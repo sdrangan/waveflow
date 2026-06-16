@@ -18,7 +18,7 @@ an [array](./dataarrays.md) or a nested `DataList`.
 
 ## Example
 
-From the [polynomial example](../../examples/stream_inband/), a command header carrying a
+From the [polynomial example](../../../examples/stream_inband/), a command header carrying a
 transaction id, a coefficient array, and a sample count:
 
 ```python

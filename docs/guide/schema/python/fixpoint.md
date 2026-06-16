@@ -14,10 +14,10 @@ summary: "FixedField — ap_fixed-compatible fixed-point: total width, integer b
 `FixedField` is a **Vitis-bit-exact** fixed-point scalar type. It maps to Vitis HLS
 `ap_fixed<W, I, Q, O>` (or `ap_ufixed<...>`) and its Python value model reproduces the
 hardware **bit-for-bit** — for quantization *and* arithmetic. It is defined in
-[`waveflow/hw/fixpoint.py`](../../../waveflow/hw/fixpoint.py); vector operations (the
+[`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py); vector operations (the
 **compute**) are covered on the
 [Fixed-point vectorization](../../vectorization/fixed.md) page in the
-[Vectorization](../vectorization/) section.
+[Vectorization](../../vectorization/) section.
 
 ## The `ap_fixed` model
 
@@ -111,7 +111,7 @@ bit-reinterpret) differs.
 ## Bit-exactness — the conformance harness
 
 The contract is proven empirically. The harness under
-[`examples/schemas/fixedpoint/`](../../../examples/schemas/fixedpoint/fixedpoint_build.py)
+[`examples/schemas/fixedpoint/`](../../../../examples/schemas/fixedpoint/fixedpoint_build.py)
 quantizes a sweep of edge values (exact-representable, rounding midpoints, min/max
 overflow, negatives, unsigned-negative inputs) in Vitis C-sim and asserts the emitted
 bits equal the Python `fixputils` bits **exactly**, across the curated configs × every

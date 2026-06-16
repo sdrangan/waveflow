@@ -15,7 +15,7 @@ summary: "ComplexField — a complex element over a scalar inner field (re/im), 
 `FloatField`, `FixedField`, or `IntField`. The real and imaginary parts share one inner
 format, and the Python value model is **bit-exact with the corresponding Vitis complex
 type** for representation *and* arithmetic. It is defined in
-[`waveflow/hw/complexfield.py`](../../../waveflow/hw/complexfield.py) and is the
+[`waveflow/hw/complexfield.py`](../../../../waveflow/hw/complexfield.py) and is the
 foundation for complex DSP (the bit-exact FFT model and friends).
 
 It composes the [fixed-point](./fixpoint.md) machinery: complex arithmetic over a
@@ -178,7 +178,7 @@ numpy FMA semantics remain available via `.val` when you want them; `cadd` / `cs
 ## Bit-exactness — the conformance harness
 
 The contract is proven empirically. The harness under
-[`examples/schemas/complex/`](../../../examples/schemas/complex/complex_build.py)
+[`examples/schemas/complex/`](../../../../examples/schemas/complex/complex_build.py)
 generates a complex kernel per case, runs it in Vitis C-sim, and asserts the emitted
 stored bits equal the Python `DataArray[ComplexField]` bits **exactly** — for round-trip
 *and* `cmult` / `cadd` / `csub` / `conj`, per inner:
@@ -196,7 +196,7 @@ is never loosened. Run it with `pytest -m vitis -k complex`.
 - [Fixed-point (`FixedField`)](./fixpoint.md) — the integer-backed inner whose arithmetic
   `ComplexField` composes for the fixed/int case.
 - [Fixed-point vectorization](../../vectorization/fixed.md) and the
-  [Vectorization](../vectorization/) section — `DataArray` compute and result-format
+  [Vectorization](../../vectorization/) section — `DataArray` compute and result-format
   propagation (a complex-vectorization page is a planned follow-on).
 - [Data Fields and Lists](./datalists.md) — the scalar field bases and the serialization
   that `ComplexField` composes for its interleaved I/Q layout.
