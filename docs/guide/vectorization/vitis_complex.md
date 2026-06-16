@@ -91,4 +91,4 @@ bit-for-bit, on real Vitis.
 
 - [Complex vectorization](./complex.md) — the Python-side numpy complex model.
 - [`vitis_raw.md`](./vitis_raw.md) — the packing factor and lane loop (apply to complex unchanged).
-- [Serialization](../schema/serialization.md) — the schema-level packing model.
+- [Serialization](../schema/hls/serialization.md) — the schema-level packing model.

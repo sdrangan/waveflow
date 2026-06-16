@@ -18,6 +18,9 @@
 *.srcs/
 hls/
 *_ide/
+# ...but the docs guide's `hls/` subsections (Python/HLS doc split) are source, not build dirs.
+!docs/guide/**/hls/
+!docs/guide/**/hls/**
 
 # Vitis build artifacts
 *.xo

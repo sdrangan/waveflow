@@ -1,8 +1,11 @@
 ---
 title: Fields
-parent: Data Schemas
+parent: Python
+grand_parent: Data Schemas
 nav_order: 1
-has_children: false
+audience: python
+api: [IntField, FloatField, EnumField, BooleanField]
+summary: "The scalar schema fields — IntField, FloatField, EnumField, BooleanField — their bitwidths, signedness, and Python values."
 ---
 
 # Fields — the basic typed values
@@ -105,7 +108,7 @@ print(f.val)        # 1.5
 
 Fields know how to serialize themselves to the packed bit representation used in simulation
 and in generated C++ — that machinery is shared with the larger schema types and is covered
-under [Code Generation](./codegen.md).
+under [Code Generation](../hls/codegen.md).
 
 ## Modeling overflow: wrap vs saturate
 

@@ -16,7 +16,7 @@ you pass around, and you don't need cycle-level control of the loop.
 
 A `struct`-mode `DataArray` lowers to a generated struct — a `data[N]` member plus serialization methods —
 emitted by `DataSchemaStep` as part of the schema's C++ type (the same build flow as any schema header; see
-[Code Generation](../schema/codegen.md)). The element's packing still comes from `ArrayUtilsStep`: the
+[Code Generation](../schema/hls/codegen.md)). The element's packing still comes from `ArrayUtilsStep`: the
 struct's methods **delegate to the element's `<elem>_array_utils` free functions**, so both storage modes
 share one packing implementation. A generated array struct looks like:
 
@@ -67,5 +67,5 @@ simpler default.
 ## See also
 
 - [`vitis_raw.md`](./vitis_raw.md) — the flat array, lane loop, and throughput pattern.
-- [Serialization](../schema/serialization.md) — the schema-level packing model.
-- [Data Arrays](../schema/dataarrays.md) — declaring `DataArray` and `cpp_storage`.
+- [Serialization](../schema/hls/serialization.md) — the schema-level packing model.
+- [Data Arrays](../schema/python/dataarrays.md) — declaring `DataArray` and `cpp_storage`.

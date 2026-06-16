@@ -22,10 +22,10 @@ pages drill in:
 - [Float vectorization](./float.md) — NumPy passthrough and golden references.
 - [Fixed-point vectorization](./fixed.md) — full-precision `a*b + c`, one explicit
   `quantize`, bit-exact with `ap_fixed`. (The fixed-point *type* itself is on the
-  [FixedField](../schema/fixpoint.md) page.)
+  [FixedField](../schema/python/fixpoint.md) page.)
 
 The **Vitis C++** pages cover the generated array helpers in a synthesizable kernel
-(the schema-level packing model is in [Serialization](../schema/serialization.md)):
+(the schema-level packing model is in [Serialization](../schema/hls/serialization.md)):
 
 - [Vitis: raw arrays](./vitis_raw.md) — the flat array, packing factor, lanes, and the
   throughput lane loop.
@@ -131,7 +131,7 @@ simulation fast. The operators just add the bit-growth bookkeeping on top.
 
 ## See also
 
-- [FixedField](../schema/fixpoint.md) — the fixed-point *type* (the `ap_fixed`
+- [FixedField](../schema/python/fixpoint.md) — the fixed-point *type* (the `ap_fixed`
   model, `QMode`/`OMode`, defaults-match-Vitis).
 - [`examples/basic_vec`](../../examples/basic_vec/) — the worked front-door: one MAC,
   `y = a*b + c`, computed with these operators and checked **bit-exact against

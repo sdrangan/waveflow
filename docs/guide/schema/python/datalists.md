@@ -1,8 +1,11 @@
 ---
 title: Data Lists
-parent: Data Schemas
+parent: Python
+grand_parent: Data Schemas
 nav_order: 2
-has_children: false
+audience: python
+api: [DataList]
+summary: "DataList — an ordered, named composite of schema fields (the C++ struct counterpart), with nesting and per-field access."
 ---
 
 # Data Lists — structured records
@@ -15,7 +18,7 @@ an [array](./dataarrays.md) or a nested `DataList`.
 
 ## Example
 
-From the [polynomial example](../../examples/stream_inband/), a command header carrying a
+From the [polynomial example](../../../examples/stream_inband/), a command header carrying a
 transaction id, a coefficient array, and a sample count:
 
 ```python
@@ -57,7 +60,7 @@ print(cmd.nsamp)    # 100
 ```
 
 A `DataList` instance serializes directly to the packed bit representation used by simulation
-interfaces, test vectors, and generated testbenches — see [Code Generation](./codegen.md).
+interfaces, test vectors, and generated testbenches — see [Code Generation](../hls/codegen.md).
 
 ---
 

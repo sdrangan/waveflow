@@ -31,7 +31,7 @@ and the type-preserving operators, all proven **bit-exact** against Vitis.
 | Example                    | Vehicle               | What it teaches                                                                                                                 | Status           |
 | -------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
 | [`basic_vec`](./basic_vec/) | one MAC (`a*b + c`) | vectorized golden vs vectorized Vitis, bit-exact for int / float / fixed — the[vectorization](../guide/vectorization/) front-door | available        |
-| `schemas/fixedpoint`     | edge-value sweep      | the rigorous fixed-point conformance harness (all `QMode`/`OMode` × widths) behind [FixedField](../guide/schema/fixpoint.md)  | available (code) |
+| `schemas/fixedpoint`     | edge-value sweep      | the rigorous fixed-point conformance harness (all `QMode`/`OMode` × widths) behind [FixedField](../guide/schema/python/fixpoint.md)  | available (code) |
 
 `basic_vec` is the teaching front-door (minimal, readable); `schemas/fixedpoint` is
 the exhaustive proof. They share the same conformance machinery.
