@@ -1,16 +1,21 @@
 ---
 title: Float vectorization
-parent: Vectorization
-nav_order: 3
+parent: Python
+grand_parent: Vectorization
+nav_order: 2
+audience: python
+applies_to: [FloatField]
+api: [FloatField]
+summary: "The float vectorized model — FloatField arrays as native NumPy float arrays, and when float fits versus fixed-point or integer."
 ---
 
 # Float vectorization
 
 Floating-point arrays are `DataArray[FloatField]` — numpy-backed by an IEEE-754
 `float32` or `float64` `ndarray`. Float is the simplest vectorization case: IEEE
-floats **don't grow**, so the [type-preserving operators](./index.md#the-two-paths)
+floats **don't grow**, so the [type-preserving operators](../index.md#the-two-paths)
 are just **NumPy passthrough** over the same arrays, and the
-[`.val` escape hatch](./index.md#1-the-numpy-escape-hatch--val) is equally correct.
+[`.val` escape hatch](../index.md#1-the-numpy-escape-hatch--val) is equally correct.
 
 ## Operators are passthrough
 
@@ -49,7 +54,7 @@ y.dtype                                                  # dtype('float32')
 The operators give you nothing extra here beyond keeping the value in a `DataArray`
 (the bit-growth bookkeeping they add for [integer](./integer.md) and
 [fixed-point](./fixed.md) has no float analog). Use whichever reads better;
-[fixed-point is the case that *needs* the operators](./index.md#when-to-use-which).
+[fixed-point is the case that *needs* the operators](../index.md#when-to-use-which).
 
 ## Golden references — matching the kernel bit-for-bit
 
@@ -73,7 +78,7 @@ asserts the Vitis C-sim output bits match them exactly.
 
 ## See also
 
-- [Vectorization overview](./index.md) — the two paths and when to use each.
+- [Vectorization overview](../index.md) — the two paths and when to use each.
 - [Integer vectorization](./integer.md) / [Fixed-point vectorization](./fixed.md) —
   the cases where the operators' growth tracking matters.
-- [Fields](../schema/python/fields.md) — `FloatField` and the scalar field types.
+- [Fields](../../schema/python/fields.md) — `FloatField` and the scalar field types.

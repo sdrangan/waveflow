@@ -1,7 +1,12 @@
 ---
 title: "Vitis: complex arrays"
-parent: Vectorization
-nav_order: 12
+parent: HLS
+grand_parent: Vectorization
+nav_order: 3
+audience: hls
+applies_to: [ComplexField]
+api: [read_array_lane, read_array_slice]
+summary: "Vectorized complex arrays in Vitis — the std::complex / wf_cint element storage and the lane loop over complex values, building on the raw-array pattern."
 ---
 
 # Vectorized arrays in Vitis — complex
@@ -9,9 +14,9 @@ nav_order: 12
 Complex samples are the workhorse of wireless signal processing — IQ data, channel estimates, beamforming
 weights. Waveflow's `ComplexField` is a first-class element type, which means **a complex array serializes
 and vectorizes through exactly the same machinery as a scalar array** — the `<type>_array_utils` helpers
-from [raw](./vitis_raw.md) / [struct](./vitis_struct.md) — with complex arithmetic supplied by a generated
+from [raw](./raw.md) / [struct](./struct.md) — with complex arithmetic supplied by a generated
 `complex_utils.hpp`. This page is the complex-specific walkthrough; for the Python-side numpy model see
-[Complex vectorization](./complex.md).
+[Complex vectorization](../python/complex.md).
 
 ## The complex element type
 
@@ -50,7 +55,7 @@ with Waveflow:
 
 ## Reading, computing, writing
 
-Because the element is first-class, the kernel is the same shape as the scalar [raw](./vitis_raw.md) case —
+Because the element is first-class, the kernel is the same shape as the scalar [raw](./raw.md) case —
 just a complex element type and `complex_utils::` arithmetic. A complex multiply over two arrays:
 
 ```cpp
@@ -74,7 +79,7 @@ au::write_array_slice<WORD_BW>(y, y_words, 0, N);
 (`complex_utils::conj`): an unqualified `conj` on a `std::complex` argument resolves to `std::conj` via ADL,
 which is not the full-precision Waveflow operator.
 
-For lane-level throughput, the [raw lane loop](./vitis_raw.md#the-lane-loop)
+For lane-level throughput, the [raw lane loop](./raw.md#the-lane-loop)
 works unchanged — `read_array_lane<WORD_BW>` delivers `LW` complex lanes per word and you unroll
 `complex_utils::cmult` across them. Note that because a complex element is `2·data_bw` bits, a *real* array
 of the same `data_bw` packs **twice** the lanes per word — the real-vs-complex throughput difference is just
@@ -89,6 +94,6 @@ bit-for-bit, on real Vitis.
 
 ## See also
 
-- [Complex vectorization](./complex.md) — the Python-side numpy complex model.
-- [`vitis_raw.md`](./vitis_raw.md) — the packing factor and lane loop (apply to complex unchanged).
-- [Serialization](../schema/hls/serialization.md) — the schema-level packing model.
+- [Complex vectorization](../python/complex.md) — the Python-side numpy complex model.
+- [`raw`](./raw.md) — the packing factor and lane loop (apply to complex unchanged).
+- [Serialization](../../schema/hls/serialization.md) — the schema-level packing model.

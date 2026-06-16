@@ -100,5 +100,5 @@ pipelining, and the wide-element `pf = 0` case).
 
 - [Code Generation](./codegen.md) — the files and classes that get generated for a schema.
 - [Test Data Files](./tbutils.md) — `serialize` / `deserialize` to the on-disk `uint32` exchange format.
-- [Vitis: raw arrays](../../vectorization/vitis_raw.md) — packing **arrays** of schemas: the lane loop,
+- [Vitis: raw arrays](../../vectorization/hls/raw.md) — packing **arrays** of schemas: the lane loop,
   `read_array_lane` / `read_array_slice`, and wide-element (`pf = 0`) handling.

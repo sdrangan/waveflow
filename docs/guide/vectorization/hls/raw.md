@@ -1,20 +1,24 @@
 ---
 title: "Vitis: raw arrays"
-parent: Vectorization
-nav_order: 10
+parent: HLS
+grand_parent: Vectorization
+nav_order: 1
+audience: hls
+api: [pf, lane_capacity, get_nwords, read_array_lane, write_array_lane, read_array_slice, write_array_slice]
+summary: "Vectorized arrays in raw storage — a flat C array; the packing factor and lanes, read_array_slice over a local buffer, and the canonical lane loop (with the pf=0 wide-element case)."
 ---
 
 # Vectorized arrays in Vitis — `raw` storage
 
-Just as each [data schema](../schema/hls/codegen.md) has a bit-exact Vitis C++ counterpart, so does each
+Just as each [data schema](../../schema/hls/codegen.md) has a bit-exact Vitis C++ counterpart, so does each
 `DataArray`: Waveflow generates the include files and helper methods that let a synthesizable kernel
 manipulate the array — pack it, unpack it, process it lane-by-lane — using the *same* layout the Python
 model uses.
 
-A `DataArray` lowers to C++ in one of two **storage modes** (see [Data Arrays](../schema/python/dataarrays.md)).
+A `DataArray` lowers to C++ in one of two **storage modes** (see [Data Arrays](../../schema/python/dataarrays.md)).
 This page covers **`raw` mode** — a flat C array — the one you reach for when you want explicit, per-cycle
-control of the vectorized loop. The [`struct`](./vitis_struct.md) mode (a wrapper with methods) and the
-[`complex`](./vitis_complex.md) element are covered separately.
+control of the vectorized loop. The [`struct`](./struct.md) mode (a wrapper with methods) and the
+[`complex`](./complex.md) element are covered separately.
 
 ## Code generation in `raw` mode
 
@@ -47,7 +51,7 @@ per-call lane methods `read_array_lane`/`write_array_lane`, and the stream varia
 
 The defining property of `raw` mode: **the generated code is keyed on the element type, not on a particular
 array.** There is no per-array struct — the same `float32_array_utils` helpers serve *every* `raw` array of
-`float` elements, of any length. (The [`struct`](./vitis_struct.md) mode is the opposite: it generates a
+`float` elements, of any length. (The [`struct`](./struct.md) mode is the opposite: it generates a
 wrapper type per array.)
 
 ## Declaring vectors in C++
@@ -55,7 +59,7 @@ wrapper type per array.)
 Once the header files are generated, any Vitis C++ function can write code using these helpers.
 Th Vitis HLS equivalent of the `raw` array is simply a flat C array of the element's `value_type`. (On the Python side this is
 `cpp_storage="raw"`, which requires `static=True` and a 1-D shape — see
-[Data Arrays](../schema/python/dataarrays.md).) In a kernel you declare it directly:
+[Data Arrays](../../schema/python/dataarrays.md).) In a kernel you declare it directly:
 
 ```cpp
 #include "float32_array_utils.h"
@@ -70,7 +74,7 @@ element type in Python, regenerate, and the C++ follows.
 
 ## Packing factors
 
-As discussed in the section on [serialization](../schema/hls/serialization.md),  arrays must be transferred over **channels**, such as AXI4-streams, or memory-mapped interfaces.  These channels may have **word bitwidth**, typically denoted `word_bw`, that may be larger or smaller than the bitwidth of each element of the array.  The generated include files provide methods to **serialize** and **deserialize** arrays of elements over channels of any width. 
+As discussed in the section on [serialization](../../schema/hls/serialization.md),  arrays must be transferred over **channels**, such as AXI4-streams, or memory-mapped interfaces.  These channels may have **word bitwidth**, typically denoted `word_bw`, that may be larger or smaller than the bitwidth of each element of the array.  The generated include files provide methods to **serialize** and **deserialize** arrays of elements over channels of any width. 
 
 Given a `word_bw`, two dual quantities describe how the elements line up with the words:
 
@@ -118,7 +122,7 @@ does `pf` elements of work per cycle — so **`WORD_BW` is the throughput lever*
 
 At `WORD_BW = 32` the element is wider than the word, so `pf` is 0 and each `Point2D` occupies two words;
 from `WORD_BW = 64` up, whole elements fit per word. (For the schema-level view — `n_words` and the
-per-transfer cycle cost — see [Serialization](../schema/hls/serialization.md).)
+per-transfer cycle cost — see [Serialization](../../schema/hls/serialization.md).)
 
 
 
@@ -200,6 +204,9 @@ bus-width → throughput relationship made concrete (and what the VMAC `mem_dwid
 
 ### Streams instead of memory
 
+> Transfer over a real stream/port — the stream/`TLAST` variants and the `m_axi`-port loop patterns — is
+> detailed in [Interfaces](../../interface/); this section is the local-buffer sketch.
+
 For an AXI-Stream port the shape is identical, but you **drop the running pointers** (`xp`/`yp`/`WPU` — the
 stream sequences itself) and use the stream lane variants, which also carry `TLAST`:
 
@@ -214,7 +221,7 @@ au::write_axi4_stream_lane<WORD_BW>(s_out, lane, /*tlast=*/last, n);
 
 ## See also
 
-- [Serialization](../schema/hls/serialization.md) — the schema-level packing model and `word_bw`.
-- [Data Arrays](../schema/python/dataarrays.md) — declaring `DataArray`, `struct` vs `raw`.
-- [`vitis_struct.md`](./vitis_struct.md) — the same packing behind a generated struct's methods.
-- [`vitis_complex.md`](./vitis_complex.md) — complex elements (wireless).
+- [Serialization](../../schema/hls/serialization.md) — the schema-level packing model and `word_bw`.
+- [Data Arrays](../../schema/python/dataarrays.md) — declaring `DataArray`, `struct` vs `raw`.
+- [`struct`](./struct.md) — the same packing behind a generated struct's methods.
+- [`complex`](./complex.md) — complex elements (wireless).

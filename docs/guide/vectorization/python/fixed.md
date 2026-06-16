@@ -1,21 +1,25 @@
 ---
 title: Fixed-point vectorization
-parent: Vectorization
-nav_order: 4
-has_children: false
+parent: Python
+grand_parent: Vectorization
+nav_order: 3
+audience: python
+applies_to: [FixedField]
+api: [FixedField]
+summary: "The fixed-point vectorized model — FixedField arrays, the two paths (.val NumPy escape hatch vs type-preserving operators), and the ap_fixed result-format growth."
 ---
 
 # Fixed-Point Vectorization
 
-This is the [vectorization](./index.md) story for fixed-point — the **compute**.
+This is the [vectorization](../index.md) story for fixed-point — the **compute**.
 The fixed-point *type* itself (the `ap_fixed` model, `QMode`/`OMode`, the
 defaults-match-Vitis contract) lives on the
-[FixedField type page](../schema/python/fixpoint.md); read that first if you haven't.
+[FixedField type page](../../schema/python/fixpoint.md); read that first if you haven't.
 
-Fixed-point arrays use [`DataArray[FixedField]`](../schema/python/dataarrays.md) — the same
+Fixed-point arrays use [`DataArray[FixedField]`](../../schema/python/dataarrays.md) — the same
 numpy-backed array schema as every other element type, so they get flat storage,
 array access, and codegen for free. This is the case that most needs the
-[type-preserving operators](./index.md#the-two-paths): fixed-point grows bits and
+[type-preserving operators](../index.md#the-two-paths): fixed-point grows bits and
 rounds on assignment, so working through `.val` by hand is easy to get wrong. The
 operators (`*`, `+`, `-`) are sugar over the **free functions** in
 [`waveflow/hw/fixpoint.py`](../../../waveflow/hw/fixpoint.py) (not methods — the
@@ -70,7 +74,7 @@ quantize(mult(a, b), Q8_4)             # DataArray[ap_fixed<8, 4>]
 
 ### Operator form (the primary spelling)
 
-The [operators](./index.md#2-type-preserving-operators--ab--c-then-quantize) are
+The [operators](../index.md#2-type-preserving-operators--ab--c-then-quantize) are
 sugar over these functions, so a multiply-add reads like the math — and like the
 HLS `ap_fixed<...> y = a*b + c;` it mirrors. The intermediates grow to full
 precision; the single `quantize` is the only rounding:
@@ -156,9 +160,9 @@ asserts the bits match the Python ops — run `pytest -m vitis -k fixedpoint`.
 
 ## See also
 
-- [Fixed-point (FixedField)](../schema/python/fixpoint.md) — the fixed-point *type*: the
+- [Fixed-point (FixedField)](../../schema/python/fixpoint.md) — the fixed-point *type*: the
   format, `QMode`/`OMode`, the defaults-match-Vitis contract.
-- [Vectorization overview](./index.md) — the two paths and when to use each.
+- [Vectorization overview](../index.md) — the two paths and when to use each.
 - [Integer vectorization](./integer.md) — the same growth-then-`quantize` story
   without a binary point.
-- [Data arrays](../schema/python/dataarrays.md) — the `DataArray` container these build on.
+- [Data arrays](../../schema/python/dataarrays.md) — the `DataArray` container these build on.

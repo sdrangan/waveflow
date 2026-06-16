@@ -14,24 +14,28 @@ call instead of a Python loop over elements. The numbers Waveflow computes match
 the Vitis HLS datapath **bit-for-bit**, and they are computed at NumPy speed.
 
 This page is the entry point: the selling point, the **two ways to compute** on
-array data, when to use each, and an honest framing of the tradeoff. The per-kind
-pages drill in:
+array data, when to use each, and an honest framing of the tradeoff. The section
+splits in two:
 
-- [Integer vectorization](./integer.md) — NumPy integer arrays, growth-aware
+**[Python](./python/)** — the NumPy-backed value model, per element kind:
+
+- [Integer vectorization](./python/integer.md) — NumPy integer arrays, growth-aware
   operators, the width-tracking caveat.
-- [Float vectorization](./float.md) — NumPy passthrough and golden references.
-- [Fixed-point vectorization](./fixed.md) — full-precision `a*b + c`, one explicit
+- [Float vectorization](./python/float.md) — NumPy passthrough and golden references.
+- [Fixed-point vectorization](./python/fixed.md) — full-precision `a*b + c`, one explicit
   `quantize`, bit-exact with `ap_fixed`. (The fixed-point *type* itself is on the
   [FixedField](../schema/python/fixpoint.md) page.)
+- [Complex vectorization](./python/complex.md) — complex arithmetic and the
+  numpy-vs-hardware multiply edge.
 
-The **Vitis C++** pages cover the generated array helpers in a synthesizable kernel
-(the schema-level packing model is in [Serialization](../schema/hls/serialization.md)):
+**[HLS](./hls/)** — the generated array helpers in a synthesizable Vitis kernel (the
+schema-level packing model is in [Serialization](../schema/hls/serialization.md)):
 
-- [Vitis: raw arrays](./vitis_raw.md) — the flat array, packing factor, lanes, and the
+- [Vitis: raw arrays](./hls/raw.md) — the flat array, packing factor, lanes, and the
   throughput lane loop.
-- [Vitis: struct arrays](./vitis_struct.md) — the generated wrapper struct's whole-array
+- [Vitis: struct arrays](./hls/struct.md) — the generated wrapper struct's whole-array
   methods.
-- [Vitis: complex arrays](./vitis_complex.md) — complex elements end-to-end (the wireless
+- [Vitis: complex arrays](./hls/complex.md) — complex elements end-to-end (the wireless
   vertical).
 
 ## Why vectorization is the differentiator
@@ -124,7 +128,7 @@ The short rule:
 - **Integer** — either works; the operators add growth-aware width tracking
   (`a*b` → `Wa+Wb` bits, `a+b` → `+1`) with a fail-fast guard above 64 bits, which
   raw `.val` NumPy won't give you (it silently wraps). See
-  [Integer vectorization](./integer.md).
+  [Integer vectorization](./python/integer.md).
 
 Both paths keep data in NumPy arrays the whole way — that's what makes the
 simulation fast. The operators just add the bit-growth bookkeeping on top.
