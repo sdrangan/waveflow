@@ -98,4 +98,4 @@ ia([1]) * u                              # NotImplementedError: mixed signed/uns
 - [Vectorization overview](./index.md) — the two paths and when to use each.
 - [Fixed-point vectorization](./fixed.md) — the same growth-then-`quantize` story
   with a binary point.
-- [Fields](../schema/fields.md) — `IntField` and the scalar field types.
+- [Fields](../schema/python/fields.md) — `IntField` and the scalar field types.

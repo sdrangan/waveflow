@@ -17,7 +17,7 @@ While the project is early, the **core of the Waveflow framework is developed an
 
 - A rich set of [data schemas](../guide/schema/)
 are already supported.  These schemas 
-include fixed and floating point [fields](../guide/schema/fields.md), and [data lists](../guide/schema/datalists.md), [data unions](../guide/schema/dataunion.md), [data arrays](../guide/schema/dataarrays.md) with full numpy [vectorization](../guide/vectorization/).
+include fixed and floating point [fields](../guide/schema/python/fields.md), and [data lists](../guide/schema/python/datalists.md), [data unions](../guide/schema/python/dataunion.md), [data arrays](../guide/schema/python/dataarrays.md) with full numpy [vectorization](../guide/vectorization/).
 Users can auto-generate the corresponding Vitis code, verified to match the Python model bit-exact.
 - Core [interfaces](../guide/interface/) such as HLS stream, AXI memory-mapped, and other memory interfaces are also in place.  Users can create [hardware components](../guide/components/) with the interfaces, auto-generate Vitis HLS code implementing core transactions including block and pipelined reads of raw data and schemas.  These have also been verified as functionally correct and cycle approximate.  Hardware components support [parameterization](../guide/components/hwparam.md).
 - A SimPy-based discrete-event simulator (DES) has also been developed, enabling cycle-approximate timing of processing and interface transactions of the hardware components.

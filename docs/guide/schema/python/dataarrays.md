@@ -1,8 +1,12 @@
 ---
 title: Data arrays
-parent: Data Schemas
+parent: Python
+grand_parent: Data Schemas
 nav_order: 3
-has_children: true
+has_children: false
+audience: python
+api: [DataArray]
+summary: "DataArray — a fixed- or dynamic-shape array of a schema element type; the raw vs struct C++ storage modes."
 ---
 
 # Data Arrays
@@ -84,4 +88,4 @@ dag.run(cfg)
 
 ## Pipelined stream operation note
 
-Pipelined stream operations (`get_pipelined`, `write_pipelined`) are only valid inside `@synthesizable` hook bodies. They are not legal in top-level extracted bodies such as `on_start`, `run_proc`, or testbench `main()`. See [Synthesis Extractor](../synthesis/extractor.md).
+Pipelined stream operations (`get_pipelined`, `write_pipelined`) are only valid inside `@synthesizable` hook bodies. They are not legal in top-level extracted bodies such as `on_start`, `run_proc`, or testbench `main()`. See [Synthesis Extractor](../../synthesis/extractor.md).

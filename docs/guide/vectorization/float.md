@@ -76,4 +76,4 @@ asserts the Vitis C-sim output bits match them exactly.
 - [Vectorization overview](./index.md) — the two paths and when to use each.
 - [Integer vectorization](./integer.md) / [Fixed-point vectorization](./fixed.md) —
   the cases where the operators' growth tracking matters.
-- [Fields](../schema/fields.md) — `FloatField` and the scalar field types.
+- [Fields](../schema/python/fields.md) — `FloatField` and the scalar field types.

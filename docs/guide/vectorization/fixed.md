@@ -10,9 +10,9 @@ has_children: false
 This is the [vectorization](./index.md) story for fixed-point — the **compute**.
 The fixed-point *type* itself (the `ap_fixed` model, `QMode`/`OMode`, the
 defaults-match-Vitis contract) lives on the
-[FixedField type page](../schema/fixpoint.md); read that first if you haven't.
+[FixedField type page](../schema/python/fixpoint.md); read that first if you haven't.
 
-Fixed-point arrays use [`DataArray[FixedField]`](../schema/dataarrays.md) — the same
+Fixed-point arrays use [`DataArray[FixedField]`](../schema/python/dataarrays.md) — the same
 numpy-backed array schema as every other element type, so they get flat storage,
 array access, and codegen for free. This is the case that most needs the
 [type-preserving operators](./index.md#the-two-paths): fixed-point grows bits and
@@ -156,9 +156,9 @@ asserts the bits match the Python ops — run `pytest -m vitis -k fixedpoint`.
 
 ## See also
 
-- [Fixed-point (FixedField)](../schema/fixpoint.md) — the fixed-point *type*: the
+- [Fixed-point (FixedField)](../schema/python/fixpoint.md) — the fixed-point *type*: the
   format, `QMode`/`OMode`, the defaults-match-Vitis contract.
 - [Vectorization overview](./index.md) — the two paths and when to use each.
 - [Integer vectorization](./integer.md) — the same growth-then-`quantize` story
   without a binary point.
-- [Data arrays](../schema/dataarrays.md) — the `DataArray` container these build on.
+- [Data arrays](../schema/python/dataarrays.md) — the `DataArray` container these build on.

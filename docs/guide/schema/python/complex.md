@@ -1,8 +1,12 @@
 ---
 title: Complex (ComplexField)
-parent: Data Schemas
+parent: Python
+grand_parent: Data Schemas
 nav_order: 6
-has_children: false
+audience: python
+applies_to: [ComplexField]
+api: [ComplexField]
+summary: "ComplexField — a complex element over a scalar inner field (re/im), the interleaved layout and complex arithmetic helpers."
 ---
 
 # Complex: `ComplexField`
@@ -191,7 +195,7 @@ is never loosened. Run it with `pytest -m vitis -k complex`.
 
 - [Fixed-point (`FixedField`)](./fixpoint.md) — the integer-backed inner whose arithmetic
   `ComplexField` composes for the fixed/int case.
-- [Fixed-point vectorization](../vectorization/fixed.md) and the
+- [Fixed-point vectorization](../../vectorization/fixed.md) and the
   [Vectorization](../vectorization/) section — `DataArray` compute and result-format
   propagation (a complex-vectorization page is a planned follow-on).
 - [Data Fields and Lists](./datalists.md) — the scalar field bases and the serialization

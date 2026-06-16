@@ -10,15 +10,15 @@ has_children: false
 This is the [vectorization](./index.md) story for complex — the **compute**. The complex
 *type* itself (the per-inner value representation, the C++ `std::complex` / `wf_cint`
 mapping, the bit-exactness contract) lives on the
-[ComplexField type page](../schema/complex.md); read that first if you haven't.
+[ComplexField type page](../schema/python/complex.md); read that first if you haven't.
 
-Complex arrays use [`DataArray[ComplexField]`](../schema/dataarrays.md), generic over a scalar
+Complex arrays use [`DataArray[ComplexField]`](../schema/python/dataarrays.md), generic over a scalar
 inner field — `FloatField`, `FixedField`, or `IntField`. The key idea for *speed*: complex
 arithmetic **composes the inner field's own vectorized ops** on the real and imaginary
 components, so a complex array stays as loop-free and NumPy-fast as a real one — and stays
 **bit-exact with the matching Vitis complex type**. For a fixed/int inner, that means complex
 math is just integer NumPy over the stored components; it inherits the `ap_fixed` growth rules
-and the single-64-bit guard from [`FixedField`](../schema/fixpoint.md), with no fixed-point math
+and the single-64-bit guard from [`FixedField`](../schema/python/fixpoint.md), with no fixed-point math
 reimplemented.
 
 ## Arrays of complex values
@@ -92,13 +92,13 @@ multiply is FMA-based, while Vitis HLS `std::complex<float>` evaluates the **nai
 `(ar·br − ai·bi)` formula. `ComplexField` follows the naive, hardware-faithful formula so it
 stays bit-exact with Vitis on rounding-triggering operands; raw numpy FMA semantics remain
 available via `.val`. The full story is on the
-[ComplexField type page](../schema/complex.md#the-float-complex-multiply-edge).
+[ComplexField type page](../schema/python/complex.md#the-float-complex-multiply-edge).
 
 ### Rounding back to a working format
 
 There is no single complex `quantize`: rounding is done **per component** through the inner
 field, since complex arithmetic composes that field. Take the grown result's components and
-`quantize` each with [`FixedField`](../schema/fixpoint.md)'s `quantize`, then recombine:
+`quantize` each with [`FixedField`](../schema/python/fixpoint.md)'s `quantize`, then recombine:
 
 ```python
 import numpy as np
@@ -147,9 +147,9 @@ asserts the emitted bits equal these Python ops — run `pytest -m vitis -k comp
 
 ## See also
 
-- [Complex (ComplexField)](../schema/complex.md) — the complex *type*: value representations,
+- [Complex (ComplexField)](../schema/python/complex.md) — the complex *type*: value representations,
   the C++ mapping, and the bit-exactness contract.
 - [Fixed-point vectorization](./fixed.md) — the inner field's growth-then-`quantize` story that
   complex composes for a fixed/int inner.
 - [Vectorization overview](./index.md) — the two paths and when to use each.
-- [Data arrays](../schema/dataarrays.md) — the `DataArray` container these build on.
+- [Data arrays](../schema/python/dataarrays.md) — the `DataArray` container these build on.

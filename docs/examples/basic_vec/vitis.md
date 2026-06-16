@@ -42,7 +42,7 @@ The split (`t = a*b; y = t + c`) plus **`-ffp-contract=off`** in
 [`run.tcl`](../../../examples/basic_vec/run.tcl) forbids the compiler from fusing `a*b + c`
 into a single-rounding FMA — so it is the same two roundings numpy `float32` does. (The
 *opposite* case — complex multiply, where numpy itself *is* FMA-fused — is covered in
-[the complex docs](../../guide/schema/complex.md).)
+[the complex docs](../../guide/schema/python/complex.md).)
 
 ## Fixed {#fixed}
 

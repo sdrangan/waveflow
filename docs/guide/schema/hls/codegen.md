@@ -1,7 +1,11 @@
 ---
 title: Code Generation
-parent: Data Schemas
-nav_order: 7
+parent: HLS
+grand_parent: Data Schemas
+nav_order: 1
+audience: hls
+api: [DataSchemaStep, ArrayUtilsStep]
+summary: "How a Python schema generates a Vitis HLS C++ struct — the .h / _tb.h headers, the DataSchemaStep / ArrayUtilsStep build steps, and the field-by-field struct mapping."
 ---
 
 # Auto-generating Vitis HLS Files
@@ -22,7 +26,7 @@ For array element helpers, `ArrayUtilsStep` generates:
 
 ## Current build flow (`DataSchemaStep` + `ArrayUtilsStep`)
 
-Schema headers and array helpers are generated through `BuildDag` steps. For example, suppose we have a simple [DataList](./datalists.md) schema like:
+Schema headers and array helpers are generated through `BuildDag` steps. For example, suppose we have a simple [DataList](../python/datalists.md) schema like:
 
 ```python
 class PolyCmdHdr(DataList):

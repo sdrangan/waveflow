@@ -1,8 +1,11 @@
 ---
 title: Data Unions
-parent: Data Schemas
+parent: Python
+grand_parent: Data Schemas
 nav_order: 4
-has_children: false
+audience: python
+api: [DataUnion]
+summary: "DataUnion — a tagged union: a schema-id header selecting one of several registered payload schemas, with a fixed wire footprint."
 ---
 
 # Data Unions
