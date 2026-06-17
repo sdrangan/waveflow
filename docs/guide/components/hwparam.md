@@ -1,7 +1,11 @@
 ---
 title: HwParam
 parent: Hardware Components
-nav_order: 2
+nav_order: 1
+audience: python
+applies_to: [HwComponent]
+api: [HwParam, HwParamValue]
+summary: "HwParam[T] — per-instance synthesis-parameter fields: int-like in simulation, identity-preserving for codegen (wrapped as HwParamValue), immutable after construction."
 ---
 
 # HwParam
@@ -11,6 +15,10 @@ nav_order: 2
 `HwParam[T]` marks component fields that should be treated as synthesis parameters. These fields behave like Python integers in simulation but preserve parameter identity for code generation.
 
 During `HwComponent.__post_init__`, raw values for `HwParam` fields are wrapped as `HwParamValue`. This wrapper preserves which parameter name produced the value so emitters can substitute template-aware expressions where needed.
+
+> The codegen side — how a `HwParam` lowers to a C++ template parameter / kernel-signature
+> argument — belongs to the forthcoming **component codegen** section; it is interim-documented
+> under [Synthesis templating](../synthesis/templating.md).
 
 ## API
 

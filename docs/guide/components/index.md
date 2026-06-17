@@ -3,9 +3,13 @@ title: Hardware Components
 parent: Guide
 nav_order: 5
 has_children: true
+audience: python
+summary: "The Python HwComponent model — declaring typed ports/endpoints, HwParam/HwConst fields, and the pre_sim/run_proc/post_sim lifecycle in the SimPy simulation."
 ---
 
 # Hardware Components
+
+This section is the **Python `HwComponent` model**: how you declare a hardware component in the SimPy simulation — its typed ports (endpoints), its `HwParam` / `HwConst` fields, and its lifecycle. It is Python-only by design; a component's **synthesizable C++ realization** — the generated kernel structure, parameterization, and hand-written hooks — is the codegen arc (see the forward-pointers below).
 
 ## Concept
 
@@ -46,3 +50,15 @@ From [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py)
 - [HwConst](./hwconst.md)
 - [HwTestbench](./hwtestbench.md)
 - [Lifecycle](./lifecycle.md)
+
+## See also
+
+**Prerequisites** — a component is built from these:
+
+- [Interfaces](../interface/) — the typed ports (stream / MM / regmap endpoints) a component declares.
+- [Data Schemas](../schema/) — the payloads those ports carry.
+
+**The synthesizable side** (the C++ realization of a component):
+
+- **component codegen** *(forthcoming section)* — what a full component generates: the kernel structure, how `HwParam` becomes C++ template parameters, and `main()`→testbench emission. It does not exist yet; the codegen flow is interim-documented under [Synthesis](../synthesis/).
+- **Custom Hooks** *(forthcoming section)* — the hand-written synthesizable kernel bodies that plug into a generated component.
