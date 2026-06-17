@@ -1,7 +1,11 @@
 ---
 title: Templating
-parent: Synthesis
+parent: Component Code Generation
 nav_order: 3
+audience: hls
+applies_to: [HwParam]
+api: [HwParam, HwParamValue]
+summary: "How HwParam values become template-aware C++: HwParamValue preserves parameter identity for codegen, and parameterized hook stubs are emitted as .tpp so template definitions stay visible via the header include path."
 ---
 
 # Templating

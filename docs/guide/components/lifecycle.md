@@ -17,8 +17,8 @@ Waveflow simulation objects follow a standard lifecycle: `pre_sim`, `run_proc`, 
 For regmap-driven kernels, `on_start` is used as the invocation-style body triggered by host `ap_start`. Free-running simulation components usually implement `run_proc` as the long-running process body.
 
 > The codegen side — which method is extracted as the kernel entry (`extract_kernel`'s
-> selection policy) and how `@sim_only` excludes a helper — belongs to the forthcoming
-> **component codegen** section; it is interim-documented under [Synthesis extractor](../synthesis/extractor.md).
+> selection policy) and how `@sim_only` excludes a helper — is in
+> [Component Code Generation: Extractor](../comp_codegen/extractor.md).
 
 ## API
 

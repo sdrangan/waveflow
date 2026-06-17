@@ -1,6 +1,6 @@
 ---
 title: Cosim timing
-parent: Synthesis
+parent: Timing Analysis Tools
 nav_order: 6
 ---
 

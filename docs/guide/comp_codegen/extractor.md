@@ -1,7 +1,10 @@
 ---
 title: Extractor
-parent: Synthesis
+parent: Component Code Generation
 nav_order: 1
+audience: hls
+api: [HwStmtExtractor, extract_kernel, SynthesisError]
+summary: "How HwStmtExtractor parses the synthesizable subset of a component's Python (on_start / run_proc, or main for a testbench) into the HwStmt IR, failing fast with SynthesisError on unsupported patterns."
 ---
 
 # Extractor

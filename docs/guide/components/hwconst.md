@@ -14,9 +14,9 @@ summary: "HwConst[T] — class-level compile-time structural constants (e.g. sta
 
 `HwConst[T]` marks class-level constants intended to represent compile-time values attached to schema/component definitions. It communicates intent to readers and codegen paths that treat the value as fixed for the class.
 
-> The codegen side — emitting a `HwConst` as a C++ `static constexpr` — is deferred and belongs to
-> the forthcoming **component codegen** section; in Python simulation a `HwConst` is a regular class
-> attribute.
+> The codegen side — emitting a `HwConst` as a C++ `static constexpr` (currently deferred) — is the
+> domain of [Component Code Generation](../comp_codegen/); in Python simulation a `HwConst` is a
+> regular class attribute.
 
 Use `HwConst` for structural constants that do not vary across instances (for example static array extents). Use `HwParam` when a value should vary per instance and potentially per generated kernel variant.
 

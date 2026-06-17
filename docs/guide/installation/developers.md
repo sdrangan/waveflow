@@ -58,7 +58,7 @@ Verify, then run the tests:
 ```
 
 The Vitis HLS integration tests run under `pytest -m vitis` and require a Vitis
-installation — see [Synthesis](../synthesis/).
+installation — see [Synthesis](../comp_codegen/).
 
 ## Maintaining the requirements files
 

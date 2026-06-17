@@ -1,7 +1,11 @@
 ---
 title: Testbench
-parent: Synthesis
+parent: Component Code Generation
 nav_order: 5
+audience: hls
+applies_to: [HwTestbench]
+api: [HwTestbench, HlsCodegenStep]
+summary: "The codegen-source testbench path: HwTestbench.main() lowered to a sequential C++ int main() (DUT build, file I/O, stream push/pop, dut.run()), emitted as <kernel>_tb.cpp when is_testbench=True."
 ---
 
 # Testbench

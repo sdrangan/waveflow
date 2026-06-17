@@ -88,4 +88,4 @@ dag.run(cfg)
 
 ## Pipelined stream operation note
 
-Pipelined stream operations (`get_pipelined`, `write_pipelined`) are only valid inside `@synthesizable` hook bodies. They are not legal in top-level extracted bodies such as `on_start`, `run_proc`, or testbench `main()`. See [Synthesis Extractor](../../synthesis/extractor.md).
+Pipelined stream operations (`get_pipelined`, `write_pipelined`) are only valid inside `@synthesizable` hook bodies. They are not legal in top-level extracted bodies such as `on_start`, `run_proc`, or testbench `main()`. See [Synthesis Extractor](../../comp_codegen/extractor.md).
