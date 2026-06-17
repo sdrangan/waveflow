@@ -53,8 +53,8 @@ ap_uint<8> evaluate(PolyCmdHdr cmd_hdr,
         const int nrem = cmd_hdr.nsamp - i;
         const int lane_count = (nrem < pf) ? nrem : pf;
         streamutils::tlast_status lane_tlast = streamutils::tlast_status::no_tlast;
-        float32_array_utils::read_axi4_stream_elem<in_bw>(
-            s_in, x_lane, lane_tlast, nrem);
+        float32_array_utils::read_axi4_stream_lane<in_bw>(
+            s_in, x_lane, nrem, lane_tlast);
 
         for (int k = 0; k < pf; ++k) {
 #pragma HLS UNROLL
@@ -64,8 +64,8 @@ ap_uint<8> evaluate(PolyCmdHdr cmd_hdr,
         }
 
         const bool out_tlast = (nrem <= pf);
-        float32_array_utils::write_axi4_stream_elem<out_bw>(
-            m_out, y_lane, out_tlast, nrem);
+        float32_array_utils::write_axi4_stream_lane<out_bw>(
+            y_lane, m_out, out_tlast, nrem);
 
         nsamp_read += lane_count;
         if (lane_tlast == streamutils::tlast_status::tlast_at_end) {
