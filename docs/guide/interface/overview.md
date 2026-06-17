@@ -2,7 +2,9 @@
 title: Overview
 parent: Interfaces
 nav_order: 1
-has_children: false
+audience: python
+api: [Interface, InterfaceEndpoint, StreamIF, MMIFMaster, MMIFSlave, Words]
+summary: "The transactional interface model — Interface vs master/slave endpoint, the Words type, the cycle-based latency model, and the SimPy write/read/bind lifecycle."
 ---
 
 # Overview

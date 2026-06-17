@@ -1,8 +1,10 @@
 ---
 title: Schema Transfer Interface
 parent: Interfaces
-nav_order: 4
-has_children: false
+nav_order: 5
+audience: python
+api: [SchemaTransferIF, SchemaTransferIFMaster, SchemaTransferIFSlave, PhysicalTransport, StreamTransport]
+summary: "The logical interface that carries serializable schema objects (DataList / DataUnion) over a transport — write(obj) / rx_proc, the layered transport model, and single- vs multi-type framing."
 ---
 
 # Schema Transfer Interface
