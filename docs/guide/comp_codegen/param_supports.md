@@ -1,7 +1,7 @@
 ---
 title: Param supports
 parent: Component Code Generation
-nav_order: 4
+nav_order: 6
 audience: hls
 applies_to: [HwParam]
 api: [param_supports]

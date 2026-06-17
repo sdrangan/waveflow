@@ -19,7 +19,7 @@ code.
 
 ## Auto-generated vs. hand-written
 
-This is the **hand-written** half of Arc 3 (hardware generation); the **auto-generated** half is
+This is the **hand-written** side of hardware generation; the **auto-generated** side is
 [Component Code Generation](../comp_codegen/). The boundary is one decorator:
 
 | | Auto-generated | Hand-written (here) |
