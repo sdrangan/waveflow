@@ -2,7 +2,7 @@
 title: Float vectorization
 parent: Python
 grand_parent: Vectorization
-nav_order: 2
+nav_order: 3
 audience: python
 applies_to: [FloatField]
 api: [FloatField]
@@ -13,9 +13,9 @@ summary: "The float vectorized model — FloatField arrays as native NumPy float
 
 Floating-point arrays are `DataArray[FloatField]` — numpy-backed by an IEEE-754
 `float32` or `float64` `ndarray`. Float is the simplest vectorization case: IEEE
-floats **don't grow**, so the [type-preserving operators](../index.md#the-two-paths)
+floats **don't grow**, so the [type-preserving operators](./numerical.md#type-preserving-operators)
 are just **NumPy passthrough** over the same arrays, and the
-[`.val` escape hatch](../index.md#1-the-numpy-escape-hatch--val) is equally correct.
+[`.val` escape hatch](./numerical.md#operations-with-val) is equally correct.
 
 ## Operators are passthrough
 
@@ -54,7 +54,7 @@ y.dtype                                                  # dtype('float32')
 The operators give you nothing extra here beyond keeping the value in a `DataArray`
 (the bit-growth bookkeeping they add for [integer](./integer.md) and
 [fixed-point](./fixed.md) has no float analog). Use whichever reads better;
-[fixed-point is the case that *needs* the operators](../index.md#when-to-use-which).
+[fixed-point is the case that *needs* the operators](./numerical.md#when-to-use-which).
 
 ## Golden references — matching the kernel bit-for-bit
 

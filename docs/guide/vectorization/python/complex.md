@@ -2,7 +2,7 @@
 title: Complex vectorization
 parent: Python
 grand_parent: Vectorization
-nav_order: 4
+nav_order: 5
 audience: python
 applies_to: [ComplexField]
 api: [ComplexField]
@@ -60,7 +60,7 @@ The `.val` representation depends on the inner, because **numpy has no integer-c
 
 ## Arithmetic: full-precision growth, composed on the components
 
-The [operators](../index.md#the-two-paths) `*` / `+` / `-` (and the free function `conj`) are
+The [operators](./numerical.md#type-preserving-operators) `*` / `+` / `-` (and the free function `conj`) are
 **type-preserving**: each runs the inner field's vectorized op on the real/imag components and
 **derives the result inner format** with full precision. For a fixed/int inner the formats
 follow the `ap_fixed` rules — products widen, sums grow an integer bit — so intermediates never

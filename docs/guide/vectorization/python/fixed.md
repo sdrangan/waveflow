@@ -2,7 +2,7 @@
 title: Fixed-point vectorization
 parent: Python
 grand_parent: Vectorization
-nav_order: 3
+nav_order: 4
 audience: python
 applies_to: [FixedField]
 api: [FixedField]
@@ -19,7 +19,7 @@ defaults-match-Vitis contract) lives on the
 Fixed-point arrays use [`DataArray[FixedField]`](../../schema/python/dataarrays.md) — the same
 numpy-backed array schema as every other element type, so they get flat storage,
 array access, and codegen for free. This is the case that most needs the
-[type-preserving operators](../index.md#the-two-paths): fixed-point grows bits and
+[type-preserving operators](./numerical.md#type-preserving-operators): fixed-point grows bits and
 rounds on assignment, so working through `.val` by hand is easy to get wrong. The
 operators (`*`, `+`, `-`) are sugar over the **free functions** in
 [`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py) (not methods — the
@@ -74,7 +74,7 @@ quantize(mult(a, b), Q8_4)             # DataArray[ap_fixed<8, 4>]
 
 ### Operator form (the primary spelling)
 
-The [operators](../index.md#2-type-preserving-operators--ab--c-then-quantize) are
+The [operators](./numerical.md#type-preserving-operators) are
 sugar over these functions, so a multiply-add reads like the math — and like the
 HLS `ap_fixed<...> y = a*b + c;` it mirrors. The intermediates grow to full
 precision; the single `quantize` is the only rounding:
