@@ -1,12 +1,16 @@
 ---
 title: "Vitis: struct arrays"
-parent: Vectorization
-nav_order: 11
+parent: HLS
+grand_parent: Vectorization
+nav_order: 2
+audience: hls
+api: [read_array, write_array]
+summary: "Vectorized arrays in struct storage — a generated per-array wrapper type carrying its own packing methods, the same lane layout behind an object interface."
 ---
 
 # Vectorized arrays in Vitis — `struct` storage
 
-The default `cpp_storage` for a `DataArray` is `"struct"`. Where [`raw` mode](./vitis_raw.md) gives you a
+The default `cpp_storage` for a `DataArray` is `"struct"`. Where [`raw` mode](./raw.md) gives you a
 flat C array and the free-function packing helpers for explicit lane control, **`struct` mode wraps the
 array in a generated type whose methods do the packing for you** — the whole array in, the whole array out,
 the lanes hidden. Reach for it when the array is a *field* of a larger schema, a port payload, or an object
@@ -16,7 +20,7 @@ you pass around, and you don't need cycle-level control of the loop.
 
 A `struct`-mode `DataArray` lowers to a generated struct — a `data[N]` member plus serialization methods —
 emitted by `DataSchemaStep` as part of the schema's C++ type (the same build flow as any schema header; see
-[Code Generation](../schema/hls/codegen.md)). The element's packing still comes from `ArrayUtilsStep`: the
+[Code Generation](../../schema/hls/codegen.md)). The element's packing still comes from `ArrayUtilsStep`: the
 struct's methods **delegate to the element's `<elem>_array_utils` free functions**, so both storage modes
 share one packing implementation. A generated array struct looks like:
 
@@ -61,11 +65,11 @@ retargeting the channel width is a one-constant change, and the bytes match the 
 | Best for | a field of a schema, a port payload, whole-array I/O | throughput kernels, per-cycle lane scheduling |
 
 If you find yourself wanting to unroll across lanes (the throughput pattern), reach for
-[`raw`](./vitis_raw.md). If you just want to move an array in and out as one typed object, `struct` is the
+[`raw`](./raw.md). If you just want to move an array in and out as one typed object, `struct` is the
 simpler default.
 
 ## See also
 
-- [`vitis_raw.md`](./vitis_raw.md) — the flat array, lane loop, and throughput pattern.
-- [Serialization](../schema/hls/serialization.md) — the schema-level packing model.
-- [Data Arrays](../schema/python/dataarrays.md) — declaring `DataArray` and `cpp_storage`.
+- [`raw`](./raw.md) — the flat array, lane loop, and throughput pattern.
+- [Serialization](../../schema/hls/serialization.md) — the schema-level packing model.
+- [Data Arrays](../../schema/python/dataarrays.md) — declaring `DataArray` and `cpp_storage`.

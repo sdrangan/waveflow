@@ -1,24 +1,28 @@
 ---
 title: Fixed-point vectorization
-parent: Vectorization
+parent: Python
+grand_parent: Vectorization
 nav_order: 4
-has_children: false
+audience: python
+applies_to: [FixedField]
+api: [FixedField]
+summary: "The fixed-point vectorized model — FixedField arrays, the two paths (.val NumPy escape hatch vs type-preserving operators), and the ap_fixed result-format growth."
 ---
 
 # Fixed-Point Vectorization
 
-This is the [vectorization](./index.md) story for fixed-point — the **compute**.
+This is the [vectorization](../index.md) story for fixed-point — the **compute**.
 The fixed-point *type* itself (the `ap_fixed` model, `QMode`/`OMode`, the
 defaults-match-Vitis contract) lives on the
-[FixedField type page](../schema/python/fixpoint.md); read that first if you haven't.
+[FixedField type page](../../schema/python/fixpoint.md); read that first if you haven't.
 
-Fixed-point arrays use [`DataArray[FixedField]`](../schema/python/dataarrays.md) — the same
+Fixed-point arrays use [`DataArray[FixedField]`](../../schema/python/dataarrays.md) — the same
 numpy-backed array schema as every other element type, so they get flat storage,
 array access, and codegen for free. This is the case that most needs the
-[type-preserving operators](./index.md#the-two-paths): fixed-point grows bits and
+[type-preserving operators](./numerical.md#type-preserving-operators): fixed-point grows bits and
 rounds on assignment, so working through `.val` by hand is easy to get wrong. The
 operators (`*`, `+`, `-`) are sugar over the **free functions** in
-[`waveflow/hw/fixpoint.py`](../../../waveflow/hw/fixpoint.py) (not methods — the
+[`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py) (not methods — the
 container stays a plain container): `mult`, `add`, `sub`, `shift`, `fixed_sum`, and
 `quantize`. They run entirely in the **integer domain** and match the Vitis `ap_fixed`
 datapath bit-for-bit.
@@ -70,7 +74,7 @@ quantize(mult(a, b), Q8_4)             # DataArray[ap_fixed<8, 4>]
 
 ### Operator form (the primary spelling)
 
-The [operators](./index.md#2-type-preserving-operators--ab--c-then-quantize) are
+The [operators](./numerical.md#type-preserving-operators) are
 sugar over these functions, so a multiply-add reads like the math — and like the
 HLS `ap_fixed<...> y = a*b + c;` it mirrors. The intermediates grow to full
 precision; the single `quantize` is the only rounding:
@@ -85,7 +89,7 @@ y    = quantize(full, Q8_4)            # ap_fixed<8, 4>   -- the one explicit ro
 to_real(y)                             # array([ 3.5 , -2.75, -1.  ])
 ```
 
-This is exactly the fixed case of [`examples/basic_vec`](../../examples/basic_vec/), checked
+This is exactly the fixed case of [`examples/basic_vec`](../../../examples/basic_vec/), checked
 bit-for-bit against a Vitis kernel.
 
 ## Single 64-bit dtype, fail-fast above it
@@ -150,15 +154,15 @@ to_real(y)                         # array([1.15625])   == numpy dot, exactly
 The accumulator is sized (`fixed_sum` grows the integer bits by `ceil(log2 N)`) so the
 sum is exact; the matching Vitis kernel declares an `ap_fixed<34, 18>` accumulator so
 `acc += taps[i] * samples[i]` never rounds either. The
-[conformance harness](../../../examples/schemas/fixedpoint/fixedpoint_build.py) runs
+[conformance harness](../../../../examples/schemas/fixedpoint/fixedpoint_build.py) runs
 exactly this `s24_12` sum-of-products (plus `mult`/`add`/`quantize`) in Vitis C-sim and
 asserts the bits match the Python ops — run `pytest -m vitis -k fixedpoint`.
 
 ## See also
 
-- [Fixed-point (FixedField)](../schema/python/fixpoint.md) — the fixed-point *type*: the
+- [Fixed-point (FixedField)](../../schema/python/fixpoint.md) — the fixed-point *type*: the
   format, `QMode`/`OMode`, the defaults-match-Vitis contract.
-- [Vectorization overview](./index.md) — the two paths and when to use each.
+- [Vectorization overview](../index.md) — the two paths and when to use each.
 - [Integer vectorization](./integer.md) — the same growth-then-`quantize` story
   without a binary point.
-- [Data arrays](../schema/python/dataarrays.md) — the `DataArray` container these build on.
+- [Data arrays](../../schema/python/dataarrays.md) — the `DataArray` container these build on.

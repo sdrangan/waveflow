@@ -1,14 +1,19 @@
 ---
 title: Integer vectorization
-parent: Vectorization
+parent: Python
+grand_parent: Vectorization
 nav_order: 2
+audience: python
+applies_to: [IntField]
+api: [IntField]
+summary: "The integer vectorized model — IntField arrays as NumPy integer arrays, stored-integer semantics, and the single-64-bit dtype with a fail-fast guard above it."
 ---
 
 # Integer vectorization
 
 Integer arrays are `DataArray[IntField]` — numpy-backed, so the stored values are a
 plain NumPy integer `ndarray` reachable through `.val`. The
-[type-preserving operators](./index.md#the-two-paths) (`+`, `-`, `*`) compute over
+[type-preserving operators](./numerical.md#type-preserving-operators) (`+`, `-`, `*`) compute over
 the whole array in one NumPy call **and track bit growth** the way the HLS `ap_int`
 datapath does, so the Python result width matches the hardware.
 
@@ -31,7 +36,7 @@ y = a * b + c
 np.asarray(y)                                            # array([ 19, -29, -38,  11])
 ```
 
-This is the integer case of [`examples/basic_vec`](../../examples/basic_vec/) — one
+This is the integer case of [`examples/basic_vec`](../../../examples/basic_vec/) — one
 elementwise MAC, no per-element Python loop.
 
 ## Growth-aware result widths
@@ -95,7 +100,7 @@ ia([1]) * u                              # NotImplementedError: mixed signed/uns
 
 ## See also
 
-- [Vectorization overview](./index.md) — the two paths and when to use each.
+- [Vectorization overview](../index.md) — the two paths and when to use each.
 - [Fixed-point vectorization](./fixed.md) — the same growth-then-`quantize` story
   with a binary point.
-- [Fields](../schema/python/fields.md) — `IntField` and the scalar field types.
+- [Fields](../../schema/python/fields.md) — `IntField` and the scalar field types.

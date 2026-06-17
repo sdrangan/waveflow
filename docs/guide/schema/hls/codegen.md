@@ -113,10 +113,10 @@ dag.run(cfg)
 
 Because the helpers are keyed on the element type, the same `float32_array_utils` serves every `float`
 array. Using them in a kernel — the lane loop, with and without pipelining, and the wide-element (`pf = 0`)
-case — is covered in [Vectorization](../../vectorization/vitis_raw.md).
+case — is covered in [Vectorization](../../vectorization/hls/raw.md).
 
 ## See also
 
 - [Serialization](./serialization.md) — moving a single schema value over each interface.
-- [Vitis: raw arrays](../../vectorization/vitis_raw.md) — *using* the array utils: the lane loop and `read_array_slice`.
+- [Vitis: raw arrays](../../vectorization/hls/raw.md) — *using* the array utils: the lane loop and `read_array_slice`.
 - [Build System](../../build/) — the full `BuildDag` walkthrough.
