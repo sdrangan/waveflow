@@ -1,11 +1,11 @@
 """Structure tests for the migrated ComplexField conformance kernel renderer.
 
 The kernel is now the thin C-sim wrapper around the **generated serialization** (the
-``<type>_array_utils::read_array`` / ``write_array`` from the ComplexField C++ codegen) and
-**``complex_utils.hpp``** arithmetic -- it no longer hand-rolls interleaving or the inline
+``<type>_array_utils::read_array_slice`` / ``write_array_slice`` from the ComplexField C++ codegen)
+and **``complex_utils.hpp``** arithmetic -- it no longer hand-rolls interleaving or the inline
 complex formula.  These tests lock that contract: the right includes, the
-``complex_utils::`` op calls, the generated ``read_array`` / ``write_array`` with the per-type
-word widths, and that round-trip is the identity / conj ignores ``in_b``.
+``complex_utils::`` op calls, the generated ``read_array_slice`` / ``write_array_slice`` with the
+per-type word widths, and that round-trip is the identity / conj ignores ``in_b``.
 
 The end-to-end **bit-exact** Vitis conformance lives in ``test_complex_conformance.py``.
 """
@@ -27,8 +27,8 @@ def test_kernel_uses_complex_utils_and_generated_serialization():
     assert '#include "complex__fixed8_4_array_utils.h"' in k          # input serialization
     assert '#include "complex__fixed17_9_array_utils.h"' in k         # result serialization
     assert "complex_utils::cmult(a[i], b[i])" in k                    # arithmetic via the header
-    assert "complex__fixed8_4_array_utils::read_array<16>(aw, a, N)" in k
-    assert "complex__fixed17_9_array_utils::write_array<34>(y, yw, N)" in k
+    assert "complex__fixed8_4_array_utils::read_array_slice<16>(aw, a)" in k
+    assert "complex__fixed17_9_array_utils::write_array_slice<34>(y, yw)" in k
     # no hand-rolled interleaving / inline formula
     assert "ar * br - ai * bi" not in k and "memcpy" not in k
 
@@ -48,7 +48,7 @@ def test_op_call_dispatch():
 
 def test_binary_reads_in_b_unary_does_not():
     binary = _k("cadd")
-    assert "rw(argv[2])" in binary and "read_array<16>(bw, b, N)" in binary
+    assert "rw(argv[2])" in binary and "read_array_slice<16>(bw, b)" in binary
     unary = _k("conj", binary=False)
     assert "rw(argv[2])" not in unary and " b[" not in unary
 

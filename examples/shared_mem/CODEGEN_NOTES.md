@@ -12,8 +12,9 @@ kernel/testbench files — `hist.py` is the source of truth.
 - **Signature / pragmas:** `void hist(s_in, m_out, m_mem)` — two AXI4-Stream
   ports + one `m_axi` pointer; `m_axi` pragma `offset=slave bundle=gmem
   depth=...`, plus `ap_ctrl_hs port=return`.
-- **Three array ops** lower to typed bursts: `float32_array_utils::read_array<32>`
-  of data and edges, `uint32_array_utils::write_array<32>` of counts, each via
+- **Three array ops** lower to resident-range slice bursts (element coordinates):
+  `float32_array_utils::read_array_slice<32>(ptr, 0, n, data)` for data and edges,
+  `uint32_array_utils::write_array_slice<32>(counts, ptr, 0, n)` for counts, each via
   `memmgr::byte_addr_to_word_index<32>(cmd.<addr>)`, into `static float data[...]`,
   `static float edges[...]`, `static ap_uint<32> counts[...]`.
 - **Datapath is factored into hand-written hooks** — `hist_impl::validate(cmd)`,

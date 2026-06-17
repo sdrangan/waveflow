@@ -5,11 +5,11 @@ The kernel no longer hand-rolls component reconstruction / interleaving or inlin
 arithmetic.  It:
 
 1. reads packed words for the operand(s) (produced by ``arrayutils.write_array``),
-2. unpacks them into element buffers with the **generated** ``<type>_array_utils::read_array``
-   (the ``ComplexField`` C++ codegen from Phase 1),
+2. unpacks them into element buffers with the **generated** ``<type>_array_utils::read_array_slice``
+   whole-array overload (the ``ComplexField`` C++ codegen from Phase 1),
 3. applies the op via **``complex_utils.hpp``** (``cmult`` / ``cadd`` / ``csub`` / ``conj``;
    round-trip is the identity), and
-4. packs the result with the generated ``write_array`` and writes the words back.
+4. packs the result with the generated ``write_array_slice`` and writes the words back.
 
 Each operand / result is (de)serialized at ``word_bw = its element bitwidth`` (<=64), so the
 packing is one element per word -- exactly the layout ``arrayutils.write_array`` produces --
@@ -43,7 +43,7 @@ def render_kernel(
             f"  auto WB = rw(argv[2]);",
             f"  static ap_uint<{wbi}> bw[{nwa}]; static {in_cpp} b[{n}];",
             f"  for (int i = 0; i < {nwa}; ++i) bw[i] = ap_uint<{wbi}>(WB[i]);",
-            f"  {in_ns}::read_array<{wbi}>(bw, b, N);",
+            f"  {in_ns}::read_array_slice<{wbi}>(bw, b);",
         ])
 
     lines = [
@@ -65,12 +65,12 @@ def render_kernel(
         "  auto WA = rw(argv[1]);",
         f"  static ap_uint<{wbi}> aw[{nwa}]; static {in_cpp} a[{n}];",
         f"  for (int i = 0; i < {nwa}; ++i) aw[i] = ap_uint<{wbi}>(WA[i]);",
-        f"  {in_ns}::read_array<{wbi}>(aw, a, N);",
+        f"  {in_ns}::read_array_slice<{wbi}>(aw, a);",
         b_block,
         f"  static {out_cpp} y[{n}];",
         f"  for (int i = 0; i < N; ++i) y[i] = {_OPCALL[op]};",
         f"  static ap_uint<{wbo}> yw[{nwy}];",
-        f"  {out_ns}::write_array<{wbo}>(y, yw, N);",
+        f"  {out_ns}::write_array_slice<{wbo}>(y, yw);",
         "  std::ofstream out(argv[3]);",
         f"  for (int i = 0; i < {nwy}; ++i) out << (unsigned long long)yw[i] << char(10);",
         "  return 0;",
