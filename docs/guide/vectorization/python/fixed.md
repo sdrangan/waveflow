@@ -22,7 +22,7 @@ array access, and codegen for free. This is the case that most needs the
 [type-preserving operators](../index.md#the-two-paths): fixed-point grows bits and
 rounds on assignment, so working through `.val` by hand is easy to get wrong. The
 operators (`*`, `+`, `-`) are sugar over the **free functions** in
-[`waveflow/hw/fixpoint.py`](../../../waveflow/hw/fixpoint.py) (not methods — the
+[`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py) (not methods — the
 container stays a plain container): `mult`, `add`, `sub`, `shift`, `fixed_sum`, and
 `quantize`. They run entirely in the **integer domain** and match the Vitis `ap_fixed`
 datapath bit-for-bit.
@@ -89,7 +89,7 @@ y    = quantize(full, Q8_4)            # ap_fixed<8, 4>   -- the one explicit ro
 to_real(y)                             # array([ 3.5 , -2.75, -1.  ])
 ```
 
-This is exactly the fixed case of [`examples/basic_vec`](../../examples/basic_vec/), checked
+This is exactly the fixed case of [`examples/basic_vec`](../../../examples/basic_vec/), checked
 bit-for-bit against a Vitis kernel.
 
 ## Single 64-bit dtype, fail-fast above it
@@ -154,7 +154,7 @@ to_real(y)                         # array([1.15625])   == numpy dot, exactly
 The accumulator is sized (`fixed_sum` grows the integer bits by `ceil(log2 N)`) so the
 sum is exact; the matching Vitis kernel declares an `ap_fixed<34, 18>` accumulator so
 `acc += taps[i] * samples[i]` never rounds either. The
-[conformance harness](../../../examples/schemas/fixedpoint/fixedpoint_build.py) runs
+[conformance harness](../../../../examples/schemas/fixedpoint/fixedpoint_build.py) runs
 exactly this `s24_12` sum-of-products (plus `mult`/`add`/`quantize`) in Vitis C-sim and
 asserts the bits match the Python ops — run `pytest -m vitis -k fixedpoint`.
 

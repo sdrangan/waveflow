@@ -37,7 +37,7 @@ np.asarray(y)                                            # array([ 3.25, -2.75, 
 y.element_type.get_bitwidth()                            # 32  (no growth — float32 in, float32 out)
 ```
 
-This is the float case of [`examples/basic_vec`](../../examples/basic_vec/). A `float64` array
+This is the float case of [`examples/basic_vec`](../../../examples/basic_vec/). A `float64` array
 stays 64-bit the same way.
 
 ## When to use `.val` vs the operators

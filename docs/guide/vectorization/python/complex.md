@@ -145,7 +145,7 @@ top.element_type.inner_type.cpp_type   # 'ap_fixed<34, 18, AP_TRN, AP_WRAP>'
 
 The products and sums grow to full precision (no overflow, no rounding); a hardware butterfly
 that declares the same widened `ap_fixed` intermediates computes the identical bits. The
-[conformance harness](../../../examples/schemas/complex/complex_build.py) runs `cmult` / `cadd`
+[conformance harness](../../../../examples/schemas/complex/complex_build.py) runs `cmult` / `cadd`
 / `csub` / `conj` (fixed, int, and float — including the float multiply edge) in Vitis C-sim and
 asserts the emitted bits equal these Python ops — run `pytest -m vitis -k complex`.
 

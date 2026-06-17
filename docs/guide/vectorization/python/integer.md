@@ -36,7 +36,7 @@ y = a * b + c
 np.asarray(y)                                            # array([ 19, -29, -38,  11])
 ```
 
-This is the integer case of [`examples/basic_vec`](../../examples/basic_vec/) — one
+This is the integer case of [`examples/basic_vec`](../../../examples/basic_vec/) — one
 elementwise MAC, no per-element Python loop.
 
 ## Growth-aware result widths
