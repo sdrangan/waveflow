@@ -1,14 +1,22 @@
 ---
 title: HwTestbench
 parent: Hardware Components
-nav_order: 4
+nav_order: 3
+audience: python
+applies_to: [HwComponent]
+api: [HwTestbench]
+summary: "HwTestbench — a HwComponent subclass whose sequential main() (stream push/pop, dut.run()) defines a test sequence in Python; the codegen source for a C++ testbench main()."
 ---
 
 # HwTestbench
 
 ## Concept
 
-`HwTestbench` is a `HwComponent` subclass for codegen-source testbenches. Its `main(self)` method is extracted and lowered into C++ testbench code by `HlsCodegenStep` testbench mode.
+`HwTestbench` is a `HwComponent` subclass for codegen-source testbenches. You write the test sequence as a Python `main(self)` method; that method is the source the codegen extracts.
+
+> The codegen side — extracting and lowering `main()` into a C++ testbench `main()` (the
+> `HlsCodegenStep` testbench mode) — belongs to the forthcoming **component codegen** section; the
+> emitter behavior is interim-documented under [Synthesis testbench](../synthesis/testbench.md).
 
 The v1 model is sequential: blocking file I/O, stream push/pop operations, and `dut.run()` are supported in `main()`. Concurrent SimPy-style stimulus/capture (`env.process(...)`) is not currently supported in this pathway.
 
