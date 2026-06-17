@@ -26,10 +26,11 @@ int main(int argc, char** argv) {
     }
 
     __NAMESPACE__::value_type data[__ARRAY_LEN__];
-    __NAMESPACE__::read_array<__WORD_BW__>(words.data(), data, __ARRAY_LEN__);
+    // Whole-array overload (range [0, N)); N is deduced from the statically-sized buffer.
+    __NAMESPACE__::read_array_slice<__WORD_BW__>(words.data(), data);
 
     ap_uint<__WORD_BW__> out_words[__NWORDS__];
-    __NAMESPACE__::write_array<__WORD_BW__>(data, out_words, __ARRAY_LEN__);
+    __NAMESPACE__::write_array_slice<__WORD_BW__>(data, out_words);
 
     std::ofstream out(out_words_path);
     if (!out) {
