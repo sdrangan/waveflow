@@ -1,7 +1,11 @@
 ---
 title: Param supports
-parent: Synthesis
+parent: Component Code Generation
 nav_order: 4
+audience: hls
+applies_to: [HwParam]
+api: [param_supports]
+summary: "How one component class emits multiple concrete kernel entry points (<kernel>_<key>) from a param_supports map of HwParam overrides — for when Vitis needs concrete tops rather than templated top-level functions."
 ---
 
 # Param supports

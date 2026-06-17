@@ -15,8 +15,8 @@ summary: "HwTestbench — a HwComponent subclass whose sequential main() (stream
 `HwTestbench` is a `HwComponent` subclass for codegen-source testbenches. You write the test sequence as a Python `main(self)` method; that method is the source the codegen extracts.
 
 > The codegen side — extracting and lowering `main()` into a C++ testbench `main()` (the
-> `HlsCodegenStep` testbench mode) — belongs to the forthcoming **component codegen** section; the
-> emitter behavior is interim-documented under [Synthesis testbench](../synthesis/testbench.md).
+> `HlsCodegenStep` testbench mode) — is in
+> [Component Code Generation: Testbench](../comp_codegen/testbench.md).
 
 The v1 model is sequential: blocking file I/O, stream push/pop operations, and `dut.run()` are supported in `main()`. Concurrent SimPy-style stimulus/capture (`env.process(...)`) is not currently supported in this pathway.
 
@@ -46,4 +46,4 @@ This is the reference sequential pattern for generated C++ testbench mains.
 - Put the test sequence in `main()`.
 - Use stream push/pop and regmap helpers directly.
 - Keep flow sequential in v1.
-- See [Synthesis testbench](../synthesis/testbench.md) for emitter behavior.
+- See [Component Code Generation: Testbench](../comp_codegen/testbench.md) for emitter behavior.

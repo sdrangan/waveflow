@@ -25,4 +25,4 @@ This section splits in two:
   (the C++ struct) and [serialization](./hls/serialization.md) (moving a single value over each
   interface). For packing **arrays** of schemas, see [Vectorization](../vectorization/).
 
-For synthesis-pipeline details beyond schema headers, see [Synthesis](../synthesis/).
+For synthesis-pipeline details beyond schema headers, see [Synthesis](../comp_codegen/).

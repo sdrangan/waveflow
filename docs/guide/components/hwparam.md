@@ -17,8 +17,7 @@ summary: "HwParam[T] — per-instance synthesis-parameter fields: int-like in si
 During `HwComponent.__post_init__`, raw values for `HwParam` fields are wrapped as `HwParamValue`. This wrapper preserves which parameter name produced the value so emitters can substitute template-aware expressions where needed.
 
 > The codegen side — how a `HwParam` lowers to a C++ template parameter / kernel-signature
-> argument — belongs to the forthcoming **component codegen** section; it is interim-documented
-> under [Synthesis templating](../synthesis/templating.md).
+> argument — is in [Component Code Generation: Templating](../comp_codegen/templating.md).
 
 ## API
 
@@ -45,4 +44,4 @@ These parameters drive generated kernel signatures and stream/regmap bitwidths.
 - Values are auto-wrapped to `HwParamValue` during construction.
 - `HwParam` fields are immutable after construction.
 - Use plain fields for mutable runtime state.
-- See [Synthesis templating](../synthesis/templating.md) for codegen flow.
+- See [Component Code Generation: Templating](../comp_codegen/templating.md) for codegen flow.

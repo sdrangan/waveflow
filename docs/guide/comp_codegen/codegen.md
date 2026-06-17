@@ -1,7 +1,10 @@
 ---
 title: Codegen
-parent: Synthesis
+parent: Component Code Generation
 nav_order: 2
+audience: hls
+api: [kernel_files_to_str, HlsCodegenStep]
+summary: "How resolved HwStmt IR is emitted to deterministic kernel files — <kernel>.hpp / .cpp plus sticky hook impl files — with C++ type lowering, top-level signatures, namespace-qualified hook calls, and variant naming."
 ---
 
 # Codegen
