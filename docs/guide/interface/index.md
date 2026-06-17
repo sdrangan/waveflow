@@ -25,5 +25,5 @@ This section is the **Python transactional model**: the interface classes, their
 ## See also
 
 - [Hardware Components](../components/) — declaring the ports (these endpoints) on a component.
-- **Custom Hooks** *(forthcoming section)* — the synthesizable side: using an interface inside a kernel body (the `#pragma HLS INTERFACE` ports and the `read_stream` / `m_axi` calls). It does not exist yet; the kernel-facing C++ for these interfaces lands there.
+- [Custom Hooks](../custom_hooks/) — the synthesizable side: using an interface inside a kernel body (the `#pragma HLS INTERFACE` ports and the `read_stream` / `m_axi` calls on it).
 

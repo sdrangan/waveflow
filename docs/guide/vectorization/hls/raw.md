@@ -204,20 +204,11 @@ bus-width → throughput relationship made concrete (and what the VMAC `mem_dwid
 
 ### Streams instead of memory
 
-> Transfer over a real stream/port — the stream/`TLAST` variants and the `m_axi`-port loop patterns — is
-> detailed in [Interfaces](../../interface/); this section is the local-buffer sketch.
-
-For an AXI-Stream port the shape is identical, but you **drop the running pointers** (`xp`/`yp`/`WPU` — the
-stream sequences itself) and use the stream lane variants, which also carry `TLAST`:
-
-```cpp
-streamutils::tlast_status tl;
-au::read_axi4_stream_lane<WORD_BW>(s_in,  lane, n, tl);             // LW elements off the stream
-au::write_axi4_stream_lane<WORD_BW>(s_out, lane, /*tlast=*/last, n);
-```
-
-`examples/vmac/vmac_compute_impl.tpp` is the worked `m_axi` example (the lane loop above);
-`examples/stream_inband/poly_evaluate_impl.tpp` is the worked stream example.
+The same lane loop runs over a stream port — you drop the running pointers (the stream
+self-sequences) and use the stream lane variants (`read_stream_lane` / `read_axi4_stream_lane`, the
+latter carrying `TLAST`). Moving data over a real stream or `m_axi` port inside a kernel — the stream
+lane calls and the worked `.tpp` examples — is covered in
+[Custom Hooks: kernel patterns](../../custom_hooks/patterns.md).
 
 ## See also
 
