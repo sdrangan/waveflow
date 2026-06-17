@@ -115,10 +115,13 @@ def test_gen_array_utils_generates_complex_header(kind):
 
     expected_include = "#include \"wf_cint.h\"" if kind == "int" else "#include <complex>"
     assert expected_include in hdr
-    # both read/write specializations construct the cpp_type from (re, im) halves
+    # both read/write per-element impl specializations construct the cpp_type from (re, im) halves
     assert f"value_type = {cf.cpp_type}" in hdr
-    assert "read_array<32>" in hdr and "read_array<64>" in hdr
-    assert "write_array<32>" in hdr and "write_array<64>" in hdr
+    assert "struct read_array_elem_impl<32>" in hdr and "struct read_array_elem_impl<64>" in hdr
+    assert "struct write_array_elem_impl<32>" in hdr and "struct write_array_elem_impl<64>" in hdr
+    # the retired bulk read_array/write_array are gone; resident arrays use slice/lane methods
+    assert "read_array_slice(" in hdr and "write_array_slice(" in hdr
+    assert "read_array<32>" not in hdr and "write_array<32>" not in hdr
     # the wide (multi-word, word_bw=32 for a >32-bit element) path declares re/im temps
     if cf.get_bitwidth() > 32:
         assert "__wf_re" in hdr and "__wf_im" in hdr

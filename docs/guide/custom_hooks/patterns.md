@@ -86,11 +86,12 @@ A hook is the C++ realization of a Python transfer interface. The
 `ArrayUtilsStep` generates these for any `DataSchema` element type, so a transfer parameterized on a
 composite `DataList` gets analogous helpers.
 
-> **API note (for [[project-serialization-phase2b-remaining]]):** earlier drafts mapped these to the
-> bulk `write_array(stream, …)` / `read_array(stream, …)` names. Those are the *memory* bulk methods
-> (`read_array<W>(words, dst, len)`) and were misapplied to streams; the current per-port API is the
-> lane/slice family above. The generator still ships the old bulk `read_array` / `write_array`
-> alongside the lane methods — retiring them is tracked in the serialization phase-2b follow-up.
+> **API note:** earlier drafts mapped these to the bulk `write_array(stream, …)` /
+> `read_array(stream, …)` names. Those were the *memory* bulk methods (`read_array<W>(words, dst,
+> len)`) misapplied to streams; the current per-port API is the lane/slice family above. The old
+> bulk `read_array` / `write_array` (and the per-element `*_elem` wrappers) have now been **retired**
+> from the generator — resident arrays use `read_array_slice` / `write_array_slice` (element
+> coordinates) or the `read_array_lane` loop, and all live examples read in this one idiom.
 
 ## See also
 
