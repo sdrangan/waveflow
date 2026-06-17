@@ -51,9 +51,9 @@ include-package-data = true
 # Pytest configuration
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "-q"
+addopts = "-q --ignore-glob=examples/_archive/*"
 testpaths = ["tests"]
-norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}"]
+norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}", "examples/_archive"]
 markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",
     "phase1: HwComponent codegen phase 14 — phase 1 (HwTestbench + extractor mode)",

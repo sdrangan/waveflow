@@ -8,12 +8,23 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from examples.conv2d.conv2d_demo import Conv2DError, Conv2DSimResult, Conv2DTest, PixelField
-from waveflow.hw.arrayutils import write_uint32_file
-from waveflow.toolchain import toolchain
+# conv2d is archived (examples/_archive/) pending a systolic-array rewrite as a proper
+# HwComponent; it uses the retired serialization API + pre-component HLS style and is not
+# in CI. This whole module is skipped, and pytest is configured (norecursedirs +
+# --ignore-glob in pyproject.toml) not to collect anything under examples/_archive.
+pytestmark = pytest.mark.skip(reason="conv2d archived pending systolic-array rework")
+
+from examples._archive.conv2d.conv2d_demo import (  # noqa: E402
+    Conv2DError,
+    Conv2DSimResult,
+    Conv2DTest,
+    PixelField,
+)
+from waveflow.hw.arrayutils import write_uint32_file  # noqa: E402
+from waveflow.toolchain import toolchain  # noqa: E402
 
 
-CONV2D_EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "conv2d"
+CONV2D_EXAMPLE_DIR = Path(__file__).resolve().parent
 
 
 def _copy_conv2d_vitis_resources(dst_dir: Path) -> None:
@@ -476,7 +487,7 @@ def test_conv2d_test_write_csynth_reports(tmp_path: Path) -> None:
                 {"DSP": 8, "LUT": 123},
             ], index=["Total"])
 
-    with patch("examples.conv2d.conv2d_demo.CsynthParser", FakeParser):
+    with patch("examples._archive.conv2d.conv2d_demo.CsynthParser", FakeParser):
         outputs = conv2d_test.write_csynth_reports(data_dir)
 
     assert outputs is not None
