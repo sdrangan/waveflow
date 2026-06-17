@@ -13,7 +13,7 @@ summary: "Run a whole system in Python: a SimPy discrete-event simulation that w
 A Waveflow design is, first, a **Python program you can run**. Before any C++ is generated, you
 assemble your components, wire them together with [interfaces](../interface/), and **simulate the
 whole system** — checking that the data flows, the protocol handshakes, and the results are correct.
-That is the Arc-2 milestone: *simulate a whole system in Python.*
+That is the milestone: *simulate a whole system in Python.*
 
 ## Discrete-event simulation (PySim)
 

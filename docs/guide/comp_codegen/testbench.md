@@ -1,7 +1,7 @@
 ---
 title: Testbench
 parent: Component Code Generation
-nav_order: 5
+nav_order: 7
 audience: hls
 applies_to: [HwTestbench]
 api: [HwTestbench, HlsCodegenStep]

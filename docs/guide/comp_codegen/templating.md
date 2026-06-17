@@ -1,7 +1,7 @@
 ---
 title: Templating
 parent: Component Code Generation
-nav_order: 3
+nav_order: 5
 audience: hls
 applies_to: [HwParam]
 api: [HwParam, HwParamValue]
