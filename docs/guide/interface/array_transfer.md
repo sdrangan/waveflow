@@ -259,18 +259,10 @@ Both `cmd_slave` and `samp_slave` share the same `transport` (and therefore the 
 
 ## Synthesis mapping
 
-> The synthesizable side — using this interface inside a kernel body (the `m_axi` / stream port and
-> the `read_array` / `write_array` calls on it) — is covered in the forthcoming **Custom Hooks**
-> section. This mapping table is a pointer to that C++; it is documented in full there.
-
-When generating Vitis HLS code, `ArrayTransferIF` maps to the utilities produced by `ArrayUtilsStep`:
-
-| Python | C++ |
-|---|---|
-| `ArrayTransferIFMaster(element_type=Float32).write(elements)` | `float32_array_utils::write_array(stream, data, n)` |
-| `ArrayTransferIFSlave(element_type=Float32).get(count=n)` | `float32_array_utils::read_array(stream, n)` |
-
-`ArrayUtilsStep` works for any `DataSchema` subclass, so an `ArrayTransferIF` parameterized on a composite `DataList` generates analogous struct-array utilities.
+The **synthesizable side** — the generated `<element>_array_utils` calls a kernel uses to move this
+transfer over an `m_axi` / stream port (`write_axi4_stream_lane` / `read_axi4_stream_lane`, or
+`read_array_slice` for a resident array) — is documented, with the Python→C++ mapping table, in
+[Custom Hooks: kernel patterns](../custom_hooks/patterns.md#mapping-the-python-transfer-interfaces-to-the-kernel).
 
 ---
 

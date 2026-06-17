@@ -61,4 +61,4 @@ From [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py)
 **The synthesizable side** (the C++ realization of a component):
 
 - [Component Code Generation](../comp_codegen/) — what a full component generates: the kernel structure, how `HwParam` becomes C++ template parameters, and `main()`→testbench emission.
-- **Custom Hooks** *(forthcoming section)* — the hand-written synthesizable kernel bodies that plug into a generated component.
+- [Custom Hooks](../custom_hooks/) — the hand-written synthesizable kernel bodies that plug into a generated component.

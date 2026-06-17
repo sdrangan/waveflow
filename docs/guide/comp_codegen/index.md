@@ -12,7 +12,8 @@ summary: "The auto-generated codegen path: how a Python HwComponent lowers to Vi
 This section is the **auto-generated codegen path**: how a Python [`HwComponent`](../components/) is
 lowered into concrete, Vitis-ready C++. It is the first half of Arc 3 (hardware generation) — the
 **machine-generated** structure of a component. The **hand-written** synthesizable kernel bodies that
-plug into that structure (the `@synthesizable(impl_file=…)` hooks) are the **Custom Hooks** section.
+plug into that structure (the `@synthesizable(impl_file=…)` hooks) are documented in
+[Custom Hooks](../custom_hooks/).
 
 The flow starts from a Python class and resolves it into a typed intermediate representation
 (`HwStmt`) that is emitted deterministically. Two things define a generated component:
@@ -29,8 +30,8 @@ The flow starts from a Python class and resolves it into a typed intermediate re
 
 This section covers only the **auto-generated** C++. The body of a compute kernel is *not* generated
 — it is hand-written in a `.tpp` and attached to the component with `@synthesizable(impl_file=…)`.
-Those hand-written hooks (how to author one, the contract they satisfy) are documented in the
-**Custom Hooks** section *(forthcoming)*.
+Those hand-written hooks (how to author one, the contract they satisfy) are documented in
+[Custom Hooks](../custom_hooks/).
 
 ## In this section
 

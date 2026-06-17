@@ -56,5 +56,5 @@ kernels — is on the [component Lifecycle](../components/lifecycle.md) page; th
 - [Build System](../build/python.md) — running a simulation as a step in a `BuildDag`.
 
 > The simulation models a design in Python. Turning that design into synthesizable C++ — the
-> generated kernel structure and the hand-written kernel bodies — is the codegen arc: the
-> forthcoming **component codegen** and **Custom Hooks** sections.
+> generated kernel structure and the hand-written kernel bodies — is the codegen arc:
+> [Component Code Generation](../comp_codegen/) and [Custom Hooks](../custom_hooks/).
