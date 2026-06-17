@@ -2,7 +2,9 @@
 title: Stream Interfaces
 parent: Interfaces
 nav_order: 2
-has_children: false
+audience: python
+api: [StreamIF, StreamIFMaster, StreamIFSlave, CrossBarIF, CrossBarIFInput, CrossBarIFOutput]
+summary: "Unidirectional stream interfaces in the SimPy model — point-to-point StreamIF (write/rx_proc), the CrossBarIF switching fabric, and pipelined get/write timing."
 ---
 
 # Stream Interfaces

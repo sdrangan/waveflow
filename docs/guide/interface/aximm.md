@@ -2,7 +2,9 @@
 title: MM Interfaces
 parent: Interfaces
 nav_order: 3
-has_children: false
+audience: python
+api: [MMIFMaster, MMIFSlave, AXIMMCrossBarIF, DirectMMIF, AXIMMProtocol, assign_address_ranges]
+summary: "Memory-mapped interfaces in the SimPy model — MMIFMaster/MMIFSlave endpoints, the AXIMMCrossBarIF (FULL/LITE, address routing) and DirectMMIF, and read/write/read_schema/read_array."
 ---
 
 # Memory-Mapped (MM) Interfaces

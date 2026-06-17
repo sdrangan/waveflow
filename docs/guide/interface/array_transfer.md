@@ -1,8 +1,10 @@
 ---
 title: Array Transfer Interface
 parent: Interfaces
-nav_order: 5
-has_children: false
+nav_order: 6
+audience: python
+api: [ArrayTransferIF, ArrayTransferIFMaster, ArrayTransferIFSlave, StreamTransport]
+summary: "The logical interface that carries a variable-length typed array over a transport — write(elements) with a numpy fast path, push (rx_proc) vs pull (get(count)) receive, and TLAST length validation."
 ---
 
 # Array Transfer Interface
@@ -256,6 +258,10 @@ Both `cmd_slave` and `samp_slave` share the same `transport` (and therefore the 
 ---
 
 ## Synthesis mapping
+
+> The synthesizable side — using this interface inside a kernel body (the `m_axi` / stream port and
+> the `read_array` / `write_array` calls on it) — is covered in the forthcoming **Custom Hooks**
+> section. This mapping table is a pointer to that C++; it is documented in full there.
 
 When generating Vitis HLS code, `ArrayTransferIF` maps to the utilities produced by `ArrayUtilsStep`:
 
