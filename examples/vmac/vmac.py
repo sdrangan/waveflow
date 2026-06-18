@@ -59,7 +59,7 @@ from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.hw_component import HwComponent, HwParam
 from waveflow.hw.interface import StreamIFSlave
 from waveflow.hw.memif import MMIFMaster
-from waveflow.hw.named import NamedObject
+from waveflow.named import NamedObject
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils import complexutils as cx

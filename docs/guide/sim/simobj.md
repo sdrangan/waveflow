@@ -56,7 +56,6 @@ from dataclasses import dataclass
 
 import simpy
 
-import waveflow.hw  # noqa: F401  (initializes the package; the simulation layer imports cleanly after)
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Generator, TypeVar
 
-from waveflow.hw.named import NamedObject
+from waveflow.named import NamedObject
 
 import simpy
 
