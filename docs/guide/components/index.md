@@ -33,8 +33,7 @@ This section is **Python-only** by design — the model you simulate. The same c
 - [Defining a component](./overview.md) — the `HwComponent` class and how you declare its endpoints (`__post_init__` + `add_endpoint`), walked through `simp_fun`.
 - [Endpoint methods](./endpoints.md) — the master/slave roles and the method you define or call per endpoint type (stream, m_axi, regmap, schema/array transfer).
 - [Lifecycle](./lifecycle.md) — `pre_sim` / `run_proc` / `post_sim` and `on_start`: *when* the endpoint methods run.
-- [HwParam](./hwparam.md) — per-instance synthesis-parameter fields.
-- [HwConst](./hwconst.md) — class-level compile-time structural constants.
+- [Parameterization](./parameterization.md) — `HwParam` (per-instance synthesis knobs) vs. `HwConst` (class-level structural constants), and `param_supports` variant kernels.
 - [HwTestbench](./hwtestbench.md) — a component subclass whose `main()` is a Python test sequence.
 
 ## See also

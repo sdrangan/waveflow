@@ -30,8 +30,7 @@ plug into.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
 - [Extractor](./extractor.md) — how `HwStmtExtractor` parses the synthesizable Python subset into the `HwStmt` IR, failing fast on unsupported patterns.
 - [Codegen](./codegen.md) — how `kernel_files_to_str` emits the deterministic kernel file set and resolves naming.
-- [Templating](./templating.md) — how `HwParam` values map to template-aware code paths.
-- [Param supports](./param_supports.md) — how variant kernels are emitted from `param_supports`.
+- [Templating](./templating.md) — the C++ realization of [parameterization](../components/parameterization.md): how `HwParam` lowers (concrete widths / `.tpp` template params), `HwConst` (deferred), and how `param_supports` emits variant kernels.
 - [Testbench](./testbench.md) — `HwTestbench` and `is_testbench=True` codegen mode.
 
 ## See also

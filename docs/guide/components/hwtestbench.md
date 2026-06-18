@@ -1,7 +1,7 @@
 ---
 title: HwTestbench
 parent: Hardware Components
-nav_order: 6
+nav_order: 5
 audience: python
 applies_to: [HwComponent]
 api: [HwTestbench]
