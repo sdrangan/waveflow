@@ -73,7 +73,7 @@ body only writes its result. A free-running component instead implements `run_pr
 process that loops over its stream/`m_axi` ports.
 
 > **Sim-only lifecycle hooks are not synthesized.** `pre_sim` and `post_sim` exist for the Python
-> [simulation lifecycle](../components/lifecycle.md) only — the generator never lowers them. Only the
+> [simulation lifecycle](../sim/simobj.md#its-lifecycle) only — the generator never lowers them. Only the
 > selected kernel entry (`on_start` / `run_proc`, or `main` for a testbench) and the `@synthesizable`
 > methods it calls become C++.
 

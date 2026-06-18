@@ -18,7 +18,7 @@ below as *who drives the transaction*.
 ## Master — the component initiates
 
 A master endpoint drives the bus: the component **calls** the transaction method itself, from its
-[lifecycle](./lifecycle.md) body (`run_proc`, or `on_start` / a `@synthesizable` hook).
+[lifecycle](../sim/simobj.md#its-lifecycle) body (`run_proc`, or `on_start` / a `@synthesizable` hook).
 
 - **Stream** — [`StreamIFMaster`](../../../waveflow/hw/interface.py): `write(data)`,
   `write_pipelined(data, t_out_start)`, `push(value)`. `poly`'s `m_out` emits its response with
@@ -68,7 +68,7 @@ The method names are canonical; the **signatures and semantics live on the linke
 ## Endpoints are *what*; lifecycle is *when*
 
 This page is the *what* — the methods available per endpoint. *When* they run — `run_proc` for a
-free-running component vs. `on_start` for a regmap-launched one — is the [Lifecycle](./lifecycle.md)
+free-running component vs. `on_start` for a regmap-launched one — is the [Lifecycle](../sim/simobj.md#its-lifecycle)
 page. The synthesizable C++ realization of each endpoint (an `hls::stream` / `m_axi` / `s_axilite`
 port) is [Component Code Generation: Endpoint interfaces](../comp_codegen/interface.md).
 

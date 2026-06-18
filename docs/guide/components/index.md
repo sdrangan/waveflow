@@ -1,11 +1,11 @@
 ---
 title: Hardware Components
 parent: Guide
-nav_order: 5
+nav_order: 6
 has_children: true
 audience: python
 api: [HwComponent, Component, add_endpoint]
-summary: "The Python HwComponent model: a synthesizable hardware module defined by its interface endpoints, wired to other components by binding endpoints to interfaces, with behavior expressed as the methods on those endpoints. Covers defining a component, the endpoint methods, the lifecycle, and HwParam / HwConst / HwTestbench."
+summary: "The Python HwComponent model: a synthesizable hardware module defined by its interface endpoints, wired to other components by binding endpoints to interfaces, with behavior expressed as the methods on those endpoints. Covers defining a component, the endpoint methods, and HwParam / HwConst / HwTestbench (its lifecycle lives in Simulation)."
 ---
 
 # Hardware Components
@@ -32,7 +32,6 @@ This section is **Python-only** by design — the model you simulate. The same c
 
 - [Defining a component](./overview.md) — the `HwComponent` class and how you declare its endpoints (`__post_init__` + `add_endpoint`), walked through `simp_fun`.
 - [Endpoint methods](./endpoints.md) — the master/slave roles and the method you define or call per endpoint type (stream, m_axi, regmap, schema/array transfer).
-- [Lifecycle](./lifecycle.md) — `pre_sim` / `run_proc` / `post_sim` and `on_start`: *when* the endpoint methods run.
 - [Parameterization](./parameterization.md) — `HwParam` (per-instance synthesis knobs) vs. `HwConst` (class-level structural constants), and `param_supports` variant kernels.
 - [HwTestbench](./hwtestbench.md) — a component subclass whose `main()` is a Python test sequence.
 

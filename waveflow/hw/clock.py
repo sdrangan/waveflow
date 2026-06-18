@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from waveflow.hw.named import NamedObject
+from waveflow.named import NamedObject
 
 from dataclasses import dataclass, field
 from typing import ClassVar

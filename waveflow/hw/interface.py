@@ -46,7 +46,7 @@ import simpy
 import numpy as np
 
 from waveflow.hw.dataschema import Words
-from waveflow.hw.named import NamedObject
+from waveflow.named import NamedObject
 from waveflow.hw.clock import Clock
 from waveflow.simulation.simobj import SimObj, ProcessGen
 from waveflow.hw.synth import synthesizable

@@ -1,7 +1,7 @@
 ---
 title: Parameterization
 parent: Hardware Components
-nav_order: 4
+nav_order: 3
 audience: python
 applies_to: [HwComponent, DataArray]
 api: [HwParam, HwParamValue, HwConst, discover_hw_const, param_supports]
