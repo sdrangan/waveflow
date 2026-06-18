@@ -141,4 +141,4 @@ experiment/
 
 # Allow build directory in waveflow
 !waveflow/build/
-!**/guide/build/
+!**/guide/build/headless_output.txt
