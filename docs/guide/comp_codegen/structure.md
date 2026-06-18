@@ -39,8 +39,10 @@ The top function `simp_fun` is the kernel; `simp_fun_impl::compute` is a hook it
 
 ## The execution model: free-running vs. regmap-launched
 
-A generated kernel runs in one of two modes, and the generator picks the mode — and the Python
-method it extracts as the kernel body — from the component's endpoints:
+The definition-side view — how you *choose* the mode when writing the component — is
+[Defining a component: Execution models](../components/overview.md#execution-models); this section is its
+C++ realization. A generated kernel runs in one of two modes, and the generator picks the mode — and the
+Python method it extracts as the kernel body — from the component's endpoints:
 
 | Mode | Kernel entry | Selected when | Control |
 |---|---|---|---|

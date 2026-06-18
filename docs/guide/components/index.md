@@ -4,58 +4,44 @@ parent: Guide
 nav_order: 5
 has_children: true
 audience: python
-summary: "The Python HwComponent model — declaring typed ports/endpoints, HwParam/HwConst fields, and the pre_sim/run_proc/post_sim lifecycle in the SimPy simulation."
+api: [HwComponent, Component, add_endpoint]
+summary: "The Python HwComponent model: a synthesizable hardware module defined by its interface endpoints, wired to other components by binding endpoints to interfaces, with behavior expressed as the methods on those endpoints. Covers defining a component, the endpoint methods, the lifecycle, and HwParam / HwConst / HwTestbench."
 ---
 
 # Hardware Components
 
-This section is the **Python `HwComponent` model**: how you declare a hardware component in the SimPy simulation — its typed ports (endpoints), its `HwParam` / `HwConst` fields, and its lifecycle. It is Python-only by design; a component's **synthesizable C++ realization** — the generated kernel structure, parameterization, and hand-written hooks — is the codegen arc (see the forward-pointers below).
+A [`HwComponent`](../../../waveflow/hw/hw_component.py) is Waveflow's representation of a
+**synthesizable hardware module**. You write it once in Python, and that one class is the source for
+both the SimPy simulation and the [generated C++ kernel](../comp_codegen/).
 
-## Concept
+A component is defined by three things, and this chapter is organized around them:
 
-`Component` is the base simulation object with named endpoints and SimPy lifecycle hooks. `HwComponent` extends it with synthesis-aware semantics: extractor-compatible methods, hardware endpoint declarations, and codegen metadata.
+- **Its interface endpoints** — the typed ports it talks to the outside world through (a stream
+  input, a memory-mapped master, an AXI-Lite register map). You declare them on the class.
+- **How it is wired** — a component does not call other components directly; its endpoints are
+  **bound** to [interfaces](../interface/), which carry transactions to the endpoints of other
+  components.
+- **What it does** — its behavior is expressed as the **methods on those endpoints** (`get` an
+  incoming transaction, `write` an outgoing one), driven from its lifecycle methods.
 
-Within a component class, fields usually fall into three categories:
-
-- `HwConst[T]` class-level constants for compile-time-style values.
-- `HwParam[T]` instance parameters that participate in synthesis templating.
-- Plain Python fields for simulation-only state and runtime configuration.
-
-Endpoints are declared in `__post_init__` and attached with `add_endpoint(...)`, typically including stream interfaces (`StreamIFMaster` / `StreamIFSlave`) and AXI-Lite control through regmap-backed endpoints such as `VitisRegMapMMIFSlave`. AXI-MM style interfaces are documented in [Interfaces](../interface/aximm.md).
-
-## API
-
-- [`Component`](../../../waveflow/hw/component.py)
-- [`HwComponent`](../../../waveflow/hw/hw_component.py)
-- [`add_endpoint(endpoint)`](../../../waveflow/hw/component.py)
-- [`HwParam`](./hwparam.md)
-- [`HwConst`](./hwconst.md)
-- [`HwTestbench`](./hwtestbench.md)
-
-## Example
-
-From [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py), `PolyAccelComponent` declares stream + regmap endpoints in `__post_init__` and registers each endpoint through `add_endpoint(...)`.
-
-## Quick reference
-
-- Use `Component` for simulation-only behavior.
-- Use `HwComponent` for synthesizable designs.
-- Declare endpoints explicitly in `__post_init__`.
-- Keep synthesis knobs in `HwParam` fields.
-- Keep compile-time constants in `HwConst` fields.
+This section is **Python-only** by design — the model you simulate. The same component's
+**synthesizable C++ realization** (the generated kernel function, its ports, parameterization) is the
+[Component Code Generation](../comp_codegen/) chapter; each page below cross-links its codegen dual.
 
 ## In this section
 
-- [HwParam](./hwparam.md)
-- [HwConst](./hwconst.md)
-- [HwTestbench](./hwtestbench.md)
-- [Lifecycle](./lifecycle.md)
+- [Defining a component](./overview.md) — the `HwComponent` class and how you declare its endpoints (`__post_init__` + `add_endpoint`), walked through `simp_fun`.
+- [Endpoint methods](./endpoints.md) — the master/slave roles and the method you define or call per endpoint type (stream, m_axi, regmap, schema/array transfer).
+- [Lifecycle](./lifecycle.md) — `pre_sim` / `run_proc` / `post_sim` and `on_start`: *when* the endpoint methods run.
+- [HwParam](./hwparam.md) — per-instance synthesis-parameter fields.
+- [HwConst](./hwconst.md) — class-level compile-time structural constants.
+- [HwTestbench](./hwtestbench.md) — a component subclass whose `main()` is a Python test sequence.
 
 ## See also
 
 **Prerequisites** — a component is built from these:
 
-- [Interfaces](../interface/) — the typed ports (stream / MM / regmap endpoints) a component declares.
+- [Interfaces](../interface/) — the typed ports (stream / MM / regmap endpoints) a component declares, and their transaction-method signatures.
 - [Data Schemas](../schema/) — the payloads those ports carry.
 
 **The synthesizable side** (the C++ realization of a component):

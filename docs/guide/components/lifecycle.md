@@ -1,7 +1,7 @@
 ---
 title: Lifecycle
 parent: Hardware Components
-nav_order: 4
+nav_order: 3
 audience: python
 applies_to: [HwComponent]
 api: [pre_sim, run_proc, post_sim, on_start, sim_only]

@@ -1,7 +1,7 @@
 ---
 title: HwParam
 parent: Hardware Components
-nav_order: 1
+nav_order: 4
 audience: python
 applies_to: [HwComponent]
 api: [HwParam, HwParamValue]
