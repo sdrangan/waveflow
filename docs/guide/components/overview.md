@@ -15,8 +15,8 @@ summary: "How you define a HwComponent: subclass HwComponent, declare its typed 
 A hardware module is a subclass of [`HwComponent`](../../../waveflow/hw/hw_component.py), which
 extends [`Component`](../../../waveflow/hw/component.py) (the base simulation object with named
 endpoints and the SimPy lifecycle). Components are written as dataclasses; runtime configuration and
-simulation-only state are plain fields, while synthesis knobs use [`HwParam`](./hwparam.md) and
-[`HwConst`](./hwconst.md).
+simulation-only state are plain fields, while synthesis knobs use [`HwParam` and
+`HwConst`](./parameterization.md).
 
 A few class-level (`ClassVar`) settings steer the generated C++ but are inert in simulation:
 `cpp_kernel_name` (override the kernel function name), `cpp_namespace` (the hook namespace), and
@@ -117,6 +117,6 @@ generated `void simp_fun(ap_int<32>& x, …)` — is
 
 - Subclass `HwComponent` (a dataclass); call `super().__post_init__()` first.
 - Declare each port in `__post_init__` and register it with `add_endpoint(...)`.
-- Keep synthesis knobs in [`HwParam`](./hwparam.md) / [`HwConst`](./hwconst.md); everything else is a plain field.
+- Keep synthesis knobs in [`HwParam` / `HwConst`](./parameterization.md); everything else is a plain field.
 - Drive behavior from `on_start` (regmap-launched) or `run_proc` (free-running) — see [Lifecycle](./lifecycle.md).
 - Mark hardware compute `@synthesizable`; the [endpoint methods](./endpoints.md) move the data.
