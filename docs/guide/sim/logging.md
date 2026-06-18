@@ -1,7 +1,7 @@
 ---
 title: Logging
 parent: Simulation
-nav_order: 4
+nav_order: 5
 audience: python
 api: [Logger, Logger.log, Logger.get_tv, NullLogger]
 summary: "Record timestamped events during a simulation: Logger is a SimObj that writes a flushed CSV (a leading time column from env.now plus your declared fields); log(**fields) records a row, get_tv(field) reads back (times, values). NullLogger is the no-op default."

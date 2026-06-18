@@ -1,7 +1,7 @@
 ---
 title: Running a simulation
 parent: Simulation
-nav_order: 2
+nav_order: 3
 audience: python
 api: [Simulation, Simulation.run_sim, SimObj, Clock, StreamIF, DirectMMIF, Interface.bind]
 summary: "Assemble and run a system in Python: instantiate components against one Simulation, wire their ports with Interface objects (.bind), and call run_sim() to drive pre_sim / run_proc / post_sim. Results are read off the objects afterward."
