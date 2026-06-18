@@ -1,7 +1,7 @@
 ---
 title: HwConst
 parent: Hardware Components
-nav_order: 2
+nav_order: 5
 audience: python
 applies_to: [HwComponent, DataArray]
 api: [HwConst, discover_hw_const]
