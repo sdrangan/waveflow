@@ -1103,7 +1103,12 @@ def header_to_cpp(
 
     tree = extract_kernel(default_comp)
     schemas = _collect_schemas(tree, default_comp)
-    lines = ['#pragma once', '']
+    # Always provide ap_int / ap_fixed: a kernel signature can use these via s_axilite
+    # register fields even when the component has no streams / schemas / m_axi (which
+    # otherwise pull in streamutils_hls.h, the header that supplies them). A regmap-only
+    # scalar kernel (e.g. simp_fun) would otherwise emit a header that uses ap_int<W> with
+    # nothing defining it. Redundant-include-safe via header guards.
+    lines = ['#pragma once', '', '#include <ap_int.h>', '#include <ap_fixed.h>', '']
     if _discover_stream_endpoints(default_comp):
         lines.append('#include "include/streamutils_hls.h"')
     for s in schemas:

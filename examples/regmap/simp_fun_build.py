@@ -321,9 +321,9 @@ def build_simp_fun_dag() -> BuildDag:
         name="validate_csim",
         golden_dir_artifact="sim_dir",
         actual_dir_artifact="csim_data_dir",
-        schemas=[
-            {"filename": "y_data.bin", "golden_filename": "y.bin", "schema": Int32},
-        ],
+        # simp_fun's output `y` is an s_axilite register, not a memory/stream buffer, so
+        # the kernel writes no `y_data.bin` — it is verified through regmap_status.json
+        # below. (A `.bin` schema comparison here would expect a file that never exists.)
         jsons=[
             {"filename": "regmap_status.json", "compare_fields": ["y"]},
         ],
