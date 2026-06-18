@@ -28,9 +28,22 @@ hardware at all.
 
 ## Its lifecycle
 
-A `SimObj` is driven through `pre_sim` → `run_proc` → `post_sim` by `Simulation.run_sim()`. That
-three-phase lifecycle — and the synthesizable-component specifics (`on_start`, `@sim_only`) — is the
-[Lifecycle](./lifecycle.md) page; this page just introduces the base object and a first simulation.
+`Simulation.run_sim()` drives every registered `SimObj` through three phases, in registration order:
+
+1. **`pre_sim()`** — setup / validation before the event loop (bind checks, address ranges, initial state).
+2. **`run_proc()`** — the object's optional SimPy generator process is scheduled; an object whose `run_proc` returns `None` is *passive* (it participates only via `pre_sim` / `post_sim`).
+3. **`post_sim()`** — collect results, assert invariants, emit reports (after the event loop ends).
+
+If the run raises, `error_cleanup()` is called on every object before the exception propagates, so
+files and loggers close cleanly.
+
+A *hardware* `SimObj` adds two synthesis-facing specifics: a regmap-launched component implements
+`on_start` — the invocation-style kernel entry the host triggers via `ap_start` — instead of a
+free-running `run_proc`, and `@sim_only` marks helpers that exist only for simulation and are excluded
+from synthesis extraction. Both are covered where the kernel is generated:
+[Component structure](../comp_codegen/structure.md),
+[Defining a component: Execution models](../components/overview.md#execution-models), and the
+[Extractor](../comp_codegen/extractor.md).
 
 ## Toy: two `SimObj`s interacting
 
@@ -110,4 +123,4 @@ interface or `HwComponent` enters the picture. Wiring `SimObj`s together with re
 - Override `run_proc` to make an object active (a SimPy generator); leave it to stay passive.
 - Use `self.timeout` / `self.process` / `self.event` / `self.now` — not raw SimPy.
 - Build a `Simulation()`, construct the `SimObj`s against it, call `run_sim()`.
-- The full lifecycle is [Lifecycle](./lifecycle.md); running a *system* of components is [Running a simulation](./running.md).
+- The three-phase lifecycle is just above; running a *system* of components is [Running a simulation](./running.md).

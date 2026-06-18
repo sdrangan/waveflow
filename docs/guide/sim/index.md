@@ -29,23 +29,17 @@ and the list of participating objects; every simulation entity is a
 borrows its environment. You rarely touch SimPy directly — `SimObj` wraps the primitives you need
 (`self.timeout(...)`, `self.process(...)`, `self.event()`).
 
-## The three-phase lifecycle (at a glance)
+## The three-phase lifecycle
 
-`Simulation.run_sim()` drives every registered object through three phases, in registration order:
-
-1. **`pre_sim()`** — setup / validation before the event loop (bind checks, address ranges, initial state).
-2. **`run_proc()`** — each object's optional SimPy generator process is scheduled (objects returning `None` are *passive* — they participate only via `pre_sim` / `post_sim`).
-3. **`post_sim()`** — collect results, assert invariants, emit reports (after the event loop ends).
-
-If the run raises, `error_cleanup()` is called on every object before the exception propagates (so
-files/loggers close). The **per-object** meaning of these hooks — and `on_start` for regmap-launched
-kernels — is on the [Lifecycle](./lifecycle.md) page; this section is the
-*system* view: how the hooks are driven across all objects at once.
+`Simulation.run_sim()` drives every registered `SimObj` through `pre_sim` → `run_proc` → `post_sim`,
+in registration order (`error_cleanup()` runs on every object if the run raises, so files and loggers
+close). That per-object lifecycle — and the `on_start` / `@sim_only` component specifics — is on the
+[SimObj](./simobj.md#its-lifecycle) page; this is the *system* view: how the hooks are driven across
+all objects at once.
 
 ## In this section
 
-- [SimObj](./simobj.md) — the base object every simulation entity is, with a toy two-`SimObj` producer/consumer simulation.
-- [Lifecycle](./lifecycle.md) — `pre_sim` / `run_proc` / `post_sim` (and the `on_start` / `@sim_only` component specifics).
+- [SimObj](./simobj.md) — the base object every simulation entity is, its three-phase lifecycle, and a toy two-`SimObj` producer/consumer simulation.
 - [Running a simulation](./running.md) — instantiate components, wire them with `Interface` objects, build a `Simulation`, and call `run_sim()`.
 - [Timing model](./timing.md) — `Clock` and how components / interfaces express cycle latency (the forward model that produces the timeline).
 - [Logging](./logging.md) — the `Logger` `SimObj`: recording timestamped events to a CSV for inspection and timing analysis.

@@ -71,7 +71,7 @@ the endpoint classes and their construction live in [Interfaces](../interface/).
 
 ## Behavior and compute
 
-A component's behavior is the **methods on its endpoints**, driven from a [lifecycle](../sim/lifecycle.md)
+A component's behavior is the **methods on its endpoints**, driven from a [lifecycle](../sim/simobj.md#its-lifecycle)
 method — `on_start` for a regmap-launched component (like `simp_fun`) or `run_proc` for a free-running
 one. Compute that must synthesize to hardware is marked
 [`@synthesizable`](../../../waveflow/hw/synth.py):
@@ -91,7 +91,7 @@ def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
 How you structure that behavior puts the component in one of two modes — and the mode follows from its
 endpoints:
 
-- **Free-running (`run_proc`).** The default: a long-lived [lifecycle](../sim/lifecycle.md) process that loops
+- **Free-running (`run_proc`).** The default: a long-lived [lifecycle](../sim/simobj.md#its-lifecycle) process that loops
   over the component's stream / `m_axi` ports, the way a streaming datapath runs continuously. You
   implement `run_proc`.
 - **Regmap-launched (`on_start`).** *Invocation-style.* A component that declares a
@@ -118,5 +118,5 @@ generated `void simp_fun(ap_int<32>& x, …)` — is
 - Subclass `HwComponent` (a dataclass); call `super().__post_init__()` first.
 - Declare each port in `__post_init__` and register it with `add_endpoint(...)`.
 - Keep synthesis knobs in [`HwParam` / `HwConst`](./parameterization.md); everything else is a plain field.
-- Drive behavior from `on_start` (regmap-launched) or `run_proc` (free-running) — see [Lifecycle](../sim/lifecycle.md).
+- Drive behavior from `on_start` (regmap-launched) or `run_proc` (free-running) — see [Lifecycle](../sim/simobj.md#its-lifecycle).
 - Mark hardware compute `@synthesizable`; the [endpoint methods](./endpoints.md) move the data.
