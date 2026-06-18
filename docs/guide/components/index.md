@@ -1,7 +1,7 @@
 ---
 title: Hardware Components
 parent: Guide
-nav_order: 5
+nav_order: 6
 has_children: true
 audience: python
 api: [HwComponent, Component, add_endpoint]

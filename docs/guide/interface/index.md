@@ -1,7 +1,7 @@
 ---
 title: Interfaces
 parent: Guide
-nav_order: 4
+nav_order: 5
 has_children: true
 audience: python
 summary: "The Python transactional interface model — how components communicate over streams, memory-mapped ports, register maps, and schema/array transfers in the SimPy simulation."
