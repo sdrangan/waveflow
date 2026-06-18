@@ -86,6 +86,25 @@ def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
     return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))
 ```
 
+## Execution models
+
+How you structure that behavior puts the component in one of two modes — and the mode follows from its
+endpoints:
+
+- **Free-running (`run_proc`).** The default: a long-lived [lifecycle](./lifecycle.md) process that loops
+  over the component's stream / `m_axi` ports, the way a streaming datapath runs continuously. You
+  implement `run_proc`.
+- **Regmap-launched (`on_start`).** *Invocation-style.* A component that declares a
+  [`VitisRegMapMMIFSlave`](./endpoints.md) is launched by the host (which writes `ap_start`); its
+  `on_start` reads its inputs from the register fields, computes, writes the results, and returns once.
+  `simp_fun` above is this mode; `poly` uses it as a control path while streaming sample data through
+  `s_in` / `m_out`.
+
+The selection is automatic — you don't set it explicitly: a component carrying a `VitisRegMapMMIFSlave` is
+regmap-launched (you implement `on_start`); otherwise it is free-running (you implement `run_proc`). The C++
+realization of each — the `ap_start` / `ap_done` handshake vs. `ap_ctrl_hs`, and how the kernel entry is
+chosen — is [Component Code Generation: Component structure](../comp_codegen/structure.md).
+
 ## The same class generates C++
 
 This one class is also the source for the synthesizable kernel: the generator turns the component
