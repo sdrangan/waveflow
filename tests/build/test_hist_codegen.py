@@ -4,7 +4,7 @@ The histogram kernel issues three array ops against one m_axi bundle at three
 different MemAddr fields, with two element types (Float32 reads, Uint32 write)
 and per-buffer compile-time bounds. This asserts the extractor produces the
 three stmts with the right (elem_type, count, addr, max) and that each lowers to
-the correct ``<elem>_array_utils::{read,write}_array`` call.
+the correct ``<elem>_array_utils::{read,write}_array_slice`` call.
 """
 from __future__ import annotations
 
@@ -70,9 +70,9 @@ def test_data_read_lowers_to_float32_array_utils():
     ctx = CodegenCtx(comp=comp)
     cpp = _emit_mm_array_read(mm[0], ctx)
     assert "static float data[max_ndata];" in cpp
-    assert ("float32_array_utils::read_array<32>("
+    assert ("float32_array_utils::read_array_slice<32>("
             "m_mem + memmgr::byte_addr_to_word_index<32>(cmd.data_addr), "
-            "data, cmd.ndata);") in cpp
+            "0, cmd.ndata, data);") in cpp
 
 
 def test_edges_read_lowers_with_binop_count():
@@ -82,16 +82,16 @@ def test_edges_read_lowers_with_binop_count():
     cpp = _emit_mm_array_read(mm[1], ctx)
     assert "static float edges[max_nbins];" in cpp
     assert "byte_addr_to_word_index<32>(cmd.bin_edges_addr)" in cpp
-    assert "edges, cmd.nbins - 1);" in cpp
+    assert "0, cmd.nbins - 1, edges);" in cpp
 
 
 def test_counts_write_lowers_to_uint32_array_utils():
     comp, mm = _extract()
     ctx = CodegenCtx(comp=comp)
     cpp = _emit_mm_array_write(mm[2], ctx)
-    assert ("uint32_array_utils::write_array<32>("
+    assert ("uint32_array_utils::write_array_slice<32>("
             "counts, m_mem + memmgr::byte_addr_to_word_index<32>(cmd.cnt_addr), "
-            "cmd.nbins);") in cpp
+            "0, cmd.nbins);") in cpp
 
 
 def test_kernel_signature_and_pragmas():
@@ -115,8 +115,8 @@ def test_kernel_lowers_hooks_and_three_array_ops():
     assert "static ap_uint<32> counts[32];" in cpp
     # compute returns an array → declared buffer + out-parameter call.
     assert "hist_impl::compute(data, edges, cmd.ndata, cmd.nbins, counts);" in cpp
-    assert "float32_array_utils::read_array<32>(" in cpp
-    assert "uint32_array_utils::write_array<32>(" in cpp
+    assert "float32_array_utils::read_array_slice<32>(" in cpp
+    assert "uint32_array_utils::write_array_slice<32>(" in cpp
     assert "hist_impl::respond(m_out, cmd.tx_id, status);" in cpp
 
 
@@ -181,7 +181,7 @@ def test_tb_edges_count_lowers_as_binop():
     tb = _gen_tb()
     assert "read_uint32_file_array(edges, (data_dir + std::string(\"/edges_array.bin\")).c_str(), cmd.nbins - 1)" in tb
     assert "get_nwords<32>(cmd.nbins - 1)" in tb
-    assert "write_array<32>(edges, mem + _cmd_bin_edges_addr_widx, cmd.nbins - 1)" in tb
+    assert "write_array_slice<32>(edges, mem + _cmd_bin_edges_addr_widx, 0, cmd.nbins - 1)" in tb
 
 
 def test_tb_allocs_clamp_to_one_word():

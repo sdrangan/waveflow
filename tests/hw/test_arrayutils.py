@@ -109,16 +109,26 @@ def test_gen_array_utils_writes_companion_tb_header(tmp_path: Path):
     assert "return word_bw / 16;" in content
     assert "static constexpr int get_nwords(int len) {" in content
     assert "return (len <= 0) ? 0 : ((len * value_bitwidth + word_bw - 1) / word_bw);" in content
-    assert "inline void read_array_elem(const ap_uint<word_bw>* src, value_type out[pf<word_bw>()], int n = pf<word_bw>()) {" in content
-    assert "inline void write_array_elem(const value_type in[pf<word_bw>()], ap_uint<word_bw>* dst, int n = pf<word_bw>()) {" in content
-    assert "inline void read_stream_elem(hls::stream<ap_uint<word_bw>>& s, value_type out[pf<word_bw>()], int n = pf<word_bw>()) {" in content
+    # The per-element *_elem_impl<W> structs are kept (lane methods + bulk loops delegate to them).
+    assert "struct read_array_elem_impl {" in content
+    assert "struct write_array_elem_impl {" in content
+    assert "struct read_stream_elem_impl {" in content
     assert "struct read_axi4_stream_elem_impl {" in content
     assert "struct read_axi4_stream_elem_impl<32> {" in content
     assert "static void run(hls::stream<streamutils::axi4s_word<32>>& s, value_type* out, streamutils::tlast_status& tl, int n) {" in content
-    assert "inline void read_axi4_stream_elem(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type out[pf<word_bw>()], streamutils::tlast_status& tl, int n = pf<word_bw>()) {" in content
-    assert "inline void read_axi4_stream_elem(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type out[pf<word_bw>()], int n = pf<word_bw>()) {" in content
-    assert "inline void write_stream_elem(hls::stream<ap_uint<word_bw>>& s, const value_type in[pf<word_bw>()], int n = pf<word_bw>()) {" in content
-    assert "inline void write_axi4_stream_elem(hls::stream<streamutils::axi4s_word<word_bw>>& s, const value_type in[pf<word_bw>()], bool tlast = false, int n = pf<word_bw>()) {" in content
+    assert "struct write_stream_elem_impl {" in content
+    assert "struct write_axi4_stream_elem_impl {" in content
+    # The public *_elem wrappers and the bulk memory read_array/write_array are retired (phase 2b).
+    assert "inline void read_array_elem(" not in content
+    assert "inline void write_array_elem(" not in content
+    assert "inline void read_stream_elem(" not in content
+    assert "inline void write_stream_elem(" not in content
+    assert "inline void read_axi4_stream_elem(" not in content
+    assert "inline void write_axi4_stream_elem(" not in content
+    assert "inline void read_array<" not in content and "inline void write_array<" not in content
+    assert "inline void read_array(const ap_uint<word_bw>* src, value_type* dst, int len)" not in content
+    assert "inline void write_array(const value_type* src, ap_uint<word_bw>* dst, int len)" not in content
+    # The bulk stream helpers are kept (TB push_array/pop_array lower to them).
     assert "inline void read_stream(hls::stream<ap_uint<word_bw>>& s, value_type* dst, int len) {" in content
     assert "inline void read_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type* dst, streamutils::tlast_status& tl, int len) {" in content
     assert "inline void read_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type* dst, streamutils::tlast_status& tl, int& nread, int len) {" in content
@@ -126,12 +136,12 @@ def test_gen_array_utils_writes_companion_tb_header(tmp_path: Path):
     assert "inline void read_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type* dst, int len) {" in content
     assert "inline void write_stream(hls::stream<ap_uint<word_bw>>& s, const value_type* src, int len) {" in content
     assert "inline void write_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>>& s, const value_type* src, bool tlast = true, int len = pf<word_bw>()) {" in content
-    assert "read_stream_elem<word_bw>(s, dst + i, len - i);" in content
-    assert "read_axi4_stream_elem<word_bw>(s, dst + i, lane_tl, len - i);" in content
-    assert "read_axi4_stream_elem_impl<word_bw>::run(s, out, tl, n);" in content
-    assert "write_stream_elem<word_bw>(s, src + i, len - i);" in content
+    # ...and they delegate to the kept *_elem_impl<W>::run structs (not the retired wrappers).
+    assert "read_stream_elem_impl<word_bw>::run(s, dst + i, len - i);" in content
+    assert "read_axi4_stream_elem_impl<word_bw>::run(s, dst + i, lane_tl, len - i);" in content
+    assert "write_stream_elem_impl<word_bw>::run(s, src + i, len - i);" in content
     assert "const bool lane_tlast = (i + pf<word_bw>() >= len) ? tlast : false;" in content
-    assert "write_axi4_stream_elem<word_bw>(s, src + i, lane_tlast, len - i);" in content
+    assert "write_axi4_stream_elem_impl<word_bw>::run(s, src + i, lane_tlast, len - i);" in content
     assert "ap_uint<32> w = src[0];" in content
     assert "dst[0] = w;" in content
     assert "tl = streamutils::tlast_status::no_tlast;" in content

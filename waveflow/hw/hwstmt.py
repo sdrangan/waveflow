@@ -99,8 +99,8 @@ class SynthCallStmt(HwStmt):
 
 class MMArrayReadStmt(SynthCallStmt):
     """IR node for ``port.read_array(elem_type, count, addr)`` — an m_axi
-    buffered read lowered to ``<elem>_array_utils::read_array<bw>(port +
-    byte_addr_to_word_index<bw>(addr), buf, count)`` (see
+    buffered read lowered to ``<elem>_array_utils::read_array_slice<bw>(port +
+    byte_addr_to_word_index<bw>(addr), 0, count, buf)`` (see
     ``plans/aximm_codegen.md`` decision 4).
 
     The constructor matches ``SynthCallStmt`` (``method``/``inputs``/``outputs``);
@@ -141,8 +141,8 @@ class MMArrayReadStmt(SynthCallStmt):
 
 class MMArrayWriteStmt(SynthCallStmt):
     """IR node for ``port.write_array(buf, elem_type, addr, count)`` — an m_axi
-    buffered write lowered to ``<elem>_array_utils::write_array<bw>(buf, port +
-    byte_addr_to_word_index<bw>(addr), count)`` (the dual of
+    buffered write lowered to ``<elem>_array_utils::write_array_slice<bw>(buf, port +
+    byte_addr_to_word_index<bw>(addr), 0, count)`` (the dual of
     :class:`MMArrayReadStmt`).
 
     Positional args: ``write_array(elements, elem_type, addr, count)``.

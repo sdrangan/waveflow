@@ -101,21 +101,21 @@ if (status != (ap_uint<8>)static_cast<unsigned int>(HistError::NO_ERROR)) {
     return;
 }
 static float data[max_ndata];
-float32_array_utils::read_array<32>(m_mem + memmgr::byte_addr_to_word_index<32>(cmd.data_addr), data, cmd.ndata);
+float32_array_utils::read_array_slice<32>(m_mem + memmgr::byte_addr_to_word_index<32>(cmd.data_addr), 0, cmd.ndata, data);
 static float edges[max_nbins];
-float32_array_utils::read_array<32>(m_mem + memmgr::byte_addr_to_word_index<32>(cmd.bin_edges_addr), edges, cmd.nbins - 1);
+float32_array_utils::read_array_slice<32>(m_mem + memmgr::byte_addr_to_word_index<32>(cmd.bin_edges_addr), 0, cmd.nbins - 1, edges);
 static ap_uint<32> counts[32];
 hist_impl::compute(data, edges, cmd.ndata, cmd.nbins, counts);
-uint32_array_utils::write_array<32>(counts, m_mem + memmgr::byte_addr_to_word_index<32>(cmd.cnt_addr), cmd.nbins);
+uint32_array_utils::write_array_slice<32>(counts, m_mem + memmgr::byte_addr_to_word_index<32>(cmd.cnt_addr), 0, cmd.nbins);
 hist_impl::respond(m_out, cmd.tx_id, status);
 ```
 
 The pieces this example exists to exercise:
 
-1. **Multi-buffer, multi-type lowering.** Three `read_array`/`write_array` calls
+1. **Multi-buffer, multi-type lowering.** Three `read_array_slice`/`write_array_slice` calls
    target the **one** `m_mem` pointer at three different command addresses, with
-   **two** element types — `float32_array_utils::read_array` for `data` and
-   `edges`, `uint32_array_utils::write_array` for `counts`. Each Python
+   **two** element types — `float32_array_utils::read_array_slice` for `data` and
+   `edges`, `uint32_array_utils::write_array_slice` for `counts`. Each Python
    `read_array(Float32, ...)` / `write_array(Uint32Field, ...)` chose its
    array-utils namespace from the schema's element type.
 2. **Byte address → word index.** Every burst wraps the command's byte address in
@@ -185,7 +185,7 @@ invalid size) — it **clamps every allocation to at least one word**:
 const int _cmd_data_addr_nwords = float32_array_utils::get_nwords<32>(cmd.ndata);
 const int _cmd_data_addr_widx = mem_mgr.alloc(_cmd_data_addr_nwords > 0 ? _cmd_data_addr_nwords : 1);
 cmd.data_addr = _cmd_data_addr_widx * (32 / 8);
-float32_array_utils::write_array<32>(data, mem + _cmd_data_addr_widx, cmd.ndata);
+float32_array_utils::write_array_slice<32>(data, mem + _cmd_data_addr_widx, 0, cmd.ndata);
 ```
 
 A 0-word region is meaningless and the allocator rejects it, so the testbench

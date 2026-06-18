@@ -243,8 +243,8 @@ def _mm_buffer_bound(stmt, buf: str, ctx: CodegenCtx) -> str:
 
 def _emit_mm_array_read(stmt: MMArrayReadStmt, ctx: CodegenCtx) -> str:
     """``buf = port.read_array(ElemT, count, addr)`` →
-    a static local buffer + an ``<elem>_array_utils::read_array`` burst
-    (mirrors the generated histogram kernel)."""
+    a static local buffer + an ``<elem>_array_utils::read_array_slice`` burst
+    over the resident range ``[0, count)`` (mirrors the generated histogram kernel)."""
     port_name = _endpoint_name(stmt.port, ctx)
     bw = int(stmt.port.bitwidth)
     ns = _array_utils_ns(stmt.elem_type)
@@ -256,15 +256,15 @@ def _emit_mm_array_read(stmt: MMArrayReadStmt, ctx: CodegenCtx) -> str:
     pad = ctx.pad()
     return (
         f"{pad}static {elem_cpp} {buf}[{bufmax}];\n"
-        f"{pad}{ns}::read_array<{bw}>("
+        f"{pad}{ns}::read_array_slice<{bw}>("
         f"{port_name} + memmgr::byte_addr_to_word_index<{bw}>({addr}), "
-        f"{buf}, {count});"
+        f"0, {count}, {buf});"
     )
 
 
 def _emit_mm_array_write(stmt: MMArrayWriteStmt, ctx: CodegenCtx) -> str:
     """``port.write_array(buf, ElemT, addr, count)`` →
-    the dual ``<elem>_array_utils::write_array`` burst."""
+    the dual ``<elem>_array_utils::write_array_slice`` burst over ``[0, count)``."""
     port_name = _endpoint_name(stmt.port, ctx)
     bw = int(stmt.port.bitwidth)
     ns = _array_utils_ns(stmt.elem_type)
@@ -273,9 +273,9 @@ def _emit_mm_array_write(stmt: MMArrayWriteStmt, ctx: CodegenCtx) -> str:
     addr = _emit_expr(stmt.addr_expr, ctx)
     pad = ctx.pad()
     return (
-        f"{pad}{ns}::write_array<{bw}>("
+        f"{pad}{ns}::write_array_slice<{bw}>("
         f"{src}, {port_name} + memmgr::byte_addr_to_word_index<{bw}>({addr}), "
-        f"{count});"
+        f"0, {count});"
     )
 
 
@@ -1435,7 +1435,7 @@ def _emit_mem_bind(stmt: MemBindStmt, ctx: TbCodegenCtx) -> str:
 
 def _emit_mem_alloc_array(stmt: MemAllocArrayStmt, ctx: TbCodegenCtx) -> str:
     """``cmd.addr = mem.alloc_array(buf, ElemT, count=n)`` →
-    ``MemMgr::alloc`` (word index) → byte address → ``write_array`` populate."""
+    ``MemMgr::alloc`` (word index) → byte address → ``write_array_slice`` populate."""
     pad = ctx.pad()
     bw, _nwords = ctx.mems[stmt.mem_local]
     ns = _array_utils_ns(stmt.elem_type)
@@ -1453,13 +1453,13 @@ def _emit_mem_alloc_array(stmt: MemAllocArrayStmt, ctx: TbCodegenCtx) -> str:
         f"{pad}const int {nwords} = {ns}::get_nwords<{bw}>({count});\n"
         f"{pad}const int {widx} = {mem}_mgr.alloc({nwords} > 0 ? {nwords} : 1);\n"
         f"{pad}{stmt.target_local}.{stmt.target_field} = {widx} * ({bw} / 8);\n"
-        f"{pad}{ns}::write_array<{bw}>({stmt.src_local}, {mem} + {widx}, {count});"
+        f"{pad}{ns}::write_array_slice<{bw}>({stmt.src_local}, {mem} + {widx}, 0, {count});"
     )
 
 
 def _emit_mem_read_array(stmt: MemReadArrayStmt, ctx: TbCodegenCtx) -> str:
     """``out = mem.read_array(addr, ElemT, count=n)`` →
-    a static output buffer + a ``read_array`` burst from the byte address."""
+    a static output buffer + a ``read_array_slice`` burst from the byte address."""
     from waveflow.hw.dataschema import DataArray
     pad = ctx.pad()
     bw, nwords = ctx.mems[stmt.mem_local]
@@ -1476,9 +1476,9 @@ def _emit_mem_read_array(stmt: MemReadArrayStmt, ctx: TbCodegenCtx) -> str:
     )
     return (
         f"{pad}static {elem_cpp} {out}[{nwords}] = {{}};\n"
-        f"{pad}{ns}::read_array<{bw}>("
+        f"{pad}{ns}::read_array_slice<{bw}>("
         f"{mem} + waveflow::memmgr::byte_addr_to_word_index<{bw}>({addr}), "
-        f"{out}, {count});"
+        f"0, {count}, {out});"
     )
 
 

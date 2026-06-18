@@ -488,201 +488,6 @@ def _wide_stream_elem_body(
     return body
 
 
-def _gen_reader_body(elem_type: type[DataSchema], word_bw: int, indent_level: int = 1) -> str:
-    indent = elem_type._get_indent(indent_level)
-    i1 = elem_type._get_indent(indent_level + 1)
-    i2 = elem_type._get_indent(indent_level + 2)
-    i3 = elem_type._get_indent(indent_level + 3)
-
-    elem_bw = elem_type.get_bitwidth()
-    pf = word_bw // elem_bw if elem_bw > 0 else 0
-    words_per_elem = elem_type.nwords_per_inst(word_bw)
-    elem_cpp = elem_type.cpp_class_name()
-    assign_expr = elem_type.from_uint_expr("src[in_idx]")
-
-    lines = [
-        f"{indent}if (src == nullptr || dst == nullptr || len <= 0) {{",
-        f"{i1}return;",
-        f"{indent}}}",
-        "",
-        f"{indent}int in_idx = 0;",
-    ]
-
-    if pf >= 2:
-        lines.extend([
-            f"{indent}for (int i = 0; i < len; i += {pf}) {{",
-            f"{i1}#pragma HLS PIPELINE II=1",
-            f"{i1}ap_uint<{word_bw}> w = src[in_idx++];",
-            f"{i1}for (int j = 0; j < {pf}; ++j) {{",
-            f"{i2}#pragma HLS UNROLL",
-            f"{i2}if (i + j < len) {{",
-        ])
-        for j in range(pf):
-            lo = j * elem_bw
-            hi = lo + elem_bw - 1
-            cond = "if" if j == 0 else "else if"
-            rhs_expr = elem_type.from_uint_expr(f"w.range({hi}, {lo})")
-            lines.append(f"{i3}{cond} (j == {j}) {{")
-            lines.append(f"{i3}    dst[i + j] = {rhs_expr};")
-            lines.append(f"{i3}}}")
-        lines.extend([
-            f"{i2}}}",
-            f"{i1}}}",
-            f"{indent}}}",
-        ])
-        return "\n".join(lines)
-
-    if elem_bw <= word_bw:
-        lines.extend([
-            f"{indent}for (int i = 0; i < len; ++i) {{",
-            f"{i1}#pragma HLS PIPELINE II=1",
-            f"{i1}dst[i] = {assign_expr};",
-            f"{i1}++in_idx;",
-            f"{indent}}}",
-        ])
-        return "\n".join(lines)
-
-    lines.extend([
-        f"{indent}constexpr int words_per_elem = {words_per_elem};",
-        f"{indent}for (int i = 0; i < len; ++i) {{",
-        f"{i1}#pragma HLS PIPELINE",
-    ])
-    recursive_lines = _get_read_recursive_lines(
-        elem_type=elem_type,
-        word_bw=word_bw,
-        dst_expr="dst[i]",
-        source_expr="(src + in_idx)",
-    )
-    for line in recursive_lines:
-        stripped = line[4:] if line.startswith("    ") else line
-        lines.append(f"{i1}{stripped}" if stripped else "")
-    lines.extend([
-        f"{i1}in_idx += words_per_elem;",
-        f"{indent}}}",
-    ])
-    return "\n".join(lines)
-
-
-def _gen_writer_body(elem_type: type[DataSchema], word_bw: int, indent_level: int = 1) -> str:
-    indent = elem_type._get_indent(indent_level)
-    i1 = elem_type._get_indent(indent_level + 1)
-    i2 = elem_type._get_indent(indent_level + 2)
-    i3 = elem_type._get_indent(indent_level + 3)
-
-    elem_bw = elem_type.get_bitwidth()
-    pf = word_bw // elem_bw if elem_bw > 0 else 0
-    words_per_elem = elem_type.nwords_per_inst(word_bw)
-    elem_uint_expr = elem_type.to_uint_value_expr("src[in_idx]")
-
-    lines = [
-        f"{indent}if (src == nullptr || dst == nullptr || len <= 0) {{",
-        f"{i1}return;",
-        f"{indent}}}",
-        "",
-        f"{indent}int out_idx = 0;",
-    ]
-
-    if pf >= 2:
-        lines.extend([
-            f"{indent}for (int i = 0; i < len; i += {pf}) {{",
-            f"{i1}#pragma HLS PIPELINE II=1",
-            f"{i1}ap_uint<{word_bw}> w = 0;",
-            f"{i1}for (int j = 0; j < {pf}; ++j) {{",
-            f"{i2}#pragma HLS UNROLL",
-            f"{i2}if (i + j < len) {{",
-        ])
-        for j in range(pf):
-            lo = j * elem_bw
-            hi = lo + elem_bw - 1
-            cond = "if" if j == 0 else "else if"
-            rhs_expr = elem_type.to_uint_value_expr(f"src[i + {j}]")
-            lines.append(f"{i3}{cond} (j == {j}) {{")
-            lines.append(f"{i3}    w.range({hi}, {lo}) = {rhs_expr};")
-            lines.append(f"{i3}}}")
-        lines.extend([
-            f"{i2}}}",
-            f"{i1}}}",
-            f"{i1}dst[out_idx++] = w;",
-            f"{indent}}}",
-        ])
-        return "\n".join(lines)
-
-    if elem_bw <= word_bw:
-        lines.extend([
-            f"{indent}for (int in_idx = 0; in_idx < len; ++in_idx) {{",
-            f"{i1}#pragma HLS PIPELINE II=1",
-            f"{i1}dst[out_idx++] = {elem_uint_expr};",
-            f"{indent}}}",
-        ])
-        return "\n".join(lines)
-
-    lines.extend([
-        f"{indent}constexpr int words_per_elem = {words_per_elem};",
-        f"{indent}for (int i = 0; i < len; ++i) {{",
-        f"{i1}#pragma HLS PIPELINE",
-    ])
-    recursive_lines = _get_write_recursive_lines(
-        elem_type=elem_type,
-        word_bw=word_bw,
-        src_expr="src[i]",
-        target_expr="(dst + out_idx)",
-    )
-    for line in recursive_lines:
-        stripped = line[4:] if line.startswith("    ") else line
-        lines.append(f"{i1}{stripped}" if stripped else "")
-    lines.extend([
-        f"{i1}out_idx += words_per_elem;",
-        f"{indent}}}",
-    ])
-    return "\n".join(lines)
-
-
-def _gen_specialization(elem_type: type[DataSchema], word_bw: int, indent_level: int = 0) -> str:
-    indent = elem_type._get_indent(indent_level)
-    elem_cpp = elem_type.cpp_class_name()
-    lines = [
-        "/**",
-        f" * @brief Read an array of {elem_cpp} values from packed {word_bw}-bit words.",
-        " *",
-        " * The packed input uses greedy LSB-first packing with no inter-element padding.",
-        f" * This specialization is optimized for word_bw = {word_bw}.",
-        " *",
-        " * @param src Pointer to packed source words.",
-        " * @param dst Pointer to the destination array.",
-        " * @param len Number of elements to decode.",
-        " */",
-        f"{indent}template<>",
-        f"{indent}inline void read_array<{word_bw}>(const ap_uint<{word_bw}>* src, value_type* dst, int len) {{",
-        f"{indent}    #pragma HLS INLINE",
-        _gen_reader_body(elem_type=elem_type, word_bw=word_bw, indent_level=1),
-        f"{indent}}}",
-    ]
-    return "\n".join(lines)
-
-
-def _gen_write_specialization(elem_type: type[DataSchema], word_bw: int, indent_level: int = 0) -> str:
-    indent = elem_type._get_indent(indent_level)
-    elem_cpp = elem_type.cpp_class_name()
-    lines = [
-        "/**",
-        f" * @brief Write an array of {elem_cpp} values into packed {word_bw}-bit words.",
-        " *",
-        " * The packed output uses greedy LSB-first packing with no inter-element padding.",
-        f" * This specialization is optimized for word_bw = {word_bw}.",
-        " *",
-        " * @param src Pointer to the source array.",
-        " * @param dst Pointer to the packed destination words.",
-        " * @param len Number of elements to encode.",
-        " */",
-        f"{indent}template<>",
-        f"{indent}inline void write_array<{word_bw}>(const value_type* src, ap_uint<{word_bw}>* dst, int len) {{",
-        f"{indent}    #pragma HLS INLINE",
-        _gen_writer_body(elem_type=elem_type, word_bw=word_bw, indent_level=1),
-        f"{indent}}}",
-    ]
-    return "\n".join(lines)
-
-
 def _gen_read_axi4_stream_elem_specializations(
     elem_type: type[DataSchema],
     word_bw_supported: list[int],
@@ -750,22 +555,9 @@ def _gen_read_axi4_stream_elem_specializations(
             f"{indent}}};",
         ])
 
-    lines.extend([
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void read_axi4_stream_elem(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type out[pf<word_bw>()], streamutils::tlast_status& tl, int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}read_axi4_stream_elem_impl<word_bw>::run(s, out, tl, n);",
-        f"{indent}}}",
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void read_axi4_stream_elem(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type out[pf<word_bw>()], int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}streamutils::tlast_status tl = streamutils::tlast_status::no_tlast;",
-        f"{i1}read_axi4_stream_elem<word_bw>(s, out, tl, n);",
-        f"{indent}}}",
-    ])
-
+    # The public read_axi4_stream_elem wrappers are retired (serialization phase 2b); callers use
+    # read_axi4_stream_lane (Phase 1a) or the bulk read_axi4_stream loop, both of which delegate to
+    # read_axi4_stream_elem_impl<word_bw>::run above.
     return "\n".join(lines)
 
 
@@ -835,14 +627,8 @@ def _gen_read_array_elem_specializations(
             f"{indent}}};",
         ])
 
-    lines.extend([
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void read_array_elem(const ap_uint<word_bw>* src, value_type out[pf<word_bw>()], int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}read_array_elem_impl<word_bw>::run(src, out, n);",
-        f"{indent}}}",
-    ])
+    # The public read_array_elem wrapper is retired (serialization phase 2b); callers use
+    # read_array_lane / read_array_slice, which delegate to read_array_elem_impl<word_bw>::run above.
     return "\n".join(lines)
 
 
@@ -913,14 +699,8 @@ def _gen_write_array_elem_specializations(
             f"{indent}}};",
         ])
 
-    lines.extend([
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void write_array_elem(const value_type in[pf<word_bw>()], ap_uint<word_bw>* dst, int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}write_array_elem_impl<word_bw>::run(in, dst, n);",
-        f"{indent}}}",
-    ])
+    # The public write_array_elem wrapper is retired (serialization phase 2b); callers use
+    # write_array_lane / write_array_slice, which delegate to write_array_elem_impl<word_bw>::run.
     return "\n".join(lines)
 
 
@@ -980,14 +760,8 @@ def _gen_read_stream_elem_specializations(
             f"{indent}}};",
         ])
 
-    lines.extend([
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void read_stream_elem(hls::stream<ap_uint<word_bw>>& s, value_type out[pf<word_bw>()], int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}read_stream_elem_impl<word_bw>::run(s, out, n);",
-        f"{indent}}}",
-    ])
+    # The public read_stream_elem wrapper is retired (serialization phase 2b); callers use
+    # read_stream_lane or the bulk read_stream loop, which delegate to read_stream_elem_impl::run.
     return "\n".join(lines)
 
 
@@ -1048,14 +822,8 @@ def _gen_write_stream_elem_specializations(
             f"{indent}}};",
         ])
 
-    lines.extend([
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void write_stream_elem(hls::stream<ap_uint<word_bw>>& s, const value_type in[pf<word_bw>()], int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}write_stream_elem_impl<word_bw>::run(s, in, n);",
-        f"{indent}}}",
-    ])
+    # The public write_stream_elem wrapper is retired (serialization phase 2b); callers use
+    # write_stream_lane or the bulk write_stream loop, which delegate to write_stream_elem_impl::run.
     return "\n".join(lines)
 
 
@@ -1117,14 +885,9 @@ def _gen_write_axi4_stream_elem_specializations(
             f"{indent}}};",
         ])
 
-    lines.extend([
-        "",
-        "template<int word_bw>",
-        f"{indent}inline void write_axi4_stream_elem(hls::stream<streamutils::axi4s_word<word_bw>>& s, const value_type in[pf<word_bw>()], bool tlast = false, int n = pf<word_bw>()) {{",
-        f"{i1}#pragma HLS INLINE",
-        f"{i1}write_axi4_stream_elem_impl<word_bw>::run(s, in, tlast, n);",
-        f"{indent}}}",
-    ])
+    # The public write_axi4_stream_elem wrapper is retired (serialization phase 2b); callers use
+    # write_axi4_stream_lane or the bulk write_axi4_stream loop, both delegating to
+    # write_axi4_stream_elem_impl<word_bw>::run above.
     return "\n".join(lines)
 
 
@@ -1377,7 +1140,7 @@ def _gen_stream_elem_helpers(
         f"{i2}return;",
         f"{i1}}}",
         f"{i1}for (int i = 0; i < len; i += pf<word_bw>()) {{",
-        f"{i2}read_stream_elem<word_bw>(s, dst + i, len - i);",
+        f"{i2}read_stream_elem_impl<word_bw>::run(s, dst + i, len - i);",
         f"{i1}}}",
         f"{indent}}}",
         "",
@@ -1393,7 +1156,7 @@ def _gen_stream_elem_helpers(
         f"{i1}for (int i = 0; i < len && !stop; i += pf<word_bw>()) {{",
         f"{i2}streamutils::tlast_status lane_tl = streamutils::tlast_status::no_tlast;",
         f"{i2}const int lane_count = ((len - i) < pf<word_bw>()) ? (len - i) : pf<word_bw>();",
-        f"{i2}read_axi4_stream_elem<word_bw>(s, dst + i, lane_tl, len - i);",
+        f"{i2}read_axi4_stream_elem_impl<word_bw>::run(s, dst + i, lane_tl, len - i);",
         f"{i2}if (lane_tl == streamutils::tlast_status::tlast_early) {{",
         f"{i3}tl = lane_tl;",
         f"{i3}stop = true;",
@@ -1437,7 +1200,7 @@ def _gen_stream_elem_helpers(
         f"{i2}return;",
         f"{i1}}}",
         f"{i1}for (int i = 0; i < len; i += pf<word_bw>()) {{",
-        f"{i2}write_stream_elem<word_bw>(s, src + i, len - i);",
+        f"{i2}write_stream_elem_impl<word_bw>::run(s, src + i, len - i);",
         f"{i1}}}",
         f"{indent}}}",
         "",
@@ -1449,7 +1212,7 @@ def _gen_stream_elem_helpers(
         f"{i1}}}",
         f"{i1}for (int i = 0; i < len; i += pf<word_bw>()) {{",
         f"{i2}const bool lane_tlast = (i + pf<word_bw>() >= len) ? tlast : false;",
-        f"{i2}write_axi4_stream_elem<word_bw>(s, src + i, lane_tlast, len - i);",
+        f"{i2}write_axi4_stream_elem_impl<word_bw>::run(s, src + i, lane_tlast, len - i);",
         f"{i1}}}",
         f"{indent}}}",
     ]
@@ -1489,7 +1252,7 @@ def _gen_tb_helpers(elem_type: type[DataSchema], indent_level: int = 0) -> str:
         f"{i1}if (ifs.peek() != std::ifstream::traits_type::eof()) {{",
         f'{i1}    throw std::runtime_error(std::string("Unexpected trailing bytes in input file: ") + file_path);',
         f"{i1}}}",
-        f"{i1}read_array<32>(words.empty() ? nullptr : words.data(), dst, n0);",
+        f"{i1}read_array_slice<32>(words.empty() ? nullptr : words.data(), 0, n0, dst);",
         f"{indent}}}",
         "",
         "/**",
@@ -1512,7 +1275,7 @@ def _gen_tb_helpers(elem_type: type[DataSchema], indent_level: int = 0) -> str:
         f"{i1}}}",
         f"{i1}const int nwords = get_nwords<32>(n0);",
         f"{i1}std::vector<ap_uint<32>> words(nwords);",
-        f"{i1}write_array<32>(src, words.empty() ? nullptr : words.data(), n0);",
+        f"{i1}write_array_slice<32>(src, words.empty() ? nullptr : words.data(), 0, n0);",
         f"{i1}for (const auto& word : words) {{",
         f"{i1}    streamutils::write_le_uint32(ofs, static_cast<uint32_t>(word));",
         f"{i1}}}",
@@ -1572,55 +1335,12 @@ def _gen_array_utils_content(
         "}",
         "",
         _gen_stream_elem_helpers(elem_type=elem_type, word_bw_supported=widths),
-        "",
-        "/**",
-        f" * @brief Read an array of {elem_cpp} values from packed ap_uint words.",
-        " *",
-        " * Elements are unpacked greedily from least-significant bits first with no",
-        " * padding between adjacent elements, matching the Waveflow DataSchema array",
-        " * packing convention.",
-        " *",
-        " * @tparam word_bw Packed source word width in bits.",
-        " * @param src Pointer to packed source words.",
-        " * @param dst Pointer to the destination array.",
-        " * @param len Number of elements to decode.",
-        " */",
-        "template<int word_bw>",
-        "inline void read_array(const ap_uint<word_bw>* src, value_type* dst, int len) {",
-        f"    static_assert(unsupported_word_bw<word_bw>::value, \"Unsupported word_bw for {namespace}::read_array\");",
-        "    (void)src;",
-        "    (void)dst;",
-        "    (void)len;",
-        "}",
-        "",
-        "/**",
-        f" * @brief Write an array of {elem_cpp} values into packed ap_uint words.",
-        " *",
-        " * Elements are packed greedily from least-significant bits first with no",
-        " * padding between adjacent elements, matching the Waveflow DataSchema array",
-        " * packing convention.",
-        " *",
-        " * @tparam word_bw Packed destination word width in bits.",
-        " * @param src Pointer to the source array.",
-        " * @param dst Pointer to the packed destination words.",
-        " * @param len Number of elements to encode.",
-        " */",
-        "template<int word_bw>",
-        "inline void write_array(const value_type* src, ap_uint<word_bw>* dst, int len) {",
-        f"    static_assert(unsupported_word_bw<word_bw>::value, \"Unsupported word_bw for {namespace}::write_array\");",
-        "    (void)src;",
-        "    (void)dst;",
-        "    (void)len;",
-        "}",
     ])
 
-    for bw in widths:
-        lines.extend([
-            "",
-            _gen_specialization(elem_type=elem_type, word_bw=bw),
-            "",
-            _gen_write_specialization(elem_type=elem_type, word_bw=bw),
-        ])
+    # The bulk memory read_array / write_array methods (greedy LSB-first packing) are retired
+    # (serialization phase 2b): kernels now move resident arrays with the word-aligned
+    # read_array_slice / write_array_slice (element coordinates) and the read_array_lane loop, both
+    # emitted by _gen_slice_helpers / _gen_lane_helpers above.
 
     lines.extend([
         "",

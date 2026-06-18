@@ -172,7 +172,8 @@ class ComplexField(DataField):
     # Each method delegates to the *inner field's* C++ codegen for re then im, interleaved,
     # ``im`` in the high ``inner_bw`` bits -- exactly as ``_serialize_recursive`` composes the
     # inner's Python serialization.  ``array_utils`` consumes these to pack ``ComplexField``
-    # like any other element (``read_array_elem`` / ``write_array_elem`` / ``pf<>``).
+    # like any other element (``read_array_elem_impl`` / ``write_array_elem_impl`` and the lane /
+    # slice methods built on them / ``pf<>``).
     @classmethod
     def _cpp_re(cls, value_expr: str) -> str:
         """C++ accessor for the real component of a ``cpp_type`` value expression."""
