@@ -1,0 +1,113 @@
+---
+title: SimObj
+parent: Simulation
+nav_order: 1
+audience: python
+api: [SimObj, Simulation]
+summary: "The SimObj base: everything in a simulation is a SimObj that registers with the owning Simulation, borrows its single simpy.Environment, and uses the wrapped primitives (self.timeout, self.process, self.event). A runnable toy two-SimObj producer/consumer shows a bare simulation before any interface or HwComponent."
+---
+
+# SimObj
+
+## What a `SimObj` is
+
+Everything that participates in a Waveflow simulation is a
+[`SimObj`](../../../waveflow/simulation/simobj.py). A `SimObj` registers itself with the owning
+[`Simulation`](../../../waveflow/simulation/simulation.py) (which owns the single
+`simpy.Environment`), borrows that environment, and exposes the SimPy primitives a process needs so
+you never touch SimPy directly:
+
+- `self.timeout(delay)` — wait `delay` time units.
+- `self.process(gen)` — start another generator as a concurrent process.
+- `self.event()` — create a bare event to wait on / fire.
+- `self.now` — the current simulation time.
+
+[Hardware components](../components/), [interfaces](../interface/), [loggers](./logging.md), and
+channels are all `SimObj`s — so the simplest possible simulation is just a couple of `SimObj`s with no
+hardware at all.
+
+## Its lifecycle
+
+A `SimObj` is driven through `pre_sim` → `run_proc` → `post_sim` by `Simulation.run_sim()`. That
+three-phase lifecycle — and the synthesizable-component specifics (`on_start`, `@sim_only`) — is the
+[Lifecycle](./lifecycle.md) page; this page just introduces the base object and a first simulation.
+
+## Toy: two `SimObj`s interacting
+
+A bare producer/consumer — no interfaces, no `HwComponent`. The `Producer`'s `run_proc` emits a few
+items onto a shared SimPy store; the `Consumer`'s `run_proc` pulls them off as they arrive. Both
+register with one `Simulation` and run via `run_sim()`:
+
+```python
+from dataclasses import dataclass
+
+import simpy
+
+import waveflow.hw  # noqa: F401  (initializes the package; the simulation layer imports cleanly after)
+from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simulation import Simulation
+
+
+@dataclass
+class Producer(SimObj):
+    """Emits ``n_items`` integers onto a shared queue, one per time unit."""
+
+    queue: simpy.Store | None = None
+    n_items: int = 5
+
+    def run_proc(self) -> ProcessGen[None]:
+        for i in range(self.n_items):
+            yield self.timeout(1)          # one time unit of "work"
+            yield self.queue.put(i)        # hand the item to the consumer
+            print(f"[t={self.now:.0f}] {self.name} produced {i}")
+
+
+@dataclass
+class Consumer(SimObj):
+    """Pulls ``n_items`` integers off the shared queue as they arrive."""
+
+    queue: simpy.Store | None = None
+    n_items: int = 5
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.received: list[int] = []
+
+    def run_proc(self) -> ProcessGen[None]:
+        for _ in range(self.n_items):
+            item = yield self.queue.get()  # blocks until an item is available
+            self.received.append(item)
+            print(f"[t={self.now:.0f}] {self.name} consumed {item}")
+
+
+sim = Simulation()
+queue = simpy.Store(sim.env)               # a SimPy store shared through the env
+producer = Producer(name="producer", sim=sim, queue=queue, n_items=5)
+consumer = Consumer(name="consumer", sim=sim, queue=queue, n_items=5)
+
+sim.run_sim()
+print("consumer received:", consumer.received)
+```
+
+Running it prints the producer and consumer stepping in lockstep, one item per time unit:
+
+```text
+[t=1] producer produced 0
+[t=1] consumer consumed 0
+...
+[t=5] producer produced 4
+[t=5] consumer consumed 4
+consumer received: [0, 1, 2, 3, 4]
+```
+
+The point: a complete, running simulation built from nothing but two `SimObj`s — *before* any
+interface or `HwComponent` enters the picture. Wiring `SimObj`s together with real transports is
+[Interfaces](../interface/); a hardware `SimObj` is a [Hardware Component](../components/).
+
+## Quick reference
+
+- Every simulation entity is a `SimObj`; construct it with `name=` and `sim=` so it registers with the `Simulation`.
+- Override `run_proc` to make an object active (a SimPy generator); leave it to stay passive.
+- Use `self.timeout` / `self.process` / `self.event` / `self.now` — not raw SimPy.
+- Build a `Simulation()`, construct the `SimObj`s against it, call `run_sim()`.
+- The full lifecycle is [Lifecycle](./lifecycle.md); running a *system* of components is [Running a simulation](./running.md).

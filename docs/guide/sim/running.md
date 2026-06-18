@@ -1,7 +1,7 @@
 ---
 title: Running a simulation
 parent: Simulation
-nav_order: 1
+nav_order: 3
 audience: python
 api: [Simulation, Simulation.run_sim, SimObj, Clock, StreamIF, DirectMMIF, Interface.bind]
 summary: "Assemble and run a system in Python: instantiate components against one Simulation, wire their ports with Interface objects (.bind), and call run_sim() to drive pre_sim / run_proc / post_sim. Results are read off the objects afterward."
@@ -37,7 +37,7 @@ sim.run_sim()                                 # pre_sim → run_proc → post_si
 - [`Simulation.run_sim()`](../../../waveflow/simulation/simulation.py) runs every registered object's
   `pre_sim()`, schedules each non-`None` `run_proc()` as a SimPy process, advances the event loop,
   then runs every `post_sim()`. (For what those hooks mean per object, see
-  [Lifecycle](../components/lifecycle.md).)
+  [Lifecycle](./lifecycle.md).)
 
 ## Wiring: `Interface` objects, not a `connect()` call
 
@@ -139,6 +139,6 @@ status off the objects afterward. Running a simulation inside a `BuildStep` like
 ## See also
 
 - [Interfaces](../interface/) — the endpoint classes and their transaction calls.
-- [Lifecycle](../components/lifecycle.md) — the per-object `pre_sim` / `run_proc` / `post_sim` hooks `run_sim` drives.
+- [Lifecycle](./lifecycle.md) — the per-object `pre_sim` / `run_proc` / `post_sim` hooks `run_sim` drives.
 - [Timing model](./timing.md) — how the `Clock` and interface latencies shape the simulated timeline.
 - [Logging](./logging.md) — recording events during the run.

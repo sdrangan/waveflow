@@ -39,11 +39,13 @@ borrows its environment. You rarely touch SimPy directly — `SimObj` wraps the 
 
 If the run raises, `error_cleanup()` is called on every object before the exception propagates (so
 files/loggers close). The **per-object** meaning of these hooks — and `on_start` for regmap-launched
-kernels — is on the [component Lifecycle](../components/lifecycle.md) page; this section is the
+kernels — is on the [Lifecycle](./lifecycle.md) page; this section is the
 *system* view: how the hooks are driven across all objects at once.
 
 ## In this section
 
+- [SimObj](./simobj.md) — the base object every simulation entity is, with a toy two-`SimObj` producer/consumer simulation.
+- [Lifecycle](./lifecycle.md) — `pre_sim` / `run_proc` / `post_sim` (and the `on_start` / `@sim_only` component specifics).
 - [Running a simulation](./running.md) — instantiate components, wire them with `Interface` objects, build a `Simulation`, and call `run_sim()`.
 - [Timing model](./timing.md) — `Clock` and how components / interfaces express cycle latency (the forward model that produces the timeline).
 - [Logging](./logging.md) — the `Logger` `SimObj`: recording timestamped events to a CSV for inspection and timing analysis.
@@ -51,7 +53,7 @@ kernels — is on the [component Lifecycle](../components/lifecycle.md) page; th
 ## See also
 
 - [Interfaces](../interface/) — the transactional connections components are wired through.
-- [Hardware Components](../components/) — declaring the components (ports, `HwParam`, lifecycle) that a simulation runs.
+- [Hardware Components](../components/) — declaring the components (ports, `HwParam`) that a simulation runs.
 - [Timing Analysis Tools](../timing/) — *analyzing* the timeline a simulation produces (this section is the model that produces it).
 - [Build System](../build/python.md) — running a simulation as a step in a `BuildDag`.
 
