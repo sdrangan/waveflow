@@ -3,8 +3,8 @@ title: Schema Transfer Interface
 parent: Interfaces
 nav_order: 5
 audience: python
-api: [SchemaTransferIF, SchemaTransferIFMaster, SchemaTransferIFSlave, PhysicalTransport, StreamTransport]
-summary: "The logical interface that carries serializable schema objects (DataList / DataUnion) over a transport — write(obj) / rx_proc, the layered transport model, and single- vs multi-type framing."
+api: [SchemaTransferIF, SchemaTransferIFMaster, SchemaTransferIFSlave, PhysicalTransport, StreamTransport, SimObj, Simulation]
+summary: "The logical interface that carries serializable schema objects (DataList / DataUnion) over a transport — write(obj) / rx_proc, the layered transport model, and single- vs multi-type framing, with a runnable two-SimObj toy."
 ---
 
 # Schema Transfer Interface
@@ -22,6 +22,82 @@ Transport layer:     PhysicalTransport  (StreamTransport | …)
                            │                            │
 Physical layer:    StreamIFMaster               StreamIFSlave
 ```
+
+---
+
+## A minimal simulation
+
+Two raw [`SimObj`](../sim/simobj.md)s sending a schema object master→slave. Each transfer endpoint
+owns an internal `StreamIFMaster` / `StreamIFSlave` (`stream_ep`); you complete the physical link by
+binding those two `stream_ep`s over a `StreamIF`. No `HwComponent`. (The `yield from` / `run_proc`
+mechanics are in [Process generators](../sim/procgen.md).)
+
+```python
+from dataclasses import dataclass
+
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import DataList, IntField
+from waveflow.hw.interface import StreamIF
+from waveflow.hw.schema_transfer_interface import (
+    SchemaTransferIFMaster, SchemaTransferIFSlave,
+)
+from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simulation import Simulation
+
+U8 = IntField.specialize(bitwidth=8, signed=False)
+S16 = IntField.specialize(bitwidth=16, signed=True)
+
+
+class SensorPacket(DataList):
+    elements = {"temp": S16, "sensor_id": U8}
+
+
+@dataclass
+class Producer(SimObj):
+    """Holds the schema master; serializes and sends each packet."""
+
+    master: SchemaTransferIFMaster | None = None
+
+    def run_proc(self) -> ProcessGen[None]:
+        for temp, sid in [(-10, 1), (25, 2)]:
+            yield from self.master.write(SensorPacket(temp=temp, sensor_id=sid))
+
+
+@dataclass
+class Consumer(SimObj):
+    """Holds the schema slave; rx_proc fires with each deserialized packet."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.received: list[tuple[int, int]] = []
+        self.slave = SchemaTransferIFSlave(
+            sim=self.sim, schema_type=SensorPacket, bitwidth=32, rx_proc=self.on_packet,
+        )
+
+    def on_packet(self, pkt: SensorPacket) -> ProcessGen[None]:
+        self.received.append((int(pkt.temp), int(pkt.sensor_id)))
+        yield self.timeout(0)
+
+
+sim = Simulation()
+clk = Clock(freq=1e9)
+
+producer = Producer(name="producer", sim=sim, master=SchemaTransferIFMaster(sim=sim, bitwidth=32))
+consumer = Consumer(name="consumer", sim=sim)
+
+# Each transfer endpoint owns an internal stream_ep; bind those to wire the physical link.
+stream_if = StreamIF(sim=sim, clk=clk)
+stream_if.bind("master", producer.master.stream_ep)
+stream_if.bind("slave", consumer.slave.stream_ep)
+
+sim.run_sim()
+print("consumer received:", consumer.received)
+```
+
+Each `SensorPacket` the producer `write`s is serialized, carried over the stream, deserialized, and
+delivered to the consumer's `rx_proc` — `consumer.received` ends up `[(-10, 1), (25, 2)]`. See
+[SimObj](../sim/simobj.md) for the base object and lifecycle. The detailed single-type and
+multi-type (`DataUnion`) walkthroughs are below.
 
 ---
 

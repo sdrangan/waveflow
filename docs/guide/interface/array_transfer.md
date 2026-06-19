@@ -3,8 +3,8 @@ title: Array Transfer Interface
 parent: Interfaces
 nav_order: 6
 audience: python
-api: [ArrayTransferIF, ArrayTransferIFMaster, ArrayTransferIFSlave, StreamTransport]
-summary: "The logical interface that carries a variable-length typed array over a transport — write(elements) with a numpy fast path, push (rx_proc) vs pull (get(count)) receive, and TLAST length validation."
+api: [ArrayTransferIF, ArrayTransferIFMaster, ArrayTransferIFSlave, StreamTransport, SimObj, Simulation]
+summary: "The logical interface that carries a variable-length typed array over a transport — write(elements) with a numpy fast path, push (rx_proc) vs pull (get(count)) receive, and TLAST length validation, with a runnable two-SimObj toy."
 ---
 
 # Array Transfer Interface
@@ -34,6 +34,82 @@ Physical layer:    StreamIFMaster                    StreamIFSlave
 | `ArrayTransferIF` | Optional logical container; validates endpoint types, `element_type`, and `bitwidth` |
 
 `PhysicalTransport` and `StreamTransport` are shared with `SchemaTransferIF`; see the [Schema Transfer Interface](schema_transfer.md) page.
+
+---
+
+## A minimal simulation
+
+Two raw [`SimObj`](../sim/simobj.md)s sending one variable-length array master→slave. Each transfer
+endpoint owns an internal `stream_ep`; bind those over a `StreamIF` to wire the physical link. No
+`HwComponent`. (The `yield from` / `run_proc` mechanics are in
+[Process generators](../sim/procgen.md).)
+
+```python
+from dataclasses import dataclass
+
+import numpy as np
+
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import FloatField
+from waveflow.hw.interface import StreamIF
+from waveflow.hw.schema_transfer_interface import (
+    ArrayTransferIFMaster, ArrayTransferIFSlave,
+)
+from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simulation import Simulation
+
+Float32 = FloatField.specialize(bitwidth=32)
+
+
+@dataclass
+class Producer(SimObj):
+    """Holds the array master; sends one variable-length burst of samples."""
+
+    master: ArrayTransferIFMaster | None = None
+
+    def run_proc(self) -> ProcessGen[None]:
+        samples = np.array([1.0, -2.5, 3.14], dtype=np.float32)
+        yield from self.master.write(samples)     # one packet, TLAST on the last element
+
+
+@dataclass
+class Consumer(SimObj):
+    """Holds the array slave; rx_proc fires once with the whole received array."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.received: np.ndarray | None = None
+        self.slave = ArrayTransferIFSlave(
+            sim=self.sim, element_type=Float32, bitwidth=32, rx_proc=self.on_samples,
+        )
+
+    def on_samples(self, elements: np.ndarray) -> ProcessGen[None]:
+        self.received = elements                  # np.ndarray[float32]
+        yield self.timeout(0)
+
+
+sim = Simulation()
+clk = Clock(freq=1e9)
+
+producer = Producer(
+    name="producer", sim=sim,
+    master=ArrayTransferIFMaster(sim=sim, element_type=Float32, bitwidth=32),
+)
+consumer = Consumer(name="consumer", sim=sim)
+
+# Each transfer endpoint owns an internal stream_ep; bind those to wire the physical link.
+stream_if = StreamIF(sim=sim, clk=clk)
+stream_if.bind("master", producer.master.stream_ep)
+stream_if.bind("slave", consumer.slave.stream_ep)
+
+sim.run_sim()
+print("consumer received:", consumer.received.tolist())
+```
+
+The producer `write`s the three-element array as one burst; the slave infers the element count from
+the burst length and delivers the whole `np.ndarray[float32]` to `rx_proc`, so `consumer.received`
+is `[1.0, -2.5, 3.14]`. See [SimObj](../sim/simobj.md) for the base object and lifecycle; push- vs
+pull-mode receive is detailed below.
 
 ---
 
