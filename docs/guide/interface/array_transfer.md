@@ -117,14 +117,14 @@ pull-mode receive is detailed below.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `transport` | `PhysicalTransport` | — | Physical layer to transmit through |
 | `element_type` | `type[DataSchema]` | — | Schema class for each element |
 | `bitwidth` | `int` | `32` | Word width for serialization |
+
+The master creates an internal `StreamIFMaster` exposed as `.stream_ep` — bind it over a `StreamIF`.
 
 ```python
 master = ArrayTransferIFMaster(
     sim=sim,
-    transport=transport,
     element_type=Float32,
     bitwidth=32,
 )
@@ -160,12 +160,12 @@ yield from self.arr_master.write([1.0, -2.5, 3.14])              # raw values �
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `transport` | `PhysicalTransport` | — | Physical layer to receive from |
 | `element_type` | `type[DataSchema]` | — | Schema class for each element |
 | `bitwidth` | `int` | `32` | Word width for deserialization |
 | `rx_proc` | `Callable[[list], ProcessGen[None]] \| None` | `None` | Push-mode callback |
 | `pull_mode` | `bool` | `False` | When `True`, enables `get(count)` and disables the push callback |
 
+The slave creates an internal `StreamIFSlave` exposed as `.stream_ep` — bind it over a `StreamIF`.
 Two receive modes are available.
 
 ### Push mode (default)
@@ -182,12 +182,11 @@ def on_samples(self, elements: np.ndarray) -> ProcessGen[None]:
 
 slave = ArrayTransferIFSlave(
     sim=sim,
-    transport=transport,
     element_type=Float32,
     bitwidth=32,
     rx_proc=self.on_samples,
 )
-slave.pre_sim()   # installs the receive callback
+# bind slave.stream_ep over a StreamIF; run_sim() then calls pre_sim() to install the callback
 ```
 
 ### Pull mode
@@ -197,7 +196,6 @@ Set `pull_mode=True` (and do not set `rx_proc`).  The owning component drives se
 ```python
 slave = ArrayTransferIFSlave(
     sim=sim,
-    transport=transport,
     element_type=Float32,
     bitwidth=32,
     pull_mode=True,
@@ -244,6 +242,9 @@ Binding raises:
 - `TypeError` if the wrong endpoint class is used for a side
 - `ValueError` if master and slave have different `element_type` or `bitwidth`
 
+Like `SchemaTransferIF`, this container only validates the logical pair — it does **not** wire the
+physical link. You still bind each endpoint's `.stream_ep` over a `StreamIF` to connect them.
+
 ---
 
 ## Example: push mode
@@ -251,12 +252,14 @@ Binding raises:
 The master sends a burst; the slave infers element count from burst length.
 
 ```python
+from dataclasses import dataclass
+
 import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import FloatField
-from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.interface import StreamIF
 from waveflow.hw.schema_transfer_interface import (
-    ArrayTransferIFMaster, ArrayTransferIFSlave, StreamTransport,
+    ArrayTransferIFMaster, ArrayTransferIFSlave,
 )
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.simobj import ProcessGen, SimObj
@@ -266,70 +269,101 @@ Float32 = FloatField.specialize(bitwidth=32)
 sim = Simulation()
 clk = Clock(freq=1e9)
 
-stream_if     = StreamIF(sim=sim, clk=clk)
-stream_master = StreamIFMaster(sim=sim, bitwidth=32)
-stream_slave  = StreamIFSlave(sim=sim, bitwidth=32)
-stream_if.bind("master", stream_master)
-stream_if.bind("slave",  stream_slave)
-
-transport = StreamTransport(master_ep=stream_master, slave_ep=stream_slave)
-
 received: list[np.ndarray] = []
 
 def on_samples(elements: np.ndarray) -> ProcessGen[None]:
     received.append(elements)   # np.ndarray[float32]
     yield sim.env.timeout(0)
 
-arr_master = ArrayTransferIFMaster(sim=sim, transport=transport, element_type=Float32, bitwidth=32)
-arr_slave  = ArrayTransferIFSlave(
-    sim=sim, transport=transport, element_type=Float32,
-    bitwidth=32, rx_proc=on_samples,
-)
-arr_slave.pre_sim()
+arr_master = ArrayTransferIFMaster(sim=sim, element_type=Float32, bitwidth=32)
+arr_slave  = ArrayTransferIFSlave(sim=sim, element_type=Float32, bitwidth=32, rx_proc=on_samples)
 
-def tx():
-    yield from arr_master.write(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+# Each transfer endpoint owns an internal stream_ep; bind those over a StreamIF.
+stream_if = StreamIF(sim=sim, clk=clk)
+stream_if.bind("master", arr_master.stream_ep)
+stream_if.bind("slave",  arr_slave.stream_ep)
 
-sim.env.process(stream_slave.run_proc())
-sim.env.process(tx())
-sim.env.run(until=sim.env.timeout(10))
+
+@dataclass
+class Tx(SimObj):
+    def run_proc(self) -> ProcessGen[None]:
+        yield from arr_master.write(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+
+
+Tx(name="tx", sim=sim)
+sim.run_sim()   # calls arr_slave.pre_sim() to install the receive callback
 # received[0] == np.array([1.0, 2.0, 3.0], dtype=np.float32)
 ```
 
 ---
 
-## Example: pull mode (PolyAccel pattern)
+## Example: pull mode
 
-The motivating use case: a component receives a typed header first, then uses the header's `nsamp` field to pull the right number of samples from the same physical stream.
+In pull mode the consumer drives sequencing: it calls `get(count=n)` for an **exact** element count
+(TLAST-validated) instead of registering a callback.
 
 ```python
-class PolyAccelSim(SimObj):
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.stream_slave = StreamIFSlave(sim=self.sim, bitwidth=32)
+from dataclasses import dataclass
 
-        transport = StreamTransport(master_ep=..., slave_ep=self.stream_slave)
+import numpy as np
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import FloatField
+from waveflow.hw.interface import StreamIF
+from waveflow.hw.schema_transfer_interface import (
+    ArrayTransferIFMaster, ArrayTransferIFSlave,
+)
+from waveflow.simulation.simulation import Simulation
+from waveflow.simulation.simobj import ProcessGen, SimObj
 
-        self.cmd_slave = SchemaTransferIFSlave(
-            sim=self.sim, transport=transport,
-            schema_type=PolyCmdHdr, bitwidth=32,
-            pull_mode=True,
-        )
-        self.samp_slave = ArrayTransferIFSlave(
-            sim=self.sim, transport=transport,
-            element_type=Float32, bitwidth=32,
-            pull_mode=True,
-        )
+Float32 = FloatField.specialize(bitwidth=32)
+
+
+@dataclass
+class Producer(SimObj):
+    master: ArrayTransferIFMaster | None = None
 
     def run_proc(self) -> ProcessGen[None]:
-        while True:
-            cmd     = yield from self.cmd_slave.get()                        # PolyCmdHdr
-            samples = yield from self.samp_slave.get(count=cmd.nsamp)        # np.ndarray[float32]
-            _, out, _ = self.accel.evaluate(cmd, samples.astype(float))
-            yield from self.resp_master.write(...)
+        yield from self.master.write(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+
+
+@dataclass
+class Consumer(SimObj):
+    slave: ArrayTransferIFSlave | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.samples: np.ndarray | None = None
+
+    def run_proc(self) -> ProcessGen[None]:
+        self.samples = yield from self.slave.get(count=3)   # exact count; TLAST-validated
+
+
+sim = Simulation()
+clk = Clock(freq=1e9)
+
+producer = Producer(
+    name="producer", sim=sim,
+    master=ArrayTransferIFMaster(sim=sim, element_type=Float32, bitwidth=32),
+)
+consumer = Consumer(
+    name="consumer", sim=sim,
+    slave=ArrayTransferIFSlave(sim=sim, element_type=Float32, bitwidth=32, pull_mode=True),
+)
+
+stream_if = StreamIF(sim=sim, clk=clk)
+stream_if.bind("master", producer.master.stream_ep)
+stream_if.bind("slave",  consumer.slave.stream_ep)
+
+sim.run_sim()
+# consumer.samples == np.array([1.0, 2.0, 3.0], dtype=np.float32)
 ```
 
-Both `cmd_slave` and `samp_slave` share the same `transport` (and therefore the same physical `StreamIFSlave`).  Because `run_proc` is a sequential coroutine, there is no contention — `cmd_slave.get()` consumes the first burst, then `samp_slave.get(count=nsamp)` consumes the second.
+> **Header + payload on one physical stream.** Each transfer endpoint owns its own `stream_ep`, so two
+> transfer slaves cannot share a single stream. For the "typed header first, then pull `nsamp`
+> samples from the *same* stream" pattern (the poly accelerator), use a single raw
+> [`StreamIFSlave`](./stream.md) and successive `get()` calls — `cmd = yield from s_in.get(PolyCmdHdr)`
+> then `samp = yield from s_in.get_pipelined(Float32, count=cmd.nsamp)` — as
+> [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py) does.
 
 ---
 
@@ -368,10 +402,10 @@ from waveflow.hw.schema_transfer_interface import (
 
 | Operation | Code |
 |---|---|
-| Create transport | `StreamTransport(master_ep=m, slave_ep=s)` |
-| Create master | `ArrayTransferIFMaster(sim=sim, transport=t, element_type=T, bitwidth=32)` |
-| Create slave (push) | `ArrayTransferIFSlave(sim=sim, transport=t, element_type=T, bitwidth=32, rx_proc=fn)` |
-| Create slave (pull) | `ArrayTransferIFSlave(sim=sim, transport=t, element_type=T, bitwidth=32, pull_mode=True)` |
+| Create master | `ArrayTransferIFMaster(sim=sim, element_type=T, bitwidth=32)` |
+| Create slave (push) | `ArrayTransferIFSlave(sim=sim, element_type=T, bitwidth=32, rx_proc=fn)` |
+| Create slave (pull) | `ArrayTransferIFSlave(sim=sim, element_type=T, bitwidth=32, pull_mode=True)` |
+| Wire the physical link | `stream_if.bind("master", master.stream_ep); stream_if.bind("slave", slave.stream_ep)` |
 | Transmit (numpy fast path) | `yield from master.write(np.array(..., dtype=np.float32))` |
 | Transmit (schema / raw values) | `yield from master.write([v1, v2, …])` |
 | Receive (push, manual setup) | `slave.pre_sim()` before `env.run()` |

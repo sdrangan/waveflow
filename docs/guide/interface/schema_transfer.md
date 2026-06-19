@@ -105,48 +105,26 @@ multi-type (`DataUnion`) walkthroughs are below.
 
 | Class | Role |
 |---|---|
-| `PhysicalTransport` | Abstract base: `write_words(words)` + `set_rx_callback(fn)` |
-| `StreamTransport` | Adapter over `StreamIFMaster` / `StreamIFSlave` |
-| `SchemaTransferIFMaster` | Serializes objects → forwards word bursts to transport |
+| `PhysicalTransport` | Abstract base: `write_words(words)` + `set_rx_callback(fn)` (internal) |
+| `StreamTransport` | Adapter over `StreamIFMaster` / `StreamIFSlave` (built internally by each endpoint) |
+| `SchemaTransferIFMaster` | Serializes objects → forwards word bursts over its stream port |
 | `SchemaTransferIFSlave` | Receives word bursts → deserializes → delivers to `rx_proc` / queue |
 | `SchemaTransferIF` | Optional logical container; validates endpoint types and bitwidth |
 
 ---
 
-## PhysicalTransport
+## The transport layer (internal)
 
-`PhysicalTransport` is an ABC with two methods:
+You do **not** construct or pass a transport. Each `SchemaTransferIF` endpoint creates its own
+internal `StreamTransport` in `__post_init__` and exposes the underlying stream endpoint as
+`.stream_ep`; you wire the physical link by binding those `.stream_ep`s over a shared `StreamIF`
+(exactly as the [minimal simulation](#a-minimal-simulation) above does).
 
-```python
-class PhysicalTransport(ABC):
-
-    @abstractmethod
-    def write_words(self, words: Words) -> ProcessGen:
-        """Transmit a word burst through the physical endpoint."""
-
-    @abstractmethod
-    def set_rx_callback(self, callback: Callable[[Words], ProcessGen]) -> None:
-        """Register the callback invoked when a word burst arrives."""
-```
-
-The only concrete implementation shipped today is `StreamTransport`.
-
----
-
-## StreamTransport
-
-`StreamTransport` wraps a `StreamIFMaster` / `StreamIFSlave` pair:
-
-```python
-from waveflow.hw.schema_transfer_interface import StreamTransport
-
-transport = StreamTransport(
-    master_ep=stream_master,   # StreamIFMaster
-    slave_ep=stream_slave,     # StreamIFSlave
-)
-```
-
-`write_words` delegates to `stream_master.write(words)`.  `set_rx_callback` sets `stream_slave.rx_proc = callback`.
+`PhysicalTransport` is the ABC the layer is built on (`write_words(words)` +
+`set_rx_callback(fn)`), and `StreamTransport` is its only implementation — an adapter whose
+`write_words` delegates to the master `stream_ep.write(words)` and whose `set_rx_callback` sets the
+slave `stream_ep.rx_proc`. Both are plumbing; the sections below cover the endpoints you actually
+construct.
 
 ---
 
@@ -154,11 +132,12 @@ transport = StreamTransport(
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `transport` | `PhysicalTransport` | — | Physical layer to transmit through |
 | `bitwidth` | `int` | `32` | Word width for serialization |
 
+The master creates an internal `StreamIFMaster` exposed as `.stream_ep` — bind it over a `StreamIF`.
+
 ```python
-master = SchemaTransferIFMaster(sim=sim, transport=transport, bitwidth=32)
+master = SchemaTransferIFMaster(sim=sim, bitwidth=32)
 ```
 
 **Usage** — from inside a `run_proc`:
@@ -176,15 +155,16 @@ def run_proc(self) -> ProcessGen:
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `transport` | `PhysicalTransport` | — | Physical layer to receive from |
 | `schema_type` | `type` | — | Class to call `.deserialize(words, word_bw)` on |
 | `bitwidth` | `int` | `32` | Word width for deserialization |
 | `rx_proc` | `Callable[[Any], ProcessGen] \| None` | `None` | Callback invoked with each deserialized object |
+| `pull_mode` | `bool` | `False` | When `True`, disables the push callback and enables `yield from slave.get()` |
+
+The slave creates an internal `StreamIFSlave` exposed as `.stream_ep` — bind it over a `StreamIF`.
 
 ```python
 slave = SchemaTransferIFSlave(
     sim=sim,
-    transport=transport,
     schema_type=SensorDU,   # DataUnion or DataList subclass
     bitwidth=32,
     rx_proc=self._on_object,
@@ -226,7 +206,7 @@ iface.bind("slave",  slave_ep)
 
 Binding raises `TypeError` if the wrong endpoint class is used for a side, and `ValueError` if the master and slave have different bitwidths.
 
-`SchemaTransferIF` is not required for the transport to function — the transport operates through the master/slave endpoint pair directly.
+`SchemaTransferIF` is optional and only validates the logical pair — it does **not** wire the physical link. You still bind each endpoint's `.stream_ep` over a `StreamIF` to connect them (see the [minimal simulation](#a-minimal-simulation)).
 
 ---
 
@@ -235,11 +215,13 @@ Binding raises `TypeError` if the wrong endpoint class is used for a side, and `
 Every transfer carries one known schema; no header is needed.
 
 ```python
+from dataclasses import dataclass
+
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
-from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.interface import StreamIF
 from waveflow.hw.schema_transfer_interface import (
-    SchemaTransferIFMaster, SchemaTransferIFSlave, StreamTransport,
+    SchemaTransferIFMaster, SchemaTransferIFSlave,
 )
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.simobj import ProcessGen, SimObj
@@ -257,8 +239,7 @@ class SensorPacket(DataList):
 class TxComponent(SimObj):
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=32)
-        self.schema_ep: SchemaTransferIFMaster | None = None
+        self.schema_ep = SchemaTransferIFMaster(sim=self.sim, bitwidth=32)
 
     def run_proc(self) -> ProcessGen:
         for temp_raw, sid in [(-10, 1), (25, 2), (75, 3)]:
@@ -269,8 +250,9 @@ class TxComponent(SimObj):
 class RxComponent(SimObj):
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.stream_ep = StreamIFSlave(sim=self.sim, bitwidth=32)
-        self.schema_ep: SchemaTransferIFSlave | None = None
+        self.schema_ep = SchemaTransferIFSlave(
+            sim=self.sim, schema_type=SensorPacket, bitwidth=32, rx_proc=self.on_packet,
+        )
 
     def on_packet(self, pkt: SensorPacket) -> ProcessGen:
         print(f"temp_raw={int(pkt.temp_raw)}  sensor_id={int(pkt.sensor_id)}")
@@ -283,19 +265,10 @@ clk = Clock(freq=1e9)
 tx = TxComponent(sim=sim)
 rx = RxComponent(sim=sim)
 
-# Physical layer
+# Each transfer endpoint owns an internal stream_ep; bind those over a StreamIF.
 stream_if = StreamIF(sim=sim, clk=clk)
-stream_if.bind("master", tx.stream_ep)
-stream_if.bind("slave",  rx.stream_ep)
-
-# Logical layer
-transport = StreamTransport(master_ep=tx.stream_ep, slave_ep=rx.stream_ep)
-tx.schema_ep = SchemaTransferIFMaster(sim=sim, transport=transport, bitwidth=32)
-rx.schema_ep = SchemaTransferIFSlave(
-    sim=sim, transport=transport,
-    schema_type=SensorPacket, bitwidth=32,
-    rx_proc=rx.on_packet,
-)
+stream_if.bind("master", tx.schema_ep.stream_ep)
+stream_if.bind("slave",  rx.schema_ep.stream_ep)
 
 sim.run_sim()
 ```
@@ -347,9 +320,10 @@ def on_receive(self, du: SensorDU) -> ProcessGen:
     if handler is not None:
         yield from handler(self, du.payload)
 
-# Slave configuration
+# Slave configuration — only schema_type changes vs. the single-type example;
+# bind rx.schema_ep.stream_ep over the StreamIF exactly as before.
 rx.schema_ep = SchemaTransferIFSlave(
-    sim=sim, transport=transport,
+    sim=sim,
     schema_type=SensorDU,   # ← DataUnion, not DataList
     bitwidth=32,
     rx_proc=rx.on_receive,
@@ -413,9 +387,9 @@ from waveflow.hw.schema_transfer_interface import (
 
 | Operation | Code |
 |---|---|
-| Create transport | `StreamTransport(master_ep=m, slave_ep=s)` |
-| Create master | `SchemaTransferIFMaster(sim=sim, transport=t, bitwidth=32)` |
-| Create slave | `SchemaTransferIFSlave(sim=sim, transport=t, schema_type=T, bitwidth=32, rx_proc=fn)` |
+| Create master | `SchemaTransferIFMaster(sim=sim, bitwidth=32)` |
+| Create slave | `SchemaTransferIFSlave(sim=sim, schema_type=T, bitwidth=32, rx_proc=fn)` |
+| Wire the physical link | `stream_if.bind("master", master.stream_ep); stream_if.bind("slave", slave.stream_ep)` |
 | Transmit (from run_proc) | `yield from master.write(obj)` |
 | Register callback (manual) | `slave.pre_sim()` before `env.run()` |
 | Poll queue | `event = slave.queue.get(); yield event; obj = event.value` |
