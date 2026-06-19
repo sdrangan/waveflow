@@ -3,8 +3,8 @@ title: Overview
 parent: Interfaces
 nav_order: 1
 audience: python
-api: [Interface, InterfaceEndpoint, StreamIF, MMIFMaster, MMIFSlave, Words]
-summary: "The transactional interface model — Interface vs master/slave endpoint, the Words type, the cycle-based latency model, and the SimPy write/read/bind lifecycle."
+api: [Interface, InterfaceEndpoint, StreamIF, StreamIFMaster, StreamIFSlave, MMIFMaster, MMIFSlave, Words, Simulation]
+summary: "The transactional interface model — Interface vs master/slave endpoint, the Words type, the cycle-based latency model, and the SimPy write/read/bind lifecycle, plus a runnable two-SimObj StreamIF toy."
 ---
 
 # Overview
@@ -89,6 +89,74 @@ proc = env.process(master_ep.read(nwords=4, global_addr=0x0000))
 yield proc
 data = proc.value   # numpy array of shape (4,)
 ```
+
+## A minimal simulation
+
+Two raw [`SimObj`](../sim/simobj.md)s connecting over a `StreamIF` — a `Producer` holding the master
+endpoint and a `Consumer` holding the slave endpoint, bound and run in one `Simulation`. No
+`HwComponent` involved. (The `yield` / `run_proc` / `ProcessGen` mechanics are explained in
+[Process generators](../sim/procgen.md).)
+
+```python
+from dataclasses import dataclass
+
+import numpy as np
+
+from waveflow.hw.clock import Clock
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave, Words
+from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simulation import Simulation
+
+
+@dataclass
+class Producer(SimObj):
+    """Holds the master endpoint; writes each packet over the stream."""
+
+    master: StreamIFMaster | None = None
+    packets: list | None = None
+
+    def run_proc(self) -> ProcessGen[None]:
+        for packet in self.packets:
+            yield from self.master.write(packet)   # blocks for latency + burst cycles
+            print(f"{self.name} sent {packet.tolist()}")
+
+
+@dataclass
+class Consumer(SimObj):
+    """Holds the slave endpoint; rx_proc fires for each arriving burst."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.received: list[np.ndarray] = []
+        self.slave = StreamIFSlave(sim=self.sim, bitwidth=32, rx_proc=self.on_receive)
+
+    def on_receive(self, words: Words) -> ProcessGen[None]:
+        self.received.append(np.array(words, copy=True))
+        print(f"{self.name} received {words.tolist()}")
+        yield self.timeout(0)
+
+
+sim = Simulation()
+iface = StreamIF(sim=sim, clk=Clock(freq=100e6), bitwidth=32)
+
+producer = Producer(
+    name="producer", sim=sim,
+    master=StreamIFMaster(sim=sim, bitwidth=32),
+    packets=[np.array([1, 2, 3], dtype=np.uint32), np.array([4, 5], dtype=np.uint32)],
+)
+consumer = Consumer(name="consumer", sim=sim)
+
+iface.bind("master", producer.master)
+iface.bind("slave", consumer.slave)
+
+sim.run_sim()
+print("consumer received:", [p.tolist() for p in consumer.received])
+```
+
+Each burst the producer `write`s lands in `consumer.received` (`[[1, 2, 3], [4, 5]]`): the master
+drives, the slave's `rx_proc` fires per burst, and `run_sim()` returns once the producer's `run_proc`
+finishes and the slave's receive loop parks on its empty buffer. See [SimObj](../sim/simobj.md) for the
+base object and lifecycle.
 
 ## Available interface types
 
