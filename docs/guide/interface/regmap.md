@@ -3,8 +3,8 @@ title: Register Maps
 parent: Interfaces
 nav_order: 4
 audience: python
-api: [RegMap, RegField, RegAccess, RegMapMMIFSlave, VitisRegMap, VitisRegMapMMIFSlave, BoundRegMap]
-summary: "AXI-Lite register maps in the SimPy model — RegField/RegAccess, the RegMap slave dispatch, the VitisRegMap ap_ctrl_hs (ap_start/ap_done) launch lifecycle, and the BoundRegMap host surface."
+api: [RegMap, RegField, RegAccess, RegMapMMIFSlave, VitisRegMap, VitisRegMapMMIFSlave, BoundRegMap, SimObj, Simulation]
+summary: "AXI-Lite register maps in the SimPy model — RegField/RegAccess, the RegMap slave dispatch, the VitisRegMap ap_ctrl_hs (ap_start/ap_done) launch lifecycle, and the BoundRegMap host surface, with a runnable two-SimObj launch-then-poll toy."
 ---
 
 # Register Maps
@@ -23,6 +23,97 @@ Waveflow provides the register-map abstraction as a thin layer on top of the exi
 The register map matches the model that Vitis HLS generates from `s_axilite` scalars and arrays: each field becomes one or more 32-bit registers in a single auto-generated AXI-Lite slave. When Waveflow eventually generates the HLS pragmas for a kernel, the offsets in the Python `RegMap` are the offsets the host driver uses.
 
 ---
+
+## A minimal simulation
+
+Two raw [`SimObj`](../sim/simobj.md)s exercising the launch-then-poll lifecycle over a
+[`DirectMMIF`](./aximm.md#directmmif): a `Kernel` holding a `VitisRegMapMMIFSlave` runs its `on_start`
+when launched, and a `Host` holding an `MMIFMaster` writes the inputs, asserts `ap_start`, polls
+`ap_done`, and reads the result back. No `HwComponent`. (`on_start` is the regmap-launched entry — see
+the [SimObj lifecycle](../sim/simobj.md#its-lifecycle); the `yield from` mechanics are in
+[Process generators](../sim/procgen.md).)
+
+```python
+from dataclasses import dataclass
+
+from waveflow.hw.aximm import DirectMMIF, MMIFMaster
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import IntField
+from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
+from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simulation import Simulation
+
+Int32 = IntField.specialize(bitwidth=32, signed=True)
+
+
+@dataclass
+class Kernel(SimObj):
+    """A regmap-launched compute SimObj: y = a*x + b, run on host ap_start."""
+
+    clk: Clock | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.regmap = VitisRegMap({
+            "x": RegField(Int32, RegAccess.RW),
+            "a": RegField(Int32, RegAccess.RW),
+            "b": RegField(Int32, RegAccess.RW),
+            "y": RegField(Int32, RegAccess.R),
+        })
+        self.s_lite = VitisRegMapMMIFSlave(
+            name=f"{self.name}_s_lite", sim=self.sim, bitwidth=32,
+            regmap=self.regmap, on_start=self.on_start,
+        )
+
+    def on_start(self) -> ProcessGen[None]:
+        # The slave invokes this on ap_start; it auto-sets ap_done when on_start returns.
+        x = int(self.regmap.get("x").val)
+        a = int(self.regmap.get("a").val)
+        b = int(self.regmap.get("b").val)
+        yield self.timeout(4 * self.clk.period)          # model compute latency
+        self.regmap.set("y", a * x + b)
+
+
+@dataclass
+class Host(SimObj):
+    """Holds the master; configures inputs, launches, polls ap_done, reads y back."""
+
+    master: MMIFMaster | None = None
+    kernel: Kernel | None = None
+    clk: Clock | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.y: int | None = None
+
+    def run_proc(self) -> ProcessGen[None]:
+        rm = self.kernel.regmap.bind_master(self.master, base_addr=0)
+        yield from rm.set("x", 5)
+        yield from rm.set("a", 3)
+        yield from rm.set("b", -4)
+        yield from rm.start()                            # write ap_start
+        ap_done = yield from rm.poll_end(interval=4 * self.clk.period, max_polls=32)
+        self.y = yield from rm.get("y")
+        print(f"ap_done={ap_done}, y={self.y}")
+
+
+sim = Simulation()
+clk = Clock(freq=100e6)
+
+kernel = Kernel(name="kernel", sim=sim, clk=clk)
+host = Host(name="host", sim=sim, master=MMIFMaster(sim=sim, bitwidth=32), kernel=kernel, clk=clk)
+
+link = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)   # byte addresses (AXI-Lite convention)
+link.bind("master", host.master)
+link.bind("slave", kernel.s_lite)
+
+sim.run_sim()
+```
+
+`host.y` is `11` (`3*5 - 4`): the host's `set` writes land in the register fields, `start()` writes
+`ap_start` which launches `on_start`, the slave sets `ap_done` when it returns, and `poll_end` reads
+that back before the host fetches `y`. `bind_master` / `start` / `poll_end` are the host-side
+[`BoundRegMap`](#host-side-boundregmap) surface. See [SimObj](../sim/simobj.md) for the lifecycle.
 
 ## Quick example
 
