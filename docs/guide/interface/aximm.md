@@ -3,8 +3,8 @@ title: MM Interfaces
 parent: Interfaces
 nav_order: 3
 audience: python
-api: [MMIFMaster, MMIFSlave, AXIMMCrossBarIF, DirectMMIF, AXIMMProtocol, assign_address_ranges]
-summary: "Memory-mapped interfaces in the SimPy model — MMIFMaster/MMIFSlave endpoints, the AXIMMCrossBarIF (FULL/LITE, address routing) and DirectMMIF, and read/write/read_schema/read_array."
+api: [MMIFMaster, MMIFSlave, AXIMMCrossBarIF, DirectMMIF, AXIMMProtocol, assign_address_ranges, SimObj, Simulation]
+summary: "Memory-mapped interfaces in the SimPy model — MMIFMaster/MMIFSlave endpoints, the AXIMMCrossBarIF (FULL/LITE, address routing) and DirectMMIF, and read/write/read_schema/read_array, with a runnable two-SimObj DirectMMIF toy."
 ---
 
 # Memory-Mapped (MM) Interfaces
@@ -91,6 +91,83 @@ arr = yield from master_ep.read_array(Float32, count=nsamp, addr=DATA_ADDR)
 ```
 
 ---
+
+## A minimal simulation
+
+Two raw [`SimObj`](../sim/simobj.md)s over a point-to-point [`DirectMMIF`](#directmmif): a `Cpu` holding
+the `MMIFMaster` writes a burst and reads it back, and a `MemBank` holding the `MMIFSlave` is a tiny
+word-addressed memory model. No `HwComponent`. (The `yield from` / `run_proc` / `ProcessGen` mechanics
+are explained in [Process generators](../sim/procgen.md).)
+
+```python
+from dataclasses import dataclass
+
+import numpy as np
+
+from waveflow.hw.aximm import DirectMMIF, MMIFMaster, MMIFSlave
+from waveflow.hw.clock import Clock
+from waveflow.hw.interface import Words
+from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simulation import Simulation
+
+
+@dataclass
+class MemBank(SimObj):
+    """A tiny word-addressed memory behind a slave endpoint."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self._mem: dict[int, int] = {}
+        self.slave = MMIFSlave(
+            sim=self.sim, bitwidth=32,
+            rx_write_proc=self.on_write, rx_read_proc=self.on_read,
+        )
+
+    def on_write(self, words: Words, local_addr: int) -> ProcessGen[None]:
+        for i, w in enumerate(words):
+            self._mem[local_addr + i] = int(w)
+        yield self.timeout(0)
+
+    def on_read(self, nwords: int, local_addr: int) -> ProcessGen[Words]:
+        yield self.timeout(0)   # model peripheral access latency here
+        return np.array([self._mem.get(local_addr + i, 0) for i in range(nwords)], dtype=np.uint32)
+
+
+@dataclass
+class Cpu(SimObj):
+    """Holds the master endpoint; writes a burst then reads it back."""
+
+    master: MMIFMaster | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.readback: np.ndarray | None = None
+
+    def run_proc(self) -> ProcessGen[None]:
+        data = np.array([0xA0, 0xA1, 0xA2, 0xA3], dtype=np.uint32)
+        yield from self.master.write(data, 0)
+        self.readback = yield from self.master.read(4, 0)
+        print(f"{self.name} read back {self.readback.tolist()}")
+
+
+sim = Simulation()
+clk = Clock(freq=100e6)
+
+mem = MemBank(name="mem", sim=sim)
+cpu = Cpu(name="cpu", sim=sim, master=MMIFMaster(sim=sim, bitwidth=32))
+
+link = DirectMMIF(sim=sim, clk=clk, byte_addressable=False)   # word addresses (BRAM convention)
+link.bind("master", cpu.master)
+link.bind("slave", mem.slave)
+
+sim.run_sim()
+```
+
+`cpu.readback` is `[0xA0, 0xA1, 0xA2, 0xA3]`: the master-initiated `write` then `read` round-trip
+through the slave's `rx_write_proc` / `rx_read_proc`. `DirectMMIF` is point-to-point, so no address
+ranges are needed; for the multi-slave **crossbar** you also call
+[`assign_address_ranges()`](#axiammcrossbarif) after `bind` (see the [full example](#full-example)
+below). See [SimObj](../sim/simobj.md) for the base object and lifecycle.
 
 ## AXIMMCrossBarIF
 
