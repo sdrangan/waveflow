@@ -1,20 +1,24 @@
-"""Committed-figure workflow for the VMAC-over-mm-queue timing example (Stage 4).
+"""Committed-figure workflow for the VMAC-over-mm-queue timing example (Stages 4-5).
 
-Renders ONE deterministic SVG that conveys the headline finding by overlaying the
-loosely-timed sim against the Vitis RTL cosim.  The figure regenerates from the two
-**committed, source-agnostic** timelines ALONE — no Vitis, no cosim re-run, no VCD:
+Renders ONE deterministic SVG telling the **II-decoupling calibration** story: the Stage-1
+loosely-timed (LT) sim was *transaction-gated* and mispredicted timing two ways — it
+underestimated absolute latency ~5x and predicted ``anorm`` faster than ``abcorr``.  Stage 5
+calibrates the LT model against a Vitis RTL cosim **sweep** (``latency ~= depth + II*trips``,
+fit on 3 sizes, validated on a held-out 4th) and re-times the sim by the pipeline schedule.
 
-    examples/vmac/timeline/sim_timeline.json    (source="sim",   timebase="ns")
-    examples/vmac/timeline/cosim_timeline.json  (source="cosim", timebase="ns")
+The figure regenerates from **committed, source-agnostic** JSONs ALONE — no Vitis, no cosim
+re-run, no VCD:
 
-That is the whole "committed figure" property: the docs build never needs Vitis.
+    examples/vmac/timeline/sim_sweep.json   (source="sim": naive + calibrated + RTL per size)
+    examples/vmac/timeline/sim_timeline.json (the calibrated 4x4 detail; ab_eq occupancy)
 
 Three panels:
-  (1) read-bus words per command  — anorm (ab_eq) issues HALF (16 vs 32); sim & RTL agree.
-  (2) command latency, sim vs RTL — sim predicts anorm<abcorr (transaction-gated), RTL is
-      FIXED-II (anorm==abcorr); and sim << RTL absolute (the underestimate).
-  (3) per-command transaction Gantt (local time) — read (A/B) + write blocks: the sim's one
-      whole-matrix LT block vs the RTL's per-word beats, and B's reads freed under ab_eq.
+  (a) latency vs trips, across the sweep — naive-LT (underestimates) -> calibrated-LT (tracks)
+      vs RTL truth; the held-out config is marked (the generalization test).
+  (b) read-bus words anorm vs abcorr per size — calibrated occupancy is STILL transaction-driven
+      (anorm = HALF), the bus-utilization result the LT model always got right.
+  (c) calibrated latency anorm vs abcorr per size — now EQUAL (fixed-II), matching the RTL: the
+      "same latency, freed bus" result the transaction-gated model could not represent.
 
 Run::
 
@@ -42,28 +46,16 @@ import matplotlib.pyplot as plt  # noqa: E402
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[1]
 TIMELINE_DIR = _HERE / "timeline"
-SIM_JSON = TIMELINE_DIR / "sim_timeline.json"
-COSIM_JSON = TIMELINE_DIR / "cosim_timeline.json"
+SIM_SWEEP_JSON = TIMELINE_DIR / "sim_sweep.json"
 COMMITTED_SVG = _REPO / "docs" / "examples" / "mmqueue" / "images" / "sim_vs_cosim.svg"
 SYNC_STATUS = COMMITTED_SVG.with_name("sync_status.json")
 
-_COL = {"A": "#4C78A8", "B": "#F58518", "write": "#E45756"}
-_SIM_C, _RTL_C = "#54A24B", "#E45756"
+_NAIVE_C, _CALIB_C, _RTL_C = "#54A24B", "#4C78A8", "#E45756"
+_ANORM_C, _ABCORR_C = "#4C78A8", "#F58518"
 
 
-def _load() -> tuple[dict, dict]:
-    sim = json.loads(SIM_JSON.read_text(encoding="utf-8"))
-    cos = json.loads(COSIM_JSON.read_text(encoding="utf-8"))
-    return sim, cos
-
-
-def _cmd(d: dict, ab_eq: bool) -> dict:
-    return next(c for c in d["commands"] if bool(c["ab_eq"]) == ab_eq)
-
-
-def _cmd_t0(c: dict) -> float:
-    """Command-local time origin: the first transaction's tstart."""
-    return min((float(t["tstart"]) for t in c["transactions"]), default=0.0)
+def _load() -> dict:
+    return json.loads(SIM_SWEEP_JSON.read_text(encoding="utf-8"))
 
 
 def _save_svg(fig, path: Path) -> None:
@@ -78,108 +70,96 @@ def _sha256(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rendering (reads only the two committed timeline JSONs)
+# Rendering (reads only the committed sim_sweep.json)
 # ---------------------------------------------------------------------------
 
 def render(out_svg: Path) -> Path:
-    sim, cos = _load()
-    sim_an, sim_ab = _cmd(sim, True), _cmd(sim, False)
-    cos_an, cos_ab = _cmd(cos, True), _cmd(cos, False)
+    sweep = _load()
+    pts = sorted(sweep["points"], key=lambda p: p["trips"])
+    cal = sweep["calibration"]
+    trips = [p["trips"] for p in pts]
+    labels = [f"{p['n_rows']}x{p['n_cols']}" for p in pts]
+    naive = [p["naive_abcorr_ns"] for p in pts]
+    calib = [p["calib_abcorr_ns"] for p in pts]
+    rtl = [p["rtl_latency_ns"] for p in pts]
+    hold_i = next((i for i, p in enumerate(pts) if p["held_out"]), None)
 
-    fig = plt.figure(figsize=(10.0, 7.6))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.15], hspace=0.55, wspace=0.30)
-    ax_words = fig.add_subplot(gs[0, 0])
-    ax_lat = fig.add_subplot(gs[0, 1])
-    ax_gantt = fig.add_subplot(gs[1, :])
+    fig = plt.figure(figsize=(10.0, 7.8))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.18, 1.0], hspace=0.42, wspace=0.28)
+    ax_lat = fig.add_subplot(gs[0, :])
+    ax_words = fig.add_subplot(gs[1, 0])
+    ax_eq = fig.add_subplot(gs[1, 1])
 
-    # -- Panel 1: read-bus words (sim & RTL agree; anorm = half of abcorr) --------
-    labels = ["anorm\n(ab_eq)", "abcorr"]
-    read_words = [sim_an["read_words"], sim_ab["read_words"]]  # identical in cosim
-    bars = ax_words.bar(labels, read_words, color=[_COL["A"], _COL["B"]],
-                        edgecolor="white", zorder=3, width=0.6)
-    for b, w in zip(bars, read_words):
-        ax_words.text(b.get_x() + b.get_width() / 2, w + 0.6, f"{w}w",
-                      ha="center", va="bottom", fontsize=10, fontweight="bold")
+    # -- Panel (a): latency vs trips — naive -> calibrated -> RTL ------------------
+    ax_lat.plot(trips, rtl, "-o", color=_RTL_C, lw=2.2, ms=8, zorder=4, label="RTL cosim (truth)")
+    ax_lat.plot(trips, calib, "-s", color=_CALIB_C, lw=2.0, ms=7, zorder=3,
+                label="calibrated LT (depth + II·trips)")
+    ax_lat.plot(trips, naive, "-^", color=_NAIVE_C, lw=2.0, ms=7, zorder=3,
+                label="naive LT (transaction-gated)")
+    if hold_i is not None:
+        ax_lat.scatter([trips[hold_i]], [rtl[hold_i]], s=320, facecolors="none",
+                       edgecolors="#333", lw=1.8, zorder=5)
+        ax_lat.annotate(
+            f"held-out {labels[hold_i]}\nfit on the other 3\npred err {cal['holdout_rel_err'] * 100:.1f}%",
+            xy=(trips[hold_i], rtl[hold_i]),
+            xytext=(trips[hold_i] - 46, rtl[hold_i] * 0.62), fontsize=8.5, color="#333",
+            ha="left", arrowprops=dict(arrowstyle="->", color="#333", lw=1.0))
+    for x, lab in zip(trips, labels):
+        ax_lat.annotate(lab, xy=(x, 0), xytext=(x, -max(rtl) * 0.055), fontsize=7.5,
+                        color="#777", ha="center", annotation_clip=False)
+    ax_lat.set_xlabel("trips = n_rows · ⌈n_cols / PF⌉   (PF=1)")
+    ax_lat.set_ylabel("command latency [ns]")
+    ax_lat.set_ylim(0, max(rtl) * 1.12)
+    ax_lat.set_title(
+        f"(a) calibrated LT tracks RTL across the sweep — fit depth={cal['depth']:.0f}, "
+        f"II={cal['ii']:.1f} cyc/trip (R²={cal['r2']:.3f})\n"
+        "naive LT underestimates ~5×; one II parameter, fit on 3 sizes, predicts the held-out 4th",
+        fontsize=9.5)
+    ax_lat.legend(fontsize=8.5, loc="upper left", framealpha=0.9)
+    ax_lat.spines[["top", "right"]].set_visible(False)
+    ax_lat.grid(color="#EEEEEE", zorder=0)
+
+    # -- Panel (b): read-bus words anorm vs abcorr (still halved) ------------------
+    x = range(len(pts))
+    w = 0.38
+    an_rw = [p["anorm_read_words"] for p in pts]
+    ab_rw = [p["abcorr_read_words"] for p in pts]
+    ax_words.bar([i - w / 2 for i in x], an_rw, w, label="anorm (ab_eq)", color=_ANORM_C,
+                 edgecolor="white", zorder=3)
+    ax_words.bar([i + w / 2 for i in x], ab_rw, w, label="abcorr", color=_ABCORR_C,
+                 edgecolor="white", zorder=3)
+    ax_words.set_xticks(list(x))
+    ax_words.set_xticklabels(labels, fontsize=8)
     ax_words.set_ylabel("m_axi read-bus words")
-    ax_words.set_ylim(0, max(read_words) * 1.25)
-    ax_words.set_title("(a) read words: ab_eq issues HALF\n(sim & RTL agree: 16 vs 32)",
-                       fontsize=10)
-    ax_words.annotate("B read suppressed\n(B aliases A)", xy=(0, read_words[0]),
-                      xytext=(0.05, max(read_words) * 0.92), fontsize=8.5, color="#444",
-                      ha="left")
+    ax_words.set_ylim(0, max(ab_rw) * 1.2)
+    ax_words.set_title("(b) bus still halved: anorm = ½ reads\n(occupancy stays transaction-driven)",
+                       fontsize=9.5)
+    ax_words.legend(fontsize=8, loc="upper left", framealpha=0.9)
     ax_words.spines[["top", "right"]].set_visible(False)
     ax_words.grid(axis="y", color="#DDDDDD", zorder=0)
 
-    # -- Panel 2: latency, sim vs RTL (fixed-II + absolute underestimate) ---------
-    x = range(2)
-    w = 0.36
-    sim_lat = [sim_an["latency"], sim_ab["latency"]]
-    rtl_lat = [cos_an["latency"], cos_ab["latency"]]
-    bs = ax_lat.bar([i - w / 2 for i in x], sim_lat, w, label="sim (loosely-timed)",
-                    color=_SIM_C, edgecolor="white", zorder=3)
-    br = ax_lat.bar([i + w / 2 for i in x], rtl_lat, w, label="RTL cosim",
-                    color=_RTL_C, edgecolor="white", zorder=3)
-    for bars_ in (bs, br):
-        for b in bars_:
-            ax_lat.text(b.get_x() + b.get_width() / 2, b.get_height() + 40,
-                        f"{b.get_height():.0f}", ha="center", va="bottom", fontsize=8.5)
-    ax_lat.set_xticks(list(x))
-    ax_lat.set_xticklabels(labels)
-    ax_lat.set_ylabel("command latency [ns]")
-    ax_lat.set_ylim(0, max(rtl_lat) * 1.22)
-    ax_lat.set_title("(b) latency: sim predicts anorm<abcorr,\nRTL is FIXED-II (equal)",
-                     fontsize=10)
-    ax_lat.legend(fontsize=8, loc="upper left", framealpha=0.9)
-    ax_lat.spines[["top", "right"]].set_visible(False)
-    ax_lat.grid(axis="y", color="#DDDDDD", zorder=0)
-    # call out the RTL fixed-II equality
-    ax_lat.annotate("", xy=(0 + w / 2, rtl_lat[0]), xytext=(1 + w / 2, rtl_lat[1]),
-                    arrowprops=dict(arrowstyle="<->", color="#777", lw=1.0))
-    ax_lat.text(0.5, rtl_lat[0] * 0.5, "RTL: equal\n(fixed-II)", ha="center",
-                fontsize=8, color="#555")
-
-    # -- Panel 3: per-command transaction Gantt (command-local time) --------------
-    lanes = [
-        ("sim  anorm",  sim_an), ("sim  abcorr", sim_ab),
-        ("RTL  anorm",  cos_an), ("RTL  abcorr", cos_ab),
-    ]
-    for row, (name, c) in enumerate(lanes):
-        y = len(lanes) - 1 - row
-        t0 = _cmd_t0(c)
-        for t in c["transactions"]:
-            color = _COL["write"] if t["rw"] == "write" else _COL.get(
-                "A" if t["name"] == "A" else "B" if t["name"] == "B" else "x", "#9D9D9D")
-            x0 = float(t["tstart"]) - t0
-            width = max(float(t["tend"]) - float(t["tstart"]), 4.0)  # min visible width
-            ax_gantt.barh(y, width, left=x0, height=0.62, color=color,
-                          edgecolor="white", linewidth=0.4, zorder=3)
-        ax_gantt.text(-60, y, name, ha="right", va="center", fontsize=9, family="monospace")
-        ax_gantt.text(c["latency"] + 60, y, f"{c['latency']:.0f} ns",
-                      ha="left", va="center", fontsize=8.5, color="#555")
-
-    ax_gantt.set_yticks([])
-    ax_gantt.set_ylim(-0.6, len(lanes) - 0.4)
-    ax_gantt.set_xlim(-700, max(cos_an["latency"], cos_ab["latency"]) + 700)
-    ax_gantt.set_xlabel("time within the command [ns]  (each command normalized to its own start)")
-    ax_gantt.set_title(
-        "(c) memory-transaction timeline: sim's one whole-matrix LT block vs the RTL's per-word "
-        "beats; B's reads freed under ab_eq", fontsize=10)
-    ax_gantt.spines[["top", "right", "left"]].set_visible(False)
-    ax_gantt.grid(axis="x", color="#EEEEEE", zorder=0)
-    legend_handles = [
-        plt.Line2D([0], [0], color=_COL["A"], lw=8, label="A read"),
-        plt.Line2D([0], [0], color=_COL["B"], lw=8, label="B read"),
-        plt.Line2D([0], [0], color=_COL["write"], lw=8, label="Y write"),
-    ]
-    ax_gantt.legend(handles=legend_handles, fontsize=8, loc="lower right", ncol=3,
-                    framealpha=0.9)
+    # -- Panel (c): calibrated latency anorm vs abcorr (now equal — fixed-II) ------
+    an_lat = [p["calib_anorm_ns"] for p in pts]
+    ab_lat = [p["calib_abcorr_ns"] for p in pts]
+    ax_eq.bar([i - w / 2 for i in x], an_lat, w, label="anorm (ab_eq)", color=_ANORM_C,
+              edgecolor="white", zorder=3)
+    ax_eq.bar([i + w / 2 for i in x], ab_lat, w, label="abcorr", color=_ABCORR_C,
+              edgecolor="white", zorder=3)
+    ax_eq.set_xticks(list(x))
+    ax_eq.set_xticklabels(labels, fontsize=8)
+    ax_eq.set_ylabel("calibrated latency [ns]")
+    ax_eq.set_ylim(0, max(ab_lat) * 1.18)
+    ax_eq.set_title("(c) calibrated: anorm latency == abcorr\n(fixed-II — \"same latency, freed bus\")",
+                    fontsize=9.5)
+    ax_eq.legend(fontsize=8, loc="upper left", framealpha=0.9)
+    ax_eq.spines[["top", "right"]].set_visible(False)
+    ax_eq.grid(axis="y", color="#DDDDDD", zorder=0)
 
     fig.suptitle(
-        "VMAC ab_eq: loosely-timed sim vs Vitis RTL cosim  (PF=1, 4x4, 100 MHz)\n"
-        "same reads halved, but RTL latency is fixed-II (\"same latency, freed bus\")",
-        fontsize=12, y=0.99)
-    # queue occupancy is a sim-only quantity (the cosim kernel has no command ring).
-    fig.text(0.01, 0.005,
+        "VMAC loosely-timed sim, cosim-calibrated (II-decoupling)  —  PF=1, 100 MHz\n"
+        "off → calibrated → tracks RTL on held-out points; bus halved but latency fixed-II",
+        fontsize=12, y=0.995)
+    fig.text(0.01, 0.004,
              "Note: queue occupancy is sim-only (the RTL cosim has an m_axi but no command ring) "
              "— out of cosim scope.", fontsize=7.5, color="#777", ha="left")
     _save_svg(fig, Path(out_svg))
@@ -191,14 +171,11 @@ def render(out_svg: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def regenerate() -> dict[str, Any]:
-    """Render the committed SVG from the two timelines and record provenance."""
+    """Render the committed SVG from the sweep timeline and record provenance."""
     render(COMMITTED_SVG)
     status = {
         "figure": "sim_vs_cosim.svg",
-        "sources": {
-            "sim_timeline.json": _sha256(SIM_JSON),
-            "cosim_timeline.json": _sha256(COSIM_JSON),
-        },
+        "sources": {"sim_sweep.json": _sha256(SIM_SWEEP_JSON)},
         "svg_sha256": _sha256(COMMITTED_SVG),
         "regenerable_without_vitis": True,
     }
@@ -219,7 +196,7 @@ def check() -> bool:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="VMAC mm-queue Stage-4 figure (sim vs cosim).")
+    ap = argparse.ArgumentParser(description="VMAC mm-queue Stage-5 figure (cosim-calibrated LT).")
     ap.add_argument("--check", action="store_true",
                     help="render to a temp file and byte-compare against the committed SVG")
     args = ap.parse_args()

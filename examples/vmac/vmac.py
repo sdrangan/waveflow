@@ -48,6 +48,7 @@ remains the hand-written ``vmac_compute`` hook; the cosim codegen path is unchan
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -70,6 +71,30 @@ from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils
 from waveflow.utils.fixputils import Format, OMode, QMode, add_format, sum_format
+
+
+@dataclass(frozen=True)
+class VmacTiming:
+    """Calibrated pipeline-schedule parameters for the **II-decoupled** timing model (Stage 5
+    of ``plans/vmac_mm_queue_timing.md``).
+
+    The loosely-timed Stage-1 model was *transaction-gated* — a command's latency was the sum
+    of its transfer blocks — so it mispredicted the ``ab_eq`` ordering (anorm faster) and
+    underestimated absolute latency ~5x.  Under II-decoupling the latency is instead the kernel
+    **pipeline schedule**
+
+        latency_cycles = depth + ii * trips,    trips = n_rows * ceil(n_cols / pf)
+
+    fit from the Vitis cosim sweep (:mod:`examples.vmac.vmac_calibrate`).  ``depth`` is the
+    fill/drain + reduce-init/writeback overhead; ``ii`` is the (memory-gated) cycles per
+    inner-loop trip.  Loaded programmatically by the driver — never hard-coded in the model —
+    and attached as ``VmacAccel.timing``."""
+
+    depth: float
+    ii: float
+
+    def cycles(self, trips: int) -> float:
+        return self.depth + self.ii * trips
 
 
 @dataclass
@@ -114,6 +139,12 @@ class VmacAccel(HwComponent):
             # (it owns the system memory map) before ``run_sim``.
             self.cmd_queue: AXIMMQueue | None = None
             self.data_base: int = 0
+            # Stage 5 II-decoupling: the calibrated pipeline-schedule params.  ``None`` ->
+            # the Stage-1 *transaction-gated* model (latency = Σ transfer blocks, kept so the
+            # naive-vs-calibrated comparison can render both).  Set by the driver to a
+            # ``VmacTiming`` (loaded from the committed cosim calibration) to make latency the
+            # II-driven pipeline schedule while occupancy stays transaction-driven.
+            self.timing: VmacTiming | None = None
             # Stage 2 timeline capture (attached by the driver; default = no-op).
             self.logger = NullLogger()
             self.region_labels: dict[int, str] = {}  # elem offset -> A / B / Y_anorm / ...
@@ -128,6 +159,13 @@ class VmacAccel(HwComponent):
         return VmacCmd.specialize(
             mem_awidth=int(self.mem_awidth), data_bw=int(self.data_bw)
         )
+
+    @property
+    def pf(self) -> int:
+        """Complex columns packed per memory word — the kernel's ``PF = MEM_BW / element_bits``
+        (element = ``2 * data_bw``).  Sets ``trips = n_rows * ceil(n_cols / pf)`` in the
+        II-decoupled timing model, matching the ``.tpp`` inner-loop step (``col0 += PF``)."""
+        return max(1, int(self.mem_dwidth) // (2 * int(self.data_bw)))
 
     @property
     def q_mode(self) -> QMode:
@@ -378,19 +416,30 @@ class VmacAccel(HwComponent):
         )
 
     def run_proc(self) -> ProcessGen[None]:
-        """Loosely-timed SimPy execution model (Stage 1): a free-running queue consumer.
+        """Loosely-timed SimPy execution model: a free-running queue consumer.
 
         Dequeue a :class:`VmacCmd` from the AXI-MM command queue; on ``OpCode.end``
         stop.  Otherwise issue **timed ``m_mem`` reads** of the operands (A; B unless
         ``ab_eq``) and a **timed write** of Y — one whole-matrix LT block per operand —
         with the numpy golden (:meth:`execute`) producing the values into a local buffer.
 
-        Latency is **transaction-driven** here: ``ab_eq`` (``b_addr == a_addr``) suppresses
-        B's read, so the model predicts ``anorm`` faster than ``abcorr``.  That is the
-        intended Stage-1 behaviour — the gap vs. the fixed-II RTL (equal latency, freed bus)
-        is the headline finding the Stage-3 cosim calibration exposes; do not equalize it
-        here.  The synthesizable C++ is unchanged (the ``.tpp`` hook); this is the *sim*
-        model, which did not exist before."""
+        **Latency model (Stage 1 vs Stage 5).**  The bus transactions are *always* issued
+        (occupancy / bus-traffic accounting — ``ab_eq`` suppresses B's read, so anorm uses
+        HALF the read words), but the command *latency* depends on :pyattr:`timing`:
+
+        * ``timing is None`` — **transaction-gated** (Stage 1): latency = Σ of the transfer
+          blocks, so the model predicts ``anorm`` faster than ``abcorr`` *and* underestimates
+          absolute latency ~5x.  Kept so the naive curve can be rendered next to the fix.
+        * ``timing`` set — **II-decoupled** (Stage 5): latency is the kernel **pipeline
+          schedule** ``(depth + ii * trips) / freq`` with ``trips = n_rows * ceil(n_cols /
+          pf)`` — the calibrated ``(depth, ii)`` fit from the Vitis cosim sweep.  Latency then
+          depends only on ``trips`` (so ``anorm`` latency == ``abcorr`` latency, matching the
+          fixed-II RTL) and tracks the RTL absolute latency, while the *bus* still shows anorm
+          at half the reads.  This is TLM's LT->AT escalation: add just enough timing structure
+          to answer the question, keeping occupancy transaction-driven and latency II-driven.
+
+        The synthesizable C++ is unchanged (the ``.tpp`` hook) and :meth:`execute` stays the
+        byte-exact golden; the II-decoupling lives entirely in *this* timing model."""
         if self.cmd_queue is None:
             raise RuntimeError(
                 "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
@@ -466,6 +515,18 @@ class VmacAccel(HwComponent):
                 cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"), "write",
                 y_addr, len(y_words), t0, t1, ab_eq,
             )
+
+            # II-decoupling: advance to the calibrated pipeline-schedule completion time.
+            # The transfers above already moved `now` (their bus occupancy is real); pad the
+            # remainder so the command latency is the II-driven schedule, NOT the transfer sum.
+            # trips depend only on geometry, so anorm and abcorr (equal trips) get equal latency
+            # — the fixed-II RTL behaviour the transaction-gated model could not represent.
+            if self.timing is not None:
+                trips = n * math.ceil(m / self.pf)
+                sched_secs = self.timing.cycles(trips) / float(self.clk.freq)
+                pad = sched_secs - (self.now - dequeue_t)
+                if pad > 0:
+                    yield self.timeout(pad)
 
             complete_t = self.now
             self.cmd_records.append({

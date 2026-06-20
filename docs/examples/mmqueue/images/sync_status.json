@@ -2,8 +2,7 @@
   "figure": "sim_vs_cosim.svg",
   "regenerable_without_vitis": true,
   "sources": {
-    "cosim_timeline.json": "fa7e14f3d4bca38e4b9625535e709a6dcc6a86b8a4fafe6244555615905a1dff",
-    "sim_timeline.json": "3dfc1bc6c085d0fc8f63cd78e04cc4d5b046209ac7af4a5d0c926ddc94d0fb1b"
+    "sim_sweep.json": "e3e14ab4be1fd6df9ade4bc425eff32dabc17952997e73cb58c09812a6087d3a"
   },
-  "svg_sha256": "652557b4bbba34ac4990f54f54a5e147816548daef1d84dd18eee2aecd138a4c"
+  "svg_sha256": "7591e6fd37bd3dc5b1df3416d954f3a44394c371afdeb0519aad565be971d269"
 }

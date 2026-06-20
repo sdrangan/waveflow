@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from examples.vmac.vmac import VmacAccel
+from examples.vmac.vmac import VmacAccel, VmacTiming
 from examples.vmac.vmac_host import VmacHost
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
 from waveflow.hw.clock import Clock
@@ -39,6 +39,7 @@ from waveflow.utils import complexutils as cx
 TIMELINE_DIR = Path(__file__).resolve().parent / "timeline"
 LOG_CSV = TIMELINE_DIR / "sim_events.csv"
 TIMELINE_JSON = TIMELINE_DIR / "sim_timeline.json"
+SIM_SWEEP_JSON = TIMELINE_DIR / "sim_sweep.json"
 _LOG_FIELDS = [
     "role", "event", "cmd_idx", "label", "rw", "nwords", "addr",
     "tstart", "tend", "depth", "ab_eq",
@@ -83,6 +84,8 @@ class VmacQueueSim:
     seed: int = 1
     val_lo: int = -3
     val_hi: int = 3             # small integer operands -> exact fixed-point result
+    calibrate: bool = True      # Stage 5: load the cosim-fit (depth, II) -> II-decoupled latency.
+                                # False keeps the Stage-1 transaction-gated model (the naive curve).
 
     def __post_init__(self) -> None:
         self.sim = Simulation()
@@ -92,6 +95,16 @@ class VmacQueueSim:
             data_bw=self.data_bw, int_bits=self.int_bits, acc_bw=48, out_bw=16,
             clk=self.clk,
         )
+        # Stage 5: attach the II-decoupled timing model from the committed cosim calibration.
+        # The (depth, II) are loaded programmatically (never hard-coded); absent the artifact,
+        # fall back to the naive transaction-gated model so the example still runs.
+        self.timing_params: tuple[float, float] | None = None
+        if self.calibrate:
+            from examples.vmac.vmac_calibrate import CALIB_JSON, fitted_params
+            if CALIB_JSON.exists():
+                depth, ii = fitted_params()
+                self.accel.timing = VmacTiming(depth=depth, ii=ii)
+                self.timing_params = (depth, ii)
 
         word_bytes = self.mem_bw // 8
         elem = self.accel._data_elem()
@@ -274,9 +287,14 @@ class VmacQueueSim:
         assert cmd0["ab_eq"] and not cmd1["ab_eq"], "expected cmd0=anorm(ab_eq), cmd1=abcorr"
         assert anorm_rw * 2 == abcorr_rw, (anorm_rw, abcorr_rw)
 
-        # 3) headline metric B — latency: anorm completes earlier (transaction-driven ab_eq).
+        # 3) headline metric B — latency.  Naive (transaction-gated): anorm finishes earlier
+        # (fewer reads).  Calibrated (II-decoupled): latency depends only on trips, so anorm
+        # latency == abcorr latency — the fixed-II RTL behaviour, the Stage-5 correction.
         anorm_lat, abcorr_lat = cmd0["latency"], cmd1["latency"]
-        assert anorm_lat < abcorr_lat, (anorm_lat, abcorr_lat)
+        if self.accel.timing is not None:
+            assert abs(anorm_lat - abcorr_lat) <= 1e-12, (anorm_lat, abcorr_lat)
+        else:
+            assert anorm_lat < abcorr_lat, (anorm_lat, abcorr_lat)
         gap = abcorr_lat - anorm_lat
 
         # 4) queue occupancy peak.
@@ -292,13 +310,18 @@ class VmacQueueSim:
         sum_read_durations = sum(t["tend"] - t["tstart"] for t in read_txns)
 
         ns = 1e9  # times are in seconds; report in ns (realistic at 100 MHz / 10 ns period)
+        mode = (f"calibrated II-decoupled (depth={self.timing_params[0]:.1f}, "
+                f"II={self.timing_params[1]:.2f})" if self.accel.timing is not None
+                else "naive transaction-gated")
         print(f"sim drained at t = {self.sim.env.now * ns:.1f} ns  (timeline advanced, no hang)")
-        print(f"rho matches numpy reference: OK")
+        print(f"timing model   : {mode}")
+        print("rho matches numpy reference: OK")
         print("--- headline metrics ---")
         print(f"read-bus words : anorm(ab_eq)={anorm_rw}  abcorr={abcorr_rw}  "
               f"(anorm = half of abcorr: {anorm_rw * 2 == abcorr_rw})")
         print(f"latency        : anorm={anorm_lat * ns:.1f} ns  abcorr={abcorr_lat * ns:.1f} ns  "
-              f"gap={gap * ns:.1f} ns  (anorm faster: {anorm_lat < abcorr_lat})")
+              f"gap={gap * ns:.1f} ns  "
+              f"({'fixed-II: anorm == abcorr' if self.accel.timing is not None else f'anorm faster: {anorm_lat < abcorr_lat}'})")
         print(f"queue depth    : peak={peak} commands")
         print(f"read accounting: {len(read_txns)} read blocks, {total_read_words} words; "
               f"sum(durations)={sum_read_durations * ns:.1f} ns, "
@@ -312,5 +335,74 @@ def run_and_check() -> VmacQueueSim:
     return VmacQueueSim().run_and_check()
 
 
+# --- Stage 5: the naive-vs-calibrated-vs-RTL latency sweep -------------------------
+def _sweep_metrics(n_rows: int, n_cols: int, calibrate: bool) -> dict:
+    """Run one (size, mode) sim and pull the anorm/abcorr latencies + read words (no asserts)."""
+    s = VmacQueueSim(n_rows=n_rows, n_cols=n_cols, calibrate=calibrate)
+    s.sim.run_sim()
+    tl = s.build_timeline()
+    c0, c1 = tl["commands"][0], tl["commands"][1]  # anorm (ab_eq), abcorr
+    ns = 1e9
+    return {
+        "anorm_ns": c0["latency"] * ns, "abcorr_ns": c1["latency"] * ns,
+        "anorm_read_words": c0["read_words"], "abcorr_read_words": c1["read_words"],
+    }
+
+
+def emit_sim_sweep() -> Path:
+    """Emit ``timeline/sim_sweep.json``: per swept size, the naive (transaction-gated) and
+    calibrated (II-decoupled) sim latencies alongside the RTL cycles — the *off -> calibrated
+    -> tracks RTL on held-out points* story, sim-only (no Vitis), the source for the Stage-5
+    figure.  Sizes + RTL truth come from the committed cosim calibration artifact."""
+    from examples.vmac.vmac_calibrate import fit, load_sweep
+
+    art = load_sweep()
+    f = fit()
+    clk_ns = float(art["clk_period_ns"])
+    points = []
+    for p in art["sweep"]:
+        nr, nc = int(p["n_rows"]), int(p["n_cols"])
+        naive = _sweep_metrics(nr, nc, calibrate=False)
+        calib = _sweep_metrics(nr, nc, calibrate=True)
+        points.append({
+            "n_rows": nr, "n_cols": nc, "trips": int(p["trips"]),
+            "held_out": [nr, nc] == list(f.holdout),
+            "naive_anorm_ns": round(naive["anorm_ns"], 3),
+            "naive_abcorr_ns": round(naive["abcorr_ns"], 3),
+            "calib_anorm_ns": round(calib["anorm_ns"], 3),
+            "calib_abcorr_ns": round(calib["abcorr_ns"], 3),
+            "anorm_read_words": calib["anorm_read_words"],
+            "abcorr_read_words": calib["abcorr_read_words"],
+            "rtl_cycles": int(p["transaction_cycles"]),
+            "rtl_latency_ns": round(int(p["transaction_cycles"]) * clk_ns, 3),
+        })
+    out = {
+        "source": "sim",
+        "timebase": "ns",
+        "pf": int(art["pf"]),
+        "clk_period_ns": clk_ns,
+        "calibration": {
+            "model": art["latency_model"],
+            "trips_formula": art["trips_formula"],
+            "depth": round(f.depth, 4),
+            "ii": round(f.ii, 5),
+            "r2": round(f.r2, 6),
+            "fit_configs": [list(k) for k in f.fit_configs],
+            "holdout": list(f.holdout),
+            "holdout_trips": f.holdout_trips,
+            "holdout_actual_cycles": f.holdout_actual,
+            "holdout_pred_cycles": round(f.holdout_pred, 2),
+            "holdout_rel_err": round(f.holdout_rel_err, 5),
+        },
+        "points": points,
+    }
+    SIM_SWEEP_JSON.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"sim sweep written: {SIM_SWEEP_JSON}")
+    return SIM_SWEEP_JSON
+
+
 if __name__ == "__main__":
-    run_and_check()
+    run_and_check()      # emits the (calibrated, if artifact present) 4x4 sim_timeline.json
+    from examples.vmac.vmac_calibrate import CALIB_JSON
+    if CALIB_JSON.exists():
+        emit_sim_sweep()  # emits the naive-vs-calibrated-vs-RTL sweep (Stage 5)

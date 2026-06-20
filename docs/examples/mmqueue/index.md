@@ -11,12 +11,14 @@ The previous examples taught one *interface concept* at a time. This one is a
 **timing study**: it takes a vector MAC accelerator (VMAC) fed commands over an
 AXI-MM command queue and asks a harder question than "does it compute the right
 numbers" — *does Waveflow's loosely-timed simulation predict the right **timing**,
-and where exactly does it stop being faithful?*
+where exactly does it stop being faithful, and can a cosim **calibration** close the
+gap?*
 
-The answer is a named result — **bus utilization ≠ latency** — and the page frames
-it in the standard comp-arch vocabulary for what the simulator is: a **loosely-timed
-(LT) transaction-level model**. The whole thing is validated against Vitis RTL
-cosim, and the headline figure is *committed* and regenerates with **no Vitis**.
+The answer is a named result — **bus utilization ≠ latency** — framed in the standard
+comp-arch vocabulary for what the simulator is (a **loosely-timed (LT) transaction-level
+model**), and then *corrected*: a Vitis RTL cosim **sweep** calibrates the LT model so
+its latency tracks real hardware. The headline figure is *committed* and regenerates
+with **no Vitis**.
 
 ## The system
 
@@ -50,54 +52,119 @@ worst case (b-read present). It does not reschedule shorter when `ab_eq` holds �
 only **predicates whether the AXI transaction fires**. That is the whole study:
 *same cycle count, B's bus beat suppressed.*
 
-## The captured sim timeline
+## The starting point: a transaction-gated LT sim
 
 The SimPy run logs a **source-agnostic** timeline — per-command memory
 transactions (`rw`/`name`/`addr`/`nwords`/`tstart`/`tend`), latency, read-word
-counts, and the command-queue occupancy — to
-[`timeline/sim_timeline.json`](../../../examples/vmac/timeline/sim_timeline.json)
-(`source:"sim"`, `timebase:"ns"`). The LT model issues **one whole-matrix block
-per operand** (16 words in a single bus transaction), so `anorm` shows one `A`
-read + one `Y` write, while `abcorr` adds the second `B` read block.
+counts, and the command-queue occupancy. The Stage-1 LT model issues **one
+whole-matrix block per operand** (16 words in a single bus transaction) and made a
+command's latency the **sum of its transfer blocks** — *transaction-gated*. Its
+prediction:
 
-The sim's prediction:
-
-| scenario | read words | latency (sim) |
+| scenario | read words | latency (naive LT) |
 | --- | --- | --- |
 | `anorm` (ab_eq) | 16 | 630 ns |
 | `abcorr`        | 32 | 940 ns |
 
 Half the reads **and** lower latency for `anorm` — the intuitive "fewer reads →
-faster" reading.
+faster" reading. **Both halves of that turn out to be wrong about latency**, and the
+RTL cosim is what exposes it.
 
-## The cosim overlay — and the result
+## What the RTL actually does
 
-Vitis RTL cosim measures the truth and emits the **same schema** with
-`source:"cosim"`
-([`timeline/cosim_timeline.json`](../../../examples/vmac/timeline/cosim_timeline.json)),
-so one renderer overlays them. The committed figure, rendered from those two JSONs
-alone:
+Vitis RTL cosim measures the truth. At 4×4 the kernel takes **347 cycles** for
+*both* scenarios — `anorm` and `abcorr` are **identical in latency**, and `anorm`
+genuinely issues **half** the read-bus words:
 
-![VMAC ab_eq: loosely-timed sim vs Vitis RTL cosim. Panel (a) read-bus words: anorm 16 vs abcorr 32, half. Panel (b) command latency sim vs RTL: sim predicts anorm 630 < abcorr 940 ns while RTL is fixed-II at 3200 ns for both. Panel (c) per-command memory-transaction timeline: the sim's one whole-matrix block per operand vs the RTL's per-word beats, with B's reads freed under ab_eq.](images/sim_vs_cosim.svg)
+| scenario | read words (RTL) | latency (RTL) |
+| --- | --- | --- |
+| `anorm` (ab_eq) | **16** | **3470 ns** |
+| `abcorr`        | **32** | **3470 ns** |
 
-**The named result — bus utilization ≠ latency:**
+Two distinct errors in the naive sim fall out:
 
-| scenario | read words (sim & RTL agree) | latency (sim) | latency (RTL) |
+1. **Ordering.** The sim said `anorm` is faster; the fixed-II RTL says **equal
+   latency, freed bus** — eliding B's read frees bandwidth, it does not shorten the
+   pipeline. *(bus utilization ≠ latency)*
+2. **Absolute scale.** The sim's 630–940 ns sit **~5× below** the RTL's 3470 ns: the
+   block model counts *transfer time*, not the kernel's *pipeline depth*.
+
+Both are the same root cause — a transaction-gated model can't see a pipeline whose
+latency decouples from the transaction count.
+
+## The fix: cosim-calibrated II-decoupling
+
+The repair is **II-decoupling** (TLM's LT→AT escalation — add just enough timing
+structure for the question at hand): make a command's latency the kernel **pipeline
+schedule** instead of the transfer sum,
+
+```
+latency_cycles ≈ depth + II · trips,   trips = n_rows · ⌈n_cols / PF⌉
+```
+
+while still *issuing* the bus transactions for occupancy. Latency becomes
+**II-driven** (depends only on `trips`, so `anorm` latency == `abcorr` latency — the
+fixed-II behaviour) and occupancy stays **transaction-driven** (`anorm` still issues
+half the reads). It lives entirely in the sim timing model
+([`VmacAccel.run_proc`](../../../examples/vmac/vmac.py)); the byte-exact golden
+`execute()` is untouched.
+
+### Calibration is a *sweep*, validated on a held-out point
+
+Fitting `(depth, II)` to the single 4×4 point would be tautological — one free
+parameter against one measurement always matches. So
+[`vmac_cosim_sweep.py`](../../../examples/vmac/vmac_cosim_sweep.py) cosims **four**
+sizes spanning distinct trip counts and commits the swept RTL cycles to
+[`calibration/vmac_calibration.json`](../../../examples/vmac/calibration/vmac_calibration.json):
+
+| size | trips | RTL cycles | RTL latency |
 | --- | --- | --- | --- |
-| `anorm` (ab_eq) | **16** | 630 ns | **3200 ns** |
-| `abcorr`        | **32** | 940 ns | **3200 ns** |
+| 4×4 | 16 | 347 | 3470 ns |
+| 6×6 | 36 | 725 | 7250 ns |
+| 8×8 | 64 | 1258 | 12580 ns |
+| 8×16 | 128 | 2435 | 24350 ns |
 
-- **`ab_eq` halves the read-bus traffic in real RTL** — 16 vs 32 read words, panel
-  (a). The cosim confirms B's beats are genuinely suppressed.
-- **But the RTL latency is FIXED-II** — `anorm` and `abcorr` are *identical* at 347
-  cycles / 3200 ns, panel (b). Eliding B's read did **not** make `anorm` faster; it
-  only **freed the bus**.
+[`vmac_calibrate.py`](../../../examples/vmac/vmac_calibrate.py) fits the model on
+**three** of them and validates the prediction on the **held-out** fourth:
 
-The sim said "fewer reads → faster"; the hardware says **"same latency, freed
-bus."** That gap is the named teaching result — and on a shared interconnect the
-freed bandwidth is exactly what another master (a CG matmul tile) would consume.
-The full numeric writeup is
-[`timeline/sim_vs_cosim.md`](../../../examples/vmac/timeline/sim_vs_cosim.md).
+- Fit on {4×4, 6×6, 8×8}: **depth = 42.7 cycles, II = 19.0 cycles/trip** (R² = 1.0000).
+  The data is cleanly linear in `trips`; `II ≈ 19` is the memory-gated inner-loop
+  interval, `depth ≈ 43` the fill/drain + reduce-loop overhead.
+- **Held-out 8×16** (trips 128): predicted 2472 cycles vs **actual 2435** —
+  **1.54 % error**. Leave-one-out over all four sizes stays ≤ 3.6 %.
+
+The same `(depth, II)` predict an un-fit configuration — that is what makes this a
+*calibration*, not a curve-trace. (It also seeds the DSE vision: the calibrated LT
+model now predicts un-cosim'd configs fast.)
+
+## The corrected result
+
+![VMAC loosely-timed sim, cosim-calibrated by II-decoupling, PF=1, 100 MHz. Panel (a): command latency vs trips across the 4×4/6×6/8×8/8×16 sweep — the naive transaction-gated LT curve sits ~5× below truth, while the calibrated LT curve (depth + II·trips, fit on three sizes) lands on the RTL cosim curve, including the circled held-out 8×16 point at 1.5% prediction error. Panel (b): m_axi read-bus words, anorm vs abcorr, per size — anorm is half across the sweep, so occupancy stays transaction-driven. Panel (c): calibrated latency anorm vs abcorr per size — equal bars (fixed-II), the "same latency, freed bus" result.](images/sim_vs_cosim.svg)
+
+The calibrated sim now reproduces both facts the naive model missed, while keeping
+the one it got right:
+
+| | naive LT | calibrated LT | RTL |
+| --- | --- | --- | --- |
+| `anorm` latency (4×4) | 630 ns | **3464 ns** | 3470 ns |
+| `abcorr` latency (4×4) | 940 ns | **3464 ns** | 3470 ns |
+| `anorm` vs `abcorr` latency | anorm faster ✗ | **equal ✓** | equal |
+| `anorm` read words | 16 (half ✓) | 16 (half ✓) | 16 (half) |
+
+- Panel **(a)** — *off → calibrated → tracks RTL*: the naive curve underestimates ~5×;
+  the calibrated curve sits on the RTL line across the whole sweep, **including the
+  held-out 8×16 point** it was never fit to.
+- Panel **(b)** — **bus still halved**: `anorm` reads half of `abcorr` at every size.
+  Occupancy stayed transaction-driven; the II-decoupling only touched latency.
+- Panel **(c)** — **fixed-II**: calibrated `anorm` latency == `abcorr` latency at every
+  size — the *"same latency, freed bus"* result, now correctly modeled.
+
+The named teaching result stands and is now *quantified*: **`ab_eq` frees the
+read-bus but does not shorten the pipeline** — and on a shared interconnect that freed
+bandwidth is exactly what another master (a CG matmul tile) would consume. The full
+numeric writeup is the committed
+[`calibration/vmac_calibration.json`](../../../examples/vmac/calibration/vmac_calibration.json)
+and [`timeline/sim_sweep.json`](../../../examples/vmac/timeline/sim_sweep.json).
 
 ## What this says about the model (loosely-timed TLM)
 
@@ -106,78 +173,67 @@ SystemC TLM-2.0 sense: each transfer is a single timed *block* that holds a
 capacity-1 bus resource for its whole duration, and concurrent masters serialize
 on it (an implicit arbiter). This is accepted, standard practice — LT is how
 industry virtual platforms run fast — **not** a Waveflow shortcut. Framing the
-result in that vocabulary is the point of the example.
+result, *and its repair*, in that vocabulary is the point of the example.
 
 **What LT captures faithfully here:**
 
 - Total interconnect **occupancy** (Σ of held block durations).
 - Multi-master **contention / arbitration** (serialization on the capacity-1 bus).
 - **First-order, burst-granular** memory-access timing — including the `ab_eq`
-  read-word halving, which the sim gets *right*.
+  read-word halving, which the sim gets *right* in every mode.
 
 **What LT abstracts away (the boundary):**
 
 - **Sub-transaction interleaving / exact beat ordering** — a block is contiguous,
-  never "every other cycle." The sim's one 16-word block vs the RTL's 16 single-word
-  beats in panel (c) is exactly this abstraction.
+  never "every other cycle."
 - Consequently **latency is mispredicted wherever it decouples from transaction
-  count** — the `ab_eq` case: transaction-gated latency predicts `anorm` faster; the
-  fixed-II RTL shows equal latency.
+  count** — the pipeline-depth and `ab_eq` cases above.
 
-**Fidelity per validation target:**
+**Fidelity per validation target, and how the calibration moves it:**
 
 | Target | Fidelity under the LT block model |
 | --- | --- |
 | Queue occupancy | **Robust** — command-level granularity; the block model is plenty fine |
 | Per-burst / total memory occupancy | **Robust** — the bus resource sums it correctly |
-| `ab_eq` latency | **Recoverable** — only via the II parameter (the cosim calibration) |
+| `ab_eq` latency & absolute latency | **Recoverable** — closed by the `(depth, II)` cosim calibration |
 | Sub-transaction ordering / fine contention | **Irreducible gap** — the block can't say who's on the bus *which* cycle |
 
-The fix for `ab_eq` latency is **II-decoupling**: advance time by the pipeline
-schedule (`II × trips / freq`) while issuing bus requests only for the transfers
-actually performed — latency II-driven, occupancy transaction-driven, decoupled.
-The `II` is a parameter **fit from cosim**. Escalating from *transaction-gated* to
-*II-parameterized* latency is Waveflow's analog of TLM's **LT→AT escalation**: add
-just enough timing structure for the question at hand. The `ab_eq` gap is the
-calibration target this example hands to that workflow.
-
-### A second calibration target: the absolute-latency underestimate
-
-Panel (b) shows a *second*, distinct gap: the LT sim's absolute latencies
-(630–940 ns) sit **far below** the RTL's 3200 ns. The block model counts **transfer
-time**, not the kernel's full **pipeline depth** (fill/drain, compute latency), so
-it systematically *underestimates* absolute latency. This is separate from the
-`ab_eq` finding — `ab_eq` is about the *relative* ordering of two scenarios; this is
-about the *absolute* scale of both — and it is the other knob cosim calibration
-would fit.
+Escalating from *transaction-gated* to *II-parameterized* latency is Waveflow's analog
+of TLM's **LT→AT escalation**: the calibrated `(depth, II)` add just enough timing
+structure to answer the latency question, no more — sub-cycle ordering remains
+deliberately out of scope.
 
 > **Scope note.** Queue occupancy is a **sim-only** quantity here: the cosim kernel
-> has an `m_axi` but no command ring, so `cosim_timeline.json` carries
-> `queue_occupancy: null`. The figure validates per-burst memory timing and the
-> `ab_eq` read-word result against RTL; occupancy is reported by the sim alone and
-> not fabricated for cosim.
+> has an `m_axi` but no command ring, so the calibration validates per-burst memory
+> timing and the `ab_eq` read-word result against RTL; occupancy is reported by the
+> sim alone and not fabricated for cosim.
 
 ## The committed figure (regenerates without Vitis)
 
 The figure is rendered by
 [`examples/vmac/vmac_figures.py`](../../../examples/vmac/vmac_figures.py) from the
-**two committed timeline JSONs alone** — no Vitis, no cosim re-run, no VCD read.
-That is the "committed figure" property: the docs build never needs the toolchain.
+**committed sweep timeline alone** —
+[`timeline/sim_sweep.json`](../../../examples/vmac/timeline/sim_sweep.json), which
+carries the naive, calibrated, and RTL latencies per size — no Vitis, no cosim
+re-run, no VCD read. That is the "committed figure" property: the docs build never
+needs the toolchain.
 
 ```bash
 cd examples/vmac
-python vmac_figures.py          # re-render docs/examples/mmqueue/images/sim_vs_cosim.svg
-python vmac_figures.py --check  # render to a temp file, byte-compare vs the committed SVG
+python vmac_calibrate.py         # print the fit + held-out validation (reads the calibration JSON)
+python vmac_queue_sim.py         # re-emit timeline/sim_timeline.json + timeline/sim_sweep.json
+python vmac_figures.py           # re-render docs/examples/mmqueue/images/sim_vs_cosim.svg
+python vmac_figures.py --check   # render to a temp file, byte-compare vs the committed SVG
 ```
 
 The SVG is deterministic (a fixed `svg.hashsalt`, no embedded timestamp, mirroring
 [`shared_mem_figures.py`](../../../examples/shared_mem/shared_mem_figures.py)), so a
-re-render is **byte-identical** when nothing changed — the `git diff` is empty
-unless the timelines actually moved. `images/sync_status.json` records the source
-JSON hashes and the SVG hash, a cheap staleness signal a docs lint can check
-without re-running anything. The cosim timelines themselves were captured once by
-[`vmac_cosim_stage3.py`](../../../examples/vmac/vmac_cosim_stage3.py) (the only step
-that needs Vitis) and committed.
+re-render is **byte-identical** when nothing changed. `images/sync_status.json` records
+the source-JSON hash and the SVG hash, a cheap staleness signal a docs lint can check
+without re-running anything. The RTL truth was captured once by the Vitis-only
+[`vmac_cosim_sweep.py`](../../../examples/vmac/vmac_cosim_sweep.py) (and the 4×4
+headline by [`vmac_cosim_stage3.py`](../../../examples/vmac/vmac_cosim_stage3.py)) and
+committed.
 
 ## Next
 
