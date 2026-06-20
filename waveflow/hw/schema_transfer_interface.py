@@ -1,7 +1,6 @@
 """Logical interfaces for transmitting serializable objects over physical transports."""
 from __future__ import annotations
 
-import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -9,63 +8,16 @@ from typing import Any, Callable
 import numpy as np
 import simpy
 
-from waveflow.hw.dataschema import FloatField, IntField, Words
+from waveflow.hw.dataschema import Words
 from waveflow.hw.interface import Interface, InterfaceEndpoint, StreamIFMaster, StreamIFSlave
 from waveflow.simulation.simobj import ProcessGen
 
 
-# ---------------------------------------------------------------------------
-# Numpy fast-path helpers for ArrayTransferIF
-# ---------------------------------------------------------------------------
-
-def _scalar_dtype_for_fast_path(
-    element_type: type, word_bw: int
-) -> tuple[np.dtype, np.dtype] | None:
-    """Return ``(elem_dtype, word_dtype)`` for the numpy fast path, or ``None``.
-
-    Fast path is available for scalar ``FloatField`` / ``IntField`` subclasses
-    whose value fits in exactly one word (``nwords_per_inst == 1``).
-    """
-    if not issubclass(element_type, (FloatField, IntField)):
-        return None
-    if element_type.nwords_per_inst(word_bw) != 1:
-        return None
-
-    word_dtype = np.dtype(np.uint32 if word_bw <= 32 else np.uint64)
-
-    if issubclass(element_type, FloatField):
-        bw = element_type.get_bitwidth()
-        elem_dtype = np.dtype(np.float32 if bw == 32 else np.float64)
-    else:  # IntField
-        bw = element_type.get_bitwidth()  # type: ignore[attr-defined]
-        signed: bool = element_type.signed  # type: ignore[attr-defined]
-        if bw <= 8:
-            elem_dtype = np.dtype(np.int8 if signed else np.uint8)
-        elif bw <= 16:
-            elem_dtype = np.dtype(np.int16 if signed else np.uint16)
-        elif bw <= 32:
-            elem_dtype = np.dtype(np.int32 if signed else np.uint32)
-        else:
-            elem_dtype = np.dtype(np.int64 if signed else np.uint64)
-
-    return elem_dtype, word_dtype
-
-
-def _to_words(arr: np.ndarray, elem_dtype: np.dtype, word_dtype: np.dtype) -> np.ndarray:
-    """Convert a numpy element array to a word array for transmission."""
-    arr = np.asarray(arr, dtype=elem_dtype)
-    if arr.dtype.itemsize == word_dtype.itemsize:
-        return arr.view(word_dtype)
-    unsigned_same = np.dtype(f'u{arr.dtype.itemsize}')
-    return arr.view(unsigned_same).astype(word_dtype)
-
-
-def _from_words(words: np.ndarray, elem_dtype: np.dtype) -> np.ndarray:
-    """Convert a word array back to a numpy element array after reception."""
-    if words.dtype.itemsize == elem_dtype.itemsize:
-        return words.view(elem_dtype)
-    unsigned_same = np.dtype(f'u{elem_dtype.itemsize}')
-    return words.astype(unsigned_same).view(elem_dtype)
+# The vectorized numpy fast path now lives on the element type itself, as the
+# ``DataSchema.to_words_numpy`` / ``from_words_numpy`` hooks (a field enables it by
+# overriding them, or — for scalars — just ``_numpy_elem_dtype``).  The transports below
+# call those hooks and fall back to the recursive (de)serializer, so adding a new
+# vectorizable field type needs no edit here.
 
 
 class PhysicalTransport(ABC):
@@ -258,10 +210,8 @@ class ArrayTransferIFMaster(InterfaceEndpoint):
             an iterable of ``element_type`` instances / raw values accepted by
             ``element_type(value)``.
         """
-        fast = _scalar_dtype_for_fast_path(self.element_type, self.bitwidth)
-        if fast is not None and isinstance(elements, np.ndarray):
-            elem_dtype, word_dtype = fast
-            all_words = _to_words(elements, elem_dtype, word_dtype)
+        all_words = self.element_type.to_words_numpy(elements, self.bitwidth)
+        if all_words is not None:                       # vectorized fast path (per element type)
             yield from self._transport.write_words(all_words)
             return
         nwords_per_elem = self.element_type.nwords_per_inst(self.bitwidth)
@@ -313,10 +263,9 @@ class ArrayTransferIFSlave(InterfaceEndpoint):
             self._transport.set_rx_callback(self._on_words_received)
 
     def _deserialize(self, words: Words, count: int) -> np.ndarray | list:
-        fast = _scalar_dtype_for_fast_path(self.element_type, self.bitwidth)
-        if fast is not None:
-            elem_dtype, _ = fast
-            return _from_words(words, elem_dtype)
+        out = self.element_type.from_words_numpy(words, count, self.bitwidth)
+        if out is not None:                             # vectorized fast path (per element type)
+            return out
         nwords_per_elem = self.element_type.nwords_per_inst(self.bitwidth)
         return [
             self.element_type().deserialize(

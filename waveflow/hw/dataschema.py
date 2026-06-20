@@ -289,6 +289,26 @@ class DataSchema(ABC):
         )
         return self
 
+    # -- vectorized numpy transfer hooks (the open/closed fast path) ------------
+    # Array serializers (``MMIFMaster.read_array`` / ``write_array``,
+    # ``ArrayTransferIF``) call these to move a whole array of ``cls`` elements as one
+    # numpy reinterpret instead of a per-element loop.  The default returns ``None`` —
+    # "no vectorized path; fall back to the generic recursive (de)serializer."  A field
+    # type opts in by overriding them (or, for scalar fields, just ``_numpy_elem_dtype``);
+    # there is no central type switch in the transport layer to edit per new type.
+    @classmethod
+    def to_words_numpy(cls, values: Any, word_bw: int) -> Words | None:
+        """Vectorized pack of an array of ``cls`` element values into hardware words, or
+        ``None`` if ``cls`` has no numpy fast path (the caller then falls back to the
+        recursive serializer)."""
+        return None
+
+    @classmethod
+    def from_words_numpy(cls, words: Any, count: int, word_bw: int) -> np.ndarray | None:
+        """Vectorized unpack of ``count`` ``cls`` elements from ``words``, or ``None`` for
+        no fast path (the caller then falls back to the recursive deserializer)."""
+        return None
+
     def write_uint32_file(self, file_path: str | Path) -> Path:
         """Serialize this schema to 32-bit words and write them to a binary file."""
         out_path = Path(file_path)
@@ -890,6 +910,44 @@ class DataField(DataSchema):
         """Convert a raw integer bit pattern to a runtime value."""
         return int(field_bits)
 
+    # -- vectorized numpy transfer (scalar fast path) --------------------------
+    # A scalar field whose stored value maps to a single numpy dtype enables the
+    # vectorized array transfer by overriding ``_numpy_elem_dtype`` alone; the pack /
+    # unpack below is then a pure numpy reinterpret (one element per word, the same layout
+    # the recursive serializer produces when ``nwords_per_inst == 1``).
+    @classmethod
+    def _numpy_elem_dtype(cls) -> np.dtype | None:
+        """The numpy dtype of one stored element value, or ``None`` if this field has no
+        direct numpy reinterpret.  Scalar fields (``IntField`` / ``FloatField``) override."""
+        return None
+
+    @classmethod
+    def to_words_numpy(cls, values: Any, word_bw: int) -> Words | None:
+        elem_dtype = cls._numpy_elem_dtype()
+        if elem_dtype is None or not isinstance(values, np.ndarray):
+            return None
+        if cls.nwords_per_inst(word_bw) != 1:
+            return None
+        word_dtype = np.dtype(np.uint32 if word_bw <= 32 else np.uint64)
+        arr = np.ascontiguousarray(values, dtype=elem_dtype).reshape(-1)
+        if arr.dtype.itemsize == word_dtype.itemsize:
+            return arr.view(word_dtype)
+        unsigned_same = np.dtype(f"u{arr.dtype.itemsize}")
+        return arr.view(unsigned_same).astype(word_dtype)
+
+    @classmethod
+    def from_words_numpy(cls, words: Any, count: int, word_bw: int) -> np.ndarray | None:
+        elem_dtype = cls._numpy_elem_dtype()
+        if elem_dtype is None or cls.nwords_per_inst(word_bw) != 1:
+            return None
+        words = np.ascontiguousarray(words)
+        if words.dtype.itemsize == elem_dtype.itemsize:
+            out = words.view(elem_dtype)
+        else:
+            unsigned_same = np.dtype(f"u{elem_dtype.itemsize}")
+            out = words.astype(unsigned_same).view(elem_dtype)
+        return out[:count]
+
     @classmethod
     def to_uint_expr(cls, value_expr: str) -> str:
         return f"(ap_uint<{cls.get_bitwidth()}>)(static_cast<unsigned int>({value_expr}))"
@@ -1190,6 +1248,20 @@ class IntField(DataField):
     cpp_type: ClassVar[str] = "ap_int<32>"
     can_gen_include: ClassVar[bool] = False
     _specializations: ClassVar[dict[tuple[Any, ...], type[IntField]]] = {}
+
+    @classmethod
+    def _numpy_elem_dtype(cls) -> np.dtype | None:
+        bw = cls.get_bitwidth()
+        if bw > 64:
+            return None  # multi-word ints: no single-dtype reinterpret; use the loop
+        signed = cls.signed
+        if bw <= 8:
+            return np.dtype(np.int8 if signed else np.uint8)
+        if bw <= 16:
+            return np.dtype(np.int16 if signed else np.uint16)
+        if bw <= 32:
+            return np.dtype(np.int32 if signed else np.uint32)
+        return np.dtype(np.int64 if signed else np.uint64)
 
     @classmethod
     @defer_if_symbolic
@@ -1597,6 +1669,10 @@ class FloatField(DataField):
     cpp_type: ClassVar[str] = "float"
     can_gen_include: ClassVar[bool] = False
     _specializations: ClassVar[dict[tuple[Any, ...], type[FloatField]]] = {}
+
+    @classmethod
+    def _numpy_elem_dtype(cls) -> np.dtype | None:
+        return np.dtype(np.float64 if cls.get_bitwidth() == 64 else np.float32)
 
     @classmethod
     @defer_if_symbolic

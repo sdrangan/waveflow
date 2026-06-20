@@ -14,7 +14,7 @@ Coverage
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
@@ -221,6 +221,41 @@ def test_write_array_read_array_round_trip():
     sim.run_sim()
     assert isinstance(drv.result, np.ndarray)
     npt.assert_allclose(drv.result, values, atol=1e-6)
+
+
+def test_write_array_read_array_complex_round_trip():
+    """A ``ComplexField`` array round-trips through ``write_array`` / ``read_array`` as a
+    vectorized structured numpy array — exercising the open/closed numpy-transfer hook
+    (``DataSchema.to_words_numpy`` / ``from_words_numpy``) with NO element-type switch in
+    the transport.  Composite types fall back to the canonical recursive serializer, which
+    returns the structured ``[('re', …), ('im', …)]`` array rather than a Python list."""
+    from waveflow.hw.complexfield import ComplexField
+    from waveflow.hw.dataschema import IntField
+    from waveflow.utils import complexutils as cx
+    from waveflow.utils.fixputils import Format
+
+    CF = ComplexField.specialize(IntField.specialize(8, signed=True))
+    sim = Simulation()
+    clk = Clock(freq=1.0)
+    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
+                       latency_init=1.0, latency_per_word=1.0)
+    n = 4
+    values = cx.make_complex([1, -2, 3, -4], [5, 6, -7, 8], Format(8, 4, True))
+
+    def program(drv):
+        nwpe = CF.nwords_per_inst(mem.word_size)
+        addr = mem.alloc(nwpe * n)
+        yield from drv.master.write_array(values, CF, addr, word_bw=mem.word_size)
+        arr = yield from drv.master.read_array(
+            CF, count=n, addr=addr, word_bw=mem.word_size)
+        return arr
+
+    drv = _wire(sim, mem, clk=clk, program=program)
+    sim.run_sim()
+    assert isinstance(drv.result, np.ndarray)          # numpy, not a list of instances
+    assert drv.result.dtype.names == ("re", "im")      # structured (vectorizable) view
+    npt.assert_array_equal(drv.result["re"], values["re"])
+    npt.assert_array_equal(drv.result["im"], values["im"])
 
 
 # ---------------------------------------------------------------------------

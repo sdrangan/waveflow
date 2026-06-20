@@ -61,8 +61,6 @@ from waveflow.hw.dataschema import DataArray
 from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.hw_component import HwComponent, HwParam
 from waveflow.hw.aximm_queue import AXIMMQueue
-from waveflow.hw.arrayutils import read_array as wf_read_array
-from waveflow.hw.arrayutils import write_array as wf_write_array
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
 from waveflow.simulation.logger import NullLogger
@@ -394,22 +392,26 @@ class VmacAccel(HwComponent):
             ab_eq=int(ab_eq),
         )
 
+    def _byte_addr(self, elem_idx: int) -> int:
+        """Byte address in the shared data region of element index *elem_idx* — the single
+        element→address conversion, used by every timed read and the Y writeback."""
+        return self.data_base + int(elem_idx) * self._elem_bytes
+
     def _read_region(
-        self, local: np.ndarray, elem_addr: int, count: int,
-        elem: type, elem_words: int, elem_bytes: int, mem_bw: int,
-        cmd_idx: int, ab_eq: bool,
+        self, local: np.ndarray, elem_addr: int, count: int, cmd_idx: int, ab_eq: bool,
     ) -> ProcessGen[None]:
-        """Issue ONE timed ``m_mem`` read of *count* contiguous complex elements at
-        *elem_addr* (element index in the data region) and unpack them into ``local``;
-        capture (t_start, t_end, nwords, addr, label) of the LT block."""
-        nwords = count * elem_words
-        addr = self.data_base + elem_addr * elem_bytes
-        t0 = self.now
-        words = yield from self.m_mem.read(nwords, addr)
-        t1 = self.now
-        local[elem_addr:elem_addr + count] = wf_read_array(
-            words, elem, mem_bw, shape=count
-        ).val
+        """Issue ONE timed ``m_mem`` read of *count* contiguous complex elements at element
+        index *elem_addr* and unpack them into ``local`` at the same offset — so the golden
+        :meth:`execute` addresses them by the command's region address (``local`` is a local
+        mirror of the shared memory).  Capture (t_start, t_end, nwords, addr, label) of the
+        LT block.  The vectorized unpack + bus-time capture come from the shared
+        :meth:`MMIFMaster.read_array_pipelined` (``self._elem`` / ``_mem_bw`` cached by
+        :meth:`run_proc`) — no hand-rolled word read or unpack here."""
+        addr = self._byte_addr(elem_addr)
+        data, t0, t1, nwords = yield from self.m_mem.read_array_pipelined(
+            self._elem, count, addr, word_bw=self._mem_bw,
+        )
+        local[elem_addr:elem_addr + count] = data
         self._record_txn(
             cmd_idx, self.region_labels.get(elem_addr, "data"), "read",
             addr, nwords, t0, t1, ab_eq,
@@ -445,12 +447,13 @@ class VmacAccel(HwComponent):
                 "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
                 "before run_sim)."
             )
-        mem_bw = int(self.m_mem.bitwidth)
-        word_bytes = mem_bw // 8
         in_fmt = self._in_fmt()
-        elem = self._data_elem()
-        elem_words = elem.nwords_per_inst(mem_bw)
-        elem_bytes = elem_words * word_bytes
+        # element geometry in the shared data region (structural, constant) — cached on self so
+        # the timed reads and the Y writeback share one element->byte-address helper.
+        self._mem_bw = int(self.m_mem.bitwidth)
+        self._elem = self._data_elem()
+        self._elem_words = self._elem.nwords_per_inst(self._mem_bw)
+        self._elem_bytes = self._elem_words * (self._mem_bw // 8)
 
         # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s, so the
         # consumer wakes promptly relative to the realistic clock (see vmac_queue_sim).
@@ -487,33 +490,24 @@ class VmacAccel(HwComponent):
             local = cx.make_complex(np.zeros(extent), np.zeros(extent), in_fmt)
 
             # timed operand reads — one whole-matrix LT block each
-            yield from self._read_region(
-                local, int(cmd.a.addr), nm, elem, elem_words, elem_bytes, mem_bw,
-                cmd_idx, ab_eq,
-            )
+            yield from self._read_region(local, int(cmd.a.addr), nm, cmd_idx, ab_eq)
             if need_b and not ab_eq:
-                yield from self._read_region(
-                    local, int(cmd.b.addr), nm, elem, elem_words, elem_bytes, mem_bw,
-                    cmd_idx, ab_eq,
-                )
+                yield from self._read_region(local, int(cmd.b.addr), nm, cmd_idx, ab_eq)
             if alpha_indirect:
-                yield from self._read_region(
-                    local, int(cmd.alpha.addr), n, elem, elem_words, elem_bytes, mem_bw,
-                    cmd_idx, ab_eq,
-                )
+                yield from self._read_region(local, int(cmd.alpha.addr), n, cmd_idx, ab_eq)
 
             # the bit-exact golden computes R / reduce / requantize and writes Y into `local`
             dst = self.execute(cmd, local)
 
-            # timed Y writeback — one LT block
-            y_words = wf_write_array(dst, word_bw=mem_bw)
-            y_addr = self.data_base + int(cmd.y.addr) * elem_bytes
-            t0 = self.now
-            yield from self.m_mem.write(y_words, y_addr)
-            t1 = self.now
+            # timed Y writeback — one LT block (element type inferred from dst, the output
+            # format, matching the prior wf_write_array(dst) inference)
+            y_addr = self._byte_addr(int(cmd.y.addr))
+            t0, t1, y_nwords = yield from self.m_mem.write_array_pipelined(
+                dst, type(dst).element_type, y_addr, word_bw=self._mem_bw,
+            )
             self._record_txn(
                 cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"), "write",
-                y_addr, len(y_words), t0, t1, ab_eq,
+                y_addr, y_nwords, t0, t1, ab_eq,
             )
 
             # II-decoupling: advance to the calibrated pipeline-schedule completion time.
