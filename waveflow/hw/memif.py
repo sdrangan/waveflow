@@ -214,32 +214,34 @@ class MMIFMaster(InterfaceEndpoint):
         m_axi buffered read at codegen time — the generated kernel fails loudly
         without it (each buffer declares its own bound; there is no fallback).
 
-        Accepts a ``np.ndarray`` (fast path for scalar ``FloatField`` /
-        ``IntField`` types) or an iterable of schema instances / raw values.
+        Accepts a ``np.ndarray`` (the vectorized fast path for any element type
+        that enables it via :meth:`DataSchema.to_words_numpy`) or a
+        :class:`~waveflow.hw.dataschema.DataArray` / array-like.  Packing is the
+        canonical :meth:`DataSchema.serialize` layout — there is no element-type
+        switch here; the element type decides whether it has a numpy fast path.
 
         *count* — when given — selects the first *count* elements before
         packing.  It exists so a synthesizable m_axi write carries an explicit
         runtime length (the static local buffer is sized at ``max``, written in
         ``[0, count)``); the dual of :meth:`read_array`'s *count*.
         """
-        from waveflow.hw.schema_transfer_interface import (
-            _scalar_dtype_for_fast_path, _to_words,
-        )
+        words = self._pack_array_words(elements, element_type, word_bw, count=count)
+        yield from self.write(words, addr)
+
+    @staticmethod
+    def _pack_array_words(
+        elements: Any, element_type: type, word_bw: int, count: int | None = None,
+    ) -> Words:
+        """Pack *elements* into hardware words: the element type's vectorized
+        :meth:`DataSchema.to_words_numpy` fast path, else the canonical recursive
+        serializer.  Shared by :meth:`write_array` and :meth:`write_array_pipelined`."""
         if count is not None:
             elements = elements[:int(count)]
-        fast = _scalar_dtype_for_fast_path(element_type, word_bw)
-        if fast is not None and isinstance(elements, np.ndarray):
-            elem_dtype, word_dtype = fast
-            yield from self.write(_to_words(elements, elem_dtype, word_dtype), addr)
-            return
-        nwpe = element_type.nwords_per_inst(word_bw)
-        items = list(elements)
-        dtype = np.uint32 if word_bw <= 32 else np.uint64
-        all_words = np.empty(len(items) * nwpe, dtype=dtype)
-        for i, raw in enumerate(items):
-            elem = raw if isinstance(raw, element_type) else element_type(raw)
-            all_words[i * nwpe:(i + 1) * nwpe] = elem.serialize(word_bw=word_bw)
-        yield from self.write(all_words, addr)
+        words = element_type.to_words_numpy(elements, word_bw)   # vectorized fast path
+        if words is None:                                        # canonical recursive pack
+            from waveflow.hw.arrayutils import write_array as _pack_array
+            words = _pack_array(elements, elem_type=element_type, word_bw=word_bw)
+        return words
 
     @synthesizable(stmt_class=MMArrayReadStmt)
     def read_array(
@@ -258,22 +260,66 @@ class MMIFMaster(InterfaceEndpoint):
         m_axi buffered read at codegen time — the generated kernel fails loudly
         without it (each buffer declares its own bound; there is no fallback).
 
-        Returns a ``np.ndarray`` for scalar ``FloatField`` / ``IntField`` types,
-        or a ``list`` of deserialized instances for composite types.
+        Returns a ``np.ndarray`` for every element type: the element's native
+        dtype for scalar ``FloatField`` / ``IntField`` types, and the structured
+        ``[('re', …), ('im', …)]`` array for ``ComplexField`` (via the canonical
+        :meth:`DataSchema.deserialize`).  No element-type switch lives here — the
+        element type supplies its own vectorized path via
+        :meth:`DataSchema.from_words_numpy`, falling back to the recursive
+        deserializer otherwise.
         """
-        from waveflow.hw.schema_transfer_interface import (
-            _scalar_dtype_for_fast_path, _from_words,
-        )
         nwpe = element_type.nwords_per_inst(word_bw)
         words = yield from self.read(nwpe * count, addr)
-        fast = _scalar_dtype_for_fast_path(element_type, word_bw)
-        if fast is not None:
-            elem_dtype, _ = fast
-            return _from_words(words, elem_dtype)
-        return [
-            element_type().deserialize(words[i * nwpe:(i + 1) * nwpe], word_bw=word_bw)
-            for i in range(count)
-        ]
+        out = element_type.from_words_numpy(words, count, word_bw)   # vectorized fast path
+        if out is None:                                             # canonical recursive unpack
+            from waveflow.hw.arrayutils import read_array as _unpack_array
+            out = _unpack_array(words, element_type, word_bw, shape=count).val
+        return out
+
+    # ------------------------------------------------------------------
+    # Timed (AT) array transfers — sim-only timing capture
+    # ------------------------------------------------------------------
+    # Same data path as read_array / write_array, but also report the SimPy times that
+    # bracket the bus transfer, so a loosely-timed component can record the transaction
+    # (or pad to a calibrated schedule) without hand-bracketing env.now.  These are
+    # sim-only (no stmt_class) — the timing is an AT-model concern, not synthesizable —
+    # mirroring the stream get_pipelined / write_pipelined helpers.
+
+    def read_array_pipelined(
+        self,
+        element_type: type,
+        count: int,
+        addr: int,
+        max_count: int | None = None,
+        word_bw: int = 32,
+    ) -> ProcessGen[tuple[np.ndarray, float, float, int]]:
+        """Like :meth:`read_array`, returning ``(data, tstart, tend, nwords)`` where
+        ``tstart`` / ``tend`` are the SimPy times bracketing the bus read and ``nwords`` is
+        the number of words transferred."""
+        nwords = element_type.nwords_per_inst(word_bw) * count
+        tstart = self.env.now
+        data = yield from self.read_array(
+            element_type, count, addr, max_count=max_count, word_bw=word_bw)
+        tend = self.env.now
+        return data, tstart, tend, nwords
+
+    def write_array_pipelined(
+        self,
+        elements: Any,
+        element_type: type,
+        addr: int,
+        count: int | None = None,
+        max_count: int | None = None,
+        word_bw: int = 32,
+    ) -> ProcessGen[tuple[float, float, int]]:
+        """Like :meth:`write_array`, returning ``(tstart, tend, nwords)`` where ``tstart`` /
+        ``tend`` bracket the bus write and ``nwords`` is the number of words transferred."""
+        words = self._pack_array_words(elements, element_type, word_bw, count=count)
+        nwords = int(np.asarray(words).shape[0])
+        tstart = self.env.now
+        yield from self.write(words, addr)
+        tend = self.env.now
+        return tstart, tend, nwords
 
 
 # ---------------------------------------------------------------------------
