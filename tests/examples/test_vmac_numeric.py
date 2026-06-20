@@ -315,11 +315,7 @@ def test_failloud_out_bw_too_small_for_fraction():
 
 def test_failloud_propagates_through_execute():
     accel = _accel(data_bw=8, int_bits=4, acc_bw=10, out_bw=8)
-    cmd = _cmd(accel, op=OpCode.inner_prod)
-    cmd.a = {"addr": 0, "row_stride": 2}
-    cmd.b = {"addr": 8, "row_stride": 2}
-    cmd.y = {"addr": 16, "row_stride": 2}
-    cmd.alpha = {"direct": 1, "imm": (16, 0), "addr": 0, "stride": 0}
-    mem = cx.make_complex(np.zeros(64), np.zeros(64), Format(8, 4, True))
+    cmd = _cmd(accel, op=OpCode.inner_prod)  # n_rows=4, n_cols=2
+    z = cx.make_complex(np.zeros((4, 2)), np.zeros((4, 2)), Format(8, 4, True))
     with pytest.raises(ValueError, match="exceeds acc_bw"):
-        accel.execute(cmd, mem)
+        accel.execute(cmd, z, z)  # the config guard fires before the operands are touched
