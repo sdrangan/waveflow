@@ -66,7 +66,7 @@ from waveflow.hw.aximm_queue import AXIMMQueue
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
 from waveflow.simulation.logger import NullLogger
-from waveflow.hw.synth import synthesizable
+from waveflow.hw.synth import sim_only, synthesizable
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils
@@ -116,6 +116,7 @@ class VmacAccel(HwComponent):
     out_bw: HwParam[int] = 16  # writeback (re/im) component width
     q_rnd: HwParam[int] = 0  # output rounding: 0 = AP_TRN, 1 = AP_RND
     o_sat: HwParam[int] = 0  # output overflow: 0 = AP_WRAP, 1 = AP_SAT
+    poll_cycles: HwParam[int] = 64  # bus cycles between command-ring polls (coarse, structural)
     clk: Clock = field(default_factory=lambda: Clock(freq=1e9))
 
     def __post_init__(self) -> None:
@@ -151,6 +152,29 @@ class VmacAccel(HwComponent):
             self.txns: list[dict] = []               # per memory transaction
             self.cmd_records: list[dict] = []         # per command (dequeue/complete/latency)
             self.q_events: list[dict] = []            # ring dequeue events (for occupancy)
+
+    def pre_sim(self) -> None:
+        """Sim setup (never synthesized): validate the driver wiring, cache the structural
+        element geometry, and precompute the coarse ring-poll interval + the command counter.
+
+        Everything here is one-time Python introspection / setup — not hardware — so it lives
+        out of :meth:`run_proc` (the HLS extraction target); ``run_proc`` then reads only the
+        cached structural constants (``_elem`` / ``_elem_bytes`` / ``_mem_bw`` / ``_poll``)."""
+        super().pre_sim()
+        if self.cmd_queue is None:
+            raise RuntimeError(
+                "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
+                "before run_sim)."
+            )
+        # element geometry in the shared data region (structural, constant) — cached on self so
+        # both the consumer and the vmac_compute shell share one element->byte-address helper.
+        self._mem_bw = int(self.m_mem.bitwidth)
+        self._elem = self._data_elem()
+        self._elem_bytes = self._elem.nwords_per_inst(self._mem_bw) * (self._mem_bw // 8)
+        # coarse ring poll (poll_cycles bus cycles), computed once: a 1-cycle poll would
+        # saturate the AXI bus merely checking the queue (see vmac_queue_sim).
+        self._poll = float(self.poll_cycles) / float(self.clk.freq)
+        self._cmd_idx = -1  # sim-only command counter, maintained by the @sim_only records
 
     @property
     def Cmd(self) -> type[VmacCmd]:
@@ -406,8 +430,11 @@ class VmacAccel(HwComponent):
         Reads each operand region as one contiguous block (``row_stride == n_cols``, the standing
         assumption) and reshapes in :meth:`execute`; suppresses B's read when it aliases A
         (``ab_eq``); records each transfer (:meth:`_record_txn`) as it follows the reads/writes.
-        The command-level II-decoupling pad stays in :meth:`run_proc` (it needs the dequeue time),
-        so the total command latency is unchanged."""
+        The command-level II-decoupling pad lives here too (after the writeback): since
+        :meth:`run_proc` dispatches this immediately on dequeue, the entry time equals the
+        dequeue time, so per-command latency is unchanged — and because this body is not
+        extracted, the (non-synthesizable) ``yield self.timeout`` pad is excluded for free."""
+        t_entry = self.now  # == dequeue_t (run_proc dispatches on the dequeue tick)
         n, m = int(cmd.n_rows), int(cmd.n_cols)
         nm = n * m
         op = OpCode(int(cmd.op))
@@ -450,6 +477,18 @@ class VmacAccel(HwComponent):
             dst, type(dst).element_type, y_addr, word_bw=self._mem_bw)
         self._record_txn(cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"),
                          "write", y_addr, nw, t0, t1, ab_eq)
+
+        # II-decoupling: advance to the calibrated pipeline-schedule completion time.  The
+        # transfers above already moved `now` (their bus occupancy is real); pad the remainder so
+        # the command latency is the II-driven schedule, NOT the transfer sum.  trips depend only
+        # on geometry, so anorm and abcorr (equal trips) get equal latency — the fixed-II RTL
+        # behaviour the transaction-gated model could not represent.
+        if self.timing is not None:
+            trips = n * math.ceil(m / self.pf)
+            sched_secs = self.timing.cycles(trips) / float(self.clk.freq)
+            pad = sched_secs - (self.now - t_entry)
+            if pad > 0:
+                yield self.timeout(pad)
         return dst
 
     def _record_txn(
@@ -473,89 +512,55 @@ class VmacAccel(HwComponent):
         element→address conversion, used by every timed read and the Y writeback."""
         return self.data_base + int(elem_idx) * self._elem_bytes
 
+    @sim_only
+    def _record_dequeue(self, cmd: VmacCmd, t: float) -> None:
+        """Sim-only: bump the command counter and capture the dequeue event (occupancy curve +
+        raw log).  Runs before the datapath so ``self._cmd_idx`` is current for the transaction
+        records :meth:`vmac_compute` emits."""
+        self._cmd_idx += 1
+        self.q_events.append(
+            {"t": float(t), "kind": "dequeue", "cmd_idx": self._cmd_idx}
+        )
+        self.logger.log(role="vmac", event="dequeue", cmd_idx=self._cmd_idx,
+                        tstart=float(t))
+
+    @sim_only
+    def _record_command(self, cmd: VmacCmd, dequeue_t: float) -> None:
+        """Sim-only: capture the per-command record (dequeue→complete latency) after the
+        datapath returns."""
+        complete_t = self.now
+        op = OpCode(int(cmd.op))
+        need_b = op in (OpCode.inner_prod, OpCode.sum)
+        ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+        self.cmd_records.append({
+            "cmd_idx": self._cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
+            "n_rows": int(cmd.n_rows), "n_cols": int(cmd.n_cols),
+            "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
+            "latency": float(complete_t - dequeue_t),
+        })
+
     def run_proc(self) -> ProcessGen[None]:
-        """Loosely-timed SimPy execution model: a free-running queue consumer.
+        """Free-running queue consumer — the HLS extraction target.
 
-        Dequeue a :class:`VmacCmd` from the AXI-MM command queue; on ``OpCode.end`` stop.
-        Otherwise delegate the whole datapath — the **timed ``m_mem`` reads** of the operands
-        (A; B unless ``ab_eq``; per-row alpha if indirect), the bit-exact golden, and the
-        **timed write** of Y, plus the per-transaction records — to the synthesizable shell
-        :meth:`vmac_compute`, then apply the command-level II-decoupling pad and the cmd
-        bookkeeping here (the pad needs the dequeue time).
+        The loop body is **hardware control flow only**: poll/dequeue a :class:`VmacCmd` from the
+        AXI-MM command ring, dispatch the per-command datapath to the synthesizable
+        :meth:`vmac_compute` shell, and stop on ``OpCode.end``.  Everything sim-only lives
+        elsewhere so the loop reads like the RTL: the precondition + structural geometry +
+        coarse poll in :meth:`pre_sim`; the dequeue/command bookkeeping (and the ``cmd_idx``
+        counter) in the ``@sim_only`` :meth:`_record_dequeue` / :meth:`_record_command` helpers
+        (silently dropped by the extractor); the II-decoupling pad inside the non-extracted
+        ``vmac_compute`` body.
 
-        **Latency model (Stage 1 vs Stage 5).**  The bus transactions are *always* issued
-        (occupancy / bus-traffic accounting — ``ab_eq`` suppresses B's read, so anorm uses
-        HALF the read words), but the command *latency* depends on :pyattr:`timing`:
-
-        * ``timing is None`` — **transaction-gated** (Stage 1): latency = Σ of the transfer
-          blocks, so the model predicts ``anorm`` faster than ``abcorr`` *and* underestimates
-          absolute latency ~5x.  Kept so the naive curve can be rendered next to the fix.
-        * ``timing`` set — **II-decoupled** (Stage 5): latency is the kernel **pipeline
-          schedule** ``(depth + ii * trips) / freq`` with ``trips = n_rows * ceil(n_cols /
-          pf)`` — the calibrated ``(depth, ii)`` fit from the Vitis cosim sweep.  Latency then
-          depends only on ``trips`` (so ``anorm`` latency == ``abcorr`` latency, matching the
-          fixed-II RTL) and tracks the RTL absolute latency, while the *bus* still shows anorm
-          at half the reads.  This is TLM's LT->AT escalation: add just enough timing structure
-          to answer the question, keeping occupancy transaction-driven and latency II-driven.
-
-        The synthesizable C++ is unchanged (the ``.tpp`` hook) and :meth:`execute` stays the
-        byte-exact golden; the II-decoupling lives entirely in *this* timing model."""
-        if self.cmd_queue is None:
-            raise RuntimeError(
-                "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
-                "before run_sim)."
-            )
-        # element geometry in the shared data region (structural, constant) — cached on self so
-        # both this consumer and the vmac_compute shell share one element->byte-address helper.
-        self._mem_bw = int(self.m_mem.bitwidth)
-        self._elem = self._data_elem()
-        self._elem_words = self._elem.nwords_per_inst(self._mem_bw)
-        self._elem_bytes = self._elem_words * (self._mem_bw // 8)
-
-        # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s, so the
-        # consumer wakes promptly relative to the realistic clock (see vmac_queue_sim).
-        poll = 1.0 / float(self.clk.freq)
-
-        cmd_idx = -1
+        (This is the clean shape, not yet end-to-end extractable — that additionally needs a
+        synthesizable ``cmd_queue.get``, a follow-on.  See the timing model in
+        :meth:`vmac_compute`: bus transactions are always issued so ``ab_eq`` shows anorm at
+        half the reads, while latency is the II-driven pipeline schedule.)"""
         while True:
-            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd, poll_interval=poll)
-            cmd_idx += 1
+            cmd: VmacCmd = yield from self.cmd_queue.get(
+                self.Cmd, poll_interval=self._poll)
             dequeue_t = self.now
-            self.q_events.append(
-                {"t": float(dequeue_t), "kind": "dequeue", "cmd_idx": cmd_idx}
-            )
-            self.logger.log(role="vmac", event="dequeue", cmd_idx=cmd_idx,
-                            tstart=float(dequeue_t))
-            op = OpCode(int(cmd.op))
-            if op is OpCode.end:
+            self._record_dequeue(cmd, dequeue_t)        # @sim_only (also bumps _cmd_idx)
+            if OpCode(int(cmd.op)) is OpCode.end:
                 break  # sentinel: the host's last command; drain and terminate
-
-            n, m = int(cmd.n_rows), int(cmd.n_cols)
-            need_b = op in (OpCode.inner_prod, OpCode.sum)
-            # ab_eq (for the cmd record): B aliases A — its read is suppressed in the shell.
-            ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
-
-            # delegate the timed reads / golden / Y write + txn records to the synthesizable
-            # shell (cmd_idx is threaded via self for its _record_txn calls).
-            self._cmd_idx = cmd_idx
             yield from self.vmac_compute(cmd, self.m_mem)
-
-            # II-decoupling: advance to the calibrated pipeline-schedule completion time.
-            # The transfers above already moved `now` (their bus occupancy is real); pad the
-            # remainder so the command latency is the II-driven schedule, NOT the transfer sum.
-            # trips depend only on geometry, so anorm and abcorr (equal trips) get equal latency
-            # — the fixed-II RTL behaviour the transaction-gated model could not represent.
-            if self.timing is not None:
-                trips = n * math.ceil(m / self.pf)
-                sched_secs = self.timing.cycles(trips) / float(self.clk.freq)
-                pad = sched_secs - (self.now - dequeue_t)
-                if pad > 0:
-                    yield self.timeout(pad)
-
-            complete_t = self.now
-            self.cmd_records.append({
-                "cmd_idx": cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
-                "n_rows": n, "n_cols": m,
-                "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
-                "latency": float(complete_t - dequeue_t),
-            })
+            self._record_command(cmd, dequeue_t)        # @sim_only
