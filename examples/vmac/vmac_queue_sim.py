@@ -44,6 +44,30 @@ _LOG_FIELDS = [
     "tstart", "tend", "depth", "ab_eq",
 ]
 
+# Time-valued fields in the timeline (seconds internally); everything else (cycles, words,
+# addresses, frequencies, clk_period_ns) is left alone.
+_TIME_KEYS = frozenset({"dequeue_t", "complete_t", "latency", "tstart", "tend", "t"})
+
+
+def _scale_times_to_ns(obj):
+    """Deep-copy *obj*, scaling second-valued time fields to ns and setting ``timebase`` to
+    ``"ns"`` — so the emitted sim timeline matches the cosim timeline's units and a single
+    Stage-4 renderer overlays them without per-source unit handling. Pure (no mutation of the
+    source records, since ``build_timeline`` is called more than once)."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k == "timebase":
+                out[k] = "ns"
+            elif k in _TIME_KEYS and isinstance(v, (int, float)):
+                out[k] = v * 1e9
+            else:
+                out[k] = _scale_times_to_ns(v)
+        return out
+    if isinstance(obj, list):
+        return [_scale_times_to_ns(x) for x in obj]
+    return obj
+
 
 @dataclass
 class VmacQueueSim:
@@ -203,7 +227,7 @@ class VmacQueueSim:
         commands.sort(key=lambda c: c["cmd_idx"])
 
         load = sorted(self.host.txns, key=lambda t: (t["tstart"], t["addr"]))
-        return {
+        d = {
             "source": "sim",
             "timebase": "seconds",
             "clk_freq_hz": float(self.clk.freq),
@@ -218,9 +242,13 @@ class VmacQueueSim:
             "commands": commands,
             "queue_occupancy": self._queue_occupancy(),
         }
+        return d
 
     def emit_timeline(self) -> Path:
-        text = json.dumps(self.build_timeline(), indent=2, sort_keys=True)
+        # Internal timeline is in seconds (SimPy env.now); emit the committed artifact in ns to
+        # match the cosim timeline, so a single Stage-4 renderer overlays sim vs cosim without
+        # per-source unit handling.
+        text = json.dumps(_scale_times_to_ns(self.build_timeline()), indent=2, sort_keys=True)
         TIMELINE_JSON.write_text(text + "\n", encoding="utf-8")
         return TIMELINE_JSON
 
