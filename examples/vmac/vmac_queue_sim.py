@@ -176,9 +176,10 @@ class VmacQueueSim:
                              file_path=str(LOG_CSV), fields=_LOG_FIELDS)
         self.host.logger = self.logger
         self.accel.logger = self.logger
-        # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s — otherwise
-        # the consumer sleeps a full second per check and dominates the realistic-clock timeline.
-        self.host.poll_interval = 1.0 / float(self.clk.freq)
+        # poll the ring on the same coarse cadence as the VMAC consumer (poll_cycles bus
+        # cycles), not the queue default of 1.0 s and not every single cycle — a 1-cycle poll
+        # would saturate the bus just checking the ring and dominate the timeline.
+        self.host.poll_interval = float(self.accel.poll_cycles) / float(self.clk.freq)
         self.accel.region_labels = {
             a_elem: "A", b_elem: "B",
             y_anorm_elem: "Y_anorm", y_abcorr_elem: "Y_abcorr",

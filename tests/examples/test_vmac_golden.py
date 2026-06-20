@@ -136,46 +136,32 @@ def _alpha_field(op, alpha, addr):
     return {"direct": 1, "imm": (re, im), "addr": 0, "stride": 0}
 
 
-def build(accel, cfg, a, b, alpha):
-    """Lay a (+ b for inner_prod/sum, + per-row alpha for indirect scalar_mult) into mem and
-    build the Cmd. Returns (cmd, mem)."""
+def build_cmd(accel, cfg, a, b, alpha):
+    """Build the matching :class:`VmacCmd` (op + reduce + geometry + alpha field).  ``execute`` is
+    now the pure golden — it takes dense operand arrays, not a flat ``mem`` — so no memory layout
+    is needed; the region addr / row_stride fields are still set to valid values (nothing in
+    ``execute`` indexes them)."""
     op = cfg["op"]
     n, m = a[0].shape
-    nm = n * m
-    need_b = op in (OpCode.inner_prod, OpCode.sum)
-    alpha_pr = op is OpCode.scalar_mult and np.ndim(alpha[0]) > 0
-
-    blocks, addr, cur = [], {}, 0
-    addr["a"] = cur
-    blocks.append(_flat(a))
-    cur += nm
-    if need_b:
-        addr["b"] = cur
-        blocks.append(_flat(b))
-        cur += nm
-    if alpha_pr:
-        addr["alpha"] = cur
-        blocks.append(_flat(alpha))
-        cur += n
-    addr["y"] = cur
-    cur += nm
-    mem = cx.make_complex(np.zeros(cur), np.zeros(cur), Format(8, 4, True))
-    order = ["a"] + (["b"] if need_b else []) + (["alpha"] if alpha_pr else [])
-    for name, blk in zip(order, blocks):
-        mem[addr[name] : addr[name] + len(blk)] = blk
-
     cmd = accel.Cmd()
     cmd.op, cmd.reduce, cmd.n_rows, cmd.n_cols = op, int(cfg["reduce"]), n, m
     for name in ("a", "b", "y"):
-        setattr(cmd, name, {"addr": addr.get(name, 0), "row_stride": m})
-    cmd.alpha = _alpha_field(op, alpha, addr.get("alpha"))
-    return cmd, mem
+        setattr(cmd, name, {"addr": 0, "row_stride": m})
+    cmd.alpha = _alpha_field(op, alpha, 0)
+    return cmd
 
 
 def run(cfg, a, b, alpha):
     accel = _accel(cfg)
-    cmd, mem = build(accel, cfg, a, b, alpha)
-    dst = accel.execute(cmd, mem)
+    cmd = build_cmd(accel, cfg, a, b, alpha)
+    op = cfg["op"]
+    # dense operand arrays (structured complex) straight to the pure golden — no flat mem
+    a_arr = _flat(a)
+    b_arr = _flat(b) if op in (OpCode.inner_prod, OpCode.sum) else None
+    alpha_arr = (
+        _flat(alpha) if op is OpCode.scalar_mult and np.ndim(alpha[0]) > 0 else None
+    )
+    dst = accel.execute(cmd, a_arr, b_arr, alpha_arr)
     exp_re, exp_im = oracle(cfg, a, b, alpha)
     got_re, got_im = np.asarray(dst.val["re"]), np.asarray(dst.val["im"])
     return (got_re, got_im), (exp_re, exp_im)

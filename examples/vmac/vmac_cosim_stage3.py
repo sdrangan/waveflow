@@ -133,7 +133,7 @@ def _scenario(accel, ab_eq: bool):
         mem[b_addr:b_addr + nm] = B
     cmd = _reduce_cmd(accel, a_addr, b_addr, y_addr)
     mem_exp = mem.copy()
-    accel.execute(cmd, mem_exp)  # the golden writes Y into mem_exp
+    accel.execute_mem(cmd, mem_exp)  # the golden writes Y into mem_exp
     return cmd, mem, mem_exp
 
 

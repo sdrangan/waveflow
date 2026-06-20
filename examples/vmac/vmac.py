@@ -12,7 +12,7 @@ component's ``HwParam`` with the schema's symbolic ``Param``::
 
     accel = VmacAccel(data_bw=16, int_bits=8)  # HwParam values bind at instantiation
     cmd   = accel.Cmd(...)                     # VmacCmd.specialize(mem_awidth=…, data_bw=…)
-    dst   = accel.execute(cmd, mem)            # the bit-exact golden (instance method)
+    dst   = accel.execute(cmd, a, b, alpha)    # the pure bit-exact golden (operand arrays in)
 
 The op is one of three **element-wise** complex ops over a row-major shared-memory region —
 ``scalar_mult`` (``α[i]·A``), ``inner_prod`` (``A·conj(B)``), ``sum`` (``A+B``) — with an
@@ -31,11 +31,13 @@ datapath: **element-wise op → wide accumulate (full precision, ≤ acc_bw) →
 round + saturate → write (out_bw)**.  The right-shift is the single lossy step (an ``ap_fixed``
 assignment); its amount ``SHIFT = F_acc − F_in`` is *derived* from the flags + the structural
 format (not in the command — see :meth:`output_format` / :meth:`derived_shift`), so the golden
-is bit-exact with the Vitis kernel.  ``mem`` is the shared memory: a 1-D structured
-``[('re','im')]`` array of stored ints; operands are row-major regions
-``M[i, j] = mem[addr + i·row_stride + j]`` (columns unit-stride).  :meth:`execute` writes the
-requantized result into ``mem`` at the ``d`` region (so commands compose) and returns the dst
-``DataArray``.
+is bit-exact with the Vitis kernel.  The shared memory is a 1-D structured ``[('re','im')]``
+array of stored ints; operands are row-major regions ``M[i, j] = mem[addr + i·row_stride + j]``
+(columns unit-stride).  :meth:`execute` is the **pure** golden — dense operand arrays
+(``a, b, alpha``) in, the requantized dst ``DataArray`` out, no memory/addressing/writeback.
+The synthesizable shell :meth:`vmac_compute` owns the memory access (pipelined ``m_mem``
+reads/writes) and supplies the operands; :meth:`execute_mem` is the synchronous flat-memory
+twin (image in → image out, used by the build / cosim vector generators).
 
 Constructed without a ``sim``, ``VmacAccel`` is a lightweight params + golden object (no
 ``Simulation`` needed) — the form the golden / numeric tests use.  With a ``sim`` it is the
@@ -64,7 +66,7 @@ from waveflow.hw.aximm_queue import AXIMMQueue
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
 from waveflow.simulation.logger import NullLogger
-from waveflow.hw.synth import synthesizable
+from waveflow.hw.synth import sim_only, synthesizable
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils
@@ -114,6 +116,7 @@ class VmacAccel(HwComponent):
     out_bw: HwParam[int] = 16  # writeback (re/im) component width
     q_rnd: HwParam[int] = 0  # output rounding: 0 = AP_TRN, 1 = AP_RND
     o_sat: HwParam[int] = 0  # output overflow: 0 = AP_WRAP, 1 = AP_SAT
+    poll_cycles: HwParam[int] = 64  # bus cycles between command-ring polls (coarse, structural)
     clk: Clock = field(default_factory=lambda: Clock(freq=1e9))
 
     def __post_init__(self) -> None:
@@ -149,6 +152,29 @@ class VmacAccel(HwComponent):
             self.txns: list[dict] = []               # per memory transaction
             self.cmd_records: list[dict] = []         # per command (dequeue/complete/latency)
             self.q_events: list[dict] = []            # ring dequeue events (for occupancy)
+
+    def pre_sim(self) -> None:
+        """Sim setup (never synthesized): validate the driver wiring, cache the structural
+        element geometry, and precompute the coarse ring-poll interval + the command counter.
+
+        Everything here is one-time Python introspection / setup — not hardware — so it lives
+        out of :meth:`run_proc` (the HLS extraction target); ``run_proc`` then reads only the
+        cached structural constants (``_elem`` / ``_elem_bytes`` / ``_mem_bw`` / ``_poll``)."""
+        super().pre_sim()
+        if self.cmd_queue is None:
+            raise RuntimeError(
+                "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
+                "before run_sim)."
+            )
+        # element geometry in the shared data region (structural, constant) — cached on self so
+        # both the consumer and the vmac_compute shell share one element->byte-address helper.
+        self._mem_bw = int(self.m_mem.bitwidth)
+        self._elem = self._data_elem()
+        self._elem_bytes = self._elem.nwords_per_inst(self._mem_bw) * (self._mem_bw // 8)
+        # coarse ring poll (poll_cycles bus cycles), computed once: a 1-cycle poll would
+        # saturate the AXI bus merely checking the queue (see vmac_queue_sim).
+        self._poll = float(self.poll_cycles) / float(self.clk.freq)
+        self._cmd_idx = -1  # sim-only command counter, maintained by the @sim_only records
 
     @property
     def Cmd(self) -> type[VmacCmd]:
@@ -204,18 +230,19 @@ class VmacAccel(HwComponent):
 
     @classmethod
     def _alpha(
-        cls, sc, n_rows: int, n_cols: int, in_fmt: Format, mem: np.ndarray
+        cls, sc, n_rows: int, n_cols: int, in_fmt: Format, alpha_arr
     ) -> DataArray:
         """Build the ``scalar_mult`` alpha operand as an ``(n_rows, n_cols)`` broadcast: direct
-        immediate (one value, broadcast over every row/col) or per-row indirect (``alpha[i]`` at
-        ``addr + i·stride``, broadcast over columns)."""
+        immediate (one value, broadcast over every row/col) or per-row indirect — the pre-read
+        per-row column ``alpha_arr`` (shape ``(n_rows,)``) broadcast over columns.  It no longer
+        reads memory: the shell (:meth:`vmac_compute` / :meth:`execute_mem`) supplies the already
+        fetched ``alpha_arr``."""
         if bool(sc.direct):
             re = np.full((n_rows, n_cols), int(cx.re_of(sc.imm)), dtype=np.int64)
             im = np.full((n_rows, n_cols), int(cx.im_of(sc.imm)), dtype=np.int64)
             M = cx.make_complex(re, im, in_fmt)
         else:
-            idx = int(sc.addr) + np.arange(n_rows) * int(sc.stride)
-            col = mem[idx]  # (n_rows,) structured complex
+            col = np.asarray(alpha_arr).reshape(n_rows)  # (n_rows,) structured complex
             M = np.broadcast_to(col[:, None], (n_rows, n_cols)).copy()
         return cls._operand(M, in_fmt)
 
@@ -315,30 +342,33 @@ class VmacAccel(HwComponent):
         )
 
     # --- the golden ----------------------------------------------------------
-    def execute(self, cmd: VmacCmd, mem: np.ndarray) -> DataArray:
-        """Execute a ``VmacCmd`` over ``mem``; write the dst region and return the dst array.
+    def execute(self, cmd: VmacCmd, a, b=None, alpha=None) -> DataArray:
+        """The **pure-math golden**: dense operand arrays in, dst ``DataArray`` out — no memory,
+        addressing, writeback, or timing (the shell :meth:`vmac_compute` owns those and supplies
+        the already-read operands).
 
-        This is the synchronous golden — the Python body of the :meth:`vmac_compute` hook
-        (the ``.tpp`` reproduces it bit-for-bit in C++).  Complex-only; the format is read off
-        ``self`` (structural), not the command.  The numeric / golden tests call it directly
-        on a no-``sim`` accelerator."""
+        This is the bit-exact datapath (the ``.tpp`` reproduces it for-bit in C++).  Complex-only;
+        the format is read off ``self`` (structural), not the command.  ``a`` / ``b`` are the A / B
+        regions as ``n_rows·n_cols`` structured complex elements (reshaped to ``(n, m)`` here);
+        ``alpha`` is the per-row indirect column (``(n_rows,)``) for ``scalar_mult`` (``None`` for a
+        direct immediate, ``None`` for the other ops).  The numeric / golden tests call it directly
+        on a no-``sim`` accelerator; :meth:`execute_mem` is the flat-memory twin for the build /
+        cosim vector generators."""
         in_fmt = self._in_fmt()
         n, m = int(cmd.n_rows), int(cmd.n_cols)
-        mem = np.asarray(mem)
         out_cls = self.output_format(cmd)  # fail-loud config guards (acc_bw / out_bw)
-
-        def region(reg) -> DataArray:
-            return self._operand(mem[self._region_idx(reg, n, m)], in_fmt)
+        A = self._operand(np.asarray(a).reshape(n, m), in_fmt)
 
         # element-wise op -> R[i, j]
         op = OpCode(int(cmd.op))
-        a = region(cmd.a)
         if op is OpCode.scalar_mult:
-            t = cmult(self._alpha(cmd.alpha, n, m, in_fmt, mem), a)  # alpha[i] · A
+            t = cmult(self._alpha(cmd.alpha, n, m, in_fmt, alpha), A)  # alpha[i] · A
         elif op is OpCode.inner_prod:
-            t = cmult(a, conj(region(cmd.b)))  # A · conj(B)
+            B = self._operand(np.asarray(b).reshape(n, m), in_fmt)
+            t = cmult(A, conj(B))  # A · conj(B)
         else:  # sum
-            t = cadd(a, region(cmd.b))  # A + B
+            B = self._operand(np.asarray(b).reshape(n, m), in_fmt)
+            t = cadd(A, B)  # A + B
 
         # optional row reduction (wide accumulator)
         if bool(cmd.reduce):
@@ -357,24 +387,109 @@ class VmacAccel(HwComponent):
                 f"accumulator format mismatch: actual {actual} != derived {spec}"
             )
 
-        dst = self._requantize(t, out_cls)
+        return self._requantize(t, out_cls)  # NOTE: no writeback — the shell stores Y
+
+    def execute_mem(self, cmd: VmacCmd, mem: np.ndarray) -> DataArray:
+        """Flat-memory twin of :meth:`vmac_compute`, around the pure :meth:`execute` golden:
+        read the operand regions out of the 1-D structured ``mem`` (row-major
+        ``addr + i·row_stride + j``, columns unit-stride), run the golden, and write the dst back
+        into ``mem`` at the ``y`` region; return the dst array.
+
+        This is the *synchronous, untimed* counterpart the build / cosim vector generators use —
+        they need a flat memory image in → image out (the expected kernel memory).  The SimPy
+        :meth:`vmac_compute` shell does the same over the timed ``m_mem`` interface; both delegate
+        the math to the one golden, so nothing here duplicates it."""
+        mem = np.asarray(mem)
+        n, m = int(cmd.n_rows), int(cmd.n_cols)
+        op = OpCode(int(cmd.op))
+        a = mem[self._region_idx(cmd.a, n, m)]
+        b = None
+        if op in (OpCode.inner_prod, OpCode.sum):
+            b = mem[self._region_idx(cmd.b, n, m)]
+        alpha = None
+        if op is OpCode.scalar_mult and not bool(cmd.alpha.direct):
+            idx = int(cmd.alpha.addr) + np.arange(n) * int(cmd.alpha.stride)
+            alpha = mem[idx]  # (n_rows,) per-row indirect column
+        dst = self.execute(cmd, a, b, alpha)
         self._writeback(mem, cmd.y, dst)
         return dst
 
-    # --- the synthesizable hook + kernel body --------------------------------
+    # --- the synthesizable shell + kernel body -------------------------------
     @synthesizable(impl_file="vmac_compute_impl.tpp")
-    def vmac_compute(self, cmd: VmacCmd, mem: np.ndarray) -> ProcessGen[DataArray]:
-        """The element-wise op (``scalar_mult`` / ``inner_prod`` / ``sum``, optional row
-        reduce) — the **single** hook (the whole datapath: read operands, op, requantize, write).
+    def vmac_compute(self, cmd: VmacCmd, mem) -> ProcessGen[DataArray]:
+        """The **synthesizable shell**: it owns the (pipelined) memory access + transaction
+        capture and delegates the math to the pure golden :meth:`execute`.
 
-        Its Python body is the golden (delegates to :meth:`execute`); its C++ is the
-        hand-written ``vmac_compute_impl.tpp`` (the ``ap_fixed`` accumulator =
-        :meth:`accumulator_format`, output = :meth:`output_format`).  As a
-        ``@synthesizable`` hook the body is not extracted — codegen emits a call to the
-        ``.tpp`` function — so the SimPy model may freely use the full-precision numpy golden.
-        """
-        return self.execute(cmd, mem)
-        yield  # unreachable — makes this a generator (ProcessGen)
+        ``mem`` is the memory the kernel reads/writes — in the SimPy model the
+        :class:`MMIFMaster` (``self.m_mem``); in the generated C++ the ``m_axi`` pointer.  Same
+        arg, same position: **do not reorder** — ``@synthesizable`` maps this signature to the C++
+        call ``vmac_compute(cmd, mem)``.  As a ``@synthesizable`` hook the Python body is *not*
+        extracted (codegen emits a call to the hand-written ``vmac_compute_impl.tpp``), so this
+        sim body may freely use pipelined ``m_mem`` reads + the full-precision numpy golden.
+
+        Reads each operand region as one contiguous block (``row_stride == n_cols``, the standing
+        assumption) and reshapes in :meth:`execute`; suppresses B's read when it aliases A
+        (``ab_eq``); records each transfer (:meth:`_record_txn`) as it follows the reads/writes.
+        The command-level II-decoupling pad lives here too (after the writeback): since
+        :meth:`run_proc` dispatches this immediately on dequeue, the entry time equals the
+        dequeue time, so per-command latency is unchanged — and because this body is not
+        extracted, the (non-synthesizable) ``yield self.timeout`` pad is excluded for free."""
+        t_entry = self.now  # == dequeue_t (run_proc dispatches on the dequeue tick)
+        n, m = int(cmd.n_rows), int(cmd.n_cols)
+        nm = n * m
+        op = OpCode(int(cmd.op))
+        need_b = op in (OpCode.inner_prod, OpCode.sum)
+        # ab_eq: B aliases A — skip B's read (not needed by the golden; the suppressed bus beat
+        # is the point).  alpha_indirect: per-row alpha lives in memory, not the immediate.
+        ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+        alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
+        cmd_idx = self._cmd_idx
+
+        # timed operand reads — one whole-matrix LT block each
+        a_addr = self._byte_addr(int(cmd.a.addr))
+        a, t0, t1, nw = yield from mem.read_array_pipelined(
+            self._elem, nm, a_addr, word_bw=self._mem_bw)
+        self._record_txn(cmd_idx, self.region_labels.get(int(cmd.a.addr), "data"),
+                         "read", a_addr, nw, t0, t1, ab_eq)
+        b = None
+        if need_b and not ab_eq:
+            b_addr = self._byte_addr(int(cmd.b.addr))
+            b, t0, t1, nw = yield from mem.read_array_pipelined(
+                self._elem, nm, b_addr, word_bw=self._mem_bw)
+            self._record_txn(cmd_idx, self.region_labels.get(int(cmd.b.addr), "data"),
+                             "read", b_addr, nw, t0, t1, ab_eq)
+        elif ab_eq:
+            b = a
+        alpha = None
+        if alpha_indirect:
+            al_addr = self._byte_addr(int(cmd.alpha.addr))
+            alpha, t0, t1, nw = yield from mem.read_array_pipelined(
+                self._elem, n, al_addr, word_bw=self._mem_bw)
+            self._record_txn(cmd_idx, self.region_labels.get(int(cmd.alpha.addr), "data"),
+                             "read", al_addr, nw, t0, t1, ab_eq)
+
+        # the bit-exact golden computes R / reduce / requantize (pure math)
+        dst = self.execute(cmd, a, b, alpha)
+
+        # timed Y writeback — one LT block (element type inferred from dst, the output format)
+        y_addr = self._byte_addr(int(cmd.y.addr))
+        t0, t1, nw = yield from mem.write_array_pipelined(
+            dst, type(dst).element_type, y_addr, word_bw=self._mem_bw)
+        self._record_txn(cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"),
+                         "write", y_addr, nw, t0, t1, ab_eq)
+
+        # II-decoupling: advance to the calibrated pipeline-schedule completion time.  The
+        # transfers above already moved `now` (their bus occupancy is real); pad the remainder so
+        # the command latency is the II-driven schedule, NOT the transfer sum.  trips depend only
+        # on geometry, so anorm and abcorr (equal trips) get equal latency — the fixed-II RTL
+        # behaviour the transaction-gated model could not represent.
+        if self.timing is not None:
+            trips = n * math.ceil(m / self.pf)
+            sched_secs = self.timing.cycles(trips) / float(self.clk.freq)
+            pad = sched_secs - (self.now - t_entry)
+            if pad > 0:
+                yield self.timeout(pad)
+        return dst
 
     def _record_txn(
         self, cmd_idx: int, name: str, rw: str, addr: int, nwords: int,
@@ -397,135 +512,55 @@ class VmacAccel(HwComponent):
         element→address conversion, used by every timed read and the Y writeback."""
         return self.data_base + int(elem_idx) * self._elem_bytes
 
-    def _read_region(
-        self, local: np.ndarray, elem_addr: int, count: int, cmd_idx: int, ab_eq: bool,
-    ) -> ProcessGen[None]:
-        """Issue ONE timed ``m_mem`` read of *count* contiguous complex elements at element
-        index *elem_addr* and unpack them into ``local`` at the same offset — so the golden
-        :meth:`execute` addresses them by the command's region address (``local`` is a local
-        mirror of the shared memory).  Capture (t_start, t_end, nwords, addr, label) of the
-        LT block.  The vectorized unpack + bus-time capture come from the shared
-        :meth:`MMIFMaster.read_array_pipelined` (``self._elem`` / ``_mem_bw`` cached by
-        :meth:`run_proc`) — no hand-rolled word read or unpack here."""
-        addr = self._byte_addr(elem_addr)
-        data, t0, t1, nwords = yield from self.m_mem.read_array_pipelined(
-            self._elem, count, addr, word_bw=self._mem_bw,
+    @sim_only
+    def _record_dequeue(self, cmd: VmacCmd, t: float) -> None:
+        """Sim-only: bump the command counter and capture the dequeue event (occupancy curve +
+        raw log).  Runs before the datapath so ``self._cmd_idx`` is current for the transaction
+        records :meth:`vmac_compute` emits."""
+        self._cmd_idx += 1
+        self.q_events.append(
+            {"t": float(t), "kind": "dequeue", "cmd_idx": self._cmd_idx}
         )
-        local[elem_addr:elem_addr + count] = data
-        self._record_txn(
-            cmd_idx, self.region_labels.get(elem_addr, "data"), "read",
-            addr, nwords, t0, t1, ab_eq,
-        )
+        self.logger.log(role="vmac", event="dequeue", cmd_idx=self._cmd_idx,
+                        tstart=float(t))
+
+    @sim_only
+    def _record_command(self, cmd: VmacCmd, dequeue_t: float) -> None:
+        """Sim-only: capture the per-command record (dequeue→complete latency) after the
+        datapath returns."""
+        complete_t = self.now
+        op = OpCode(int(cmd.op))
+        need_b = op in (OpCode.inner_prod, OpCode.sum)
+        ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+        self.cmd_records.append({
+            "cmd_idx": self._cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
+            "n_rows": int(cmd.n_rows), "n_cols": int(cmd.n_cols),
+            "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
+            "latency": float(complete_t - dequeue_t),
+        })
 
     def run_proc(self) -> ProcessGen[None]:
-        """Loosely-timed SimPy execution model: a free-running queue consumer.
+        """Free-running queue consumer — the HLS extraction target.
 
-        Dequeue a :class:`VmacCmd` from the AXI-MM command queue; on ``OpCode.end``
-        stop.  Otherwise issue **timed ``m_mem`` reads** of the operands (A; B unless
-        ``ab_eq``) and a **timed write** of Y — one whole-matrix LT block per operand —
-        with the numpy golden (:meth:`execute`) producing the values into a local buffer.
+        The loop body is **hardware control flow only**: poll/dequeue a :class:`VmacCmd` from the
+        AXI-MM command ring, dispatch the per-command datapath to the synthesizable
+        :meth:`vmac_compute` shell, and stop on ``OpCode.end``.  Everything sim-only lives
+        elsewhere so the loop reads like the RTL: the precondition + structural geometry +
+        coarse poll in :meth:`pre_sim`; the dequeue/command bookkeeping (and the ``cmd_idx``
+        counter) in the ``@sim_only`` :meth:`_record_dequeue` / :meth:`_record_command` helpers
+        (silently dropped by the extractor); the II-decoupling pad inside the non-extracted
+        ``vmac_compute`` body.
 
-        **Latency model (Stage 1 vs Stage 5).**  The bus transactions are *always* issued
-        (occupancy / bus-traffic accounting — ``ab_eq`` suppresses B's read, so anorm uses
-        HALF the read words), but the command *latency* depends on :pyattr:`timing`:
-
-        * ``timing is None`` — **transaction-gated** (Stage 1): latency = Σ of the transfer
-          blocks, so the model predicts ``anorm`` faster than ``abcorr`` *and* underestimates
-          absolute latency ~5x.  Kept so the naive curve can be rendered next to the fix.
-        * ``timing`` set — **II-decoupled** (Stage 5): latency is the kernel **pipeline
-          schedule** ``(depth + ii * trips) / freq`` with ``trips = n_rows * ceil(n_cols /
-          pf)`` — the calibrated ``(depth, ii)`` fit from the Vitis cosim sweep.  Latency then
-          depends only on ``trips`` (so ``anorm`` latency == ``abcorr`` latency, matching the
-          fixed-II RTL) and tracks the RTL absolute latency, while the *bus* still shows anorm
-          at half the reads.  This is TLM's LT->AT escalation: add just enough timing structure
-          to answer the question, keeping occupancy transaction-driven and latency II-driven.
-
-        The synthesizable C++ is unchanged (the ``.tpp`` hook) and :meth:`execute` stays the
-        byte-exact golden; the II-decoupling lives entirely in *this* timing model."""
-        if self.cmd_queue is None:
-            raise RuntimeError(
-                "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
-                "before run_sim)."
-            )
-        in_fmt = self._in_fmt()
-        # element geometry in the shared data region (structural, constant) — cached on self so
-        # the timed reads and the Y writeback share one element->byte-address helper.
-        self._mem_bw = int(self.m_mem.bitwidth)
-        self._elem = self._data_elem()
-        self._elem_words = self._elem.nwords_per_inst(self._mem_bw)
-        self._elem_bytes = self._elem_words * (self._mem_bw // 8)
-
-        # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s, so the
-        # consumer wakes promptly relative to the realistic clock (see vmac_queue_sim).
-        poll = 1.0 / float(self.clk.freq)
-
-        cmd_idx = -1
+        (This is the clean shape, not yet end-to-end extractable — that additionally needs a
+        synthesizable ``cmd_queue.get``, a follow-on.  See the timing model in
+        :meth:`vmac_compute`: bus transactions are always issued so ``ab_eq`` shows anorm at
+        half the reads, while latency is the II-driven pipeline schedule.)"""
         while True:
-            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd, poll_interval=poll)
-            cmd_idx += 1
+            cmd: VmacCmd = yield from self.cmd_queue.get(
+                self.Cmd, poll_interval=self._poll)
             dequeue_t = self.now
-            self.q_events.append(
-                {"t": float(dequeue_t), "kind": "dequeue", "cmd_idx": cmd_idx}
-            )
-            self.logger.log(role="vmac", event="dequeue", cmd_idx=cmd_idx,
-                            tstart=float(dequeue_t))
-            op = OpCode(int(cmd.op))
-            if op is OpCode.end:
+            self._record_dequeue(cmd, dequeue_t)        # @sim_only (also bumps _cmd_idx)
+            if OpCode(int(cmd.op)) is OpCode.end:
                 break  # sentinel: the host's last command; drain and terminate
-
-            n, m = int(cmd.n_rows), int(cmd.n_cols)
-            nm = n * m
-            need_b = op in (OpCode.inner_prod, OpCode.sum)
-            # ab_eq: B aliases A — skip B's read (it is not needed in the golden, and the
-            # suppressed bus beat is the point).  Latency stays transaction-driven.
-            ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
-            alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
-
-            ends = [int(cmd.a.addr) + nm, int(cmd.y.addr) + nm]
-            if need_b:
-                ends.append(int(cmd.b.addr) + nm)
-            if alpha_indirect:
-                ends.append(int(cmd.alpha.addr) + n)
-            extent = max(ends)
-            local = cx.make_complex(np.zeros(extent), np.zeros(extent), in_fmt)
-
-            # timed operand reads — one whole-matrix LT block each
-            yield from self._read_region(local, int(cmd.a.addr), nm, cmd_idx, ab_eq)
-            if need_b and not ab_eq:
-                yield from self._read_region(local, int(cmd.b.addr), nm, cmd_idx, ab_eq)
-            if alpha_indirect:
-                yield from self._read_region(local, int(cmd.alpha.addr), n, cmd_idx, ab_eq)
-
-            # the bit-exact golden computes R / reduce / requantize and writes Y into `local`
-            dst = self.execute(cmd, local)
-
-            # timed Y writeback — one LT block (element type inferred from dst, the output
-            # format, matching the prior wf_write_array(dst) inference)
-            y_addr = self._byte_addr(int(cmd.y.addr))
-            t0, t1, y_nwords = yield from self.m_mem.write_array_pipelined(
-                dst, type(dst).element_type, y_addr, word_bw=self._mem_bw,
-            )
-            self._record_txn(
-                cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"), "write",
-                y_addr, y_nwords, t0, t1, ab_eq,
-            )
-
-            # II-decoupling: advance to the calibrated pipeline-schedule completion time.
-            # The transfers above already moved `now` (their bus occupancy is real); pad the
-            # remainder so the command latency is the II-driven schedule, NOT the transfer sum.
-            # trips depend only on geometry, so anorm and abcorr (equal trips) get equal latency
-            # — the fixed-II RTL behaviour the transaction-gated model could not represent.
-            if self.timing is not None:
-                trips = n * math.ceil(m / self.pf)
-                sched_secs = self.timing.cycles(trips) / float(self.clk.freq)
-                pad = sched_secs - (self.now - dequeue_t)
-                if pad > 0:
-                    yield self.timeout(pad)
-
-            complete_t = self.now
-            self.cmd_records.append({
-                "cmd_idx": cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
-                "n_rows": n, "n_cols": m,
-                "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
-                "latency": float(complete_t - dequeue_t),
-            })
+            yield from self.vmac_compute(cmd, self.m_mem)
+            self._record_command(cmd, dequeue_t)        # @sim_only
