@@ -117,8 +117,13 @@ class HwStmtExtractor:
           - The function chain of a call whose target is ``@synthesizable`` or
             ``@sim_only`` (e.g. ``self.s_in.get`` in ``self.s_in.get(...)``).
           - Reads that resolve to a ``@sim_only`` callable.
-          - Reads that resolve to an ``InterfaceEndpoint`` or a ``RegMap``
-            (endpoint references passed into synthesizable calls).
+          - Reads that resolve to an ``InterfaceEndpoint``, a ``RegMap``, or an
+            ``AXIMMQueue`` (resource references passed into synthesizable calls).
+          - Reads that resolve to a ``DataSchema`` subclass — a compile-time schema
+            *type* passed as a codegen argument (e.g. ``self.Cmd`` in
+            ``self.cmd_queue.get(self.Cmd)``, the instance-specialized analogue of
+            hist's bare-global ``HistCmd``).  A schema class is a type, not a runtime
+            field read, so it carries no hardware state to capture.
 
         Anything else — a plain field like ``self.proc_latency`` used in an
         expression — raises ``SynthesisError``.
@@ -126,6 +131,8 @@ class HwStmtExtractor:
         Subtrees of ``@sim_only`` call statements are skipped entirely so the
         rule doesn't apply to their arguments either.
         """
+        from waveflow.hw.aximm_queue import AXIMMQueue
+        from waveflow.hw.dataschema import DataSchema
         from waveflow.hw.hw_component import HwParamValue
         from waveflow.hw.interface import InterfaceEndpoint
         from waveflow.hw.regmap import RegMap
@@ -164,7 +171,9 @@ class HwStmtExtractor:
                 if obj is not None and (
                     getattr(obj, '_is_sim_only', False)
                     or getattr(obj, '_is_synthesizable', False)
-                    or isinstance(obj, (InterfaceEndpoint, RegMap, HwParamValue))
+                    or isinstance(obj, (InterfaceEndpoint, RegMap, AXIMMQueue,
+                                        HwParamValue))
+                    or (isinstance(obj, type) and issubclass(obj, DataSchema))
                 ):
                     return
                 lineno = getattr(node, 'lineno', '?')

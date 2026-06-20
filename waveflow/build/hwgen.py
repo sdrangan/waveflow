@@ -31,6 +31,7 @@ from waveflow.hw.hwstmt import (
     TbStreamIOStmt,
     WhileStmt,
 )
+from waveflow.hw.aximm_queue import AXIMMQueueGetStmt
 from waveflow.hw.interface import (
     StreamDrainStmt,
     StreamGetStmt,
@@ -73,6 +74,8 @@ def to_cpp(stmt: HwStmt, ctx: CodegenCtx) -> str:
         return f"{ctx.pad()}continue;"
     if isinstance(stmt, CaseStmt):
         return _emit_case(stmt, ctx)
+    if isinstance(stmt, AXIMMQueueGetStmt):
+        return _emit_aximm_queue_get(stmt, ctx)
     if isinstance(stmt, StreamGetStmt):
         return _emit_stream_get(stmt, ctx)
     if isinstance(stmt, StreamWriteStmt):
@@ -184,6 +187,32 @@ def _emit_stream_get(stmt: StreamGetStmt, ctx: CodegenCtx) -> str:
     return (
         f"{pad}{cpp_type} {out.name};\n"
         f"{pad}{out.name}.read_axi4_stream<{tmpl}>({stream_name});"
+    )
+
+
+def _emit_aximm_queue_get(stmt: AXIMMQueueGetStmt, ctx: CodegenCtx) -> str:
+    """``cmd = self.cmd_queue.get(self.Cmd)`` → declare the command local and call the
+    hand-written ring-dequeue hook (``aximm_queue_impl::queue_get``).
+
+    Strategy A (decision D5): the dequeue is a hand-written C++ hook, mirroring the
+    ``vmac_compute_impl.tpp`` pattern, rather than inlined codegen.  The ring geometry
+    (base / capacity / elem_words) is fixed by the Python :class:`AXIMMQueueLayout` and
+    passed as template params; the m_axi pointer is the queue master's bound port (the
+    same ``gmem`` the datapath uses).  ``inputs[0]`` is the command schema class;
+    ``outputs[0]`` is the bound local."""
+    schema_cls = stmt.inputs[0]
+    out = stmt.outputs[0]
+    cpp_t = schema_cls.cpp_class_name()
+    queue = stmt.method.__self__  # type: ignore[attr-defined]  # the AXIMMQueue
+    layout = queue.layout
+    port_name = _endpoint_name(queue.master, ctx)
+    bw = int(layout.mem_bw)
+    pad = ctx.pad()
+    return (
+        f"{pad}{cpp_t} {out.name};\n"
+        f"{pad}aximm_queue_impl::queue_get<{cpp_t}, {bw}, "
+        f"{layout.base_addr}, {layout.capacity}, {layout.elem_words}>"
+        f"({port_name}, {out.name});"
     )
 
 
