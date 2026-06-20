@@ -64,6 +64,7 @@ from waveflow.hw.arrayutils import read_array as wf_read_array
 from waveflow.hw.arrayutils import write_array as wf_write_array
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
+from waveflow.simulation.logger import NullLogger
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils import complexutils as cx
@@ -113,6 +114,12 @@ class VmacAccel(HwComponent):
             # (it owns the system memory map) before ``run_sim``.
             self.cmd_queue: AXIMMQueue | None = None
             self.data_base: int = 0
+            # Stage 2 timeline capture (attached by the driver; default = no-op).
+            self.logger = NullLogger()
+            self.region_labels: dict[int, str] = {}  # elem offset -> A / B / Y_anorm / ...
+            self.txns: list[dict] = []               # per memory transaction
+            self.cmd_records: list[dict] = []         # per command (dequeue/complete/latency)
+            self.q_events: list[dict] = []            # ring dequeue events (for occupancy)
 
     @property
     def Cmd(self) -> type[VmacCmd]:
@@ -333,18 +340,42 @@ class VmacAccel(HwComponent):
         return self.execute(cmd, mem)
         yield  # unreachable — makes this a generator (ProcessGen)
 
+    def _record_txn(
+        self, cmd_idx: int, name: str, rw: str, addr: int, nwords: int,
+        tstart: float, tend: float, ab_eq: bool,
+    ) -> None:
+        """Append one captured memory transaction (and mirror it to the raw CSV log)."""
+        self.txns.append({
+            "cmd_idx": int(cmd_idx), "name": name, "rw": rw, "addr": int(addr),
+            "nwords": int(nwords), "tstart": float(tstart), "tend": float(tend),
+            "ab_eq": bool(ab_eq),
+        })
+        self.logger.log(
+            role="vmac", event="mem", cmd_idx=cmd_idx, label=name, rw=rw,
+            nwords=int(nwords), addr=int(addr), tstart=float(tstart), tend=float(tend),
+            ab_eq=int(ab_eq),
+        )
+
     def _read_region(
         self, local: np.ndarray, elem_addr: int, count: int,
         elem: type, elem_words: int, elem_bytes: int, mem_bw: int,
+        cmd_idx: int, ab_eq: bool,
     ) -> ProcessGen[None]:
         """Issue ONE timed ``m_mem`` read of *count* contiguous complex elements at
-        *elem_addr* (element index in the data region) and unpack them into ``local``."""
-        words = yield from self.m_mem.read(
-            count * elem_words, self.data_base + elem_addr * elem_bytes
-        )
+        *elem_addr* (element index in the data region) and unpack them into ``local``;
+        capture (t_start, t_end, nwords, addr, label) of the LT block."""
+        nwords = count * elem_words
+        addr = self.data_base + elem_addr * elem_bytes
+        t0 = self.now
+        words = yield from self.m_mem.read(nwords, addr)
+        t1 = self.now
         local[elem_addr:elem_addr + count] = wf_read_array(
             words, elem, mem_bw, shape=count
         ).val
+        self._record_txn(
+            cmd_idx, self.region_labels.get(elem_addr, "data"), "read",
+            addr, nwords, t0, t1, ab_eq,
+        )
 
     def run_proc(self) -> ProcessGen[None]:
         """Loosely-timed SimPy execution model (Stage 1): a free-running queue consumer.
@@ -372,8 +403,16 @@ class VmacAccel(HwComponent):
         elem_words = elem.nwords_per_inst(mem_bw)
         elem_bytes = elem_words * word_bytes
 
+        cmd_idx = -1
         while True:
             cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd)
+            cmd_idx += 1
+            dequeue_t = self.now
+            self.q_events.append(
+                {"t": float(dequeue_t), "kind": "dequeue", "cmd_idx": cmd_idx}
+            )
+            self.logger.log(role="vmac", event="dequeue", cmd_idx=cmd_idx,
+                            tstart=float(dequeue_t))
             op = OpCode(int(cmd.op))
             if op is OpCode.end:
                 break  # sentinel: the host's last command; drain and terminate
@@ -396,15 +435,18 @@ class VmacAccel(HwComponent):
 
             # timed operand reads — one whole-matrix LT block each
             yield from self._read_region(
-                local, int(cmd.a.addr), nm, elem, elem_words, elem_bytes, mem_bw
+                local, int(cmd.a.addr), nm, elem, elem_words, elem_bytes, mem_bw,
+                cmd_idx, ab_eq,
             )
             if need_b and not ab_eq:
                 yield from self._read_region(
-                    local, int(cmd.b.addr), nm, elem, elem_words, elem_bytes, mem_bw
+                    local, int(cmd.b.addr), nm, elem, elem_words, elem_bytes, mem_bw,
+                    cmd_idx, ab_eq,
                 )
             if alpha_indirect:
                 yield from self._read_region(
-                    local, int(cmd.alpha.addr), n, elem, elem_words, elem_bytes, mem_bw
+                    local, int(cmd.alpha.addr), n, elem, elem_words, elem_bytes, mem_bw,
+                    cmd_idx, ab_eq,
                 )
 
             # the bit-exact golden computes R / reduce / requantize and writes Y into `local`
@@ -412,6 +454,19 @@ class VmacAccel(HwComponent):
 
             # timed Y writeback — one LT block
             y_words = wf_write_array(dst, word_bw=mem_bw)
-            yield from self.m_mem.write(
-                y_words, self.data_base + int(cmd.y.addr) * elem_bytes
+            y_addr = self.data_base + int(cmd.y.addr) * elem_bytes
+            t0 = self.now
+            yield from self.m_mem.write(y_words, y_addr)
+            t1 = self.now
+            self._record_txn(
+                cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"), "write",
+                y_addr, len(y_words), t0, t1, ab_eq,
             )
+
+            complete_t = self.now
+            self.cmd_records.append({
+                "cmd_idx": cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
+                "n_rows": n, "n_cols": m,
+                "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
+                "latency": float(complete_t - dequeue_t),
+            })

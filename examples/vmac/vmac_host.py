@@ -28,6 +28,7 @@ from waveflow.hw.arrayutils import read_array as wf_read_array
 from waveflow.hw.arrayutils import write_array as wf_write_array
 from waveflow.hw.dataschema import DataArray
 from waveflow.hw.memif import MMIFMaster
+from waveflow.simulation.logger import NullLogger
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.utils import complexutils as cx
 
@@ -62,13 +63,28 @@ class VmacHost(SimObj):
         self.anorm: np.ndarray | None = None   # per-column, complex (im≈0)
         self.abcorr: np.ndarray | None = None  # per-column, complex
         self.rho: np.ndarray | None = None      # abcorr / anorm
+        # Stage 2 timeline capture (attached by the driver; default = no-op).
+        self.logger = NullLogger()
+        self.txns: list[dict] = []             # per host memory transaction (A/B loads)
+        self.q_events: list[dict] = []         # ring enqueue events (for occupancy)
 
     # -- region helpers (timed m_mem transactions) ----------------------------
     def _write_matrix(self, M: np.ndarray, elem_addr: int) -> ProcessGen[None]:
         flat = np.asarray(M).ravel()
         da = DataArray.specialize(self._elem, max_shape=(flat.shape[0],))(flat)
         words = wf_write_array(da, word_bw=self._mem_bw)
-        yield from self.master.write(words, self.data_base + elem_addr * self._elem_bytes)
+        addr = self.data_base + elem_addr * self._elem_bytes
+        t0 = self.now
+        yield from self.master.write(words, addr)
+        t1 = self.now
+        self.txns.append({
+            "cmd_idx": -1, "name": "data_in", "rw": "write", "addr": int(addr),
+            "nwords": int(len(words)), "tstart": float(t0), "tend": float(t1),
+            "ab_eq": False,
+        })
+        self.logger.log(role="host", event="mem", label="data_in", rw="write",
+                        nwords=int(len(words)), addr=int(addr),
+                        tstart=float(t0), tend=float(t1))
 
     def _read_values(self, elem_addr: int, count: int) -> ProcessGen[np.ndarray]:
         """Read *count* complex elements back and return them as scaled complex values."""
@@ -97,11 +113,14 @@ class VmacHost(SimObj):
         cmd.alpha = {"direct": 1, "imm": (0, 0), "addr": 0, "stride": 0}
         return cmd
 
-    def _enqueue(self, cmd: VmacCmd) -> ProcessGen[None]:
+    def _enqueue(self, cmd: VmacCmd, cmd_idx: int) -> ProcessGen[None]:
         # one command == one ring slot (cmd_words == layout.elem_words); raw-word path.
         yield from self.queue.write(
             cmd.serialize(word_bw=self._mem_bw), poll_interval=self.poll_interval
         )
+        t = self.now
+        self.q_events.append({"t": float(t), "kind": "enqueue", "cmd_idx": cmd_idx})
+        self.logger.log(role="host", event="enqueue", cmd_idx=cmd_idx, tstart=float(t))
 
     # -- the driving process --------------------------------------------------
     def run_proc(self) -> ProcessGen[None]:
@@ -109,9 +128,9 @@ class VmacHost(SimObj):
         yield from self._write_matrix(self.A, self.a_elem)
         yield from self._write_matrix(self.B, self.b_elem)
 
-        yield from self._enqueue(self._reduce_cmd(self.a_elem, self.a_elem, self.y_anorm_elem))
-        yield from self._enqueue(self._reduce_cmd(self.a_elem, self.b_elem, self.y_abcorr_elem))
-        yield from self._enqueue(self._end_cmd())
+        yield from self._enqueue(self._reduce_cmd(self.a_elem, self.a_elem, self.y_anorm_elem), 0)
+        yield from self._enqueue(self._reduce_cmd(self.a_elem, self.b_elem, self.y_abcorr_elem), 1)
+        yield from self._enqueue(self._end_cmd(), 2)
 
         # barrier: the ring is empty only once VMAC has consumed `end`, which (in order)
         # means both compute commands' Y writes have landed.
