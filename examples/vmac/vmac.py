@@ -39,9 +39,11 @@ requantized result into ``mem`` at the ``d`` region (so commands compose) and re
 
 Constructed without a ``sim``, ``VmacAccel`` is a lightweight params + golden object (no
 ``Simulation`` needed) — the form the golden / numeric tests use.  With a ``sim`` it is the
-full ``HwComponent``: an ``m_axi`` (``MMIFMaster``) data port + an ``s_in`` command stream,
-with :meth:`run_proc` the kernel body the generated kernel is lowered from (the m_axi data
-plumbing + codegen are wired in the build phase).
+full ``HwComponent`` with a single ``m_axi`` (``MMIFMaster``) port that serves **both** the
+AXI-MM command queue and the A/B/Y data (Stage 1 of ``plans/vmac_mm_queue_timing.md``):
+:meth:`run_proc` is the loosely-timed SimPy execution model — a free-running queue consumer
+that issues timed ``m_mem`` transactions around the bit-exact golden.  (The synthesizable C++
+remains the hand-written ``vmac_compute`` hook; the cosim codegen path is unchanged.)
 """
 
 from __future__ import annotations
@@ -57,7 +59,9 @@ from waveflow.hw.complexfield import ComplexField, cadd, cmult, conj, csum
 from waveflow.hw.dataschema import DataArray
 from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.hw_component import HwComponent, HwParam
-from waveflow.hw.interface import StreamIFSlave
+from waveflow.hw.aximm_queue import AXIMMQueue
+from waveflow.hw.arrayutils import read_array as wf_read_array
+from waveflow.hw.arrayutils import write_array as wf_write_array
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
 from waveflow.hw.synth import synthesizable
@@ -97,16 +101,18 @@ class VmacAccel(HwComponent):
             object.__setattr__(self, "_hw_construction_complete", True)
         else:
             super().__post_init__()
-            # The m_axi data port (the shared memory the op reads/writes) and the
-            # command stream; mirror HistAccel's endpoint set.
-            self.s_in = StreamIFSlave(
-                name=f"{self.name}_s_in", sim=self.sim, bitwidth=int(self.mem_dwidth)
-            )
+            # Stage 1 (loosely-timed SimPy model): ONE m_mem master serves both the
+            # command dequeue (over an AXI-MM queue) and the A/B/Y data — one realistic
+            # AXI port.  ``mem_dwidth`` is the sim bus width here (must be a queue-legal
+            # 8/16/32/64); for synthesis it is the lane-packing MEM_BW (set per build).
             self.m_mem = MMIFMaster(
                 name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth)
             )
-            for ep in (self.s_in, self.m_mem):
-                self.add_endpoint(ep)
+            self.add_endpoint(self.m_mem)
+            # The command queue + the data-region byte base are attached by the driver
+            # (it owns the system memory map) before ``run_sim``.
+            self.cmd_queue: AXIMMQueue | None = None
+            self.data_base: int = 0
 
     @property
     def Cmd(self) -> type[VmacCmd]:
@@ -146,6 +152,12 @@ class VmacAccel(HwComponent):
         elem = ComplexField.specialize(cls._fixed_cls(in_fmt))
         shape = M.shape if M.shape else (1,)
         return DataArray.specialize(elem, max_shape=tuple(shape))(M)
+
+    def _data_elem(self) -> type[ComplexField]:
+        """The shared-memory element type — the operand ``ComplexField`` at the input
+        format.  Both VMAC and the host (de)serialize the A/B/Y regions through it, so the
+        timed ``m_mem`` words round-trip bit-exactly with the golden's structured buffer."""
+        return ComplexField.specialize(self._fixed_cls(self._in_fmt()))
 
     @classmethod
     def _alpha(
@@ -321,13 +333,85 @@ class VmacAccel(HwComponent):
         return self.execute(cmd, mem)
         yield  # unreachable — makes this a generator (ProcessGen)
 
-    def run_proc(self) -> ProcessGen[None]:
-        """Kernel body (single ap_ctrl_hs invocation) — the codegen root.
+    def _read_region(
+        self, local: np.ndarray, elem_addr: int, count: int,
+        elem: type, elem_words: int, elem_bytes: int, mem_bw: int,
+    ) -> ProcessGen[None]:
+        """Issue ONE timed ``m_mem`` read of *count* contiguous complex elements at
+        *elem_addr* (element index in the data region) and unpack them into ``local``."""
+        words = yield from self.m_mem.read(
+            count * elem_words, self.data_base + elem_addr * elem_bytes
+        )
+        local[elem_addr:elem_addr + count] = wf_read_array(
+            words, elem, mem_bw, shape=count
+        ).val
 
-        Read one :class:`VmacCmd` off ``s_in``, then run the op in the
-        :meth:`vmac_compute` hook against the ``m_mem`` shared memory.  The m_axi
-        read/write plumbing around the hook (the strided gather/scatter the
-        ``.tpp`` performs lane-by-lane) and the codegen wiring are completed in the
-        build phase; this is the structure the generated kernel is lowered from."""
-        cmd: VmacCmd = yield from self.s_in.get(self.Cmd)
-        yield from self.vmac_compute(cmd, self.m_mem)
+    def run_proc(self) -> ProcessGen[None]:
+        """Loosely-timed SimPy execution model (Stage 1): a free-running queue consumer.
+
+        Dequeue a :class:`VmacCmd` from the AXI-MM command queue; on ``OpCode.end``
+        stop.  Otherwise issue **timed ``m_mem`` reads** of the operands (A; B unless
+        ``ab_eq``) and a **timed write** of Y — one whole-matrix LT block per operand —
+        with the numpy golden (:meth:`execute`) producing the values into a local buffer.
+
+        Latency is **transaction-driven** here: ``ab_eq`` (``b_addr == a_addr``) suppresses
+        B's read, so the model predicts ``anorm`` faster than ``abcorr``.  That is the
+        intended Stage-1 behaviour — the gap vs. the fixed-II RTL (equal latency, freed bus)
+        is the headline finding the Stage-3 cosim calibration exposes; do not equalize it
+        here.  The synthesizable C++ is unchanged (the ``.tpp`` hook); this is the *sim*
+        model, which did not exist before."""
+        if self.cmd_queue is None:
+            raise RuntimeError(
+                "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
+                "before run_sim)."
+            )
+        mem_bw = int(self.m_mem.bitwidth)
+        word_bytes = mem_bw // 8
+        in_fmt = self._in_fmt()
+        elem = self._data_elem()
+        elem_words = elem.nwords_per_inst(mem_bw)
+        elem_bytes = elem_words * word_bytes
+
+        while True:
+            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd)
+            op = OpCode(int(cmd.op))
+            if op is OpCode.end:
+                break  # sentinel: the host's last command; drain and terminate
+
+            n, m = int(cmd.n_rows), int(cmd.n_cols)
+            nm = n * m
+            need_b = op in (OpCode.inner_prod, OpCode.sum)
+            # ab_eq: B aliases A — skip B's read (it is not needed in the golden, and the
+            # suppressed bus beat is the point).  Latency stays transaction-driven.
+            ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+            alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
+
+            ends = [int(cmd.a.addr) + nm, int(cmd.y.addr) + nm]
+            if need_b:
+                ends.append(int(cmd.b.addr) + nm)
+            if alpha_indirect:
+                ends.append(int(cmd.alpha.addr) + n)
+            extent = max(ends)
+            local = cx.make_complex(np.zeros(extent), np.zeros(extent), in_fmt)
+
+            # timed operand reads — one whole-matrix LT block each
+            yield from self._read_region(
+                local, int(cmd.a.addr), nm, elem, elem_words, elem_bytes, mem_bw
+            )
+            if need_b and not ab_eq:
+                yield from self._read_region(
+                    local, int(cmd.b.addr), nm, elem, elem_words, elem_bytes, mem_bw
+                )
+            if alpha_indirect:
+                yield from self._read_region(
+                    local, int(cmd.alpha.addr), n, elem, elem_words, elem_bytes, mem_bw
+                )
+
+            # the bit-exact golden computes R / reduce / requantize and writes Y into `local`
+            dst = self.execute(cmd, local)
+
+            # timed Y writeback — one LT block
+            y_words = wf_write_array(dst, word_bw=mem_bw)
+            yield from self.m_mem.write(
+                y_words, self.data_base + int(cmd.y.addr) * elem_bytes
+            )
