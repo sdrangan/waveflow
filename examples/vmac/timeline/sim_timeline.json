@@ -1,0 +1,140 @@
+{
+  "clk_freq_hz": 100000000.0,
+  "clk_period_ns": 10.0,
+  "commands": [
+    {
+      "ab_eq": true,
+      "cmd_idx": 0,
+      "complete_t": 5273.899082568806,
+      "dequeue_t": 1809.9999999999998,
+      "latency": 3463.899082568806,
+      "n_cols": 4,
+      "n_rows": 4,
+      "op": "inner_prod",
+      "read_words": 16,
+      "transactions": [
+        {
+          "ab_eq": true,
+          "addr": 4496,
+          "cmd_idx": 0,
+          "name": "A",
+          "nwords": 16,
+          "rw": "read",
+          "tend": 2199.9999999999995,
+          "tstart": 1809.9999999999998
+        },
+        {
+          "ab_eq": true,
+          "addr": 4624,
+          "cmd_idx": 0,
+          "name": "Y_anorm",
+          "nwords": 4,
+          "rw": "write",
+          "tend": 2439.9999999999995,
+          "tstart": 2199.9999999999995
+        }
+      ],
+      "write_words": 4
+    },
+    {
+      "ab_eq": false,
+      "cmd_idx": 1,
+      "complete_t": 9197.79816513761,
+      "dequeue_t": 5733.899082568805,
+      "latency": 3463.899082568806,
+      "n_cols": 4,
+      "n_rows": 4,
+      "op": "inner_prod",
+      "read_words": 32,
+      "transactions": [
+        {
+          "ab_eq": false,
+          "addr": 4496,
+          "cmd_idx": 1,
+          "name": "A",
+          "nwords": 16,
+          "rw": "read",
+          "tend": 6153.899082568802,
+          "tstart": 5733.899082568805
+        },
+        {
+          "ab_eq": false,
+          "addr": 4560,
+          "cmd_idx": 1,
+          "name": "B",
+          "nwords": 16,
+          "rw": "read",
+          "tend": 6533.899082568802,
+          "tstart": 6153.899082568802
+        },
+        {
+          "ab_eq": false,
+          "addr": 4640,
+          "cmd_idx": 1,
+          "name": "Y_abcorr",
+          "nwords": 4,
+          "rw": "write",
+          "tend": 6673.8990825688,
+          "tstart": 6533.899082568802
+        }
+      ],
+      "write_words": 4
+    }
+  ],
+  "load_transactions": [
+    {
+      "ab_eq": false,
+      "addr": 4496,
+      "cmd_idx": -1,
+      "name": "data_in",
+      "nwords": 16,
+      "rw": "write",
+      "tend": 479.99999999999994,
+      "tstart": 120.00000000000001
+    },
+    {
+      "ab_eq": false,
+      "addr": 4560,
+      "cmd_idx": -1,
+      "name": "data_in",
+      "nwords": 16,
+      "rw": "write",
+      "tend": 839.9999999999999,
+      "tstart": 479.99999999999994
+    }
+  ],
+  "mem_bw": 32,
+  "mem_latency_init_cycles": 2.0,
+  "mem_latency_per_word_cycles": 1.0,
+  "n_cols": 4,
+  "n_rows": 4,
+  "queue_occupancy": [
+    {
+      "depth": 1,
+      "t": 1310.0
+    },
+    {
+      "depth": 0,
+      "t": 1809.9999999999998
+    },
+    {
+      "depth": 1,
+      "t": 1839.9999999999998
+    },
+    {
+      "depth": 2,
+      "t": 2469.9999999999995
+    },
+    {
+      "depth": 1,
+      "t": 5733.899082568805
+    },
+    {
+      "depth": 0,
+      "t": 9703.899082568774
+    }
+  ],
+  "source": "sim",
+  "timebase": "ns",
+  "word_bytes": 4
+}

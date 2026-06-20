@@ -1,0 +1,61 @@
+{
+  "clk_period_ns": 10.0,
+  "latency_model": "latency_cycles ~= depth + II * trips",
+  "mem_dwidth": 32,
+  "note": "RTL transaction_cycles is independent of ab_eq (Stage 3: anorm==abcorr==347 at 4x4), so one distinct-B cosim per size calibrates the cycle model; the II-decoupled sim reproduces anorm==abcorr by construction (latency = f(trips)).",
+  "op": "inner_prod+reduce (distinct B, worst-case II)",
+  "pf": 1,
+  "source": "cosim",
+  "sweep": [
+    {
+      "clk_period_ns": 10.0,
+      "n_cols": 4,
+      "n_rows": 4,
+      "pf": 1,
+      "read_burst_count": 32,
+      "read_words": 32,
+      "transaction_cycles": 347,
+      "trips": 16,
+      "vcd_latency_ns": 3200.0,
+      "write_words": 4
+    },
+    {
+      "clk_period_ns": 10.0,
+      "n_cols": 6,
+      "n_rows": 6,
+      "pf": 1,
+      "read_burst_count": 72,
+      "read_words": 72,
+      "transaction_cycles": 725,
+      "trips": 36,
+      "vcd_latency_ns": 6960.0,
+      "write_words": 6
+    },
+    {
+      "clk_period_ns": 10.0,
+      "n_cols": 8,
+      "n_rows": 8,
+      "pf": 1,
+      "read_burst_count": 128,
+      "read_words": 128,
+      "transaction_cycles": 1258,
+      "trips": 64,
+      "vcd_latency_ns": 12260.0,
+      "write_words": 8
+    },
+    {
+      "clk_period_ns": 10.0,
+      "n_cols": 16,
+      "n_rows": 8,
+      "pf": 1,
+      "read_burst_count": 256,
+      "read_words": 256,
+      "transaction_cycles": 2435,
+      "trips": 128,
+      "vcd_latency_ns": 23960.0,
+      "write_words": 16
+    }
+  ],
+  "tool": "Vitis HLS 2025.1 cosim (xsim), xc7z020clg484-1, create_clock -period 10",
+  "trips_formula": "trips = n_rows * ceil(n_cols / PF)"
+}

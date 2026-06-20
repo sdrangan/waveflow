@@ -39,13 +39,16 @@ requantized result into ``mem`` at the ``d`` region (so commands compose) and re
 
 Constructed without a ``sim``, ``VmacAccel`` is a lightweight params + golden object (no
 ``Simulation`` needed) — the form the golden / numeric tests use.  With a ``sim`` it is the
-full ``HwComponent``: an ``m_axi`` (``MMIFMaster``) data port + an ``s_in`` command stream,
-with :meth:`run_proc` the kernel body the generated kernel is lowered from (the m_axi data
-plumbing + codegen are wired in the build phase).
+full ``HwComponent`` with a single ``m_axi`` (``MMIFMaster``) port that serves **both** the
+AXI-MM command queue and the A/B/Y data (Stage 1 of ``plans/vmac_mm_queue_timing.md``):
+:meth:`run_proc` is the loosely-timed SimPy execution model — a free-running queue consumer
+that issues timed ``m_mem`` transactions around the bit-exact golden.  (The synthesizable C++
+remains the hand-written ``vmac_compute`` hook; the cosim codegen path is unchanged.)
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -57,14 +60,41 @@ from waveflow.hw.complexfield import ComplexField, cadd, cmult, conj, csum
 from waveflow.hw.dataschema import DataArray
 from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.hw_component import HwComponent, HwParam
-from waveflow.hw.interface import StreamIFSlave
+from waveflow.hw.aximm_queue import AXIMMQueue
+from waveflow.hw.arrayutils import read_array as wf_read_array
+from waveflow.hw.arrayutils import write_array as wf_write_array
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
+from waveflow.simulation.logger import NullLogger
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils
 from waveflow.utils.fixputils import Format, OMode, QMode, add_format, sum_format
+
+
+@dataclass(frozen=True)
+class VmacTiming:
+    """Calibrated pipeline-schedule parameters for the **II-decoupled** timing model (Stage 5
+    of ``plans/vmac_mm_queue_timing.md``).
+
+    The loosely-timed Stage-1 model was *transaction-gated* — a command's latency was the sum
+    of its transfer blocks — so it mispredicted the ``ab_eq`` ordering (anorm faster) and
+    underestimated absolute latency ~5x.  Under II-decoupling the latency is instead the kernel
+    **pipeline schedule**
+
+        latency_cycles = depth + ii * trips,    trips = n_rows * ceil(n_cols / pf)
+
+    fit from the Vitis cosim sweep (:mod:`examples.vmac.vmac_calibrate`).  ``depth`` is the
+    fill/drain + reduce-init/writeback overhead; ``ii`` is the (memory-gated) cycles per
+    inner-loop trip.  Loaded programmatically by the driver — never hard-coded in the model —
+    and attached as ``VmacAccel.timing``."""
+
+    depth: float
+    ii: float
+
+    def cycles(self, trips: int) -> float:
+        return self.depth + self.ii * trips
 
 
 @dataclass
@@ -97,16 +127,30 @@ class VmacAccel(HwComponent):
             object.__setattr__(self, "_hw_construction_complete", True)
         else:
             super().__post_init__()
-            # The m_axi data port (the shared memory the op reads/writes) and the
-            # command stream; mirror HistAccel's endpoint set.
-            self.s_in = StreamIFSlave(
-                name=f"{self.name}_s_in", sim=self.sim, bitwidth=int(self.mem_dwidth)
-            )
+            # Stage 1 (loosely-timed SimPy model): ONE m_mem master serves both the
+            # command dequeue (over an AXI-MM queue) and the A/B/Y data — one realistic
+            # AXI port.  ``mem_dwidth`` is the sim bus width here (must be a queue-legal
+            # 8/16/32/64); for synthesis it is the lane-packing MEM_BW (set per build).
             self.m_mem = MMIFMaster(
                 name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth)
             )
-            for ep in (self.s_in, self.m_mem):
-                self.add_endpoint(ep)
+            self.add_endpoint(self.m_mem)
+            # The command queue + the data-region byte base are attached by the driver
+            # (it owns the system memory map) before ``run_sim``.
+            self.cmd_queue: AXIMMQueue | None = None
+            self.data_base: int = 0
+            # Stage 5 II-decoupling: the calibrated pipeline-schedule params.  ``None`` ->
+            # the Stage-1 *transaction-gated* model (latency = Σ transfer blocks, kept so the
+            # naive-vs-calibrated comparison can render both).  Set by the driver to a
+            # ``VmacTiming`` (loaded from the committed cosim calibration) to make latency the
+            # II-driven pipeline schedule while occupancy stays transaction-driven.
+            self.timing: VmacTiming | None = None
+            # Stage 2 timeline capture (attached by the driver; default = no-op).
+            self.logger = NullLogger()
+            self.region_labels: dict[int, str] = {}  # elem offset -> A / B / Y_anorm / ...
+            self.txns: list[dict] = []               # per memory transaction
+            self.cmd_records: list[dict] = []         # per command (dequeue/complete/latency)
+            self.q_events: list[dict] = []            # ring dequeue events (for occupancy)
 
     @property
     def Cmd(self) -> type[VmacCmd]:
@@ -115,6 +159,13 @@ class VmacAccel(HwComponent):
         return VmacCmd.specialize(
             mem_awidth=int(self.mem_awidth), data_bw=int(self.data_bw)
         )
+
+    @property
+    def pf(self) -> int:
+        """Complex columns packed per memory word — the kernel's ``PF = MEM_BW / element_bits``
+        (element = ``2 * data_bw``).  Sets ``trips = n_rows * ceil(n_cols / pf)`` in the
+        II-decoupled timing model, matching the ``.tpp`` inner-loop step (``col0 += PF``)."""
+        return max(1, int(self.mem_dwidth) // (2 * int(self.data_bw)))
 
     @property
     def q_mode(self) -> QMode:
@@ -146,6 +197,12 @@ class VmacAccel(HwComponent):
         elem = ComplexField.specialize(cls._fixed_cls(in_fmt))
         shape = M.shape if M.shape else (1,)
         return DataArray.specialize(elem, max_shape=tuple(shape))(M)
+
+    def _data_elem(self) -> type[ComplexField]:
+        """The shared-memory element type — the operand ``ComplexField`` at the input
+        format.  Both VMAC and the host (de)serialize the A/B/Y regions through it, so the
+        timed ``m_mem`` words round-trip bit-exactly with the golden's structured buffer."""
+        return ComplexField.specialize(self._fixed_cls(self._in_fmt()))
 
     @classmethod
     def _alpha(
@@ -321,13 +378,160 @@ class VmacAccel(HwComponent):
         return self.execute(cmd, mem)
         yield  # unreachable — makes this a generator (ProcessGen)
 
-    def run_proc(self) -> ProcessGen[None]:
-        """Kernel body (single ap_ctrl_hs invocation) — the codegen root.
+    def _record_txn(
+        self, cmd_idx: int, name: str, rw: str, addr: int, nwords: int,
+        tstart: float, tend: float, ab_eq: bool,
+    ) -> None:
+        """Append one captured memory transaction (and mirror it to the raw CSV log)."""
+        self.txns.append({
+            "cmd_idx": int(cmd_idx), "name": name, "rw": rw, "addr": int(addr),
+            "nwords": int(nwords), "tstart": float(tstart), "tend": float(tend),
+            "ab_eq": bool(ab_eq),
+        })
+        self.logger.log(
+            role="vmac", event="mem", cmd_idx=cmd_idx, label=name, rw=rw,
+            nwords=int(nwords), addr=int(addr), tstart=float(tstart), tend=float(tend),
+            ab_eq=int(ab_eq),
+        )
 
-        Read one :class:`VmacCmd` off ``s_in``, then run the op in the
-        :meth:`vmac_compute` hook against the ``m_mem`` shared memory.  The m_axi
-        read/write plumbing around the hook (the strided gather/scatter the
-        ``.tpp`` performs lane-by-lane) and the codegen wiring are completed in the
-        build phase; this is the structure the generated kernel is lowered from."""
-        cmd: VmacCmd = yield from self.s_in.get(self.Cmd)
-        yield from self.vmac_compute(cmd, self.m_mem)
+    def _read_region(
+        self, local: np.ndarray, elem_addr: int, count: int,
+        elem: type, elem_words: int, elem_bytes: int, mem_bw: int,
+        cmd_idx: int, ab_eq: bool,
+    ) -> ProcessGen[None]:
+        """Issue ONE timed ``m_mem`` read of *count* contiguous complex elements at
+        *elem_addr* (element index in the data region) and unpack them into ``local``;
+        capture (t_start, t_end, nwords, addr, label) of the LT block."""
+        nwords = count * elem_words
+        addr = self.data_base + elem_addr * elem_bytes
+        t0 = self.now
+        words = yield from self.m_mem.read(nwords, addr)
+        t1 = self.now
+        local[elem_addr:elem_addr + count] = wf_read_array(
+            words, elem, mem_bw, shape=count
+        ).val
+        self._record_txn(
+            cmd_idx, self.region_labels.get(elem_addr, "data"), "read",
+            addr, nwords, t0, t1, ab_eq,
+        )
+
+    def run_proc(self) -> ProcessGen[None]:
+        """Loosely-timed SimPy execution model: a free-running queue consumer.
+
+        Dequeue a :class:`VmacCmd` from the AXI-MM command queue; on ``OpCode.end``
+        stop.  Otherwise issue **timed ``m_mem`` reads** of the operands (A; B unless
+        ``ab_eq``) and a **timed write** of Y — one whole-matrix LT block per operand —
+        with the numpy golden (:meth:`execute`) producing the values into a local buffer.
+
+        **Latency model (Stage 1 vs Stage 5).**  The bus transactions are *always* issued
+        (occupancy / bus-traffic accounting — ``ab_eq`` suppresses B's read, so anorm uses
+        HALF the read words), but the command *latency* depends on :pyattr:`timing`:
+
+        * ``timing is None`` — **transaction-gated** (Stage 1): latency = Σ of the transfer
+          blocks, so the model predicts ``anorm`` faster than ``abcorr`` *and* underestimates
+          absolute latency ~5x.  Kept so the naive curve can be rendered next to the fix.
+        * ``timing`` set — **II-decoupled** (Stage 5): latency is the kernel **pipeline
+          schedule** ``(depth + ii * trips) / freq`` with ``trips = n_rows * ceil(n_cols /
+          pf)`` — the calibrated ``(depth, ii)`` fit from the Vitis cosim sweep.  Latency then
+          depends only on ``trips`` (so ``anorm`` latency == ``abcorr`` latency, matching the
+          fixed-II RTL) and tracks the RTL absolute latency, while the *bus* still shows anorm
+          at half the reads.  This is TLM's LT->AT escalation: add just enough timing structure
+          to answer the question, keeping occupancy transaction-driven and latency II-driven.
+
+        The synthesizable C++ is unchanged (the ``.tpp`` hook) and :meth:`execute` stays the
+        byte-exact golden; the II-decoupling lives entirely in *this* timing model."""
+        if self.cmd_queue is None:
+            raise RuntimeError(
+                "VmacAccel.run_proc requires an attached cmd_queue (set by the driver "
+                "before run_sim)."
+            )
+        mem_bw = int(self.m_mem.bitwidth)
+        word_bytes = mem_bw // 8
+        in_fmt = self._in_fmt()
+        elem = self._data_elem()
+        elem_words = elem.nwords_per_inst(mem_bw)
+        elem_bytes = elem_words * word_bytes
+
+        # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s, so the
+        # consumer wakes promptly relative to the realistic clock (see vmac_queue_sim).
+        poll = 1.0 / float(self.clk.freq)
+
+        cmd_idx = -1
+        while True:
+            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd, poll_interval=poll)
+            cmd_idx += 1
+            dequeue_t = self.now
+            self.q_events.append(
+                {"t": float(dequeue_t), "kind": "dequeue", "cmd_idx": cmd_idx}
+            )
+            self.logger.log(role="vmac", event="dequeue", cmd_idx=cmd_idx,
+                            tstart=float(dequeue_t))
+            op = OpCode(int(cmd.op))
+            if op is OpCode.end:
+                break  # sentinel: the host's last command; drain and terminate
+
+            n, m = int(cmd.n_rows), int(cmd.n_cols)
+            nm = n * m
+            need_b = op in (OpCode.inner_prod, OpCode.sum)
+            # ab_eq: B aliases A — skip B's read (it is not needed in the golden, and the
+            # suppressed bus beat is the point).  Latency stays transaction-driven.
+            ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+            alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
+
+            ends = [int(cmd.a.addr) + nm, int(cmd.y.addr) + nm]
+            if need_b:
+                ends.append(int(cmd.b.addr) + nm)
+            if alpha_indirect:
+                ends.append(int(cmd.alpha.addr) + n)
+            extent = max(ends)
+            local = cx.make_complex(np.zeros(extent), np.zeros(extent), in_fmt)
+
+            # timed operand reads — one whole-matrix LT block each
+            yield from self._read_region(
+                local, int(cmd.a.addr), nm, elem, elem_words, elem_bytes, mem_bw,
+                cmd_idx, ab_eq,
+            )
+            if need_b and not ab_eq:
+                yield from self._read_region(
+                    local, int(cmd.b.addr), nm, elem, elem_words, elem_bytes, mem_bw,
+                    cmd_idx, ab_eq,
+                )
+            if alpha_indirect:
+                yield from self._read_region(
+                    local, int(cmd.alpha.addr), n, elem, elem_words, elem_bytes, mem_bw,
+                    cmd_idx, ab_eq,
+                )
+
+            # the bit-exact golden computes R / reduce / requantize and writes Y into `local`
+            dst = self.execute(cmd, local)
+
+            # timed Y writeback — one LT block
+            y_words = wf_write_array(dst, word_bw=mem_bw)
+            y_addr = self.data_base + int(cmd.y.addr) * elem_bytes
+            t0 = self.now
+            yield from self.m_mem.write(y_words, y_addr)
+            t1 = self.now
+            self._record_txn(
+                cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"), "write",
+                y_addr, len(y_words), t0, t1, ab_eq,
+            )
+
+            # II-decoupling: advance to the calibrated pipeline-schedule completion time.
+            # The transfers above already moved `now` (their bus occupancy is real); pad the
+            # remainder so the command latency is the II-driven schedule, NOT the transfer sum.
+            # trips depend only on geometry, so anorm and abcorr (equal trips) get equal latency
+            # — the fixed-II RTL behaviour the transaction-gated model could not represent.
+            if self.timing is not None:
+                trips = n * math.ceil(m / self.pf)
+                sched_secs = self.timing.cycles(trips) / float(self.clk.freq)
+                pad = sched_secs - (self.now - dequeue_t)
+                if pad > 0:
+                    yield self.timeout(pad)
+
+            complete_t = self.now
+            self.cmd_records.append({
+                "cmd_idx": cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
+                "n_rows": n, "n_cols": m,
+                "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
+                "latency": float(complete_t - dequeue_t),
+            })

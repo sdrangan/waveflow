@@ -131,6 +131,9 @@ examples/shared_mem/gen/
 examples/shared_mem/data/
 examples/shared_mem/results/
 
+examples/vmac/cosim/
+examples/vmac/sweep/
+
 examples/_archive/conv2d/include/
 examples/_archive/conv2d/waveflow_conv2d_proj/
 examples/_archive/conv2d/logs/

@@ -1,0 +1,93 @@
+{
+  "calibration": {
+    "depth": 42.6651,
+    "fit_configs": [
+      [
+        4,
+        4
+      ],
+      [
+        6,
+        6
+      ],
+      [
+        8,
+        8
+      ]
+    ],
+    "holdout": [
+      8,
+      16
+    ],
+    "holdout_actual_cycles": 2435,
+    "holdout_pred_cycles": 2472.46,
+    "holdout_rel_err": 0.01539,
+    "holdout_trips": 128,
+    "ii": 18.9828,
+    "model": "latency_cycles ~= depth + II * trips",
+    "r2": 0.999996,
+    "trips_formula": "trips = n_rows * ceil(n_cols / PF)"
+  },
+  "clk_period_ns": 10.0,
+  "pf": 1,
+  "points": [
+    {
+      "abcorr_read_words": 32,
+      "anorm_read_words": 16,
+      "calib_abcorr_ns": 3463.899,
+      "calib_anorm_ns": 3463.899,
+      "held_out": false,
+      "n_cols": 4,
+      "n_rows": 4,
+      "naive_abcorr_ns": 940.0,
+      "naive_anorm_ns": 630.0,
+      "rtl_cycles": 347,
+      "rtl_latency_ns": 3470.0,
+      "trips": 16
+    },
+    {
+      "abcorr_read_words": 72,
+      "anorm_read_words": 36,
+      "calib_abcorr_ns": 7260.459,
+      "calib_anorm_ns": 7260.459,
+      "held_out": false,
+      "n_cols": 6,
+      "n_rows": 6,
+      "naive_abcorr_ns": 1780.0,
+      "naive_anorm_ns": 970.0,
+      "rtl_cycles": 725,
+      "rtl_latency_ns": 7250.0,
+      "trips": 36
+    },
+    {
+      "abcorr_read_words": 128,
+      "anorm_read_words": 64,
+      "calib_abcorr_ns": 12575.642,
+      "calib_anorm_ns": 12575.642,
+      "held_out": false,
+      "n_cols": 8,
+      "n_rows": 8,
+      "naive_abcorr_ns": 2940.0,
+      "naive_anorm_ns": 1550.0,
+      "rtl_cycles": 1258,
+      "rtl_latency_ns": 12580.0,
+      "trips": 64
+    },
+    {
+      "abcorr_read_words": 256,
+      "anorm_read_words": 128,
+      "calib_abcorr_ns": 24724.633,
+      "calib_anorm_ns": 24724.633,
+      "held_out": true,
+      "n_cols": 16,
+      "n_rows": 8,
+      "naive_abcorr_ns": 5680.0,
+      "naive_anorm_ns": 2990.0,
+      "rtl_cycles": 2435,
+      "rtl_latency_ns": 24350.0,
+      "trips": 128
+    }
+  ],
+  "source": "sim",
+  "timebase": "ns"
+}

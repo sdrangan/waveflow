@@ -50,6 +50,7 @@ class OpCode(IntEnum):
     scalar_mult = 0  # R = alpha[i] · A
     inner_prod = 1  # R = A · conj(B)
     sum = 2  # R = A + B
+    end = 3  # sentinel: no compute — a free-running queue consumer breaks its loop on this
 
 
 class Region(ParamSchema):
