@@ -403,9 +403,13 @@ class VmacAccel(HwComponent):
         elem_words = elem.nwords_per_inst(mem_bw)
         elem_bytes = elem_words * word_bytes
 
+        # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s, so the
+        # consumer wakes promptly relative to the realistic clock (see vmac_queue_sim).
+        poll = 1.0 / float(self.clk.freq)
+
         cmd_idx = -1
         while True:
-            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd)
+            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd, poll_interval=poll)
             cmd_idx += 1
             dequeue_t = self.now
             self.q_events.append(

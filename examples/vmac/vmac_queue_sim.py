@@ -62,7 +62,7 @@ class VmacQueueSim:
 
     def __post_init__(self) -> None:
         self.sim = Simulation()
-        self.clk = Clock(freq=100.0)   # 100 Hz -> 1 cycle = 0.01 s
+        self.clk = Clock(freq=100e6)   # 100 MHz -> 1 cycle = 10 ns (matches cosim create_clock -period 10)
         self.accel = VmacAccel(
             sim=self.sim, mem_dwidth=self.mem_bw, mem_awidth=32,
             data_bw=self.data_bw, int_bits=self.int_bits, acc_bw=48, out_bw=16,
@@ -139,6 +139,9 @@ class VmacQueueSim:
                              file_path=str(LOG_CSV), fields=_LOG_FIELDS)
         self.host.logger = self.logger
         self.accel.logger = self.logger
+        # poll the ring at the bus clock (1 cycle), not the queue default of 1.0 s — otherwise
+        # the consumer sleeps a full second per check and dominates the realistic-clock timeline.
+        self.host.poll_interval = 1.0 / float(self.clk.freq)
         self.accel.region_labels = {
             a_elem: "A", b_elem: "B",
             y_anorm_elem: "Y_anorm", y_abcorr_elem: "Y_abcorr",
@@ -260,17 +263,18 @@ class VmacQueueSim:
         read_access_secs = total_read_words * mem_per_word_secs
         sum_read_durations = sum(t["tend"] - t["tstart"] for t in read_txns)
 
-        print(f"sim drained at t = {self.sim.env.now:.4f} s  (timeline advanced, no hang)")
+        ns = 1e9  # times are in seconds; report in ns (realistic at 100 MHz / 10 ns period)
+        print(f"sim drained at t = {self.sim.env.now * ns:.1f} ns  (timeline advanced, no hang)")
         print(f"rho matches numpy reference: OK")
         print("--- headline metrics ---")
         print(f"read-bus words : anorm(ab_eq)={anorm_rw}  abcorr={abcorr_rw}  "
               f"(anorm = half of abcorr: {anorm_rw * 2 == abcorr_rw})")
-        print(f"latency        : anorm={anorm_lat:.4f}s  abcorr={abcorr_lat:.4f}s  "
-              f"gap={gap:.4f}s  (anorm faster: {anorm_lat < abcorr_lat})")
+        print(f"latency        : anorm={anorm_lat * ns:.1f} ns  abcorr={abcorr_lat * ns:.1f} ns  "
+              f"gap={gap * ns:.1f} ns  (anorm faster: {anorm_lat < abcorr_lat})")
         print(f"queue depth    : peak={peak} commands")
         print(f"read accounting: {len(read_txns)} read blocks, {total_read_words} words; "
-              f"sum(durations)={sum_read_durations:.4f}s, "
-              f"per-word mem component={read_access_secs:.4f}s")
+              f"sum(durations)={sum_read_durations * ns:.1f} ns, "
+              f"per-word mem component={read_access_secs * ns:.1f} ns")
         print(f"timeline written: {TIMELINE_JSON}")
         print("OK - metrics hold; timeline emitted.")
         return self
