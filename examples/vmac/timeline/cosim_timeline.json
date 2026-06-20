@@ -1,0 +1,495 @@
+{
+  "clk_period_ns": 10.0,
+  "commands": [
+    {
+      "ab_eq": true,
+      "cmd_idx": 0,
+      "complete_t": 4045.0,
+      "kernel_start_t": 845.0,
+      "latency": 3200.0,
+      "n_cols": 4,
+      "n_rows": 4,
+      "op": "inner_prod",
+      "read_burst_count": 16,
+      "read_words": 16,
+      "scenario": "anorm",
+      "transaction_cycles": 347,
+      "transactions": [
+        {
+          "addr": 0,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 855.0,
+          "tstart": 845.0
+        },
+        {
+          "addr": 4,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1035.0,
+          "tstart": 1025.0
+        },
+        {
+          "addr": 8,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1215.0,
+          "tstart": 1205.0
+        },
+        {
+          "addr": 12,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1395.0,
+          "tstart": 1385.0
+        },
+        {
+          "addr": 16,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1645.0,
+          "tstart": 1635.0
+        },
+        {
+          "addr": 20,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1825.0,
+          "tstart": 1815.0
+        },
+        {
+          "addr": 24,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2005.0,
+          "tstart": 1995.0
+        },
+        {
+          "addr": 28,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2185.0,
+          "tstart": 2175.0
+        },
+        {
+          "addr": 32,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2435.0,
+          "tstart": 2425.0
+        },
+        {
+          "addr": 36,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2615.0,
+          "tstart": 2605.0
+        },
+        {
+          "addr": 40,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2795.0,
+          "tstart": 2785.0
+        },
+        {
+          "addr": 44,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2975.0,
+          "tstart": 2965.0
+        },
+        {
+          "addr": 48,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3225.0,
+          "tstart": 3215.0
+        },
+        {
+          "addr": 52,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3405.0,
+          "tstart": 3395.0
+        },
+        {
+          "addr": 56,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3585.0,
+          "tstart": 3575.0
+        },
+        {
+          "addr": 60,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3765.0,
+          "tstart": 3755.0
+        },
+        {
+          "addr": 64,
+          "name": "Y_anorm",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4015.0,
+          "tstart": 4015.0
+        },
+        {
+          "addr": 68,
+          "name": "Y_anorm",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4025.0,
+          "tstart": 4025.0
+        },
+        {
+          "addr": 72,
+          "name": "Y_anorm",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4035.0,
+          "tstart": 4035.0
+        },
+        {
+          "addr": 76,
+          "name": "Y_anorm",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4045.0,
+          "tstart": 4045.0
+        }
+      ],
+      "write_words": 4
+    },
+    {
+      "ab_eq": false,
+      "cmd_idx": 1,
+      "complete_t": 4045.0,
+      "kernel_start_t": 845.0,
+      "latency": 3200.0,
+      "n_cols": 4,
+      "n_rows": 4,
+      "op": "inner_prod",
+      "read_burst_count": 32,
+      "read_words": 32,
+      "scenario": "abcorr",
+      "transaction_cycles": 347,
+      "transactions": [
+        {
+          "addr": 0,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 855.0,
+          "tstart": 845.0
+        },
+        {
+          "addr": 64,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 865.0,
+          "tstart": 865.0
+        },
+        {
+          "addr": 4,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1035.0,
+          "tstart": 1025.0
+        },
+        {
+          "addr": 68,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1045.0,
+          "tstart": 1045.0
+        },
+        {
+          "addr": 8,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1215.0,
+          "tstart": 1205.0
+        },
+        {
+          "addr": 72,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1225.0,
+          "tstart": 1225.0
+        },
+        {
+          "addr": 12,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1395.0,
+          "tstart": 1385.0
+        },
+        {
+          "addr": 76,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1405.0,
+          "tstart": 1405.0
+        },
+        {
+          "addr": 16,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1645.0,
+          "tstart": 1635.0
+        },
+        {
+          "addr": 80,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1655.0,
+          "tstart": 1655.0
+        },
+        {
+          "addr": 20,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1825.0,
+          "tstart": 1815.0
+        },
+        {
+          "addr": 84,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 1835.0,
+          "tstart": 1835.0
+        },
+        {
+          "addr": 24,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2005.0,
+          "tstart": 1995.0
+        },
+        {
+          "addr": 88,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2015.0,
+          "tstart": 2015.0
+        },
+        {
+          "addr": 28,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2185.0,
+          "tstart": 2175.0
+        },
+        {
+          "addr": 92,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2195.0,
+          "tstart": 2195.0
+        },
+        {
+          "addr": 32,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2435.0,
+          "tstart": 2425.0
+        },
+        {
+          "addr": 96,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2445.0,
+          "tstart": 2445.0
+        },
+        {
+          "addr": 36,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2615.0,
+          "tstart": 2605.0
+        },
+        {
+          "addr": 100,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2625.0,
+          "tstart": 2625.0
+        },
+        {
+          "addr": 40,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2795.0,
+          "tstart": 2785.0
+        },
+        {
+          "addr": 104,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2805.0,
+          "tstart": 2805.0
+        },
+        {
+          "addr": 44,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2975.0,
+          "tstart": 2965.0
+        },
+        {
+          "addr": 108,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 2985.0,
+          "tstart": 2985.0
+        },
+        {
+          "addr": 48,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3225.0,
+          "tstart": 3215.0
+        },
+        {
+          "addr": 112,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3235.0,
+          "tstart": 3235.0
+        },
+        {
+          "addr": 52,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3405.0,
+          "tstart": 3395.0
+        },
+        {
+          "addr": 116,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3415.0,
+          "tstart": 3415.0
+        },
+        {
+          "addr": 56,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3585.0,
+          "tstart": 3575.0
+        },
+        {
+          "addr": 120,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3595.0,
+          "tstart": 3595.0
+        },
+        {
+          "addr": 60,
+          "name": "A",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3765.0,
+          "tstart": 3755.0
+        },
+        {
+          "addr": 124,
+          "name": "B",
+          "nwords": 1,
+          "rw": "read",
+          "tend": 3775.0,
+          "tstart": 3775.0
+        },
+        {
+          "addr": 128,
+          "name": "Y_abcorr",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4015.0,
+          "tstart": 4015.0
+        },
+        {
+          "addr": 132,
+          "name": "Y_abcorr",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4025.0,
+          "tstart": 4025.0
+        },
+        {
+          "addr": 136,
+          "name": "Y_abcorr",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4035.0,
+          "tstart": 4035.0
+        },
+        {
+          "addr": 140,
+          "name": "Y_abcorr",
+          "nwords": 1,
+          "rw": "write",
+          "tend": 4045.0,
+          "tstart": 4045.0
+        }
+      ],
+      "write_words": 4
+    }
+  ],
+  "mem_bw": 32,
+  "n_cols": 4,
+  "n_rows": 4,
+  "queue_note": "out of cosim scope: the command queue / ring is sim-only (kernel has m_axi, no queue)",
+  "queue_occupancy": null,
+  "source": "cosim",
+  "timebase": "ns",
+  "word_bytes": 4
+}

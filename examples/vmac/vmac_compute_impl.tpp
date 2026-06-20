@@ -104,6 +104,12 @@ void vmac_compute_core(
     const bool op_sum = (op == VMAC_OP_SUM);
     const bool op_scalar = (op == VMAC_OP_SCALAR_MULT);
     const bool need_b = (op != VMAC_OP_SCALAR_MULT);            // inner_prod / sum read B
+    // ab_eq: B aliases A element-for-element (same base AND same row stride), so b_lane can be
+    // filled by copying a_lane instead of issuing a second m_axi burst.  Loop-invariant (derived
+    // from the command, no host flag); a RUNTIME flag, so HLS keeps ONE static II (worst case =
+    // b-read present) and only predicates whether the B transaction fires — same cycle count,
+    // B's read-bus beat suppressed.  Requiring equal stride keeps the copy bit-exact with the read.
+    const bool ab_eq = need_b && (a_addr == b_addr) && (a_rs == b_rs);
 
     // per-column complex accumulators (reduce): summed over rows.
     ACC_CX acc[MAX_COLS];
@@ -145,8 +151,10 @@ void vmac_compute_core(
 #pragma HLS ARRAY_PARTITION variable=a_lane complete dim=1
 #pragma HLS ARRAY_PARTITION variable=b_lane complete dim=1
             vmac_in_au::read_array_lane<MEM_BW>(mem + a_w, a_lane, cols);
-            if (need_b)
+            if (need_b && !ab_eq)
                 vmac_in_au::read_array_lane<MEM_BW>(mem + b_w, b_lane, cols);
+            else if (ab_eq)
+                for (int k = 0; k < PF; ++k) b_lane[k] = a_lane[k];  // B aliases A: copy, no re-read
 
             CXO y_lane[PF];
 #pragma HLS ARRAY_PARTITION variable=y_lane complete dim=1
