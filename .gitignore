@@ -131,10 +131,10 @@ examples/shared_mem/gen/
 examples/shared_mem/data/
 examples/shared_mem/results/
 
-examples/conv2d/include/
-examples/conv2d/waveflow_conv2d_proj/
-examples/conv2d/logs/
-examples/conv2d/data/
+examples/_archive/conv2d/include/
+examples/_archive/conv2d/waveflow_conv2d_proj/
+examples/_archive/conv2d/logs/
+examples/_archive/conv2d/data/
 
 
 experiment/
