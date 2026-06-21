@@ -90,6 +90,24 @@ arr = yield from master_ep.read_array(Float32, count=nsamp, addr=DATA_ADDR)
 # arr is np.ndarray[float32] for FloatField/IntField element types
 ```
 
+**Region — element-coordinate access (the `read_array_slice` twin).** `read_array` takes a
+**byte** address; a `Region` binds a byte base + element type once and is then indexed by
+**element coordinate**, so callers never compute `addr * elem_bytes` by hand. This is the SimPy
+twin of the C++ `read_array_slice` / `read_array_lane` contract (and the PynQ-`allocate`
+analogue): the framework owns the element→byte conversion (using the interface's
+`byte_addressable`), so the sim model indexes memory exactly like the generated kernel.
+
+```python
+x = master_ep.region(base_addr=XADDR, element_type=Float32)   # byte base + element dtype
+xs = yield from x.read(i0, i1)                                  # x[i0:i1] by element index
+yield from x.write(i0, xs)                                      # write elements back at i0
+# *_pipelined variants also return (… tstart, tend, nwords) for AT timing capture
+```
+
+The base is a **byte** address (host/allocator-owned, width-agnostic); indices within are
+**element** coordinates (width-agnostic — the same code works at any `mem_bw`). Prefer a `Region`
+over a hand-rolled byte-address helper whenever a component addresses a memory region by element.
+
 ---
 
 ## A minimal simulation
