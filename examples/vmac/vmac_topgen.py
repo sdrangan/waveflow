@@ -292,8 +292,9 @@ def gen_topgen_config(cfg: StructCfg, tdir: Path) -> dict:
     dag.run(bc)
     for fname in HOOK_FILES:  # vmac_compute_impl.tpp (the datapath hook), in the example dir
         shutil.copy(_SOURCE_DIR / fname, tdir / fname)
-    # the ring-dequeue hook + complex toolkit live in the framework build dir
-    for fname in BUILD_HDRS + ("aximm_queue_impl.tpp",):
+    # the ring-dequeue hook (+ its reusable poll primitive) + complex toolkit live in the
+    # framework build dir.  aximm_queue_impl.tpp #includes poll_until_impl.tpp, so both must land.
+    for fname in BUILD_HDRS + ("aximm_queue_impl.tpp", "poll_until_impl.tpp"):
         shutil.copy(_BUILD_DIR / fname, tdir / fname)
 
     g = _topgen_vectors(cfg)
