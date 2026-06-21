@@ -1,7 +1,7 @@
 ---
 title: Register Maps
 parent: Interfaces
-nav_order: 4
+nav_order: 5
 audience: python
 api: [RegMap, RegField, RegAccess, RegMapMMIFSlave, VitisRegMap, VitisRegMapMMIFSlave, BoundRegMap, SimObj, Simulation]
 summary: "AXI-Lite register maps in the SimPy model — RegField/RegAccess, the RegMap slave dispatch, the VitisRegMap ap_ctrl_hs (ap_start/ap_done) launch lifecycle, and the BoundRegMap host surface, with a runnable two-SimObj launch-then-poll toy."

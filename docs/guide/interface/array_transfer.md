@@ -1,7 +1,7 @@
 ---
 title: Array Transfer Interface
 parent: Interfaces
-nav_order: 6
+nav_order: 7
 audience: python
 api: [ArrayTransferIF, ArrayTransferIFMaster, ArrayTransferIFSlave, StreamTransport, SimObj, Simulation]
 summary: "The logical interface that carries a variable-length typed array over a transport — write(elements) with a numpy fast path, push (rx_proc) vs pull (get(count)) receive, and TLAST length validation, with a runnable two-SimObj toy."
