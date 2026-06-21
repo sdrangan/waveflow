@@ -25,9 +25,19 @@ CLI::
 
     python vmac_build.py --through gen          # write headers + per-config TB + vectors
     python vmac_build.py --through py_sim        # + golden-vs-oracle parity (no Vitis)
+    python vmac_build.py --through topgen_cosim  # + the AUTO-EXTRACTED top, bit-exact cosim (Vitis)
     python vmac_build.py --through csim          # + the bit-exact Vitis conformance (Vitis)
     python vmac_build.py --through extract_cosim_timing   # + throughput sweep (Vitis)
     python vmac_build.py --list-steps
+
+The ``topgen_cosim`` step generates VMAC's synthesizable top *from the extracted ``run_proc``
+IR* (``examples.vmac.vmac_topgen``; the framework ``kernel_to_cpp`` path) — a free-running
+``m_axi``-only kernel that dequeues commands from the in-memory ring — and cosims it bit-exact
+against :meth:`~examples.vmac.vmac.VmacAccel.execute_mem`.  (The hand-rolled ``render_top`` /
+``render_cosim_tb`` remain for now: the calibration pipeline — ``vmac_cosim_sweep`` /
+``vmac_cosim_stage3`` → ``calibration/vmac_calibration.json`` → the queue-sim baseline — still
+shares them.  Migrating those to the generated top + re-running the Vitis calibration sweep is a
+follow-up.)
 """
 
 from __future__ import annotations
@@ -70,7 +80,7 @@ _BUILD_DIR = (
     Path(__file__).resolve().parents[2] / "waveflow" / "build"
 )  # complex_utils.hpp / wf_cint.h
 INCLUDE_DIR = "include"
-WORD_BW_SUPPORTED = [32, 64]  # cmd schema word widths
+WORD_BW_SUPPORTED = [16, 32, 64]  # cmd schema word widths (incl. ring MEM_BW for read_array)
 MEM_WORD_BWS = [16, 32, 64, 128]  # m_axi widths the array-utils support (PF sweep)
 CMD_NWORDS = 12  # >= VmacCmd.serialize(word_bw=32) word count
 MAX_COLS_CAP = 16  # acc[] capacity in the kernel (>= any case n_cols)
@@ -926,12 +936,72 @@ class ExtractCosimTimingStep(BuildStep):
         return {"cosim_timing": out}
 
 
+# --- auto-extracted top (the generated run_proc kernel) -----------------------
+# The synthesizable VMAC top generated *from the extracted run_proc IR* (framework
+# kernel_to_cpp path), not the hand-rolled render_top f-strings: a free-running m_axi-only
+# kernel that dequeues VmacCmds from the in-memory ring (the synthesizable AXIMMQueue.get ->
+# aximm_queue_impl::queue_get hook), runs vmac_compute, and stops on OpCode.end (decision D6).
+# The cosim builds the ring image and checks the Y region bit-exact against execute_mem.
+TOPGEN_CFG = StructCfg(out_bw=8, q_rnd=0, o_sat=0, mem_dwidth=64)  # PF=4 (exercises lane packing)
+
+
+@dataclass(kw_only=True)
+class GenTopgenStep(BuildStep):
+    description = (
+        "Generate the auto-extracted (kernel_to_cpp) VMAC top + ring cosim TB + vectors."
+    )
+    consumes = ["vmac_source", "tpp_source"]
+    produces = {"topgen_dir": Path("topgen")}
+
+    def run(self, config: BuildConfig, **_) -> dict[str, Any]:
+        from examples.vmac.vmac_topgen import gen_topgen_config  # local: avoid import cycle
+
+        d = config.root_dir / "topgen"
+        gen_topgen_config(TOPGEN_CFG, d)
+        return {"topgen_dir": d}
+
+
+@dataclass(kw_only=True)
+class TopgenCosimStep(BuildStep):
+    description = (
+        "Vitis csim/csynth/cosim the auto-extracted top; assert Y bit-exact vs the golden."
+    )
+    consumes = ["topgen_dir"]
+    produces = {"topgen_cosim": Path("results/topgen_cosim.json")}
+    params: dict = field(default_factory=lambda: {"live_output": False})
+
+    def run(self, config: BuildConfig, live_output, **_) -> dict[str, Any]:
+        d = (config.root_dir / "topgen").resolve()
+        toolchain.run_vitis_hls(
+            d / "run.tcl", work_dir=d, capture_output=not live_output
+        )
+        log = (d / "logs" / "hls_run_tcl.log").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        if "VMAC_COSIM_MISMATCH" in log or "WAVEFLOW_SUCCESS" not in log:
+            raise RuntimeError(
+                "STOP — the generated top disagreed with the Python golden (execute_mem). "
+                "The golden is the spec; fix the kernel/hook, do not loosen the compare."
+            )
+        out = config.root_dir / "results" / "topgen_cosim.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps({"bit_exact": True, "config": TOPGEN_CFG.name}, indent=2),
+            encoding="utf-8",
+        )
+        return {"topgen_cosim": out}
+
+
 def build_vmac_dag() -> BuildDag:
     dag = BuildDag()
     dag.add(SourceStep(artifact="vmac_source", path=_SOURCE_DIR / "vmac.py"))
     dag.add(
         SourceStep(artifact="tpp_source", path=_SOURCE_DIR / "vmac_compute_impl.tpp")
     )
+    # the auto-extracted top + its bit-exact cosim (depend only on the sources, so
+    # `--through topgen_cosim` runs without the full csim/tput sweeps)
+    dag.add(GenTopgenStep(name="gen_topgen"))
+    dag.add(TopgenCosimStep(name="topgen_cosim"))
     dag.add(GenStep(name="gen"))
     dag.add(PySimStep(name="py_sim"))
     dag.add(CsimStep(name="csim"))

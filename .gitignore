@@ -133,6 +133,9 @@ examples/shared_mem/results/
 
 examples/vmac/cosim/
 examples/vmac/sweep/
+examples/vmac/topgen/
+examples/vmac/tput/
+examples/vmac/results/
 
 examples/_archive/conv2d/include/
 examples/_archive/conv2d/waveflow_conv2d_proj/

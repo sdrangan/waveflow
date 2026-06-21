@@ -75,15 +75,11 @@ poll_nonempty:
     // 3) advance head = (head + 1) % CAP (mask) and publish — only now is the slot reclaimable.
     gmem[base_word + 0] = (ap_uint<MEM_BW>)((head + 1) & (CAP - 1));
 
-    // 4) deserialize the slot words into the typed command.
-    //    PHASE 3 SEAM (flagged for review): the generated command struct must provide a
-    //    word-array unpack — the m_axi dual of its stream `read_axi4_stream`.  The generated
-    //    structs today read only from hls::stream (see coeff_array.h::read_axi4_stream), so
-    //    Phase 3 must add this entry point to the DataSchema C++ codegen (e.g. an
-    //    `out.unpack(slot)` member, or wire an ArrayUtilsStep for the command element and call
-    //    `<cmd>_array_utils::read_array_slice`).  Kept as a single, isolated call so the ring
-    //    mechanics above stay decoupled from the chosen deserialize primitive.
-    out.unpack(slot);
+    // 4) deserialize the slot words into the typed command via the generated struct's
+    //    word-array unpack (the m_axi dual of its stream read; the csim conformance TB uses the
+    //    same `read_array<word_bw>` entry point).  The command DataSchemaStep must include
+    //    MEM_BW in its word_bw_supported so this instantiation exists.
+    out.template read_array<MEM_BW>(slot);  // `template` disambiguator: CmdT is dependent
 }
 
 }  // namespace aximm_queue_impl
