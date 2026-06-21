@@ -1,9 +1,10 @@
 # Design proposal: an LT polling-overhead model — `m_mem.poll_until(...)`
 
-**Status: future design proposal. DO NOT START YET.** This touches `AXIMMQueue`, the MM
-master endpoint, and the crossbar/slave — the same files the `vmac-top-autosynth` branch
-(Phases 3–4) is actively changing. Sequence this **after** that work lands and merges to
-`main`, to avoid conflicts. This file is a captured design, not an implementation brief.
+**Status: design proposal — UNBLOCKED (prereq merged 2026-06-21).** The
+`vmac-top-autosynth` work it was gated behind has landed on `main`, so this is now ready to
+pick up. Start with the Phase-0 design pass (resolve the open decisions at the end of this
+file) before implementing. This file is a captured design + decision list, not yet a
+turn-key implementation brief.
 
 ## Motivation
 
@@ -103,6 +104,6 @@ The Python predicate is the sim form; the C++ is the poll loop. This generalizes
 
 ## Coordination
 
-Prereq: `vmac-top-autosynth` (Phases 1–4) merged to `main`. This work modifies
-`AXIMMQueue` / the MM master / the crossbar and would collide with that branch. Start only
-after it lands.
+Prereq `vmac-top-autosynth` (Phases 1–4) is merged to `main` (2026-06-21) — DONE. This work
+modifies `AXIMMQueue` / the MM master / the crossbar; with the prereq landed there is no
+longer a conflicting branch in flight, so it is clear to start.
