@@ -470,6 +470,9 @@ class MemComponent(SimObj):
             bitwidth=self.word_size,
             rx_write_proc=self._on_write,
             rx_read_proc=self._on_read,
+            # untimed snapshot read for MMIFMaster.poll_until (its bus cost is
+            # modeled aggregately by the poller registry, so the peek is free).
+            peek_read=lambda nwords, local_addr: self._mem.read(local_addr, nwords),
         )
 
     def _access_delay(self, nwords: int) -> float:

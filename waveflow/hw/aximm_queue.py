@@ -38,7 +38,7 @@ from typing import Any, ClassVar
 import numpy as np
 
 from waveflow.hw.hwstmt import SynthCallStmt
-from waveflow.hw.memif import MMIFMaster, Words
+from waveflow.hw.memif import MMIFMaster, Ne, Words
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 
@@ -150,7 +150,10 @@ class AXIMMQueueLayout:
 # Queue proxy
 # ---------------------------------------------------------------------------
 
-#: Default poll interval (simulation seconds) for the blocking write/get loops.
+#: Default poll interval (in **cycles**) for the blocking write/get loops.  The
+#: consumer's empty-wait is modeled by :meth:`MMIFMaster.poll_until` (which is
+#: cycle-denominated: discovery delay + per-bus occupancy derating); the
+#: producer's full-wait converts this to seconds via the bound interface clock.
 DEFAULT_POLL_INTERVAL: float = 1.0
 
 
@@ -183,10 +186,12 @@ class AXIMMQueue:
 
     master: MMIFMaster
     layout: AXIMMQueueLayout
-    #: Default poll interval (sim seconds) for the blocking write/get loops when a
-    #: call does not pass ``poll_interval=`` explicitly.  The consumer sets this once
-    #: (in ``pre_sim``) so the synthesizable ``get(self.Cmd)`` call site stays bare
-    #: (decision D3); the poll lives inside the C++ dequeue hook.
+    #: Default poll interval (in **cycles**) for the blocking write/get loops when
+    #: a call does not pass ``poll_interval=`` explicitly.  The consumer sets this
+    #: once (in ``pre_sim``) so the synthesizable ``get(self.Cmd)`` call site stays
+    #: bare (decision D3); the poll lives inside the C++ dequeue hook.  In sim the
+    #: consumer's empty-wait goes through :meth:`MMIFMaster.poll_until` (cycle
+    #: units: discovery delay + bus-occupancy derating).
     poll_interval: float = DEFAULT_POLL_INTERVAL
 
     def __post_init__(self) -> None:
@@ -326,11 +331,21 @@ class AXIMMQueue:
             )
         return nwpe
 
+    def _poll_secs(self, cycles: float) -> float:
+        """Convert a poll interval in cycles to simulation seconds via the bound
+        interface clock.  Used by the producer's full-wait fallback; the
+        consumer's empty-wait overhead is modeled inside
+        :meth:`MMIFMaster.poll_until` instead (so it is not just a bare timeout)."""
+        iface = self.master.interface
+        freq = iface.clk.freq if iface is not None and iface.clk is not None else 1.0
+        return float(cycles) / float(freq)
+
     def _write_raw(self, words: Words, poll_interval: float) -> ProcessGen[None]:
         """Stream *words* into the ring in pieces of at most the usable depth.
 
         Blocks as the consumer drains; mirrors :meth:`_get_raw_slots`.  There is
         no size guard — an array larger than the queue is fed through in chunks.
+        *poll_interval* is in cycles (converted to seconds for the full-wait).
         """
         ew = self.layout.elem_words
         chunk_words = (self.layout.capacity - 1) * ew   # max words per attempt
@@ -341,17 +356,29 @@ class AXIMMQueue:
             if (yield from self.try_write(piece)):
                 off += len(piece)
             else:
-                yield self.master.timeout(poll_interval)
+                yield self.master.timeout(self._poll_secs(poll_interval))
 
     def _get_raw_slots(self, nslots: int, poll_interval: float) -> ProcessGen[Words]:
-        """Dequeue exactly *nslots* slots (blocking), returning the raw words."""
+        """Dequeue exactly *nslots* slots (blocking), returning the raw words.
+
+        The empty-ring wait is expressed as a :meth:`MMIFMaster.poll_until` on
+        ``tail != head`` (the loosely-timed twin of the C++ ring-poll
+        ``while (head == tail) tail = gmem[...]``): it blocks until the producer
+        advances ``tail`` past ``head``, modeling the poll bandwidth-steal +
+        discovery delay rather than shifting times with a bare timeout.
+        *poll_interval* is in cycles.
+        """
         ew = self.layout.elem_words
         out: list[Words] = []
         collected = 0
         while collected < nslots:
             chunk = yield from self.try_get(nslots - collected)
             if len(chunk) == 0:
-                yield self.master.timeout(poll_interval)
+                # Empty: block until tail moves off the (currently equal) head.
+                head, _tail = yield from self._read_ptrs()
+                yield from self.master.poll_until(
+                    self.layout.tail_addr, Ne(head), poll_interval
+                )
             else:
                 out.append(chunk)
                 collected += len(chunk) // ew

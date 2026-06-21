@@ -54,9 +54,10 @@ assign_address_ranges(slaves, [(base_addr, size), ...]) -> list[AXIMMAddressRang
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import numpy as np
 import simpy
@@ -90,6 +91,54 @@ class AXIMMAddressRange:
 # Callable type aliases for slave callbacks.
 RxWriteProc = Callable[[Words, int], ProcessGen[None]]   # (words, local_addr) -> ProcessGen[None]
 RxReadProc  = Callable[[int,   int], ProcessGen[Words]]  # (nwords, local_addr) -> ProcessGen[Words]
+PeekRead    = Callable[[int,   int], Words]              # (nwords, local_addr) -> Words (untimed)
+
+
+# ---------------------------------------------------------------------------
+# Poll conditions — the restricted, lowerable predicate for poll_until
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PollCond:
+    """A small declarative poll predicate usable by both sim and (later) synth.
+
+    The op is one of ``==`` / ``!=`` (use the :class:`Eq` / :class:`Ne`
+    subclasses); ``rhs`` is the value the polled word is compared against — a
+    literal **or** a value captured from a prior runtime read (in simulation
+    both are plain integers).
+
+    :meth:`eval` is the sim form (``cond.eval(read_value)``); the *same* object
+    is the single source of truth a future extractor lowers to the C++ poll loop
+    (decision D4 in ``plans/poll_until_lt_model.md``) — no sim/synth drift.  Sim
+    expressiveness is intentionally limited to ``==`` / ``!=`` vs a single word,
+    which is exactly what real polls are (``tail != head``).
+    """
+
+    rhs: Any
+    op: ClassVar[str] = ""
+
+    def eval(self, value: int) -> bool:
+        """True when ``value <op> rhs`` (the sim evaluation of this poll)."""
+        v, r = int(value), int(self.rhs)
+        if self.op == "==":
+            return v == r
+        if self.op == "!=":
+            return v != r
+        raise ValueError(f"PollCond: unsupported op {self.op!r}")
+
+
+@dataclass(frozen=True)
+class Eq(PollCond):
+    """Poll predicate ``read(addr) == rhs``."""
+
+    op: ClassVar[str] = "=="
+
+
+@dataclass(frozen=True)
+class Ne(PollCond):
+    """Poll predicate ``read(addr) != rhs`` (e.g. the ring dequeue ``tail != head``)."""
+
+    op: ClassVar[str] = "!="
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +169,12 @@ class MMIFSlave(InterfaceEndpoint):
     rx_write_proc: RxWriteProc | None = None
     rx_read_proc:  RxReadProc  | None = None
     latency_per_word: float = 2.0
+    peek_read: PeekRead | None = None
+    """Optional *untimed*, synchronous read ``(nwords, local_addr) -> Words`` of
+    the backing store — the snapshot :meth:`MMIFMaster.poll_until` peeks while
+    waiting (its bus cost is modeled aggregately, so the peek itself is free).
+    :class:`~waveflow.hw.memory.MemComponent` populates it; a slave without one
+    cannot be polled."""
 
     addr_range: AXIMMAddressRange | None = field(init=False)
     bus: simpy.Resource = field(init=False)
@@ -181,6 +236,69 @@ class MMIFMaster(InterfaceEndpoint):
         proc = self.process(self.interface.read(nwords, global_addr, self.master_port))
         yield proc
         return proc.value
+
+    # ------------------------------------------------------------------
+    # Polling (the LT polling-overhead model)
+    # ------------------------------------------------------------------
+
+    def poll_until(
+        self,
+        global_addr: int,
+        cond: PollCond,
+        poll_interval: float,
+        *,
+        poll_beat_cost: int = 1,
+        discovery: str = "mean",
+    ) -> ProcessGen[int]:
+        """Block until *cond* holds on a poll of *global_addr*; return the
+        satisfying word value.
+
+        The loosely-timed polling-overhead model (see
+        ``plans/poll_until_lt_model.md``).  Two costs are modeled separately:
+
+        * **Bandwidth steal** — for the duration of the wait the master registers
+          as an *active poller* on the bus/slave it polls, contributing
+          ``poll_beat_cost / poll_interval`` to that bus's occupancy ``ov``; the
+          interconnect derates **other** masters' real per-word transfers by
+          ``1/(1-ov)``.  The poll reads themselves cost no bus time (their cost
+          *is* that ``ov`` contribution), so the sim never issues a timed read
+          every ``poll_interval`` — it waits, in O(transactions), on the bus's
+          write-notify, peeking the watched word untimed.
+        * **Discovery latency** — on *cond* true the deterministic mean
+          event-to-next-poll gap ``(poll_interval-1)/2`` cycles is added
+          (decision D1; a seeded-stochastic mode is deferred).
+
+        ``poll_interval`` is in **cycles**.  ``poll_beat_cost`` (default 1, D3) is
+        the per-poll bus beat-occupancy charged.  ``discovery='mean'`` is the
+        only mode in v1.
+        """
+        self._check_bound()
+        if discovery != "mean":
+            raise ValueError(
+                f"poll_until: discovery={discovery!r} unsupported; only 'mean' in v1 (D1)"
+            )
+        iface = self.interface
+        if not hasattr(iface, "register_poller"):
+            raise TypeError(
+                f"poll_until requires a poll-aware interconnect; "
+                f"{type(iface).__name__} does not support active pollers"
+            )
+        iface.register_poller(global_addr, poll_beat_cost, poll_interval)
+        try:
+            while True:
+                word = iface.poll_peek(global_addr, 1)
+                value = int(np.asarray(word).reshape(-1)[0])
+                if cond.eval(value):
+                    break
+                # O(transactions) wait: wake on the next write to this slave and
+                # re-check, rather than stepping every poll_interval.
+                yield iface.poll_wait_event(global_addr)
+            disc_cycles = (float(poll_interval) - 1.0) / 2.0
+            if disc_cycles > 0:
+                yield self.timeout(disc_cycles / iface.clk.freq)
+        finally:
+            iface.unregister_poller(global_addr, poll_beat_cost, poll_interval)
+        return value
 
     # ------------------------------------------------------------------
     # Schema convenience methods
@@ -323,11 +441,128 @@ class MMIFMaster(InterfaceEndpoint):
 
 
 # ---------------------------------------------------------------------------
+# Shared poll support for poll-aware MM interconnects
+# ---------------------------------------------------------------------------
+
+class _MMPollSupport:
+    """Active-poller registry + write-notify + occupancy derating shared by the
+    poll-aware MM interconnects (:class:`AXIMMCrossBarIF`, :class:`DirectMMIF`).
+
+    The interconnect owns this because it has the global, per-bus topology view
+    the model needs: ``ov`` (the poll bandwidth-steal fraction) is summed **per
+    slave/bus** (keyed by ``ep_name``) so independent ports never derate each
+    other, and it is evaluated at each transaction's time because the
+    active-poller set is finite and time-varying.  See
+    ``plans/poll_until_lt_model.md``.
+
+    Subclasses provide :meth:`_poll_ep_for_addr` (address → bus key + slave +
+    local addr), call :meth:`_init_poll_support` in ``__post_init__``, and call
+    :meth:`_notify_write` after each completed write.
+    """
+
+    #: ``ov`` is clamped just under 1 so ``1/(1-ov)`` cannot diverge on a
+    #: polling-bound config (e.g. a 1-cycle poll is ``ov=1``); the per-word
+    #: stretch saturates at ~100x and one warning fires per bus per saturation
+    #: onset (decision D2).
+    POLL_OV_CEILING: ClassVar[float] = 0.99
+
+    def _init_poll_support(self) -> None:
+        self._pollers: dict[str, list[tuple[float, float]]] = {}
+        self._poll_write_events: dict[str, simpy.Event] = {}
+        self._poll_saturated: dict[str, bool] = {}
+
+    # -- subclass hook ------------------------------------------------------
+    def _poll_ep_for_addr(self, global_addr: int) -> tuple[str, MMIFSlave, int]:
+        """Return ``(bus_key, slave_ep, local_addr)`` for *global_addr*."""
+        raise NotImplementedError
+
+    # -- write-notify (the O(transactions) wakeup for blocked pollers) ------
+    def _poll_event(self, ep_name: str) -> simpy.Event:
+        ev = self._poll_write_events.get(ep_name)
+        if ev is None:
+            ev = self.env.event()
+            self._poll_write_events[ep_name] = ev
+        return ev
+
+    def _notify_write(self, ep_name: str) -> None:
+        """Fire (and renew) the per-slave write-notify so blocked pollers
+        re-check.  Called after a write lands so a poller's untimed peek already
+        sees the new value (no lost wakeup)."""
+        ev = self._poll_write_events.get(ep_name)
+        if ev is not None and not ev.triggered:
+            ev.succeed()
+        self._poll_write_events[ep_name] = self.env.event()
+
+    # -- active-poller registry (used by MMIFMaster.poll_until) -------------
+    def register_poller(
+        self, global_addr: int, poll_beat_cost: float, poll_interval: float
+    ) -> None:
+        ep_name, _, _ = self._poll_ep_for_addr(global_addr)
+        self._pollers.setdefault(ep_name, []).append(
+            (float(poll_beat_cost), float(poll_interval))
+        )
+
+    def unregister_poller(
+        self, global_addr: int, poll_beat_cost: float, poll_interval: float
+    ) -> None:
+        ep_name, _, _ = self._poll_ep_for_addr(global_addr)
+        lst = self._pollers.get(ep_name)
+        if lst:
+            try:
+                lst.remove((float(poll_beat_cost), float(poll_interval)))
+            except ValueError:
+                pass
+
+    def poll_peek(self, global_addr: int, nwords: int) -> Words:
+        """Untimed snapshot read of *nwords* at *global_addr* (zero sim time)."""
+        ep_name, slave_ep, local_addr = self._poll_ep_for_addr(global_addr)
+        if getattr(slave_ep, "peek_read", None) is None:
+            raise RuntimeError(
+                f"poll_until: slave '{getattr(slave_ep, 'name', ep_name)}' exposes "
+                f"no peek_read (an untimed synchronous read); it cannot be polled"
+            )
+        return slave_ep.peek_read(int(nwords), int(local_addr))
+
+    def poll_wait_event(self, global_addr: int) -> simpy.Event:
+        ep_name, _, _ = self._poll_ep_for_addr(global_addr)
+        return self._poll_event(ep_name)
+
+    # -- occupancy derating -------------------------------------------------
+    def _poll_occupancy(self, ep_name: str) -> float:
+        """``ov = Σ poll_beat_cost_i / poll_interval[i]`` over the pollers active
+        on *ep_name*, clamped to :attr:`POLL_OV_CEILING` (warn once per onset)."""
+        lst = self._pollers.get(ep_name)
+        if not lst:
+            self._poll_saturated[ep_name] = False
+            return 0.0
+        ov = sum(cost / interval for cost, interval in lst if interval > 0)
+        if ov >= self.POLL_OV_CEILING:
+            if not self._poll_saturated.get(ep_name):
+                warnings.warn(
+                    f"{type(self).__name__} '{getattr(self, 'name', '?')}': bus "
+                    f"'{ep_name}' is polling-bound (ov={ov:.3f} >= 1); clamping to "
+                    f"{self.POLL_OV_CEILING} (per-word occupancy stretched "
+                    f"~{1.0 / (1.0 - self.POLL_OV_CEILING):.0f}x). A poll interval "
+                    f"this aggressive saturates the bus merely checking the condition.",
+                    stacklevel=2,
+                )
+                self._poll_saturated[ep_name] = True
+            return self.POLL_OV_CEILING
+        self._poll_saturated[ep_name] = False
+        return ov
+
+    def _poll_stretch(self, ep_name: str) -> float:
+        """Per-word occupancy derating factor ``1/(1-ov)`` for *ep_name* (the
+        ``nwords`` term is multiplied by this; init/address latency is not)."""
+        return 1.0 / (1.0 - self._poll_occupancy(ep_name))
+
+
+# ---------------------------------------------------------------------------
 # AXI-MM Crossbar interconnect
 # ---------------------------------------------------------------------------
 
 @dataclass
-class AXIMMCrossBarIF(QueuedTransferIF):
+class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
     """
     AXI-MM crossbar connecting ``nports_master`` master ports to
     ``nports_slave`` slave ports.
@@ -389,6 +624,7 @@ class AXIMMCrossBarIF(QueuedTransferIF):
         )
         self._slave_protocols: dict[str, AXIMMProtocol] = {}
         super().__post_init__()
+        self._init_poll_support()
 
     # ------------------------------------------------------------------
     # Bind
@@ -459,6 +695,9 @@ class AXIMMCrossBarIF(QueuedTransferIF):
             f"range on crossbar '{self.name}'"
         )
 
+    def _poll_ep_for_addr(self, global_addr: int) -> tuple[str, MMIFSlave, int]:
+        return self._decode_address(global_addr)
+
     def _dtype(self) -> np.dtype:
         bw = self.bitwidth if self.bitwidth is not None else 32
         return np.dtype(np.uint32) if bw <= 32 else np.dtype(np.uint64)
@@ -478,7 +717,9 @@ class AXIMMCrossBarIF(QueuedTransferIF):
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
 
         if protocol == AXIMMProtocol.FULL:
-            cycles = self.latency_init + words.shape[0]
+            # Derate only the per-word (nwords) occupancy term by 1/(1-ov); the
+            # fixed init/address latency is untouched (see the model).
+            cycles = self.latency_init + words.shape[0] * self._poll_stretch(ep_name)
             dly = cycles / self.clk.freq
             if dly > 0:
                 yield self.timeout(dly)
@@ -503,6 +744,9 @@ class AXIMMCrossBarIF(QueuedTransferIF):
                             )
                         )
 
+        # the watched word may have changed — wake any pollers on this slave
+        self._notify_write(ep_name)
+
     # ------------------------------------------------------------------
     # Read path
     # ------------------------------------------------------------------
@@ -526,7 +770,11 @@ class AXIMMCrossBarIF(QueuedTransferIF):
                 else:
                     words = np.zeros(nwords, dtype=dtype)
 
-            ret_dly = (self.latency_read_return + nwords) / self.clk.freq
+            # Derate only the per-word (nwords) occupancy term by 1/(1-ov);
+            # latency_read_return (the fixed address/return-wire latency) is not.
+            ret_dly = (
+                self.latency_read_return + nwords * self._poll_stretch(ep_name)
+            ) / self.clk.freq
             if ret_dly > 0:
                 yield self.timeout(ret_dly)
 
@@ -557,7 +805,7 @@ class AXIMMCrossBarIF(QueuedTransferIF):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class DirectMMIF(QueuedTransferIF):
+class DirectMMIF(_MMPollSupport, QueuedTransferIF):
     """
     Simple point-to-point MM interconnect: one master, one slave.
 
@@ -598,6 +846,15 @@ class DirectMMIF(QueuedTransferIF):
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')
         super().__post_init__()
+        self._init_poll_support()
+
+    def _poll_ep_for_addr(self, global_addr: int) -> tuple[str, MMIFSlave, int]:
+        slave = self.endpoints['slave']
+        if slave is None:
+            raise RuntimeError("DirectMMIF: slave endpoint is not bound")
+        # Point-to-point, no address translation — the master's address is the
+        # slave's local address (mirroring read/write below).
+        return ('slave', slave, global_addr)
 
     def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
         if ep_name == 'master':
@@ -629,6 +886,8 @@ class DirectMMIF(QueuedTransferIF):
             yield req
             if slave_ep.rx_write_proc is not None:
                 yield self.env.process(slave_ep.rx_write_proc(words, addr))
+        # wake any pollers waiting on this slave (point-to-point: single bus)
+        self._notify_write('slave')
 
     def read(self, nwords: int, addr: int, master_port: int) -> ProcessGen[Words]:
         slave_ep: MMIFSlave = self.endpoints['slave']
