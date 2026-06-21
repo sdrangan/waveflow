@@ -237,6 +237,7 @@ def _emit_poll_until(stmt: PollUntilStmt, ctx: CodegenCtx) -> str:
     bw = int(master.bitwidth)
     out = stmt.outputs[0]
     cond = stmt.cond
+    assert cond is not None, "PollUntilStmt requires a lowered PollCond (op + rhs)"
     addr_expr = _emit_expr(stmt.addr_expr, ctx)
     rhs = _emit_expr(cond.rhs, ctx)
     fn = "poll_until_eq" if cond.op == "==" else "poll_until_ne"
