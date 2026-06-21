@@ -488,6 +488,84 @@ class MMIFMaster(InterfaceEndpoint):
         tend = self.env.now
         return tstart, tend, nwords
 
+    # ------------------------------------------------------------------
+    # Element-coordinate region view (the sim twin of the C++ read_array_slice)
+    # ------------------------------------------------------------------
+
+    def _word_bytes(self, word_bw: int) -> int:
+        """Address units spanned by one packed word — the bound interface's addressing
+        convention (byte-addressed AXI: ``word_bw // 8``; word-addressed: ``1``).  The single
+        place the element→address conversion consults, so accelerators never hard-code
+        ``mem_bw // 8`` (the ``_byte_addr`` antipattern)."""
+        iface = self.interface
+        if iface is not None and not getattr(iface, "byte_addressable", True):
+            return 1
+        return word_bw // 8
+
+    def region(self, base_addr: int, element_type: type, *, word_bw: int = 32) -> "Region":
+        """A memory-region view bound to a byte *base_addr* and an *element_type*, addressed by
+        **element index**.
+
+        The SimPy twin of the C++ ``read_array_slice`` / ``read_array_lane`` element-coordinate
+        contract (and the PynQ-``allocate`` analogue): ``region.read(i0, i1)`` moves elements
+        ``[i0, i1)`` and the interface does the element→byte conversion (see :meth:`_word_bytes`).
+        The base is a byte address (host/allocator-owned, width-agnostic); indices within are
+        element coordinates (width-agnostic, HLS-natural)."""
+        return Region(
+            master=self, base_addr=int(base_addr),
+            element_type=element_type, word_bw=int(word_bw),
+        )
+
+
+@dataclass
+class Region:
+    """Element-indexed view of a memory region for an :class:`MMIFMaster` (built via
+    :meth:`MMIFMaster.region`).
+
+    Binds a byte ``base_addr`` + ``element_type``; **all indices are element coordinates**.
+    Mirrors the C++ ``read_array_slice`` / ``read_array_lane`` contract so the SimPy model and the
+    generated kernel address memory identically — the element→byte conversion lives here (in the
+    framework), not hand-rolled on each accelerator.
+    """
+
+    master: MMIFMaster
+    base_addr: int
+    element_type: type
+    word_bw: int = 32
+
+    @property
+    def _elem_bytes(self) -> int:
+        return (self.element_type.nwords_per_inst(self.word_bw)
+                * self.master._word_bytes(self.word_bw))
+
+    def byte_of(self, i: int) -> int:
+        """Byte address of element *i* (the element-coordinate → address conversion)."""
+        return self.base_addr + int(i) * self._elem_bytes
+
+    def read(self, i0: int, i1: int) -> ProcessGen[Any]:
+        """Read elements ``[i0, i1)`` (element coordinates); returns the deserialized array."""
+        return self.master.read_array(
+            self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
+
+    def read_pipelined(self, i0: int, i1: int) -> ProcessGen[tuple]:
+        """Like :meth:`read`, also returning ``(data, tstart, tend, nwords)`` (AT timing capture)."""
+        return self.master.read_array_pipelined(
+            self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
+
+    def write(self, i0: int, elements: Any, element_type: type | None = None) -> ProcessGen[None]:
+        """Write *elements* starting at element index *i0*.  *element_type* defaults to the
+        region's; pass it when the written elements differ (e.g. an output format whose addressing
+        stride matches the region's)."""
+        return self.master.write_array(
+            elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
+
+    def write_pipelined(
+        self, i0: int, elements: Any, element_type: type | None = None,
+    ) -> ProcessGen[tuple]:
+        """Like :meth:`write`, also returning ``(tstart, tend, nwords)`` (AT timing capture)."""
+        return self.master.write_array_pipelined(
+            elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
+
 
 # ---------------------------------------------------------------------------
 # Shared poll support for poll-aware MM interconnects

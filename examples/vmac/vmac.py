@@ -168,7 +168,7 @@ class VmacAccel(HwComponent):
 
         Everything here is one-time Python introspection / setup — not hardware — so it lives
         out of :meth:`run_proc` (the HLS extraction target); ``run_proc`` then reads only the
-        cached structural constants (``_elem`` / ``_elem_bytes`` / ``_mem_bw``)."""
+        cached structural constants (``_elem`` / ``_mem_bw``)."""
         super().pre_sim()
         if self.cmd_queue is None:
             raise RuntimeError(
@@ -179,7 +179,6 @@ class VmacAccel(HwComponent):
         # both the consumer and the vmac_compute shell share one element->byte-address helper.
         self._mem_bw = int(self.m_mem.bitwidth)
         self._elem = self._data_elem()
-        self._elem_bytes = self._elem.nwords_per_inst(self._mem_bw) * (self._mem_bw // 8)
         # ring poll interval (bus cycles), set once on the queue (D3) so the synthesizable
         # call site stays the bare get(self.Cmd); the poll lives in the C++ dequeue hook.  The
         # consumer's empty-wait now goes through MMIFMaster.poll_until: the poll's bus cost is
@@ -458,38 +457,37 @@ class VmacAccel(HwComponent):
         alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
         cmd_idx = self._cmd_idx
 
+        # The shared data region as an element-indexed view (the framework owns the element→byte
+        # conversion — see MMIFMaster.region; the C++ hook uses read_array_lane/slice over the same
+        # element coordinates).  All addresses below are element indices straight from the command.
+        data = mem.region(self.data_base, self._elem, word_bw=self._mem_bw)
+
         # timed operand reads — one whole-matrix LT block each
-        a_addr = self._byte_addr(int(cmd.a.addr))
-        a, t0, t1, nw = yield from mem.read_array_pipelined(
-            self._elem, nm, a_addr, word_bw=self._mem_bw)
+        a, t0, t1, nw = yield from data.read_pipelined(int(cmd.a.addr), int(cmd.a.addr) + nm)
         self._record_txn(cmd_idx, self.region_labels.get(int(cmd.a.addr), "data"),
-                         "read", a_addr, nw, t0, t1, ab_eq)
+                         "read", data.byte_of(int(cmd.a.addr)), nw, t0, t1, ab_eq)
         b = None
         if need_b and not ab_eq:
-            b_addr = self._byte_addr(int(cmd.b.addr))
-            b, t0, t1, nw = yield from mem.read_array_pipelined(
-                self._elem, nm, b_addr, word_bw=self._mem_bw)
+            b, t0, t1, nw = yield from data.read_pipelined(int(cmd.b.addr), int(cmd.b.addr) + nm)
             self._record_txn(cmd_idx, self.region_labels.get(int(cmd.b.addr), "data"),
-                             "read", b_addr, nw, t0, t1, ab_eq)
+                             "read", data.byte_of(int(cmd.b.addr)), nw, t0, t1, ab_eq)
         elif ab_eq:
             b = a
         alpha = None
         if alpha_indirect:
-            al_addr = self._byte_addr(int(cmd.alpha.addr))
-            alpha, t0, t1, nw = yield from mem.read_array_pipelined(
-                self._elem, n, al_addr, word_bw=self._mem_bw)
+            alpha, t0, t1, nw = yield from data.read_pipelined(
+                int(cmd.alpha.addr), int(cmd.alpha.addr) + n)
             self._record_txn(cmd_idx, self.region_labels.get(int(cmd.alpha.addr), "data"),
-                             "read", al_addr, nw, t0, t1, ab_eq)
+                             "read", data.byte_of(int(cmd.alpha.addr)), nw, t0, t1, ab_eq)
 
         # the bit-exact golden computes R / reduce / requantize (pure math)
         dst = self.execute(cmd, a, b, alpha)
 
-        # timed Y writeback — one LT block (element type inferred from dst, the output format)
-        y_addr = self._byte_addr(int(cmd.y.addr))
-        t0, t1, nw = yield from mem.write_array_pipelined(
-            dst, type(dst).element_type, y_addr, word_bw=self._mem_bw)
+        # timed Y writeback — one LT block (element type is dst's, the output format)
+        t0, t1, nw = yield from data.write_pipelined(
+            int(cmd.y.addr), dst, element_type=type(dst).element_type)
         self._record_txn(cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"),
-                         "write", y_addr, nw, t0, t1, ab_eq)
+                         "write", data.byte_of(int(cmd.y.addr)), nw, t0, t1, ab_eq)
 
         # II-decoupling: advance to the calibrated pipeline-schedule completion time.  The
         # transfers above already moved `now` (their bus occupancy is real); pad the remainder so
@@ -519,11 +517,6 @@ class VmacAccel(HwComponent):
             nwords=int(nwords), addr=int(addr), tstart=float(tstart), tend=float(tend),
             ab_eq=int(ab_eq),
         )
-
-    def _byte_addr(self, elem_idx: int) -> int:
-        """Byte address in the shared data region of element index *elem_idx* — the single
-        element→address conversion, used by every timed read and the Y writeback."""
-        return self.data_base + int(elem_idx) * self._elem_bytes
 
     @sim_only
     def _record_dequeue(self, cmd: VmacCmd) -> None:
