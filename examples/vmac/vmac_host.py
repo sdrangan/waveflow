@@ -48,7 +48,7 @@ class VmacHost(SimObj):
     y_abcorr_elem: int = 0
     A: np.ndarray | None = None              # (n_rows, n_cols) structured complex (stored ints)
     B: np.ndarray | None = None
-    poll_interval: float = 1.0
+    poll_interval: float = 1.0               # ring poll interval in **cycles** (see RING_POLL_CYCLES)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -133,9 +133,11 @@ class VmacHost(SimObj):
         yield from self._enqueue(self._end_cmd(), 2)
 
         # barrier: the ring is empty only once VMAC has consumed `end`, which (in order)
-        # means both compute commands' Y writes have landed.
+        # means both compute commands' Y writes have landed.  poll_interval is in cycles;
+        # convert to seconds for the bare drain-poll timeout.
+        poll_secs = float(self.poll_interval) / float(self.accel.clk.freq)
         while (yield from self.queue.count()) > 0:
-            yield self.timeout(self.poll_interval)
+            yield self.timeout(poll_secs)
 
         self.anorm = yield from self._read_values(self.y_anorm_elem, self.n_cols)
         self.abcorr = yield from self._read_values(self.y_abcorr_elem, self.n_cols)

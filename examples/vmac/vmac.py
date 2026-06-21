@@ -73,6 +73,16 @@ from waveflow.utils import fixputils
 from waveflow.utils.fixputils import Format, OMode, QMode, add_format, sum_format
 
 
+#: Command-ring poll interval in **bus cycles**.  A poll interval now *means*
+#: something (the LT polling-overhead model in ``plans/poll_until_lt_model.md``):
+#: the consumer's empty-ring wait goes through :meth:`MMIFMaster.poll_until`,
+#: which charges ``1/poll_interval`` of bus occupancy (derating real transfers)
+#: and adds the ``(poll_interval-1)/2``-cycle discovery delay.  This replaces the
+#: old structural ``poll_cycles=64`` band-aid — an aggressive (tiny) interval now
+#: shows up as derated bus throughput, not just shifted dequeue times.
+RING_POLL_CYCLES: int = 64
+
+
 @dataclass(frozen=True)
 class VmacTiming:
     """Calibrated pipeline-schedule parameters for the **II-decoupled** timing model (Stage 5
@@ -116,7 +126,6 @@ class VmacAccel(HwComponent):
     out_bw: HwParam[int] = 16  # writeback (re/im) component width
     q_rnd: HwParam[int] = 0  # output rounding: 0 = AP_TRN, 1 = AP_RND
     o_sat: HwParam[int] = 0  # output overflow: 0 = AP_WRAP, 1 = AP_SAT
-    poll_cycles: HwParam[int] = 64  # bus cycles between command-ring polls (coarse, structural)
     clk: Clock = field(default_factory=lambda: Clock(freq=1e9))
 
     def __post_init__(self) -> None:
@@ -159,7 +168,7 @@ class VmacAccel(HwComponent):
 
         Everything here is one-time Python introspection / setup — not hardware — so it lives
         out of :meth:`run_proc` (the HLS extraction target); ``run_proc`` then reads only the
-        cached structural constants (``_elem`` / ``_elem_bytes`` / ``_mem_bw`` / ``_poll``)."""
+        cached structural constants (``_elem`` / ``_elem_bytes`` / ``_mem_bw``)."""
         super().pre_sim()
         if self.cmd_queue is None:
             raise RuntimeError(
@@ -171,12 +180,12 @@ class VmacAccel(HwComponent):
         self._mem_bw = int(self.m_mem.bitwidth)
         self._elem = self._data_elem()
         self._elem_bytes = self._elem.nwords_per_inst(self._mem_bw) * (self._mem_bw // 8)
-        # coarse ring poll (poll_cycles bus cycles), computed once: a 1-cycle poll would
-        # saturate the AXI bus merely checking the queue (see vmac_queue_sim).  Set on the queue
-        # (D3) so the synthesizable call site stays the bare get(self.Cmd); the poll lives in the
-        # C++ dequeue hook.
-        self._poll = float(self.poll_cycles) / float(self.clk.freq)
-        self.cmd_queue.poll_interval = self._poll
+        # ring poll interval (bus cycles), set once on the queue (D3) so the synthesizable
+        # call site stays the bare get(self.Cmd); the poll lives in the C++ dequeue hook.  The
+        # consumer's empty-wait now goes through MMIFMaster.poll_until: the poll's bus cost is
+        # modeled (occupancy derating + discovery delay), so an aggressive interval is no longer
+        # a 1-cycle bus saturation the model can't see (it replaces the poll_cycles band-aid).
+        self.cmd_queue.poll_interval = float(RING_POLL_CYCLES)
         self._cmd_idx = -1  # sim-only command counter, maintained by the @sim_only records
         self._dequeue_t = 0.0  # sim-only: dequeue time stashed by _record_dequeue
 

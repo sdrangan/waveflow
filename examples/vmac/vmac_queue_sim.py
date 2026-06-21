@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from examples.vmac.vmac import VmacAccel, VmacTiming
+from examples.vmac.vmac import RING_POLL_CYCLES, VmacAccel, VmacTiming
 from examples.vmac.vmac_host import VmacHost
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
 from waveflow.hw.clock import Clock
@@ -176,10 +176,11 @@ class VmacQueueSim:
                              file_path=str(LOG_CSV), fields=_LOG_FIELDS)
         self.host.logger = self.logger
         self.accel.logger = self.logger
-        # poll the ring on the same coarse cadence as the VMAC consumer (poll_cycles bus
-        # cycles), not the queue default of 1.0 s and not every single cycle — a 1-cycle poll
-        # would saturate the bus just checking the ring and dominate the timeline.
-        self.host.poll_interval = float(self.accel.poll_cycles) / float(self.clk.freq)
+        # poll the ring on the same cadence (in cycles) as the VMAC consumer; the host's
+        # producer full-wait and drain barrier reuse it.  The polling cost itself is now
+        # modeled by poll_until (occupancy derating + discovery delay), not dodged by a
+        # coarse interval.
+        self.host.poll_interval = float(RING_POLL_CYCLES)
         self.accel.region_labels = {
             a_elem: "A", b_elem: "B",
             y_anorm_elem: "Y_anorm", y_abcorr_elem: "Y_abcorr",
