@@ -220,13 +220,6 @@ class VmacAccel(HwComponent):
             fmt.W, fmt.int_bits, fmt.signed, fmt.q_mode, fmt.o_mode
         )
 
-    @staticmethod
-    def _region_idx(reg, n_rows: int, n_cols: int) -> np.ndarray:
-        """The row-major index matrix: ``addr + i·row_stride + j`` (columns unit-stride)."""
-        rows = np.arange(n_rows)[:, None] * int(reg.row_stride)
-        cols = np.arange(n_cols)[None, :]
-        return int(reg.addr) + rows + cols
-
     @classmethod
     def _operand(cls, M: np.ndarray, in_fmt: Format) -> DataArray:
         """Wrap a strided complex matrix view (structured re/im) as a DataArray operand."""
@@ -271,15 +264,6 @@ class VmacAccel(HwComponent):
         elem = ComplexField.specialize(out_cls)
         struct = cx.make_complex(re, im, target)
         return DataArray.specialize(elem, max_shape=struct.shape)(struct)
-
-    @staticmethod
-    def _writeback(mem: np.ndarray, reg, dst: DataArray) -> None:
-        val = np.asarray(dst.val)
-        if val.ndim == 1:  # reduced -> single row of columns
-            idx = int(reg.addr) + np.arange(val.shape[0])  # columns unit-stride
-        else:
-            idx = VmacAccel._region_idx(reg, val.shape[0], val.shape[1])
-        mem[idx] = val
 
     # --- numeric model: datapath format derivation (the codegen spec) ------------
     def _in_fmt(self) -> Format:
@@ -401,30 +385,11 @@ class VmacAccel(HwComponent):
 
         return self._requantize(t, out_cls)  # NOTE: no writeback — the shell stores Y
 
-    def execute_mem(self, cmd: VmacCmd, mem: np.ndarray) -> DataArray:
-        """Flat-memory twin of :meth:`vmac_compute`, around the pure :meth:`execute` golden:
-        read the operand regions out of the 1-D structured ``mem`` (row-major
-        ``addr + i·row_stride + j``, columns unit-stride), run the golden, and write the dst back
-        into ``mem`` at the ``y`` region; return the dst array.
-
-        This is the *synchronous, untimed* counterpart the build / cosim vector generators use —
-        they need a flat memory image in → image out (the expected kernel memory).  The SimPy
-        :meth:`vmac_compute` shell does the same over the timed ``m_mem`` interface; both delegate
-        the math to the one golden, so nothing here duplicates it."""
-        mem = np.asarray(mem)
-        n, m = int(cmd.n_rows), int(cmd.n_cols)
-        op = OpCode(int(cmd.op))
-        a = mem[self._region_idx(cmd.a, n, m)]
-        b = None
-        if op in (OpCode.inner_prod, OpCode.sum):
-            b = mem[self._region_idx(cmd.b, n, m)]
-        alpha = None
-        if op is OpCode.scalar_mult and not bool(cmd.alpha.direct):
-            idx = int(cmd.alpha.addr) + np.arange(n) * int(cmd.alpha.stride)
-            alpha = mem[idx]  # (n_rows,) per-row indirect column
-        dst = self.execute(cmd, a, b, alpha)
-        self._writeback(mem, cmd.y, dst)
-        return dst
+    # NOTE: the flat-memory golden image (operands in → expected image out) is now harness
+    # plumbing, not a method here: ``examples/vmac/vmac_golden_mem.py::apply_golden`` slices the
+    # regions from an element-indexed image and runs ``execute`` (the one golden).  The
+    # accelerator's golden surface is just ``execute`` — the histogram anatomy (golden on the
+    # model, marshalling in the testbench).
 
     # --- the synthesizable shell + kernel body -------------------------------
     @synthesizable(impl_file="vmac_compute_impl.tpp")

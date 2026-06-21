@@ -71,9 +71,11 @@ from waveflow.utils.fixputils import Format
 try:
     from examples.vmac.vmac import VmacAccel
     from examples.vmac.vmac_cmd import Alpha, OpCode, Region, VmacCmd
+    from examples.vmac.vmac_golden_mem import apply_golden
 except ModuleNotFoundError:  # direct execution from the example dir
     from vmac import VmacAccel  # type: ignore[no-redef]
     from vmac_cmd import Alpha, OpCode, Region, VmacCmd  # type: ignore[no-redef]
+    from vmac_golden_mem import apply_golden  # type: ignore[no-redef]
 
 _SOURCE_DIR = Path(__file__).resolve().parent
 _BUILD_DIR = (
@@ -328,7 +330,7 @@ def golden_case(cfg: StructCfg, case) -> dict:
     mem_in_words = _mem_words(mem, in_elem, cfg.mem_dwidth)
 
     post = mem.copy()
-    dst = accel.execute_mem(cmd, post)  # mutates `post` (writes dst region)
+    dst = apply_golden(accel, cmd, post)  # mutates `post` (writes dst region)
     exp_re, exp_im = oracle(cfg, op, reduce, a, b, alpha)
     got_re, got_im = np.asarray(dst.val["re"]), np.asarray(dst.val["im"])
     oracle_ok = np.array_equal(got_re, exp_re) and np.array_equal(got_im, exp_im)
@@ -659,7 +661,7 @@ def _tput_vectors(cfg: StructCfg):
     b = _pair(rng.integers(-30, 31, (n, m)), rng.integers(-30, 31, (n, m)))
     cmd, mem = build(cfg.accel(), TPUT_OP, 0, a, b, _pair(16, 0))
     post = mem.copy()
-    cfg.accel().execute_mem(cmd, post)
+    apply_golden(cfg.accel(), cmd, post)
     in_elem = cfg.in_elem()
     scalars = [
         int(cmd.op),

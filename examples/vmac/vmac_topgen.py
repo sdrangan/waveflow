@@ -47,6 +47,7 @@ try:
         StructCfg,
     )
     from examples.vmac.vmac_cmd import OpCode
+    from examples.vmac.vmac_golden_mem import apply_golden
 except ModuleNotFoundError:  # direct execution from the example dir
     from vmac import VmacAccel  # type: ignore[no-redef]
     from vmac_build import (  # type: ignore[no-redef]
@@ -54,6 +55,7 @@ except ModuleNotFoundError:  # direct execution from the example dir
         _BUILD_DIR, _SOURCE_DIR, _cmd_schema_steps, _mem_words, _pair, StructCfg,
     )
     from vmac_cmd import OpCode  # type: ignore[no-redef]
+    from vmac_golden_mem import apply_golden  # type: ignore[no-redef]
 
 from waveflow.utils import complexutils as cx  # noqa: E402
 
@@ -141,7 +143,7 @@ def _topgen_vectors(cfg: StructCfg) -> dict:
     end_cmd.alpha = {"direct": 1, "imm": (0, 0), "addr": 0, "stride": 0}
 
     mem_exp_struct = mem_struct.copy()
-    accel.execute_mem(cmd, mem_exp_struct)  # the golden writes Y into mem_exp_struct
+    apply_golden(accel, cmd, mem_exp_struct)  # the golden writes Y into mem_exp_struct
 
     # serialize the data region (A|B|Y elements) to mem words, packed pf/word
     data_in = _mem_words(mem_struct[a_addr:y_addr + nm], cfg.in_elem(), g["mbw"])
