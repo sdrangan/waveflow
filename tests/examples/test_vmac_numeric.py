@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 from examples.vmac.vmac import VmacAccel
-from examples.vmac.vmac_cmd import OpCode
+from examples.vmac.vmac_datatypes import OpCode, VmacFormats
 from waveflow.hw.dataschema import DataArray
 from waveflow.hw.fixpoint import FixedField
 from waveflow.utils import complexutils as cx
@@ -123,7 +123,7 @@ def test_requantize_complex_equals_ap_fixed(acc_W, acc_I, out_bw, shift, q_rnd, 
         ComplexField.specialize(FixedField.specialize(acc_W, acc_I, True)),
         max_shape=(len(re),),
     )(cx.make_complex(re, im, acc_fmt))
-    out = VmacAccel._requantize(t, out_cls).val
+    out = VmacFormats.requantize(t, out_cls).val
     for comp, src in (("re", re), ("im", im)):
         hw = [hw_shift_round_sat(s, shift, out_bw, q_rnd, o_sat) for s in src]
         frac = [
@@ -189,7 +189,7 @@ def test_accumulator_format_matches_hand_derivation(
     )
     cmd = accel.Cmd()
     cmd.op, cmd.reduce, cmd.n_rows, cmd.n_cols = op, reduce, n_rows, 2
-    acc = accel.accumulator_format(cmd)
+    acc = accel.types.accumulator_format(cmd)
     exp_W, exp_I = _expected_acc(op, reduce, data_bw, int_bits, n_rows)
     assert (acc.W, acc.int_bits) == (exp_W, exp_I)
     assert acc.signed is True
@@ -209,12 +209,12 @@ def test_output_format_structural_scale_and_codegen_target():
         4,
         2,
     )  # F_acc = 2·4 = 8
-    acc = accel.accumulator_format(cmd)
-    out = accel.output_format(cmd)
+    acc = accel.types.accumulator_format(cmd)
+    out = accel.types.output_format(cmd)
     f_in = int(accel.data_bw) - int(accel.int_bits)
     assert out.get_format().frac_bits == f_in  # F_out = F_in (structural)
     assert out.int_bits == accel.out_bw - f_in  # I_out = out_bw - F_in
-    assert accel.derived_shift(cmd) == acc.frac_bits - f_in  # SHIFT = F_acc - F_in
+    assert accel.types.derived_shift(cmd) == acc.frac_bits - f_in  # SHIFT = F_acc - F_in
     assert out.get_bitwidth() == accel.out_bw
     assert (
         out.cpp_type == f"ap_fixed<12, {out.int_bits}, AP_TRN, AP_WRAP>"
@@ -228,7 +228,7 @@ def test_sum_derived_shift_is_zero():
     )
     cmd = accel.Cmd()
     cmd.op, cmd.reduce, cmd.n_rows, cmd.n_cols = OpCode.sum, 0, 4, 2
-    assert accel.derived_shift(cmd) == 0
+    assert accel.types.derived_shift(cmd) == 0
 
 
 def test_accumulator_format_matches_execute_invariant():
@@ -302,7 +302,7 @@ def test_failloud_acc_bw_too_small():
     )  # inner_prod acc ~ 18 bits > 10
     cmd = _cmd(accel, op=OpCode.inner_prod)
     with pytest.raises(ValueError, match="exceeds acc_bw"):
-        accel.output_format(cmd)
+        accel.types.output_format(cmd)
 
 
 def test_failloud_out_bw_too_small_for_fraction():
@@ -310,7 +310,7 @@ def test_failloud_out_bw_too_small_for_fraction():
     accel = _accel(data_bw=8, int_bits=0, acc_bw=64, out_bw=4)
     cmd = _cmd(accel, op=OpCode.sum)
     with pytest.raises(ValueError, match="too small"):
-        accel.output_format(cmd)
+        accel.types.output_format(cmd)
 
 
 def test_failloud_propagates_through_execute():

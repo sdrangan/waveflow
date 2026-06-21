@@ -47,7 +47,8 @@ from examples.vmac.vmac_build import (
     render_cosim_tb,
     render_top,
 )
-from examples.vmac.vmac_cmd import OpCode
+from examples.vmac.vmac_datatypes import OpCode
+from examples.vmac.vmac_golden_mem import apply_golden
 from waveflow.build.build import BuildConfig, BuildDag
 from waveflow.build.streamutils import StreamUtilsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
@@ -123,7 +124,7 @@ def _scenario(accel, n_rows: int, n_cols: int):
     """Build (cmd, mem, mem_exp) for a distinct-B inner_prod+reduce of size n_rows x n_cols."""
     nm = n_rows * n_cols
     a_re, a_im, b_re, b_im = _operands(n_rows, n_cols)
-    in_fmt = accel._in_fmt()
+    in_fmt = accel.types.in_format()
     A = cx.make_complex(a_re.ravel(), a_im.ravel(), in_fmt)
     B = cx.make_complex(b_re.ravel(), b_im.ravel(), in_fmt)
     a_addr, b_addr, y_addr = 0, nm, 2 * nm
@@ -133,7 +134,7 @@ def _scenario(accel, n_rows: int, n_cols: int):
     mem[b_addr:b_addr + nm] = B
     cmd = _reduce_cmd(accel, n_rows, n_cols, a_addr, b_addr, y_addr)
     mem_exp = mem.copy()
-    accel.execute_mem(cmd, mem_exp)  # the golden writes Y
+    apply_golden(accel, cmd, mem_exp)  # the golden writes Y
     return cmd, mem, mem_exp
 
 

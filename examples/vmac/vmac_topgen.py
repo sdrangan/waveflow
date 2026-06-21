@@ -12,7 +12,7 @@ are the ``m_axi`` gmem + ``ap_ctrl``).
 The cosim builds the ring image in memory (head/tail/capacity + one command slot + an ``END``
 slot, via the producer-side :meth:`VmacCmd.serialize`), lays the A/B operands after the ring,
 invokes the generated top, and checks the Y region **bit-exact** against
-:meth:`VmacAccel.execute_mem` (the same golden the csim conformance uses — no new golden)."""
+``vmac_golden_mem.apply_golden`` (runs the one golden, execute — no new golden)."""
 from __future__ import annotations
 
 import shutil
@@ -46,14 +46,16 @@ try:
         _pair,
         StructCfg,
     )
-    from examples.vmac.vmac_cmd import OpCode
+    from examples.vmac.vmac_datatypes import OpCode
+    from examples.vmac.vmac_golden_mem import apply_golden
 except ModuleNotFoundError:  # direct execution from the example dir
     from vmac import VmacAccel  # type: ignore[no-redef]
     from vmac_build import (  # type: ignore[no-redef]
         BUILD_HDRS, HOOK_FILES, INCLUDE_DIR, MEM_AWIDTH, MEM_WORD_BWS,
         _BUILD_DIR, _SOURCE_DIR, _cmd_schema_steps, _mem_words, _pair, StructCfg,
     )
-    from vmac_cmd import OpCode  # type: ignore[no-redef]
+    from vmac_datatypes import OpCode  # type: ignore[no-redef]
+    from vmac_golden_mem import apply_golden  # type: ignore[no-redef]
 
 from waveflow.utils import complexutils as cx  # noqa: E402
 
@@ -109,10 +111,10 @@ def _ring_geometry(cfg: StructCfg) -> dict:
 
 def _topgen_vectors(cfg: StructCfg) -> dict:
     """Build the ring image (mem_in) + the golden expected image (mem_exp), bit-exact via
-    :meth:`VmacAccel.execute_mem`.  inner_prod (no reduce), distinct B."""
+    ``vmac_golden_mem.apply_golden``.  inner_prod (no reduce), distinct B."""
     g = _ring_geometry(cfg)
     accel = g["accel"]
-    in_fmt = accel._in_fmt()
+    in_fmt = accel.types.in_format()
     n, m, nm, ew = g["n"], g["m"], g["nm"], g["ew"]
     a_addr, b_addr, y_addr = g["a_addr"], g["b_addr"], g["y_addr"]
 
@@ -141,7 +143,7 @@ def _topgen_vectors(cfg: StructCfg) -> dict:
     end_cmd.alpha = {"direct": 1, "imm": (0, 0), "addr": 0, "stride": 0}
 
     mem_exp_struct = mem_struct.copy()
-    accel.execute_mem(cmd, mem_exp_struct)  # the golden writes Y into mem_exp_struct
+    apply_golden(accel, cmd, mem_exp_struct)  # the golden writes Y into mem_exp_struct
 
     # serialize the data region (A|B|Y elements) to mem words, packed pf/word
     data_in = _mem_words(mem_struct[a_addr:y_addr + nm], cfg.in_elem(), g["mbw"])
@@ -221,7 +223,7 @@ def _gen_topgen_tb(cfg: StructCfg, g: dict) -> str:
     return "\n".join([
         "// Generated-top cosim TB: load the ring image, run the auto-extracted vmac() top",
         "// (it drains the ring until OpCode::end and returns), and check the Y region bit-exact",
-        "// against execute_mem's golden.",
+        "// against apply_golden's golden image.",
         '#include "vmac.hpp"',
         "#include <fstream>",
         "#include <iostream>",

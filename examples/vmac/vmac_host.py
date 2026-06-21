@@ -22,11 +22,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from examples.vmac.vmac import VmacAccel
-from examples.vmac.vmac_cmd import OpCode, VmacCmd
+from examples.vmac.vmac_datatypes import OpCode, VmacCmd
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
-from waveflow.hw.arrayutils import read_array as wf_read_array
-from waveflow.hw.arrayutils import write_array as wf_write_array
-from waveflow.hw.dataschema import DataArray
 from waveflow.hw.memif import MMIFMaster
 from waveflow.simulation.logger import NullLogger
 from waveflow.simulation.simobj import ProcessGen, SimObj
@@ -55,9 +52,13 @@ class VmacHost(SimObj):
         self._mem_bw = int(self.accel.mem_dwidth)
         self.master = MMIFMaster(sim=self.sim, bitwidth=self._mem_bw)
         self.queue = AXIMMQueue(master=self.master, layout=self.layout)
-        self._elem = self.accel._data_elem()
-        self._elem_words = self._elem.nwords_per_inst(self._mem_bw)
-        self._elem_bytes = self._elem_words * (self._mem_bw // 8)
+        self._elem = self.accel.types.operand_elem()
+        # Element-indexed view of the shared data region — the framework owns the element→byte
+        # conversion (see MMIFMaster.region); regions are addressed by element coordinate.  The
+        # on_transfer hook records the host's A/B data-in writes to the timeline (the Y readbacks
+        # are untracked), so _write_matrix / _read_values just slice by element index.
+        self._data = self.master.region(self.data_base, self._elem, word_bw=self._mem_bw)
+        self._data.on_transfer = self._on_transfer
         # F_out = F_in (structural): stored code -> value is code / 2**F_out.
         self._out_frac = int(self.accel.data_bw) - int(self.accel.int_bits)
         self.anorm: np.ndarray | None = None   # per-column, complex (im≈0)
@@ -69,29 +70,25 @@ class VmacHost(SimObj):
         self.q_events: list[dict] = []         # ring enqueue events (for occupancy)
 
     # -- region helpers (timed m_mem transactions) ----------------------------
-    def _write_matrix(self, M: np.ndarray, elem_addr: int) -> ProcessGen[None]:
-        flat = np.asarray(M).ravel()
-        da = DataArray.specialize(self._elem, max_shape=(flat.shape[0],))(flat)
-        words = wf_write_array(da, word_bw=self._mem_bw)
-        addr = self.data_base + elem_addr * self._elem_bytes
-        t0 = self.now
-        yield from self.master.write(words, addr)
-        t1 = self.now
+    def _on_transfer(self, rw: str, i0: int, nwords: int, t0: float, t1: float) -> None:
+        """``Region.on_transfer`` hook: record the host's A/B data-in **writes** to the timeline.
+        Y readbacks (reads) are deliberately untracked, matching the original instrumentation."""
+        if rw != "write":
+            return
+        addr = self._data.byte_of(i0)
         self.txns.append({
             "cmd_idx": -1, "name": "data_in", "rw": "write", "addr": int(addr),
-            "nwords": int(len(words)), "tstart": float(t0), "tend": float(t1),
-            "ab_eq": False,
+            "nwords": int(nwords), "tstart": float(t0), "tend": float(t1), "ab_eq": False,
         })
         self.logger.log(role="host", event="mem", label="data_in", rw="write",
-                        nwords=int(len(words)), addr=int(addr),
-                        tstart=float(t0), tend=float(t1))
+                        nwords=int(nwords), addr=int(addr), tstart=float(t0), tend=float(t1))
+
+    def _write_matrix(self, M: np.ndarray, elem_addr: int) -> ProcessGen[None]:
+        yield from self._data.write_slice(elem_addr, np.asarray(M).ravel())
 
     def _read_values(self, elem_addr: int, count: int) -> ProcessGen[np.ndarray]:
         """Read *count* complex elements back and return them as scaled complex values."""
-        words = yield from self.master.read(
-            count * self._elem_words, self.data_base + elem_addr * self._elem_bytes
-        )
-        struct = wf_read_array(words, self._elem, self._mem_bw, shape=count).val
+        struct = yield from self._data.read_slice(elem_addr, elem_addr + count)
         scale = 2.0 ** self._out_frac
         return (cx.re_of(struct).astype(np.float64) + 1j * cx.im_of(struct).astype(np.float64)) / scale
 

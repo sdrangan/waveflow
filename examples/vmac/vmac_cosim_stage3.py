@@ -47,7 +47,8 @@ from examples.vmac.vmac_build import (
     _SOURCE_DIR,
     _BUILD_DIR,
 )
-from examples.vmac.vmac_cmd import OpCode
+from examples.vmac.vmac_datatypes import OpCode
+from examples.vmac.vmac_golden_mem import apply_golden
 from waveflow.build.build import BuildConfig, BuildDag
 from waveflow.build.streamutils import StreamUtilsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
@@ -120,7 +121,7 @@ def _scenario(accel, ab_eq: bool):
     """Build (cmd, mem, mem_exp) for an anorm (ab_eq) or abcorr scenario."""
     nm = N_ROWS * N_COLS
     a_re, a_im, b_re, b_im = _operands()
-    in_fmt = accel._in_fmt()
+    in_fmt = accel.types.in_format()
     A = cx.make_complex(a_re.ravel(), a_im.ravel(), in_fmt)
     B = cx.make_complex(b_re.ravel(), b_im.ravel(), in_fmt)
     if ab_eq:  # B aliases A: a_addr == b_addr; layout A | Y
@@ -133,7 +134,7 @@ def _scenario(accel, ab_eq: bool):
         mem[b_addr:b_addr + nm] = B
     cmd = _reduce_cmd(accel, a_addr, b_addr, y_addr)
     mem_exp = mem.copy()
-    accel.execute_mem(cmd, mem_exp)  # the golden writes Y into mem_exp
+    apply_golden(accel, cmd, mem_exp)  # the golden writes Y into mem_exp
     return cmd, mem, mem_exp
 
 

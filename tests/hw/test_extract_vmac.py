@@ -8,7 +8,7 @@ the ``end`` sentinel, and the datapath hook — with the ``@sim_only`` bookkeepi
 from __future__ import annotations
 
 from examples.vmac.vmac import VmacAccel
-from examples.vmac.vmac_cmd import OpCode
+from examples.vmac.vmac_datatypes import OpCode
 from waveflow.build.hwcodegen import HwStmtExtractor, extract_kernel
 from waveflow.hw.aximm_queue import (
     AXIMMQueue,

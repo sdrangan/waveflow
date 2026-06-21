@@ -90,6 +90,34 @@ arr = yield from master_ep.read_array(Float32, count=nsamp, addr=DATA_ADDR)
 # arr is np.ndarray[float32] for FloatField/IntField element types
 ```
 
+**Region — element-coordinate access (the `read_array_slice` twin).** `read_array` takes a
+**byte** address; a `Region` binds a byte base + element type once and is then indexed by
+**element coordinate**, so callers never compute `addr * elem_bytes` by hand. This is the SimPy
+twin of the C++ `read_array_slice` / `read_array_lane` contract (and the PynQ-`allocate`
+analogue): the framework owns the element→byte conversion (using the interface's
+`byte_addressable`), so the sim model indexes memory exactly like the generated kernel.
+
+```python
+x = master_ep.region(base_addr=XADDR, element_type=Float32)   # byte base + element dtype
+xs = yield from x.read_slice(i0, i1)                            # x[i0:i1] by element index
+yield from x.write_slice(i0, xs)                               # write elements back at i0
+```
+
+`read_slice` / `write_slice` return just data / nothing — exactly like the hardware
+`read_array_slice` — so the **timing stays off the data path**. A loosely-timed component that
+needs the transfer timeline sets `x.on_transfer`, a hook `(rw, i0, nwords, tstart, tend) -> None`
+fired after each slice; the AT timing capture then lives in the framework, not hand-bracketed at
+every call:
+
+```python
+x.on_transfer = lambda rw, i0, nw, t0, t1: record(rw, x.byte_of(i0), nw, t0, t1)
+a = yield from x.read_slice(0, n)        # the data path never unpacks timing
+```
+
+The base is a **byte** address (host/allocator-owned, width-agnostic); indices within are
+**element** coordinates (width-agnostic — the same code works at any `mem_bw`). Prefer a `Region`
+over a hand-rolled byte-address helper whenever a component addresses a memory region by element.
+
 ---
 
 ## A minimal simulation
