@@ -61,6 +61,7 @@ writes results back — all hand-written, bit-exact with the Python golden by co
 
 - [Writing a hook](./writing.md) — the templated `.tpp` signature, how it plugs into the generated kernel, and the csynth gotchas (scalar `*_core` args, `#pragma HLS INLINE`), walked through VMAC.
 - [Kernel patterns](./patterns.md) — moving data over an `m_axi` / stream port inside a hook (`read_array_lane` / `read_array_slice` / `read_stream_lane`, `TLAST`) and the common loop shapes.
+- [Memory command queue](./queue.md) — the ring-dequeue hook (`queue_get`) that `AXIMMQueue.get` lowers to: poll the ring, read one slot, advance `head`, deserialize the typed command.
 
 ## See also
 
