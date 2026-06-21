@@ -980,7 +980,7 @@ class HwStmtExtractor:
                 f"Undefined variable '{var_name}' in 'if' at line {node.lineno}"
             )
         hw_var = self._scope[var_name]
-        cmp_val = self._eval_const(test.comparators[0])
+        cmp_val = self._resolve_compare_rhs(test.comparators[0])
         op = '==' if isinstance(test.ops[0], ast.Eq) else '!='
         body_stmts = self._visit_stmts(node.body)
         else_stmts = self._visit_stmts(node.orelse) if node.orelse else None
@@ -1161,6 +1161,20 @@ class HwStmtExtractor:
                     if isinstance(elt, ast.Name):
                         names.append(elt.id)
         return names
+
+    def _resolve_compare_rhs(self, node: ast.expr) -> object:
+        """Resolve the rhs of a synthesizable ``==`` / ``!=`` comparison.
+
+        The condition-IR rhs may be EITHER a compile-time constant (an enum
+        member or literal) OR a **runtime variable already in scope** (a
+        ``HwVar``).  The latter is what the ring-poll dequeue needs — it compares
+        ``tail != head`` where ``head`` is a runtime-read local, not a literal.
+        A bare name in scope binds to its ``HwVar``; everything else falls
+        through to constant evaluation (which still rejects unsupported forms).
+        """
+        if isinstance(node, ast.Name) and node.id in self._scope:
+            return self._scope[node.id]
+        return self._eval_const(node)
 
     def _eval_const(self, node: ast.expr) -> object:
         if isinstance(node, ast.Constant):

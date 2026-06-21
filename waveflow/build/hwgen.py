@@ -114,7 +114,10 @@ def _emit_return(stmt: ReturnStmt, ctx: CodegenCtx) -> str:
 
 def _emit_case(stmt: CaseStmt, ctx: CodegenCtx) -> str:
     lhs = stmt.var.name if stmt.field is None else f"{stmt.var.name}.{stmt.field}"
-    rhs = _emit_literal(stmt.value)
+    # The rhs may be a constant (enum / literal) OR a runtime variable in scope
+    # (a HwVar / FieldRef — e.g. the ring-poll's ``tail != head``).  _emit_expr
+    # emits the variable name for those and the C++ literal for constants.
+    rhs = _emit_expr(stmt.value, ctx)
     # When the bare variable is itself an IntEnum (e.g. evaluate's PolyError
     # return), the local var is declared as ap_uint<8> (matching the hook's
     # actual C++ return type).  Cast the enum literal so the comparison
