@@ -73,7 +73,7 @@ base case.
 | 2 | `pure_stream`                    | moving-average filter | streaming dataflow — no packet boundary, no TLAST, no control | planned                   | reserved (not built yet)               |
 | 3 | [`stream_inband`](./stream_inband/) | polynomial            | packetization (TLAST) + in-band control on the stream          | stages 1–5               | available                              |
 | 4 | [`shared_mem`](./shared_mem/)       | histogram             | data in memory (AXI-MM), control over a dedicated stream       | stages 1–5               | available; codegen upgrade in progress |
-| 5 | `mem_queue`                      | vector unit           | control*also* in memory, via a descriptor queue              | stages 1–2 (codegen TBD) | reserved (not built yet)               |
+| 5 | [`mmqueue`](./mmqueue/)             | complex vector MAC (VMAC) | control *also* in memory, via a descriptor queue            | stages 1–5               | available                              |
 
 The shared-memory (`shared_mem`) example is the reference for AXI-MM (`m_axi`)
 codegen — multiple buffers and element types read/written over one bundle, with
