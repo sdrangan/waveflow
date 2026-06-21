@@ -107,7 +107,7 @@ class VmacQueueSim:
                 self.timing_params = (depth, ii)
 
         word_bytes = self.mem_bw // 8
-        elem = self.accel._data_elem()
+        elem = self.accel.types.operand_elem()
         elem_words = elem.nwords_per_inst(self.mem_bw)
         cmd_words = self.accel.Cmd.nwords_per_inst(self.mem_bw)
 
@@ -146,7 +146,7 @@ class VmacQueueSim:
         self.A_im = rng.integers(self.val_lo, self.val_hi + 1, size=shp)
         self.B_re = rng.integers(self.val_lo, self.val_hi + 1, size=shp)
         self.B_im = rng.integers(self.val_lo, self.val_hi + 1, size=shp)
-        in_fmt = self.accel._in_fmt()
+        in_fmt = self.accel.types.in_format()
         A = cx.make_complex(self.A_re, self.A_im, in_fmt)
         B = cx.make_complex(self.B_re, self.B_im, in_fmt)
 

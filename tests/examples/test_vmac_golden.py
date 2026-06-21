@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from examples.vmac.vmac import VmacAccel
-from examples.vmac.vmac_cmd import OpCode
+from examples.vmac.vmac_datatypes import OpCode
 from waveflow.utils import complexutils as cx
 from waveflow.utils.fixputils import Format
 

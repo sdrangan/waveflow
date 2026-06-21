@@ -30,14 +30,20 @@ operators (``cmult`` / ``cadd`` / ``conj``), the wide-accumulator column reducti
 datapath: **element-wise op → wide accumulate (full precision, ≤ acc_bw) → right-shift →
 round + saturate → write (out_bw)**.  The right-shift is the single lossy step (an ``ap_fixed``
 assignment); its amount ``SHIFT = F_acc − F_in`` is *derived* from the flags + the structural
-format (not in the command — see :meth:`output_format` / :meth:`derived_shift`), so the golden
-is bit-exact with the Vitis kernel.  The shared memory is a 1-D structured ``[('re','im')]``
-array of stored ints; operands are row-major regions ``M[i, j] = mem[addr + i·row_stride + j]``
-(columns unit-stride).  :meth:`execute` is the **pure** golden — dense operand arrays
-(``a, b, alpha``) in, the requantized dst ``DataArray`` out, no memory/addressing/writeback.
-The synthesizable shell :meth:`vmac_compute` owns the memory access (pipelined ``m_mem``
-reads/writes) and supplies the operands; :meth:`execute_mem` is the synchronous flat-memory
-twin (image in → image out, used by the build / cosim vector generators).
+format (not in the command — see ``VmacFormats.output_format`` / ``derived_shift`` in
+:mod:`examples.vmac.vmac_datatypes`), so the golden is bit-exact with the Vitis kernel.  The
+shared memory is a 1-D structured ``[('re','im')]`` array of stored ints; operands are row-major
+regions ``M[i, j] = mem[addr + i·row_stride + j]`` (columns unit-stride).  :meth:`execute` is the
+**pure** golden — dense operand arrays (``a, b, alpha``) in, the requantized dst ``DataArray``
+out, no memory/addressing/writeback.  The synthesizable shell :meth:`vmac_compute` owns the
+memory access (pipelined ``m_mem`` reads/writes) and supplies the operands; the synchronous
+flat-memory twin (image in → image out, for the build / cosim vector generators) is
+``vmac_golden_mem.apply_golden``.
+
+The **fixed-point derived types** VMAC depends on — the operand element type, the wide
+accumulator format, the output format, the requantize shift — live in
+:class:`~examples.vmac.vmac_datatypes.VmacFormats` (composed as :attr:`VmacAccel.types`), kept in
+the datatypes module so this class carries the datapath *behaviour*, not the type algebra.
 
 Constructed without a ``sim``, ``VmacAccel`` is a lightweight params + golden object (no
 ``Simulation`` needed) — the form the golden / numeric tests use.  With a ``sim`` it is the
@@ -56,11 +62,10 @@ from typing import ClassVar
 
 import numpy as np
 
-from examples.vmac.vmac_cmd import OpCode, VmacCmd
+from examples.vmac.vmac_datatypes import OpCode, VmacCmd, VmacFormats
 from waveflow.hw.clock import Clock
-from waveflow.hw.complexfield import ComplexField, cadd, cmult, conj, csum
+from waveflow.hw.complexfield import cadd, cmult, conj, csum
 from waveflow.hw.dataschema import DataArray
-from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.hw_component import HwComponent, HwParam
 from waveflow.hw.aximm_queue import AXIMMQueue
 from waveflow.hw.memif import MMIFMaster
@@ -68,9 +73,6 @@ from waveflow.named import NamedObject
 from waveflow.simulation.logger import NullLogger
 from waveflow.hw.synth import sim_only, synthesizable
 from waveflow.simulation.simobj import ProcessGen
-from waveflow.utils import complexutils as cx
-from waveflow.utils import fixputils
-from waveflow.utils.fixputils import Format, OMode, QMode, add_format, sum_format
 
 
 #: Command-ring poll interval in **bus cycles**.  A poll interval now *means*
@@ -178,7 +180,7 @@ class VmacAccel(HwComponent):
         # element geometry in the shared data region (structural, constant) — cached on self so
         # both the consumer and the vmac_compute shell share one element->byte-address helper.
         self._mem_bw = int(self.m_mem.bitwidth)
-        self._elem = self._data_elem()
+        self._elem = self.types.operand_elem()
         # ring poll interval (bus cycles), set once on the queue (D3) so the synthesizable
         # call site stays the bare get(self.Cmd); the poll lives in the C++ dequeue hook.  The
         # consumer's empty-wait now goes through MMIFMaster.poll_until: the poll's bus cost is
@@ -197,145 +199,23 @@ class VmacAccel(HwComponent):
         )
 
     @property
+    def types(self) -> VmacFormats:
+        """The fixed-point derived types/formats this accelerator's widths induce (see
+        :class:`~examples.vmac.vmac_datatypes.VmacFormats`).  The datapath / golden read their
+        operand / accumulator / output formats off this — the accelerator class carries the
+        *behaviour*, the *type algebra* lives in the datatypes module (the dependent-types split)."""
+        return VmacFormats(
+            data_bw=int(self.data_bw), int_bits=int(self.int_bits),
+            acc_bw=int(self.acc_bw), out_bw=int(self.out_bw),
+            q_rnd=int(self.q_rnd), o_sat=int(self.o_sat),
+        )
+
+    @property
     def pf(self) -> int:
-        """Complex columns packed per memory word — the kernel's ``PF = MEM_BW / element_bits``
-        (element = ``2 * data_bw``).  Sets ``trips = n_rows * ceil(n_cols / pf)`` in the
-        II-decoupled timing model, matching the ``.tpp`` inner-loop step (``col0 += PF``)."""
-        return max(1, int(self.mem_dwidth) // (2 * int(self.data_bw)))
-
-    @property
-    def q_mode(self) -> QMode:
-        """The (structural) output quantization mode — ``ap_fixed``'s compile-time ``Q``."""
-        return QMode.AP_RND if int(self.q_rnd) else QMode.AP_TRN
-
-    @property
-    def o_mode(self) -> OMode:
-        """The (structural) output overflow mode — ``ap_fixed``'s compile-time ``O``."""
-        return OMode.AP_SAT if int(self.o_sat) else OMode.AP_WRAP
-
-    # --- private datapath helpers (complex-only → static / class) ----------------
-    @staticmethod
-    def _fixed_cls(fmt: Format) -> type[FixedField]:
-        return FixedField.specialize(
-            fmt.W, fmt.int_bits, fmt.signed, fmt.q_mode, fmt.o_mode
-        )
-
-    @classmethod
-    def _operand(cls, M: np.ndarray, in_fmt: Format) -> DataArray:
-        """Wrap a strided complex matrix view (structured re/im) as a DataArray operand."""
-        elem = ComplexField.specialize(cls._fixed_cls(in_fmt))
-        shape = M.shape if M.shape else (1,)
-        return DataArray.specialize(elem, max_shape=tuple(shape))(M)
-
-    def _data_elem(self) -> type[ComplexField]:
-        """The shared-memory element type — the operand ``ComplexField`` at the input
-        format.  Both VMAC and the host (de)serialize the A/B/Y regions through it, so the
-        timed ``m_mem`` words round-trip bit-exactly with the golden's structured buffer."""
-        return ComplexField.specialize(self._fixed_cls(self._in_fmt()))
-
-    @classmethod
-    def _alpha(
-        cls, sc, n_rows: int, n_cols: int, in_fmt: Format, alpha_arr
-    ) -> DataArray:
-        """Build the ``scalar_mult`` alpha operand as an ``(n_rows, n_cols)`` broadcast: direct
-        immediate (one value, broadcast over every row/col) or per-row indirect — the pre-read
-        per-row column ``alpha_arr`` (shape ``(n_rows,)``) broadcast over columns.  It no longer
-        reads memory: the shell (:meth:`vmac_compute` / :meth:`execute_mem`) supplies the already
-        fetched ``alpha_arr``."""
-        if bool(sc.direct):
-            re = np.full((n_rows, n_cols), int(cx.re_of(sc.imm)), dtype=np.int64)
-            im = np.full((n_rows, n_cols), int(cx.im_of(sc.imm)), dtype=np.int64)
-            M = cx.make_complex(re, im, in_fmt)
-        else:
-            col = np.asarray(alpha_arr).reshape(n_rows)  # (n_rows,) structured complex
-            M = np.broadcast_to(col[:, None], (n_rows, n_cols)).copy()
-        return cls._operand(M, in_fmt)
-
-    @staticmethod
-    def _requantize(t: DataArray, out_cls: type[FixedField]) -> DataArray:
-        """Requantize the wide complex accumulator ``t`` into the output ``FixedField``
-        ``out_cls`` — the single lossy step (right-shift + round + saturate), an ``ap_fixed``
-        assignment via the ``ap_fixed``-exact integer requantizer (``fixputils.quantize``).
-        The shift is implicit in the binary-point difference src.frac − target.frac."""
-        target = out_cls.get_format()
-        src = t.element_type.inner_format()
-        re = fixputils.quantize(cx.re_of(t.val), src, target)
-        im = fixputils.quantize(cx.im_of(t.val), src, target)
-        elem = ComplexField.specialize(out_cls)
-        struct = cx.make_complex(re, im, target)
-        return DataArray.specialize(elem, max_shape=struct.shape)(struct)
-
-    # --- numeric model: datapath format derivation (the codegen spec) ------------
-    def _in_fmt(self) -> Format:
-        """The operand component ``FixedField`` format — fully structural: ``W = data_bw``,
-        ``I = int_bits``, so ``F_in = data_bw - int_bits`` fractional bits."""
-        return Format(int(self.data_bw), int(self.int_bits), signed=True)
-
-    def accumulator_format(self, cmd: VmacCmd) -> Format:
-        """The wide-accumulator component ``FixedField`` for ``cmd`` — full precision, no loss.
-
-        Complex-only, so a multiply is ``cmult_format`` (``sub_format``-based, +1 integer bit)
-        and an add is ``add_format`` (+1 integer bit).  Composes the datapath as pure format
-        algebra (no data), per op:
-
-        - **scalar_mult** ``alpha·A``: one multiply → ``cmult_format(in, in)`` (``F_acc = 2·F_in``);
-        - **inner_prod** ``A·conj(B)``: ``conj`` grows the inner ``(W+1, I+1)``, then a multiply
-          → ``cmult_format(in, conj(in))`` (``F_acc = 2·F_in``);
-        - **sum** ``A+B``: aligned add → ``add_format(in, in)`` (``F_acc = F_in``);
-        - **reduce**: ``+⌈log₂ n_rows⌉`` integer bits (``sum_format``).
-
-        ``F_acc`` (fractional depth) depends only on the op (``2·F_in`` for the products, ``F_in``
-        for the add); this is what makes the requantize shift derivable (see
-        :meth:`output_format` / :meth:`derived_shift`)."""
-        in_fmt = self._in_fmt()
-        op = OpCode(int(cmd.op))
-        if op is OpCode.scalar_mult:
-            acc = cx.cmult_format(in_fmt, in_fmt)  # alpha · A
-        elif op is OpCode.inner_prod:
-            acc = cx.cmult_format(in_fmt, cx.conj_format(in_fmt))  # A · conj(B)
-        else:  # sum
-            acc = add_format(in_fmt, in_fmt)  # A + B (aligned, +1 int bit)
-        if bool(cmd.reduce):
-            acc = sum_format(acc, int(cmd.n_rows))  # + ceil(log2 n_rows) int bits
-        return acc
-
-    def output_format(self, cmd: VmacCmd) -> type[FixedField]:
-        """The output (per-component) ``FixedField`` for ``cmd`` — structural scale, the
-        codegen target.
-
-        The output is fixed at the **input fractional scale** ``F_out = F_in`` (a normalized
-        result comparable to the inputs), with structural width ``out_bw`` and round/saturate
-        modes ``q_mode`` / ``o_mode``.  The single lossy step requantizes the accumulator
-        (``F_acc`` fractional bits) down to ``F_out``, i.e. a right-shift of
-        ``SHIFT = F_acc − F_in`` (= ``F_in`` for the product ops, ``0`` for ``sum``) — *derived*
-        from the op, not carried in the command.  Fail-loud on a mis-sized accelerator: an
-        accumulator wider than ``acc_bw``, or an ``out_bw`` too small to hold the integer part.
-        """
-        acc = self.accumulator_format(cmd)
-        if acc.W > int(self.acc_bw):
-            raise ValueError(
-                f"accumulator width {acc.W} exceeds acc_bw={int(self.acc_bw)}; widen acc_bw."
-            )
-        out_frac = int(self.data_bw) - int(self.int_bits)  # F_out = F_in (structural)
-        out_bw = int(self.out_bw)
-        int_bits = out_bw - out_frac
-        if int_bits < 0:
-            raise ValueError(
-                f"out_bw={out_bw} is too small: F_out={out_frac} fractional bits exceed it "
-                f"(need out_bw >= {out_frac})."
-            )
-        return FixedField.specialize(
-            out_bw, int_bits, acc.signed, self.q_mode, self.o_mode
-        )
-
-    def derived_shift(self, cmd: VmacCmd) -> int:
-        """The requantize right-shift derived from the op + structural format —
-        ``SHIFT = F_acc − F_out`` (``F_in`` for the product ops, ``0`` for ``sum``; the residual
-        runtime numeric).  The ``.tpp`` reproduces it via the ``ap_fixed`` requantize scale.
-        """
-        return self.accumulator_format(cmd).frac_bits - (
-            int(self.data_bw) - int(self.int_bits)
-        )
+        """Complex columns packed per memory word (``MEM_BW / element_bits``) — the timing model's
+        ``trips = n_rows · ⌈n_cols / pf⌉`` step.  Couples the bus width (``mem_dwidth``) to the
+        element width, so it lives on the accelerator and delegates to ``types.lane_capacity``."""
+        return self.types.lane_capacity(int(self.mem_dwidth))
 
     # --- the golden ----------------------------------------------------------
     def execute(self, cmd: VmacCmd, a, b=None, alpha=None) -> DataArray:
@@ -348,22 +228,22 @@ class VmacAccel(HwComponent):
         regions as ``n_rows·n_cols`` structured complex elements (reshaped to ``(n, m)`` here);
         ``alpha`` is the per-row indirect column (``(n_rows,)``) for ``scalar_mult`` (``None`` for a
         direct immediate, ``None`` for the other ops).  The numeric / golden tests call it directly
-        on a no-``sim`` accelerator; :meth:`execute_mem` is the flat-memory twin for the build /
-        cosim vector generators."""
-        in_fmt = self._in_fmt()
+        on a no-``sim`` accelerator; the flat-memory twin for the build / cosim vector generators is
+        ``vmac_golden_mem.apply_golden``.  All formats are read off :attr:`types`."""
+        fmt = self.types
         n, m = int(cmd.n_rows), int(cmd.n_cols)
-        out_cls = self.output_format(cmd)  # fail-loud config guards (acc_bw / out_bw)
-        A = self._operand(np.asarray(a).reshape(n, m), in_fmt)
+        out_cls = fmt.output_format(cmd)  # fail-loud config guards (acc_bw / out_bw)
+        A = fmt.operand(np.asarray(a).reshape(n, m))
 
         # element-wise op -> R[i, j]
         op = OpCode(int(cmd.op))
         if op is OpCode.scalar_mult:
-            t = cmult(self._alpha(cmd.alpha, n, m, in_fmt, alpha), A)  # alpha[i] · A
+            t = cmult(fmt.alpha(cmd.alpha, n, m, alpha), A)  # alpha[i] · A
         elif op is OpCode.inner_prod:
-            B = self._operand(np.asarray(b).reshape(n, m), in_fmt)
+            B = fmt.operand(np.asarray(b).reshape(n, m))
             t = cmult(A, conj(B))  # A · conj(B)
         else:  # sum
-            B = self._operand(np.asarray(b).reshape(n, m), in_fmt)
+            B = fmt.operand(np.asarray(b).reshape(n, m))
             t = cadd(A, B)  # A + B
 
         # optional row reduction (wide accumulator)
@@ -373,7 +253,7 @@ class VmacAccel(HwComponent):
         # invariant: the actual accumulator format must equal the derived spec (the format
         # algebra in accumulator_format mirrors the operators it composes).
         actual = t.element_type.inner_format()
-        spec = self.accumulator_format(cmd)
+        spec = fmt.accumulator_format(cmd)
         if (actual.W, actual.int_bits, actual.signed) != (
             spec.W,
             spec.int_bits,
@@ -383,7 +263,7 @@ class VmacAccel(HwComponent):
                 f"accumulator format mismatch: actual {actual} != derived {spec}"
             )
 
-        return self._requantize(t, out_cls)  # NOTE: no writeback — the shell stores Y
+        return fmt.requantize(t, out_cls)  # NOTE: no writeback — the shell stores Y
 
     # NOTE: the flat-memory golden image (operands in → expected image out) is now harness
     # plumbing, not a method here: ``examples/vmac/vmac_golden_mem.py::apply_golden`` slices the

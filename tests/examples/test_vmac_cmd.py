@@ -13,7 +13,7 @@ immediate complex ``imm`` = ``data_bw`` bits per component); same params → sam
 import pytest
 
 from examples.vmac.vmac import VmacAccel
-from examples.vmac.vmac_cmd import Alpha, OpCode, Region, VmacCmd
+from examples.vmac.vmac_datatypes import Alpha, OpCode, Region, VmacCmd
 from waveflow.utils.fixputils import OMode, QMode
 
 # a concrete accelerator: 32-bit addresses, 16-bit operands/immediates
@@ -93,9 +93,9 @@ def test_reduce_is_booleanfield():
 def test_accel_q_o_mode_properties():
     # q_rnd / o_sat are structural (on the accelerator) — ap_fixed's compile-time Q/O.
     a = VmacAccel(data_bw=16, q_rnd=0, o_sat=0)
-    assert a.q_mode is QMode.AP_TRN and a.o_mode is OMode.AP_WRAP
+    assert a.types.q_mode is QMode.AP_TRN and a.types.o_mode is OMode.AP_WRAP
     b = VmacAccel(data_bw=16, q_rnd=1, o_sat=1)
-    assert b.q_mode is QMode.AP_RND and b.o_mode is OMode.AP_SAT
+    assert b.types.q_mode is QMode.AP_RND and b.types.o_mode is OMode.AP_SAT
 
 
 # --- the instance -> type bridge + cascade ------------------------------------

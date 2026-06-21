@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from examples.vmac.vmac import VmacAccel
-from examples.vmac.vmac_cmd import OpCode, VmacCmd
+from examples.vmac.vmac_datatypes import OpCode, VmacCmd
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
 from waveflow.hw.memif import MMIFMaster
 from waveflow.simulation.logger import NullLogger
@@ -52,7 +52,7 @@ class VmacHost(SimObj):
         self._mem_bw = int(self.accel.mem_dwidth)
         self.master = MMIFMaster(sim=self.sim, bitwidth=self._mem_bw)
         self.queue = AXIMMQueue(master=self.master, layout=self.layout)
-        self._elem = self.accel._data_elem()
+        self._elem = self.accel.types.operand_elem()
         # Element-indexed view of the shared data region — the framework owns the element→byte
         # conversion (see MMIFMaster.region); regions are addressed by element coordinate.
         self._data = self.master.region(self.data_base, self._elem, word_bw=self._mem_bw)

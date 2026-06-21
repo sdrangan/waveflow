@@ -33,7 +33,7 @@ CLI::
 The ``topgen_cosim`` step generates VMAC's synthesizable top *from the extracted ``run_proc``
 IR* (``examples.vmac.vmac_topgen``; the framework ``kernel_to_cpp`` path) — a free-running
 ``m_axi``-only kernel that dequeues commands from the in-memory ring — and cosims it bit-exact
-against :meth:`~examples.vmac.vmac.VmacAccel.execute_mem`.  (The hand-rolled ``render_top`` /
+against ``vmac_golden_mem.apply_golden``.  (The hand-rolled ``render_top`` /
 ``render_cosim_tb`` remain for now: the calibration pipeline — ``vmac_cosim_sweep`` /
 ``vmac_cosim_stage3`` → ``calibration/vmac_calibration.json`` → the queue-sim baseline — still
 shares them.  Migrating those to the generated top + re-running the Vitis calibration sweep is a
@@ -70,11 +70,11 @@ from waveflow.utils.fixputils import Format
 
 try:
     from examples.vmac.vmac import VmacAccel
-    from examples.vmac.vmac_cmd import Alpha, OpCode, Region, VmacCmd
+    from examples.vmac.vmac_datatypes import Alpha, OpCode, Region, VmacCmd
     from examples.vmac.vmac_golden_mem import apply_golden
 except ModuleNotFoundError:  # direct execution from the example dir
     from vmac import VmacAccel  # type: ignore[no-redef]
-    from vmac_cmd import Alpha, OpCode, Region, VmacCmd  # type: ignore[no-redef]
+    from vmac_datatypes import Alpha, OpCode, Region, VmacCmd  # type: ignore[no-redef]
     from vmac_golden_mem import apply_golden  # type: ignore[no-redef]
 
 _SOURCE_DIR = Path(__file__).resolve().parent
@@ -943,7 +943,7 @@ class ExtractCosimTimingStep(BuildStep):
 # kernel_to_cpp path), not the hand-rolled render_top f-strings: a free-running m_axi-only
 # kernel that dequeues VmacCmds from the in-memory ring (the synthesizable AXIMMQueue.get ->
 # aximm_queue_impl::queue_get hook), runs vmac_compute, and stops on OpCode.end (decision D6).
-# The cosim builds the ring image and checks the Y region bit-exact against execute_mem.
+# The cosim builds the ring image and checks the Y region bit-exact against apply_golden.
 TOPGEN_CFG = StructCfg(out_bw=8, q_rnd=0, o_sat=0, mem_dwidth=64)  # PF=4 (exercises lane packing)
 
 
@@ -982,7 +982,7 @@ class TopgenCosimStep(BuildStep):
         )
         if "VMAC_COSIM_MISMATCH" in log or "WAVEFLOW_SUCCESS" not in log:
             raise RuntimeError(
-                "STOP — the generated top disagreed with the Python golden (execute_mem). "
+                "STOP — the generated top disagreed with the Python golden (apply_golden). "
                 "The golden is the spec; fix the kernel/hook, do not loosen the compare."
             )
         out = config.root_dir / "results" / "topgen_cosim.json"

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from examples.vmac.vmac_cmd import OpCode
+from examples.vmac.vmac_datatypes import OpCode
 
 
 def _region_idx(reg, n_rows: int, n_cols: int) -> np.ndarray:
