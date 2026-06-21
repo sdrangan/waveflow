@@ -172,9 +172,13 @@ class VmacAccel(HwComponent):
         self._elem = self._data_elem()
         self._elem_bytes = self._elem.nwords_per_inst(self._mem_bw) * (self._mem_bw // 8)
         # coarse ring poll (poll_cycles bus cycles), computed once: a 1-cycle poll would
-        # saturate the AXI bus merely checking the queue (see vmac_queue_sim).
+        # saturate the AXI bus merely checking the queue (see vmac_queue_sim).  Set on the queue
+        # (D3) so the synthesizable call site stays the bare get(self.Cmd); the poll lives in the
+        # C++ dequeue hook.
         self._poll = float(self.poll_cycles) / float(self.clk.freq)
+        self.cmd_queue.poll_interval = self._poll
         self._cmd_idx = -1  # sim-only command counter, maintained by the @sim_only records
+        self._dequeue_t = 0.0  # sim-only: dequeue time stashed by _record_dequeue
 
     @property
     def Cmd(self) -> type[VmacCmd]:
@@ -513,11 +517,14 @@ class VmacAccel(HwComponent):
         return self.data_base + int(elem_idx) * self._elem_bytes
 
     @sim_only
-    def _record_dequeue(self, cmd: VmacCmd, t: float) -> None:
-        """Sim-only: bump the command counter and capture the dequeue event (occupancy curve +
-        raw log).  Runs before the datapath so ``self._cmd_idx`` is current for the transaction
-        records :meth:`vmac_compute` emits."""
+    def _record_dequeue(self, cmd: VmacCmd) -> None:
+        """Sim-only: bump the command counter, capture + stash the dequeue time, and record the
+        dequeue event (occupancy curve + raw log).  Runs before the datapath so ``self._cmd_idx``
+        is current for the transaction records :meth:`vmac_compute` emits, and ``self._dequeue_t``
+        is stashed for :meth:`_record_command` (so ``run_proc``'s body holds no ``self.now``)."""
         self._cmd_idx += 1
+        t = self.now
+        self._dequeue_t = float(t)
         self.q_events.append(
             {"t": float(t), "kind": "dequeue", "cmd_idx": self._cmd_idx}
         )
@@ -525,9 +532,10 @@ class VmacAccel(HwComponent):
                         tstart=float(t))
 
     @sim_only
-    def _record_command(self, cmd: VmacCmd, dequeue_t: float) -> None:
+    def _record_command(self, cmd: VmacCmd) -> None:
         """Sim-only: capture the per-command record (dequeue→complete latency) after the
-        datapath returns."""
+        datapath returns, reading the dequeue time stashed by :meth:`_record_dequeue`."""
+        dequeue_t = self._dequeue_t
         complete_t = self.now
         op = OpCode(int(cmd.op))
         need_b = op in (OpCode.inner_prod, OpCode.sum)
@@ -551,16 +559,16 @@ class VmacAccel(HwComponent):
         (silently dropped by the extractor); the II-decoupling pad inside the non-extracted
         ``vmac_compute`` body.
 
-        (This is the clean shape, not yet end-to-end extractable — that additionally needs a
-        synthesizable ``cmd_queue.get``, a follow-on.  See the timing model in
-        :meth:`vmac_compute`: bus transactions are always issued so ``ab_eq`` shows anorm at
-        half the reads, while latency is the II-driven pipeline schedule.)"""
+        The loop body extracts to the HLS IR (``HwStmtExtractor``): the dequeue is the
+        synthesizable :meth:`AXIMMQueue.get <waveflow.hw.aximm_queue.AXIMMQueue.get>`
+        (``AXIMMQueueGetStmt`` → the ring-dequeue hook), the ``end`` sentinel is the
+        ``cmd.op == OpCode.end`` case, and the datapath is the ``vmac_compute`` hook.  See the
+        timing model in :meth:`vmac_compute`: bus transactions are always issued so ``ab_eq``
+        shows anorm at half the reads, while latency is the II-driven pipeline schedule."""
         while True:
-            cmd: VmacCmd = yield from self.cmd_queue.get(
-                self.Cmd, poll_interval=self._poll)
-            dequeue_t = self.now
-            self._record_dequeue(cmd, dequeue_t)        # @sim_only (also bumps _cmd_idx)
-            if OpCode(int(cmd.op)) is OpCode.end:
-                break  # sentinel: the host's last command; drain and terminate
+            cmd: VmacCmd = yield from self.cmd_queue.get(self.Cmd)
+            self._record_dequeue(cmd)               # @sim_only (bumps _cmd_idx, stashes dequeue_t)
+            if cmd.op == OpCode.end:
+                return  # sentinel: the host's last command; drain and terminate
             yield from self.vmac_compute(cmd, self.m_mem)
-            self._record_command(cmd, dequeue_t)        # @sim_only
+            self._record_command(cmd)               # @sim_only

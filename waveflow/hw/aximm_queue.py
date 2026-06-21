@@ -37,8 +37,27 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from waveflow.hw.hwstmt import SynthCallStmt
 from waveflow.hw.memif import MMIFMaster, Words
+from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
+
+
+# ---------------------------------------------------------------------------
+# HwStmt subclass (queue-owned; lives alongside the queue, like StreamGetStmt)
+# ---------------------------------------------------------------------------
+
+class AXIMMQueueGetStmt(SynthCallStmt):
+    """IR node produced by ``AXIMMQueue.get(schema_type)`` calls — a memory-backed
+    ring dequeue.  Lowered (``hwgen._emit_aximm_queue_get``) to a call into the
+    hand-written ring-dequeue hook (``waveflow/build/aximm_queue_impl.tpp``).
+
+    ``inputs[0]`` is the element schema class; ``outputs[0]`` is the bound command
+    ``HwVar``.  Mirrors :class:`~waveflow.hw.interface.StreamGetStmt`."""
+
+    def __repr__(self) -> str:
+        outs = ', '.join(v.name for v in self.outputs)
+        return f"AXIMMQueueGetStmt(outputs=[{outs}])"
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +183,11 @@ class AXIMMQueue:
 
     master: MMIFMaster
     layout: AXIMMQueueLayout
+    #: Default poll interval (sim seconds) for the blocking write/get loops when a
+    #: call does not pass ``poll_interval=`` explicitly.  The consumer sets this once
+    #: (in ``pre_sim``) so the synthesizable ``get(self.Cmd)`` call site stays bare
+    #: (decision D3); the poll lives inside the C++ dequeue hook.
+    poll_interval: float = DEFAULT_POLL_INTERVAL
 
     def __post_init__(self) -> None:
         # Decision 11: the layout's mem_bw is the single source of word width
@@ -364,13 +388,14 @@ class AXIMMQueue:
             words = write_array(data, elem_type=element_type, word_bw=self.layout.mem_bw)
         yield from self._write_raw(words, poll_interval)
 
+    @synthesizable(stmt_class=AXIMMQueueGetStmt)
     def get(
         self,
         schema_type: type | None = None,
         count: int | None = None,
         *,
         nwords_max: int | None = None,
-        poll_interval: float = DEFAULT_POLL_INTERVAL,
+        poll_interval: float | None = None,
     ) -> ProcessGen[Any]:
         """Dequeue from the ring, blocking until the data is available.
 
@@ -387,7 +412,14 @@ class AXIMMQueue:
         ``count``-element :class:`~waveflow.hw.dataschema.DataArray` (mirroring
         ``StreamIFSlave.get``); without *count*, a single deserialized instance
         (one slot).
+
+        Synthesizable typed single-element path (``get(schema_type)``): mirrors
+        ``StreamIFSlave.get`` and extracts to :class:`AXIMMQueueGetStmt` (a C++
+        ring dequeue).  ``poll_interval`` is sim-only and defaults to the queue's
+        :attr:`poll_interval` attribute when omitted (decision D3) — the bare
+        ``get(self.Cmd)`` call site is what extracts.
         """
+        poll = self.poll_interval if poll_interval is None else poll_interval
         ew = self.layout.elem_words
         if schema_type is None:
             if count is not None and nwords_max is not None:
@@ -403,12 +435,12 @@ class AXIMMQueue:
                 nslots = int(nwords_max) // ew
             else:
                 raise ValueError("get: raw path requires count or nwords_max")
-            return (yield from self._get_raw_slots(nslots, poll_interval))
+            return (yield from self._get_raw_slots(nslots, poll))
 
         # Typed path.
         self._check_schema_elem_words(schema_type)
         nslots = int(count) if count is not None else 1
-        raw = yield from self._get_raw_slots(nslots, poll_interval)
+        raw = yield from self._get_raw_slots(nslots, poll)
         if count is not None:
             from waveflow.hw.arrayutils import read_array
             return read_array(
