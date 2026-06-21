@@ -85,6 +85,7 @@ timestamped events for later analysis).
 
 ## See also
 
+- [Timing Models](../timing_model/) — the deeper forward model: how a component's load/compute/store shape (block, streaming, double-buffered) sets its timeline, building on this page.
 - [Logging](./logging.md) — capture `self.now`-stamped events to a CSV during the run.
 - [Timing Analysis Tools](../timing/) — analyzing the timeline this model produces.
 - [Interface Overview](../interface/overview.md) — the per-interface latency parameters.
