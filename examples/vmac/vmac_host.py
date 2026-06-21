@@ -54,8 +54,11 @@ class VmacHost(SimObj):
         self.queue = AXIMMQueue(master=self.master, layout=self.layout)
         self._elem = self.accel.types.operand_elem()
         # Element-indexed view of the shared data region — the framework owns the element→byte
-        # conversion (see MMIFMaster.region); regions are addressed by element coordinate.
+        # conversion (see MMIFMaster.region); regions are addressed by element coordinate.  The
+        # on_transfer hook records the host's A/B data-in writes to the timeline (the Y readbacks
+        # are untracked), so _write_matrix / _read_values just slice by element index.
         self._data = self.master.region(self.data_base, self._elem, word_bw=self._mem_bw)
+        self._data.on_transfer = self._on_transfer
         # F_out = F_in (structural): stored code -> value is code / 2**F_out.
         self._out_frac = int(self.accel.data_bw) - int(self.accel.int_bits)
         self.anorm: np.ndarray | None = None   # per-column, complex (im≈0)
@@ -67,22 +70,25 @@ class VmacHost(SimObj):
         self.q_events: list[dict] = []         # ring enqueue events (for occupancy)
 
     # -- region helpers (timed m_mem transactions) ----------------------------
-    def _write_matrix(self, M: np.ndarray, elem_addr: int) -> ProcessGen[None]:
-        flat = np.asarray(M).ravel()
-        t0, t1, nwords = yield from self._data.write_pipelined(elem_addr, flat)
-        addr = self._data.byte_of(elem_addr)
+    def _on_transfer(self, rw: str, i0: int, nwords: int, t0: float, t1: float) -> None:
+        """``Region.on_transfer`` hook: record the host's A/B data-in **writes** to the timeline.
+        Y readbacks (reads) are deliberately untracked, matching the original instrumentation."""
+        if rw != "write":
+            return
+        addr = self._data.byte_of(i0)
         self.txns.append({
             "cmd_idx": -1, "name": "data_in", "rw": "write", "addr": int(addr),
-            "nwords": int(nwords), "tstart": float(t0), "tend": float(t1),
-            "ab_eq": False,
+            "nwords": int(nwords), "tstart": float(t0), "tend": float(t1), "ab_eq": False,
         })
         self.logger.log(role="host", event="mem", label="data_in", rw="write",
-                        nwords=int(nwords), addr=int(addr),
-                        tstart=float(t0), tend=float(t1))
+                        nwords=int(nwords), addr=int(addr), tstart=float(t0), tend=float(t1))
+
+    def _write_matrix(self, M: np.ndarray, elem_addr: int) -> ProcessGen[None]:
+        yield from self._data.write_slice(elem_addr, np.asarray(M).ravel())
 
     def _read_values(self, elem_addr: int, count: int) -> ProcessGen[np.ndarray]:
         """Read *count* complex elements back and return them as scaled complex values."""
-        struct = yield from self._data.read(elem_addr, elem_addr + count)
+        struct = yield from self._data.read_slice(elem_addr, elem_addr + count)
         scale = 2.0 ** self._out_frac
         return (cx.re_of(struct).astype(np.float64) + 1j * cx.im_of(struct).astype(np.float64)) / scale
 

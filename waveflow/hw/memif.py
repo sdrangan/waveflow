@@ -507,7 +507,7 @@ class MMIFMaster(InterfaceEndpoint):
         **element index**.
 
         The SimPy twin of the C++ ``read_array_slice`` / ``read_array_lane`` element-coordinate
-        contract (and the PynQ-``allocate`` analogue): ``region.read(i0, i1)`` moves elements
+        contract (and the PynQ-``allocate`` analogue): ``region.read_slice(i0, i1)`` moves elements
         ``[i0, i1)`` and the interface does the element→byte conversion (see :meth:`_word_bytes`).
         The base is a byte address (host/allocator-owned, width-agnostic); indices within are
         element coordinates (width-agnostic, HLS-natural)."""
@@ -517,21 +517,32 @@ class MMIFMaster(InterfaceEndpoint):
         )
 
 
+#: A per-transfer instrumentation hook ``(rw, i0, nwords, tstart, tend) -> None`` — fired by
+#: :meth:`Region.read_slice` / :meth:`Region.write_slice` after each transfer so a loosely-timed
+#: component can record it (the timeline) without the data path ever unpacking timing.  ``rw`` is
+#: ``"read"`` / ``"write"``; ``i0`` is the element start index.
+OnTransfer = Callable[[str, int, int, float, float], None]
+
+
 @dataclass
 class Region:
     """Element-indexed view of a memory region for an :class:`MMIFMaster` (built via
     :meth:`MMIFMaster.region`).
 
     Binds a byte ``base_addr`` + ``element_type``; **all indices are element coordinates**.
-    Mirrors the C++ ``read_array_slice`` / ``read_array_lane`` contract so the SimPy model and the
-    generated kernel address memory identically — the element→byte conversion lives here (in the
-    framework), not hand-rolled on each accelerator.
+    :meth:`read_slice` / :meth:`write_slice` mirror the C++ ``read_array_slice`` /
+    ``write_array_slice`` contract so the SimPy model and the generated kernel address memory
+    identically — and they return just data / nothing, exactly like the hardware call.  Timing is
+    *not* on the data path: set :attr:`on_transfer` and each slice reports ``(rw, i0, nwords,
+    tstart, tend)`` to it (the loosely-timed instrumentation hook), so the element→byte conversion
+    *and* the AT timing capture both live in the framework, not hand-rolled on each accelerator.
     """
 
     master: MMIFMaster
     base_addr: int
     element_type: type
     word_bw: int = 32
+    on_transfer: OnTransfer | None = None
 
     @property
     def _elem_bytes(self) -> int:
@@ -542,29 +553,26 @@ class Region:
         """Byte address of element *i* (the element-coordinate → address conversion)."""
         return self.base_addr + int(i) * self._elem_bytes
 
-    def read(self, i0: int, i1: int) -> ProcessGen[Any]:
-        """Read elements ``[i0, i1)`` (element coordinates); returns the deserialized array."""
-        return self.master.read_array(
+    def read_slice(self, i0: int, i1: int) -> ProcessGen[Any]:
+        """Read elements ``[i0, i1)`` (element coordinates) and return the deserialized array —
+        the sim twin of ``read_array_slice<W>(mem, i0, i1, x)``.  Fires :attr:`on_transfer`."""
+        data, t0, t1, nw = yield from self.master.read_array_pipelined(
             self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
+        if self.on_transfer is not None:
+            self.on_transfer("read", int(i0), nw, t0, t1)
+        return data
 
-    def read_pipelined(self, i0: int, i1: int) -> ProcessGen[tuple]:
-        """Like :meth:`read`, also returning ``(data, tstart, tend, nwords)`` (AT timing capture)."""
-        return self.master.read_array_pipelined(
-            self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
-
-    def write(self, i0: int, elements: Any, element_type: type | None = None) -> ProcessGen[None]:
-        """Write *elements* starting at element index *i0*.  *element_type* defaults to the
-        region's; pass it when the written elements differ (e.g. an output format whose addressing
-        stride matches the region's)."""
-        return self.master.write_array(
-            elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
-
-    def write_pipelined(
+    def write_slice(
         self, i0: int, elements: Any, element_type: type | None = None,
-    ) -> ProcessGen[tuple]:
-        """Like :meth:`write`, also returning ``(tstart, tend, nwords)`` (AT timing capture)."""
-        return self.master.write_array_pipelined(
+    ) -> ProcessGen[None]:
+        """Write *elements* starting at element index *i0* — the sim twin of
+        ``write_array_slice``.  *element_type* defaults to the region's (pass it when the written
+        elements differ, e.g. an output format whose addressing stride matches).  Fires
+        :attr:`on_transfer`."""
+        t0, t1, nw = yield from self.master.write_array_pipelined(
             elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
+        if self.on_transfer is not None:
+            self.on_transfer("write", int(i0), nw, t0, t1)
 
 
 # ---------------------------------------------------------------------------

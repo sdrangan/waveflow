@@ -99,9 +99,19 @@ analogue): the framework owns the element→byte conversion (using the interface
 
 ```python
 x = master_ep.region(base_addr=XADDR, element_type=Float32)   # byte base + element dtype
-xs = yield from x.read(i0, i1)                                  # x[i0:i1] by element index
-yield from x.write(i0, xs)                                      # write elements back at i0
-# *_pipelined variants also return (… tstart, tend, nwords) for AT timing capture
+xs = yield from x.read_slice(i0, i1)                            # x[i0:i1] by element index
+yield from x.write_slice(i0, xs)                               # write elements back at i0
+```
+
+`read_slice` / `write_slice` return just data / nothing — exactly like the hardware
+`read_array_slice` — so the **timing stays off the data path**. A loosely-timed component that
+needs the transfer timeline sets `x.on_transfer`, a hook `(rw, i0, nwords, tstart, tend) -> None`
+fired after each slice; the AT timing capture then lives in the framework, not hand-bracketed at
+every call:
+
+```python
+x.on_transfer = lambda rw, i0, nw, t0, t1: record(rw, x.byte_of(i0), nw, t0, t1)
+a = yield from x.read_slice(0, n)        # the data path never unpacks timing
 ```
 
 The base is a **byte** address (host/allocator-owned, width-agnostic); indices within are

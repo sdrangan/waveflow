@@ -302,37 +302,29 @@ class VmacAccel(HwComponent):
         alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
         cmd_idx = self._cmd_idx
 
-        # The shared data region as an element-indexed view (the framework owns the element→byte
-        # conversion — see MMIFMaster.region; the C++ hook uses read_array_lane/slice over the same
-        # element coordinates).  All addresses below are element indices straight from the command.
+        # The shared data region as an element-indexed view — read_slice / write_slice mirror the
+        # C++ read_array_slice over the same element coordinates (the framework owns the element→byte
+        # conversion).  The transaction timeline is captured by the region's on_transfer hook, not
+        # hand-bracketed here, so the data path reads/writes by element index and nothing else.
         data = mem.region(self.data_base, self._elem, word_bw=self._mem_bw)
+        data.on_transfer = self._txn_recorder(data, cmd_idx, ab_eq)
 
-        # timed operand reads — one whole-matrix LT block each
-        a, t0, t1, nw = yield from data.read_pipelined(int(cmd.a.addr), int(cmd.a.addr) + nm)
-        self._record_txn(cmd_idx, self.region_labels.get(int(cmd.a.addr), "data"),
-                         "read", data.byte_of(int(cmd.a.addr)), nw, t0, t1, ab_eq)
+        # timed operand reads — one whole-matrix LT block each (on_transfer records each)
+        a = yield from data.read_slice(int(cmd.a.addr), int(cmd.a.addr) + nm)
         b = None
         if need_b and not ab_eq:
-            b, t0, t1, nw = yield from data.read_pipelined(int(cmd.b.addr), int(cmd.b.addr) + nm)
-            self._record_txn(cmd_idx, self.region_labels.get(int(cmd.b.addr), "data"),
-                             "read", data.byte_of(int(cmd.b.addr)), nw, t0, t1, ab_eq)
+            b = yield from data.read_slice(int(cmd.b.addr), int(cmd.b.addr) + nm)
         elif ab_eq:
             b = a
         alpha = None
         if alpha_indirect:
-            alpha, t0, t1, nw = yield from data.read_pipelined(
-                int(cmd.alpha.addr), int(cmd.alpha.addr) + n)
-            self._record_txn(cmd_idx, self.region_labels.get(int(cmd.alpha.addr), "data"),
-                             "read", data.byte_of(int(cmd.alpha.addr)), nw, t0, t1, ab_eq)
+            alpha = yield from data.read_slice(int(cmd.alpha.addr), int(cmd.alpha.addr) + n)
 
         # the bit-exact golden computes R / reduce / requantize (pure math)
         dst = self.execute(cmd, a, b, alpha)
 
         # timed Y writeback — one LT block (element type is dst's, the output format)
-        t0, t1, nw = yield from data.write_pipelined(
-            int(cmd.y.addr), dst, element_type=type(dst).element_type)
-        self._record_txn(cmd_idx, self.region_labels.get(int(cmd.y.addr), "Y"),
-                         "write", data.byte_of(int(cmd.y.addr)), nw, t0, t1, ab_eq)
+        yield from data.write_slice(int(cmd.y.addr), dst, element_type=type(dst).element_type)
 
         # II-decoupling: advance to the calibrated pipeline-schedule completion time.  The
         # transfers above already moved `now` (their bus occupancy is real); pad the remainder so
@@ -346,6 +338,17 @@ class VmacAccel(HwComponent):
             if pad > 0:
                 yield self.timeout(pad)
         return dst
+
+    def _txn_recorder(self, region, cmd_idx: int, ab_eq: bool):
+        """Build the per-command ``Region.on_transfer`` hook: each ``read_slice`` / ``write_slice``
+        transfer becomes one timeline record.  The label is looked up by element offset (``Y`` for
+        writes, ``data`` for reads, by default); ``cmd_idx`` / ``ab_eq`` are the command's.  This is
+        what lets :meth:`vmac_compute` read/write by element index with the timing capture off the
+        data path (the ``read_pipelined`` 4-tuple is gone)."""
+        def record(rw: str, i0: int, nwords: int, t0: float, t1: float) -> None:
+            label = self.region_labels.get(int(i0), "Y" if rw == "write" else "data")
+            self._record_txn(cmd_idx, label, rw, region.byte_of(i0), nwords, t0, t1, ab_eq)
+        return record
 
     def _record_txn(
         self, cmd_idx: int, name: str, rw: str, addr: int, nwords: int,
