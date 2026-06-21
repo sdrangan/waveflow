@@ -1,11 +1,12 @@
 # Design proposal: an LT polling-overhead model — `m_mem.poll_until(...)`
 
-**Status: steps 1–4 IMPLEMENTED (2026-06-21); step 5 gated/out of scope.** The Phase-0 design
-pass is done and the four decisions (D1–D4) are settled. The sim-side LT model (the `PollCond`
-value type, `MMIFMaster.poll_until`, the per-bus poller registry + occupancy derating in the
-crossbar, and the `AXIMMQueue.get` rebuild) is landed — see "Implementation status (steps 1–4
-landed)" below. Step 5 (the `@synthesizable` twin) stays blocked on the condition-IR
-rhs-as-runtime-var extension. The `vmac-top-autosynth` prereq is merged on `main`.
+**Status: steps 1–5 IMPLEMENTED (2026-06-21).** The Phase-0 design pass is done and the four
+decisions (D1–D4) are settled. Steps 1–4 (the sim-side LT model: the `PollCond` value type,
+`MMIFMaster.poll_until`, the per-bus poller registry + occupancy derating, the `AXIMMQueue.get`
+rebuild) and step 5 (the `@synthesizable` twin: the condition-IR rhs-as-runtime-var extension,
+`PollUntilStmt`, and the reusable `poll_until_impl` C++ primitive the ring dequeue now shares)
+are all landed — see "Implementation status" below. The `vmac-top-autosynth` prereq is merged
+on `main`.
 
 ## Motivation
 
@@ -151,8 +152,9 @@ The same rule applies to the FULL write's `nwords` term in `cycles = latency_ini
    has the per-bus topology view), with the `ov<1` clamp-and-warn.
 4. Rebuild `AXIMMQueue.get`'s blocking poll on `poll_until`; retire `poll_cycles=64`; record the
    new (expected-to-shift) queue-sim baseline, asserting the per-command invariants still hold.
-5. (Later, gated on the condition-IR rhs-as-runtime-var extension) make `poll_until`
-   `@synthesizable` and lower the `Cond` to the C++ ring-poll, generalizing `AXIMMQueueGetStmt`.
+5. (DONE) Extend the condition-IR so the `==`/`!=` rhs may be a runtime `HwVar`, then make
+   `poll_until` `@synthesizable` and lower the `Cond` to the C++ ring-poll via the reusable
+   `poll_until_impl` primitive that `queue_get` now shares (generalizing the ring-poll hook).
 
 ## Superseded open decisions (kept for history)
 
@@ -215,16 +217,46 @@ not done** — see the blocker below.
     exactly the `ov ≥ 1` polling-bound case. They pass functionally and now emit the loud
     clamp-and-warn (the model flagging the precise 1-cycle-poll mistake, as intended by D2).
 
-### Step 5 (synthesizable twin) — NOT done; blocker recorded
+### Step 5 (synthesizable twin) — DONE
 
-Making `poll_until` `@synthesizable` and lowering `PollCond` to the C++ ring-poll is **out of
-scope for this run** and remains gated on the **condition-IR rhs-as-runtime-var extension**
-(D4's flagged cost): the existing condition-IR lowers `==`/`!=` only against *constants*, but
-the queue dequeue polls `tail != head` where `head` is a runtime-read local. The sim-only
-`PollCond.eval` path (steps 1–4) does **not** need it — `Ne(head)` just captures the int — so
-the LT model lands first and the synth lowering follows once the condition-IR accepts a runtime
-`HwVar` rhs. `PollCond`/`Eq`/`Ne` are already shaped as the single lowerable object so that
-extension is purely additive (no sim/synth source split).
+`poll_until` is now `@synthesizable` and lowers to the hand-written C++ ring-poll. The blocker
+(D4's flagged cost) was the **condition-IR rhs-as-runtime-var extension**; resolving it unlocked
+both the standalone poll lowering and a general capability.
+
+- **Condition-IR extension (the blocker).** `HwStmtExtractor._visit_if` now resolves the `==`/
+  `!=` rhs via `_resolve_compare_rhs`: a bare name **in scope** binds to its `HwVar`; everything
+  else still falls through to constant evaluation (the `==`/`!=` + single-comparison restriction
+  is unchanged). `_emit_case` emits the rhs through `_emit_expr`, so a `HwVar`/`FieldRef` rhs
+  prints the variable name while constants/enums are unchanged. This is the general capability —
+  a synthesizable `if a != b:` now compares two runtime locals — and it is what `Ne(head)` needs.
+  Tests: `tests/hw/test_condition_ir_var_rhs.py` (extraction binds the var; constant path
+  unregressed; non-`==`/`!=` op still rejected; emission of var vs literal rhs).
+- **`poll_until` lowering.** `MMIFMaster.poll_until` is decorated `@synthesizable(stmt_class=
+  PollUntilStmt)`. The extractor recognizes an `Eq(x)` / `Ne(x)` call-site arg (resolved via the
+  method's globals) and lowers it to a `LoweredPollCond(op, rhs)` — `rhs` a constant or a runtime
+  `HwVar`. `PollUntilStmt` carries `[addr, LoweredPollCond, poll_interval]`; `poll_beat_cost` /
+  `discovery` / `poll_interval` are sim-only (AT-model) and **never** reach the IR or the C++.
+  `hwgen._emit_poll_until` lowers it to a call into the reusable primitive
+  `poll_until_impl::poll_until_{eq,ne}<MEM_BW>(gmem, word_idx, rhs)` (the header pulls in
+  `poll_until_impl.tpp`). Tests: `tests/hw/test_poll_until_stmt.py` (extraction of const + runtime
+  rhs, multi-arg cond rejected; emission of the eq/ne primitive call; poll_interval not emitted).
+- **One poll loop, not two (generalization).** The new `waveflow/build/poll_until_impl.tpp` holds
+  the reusable primitive. `aximm_queue_impl::queue_get` was refactored to express its `while
+  (head == tail)` non-empty wait as `poll_until_impl::poll_until_ne<MEM_BW>(gmem, tail_word,
+  head)` — so the standalone `poll_until` and the ring dequeue share one loop, exactly as the
+  plan intended ("generalizes the `AXIMMQueueGetStmt` hook into a reusable polling primitive").
+  `AXIMMQueue.get`'s *extraction* (`AXIMMQueueGetStmt` → `queue_get`) is unchanged — only the
+  hook's C++ internals now delegate to the primitive.
+- **Sim path untouched.** The decorator only tags `poll_until`; its SimPy body still runs the LT
+  model. The committed `examples/vmac/timeline/sim_timeline.json` baseline is **byte-identical**.
+- **Verification (Vitis HLS 2025.1, installed here).** Both the standalone primitive and the
+  refactored `queue_get` compile + run correctly against the real `ap_int.h` (a g++ csim of each).
+  A **Vitis HLS `csim_design` of the auto-extracted VMAC top** (`vmac_topgen`) — the real
+  generated `VmacCmd` draining the ring through `queue_get` → `poll_until_ne` — passes with **0
+  errors**. The full non-vitis suite shows no new failures vs the known 15-failure baseline.
+  (Full RTL `cosim_design` of the generated top was not re-run for this change — the refactor is
+  a semantically-identical function extraction that HLS inlines, and the generated `vmac.cpp` is
+  byte-identical; csim + the C++ runs cover the new code.)
 
 ## Coordination
 

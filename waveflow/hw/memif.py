@@ -63,7 +63,7 @@ import numpy as np
 import simpy
 
 from waveflow.hw.interface import InterfaceEndpoint, QueuedTransferIF, Words
-from waveflow.hw.hwstmt import MMArrayReadStmt, MMArrayWriteStmt
+from waveflow.hw.hwstmt import MMArrayReadStmt, MMArrayWriteStmt, SynthCallStmt
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 
@@ -139,6 +139,54 @@ class Ne(PollCond):
     """Poll predicate ``read(addr) != rhs`` (e.g. the ring dequeue ``tail != head``)."""
 
     op: ClassVar[str] = "!="
+
+
+# ---------------------------------------------------------------------------
+# Synthesizable lowering of poll_until (step 5 — the C++ ring-poll twin)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LoweredPollCond:
+    """The lowered, synthesizable form of a :class:`PollCond` — what the
+    extractor resolves an ``Eq(x)`` / ``Ne(x)`` call-site argument to.
+
+    ``op`` is ``'=='`` / ``'!='``; ``rhs`` is the comparison value, either a
+    compile-time constant or a runtime ``HwVar`` already in scope (the ring poll
+    compares ``tail != head`` where ``head`` is a prior read).  It carries none
+    of the loosely-timed AT-model data (``poll_beat_cost`` / ``discovery``):
+    a hardware poll just spins on the word."""
+
+    op: str
+    rhs: Any   # HwVar | int (constant)
+
+
+class PollUntilStmt(SynthCallStmt):
+    """IR node for ``val = master.poll_until(addr, cond, poll_interval)`` — a
+    blocking poll over the master's m_axi pointer, lowered to the reusable C++
+    ring-poll primitive (``poll_until_impl::poll_until_{eq,ne}``).
+
+    ``inputs[0]`` is the watched byte address; ``inputs[1]`` is the
+    :class:`LoweredPollCond`; ``inputs[2]`` (if present) is ``poll_interval`` —
+    sim-only (AT-model) and **never emitted**.  ``outputs[0]`` is the
+    satisfying-value local.  ``poll_beat_cost`` / ``discovery`` are sim-only and
+    never reach this IR."""
+
+    @property
+    def port(self):
+        """The bound ``MMIFMaster`` endpoint (``method.__self__``)."""
+        return getattr(self.method, '__self__', None)
+
+    @property
+    def addr_expr(self):
+        return self.inputs[0] if self.inputs else None
+
+    @property
+    def cond(self) -> "LoweredPollCond | None":
+        return self.inputs[1] if len(self.inputs) > 1 else None
+
+    def __repr__(self) -> str:
+        out = self.outputs[0].name if self.outputs else '?'
+        return f"PollUntilStmt({out} = poll_until)"
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +289,7 @@ class MMIFMaster(InterfaceEndpoint):
     # Polling (the LT polling-overhead model)
     # ------------------------------------------------------------------
 
+    @synthesizable(stmt_class=PollUntilStmt)
     def poll_until(
         self,
         global_addr: int,

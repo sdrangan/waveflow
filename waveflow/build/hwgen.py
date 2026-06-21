@@ -37,6 +37,7 @@ from waveflow.hw.interface import (
     StreamGetStmt,
     StreamWriteStmt,
 )
+from waveflow.hw.memif import PollUntilStmt
 from waveflow.hw.regmap import RegMapGetStmt, RegMapSetStmt
 
 if TYPE_CHECKING:
@@ -76,6 +77,8 @@ def to_cpp(stmt: HwStmt, ctx: CodegenCtx) -> str:
         return _emit_case(stmt, ctx)
     if isinstance(stmt, AXIMMQueueGetStmt):
         return _emit_aximm_queue_get(stmt, ctx)
+    if isinstance(stmt, PollUntilStmt):
+        return _emit_poll_until(stmt, ctx)
     if isinstance(stmt, StreamGetStmt):
         return _emit_stream_get(stmt, ctx)
     if isinstance(stmt, StreamWriteStmt):
@@ -114,7 +117,10 @@ def _emit_return(stmt: ReturnStmt, ctx: CodegenCtx) -> str:
 
 def _emit_case(stmt: CaseStmt, ctx: CodegenCtx) -> str:
     lhs = stmt.var.name if stmt.field is None else f"{stmt.var.name}.{stmt.field}"
-    rhs = _emit_literal(stmt.value)
+    # The rhs may be a constant (enum / literal) OR a runtime variable in scope
+    # (a HwVar / FieldRef — e.g. the ring-poll's ``tail != head``).  _emit_expr
+    # emits the variable name for those and the C++ literal for constants.
+    rhs = _emit_expr(stmt.value, ctx)
     # When the bare variable is itself an IntEnum (e.g. evaluate's PolyError
     # return), the local var is declared as ap_uint<8> (matching the hook's
     # actual C++ return type).  Cast the enum literal so the comparison
@@ -216,6 +222,34 @@ def _emit_aximm_queue_get(stmt: AXIMMQueueGetStmt, ctx: CodegenCtx) -> str:
     )
 
 
+def _emit_poll_until(stmt: PollUntilStmt, ctx: CodegenCtx) -> str:
+    """``val = self.m_mem.poll_until(addr, Ne(head), poll_interval)`` → a blocking
+    poll over the master's m_axi pointer, lowered to the reusable ring-poll
+    primitive ``poll_until_impl::poll_until_{eq,ne}`` (the C++ twin of the sim
+    ``MMIFMaster.poll_until``).
+
+    ``inputs[0]`` is the watched byte address; ``inputs[1]`` is the
+    :class:`~waveflow.hw.memif.LoweredPollCond` (op + const-or-HwVar rhs).
+    ``poll_interval`` (``inputs[2]``) is sim-only (the AT-model discovery delay)
+    and is NOT emitted — a hardware poll just spins on the word."""
+    master = stmt.method.__self__  # type: ignore[attr-defined]  # the MMIFMaster
+    port_name = _endpoint_name(master, ctx)
+    bw = int(master.bitwidth)
+    out = stmt.outputs[0]
+    cond = stmt.cond
+    assert cond is not None, "PollUntilStmt requires a lowered PollCond (op + rhs)"
+    addr_expr = _emit_expr(stmt.addr_expr, ctx)
+    rhs = _emit_expr(cond.rhs, ctx)
+    fn = "poll_until_eq" if cond.op == "==" else "poll_until_ne"
+    out_t = f"ap_uint<{bw}>"
+    word = f"memmgr::byte_addr_to_word_index<{bw}>({addr_expr})"
+    pad = ctx.pad()
+    return (
+        f"{pad}{out_t} {out.name} = poll_until_impl::{fn}<{bw}>("
+        f"{port_name}, {word}, ({out_t}){rhs});"
+    )
+
+
 def _emit_stream_write(stmt: StreamWriteStmt, ctx: CodegenCtx) -> str:
     # stmt.inputs = [HwVar of the value to write]
     value = stmt.inputs[0]
@@ -306,6 +340,29 @@ def _emit_mm_array_write(stmt: MMArrayWriteStmt, ctx: CodegenCtx) -> str:
         f"{src}, {port_name} + memmgr::byte_addr_to_word_index<{bw}>({addr}), "
         f"0, {count});"
     )
+
+
+def _tree_has_poll_until(tree: HwStmt) -> bool:
+    """True if any ``PollUntilStmt`` is reachable from ``tree`` (so the header
+    must pull in the reusable ring-poll primitive)."""
+    found = False
+
+    def walk(node: HwStmt) -> None:
+        nonlocal found
+        if isinstance(node, PollUntilStmt):
+            found = True
+        if isinstance(node, SeqStmt):
+            for s in node.stmts:
+                walk(s)
+        elif isinstance(node, WhileStmt):
+            walk(node.body)
+        elif isinstance(node, CaseStmt):
+            walk(node.if_true)
+            if node.if_false is not None:
+                walk(node.if_false)
+
+    walk(tree)
+    return found
 
 
 def _collect_mm_stmts(tree: HwStmt) -> list:
@@ -1154,6 +1211,11 @@ def header_to_cpp(
             f'#include "{_array_utils_include_path(et)}"'
             for et in _collect_mm_elem_types(tree)
         ]:
+            if inc not in lines:
+                lines.append(inc)
+        # The reusable ring-poll primitive backing a synthesizable poll_until.
+        if _tree_has_poll_until(tree):
+            inc = '#include "poll_until_impl.tpp"'
             if inc not in lines:
                 lines.append(inc)
         # Compile-time bounds: the HwParam buffer maxes read in the kernel, then

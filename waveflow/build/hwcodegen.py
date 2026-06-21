@@ -73,6 +73,9 @@ class HwStmtExtractor:
         self._method_name = method_name
         self._is_testbench = is_testbench
         self._scope: dict[str, HwVar] = {}
+        # Globals of the extracted method — used to resolve bare-name call-site
+        # references (e.g. the ``Eq`` / ``Ne`` poll-condition constructors).
+        self._globals: dict = {}
         # Testbench-mode side tables — empty in kernel mode, populated by
         # the extractor as it walks the body in Phase 3/4.
         self._duts: dict[str, object] = {}      # local_name -> HwComponent instance
@@ -85,6 +88,7 @@ class HwStmtExtractor:
 
     def extract(self) -> HwStmt:
         method = getattr(self._comp, self._method_name)
+        self._globals = getattr(method, '__globals__', {}) or {}
         src = inspect.getsource(method)
         src = textwrap.dedent(src)
         tree = ast.parse(src)
@@ -980,7 +984,7 @@ class HwStmtExtractor:
                 f"Undefined variable '{var_name}' in 'if' at line {node.lineno}"
             )
         hw_var = self._scope[var_name]
-        cmp_val = self._eval_const(test.comparators[0])
+        cmp_val = self._resolve_compare_rhs(test.comparators[0])
         op = '==' if isinstance(test.ops[0], ast.Eq) else '!='
         body_stmts = self._visit_stmts(node.body)
         else_stmts = self._visit_stmts(node.orelse) if node.orelse else None
@@ -1105,11 +1109,41 @@ class HwStmtExtractor:
                 obj = self._resolve_obj(arg)
                 result.append(obj if obj is not None else arg)
             elif isinstance(arg, ast.Call):
+                cond = self._try_lower_poll_cond(arg)
+                if cond is not None:
+                    result.append(cond)
+                    continue
                 hw_var = self._try_inline_regmap_get(arg)
                 result.append(hw_var if hw_var is not None else arg)
             else:
                 result.append(arg)
         return result
+
+    def _try_lower_poll_cond(self, call_node: ast.Call):
+        """Recognize an ``Eq(x)`` / ``Ne(x)`` poll-condition constructor used as a
+        call-site argument (the ``cond`` of ``poll_until``) and lower it to a
+        :class:`~waveflow.hw.memif.LoweredPollCond`.
+
+        The op (``==`` / ``!=``) comes from the class; the rhs resolves via
+        :meth:`_resolve_compare_rhs` — a runtime variable already in scope (a
+        ``HwVar``) or a compile-time constant.  Returns ``None`` for any other
+        call so the caller falls through to its other handlers."""
+        from waveflow.hw.memif import Eq, LoweredPollCond, Ne
+        func = call_node.func
+        cls = self._globals.get(func.id) if isinstance(func, ast.Name) else None
+        if cls is Eq:
+            op = '=='
+        elif cls is Ne:
+            op = '!='
+        else:
+            return None
+        if len(call_node.args) != 1 or call_node.keywords:
+            raise SynthesisError(
+                f"poll_until condition {func.id}(...) takes exactly one positional "
+                f"argument (a literal or a runtime value), at line {call_node.lineno}"
+            )
+        rhs = self._resolve_compare_rhs(call_node.args[0])
+        return LoweredPollCond(op=op, rhs=rhs)
 
     def _try_inline_regmap_get(self, call_node: ast.Call) -> HwVar | None:
         """Recognize ``self.regmap.get("<name>")`` as a sub-expression and
@@ -1161,6 +1195,20 @@ class HwStmtExtractor:
                     if isinstance(elt, ast.Name):
                         names.append(elt.id)
         return names
+
+    def _resolve_compare_rhs(self, node: ast.expr) -> object:
+        """Resolve the rhs of a synthesizable ``==`` / ``!=`` comparison.
+
+        The condition-IR rhs may be EITHER a compile-time constant (an enum
+        member or literal) OR a **runtime variable already in scope** (a
+        ``HwVar``).  The latter is what the ring-poll dequeue needs — it compares
+        ``tail != head`` where ``head`` is a runtime-read local, not a literal.
+        A bare name in scope binds to its ``HwVar``; everything else falls
+        through to constant evaluation (which still rejects unsupported forms).
+        """
+        if isinstance(node, ast.Name) and node.id in self._scope:
+            return self._scope[node.id]
+        return self._eval_const(node)
 
     def _eval_const(self, node: ast.expr) -> object:
         if isinstance(node, ast.Constant):

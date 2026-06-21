@@ -32,6 +32,8 @@
 
 #include <ap_int.h>
 
+#include "poll_until_impl.tpp"   // the reusable ring-poll primitive (poll_until_ne)
+
 namespace aximm_queue_impl {
 
 // Number of control words that precede the data slots (mirror
@@ -57,12 +59,12 @@ void queue_get(ap_uint<MEM_BW>* gmem, CmdT& out) {
 
     // 1) read head once, then poll tail until the ring is non-empty.  head is consumer-owned
     //    (only we write it), so it is stable across the poll; only tail moves (producer).
+    //    The non-empty wait `while (head == tail)` IS the reusable poll primitive
+    //    poll_until_ne(tail_word, head) — the C++ twin of MMIFMaster.poll_until(Ne(head)),
+    //    so the ring dequeue and a standalone poll_until share one poll loop.
     const int head = (int)gmem[base_word + 0];
-    int tail = (int)gmem[base_word + 1];
-poll_nonempty:
-    while (head == tail) {
-        tail = (int)gmem[base_word + 1];
-    }
+    const int tail = (int)poll_until_impl::poll_until_ne<MEM_BW>(
+        gmem, base_word + 1, (ap_uint<MEM_BW>)head);
 
     // 2) read one slot (EW words) at slot(head) BEFORE advancing head (SPSC ordering crux).
     ap_uint<MEM_BW> slot[EW];
