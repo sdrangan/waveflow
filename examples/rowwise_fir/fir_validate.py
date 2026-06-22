@@ -87,11 +87,15 @@ def sim_spans() -> dict:
     ev = {e["event"]: e["t"] for e in sim.accel.events if e["tx_id"] == 0}
     anchor = ev["cmd_arrive"]
     to_cyc = lambda a, b: (ev[b] - ev[a]) / (CLK_NS * 1e-9)
+    off = lambda e: (ev[e] - anchor) / (CLK_NS * 1e-9)   # offset from cmd_arrive, cycles
     return {
         "load_span_cyc": to_cyc("load_begin", "load_end"),
         "store_span_cyc": to_cyc("store_begin", "store_end"),
-        "compute_gap_cyc": to_cyc("load_end", "store_begin"),
-        "total_cyc": (ev["resp_sent"] - anchor) / (CLK_NS * 1e-9),
+        "store_begin_off_cyc": off("store_begin"),
+        "load_end_off_cyc": off("load_end"),
+        "whole_kernel_cyc": off("store_end"),       # X-read || Y-write overlapped end
+        "resp_sent_cyc": off("resp_sent"),
+        "overlap": off("store_begin") < off("load_end"),  # Y-write starts before X-read ends
     }
 
 
@@ -110,19 +114,27 @@ def main() -> None:
     def rel(a, b):
         return abs(a - b) / b if b else float("nan")
 
+    # cosim whole-kernel = first bus event -> last bus event (X-read start -> Y-write end)
+    cos_whole = (cos["y_write"]["end_ns"] - cos["x_read"]["start_ns"]) / cos["clk_period_ns"]
     read_err = rel(sim["load_span_cyc"], cos["x_read"]["dur_cyc"])
     write_err = rel(sim["store_span_cyc"], cos["y_write"]["dur_cyc"])
-    print("RESIDUAL (sim vs cosim span duration; PROVISIONAL params):")
-    print(f"  read-channel  : sim {sim['load_span_cyc']:.1f} vs cosim {cos['x_read']['dur_cyc']:.1f} "
+    whole_err = rel(sim["whole_kernel_cyc"], cos_whole)
+    print("RESIDUAL (sim vs cosim; PROVISIONAL params seeded to this 4x64 point):")
+    print(f"  X-read span   : sim {sim['load_span_cyc']:.1f} vs cosim {cos['x_read']['dur_cyc']:.1f} "
           f"-> {read_err*100:.1f}%")
-    print(f"  write-channel : sim {sim['store_span_cyc']:.1f} vs cosim {cos['y_write']['dur_cyc']:.1f} "
+    print(f"  Y-write span  : sim {sim['store_span_cyc']:.1f} vs cosim {cos['y_write']['dur_cyc']:.1f} "
           f"-> {write_err*100:.1f}%")
-    print("  (residual closes via the deferred per-stage calibration — see FIRTiming)")
+    print(f"  whole-kernel  : sim {sim['whole_kernel_cyc']:.1f} vs cosim {cos_whole:.1f} "
+          f"-> {whole_err*100:.1f}%  (829 if NOT overlapped)")
+    print(f"  overlap landing: store_begin@{sim['store_begin_off_cyc']:.0f} < load_end@"
+          f"{sim['load_end_off_cyc']:.0f} cyc  -> {sim['overlap']}")
+    print(f"  resp_sent     : sim {sim['resp_sent_cyc']:.1f} cyc")
 
     out = HERE / "results" / "timeline_single.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"sim": sim, "cosim": cos,
-                               "read_rel_err": read_err, "write_rel_err": write_err}, indent=2) + "\n",
+    out.write_text(json.dumps({"sim": sim, "cosim": cos, "cosim_whole_kernel_cyc": cos_whole,
+                               "read_rel_err": read_err, "write_rel_err": write_err,
+                               "whole_kernel_rel_err": whole_err}, indent=2) + "\n",
                    encoding="utf-8")
     print(f"wrote {out}")
 

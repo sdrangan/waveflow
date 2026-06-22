@@ -273,10 +273,17 @@ class MMIFMaster(InterfaceEndpoint):
     # Raw word transfers
     # ------------------------------------------------------------------
 
-    def write(self, words: Words, global_addr: int) -> ProcessGen[None]:
-        """Write a burst of words to *global_addr*."""
+    def write(self, words: Words, global_addr: int,
+              tstart: float | None = None) -> ProcessGen[None]:
+        """Write a burst of words to *global_addr*.
+
+        *tstart* (optional) models an **early-anchored pipelined** write: the burst
+        is treated as having started at absolute time *tstart*, so it completes at
+        ``tstart + nwords*period`` (the wait shortens if *tstart* is in the past).
+        ``None`` is the ordinary blocking write."""
         self._check_bound()
-        yield self.process(self.interface.write(words, global_addr, self.master_port))
+        yield self.process(
+            self.interface.write(words, global_addr, self.master_port, tstart=tstart))
 
     def read(self, nwords: int, global_addr: int) -> ProcessGen[Words]:
         """Read *nwords* from *global_addr* and return the word array."""
@@ -470,6 +477,29 @@ class MMIFMaster(InterfaceEndpoint):
         tend = self.env.now
         return data, tstart, tend, nwords
 
+    def read_array_anchored(
+        self,
+        element_type: type,
+        count: int,
+        addr: int,
+        max_count: int | None = None,
+        word_bw: int = 32,
+    ) -> ProcessGen[tuple[np.ndarray, float]]:
+        """Blocking read that returns ``(data, tstart)`` with *tstart* **back-calculated**
+        from the completion time (the time the first word arrived), mirroring
+        :meth:`StreamIFSlave.get_pipelined`:
+
+            tstart = now_after - (nwords - 1) * clk.period
+
+        The read still blocks for the whole burst (the consumer needs all of it); *tstart*
+        is the early pipeline-fill anchor for the next stage's overlap accounting."""
+        nwords = element_type.nwords_per_inst(word_bw) * count
+        data = yield from self.read_array(
+            element_type, count, addr, max_count=max_count, word_bw=word_bw)
+        period = 1.0 / float(self.interface.clk.freq)
+        tstart = self.env.now - max(0, nwords - 1) * period
+        return data, tstart
+
     def write_array_pipelined(
         self,
         elements: Any,
@@ -478,13 +508,20 @@ class MMIFMaster(InterfaceEndpoint):
         count: int | None = None,
         max_count: int | None = None,
         word_bw: int = 32,
+        t_out_start: float | None = None,
     ) -> ProcessGen[tuple[float, float, int]]:
         """Like :meth:`write_array`, returning ``(tstart, tend, nwords)`` where ``tstart`` /
-        ``tend`` bracket the bus write and ``nwords`` is the number of words transferred."""
+        ``tend`` bracket the bus write and ``nwords`` is the number of words transferred.
+
+        With *t_out_start* the write is **early-anchored** (pipelined): the burst is modeled
+        as having started at absolute time *t_out_start*, so it completes at
+        ``t_out_start + nwords*period`` (the wait shortens if the anchor is in the past) —
+        this is what lets a producer's write overlap an earlier consumer's read.
+        ``t_out_start=None`` preserves the ordinary blocking write (backward-compatible)."""
         words = self._pack_array_words(elements, element_type, word_bw, count=count)
         nwords = int(np.asarray(words).shape[0])
         tstart = self.env.now
-        yield from self.write(words, addr)
+        yield from self.write(words, addr, tstart=t_out_start)
         tend = self.env.now
         return tstart, tend, nwords
 
@@ -571,6 +608,31 @@ class Region:
         :attr:`on_transfer`."""
         t0, t1, nw = yield from self.master.write_array_pipelined(
             elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
+        if self.on_transfer is not None:
+            self.on_transfer("write", int(i0), nw, t0, t1)
+
+    def read_slice_pipelined(self, i0: int, i1: int) -> ProcessGen[tuple[Any, float]]:
+        """Like :meth:`read_slice`, returning ``(data, tstart)`` where *tstart* is the
+        back-calculated time the first element arrived (the early pipeline-fill anchor) —
+        the memory/Region mirror of :meth:`StreamIFSlave.get_pipelined`.  Fires
+        :attr:`on_transfer`."""
+        nwords = self.element_type.nwords_per_inst(self.word_bw) * (int(i1) - int(i0))
+        data, tstart = yield from self.master.read_array_anchored(
+            self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
+        if self.on_transfer is not None:
+            self.on_transfer("read", int(i0), nwords, tstart, self.master.env.now)
+        return data, tstart
+
+    def write_slice_pipelined(
+        self, i0: int, elements: Any, t_out_start: float, element_type: type | None = None,
+    ) -> ProcessGen[None]:
+        """Like :meth:`write_slice`, but **early-anchored** at absolute time *t_out_start*:
+        the burst is modeled as having started then, so it completes at
+        ``t_out_start + nwords*period`` (overlapping an earlier read).  The memory/Region
+        mirror of :meth:`StreamIFMaster.write_pipelined`.  Fires :attr:`on_transfer`."""
+        t0, t1, nw = yield from self.master.write_array_pipelined(
+            elements, element_type or self.element_type, self.byte_of(i0),
+            word_bw=self.word_bw, t_out_start=t_out_start)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
 
@@ -847,7 +909,8 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
     # Write path
     # ------------------------------------------------------------------
 
-    def write(self, words: Words, global_addr: int, master_port: int) -> ProcessGen[None]:
+    def write(self, words: Words, global_addr: int, master_port: int,
+              tstart: float | None = None) -> ProcessGen[None]:
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
 
@@ -856,6 +919,11 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             # fixed init/address latency is untouched (see the model).
             cycles = self.latency_init + words.shape[0] * self._poll_stretch(ep_name)
             dly = cycles / self.clk.freq
+            # Early-anchored (pipelined) write: model the burst as having started
+            # at `tstart` so it completes at tstart + cycles*period — shorten the
+            # wait if the anchor is in the past (mirrors StreamIF.write_pipelined).
+            if tstart is not None:
+                dly = max(0.0, dly + (tstart - self.env.now))
             if dly > 0:
                 yield self.timeout(dly)
             with slave_ep.bus.request() as req:
@@ -867,6 +935,8 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             word_step = self._word_step()
             for i in range(words.shape[0]):
                 dly = slave_ep.latency_per_word / self.clk.freq
+                if tstart is not None and i == 0:
+                    dly = max(0.0, dly + (tstart - self.env.now))
                 if dly > 0:
                     yield self.timeout(dly)
                 with slave_ep.bus.request() as req:
@@ -1010,11 +1080,15 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         bw = self.bitwidth if self.bitwidth is not None else 32
         return np.dtype(np.uint32) if bw <= 32 else np.dtype(np.uint64)
 
-    def write(self, words: Words, addr: int, master_port: int) -> ProcessGen[None]:
+    def write(self, words: Words, addr: int, master_port: int,
+              tstart: float | None = None) -> ProcessGen[None]:
         slave_ep: MMIFSlave = self.endpoints['slave']
         if slave_ep is None:
             raise RuntimeError("DirectMMIF: slave endpoint is not bound")
         dly = self.latency_write / self.clk.freq
+        # Early-anchored (pipelined) write — see AXIMMCrossBarIF.write.
+        if tstart is not None:
+            dly = max(0.0, dly + (tstart - self.env.now))
         if dly > 0:
             yield self.timeout(dly)
         with slave_ep.bus.request() as req:
