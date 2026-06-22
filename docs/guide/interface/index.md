@@ -19,6 +19,7 @@ This section is the **Python transactional model**: the interface classes, their
 - [Stream Interfaces](./stream.md) — unidirectional streams (`StreamIF`, `CrossBarIF`) and pipelined transfer.
 - [MM Interfaces](./aximm.md) — memory-mapped read/write (`AXIMMCrossBarIF`, `DirectMMIF`).
 - [Polling Overhead](./poll.md) — the loosely-timed polling model (`MMIFMaster.poll_until`): bandwidth steal + discovery latency.
+- [AXI-MM Command Queue](./mmqueue.md) — the in-memory command ring (`AXIMMQueue`): control moved off the stream and into shared memory.
 - [Register Maps](./regmap.md) — AXI-Lite control/status fields (`RegMap`, `VitisRegMap`).
 - [Schema Transfer Interface](./schema_transfer.md) — carrying serializable schema objects over a transport.
 - [Array Transfer Interface](./array_transfer.md) — carrying a variable-length typed array over a transport.
