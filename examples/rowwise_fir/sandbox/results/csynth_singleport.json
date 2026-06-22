@@ -1,0 +1,51 @@
+{
+  "clk_period_ns": 10.0,
+  "compute_loop_ii": 1,
+  "inferred_bursts": [
+    {
+      "direction": "read",
+      "interface": "m_axi_gmem",
+      "length": "8",
+      "loop": "LOAD_TAPS",
+      "width": "32"
+    },
+    {
+      "direction": "read",
+      "interface": "m_axi_gmem",
+      "length": "variable",
+      "loop": "LOAD",
+      "width": "32"
+    },
+    {
+      "direction": "write",
+      "interface": "m_axi_gmem",
+      "length": "variable",
+      "loop": "STORE",
+      "width": "32"
+    }
+  ],
+  "loop_ii": {
+    "COMPUTE": 1,
+    "LOAD": 1,
+    "LOAD_TAPS": 1,
+    "ROW": null,
+    "STORE": 1
+  },
+  "part": "xc7z020clg484-1",
+  "resources_total": {
+    "BRAM_18K": 28,
+    "DSP": 46,
+    "FF": 8419,
+    "LUT": 10825,
+    "URAM": 0
+  },
+  "solution": "singleport",
+  "top": "fir_accel",
+  "top_latency": {
+    "Average-caseLatency": "undef",
+    "Best-caseLatency": "undef",
+    "Interval-max": "undef",
+    "Interval-min": "undef",
+    "Worst-caseLatency": "undef"
+  }
+}

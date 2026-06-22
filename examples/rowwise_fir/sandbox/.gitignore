@@ -1,0 +1,10 @@
+# Vitis HLS build dirs (regenerable via run.tcl)
+waveflow_rowwise_fir_proj/
+waveflow_rowwise_fir_split_proj/
+# Per-point cosim sweep build dirs (regenerable via cosim_sweep.py)
+sweep/
+# Logs and scratch
+*.log
+__pycache__/
+# Throwaway TB output dump
+data/Y_out.bin
