@@ -25,18 +25,17 @@ Key modeling ideas (from the plan):
   partitioned-BRAM / FIFO channels); they carry the data plus an absolute-time
   ``tstart`` tag (the pipeline-fill quantity threaded through the stages).
 
-**Timing is driven by explicit per-row-aware calibrated timeouts** holding ``bus_rd`` /
-``bus_wr``; functional data moves through the MemComponent's direct-backed master
-(``mem.m_mm``, zero sim time).  The read/write channel SPANS are
-``FIRTiming.t_load/t_store`` (``setup*n_row + per_word*words``) — **bilinear** (Phase 1),
-which the linear bus-transfer model cannot represent, so the spans come from these
-timeouts rather than the Region's bus-timed slices.  The **store is early-anchored**: the
-Y-write is modeled as beginning at ``tstart_out`` (when the first Y row is ready), so it
-*completes at* ``tstart_out + t_store`` and **overlaps the X-read** (the latency fix) —
-the identical anchor semantics as the new ``Region.write_slice_pipelined`` /
-``MMIFMaster.write_array_pipelined(t_out_start=...)`` infra (built this change), applied
-explicitly here because ``t_store`` is n_row-dependent.  Separating functional movement
-(instant) from calibrated timing (timeouts) avoids double-counting.
+**Timing uses the element-coordinate Region API end-to-end** (no raw bytes, no hand-rolled
+retime).  The read/write channel SPANS are ``FIRTiming.t_load/t_store``
+(``setup*n_row + per_word*words``) — **bilinear** (Phase 1), which the linear ``word_bw``
+bus model cannot represent — so they are passed as ``duration=`` to the Region's pipelined
+slice calls, which do the functional movement AND occupy the channel for exactly that span
+(the movement's own word_bw bus time is subsumed; no double-count).  The **store is
+early-anchored**: ``write_slice_pipelined(..., t_out_start=tstart_out, duration=t_store)``
+models the Y-write as beginning when the first Y row is ready, so it *completes at*
+``tstart_out + t_store`` and **overlaps the X-read** (the latency fix).  ``bus_rd`` /
+``bus_wr`` are held around the calls to serialize successive same-direction transfers
+(the inter-matrix throughput model).
 
 **Codegen** is the hand-rolled ``render_top`` in :mod:`examples.rowwise_fir.fir_build`
 (VMAC's *primary* pattern), wrapping the ``@synthesizable(impl_file="fir_dataflow.tpp")``
@@ -200,7 +199,6 @@ class FIRAccel(HwComponent):
         # Attached by the driver (owns the system memory map) before run_sim:
         self.cmd_queue = None            # AXIMMQueue (sim-only command ring)
         self.data_base: int = 0          # byte base of the shared data region
-        self.backing = None              # MemComponent (direct-backed, zero-time data moves)
         self.timing = FIRTiming()        # PROVISIONAL; replaced by the deferred calibration
         self.logger = NullLogger()
         # timeline capture (per-command stage events), correlated by tx_id
@@ -238,18 +236,16 @@ class FIRAccel(HwComponent):
         Codegen emits the m_axi top (``fir_build.render_top``) that calls the hand-written
         ``fir_dataflow.tpp`` core (= the validated Phase 1 sandbox ``fir_accel``).  **In sim
         this is never run** — the three stage processes below model its timing; its body is
-        documentary so the golden/codegen contract is explicit."""
-        X = yield from self.m_mem.read_array(Float32, int(cmd.n_rows) * int(cmd.n_cols),
-                                             self._byte(int(cmd.x_off)))
-        h = yield from self.m_mem.read_array(Float32, T, self._byte(int(cmd.h_off)))
-        Y = self.execute(np.asarray(X).reshape(int(cmd.n_rows), int(cmd.n_cols)), np.asarray(h))
-        yield from self.m_mem.write_array(Y.ravel(), Float32, self._byte(int(cmd.y_off)))
+        documentary so the golden/codegen contract is explicit (element-coordinate access; the
+        Region owns element->byte)."""
+        n, m = int(cmd.n_rows), int(cmd.n_cols)
+        region = self.m_mem.region(self.data_base, Float32, word_bw=self._mem_bw)
+        X = yield from region.read_slice(int(cmd.x_off), int(cmd.x_off) + n * m)
+        h = yield from region.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
+        Y = self.execute(np.asarray(X).reshape(n, m), np.asarray(h))
+        yield from region.write_slice(int(cmd.y_off), Y.ravel(), element_type=Float32)
 
     # --- helpers -------------------------------------------------------------
-    def _byte(self, elem_off: int) -> int:
-        """Element (float) offset -> byte address in the shared data region."""
-        return self.data_base + elem_off * (self._mem_bw // 8)
-
     def _secs(self, cycles: float) -> float:
         return cycles / float(self.clk.freq)
 
@@ -265,14 +261,12 @@ class FIRAccel(HwComponent):
         # Per-DIRECTION channel resources (full-duplex bundle): independent, capacity-1.
         self.bus_rd = self.resource(capacity=1)     # AR/R — successive loads serialize here
         self.bus_wr = self.resource(capacity=1)     # AW/W — successive stores serialize here
-        if self.backing is None:
-            raise RuntimeError("FIRAccel requires an attached backing MemComponent (set by the driver).")
-        # Functional data moves go through the MemComponent's direct-backed master (zero sim
-        # time); the per-stage SPANS come from the per-row-aware FIRTiming timeouts below (held
-        # on bus_rd/bus_wr) — so there is no double-count, and the read/write spans carry the
-        # per-row burst-setup term the linear bus model cannot represent.  Poll the ring on a
-        # coarse cadence (the cmd_arrive offset is anchored away in the timeline comparison).
-        self._mm = self.backing.m_mm
+        # Element-coordinate view of the shared data region (the Region owns element->byte).
+        # Data moves through it; the per-stage SPANS are passed explicitly as `duration=` to the
+        # pipelined slice calls (per-row-aware / bilinear — the linear word_bw model can't express
+        # them), and the functional movement's own bus time is subsumed into that duration (no
+        # double-count).  Poll the ring on a coarse cadence (cmd_arrive offset anchored away).
+        self._data = self.m_mem.region(self.data_base, Float32, word_bw=self._mem_bw)
         self.cmd_queue.poll_interval = 64.0
 
     def pre_sim_processes(self):  # documented spawn point — see pre_sim
@@ -305,17 +299,19 @@ class FIRAccel(HwComponent):
             with self.bus_rd.request() as req:      # read channel (serializes successive loads)
                 yield req
                 t_begin = self.now
-                # tstart = ABSOLUTE time the first input row is available to compute (the
-                # pipeline-fill anchor): load start + one row's read-channel time.
-                tstart = t_begin + self._secs(self.timing.t_row_load_cyc(n_cols))
                 self._log("load_begin", cmd)        # == start of the X-read burst in RTL
-                # Functional read via the direct-backed master (zero sim time); the X-read
-                # SPAN is the per-row-aware timeout that holds bus_rd (the load still blocks
-                # for the whole matrix — the golden needs all of X).
-                Xf = yield from self._mm.read_array(Float32, n_rows * n_cols, self._byte(int(cmd.x_off)))
-                hf = yield from self._mm.read_array(Float32, T, self._byte(int(cmd.h_off)))
-                yield self.timeout(self._secs(self.timing.t_load_cyc(n_rows, n_cols)))
+                # Element-coordinate read: h (small, subsumed) then the X-read whose SPAN is the
+                # per-row-aware t_load, anchored at the load start.  The Region does the
+                # functional movement and occupies bus_rd for exactly the duration (no
+                # double-count, no byte arithmetic, no hand-rolled timeout).
+                hf = yield from self._data.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
+                Xf, _ = yield from self._data.read_slice_pipelined(
+                    int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols,
+                    t_out_start=t_begin, duration=self._secs(self.timing.t_load_cyc(n_rows, n_cols)))
                 self._log("load_end", cmd)          # == end of the X-read burst
+            # tstart = ABSOLUTE time the first input row is available to compute (pipeline-fill
+            # anchor): load start + one row's read-channel time.
+            tstart = t_begin + self._secs(self.timing.t_row_load_cyc(n_cols))
             X = np.asarray(Xf, dtype=np.float32).reshape(n_rows, n_cols)
             self.compute_q.put(FIRCompMsg(tstart=tstart, X=X, h=np.asarray(hf, dtype=np.float32),
                                           cmd=cmd))
@@ -347,22 +343,17 @@ class FIRAccel(HwComponent):
             n_rows, n_cols = int(msg.cmd.n_rows), int(msg.cmd.n_cols)
             with self.bus_wr.request() as req:      # write channel (independent of bus_rd)
                 yield req
-                # Functional write via the direct-backed master (zero sim time).
-                yield from self._mm.write_array(msg.Y.ravel(), Float32, self._byte(int(msg.cmd.y_off)))
-                # EARLY-ANCHORED write (the critical latency fix): the Y-write burst is modeled
-                # as having begun at the early anchor msg.tstart (= tstart_out, when the first Y
-                # row was ready), so it COMPLETES at tstart_out + t_store — overlapping the
-                # X-read instead of starting after it.  Identical anchor formula to
-                # Region.write_slice_pipelined; done explicitly here because t_store is
-                # per-row-aware (n_row-dependent), which the linear bus model cannot express.
+                # EARLY-ANCHORED, per-row-aware Y-write in ONE element-coordinate call: the
+                # Region writes Y functionally AND occupies bus_wr for exactly t_store, anchored
+                # at tstart_out (when the first Y row was ready) — so it completes at
+                # tstart_out + t_store, OVERLAPPING the X-read instead of following it (the
+                # latency fix).  No byte arithmetic, no hand-rolled anchor/timeout.
                 t_store = self._secs(self.timing.t_store_cyc(n_rows, n_cols))
-                now = self.now
-                store_end_t = max(msg.tstart + t_store, now)   # clamp: cannot finish in the past
-                self._log("store_begin", msg.cmd, t=store_end_t - t_store)  # effective Y-write start
-                dly = store_end_t - now
-                if dly > 0:
-                    yield self.timeout(dly)
-                self._log("store_end", msg.cmd)     # == end of the Y-write burst
+                t0, t1 = yield from self._data.write_slice_pipelined(
+                    int(msg.cmd.y_off), msg.Y.ravel(), t_out_start=msg.tstart,
+                    duration=t_store, element_type=Float32)
+                self._log("store_begin", msg.cmd, t=t0)   # effective Y-write start
+                self._log("store_end", msg.cmd, t=t1)     # == end of the Y-write burst
                 # response back to the host — a small write burst on bus_wr after the Y writes.
                 yield self.timeout(self._secs(self.timing.resp_words * self.timing.write_per_word))
                 self._log("resp_sent", msg.cmd)

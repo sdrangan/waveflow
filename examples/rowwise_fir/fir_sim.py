@@ -131,7 +131,6 @@ class FIRSim:
 
         self.accel.cmd_queue = AXIMMQueue(master=self.accel.m_mem, layout=self.layout)
         self.accel.data_base = data_base
-        self.accel.backing = self.mem    # direct-backed master for zero-time functional data moves
 
         self.host = FIRHost(name="host", sim=self.sim, accel=self.accel, layout=self.layout,
                             data_base=data_base, specs=self.specs)

@@ -611,30 +611,70 @@ class Region:
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
 
-    def read_slice_pipelined(self, i0: int, i1: int) -> ProcessGen[tuple[Any, float]]:
-        """Like :meth:`read_slice`, returning ``(data, tstart)`` where *tstart* is the
-        back-calculated time the first element arrived (the early pipeline-fill anchor) —
-        the memory/Region mirror of :meth:`StreamIFSlave.get_pipelined`.  Fires
-        :attr:`on_transfer`."""
-        nwords = self.element_type.nwords_per_inst(self.word_bw) * (int(i1) - int(i0))
-        data, tstart = yield from self.master.read_array_anchored(
-            self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
+    def read_slice_pipelined(
+        self, i0: int, i1: int, t_out_start: float | None = None, duration: float | None = None,
+    ) -> ProcessGen[tuple[Any, float]]:
+        """Read elements ``[i0, i1)`` and return ``(data, tstart)``.
+
+        *duration* (when given) makes the read occupy the bus for **exactly** that span,
+        anchored at *t_out_start* (default: now) — the element-coordinate way to express a
+        per-stage span the linear ``word_bw`` model cannot (e.g. a per-row/bilinear read
+        burst).  The functional movement happens in the same call; its own word_bw bus time
+        is *subsumed* into *duration* (which must be >= it, else the burst overruns the span).
+        ``tstart`` is the anchor (first-element-available, the pipeline-fill time).
+
+        *duration=None* preserves the word_bw-derived behaviour: ``tstart`` is back-calculated
+        like :meth:`StreamIFSlave.get_pipelined`."""
+        n = int(i1) - int(i0)
+        nwords = self.element_type.nwords_per_inst(self.word_bw) * n
+        if duration is None:
+            data, tstart = yield from self.master.read_array_anchored(
+                self.element_type, n, self.byte_of(i0), word_bw=self.word_bw)
+            t0, t1 = tstart, self.master.env.now
+        else:
+            anchor = self.master.env.now if t_out_start is None else float(t_out_start)
+            data = yield from self.master.read_array(
+                self.element_type, n, self.byte_of(i0), word_bw=self.word_bw)  # functional (subsumed)
+            t0, t1 = anchor, max(anchor + duration, self.master.env.now)
+            rem = t1 - self.master.env.now
+            if rem > 0:
+                yield self.master.timeout(rem)
+            tstart = anchor
         if self.on_transfer is not None:
-            self.on_transfer("read", int(i0), nwords, tstart, self.master.env.now)
+            self.on_transfer("read", int(i0), nwords, t0, t1)
         return data, tstart
 
     def write_slice_pipelined(
-        self, i0: int, elements: Any, t_out_start: float, element_type: type | None = None,
-    ) -> ProcessGen[None]:
-        """Like :meth:`write_slice`, but **early-anchored** at absolute time *t_out_start*:
-        the burst is modeled as having started then, so it completes at
-        ``t_out_start + nwords*period`` (overlapping an earlier read).  The memory/Region
-        mirror of :meth:`StreamIFMaster.write_pipelined`.  Fires :attr:`on_transfer`."""
-        t0, t1, nw = yield from self.master.write_array_pipelined(
-            elements, element_type or self.element_type, self.byte_of(i0),
-            word_bw=self.word_bw, t_out_start=t_out_start)
+        self, i0: int, elements: Any, t_out_start: float, duration: float | None = None,
+        element_type: type | None = None,
+    ) -> ProcessGen[tuple[float, float]]:
+        """Early-anchored write of *elements* at element *i0*; returns the bus-visible span
+        ``(t0, t1)``.
+
+        *duration* (when given): the write occupies the bus for **exactly** that span anchored
+        at *t_out_start* — it completes at ``t_out_start + duration`` (clamped to now if the
+        anchor is already past).  This expresses a per-stage span (e.g. a per-row/bilinear
+        Y-write) the linear ``word_bw`` model cannot.  The functional movement happens in the
+        same call and its word_bw bus time is *subsumed* into *duration* (>= it).
+
+        *duration=None* preserves the word_bw-derived early-anchored write (completes at
+        ``t_out_start + nwords*period``) — the mirror of :meth:`StreamIFMaster.write_pipelined`."""
+        et = element_type or self.element_type
+        nw = et.nwords_per_inst(self.word_bw) * (len(elements) if hasattr(elements, "__len__") else 0)
+        if duration is None:
+            t0, t1, nw = yield from self.master.write_array_pipelined(
+                elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
+        else:
+            yield from self.master.write_array(
+                elements, et, self.byte_of(i0), word_bw=self.word_bw)  # functional (subsumed)
+            t1 = max(float(t_out_start) + duration, self.master.env.now)
+            t0 = t1 - duration
+            rem = t1 - self.master.env.now
+            if rem > 0:
+                yield self.master.timeout(rem)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
+        return t0, t1
 
 
 # ---------------------------------------------------------------------------
