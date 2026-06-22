@@ -24,36 +24,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
-T = 8  # must match fir_sandbox.hpp
+# The ONE shared FIR golden (examples/rowwise_fir/fir_golden.py) — do not
+# reimplement FIR here.  Importable whether run from the sandbox dir or the repo.
+try:
+    from examples.rowwise_fir.fir_golden import T, fir_golden
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from fir_golden import T, fir_golden
 
-
-def golden_valid_fir(X: np.ndarray, h: np.ndarray) -> np.ndarray:
-    """Bit-exact float32 valid FIR per row, matching fir_compute's tap order.
-
-    X : (n_rows, n_cols) float32, h : (T,) float32  ->  (n_rows, n_cols-T+1).
-    The accumulation is an explicit left-to-right float32 reduction over t so
-    the rounding sequence is identical to the C++ ``acc += h[t]*x[...]`` loop.
-    """
-    X = np.ascontiguousarray(X, dtype=np.float32)
-    h = np.ascontiguousarray(h, dtype=np.float32)
-    n_rows, n_cols = X.shape
-    t = h.shape[0]
-    out_len = n_cols - t + 1
-    Y = np.empty((n_rows, out_len), dtype=np.float32)
-    for i in range(n_rows):
-        for j in range(out_len):
-            acc = np.float32(0.0)
-            for k in range(t):
-                # np.float32 * np.float32 -> float32 product (rounded), then a
-                # float32 add: one rounding per multiply and per accumulate,
-                # identical to the kernel.
-                acc = np.float32(acc + np.float32(h[k] * X[i, j + (t - 1) - k]))
-            Y[i, j] = acc
-    return Y
+#: Back-compat alias — the golden used to live here as ``golden_valid_fir``.
+golden_valid_fir = fir_golden
 
 
 def write_fixture(out_dir: Path, n_rows: int, n_cols: int, seed: int = 0) -> dict:
