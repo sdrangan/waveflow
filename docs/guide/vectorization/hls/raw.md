@@ -208,7 +208,7 @@ The same lane loop runs over a stream port — you drop the running pointers (th
 self-sequences) and use the stream lane variants (`read_stream_lane` / `read_axi4_stream_lane`, the
 latter carrying `TLAST`). Moving data over a real stream or `m_axi` port inside a kernel — the stream
 lane calls and the worked `.tpp` examples — is covered in
-[Custom Hooks: kernel patterns](../../custom_hooks/patterns.md).
+[Custom Hooks: kernel transfer reference](../../custom_hooks/reference.md).
 
 ## See also
 

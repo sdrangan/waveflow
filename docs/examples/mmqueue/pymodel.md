@@ -66,7 +66,7 @@ The shell reads and writes through a **`Region`** view over the master:
 `mem.region(...)` gives a `Region` whose `read_slice` / `write_slice` take **element
 indices**, not byte or word offsets. This is the SimPy twin of the C++
 `read_array_slice` / `read_array_lane` calls (see
-[kernel patterns](../../guide/custom_hooks/patterns.md)): the model and the kernel
+[kernel transfer reference](../../guide/custom_hooks/reference.md)): the model and the kernel
 address operands the same width-agnostic way — `M[i, j]` at element `addr +
 i·row_stride + j` — so a `data_bw` or `mem_dwidth` change never rewrites the
 addressing. Element coordinates are also synth-natural: the kernel divides by the

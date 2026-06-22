@@ -1,7 +1,7 @@
 ---
 title: Memory command queue
 parent: Custom Hooks
-nav_order: 3
+nav_order: 5
 audience: hls
 api: [AXIMMQueue, AXIMMQueueGetStmt, queue_get, synthesizable]
 summary: "The synthesizable side of the AXI-MM command queue: AXIMMQueue.get lowers to AXIMMQueueGetStmt, emitted as a call to the hand-written ring-dequeue hook queue_get<CmdT, MEM_BW, BASE, CAP, EW> in aximm_queue_impl.tpp — read (head,tail), poll while empty, read one slot, advance head with a power-of-two mask, deserialize the typed command."
@@ -9,18 +9,25 @@ summary: "The synthesizable side of the AXI-MM command queue: AXIMMQueue.get low
 
 # Memory command queue — the ring-dequeue hook
 
-The [AXI-MM command queue](../interface/mmqueue.md) interface has a Python
-transactional model (`AXIMMQueue.write` / `get`) and a **synthesizable** side: when an
-accelerator dequeues a command inside a kernel, that `get` becomes a hand-written
-ring-dequeue hook. This page is that hook —
+This is the **advanced case**: a hook that is not a datapath at all but the
+**synthesizable half of a transport interface**. The
+[AXI-MM command queue](../interface/mmqueue.md) has a Python transactional model
+(`AXIMMQueue.write` / `get`); its synthesizable side is a hand-written ring-dequeue
+hook that *is* what `get` lowers to inside a kernel. Where the
+[block](./block.md) / [stream](./stream.md) / [complex](./complex.md) patterns are
+hooks you write for *your* datapath, this one implements a reusable **interface**
+once, and every kernel that dequeues a command gets it for free.
+
+This page is that hook —
 [`waveflow/build/aximm_queue_impl.tpp`](../../../waveflow/build/aximm_queue_impl.tpp)'s
 `queue_get` — and how the extractor lowers a `get` call onto it. It is **merged and
 Vitis-verified**: the [VMAC generated top](../../examples/mmqueue/codegen.md) calls it
 and cosims bit-exact.
 
-It is a stmt-class hook, structurally like the [`vmac_compute` hook](./writing.md) —
-the general `.tpp` contract (templating, `#pragma HLS INLINE`, the generated packing
-helpers) is that page; this one is the queue-specific datapath.
+It is a stmt-class hook. The general `.tpp` contract (the bit-exact Python sibling,
+the namespace, `#pragma HLS INLINE`) is [Writing a hook](./writing.md); the complex
+datapath that consumes the dequeued command is [complex.md](./complex.md). This page
+is the queue-specific dequeue.
 
 ## What lowers to it
 
@@ -92,7 +99,7 @@ and sidestep the nested-struct csynth pitfall.
   hook is the synthesizable half of.
 - [VMAC code generation](../../examples/mmqueue/codegen.md) — the generated top that
   calls `queue_get`, and the worked end-to-end example.
-- [Writing a hook](./writing.md) / [Kernel patterns](./patterns.md) — the general
-  `.tpp` contract and the in-kernel transfer calls.
+- [Writing a hook](./writing.md) / [Kernel transfer reference](./reference.md) — the
+  general `.tpp` contract and the in-kernel transfer calls.
 - [Polling Overhead](../interface/poll.md) — the loosely-timed poll model behind the
   empty-ring wait.

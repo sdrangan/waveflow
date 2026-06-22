@@ -372,7 +372,7 @@ sim.run_sim()
 The **synthesizable side** — the generated `<element>_array_utils` calls a kernel uses to move this
 transfer over an `m_axi` / stream port (`write_axi4_stream_lane` / `read_axi4_stream_lane`, or
 `read_array_slice` for a resident array) — is documented, with the Python→C++ mapping table, in
-[Custom Hooks: kernel patterns](../custom_hooks/patterns.md#mapping-the-python-transfer-interfaces-to-the-kernel).
+[Custom Hooks: kernel transfer reference](../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel).
 
 ---
 

@@ -13,10 +13,10 @@ This page walks **this specific datapath**. The *general* hook contract — the
 templated signature, how a hook plugs into the generated kernel, the csynth gotchas
 (scalar `*_core` args, `#pragma HLS INLINE`), and the `read_array_lane` /
 `read_array_slice` calls — is the guide's job:
-[Writing a hook](../../guide/custom_hooks/writing.md) and
-[Kernel patterns](../../guide/custom_hooks/patterns.md) already use VMAC for exactly
-that. Read those for the rules; this page is the VMAC-specific datapath they leave
-out.
+[Writing a hook](../../guide/custom_hooks/writing.md) is the mechanism, and
+[Custom Hooks: Complex](../../guide/custom_hooks/complex.md) already uses VMAC for
+exactly the data-dependent `m_axi` addressing and the csynth gotchas. Read those for
+the rules; this page is the VMAC-specific datapath they leave out.
 
 > Documented **as it currently is** — if the complex-typed cleanups tracked in the
 > repo's VMAC plan land later, the `.tpp` will move, but the shape below is what is in
@@ -24,7 +24,7 @@ out.
 
 ## Shape: a scalar-arg core + a thin wrapper
 
-Per the [csynth gotcha](../../guide/custom_hooks/writing.md#pass-scalars-to-a-core-function--not-a-struct-by-value),
+Per the [csynth gotcha](../../guide/custom_hooks/complex.md#pass-scalars-to-a-core-function--not-a-struct-by-value),
 the real work is in a `vmac_compute_core` taking **flat scalar arguments**, with a
 struct-taking `vmac_compute(VmacCmd cmd, mem)` wrapper kept only for the csim
 testbench. The core is templated on the structural widths and takes the command as
@@ -62,7 +62,7 @@ it in `CXO`.
 ## The fused read-compute-write loop
 
 Operand rows are read with the `read_array_lane` lane loop (see
-[kernel patterns](../../guide/custom_hooks/patterns.md)): each iteration pulls the
+[kernel transfer reference](../../guide/custom_hooks/reference.md)): each iteration pulls the
 next `PF` complex columns for `A` (and `B`) at running word pointers and runs the
 complex datapath across the lane, `#pragma HLS UNROLL`-ed over the `PF` lanes:
 
@@ -103,7 +103,7 @@ Addresses arrive in **element** coordinates (matching the Python
 pointers with `elem_to_word<PF>` (which checks PF-alignment) and advances them per
 beat (`a_w += 1` per lane iteration) and per row (`a_row += a_rsw`). Any helper that
 touches `mem` is `INLINE` so the `m_axi` reads bind to the top — again, the
-[guide's gotcha 2](../../guide/custom_hooks/writing.md#pragma-hls-inline-so-maxi-binds-to-the-top).
+[guide's gotcha 2](../../guide/custom_hooks/complex.md#pragma-hls-inline-so-maxi-binds-to-the-top).
 
 ## Validated against the golden
 

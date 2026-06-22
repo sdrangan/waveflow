@@ -98,7 +98,7 @@ A slave endpoint carries the Python handler that becomes (part of) the synthesiz
 - For **stream / m_axi** endpoints there is no separate handler method: the free-running `run_proc`
   body reads and writes them directly, and those per-port read/write calls are lowered to
   `hls::stream` / `m_axi` transactions. The transaction methods themselves (`read_stream_lane`,
-  `read_array_lane`, …) are documented in [Custom Hooks: Kernel patterns](../custom_hooks/patterns.md).
+  `read_array_lane`, …) are documented in [Custom Hooks: Kernel transfer reference](../custom_hooks/reference.md).
 
 ## API
 

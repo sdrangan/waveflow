@@ -4,112 +4,97 @@ parent: Custom Hooks
 nav_order: 1
 audience: hls
 api: [synthesizable]
-summary: "How to write a custom-hook .tpp: the templated function signature codegen calls, how it plugs into the generated kernel (m_axi/stream ports + the generated packing it calls), and the two VMAC csynth gotchas — pass scalars to a *_core function (a by-value struct DCEs the kernel) and #pragma HLS INLINE so m_axi binds to the top."
+summary: "The hook contract, walked through the simplest hook — the scalar simp_fun compute. The @synthesizable stub form (Python body = bit-exact golden, C++ hand-written), the cpp_namespace, #pragma HLS INLINE so the hook fuses into the top, and the .cpp-vs-.tpp rule (non-templated scalar -> .cpp; HwParam-width-templated -> .tpp)."
 ---
 
 # Writing a hook
 
-A hook is a C++ function in the `impl_file` you named in `@synthesizable(impl_file="…")`. Codegen
-emits a *call* to it from the generated kernel; you write the body. This page is the contract that
-function must satisfy, walked through VMAC's
-[`vmac_compute_impl.tpp`](../../../examples/vmac/vmac_compute_impl.tpp).
+A hook is a C++ function that codegen *calls* from the generated kernel — you write the body. This
+page is the contract that function must satisfy, walked through the simplest possible hook: the
+scalar `compute` of the regmap example
+([`examples/regmap/simp_fun.py`](../../../examples/regmap/simp_fun.py)), whose whole C++ is seven
+lines. The data-movement patterns build on this contract —
+[block](./block.md), [stream](./stream.md), [complex](./complex.md).
 
-## The templated signature
+## The stub form
 
-The generated kernel is parameterized on the component's `HwParam` widths (see
-[templating](../comp_codegen/templating.md)), so the hook is a **function template** over those same
-widths, living in the component's `cpp_namespace`. VMAC's hook takes the command struct and the
-`m_axi` memory pointer:
+Decorate a component method [`@synthesizable`](../../../waveflow/hw/synth.py) with no `synth_fn`. The
+extractor then does **not** lower the method's Python body; codegen emits a call to your hand-written
+C++ instead. The Python body stays the **simulation** model:
 
-```cpp
-namespace vmac_impl {   // == VmacAccel.cpp_namespace
-
-template <int MEM_BW, int MEM_AWIDTH, int DATA_BW, int INT_BITS, int ACC_BW, int OUT_BW,
-          bool Q_RND, bool O_SAT, int MAX_COLS>
-void vmac_compute(VmacCmd cmd, ap_uint<MEM_BW>* mem) {
-    // ... read operands, compute, write back ...
-}
-
-}  // namespace vmac_impl
+```python
+@synthesizable
+def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
+    return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))
 ```
 
-The file is a `.tpp` (not `.cpp`) because it is templated: the definition must be visible at the
-include site so the template instantiates for each width set. (The generated header includes it; see
-[templating](../comp_codegen/templating.md) for why parameterized hook stubs become `.tpp`.)
+The rest of the kernel reaches the hook through the auto-generated path — for `simp_fun` the operands
+arrive in s_axilite registers and `on_start` calls `compute`; codegen lowers that call to your C++.
+How the surrounding I/O is generated is the subject of the pattern pages; this page is the hook
+itself.
 
-## How it plugs in
+## The bit-exact Python sibling
 
-The hook is handed the component's **ports** and works through the **generated packing helpers** — it
-does not hand-roll bit twiddling:
+The method's Python body **is the golden**. It runs in [PySim](../sim/), and the hand-written C++ is
+checked against it bit-for-bit in C-simulation. That is the core contract: the C++ may use any HLS
+construct you like, but it must produce the same bits as the Python body for every input. Because the
+two are siblings on one method, the hook can never silently drift from the model — a mismatch fails
+csim.
 
-- The `ap_uint<MEM_BW>* mem` argument is the component's `m_axi` port. The hook reads/writes it with
-  the generated array-utils methods (`read_array_lane` / `read_array_slice` / `write_array_lane`) —
-  the [kernel patterns](./patterns.md) page covers these.
-- The command (`VmacCmd cmd`) is the deserialized control struct; its fields drive the addressing.
-- Arithmetic comes from the generated/shipped headers the component pulls in (VMAC uses
-  `complex_utils.hpp`), not from inline formulas.
+## The namespace
 
-So a hook is *glue + datapath*: it calls generated serialization to move typed data over the port,
-and you write only the math in between.
-
-## The csynth gotchas (from VMAC)
-
-Two non-obvious rules, both learned from VMAC's `.tpp` and both about how the hook meets the
-synthesizable top:
-
-### 1. Pass scalars to a `*_core` function — not a struct by value
-
-Passing the nested `VmacCmd` **struct by value** into the synthesizable path mis-decomposes through
-HLS's array/struct optimization at csynth: loop bounds fold to 0 and the kernel is dead-code
-eliminated. The fix is a `*_core` function that takes the command as **flat scalar arguments**
-(each keeping its precise type), with the struct-taking wrapper kept only for the csim testbench:
+The hook lives in the component's `cpp_namespace`, so the generated call site is qualified
+(`simp_fun_impl::compute(...)`):
 
 ```cpp
-// Scalar-arg core — the synthesizable top calls THIS directly.
-template <int MEM_BW, int MEM_AWIDTH, /* … widths … */>
-void vmac_compute_core(
-    ap_uint<MEM_BW>* mem,
-    int op, bool reduce, ap_uint<16> n_rows, ap_uint<16> n_cols,
-    ap_uint<MEM_AWIDTH> a_addr, ap_int<MEM_AWIDTH> a_rs, /* … */) {
+// simp_fun_compute_impl.cpp
+#include <ap_int.h>
+
+namespace simp_fun_impl {            // == SimpFunComponent.cpp_namespace
+
+ap_int<32> compute(ap_int<32> x, ap_int<32> a, ap_int<32> b) {
 #pragma HLS INLINE
-    // ... datapath ...
+    ap_int<32> affine = a * x + b;
+    return (affine > 0) ? affine : ap_int<32>(0);
 }
 
-// Thin struct-taking wrapper — fine for the csim harness; unwraps cmd into the core's scalars.
-template <int MEM_BW, int MEM_AWIDTH, /* … */>
-void vmac_compute(VmacCmd cmd, ap_uint<MEM_BW>* mem) {
-    vmac_compute_core<MEM_BW, MEM_AWIDTH, /* … */>(
-        mem, (int)cmd.op, (bool)cmd.reduce, cmd.n_rows, cmd.n_cols,
-        cmd.a.addr, cmd.a.row_stride, /* … */);
-}
+}  // namespace simp_fun_impl
 ```
 
-Keeping the precise field types (`ap_uint<MEM_AWIDTH>` addresses, signed strides, `ap_uint<16>`
-shape) also keeps the address arithmetic sized by `MEM_AWIDTH` rather than a stray 32-bit `int`.
+The argument and return types come from the method's annotations through
+[`cpp_type`](../comp_codegen/) — a scalar `Int32` is `ap_int<32>`. Codegen finds the file by the
+`{kernel}_{method}_impl.{cpp,tpp}` convention (here `simp_fun_compute_impl.cpp`), or you name it with
+`@synthesizable(impl_file="…")`.
 
-### 2. `#pragma HLS INLINE` so `m_axi` binds to the top
+## `#pragma HLS INLINE`
 
-The `*_core` function carries `#pragma HLS INLINE` so it is inlined **into the synthesizable top**.
-That way the `m_axi` reads/writes belong to the top's `gmem` port. Left as a separate module, the
-function would have "no outputs" and the `gmem` port would dangle. Any small helper that touches the
-memory pointer (VMAC's `elem_to_word`) is `INLINE` for the same reason.
+The one rule that applies to **every** hook: mark it `#pragma HLS INLINE` so it is inlined into the
+synthesizable top. A hook is glue between the generated kernel and your math; left as a separate
+module it becomes a sub-block with its own (mis-inferred) interface, and any port it touches dangles.
+Inlining fuses it into the top so the top's ports — s_axilite registers here, an `m_axi` master
+elsewhere — bind correctly. Any small helper the hook calls is `INLINE` for the same reason.
 
-## Walkthrough: VMAC
+## `.cpp` vs `.tpp`
 
-Putting it together, `vmac_compute_core` is the whole VMAC datapath:
+A hook is a plain C++ function **or** a function template, and that decides the file extension:
 
-1. **Compute row addresses** from the command's element-coordinate addr/stride fields.
-2. **Read operand rows** off `mem` with the generated lane methods (`vmac_in_au::read_array_lane`),
-   and the per-row scalar with `read_array_slice` — see [kernel patterns](./patterns.md).
-3. **Run the complex datapath** — `complex_utils` `cmult`/`cadd`/`conj`, an `ap_fixed` accumulator,
-   one `cx_requantize` to the output format (full precision until the single requantize).
-4. **Write results back** with `vmac_out_au::write_array_lane`.
+- **Non-templated → `.cpp`.** `simp_fun`'s `compute` takes concrete `ap_int<32>` scalars — nothing
+  depends on a compile-time width — so it is an ordinary function in a `.cpp`. The [block](./block.md)
+  hook is also a `.cpp`: its array buffers are sized by a compile-time bound, but the function itself
+  is not templated.
+- **Templated → `.tpp`.** When the kernel is parameterized on an `HwParam` width that reaches the
+  hook — typically a **stream port** whose `axi4s_word<WORD_BW>` type carries the width — the hook is
+  a function template over that width. A template definition must be visible at the include site, so
+  it lives in a `.tpp` the generated header includes. The [stream](./stream.md) and
+  [complex](./complex.md) hooks are `.tpp` for this reason; see
+  [templating](../comp_codegen/templating.md) for how `HwParam` reaches the hook.
 
-Because the hook's Python sibling (`VmacAccel.execute`) is the bit-exact golden, the `.tpp` is
-validated against it in csim — the hook can never silently drift from the model.
+The rule is mechanical: if the hook's signature mentions a templated width, it is a `.tpp`; otherwise
+a `.cpp`.
 
 ## See also
 
-- [Kernel patterns](./patterns.md) — the port read/write calls and loop shapes a hook uses.
-- [Component Code Generation: Templating](../comp_codegen/templating.md) — why the hook is a `.tpp` and how `HwParam` reaches it.
+- [Block](./block.md) / [Stream](./stream.md) / [Complex](./complex.md) — the three data-movement patterns the hook plugs into.
+- [Kernel transfer reference](./reference.md) — the in-kernel port read/write calls a hook uses.
+- [Component Code Generation: Templating](../comp_codegen/templating.md) — why a templated hook is a `.tpp` and how `HwParam` reaches it.
 - [`@synthesizable`](../../../waveflow/hw/synth.py) — the decorator and its `impl_file` / `synth_fn` options.
