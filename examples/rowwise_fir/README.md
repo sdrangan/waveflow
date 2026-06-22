@@ -57,39 +57,35 @@ extension was required.**
 | **Golden conformance (sim)** | sim `Y` bit-exact vs `fir_golden`, single + back-to-back — PASS (`fir_sim.py`) |
 | **Generated kernel csim/csynth/cosim** | bit-exact vs the shared golden (cosim 656 cyc @ 4×64) — `fir_build.py --cosim` |
 | **Inter-matrix overlap (the key result)** | back-to-back: `load(N+1)` on `bus_rd` overlaps `store(N)` on `bus_wr` — 2 matrices in ~778 cyc vs ~1012 sequential |
-| **Single-command timeline vs cosim** | bus-visible span comparison — see below (`fir_validate.py` → `results/timeline_single.json`) |
+| **Latency fix (early-anchored Y-write)** | single-command whole-kernel tracks RTL (656, not the 829 serial estimate); the Y-write overlaps the X-read (`fir_validate.py`) |
+| **Per-stage calibration** | sklearn bilinear (+concave `sqrt(n_col)`) fit from a `{1,2,4,8}×{64,256,1024}` cosim grid; **interior held-out (2,256) whole-kernel 0.02%** (`fir_calibrate.py`) |
+| **Back-to-back vs cosim** | sim 2×(n_row) vs `cosim(2·n_row)`: 6–10% (converging with size) |
 | **Baseline** | branch non-vitis failures == main's 15 (zero regressions) |
 
-### Single-command timeline (4×64), sim vs RTL cosim
+### Timing model (calibrated)
 
-| span | sim (block) | cosim (RTL) | residual |
-|---|---|---|---|
-| read-channel (X-read) | 272 cyc (~1.03 cyc/word) | 392 cyc (~1.36 cyc/word) | 30.6% |
-| write-channel (Y-write) | 230 cyc (~1.01 cyc/word) | 437 cyc (~1.92 cyc/word) | 47.4% |
-| compute gap (load_end→store_begin) | 0 (hidden) | — | — |
-
-The residuals are **expected and diagnostic** (params are PROVISIONAL): the linear
-bus-transfer model misses (a) the **per-row burst setup** on the read channel (the
-Phase 1 bilinear `L_row` term), and (b) the **per-row compute-coupling** of the write
-channel — in RTL the Y-write span (`[2515, 6885] ns`) even *overlaps* the X-read span
-(`[515, 4435] ns`), the intra-matrix full-duplex that matrix-LT deliberately abstracts.
-`fir_validate.py` is the harness; the deferred per-stage calibration drives both
-residuals to <eps by fitting the per-row terms into `FIRTiming`.
+`FIRTiming` holds per-span fitted models (`results/fir_calibration.json`): the X-read
+span (bilinear), the Y-write span and the first-Y-row `fill` (bilinear + a concave
+`sqrt(n_col)` term, because the per-row write gap and compute fill **saturate in n_col**).
+The store is **early-anchored** (Y-write begins at the first-Y-row time → overlaps the
+X-read: the latency fix), and successive writes serialize by their effective spans
+(back-to-back throughput).  Full numbers, held-out residuals (interior + untrained-n_col),
+back-to-back, and the ship-gate verdict: **`results/fir_calibration_results.md`**.
 
 Run:
 
 ```bash
-PYTHONPATH=. python examples/rowwise_fir/fir_sim.py          # golden conformance + overlap
+PYTHONPATH=. python examples/rowwise_fir/fir_sim.py            # golden conformance + overlap
 PYTHONPATH=. python examples/rowwise_fir/fir_build.py --cosim  # generated kernel bit-exact
-PYTHONPATH=. python examples/rowwise_fir/fir_validate.py     # sim-vs-cosim timeline
+PYTHONPATH=. python examples/rowwise_fir/fir_calibrate.py --measure   # cosim grid (slow)
+PYTHONPATH=. python examples/rowwise_fir/fir_calibrate.py --fit       # fit + validate
 ```
 
-## Timing parameters are PROVISIONAL
+## Calibration status
 
-`FIRTiming` is seeded from the Phase 1 bilinear fit; the bus-transfer model gives the
-~1 cyc/word read/write-channel rate.  The **deferred follow-step** (noted, not done):
-the per-stage cosim calibration — read-channel / write-channel / compute split read off
-their own burst spans, a `≥3 n_row` × in-range `n_col` grid with an **interior**
-held-out point, a back-to-back **2-matrix cosim** point to validate the overlap against
-RTL, and the `sklearn.linear_model.LinearRegression` bilinear fit.  `FIRTiming` is
-exactly where those numbers plug in; `fir_validate.py` is the harness that consumes them.
+The interior held-out (the plan's verdict) meets target (whole-kernel 0.02%, per-event
+≤3.5%).  Honest caveats in `results/fir_calibration_results.md`: untrained-n_col
+generalization is 6–10% (the 3-column grid undersamples the concave n_col curve — denser
+columns would close it), and the back-to-back gate uses `cosim(2·n_row continuous)` as a
+proxy because the definitive free-running reference (the AXIMMQueue ring kernel) is the
+deferred codegen.

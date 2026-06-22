@@ -45,14 +45,16 @@ orchestration (it never executes the hook), so it is not a valid extraction sour
 The AXIMMQueue ring is sim-only; the synthesized kernel takes the command as
 s_axilite scalars (exactly as VMAC bakes its command).
 
-**Timing parameters are PROVISIONAL** (seeded from the Phase 1 bilinear fit). The
-per-stage cosim calibration (read-channel / write-channel / compute split, ≥3
-``n_row``, the back-to-back 2-matrix point, the sklearn fit) is the deferred
-follow-step; :class:`FIRTiming` is where the real numbers plug in.
+**Timing is calibrated** from the RTL cosim grid (``fir_calibrate.py``): :class:`FIRTiming`
+holds the fitted bilinear ``(L0, L_row, L_col, II)`` coefficients for the X-read span, the
+Y-write span, and the first-Y-row fill, loaded via :meth:`FIRTiming.from_calibration`
+(``results/fir_calibration.json``).  :meth:`FIRTiming.provisional` is a coarse seed for
+running before calibration.
 """
 from __future__ import annotations
 
 import enum
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,60 +124,76 @@ class FIRStoreMsg:
     cmd: FIRCmd
 
 
+def _fir_features(n_rows: int, n_cols: int) -> dict:
+    """Named regression features for the span models (the basis the calibration fits)."""
+    trips = n_rows * (n_cols - T + 1)
+    sqrt_nc = float(n_cols) ** 0.5
+    return {"1": 1.0, "n_row": float(n_rows), "n_col": float(n_cols), "trips": float(trips),
+            "sqrt_nc": sqrt_nc, "nr_sqrt_nc": n_rows * sqrt_nc}
+
+
+#: One fitted span model: ``{"basis": [feature names], "coeffs": [floats]}``.
+SpanModel = dict
+
+
 @dataclass(frozen=True)
 class FIRTiming:
-    """PROVISIONAL per-stage timing budget (cycles), seeded from the Phase 1 bilinear fit.
+    """Per-stage timing model (cycles), fitted from the RTL cosim grid (sklearn).
 
-    The matrix-LT model needs the budget **split by the resource it consumes** so the
-    read-channel, write-channel, and compute timelines overlap correctly:
+    Three bus-visible spans, each a linear model over a per-span **named feature basis**:
 
-    * ``read_setup`` + ``read_per_word`` -> ``bus_rd`` hold (the X-read burst span).
-    * ``write_setup`` + ``write_per_word`` -> ``bus_wr`` hold (the Y-write burst span).
-    * ``comp_fill`` + ``comp_per_col``/``comp_per_row`` -> the BRAM compute time that
-      overlaps both channels (the ``L0 + L_col*n_col`` fill of the Phase 1 fit; compute
-      is II=1 so the per-output rate is hidden under memory for normal T).
+    * ``load``  -> the X-read span (held on ``bus_rd``); a plain bilinear basis
+      ``[1, n_row, n_col, trips]`` (the read is ~linear in words).
+    * ``store`` -> the Y-write span (held on ``bus_wr``); the bilinear basis **plus a
+      concave ``sqrt(n_col)`` term**, because the per-row write gap SATURATES in n_col
+      (70->261->268 cyc at n_col 64->256->1024) — a curvature a linear-in-n_col model
+      cannot fit (Phase-1's ~1.3% misfit, amplified at the n_col knee).
+    * ``fill`` -> the first-Y-row latency (the Y-write START offset that makes the write
+      overlap the read); same concave basis (the compute fill saturates the same way),
+      and ~constant in n_row.
 
-    These numbers are PROVISIONAL — seeded to the single 4x64 cosim point (X-read 392,
-    Y-write 437, whole-kernel 656 cyc) so the overlap can be checked.  >>> The real
-    per-stage cosim calibration (X-read span / Y-write span / load_end->store_begin gap,
-    >=3 n_row, sklearn bilinear fit) replaces every field here. <<<  See
-    plans/load_compute_store.md "Calibration".
-
-    Spans are PER-ROW-AWARE (``setup*n_row + per_word*words``) so they can match RTL's
-    bilinear shape — the linear bus model cannot, which is why FIR drives the spans from
-    these timeouts rather than the Region's bus-timed transfer (see the class docstring).
+    Compute is BRAM/II=1 and hidden under memory for FIR -> ``t_compute_const`` keeps
+    ``t_tail`` ~0.  Load with :meth:`from_calibration`; :meth:`provisional` is a coarse
+    seed so the model runs before calibration.
     """
-    # read channel (per row: setup + a burst of n_col input words); 4*(34+64)=392 @ 4x64
-    read_setup: float = 34.0
-    read_per_word: float = 1.0
-    # write channel (per row: setup + a burst of (n_col-T+1) output words); 4*(52.25+57)=437 @ 4x64
-    write_setup: float = 52.25
-    write_per_word: float = 1.0
-    # compute (BRAM; hidden under memory for normal T -> keep t_compute small so t_tail=0)
-    comp_fill: float = 30.0
-    comp_per_col: float = 0.0
-    comp_per_row: float = 0.0
-    comp_row_fill: float = 121.0    # first-Y-row latency after the first input row lands
-    # response write (small burst on bus_wr after Y)
-    resp_words: float = 4.0
+    load: SpanModel           # X-read span model
+    store: SpanModel          # Y-write span model
+    fill: SpanModel           # first-Y-row latency model (Y-write start offset)
+    t_compute_const: float = 30.0   # hidden BRAM compute (keeps t_tail ~0 for FIR)
+    resp_words: float = 4.0         # small response write after Y (cycles ~= resp_words)
+    write_per_word: float = 1.0     # response-write rate
 
-    def t_row_load_cyc(self, n_cols: int) -> float:
-        return self.read_setup + self.read_per_word * n_cols
+    @staticmethod
+    def _eval(model: SpanModel, n_rows: int, n_cols: int) -> float:
+        f = _fir_features(n_rows, n_cols)
+        return sum(c * f[k] for c, k in zip(model["coeffs"], model["basis"]))
 
     def t_load_cyc(self, n_rows: int, n_cols: int) -> float:
-        return n_rows * self.t_row_load_cyc(n_cols)
-
-    def t_row_store_cyc(self, n_cols: int) -> float:
-        return self.write_setup + self.write_per_word * (n_cols - T + 1)
+        return max(0.0, self._eval(self.load, n_rows, n_cols))
 
     def t_store_cyc(self, n_rows: int, n_cols: int) -> float:
-        return n_rows * self.t_row_store_cyc(n_cols)
+        return max(0.0, self._eval(self.store, n_rows, n_cols))
+
+    def t_fill_cyc(self, n_rows: int, n_cols: int) -> float:
+        """First-Y-row latency = Y-write start offset from load start (== tstart_out)."""
+        return max(0.0, self._eval(self.fill, n_rows, n_cols))
 
     def t_compute_cyc(self, n_rows: int, n_cols: int) -> float:
-        return self.comp_fill + self.comp_per_col * n_cols + self.comp_per_row * n_rows
+        return self.t_compute_const
 
-    def t_row_compute_cyc(self, n_cols: int) -> float:
-        return self.comp_row_fill
+    @classmethod
+    def provisional(cls) -> "FIRTiming":
+        """Coarse seed (II-only on trips, exact at 4x64) used before calibration runs."""
+        b = ["trips"]
+        return cls(load={"basis": b, "coeffs": [1.72]},
+                   store={"basis": b, "coeffs": [1.92]},
+                   fill={"basis": b, "coeffs": [0.96]})
+
+    @classmethod
+    def from_calibration(cls, path) -> "FIRTiming":
+        """Load the fitted per-span models from a fir_calibrate.py JSON artifact."""
+        d = json.loads(Path(path).read_text())["models"]
+        return cls(load=d["load"], store=d["store"], fill=d["fill"])
 
 
 @dataclass
@@ -199,7 +217,7 @@ class FIRAccel(HwComponent):
         # Attached by the driver (owns the system memory map) before run_sim:
         self.cmd_queue = None            # AXIMMQueue (sim-only command ring)
         self.data_base: int = 0          # byte base of the shared data region
-        self.timing = FIRTiming()        # PROVISIONAL; replaced by the deferred calibration
+        self.timing = FIRTiming.provisional()   # driver overrides with the fitted calibration
         self.logger = NullLogger()
         # timeline capture (per-command stage events), correlated by tx_id
         self.events: list[dict] = []
@@ -267,6 +285,10 @@ class FIRAccel(HwComponent):
         # them), and the functional movement's own bus time is subsumed into that duration (no
         # double-count).  Poll the ring on a coarse cadence (cmd_arrive offset anchored away).
         self._data = self.m_mem.region(self.data_base, Float32, word_bw=self._mem_bw)
+        # Write-channel effective-free time: successive Y-writes serialize by their EARLY-
+        # ANCHORED effective spans (not just the late resource acquire), so back-to-back
+        # throughput is correct (resolves the bus_wr "acquired late" caveat).
+        self._bus_wr_free = 0.0
         self.cmd_queue.poll_interval = 64.0
 
     def pre_sim_processes(self):  # documented spawn point — see pre_sim
@@ -309,9 +331,9 @@ class FIRAccel(HwComponent):
                     int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols,
                     t_out_start=t_begin, duration=self._secs(self.timing.t_load_cyc(n_rows, n_cols)))
                 self._log("load_end", cmd)          # == end of the X-read burst
-            # tstart = ABSOLUTE time the first input row is available to compute (pipeline-fill
-            # anchor): load start + one row's read-channel time.
-            tstart = t_begin + self._secs(self.timing.t_row_load_cyc(n_cols))
+            # tstart = load start; the first-Y-row fill (t_fill) is added in compute as the
+            # Y-write anchor.  (compute is hidden, so the input-row split is immaterial.)
+            tstart = t_begin
             X = np.asarray(Xf, dtype=np.float32).reshape(n_rows, n_cols)
             self.compute_q.put(FIRCompMsg(tstart=tstart, X=X, h=np.asarray(hf, dtype=np.float32),
                                           cmd=cmd))
@@ -331,8 +353,8 @@ class FIRAccel(HwComponent):
             self._log("comp_begin", msg.cmd, t_compute=float(t_compute), t_tail=float(t_tail))
             Y = self.execute(msg.X, msg.h)          # the ONE shared golden
             yield self.timeout(t_tail)
-            # first Y row available to store = first input row + one row's compute time.
-            tstart_out = msg.tstart + self._secs(self.timing.t_row_compute_cyc(n_cols))
+            # first Y row available to store = load start + the fitted first-Y-row fill.
+            tstart_out = msg.tstart + self._secs(self.timing.t_fill_cyc(n_rows, n_cols))
             self.store_q.put(FIRStoreMsg(tstart=tstart_out, Y=Y, cmd=msg.cmd))
 
     def store(self) -> ProcessGen[None]:
@@ -349,9 +371,16 @@ class FIRAccel(HwComponent):
                 # tstart_out + t_store, OVERLAPPING the X-read instead of following it (the
                 # latency fix).  No byte arithmetic, no hand-rolled anchor/timeout.
                 t_store = self._secs(self.timing.t_store_cyc(n_rows, n_cols))
+                # Serialize successive writes by their EFFECTIVE spans: the Y-write cannot
+                # begin before the previous Y-write's effective end (the write channel is
+                # busy), even though its first row was ready earlier.  This is what makes
+                # back-to-back THROUGHPUT correct (single-matrix latency is unchanged:
+                # _bus_wr_free starts at 0).
+                anchor = max(msg.tstart, self._bus_wr_free)
                 t0, t1 = yield from self._data.write_slice_pipelined(
-                    int(msg.cmd.y_off), msg.Y.ravel(), t_out_start=msg.tstart,
+                    int(msg.cmd.y_off), msg.Y.ravel(), t_out_start=anchor,
                     duration=t_store, element_type=Float32)
+                self._bus_wr_free = t1
                 self._log("store_begin", msg.cmd, t=t0)   # effective Y-write start
                 self._log("store_end", msg.cmd, t=t1)     # == end of the Y-write burst
                 # response back to the host — a small write burst on bus_wr after the Y writes.

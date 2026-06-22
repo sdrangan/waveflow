@@ -32,7 +32,7 @@ from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 
-from examples.rowwise_fir.fir import FIRAccel, FIRCmd, FIROp, Float32, T
+from examples.rowwise_fir.fir import FIRAccel, FIRCmd, FIROp, FIRTiming, Float32, T
 from examples.rowwise_fir.fir_golden import fir_golden
 
 
@@ -110,11 +110,16 @@ class FIRSim:
     specs: list[MatrixSpec]
     base_addr: int = 0
     capacity: int = 8
+    calibration: Path | None = None   # fir_calibrate.py JSON; None -> committed default or provisional
 
     def __post_init__(self) -> None:
         self.sim = Simulation()
         self.clk = Clock(freq=100e6)   # 10 ns/cycle (matches cosim create_clock -period 10)
         self.accel = FIRAccel(name="fir", sim=self.sim, mem_dwidth=32, mem_awidth=32, clk=self.clk)
+        # Load the fitted calibration if available (else the provisional seed in FIRAccel).
+        calib = self.calibration or (Path(__file__).resolve().parent / "results" / "fir_calibration.json")
+        if Path(calib).exists():
+            self.accel.timing = FIRTiming.from_calibration(calib)
 
         cmd_words = FIRCmd.nwords_per_inst(32)
         self.layout = AXIMMQueueLayout(

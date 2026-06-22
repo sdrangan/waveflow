@@ -1,0 +1,253 @@
+{
+  "model": "span ~= sum(coeff_i * feature_i); features per-span (bilinear + concave sqrt(n_col) for store/fill)",
+  "T": 8,
+  "clk_ns": 10.0,
+  "fit_grid": [
+    [
+      1,
+      64
+    ],
+    [
+      1,
+      256
+    ],
+    [
+      1,
+      1024
+    ],
+    [
+      2,
+      64
+    ],
+    [
+      2,
+      1024
+    ],
+    [
+      4,
+      64
+    ],
+    [
+      4,
+      256
+    ],
+    [
+      4,
+      1024
+    ],
+    [
+      8,
+      64
+    ],
+    [
+      8,
+      256
+    ],
+    [
+      8,
+      1024
+    ]
+  ],
+  "models": {
+    "load": {
+      "basis": [
+        "1",
+        "n_row",
+        "n_col",
+        "trips"
+      ],
+      "coeffs": [
+        -107.14024623308352,
+        95.81308895440348,
+        -0.2187211332160004,
+        1.1188004385997914
+      ]
+    },
+    "store": {
+      "basis": [
+        "1",
+        "n_row",
+        "n_col",
+        "trips",
+        "sqrt_nc",
+        "nr_sqrt_nc"
+      ],
+      "coeffs": [
+        234.23423423445996,
+        -248.43053209459805,
+        0.9332066441440503,
+        0.04145551801804004,
+        -45.619932432431966,
+        46.63344594594598
+      ]
+    },
+    "fill": {
+      "basis": [
+        "1",
+        "n_row",
+        "n_col",
+        "trips",
+        "sqrt_nc",
+        "nr_sqrt_nc"
+      ],
+      "coeffs": [
+        -181.66666666666646,
+        -9.370282327836321e-14,
+        0.018229166666647534,
+        5.6066262743570405e-15,
+        47.56249999999996,
+        -5.102168687542985e-14
+      ]
+    }
+  },
+  "r2": {
+    "load": 0.99424,
+    "store": 1.0,
+    "fill": 1.0
+  },
+  "holdout_interior": {
+    "point": [
+      2,
+      256
+    ],
+    "note": "n_row interpolation (n_col=256 is a trained column)",
+    "residual": {
+      "load": {
+        "pred": 585.7,
+        "actual": 566.0,
+        "rel_err": 0.0347
+      },
+      "store": {
+        "pred": 759.3,
+        "actual": 759.0,
+        "rel_err": 0.0004
+      },
+      "fill": {
+        "pred": 584.0,
+        "actual": 584.0,
+        "rel_err": 0.0
+      },
+      "whole_kernel": {
+        "pred": 1343.3,
+        "actual": 1343.0,
+        "rel_err": 0.0002
+      }
+    }
+  },
+  "holdout_ncol": [
+    {
+      "point": [
+        4,
+        128
+      ],
+      "note": "UNTRAINED n_col (tests the sqrt n_col curve)",
+      "residual": {
+        "load": {
+          "pred": 789.6,
+          "actual": 672.0,
+          "rel_err": 0.175
+        },
+        "store": {
+          "pred": 974.3,
+          "actual": 885.0,
+          "rel_err": 0.1009
+        },
+        "fill": {
+          "pred": 358.8,
+          "actual": 328.0,
+          "rel_err": 0.0938
+        },
+        "whole_kernel": {
+          "pred": 1333.1,
+          "actual": 1213.0,
+          "rel_err": 0.099
+        }
+      }
+    },
+    {
+      "point": [
+        4,
+        512
+      ],
+      "note": "UNTRAINED n_col (tests the sqrt n_col curve)",
+      "residual": {
+        "load": {
+          "pred": 2424.1,
+          "actual": 2343.0,
+          "rel_err": 0.0346
+        },
+        "store": {
+          "pred": 2990.6,
+          "actual": 2826.0,
+          "rel_err": 0.0582
+        },
+        "fill": {
+          "pred": 903.9,
+          "actual": 847.0,
+          "rel_err": 0.0672
+        },
+        "whole_kernel": {
+          "pred": 3894.5,
+          "actual": 3673.0,
+          "rel_err": 0.0603
+        }
+      }
+    }
+  ],
+  "validation": {
+    "single_holdout": {
+      "point": [
+        2,
+        256
+      ],
+      "x_read_span": {
+        "sim": 585.7,
+        "cosim": 566.0,
+        "rel_err": 0.0347
+      },
+      "y_write_span": {
+        "sim": 759.3,
+        "cosim": 759.0,
+        "rel_err": 0.0004
+      },
+      "t_fill": {
+        "sim": 584.0,
+        "cosim": 584.0,
+        "rel_err": 0.0
+      },
+      "whole_kernel": {
+        "sim": 1343.3,
+        "cosim": 1343.0,
+        "rel_err": 0.0002
+      }
+    },
+    "back_to_back": [
+      {
+        "sim_2x": [
+          4,
+          64
+        ],
+        "cosim_ref": [
+          8,
+          64
+        ],
+        "sim_span_cyc": 1264.4,
+        "cosim_whole_cyc": 1145.0,
+        "rel_err": 0.1043
+      },
+      {
+        "sim_2x": [
+          4,
+          256
+        ],
+        "cosim_ref": [
+          8,
+          256
+        ],
+        "sim_span_cyc": 4134.6,
+        "cosim_whole_cyc": 4389.0,
+        "rel_err": 0.058
+      }
+    ]
+  }
+}
