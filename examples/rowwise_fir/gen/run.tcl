@@ -26,8 +26,12 @@ if {[catch {csim_design -argv "$data_dir"} res]} { puts "WAVEFLOW_ERROR: fir csi
 if {$do_csynth || $do_cosim} {
     if {[catch {csynth_design} res]} { puts "WAVEFLOW_ERROR: fir csynth failed."; puts $res; exit 1 }
 }
+set trace_level "none"
+if {[info exists ::env(WAVEFLOW_ROWWISE_FIR_TRACE_LEVEL)]} {
+    set trace_level $::env(WAVEFLOW_ROWWISE_FIR_TRACE_LEVEL)
+}
 if {$do_cosim} {
-    if {[catch {cosim_design -argv "$data_dir" -trace_level none} res]} { puts "WAVEFLOW_ERROR: fir cosim failed."; puts $res; exit 1 }
+    if {[catch {cosim_design -argv "$data_dir" -trace_level $trace_level} res]} { puts "WAVEFLOW_ERROR: fir cosim failed."; puts $res; exit 1 }
     puts "WAVEFLOW_SUCCESS: fir csim/csynth/cosim passed."
 } else {
     puts "WAVEFLOW_SUCCESS: fir csim passed."

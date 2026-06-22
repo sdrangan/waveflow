@@ -1,0 +1,25 @@
+{
+  "sim": {
+    "load_span_cyc": 271.99999999999994,
+    "store_span_cyc": 230.00000000000009,
+    "compute_gap_cyc": 0.0,
+    "total_cyc": 506.0
+  },
+  "cosim": {
+    "clk_period_ns": 10.0,
+    "x_read": {
+      "start_ns": 515.0,
+      "end_ns": 4435.0,
+      "dur_cyc": 392.0,
+      "words": 288
+    },
+    "y_write": {
+      "start_ns": 2515.0,
+      "end_ns": 6885.0,
+      "dur_cyc": 437.0,
+      "words": 228
+    }
+  },
+  "read_rel_err": 0.30612244897959195,
+  "write_rel_err": 0.4736842105263156
+}
