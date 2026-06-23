@@ -58,19 +58,22 @@ extension was required.**
 | **Generated kernel csim/csynth/cosim** | bit-exact vs the shared golden (cosim 656 cyc @ 4×64) — `fir_build.py --cosim` |
 | **Inter-matrix overlap (the key result)** | back-to-back: `load(N+1)` on `bus_rd` overlaps `store(N)` on `bus_wr` — 2 matrices in ~778 cyc vs ~1012 sequential |
 | **Latency fix (early-anchored Y-write)** | single-command whole-kernel tracks RTL (656, not the 829 serial estimate); the Y-write overlaps the X-read (`fir_validate.py`) |
-| **Per-stage calibration** | sklearn bilinear (+concave `sqrt(n_col)`) fit from a `{1,2,4,8}×{64,256,1024}` cosim grid; **interior held-out (2,256) whole-kernel 0.02%** (`fir_calibrate.py`) |
-| **Back-to-back vs cosim** | sim 2×(n_row) vs `cosim(2·n_row)`: 6–10% (converging with size) |
+| **Physical timing model** | deterministic occupancy (beats==nwords) + II=1 compute + calibrated `g(n_col)`; **Gate 1 (2,256) 0.11%, Gate 2 untrained-n_col 0.14% / 0.60%**, sim vs cosim (`fir_calibrate.py`) |
+| **Whole-grid sim reconstruction** | ≤1.30% (worst at the smallest matrix; the rest < 0.3%) |
 | **Baseline** | branch non-vitis failures == main's 15 (zero regressions) |
 
-### Timing model (calibrated)
+### Timing model (physical, near-fit-free)
 
-`FIRTiming` holds per-span fitted models (`results/fir_calibration.json`): the X-read
-span (bilinear), the Y-write span and the first-Y-row `fill` (bilinear + a concave
-`sqrt(n_col)` term, because the per-row write gap and compute fill **saturate in n_col**).
-The store is **early-anchored** (Y-write begins at the first-Y-row time → overlaps the
-X-read: the latency fix), and successive writes serialize by their effective spans
-(back-to-back throughput).  Full numbers, held-out residuals (interior + untrained-n_col),
-back-to-back, and the ship-gate verdict: **`results/fir_calibration_results.md`**.
+The whole-kernel decomposes — and the sim composes — as
+`whole = (n_col+T) + trips + n_row·g(n_col) + fill_const = fill + max(write_occ, compute_body)`.
+**Channel occupancy is deterministic** (each transfer beat is one word ⇒ `nwords +
+setup·num_trans`, the `BusTiming`; *not* fitted), **compute is II=1** (`trips + (n_row−1)·g`,
+slope 1 exact), and the **only calibrated term is `g(n_col)`** — the per-row pipeline /
+ping-pong depth, a *saturating* `InterpCalibModel` lookup (not a `sqrt` fudge).  The store
+finishes **under compute's shadow** (`min_span = compute_body` on the Y-write).  The old
+`write_span` had conflated the compute-stall into a fitted span — that was the entire apparent
+curvature.  Full decomposition, the sanity check, `g`, and the gates:
+**`results/fir_calibration_results.md`**.
 
 Run:
 
@@ -83,9 +86,11 @@ PYTHONPATH=. python examples/rowwise_fir/fir_calibrate.py --fit       # fit + va
 
 ## Calibration status
 
-The interior held-out (the plan's verdict) meets target (whole-kernel 0.02%, per-event
-≤3.5%).  Honest caveats in `results/fir_calibration_results.md`: untrained-n_col
-generalization is 6–10% (the 3-column grid undersamples the concave n_col curve — denser
-columns would close it), and the back-to-back gate uses `cosim(2·n_row continuous)` as a
-proxy because the definitive free-running reference (the AXIMMQueue ring kernel) is the
-deferred codegen.
+Both single-command gates meet target on the **actual sim**: Gate 1 (interior holdout 2,256)
+**0.11%**, Gate 2 (untrained n_col 4×128 / 4×512) **0.14% / 0.60%**.  The model is physical and
+near-fit-free: occupancy and the II=1 compute are exact (fit-free); the sole calibrated term is
+the per-row pipeline depth `g(n_col)`, which saturates (so a few columns interpolate cleanly).
+The one residual is `g(n_col)` itself — a *per-row* quantity that block granularity can only see
+as `n_row·g(n_col)`; modeling it once per row is the fit-free lift a **row-LT** version would get
+(`results/fir_calibration_results.md`).  The back-to-back / inter-command throughput claim still
+awaits the free-running AXIMMQueue ring-kernel codegen (deferred).

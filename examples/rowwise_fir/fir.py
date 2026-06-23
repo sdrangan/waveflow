@@ -16,26 +16,27 @@ Key modeling ideas (from the plan):
   next matrix as soon as they are free, so ``load(N+1)`` overlaps ``compute(N)``
   and ``store(N)`` — the throughput win of the structure.
 * **Per-direction channel resources.** An ``m_axi`` bundle is full-duplex (Phase 1
-  correction): ``bus_rd`` (AR/R) and ``bus_wr`` (AW/W) are independent capacity-1
-  resources, *not* one shared bus.  ``compute`` runs from BRAM and holds neither,
-  so it overlaps both; ``load(N+1)`` and ``store(N)`` use different channels and
-  also overlap.  There is **no single-port II=2 floor** for a read+write kernel.
+  correction): the master's ``read_channel`` (AR/R) and ``write_channel`` (AW/W) are
+  independent capacity-1 resources, *not* one shared bus, **owned by the m_axi port** and
+  acquired automatically by the Region slice calls (no ``bus_rd``/``bus_wr`` wiring in the
+  component).  ``compute`` runs from BRAM and holds neither, so it overlaps both;
+  ``load(N+1)`` and ``store(N)`` use different channels and also overlap.  There is **no
+  single-port II=2 floor** for a read+write kernel.
 * **Fictitious inter-stage messages.** :class:`FIRCompMsg` / :class:`FIRStoreMsg`
   are plain dataclasses (never synthesized — in hardware the data moves through the
   partitioned-BRAM / FIFO channels); they carry the data plus an absolute-time
   ``tstart`` tag (the pipeline-fill quantity threaded through the stages).
 
 **Timing uses the element-coordinate Region API end-to-end** (no raw bytes, no hand-rolled
-retime).  The read/write channel SPANS are ``FIRTiming.t_load/t_store``
-(``setup*n_row + per_word*words``) — **bilinear** (Phase 1), which the linear ``word_bw``
-bus model cannot represent — so they are passed as ``duration=`` to the Region's pipelined
-slice calls, which do the functional movement AND occupy the channel for exactly that span
-(the movement's own word_bw bus time is subsumed; no double-count).  The **store is
-early-anchored**: ``write_slice_pipelined(..., t_out_start=tstart_out, duration=t_store)``
-models the Y-write as beginning when the first Y row is ready, so it *completes at*
-``tstart_out + t_store`` and **overlaps the X-read** (the latency fix).  ``bus_rd`` /
-``bus_wr`` are held around the calls to serialize successive same-direction transfers
-(the inter-matrix throughput model).
+retime).  The component supplies only the *structural* ``num_trans = n_row`` (one burst per
+row) at the slice calls; the **interface** turns it into the deterministic channel-occupancy
+span (``nwords + setup·num_trans`` — the :class:`~waveflow.hw.memif.BusTiming`).  The **store
+is early-anchored** and finishes **under compute's shadow**:
+``write_slice_pipelined(..., t_out_start=tstart_out, num_trans=n_row, min_span=compute_body)``
+models the Y-write as beginning when the first Y row is ready and occupying the write channel
+for ``max(write_occ, compute_body)``, so it *completes at* ``tstart_out + max(...)`` and
+**overlaps the X-read** (the latency fix), hiding the channel under compute when compute is the
+bottleneck.
 
 **Codegen** is the hand-rolled ``render_top`` in :mod:`examples.rowwise_fir.fir_build`
 (VMAC's *primary* pattern), wrapping the ``@synthesizable(impl_file="fir_dataflow.tpp")``
@@ -45,11 +46,13 @@ orchestration (it never executes the hook), so it is not a valid extraction sour
 The AXIMMQueue ring is sim-only; the synthesized kernel takes the command as
 s_axilite scalars (exactly as VMAC bakes its command).
 
-**Timing is calibrated** from the RTL cosim grid (``fir_calibrate.py``): :class:`FIRTiming`
-holds the fitted bilinear ``(L0, L_row, L_col, II)`` coefficients for the X-read span, the
-Y-write span, and the first-Y-row fill, loaded via :meth:`FIRTiming.from_calibration`
-(``results/fir_calibration.json``).  :meth:`FIRTiming.provisional` is a coarse seed for
-running before calibration.
+**Timing is physical and near-fit-free** (``fir_calibrate.py``): channel occupancy is
+deterministic (transfer beats == nwords), compute is II=1, and the only calibrated term is the
+per-row pipeline depth ``g(n_col)`` (a saturating :class:`~waveflow.calib.InterpCalibModel`
+lookup).  The whole-kernel composes as ``(n_col+T) + trips + n_row·g(n_col) + fill_const``.
+:class:`FIRTiming` is loaded via :meth:`FIRTiming.from_calibration`
+(``results/fir_calibration.json``); :meth:`FIRTiming.provisional` is a coarse seed.  Full
+decomposition + gates: ``results/fir_calibration_results.md``.
 """
 from __future__ import annotations
 
@@ -65,7 +68,8 @@ import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, FloatField, IntField, MemAddr
 from waveflow.hw.hw_component import HwComponent, HwParam
-from waveflow.hw.memif import MMIFMaster
+from waveflow.calib import InterpCalibModel
+from waveflow.hw.memif import BusTiming, MMIFMaster
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.logger import NullLogger
 from waveflow.simulation.simobj import ProcessGen
@@ -122,78 +126,104 @@ class FIRStoreMsg:
     tstart: float          # absolute sim-time the first row of Y is available to store
     Y: np.ndarray          # computed output matrix (n_rows, out_len)
     cmd: FIRCmd
+    compute_body: float = 0.0   # secs: the II=1 production span the store hides under (min_span)
 
 
-def _fir_features(n_rows: int, n_cols: int) -> dict:
-    """Named regression features for the span models (the basis the calibration fits)."""
-    trips = n_rows * (n_cols - T + 1)
-    sqrt_nc = float(n_cols) ** 0.5
-    return {"1": 1.0, "n_row": float(n_rows), "n_col": float(n_cols), "trips": float(trips),
-            "sqrt_nc": sqrt_nc, "nr_sqrt_nc": n_rows * sqrt_nc}
+@dataclass(frozen=True)
+class LinSpan:
+    """A fitted **linear primitive**: ``value = intercept + Σ coeff_i · row[name_i]``.
 
+    The A4 pure-linear model — no ``sqrt`` fudge.  The bus spans use the physically
+    grounded through-origin basis ``["num_trans", "nwords"]`` (``span = setup·num_trans +
+    per_word·nwords``); the component ``fill`` uses ``["n_col"]`` with an intercept.  Has the
+    ``predict(row) -> cycles`` shape :class:`~waveflow.hw.memif.BusTiming` consumes, is
+    serialized as ``{"basis", "coeffs", "intercept"}`` in the calibration JSON, and is produced
+    by :mod:`fir_calibrate` via :class:`waveflow.calib.LinCalibModel`."""
 
-#: One fitted span model: ``{"basis": [feature names], "coeffs": [floats]}``.
-SpanModel = dict
+    basis: tuple[str, ...]
+    coeffs: tuple[float, ...]
+    intercept: float = 0.0
+
+    def predict(self, row: dict) -> float:
+        return self.intercept + sum(c * float(row[n]) for c, n in zip(self.coeffs, self.basis))
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "LinSpan":
+        return cls(basis=tuple(d["basis"]), coeffs=tuple(float(c) for c in d["coeffs"]),
+                   intercept=float(d.get("intercept", 0.0)))
 
 
 @dataclass(frozen=True)
 class FIRTiming:
-    """Per-stage timing model (cycles), fitted from the RTL cosim grid (sklearn).
+    """**Physical, near-fit-free** per-primitive timing model (cycles).  The whole-kernel
+    decomposes — and the sim *composes* — as
 
-    Three bus-visible spans, each a linear model over a per-span **named feature basis**:
+    ::
 
-    * ``load``  -> the X-read span (held on ``bus_rd``); a plain bilinear basis
-      ``[1, n_row, n_col, trips]`` (the read is ~linear in words).
-    * ``store`` -> the Y-write span (held on ``bus_wr``); the bilinear basis **plus a
-      concave ``sqrt(n_col)`` term**, because the per-row write gap SATURATES in n_col
-      (70->261->268 cyc at n_col 64->256->1024) — a curvature a linear-in-n_col model
-      cannot fit (Phase-1's ~1.3% misfit, amplified at the n_col knee).
-    * ``fill`` -> the first-Y-row latency (the Y-write START offset that makes the write
-      overlap the read); same concave basis (the compute fill saturates the same way),
-      and ~constant in n_row.
+        whole = (n_col + T) + trips + n_row·g(n_col) + fill_const          (master equation)
+              = fill + max(write_occ, compute_body)                        (the sim composition)
 
-    Compute is BRAM/II=1 and hidden under memory for FIR -> ``t_compute_const`` keeps
-    ``t_tail`` ~0.  Load with :meth:`from_calibration`; :meth:`provisional` is a coarse
-    seed so the model runs before calibration.
-    """
-    load: SpanModel           # X-read span model
-    store: SpanModel          # Y-write span model
-    fill: SpanModel           # first-Y-row latency model (Y-write start offset)
-    t_compute_const: float = 30.0   # hidden BRAM compute (keeps t_tail ~0 for FIR)
-    resp_words: float = 4.0         # small response write after Y (cycles ~= resp_words)
-    write_per_word: float = 1.0     # response-write rate
+    with the pieces split by what they physically are (validated to ≤0.34% on the cosim grid):
 
-    @staticmethod
-    def _eval(model: SpanModel, n_rows: int, n_cols: int) -> float:
-        f = _fir_features(n_rows, n_cols)
-        return sum(c * f[k] for c, k in zip(model["coeffs"], model["basis"]))
+    * **Channel occupancy — deterministic, fit-free.**  Each transfer beat is one word, so a
+      burst occupies its channel for ``nwords + setup·num_trans`` cycles (``setup`` = the small
+      fixed per-burst address latency).  This is the :class:`~waveflow.hw.memif.BusTiming` the
+      slices consult; *not* a fitted curve.  (The old ``write_span`` wall-clock conflated this
+      with the compute-stall — that conflation was the entire apparent "curvature".)
+    * **Compute body — II=1, exact.**  ``compute_body = trips + (n_row−1)·g(n_col)``: the steady
+      MAC throughput is exactly one output/cycle (slope 1, *not fitted*); the only non-trivial
+      part is the per-row pipeline refill ``g``.
+    * **``g(n_col)`` — the ONE calibrated term.**  The per-row pipeline / 2-buffer ping-pong
+      depth: a smooth, **saturating** 1-D curve (~70→260→268 cyc), carried as a calibrated
+      :class:`~waveflow.calib.InterpCalibModel` *lookup* (not a ``sqrt`` fudge).  It appears
+      ``n_row`` times — once in ``fill``, ``(n_row−1)`` times as inter-row gaps in the body.
+    * **``fill``** (ramp to first output) ``= (n_col+T) + g(n_col) + fill_const``, and
+      ``fill_const`` is a single calibrated constant (command→first-bus latency + drain edge).
 
-    def t_load_cyc(self, n_rows: int, n_cols: int) -> float:
-        return max(0.0, self._eval(self.load, n_rows, n_cols))
+    The store finishes **under compute's shadow**: its bus-visible span is
+    ``max(write_occ, compute_body)`` (the ``min_span`` of
+    :meth:`~waveflow.hw.memif.Region.write_slice_pipelined`), so when compute is the bottleneck
+    the channel hides under it.  Load with :meth:`from_calibration`; :meth:`provisional` is a
+    coarse seed."""
 
-    def t_store_cyc(self, n_rows: int, n_cols: int) -> float:
-        return max(0.0, self._eval(self.store, n_rows, n_cols))
+    g: InterpCalibModel       # per-row pipeline depth g(n_col) — the ONE calibrated term
+    fill_const: float         # ramp/drain constant (command->first-bus latency + drain edge)
+    setup: float = 2.0        # per-burst address latency (deterministic channel occupancy)
+    resp_words: float = 4.0   # small response write after Y (cycles ~= resp_words)
+    write_per_word: float = 1.0
+
+    def g_cyc(self, n_cols: int) -> float:
+        return max(0.0, self.g.predict({"n_col": float(n_cols)}))
+
+    def bus_timing(self, clk_freq: float) -> BusTiming:
+        """Deterministic per-direction channel occupancy ``nwords + setup·num_trans`` (slope 1,
+        fit-free).  Both directions share the same form; the interface supplies the direction's
+        ``nwords`` and ``num_trans`` at the slice call."""
+        occ = LinSpan(("num_trans", "nwords"), (self.setup, 1.0))
+        return BusTiming(read=occ, write=occ, clk_freq=clk_freq)
 
     def t_fill_cyc(self, n_rows: int, n_cols: int) -> float:
-        """First-Y-row latency = Y-write start offset from load start (== tstart_out)."""
-        return max(0.0, self._eval(self.fill, n_rows, n_cols))
+        """Ramp to first output (Y-write start offset): ``(n_col+T) + g(n_col) + fill_const``."""
+        return max(0.0, (n_cols + T) + self.g_cyc(n_cols) + self.fill_const)
 
-    def t_compute_cyc(self, n_rows: int, n_cols: int) -> float:
-        return self.t_compute_const
+    def compute_body_cyc(self, n_rows: int, n_cols: int) -> float:
+        """II=1 production span of all outputs: ``trips + (n_row−1)·g(n_col)``."""
+        trips = n_rows * (n_cols - T + 1)
+        return max(0.0, trips + (n_rows - 1) * self.g_cyc(n_cols))
 
     @classmethod
     def provisional(cls) -> "FIRTiming":
-        """Coarse seed (II-only on trips, exact at 4x64) used before calibration runs."""
-        b = ["trips"]
-        return cls(load={"basis": b, "coeffs": [1.72]},
-                   store={"basis": b, "coeffs": [1.92]},
-                   fill={"basis": b, "coeffs": [0.96]})
+        """Coarse seed (flat g ≈ pipeline depth) used before calibration runs."""
+        g = InterpCalibModel.from_samples("n_col", [64.0, 1024.0], [70.0, 268.0], "g")
+        return cls(g=g, fill_const=59.0)
 
     @classmethod
     def from_calibration(cls, path) -> "FIRTiming":
-        """Load the fitted per-span models from a fir_calibrate.py JSON artifact."""
+        """Load the calibrated ``g`` table + constants from a fir_calibrate.py JSON artifact."""
         d = json.loads(Path(path).read_text())["models"]
-        return cls(load=d["load"], store=d["store"], fill=d["fill"])
+        gd = d["g"]
+        g = InterpCalibModel.from_samples(gd["feature"], gd["x"], gd["y"], "g")
+        return cls(g=g, fill_const=float(d["fill_const"]), setup=float(d.get("setup", 2.0)))
 
 
 @dataclass
@@ -276,18 +306,16 @@ class FIRAccel(HwComponent):
         self.load_q = self.transaction_queue()      # run_proc -> load
         self.compute_q = self.transaction_queue()   # load -> compute
         self.store_q = self.transaction_queue()     # compute -> store
-        # Per-DIRECTION channel resources (full-duplex bundle): independent, capacity-1.
-        self.bus_rd = self.resource(capacity=1)     # AR/R — successive loads serialize here
-        self.bus_wr = self.resource(capacity=1)     # AW/W — successive stores serialize here
-        # Element-coordinate view of the shared data region (the Region owns element->byte).
-        # Data moves through it; the per-stage SPANS are passed explicitly as `duration=` to the
-        # pipelined slice calls (per-row-aware / bilinear — the linear word_bw model can't express
-        # them), and the functional movement's own bus time is subsumed into that duration (no
-        # double-count).  Poll the ring on a coarse cadence (cmd_arrive offset anchored away).
+        # The full-duplex AR/R and AW/W channel resources now live on the m_axi port
+        # (``m_mem.read_channel`` / ``write_channel``) and are acquired automatically by the
+        # Region slice calls — the component no longer wires bus contention by hand.  The
+        # per-direction X-read / Y-write SPANS are the port's calibrated ``bus_timing``; the
+        # component supplies only ``num_trans = n_row`` (one burst per row) at the slice call.
+        self.m_mem.bus_timing = self.timing.bus_timing(self.clk.freq)
         self._data = self.m_mem.region(self.data_base, Float32, word_bw=self._mem_bw)
         # Write-channel effective-free time: successive Y-writes serialize by their EARLY-
         # ANCHORED effective spans (not just the late resource acquire), so back-to-back
-        # throughput is correct (resolves the bus_wr "acquired late" caveat).
+        # throughput is correct (resolves the write-channel "acquired late" caveat).
         self._bus_wr_free = 0.0
         self.cmd_queue.poll_interval = 64.0
 
@@ -318,19 +346,17 @@ class FIRAccel(HwComponent):
                 self.compute_q.put(FIRCompMsg(tstart=self.now, X=empty, h=empty, cmd=cmd))
                 return
             n_rows, n_cols = int(cmd.n_rows), int(cmd.n_cols)
-            with self.bus_rd.request() as req:      # read channel (serializes successive loads)
-                yield req
-                t_begin = self.now
-                self._log("load_begin", cmd)        # == start of the X-read burst in RTL
-                # Element-coordinate read: h (small, subsumed) then the X-read whose SPAN is the
-                # per-row-aware t_load, anchored at the load start.  The Region does the
-                # functional movement and occupies bus_rd for exactly the duration (no
-                # double-count, no byte arithmetic, no hand-rolled timeout).
-                hf = yield from self._data.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
-                Xf, _ = yield from self._data.read_slice_pipelined(
-                    int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols,
-                    t_out_start=t_begin, duration=self._secs(self.timing.t_load_cyc(n_rows, n_cols)))
-                self._log("load_end", cmd)          # == end of the X-read burst
+            t_begin = self.now
+            self._log("load_begin", cmd)            # == start of the X-read burst in RTL
+            # Element-coordinate read: h (small, subsumed) then the X-read.  The read channel
+            # is acquired automatically by the Region, and the X-read SPAN is the interface's
+            # calibrated bus_timing for ``num_trans = n_row`` bursts — anchored at the load
+            # start.  No byte arithmetic, no hand-rolled duration, no bus_rd wiring.
+            hf = yield from self._data.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
+            Xf, _ = yield from self._data.read_slice_pipelined(
+                int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols,
+                t_out_start=t_begin, num_trans=n_rows)
+            self._log("load_end", cmd)              # == end of the X-read burst
             # tstart = load start; the first-Y-row fill (t_fill) is added in compute as the
             # Y-write anchor.  (compute is hidden, so the input-row split is immaterial.)
             tstart = t_begin
@@ -346,43 +372,41 @@ class FIRAccel(HwComponent):
                                              Y=np.zeros((0, 0), dtype=np.float32), cmd=msg.cmd))
                 return
             n_rows, n_cols = int(msg.cmd.n_rows), int(msg.cmd.n_cols)
-            # absolute completion = first-input-row time + whole-matrix compute time.
-            t_compute = self._secs(self.timing.t_compute_cyc(n_rows, n_cols))
-            t_done = msg.tstart + t_compute
-            t_tail = max(t_done - self.now, 0.0)    # remainder after the load tail (overlap credit)
-            self._log("comp_begin", msg.cmd, t_compute=float(t_compute), t_tail=float(t_tail))
             Y = self.execute(msg.X, msg.h)          # the ONE shared golden
-            yield self.timeout(t_tail)
-            # first Y row available to store = load start + the fitted first-Y-row fill.
+            # first Y row available to store = load start + the ramp-to-first-output fill;
+            # compute_body = the II=1 production span the store then hides under (the
+            # compute-shadow floor passed to the Y-write).  Compute holds no bus channel, so it
+            # overlaps load(N+1)/store(N) — the timing is carried by the store's anchored span.
             tstart_out = msg.tstart + self._secs(self.timing.t_fill_cyc(n_rows, n_cols))
-            self.store_q.put(FIRStoreMsg(tstart=tstart_out, Y=Y, cmd=msg.cmd))
+            compute_body = self._secs(self.timing.compute_body_cyc(n_rows, n_cols))
+            self._log("comp_begin", msg.cmd, compute_body=float(compute_body))
+            self.store_q.put(FIRStoreMsg(tstart=tstart_out, Y=Y, cmd=msg.cmd,
+                                         compute_body=compute_body))
 
     def store(self) -> ProcessGen[None]:
         while True:
             msg: FIRStoreMsg = yield self.store_q.get()
             if int(msg.cmd.op) == int(FIROp.end):
                 return                      # drain complete
-            n_rows, n_cols = int(msg.cmd.n_rows), int(msg.cmd.n_cols)
-            with self.bus_wr.request() as req:      # write channel (independent of bus_rd)
-                yield req
-                # EARLY-ANCHORED, per-row-aware Y-write in ONE element-coordinate call: the
-                # Region writes Y functionally AND occupies bus_wr for exactly t_store, anchored
-                # at tstart_out (when the first Y row was ready) — so it completes at
-                # tstart_out + t_store, OVERLAPPING the X-read instead of following it (the
-                # latency fix).  No byte arithmetic, no hand-rolled anchor/timeout.
-                t_store = self._secs(self.timing.t_store_cyc(n_rows, n_cols))
-                # Serialize successive writes by their EFFECTIVE spans: the Y-write cannot
-                # begin before the previous Y-write's effective end (the write channel is
-                # busy), even though its first row was ready earlier.  This is what makes
-                # back-to-back THROUGHPUT correct (single-matrix latency is unchanged:
-                # _bus_wr_free starts at 0).
-                anchor = max(msg.tstart, self._bus_wr_free)
-                t0, t1 = yield from self._data.write_slice_pipelined(
-                    int(msg.cmd.y_off), msg.Y.ravel(), t_out_start=anchor,
-                    duration=t_store, element_type=Float32)
-                self._bus_wr_free = t1
-                self._log("store_begin", msg.cmd, t=t0)   # effective Y-write start
-                self._log("store_end", msg.cmd, t=t1)     # == end of the Y-write burst
-                # response back to the host — a small write burst on bus_wr after the Y writes.
-                yield self.timeout(self._secs(self.timing.resp_words * self.timing.write_per_word))
-                self._log("resp_sent", msg.cmd)
+            n_rows = int(msg.cmd.n_rows)
+            # EARLY-ANCHORED Y-write in ONE element-coordinate call: the Region writes Y
+            # functionally, acquires the write channel automatically, and occupies it for
+            # max(channel occupancy, compute_body) — the store finishes UNDER COMPUTE'S SHADOW
+            # (min_span=compute_body) — anchored at tstart_out (when the first Y row was ready),
+            # so it completes at tstart_out + max(...), OVERLAPPING the X-read (the latency fix)
+            # and hiding the channel under compute when compute is the bottleneck.
+            #
+            # Serialize successive writes by their EFFECTIVE spans: the Y-write cannot begin
+            # before the previous Y-write's effective end (the write channel is busy), even
+            # though its first row was ready earlier.  This is what makes back-to-back
+            # THROUGHPUT correct (single-matrix latency is unchanged: _bus_wr_free starts at 0).
+            anchor = max(msg.tstart, self._bus_wr_free)
+            t0, t1 = yield from self._data.write_slice_pipelined(
+                int(msg.cmd.y_off), msg.Y.ravel(), t_out_start=anchor,
+                num_trans=n_rows, min_span=msg.compute_body, element_type=Float32)
+            self._bus_wr_free = t1
+            self._log("store_begin", msg.cmd, t=t0)   # effective Y-write start
+            self._log("store_end", msg.cmd, t=t1)     # == end of the Y-write burst
+            # response back to the host — a small write burst on the write channel after Y.
+            yield self.timeout(self._secs(self.timing.resp_words * self.timing.write_per_word))
+            self._log("resp_sent", msg.cmd)

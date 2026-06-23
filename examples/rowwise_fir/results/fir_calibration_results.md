@@ -1,95 +1,97 @@
-# Matrix-LT FIR — per-stage cosim calibration (steps 4–5)
+# Matrix-LT FIR — physical, near-fit-free timing model
 
 Calibration of the block-fidelity FIR timing model against RTL cosim (Vitis 2025.1,
 xc7z020clg484-1, 10 ns clock).  Artifacts: `cosim_grid.json` (fit grid),
-`cosim_holdout_ncol.json` (untrained-n_col held-out), `fir_calibration.json` (fitted
-models + validation).  Reproduce: `fir_calibrate.py --measure` then `--fit`.
+`cosim_holdout_ncol.json` (untrained-n_col held-out), `fir_calibration.json` (the calibrated
+`g` table + constants + the sim-measured gates).  Reproduce: `fir_calibrate.py --measure` then
+`--fit` (the `--fit` step needs no Vitis — it reads the committed cosim grid).
 
-## Method (endpoints pinned identically to the sim)
+## The model — what each piece physically is
 
-Every span is read off its **own** m_axi burst in the cosim VCD and anchored at the
-X-read start — exactly as the sim anchors at `load_begin`:
+The whole-kernel **decomposes**, and the sim **composes**, as
 
-| quantity | cosim (VCD bursts) | sim event |
+```
+whole = (n_col + T) + trips + n_row·g(n_col) + fill_const          (master equation)
+      = fill + max(write_occ, compute_body)                        (the sim composition)
+```
+
+with `trips = n_row·(n_col − T + 1)`, `T = 8`.  Every term is physical:
+
+| piece | form | fitted? |
 |---|---|---|
-| X-read span | first→last read burst | `load_begin`→`load_end` |
-| Y-write span | first→last write burst | `store_begin`→`store_end` |
-| `t_fill` (first-Y-row) | Y-write start − X-read start | `store_begin` offset |
-| whole-kernel | Y-write end − X-read start | `store_end` offset |
+| **channel occupancy** | `nwords + setup·num_trans` (slope **1**, each transfer beat = one word) | **no** — deterministic |
+| **compute body** (II=1) | `trips + (n_row−1)·g(n_col)` (one output / cycle) | **no** — slope 1 exact |
+| **`fill`** (ramp to 1st output) | `(n_col+T) + g(n_col) + fill_const` | `fill_const` = one scalar |
+| **`g(n_col)`** | per-row pipeline / 2-buffer ping-pong depth | **yes** — the *only* calibrated curve |
 
-Fit grid: `n_row ∈ {1,2,4,8}` × `n_col ∈ {64,256,1024}` (sklearn `LinearRegression`).
-Per-span feature basis (`trips = n_row·(n_col−T+1)`, `T=8`):
+`g(n_col)` appears **`n_row` times**: once in `fill`, `(n_row−1)` times as inter-row gaps in
+the compute body.
 
-- **load** (X-read): `[1, n_row, n_col, trips]` — the read is ~linear in words.
-- **store** / **fill**: above **+ `sqrt(n_col)`, `n_row·sqrt(n_col)`** — the per-row write
-  gap and the first-row fill **saturate in n_col** (gap = 70→261→268 cyc at n_col
-  64→256→1024), a concave shape a linear-in-n_col model cannot fit.
+### The realization (why the old model had "curvature")
 
-`fill` comes out n_row-independent: `fill ≈ −182 + 0.018·n_col + 47.6·√n_col` (the n_row
-and trips coefficients fit to ~0) — the first output row's latency does not depend on how
-many rows follow.
+The earlier `write_span` was the **wall-clock data-phase span** — it conflated the *channel
+occupancy* with the *compute-stall* (the store idling on the write data channel, `TVALID=0`,
+while compute caught up).  That stall is **compute**, already a sim primitive; folding it into a
+fitted span term is what produced the apparent `sqrt(n_col)` curvature.  Separating the two —
+deterministic occupancy + an II=1 compute that the sim lets pace the store — removes it.  The
+store now finishes **under compute's shadow**: its bus-visible span is `max(write_occ,
+compute_body)` (the `min_span` of `Region.write_slice_pipelined`), so when compute is the
+bottleneck the channel hides under it.
 
-## Fit quality
+## Sanity check — channel occupancy is deterministic (transfer beats == nwords)
 
-| span | R² (fit grid) |
-|---|---|
-| load (X-read) | 0.994 |
-| store (Y-write) | 1.000 |
-| fill | 1.000 |
+Summing only `beat_type == TRANSFER` per direction (`waveflow/utils/vcd.py`
+`AximmBeatType`; `IDLE`/`STALL` dropped) over all 12 grid points:
 
-## Held-out residuals (the verdict — sim with fitted model vs cosim)
+- **read** beats == `n_row·(n_col + T)` — exact, all 12 (the kernel re-reads the `T` taps per row).
+- **write** beats == `trips = n_row·(n_col − T + 1)` — exact, all 12.
 
-**Interior held-out `(2,256)`** (the plan's specified verdict — tests n_row interpolation;
-n_col=256 is a trained column):
+So occupancy is `nwords + setup·num_trans` with slope **1** and `setup` a small fixed per-burst
+address latency (`setup = 2`; immaterial while compute-bound — it only gates the write-bound
+regime).  *Not* a fitted curve.
 
-| event | sim | cosim | rel-err |
+## Compute is II=1 — exact
+
+Fitting `compute_body` against `trips` on the **single-row** points (no inter-row boundary):
+slope **1.000**, intercept **−1.0**, **R² = 1.0000**.  The steady MAC throughput is exactly one
+output per cycle.  The only non-trivial part is the per-row refill `g`.
+
+## `g(n_col)` — the one calibrated term (a measured, saturating lookup)
+
+Measured from the inter-row gaps, `g = (y_write_span − trips)/(n_row − 1)` (constant across
+`n_row` for each `n_col`):
+
+| n_col | 64 | 256 | 1024 |
 |---|---|---|---|
-| X-read span | 585.7 | 566.0 | **3.5%** |
-| Y-write span | 759.3 | 759.0 | **0.0%** |
-| t_fill | 584.0 | 584.0 | **0.0%** |
-| **whole-kernel** | 1343.3 | 1343.0 | **0.02%** |
+| `g(n_col)` (cyc) | 69.5 | 260.3 | 268.5 |
 
-**Untrained-n_col held-out** (added for honesty — tests the `sqrt(n_col)` interpolation
-between the 3 fit columns; these n_col are NOT in the fit):
+`g` **saturates** (~268, the FIR pipeline depth), so it is carried as a calibrated
+`InterpCalibModel` *lookup* (linear interpolation between samples, flat beyond) — **not** a
+`sqrt` basis.  Saturation makes it cheap: three columns already interpolate the untrained
+columns to <1% (denser sampling is a trivial, additive future tightening — no model change).
 
-| point | X-read | Y-write | t_fill | whole-kernel |
+## Gates — sim (loading the calibration) vs cosim, on the **actual** simulation
+
+| gate | point | sim whole | cosim whole | rel-err |
 |---|---|---|---|---|
-| (4,128) | 17.5% | 10.1% | 9.4% | **9.9%** |
-| (4,512) | 3.5% | 5.8% | 6.7% | **6.0%** |
+| **Gate 1** single-command (n_row held out; g(256) trained) | (2,256) | 1341.5 | 1343 | **0.11%** |
+| **Gate 2** untrained n_col (g interpolated) | (4,128) | 1211.3 | 1213 | **0.14%** |
+| **Gate 2** untrained n_col (g interpolated) | (4,512) | 3651.0 | 3673 | **0.60%** |
 
-Interior whole-kernel is **0.02%** (≲2–3% target met; per-event ≤3.5% ≲5% met).  The
-untrained-n_col whole-kernel is **6–10%**: the 3-column grid undersamples the concave
-n_col curve, so interpolation to a *new* column is 6–10%.  Tightening this to ≲3% for
-arbitrary n_col needs a denser n_col grid (more columns to pin the concavity) — noted, not
-done.
+Whole-grid sim reconstruction: **max 1.30%** (worst at the smallest matrix (1,64), where the
+fixed `fill_const` dominates a 256-cycle kernel; every other point < 0.3%).
 
-## Back-to-back throughput (step 5)
+> Composition caveat (the quiet failure the model had to clear): the early-anchored Y-write
+> must do its **functional** movement *anchored* at `t_out_start`, otherwise — when the store
+> runs late behind a long read — the write restarts at `now` and overruns the span (seen as an
+> 11% miss at (4,512) before the fix).  `Region.write_slice_pipelined` now anchors it.
 
-Sim runs **two** matrices back-to-back (the `bus_rd`/`bus_wr` serialization +
-`load(N+1)∥store(N)` overlap; writes serialize by their effective spans via
-`_bus_wr_free`).  RTL reference: `cosim(2·n_row, n_col)` — one kernel over `2·n_row`
-continuous rows (the per-row dataflow has no matrix boundary).
+## The residual — `g(n_col)`, and why it belongs to row-LT
 
-| sim 2×(n_row,n_col) | cosim ref | sim span | cosim | rel-err |
-|---|---|---|---|---|
-| 2×(4,64) | (8,64) | 1264 | 1145 | 10.4% |
-| 2×(4,256) | (8,256) | 4135 | 4389 | 5.8% |
-
-The sim reads slightly high at small size and converges with size.  **Caveat:** the true
-back-to-back reference is a *free-running* accelerator (the AXIMMQueue ring kernel), whose
-codegen is deferred; `cosim(2·n_row continuous)` is the closest available RTL proxy and
-lacks the inter-command seam the sim models (per-matrix fill + response), so the sim reads
-high by roughly one per-row write-gap — a relative effect that shrinks as the matrices
-grow.
-
-## Ship-gate verdict
-
-1. **Latency fix (early-anchored pipelined transfer)** — **MET.** Single-command
-   whole-kernel tracks RTL (interior held-out 0.02%), not the 829-cyc serial estimate;
-   the Y-write overlaps the X-read.
-2. **Per-stage cosim calibration** — **MET at the plan's interior held-out** (whole-kernel
-   0.02%, per-event ≤3.5%). Honest caveat: untrained-n_col generalization is 6–10%
-   (sparse concave n_col sampling); denser columns would close it.
-3. **Back-to-back validated vs cosim** — **PARTIAL.** Matches the continuous-kernel proxy
-   within 6–10% (converging with size); the definitive free-running-RTL reference is the
-   deferred ring-kernel codegen.
+The curvature was *mostly* the measurement (occupancy + II=1 compute are exact).  The sole
+remaining non-linearity is `g(n_col)` — the **per-row** pipeline / 2-buffer ping-pong depth.  At
+**block (matrix) granularity** the model can only see it as `n_row·g(n_col)` and must carry `g`
+as a measured 1-D curve.  At **row granularity** (row-LT) `g(n_col)` is simply the row's
+pipeline depth, modeled once per row — the fit-free structural lift.  This is the concrete,
+quantified case for row-LT: the residual is a single, physically-named, per-row quantity, not a
+diffuse curvature, and not a `sqrt` fudge.

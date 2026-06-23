@@ -1,7 +1,8 @@
 {
-  "model": "span ~= sum(coeff_i * feature_i); features per-span (bilinear + concave sqrt(n_col) for store/fill)",
+  "model": "PHYSICAL near-fit-free: channel occupancy deterministic (beats==nwords); compute II=1 (trips + (n_row-1)*g); g(n_col) = calibrated saturating lookup (the per-row ping-pong depth); whole = (n_col+T) + trips + n_row*g(n_col) + fill_const",
   "T": 8,
   "clk_ns": 10.0,
+  "setup": 2.0,
   "fit_grid": [
     [
       1,
@@ -49,89 +50,33 @@
     ]
   ],
   "models": {
-    "load": {
-      "basis": [
-        "1",
-        "n_row",
-        "n_col",
-        "trips"
+    "g": {
+      "feature": "n_col",
+      "x": [
+        64.0,
+        256.0,
+        1024.0
       ],
-      "coeffs": [
-        -107.14024623308352,
-        95.81308895440348,
-        -0.2187211332160004,
-        1.1188004385997914
+      "y": [
+        69.50793650793652,
+        260.33333333333337,
+        268.50793650793656
       ]
     },
-    "store": {
-      "basis": [
-        "1",
-        "n_row",
-        "n_col",
-        "trips",
-        "sqrt_nc",
-        "nr_sqrt_nc"
-      ],
-      "coeffs": [
-        234.23423423445996,
-        -248.43053209459805,
-        0.9332066441440503,
-        0.04145551801804004,
-        -45.619932432431966,
-        46.63344594594598
-      ]
-    },
-    "fill": {
-      "basis": [
-        "1",
-        "n_row",
-        "n_col",
-        "trips",
-        "sqrt_nc",
-        "nr_sqrt_nc"
-      ],
-      "coeffs": [
-        -181.66666666666646,
-        -9.370282327836321e-14,
-        0.018229166666647534,
-        5.6066262743570405e-15,
-        47.56249999999996,
-        -5.102168687542985e-14
-      ]
-    }
+    "fill_const": 58.8124,
+    "setup": 2.0
   },
-  "r2": {
-    "load": 0.99424,
-    "store": 1.0,
-    "fill": 1.0
-  },
+  "in_grid_reconstruction_max_rel_err": 0.013,
   "holdout_interior": {
     "point": [
       2,
       256
     ],
-    "note": "n_row interpolation (n_col=256 is a trained column)",
-    "residual": {
-      "load": {
-        "pred": 585.7,
-        "actual": 566.0,
-        "rel_err": 0.0347
-      },
-      "store": {
-        "pred": 759.3,
-        "actual": 759.0,
-        "rel_err": 0.0004
-      },
-      "fill": {
-        "pred": 584.0,
-        "actual": 584.0,
-        "rel_err": 0.0
-      },
-      "whole_kernel": {
-        "pred": 1343.3,
-        "actual": 1343.0,
-        "rel_err": 0.0002
-      }
+    "note": "n_row=2 held out from the fit; g(256) trained from (4,256),(8,256)",
+    "whole_kernel": {
+      "pred": 1341.5,
+      "actual": 1343.0,
+      "rel_err": 0.0011
     }
   },
   "holdout_ncol": [
@@ -140,28 +85,11 @@
         4,
         128
       ],
-      "note": "UNTRAINED n_col (tests the sqrt n_col curve)",
-      "residual": {
-        "load": {
-          "pred": 789.6,
-          "actual": 672.0,
-          "rel_err": 0.175
-        },
-        "store": {
-          "pred": 974.3,
-          "actual": 885.0,
-          "rel_err": 0.1009
-        },
-        "fill": {
-          "pred": 358.8,
-          "actual": 328.0,
-          "rel_err": 0.0938
-        },
-        "whole_kernel": {
-          "pred": 1333.1,
-          "actual": 1213.0,
-          "rel_err": 0.099
-        }
+      "note": "UNTRAINED n_col (g interpolated \u2014 the honest generalization test)",
+      "whole_kernel": {
+        "pred": 1211.3,
+        "actual": 1213.0,
+        "rel_err": 0.0014
       }
     },
     {
@@ -169,84 +97,45 @@
         4,
         512
       ],
-      "note": "UNTRAINED n_col (tests the sqrt n_col curve)",
-      "residual": {
-        "load": {
-          "pred": 2424.1,
-          "actual": 2343.0,
-          "rel_err": 0.0346
-        },
-        "store": {
-          "pred": 2990.6,
-          "actual": 2826.0,
-          "rel_err": 0.0582
-        },
-        "fill": {
-          "pred": 903.9,
-          "actual": 847.0,
-          "rel_err": 0.0672
-        },
-        "whole_kernel": {
-          "pred": 3894.5,
-          "actual": 3673.0,
-          "rel_err": 0.0603
-        }
+      "note": "UNTRAINED n_col (g interpolated \u2014 the honest generalization test)",
+      "whole_kernel": {
+        "pred": 3651.0,
+        "actual": 3673.0,
+        "rel_err": 0.006
       }
     }
   ],
   "validation": {
-    "single_holdout": {
+    "gate1_single_command": {
       "point": [
         2,
         256
       ],
-      "x_read_span": {
-        "sim": 585.7,
-        "cosim": 566.0,
-        "rel_err": 0.0347
-      },
-      "y_write_span": {
-        "sim": 759.3,
-        "cosim": 759.0,
-        "rel_err": 0.0004
-      },
-      "t_fill": {
-        "sim": 584.0,
-        "cosim": 584.0,
-        "rel_err": 0.0
-      },
-      "whole_kernel": {
-        "sim": 1343.3,
-        "cosim": 1343.0,
-        "rel_err": 0.0002
-      }
+      "note": "interior holdout (n_row=2; g(256) trained)",
+      "sim_whole_cyc": 1341.5,
+      "cosim_whole_cyc": 1343.0,
+      "rel_err": 0.0011
     },
-    "back_to_back": [
+    "gate2_untrained_ncol": [
       {
-        "sim_2x": [
+        "point": [
           4,
-          64
+          128
         ],
-        "cosim_ref": [
-          8,
-          64
-        ],
-        "sim_span_cyc": 1264.4,
-        "cosim_whole_cyc": 1145.0,
-        "rel_err": 0.1043
+        "note": "untrained n_col (g interpolated)",
+        "sim_whole_cyc": 1211.3,
+        "cosim_whole_cyc": 1213.0,
+        "rel_err": 0.0014
       },
       {
-        "sim_2x": [
+        "point": [
           4,
-          256
+          512
         ],
-        "cosim_ref": [
-          8,
-          256
-        ],
-        "sim_span_cyc": 4134.6,
-        "cosim_whole_cyc": 4389.0,
-        "rel_err": 0.058
+        "note": "untrained n_col (g interpolated)",
+        "sim_whole_cyc": 3651.0,
+        "cosim_whole_cyc": 3673.0,
+        "rel_err": 0.006
       }
     ]
   }

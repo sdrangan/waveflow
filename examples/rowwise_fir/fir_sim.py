@@ -7,8 +7,9 @@ Wires a small host + the timed :class:`FIRAccel` model as two masters on an
 ``FIRCmd`` per matrix + an ``end`` sentinel, and the driver reads Y back after the
 run and checks it **bit-exact** against the shared ``fir_golden``.
 
-Memory latency is zero — stage timing comes from :class:`FIRTiming`'s calibrated
-timeouts (held on ``bus_rd`` / ``bus_wr``), not the bus model.
+Memory latency is zero — stage timing comes from :class:`FIRTiming` (deterministic channel
+occupancy + II=1 compute + the calibrated ``g(n_col)``), composed over the master's per-direction
+``read_channel`` / ``write_channel``, not the bus model.
 
 Run with the project venv::
 
