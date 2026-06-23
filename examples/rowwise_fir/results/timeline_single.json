@@ -1,0 +1,30 @@
+{
+  "sim": {
+    "load_span_cyc": 391.99999999999994,
+    "store_span_cyc": 436.99999999999994,
+    "store_begin_off_cyc": 218.99999999999994,
+    "load_end_off_cyc": 391.99999999999994,
+    "whole_kernel_cyc": 655.9999999999999,
+    "resp_sent_cyc": 659.9999999999999,
+    "overlap": true
+  },
+  "cosim": {
+    "clk_period_ns": 10.0,
+    "x_read": {
+      "start_ns": 515.0,
+      "end_ns": 4435.0,
+      "dur_cyc": 392.0,
+      "words": 288
+    },
+    "y_write": {
+      "start_ns": 2515.0,
+      "end_ns": 6885.0,
+      "dur_cyc": 437.0,
+      "words": 228
+    }
+  },
+  "cosim_whole_kernel_cyc": 637.0,
+  "read_rel_err": 1.450087215836939e-16,
+  "write_rel_err": 1.300764733656934e-16,
+  "whole_kernel_rel_err": 0.029827315541601077
+}

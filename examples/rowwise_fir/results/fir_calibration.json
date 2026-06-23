@@ -1,0 +1,142 @@
+{
+  "model": "PHYSICAL near-fit-free: channel occupancy deterministic (beats==nwords); compute II=1 (trips + (n_row-1)*row_depth); row_depth(n_col) = calibrated saturating lookup (the per-row ping-pong refill depth); whole = (n_col+T) + trips + n_row*row_depth(n_col) + fill_const",
+  "T": 8,
+  "clk_ns": 10.0,
+  "setup": 2.0,
+  "fit_grid": [
+    [
+      1,
+      64
+    ],
+    [
+      1,
+      256
+    ],
+    [
+      1,
+      1024
+    ],
+    [
+      2,
+      64
+    ],
+    [
+      2,
+      1024
+    ],
+    [
+      4,
+      64
+    ],
+    [
+      4,
+      256
+    ],
+    [
+      4,
+      1024
+    ],
+    [
+      8,
+      64
+    ],
+    [
+      8,
+      256
+    ],
+    [
+      8,
+      1024
+    ]
+  ],
+  "models": {
+    "row_depth": {
+      "feature": "n_col",
+      "x": [
+        64.0,
+        256.0,
+        1024.0
+      ],
+      "y": [
+        69.50793650793652,
+        260.33333333333337,
+        268.50793650793656
+      ]
+    },
+    "fill_const": 58.8124,
+    "setup": 2.0
+  },
+  "in_grid_reconstruction_max_rel_err": 0.013,
+  "holdout_interior": {
+    "point": [
+      2,
+      256
+    ],
+    "note": "n_row=2 held out from the fit; row_depth(256) trained from (4,256),(8,256)",
+    "whole_kernel": {
+      "pred": 1341.5,
+      "actual": 1343.0,
+      "rel_err": 0.0011
+    }
+  },
+  "holdout_ncol": [
+    {
+      "point": [
+        4,
+        128
+      ],
+      "note": "UNTRAINED n_col (row_depth interpolated \u2014 the honest generalization test)",
+      "whole_kernel": {
+        "pred": 1211.3,
+        "actual": 1213.0,
+        "rel_err": 0.0014
+      }
+    },
+    {
+      "point": [
+        4,
+        512
+      ],
+      "note": "UNTRAINED n_col (row_depth interpolated \u2014 the honest generalization test)",
+      "whole_kernel": {
+        "pred": 3651.0,
+        "actual": 3673.0,
+        "rel_err": 0.006
+      }
+    }
+  ],
+  "validation": {
+    "gate1_single_command": {
+      "point": [
+        2,
+        256
+      ],
+      "note": "interior holdout (n_row=2; row_depth(256) trained)",
+      "sim_whole_cyc": 1341.5,
+      "cosim_whole_cyc": 1343.0,
+      "rel_err": 0.0011
+    },
+    "gate2_untrained_ncol": [
+      {
+        "point": [
+          4,
+          128
+        ],
+        "note": "untrained n_col (row_depth interpolated)",
+        "sim_whole_cyc": 1211.3,
+        "cosim_whole_cyc": 1213.0,
+        "rel_err": 0.0014
+      },
+      {
+        "point": [
+          4,
+          512
+        ],
+        "note": "untrained n_col (row_depth interpolated)",
+        "sim_whole_cyc": 3651.0,
+        "cosim_whole_cyc": 3673.0,
+        "rel_err": 0.006
+      }
+    ]
+  }
+}

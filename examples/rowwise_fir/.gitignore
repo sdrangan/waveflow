@@ -1,0 +1,5 @@
+gen/fir_gen_proj/
+gen/data/
+*.log
+__pycache__/
+gen/vcd/

@@ -1,0 +1,186 @@
+{
+  "T": 8,
+  "calibration": {
+    "L0": 68.6269,
+    "L_col": 1.031,
+    "L_row": 60.2299,
+    "fit_configs": [
+      [
+        1,
+        16
+      ],
+      [
+        1,
+        32
+      ],
+      [
+        1,
+        64
+      ],
+      [
+        1,
+        128
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        512
+      ],
+      [
+        4,
+        16
+      ],
+      [
+        4,
+        32
+      ],
+      [
+        4,
+        64
+      ],
+      [
+        4,
+        128
+      ],
+      [
+        4,
+        256
+      ],
+      [
+        4,
+        512
+      ]
+    ],
+    "holdout": [
+      4,
+      1024
+    ],
+    "holdout_actual_cycles": 6252,
+    "holdout_note": "n_col=1024 is a 2x extrapolation beyond the fit grid (max 512) into the burst-amortized regime where cyc/output is still decreasing, so the affine fit overshoots.",
+    "holdout_pred_cycles": 7440.42,
+    "holdout_rel_err": 0.19009,
+    "holdout_trips": 4068,
+    "ii": 1.4934,
+    "model": "latency_cycles ~= L0 + L_row*n_row + L_col*n_col + II*trips",
+    "model_note": "Bilinear: the plan's L0 + n_row*L_row + II*trips form (single global II~=2) does NOT fit -- per-row DATAFLOW overlap makes the per-row interval scale with n_col, so an L_col*n_col pipeline-fill term is required.  There is no single 'II=2' floor; see steady_state_cyc_per_output.",
+    "r2": 0.987053,
+    "steady_state_cyc_per_output": 1.25,
+    "trips_formula": "trips = n_row * (n_col - T + 1)"
+  },
+  "clk_period_ns": 10.0,
+  "fullduplex_finding": "single-port (X+Y share bundle=gmem) and split (gmemX/gmemY) cosim to identical cycles; a single m_axi bundle is full-duplex, so a read+write pair does not contend. See rtl_cycles_split on the duplex-evidence points.",
+  "points": [
+    {
+      "held_out": false,
+      "n_cols": 16,
+      "n_rows": 1,
+      "rtl_cycles": 128,
+      "rtl_latency_ns": 1280.0,
+      "trips": 9
+    },
+    {
+      "held_out": false,
+      "n_cols": 32,
+      "n_rows": 1,
+      "rtl_cycles": 176,
+      "rtl_latency_ns": 1760.0,
+      "trips": 25
+    },
+    {
+      "held_out": false,
+      "n_cols": 64,
+      "n_rows": 1,
+      "rtl_cycles": 272,
+      "rtl_cycles_split": 272,
+      "rtl_latency_ns": 2720.0,
+      "trips": 57
+    },
+    {
+      "held_out": false,
+      "n_cols": 128,
+      "n_rows": 1,
+      "rtl_cycles": 464,
+      "rtl_latency_ns": 4640.0,
+      "trips": 121
+    },
+    {
+      "held_out": false,
+      "n_cols": 256,
+      "n_rows": 1,
+      "rtl_cycles": 848,
+      "rtl_latency_ns": 8480.0,
+      "trips": 249
+    },
+    {
+      "held_out": false,
+      "n_cols": 512,
+      "n_rows": 1,
+      "rtl_cycles": 1367,
+      "rtl_latency_ns": 13670.0,
+      "trips": 505
+    },
+    {
+      "held_out": false,
+      "n_cols": 16,
+      "n_rows": 4,
+      "rtl_cycles": 305,
+      "rtl_latency_ns": 3050.0,
+      "trips": 36
+    },
+    {
+      "held_out": false,
+      "n_cols": 32,
+      "n_rows": 4,
+      "rtl_cycles": 401,
+      "rtl_latency_ns": 4010.0,
+      "trips": 100
+    },
+    {
+      "held_out": false,
+      "n_cols": 64,
+      "n_rows": 4,
+      "rtl_cycles": 655,
+      "rtl_latency_ns": 6550.0,
+      "trips": 228
+    },
+    {
+      "held_out": false,
+      "n_cols": 128,
+      "n_rows": 4,
+      "rtl_cycles": 1231,
+      "rtl_latency_ns": 12310.0,
+      "trips": 484
+    },
+    {
+      "held_out": false,
+      "n_cols": 256,
+      "n_rows": 4,
+      "rtl_cycles": 2383,
+      "rtl_cycles_split": 2383,
+      "rtl_latency_ns": 23830.0,
+      "trips": 996
+    },
+    {
+      "held_out": false,
+      "n_cols": 512,
+      "n_rows": 4,
+      "rtl_cycles": 3692,
+      "rtl_latency_ns": 36920.0,
+      "trips": 2020
+    },
+    {
+      "held_out": true,
+      "n_cols": 1024,
+      "n_rows": 4,
+      "rtl_cycles": 6252,
+      "rtl_latency_ns": 62520.0,
+      "trips": 4068
+    }
+  ],
+  "source": "cosim",
+  "timebase": "ns",
+  "tool": "Vitis HLS 2025.1 cosim (xsim), xc7z020clg484-1, create_clock -period 10"
+}
