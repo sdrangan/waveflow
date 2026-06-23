@@ -3,28 +3,28 @@
 A small, reusable corpus + model layer for fitting **physically-reasonable
 primitive timing models** from synth/cosim datapoints (the
 ``project-cycle-model-training`` vision: keep timing artifacts structured and the
-parameters programmatic).  It is deliberately minimal — an sklearn wrapper plus a
-datapoint database with held-out / R² / plot helpers — *not* an ML framework.
+parameters programmatic).  It is deliberately minimal — a ``pandas.DataFrame``
+wrapper plus sklearn / interp models with held-out / R² / plot helpers — *not* an
+ML framework.
 
-* :class:`CalibDatabase` — one row per synth/cosim datapoint (the structured corpus).
-* :class:`CalibModel` — base fit/predict/score interface (per-target).
-* :class:`LinCalibModel` — sklearn ``LinearRegression``-backed, with feature
-  transforms / basis functions (e.g. ``sqrt``, products) for generality.  FIR uses
-  the pure-linear basis ``[num_trans, nwords]``; the transforms exist so the class
-  generalizes, not to reintroduce a fudge term.
+* :class:`CalibDataFrame` — one row per synth/cosim datapoint, backed by a
+  ``pandas.DataFrame`` (``.df``); filter/select with native pandas.
+* :class:`CalibModel` — base fit/predict/score interface (per-target).  Basis /
+  target are column-name strings; any transform is a caller-side derived column.
+* :class:`LinCalibModel` — sklearn ``LinearRegression``-backed.  FIR uses the
+  pure-linear basis ``[num_trans, nwords]``.
+* :class:`InterpCalibModel` — a calibrated 1-D saturating lookup (FIR's ``row_depth(n_col)``).
 """
 from .calib import (
-    CalibDatabase,
+    CalibDataFrame,
     CalibModel,
-    Feature,
     InterpCalibModel,
     LinCalibModel,
 )
 
 __all__ = [
-    "CalibDatabase",
+    "CalibDataFrame",
     "CalibModel",
-    "Feature",
     "InterpCalibModel",
     "LinCalibModel",
 ]

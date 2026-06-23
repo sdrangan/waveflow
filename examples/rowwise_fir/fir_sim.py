@@ -8,7 +8,7 @@ Wires a small host + the timed :class:`FIRAccel` model as two masters on an
 run and checks it **bit-exact** against the shared ``fir_golden``.
 
 Memory latency is zero — stage timing comes from :class:`FIRTiming` (deterministic channel
-occupancy + II=1 compute + the calibrated ``g(n_col)``), composed over the master's per-direction
+occupancy + II=1 compute + the calibrated ``row_depth(n_col)``), composed over the master's per-direction
 ``read_channel`` / ``write_channel``, not the bus model.
 
 Run with the project venv::

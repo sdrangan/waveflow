@@ -38,7 +38,7 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
 
 from waveflow.toolchain import toolchain  # noqa: E402
-from waveflow.calib import CalibDatabase, Feature, InterpCalibModel  # noqa: E402
+from waveflow.calib import CalibDataFrame, InterpCalibModel  # noqa: E402
 from examples.rowwise_fir import fir_build  # noqa: E402
 from examples.rowwise_fir.fir_golden import T  # noqa: E402
 
@@ -116,10 +116,12 @@ def run_grid() -> None:
 # --- physical, near-fit-free model (waveflow.calib) ----------------------------
 # Channel occupancy is DETERMINISTIC: each TRANSFER beat is one word, so a burst occupies its
 # channel for nwords + setup*num_trans cycles (slope 1, NOT fitted; see the sanity check).
-# Compute body is II=1: trips + (n_row-1)*g(n_col).  The ONE calibrated term is g(n_col) — the
-# per-row pipeline / 2-buffer ping-pong depth — a smooth SATURATING 1-D InterpCalibModel lookup
-# (not a sqrt fudge).  fill = (n_col+T) + g(n_col) + fill_const (one constant).  Master eq:
-#     whole = (n_col+T) + trips + n_row*g(n_col) + fill_const   ==   fill + max(write_occ, compute_body)
+# Compute body is II=1: trips + (n_row-1)*row_depth(n_col).  The ONE calibrated term is
+# row_depth(n_col) — the per-row pipeline / 2-buffer ping-pong refill depth — a smooth SATURATING
+# 1-D InterpCalibModel lookup (not a sqrt fudge).  fill = (n_col+T) + row_depth(n_col) + fill_const
+# (one constant).  Master eq:
+#     whole = (n_col+T) + trips + n_row*row_depth(n_col) + fill_const
+#           == fill + max(write_occ, compute_body)
 
 SETUP = 2.0  # per-burst address latency (deterministic occupancy; immaterial while compute-bound)
 
@@ -128,28 +130,28 @@ def _trips(p):
     return p["n_row"] * (p["n_col"] - T + 1)
 
 
-def _fit_g(fit_pts) -> InterpCalibModel:
-    """g(n_col), the per-row pipeline gap, measured from the INTER-ROW gaps:
-    ``g = (y_write_span - trips) / (n_row - 1)`` (n_row>1).  Averaged per n_col by the
-    InterpCalibModel.  g saturates, so a few columns interpolate cleanly (cheap to densify)."""
-    db = CalibDatabase(["n_col", "g"])
+def _fit_row_depth(fit_pts) -> InterpCalibModel:
+    """row_depth(n_col), the per-row pipeline refill depth, measured from the INTER-ROW gaps:
+    ``row_depth = (y_write_span - trips) / (n_row - 1)`` (n_row>1).  Averaged per n_col by the
+    InterpCalibModel.  It saturates, so a few columns interpolate cleanly (cheap to densify)."""
+    db = CalibDataFrame(["n_col", "row_depth"])
     for p in fit_pts:
         if p["n_row"] > 1:
             db.add_datapoint({"n_col": p["n_col"],
-                              "g": (p["y_write_span_cyc"] - _trips(p)) / (p["n_row"] - 1)})
-    return InterpCalibModel([Feature("n_col")], "g").fit(db)
+                              "row_depth": (p["y_write_span_cyc"] - _trips(p)) / (p["n_row"] - 1)})
+    return InterpCalibModel(["n_col"], "row_depth").fit(db)
 
 
-def _fit_fill_const(fit_pts, g) -> float:
-    """fill_const = mean(t_fill - (n_col+T) - g(n_col)) — a single calibrated scalar."""
-    return float(np.mean([p["t_fill_cyc"] - (p["n_col"] + T) - g.predict(p) for p in fit_pts]))
+def _fit_fill_const(fit_pts, row_depth) -> float:
+    """fill_const = mean(t_fill - (n_col+T) - row_depth(n_col)) — a single calibrated scalar."""
+    return float(np.mean([p["t_fill_cyc"] - (p["n_col"] + T) - row_depth.predict(p) for p in fit_pts]))
 
 
-def _compose(p, g, fill_const) -> float:
+def _compose(p, row_depth, fill_const) -> float:
     """The whole-kernel exactly as the sim composes it: fill + max(write_occ, compute_body)."""
-    gv = g.predict(p)
-    fill = (p["n_col"] + T) + gv + fill_const
-    compute_body = _trips(p) + (p["n_row"] - 1) * gv
+    rd = row_depth.predict(p)
+    fill = (p["n_col"] + T) + rd + fill_const
+    compute_body = _trips(p) + (p["n_row"] - 1) * rd
     write_occ = _trips(p) + SETUP * p["n_row"]
     return fill + max(write_occ, compute_body)
 
@@ -160,11 +162,11 @@ def fit_and_validate() -> dict:
     ncol_ho_path = RESULTS / "cosim_holdout_ncol.json"
     ncol_ho = json.loads(ncol_ho_path.read_text())["points"] if ncol_ho_path.exists() else []
 
-    g = _fit_g(fit_pts)
-    fill_const = _fit_fill_const(fit_pts, g)
+    row_depth = _fit_row_depth(fit_pts)
+    fill_const = _fit_fill_const(fit_pts, row_depth)
 
     def whole_resid(p):
-        pred = _compose(p, g, fill_const)
+        pred = _compose(p, row_depth, fill_const)
         a = p["whole_kernel_cyc"]
         return {"pred": round(pred, 1), "actual": round(a, 1),
                 "rel_err": round(abs(pred - a) / a, 4) if a else None}
@@ -172,23 +174,25 @@ def fit_and_validate() -> dict:
     ho = next(p for p in grid if (p["n_row"], p["n_col"]) == HOLDOUT)
     calib = {
         "model": "PHYSICAL near-fit-free: channel occupancy deterministic (beats==nwords); "
-                 "compute II=1 (trips + (n_row-1)*g); g(n_col) = calibrated saturating lookup "
-                 "(the per-row ping-pong depth); whole = (n_col+T) + trips + n_row*g(n_col) + fill_const",
+                 "compute II=1 (trips + (n_row-1)*row_depth); row_depth(n_col) = calibrated "
+                 "saturating lookup (the per-row ping-pong refill depth); "
+                 "whole = (n_col+T) + trips + n_row*row_depth(n_col) + fill_const",
         "T": T, "clk_ns": grid[0]["clk_ns"], "setup": SETUP,
         "fit_grid": [[p["n_row"], p["n_col"]] for p in fit_pts],
-        "models": {"g": g.samples, "fill_const": round(fill_const, 4), "setup": SETUP},
+        "models": {"row_depth": row_depth.samples, "fill_const": round(fill_const, 4), "setup": SETUP},
         "in_grid_reconstruction_max_rel_err":
-            round(max(abs(_compose(p, g, fill_const) - p["whole_kernel_cyc"]) / p["whole_kernel_cyc"]
+            round(max(abs(_compose(p, row_depth, fill_const) - p["whole_kernel_cyc"]) / p["whole_kernel_cyc"]
                       for p in grid), 4),
         "holdout_interior": {"point": list(HOLDOUT),
-                             "note": "n_row=2 held out from the fit; g(256) trained from (4,256),(8,256)",
+                             "note": "n_row=2 held out from the fit; row_depth(256) trained from (4,256),(8,256)",
                              "whole_kernel": whole_resid(ho)},
         "holdout_ncol": [{"point": [p["n_row"], p["n_col"]],
-                          "note": "UNTRAINED n_col (g interpolated — the honest generalization test)",
+                          "note": "UNTRAINED n_col (row_depth interpolated — the honest generalization test)",
                           "whole_kernel": whole_resid(p)} for p in ncol_ho],
     }
     CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"g_samples": calib["models"]["g"], "fill_const": calib["models"]["fill_const"],
+    print(json.dumps({"row_depth_samples": calib["models"]["row_depth"],
+                      "fill_const": calib["models"]["fill_const"],
                       "in_grid_max_rel_err": calib["in_grid_reconstruction_max_rel_err"],
                       "holdout_interior_whole": calib["holdout_interior"]["whole_kernel"],
                       "holdout_ncol_whole": [h["whole_kernel"] for h in calib["holdout_ncol"]]}, indent=2))
@@ -217,8 +221,9 @@ def _sim_whole_kernel(spec) -> float:
 def validate(calib: dict) -> dict:
     """The gates — sim (loading the calibration) vs cosim, on the **actual** simulation.
 
-    Gate 1: single-command whole-kernel at the interior holdout (2,256) — n_row held out, g(256)
-    trained.  Gate 2: whole-kernel at the UNTRAINED n_col points (g interpolated)."""
+    Gate 1: single-command whole-kernel at the interior holdout (2,256) — n_row held out,
+    row_depth(256) trained.  Gate 2: whole-kernel at the UNTRAINED n_col points (row_depth
+    interpolated)."""
     grid = {(p["n_row"], p["n_col"]): p for p in json.loads(GRID_JSON.read_text())["points"]}
     ncol_ho_path = RESULTS / "cosim_holdout_ncol.json"
     ncol_ho = json.loads(ncol_ho_path.read_text())["points"] if ncol_ho_path.exists() else []
@@ -229,9 +234,10 @@ def validate(calib: dict) -> dict:
                 "sim_whole_cyc": round(sim_whole, 1), "cosim_whole_cyc": round(cosim_whole, 1),
                 "rel_err": round(abs(sim_whole - cosim_whole) / cosim_whole, 4) if cosim_whole else None}
 
-    gate1 = gate(*HOLDOUT, grid[HOLDOUT]["whole_kernel_cyc"], "interior holdout (n_row=2; g(256) trained)")
-    gate2 = [gate(p["n_row"], p["n_col"], p["whole_kernel_cyc"], "untrained n_col (g interpolated)")
-             for p in ncol_ho]
+    gate1 = gate(*HOLDOUT, grid[HOLDOUT]["whole_kernel_cyc"],
+                 "interior holdout (n_row=2; row_depth(256) trained)")
+    gate2 = [gate(p["n_row"], p["n_col"], p["whole_kernel_cyc"],
+                  "untrained n_col (row_depth interpolated)") for p in ncol_ho]
     return {"gate1_single_command": gate1, "gate2_untrained_ncol": gate2}
 
 

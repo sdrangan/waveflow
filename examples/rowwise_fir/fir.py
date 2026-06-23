@@ -48,8 +48,9 @@ s_axilite scalars (exactly as VMAC bakes its command).
 
 **Timing is physical and near-fit-free** (``fir_calibrate.py``): channel occupancy is
 deterministic (transfer beats == nwords), compute is II=1, and the only calibrated term is the
-per-row pipeline depth ``g(n_col)`` (a saturating :class:`~waveflow.calib.InterpCalibModel`
-lookup).  The whole-kernel composes as ``(n_col+T) + trips + n_row·g(n_col) + fill_const``.
+per-row pipeline refill depth ``row_depth(n_col)`` (a saturating
+:class:`~waveflow.calib.InterpCalibModel` lookup).  The whole-kernel composes as
+``(n_col+T) + trips + n_row·row_depth(n_col) + fill_const``.
 :class:`FIRTiming` is loaded via :meth:`FIRTiming.from_calibration`
 (``results/fir_calibration.json``); :meth:`FIRTiming.provisional` is a coarse seed.  Full
 decomposition + gates: ``results/fir_calibration_results.md``.
@@ -160,7 +161,7 @@ class FIRTiming:
 
     ::
 
-        whole = (n_col + T) + trips + n_row·g(n_col) + fill_const          (master equation)
+        whole = (n_col + T) + trips + n_row·row_depth(n_col) + fill_const  (master equation)
               = fill + max(write_occ, compute_body)                        (the sim composition)
 
     with the pieces split by what they physically are (validated to ≤0.34% on the cosim grid):
@@ -170,14 +171,15 @@ class FIRTiming:
       fixed per-burst address latency).  This is the :class:`~waveflow.hw.memif.BusTiming` the
       slices consult; *not* a fitted curve.  (The old ``write_span`` wall-clock conflated this
       with the compute-stall — that conflation was the entire apparent "curvature".)
-    * **Compute body — II=1, exact.**  ``compute_body = trips + (n_row−1)·g(n_col)``: the steady
-      MAC throughput is exactly one output/cycle (slope 1, *not fitted*); the only non-trivial
-      part is the per-row pipeline refill ``g``.
-    * **``g(n_col)`` — the ONE calibrated term.**  The per-row pipeline / 2-buffer ping-pong
-      depth: a smooth, **saturating** 1-D curve (~70→260→268 cyc), carried as a calibrated
-      :class:`~waveflow.calib.InterpCalibModel` *lookup* (not a ``sqrt`` fudge).  It appears
-      ``n_row`` times — once in ``fill``, ``(n_row−1)`` times as inter-row gaps in the body.
-    * **``fill``** (ramp to first output) ``= (n_col+T) + g(n_col) + fill_const``, and
+    * **Compute body — II=1, exact.**  ``compute_body = trips + (n_row−1)·row_depth(n_col)``: the
+      steady MAC throughput is exactly one output/cycle (slope 1, *not fitted*); the only
+      non-trivial part is the per-row pipeline refill ``row_depth``.
+    * **``row_depth(n_col)`` — the ONE calibrated term.**  The per-row pipeline / 2-buffer
+      ping-pong refill depth: a smooth, **saturating** 1-D curve (~70→260→268 cyc), carried as a
+      calibrated :class:`~waveflow.calib.InterpCalibModel` *lookup* (not a ``sqrt`` fudge).  It
+      appears ``n_row`` times — once in ``fill``, ``(n_row−1)`` times as inter-row gaps in the body.
+      (It is dataflow refill depth, **not** compute latency — compute is exactly II=1.)
+    * **``fill``** (ramp to first output) ``= (n_col+T) + row_depth(n_col) + fill_const``, and
       ``fill_const`` is a single calibrated constant (command→first-bus latency + drain edge).
 
     The store finishes **under compute's shadow**: its bus-visible span is
@@ -186,14 +188,14 @@ class FIRTiming:
     the channel hides under it.  Load with :meth:`from_calibration`; :meth:`provisional` is a
     coarse seed."""
 
-    g: InterpCalibModel       # per-row pipeline depth g(n_col) — the ONE calibrated term
+    row_depth: InterpCalibModel   # per-row pipeline refill depth row_depth(n_col) — the ONE calibrated term
     fill_const: float         # ramp/drain constant (command->first-bus latency + drain edge)
     setup: float = 2.0        # per-burst address latency (deterministic channel occupancy)
     resp_words: float = 4.0   # small response write after Y (cycles ~= resp_words)
     write_per_word: float = 1.0
 
-    def g_cyc(self, n_cols: int) -> float:
-        return max(0.0, self.g.predict({"n_col": float(n_cols)}))
+    def row_depth_cyc(self, n_cols: int) -> float:
+        return max(0.0, self.row_depth.predict({"n_col": float(n_cols)}))
 
     def bus_timing(self, clk_freq: float) -> BusTiming:
         """Deterministic per-direction channel occupancy ``nwords + setup·num_trans`` (slope 1,
@@ -203,27 +205,27 @@ class FIRTiming:
         return BusTiming(read=occ, write=occ, clk_freq=clk_freq)
 
     def t_fill_cyc(self, n_rows: int, n_cols: int) -> float:
-        """Ramp to first output (Y-write start offset): ``(n_col+T) + g(n_col) + fill_const``."""
-        return max(0.0, (n_cols + T) + self.g_cyc(n_cols) + self.fill_const)
+        """Ramp to first output (Y-write start offset): ``(n_col+T) + row_depth(n_col) + fill_const``."""
+        return max(0.0, (n_cols + T) + self.row_depth_cyc(n_cols) + self.fill_const)
 
     def compute_body_cyc(self, n_rows: int, n_cols: int) -> float:
-        """II=1 production span of all outputs: ``trips + (n_row−1)·g(n_col)``."""
+        """II=1 production span of all outputs: ``trips + (n_row−1)·row_depth(n_col)``."""
         trips = n_rows * (n_cols - T + 1)
-        return max(0.0, trips + (n_rows - 1) * self.g_cyc(n_cols))
+        return max(0.0, trips + (n_rows - 1) * self.row_depth_cyc(n_cols))
 
     @classmethod
     def provisional(cls) -> "FIRTiming":
-        """Coarse seed (flat g ≈ pipeline depth) used before calibration runs."""
-        g = InterpCalibModel.from_samples("n_col", [64.0, 1024.0], [70.0, 268.0], "g")
-        return cls(g=g, fill_const=59.0)
+        """Coarse seed (flat row_depth ≈ pipeline depth) used before calibration runs."""
+        row_depth = InterpCalibModel.from_samples("n_col", [64.0, 1024.0], [70.0, 268.0], "row_depth")
+        return cls(row_depth=row_depth, fill_const=59.0)
 
     @classmethod
     def from_calibration(cls, path) -> "FIRTiming":
-        """Load the calibrated ``g`` table + constants from a fir_calibrate.py JSON artifact."""
+        """Load the calibrated ``row_depth`` table + constants from a fir_calibrate.py JSON artifact."""
         d = json.loads(Path(path).read_text())["models"]
-        gd = d["g"]
-        g = InterpCalibModel.from_samples(gd["feature"], gd["x"], gd["y"], "g")
-        return cls(g=g, fill_const=float(d["fill_const"]), setup=float(d.get("setup", 2.0)))
+        rd = d["row_depth"]
+        row_depth = InterpCalibModel.from_samples(rd["feature"], rd["x"], rd["y"], "row_depth")
+        return cls(row_depth=row_depth, fill_const=float(d["fill_const"]), setup=float(d.get("setup", 2.0)))
 
 
 @dataclass
@@ -281,17 +283,20 @@ class FIRAccel(HwComponent):
     def dataflow(self, cmd: FIRCmd, mem) -> ProcessGen[None]:
         """The single synthesizable unit: the whole load-compute-store DATAFLOW kernel.
 
-        Codegen emits the m_axi top (``fir_build.render_top``) that calls the hand-written
-        ``fir_dataflow.tpp`` core (= the validated Phase 1 sandbox ``fir_accel``).  **In sim
-        this is never run** — the three stage processes below model its timing; its body is
-        documentary so the golden/codegen contract is explicit (element-coordinate access; the
-        Region owns element->byte)."""
-        n, m = int(cmd.n_rows), int(cmd.n_cols)
-        region = self.m_mem.region(self.data_base, Float32, word_bw=self._mem_bw)
-        X = yield from region.read_slice(int(cmd.x_off), int(cmd.x_off) + n * m)
-        h = yield from region.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
-        Y = self.execute(np.asarray(X).reshape(n, m), np.asarray(h))
-        yield from region.write_slice(int(cmd.y_off), Y.ravel(), element_type=Float32)
+        **Body is a bare ``yield`` (a stub).**  Codegen does not introspect this body: the
+        ``@synthesizable`` decorator records only the signature ``(self, cmd, mem)`` (mapped to
+        the C++ call args) and ``impl_file="fir_dataflow.tpp"``; the m_axi top is the hand-rolled
+        :func:`fir_build.render_top`, which calls the hand-written ``fir_dataflow.tpp`` core
+        (= the validated Phase 1 sandbox ``fir_accel``).  And **in sim this is never run** — the
+        three stage processes below model the timing.  So the body has no source-of-truth role;
+        it stays a generator (the ``yield``) only so ``@synthesizable`` sees a coroutine.
+
+        Element-coordinate contract (what ``fir_dataflow.tpp`` implements, for the record):
+        read ``X = mem[x_off : x_off + n_rows*n_cols]`` and ``h = mem[h_off : h_off + T]``,
+        compute ``Y = fir_golden(X.reshape(n_rows, n_cols), h)``, and write
+        ``mem[y_off : ...] = Y.ravel()`` — all in element (float) coordinates; the Region owns
+        the element->byte mapping."""
+        yield
 
     # --- helpers -------------------------------------------------------------
     def _secs(self, cycles: float) -> float:
@@ -352,6 +357,15 @@ class FIRAccel(HwComponent):
             # is acquired automatically by the Region, and the X-read SPAN is the interface's
             # calibrated bus_timing for ``num_trans = n_row`` bursts — anchored at the load
             # start.  No byte arithmetic, no hand-rolled duration, no bus_rd wiring.
+            #
+            # DEFERRED (plan item 4): re-anchoring at the *actual* X-read start (drop
+            # ``t_out_start`` so the returned ``x_tstart`` is used downstream) would be the clean
+            # attribution for read-bound kernels, with the coupled ``+T`` taken OUT of ``fill``.
+            # It is masked for FIR (the write channel anchors throughput) and is NOT a free pure
+            # refactor here: the h read also incurs the crossbar's address/return latency, so
+            # ``x_tstart - load_start`` is ``T + 2·latency`` cycles, not ``T`` — cancelling it
+            # would force re-deriving ``fill_const`` and shift the gates.  Left as-is; revisit
+            # when the interconnect ("B") owns bus timing.
             hf = yield from self._data.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
             Xf, _ = yield from self._data.read_slice_pipelined(
                 int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols,
