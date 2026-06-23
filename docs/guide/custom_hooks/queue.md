@@ -1,7 +1,7 @@
 ---
 title: Memory command queue
 parent: Custom Hooks
-nav_order: 5
+nav_order: 6
 audience: hls
 api: [AXIMMQueue, AXIMMQueueGetStmt, queue_get, synthesizable]
 summary: "The synthesizable side of the AXI-MM command queue: AXIMMQueue.get lowers to AXIMMQueueGetStmt, emitted as a call to the hand-written ring-dequeue hook queue_get<CmdT, MEM_BW, BASE, CAP, EW> in aximm_queue_impl.tpp — read (head,tail), poll while empty, read one slot, advance head with a power-of-two mask, deserialize the typed command."

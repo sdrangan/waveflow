@@ -1,7 +1,7 @@
 ---
 title: Kernel transfer reference
 parent: Custom Hooks
-nav_order: 6
+nav_order: 7
 audience: hls
 api: [read_array_lane, write_array_lane, read_array_slice, write_array_slice, read_stream_lane, write_stream_lane, read_axi4_stream_lane, write_axi4_stream_lane]
 summary: "The in-kernel transfer-call cheat sheet: the m_axi memory calls (read_array_slice for a resident range, the read_array_lane lane loop for throughput) and the stream calls (read_stream_lane / read_axi4_stream_lane with TLAST), the common loop shapes, and the Python-to-C++ mapping table the pattern pages draw on."

@@ -53,16 +53,24 @@ range of input sizes, and read the cycle count for each. That is a cycle-timed m
 [LT vs CT](./models.md)) used precisely to calibrate the loosely-timed model so the fast LT
 simulation predicts the slow RTL.
 
-## Infrastructure (in progress)
+## Infrastructure: the calibration package
 
-Turning "run a sweep, fit `latency`/`ii`/`unroll_factor`, attach them to the component" into a
-reusable, committed flow is the **cosim cycle-model** work. The pattern already exists end-to-end
-in the AXI-MM command-queue example, which fits a `(depth, ii)` cycle model from a committed cosim
-sweep and feeds it back into the LT simulation; the general infrastructure for arbitrary components
-is being built out from there.
+Turning "run a sweep, fit the parameters, attach them to the component" into a reusable, committed
+flow is the [**Calibration**](../calib/) package (`waveflow.calib`): a `CalibDataFrame` corpus (one
+row per synth/cosim measurement) plus per-target models — `LinCalibModel` (the linear fit above) and
+`InterpCalibModel` (a calibrated lookup for a smooth, saturating physical curve). The line-fit on
+this page is a `LinCalibModel`; see [Calibration](../calib/) for the corpus, the models, and a worked
+example.
+
+The richest worked case is the matrix-LT FIR ([`examples/rowwise_fir`](../../../examples/rowwise_fir/)),
+where the cosim sweep does not collapse to a single `latency`/`ii` line — instead it decomposes into
+*physical, mostly fit-free* terms (deterministic channel occupancy + II=1 compute) with a single
+calibrated `InterpCalibModel` curve (`row_depth(n_col)`, the per-row pipeline depth). See
+[Double-buffered processing](./double_buffered.md#worked-example-the-matrix-lt-fir).
 
 ## See also
 
 - [Block processing](./block.md) — the `latency + ii·(m − 1)` form this fit inverts.
+- [Calibration](../calib/) — the `waveflow.calib` package (`CalibDataFrame`, `LinCalibModel`, `InterpCalibModel`) this fit is built on, with a worked example.
 - [AXI-MM Command Queue example](../../examples/mmqueue/) — a worked cosim-sweep calibration (`depth`, `ii`) that this generalizes.
 - [Timing Analysis Tools — cosim timing](../timing/cosim_timing.md) — extracting cycle counts from a Vitis HLS cosim run, the measurement side of the fit.

@@ -61,6 +61,7 @@ difficulty. Ask what your operand looks like:
 | a **fixed-size block** you can name up front | codegen (auto-gen `read_array`/`write_array` in `run_proc`) | pure compute over a materialized C++ array | [Block](./block.md) |
 | a **stream** that arrives incrementally | the hook's own lane loop | read loop + compute + write, with `TLAST`/framing | [Stream](./stream.md) |
 | a **data-dependent memory region** (strided rows, gather/scatter) | the datapath itself, over the `m_axi` port | strided `read_array_lane` + the datapath | [Complex](./complex.md) |
+| a **resident window/tile** (a sliding window needs random access) | the hook owns the whole load-compute-store pipeline | three HLS functions in a `#pragma HLS DATAFLOW` region | [Dataflow](./dataflow.md) |
 
 Start at [Writing a hook](./writing.md) for the mechanism (it uses the simplest case — a scalar hook
 with no data movement), then jump to the pattern that matches your operand.
@@ -71,6 +72,7 @@ with no data movement), then jump to the pattern that matches your operand.
 - [Block — load, compute, store](./block.md) — auto-generated `read_array`/`write_array` I/O, a pure-compute hook. The array generalization of the regmap kernel.
 - [Stream — process as you read](./stream.md) — the lane loop over an AXI-Stream port (`read_axi4_stream_lane` / `write_axi4_stream_lane`, `pf` lanes, `TLAST`).
 - [Complex — data-dependent addressing](./complex.md) — driving the `m_axi` port from the datapath (`read_array_lane` with a running pointer), and the two VMAC csynth gotchas.
+- [Dataflow — load, compute, store pipeline](./dataflow.md) — the hook owns the *whole* pipeline: three HLS functions in a `#pragma HLS DATAFLOW` region (partitioned-BRAM ping-pong + FIFO), the synthesizable side of the double-buffered timing model. The `rowwise_fir` example.
 - [Memory command queue](./queue.md) — the advanced case: a hook that is the synthesizable half of a transport interface (the `queue_get` ring dequeue).
 - [Kernel transfer reference](./reference.md) — the in-kernel transfer-call cheat sheet (`read_array_lane` / `read_array_slice` / stream variants) and the Python↔C++ mapping table.
 

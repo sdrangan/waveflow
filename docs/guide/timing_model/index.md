@@ -49,8 +49,8 @@ load while the current one is still being processed.
 - [LT vs CT models](./models.md) — loosely-timed vs cycle-timed simulation, and why Waveflow is LT.
 - [Block processing](./block.md) — the serial barrier: load → compute → store. The simplest to model, and the closed-form compute latency `latency + II·(m − 1)`.
 - [Streaming processing](./streaming.md) — per-element overlap: the first output appears `latency` cycles after the *first* input, and the rest are gated by whichever is slower, input arrival or compute rate.
-- [Double-buffered processing](./double_buffered.md) — block-granularity overlap (`load(n) ∥ process(n-1) ∥ store(n-2)`), modeled with three concurrent SimPy processes through depth-2 buffers.
-- [Fitting a timing model](./fit.md) — recovering `latency`, `ii`, and `unroll_factor` from measured data points.
+- [Double-buffered processing](./double_buffered.md) — block-granularity overlap (`load(n) ∥ process(n-1) ∥ store(n-2)`), modeled with three concurrent SimPy processes through depth-2 buffers. The matrix-LT FIR (`rowwise_fir`) is the worked, cosim-calibrated example, synthesized via a [DATAFLOW custom hook](../custom_hooks/dataflow.md).
+- [Fitting a timing model](./fit.md) — recovering a timing model's parameters from measured `(size, cycles)` data points; see also the [Calibration](../calib/) package.
 
 ## See also
 

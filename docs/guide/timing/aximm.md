@@ -186,6 +186,37 @@ For write bursts:
 
 The important point is that `beat_type` only refers to the cycles when this burst is the active burst on the data channel. It does not mean that other outstanding requests do not exist.
 
+## True channel occupancy: count transfer beats
+
+A common mistake is to treat the data-phase *span* (`data_tend − data_tstart`) as the channel's busy
+time. It is not — that span includes `idle` and `stall` beats. The **true occupancy** of the data
+channel is the number of **`transfer`** beats, and at `II=1` that is exactly one beat per word:
+
+```python
+from waveflow.utils.vcd import AximmBeatType
+
+def transfer_beats(burst) -> int:
+    """Words actually moved on the data channel (excludes idle / stall cycles)."""
+    return sum(1 for bt in burst["beat_type"] if bt == AximmBeatType.TRANSFER)
+
+write_words = sum(transfer_beats(b) for b in write_bursts)   # == the bytes/word written
+```
+
+Why the distinction matters for a timing model: an **`idle`** beat (`VALID == 0`) is the *master not
+driving the channel* — i.e. an **upstream stall** (the producer hasn't supplied the next word yet,
+e.g. compute hasn't finished the row), **not** time the channel itself is busy. So summing only
+`transfer` beats cleanly separates two things that the wall-clock span conflates:
+
+- the **deterministic channel occupancy** (`transfer` beats `== nwords`), a property of the bus, and
+- the **pipeline stall** (the `idle` beats), a property of the *compute*, which a load-compute-store
+  timing model should let *emerge* from the compute stage rather than fold into the transfer time.
+
+This is precisely the measurement that underpins the matrix-LT FIR calibration: occupancy is read off
+the `transfer` beat count (deterministic), and the per-row stall is attributed to compute. See the
+beat-counting helper in [`fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py), the
+[double-buffered worked example](../timing_model/double_buffered.md#worked-example-the-matrix-lt-fir),
+and the [Calibration](../calib/) package.
+
 ## Queueing and Outstanding Reads
 
 When analyzing AXI4 read traffic, it is common to see:
