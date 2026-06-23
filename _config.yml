@@ -21,6 +21,11 @@ just_the_docs:
   favicon: "/assets/images/favicon.png"
   color_scheme: light
 
+# Mermaid diagrams: just-the-docs renders ```mermaid fenced blocks client-side,
+# loading Mermaid from a CDN at this version (works on GitHub Pages, no build plugin).
+mermaid:
+  version: "10.9.1"
+
 # Exclude source code and non-doc content from Jekyll processing.
 # examples/ is intentionally kept so that generated HTML reports
 # (e.g. examples/some_example/report.html) remain accessible as

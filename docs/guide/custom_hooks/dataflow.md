@@ -135,4 +135,5 @@ The two are the two faces of the same load-compute-store accelerator.
 - [Block — load, compute, store](./block.md) — the simpler pattern (codegen moves the data; the hook is pure compute).
 - [Stream — process as you read](./stream.md) — when the math can run as data arrives, no resident buffer.
 - [Kernel transfer reference](./reference.md) — the in-kernel transfer calls and the element-coordinate convention.
-- [`examples/rowwise_fir`](../../../examples/rowwise_fir/fir.py) — the worked example: the hook ([`fir_dataflow.tpp`](../../../examples/rowwise_fir/fir_dataflow.tpp)), the generated top, and the bit-exact golden.
+- [Rowwise FIR example](../../examples/rowwise_fir/) — the full worked walkthrough; this hook is its [Writing the dataflow hook](../../examples/rowwise_fir/kernel_hook.md) page.
+- [`examples/rowwise_fir`](../../../examples/rowwise_fir/fir.py) — the source: the hook ([`fir_dataflow.tpp`](../../../examples/rowwise_fir/fir_dataflow.tpp)), the generated top, and the bit-exact golden.

@@ -86,6 +86,9 @@ The three functions are started as concurrent processes (e.g. `self.process(load
 
 ## Worked example: the matrix-LT FIR
 
+> The [**Rowwise FIR** example](../../examples/rowwise_fir/) walks this end-to-end (model, hook, cosim,
+> calibration); this section is the summary.
+
 [`examples/rowwise_fir`](../../../examples/rowwise_fir/fir.py) (`FIRAccel`) is a shipped, cosim-
 calibrated realization of this model — a per-matrix-row FIR. It keeps the three-process shape
 (`load` / `compute` / `store` started in `pre_sim`, handing off through `transaction_queue`s) but

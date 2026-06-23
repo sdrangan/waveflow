@@ -161,4 +161,5 @@ When the held-out point lands within tolerance, the loop is closed: the LT sim r
 - [A worked example](./example.md) — the same fit/score/holdout on synthetic data.
 - [AXI4-MM timing analysis](../timing/aximm.md) — `extract_aximm_bursts`, the burst fields, and the transfer-beat occupancy technique.
 - [Double-buffered processing](../timing_model/double_buffered.md) — the FIR timing model these primitives compose into.
+- [Rowwise FIR example](../../examples/rowwise_fir/) — this playbook applied end-to-end ([cosim extraction](../../examples/rowwise_fir/cosim_timing.md), [fitting](../../examples/rowwise_fir/fit.md)).
 - [`examples/rowwise_fir/fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py) — the real cosim-sweep calibration.
