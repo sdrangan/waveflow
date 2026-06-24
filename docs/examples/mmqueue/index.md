@@ -1,7 +1,7 @@
 ---
 title: AXI-MM Command Queue (VMAC)
 parent: Examples
-nav_order: 6
+nav_order: 7
 has_children: true
 ---
 
@@ -31,12 +31,13 @@ matrices `A` (and `B`) from memory over `m_axi`, computes, and writes the result
 back to the same bundle. The ring's `head`/`tail` pointers live in that memory too,
 so command flow and data flow share one interconnect.
 
-## Why this is the capstone example
+## What mmqueue adds
 
-It is the last and most complete example in the
-[examples progression](../), and it is distinctive on two counts:
+It introduces the **AXI-MM command queue** — control moved off the stream and into a
+shared-memory ring (where [rowwise FIR](../rowwise_fir/) and `shared_mem` keep control on a
+stream) — and it is distinctive on two counts:
 
-- It is the only example that is **also a timing study** — it does not just ask
+- It is **also a timing study** — it does not just ask
   "are the numbers right" but "does the loosely-timed simulation predict the right
   *timing*, and can a Vitis cosim calibrate it." That study is the [timing](./timing.md)
   page.
@@ -64,5 +65,5 @@ It is the last and most complete example in the
    complex datapath.
 8. [C and RTL simulation](./rtlsim.md) — Vitis csim/cosim against the one golden, the
    conformance matrix, and throughput vs packing factor.
-9. [Timing — the LT model + cosim calibration](./timing.md) — the capstone timing
+9. [Timing — the LT model + cosim calibration](./timing.md) — the culminating timing
    study (`ab_eq` bus-vs-latency, naive → calibrated → RTL, the committed figure).

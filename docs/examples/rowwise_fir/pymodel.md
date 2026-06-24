@@ -19,8 +19,8 @@ hand off through queues.
 ## Three stage processes, kicked by `run_proc`
 
 `pre_sim` spawns the three persistent processes; `run_proc` is the host-facing entry that pulls each
-command off the memory queue and hands it to the load stage **without blocking** — so successive
-commands (and the three stages) overlap:
+command off the `s_in` control stream and hands it to the load stage **without blocking** — so
+successive commands (and the three stages) overlap:
 
 ```python
 def pre_sim(self):
@@ -31,7 +31,7 @@ def pre_sim(self):
 
 def run_proc(self):
     while True:
-        cmd = yield from self.cmd_queue.get(self.Cmd)
+        cmd = yield from self.s_in.get(self.Cmd)
         self.load_q.put(cmd)          # kick the pipeline; do not wait for completion
 ```
 

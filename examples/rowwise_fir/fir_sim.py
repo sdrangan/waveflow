@@ -1,11 +1,13 @@
 """fir_sim.py — host-driven simulation of the matrix-LT FIR accelerator.
 
-Wires a small host + the timed :class:`FIRAccel` model as two masters on an
-:class:`AXIMMCrossBarIF` over one :class:`MemComponent` holding the command ring
-(:class:`AXIMMQueueLayout`) + per-matrix X / h / Y data regions (mirrors
-``examples/vmac/vmac_queue_sim.py``).  The host writes the operands, enqueues one
-``FIRCmd`` per matrix + an ``end`` sentinel, and the driver reads Y back after the
-run and checks it **bit-exact** against the shared ``fir_golden``.
+Wires a small host + the timed :class:`FIRAccel` model with **AXI-stream control**
+(like ``examples/shared_mem``): the command rides a :class:`StreamIF` (host ``m_cmd``
+-> accel ``s_in``) and the response a second :class:`StreamIF` (accel ``m_out`` -> host
+``s_resp``).  The X / h / Y operands live in one :class:`MemComponent`, reached by the
+host and the accelerator as two masters on an :class:`AXIMMCrossBarIF`.  The host writes
+the operands, streams one ``FIRCmd`` per matrix + an ``end`` sentinel, collects the
+per-command responses (the barrier), and the driver reads Y back after the run and checks
+it **bit-exact** against the shared ``fir_golden``.
 
 Memory latency is zero — stage timing comes from :class:`FIRTiming` (deterministic channel
 occupancy + II=1 compute + the calibrated ``row_depth(n_col)``), composed over the master's per-direction
@@ -18,7 +20,7 @@ Run with the project venv::
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -26,15 +28,16 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
-from waveflow.hw.clock import Clock
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
-from waveflow.hw.memory import MemComponent
-from waveflow.simulation.simobj import ProcessGen, SimObj
-from waveflow.simulation.simulation import Simulation
+from waveflow.hw.clock import Clock  # noqa: E402
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
+from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges  # noqa: E402
+from waveflow.hw.memory import MemComponent  # noqa: E402
+from waveflow.simulation.simobj import ProcessGen, SimObj  # noqa: E402
+from waveflow.simulation.simulation import Simulation  # noqa: E402
 
-from examples.rowwise_fir.fir import FIRAccel, FIRCmd, FIROp, FIRTiming, Float32, T
-from examples.rowwise_fir.fir_golden import fir_golden
+from examples.rowwise_fir.fir import (  # noqa: E402
+    FIRAccel, FIRCmd, FIROp, FIRResp, FIRTiming, Float32, T)
+from examples.rowwise_fir.fir_golden import fir_golden  # noqa: E402
 
 
 @dataclass
@@ -62,18 +65,20 @@ class MatrixSpec:
 
 @dataclass(kw_only=True)
 class FIRHost(SimObj):
-    """Non-synthesized producer: write operands, enqueue commands + an ``end``, then drain."""
+    """Non-synthesized producer: write operands, stream commands + an ``end``, then
+    collect the per-command responses (the barrier).  Mirrors ``shared_mem``'s
+    controller: the command goes out on ``m_cmd`` and the response comes back on
+    ``s_resp``; the X / h operands ride the data master into shared memory."""
     accel: FIRAccel
-    layout: AXIMMQueueLayout
     data_base: int
     specs: list[MatrixSpec]
-    poll_interval: float = 64.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self._mem_bw = int(self.accel.mem_dwidth)
         self.master = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=self._mem_bw)
-        self.queue = AXIMMQueue(master=self.master, layout=self.layout)
+        self.m_cmd = StreamIFMaster(name=f"{self.name}_m_cmd", sim=self.sim, bitwidth=self._mem_bw)
+        self.s_resp = StreamIFSlave(name=f"{self.name}_s_resp", sim=self.sim, bitwidth=self._mem_bw)
         self._data = self.master.region(self.data_base, Float32, word_bw=self._mem_bw)
 
     def _cmd(self, op: FIROp, s: MatrixSpec | None, tx_id: int) -> FIRCmd:
@@ -88,21 +93,17 @@ class FIRHost(SimObj):
         return cmd
 
     def run_proc(self) -> ProcessGen[None]:
-        yield from self.queue.reset()
         for s in self.specs:
             yield from self._data.write_slice(s.x_off, s.X.ravel().astype(np.float32),
                                               element_type=Float32)
             yield from self._data.write_slice(s.h_off, s.h.astype(np.float32),
                                               element_type=Float32)
         for s in self.specs:
-            yield from self.queue.write(self._cmd(FIROp.fir, s, s.tx_id).serialize(word_bw=self._mem_bw),
-                                        poll_interval=self.poll_interval)
-        yield from self.queue.write(self._cmd(FIROp.end, None, 0xFFFF).serialize(word_bw=self._mem_bw),
-                                    poll_interval=self.poll_interval)
-        # barrier: ring empty only once the accelerator has consumed `end`.
-        poll_secs = float(self.poll_interval) / float(self.accel.clk.freq)
-        while (yield from self.queue.count()) > 0:
-            yield self.timeout(poll_secs)
+            yield from self.m_cmd.write(self._cmd(FIROp.fir, s, s.tx_id))
+        yield from self.m_cmd.write(self._cmd(FIROp.end, None, 0xFFFF))
+        # barrier: one response per fir command (the `end` sentinel carries no response).
+        for _ in self.specs:
+            yield from self.s_resp.get(FIRResp)
 
 
 @dataclass
@@ -110,7 +111,6 @@ class FIRSim:
     """Build + run one host-driven FIR simulation over a list of matrices."""
     specs: list[MatrixSpec]
     base_addr: int = 0
-    capacity: int = 8
     calibration: Path | None = None   # fir_calibrate.py JSON; None -> committed default or provisional
 
     def __post_init__(self) -> None:
@@ -122,31 +122,38 @@ class FIRSim:
         if Path(calib).exists():
             self.accel.timing = FIRTiming.from_calibration(calib)
 
-        cmd_words = FIRCmd.nwords_per_inst(32)
-        self.layout = AXIMMQueueLayout(
-            base_addr=self.base_addr, capacity=self.capacity, elem_words=cmd_words, mem_bw=32)
-        data_base = self.base_addr + self.layout.total_bytes
+        # No command ring: control rides AXI-stream, so the shared memory holds only the
+        # X / h / Y data (data_base == base_addr).
+        data_base = self.base_addr
         # total data words = past the last region used by any spec.
         data_elems = max((s.y_off + s.n_rows * s.out_len) for s in self.specs)
         word_bytes = 32 // 8
-        total_bytes = self.layout.total_bytes + data_elems * word_bytes
+        total_bytes = data_elems * word_bytes
 
         self.mem = MemComponent(sim=self.sim, word_size=32, inline=False, clk=self.clk,
                                 latency_init=0.0, latency_per_word=0.0)
         self.mem.alloc(total_bytes // word_bytes)
 
-        self.accel.cmd_queue = AXIMMQueue(master=self.accel.m_mem, layout=self.layout)
         self.accel.data_base = data_base
 
-        self.host = FIRHost(name="host", sim=self.sim, accel=self.accel, layout=self.layout,
+        self.host = FIRHost(name="host", sim=self.sim, accel=self.accel,
                             data_base=data_base, specs=self.specs)
 
+        # Data path: host + accelerator masters over the crossbar to the shared memory.
         self.xbar = AXIMMCrossBarIF(sim=self.sim, clk=self.clk, nports_master=2, nports_slave=1,
                                     bitwidth=32, latency_init=2.0, latency_read_return=2.0)
         self.xbar.bind("master_0", self.host.master)
         self.xbar.bind("master_1", self.accel.m_mem)
         self.xbar.bind("slave_0", self.mem.s_mm)
         assign_address_ranges([self.mem.s_mm], [(self.base_addr, total_bytes)])
+
+        # Control path: command stream (host -> accel.s_in), response stream (accel.m_out -> host).
+        self.cmd_stream = StreamIF(sim=self.sim, clk=self.clk)
+        self.cmd_stream.bind("master", self.host.m_cmd)
+        self.cmd_stream.bind("slave", self.accel.s_in)
+        self.resp_stream = StreamIF(sim=self.sim, clk=self.clk)
+        self.resp_stream.bind("master", self.accel.m_out)
+        self.resp_stream.bind("slave", self.host.s_resp)
         self.data_base = data_base
 
     def run(self) -> dict:

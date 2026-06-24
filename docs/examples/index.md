@@ -73,16 +73,17 @@ base case.
 | 2 | `pure_stream`                    | moving-average filter | streaming dataflow — no packet boundary, no TLAST, no control | planned                   | reserved (not built yet)               |
 | 3 | [`stream_inband`](./stream_inband/) | polynomial            | packetization (TLAST) + in-band control on the stream          | stages 1–5               | available                              |
 | 4 | [`shared_mem`](./shared_mem/)       | histogram             | data in memory (AXI-MM), control over a dedicated stream       | stages 1–5               | available; codegen upgrade in progress |
+| — | [`rowwise_fir`](./rowwise_fir/)     | per-row FIR filter    | **no new interface** (reuses `shared_mem`'s AXI-stream control + AXI-MM data); turns *inward* to the internal **load-compute-store dataflow** + a cosim-calibrated timing model | stages 1–5 + calibration | available |
 | 5 | [`mmqueue`](./mmqueue/)             | complex vector MAC (VMAC) | control *also* in memory, via a descriptor queue            | stages 1–5               | available                              |
-| 6 | [`rowwise_fir`](./rowwise_fir/)     | per-row FIR filter    | turns *inward*: the internal **load-compute-store dataflow** + a cosim-calibrated timing model | stages 1–5 + calibration | available |
 
 The shared-memory (`shared_mem`) example is the reference for AXI-MM (`m_axi`)
 codegen — multiple buffers and element types read/written over one bundle, with
 the kernel and testbench generated from the Python component.
 
-**[`rowwise_fir`](./rowwise_fir/) is different in kind.** Where #1–5 each move more of
-the *interface* contract into shared structures, rowwise FIR **reuses** the mm-queue
-interface and instead studies the accelerator's *internal* structure — the
-load-compute-store dataflow — and how to give it a **physical, cosim-calibrated timing
-model**. It is the capstone of the [timing-model](../guide/timing_model/) and
-[calibration](../guide/calib/) arc.
+**[`rowwise_fir`](./rowwise_fir/) is different in kind**, which is why it sits before `mmqueue`
+even though it adds no interface. Where the numbered steps each move more of the *interface*
+contract into shared structures, rowwise FIR **reuses** `shared_mem`'s AXI-stream control (over
+AXI-MM data) and instead studies the accelerator's *internal* structure — the load-compute-store
+dataflow — and how to give it a **physical, cosim-calibrated timing model**. It is the culmination
+of the [timing-model](../guide/timing_model/) and [calibration](../guide/calib/) arc; `mmqueue` then
+stays last as the climax of the *interface* progression (control in a memory queue).

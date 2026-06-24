@@ -30,7 +30,8 @@ the C kernel, the RTL — is checked against this one function.
 
 ## The command
 
-A host drives the accelerator through a memory command queue (the [`mmqueue`](../mmqueue/) interface).
+A host drives the accelerator with **AXI-stream control**, like [`shared_mem`](../shared_mem/): it
+sends the command over `s_in` and reads the response from `m_out`, while the data rides AXI-MM.
 Each `FIRCmd` ([`fir.py`](../../../examples/rowwise_fir/fir.py)) carries the taps `h`, the element
 offsets of `X`, `h`, and `Y` in shared memory, and the matrix shape `n_rows` / `n_cols`. Addresses are
 **element coordinates** (indices into the typed region), not bytes.

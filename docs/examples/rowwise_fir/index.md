@@ -1,17 +1,18 @@
 ---
 title: Rowwise FIR
 parent: Examples
-nav_order: 7
+nav_order: 6
 has_children: true
 ---
 
 # Rowwise FIR
 
 **Rowwise FIR** is a per-matrix-row FIR filter accelerator — `Y[i,j] = Σ_t h[t]·X[i, j−t]` over every
-row of an input matrix. It is the example where Waveflow turns **inward**: where [`mmqueue`](../mmqueue/)
-is about the host↔accelerator *interface* (control in a memory queue), rowwise FIR reuses that same
-queue and instead studies the accelerator's **internal structure** — the **load-compute-store
-dataflow** — and how to give it a **physical, cosim-calibrated timing model**.
+row of an input matrix. It is the example where Waveflow turns **inward**: it reuses
+[`shared_mem`](../shared_mem/)'s **AXI-stream control** (the command on `s_in`, the response on
+`m_out`) over AXI-MM data, and instead studies the accelerator's **internal structure** — the
+**load-compute-store dataflow** — and how to give it a **physical, cosim-calibrated timing model**. It
+adds **no new interface** (control is the stream you already know); its new ideas are all internal.
 
 ## The system
 
@@ -23,19 +24,20 @@ flowchart LR
         load["load"] --> compute["compute"] --> store["store"]
     end
     mem[("shared memory<br/>X · h · Y")]
-    host -->|"AXI-MM command queue"| fir
+    host -->|"AXI-stream control"| fir
     fir -->|"m_axi (gmem)"| mem
 ```
 
-A host enqueues `FIRCmd`s (filter taps `h`, the address of `X`, `n_rows`, `n_cols`); the accelerator
-reads each row of `X`, computes the FIR, and writes `Y` back over a single full-duplex `m_axi` bundle.
-Internally it is three concurrent stages — **load**, **compute**, **store** — overlapping across rows,
-the [double-buffered timing model](../../guide/timing_model/double_buffered.md) made concrete.
+A host sends `FIRCmd`s over the control stream (filter taps `h`, the address of `X`, `n_rows`,
+`n_cols`); the accelerator reads each row of `X`, computes the FIR, writes `Y` back over a single
+full-duplex `m_axi` bundle, and returns a response on `m_out`. Internally it is three concurrent
+stages — **load**, **compute**, **store** — overlapping across rows, the
+[double-buffered timing model](../../guide/timing_model/double_buffered.md) made concrete.
 
-## Why this is the capstone
+## What it adds
 
-The earlier examples answer *"are the numbers right?"*. Rowwise FIR adds two things that make it the
-end of the [timing](../../guide/timing_model/) and [calibration](../../guide/calib/) arc:
+The earlier examples answer *"are the numbers right?"*. Rowwise FIR is the culmination of the
+[timing](../../guide/timing_model/) and [calibration](../../guide/calib/) arc, adding two things:
 
 - **The load-compute-store dataflow** — a sliding window *forces* the input resident and randomly
   addressable, so the design cannot be a pure stream. It must load a row, compute over it, and store

@@ -7,11 +7,13 @@ the validated Phase 1 sandbox kernel is reused as the hand-written DATAFLOW hook
 (The row-LT version and the dataflow sub-module codegen are **not** built here.)
 
 ```
-fir_golden.py     the ONE shared bit-exact FIR golden (sandbox gen_data imports it)
-fir.py            FIRAccel HwComponent: AXIMMQueue ring + 3-process block timing model
-fir_dataflow.tpp  the @synthesizable hook core = the Phase 1 sandbox fir_accel kernel
-fir_build.py      hand-rolled m_axi top (render_top) wrapping the hook + Vitis driver
-fir_sim.py        host-driven sim: golden conformance + the overlap timeline
+fir_golden.py       the ONE shared bit-exact FIR golden (sandbox gen_data imports it)
+fir.py              FIRAccel HwComponent: AXI-stream control (s_in/m_out) + 3-process block timing model
+fir_dataflow.tpp    the @synthesizable hook core = the Phase 1 sandbox fir_accel kernel
+fir_top.cpp         static m_axi + AXI-stream-control top (copied into gen/fir.cpp); + fir.hpp / fir_tb.cpp / run.tcl
+fir_respond_impl.tpp hand-written response hook (m_out), like shared_mem's hist_respond_impl
+fir_build.py        copies the static top/hpp/tb/tcl into gen/ + the Vitis driver
+fir_sim.py          host-driven sim: golden conformance + the overlap timeline
 fir_validate.py   sim-vs-cosim bus-visible timeline comparison (single command)
 gen/              generated kernel sources (fir.cpp/.hpp/.tpp + TB + run.tcl)
 sandbox/          Phase 1 hand-written HLS sandbox (the kernel reused here)
@@ -42,13 +44,14 @@ on a near-zero-latency memory so there is no double-count.
 
 The synthesizable unit is the **whole** load-compute-store DATAFLOW kernel
 (`fir_dataflow.tpp` = the validated Phase 1 `fir_accel`), bound via
-`@synthesizable(impl_file="fir_dataflow.tpp")`.  `fir_build.render_top` hand-rolls a
-thin `void fir(gmem, x_off,y_off,h_off,n_rows,n_cols)` m_axi top calling the hook —
-**VMAC's primary `render_top` pattern**, not the `run_proc` extractor (this `run_proc`
-is 3-process timing orchestration and never executes the hook, so it is not a valid
-extraction source).  The AXIMMQueue ring is sim-only; the synthesized kernel takes the
-command as s_axilite scalars (exactly as VMAC bakes its command).  **No codegen-engine
-extension was required.**
+`@synthesizable(impl_file="fir_dataflow.tpp")`.  The top is a **static source file**
+(`fir_top.cpp`, copied verbatim into `gen/fir.cpp` — no templating) that adds
+**AXI-stream control** (the command on `s_in`, the response on `m_out` via
+`fir_respond_impl.tpp`, like `shared_mem`) around a `void fir(s_in, m_out, gmem)` m_axi
+top calling the hook.  The `run_proc` extractor is **not** used (this `run_proc` is
+3-process timing orchestration and never executes the hook, so it is not a valid
+extraction source).  FIR is the first example with static-file codegen.  **No
+codegen-engine extension was required.**
 
 ## What's validated (deliverables)
 
@@ -93,4 +96,4 @@ the per-row pipeline depth `g(n_col)`, which saturates (so a few columns interpo
 The one residual is `g(n_col)` itself — a *per-row* quantity that block granularity can only see
 as `n_row·g(n_col)`; modeling it once per row is the fit-free lift a **row-LT** version would get
 (`results/fir_calibration_results.md`).  The back-to-back / inter-command throughput claim still
-awaits the free-running AXIMMQueue ring-kernel codegen (deferred).
+awaits a multi-command kernel cosim (deferred).

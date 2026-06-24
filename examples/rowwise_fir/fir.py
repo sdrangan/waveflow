@@ -3,8 +3,9 @@
 This is the ``exec_model=hook`` + ``sim_fidelity=block`` version of the row-wise
 FIR from ``plans/load_compute_store.md`` (the "Creating a matrix LT version"
 section is authoritative).  It mirrors :mod:`examples.vmac.vmac`'s scaffolding —
-an AXI-MM command ring, an element-indexed memory region, the single
-``@synthesizable`` hook, the bit-exact golden, sim-only timing — but its timing
+an element-indexed memory region, the single ``@synthesizable`` hook, the bit-exact
+golden, sim-only timing — but its **control is AXI-stream** (like ``shared_mem``: the
+command rides ``s_in``, the response ``m_out``), not the AXI-MM command ring, and its timing
 model is the **three persistent stage processes** (load / compute / store) over
 **per-direction** bus resources, which is what the load-compute-store dataflow
 needs and a single ``run_proc`` cannot express (it would serialize matrices and
@@ -38,13 +39,14 @@ for ``max(write_occ, compute_body)``, so it *completes at* ``tstart_out + max(..
 **overlaps the X-read** (the latency fix), hiding the channel under compute when compute is the
 bottleneck.
 
-**Codegen** is the hand-rolled ``render_top`` in :mod:`examples.rowwise_fir.fir_build`
-(VMAC's *primary* pattern), wrapping the ``@synthesizable(impl_file="fir_dataflow.tpp")``
+**Codegen** is the static ``fir_top.cpp`` in :mod:`examples.rowwise_fir.fir_build`
+(copied verbatim into ``gen/``), wrapping the ``@synthesizable(impl_file="fir_dataflow.tpp")``
 hook — i.e. the validated Phase 1 sandbox ``fir_accel`` kernel.  The framework
 ``run_proc`` extractor is **not** used here: this ``run_proc`` is 3-process timing
 orchestration (it never executes the hook), so it is not a valid extraction source.
-The AXIMMQueue ring is sim-only; the synthesized kernel takes the command as
-s_axilite scalars (exactly as VMAC bakes its command).
+Control is **AXI-stream**, like ``shared_mem`` — the host sends the command over
+``s_in`` and reads the response on ``m_out`` — while the data stays on ``m_mem`` (the
+synthesized top reads the command off the stream rather than s_axilite scalars).
 
 **Timing is physical and near-fit-free** (``fir_calibrate.py``): channel occupancy is
 deterministic (transfer beats == nwords), compute is II=1, and the only calibrated term is the
@@ -70,6 +72,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, FloatField, IntField, MemAddr
 from waveflow.hw.hw_component import HwComponent, HwParam
 from waveflow.calib import InterpCalibModel
+from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import BusTiming, MMIFMaster
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.logger import NullLogger
@@ -94,12 +97,12 @@ class FIROp(enum.IntEnum):
 
 
 class FIRCmd(DataList):
-    """One matrix-FIR command (host -> ring -> accelerator).
+    """One matrix-FIR command (host -> ``s_in`` stream -> accelerator).
 
     Addresses are **element (float) offsets** into the shared data region; the
     region base (``data_base``) is owned by the driver/system memory map.  ``h``
     lives in memory at ``h_off`` (read by the load stage), keeping the command a
-    flat scalar record (so it serializes cleanly through the ring)."""
+    flat scalar record (so it serializes cleanly over the stream)."""
 
     elements = {
         "op":     {"schema": Word32, "description": "FIROp (fir / end)"},
@@ -109,6 +112,18 @@ class FIRCmd(DataList):
         "y_off":  {"schema": Addr32, "description": "output matrix base (element offset)"},
         "n_rows": {"schema": Word32, "description": "matrix rows"},
         "n_cols": {"schema": Word32, "description": "matrix cols"},
+    }
+
+
+class FIRResp(DataList):
+    """One matrix-FIR response (accelerator -> ``m_out`` stream -> host).
+
+    Emitted when a command completes (mirrors ``shared_mem``'s ``HistResp``); echoes
+    the command's ``tx_id`` so the host can correlate, with a completion status."""
+
+    elements = {
+        "tx_id":  {"schema": Word32, "description": "echo of the command transaction id"},
+        "status": {"schema": Word32, "description": "completion status (0 = ok)"},
     }
 
 
@@ -230,8 +245,9 @@ class FIRTiming:
 
 @dataclass
 class FIRAccel(HwComponent):
-    """Matrix-LT FIR accelerator: AXI-MM command ring + the 3-process block timing model
-    over per-direction bus resources, wrapping the ``fir_dataflow`` hook."""
+    """Matrix-LT FIR accelerator: AXI-stream control (``s_in``/``m_out``, like ``shared_mem``)
+    + the 3-process block timing model over per-direction bus resources, wrapping the
+    ``fir_dataflow`` hook."""
 
     cpp_kernel_name: ClassVar[str | None] = "fir"
     cpp_namespace: ClassVar[str | None] = "fir_dataflow"
@@ -242,12 +258,18 @@ class FIRAccel(HwComponent):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        # Control rides AXI-stream (command on s_in, response on m_out, like shared_mem);
+        # the data stays on the m_mem AXI-MM bundle.
+        self.s_in = StreamIFSlave(
+            name=f"{self.name}_s_in", sim=self.sim, bitwidth=int(self.mem_dwidth))
+        self.m_out = StreamIFMaster(
+            name=f"{self.name}_m_out", sim=self.sim, bitwidth=int(self.mem_dwidth))
         self.m_mem = MMIFMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth)
         )
-        self.add_endpoint(self.m_mem)
+        for ep in (self.s_in, self.m_out, self.m_mem):
+            self.add_endpoint(ep)
         # Attached by the driver (owns the system memory map) before run_sim:
-        self.cmd_queue = None            # AXIMMQueue (sim-only command ring)
         self.data_base: int = 0          # byte base of the shared data region
         self.timing = FIRTiming.provisional()   # driver overrides with the fitted calibration
         self.logger = NullLogger()
@@ -285,9 +307,10 @@ class FIRAccel(HwComponent):
 
         **Body is a bare ``yield`` (a stub).**  Codegen does not introspect this body: the
         ``@synthesizable`` decorator records only the signature ``(self, cmd, mem)`` (mapped to
-        the C++ call args) and ``impl_file="fir_dataflow.tpp"``; the m_axi top is the hand-rolled
-        :func:`fir_build.render_top`, which calls the hand-written ``fir_dataflow.tpp`` core
-        (= the validated Phase 1 sandbox ``fir_accel``).  And **in sim this is never run** — the
+        the C++ call args) and ``impl_file="fir_dataflow.tpp"``; the m_axi top is the static
+        ``fir_top.cpp`` (copied into ``gen/`` by :mod:`fir_build`), which calls the hand-written
+        ``fir_dataflow.tpp`` core (= the validated Phase 1 sandbox ``fir_accel``).  And **in sim
+        this is never run** — the
         three stage processes below model the timing.  So the body has no source-of-truth role;
         it stays a generator (the ``yield``) only so ``@synthesizable`` sees a coroutine.
 
@@ -305,8 +328,6 @@ class FIRAccel(HwComponent):
     # --- lifecycle -----------------------------------------------------------
     def pre_sim(self) -> None:
         super().pre_sim()
-        if self.cmd_queue is None:
-            raise RuntimeError("FIRAccel requires an attached cmd_queue (set by the driver).")
         # Sanctioned SimPy primitives (waveflow/simulation/simobj.py).
         self.load_q = self.transaction_queue()      # run_proc -> load
         self.compute_q = self.transaction_queue()   # load -> compute
@@ -322,21 +343,22 @@ class FIRAccel(HwComponent):
         # ANCHORED effective spans (not just the late resource acquire), so back-to-back
         # throughput is correct (resolves the write-channel "acquired late" caveat).
         self._bus_wr_free = 0.0
-        self.cmd_queue.poll_interval = 64.0
 
     def pre_sim_processes(self):  # documented spawn point — see pre_sim
         pass
 
     def run_proc(self) -> ProcessGen[None]:
-        """Host-facing entry: pull commands off the ring and kick the pipeline.
+        """Host-facing entry: pull commands off the ``s_in`` stream and kick the pipeline.
 
         Spawns the three persistent stage processes on first entry, then forwards each
-        command to the load stage without blocking on completion (the pipeline overlaps)."""
+        command to the load stage without blocking on completion (the pipeline overlaps).
+        Each command's response is emitted on ``m_out`` by the store stage when it
+        completes (like ``shared_mem``)."""
         self.process(self.load())
         self.process(self.compute())
         self.process(self.store())
         while True:
-            cmd: FIRCmd = yield from self.cmd_queue.get(self.Cmd)
+            cmd: FIRCmd = yield from self.s_in.get(self.Cmd)
             if int(cmd.op) == int(FIROp.end):
                 self.load_q.put(cmd)   # forward the sentinel so the stages drain + stop
                 return
@@ -421,6 +443,8 @@ class FIRAccel(HwComponent):
             self._bus_wr_free = t1
             self._log("store_begin", msg.cmd, t=t0)   # effective Y-write start
             self._log("store_end", msg.cmd, t=t1)     # == end of the Y-write burst
-            # response back to the host — a small write burst on the write channel after Y.
+            # response back to the host on the m_out stream (like shared_mem's respond) —
+            # the small post-Y latency is preserved, then the FIRResp is emitted.
             yield self.timeout(self._secs(self.timing.resp_words * self.timing.write_per_word))
             self._log("resp_sent", msg.cmd)
+            yield from self.m_out.write(FIRResp(tx_id=int(msg.cmd.tx_id), status=0))

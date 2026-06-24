@@ -69,18 +69,24 @@ COMPUTE:
 `fir_load_row` and `fir_store_row` are simple `II=1` burst loops over `X[base + j]` / `Y[obase + j]`,
 which HLS coalesces into AXI bursts.
 
-## Interface pragmas live in the generated top
+## Interface pragmas live in the static top
 
-The hook core takes plain pointers — **no** `m_axi` / `s_axilite` pragmas — so it is reusable and the
-interface is a codegen concern. The generated top
-([`fir_build.py`](../../../examples/rowwise_fir/fir_build.py) `render_top`) wraps it:
+The hook core takes plain pointers — **no** `m_axi` / `axis` pragmas — so it is reusable and the
+interface is a codegen concern. The top is a **static source file**
+([`fir_top.cpp`](../../../examples/rowwise_fir/fir_top.cpp), copied verbatim into `gen/fir.cpp` by
+[`fir_build.py`](../../../examples/rowwise_fir/fir_build.py)) that adds **AXI-stream control** (the
+command on `s_in`, the response on `m_out`, like `shared_mem`) around it:
 
 ```cpp
-// generated gen/fir.cpp
-void fir(real_t* gmem, int x_off, int y_off, int h_off, int n_rows, int n_cols) {
+// static fir_top.cpp -> gen/fir.cpp
+void fir(hls::stream<ap_uint<32> >& s_in, hls::stream<ap_uint<32> >& m_out, real_t* gmem) {
+#pragma HLS INTERFACE axis port=s_in
+#pragma HLS INTERFACE axis port=m_out
 #pragma HLS INTERFACE m_axi port=gmem bundle=gmem ...
-#pragma HLS INTERFACE s_axilite port=x_off ...
+#pragma HLS INTERFACE ap_ctrl_hs port=return
+    // read the FIRCmd off s_in (x_off, h_off, y_off, n_rows, n_cols), then:
     fir_dataflow::fir_accel_core(gmem + x_off, gmem + y_off, gmem + h_off, n_rows, n_cols);
+    fir_dataflow::fir_respond(m_out, tx_id);   // response hook (fir_respond_impl.tpp)
 }
 ```
 
