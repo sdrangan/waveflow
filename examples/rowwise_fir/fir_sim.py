@@ -10,8 +10,9 @@ per-command responses (the barrier), and the driver reads Y back after the run a
 it **bit-exact** against the shared ``fir_golden``.
 
 Memory latency is zero — stage timing comes from :class:`FIRTiming` (deterministic channel
-occupancy + II=1 compute + the calibrated ``row_depth(n_col)``), composed over the master's per-direction
-``read_channel`` / ``write_channel``, not the bus model.
+occupancy + II=1 compute + the calibrated ``row_depth(n_col)``), composed over the shared-data
+slave's per-direction ``read_channel`` / ``write_channel`` and its calibrated ``bus_timing``
+(configured at wire-up below), reached through the crossbar — not a master-side bus model.
 
 Run with the project venv::
 
@@ -133,6 +134,12 @@ class FIRSim:
         self.mem = MemComponent(sim=self.sim, word_size=32, inline=False, clk=self.clk,
                                 latency_init=0.0, latency_per_word=0.0)
         self.mem.alloc(total_bytes // word_bytes)
+
+        # The contended memory port owns its per-direction occupancy span: configure the
+        # shared-data slave's calibrated bus_timing here, at platform wire-up — the accelerator
+        # never pokes platform bus params (the FIRTiming model is the *source*, applied to the
+        # slave).  The Region slice calls reach it through the crossbar's address decode.
+        self.mem.s_mm.bus_timing = self.accel.timing.bus_timing(self.clk.freq)
 
         self.accel.data_base = data_base
 

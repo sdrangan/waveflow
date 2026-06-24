@@ -17,12 +17,12 @@ Key modeling ideas (from the plan):
   next matrix as soon as they are free, so ``load(N+1)`` overlaps ``compute(N)``
   and ``store(N)`` — the throughput win of the structure.
 * **Per-direction channel resources.** An ``m_axi`` bundle is full-duplex (Phase 1
-  correction): the master's ``read_channel`` (AR/R) and ``write_channel`` (AW/W) are
-  independent capacity-1 resources, *not* one shared bus, **owned by the m_axi port** and
-  acquired automatically by the Region slice calls (no ``bus_rd``/``bus_wr`` wiring in the
-  component).  ``compute`` runs from BRAM and holds neither, so it overlaps both;
-  ``load(N+1)`` and ``store(N)`` use different channels and also overlap.  There is **no
-  single-port II=2 floor** for a read+write kernel.
+  correction): the read (AR/R) and write (AW/W) channels are independent capacity-1
+  resources, *not* one shared bus.  They are **owned by the interconnect/slave** (the
+  contended memory port) and acquired automatically by the Region slice calls *through the
+  interconnect* (no ``bus_rd``/``bus_wr`` wiring in the component).  ``compute`` runs from
+  BRAM and holds neither, so it overlaps both; ``load(N+1)`` and ``store(N)`` use different
+  channels and also overlap.  There is **no single-port II=2 floor** for a read+write kernel.
 * **Fictitious inter-stage messages.** :class:`FIRCompMsg` / :class:`FIRStoreMsg`
   are plain dataclasses (never synthesized — in hardware the data moves through the
   partitioned-BRAM / FIFO channels); they carry the data plus an absolute-time
@@ -332,12 +332,12 @@ class FIRAccel(HwComponent):
         self.load_q = self.transaction_queue()      # run_proc -> load
         self.compute_q = self.transaction_queue()   # load -> compute
         self.store_q = self.transaction_queue()     # compute -> store
-        # The full-duplex AR/R and AW/W channel resources now live on the m_axi port
-        # (``m_mem.read_channel`` / ``write_channel``) and are acquired automatically by the
-        # Region slice calls — the component no longer wires bus contention by hand.  The
-        # per-direction X-read / Y-write SPANS are the port's calibrated ``bus_timing``; the
-        # component supplies only ``num_trans = n_row`` (one burst per row) at the slice call.
-        self.m_mem.bus_timing = self.timing.bus_timing(self.clk.freq)
+        # The full-duplex AR/R and AW/W channels + the per-direction X-read / Y-write SPANS
+        # (``bus_timing``) live on the **interconnect/slave** (the contended memory port), not
+        # on this accelerator: the Region slice calls reach them through the interconnect, which
+        # decodes the address to the serving slave.  The component supplies only the *access
+        # pattern* — ``num_trans = n_row`` (one burst per row) — at the slice call; the platform
+        # wiring configures the slave's ``bus_timing`` (see fir_sim.py).
         self._data = self.m_mem.region(self.data_base, Float32, word_bw=self._mem_bw)
         # Write-channel effective-free time: successive Y-writes serialize by their EARLY-
         # ANCHORED effective spans (not just the late resource acquire), so back-to-back

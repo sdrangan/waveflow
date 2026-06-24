@@ -94,13 +94,19 @@ calibrated realization of this model — a per-matrix-row FIR. It keeps the thre
 (`load` / `compute` / `store` started in `pre_sim`, handing off through `transaction_queue`s) but
 sharpens three things over the bare `simpy.Store` pattern above:
 
-- **Per-direction channel resources, not one bus.** The ping-pong contention lives on the `m_axi`
-  port as independent `read_channel` / `write_channel` resources (an AXI bundle is full-duplex, so a
-  read and a write never contend). The component never wires bus contention by hand — the
-  element-coordinate slice calls acquire the right channel automatically.
+- **Per-direction channel resources, not one bus — owned by the interconnect.** Bus contention,
+  occupancy timing, and duplex are properties of the contended memory port, so they live on the
+  **interconnect/slave** (`MMIFSlave.read_channel` / `write_channel`, independent capacity-1
+  resources), reached by the element-coordinate slice calls *through the interconnect* (it decodes
+  the address to the serving slave). An AXI bundle is full-duplex, so a read and a write never
+  contend — that is the default. A slave that genuinely shares R/W bandwidth (a single-port BRAM, or
+  a DDR model) *declares* itself `half_duplex=True`, re-coupling the two channels onto one resource.
+  The component never wires bus contention by hand and owns no channel — it supplies only the
+  *access pattern* (`num_trans`, `nwords`) at the slice call.
 - **Element-coordinate pipelined transfers.** Load and store use `read_slice_pipelined` /
   `write_slice_pipelined` with `num_trans = n_row` (one burst per row) instead of `read_array` /
-  `write_array`; the per-burst span comes from the port's calibrated bus timing.
+  `write_array`; the per-burst span comes from the **serving slave's** calibrated bus timing
+  (`MMIFSlave.bus_timing`), configured once per platform at wire-up.
 - **The store hides under compute.** The Y-write is *early-anchored* and given `min_span =
   compute_body`, so it occupies the write channel for `max(write_occ, compute_body)` — finishing
   under compute's shadow when compute is the bottleneck. This is the double-buffered

@@ -436,6 +436,11 @@ class MemComponent(SimObj):
     latency_init: float = 0.0       # fixed cycles per access
     latency_per_word: float = 0.0   # cycles per word
     addr_unit: AddrUnit = AddrUnit.byte
+    half_duplex: bool = False
+    """When ``True`` the ``s_mm`` slave's read and write channels are one shared
+    resource, so reads and writes to this memory mutually exclude — a single-port
+    memory (a DDR model that shares R/W bandwidth, or single-port BRAM).  The default
+    (full-duplex) gives independent AR/R and AW/W channels (real AXI)."""
 
     def __post_init__(self) -> None:
         # SimObj.__post_init__ assigns the default name and registers this
@@ -468,6 +473,7 @@ class MemComponent(SimObj):
             name=f'{self.name}_s_mm',
             sim=self.sim,
             bitwidth=self.word_size,
+            half_duplex=self.half_duplex,
             rx_write_proc=self._on_write,
             rx_read_proc=self._on_read,
             # untimed snapshot read for MMIFMaster.poll_until (its bus cost is

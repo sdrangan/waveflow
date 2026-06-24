@@ -133,9 +133,13 @@ class VmacQueueSim:
         self.mem_latency_init, self.mem_latency_per_word = 2.0, 1.0
 
         # one shared external memory (ring + data); crossbar maps global base -> local 0.
+        # half_duplex: the host (producer) and accel (consumer) share this single external
+        # DDR port, so its reads and writes contend for one R/W bandwidth — the
+        # declared-half-duplex slave (the plan's DDR caveat).  Without it the full-duplex
+        # default would let the consumer's reads overlap the producer's ring writes.
         self.mem = MemComponent(
             sim=self.sim, word_size=self.mem_bw, inline=False, clk=self.clk,
-            latency_init=2.0, latency_per_word=1.0,
+            latency_init=2.0, latency_per_word=1.0, half_duplex=True,
         )
         self.mem.alloc(total_bytes // word_bytes)
 

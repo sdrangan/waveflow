@@ -211,6 +211,13 @@ e.g. compute hasn't finished the row), **not** time the channel itself is busy. 
 - the **pipeline stall** (the `idle` beats), a property of the *compute*, which a load-compute-store
   timing model should let *emerge* from the compute stage rather than fold into the transfer time.
 
+In the SimPy model these three bus properties — **contention, occupancy timing, and duplex** — live on
+the **interconnect/slave** (the contended memory port), not on the accelerator: each `MMIFSlave` owns
+independent `read_channel` / `write_channel` resources and a per-direction `bus_timing` occupancy model,
+reached by a `Region` slice *through the interconnect* (which decodes the address to the serving slave).
+A read and a write on one AXI bundle never contend (full-duplex is the default); a single-port BRAM or a
+DDR model that shares R/W bandwidth *declares* itself `half_duplex=True` to re-couple the channels.
+
 This is precisely the measurement that underpins the matrix-LT FIR calibration: occupancy is read off
 the `transfer` beat count (deterministic), and the per-row stall is attributed to compute. See the
 beat-counting helper in [`fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py), the

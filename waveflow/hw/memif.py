@@ -224,8 +224,22 @@ class MMIFSlave(InterfaceEndpoint):
     :class:`~waveflow.hw.memory.MemComponent` populates it; a slave without one
     cannot be polled."""
 
+    half_duplex: bool = False
+    """When ``True`` the read and write channels are the *same* resource, so reads
+    and writes to this slave mutually exclude — a declared half-duplex memory port
+    (single-port BRAM, or a DDR model that shares R/W bandwidth).  The default
+    (``False``, full-duplex) gives independent AR/R and AW/W channels, matching real
+    AXI where a read and a write on one bundle never contend."""
+
+    bus_timing: "BusTiming | None" = None
+    """Calibrated per-direction bus-occupancy span model for this slave's memory port
+    (the contended physical resource).  ``None`` ⇒ the pipelined :class:`Region` slices
+    fall back to the plain ``word_bw``-derived span.  Configured per platform at wire-up,
+    not poked onto a master by an accelerator."""
+
     addr_range: AXIMMAddressRange | None = field(init=False)
-    bus: simpy.Resource = field(init=False)
+    read_channel: simpy.Resource = field(init=False)
+    write_channel: simpy.Resource = field(init=False)
 
     type_name = 'mmif_slave'
 
@@ -235,7 +249,12 @@ class MMIFSlave(InterfaceEndpoint):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.addr_range = None
-        self.bus = simpy.Resource(self.env, capacity=1)
+        # Per-direction memory-port channels (the contended physical resource): a
+        # full-duplex slave has independent AR/R and AW/W channels; a declared
+        # half-duplex slave re-couples them onto one shared resource.
+        self.read_channel = self.resource(capacity=1)
+        self.write_channel = (
+            self.read_channel if self.half_duplex else self.resource(capacity=1))
 
 
 # ---------------------------------------------------------------------------
@@ -244,14 +263,16 @@ class MMIFSlave(InterfaceEndpoint):
 
 @dataclass
 class BusTiming:
-    """Per-direction bus-transfer span model owned by an :class:`MMIFMaster` (m_axi port).
+    """Per-direction bus-transfer span model owned by an :class:`MMIFSlave` (the
+    contended memory port), configured per platform and reached by a :class:`Region`
+    slice **through the interconnect**.
 
     Maps a transfer's **structural facts** to its bus-occupancy span (the time the
     burst holds the channel): ``num_trans`` (the number of bus transactions — e.g.
     one burst per matrix row) and ``nwords`` (the words moved).  The accelerator
     author supplies only those at the slice call (``read_slice_pipelined(...,
     num_trans=n_row)``); the *calibrated* read / write rates live here, on the
-    interface — not hand-rolled on the component.
+    slave — not hand-rolled on the component.
 
     ``read`` / ``write`` are :class:`~waveflow.calib.CalibModel`-like predictors over
     the feature row ``{"num_trans", "nwords"}`` (anything with
@@ -288,14 +309,13 @@ class MMIFMaster(InterfaceEndpoint):
     Exposes :meth:`write` and :meth:`read` using global addresses, plus
     convenience methods for schema-typed access.
 
-    Owns the per-direction **channel resources** (``read_channel`` AR/R,
-    ``write_channel`` AW/W) of its m_axi port: a full-duplex bundle whose read and
-    write channels are independent capacity-1 resources.  :class:`Region` slice
-    transfers acquire them automatically, so successive same-direction transfers on
-    one port serialise (and multiple ``Region``\\ s on the port share them) without
-    the accelerator author wiring contention by hand.  :attr:`bus_timing` (a
-    :class:`BusTiming`) holds the calibrated per-direction span model the pipelined
-    slices consult.
+    Bus **contention, occupancy timing, and duplex** are properties of the
+    contended memory port, so they live on the :class:`MMIFSlave` (the per-direction
+    ``read_channel`` / ``write_channel`` and its :attr:`~MMIFSlave.bus_timing`) and
+    are reached **through the interconnect** (which decodes the address to the slave).
+    A :class:`Region` slice therefore supplies only the *access pattern* (``num_trans``,
+    ``nwords``); it never wires contention by hand, and the master owns no channel or
+    span model.
     """
 
     bitwidth: int = 32
@@ -309,16 +329,6 @@ class MMIFMaster(InterfaceEndpoint):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.master_port = -1
-        # Full-duplex m_axi channels: independent, capacity-1 (AR/R vs AW/W).
-        self.read_channel = self.resource(capacity=1)
-        self.write_channel = self.resource(capacity=1)
-        # Calibrated per-direction bus-span model (set by the driver); None -> the
-        # pipelined slices use the plain word_bw span.
-        self.bus_timing: BusTiming | None = None
-
-    def channel(self, rw: str) -> simpy.Resource:
-        """The channel resource for direction *rw* (``"read"`` / ``"write"``)."""
-        return self.write_channel if rw == "write" else self.read_channel
 
     def _check_bound(self) -> None:
         if self.interface is None:
@@ -583,6 +593,46 @@ class MMIFMaster(InterfaceEndpoint):
         return tstart, tend, nwords
 
     # ------------------------------------------------------------------
+    # Spanned (calibrated-occupancy) transfers — delegate the channel + span to
+    # the interconnect (which decodes the address to the contended slave port).
+    # Sim-only; the pipelined Region slices drive these when the slave declares a
+    # bus_timing model.  Same data path as read_array / write_array (pack/unpack).
+    # ------------------------------------------------------------------
+
+    def read_spanned(
+        self, element_type: type, count: int, addr: int,
+        *, t_out_start: float | None, num_trans: int, word_bw: int = 32,
+    ) -> ProcessGen[tuple[np.ndarray | list, float, float]]:
+        """Read *count* elements through the interconnect's calibrated-occupancy path,
+        returning ``(data, t0, t1)`` — the bus-visible span (see
+        :meth:`AXIMMCrossBarIF.read_spanned`)."""
+        nwords = element_type.nwords_per_inst(word_bw) * count
+        proc = self.process(self.interface.read_spanned(
+            nwords, addr, self.master_port, t_out_start=t_out_start, num_trans=num_trans))
+        yield proc
+        words, t0, t1 = proc.value
+        out = element_type.from_words_numpy(words, count, word_bw)   # vectorized fast path
+        if out is None:                                             # canonical recursive unpack
+            from waveflow.hw.arrayutils import read_array as _unpack_array
+            out = _unpack_array(words, element_type, word_bw, shape=count).val
+        return out, t0, t1
+
+    def write_spanned(
+        self, elements: Any, element_type: type, addr: int,
+        *, t_out_start: float | None, num_trans: int, min_span: float | None,
+        count: int | None = None, word_bw: int = 32,
+    ) -> ProcessGen[tuple[float, float]]:
+        """Write *elements* through the interconnect's calibrated-occupancy path,
+        returning the bus-visible span ``(t0, t1)`` (see
+        :meth:`AXIMMCrossBarIF.write_spanned`)."""
+        words = self._pack_array_words(elements, element_type, word_bw, count=count)
+        proc = self.process(self.interface.write_spanned(
+            words, addr, self.master_port,
+            t_out_start=t_out_start, num_trans=num_trans, min_span=min_span))
+        yield proc
+        return proc.value
+
+    # ------------------------------------------------------------------
     # Element-coordinate region view (the sim twin of the C++ read_array_slice)
     # ------------------------------------------------------------------
 
@@ -647,14 +697,22 @@ class Region:
         """Byte address of element *i* (the element-coordinate → address conversion)."""
         return self.base_addr + int(i) * self._elem_bytes
 
+    def _slave_bus_timing(self, i0: int) -> "BusTiming | None":
+        """The :class:`BusTiming` of the slave serving element *i0*, resolved **through the
+        interconnect** (which owns the address decode).  ``None`` when the interface is not a
+        poll-aware MM interconnect or the slave declares no model — the word_bw fallback."""
+        iface = self.master.interface
+        resolver = getattr(iface, "slave_endpoint", None)
+        if resolver is None:
+            return None
+        return getattr(resolver(self.byte_of(i0)), "bus_timing", None)
+
     def read_slice(self, i0: int, i1: int) -> ProcessGen[Any]:
         """Read elements ``[i0, i1)`` (element coordinates) and return the deserialized array —
-        the sim twin of ``read_array_slice<W>(mem, i0, i1, x)``.  Holds the master's read
-        channel for the transfer and fires :attr:`on_transfer`."""
-        with self.master.read_channel.request() as req:
-            yield req
-            data, t0, t1, nw = yield from self.master.read_array_pipelined(
-                self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
+        the sim twin of ``read_array_slice<W>(mem, i0, i1, x)``.  The interconnect holds the
+        slave's read channel for the transfer; fires :attr:`on_transfer`."""
+        data, t0, t1, nw = yield from self.master.read_array_pipelined(
+            self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
         if self.on_transfer is not None:
             self.on_transfer("read", int(i0), nw, t0, t1)
         return data
@@ -664,51 +722,43 @@ class Region:
     ) -> ProcessGen[None]:
         """Write *elements* starting at element index *i0* — the sim twin of
         ``write_array_slice``.  *element_type* defaults to the region's (pass it when the written
-        elements differ, e.g. an output format whose addressing stride matches).  Holds the
-        master's write channel for the transfer and fires :attr:`on_transfer`."""
-        with self.master.write_channel.request() as req:
-            yield req
-            t0, t1, nw = yield from self.master.write_array_pipelined(
-                elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
+        elements differ, e.g. an output format whose addressing stride matches).  The
+        interconnect holds the slave's write channel for the transfer; fires :attr:`on_transfer`."""
+        t0, t1, nw = yield from self.master.write_array_pipelined(
+            elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
 
     def read_slice_pipelined(
         self, i0: int, i1: int, t_out_start: float | None = None, num_trans: int = 1,
     ) -> ProcessGen[tuple[Any, float]]:
-        """Read elements ``[i0, i1)`` and return ``(data, tstart)``, holding the master's read
-        channel for the burst.
+        """Read elements ``[i0, i1)`` and return ``(data, tstart)``.
 
         *num_trans* is the number of bus transactions the read takes (e.g. one burst per
-        matrix row).  The **interface** turns it into the burst span from the master's
-        calibrated :class:`BusTiming` (``span = read model over {num_trans, nwords}``) and the
-        read then occupies the channel for **exactly** that span, anchored at *t_out_start*
+        matrix row).  The **interconnect** turns it into the burst span from the serving
+        slave's calibrated :class:`BusTiming` (``span = read model over {num_trans, nwords}``)
+        and holds the slave's read channel for **exactly** that span, anchored at *t_out_start*
         (default: now); the functional movement happens in the same call and its own word_bw
         bus time is *subsumed* into the span.  ``tstart`` is the anchor (first-element-available,
         the pipeline-fill time).
 
-        When the master has no :attr:`~MMIFMaster.bus_timing` read model the span is ``None``
-        and the call falls back to the word_bw-derived behaviour: ``tstart`` is back-calculated
-        like :meth:`StreamIFSlave.get_pipelined`."""
+        When the serving slave has no :attr:`~MMIFSlave.bus_timing` read model the call falls
+        back to the word_bw-derived behaviour: ``tstart`` is back-calculated like
+        :meth:`StreamIFSlave.get_pipelined`."""
         n = int(i1) - int(i0)
         nwords = self.element_type.nwords_per_inst(self.word_bw) * n
-        bt = self.master.bus_timing
-        duration = bt.read_span_secs(num_trans, nwords) if bt is not None else None
-        with self.master.read_channel.request() as req:
-            yield req
-            if duration is None:
-                data, tstart = yield from self.master.read_array_anchored(
-                    self.element_type, n, self.byte_of(i0), word_bw=self.word_bw)
-                t0, t1 = tstart, self.master.env.now
-            else:
-                anchor = self.master.env.now if t_out_start is None else float(t_out_start)
-                data = yield from self.master.read_array(
-                    self.element_type, n, self.byte_of(i0), word_bw=self.word_bw)  # functional (subsumed)
-                t0, t1 = anchor, max(anchor + duration, self.master.env.now)
-                rem = t1 - self.master.env.now
-                if rem > 0:
-                    yield self.master.timeout(rem)
-                tstart = anchor
+        bt = self._slave_bus_timing(i0)
+        use_span = bt is not None and bt.read is not None and hasattr(
+            self.master.interface, "read_spanned")
+        if not use_span:
+            data, tstart = yield from self.master.read_array_anchored(
+                self.element_type, n, self.byte_of(i0), word_bw=self.word_bw)
+            t0, t1 = tstart, self.master.env.now
+        else:
+            data, t0, t1 = yield from self.master.read_spanned(
+                self.element_type, n, self.byte_of(i0),
+                t_out_start=t_out_start, num_trans=num_trans, word_bw=self.word_bw)
+            tstart = t0
         if self.on_transfer is not None:
             self.on_transfer("read", int(i0), nwords, t0, t1)
         return data, tstart
@@ -718,48 +768,39 @@ class Region:
         element_type: type | None = None, min_span: float | None = None,
     ) -> ProcessGen[tuple[float, float]]:
         """Early-anchored write of *elements* at element *i0*; returns the bus-visible span
-        ``(t0, t1)``, holding the master's write channel for the burst.
+        ``(t0, t1)``.
 
         *num_trans* is the number of bus transactions (e.g. one burst per matrix row).  The
-        **interface** turns it into the channel-occupancy span from the master's calibrated
-        :class:`BusTiming` (``span = write model over {num_trans, nwords}``).
+        **interconnect** turns it into the channel-occupancy span from the serving slave's
+        calibrated :class:`BusTiming` (``span = write model over {num_trans, nwords}``) and
+        holds the slave's write channel for it.
 
         *min_span* is the **compute-shadow floor** (seconds): in a load-compute-store pipeline
         the store is paced by its producer, so its bus-visible span is ``max(channel_occupancy,
         min_span)`` — when the producer (compute) is the bottleneck the channel hides *under* it
         (``min_span`` > occupancy), and the write completes at ``t_out_start + max(...)``.  The
-        component supplies ``min_span`` (the producer pacing); the interface owns the channel
+        component supplies ``min_span`` (the producer pacing); the interconnect owns the channel
         occupancy.  ``None`` means no floor (pure channel occupancy).
 
         The write completes at ``t_out_start + span`` (clamped to now if the anchor is already
         past), overlapping an earlier read; the functional movement happens in the same call and
-        its word_bw bus time is subsumed into the span.  When the master has no
-        :attr:`~MMIFMaster.bus_timing` write model *and* no *min_span*, the call falls back to
+        its word_bw bus time is subsumed into the span.  When the serving slave has no
+        :attr:`~MMIFSlave.bus_timing` write model *and* no *min_span*, the call falls back to
         the word_bw-derived early-anchored write — the mirror of
         :meth:`StreamIFMaster.write_pipelined`."""
         et = element_type or self.element_type
         nw = et.nwords_per_inst(self.word_bw) * (len(elements) if hasattr(elements, "__len__") else 0)
-        bt = self.master.bus_timing
-        duration = bt.write_span_secs(num_trans, nw) if bt is not None else None
-        if min_span is not None:
-            duration = max(duration if duration is not None else 0.0, float(min_span))
-        with self.master.write_channel.request() as req:
-            yield req
-            if duration is None:
-                t0, t1, nw = yield from self.master.write_array_pipelined(
-                    elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
-            else:
-                # EARLY-ANCHORED functional movement: model the burst as having started at
-                # t_out_start so it OVERLAPS an earlier read (rather than restarting at `now`
-                # when the store runs late behind the read — which would overrun the span); its
-                # word_bw bus time is subsumed.  Then occupy the channel out to the full span.
-                yield from self.master.write_array_pipelined(
-                    elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
-                t1 = max(float(t_out_start) + duration, self.master.env.now)
-                t0 = t1 - duration
-                rem = t1 - self.master.env.now
-                if rem > 0:
-                    yield self.master.timeout(rem)
+        bt = self._slave_bus_timing(i0)
+        has_model = bt is not None and bt.write is not None
+        use_span = (has_model or min_span is not None) and hasattr(
+            self.master.interface, "write_spanned")
+        if not use_span:
+            t0, t1, _ = yield from self.master.write_array_pipelined(
+                elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
+        else:
+            t0, t1 = yield from self.master.write_spanned(
+                elements, et, self.byte_of(i0),
+                t_out_start=t_out_start, num_trans=num_trans, min_span=min_span)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
         return t0, t1
@@ -800,6 +841,12 @@ class _MMPollSupport:
     def _poll_ep_for_addr(self, global_addr: int) -> tuple[str, MMIFSlave, int]:
         """Return ``(bus_key, slave_ep, local_addr)`` for *global_addr*."""
         raise NotImplementedError
+
+    def slave_endpoint(self, global_addr: int) -> MMIFSlave:
+        """The :class:`MMIFSlave` serving *global_addr* — the contended memory port
+        whose per-direction channels + :attr:`~MMIFSlave.bus_timing` a :class:`Region`
+        slice consults through the interconnect (it owns the address decode)."""
+        return self._poll_ep_for_addr(global_addr)[1]
 
     # -- write-notify (the O(transactions) wakeup for blocked pollers) ------
     def _poll_event(self, ep_name: str) -> simpy.Event:
@@ -1054,7 +1101,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 dly = max(0.0, dly + (tstart - self.env.now))
             if dly > 0:
                 yield self.timeout(dly)
-            with slave_ep.bus.request() as req:
+            with slave_ep.write_channel.request() as req:
                 yield req
                 if slave_ep.rx_write_proc is not None:
                     yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
@@ -1067,7 +1114,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     dly = max(0.0, dly + (tstart - self.env.now))
                 if dly > 0:
                     yield self.timeout(dly)
-                with slave_ep.bus.request() as req:
+                with slave_ep.write_channel.request() as req:
                     yield req
                     if slave_ep.rx_write_proc is not None:
                         yield self.env.process(
@@ -1094,7 +1141,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             if req_dly > 0:
                 yield self.timeout(req_dly)
 
-            with slave_ep.bus.request() as req:
+            with slave_ep.read_channel.request() as req:
                 yield req
                 if slave_ep.rx_read_proc is not None:
                     proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
@@ -1121,7 +1168,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 dly = slave_ep.latency_per_word / self.clk.freq
                 if dly > 0:
                     yield self.timeout(dly)
-                with slave_ep.bus.request() as req:
+                with slave_ep.read_channel.request() as req:
                     yield req
                     if slave_ep.rx_read_proc is not None:
                         proc = self.env.process(
@@ -1131,6 +1178,116 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                         result[i] = proc.value[0]
 
             return result
+
+    # ------------------------------------------------------------------
+    # Spanned (calibrated-occupancy) transfers — the interconnect owns the
+    # channel + the per-direction occupancy span (sim-only; the AT model the
+    # pipelined Region slices drive).  The functional word-move is *subsumed*
+    # into the span; the channel is held for the whole span so successive
+    # same-direction transfers and multi-master contention fall out at the
+    # contended memory port.
+    # ------------------------------------------------------------------
+
+    def read_spanned(
+        self, nwords: int, global_addr: int, master_port: int,
+        *, t_out_start: float | None, num_trans: int,
+    ) -> ProcessGen[tuple[Words, float, float]]:
+        """Read *nwords* holding the slave read channel for the calibrated occupancy
+        span (``slave.bus_timing`` over ``{num_trans, nwords}``).  Returns
+        ``(words, t0, t1)`` — the bus-visible span; ``t0`` is the anchor
+        (*t_out_start*, or now) and the read's own word_bw bus time is subsumed."""
+        ep_name, slave_ep, local_addr = self._decode_address(global_addr)
+        protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
+        dtype = self._dtype()
+        span = slave_ep.bus_timing.read_span_secs(num_trans, nwords)
+        with slave_ep.read_channel.request() as req:
+            yield req
+            anchor = self.env.now if t_out_start is None else float(t_out_start)
+            # Functional read (word_bw timing), channel already held — subsumed.
+            if protocol == AXIMMProtocol.FULL:
+                req_dly = self.latency_init / self.clk.freq
+                if req_dly > 0:
+                    yield self.timeout(req_dly)
+                if slave_ep.rx_read_proc is not None:
+                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
+                    yield proc
+                    words = proc.value
+                else:
+                    words = np.zeros(nwords, dtype=dtype)
+                ret_dly = (
+                    self.latency_read_return + nwords * self._poll_stretch(ep_name)
+                ) / self.clk.freq
+                if ret_dly > 0:
+                    yield self.timeout(ret_dly)
+            else:  # LITE — one word per transaction
+                word_step = self._word_step()
+                words = np.zeros(nwords, dtype=dtype)
+                for i in range(nwords):
+                    dly = slave_ep.latency_per_word / self.clk.freq
+                    if dly > 0:
+                        yield self.timeout(dly)
+                    if slave_ep.rx_read_proc is not None:
+                        proc = self.env.process(
+                            slave_ep.rx_read_proc(1, local_addr + i * word_step))
+                        yield proc
+                        words[i] = proc.value[0]
+            # Occupy the channel out to the full span (anchored).
+            t0 = anchor
+            t1 = max(anchor + span, self.env.now)
+            rem = t1 - self.env.now
+            if rem > 0:
+                yield self.timeout(rem)
+        return words, t0, t1
+
+    def write_spanned(
+        self, words: Words, global_addr: int, master_port: int,
+        *, t_out_start: float | None, num_trans: int, min_span: float | None,
+    ) -> ProcessGen[tuple[float, float]]:
+        """Early-anchored write of *words* holding the slave write channel for the
+        calibrated occupancy span (``slave.bus_timing`` over ``{num_trans, nwords}``,
+        floored by *min_span* — the compute-shadow floor).  Returns the bus-visible
+        span ``(t0, t1)``; the write completes at ``t_out_start + span`` (clamped to
+        now), overlapping an earlier read, with its word_bw bus time subsumed."""
+        ep_name, slave_ep, local_addr = self._decode_address(global_addr)
+        protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
+        nwords = int(words.shape[0])
+        bt = slave_ep.bus_timing
+        span = bt.write_span_secs(num_trans, nwords) if bt is not None else None
+        if min_span is not None:
+            span = max(span if span is not None else 0.0, float(min_span))
+        with slave_ep.write_channel.request() as req:
+            yield req
+            anchor = self.env.now if t_out_start is None else float(t_out_start)
+            # Early-anchored functional write (subsumed), channel already held.
+            if protocol == AXIMMProtocol.FULL:
+                cycles = self.latency_init + nwords * self._poll_stretch(ep_name)
+                dly = cycles / self.clk.freq
+                if t_out_start is not None:
+                    dly = max(0.0, dly + (t_out_start - self.env.now))
+                if dly > 0:
+                    yield self.timeout(dly)
+                if slave_ep.rx_write_proc is not None:
+                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+            else:  # LITE — one word per transaction
+                word_step = self._word_step()
+                for i in range(nwords):
+                    dly = slave_ep.latency_per_word / self.clk.freq
+                    if t_out_start is not None and i == 0:
+                        dly = max(0.0, dly + (t_out_start - self.env.now))
+                    if dly > 0:
+                        yield self.timeout(dly)
+                    if slave_ep.rx_write_proc is not None:
+                        yield self.env.process(slave_ep.rx_write_proc(
+                            words[i : i + 1], local_addr + i * word_step))
+            # the watched word may have changed — wake any pollers on this slave
+            self._notify_write(ep_name)
+            # Occupy the channel out to the full span (anchored).
+            t1 = max(anchor + span, self.env.now)
+            t0 = t1 - span
+            rem = t1 - self.env.now
+            if rem > 0:
+                yield self.timeout(rem)
+        return t0, t1
 
 
 # ---------------------------------------------------------------------------
@@ -1219,7 +1376,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
             dly = max(0.0, dly + (tstart - self.env.now))
         if dly > 0:
             yield self.timeout(dly)
-        with slave_ep.bus.request() as req:
+        with slave_ep.write_channel.request() as req:
             yield req
             if slave_ep.rx_write_proc is not None:
                 yield self.env.process(slave_ep.rx_write_proc(words, addr))
@@ -1236,7 +1393,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         if req_dly > 0:
             yield self.timeout(req_dly)
 
-        with slave_ep.bus.request() as req:
+        with slave_ep.read_channel.request() as req:
             yield req
             if slave_ep.rx_read_proc is not None:
                 proc = self.env.process(slave_ep.rx_read_proc(nwords, addr))
