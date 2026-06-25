@@ -37,6 +37,7 @@ build_lab_autograder = "waveflow.scripts.build_lab_autograder:main"
 waveflow_mcp_setup = "waveflow.scripts.waveflow_mcp_setup:main"
 waveflow_mcp_server = "waveflow.mcp.server:main"
 build_corpus = "waveflow.mcp.build_corpus:main"
+clean_examples = "waveflow.scripts.clean_examples:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]
