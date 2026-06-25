@@ -1,2 +1,0 @@
-set WF_FIR_X_DEPTH 256
-set WF_FIR_Y_DEPTH 228

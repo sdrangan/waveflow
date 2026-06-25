@@ -1,12 +1,12 @@
 """fir_golden.py — the ONE bit-exact FIR golden, shared by every FIR artifact.
 
-Both the matrix-LT accelerator (``examples/rowwise_fir/fir.py``) and the Phase-1
-synthesizable sandbox (``examples/rowwise_fir/sandbox/gen_data.py``) call this —
-there is a single FIR definition, never a re-implementation.
+Both the rowwise_fir accelerator (``examples/rowwise_fir/fir.py``) and the
+hand-written HLS sandbox (``examples/rowwise_fir/sandbox/``) use this — there is a
+single FIR definition, never a re-implementation.
 
 Real-valued *valid* FIR per matrix row, accumulated **left-to-right in t** in
-``float32`` — the exact order the hand-written kernel (`fir_compute_row`) uses —
-so the C-simulation compares bit-exactly (no tolerance):
+``float32`` — the exact order the hand-written kernel (the streaming shift-register
+``compute``) uses — so the C-simulation compares bit-exactly (no tolerance):
 
     Y[i, j] = sum_{t=0..T-1} h[t] * X[i, j + (T-1) - t],   j in [0, n_cols - T]
 """
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-#: FIR tap count (must match the kernel's compile-time ``T`` in fir_sandbox.hpp).
+#: FIR tap count (must match the kernel's compile-time ``T`` in fir_freerun_sandbox.hpp).
 T = 8
 
 
