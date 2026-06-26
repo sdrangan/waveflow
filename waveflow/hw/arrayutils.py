@@ -988,13 +988,21 @@ def _gen_slice_helpers(
     with the compile-time-constant ``LW`` (a multiply/shift, not a hardware divider), correct for
     any ``pf`` -- non-powers-of-two and ``pf == 0`` included.
 
+    For ``LW == 1`` (one element per ``WPU`` contiguous words -- the scalar ``pf == 1`` and the
+    wide-element ``pf == 0`` regimes) no group is ever partial, so both directions emit a flat,
+    fixed-trip affine loop that the HLS burst/dependence analyzer lowers to a **single fixed-length
+    burst**.  The ``LW > 1`` (vectorized, multiple lanes per word) regime keeps the group walk:
     ``write_array_slice`` read-modify-writes a **partial boundary group** (one whose word it shares
     with neighbor elements outside ``[i0, i1)``) so those neighbors are preserved; a fully-covered
-    group skips the read.  A statically-sized whole-array overload (range ``[0, N)``) deduces ``N``.
+    group skips the read.  (Emitting the RMW read unconditionally serialized the ``LW == 1`` write
+    to II=16 -- a same-bundle read-after-write the scheduler can't disprove -- and the group walk's
+    running pointer + variable trip yielded only variable-length / missed read bursts.)
+    A statically-sized whole-array overload (range ``[0, N)``) deduces ``N``.
     """
     indent = elem_type._get_indent(indent_level)
     i1 = elem_type._get_indent(indent_level + 1)
     i2 = elem_type._get_indent(indent_level + 2)
+    i3 = elem_type._get_indent(indent_level + 3)
 
     return "\n".join([
         "// --- range methods (Phase 1b): element-indexed [i0, i1) over memory, on the lane methods ---",
@@ -1003,12 +1011,18 @@ def _gen_slice_helpers(
         "// word pointer (advance WPU = get_nwords<W>(LW) per group) + a per-group lane index -- no",
         "// per-element divide. Element coordinates throughout: the caller never computes i0/PF.",
         "",
-        "template<int word_bw>",
-        f"{indent}inline void read_array_slice(const ap_uint<word_bw>* words, int i0, int i1, value_type* out) {{",
+        "// Regime tag: lane_capacity<W>() selects the slice form by overload resolution (the",
+        "// word_bw_tag idiom, keyed on LW) -- no if constexpr. slice_lane_tag<1> (scalar pf==1 or",
+        "// wide-element pf==0: one element per WPU contiguous words) takes the flat fixed-trip affine",
+        "// path the burst analyzer lowers to a single fixed-length burst; the generic",
+        "// slice_lane_tag<lw> (vectorized, lw lanes per word) keeps the group walk.",
+        "template<int lw>",
+        f"{indent}struct slice_lane_tag {{}};",
+        "",
+        "// read, generic (LW > 1): group walk with per-group lane copy.",
+        "template<int word_bw, int lw>",
+        f"{indent}inline void read_array_slice_dispatch(slice_lane_tag<lw>, const ap_uint<word_bw>* words, int i0, int i1, value_type* out) {{",
         f"{i1}#pragma HLS INLINE",
-        f"{i1}if (words == nullptr || out == nullptr || i1 <= i0) {{",
-        f"{i2}return;",
-        f"{i1}}}",
         f"{i1}constexpr int LW = lane_capacity<word_bw>();",
         f"{i1}constexpr int WPU = get_nwords<word_bw>(LW);",
         f"{i1}const int q0 = i0 / LW;                          // first group (LW is compile-time)",
@@ -1020,18 +1034,44 @@ def _gen_slice_helpers(
         f"{i2}value_type lane[LW];",
         f"{i2}read_array_lane<word_bw>(wp, lane, LW);",
         f"{i2}for (int l = lstart; l < lend; ++l) {{",
-        f"{i2}    out[o++] = lane[l];",
+        f"{i3}out[o++] = lane[l];",
         f"{i2}}}",
         f"{i2}wp += WPU;",
         f"{i1}}}",
         f"{indent}}}",
         "",
+        "// read, scalar (LW == 1): flat fixed-trip affine burst (one element per WPU contiguous words).",
         "template<int word_bw>",
-        f"{indent}inline void write_array_slice(const value_type* in, ap_uint<word_bw>* words, int i0, int i1) {{",
+        f"{indent}inline void read_array_slice_dispatch(slice_lane_tag<1>, const ap_uint<word_bw>* words, int i0, int i1, value_type* out) {{",
         f"{i1}#pragma HLS INLINE",
-        f"{i1}if (words == nullptr || in == nullptr || i1 <= i0) {{",
+        f"{i1}constexpr int WPU = get_nwords<word_bw>(1);",
+        f"{i1}const ap_uint<word_bw>* wp = words + i0 * WPU;",
+        f"{i1}const int n = i1 - i0;",
+        f"{i1}for (int e = 0; e < n; ++e) {{",
+        f"{i2}#pragma HLS PIPELINE II=1",
+        f"{i2}read_array_lane<word_bw>(wp + e * WPU, out + e, 1);",
+        f"{i1}}}",
+        f"{indent}}}",
+        "",
+        "template<int word_bw>",
+        f"{indent}inline void read_array_slice(const ap_uint<word_bw>* words, int i0, int i1, value_type* out) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}if (words == nullptr || out == nullptr || i1 <= i0) {{",
         f"{i2}return;",
         f"{i1}}}",
+        f"{i1}read_array_slice_dispatch(slice_lane_tag<lane_capacity<word_bw>()>{{}}, words, i0, i1, out);",
+        f"{indent}}}",
+        "",
+        # TODO(boundary-peel, future): the LW>1 write keeps a conditional (boundary-only) RMW read
+        # statically in the hot loop. It pipelines at II=1 for aligned writes TODAY, but that relies
+        # on the optimizer eliding the dead read mid-iteration -- fragile (LW==1 proved a static-but-
+        # dead read can flip to II=16). Principled fix: peel the <=2 partial head/tail words out and
+        # make the middle an unconditional pure-write burst -> structural II=1. Do this (and add an
+        # unaligned LW>1 case to test_arrayutils_slice_ii_vitis) when a real LW>1 kernel uses it.
+        "// write, generic (LW > 1): group walk; a partial boundary group is read-modify-written.",
+        "template<int word_bw, int lw>",
+        f"{indent}inline void write_array_slice_dispatch(slice_lane_tag<lw>, const value_type* in, ap_uint<word_bw>* words, int i0, int i1) {{",
+        f"{i1}#pragma HLS INLINE",
         f"{i1}constexpr int LW = lane_capacity<word_bw>();",
         f"{i1}constexpr int WPU = get_nwords<word_bw>(LW);",
         f"{i1}const int q0 = i0 / LW;",
@@ -1044,14 +1084,37 @@ def _gen_slice_helpers(
         f"{i2}// Partial boundary group shares its word with neighbors outside [i0, i1):",
         f"{i2}// read-modify-write to preserve them. A fully-covered group skips the read.",
         f"{i2}if (lstart != 0 || lend != LW) {{",
-        f"{i2}    read_array_lane<word_bw>(wp, lane, LW);",
+        f"{i3}read_array_lane<word_bw>(wp, lane, LW);",
         f"{i2}}}",
         f"{i2}for (int l = lstart; l < lend; ++l) {{",
-        f"{i2}    lane[l] = in[o++];",
+        f"{i3}lane[l] = in[o++];",
         f"{i2}}}",
         f"{i2}write_array_lane<word_bw>(lane, wp, LW);",
         f"{i2}wp += WPU;",
         f"{i1}}}",
+        f"{indent}}}",
+        "",
+        "// write, scalar (LW == 1): pure-write flat affine burst -- no RMW read on the gmem bundle",
+        "// (the unconditional RMW read is what forced the write to II=16).",
+        "template<int word_bw>",
+        f"{indent}inline void write_array_slice_dispatch(slice_lane_tag<1>, const value_type* in, ap_uint<word_bw>* words, int i0, int i1) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}constexpr int WPU = get_nwords<word_bw>(1);",
+        f"{i1}ap_uint<word_bw>* wp = words + i0 * WPU;",
+        f"{i1}const int n = i1 - i0;",
+        f"{i1}for (int e = 0; e < n; ++e) {{",
+        f"{i2}#pragma HLS PIPELINE II=1",
+        f"{i2}write_array_lane<word_bw>(in + e, wp + e * WPU, 1);",
+        f"{i1}}}",
+        f"{indent}}}",
+        "",
+        "template<int word_bw>",
+        f"{indent}inline void write_array_slice(const value_type* in, ap_uint<word_bw>* words, int i0, int i1) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}if (words == nullptr || in == nullptr || i1 <= i0) {{",
+        f"{i2}return;",
+        f"{i1}}}",
+        f"{i1}write_array_slice_dispatch(slice_lane_tag<lane_capacity<word_bw>()>{{}}, in, words, i0, i1);",
         f"{indent}}}",
         "",
         "// Whole-array overloads (range [0, N)); N is deduced from the statically-sized buffer.",
