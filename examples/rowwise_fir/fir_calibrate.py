@@ -1,29 +1,29 @@
-"""fir_calibrate.py — real per-stage cosim calibration of the matrix-LT FIR timing.
+"""fir_calibrate.py — occupancy-based, near-fit-free cycle model from the cosim sweep (Stage B).
 
-Steps 4-5 of plans/load_compute_store.md.  Measures the per-stage bus-visible spans
-from RTL cosim over a grid, fits the bilinear timing model with scikit-learn (NO
-seeding), validates an INTERIOR held-out point, and validates the back-to-back
-throughput claim against cosim.
+Replaces the retired matrix-LT calibration.  The free-running kernel's timing is **composed from
+physical, deterministic components**, not fitted end-to-end (the matrix-LT philosophy,
+``project-matrix-lt-fir-build``; and the empirical finding that span-based end-to-end fits are
+contaminated by stalls + interleaved beats — measure *occupancy*, not span):
 
-Endpoints are pinned identically to the sim (the guardrail): every span is measured
-from the VCD m_axi bursts and anchored at the X-read start, exactly as the sim anchors
-at ``load_begin``:
-  * X-read span  = [first read burst, last read burst]   <-> sim load_begin..load_end
-  * Y-write span = [first write burst, last write burst]  <-> sim store_begin..store_end
-  * t_fill       = (Y-write start) - (X-read start)        <-> sim store_begin offset
+  * **bus occupancy = transfer beats == nwords** — asserted exact across the sweep (the load moves
+    ``read_words`` beats, the store ``write_words``).  Zero fit.
+  * **compute II=1** — ``n_rows*n_cols`` input samples.  Zero fit (``compute_beat_cyc = 1``).
+  * the load + store **serialize on the one ``gmem`` bundle in practice** (VCD: <10% burst
+    overlap), so per job the bus moves ``read_words + write_words`` beats — a structural
+    composition, not a fit.  (NB the bundle itself is full-duplex — ``sandbox/duplex_toy`` shows
+    read+write cosim ≈ max for both one process and two DATAFLOW processes — so this is the FIR's
+    dataflow-dynamics serialization, ~2× throughput headroom, not a bus limit.)
 
-Fitted (each via sklearn LinearRegression on [n_row, n_col, trips], intercept=L0):
-  * t_load  ~ L0 + Lrow*n_row + Lcol*n_col + II*trips   (the X-read span)
-  * t_store ~ ...                                        (the Y-write span)
-  * t_fill  ~ ...                                        (first-Y-row latency; ~const in n_row)
-with trips = n_row*(n_col - T + 1).
+The **single calibrated residual** is ``beta`` — the m_axi sustained cyc/beat (the Vitis
+random-stall efficiency) — fit from ``period`` vs ``occupancy`` (slope = ``beta``, intercept =
+``bus_job_cyc``, the per-job address/command setup).  ``pipe_fill_cyc`` (the command stream-in +
+DATAFLOW fill/drain lead-in) is then set from the single-job-latency residual.  The end-to-end
+period/latency are **emergent** (the sim composes the components over the shared bus) and are
+*validated*, not fitted target-by-target — incl. a held-out size point.
 
-Usage (project venv; Vitis 2025.1 for --measure)::
+Usage (project venv; reads results/cosim_sweep.json from fir_sweep.py --sweep)::
 
-    # 1. cosim the grid (slow) -> results/cosim_grid.json
-    PYTHONPATH=. ../pysilicon-venv/Scripts/python.exe examples/rowwise_fir/fir_calibrate.py --measure
-    # 2. fit + validate (fast) -> results/fir_calibration.json
-    PYTHONPATH=. ../pysilicon-venv/Scripts/python.exe examples/rowwise_fir/fir_calibrate.py --fit
+    PYTHONPATH=../../.. ../../../pysilicon-venv/Scripts/python.exe fir_calibrate.py
 """
 from __future__ import annotations
 
@@ -37,222 +37,135 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
 
-from waveflow.toolchain import toolchain  # noqa: E402
-from waveflow.calib import CalibDataFrame, InterpCalibModel  # noqa: E402
-from examples.rowwise_fir import fir_build  # noqa: E402
-from examples.rowwise_fir.fir_golden import T  # noqa: E402
+from examples.rowwise_fir.fir_golden import T   # noqa: E402
 
 RESULTS = HERE / "results"
-GRID_JSON = RESULTS / "cosim_grid.json"
+SWEEP_JSON = RESULTS / "cosim_sweep.json"
 CALIB_JSON = RESULTS / "fir_calibration.json"
 
-# >=3 n_row x in-range n_col.  Holdout is INTERIOR (in the convex hull of the grid).
-N_ROWS = [1, 2, 4, 8]
-N_COLS = [64, 256, 1024]
-HOLDOUT = (2, 256)            # interior held-out point (Gate 1: n_row interpolation)
+COMPUTE_BEAT_CYC = 1.0          # II=1: one input sample per cycle (physical, not fitted)
 
 
-def _burst_beats(b: dict) -> int:
-    return sum(1 for bt in b.get("beat_type", []) if bt == 0)
+def _occ(pt: dict) -> int:
+    j0 = pt["per_job"][0]
+    return j0["load_words"] + j0["store_words"]
 
 
-def measure_cosim(n_row: int, n_col: int) -> dict:
-    """Cosim the generated kernel (port trace) at (n_row,n_col); return the bus-visible
-    endpoints (ns) + clk period from the VCD m_axi bursts."""
-    from vcdvcd import VCDVCD
-    from waveflow.scripts.xsim_vcd import run_xsim_vcd
-    from waveflow.utils.vcd import VcdParser
-
-    fir_build.generate(n_row, n_col)
-    env = {"WAVEFLOW_ROWWISE_FIR_COSIM": "1", "WAVEFLOW_ROWWISE_FIR_TRACE_LEVEL": "port"}
-    res = toolchain.run_vitis_hls_result(fir_build.GEN_DIR / "run.tcl",
-                                         work_dir=fir_build.GEN_DIR, capture_output=True, env=env)
-    out = (res.get("stdout") or "") + (res.get("stderr") or "")
-    if "WAVEFLOW_SUCCESS" not in out:
-        raise RuntimeError(f"cosim failed at ({n_row},{n_col}):\n" + out[-1500:])
-
-    vcd_path = run_xsim_vcd(top="fir", comp="fir_gen_proj", out="dump.vcd",
-                            soln="solution1", trace_level="port", workdir=fir_build.GEN_DIR)
-    vcd = VCDVCD(str(vcd_path), signals=None, store_tvs=True)
-    vp = VcdParser(vcd)
-    clk = vp.add_clock_signal()
-    aximm_sigs, _ = vp.add_aximm_signals(prefix="m_axi_gmem_", dir="both",
-                                         lite_only=False, short_name_prefix="gmem_")
-    write_bursts, read_bursts, clk_period = vp.extract_aximm_bursts(clk_name=clk, aximm_sigs=aximm_sigs)
-
-    def span(bursts):
-        t0 = min(float(b.get("data_tstart", b["tstart"])) for b in bursts)
-        t1 = max(float(b["data_tend"]) for b in bursts)
-        return t0, t1, sum(_burst_beats(b) for b in bursts)
-
-    xr0, xr1, rwords = span(read_bursts)
-    yw0, yw1, wwords = span(write_bursts)
-    clk_ns = float(clk_period)
-    anchor = xr0
-    return {
-        "n_row": n_row, "n_col": n_col, "clk_ns": clk_ns,
-        "x_read_span_cyc": (xr1 - xr0) / clk_ns,
-        "y_write_span_cyc": (yw1 - yw0) / clk_ns,
-        "t_fill_cyc": (yw0 - anchor) / clk_ns,            # Y-write start offset
-        "whole_kernel_cyc": (yw1 - anchor) / clk_ns,
-        "read_words": rwords, "write_words": wwords,
-    }
+def assert_occupancy_deterministic(points: list[dict]) -> None:
+    """The component check: every transfer's beats == nwords (the deterministic occupancy)."""
+    for p in points:
+        j0 = p["per_job"][0]
+        if j0["load_words"] != p["read_words"] or j0["store_words"] != p["write_words"]:
+            raise AssertionError(
+                f"occupancy not deterministic at {p['n_row']}x{p['n_col']}: "
+                f"load {j0['load_words']} vs read {p['read_words']}, "
+                f"store {j0['store_words']} vs write {p['write_words']}")
 
 
-def run_grid() -> None:
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    points = []
-    grid = [(nr, nc) for nr in N_ROWS for nc in N_COLS]
-    for nr, nc in grid:
-        print(f"[cosim {nr}x{nc}] ...", flush=True)
-        p = measure_cosim(nr, nc)
-        points.append(p)
-        print(f"  x_read={p['x_read_span_cyc']:.0f} y_write={p['y_write_span_cyc']:.0f} "
-              f"t_fill={p['t_fill_cyc']:.0f} whole={p['whole_kernel_cyc']:.0f}", flush=True)
-        GRID_JSON.write_text(json.dumps({"points": points}, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {GRID_JSON}")
+def fit(points: list[dict], holdout: tuple[int, int]) -> dict:
+    """Fit ``beta`` + ``bus_job_cyc`` from period-vs-occupancy, then ``pipe_fill_cyc`` from the
+    single-job-latency residual.  Excludes the holdout from the fit."""
+    train = [p for p in points if (p["n_row"], p["n_col"]) != holdout]
+    occ = np.array([_occ(p) for p in train], dtype=float)
+    per = np.array([p["period_cyc"] for p in train], dtype=float)
+    beta, bus_job = np.linalg.lstsq(np.vstack([occ, np.ones_like(occ)]).T, per, rcond=None)[0]
+
+    # pipe_fill: mean( L1 - [read*beta + bus_job + n_rows*n_cols*compute_beat + write*beta] )
+    resid = []
+    for p in train:
+        rw = p["read_words"] * beta + bus_job + p["write_words"] * beta
+        comp = p["n_row"] * p["n_col"] * COMPUTE_BEAT_CYC
+        resid.append(p["single_job_latency_cyc"] - (rw + comp))
+    pipe_fill = float(np.mean(resid))
+    return {"bus_beat_cyc": round(float(beta), 4), "bus_job_cyc": round(float(bus_job), 2),
+            "compute_beat_cyc": COMPUTE_BEAT_CYC, "pipe_fill_cyc": round(pipe_fill, 2)}
 
 
-# --- physical, near-fit-free model (waveflow.calib) ----------------------------
-# Channel occupancy is DETERMINISTIC: each TRANSFER beat is one word, so a burst occupies its
-# channel for nwords + setup*num_trans cycles (slope 1, NOT fitted; see the sanity check).
-# Compute body is II=1: trips + (n_row-1)*row_depth(n_col).  The ONE calibrated term is
-# row_depth(n_col) — the per-row pipeline / 2-buffer ping-pong refill depth — a smooth SATURATING
-# 1-D InterpCalibModel lookup (not a sqrt fudge).  fill = (n_col+T) + row_depth(n_col) + fill_const
-# (one constant).  Master eq:
-#     whole = (n_col+T) + trips + n_row*row_depth(n_col) + fill_const
-#           == fill + max(write_occ, compute_body)
+# --- emergent validation (run the actual sim with the fitted params) -----------
 
-SETUP = 2.0  # per-burst address latency (deterministic occupancy; immaterial while compute-bound)
-
-
-def _trips(p):
-    return p["n_row"] * (p["n_col"] - T + 1)
-
-
-def _fit_row_depth(fit_pts) -> InterpCalibModel:
-    """row_depth(n_col), the per-row pipeline refill depth, measured from the INTER-ROW gaps:
-    ``row_depth = (y_write_span - trips) / (n_row - 1)`` (n_row>1).  Averaged per n_col by the
-    InterpCalibModel.  It saturates, so a few columns interpolate cleanly (cheap to densify)."""
-    db = CalibDataFrame(["n_col", "row_depth"])
-    for p in fit_pts:
-        if p["n_row"] > 1:
-            db.add_datapoint({"n_col": p["n_col"],
-                              "row_depth": (p["y_write_span_cyc"] - _trips(p)) / (p["n_row"] - 1)})
-    return InterpCalibModel(["n_col"], "row_depth").fit(db)
-
-
-def _fit_fill_const(fit_pts, row_depth) -> float:
-    """fill_const = mean(t_fill - (n_col+T) - row_depth(n_col)) — a single calibrated scalar."""
-    return float(np.mean([p["t_fill_cyc"] - (p["n_col"] + T) - row_depth.predict(p) for p in fit_pts]))
-
-
-def _compose(p, row_depth, fill_const) -> float:
-    """The whole-kernel exactly as the sim composes it: fill + max(write_occ, compute_body)."""
-    rd = row_depth.predict(p)
-    fill = (p["n_col"] + T) + rd + fill_const
-    compute_body = _trips(p) + (p["n_row"] - 1) * rd
-    write_occ = _trips(p) + SETUP * p["n_row"]
-    return fill + max(write_occ, compute_body)
-
-
-def fit_and_validate() -> dict:
-    grid = json.loads(GRID_JSON.read_text())["points"]
-    fit_pts = [p for p in grid if (p["n_row"], p["n_col"]) != HOLDOUT]
-    ncol_ho_path = RESULTS / "cosim_holdout_ncol.json"
-    ncol_ho = json.loads(ncol_ho_path.read_text())["points"] if ncol_ho_path.exists() else []
-
-    row_depth = _fit_row_depth(fit_pts)
-    fill_const = _fit_fill_const(fit_pts, row_depth)
-
-    def whole_resid(p):
-        pred = _compose(p, row_depth, fill_const)
-        a = p["whole_kernel_cyc"]
-        return {"pred": round(pred, 1), "actual": round(a, 1),
-                "rel_err": round(abs(pred - a) / a, 4) if a else None}
-
-    ho = next(p for p in grid if (p["n_row"], p["n_col"]) == HOLDOUT)
-    calib = {
-        "model": "PHYSICAL near-fit-free: channel occupancy deterministic (beats==nwords); "
-                 "compute II=1 (trips + (n_row-1)*row_depth); row_depth(n_col) = calibrated "
-                 "saturating lookup (the per-row ping-pong refill depth); "
-                 "whole = (n_col+T) + trips + n_row*row_depth(n_col) + fill_const",
-        "T": T, "clk_ns": grid[0]["clk_ns"], "setup": SETUP,
-        "fit_grid": [[p["n_row"], p["n_col"]] for p in fit_pts],
-        "models": {"row_depth": row_depth.samples, "fill_const": round(fill_const, 4), "setup": SETUP},
-        "in_grid_reconstruction_max_rel_err":
-            round(max(abs(_compose(p, row_depth, fill_const) - p["whole_kernel_cyc"]) / p["whole_kernel_cyc"]
-                      for p in grid), 4),
-        "holdout_interior": {"point": list(HOLDOUT),
-                             "note": "n_row=2 held out from the fit; row_depth(256) trained from (4,256),(8,256)",
-                             "whole_kernel": whole_resid(ho)},
-        "holdout_ncol": [{"point": [p["n_row"], p["n_col"]],
-                          "note": "UNTRAINED n_col (row_depth interpolated — the honest generalization test)",
-                          "whole_kernel": whole_resid(p)} for p in ncol_ho],
-    }
-    CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"row_depth_samples": calib["models"]["row_depth"],
-                      "fill_const": calib["models"]["fill_const"],
-                      "in_grid_max_rel_err": calib["in_grid_reconstruction_max_rel_err"],
-                      "holdout_interior_whole": calib["holdout_interior"]["whole_kernel"],
-                      "holdout_ncol_whole": [h["whole_kernel"] for h in calib["holdout_ncol"]]}, indent=2))
-    print(f"wrote {CALIB_JSON}")
-    return calib
-
-
-CLK_NS = 10.0
-
-
-def _sim_events(specs):
-    """Run the block-fidelity sim (loading the just-written calibration) and return events."""
-    from examples.rowwise_fir.fir_sim import FIRSim, make_specs  # imports FIRTiming.from_calibration
-    sim = FIRSim(make_specs(specs))
+def _sim_period(nr: int, nc: int, n_jobs: int = 4) -> float:
+    """Steady per-job period from the sim: a mid (fully-contended) inter-job store-end spacing
+    (NOT the final spacing, which is the pipeline drain)."""
+    from examples.rowwise_fir.fir_sim import FIRSim, make_specs
+    sim = FIRSim(make_specs([(nr, nc)] * n_jobs, seed=0))
     sim.run()
-    return sim.accel.events
+    se = [next(e["cyc"] for e in sim.accel.events if e["event"] == "store_end" and e["tx_id"] == t)
+          for t in range(n_jobs)]
+    sp = [se[i + 1] - se[i] for i in range(n_jobs - 1)]
+    return sp[len(sp) // 2 - 1]
 
 
-def _sim_whole_kernel(spec) -> float:
-    """Run the ACTUAL sim for one matrix and return its bus-visible whole-kernel (cycles):
-    store_end − cmd_arrive (== Y-write end − X-read start)."""
-    ev = {e["event"]: e["t"] for e in _sim_events([spec]) if e["tx_id"] == 0}
-    return (ev["store_end"] - ev["cmd_arrive"]) / (CLK_NS * 1e-9)
+def _sim_latency(nr: int, nc: int) -> float:
+    """Single-job latency from the sim: store_end − cmd_arrive (no inter-job store contention)."""
+    from examples.rowwise_fir.fir_sim import FIRSim, make_specs
+    sim = FIRSim(make_specs([(nr, nc)], seed=0))
+    sim.run()
+
+    def c(name: str) -> float:
+        return next(e["cyc"] for e in sim.accel.events if e["event"] == name and e["tx_id"] == 0)
+
+    return c("store_end") - c("cmd_arrive")
 
 
-def validate(calib: dict) -> dict:
-    """The gates — sim (loading the calibration) vs cosim, on the **actual** simulation.
-
-    Gate 1: single-command whole-kernel at the interior holdout (2,256) — n_row held out,
-    row_depth(256) trained.  Gate 2: whole-kernel at the UNTRAINED n_col points (row_depth
-    interpolated)."""
-    grid = {(p["n_row"], p["n_col"]): p for p in json.loads(GRID_JSON.read_text())["points"]}
-    ncol_ho_path = RESULTS / "cosim_holdout_ncol.json"
-    ncol_ho = json.loads(ncol_ho_path.read_text())["points"] if ncol_ho_path.exists() else []
-
-    def gate(nr, nc, cosim_whole, note):
-        sim_whole = _sim_whole_kernel((nr, nc))
-        return {"point": [nr, nc], "note": note,
-                "sim_whole_cyc": round(sim_whole, 1), "cosim_whole_cyc": round(cosim_whole, 1),
-                "rel_err": round(abs(sim_whole - cosim_whole) / cosim_whole, 4) if cosim_whole else None}
-
-    gate1 = gate(*HOLDOUT, grid[HOLDOUT]["whole_kernel_cyc"],
-                 "interior holdout (n_row=2; row_depth(256) trained)")
-    gate2 = [gate(p["n_row"], p["n_col"], p["whole_kernel_cyc"],
-                  "untrained n_col (row_depth interpolated)") for p in ncol_ho]
-    return {"gate1_single_command": gate1, "gate2_untrained_ncol": gate2}
+def validate(points: list[dict], holdout: tuple[int, int]) -> dict:
+    """Gate B — the **emergent** sim (with the fitted params just written) vs the cosim sweep,
+    per size, including the held-out point.  No extra Vitis."""
+    rows = []
+    for p in points:
+        nr, nc = p["n_row"], p["n_col"]
+        sp, sl = _sim_period(nr, nc), _sim_latency(nr, nc)
+        rec = {"point": [nr, nc], "held_out": (nr, nc) == holdout,
+               "occupancy": _occ(p),
+               "period": {"sim": round(sp, 1), "cosim": p["period_cyc"],
+                          "rel_err": round(abs(sp - p["period_cyc"]) / p["period_cyc"], 4)},
+               "latency": {"sim": round(sl, 1), "cosim": p["single_job_latency_cyc"],
+                           "rel_err": round(abs(sl - p["single_job_latency_cyc"])
+                                            / p["single_job_latency_cyc"], 4)}}
+        rows.append(rec)
+    amortized = [r for r in rows if r["occupancy"] >= 128]   # the throughput regime
+    ho = next(r for r in rows if r["held_out"])
+    return {"per_point": rows, "holdout": ho,
+            "worst_period_rel_err": round(max(r["period"]["rel_err"] for r in rows), 4),
+            "worst_latency_rel_err": round(max(r["latency"]["rel_err"] for r in rows), 4),
+            "worst_period_rel_err_amortized": round(max(r["period"]["rel_err"] for r in amortized), 4),
+            "worst_latency_rel_err_amortized": round(max(r["latency"]["rel_err"] for r in amortized), 4)}
 
 
 def main() -> None:
-    if "--measure" in sys.argv:
-        run_grid()
-    if "--fit" in sys.argv:
-        calib = fit_and_validate()
-        val = validate(calib)
-        calib["validation"] = val
-        CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
-        print("\n=== VALIDATION (sim with fitted calibration vs cosim) ===")
-        print(json.dumps(val, indent=2))
-    if "--measure" not in sys.argv and "--fit" not in sys.argv:
-        print("usage: fir_calibrate.py [--measure] [--fit]")
+    data = json.loads(SWEEP_JSON.read_text(encoding="utf-8"))
+    points = data["points"]
+    holdout = tuple(data["holdout"])
+    assert_occupancy_deterministic(points)
+    print("occupancy deterministic (beats == nwords): OK for all "
+          f"{len(points)} points")
+
+    params = fit(points, holdout)
+    print(f"fitted: {params}")
+
+    calib = {
+        "model": "occupancy-based, near-fit-free: bus occupancy = beats == nwords (exact); "
+                 "compute II=1 (exact); FIR serializes load+store on the shared gmem bundle "
+                 "(VCD <10% overlap; bundle is full-duplex per duplex_toy -> ~2x headroom), so "
+                 "read+write occupancy ADD; single residual beta = m_axi sustained cyc/beat "
+                 "(period vs occupancy); end-to-end period/latency EMERGENT, validated not fitted.",
+        "T": T, "clk_ns": data["points"][0]["clk_ns"], "njobs": data["njobs"],
+        "holdout": list(holdout), "model_params": params,
+        "occupancy_deterministic": True,
+    }
+    # write params first so the sim (FIRTiming.from_calibration) picks them up for validation
+    CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
+    calib["validation"] = validate(points, holdout)
+    CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
+
+    v = calib["validation"]
+    print("\n=== Gate B (emergent sim with fitted params vs cosim) ===")
+    print(f"worst period   rel_err: all {v['worst_period_rel_err']*100:.1f}%  "
+          f"amortized {v['worst_period_rel_err_amortized']*100:.1f}%")
+    print(f"worst latency  rel_err: all {v['worst_latency_rel_err']*100:.1f}%  "
+          f"amortized {v['worst_latency_rel_err_amortized']*100:.1f}%")
+    print(f"holdout {v['holdout']['point']}: period {v['holdout']['period']}, "
+          f"latency {v['holdout']['latency']}")
+    print(f"\nwrote {CALIB_JSON}")
 
 
 if __name__ == "__main__":
