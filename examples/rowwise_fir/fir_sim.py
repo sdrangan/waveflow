@@ -126,9 +126,12 @@ class FIRSim:
         self.host = FIRHost(name="host", sim=self.sim, accel=self.accel,
                             data_base=data_base, specs=self.specs)
 
-        # Data path: host + accelerator masters over the crossbar to the shared memory.
+        # Data path: host + accelerator masters over the crossbar to the shared memory.  The
+        # interconnect/memory latencies are 0 so the per-stage timeouts in FIRTiming (calibrated
+        # to the freerun cosim) are the SOLE timing source — the functional read/write_slice in the
+        # stages are instantaneous; the streaming period + fill live entirely in the cycle model.
         self.xbar = AXIMMCrossBarIF(sim=self.sim, clk=self.clk, nports_master=2, nports_slave=1,
-                                    bitwidth=32, latency_init=2.0, latency_read_return=2.0)
+                                    bitwidth=32, latency_init=0.0, latency_read_return=0.0)
         self.xbar.bind("master_0", self.host.master)
         self.xbar.bind("master_1", self.accel.m_mem)
         self.xbar.bind("slave_0", self.mem.s_mm)

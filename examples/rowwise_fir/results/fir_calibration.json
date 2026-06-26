@@ -1,142 +1,241 @@
 {
-  "model": "PHYSICAL near-fit-free: channel occupancy deterministic (beats==nwords); compute II=1 (trips + (n_row-1)*row_depth); row_depth(n_col) = calibrated saturating lookup (the per-row ping-pong refill depth); whole = (n_col+T) + trips + n_row*row_depth(n_col) + fill_const",
+  "model": "occupancy-based, near-fit-free: bus occupancy = beats == nwords (exact); compute II=1 (exact); FIR serializes load+store on the shared gmem bundle (VCD <10% overlap; bundle is full-duplex per duplex_toy -> ~2x headroom), so read+write occupancy ADD; single residual beta = m_axi sustained cyc/beat (period vs occupancy); end-to-end period/latency EMERGENT, validated not fitted.",
   "T": 8,
   "clk_ns": 10.0,
-  "setup": 2.0,
-  "fit_grid": [
-    [
-      1,
-      64
-    ],
-    [
-      1,
-      256
-    ],
-    [
-      1,
-      1024
-    ],
-    [
-      2,
-      64
-    ],
-    [
-      2,
-      1024
-    ],
-    [
-      4,
-      64
-    ],
-    [
-      4,
-      256
-    ],
-    [
-      4,
-      1024
-    ],
-    [
-      8,
-      64
-    ],
-    [
-      8,
-      256
-    ],
-    [
-      8,
-      1024
-    ]
+  "njobs": 3,
+  "holdout": [
+    2,
+    96
   ],
-  "models": {
-    "row_depth": {
-      "feature": "n_col",
-      "x": [
-        64.0,
-        256.0,
-        1024.0
-      ],
-      "y": [
-        69.50793650793652,
-        260.33333333333337,
-        268.50793650793656
-      ]
-    },
-    "fill_const": 58.8124,
-    "setup": 2.0
+  "model_params": {
+    "bus_beat_cyc": 1.4373,
+    "bus_job_cyc": 20.28,
+    "compute_beat_cyc": 1.0,
+    "pipe_fill_cyc": 88.5
   },
-  "in_grid_reconstruction_max_rel_err": 0.013,
-  "holdout_interior": {
-    "point": [
-      2,
-      256
-    ],
-    "note": "n_row=2 held out from the fit; row_depth(256) trained from (4,256),(8,256)",
-    "whole_kernel": {
-      "pred": 1341.5,
-      "actual": 1343.0,
-      "rel_err": 0.0011
-    }
-  },
-  "holdout_ncol": [
-    {
-      "point": [
-        4,
-        128
-      ],
-      "note": "UNTRAINED n_col (row_depth interpolated \u2014 the honest generalization test)",
-      "whole_kernel": {
-        "pred": 1211.3,
-        "actual": 1213.0,
-        "rel_err": 0.0014
-      }
-    },
-    {
-      "point": [
-        4,
-        512
-      ],
-      "note": "UNTRAINED n_col (row_depth interpolated \u2014 the honest generalization test)",
-      "whole_kernel": {
-        "pred": 3651.0,
-        "actual": 3673.0,
-        "rel_err": 0.006
-      }
-    }
-  ],
+  "occupancy_deterministic": true,
   "validation": {
-    "gate1_single_command": {
-      "point": [
-        2,
-        256
-      ],
-      "note": "interior holdout (n_row=2; row_depth(256) trained)",
-      "sim_whole_cyc": 1341.5,
-      "cosim_whole_cyc": 1343.0,
-      "rel_err": 0.0011
-    },
-    "gate2_untrained_ncol": [
+    "per_point": [
+      {
+        "point": [
+          1,
+          16
+        ],
+        "held_out": false,
+        "occupancy": 33,
+        "period": {
+          "sim": 67.7,
+          "cosim": 95.0,
+          "rel_err": 0.2873
+        },
+        "latency": {
+          "sim": 172.2,
+          "cosim": 193.5,
+          "rel_err": 0.11
+        }
+      },
+      {
+        "point": [
+          1,
+          32
+        ],
+        "held_out": false,
+        "occupancy": 65,
+        "period": {
+          "sim": 113.7,
+          "cosim": 127.0,
+          "rel_err": 0.1047
+        },
+        "latency": {
+          "sim": 234.2,
+          "cosim": 257.5,
+          "rel_err": 0.0905
+        }
+      },
+      {
+        "point": [
+          1,
+          64
+        ],
+        "held_out": false,
+        "occupancy": 129,
+        "period": {
+          "sim": 205.7,
+          "cosim": 191.0,
+          "rel_err": 0.0769
+        },
+        "latency": {
+          "sim": 358.2,
+          "cosim": 385.5,
+          "rel_err": 0.0708
+        }
+      },
+      {
+        "point": [
+          1,
+          128
+        ],
+        "held_out": false,
+        "occupancy": 257,
+        "period": {
+          "sim": 389.7,
+          "cosim": 383.0,
+          "rel_err": 0.0174
+        },
+        "latency": {
+          "sim": 606.2,
+          "cosim": 641.5,
+          "rel_err": 0.0551
+        }
+      },
+      {
+        "point": [
+          1,
+          256
+        ],
+        "held_out": false,
+        "occupancy": 513,
+        "period": {
+          "sim": 757.6,
+          "cosim": 766.0,
+          "rel_err": 0.0109
+        },
+        "latency": {
+          "sim": 1102.1,
+          "cosim": 1153.5,
+          "rel_err": 0.0445
+        }
+      },
+      {
+        "point": [
+          4,
+          16
+        ],
+        "held_out": false,
+        "occupancy": 108,
+        "period": {
+          "sim": 175.5,
+          "cosim": 191.0,
+          "rel_err": 0.0811
+        },
+        "latency": {
+          "sim": 328.0,
+          "cosim": 343.5,
+          "rel_err": 0.0451
+        }
+      },
+      {
+        "point": [
+          4,
+          32
+        ],
+        "held_out": false,
+        "occupancy": 236,
+        "period": {
+          "sim": 359.5,
+          "cosim": 320.0,
+          "rel_err": 0.1234
+        },
+        "latency": {
+          "sim": 576.0,
+          "cosim": 599.5,
+          "rel_err": 0.0392
+        }
+      },
+      {
+        "point": [
+          4,
+          64
+        ],
+        "held_out": false,
+        "occupancy": 492,
+        "period": {
+          "sim": 727.4,
+          "cosim": 704.0,
+          "rel_err": 0.0333
+        },
+        "latency": {
+          "sim": 1071.9,
+          "cosim": 1111.5,
+          "rel_err": 0.0356
+        }
+      },
       {
         "point": [
           4,
           128
         ],
-        "note": "untrained n_col (row_depth interpolated)",
-        "sim_whole_cyc": 1211.3,
-        "cosim_whole_cyc": 1213.0,
-        "rel_err": 0.0014
+        "held_out": false,
+        "occupancy": 1004,
+        "period": {
+          "sim": 1463.3,
+          "cosim": 1486.0,
+          "rel_err": 0.0153
+        },
+        "latency": {
+          "sim": 2063.8,
+          "cosim": 2158.5,
+          "rel_err": 0.0439
+        }
       },
       {
         "point": [
           4,
-          512
+          256
         ],
-        "note": "untrained n_col (row_depth interpolated)",
-        "sim_whole_cyc": 3651.0,
-        "cosim_whole_cyc": 3673.0,
-        "rel_err": 0.006
+        "held_out": false,
+        "occupancy": 2028,
+        "period": {
+          "sim": 2935.1,
+          "cosim": 2932.0,
+          "rel_err": 0.0011
+        },
+        "latency": {
+          "sim": 4047.6,
+          "cosim": 3715.5,
+          "rel_err": 0.0894
+        }
+      },
+      {
+        "point": [
+          2,
+          96
+        ],
+        "held_out": true,
+        "occupancy": 378,
+        "period": {
+          "sim": 563.6,
+          "cosim": 499.0,
+          "rel_err": 0.1294
+        },
+        "latency": {
+          "sim": 844.1,
+          "cosim": 883.5,
+          "rel_err": 0.0446
+        }
       }
-    ]
+    ],
+    "holdout": {
+      "point": [
+        2,
+        96
+      ],
+      "held_out": true,
+      "occupancy": 378,
+      "period": {
+        "sim": 563.6,
+        "cosim": 499.0,
+        "rel_err": 0.1294
+      },
+      "latency": {
+        "sim": 844.1,
+        "cosim": 883.5,
+        "rel_err": 0.0446
+      }
+    },
+    "worst_period_rel_err": 0.2873,
+    "worst_latency_rel_err": 0.11,
+    "worst_period_rel_err_amortized": 0.1294,
+    "worst_latency_rel_err_amortized": 0.0894
   }
 }

@@ -6,11 +6,14 @@
 // bit-cast.  Y is compared BIT-EXACT to a C++ golden in the same left-to-right tap order.
 //
 // argv[1] scenario: single|two|three (N×4×64) | clean (varying) | error (per-job error +
-// restart).  Reproduces the sandbox gates against the generated kernel.
+// restart) | sweep:NROWS:NCOLS:NJOBS (Stage-B calibration: NJOBS identical jobs back-to-back so
+// one cosim yields both the single-job latency and the steady inter-job period via the VCD bursts).
+// Reproduces the sandbox gates against the generated kernel.
 #include "gen/fir.hpp"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -168,6 +171,25 @@ int main(int argc, char** argv) {
         auto resp2 = drain_resp(m_out);
         if (resp2.size() != 1 || resp2[0].second != 0) { std::fprintf(stderr, "  batch2 restart resp wrong\n"); ++fails; }
         std::printf("  [batch2/restart] %zu resp, OK\n", resp2.size());
+
+    } else if (scn.rfind("sweep:", 0) == 0) {
+        // sweep:NROWS:NCOLS:NJOBS — NJOBS identical jobs back-to-back (one batch, one ap_start).
+        int nr = 0, nc = 0, nj = 0;
+        if (std::sscanf(scn.c_str(), "sweep:%d:%d:%d", &nr, &nc, &nj) != 3 || nr < 1 || nc < T || nj < 1) {
+            std::fprintf(stderr, "bad sweep scenario '%s' (want sweep:NROWS:NCOLS:NJOBS)\n", scn.c_str());
+            return 2;
+        }
+        std::vector<Job> jobs;
+        for (int i = 0; i < nj; ++i) jobs.push_back(Job{nr, nc, (unsigned)(500 + i), false, 0, 0, 0});
+        layout_and_fill(jobs, gmem);
+        for (auto& j : jobs) push_cmd(s_in, j, FIROp::fir);
+        push_end(s_in);
+        fir(s_in, m_out, gmem.data());
+        for (auto& j : jobs) fails += check_Y(gmem, j, scn.c_str());
+        auto resp = drain_resp(m_out);
+        if ((int)resp.size() != nj) { std::fprintf(stderr, "  expected %d resp, got %zu\n", nj, resp.size()); ++fails; }
+        for (auto& rp : resp) if (rp.second != 0) { std::fprintf(stderr, "  tx=%u status=%u\n", rp.first, rp.second); ++fails; }
+        std::printf("  scenario 'sweep' %dx%d x%d job(s): %zu resp, all OK\n", nr, nc, nj, resp.size());
 
     } else {
         std::fprintf(stderr, "unknown scenario '%s'\n", scn.c_str());

@@ -1,0 +1,505 @@
+{
+  "njobs": 3,
+  "T": 8,
+  "holdout": [
+    2,
+    96
+  ],
+  "points": [
+    {
+      "n_row": 1,
+      "n_col": 16,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 9,
+      "read_words": 24,
+      "write_words": 9,
+      "total_cycles": 372,
+      "period_cyc": 95.0,
+      "load_period_cyc": 95.0,
+      "single_job_latency_cyc": 193.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 48.0,
+          "load_words": 24,
+          "store_start_ns": 1855.0,
+          "store_span_cyc": 8.0,
+          "store_words": 9,
+          "fill_cyc": 136.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 1445.0,
+          "load_span_cyc": 48.0,
+          "load_words": 24,
+          "store_start_ns": 2805.0,
+          "store_span_cyc": 8.0,
+          "store_words": 9,
+          "fill_cyc": 136.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 2395.0,
+          "load_span_cyc": 48.0,
+          "load_words": 24,
+          "store_start_ns": 3755.0,
+          "store_span_cyc": 8.0,
+          "store_words": 9,
+          "fill_cyc": 136.0
+        }
+      ]
+    },
+    {
+      "n_row": 1,
+      "n_col": 32,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 25,
+      "read_words": 40,
+      "write_words": 25,
+      "total_cycles": 500,
+      "period_cyc": 127.0,
+      "load_period_cyc": 127.0,
+      "single_job_latency_cyc": 257.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 64.0,
+          "load_words": 40,
+          "store_start_ns": 2335.0,
+          "store_span_cyc": 24.0,
+          "store_words": 25,
+          "fill_cyc": 184.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 1765.0,
+          "load_span_cyc": 64.0,
+          "load_words": 40,
+          "store_start_ns": 3605.0,
+          "store_span_cyc": 24.0,
+          "store_words": 25,
+          "fill_cyc": 184.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 3035.0,
+          "load_span_cyc": 64.0,
+          "load_words": 40,
+          "store_start_ns": 4875.0,
+          "store_span_cyc": 24.0,
+          "store_words": 25,
+          "fill_cyc": 184.0
+        }
+      ]
+    },
+    {
+      "n_row": 1,
+      "n_col": 64,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 57,
+      "read_words": 72,
+      "write_words": 57,
+      "total_cycles": 756,
+      "period_cyc": 191.0,
+      "load_period_cyc": 191.0,
+      "single_job_latency_cyc": 385.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 96.0,
+          "load_words": 72,
+          "store_start_ns": 3295.0,
+          "store_span_cyc": 56.0,
+          "store_words": 57,
+          "fill_cyc": 280.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 2405.0,
+          "load_span_cyc": 96.0,
+          "load_words": 72,
+          "store_start_ns": 5205.0,
+          "store_span_cyc": 56.0,
+          "store_words": 57,
+          "fill_cyc": 280.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 4315.0,
+          "load_span_cyc": 96.0,
+          "load_words": 72,
+          "store_start_ns": 7115.0,
+          "store_span_cyc": 56.0,
+          "store_words": 57,
+          "fill_cyc": 280.0
+        }
+      ]
+    },
+    {
+      "n_row": 1,
+      "n_col": 128,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 121,
+      "read_words": 136,
+      "write_words": 121,
+      "total_cycles": 1396,
+      "period_cyc": 383.0,
+      "load_period_cyc": 319.0,
+      "single_job_latency_cyc": 641.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 160.0,
+          "load_words": 136,
+          "store_start_ns": 5215.0,
+          "store_span_cyc": 120.0,
+          "store_words": 121,
+          "fill_cyc": 472.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 3685.0,
+          "load_span_cyc": 160.0,
+          "load_words": 136,
+          "store_start_ns": 9045.0,
+          "store_span_cyc": 120.0,
+          "store_words": 121,
+          "fill_cyc": 536.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 6875.0,
+          "load_span_cyc": 160.0,
+          "load_words": 136,
+          "store_start_ns": 12875.0,
+          "store_span_cyc": 120.0,
+          "store_words": 121,
+          "fill_cyc": 600.0
+        }
+      ]
+    },
+    {
+      "n_row": 1,
+      "n_col": 256,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 249,
+      "read_words": 264,
+      "write_words": 249,
+      "total_cycles": 2674,
+      "period_cyc": 766.0,
+      "load_period_cyc": 575.0,
+      "single_job_latency_cyc": 1153.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 288.0,
+          "load_words": 264,
+          "store_start_ns": 9055.0,
+          "store_span_cyc": 248.0,
+          "store_words": 249,
+          "fill_cyc": 856.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 6245.0,
+          "load_span_cyc": 288.0,
+          "load_words": 264,
+          "store_start_ns": 16705.0,
+          "store_span_cyc": 248.0,
+          "store_words": 249,
+          "fill_cyc": 1046.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 11995.0,
+          "load_span_cyc": 288.0,
+          "load_words": 264,
+          "store_start_ns": 24375.0,
+          "store_span_cyc": 248.0,
+          "store_words": 249,
+          "fill_cyc": 1238.0
+        }
+      ]
+    },
+    {
+      "n_row": 4,
+      "n_col": 16,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 36,
+      "read_words": 72,
+      "write_words": 36,
+      "total_cycles": 714,
+      "period_cyc": 191.0,
+      "load_period_cyc": 191.0,
+      "single_job_latency_cyc": 343.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 96.0,
+          "load_words": 72,
+          "store_start_ns": 3085.0,
+          "store_span_cyc": 35.0,
+          "store_words": 36,
+          "fill_cyc": 259.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 2405.0,
+          "load_span_cyc": 96.0,
+          "load_words": 72,
+          "store_start_ns": 4995.0,
+          "store_span_cyc": 35.0,
+          "store_words": 36,
+          "fill_cyc": 259.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 4315.0,
+          "load_span_cyc": 96.0,
+          "load_words": 72,
+          "store_start_ns": 6905.0,
+          "store_span_cyc": 35.0,
+          "store_words": 36,
+          "fill_cyc": 259.0
+        }
+      ]
+    },
+    {
+      "n_row": 4,
+      "n_col": 32,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 100,
+      "read_words": 136,
+      "write_words": 100,
+      "total_cycles": 1228,
+      "period_cyc": 320.0,
+      "load_period_cyc": 319.0,
+      "single_job_latency_cyc": 599.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 160.0,
+          "load_words": 136,
+          "store_start_ns": 5005.0,
+          "store_span_cyc": 99.0,
+          "store_words": 100,
+          "fill_cyc": 451.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 3685.0,
+          "load_span_cyc": 160.0,
+          "load_words": 136,
+          "store_start_ns": 8205.0,
+          "store_span_cyc": 99.0,
+          "store_words": 100,
+          "fill_cyc": 452.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 6875.0,
+          "load_span_cyc": 160.0,
+          "load_words": 136,
+          "store_start_ns": 11405.0,
+          "store_span_cyc": 99.0,
+          "store_words": 100,
+          "fill_cyc": 453.0
+        }
+      ]
+    },
+    {
+      "n_row": 4,
+      "n_col": 64,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 228,
+      "read_words": 264,
+      "write_words": 228,
+      "total_cycles": 2508,
+      "period_cyc": 704.0,
+      "load_period_cyc": 575.0,
+      "single_job_latency_cyc": 1111.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 288.0,
+          "load_words": 264,
+          "store_start_ns": 8845.0,
+          "store_span_cyc": 227.0,
+          "store_words": 228,
+          "fill_cyc": 835.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 6245.0,
+          "load_span_cyc": 288.0,
+          "load_words": 264,
+          "store_start_ns": 15885.0,
+          "store_span_cyc": 227.0,
+          "store_words": 228,
+          "fill_cyc": 964.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 11995.0,
+          "load_span_cyc": 288.0,
+          "load_words": 264,
+          "store_start_ns": 22925.0,
+          "store_span_cyc": 227.0,
+          "store_words": 228,
+          "fill_cyc": 1093.0
+        }
+      ]
+    },
+    {
+      "n_row": 4,
+      "n_col": 128,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 484,
+      "read_words": 520,
+      "write_words": 484,
+      "total_cycles": 5119,
+      "period_cyc": 1486.0,
+      "load_period_cyc": 1103.0,
+      "single_job_latency_cyc": 2158.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 816.0,
+          "load_words": 520,
+          "store_start_ns": 12055.0,
+          "store_span_cyc": 953.0,
+          "store_words": 484,
+          "fill_cyc": 1156.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 11525.0,
+          "load_span_cyc": 816.0,
+          "load_words": 520,
+          "store_start_ns": 26915.0,
+          "store_span_cyc": 953.0,
+          "store_words": 484,
+          "fill_cyc": 1539.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 22555.0,
+          "load_span_cyc": 816.0,
+          "load_words": 520,
+          "store_start_ns": 41775.0,
+          "store_span_cyc": 953.0,
+          "store_words": 484,
+          "fill_cyc": 1922.0
+        }
+      ]
+    },
+    {
+      "n_row": 4,
+      "n_col": 256,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 996,
+      "read_words": 1032,
+      "write_words": 996,
+      "total_cycles": 9760,
+      "period_cyc": 2932.0,
+      "load_period_cyc": 2159.0,
+      "single_job_latency_cyc": 3715.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 1872.0,
+          "load_words": 1032,
+          "store_start_ns": 11985.0,
+          "store_span_cyc": 2517.0,
+          "store_words": 996,
+          "fill_cyc": 1149.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 22085.0,
+          "load_span_cyc": 1872.0,
+          "load_words": 1032,
+          "store_start_ns": 40045.0,
+          "store_span_cyc": 2749.0,
+          "store_words": 996,
+          "fill_cyc": 1796.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 43675.0,
+          "load_span_cyc": 1872.0,
+          "load_words": 1032,
+          "store_start_ns": 70625.0,
+          "store_span_cyc": 2709.0,
+          "store_words": 996,
+          "fill_cyc": 2695.0
+        }
+      ]
+    },
+    {
+      "n_row": 2,
+      "n_col": 96,
+      "n_jobs": 3,
+      "clk_ns": 10.0,
+      "trips": 178,
+      "read_words": 200,
+      "write_words": 178,
+      "total_cycles": 1912,
+      "period_cyc": 499.0,
+      "load_period_cyc": 447.0,
+      "single_job_latency_cyc": 883.5,
+      "per_job": [
+        {
+          "job": 0,
+          "load_start_ns": 495.0,
+          "load_span_cyc": 224.0,
+          "load_words": 200,
+          "store_start_ns": 7065.0,
+          "store_span_cyc": 177.0,
+          "store_words": 178,
+          "fill_cyc": 657.0
+        },
+        {
+          "job": 1,
+          "load_start_ns": 4965.0,
+          "load_span_cyc": 224.0,
+          "load_words": 200,
+          "store_start_ns": 12605.0,
+          "store_span_cyc": 177.0,
+          "store_words": 178,
+          "fill_cyc": 764.0
+        },
+        {
+          "job": 2,
+          "load_start_ns": 9435.0,
+          "load_span_cyc": 224.0,
+          "load_words": 200,
+          "store_start_ns": 17045.0,
+          "store_span_cyc": 219.0,
+          "store_words": 178,
+          "fill_cyc": 761.0
+        }
+      ]
+    }
+  ]
+}
