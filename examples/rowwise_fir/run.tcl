@@ -1,39 +1,56 @@
-# Vitis HLS driver for the generated matrix-LT FIR top.  Mirrors the sandbox
-# run.tcl conventions: WAVEFLOW_SUCCESS:/WAVEFLOW_ERROR: sentinels, env-gated
-# cosim, exact m_axi depth (-D from dims.tcl) so cosim's mem model matches the TB.
-set d [file dirname [file normalize [info script]]]
-set data_dir [file join $d "data"]
+# Vitis HLS driver for the generated free-running FIR top (Stage A).
+# csim + csynth (+ optional cosim) of gen/fir.cpp (the generated ap_ctrl_hs top calling the
+# fir_impl::pipeline hook in fir_pipeline_impl.tpp) against the hand-written fir_tb.cpp.
+#
+# Parametrized by env (vitis-run injects its own argv):
+#   WAVEFLOW_FIR_SCENARIO   tb argv: single|two|three|clean|error  (default clean)
+#   WAVEFLOW_FIR_COSIM      1 -> also run cosim_design               (default off)
+#   WAVEFLOW_FIR_TRACE      cosim -trace_level                       (default none)
+set script_dir [file dirname [file normalize [info script]]]
 set part {xc7z020clg484-1}
-set depthflags ""
-set dims [file join $data_dir "dims.tcl"]
-if {[file exists $dims]} { source $dims; set depthflags " -DWF_FIR_MEM_DEPTH=$WF_FIR_MEM_DEPTH" }
+
+set scenario "clean"
+if {[info exists ::env(WAVEFLOW_FIR_SCENARIO)]} { set scenario $::env(WAVEFLOW_FIR_SCENARIO) }
 set do_cosim 0
-if {[info exists ::env(WAVEFLOW_ROWWISE_FIR_COSIM)]} {
-    set do_cosim [expr {$::env(WAVEFLOW_ROWWISE_FIR_COSIM) in {1 true TRUE yes YES}}]
+if {[info exists ::env(WAVEFLOW_FIR_COSIM)]} {
+    set do_cosim [expr {$::env(WAVEFLOW_FIR_COSIM) in {1 true TRUE yes YES}}]
 }
-set do_csynth 0
-if {[info exists ::env(WAVEFLOW_ROWWISE_FIR_CSYNTH)]} {
-    set do_csynth [expr {$::env(WAVEFLOW_ROWWISE_FIR_CSYNTH) in {1 true TRUE yes YES}}]
-}
-open_project -reset fir_gen_proj
+set trace_level "none"
+if {[info exists ::env(WAVEFLOW_FIR_TRACE)]} { set trace_level $::env(WAVEFLOW_FIR_TRACE) }
+
+puts "WAVEFLOW_INFO: scenario=$scenario cosim=$do_cosim trace=$trace_level"
+
+open_project -reset waveflow_fir_proj
 set_top fir
-add_files [file join $d fir.cpp] -cflags "-I$d$depthflags"
-add_files -tb [file join $d fir_tb.cpp] -cflags "-I$d"
+add_files gen/fir.cpp -cflags "-I."
+add_files -tb fir_tb.cpp -cflags "-I."
+set su [file join $script_dir "include" "streamutils.cpp"]
+if {[file exists $su]} { add_files -tb $su -cflags "-I." }
 open_solution -reset "solution1"
 set_part $part
 create_clock -period 10
-if {[catch {csim_design -argv "$data_dir"} res]} { puts "WAVEFLOW_ERROR: fir csim failed."; puts $res; exit 1 }
-if {$do_csynth || $do_cosim} {
-    if {[catch {csynth_design} res]} { puts "WAVEFLOW_ERROR: fir csynth failed."; puts $res; exit 1 }
+
+if {[catch {csim_design -argv "$scenario"} res]} {
+    puts "WAVEFLOW_ERROR: fir C-simulation failed."
+    puts $res
+    exit 1
 }
-set trace_level "none"
-if {[info exists ::env(WAVEFLOW_ROWWISE_FIR_TRACE_LEVEL)]} {
-    set trace_level $::env(WAVEFLOW_ROWWISE_FIR_TRACE_LEVEL)
+if {[catch {csynth_design} res]} {
+    puts "WAVEFLOW_ERROR: fir C-synthesis failed."
+    puts $res
+    exit 1
 }
 if {$do_cosim} {
-    if {[catch {cosim_design -argv "$data_dir" -trace_level $trace_level} res]} { puts "WAVEFLOW_ERROR: fir cosim failed."; puts $res; exit 1 }
-    puts "WAVEFLOW_SUCCESS: fir csim/csynth/cosim passed."
+    if {[catch {cosim_design -argv "$scenario" -trace_level $trace_level} res]} {
+        puts "WAVEFLOW_ERROR: fir RTL co-simulation failed."
+        puts $res
+        exit 1
+    }
+}
+
+if {$do_cosim} {
+    puts "WAVEFLOW_SUCCESS: fir C-sim, C-synth, and RTL co-sim passed (scenario=$scenario)."
 } else {
-    puts "WAVEFLOW_SUCCESS: fir csim passed."
+    puts "WAVEFLOW_SUCCESS: fir C-sim and C-synth passed (scenario=$scenario)."
 }
 exit 0

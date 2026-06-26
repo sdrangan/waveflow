@@ -1,5 +1,14 @@
-gen/fir_gen_proj/
-gen/data/
+# Vitis HLS build / project dirs (regenerable)
+*_proj/
+# Generated codegen output (HlsCodegenStep -> gen/, gen-include -> include/) — regenerated
+# by fir_build.generate(); like shared_mem, the generated kernel is not committed.
+gen/
+include/
+# Generated array-utils that may land at the example root
+/float32_array_utils*.h
+# Stage-A RTL measurements (regenerable via run_fir.py --cosim)
+results_freerun/
+# Cosim / build logs + console dumps + scratch
 *.log
+*.out
 __pycache__/
-gen/vcd/

@@ -1,18 +1,14 @@
-"""fir_sim.py — host-driven simulation of the matrix-LT FIR accelerator.
+"""fir_sim.py — host-driven simulation of the free-running streaming FIR (Stage A).
 
-Wires a small host + the timed :class:`FIRAccel` model with **AXI-stream control**
-(like ``examples/shared_mem``): the command rides a :class:`StreamIF` (host ``m_cmd``
--> accel ``s_in``) and the response a second :class:`StreamIF` (accel ``m_out`` -> host
-``s_resp``).  The X / h / Y operands live in one :class:`MemComponent`, reached by the
-host and the accelerator as two masters on an :class:`AXIMMCrossBarIF`.  The host writes
-the operands, streams one ``FIRCmd`` per matrix + an ``end`` sentinel, collects the
-per-command responses (the barrier), and the driver reads Y back after the run and checks
-it **bit-exact** against the shared ``fir_golden``.
+Wires a small host + the :class:`FIRAccel` model with AXI-stream control (command on ``s_in``,
+per-job response on ``m_out``) and the data on one :class:`MemComponent` reached by the host and
+the accelerator as two masters on an :class:`AXIMMCrossBarIF`.  The host writes the operands,
+streams a **batch** of ``FIRCmd``\\ s + an ``END`` sentinel, and drains the per-job responses
+(reading each ``status`` — errors ride the stream, no regmap); the driver reads ``Y`` back and
+checks it **bit-exact** against the shared ``fir_golden``.
 
-Memory latency is zero — stage timing comes from :class:`FIRTiming` (deterministic channel
-occupancy + II=1 compute + the calibrated ``row_depth(n_col)``), composed over the shared-data
-slave's per-direction ``read_channel`` / ``write_channel`` and its calibrated ``bus_timing``
-(configured at wire-up below), reached through the crossbar — not a master-side bus model.
+Stage A: the accel's ``run_proc`` -> ``pipeline`` hook processes the batch functionally
+(placeholder timing); the calibrated streaming timing model is Stage B.
 
 Run with the project venv::
 
@@ -37,7 +33,7 @@ from waveflow.simulation.simobj import ProcessGen, SimObj  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 
 from examples.rowwise_fir.fir import (  # noqa: E402
-    FIRAccel, FIRCmd, FIROp, FIRResp, FIRTiming, Float32, T)
+    FIRAccel, FIRCmd, FIROp, FIRResp, FIRStatus, Float32, T)
 from examples.rowwise_fir.fir_golden import fir_golden  # noqa: E402
 
 
@@ -66,10 +62,8 @@ class MatrixSpec:
 
 @dataclass(kw_only=True)
 class FIRHost(SimObj):
-    """Non-synthesized producer: write operands, stream commands + an ``end``, then
-    collect the per-command responses (the barrier).  Mirrors ``shared_mem``'s
-    controller: the command goes out on ``m_cmd`` and the response comes back on
-    ``s_resp``; the X / h operands ride the data master into shared memory."""
+    """Non-synthesized producer: write operands, stream a batch of commands + ``END``, then
+    drain the per-job responses (reading each ``status``)."""
     accel: FIRAccel
     data_base: int
     specs: list[MatrixSpec]
@@ -81,14 +75,14 @@ class FIRHost(SimObj):
         self.m_cmd = StreamIFMaster(name=f"{self.name}_m_cmd", sim=self.sim, bitwidth=self._mem_bw)
         self.s_resp = StreamIFSlave(name=f"{self.name}_s_resp", sim=self.sim, bitwidth=self._mem_bw)
         self._data = self.master.region(self.data_base, Float32, word_bw=self._mem_bw)
+        self.responses: list[tuple[int, int]] = []   # (tx_id, status) per job
 
     def _cmd(self, op: FIROp, s: MatrixSpec | None, tx_id: int) -> FIRCmd:
         cmd = FIRCmd()
+        cmd.op, cmd.tx_id = int(op), tx_id
         if s is None:
-            cmd.op, cmd.tx_id = int(op), tx_id
             cmd.x_off = cmd.h_off = cmd.y_off = cmd.n_rows = cmd.n_cols = 0
         else:
-            cmd.op, cmd.tx_id = int(op), tx_id
             cmd.x_off, cmd.h_off, cmd.y_off = s.x_off, s.h_off, s.y_off
             cmd.n_rows, cmd.n_cols = s.n_rows, s.n_cols
         return cmd
@@ -102,9 +96,10 @@ class FIRHost(SimObj):
         for s in self.specs:
             yield from self.m_cmd.write(self._cmd(FIROp.fir, s, s.tx_id))
         yield from self.m_cmd.write(self._cmd(FIROp.end, None, 0xFFFF))
-        # barrier: one response per fir command (the `end` sentinel carries no response).
+        # barrier: one response per fir command (the END sentinel carries no response).
         for _ in self.specs:
-            yield from self.s_resp.get(FIRResp)
+            resp = yield from self.s_resp.get(FIRResp)
+            self.responses.append((int(resp.tx_id), int(resp.status)))
 
 
 @dataclass
@@ -112,21 +107,13 @@ class FIRSim:
     """Build + run one host-driven FIR simulation over a list of matrices."""
     specs: list[MatrixSpec]
     base_addr: int = 0
-    calibration: Path | None = None   # fir_calibrate.py JSON; None -> committed default or provisional
 
     def __post_init__(self) -> None:
         self.sim = Simulation()
         self.clk = Clock(freq=100e6)   # 10 ns/cycle (matches cosim create_clock -period 10)
         self.accel = FIRAccel(name="fir", sim=self.sim, mem_dwidth=32, mem_awidth=32, clk=self.clk)
-        # Load the fitted calibration if available (else the provisional seed in FIRAccel).
-        calib = self.calibration or (Path(__file__).resolve().parent / "results" / "fir_calibration.json")
-        if Path(calib).exists():
-            self.accel.timing = FIRTiming.from_calibration(calib)
 
-        # No command ring: control rides AXI-stream, so the shared memory holds only the
-        # X / h / Y data (data_base == base_addr).
         data_base = self.base_addr
-        # total data words = past the last region used by any spec.
         data_elems = max((s.y_off + s.n_rows * s.out_len) for s in self.specs)
         word_bytes = 32 // 8
         total_bytes = data_elems * word_bytes
@@ -134,13 +121,6 @@ class FIRSim:
         self.mem = MemComponent(sim=self.sim, word_size=32, inline=False, clk=self.clk,
                                 latency_init=0.0, latency_per_word=0.0)
         self.mem.alloc(total_bytes // word_bytes)
-
-        # The contended memory port owns its per-direction occupancy span: configure the
-        # shared-data slave's calibrated bus_timing here, at platform wire-up — the accelerator
-        # never pokes platform bus params (the FIRTiming model is the *source*, applied to the
-        # slave).  The Region slice calls reach it through the crossbar's address decode.
-        self.mem.s_mm.bus_timing = self.accel.timing.bus_timing(self.clk.freq)
-
         self.accel.data_base = data_base
 
         self.host = FIRHost(name="host", sim=self.sim, accel=self.accel,
@@ -200,26 +180,19 @@ def check_golden(specs: list[MatrixSpec], results: dict) -> bool:
 
 
 def main() -> None:
-    print("[single command] 4x64")
-    specs = make_specs([(4, 64)])
-    sim = FIRSim(specs)
-    res = sim.run()
-    ok1 = check_golden(specs, res)
-    for e in sim.accel.events:
-        print(f"    {e['event']:12s} tx={e['tx_id']} t={e['t']*1e9:8.1f} ns")
-
-    print("[back-to-back] 4x64, 4x64")
-    specs2 = make_specs([(4, 64), (4, 64)], seed=1)
-    sim2 = FIRSim(specs2)
-    res2 = sim2.run()
-    ok2 = check_golden(specs2, res2)
-    # show the overlap: tx=1 load vs tx=0 store/compute
-    for e in sim2.accel.events:
-        print(f"    {e['event']:12s} tx={e['tx_id']} t={e['t']*1e9:8.1f} ns")
-
-    print(f"\nGOLDEN CONFORMANCE: single={ok1} back_to_back={ok2}  ->  {'PASS' if ok1 and ok2 else 'FAIL'}")
-    if not (ok1 and ok2):
-        sys.exit(1)
+    for tag, shapes, seed in [("single 4x64", [(4, 64)], 0),
+                              ("clean varying", [(4, 64), (2, 48), (3, 32)], 1)]:
+        print(f"[{tag}]")
+        specs = make_specs(shapes, seed=seed)
+        sim = FIRSim(specs)
+        res = sim.run()
+        ok = check_golden(specs, res)
+        statuses = sim.host.responses
+        all_ok = all(st == int(FIRStatus.ok) for _, st in statuses)
+        print(f"  responses={statuses} -> {'PASS' if ok and all_ok else 'FAIL'}")
+        if not (ok and all_ok):
+            sys.exit(1)
+    print("GOLDEN CONFORMANCE: PASS")
 
 
 if __name__ == "__main__":
