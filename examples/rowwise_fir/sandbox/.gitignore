@@ -5,5 +5,11 @@
 *.out
 logs/
 __pycache__/
-# Regenerable measurement output (findings live in freerun_notes.md)
+# Regenerable measurement output (findings live in freerun_notes.md / LADDER.md)
 results_*/
+# VCD dumps, xsim/dfx runtime + console/result text dumps (regenerable)
+vcd/
+data/
+dump.vcd
+*.txt
+*.jou

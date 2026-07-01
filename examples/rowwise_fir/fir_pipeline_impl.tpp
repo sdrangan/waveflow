@@ -30,7 +30,12 @@ namespace fir_impl {
 static const int FIR_T        = 8;       // FIR taps (tapped-delay-line depth)
 static const int FIR_NCOL_MAX = 1024;    // valid-size bound
 static const int FIR_MAX_ROWS = 64;      // valid-size bound
-static const int FIR_CHUNK    = 256;     // burst staging chunk (one X/Y burst per test job)
+
+// LW==1 only: the compute uses a scalar shift register sr[T] and emits one output/cycle, and the
+// load/store lane loops move one float/cycle.  A wider m_axi word (word_bw>32 -> LW>1) would need an
+// s[LW][T] window + an LW*T MAC array to retire LW outputs/cycle — not yet supported.  Fail loudly.
+static_assert(float32_array_utils::lane_capacity<32>() == 1,
+              "fir_pipeline_impl supports LW==1 only; LW>1 (vectorized bus) needs an s[LW][T] window.");
 
 // load: read each FIRCmd off s_in (built-in deserialize); validate; forward a FirMeta on the
 // 32-bit ctrl stream; for a good job read h (T taps) + X (CHUNK bursts) from mem via
@@ -72,17 +77,23 @@ LOAD_CMDS: while (!done) {
         m.write_stream<32>(ld_ctrl);
         if (!ok) continue;                           // bad job: no data streamed
 
+        // h (T taps) is genuinely resident — read once, cached in compute's tap registers — so a
+        // slice into a small buffer is the right pattern for it.
         float hb[FIR_T];
         float32_array_utils::read_array_slice<32>(mem, (int)cmd.h_off, (int)cmd.h_off + FIR_T, hb);
         for (int t = 0; t < FIR_T; ++t) ld_data.write(hb[t]);
 
+        // X is a STREAM: move gmem -> ld_data DIRECTLY, one II=1 pass, no intermediate buffer (the
+        // lane-loop shape for LW==1; docs/guide/vectorization/hls/raw.md).  Staging through a
+        // read_array_slice buffer (gmem -> cb -> FIFO, the "resident" path) serializes the m_axi and
+        // forfeits the full-duplex load||store overlap — see [[project-fir-slice-vs-laneloop-rootcause]].
+        // (NB the framework read_array_lane helper with a running pointer dangles the m_axi first read
+        // in this free-running DATAFLOW context — RTL reads x[0] as 0; direct mem[i] indexing is
+        // bit-exact.  A framework gotcha to fix; see [[reference-arrayutils-slice-codegen-gotchas]].)
         const int total = nr * nc;
-        float cb[FIR_CHUNK];
-    LOAD_X: for (int base = 0; base < total; base += FIR_CHUNK) {
-            const int k = (total - base < FIR_CHUNK) ? (total - base) : FIR_CHUNK;
-            float32_array_utils::read_array_slice<32>(mem, (int)cmd.x_off + base,
-                                                      (int)cmd.x_off + base + k, cb);
-            for (int i = 0; i < k; ++i) ld_data.write(cb[i]);
+    LOAD_X: for (int i = 0; i < total; ++i) {
+#pragma HLS PIPELINE II=1
+            ld_data.write(streamutils::uint_to_float((uint32_t)mem[(int)cmd.x_off + i]));
         }
     }
 }
@@ -147,12 +158,11 @@ STORE_CMDS: while (!done) {
             const int nc = (int)m.n_cols, nr = (int)m.n_rows;
             const int out_len = nc - FIR_T + 1;
             const int total = nr * out_len;
-            float cb[FIR_CHUNK];
-        STORE_Y: for (int base = 0; base < total; base += FIR_CHUNK) {
-                const int k = (total - base < FIR_CHUNK) ? (total - base) : FIR_CHUNK;
-                for (int i = 0; i < k; ++i) cb[i] = cp_data.read();
-                float32_array_utils::write_array_slice<32>(cb, mem, (int)m.y_off + base,
-                                                           (int)m.y_off + base + k);
+            // Y is a STREAM: cp_data -> gmem DIRECTLY (one II=1 pass, no cb buffer) — the symmetric
+            // fix to the load (see [[project-fir-slice-vs-laneloop-rootcause]]).
+        STORE_Y: for (int i = 0; i < total; ++i) {
+#pragma HLS PIPELINE II=1
+                mem[(int)m.y_off + i] = streamutils::float_to_uint(cp_data.read());
             }
         }
         FIRResp resp;

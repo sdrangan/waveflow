@@ -23,6 +23,17 @@ as in the kernel (``load(N+1) ∥ store(N)``).  The per-stage durations come fro
 **period** (the bottleneck), ``load`` + ``compute`` carry the pipeline **fill**, so a batch of
 ``n`` jobs takes ``fill + n*period`` — matching the cosim (``704`` cyc/job @ 4×64, fill ≈ ``396``).
 The functional truth (``execute``) is bit-exact-shared with the kernel; only the timing is modeled.
+
+**⚠ TIMING MODEL STALE (2026-07-01).**  This ``FIRTiming`` models the OLD *buffered* kernel (the
+``read_array_slice`` 2-pass), which serialized load/store (``period ≈ occupancy·β``, β≈1.45).  The
+hook was since fixed to stream direct (lane loop, ``fir_pipeline_impl.tpp``): it now runs ~1.5×
+faster (704→473 cyc/job @ 4×64), **full-duplex** (load ∥ store), with β≈1.0 — AND streams
+*within* a job (load/compute/store overlap), so the single-job latency is no longer the serial
+stage sum.  Re-calibrating needs a **double-buffered / streaming-timing** model (per-element or
+anchored overlap; cf. the atomic-stage sim here gives ~186% latency error on the fixed kernel).
+Deferred to a focused task — see [[project-fir-slice-vs-laneloop-rootcause]] and
+``plans/fir_freerun_integration.md``.  **The functional golden is unaffected** (bit-exactness does
+not depend on timing); only the *cycle numbers* the sim reports are stale.
 """
 from __future__ import annotations
 
