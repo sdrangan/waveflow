@@ -27,7 +27,8 @@ sys.path.insert(0, str(REPO))
 
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges  # noqa: E402
+from waveflow.hw.memif import (  # noqa: E402
+    AXIMMCrossBarIF, BusTiming, MMIFMaster, assign_address_ranges)
 from waveflow.hw.memory import MemComponent  # noqa: E402
 from waveflow.simulation.simobj import ProcessGen, SimObj  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
@@ -35,6 +36,44 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from examples.rowwise_fir.fir import (  # noqa: E402
     FIRAccel, FIRCmd, FIROp, FIRResp, FIRStatus, Float32, T)
 from examples.rowwise_fir.fir_golden import fir_golden  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Platform bus characterization (ONE-TIME, per platform — NOT per accelerator)
+# ---------------------------------------------------------------------------
+# `setup` / `per_word` are properties of the *memory + AXI interconnect*, the same for any
+# accelerator dropped on this platform.  They are characterized ONCE from a pure copy kernel
+# (`sandbox/loadstore_iso` — no compute), NOT re-fit per accelerator.  Only the kernel's COMPUTE
+# is calibrated per accelerator (the accel's fill_model / compute_model).  If the bus model + the
+# isolated compute fit are both right, the LOADED end-to-end throughput matches with zero
+# end-to-end fitting (Gate B).
+# See [[project-two-level-calibration]].
+#
+# TODO: promote this to a dedicated bus-calibration example teaching (a) characterize a bus from a
+# pure copy kernel, (b) calibrate a kernel against a known bus model.  Kept here (as documented
+# platform constants) for now — a full new example is out of scope.
+BUS_SETUP_CYC = 22.0      # AR/AW -> first-data address latency, per burst (from loadstore_iso)
+BUS_PER_WORD_CYC = 1.0    # beats/cycle for a healthy II=1 full-width burst
+
+
+@dataclass(frozen=True)
+class _LinSpan:
+    """Linear span predictor ``value = intercept + Σ coeff_i · row[name_i]`` with the
+    ``predict(row) -> cycles`` shape :class:`~waveflow.hw.memif.BusTiming` consumes (basis
+    ``("num_trans", "nwords")`` -> ``setup·num_trans + per_word·nwords``)."""
+    basis: tuple[str, ...]
+    coeffs: tuple[float, ...]
+    intercept: float = 0.0
+
+    def predict(self, row: dict) -> float:
+        return self.intercept + sum(c * float(row[n]) for c, n in zip(self.coeffs, self.basis))
+
+
+def platform_bus_timing(clk_freq: float) -> BusTiming:
+    """The platform's per-direction bus-occupancy model (``setup·num_trans + per_word·nwords``),
+    identical for R and W — configured on the memory slave, NOT owned by the accelerator."""
+    occ = _LinSpan(("num_trans", "nwords"), (BUS_SETUP_CYC, BUS_PER_WORD_CYC))
+    return BusTiming(read=occ, write=occ, clk_freq=clk_freq)
 
 
 @dataclass
@@ -127,15 +166,20 @@ class FIRSim:
                             data_base=data_base, specs=self.specs)
 
         # Data path: host + accelerator masters over the crossbar to the shared memory.  The
-        # interconnect/memory latencies are 0 so the per-stage timeouts in FIRTiming (calibrated
-        # to the freerun cosim) are the SOLE timing source — the functional read/write_slice in the
-        # stages are instantaneous; the streaming period + fill live entirely in the cycle model.
+        # interconnect/memory init latencies are 0 here because the bus-transfer time is modeled by
+        # the memory slave's BusTiming (the PLATFORM bus characterization, attached below); the
+        # anchored read/write_slice_pipelined transfers resolve their per-direction channel spans
+        # from it, and the accel's fill/compute overlap lives in the anchoring.
         self.xbar = AXIMMCrossBarIF(sim=self.sim, clk=self.clk, nports_master=2, nports_slave=1,
                                     bitwidth=32, latency_init=0.0, latency_read_return=0.0)
         self.xbar.bind("master_0", self.host.master)
         self.xbar.bind("master_1", self.accel.m_mem)
         self.xbar.bind("slave_0", self.mem.s_mm)
         assign_address_ranges([self.mem.s_mm], [(self.base_addr, total_bytes)])
+        # Bus transfer time = PLATFORM property (one-time characterization), NOT the accelerator's:
+        # the per-direction (AR/R, AW/W) channel spans live on the memory slave, reused by any
+        # accelerator on this platform.  The accel supplies only num_trans/nwords at the slice call.
+        self.mem.s_mm.bus_timing = platform_bus_timing(self.clk.freq)
 
         # Control path: command stream (host -> accel.s_in), response stream (accel.m_out -> host).
         self.cmd_stream = StreamIF(sim=self.sim, clk=self.clk)
