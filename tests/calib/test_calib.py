@@ -132,6 +132,90 @@ def test_as_dict_serializable():
 
 
 # ---------------------------------------------------------------------------
+# Model-owned transform + load_coeffs deploy + clock-independence (the FIR form)
+# ---------------------------------------------------------------------------
+
+def _compute_features(row):
+    """FIR compute-time features: clk_period folded in -> predict returns SECONDS and the
+    coefficients are cycle-domain rates (row_setup, compute_beat)."""
+    cp, nr, nc = float(row["clk_period"]), float(row["n_row"]), float(row["n_col"])
+    return [cp * (nr - 1.0), cp * nr * nc]
+
+
+def test_model_owned_transform_and_clock_independence():
+    # Ground truth: 8 cyc/row-boundary + 1 cyc/input-sample, measured at clk_period = 10 ns.
+    CP_FIT = 10e-9
+    db = CalibDataFrame(["n_row", "n_col", "clk_period", "compute_time"])
+    for nr in (1, 4, 16):
+        for nc in (16, 64, 256):
+            cyc = 8.0 * (nr - 1) + 1.0 * nr * nc
+            db.add_datapoint({"n_row": nr, "n_col": nc, "clk_period": CP_FIT,
+                              "compute_time": cyc * CP_FIT})
+    m = LinCalibModel(["row_setup", "compute_beat"], "compute_time",
+                      fit_intercept=False, transform=_compute_features).fit(db)
+    # through-origin coefficients recover the cycle-domain rates
+    assert m.coeffs["row_setup"] == pytest.approx(8.0, abs=1e-6)
+    assert m.coeffs["compute_beat"] == pytest.approx(1.0, abs=1e-6)
+    # predict at a DIFFERENT clock with no re-fit: cycles are clock-independent, time scales
+    cyc_4x64 = 8.0 * 3 + 1.0 * 4 * 64          # = 280 cycles
+    assert m.predict({"n_row": 4, "n_col": 64, "clk_period": 10e-9}) == pytest.approx(280 * 10e-9)
+    assert m.predict({"n_row": 4, "n_col": 64, "clk_period": 2e-9}) == pytest.approx(280 * 2e-9)
+
+
+def test_load_params_deploy_roundtrip():
+    # A deployed model (from stored params) predicts identically — no fit / training data needed.
+    fitted = LinCalibModel([], "compute_time", fit_intercept=False, transform=_compute_features,
+                           coeff_names=["row_setup", "compute_beat"])
+    fitted.load_params({"row_setup": 8.0, "compute_beat": 1.0})
+    row = {"n_row": 4, "n_col": 64, "clk_period": 10e-9}
+    assert fitted.predict(row) == pytest.approx(280 * 10e-9)
+    # a bias-only-style through-origin fill model: fill_time = clk_period * L0
+    fill = LinCalibModel([], "fill_time", fit_intercept=False, coeff_names=["L0"],
+                         transform=lambda r: [float(r["clk_period"])]).load_params({"L0": 60.0})
+    assert fill.predict({"clk_period": 10e-9}) == pytest.approx(60 * 10e-9)
+
+
+def test_to_params_named_vs_vector():
+    # coeff_names -> individually named state_dict; None -> flat "coeffs" vector.
+    db = _grid_db()
+    named = LinCalibModel(["num_trans", "nwords"], "span", fit_intercept=False,
+                          coeff_names=["setup", "per_word"]).fit(db)
+    assert named.to_params() == {"setup": pytest.approx(5.0), "per_word": pytest.approx(1.0)}
+    vec = LinCalibModel(["num_trans", "nwords"], "span", fit_intercept=False).fit(db)
+    p = vec.to_params()
+    assert set(p) == {"coeffs"} and p["coeffs"] == pytest.approx([5.0, 1.0])
+    # intercept goes under intercept_name only when fit_intercept
+    biased = LinCalibModel(["x"], "y", fit_intercept=True, intercept_name="L0")
+    biased.load_params({"coeffs": [3.0], "L0": 7.0})
+    assert biased.predict({"x": 2}) == pytest.approx(13.0)
+
+
+def test_save_load_default_artifact(tmp_path):
+    # save_model -> load_model round-trip through a file; load_or_default falls back to the seed.
+    path = tmp_path / "m.json"
+    seed = {"row_setup": 8.0, "compute_beat": 1.0}
+    m = LinCalibModel([], "compute_time", fit_intercept=False, transform=_compute_features,
+                      coeff_names=["row_setup", "compute_beat"], seed=seed, path=path)
+    # no file yet -> load_or_default uses the seed
+    assert m.load_or_default().predict({"n_row": 4, "n_col": 64, "clk_period": 10e-9}) \
+        == pytest.approx(280 * 10e-9)
+    # fit a DIFFERENT model, save it, and confirm a fresh shell loads those params from the file
+    CP = 10e-9
+    db = CalibDataFrame(["n_row", "n_col", "clk_period", "compute_time"])
+    for nr in (1, 4, 16):
+        for nc in (16, 64, 256):
+            db.add_datapoint({"n_row": nr, "n_col": nc, "clk_period": CP,
+                              "compute_time": (5.0 * (nr - 1) + 2.0 * nr * nc) * CP})
+    m.fit(db).save_model()
+    assert path.exists()
+    fresh = LinCalibModel([], "compute_time", fit_intercept=False, transform=_compute_features,
+                          coeff_names=["row_setup", "compute_beat"], seed=seed, path=path)
+    fresh.load_or_default()   # file exists -> loads fitted params, not the seed
+    assert fresh.coeffs["row_setup"] == pytest.approx(5.0, abs=1e-6)
+    assert fresh.coeffs["compute_beat"] == pytest.approx(2.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # Metrics / holdout
 # ---------------------------------------------------------------------------
 
