@@ -14,7 +14,7 @@ import numpy.testing as npt
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.memif import AXIMMCrossBarIF, BusTiming, MMIFMaster, assign_address_ranges
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
@@ -109,6 +109,47 @@ def test_read_anchored_returns_backcalc_tstart():
     # read of 10 words over freq=1: tstart = end - 9*period
     assert res["tstart"] == res["end"] - 9.0
     npt.assert_array_equal(res["data"], data)
+
+
+class _ConstSpan:
+    """Constant channel-occupancy span (cycles), size-independent — chosen large so it
+    dominates the (subsumed) functional-write cost, letting t0/t1 read out anchor + span."""
+    def __init__(self, cyc: float) -> None:
+        self.cyc = float(cyc)
+
+    def predict(self, row: dict) -> float:
+        return self.cyc
+
+
+def test_write_spanned_serializes_past_anchored_writes():
+    """Two back-to-back writes BOTH anchored in the past must serialize on the write
+    channel via the slave's ``write_busy_until`` — the SimPy resource alone can't, since a
+    past-anchored span would otherwise double-book the channel (the FIR store's contract)."""
+    sim, mem, master = _harness()
+    # A calibrated (large, constant) write model routes write_slice_pipelined through
+    # write_spanned and makes the channel occupancy dominate the functional-write cost.
+    mem.s_mm.bus_timing = BusTiming(read=None, write=_ConstSpan(1000.0), clk_freq=1.0)
+    region = master.region(0, I32, word_bw=32)
+    data = np.arange(2, dtype=np.int32)
+    res = {}
+
+    def body(self):
+        yield self.timeout(5.0)
+        # write A: past anchor 0 (models within-job overlap) -> occupies [0, 1000]
+        t0a, t1a = yield from region.write_slice_pipelined(0, data, t_out_start=0.0, num_trans=1)
+        # write B: ALSO anchored at 0 (past) -> busy_until must push its start to A's end (1000)
+        t0b, t1b = yield from region.write_slice_pipelined(4, data, t_out_start=0.0, num_trans=1)
+        res.update(t0a=t0a, t1a=t1a, t0b=t0b, t1b=t1b)
+
+    # NB: the driver auto-registers via SimObj.__post_init__ (add_obj); do NOT add_obj it
+    # again — a second registration double-runs `body`, and the second run would observe the
+    # first's mutation of the slave's shared write_busy_until (harmless for stateless bodies).
+    _Driver(name="d", sim=sim, body=body)
+    sim.run_sim()
+    assert res["t0a"] == 0.0             # A's early (past) anchor honored -> within-job overlap
+    assert res["t1a"] == 1000.0          # A occupies [0, 1000]
+    assert res["t0b"] == 1000.0          # B serialized: clamped up to A's busy_until (NOT past 0)
+    assert res["t1b"] == 2000.0          # B occupies [1000, 2000], no double-book
 
 
 def test_region_pipelined_slices():

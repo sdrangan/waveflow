@@ -14,31 +14,39 @@ hook.  Codegen replaces the hook body with ``fir_pipeline_impl.tpp`` (the DATAFL
 load/compute/store + shift-register FIR + END-drain + per-job status, ``ap_uint<MEM_DW>*`` gmem
 via ``read_array_slice``/``write_array_slice``).  **In sim the hook body IS the model.**
 
-**Stage-B sim = the streaming pipeline.**  The hook's sim body spawns **three persistent stage
-processes** (``load`` / ``compute`` / ``store``) wired by unbounded job queues — the sim twin of
-the kernel's three ``#pragma HLS DATAFLOW`` ``while(!done)`` stages.  ``run_proc`` pulls each
-command off ``s_in`` and kicks ``load`` **without blocking**, so successive jobs overlap exactly
-as in the kernel (``load(N+1) ∥ store(N)``).  The per-stage durations come from :class:`FIRTiming`
-(calibrated to the freerun cosim by ``fir_calibrate.py``): ``store`` carries the steady throughput
-**period** (the bottleneck), ``load`` + ``compute`` carry the pipeline **fill**, so a batch of
-``n`` jobs takes ``fill + n*period`` — matching the cosim (``704`` cyc/job @ 4×64, fill ≈ ``396``).
-The functional truth (``execute``) is bit-exact-shared with the kernel; only the timing is modeled.
+**Stage-B sim = the streaming (double-buffered) pipeline.**  The hook's sim body spawns **three
+persistent stage processes** (``load`` / ``compute`` / ``store``) wired by unbounded job queues —
+the sim twin of the kernel's three ``#pragma HLS DATAFLOW`` ``while(!done)`` stages.  ``run_proc``
+pulls each command off ``s_in`` and kicks ``load`` **without blocking**, so successive jobs overlap
+(``load(N+1) ∥ store(N)``).  The load's X-read and the store's Y-write use the **anchored** Region
+transfers (``read_slice_pipelined`` / ``write_slice_pipelined``): they hold the memory slave's
+**separate** AR/R and AW/W channels (full-duplex, per the lane-loop fix), and the store is
+**early-anchored** at ``x_read_start + t_fill`` (the X-read burst start, *after* the h-read holds
+the R channel) with ``min_span = compute_body`` so its Y-write
+*overlaps* the X-read (within-job streaming) and hides under compute — the throughput **period**
+then emerges from the busier direction's channel *occupancy*, not a fitted end-to-end model.
 
-**⚠ TIMING MODEL STALE (2026-07-01).**  This ``FIRTiming`` models the OLD *buffered* kernel (the
-``read_array_slice`` 2-pass), which serialized load/store (``period ≈ occupancy·β``, β≈1.45).  The
-hook was since fixed to stream direct (lane loop, ``fir_pipeline_impl.tpp``): it now runs ~1.5×
-faster (704→473 cyc/job @ 4×64), **full-duplex** (load ∥ store), with β≈1.0 — AND streams
-*within* a job (load/compute/store overlap), so the single-job latency is no longer the serial
-stage sum.  Re-calibrating needs a **double-buffered / streaming-timing** model (per-element or
-anchored overlap; cf. the atomic-stage sim here gives ~186% latency error on the fixed kernel).
-Deferred to a focused task — see [[project-fir-slice-vs-laneloop-rootcause]] and
-``plans/fir_freerun_integration.md``.  **The functional golden is unaffected** (bit-exactness does
-not depend on timing); only the *cycle numbers* the sim reports are stale.
+**Two-level timing (see [[project-two-level-calibration]]).**  The per-direction bus spans are the
+memory slave's :class:`~waveflow.hw.memif.BusTiming` — the **platform** bus characterization
+(``setup``/``per_word``), configured in ``fir_sim.py`` and reused by any accelerator; the component
+supplies only ``num_trans``/``nwords``.  The **compute** — the one thing calibrated *per kernel* — is
+two learned :class:`~waveflow.calib.LinCalibModel`s (``fill_model``, ``compute_model``) held by the
+accelerator, so the sim reads ``model.predict(row)`` right where the estimate is used.  If both the
+bus model and the compute fit are right, the loaded end-to-end throughput matches with zero
+end-to-end fitting (Gate B).  The functional truth (``execute``) is bit-exact-shared with the
+kernel; only the timing is modeled.
+
+**⚠ COMPUTE PARAMS PROVISIONAL (streaming re-cal, 2026-07-02).**  The compute models describe the
+FIXED (lane-loop) kernel — ~1.5× faster (704→473 cyc/job @ 4×64), full-duplex, streaming *within* a
+job.  They **supersede** the old buffered/occupancy model (which serialized load/store, β≈1.45).
+The seed coeffs are un-calibrated placeholders; run a
+contention-free freerun sweep + ``fir_calibrate.py`` to fit ``streaming_params`` (compute only) and
+validate Gate B before trusting the reported cycles.  **The functional golden is unaffected.**  See
+[[project-fir-slice-vs-laneloop-rootcause]] and ``plans/fir_freerun_integration.md``.
 """
 from __future__ import annotations
 
 import enum
-import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,13 +54,13 @@ from typing import ClassVar
 
 import numpy as np
 
+from waveflow.calib import LinCalibModel
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, EnumField, FloatField, IntField, MemAddr
 from waveflow.hw.hw_component import HwComponent, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import MMIFMaster
 from waveflow.hw.synth import synthesizable
-from waveflow.simulation.logger import NullLogger
 from waveflow.simulation.simobj import ProcessGen
 
 try:
@@ -134,72 +142,60 @@ class FirMeta(DataList):
 #: Schema classes the gen-include step emits headers for (consumed by fir_pipeline_impl.tpp).
 SCHEMA_CLASSES = [FIROpField, FIRStatusField, FIRCmd, FIRResp, FirMeta]
 
-#: The fitted streaming cycle model (``fir_calibrate.py`` -> from the cosim sweep).  The sim loads
-#: it via :meth:`FIRTiming.from_calibration`; absent (a fresh build before calibration), the baked
-#: defaults below keep the functional sim running (timing does not affect bit-exactness).
-CALIB_JSON = Path(__file__).resolve().parent / "results" / "fir_calibration.json"
+#: Per-model COMPUTE artifacts (one file each — the BuildDAG tracks them).  ``fir_calibrate.py``
+#: fits + ``save_model()``s them from a contention-free cosim sweep; absent (a fresh build before
+#: calibration), the seed coeffs below keep the functional sim running (timing ≠ bit-exactness).
+RESULTS = Path(__file__).resolve().parent / "results"
+FILL_MODEL_PATH = RESULTS / "fir_fill_model.json"
+COMPUTE_MODEL_PATH = RESULTS / "fir_compute_model.json"
 
 
-@dataclass
-class FIRTiming:
-    """Streaming free-running pipeline cycle model — **occupancy-based, near-fit-free**.
+# -- the per-kernel COMPUTE model (the ONLY thing calibrated per accelerator) --------------------
+# Two through-origin :class:`~waveflow.calib.LinCalibModel`s, each a learned estimate of a TIME (so
+# the sim reads ``model.predict(row)`` directly and it's obvious where the estimate is made).  Bus
+# transfer time is NOT here — it's the platform's, configured on the memory slave in fir_sim.py.
+# See [[project-two-level-calibration]].  ``clk_period`` is folded into the features, so the fit is
+# clock-independent (coeffs are cycle-domain rates) and predict returns seconds:
+#   fill_time    = clk_period · L0                                  (ramp to first Y output)
+#   compute_time = clk_period · [row_setup·(n_row-1) + beat·n_row·n_col]   (II=1 body + per-row flush)
+# The ``ROWS`` loop is not flattened/rewound (``fir_pipeline_impl.tpp``), so each of the n_row-1
+# non-first rows pays the inner-pipeline flush ``row_setup``; the first row's fill is L0.
 
-    The components are physical and deterministic, not fitted (the matrix-LT philosophy,
-    ``project-matrix-lt-fir-build``):
+def _fill_features(row: dict) -> list[float]:
+    """Fill-time feature: ``[clk_period]`` (coeff L0 = ramp cycles)."""
+    return [float(row["clk_period"])]
 
-    * **bus occupancy = transfer beats = nwords** (``beats == nwords``, validated in cosim) —
-      the load moves ``read_words`` beats (X + taps), the store ``write_words`` beats (Y).  This
-      is *exact*; the per-stage wall-clock *span* is NOT used (it is contaminated by stalls and
-      interleaved beats of the other direction — measure occupancy, not span).
-    * **compute II=1** — ``n_rows*n_cols`` input samples streamed through the shift-register FIR.
 
-    The load and store **serialize on the one ``gmem`` bundle in practice** — the VCD shows their
-    bursts overlap <10%, so per job the bus moves ``read_words + write_words`` beats *serially*,
-    which is what makes the period ``≈ (read+write)*beta``.  This is NOT a bus limit: an isolation
-    toy (``sandbox/duplex_toy``) shows one bundle IS full-duplex for both a single process AND two
-    DATAFLOW processes (read+write cosim ≈ max, not sum) — so the serialization is a property of
-    the FIR's dataflow *dynamics* (the load/store bursts don't coincide in time), i.e. ~2×
-    throughput headroom.  The sim's shared-bus :class:`Resource` reproduces the measured
-    serialization.  The single calibrated residual is:
+def _compute_features(row: dict) -> list[float]:
+    """Compute-time features: ``[clk_period·(n_row-1), clk_period·n_row·n_col]`` (coeffs
+    row_setup, compute_beat — cycle-domain rates)."""
+    cp, nr, nc = float(row["clk_period"]), float(row["n_row"]), float(row["n_col"])
+    return [cp * (nr - 1.0), cp * nr * nc]
 
-    * ``beta`` — m_axi **sustained cyc/beat** (~1.45; the Vitis random-stall efficiency,
-      cf. ``sandbox/freerun_notes.md``) — fit from period-vs-occupancy over a few points.
 
-    ``bus_job_cyc`` (per-job address/command setup) and ``pipe_fill_cyc`` (the command stream-in +
-    DATAFLOW fill/drain, a single-job lead-in that overlaps across jobs) are small constants the
-    composition needs; the **end-to-end period/latency are emergent**, validated against cosim, not
-    fitted target-by-target."""
+#: Provisional seed coeffs (cycles) — the default until fir_calibrate.py fits + save_model()s.
+_FILL_SEED = {"L0": 60.0}
+_COMPUTE_SEED = {"row_setup": 8.0, "compute_beat": 1.0}
 
-    clk_ns: float = 10.0
-    bus_beat_cyc: float = 1.44     # beta: m_axi sustained cyc/beat (the ONE calibrated residual)
-    bus_job_cyc: float = 20.0      # per-job bus address/setup overhead (charged once, on load)
-    compute_beat_cyc: float = 1.0  # II=1: cyc per input sample streamed through the FIR
-    pipe_fill_cyc: float = 130.0   # command stream-in + DATAFLOW fill/drain (lead-in; overlaps)
 
-    @classmethod
-    def from_calibration(cls, path: Path = CALIB_JSON) -> "FIRTiming":
-        """Load the fitted coefficients from *path*; fall back to the baked defaults if absent."""
-        if not Path(path).exists():
-            return cls()
-        c = json.loads(Path(path).read_text(encoding="utf-8"))
-        if "model_params" not in c:        # not the streaming calibration (e.g. a stale file)
-            return cls()
-        p = c["model_params"]
-        return cls(clk_ns=float(c["clk_ns"]), bus_beat_cyc=p["bus_beat_cyc"],
-                   bus_job_cyc=p["bus_job_cyc"], compute_beat_cyc=p["compute_beat_cyc"],
-                   pipe_fill_cyc=p["pipe_fill_cyc"])
+def make_fill_model() -> LinCalibModel:
+    """The fill-time model shell (seed + artifact path); fit or ``load_or_default()``."""
+    return LinCalibModel(basis=[], target="fill_time", fit_intercept=False,
+                         transform=_fill_features, coeff_names=["L0"],
+                         seed=_FILL_SEED, path=FILL_MODEL_PATH)
 
-    # -- physical component models ------------------------------------------
-    def bus_cyc(self, nwords: int) -> float:
-        """Bus occupancy of an ``nwords``-beat transfer (beats * beta)."""
-        return self.bus_beat_cyc * nwords
 
-    def compute_cyc(self, n_rows: int, n_cols: int) -> float:
-        """The streaming FIR compute: II=1 over the ``n_rows*n_cols`` input samples."""
-        return self.compute_beat_cyc * n_rows * n_cols
+def make_compute_model() -> LinCalibModel:
+    """The compute-time model shell (seed + artifact path); fit or ``load_or_default()``."""
+    return LinCalibModel(basis=[], target="compute_time", fit_intercept=False,
+                         transform=_compute_features, coeff_names=["row_setup", "compute_beat"],
+                         seed=_COMPUTE_SEED, path=COMPUTE_MODEL_PATH)
 
-    def sec(self, cyc: float) -> float:
-        return max(0.0, cyc) * self.clk_ns * 1e-9
+
+def load_compute_models() -> tuple[LinCalibModel, LinCalibModel]:
+    """The ``(fill_model, compute_model)`` for the sim — each loads its fitted artifact
+    (``load_or_default``) or falls back to its seed (deployed: no sklearn / data at sim time)."""
+    return make_fill_model().load_or_default(), make_compute_model().load_or_default()
 
 
 @dataclass
@@ -229,11 +225,11 @@ class FIRAccel(HwComponent):
             self.add_endpoint(ep)
         # Attached by the driver (owns the system memory map) before run_sim.
         self.data_base: int = 0
-        self.logger = NullLogger()
         self.events: list[dict] = []
         self._mem_bw = int(self.mem_dwidth)
-        # The calibrated streaming cycle model (the freerun-cosim fit; baked defaults if absent).
-        self.timing = FIRTiming.from_calibration()
+        # The per-kernel COMPUTE models (fill/compute time; freerun-cosim fit, seeds if absent) —
+        # explicit learned estimates.  Bus transfer time is the platform's (memory slave, by driver).
+        self.fill_model, self.compute_model = load_compute_models()
 
     @property
     def Cmd(self) -> type[FIRCmd]:
@@ -251,28 +247,17 @@ class FIRAccel(HwComponent):
         ``fir_impl::pipeline(s_in, m_out, m_mem)``."""
         yield from self.pipeline(self.s_in, self.m_out, self.m_mem)
 
-    def _ev(self, event: str, tx_id: int, **extra) -> None:
-        """Record a bus-visible timeline event (cycles), for the timing gate / figure."""
+    def _ev(self, event: str, tx_id: int, t: float | None = None, **extra) -> None:
+        """Record a bus-visible timeline event (cycles).  *t* overrides ``now`` — the store's
+        Y-write is early-anchored, so ``store_begin`` / ``store_end`` log the effective span
+        endpoints (``t0`` / ``t1``), not the late resource-acquire time."""
+        tt = self.now if t is None else t
         self.events.append({"event": event, "tx_id": tx_id,
-                            "t": self.now, "cyc": self.now / self.clk.period, **extra})
+                            "t": tt, "cyc": tt / self.clk.period, **extra})
 
     @staticmethod
     def _is_valid(cmd: FIRCmd) -> bool:
         return T <= int(cmd.n_cols) <= NCOL_MAX and 1 <= int(cmd.n_rows) <= MAX_ROWS
-
-    def _bus_xfer(self, occupancy_cyc: float, movement: ProcessGen) -> ProcessGen:
-        """Acquire the shared ``gmem`` bus, run the functional *movement* (its bus time is
-        **subsumed**), and hold the bus for the full *occupancy_cyc* (beats * beta).  The
-        load-read and store-write of in-flight jobs SERIALIZE on this one resource (modeling the
-        FIR's measured <10% load/store burst overlap — see :class:`FIRTiming`), so the bus moves
-        ``read_words + write_words`` beats per job — the composition that sets the period."""
-        with self._bus.request() as req:
-            yield req
-            t0 = self.now
-            result = yield from movement
-            elapsed = (self.now - t0) / self.clk.period
-            yield self.timeout(self.timing.sec(occupancy_cyc - elapsed))
-            return result
 
     # --- the synthesizable hook (codegen: fir_pipeline_impl.tpp; sim: this body) ---
     @synthesizable
@@ -282,22 +267,23 @@ class FIRAccel(HwComponent):
 
         **Codegen** replaces this body with ``fir_pipeline_impl.tpp`` — the ``#pragma HLS
         DATAFLOW`` region (load / compute / store ``while(!done)`` stages, shift-register FIR at
-        II=1, ``ap_uint<MEM_DW>*`` gmem via ``read_array_slice`` / ``write_array_slice``, END
-        drain, per-job status).  ``mem`` lowers to the m_axi pointer (the hwgen m_axi-hook-arg
-        branch); ``s_in`` / ``m_out`` to ``axis``.
+        II=1, ``ap_uint<MEM_DW>*`` gmem streamed direct (the lane-loop fix), END drain, per-job
+        status).  ``mem`` lowers to the m_axi pointer; ``s_in`` / ``m_out`` to ``axis``.
 
-        **Sim** — this body is the streaming model: spawn the three persistent stage processes
-        (``load`` / ``compute`` / ``store``) wired by unbounded job queues (the sim twin of the
-        DATAFLOW FIFOs) over **one shared ``gmem`` bus** (``self._bus``).  The dispatcher pulls
-        each ``FIRCmd`` off ``s_in`` and hands it to ``load`` **without blocking**, so successive
-        jobs overlap (``load(N+1) ∥ store(N)``); the bus resource serializes their read/write beats
-        (matching the FIR's measured non-overlap) — that composition makes the throughput period
-        emerge from the bus *occupancy*, not from a fitted end-to-end model.  The ``END`` sentinel drains
-        the network (each stage forwards it and returns), mirroring the kernel's per-batch
-        ``ap_done`` restart.  The functional movement + the shared ``fir_golden`` keep the sim's
-        ``Y`` bit-exact with the kernel's; timing is the occupancy-based :class:`FIRTiming`."""
+        **Sim — streaming (double-buffered) model.**  Spawn the three persistent stage processes
+        (``load`` / ``compute`` / ``store``) wired by unbounded job queues.  The load's X-read and
+        the store's Y-write use the **anchored** Region transfers (``read_slice_pipelined`` /
+        ``write_slice_pipelined``): they hold the memory slave's **separate** AR/R and AW/W
+        channels (full-duplex — the lane-loop fix enabled it), and the store is **early-anchored**
+        at ``x_read_start + t_fill`` (the X-read burst start, after the h-read) with ``min_span =
+        compute_body`` so its Y-write *overlaps* the X-read (within-job streaming) and hides under
+        compute.  The per-direction channel spans are
+        the memory slave's calibrated :class:`~waveflow.hw.memif.BusTiming` (attached by the
+        driver); the component supplies only ``num_trans`` at the slice call.  The dispatcher pulls
+        each ``FIRCmd`` off ``s_in`` and kicks ``load`` without blocking, so ``load(N+1) ∥
+        store(N)``.  The ``END`` sentinel drains the network.  ``execute`` (the shared golden) keeps
+        ``Y`` bit-exact; the compute timing is the two learned models (PROVISIONAL until calibrated)."""
         data = mem.region(self.data_base, Float32, word_bw=self._mem_bw)
-        self._bus = self.resource(capacity=1)   # the shared gmem bus (FIR serializes load/store)
         load_q = self.transaction_queue()       # dispatcher -> load
         comp_q = self.transaction_queue()       # load       -> compute
         store_q = self.transaction_queue()      # compute     -> store
@@ -308,26 +294,19 @@ class FIRAccel(HwComponent):
         while True:
             cmd: FIRCmd = yield from s_in.get(FIRCmd)
             if int(cmd.op) == int(FIROp.end):
-                # END drains behind the in-flight jobs' lead-in delays (preserve order).
-                self.process(self._delayed_put(load_q, ("end", None), self.timing.pipe_fill_cyc))
+                load_q.put(("end", None))
                 return
             self._ev("cmd_arrive", int(cmd.tx_id), n_rows=int(cmd.n_rows), n_cols=int(cmd.n_cols))
-            # The command stream-in + DATAFLOW fill is a per-job LEAD-IN latency that overlaps
-            # across jobs (it is NOT a throughput cost) -> a parallel delay, not a serial timeout.
-            self.process(self._delayed_put(load_q, ("job", cmd), self.timing.pipe_fill_cyc))
-
-    def _delayed_put(self, q, item, delay_cyc: float) -> ProcessGen[None]:
-        """Put *item* on *q* after a *delay_cyc* lead-in — spawned per job so the lead-ins overlap
-        (a pure latency, not a throughput bottleneck)."""
-        yield self.timeout(self.timing.sec(delay_cyc))
-        q.put(item)
+            load_q.put(("job", cmd))            # kick load without blocking -> jobs overlap
 
     # --- the three persistent stage processes (sim-only; the kernel's DATAFLOW stages) ---
     def _load_stage(self, data, load_q, comp_q) -> ProcessGen[None]:
-        """Read X + taps off the shared bus (``read_words`` beats + the per-job setup); forward to
-        ``compute``.  A bad-size job streams no data (a balanced ``bad`` marker, like the kernel).
-        The ``pipe_fill_cyc`` lead-in (command stream-in + DATAFLOW fill) precedes the read and
-        overlaps across jobs (the dispatcher already queued the next command)."""
+        """Read h (taps) + X off the AR/R channel via anchored ``read_slice_pipelined`` (one burst
+        each, ``num_trans=1``).  h is read FIRST and holds the AR/R channel (``setup+T``), so the
+        X-read burst starts only *after* it — the X-read's returned ``tstart`` (its burst start, =
+        ``t_begin + h_span``) is the honest fill anchor forwarded to ``compute`` (NOT the optimistic
+        load-entry ``t_begin``, which would ignore the h-read delay).  A bad-size job streams no
+        data (a balanced ``bad`` marker, like the kernel)."""
         while True:
             kind, cmd = yield load_q.get()
             if kind == "end":
@@ -338,24 +317,23 @@ class FIRAccel(HwComponent):
                 comp_q.put(("bad", cmd, None))
                 continue
             n_rows, n_cols = int(cmd.n_rows), int(cmd.n_cols)
-            read_words = n_rows * n_cols + T
+            t_begin = self.now                              # load entry (h-read burst anchor)
             self._ev("load_begin", tx)
-
-            def read_xh() -> ProcessGen:
-                hf = yield from data.read_slice(int(cmd.h_off), int(cmd.h_off) + T)
-                Xf = yield from data.read_slice(int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols)
-                return hf, Xf
-
-            hf, Xf = yield from self._bus_xfer(
-                self.timing.bus_cyc(read_words) + self.timing.bus_job_cyc, read_xh())
+            hf, _ = yield from data.read_slice_pipelined(
+                int(cmd.h_off), int(cmd.h_off) + T, t_out_start=t_begin, num_trans=1)
+            # X reads AFTER h on the same R channel; its burst start (returned tstart) already
+            # carries the h-read delay — the honest anchor for the fill/store (t_begin is optimistic).
+            Xf, x_read_start = yield from data.read_slice_pipelined(
+                int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols, num_trans=1)
             self._ev("load_end", tx)
             X = np.asarray(Xf, dtype=np.float32).reshape(n_rows, n_cols)
-            comp_q.put(("job", cmd, (X, np.asarray(hf, dtype=np.float32))))
+            comp_q.put(("job", cmd, (X, np.asarray(hf, dtype=np.float32), x_read_start)))
 
     def _compute_stage(self, comp_q, store_q) -> ProcessGen[None]:
-        """The streaming shift-register FIR (II=1 over the ``n_rows*n_cols`` input samples) — the
-        ONE shared golden.  No bus; it runs under the bus shadow (the kernel is memory-bound), so
-        it is hidden in steady state and only exposed in the single-job latency."""
+        """The streaming shift-register FIR (II=1) — the ONE shared golden.  Holds **no** bus
+        channel (so it overlaps load(N+1)/store(N)); its timing is carried into the store's
+        anchored span: the store's early anchor ``x_read_start + t_fill`` and its compute-shadow
+        floor ``min_span = compute_body`` (the II=1 production span)."""
         while True:
             kind, cmd, payload = yield comp_q.get()
             if kind == "end":
@@ -366,19 +344,27 @@ class FIRAccel(HwComponent):
                 continue
             tx = int(cmd.tx_id)
             n_rows, n_cols = int(cmd.n_rows), int(cmd.n_cols)
-            X, h = payload
+            X, h, x_read_start = payload
             self._ev("compute_begin", tx)
             Y = self.execute(X, h)
-            yield self.timeout(self.timing.sec(self.timing.compute_cyc(n_rows, n_cols)))
+            # The two learned COMPUTE estimates (seconds; clk_period folded into the model features).
+            # t_fill = ramp from the X-read burst start to the first Y output; compute_body = the
+            # II=1 production span the store then hides under (the write's min_span floor).
+            row = {"n_row": n_rows, "n_col": n_cols, "clk_period": self.clk.period}
+            t_store_anchor = x_read_start + self.fill_model.predict(row)
+            compute_body = self.compute_model.predict(row)
             self._ev("compute_end", tx)
-            store_q.put(("job", cmd, Y))
+            store_q.put(("job", cmd, (Y, t_store_anchor, compute_body)))
 
     def _store_stage(self, data, store_q, m_out) -> ProcessGen[None]:
-        """Write Y over the shared bus (``write_words`` beats — serialized with the loads of
-        in-flight jobs on the one bundle) + emit the per-job response on ``m_out`` (``ok`` /
-        ``bad_size``); the ``END`` sentinel ends the batch."""
+        """Early-anchored Y-write on the AW/W channel via ``write_slice_pipelined`` — anchored at
+        ``t_store_anchor`` (when the first Y row was ready), occupying the channel for
+        ``max(channel_occupancy, compute_body)``, so it OVERLAPS the X-read and hides under compute.
+        Back-to-back writes serialize on the channel inside the bus model (the slave's
+        ``write_busy_until``), so this stage just passes its *desired* early anchor.  Then emit the
+        per-job response; the ``END`` sentinel ends the batch."""
         while True:
-            kind, cmd, Y = yield store_q.get()
+            kind, cmd, payload = yield store_q.get()
             if kind == "end":
                 return
             tx = int(cmd.tx_id)
@@ -386,14 +372,14 @@ class FIRAccel(HwComponent):
                 yield from m_out.write(FIRResp(tx_id=tx, status=int(FIRStatus.bad_size)))
                 self._ev("resp_sent", tx, status=int(FIRStatus.bad_size))
                 continue
-            n_rows = int(cmd.n_rows)
-            write_words = n_rows * (int(cmd.n_cols) - T + 1)
-            self._ev("store_begin", tx)
-
-            def write_y() -> ProcessGen:
-                yield from data.write_slice(int(cmd.y_off), Y.ravel(), element_type=Float32)
-
-            yield from self._bus_xfer(self.timing.bus_cyc(write_words), write_y())
-            self._ev("store_end", tx)
+            Y, t_store_anchor, compute_body = payload
+            t0, t1 = yield from data.write_slice_pipelined(
+                int(cmd.y_off), Y.ravel(), t_out_start=t_store_anchor, num_trans=1,
+                min_span=compute_body, element_type=Float32)
+            self._ev("store_begin", tx, t=t0)
+            self._ev("store_end", tx, t=t1)
+            # the response write is a real transfer on m_out — its cost is modeled by the stream
+            # interface itself (StreamIF._push_to_endpoint advances the clock by nwords), serial in
+            # the store stage exactly like the kernel; no separate delay to add here.
             yield from m_out.write(FIRResp(tx_id=tx, status=int(FIRStatus.ok)))
             self._ev("resp_sent", tx, status=int(FIRStatus.ok))

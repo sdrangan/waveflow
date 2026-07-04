@@ -240,6 +240,7 @@ class MMIFSlave(InterfaceEndpoint):
     addr_range: AXIMMAddressRange | None = field(init=False)
     read_channel: simpy.Resource = field(init=False)
     write_channel: simpy.Resource = field(init=False)
+    write_busy_until: float = field(init=False, default=0.0)
 
     type_name = 'mmif_slave'
 
@@ -255,6 +256,13 @@ class MMIFSlave(InterfaceEndpoint):
         self.read_channel = self.resource(capacity=1)
         self.write_channel = (
             self.read_channel if self.half_duplex else self.resource(capacity=1))
+        # Effective time the write channel is busy until — the memory of the last
+        # (early-anchored) write's span end.  An early-anchored write measures its span
+        # from a *past* anchor (to model within-job read/write overlap), which the SimPy
+        # resource alone cannot serialize (it gates the acquire instant, not the span); so
+        # ``write_spanned`` clamps each write's anchor to ``max(t_out_start, write_busy_until)``
+        # here.  ``0.0`` = free since t=0 (sim time is non-negative, so it never clamps the first).
+        self.write_busy_until = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1246,8 +1254,15 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         """Early-anchored write of *words* holding the slave write channel for the
         calibrated occupancy span (``slave.bus_timing`` over ``{num_trans, nwords}``,
         floored by *min_span* — the compute-shadow floor).  Returns the bus-visible
-        span ``(t0, t1)``; the write completes at ``t_out_start + span`` (clamped to
-        now), overlapping an earlier read, with its word_bw bus time subsumed."""
+        span ``(t0, t1)``; the write completes at ``anchor + span`` (clamped to now),
+        overlapping an earlier read, with its word_bw bus time subsumed.
+
+        *t_out_start* is the caller's *desired* early anchor (deliberately in the past to
+        model within-job read/write overlap).  The effective anchor is clamped up to the
+        channel's :attr:`~MMIFSlave.write_busy_until` — the span end of the previous write —
+        so back-to-back early-anchored writes serialize on the channel instead of
+        double-booking it (the SimPy resource gates only the acquire instant, not a
+        past-anchored span, so the serialization lives here, not in the caller)."""
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
         nwords = int(words.shape[0])
@@ -1257,13 +1272,12 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             span = max(span if span is not None else 0.0, float(min_span))
         with slave_ep.write_channel.request() as req:
             yield req
-            anchor = self.env.now if t_out_start is None else float(t_out_start)
+            base = self.env.now if t_out_start is None else float(t_out_start)
+            anchor = max(base, slave_ep.write_busy_until)   # channel can't restart before last span ended
             # Early-anchored functional write (subsumed), channel already held.
             if protocol == AXIMMProtocol.FULL:
                 cycles = self.latency_init + nwords * self._poll_stretch(ep_name)
-                dly = cycles / self.clk.freq
-                if t_out_start is not None:
-                    dly = max(0.0, dly + (t_out_start - self.env.now))
+                dly = max(0.0, cycles / self.clk.freq + (anchor - self.env.now))
                 if dly > 0:
                     yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
@@ -1272,8 +1286,8 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 word_step = self._word_step()
                 for i in range(nwords):
                     dly = slave_ep.latency_per_word / self.clk.freq
-                    if t_out_start is not None and i == 0:
-                        dly = max(0.0, dly + (t_out_start - self.env.now))
+                    if i == 0:
+                        dly = max(0.0, dly + (anchor - self.env.now))
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_write_proc is not None:
@@ -1281,9 +1295,11 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                             words[i : i + 1], local_addr + i * word_step))
             # the watched word may have changed — wake any pollers on this slave
             self._notify_write(ep_name)
-            # Occupy the channel out to the full span (anchored).
+            # Occupy the channel out to the full span (anchored); remember the busy-until so the
+            # next early-anchored write on this channel serializes after it.
             t1 = max(anchor + span, self.env.now)
             t0 = t1 - span
+            slave_ep.write_busy_until = t1
             rem = t1 - self.env.now
             if rem > 0:
                 yield self.timeout(rem)
