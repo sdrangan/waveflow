@@ -744,9 +744,17 @@ def kernel_signature(comp, variant_suffix: str = "") -> str:
         arg_lines.append(f"    ap_uint<{bw}>* {attr}")
         # depth is the total region the master sees — a named header constant
         # summing this port's buffer bounds (see header_to_cpp).
+        # max_*_burst_length=256 (the AXI4 max) lets bulk transfers coalesce into
+        # full bursts; without it Vitis caps bursts at the default 16 and
+        # partitions every read_array_slice into 16x more requests (measured ~8x
+        # slower under the cosim's per-burst stall model).  It is a *cap*, not a
+        # forced size — small transfers still burst small; the only cost is the
+        # adapter's burst-buffer BRAM.  TODO: make per-port configurable (a small
+        # random-access port wants a smaller cap).
         pragma_lines.append(
             f"#pragma HLS INTERFACE m_axi port={attr} offset=slave "
-            f"bundle=gmem depth={attr}_depth"
+            f"bundle=gmem depth={attr}_depth "
+            f"max_read_burst_length=256 max_write_burst_length=256"
         )
     # Control protocol on the return port: s_axilite when a regmap drives
     # control (poly), else ap_ctrl_hs for stream-controlled kernels (histogram /
@@ -784,12 +792,29 @@ def hook_signature(
     import typing
 
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.hw.memif import MMIFMaster
 
     hints = typing.get_type_hints(method)
     sig = inspect.signature(method)
     param_names = [name for name in sig.parameters if name != 'self']
     tparam_queue = list(template_params) if template_params else []
     args: list[tuple[str, str]] = []
+    # An ``MMIFMaster`` hook arg lowers to the raw-word m_axi pointer ``ap_uint<bw>*``
+    # (the §2 serialization convention).  Its width is the concrete bitwidth of the
+    # component's m_axi master (resolved from the hook's bound ``self`` — like the top
+    # signature does), so the pointer type is concrete even though the hook is templated
+    # on its stream widths.
+    _self = getattr(method, '__self__', None)
+    _mm_bw = None
+    if _self is not None:
+        _mm = _discover_mm_masters(_self)
+        if len(_mm) == 1:
+            _mm_bw = int(_mm[0][1].bitwidth)
+    # ``template_params`` is deduped (one entry per distinct HwParam width), but a hook can have
+    # several stream args sharing one width (e.g. a free-running kernel whose s_in and m_out are
+    # both ``mem_dwidth``).  Consume sequentially, but when the queue exhausts fall back to the
+    # last consumed param (the shared width) rather than the symbolic ``WORD_BW`` (undefined).
+    _last_tmpl: str | None = None
     for name in param_names:
         annot = hints.get(name)
         if annot is None:
@@ -797,10 +822,20 @@ def hook_signature(
                 f"Hook '{method.__name__}' parameter '{name}' has no type annotation"
             )
         if isinstance(annot, type) and issubclass(annot, (StreamIFSlave, StreamIFMaster)):
-            tmpl = tparam_queue.pop(0) if tparam_queue else "WORD_BW"
+            if tparam_queue:
+                _last_tmpl = tparam_queue.pop(0)
+            tmpl = _last_tmpl if _last_tmpl is not None else "WORD_BW"
             args.append(
                 (name, f"hls::stream<streamutils::axi4s_word<{tmpl}>>& {name}")
             )
+            continue
+        if isinstance(annot, type) and issubclass(annot, MMIFMaster):
+            if _mm_bw is None:
+                raise RuntimeError(
+                    f"Hook '{method.__name__}' arg '{name}' is an MMIFMaster but the "
+                    f"component has no single resolvable m_axi master to size the pointer"
+                )
+            args.append((name, f"ap_uint<{_mm_bw}>* {name}"))
             continue
         if (isinstance(annot, type) and issubclass(annot, DataArray)
                 and getattr(annot, 'cpp_storage', 'struct') == 'raw'):
