@@ -79,12 +79,14 @@ int main(int argc, char** argv) {
     dump_words(out_read, rout, NWS);
 
     // (C) ranged write [I0, I1) RMW: start from a copy of the full golden, splice in M
-    // replacement elements, dump the whole array. Neighbors in the boundary words must survive.
+    // replacement elements, dump the whole array. Neighbors in the boundary words must survive --
+    // this is the read-modify-write variant (write_array_slice itself is pure-write and would
+    // clobber the boundary-word neighbors).
     ap_uint<__WORD_BW__> work[NWF];
     for (int i = 0; i < NWF; ++i) work[i] = full[i];
     au::value_type wbuf[M];
     au::read_array_slice<__WORD_BW__>(repl, 0, M, wbuf);
-    au::write_array_slice<__WORD_BW__>(wbuf, work, I0, I1);
+    au::write_array_slice_rmw<__WORD_BW__>(wbuf, work, I0, I1);
     dump_words(out_write, work, NWF);
 
     return 0;
