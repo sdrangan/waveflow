@@ -5,6 +5,17 @@ This is an **executable plan** for Claude CLI. Work the phases **in order**. Eac
 rationale lives in the companion docs; this file is the sequencing, the acceptance gates, and the
 hard-won constraints so you don't re-derive them.
 
+> **PIVOT (2026-07) — read this first.** DATAFLOW is limited and off Waveflow's process/channel
+> philosophy, so we are **not productizing `interleaver_df`**; the DATAFLOW work stays as *committed
+> evidence* (the sandbox + `dataflow_mod.md`), not a featured example. **Gate G1 PASSED** — SystemC/RTL
+> verification works on this Windows box via the **XSI flow** (both a SystemC DUT and a Verilog DUT
+> driven through XSI; see [[reference-systemc-xsim-windows-xsi]]). That removes the one blocker under
+> the pivot, so the **main line is now the general / free-running model** (`component.md` hierarchy +
+> `hls::task` + XSI verification, i.e. Phase 5). **Phases 1–4 below (`interleaver_df`) are now OPTIONAL**
+> — do them only if a fast, Vitis-cosim-able bounded example is wanted; otherwise skip to Phase 5.
+> Phase 1 (capability endpoints) is the one shared piece worth doing regardless (the free-running model
+> needs it too).
+
 Companion design docs (read these for depth, don't duplicate them):
 - `plans/dataflow_mod.md` — DATAFLOW codegen design + the C1–C7 codegen-shape de-risk (with cosim
   numbers) + the capability model + the host-contract menu.
@@ -155,23 +166,30 @@ primitives only if cheap.
 
 ---
 
-## Gate G1 — SystemC-in-xsim smoke test (BEFORE the free-running interleaver)
+## Gate G1 — SystemC/RTL-in-xsim on Windows — **PASSED (2026-07)**
 
-**This is the critical gating de-risk.** The free-running `interleaver` can be verified *only* via
-SystemC/xsim (constraint 3). We have NOT proven that flow works on Windows. Prove it before investing.
+The critical gating de-risk: the free-running `interleaver` can be verified *only* via RTL sim
+(constraint 3: `hls::task`+`m_axi` → 212-345, cocotb can't drive xsim). **Result: it works on this
+Windows box — via the XSI flow, not `xsc --exe`.** Full recipe + gotchas in
+[[reference-systemc-xsim-windows-xsi]]. Evidence:
+- AMD's official XSI example (`Vivado/examples/xsim/SystemC/xsi/counter`, a **SystemC** DUT) → `PASSED
+  test, 15 checks, exit 0`.
+- A hand **Verilog** DUT (registered adder, via `xvlog` — the HLS-export path) driven through XSI:
+  poke 8-bit `a`/`b`, clock a posedge, peek 9-bit `sum` = 42, no X → `PASSED, exit 0`.
+- `ap_int.h` compiles fine under the bundled mingw g++ 6.2.0.
 
-**Steps:**
-- Write a ~10-line SystemC TB (`sc_module` with an `SC_THREAD`) driving a trivial Verilog DUT (e.g., a
-  registered adder). Compile with Vivado's `xsc` (`C:/Xilinx/2025.1/Vivado/bin/xsc`), elaborate with
-  `xelab`, run in `xsim`. Confirm it runs and checks output.
-- Separately confirm `#include "ap_int.h"` (from `C:/Xilinx/2025.1/Vitis/include`) compiles under
-  `xsc`, and `ap_int ↔ sc_bv` conversion works.
+Key facts for Phase 5:
+- **The flow is XSI** (`xelab -dll` → `xsimk.dll`; a standalone C++/SystemC exe loads it via
+  `xsi_loader` and drives **top-level ports** only). `xsc --exe` standalone-SystemC is broken here —
+  don't use it.
+- The XSI primitives proven (multi-bit `put_value`/`get_value`, clock `run(t)`) are all AXI needs;
+  driving `s_axis`/`m_axi` is just the handshake protocol in the TB (a behavioral AXI-MM slave), which
+  is TB-authoring, not a toolchain risk.
+- Gotchas: `call` before `.bat` tools; invoke the exe as `.\run_xsim.exe`; PATH must include the
+  design-DLL dir `xsim.dir/<top>/` (for the xelab-generated `sysc_interface.dll`), mingw `nt/bin`,
+  `lib/win64.o`, `bin`.
 
-**Gate:** the `xsc → xelab → xsim` SystemC flow runs a passing check on Windows, and `ap_int.h`
-compiles under `xsc`.
-- **If PASS** → proceed to Phase 5.
-- **If FAIL** → STOP. Do not build the free-running path. Report the specific blocker; the decision
-  becomes "Linux box / Questa license / defer" — not "build codegen we can't verify."
+**→ Gate cleared. Proceed to Phase 5 (now the main line).**
 
 ---
 
