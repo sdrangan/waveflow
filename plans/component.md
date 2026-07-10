@@ -290,6 +290,27 @@ enqueued, there is a single source of truth and no need for `TLAST`.  **Multi-ma
 (the `n_masters` arbiter) is deferred until 2+ modules share one memory; **`TLAST`/AXI4-Stream framing**
 is the later robustness upgrade.  Implementation sequence in `plans/mem_stream_impl.md`.
 
+**`MemRStream`/`MemWStream` LT timing (P1.5).**  The `run_proc` golden models the fixed `a2s`/`s2a`
+as an **overlapped** read+write: it reads through a word-typed `Region` (element = one `ap_uint<MEM_DW>`
+word, so element coord == word index; `Region` owns the byte↔word conversion via `byte_of`/`word_bw`,
+so the accelerator hand-rolls no `byte_addr_to_word_index` or align-assert) with `read_slice_pipelined`
+and **early-anchors** the `m_out` write (`write_pipelined(t_out_start = t0 + FILL)`) so the burst costs
+`~n_words + fill`, not the `~2·n_words` of a sequential read-then-write.  `MemWStream` is the mirror
+(`get_pipelined` on `s_in` → early-anchored `write_slice_pipelined`).
+
+**Known simplification, deferred → `SimField`.**  The *downstream* consumer of an overlapped burst
+still treats the whole burst as arriving at `tend` (the compute stage waits for the full word stream
+before it starts), so **cross-stage** overlap (fill block *j+1* while gather reads block *j*) is not
+yet modeled at the stream boundary — only the within-endpoint read/write overlap above is.  The named
+exit is a **`SimField`**: a `DataSchema` field that is **not synthesized** (dropped by the extractor,
+like `@sim_only`), carries arbitrary Python structure — here an **LT timing anchor** (the producer's
+`t_out_start` / first-word-available time) — and **rides with the data** on the stream/block so a
+downstream stage can anchor its own `*_pipelined` transfer to it instead of to `tend`.  This
+generalizes the per-endpoint `t0` anchor used above into a first-class, composable field, and is the
+stream-boundary counterpart of the block-handover overlap.  Deferred (P1.5 models within-endpoint
+overlap only); connects to `project-pipeline-timing` (the `get_pipelined`/`write_pipelined` anchors it
+would carry).
+
 ## Code Generation for Synthesizable Vitis Kernels
 
 A `HwComponent` class is a **synthesizble Vitis kernel** if Waveflow can generat C++ code that Vitis can in turn run through Csynth and hence export as Vitis IP.  To determine if a particular `HwComponent` class is a synthesizable Vitis kernel, each `HwComponent` class 
