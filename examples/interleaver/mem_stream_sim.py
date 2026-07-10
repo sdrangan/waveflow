@@ -18,7 +18,7 @@ from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 
-from examples.interleaver.mem_stream import (
+from waveflow.hw.mem_stream import (
     MRCmd,
     MWCmd,
     MemRStream,
@@ -84,12 +84,12 @@ class WordSink(SimObj):
 # Read harness — MemRStream bursts a region onto m_out
 # ---------------------------------------------------------------------------
 
-def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> bool:
+def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> "MemRStream":
     """Load a known word-run into memory, command a ``MemRStream`` to burst it, and check the
-    stream output equals the region."""
+    stream output equals the region.  Returns the component (``transfer_spans`` carries the
+    modeled overlapped read+write span for the timing check)."""
     sim = Simulation()
     clk = Clock(freq=100e6)
-    wbytes = mem_dwidth // 8
 
     mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=mem_dwidth, addr_size=32)
@@ -120,18 +120,21 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> 
 
     got = np.concatenate(sink.words) if sink.words else np.array([], dtype=np.uint64)
     ok = np.array_equal(got.astype(np.uint64), known.astype(np.uint64))
-    print(f"[read] n_words={n_words} base=0x{base_addr:x} got={len(got)} words ok={ok}")
+    span_cyc = (rstream.transfer_spans[-1] / clk.period) if rstream.transfer_spans else 0.0
+    print(f"[read] n_words={n_words} base=0x{base_addr:x} got={len(got)} words "
+          f"ok={ok} span={span_cyc:.1f}cyc (~n_words+fill overlap; 2*n_words is sequential)")
     assert ok, f"MemRStream mismatch:\n got={got[:8]}\n exp={known[:8]}"
-    return ok
+    return rstream
 
 
 # ---------------------------------------------------------------------------
 # Write harness — MemWStream drains a stream into a region
 # ---------------------------------------------------------------------------
 
-def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> bool:
+def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> "MemWStream":
     """Command a ``MemWStream`` to drain a known word-run off s_in into memory, then check the
-    region equals the input."""
+    region equals the input.  Returns the component (``transfer_spans`` carries the modeled
+    overlapped drain+store span)."""
     sim = Simulation()
     clk = Clock(freq=100e6)
 
@@ -162,16 +165,22 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) ->
 
     got = mem._mem.read(base_addr, n_words).astype(np.uint64)
     ok = np.array_equal(got, known.astype(np.uint64))
-    print(f"[write] n_words={n_words} base=0x{base_addr:x} ok={ok}")
+    span_cyc = (wstream.transfer_spans[-1] / clk.period) if wstream.transfer_spans else 0.0
+    print(f"[write] n_words={n_words} base=0x{base_addr:x} ok={ok} span={span_cyc:.1f}cyc")
     assert ok, f"MemWStream mismatch:\n got={got[:8]}\n exp={known[:8]}"
-    return ok
+    return wstream
+
+
+def overlap_span_cyc(comp) -> float:
+    """The last modeled transfer span in cycles (``transfer_spans`` / clk period)."""
+    return comp.transfer_spans[-1] / comp.clk.period
 
 
 def run_and_check() -> bool:
-    ok_r = run_read()
-    ok_w = run_write()
-    print("mem_stream pysim golden: PASSED" if (ok_r and ok_w) else "FAILED")
-    return ok_r and ok_w
+    run_read()
+    run_write()
+    print("mem_stream pysim golden: PASSED")
+    return True
 
 
 if __name__ == "__main__":

@@ -2,26 +2,39 @@
 
 The Waveflow realization of the "stream-wrapped memory" pattern (``plans/component.md``): two
 pre-written, reusable :class:`~waveflow.hw.hw_component.HwComponent`s whose **kernel body is FIXED**
-(= the hand-validated sandbox ``a2s`` / ``s2a`` in
-``examples/interleaver/sandbox/il_1d/interleaver_task_sob3.cpp``), parameterized only by ``MEM_DW``.
+(= the hand-validated sandbox ``a2s`` / ``s2a`` in ``interleaver_task_sob3.cpp``), parameterized
+only by ``MEM_DW``.  They are framework code (they depend only on ``waveflow.hw`` /
+``waveflow.simulation``) so any accelerator can compose them; the ``examples/interleaver`` package
+keeps only instantiation, build orchestration, and the sandbox.
 
 * :class:`MemRStream` — the sole ``m_axi`` **read** owner: dequeues an :class:`MRCmd`
-  ``{byte_addr, n_words}``, converts the byte address to a word index, and bursts ``n_words``
-  packed words out on ``m_out`` (word-granular, one word/cycle).
+  ``{byte_addr, n_words}`` and bursts ``n_words`` packed words out on ``m_out`` (word-granular,
+  one word/cycle).
 * :class:`MemWStream` — the mirror: dequeues an :class:`MWCmd`, drains ``n_words`` words off
   ``s_in`` and pure-writes them to memory (word-aligned burst).
 
 Both are **word-granular** (``ap_uint<MEM_DW>`` throughout — the sob3 lesson: element-granular
-streams halve bus bandwidth at ``MEM_DW>32``), and each is a **free-running** (``ap_ctrl_none``)
-single-``hls::task`` kernel.  Per the DTLP + ``hls::task``+``m_axi`` de-risk (memories
-``reference-hls-task-no-maxi`` / ``reference-hls-stream-of-blocks-pingpong``) an ``m_axi`` owner
-touches **only** streams — never a ``stream_of_blocks`` — which is exactly what these two do.
+streams halve bus bandwidth at ``MEM_DW>32``), and each generates a **free-running**
+(``ap_ctrl_none``) single-``hls::task`` kernel.  Per the DTLP + ``hls::task``+``m_axi`` de-risk
+(memories ``reference-hls-task-no-maxi`` / ``reference-hls-stream-of-blocks-pingpong``) an ``m_axi``
+owner touches **only** streams — never a ``stream_of_blocks`` — which is exactly what these two do.
 
-**Codegen is a template, not a ``run_proc`` extraction** (``examples/interleaver/mem_stream_gen.py``):
-the body is fixed, so we emit the ``hls::task`` kernel directly from a template parameterized by
-``MEM_DW`` + the generated command struct.  :meth:`MemRStream.run_proc` / :meth:`MemWStream.run_proc`
-here are the **pysim golden** only — the bit-exact functional twin the generated RTL is checked
-against (via XSI — ``ap_ctrl_none`` cosim is unreliable).
+**Codegen is a template, not a ``run_proc`` extraction** (``waveflow.build.mem_stream_gen``): the
+body is fixed, so the generated top bakes a concrete width and instantiates the
+``template<int MEM_DW>`` task body shipped in ``waveflow/build/mem_{r,w}_stream_task.h``.
+:meth:`MemRStream.run_proc` / :meth:`MemWStream.run_proc` here are the **pysim golden** only — the
+bit-exact functional twin the generated RTL is checked against (via XSI — ``ap_ctrl_none`` cosim is
+unreliable).
+
+**Timing = overlapped a2s/s2a (loosely-timed).**  The hardware ``a2s`` reads word ``w`` and writes
+it out the same cycle (II=1), so read and write **overlap** — the burst costs ``~n_words + fill``,
+not the ``~2·n_words`` of a sequential read-then-write.  The golden models this by reading through a
+word-typed :class:`~waveflow.hw.memif.Region` (which owns the byte↔word conversion) with the
+**pipelined** slice and **early-anchoring** the output write at the read's first-word-available time
+plus a small pipeline ``fill`` — :meth:`~waveflow.hw.interface.StreamIFMaster.write_pipelined`'s
+"the wait shortens if the anchor is already past" is what folds the two spans together.  (Known
+simplification, deferred: the downstream consumer still treats the whole burst as arriving at
+``tend``; the named exit is a ``SimField`` — see ``plans/component.md``.)
 
 The command struct C++ generates from the :class:`MRCmd` / :class:`MWCmd` schema (the same
 ``DataSchemaStep`` path that emits ``VmacCmd`` / ``FIRCmd``), so the sim ``.get()`` and the kernel
@@ -29,9 +42,7 @@ struct share one source.
 """
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import ClassVar
 
 from waveflow.hw.clock import Clock
@@ -70,12 +81,15 @@ SCHEMA_CLASSES = [MRCmd, MWCmd]
 #: Word widths the generated command headers (read_stream<W>) support.
 WORD_BW_SUPPORTED = [32, 64]
 
-HERE = Path(__file__).resolve().parent
+#: Pipeline-fill latency (cycles) between the a2s/s2a read and its overlapped write — the small
+#: ramp before the first word is forwarded.  Loosely-timed; the burst then costs ~n_words + fill.
+FILL_CYCLES = 8
 
 
-def _word_bytes(mem_dwidth: int) -> int:
-    """Bytes per packed memory word (byte-addressed AXI)."""
-    return int(mem_dwidth) // 8
+def _word_type(mem_dwidth: int) -> type[IntField]:
+    """The packed-memory word element type — one ``ap_uint<MEM_DW>`` word.  Used as the Region
+    element type so an element coordinate **is** a word index (``nwords_per_inst == 1``)."""
+    return IntField.specialize(bitwidth=int(mem_dwidth), signed=False)
 
 
 @dataclass
@@ -85,8 +99,7 @@ class MemRStream(HwComponent):
     Endpoints (added in :meth:`__post_init__`): ``m_mem`` (:class:`MMIFMaster`, bound **read**),
     ``s_cmd`` (:class:`StreamIFSlave` carrying :class:`MRCmd`), ``m_out`` (:class:`StreamIFMaster`
     carrying packed words).  Structural param: ``mem_dwidth`` (= ``MEM_DW``).  Codegen emits the
-    fixed ``a2s`` ``hls::task`` (``examples/interleaver/mem_stream_gen.py``); :meth:`run_proc` is the
-    pysim golden.
+    fixed ``a2s`` ``hls::task``; :meth:`run_proc` is the pysim golden.
     """
 
     cpp_kernel_name: ClassVar[str | None] = "mem_r_stream"
@@ -111,6 +124,11 @@ class MemRStream(HwComponent):
         for ep in (self.m_mem, self.s_cmd, self.m_out):
             self.add_endpoint(ep)
         self._mem_bw = int(self.mem_dwidth)
+        self._word_t = _word_type(self.mem_dwidth)
+        self._fill = FILL_CYCLES * self.clk.period
+        #: Per-command modeled transfer span (seconds) — read-start → write-complete.  Overlapped,
+        #: so ~ (n_words + fill)·period, not ~2·n_words·period (observability / the timing test).
+        self.transfer_spans: list[float] = []
 
     @property
     def Cmd(self) -> type[MRCmd]:
@@ -118,18 +136,24 @@ class MemRStream(HwComponent):
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden (NOT extracted — codegen is the fixed ``a2s`` template).  Free-running:
-        dequeue an :class:`MRCmd`, convert its byte address to a word index, read that word-run off
-        ``m_mem`` and burst it out on ``m_out``.  Blocks on an empty command queue (sim drains when
-        the driver stops), mirroring the sob3 ``load_task`` firing model."""
-        wbytes = _word_bytes(self._mem_bw)
+        dequeue an :class:`MRCmd`, read the word-run off ``m_mem`` through a word-typed
+        :class:`~waveflow.hw.memif.Region` (which owns byte↔word), and burst it out on ``m_out``
+        **early-anchored** so the read and write overlap (``~n_words + fill``).  Blocks on an empty
+        command queue (sim drains when the driver stops), mirroring the sob3 ``load_task``."""
         while True:
             cmd: MRCmd = yield from self.s_cmd.get(MRCmd)
             byte_addr = int(cmd.byte_addr)
             nw = int(cmd.n_words)
-            assert byte_addr % wbytes == 0, (
-                f"MemRStream: byte_addr {byte_addr} not word-aligned (word={wbytes}B)")
-            words = yield from self.m_mem.read(nw, byte_addr)   # m_mem[w0 .. w0+nw)
-            yield from self.m_out.write(words)                  # word-granular burst out
+            t_start = self.now
+            # Region owns byte↔word: base = the command's byte address, element = one MEM_DW word,
+            # so element coord == word index and byte_of()/word_bw do the conversion (no hand-rolled
+            # byte_addr_to_word_index / align-assert on the accelerator).
+            region = self.m_mem.region(byte_addr, self._word_t, word_bw=self._mem_bw)
+            words, t0 = yield from region.read_slice_pipelined(0, nw)
+            # early-anchor the output at the first-word-available time + pipeline fill: the read and
+            # write OVERLAP (write_pipelined shortens its wait when the anchor is already past).
+            yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
+            self.transfer_spans.append(self.now - t_start)
 
 
 @dataclass
@@ -163,6 +187,9 @@ class MemWStream(HwComponent):
         for ep in (self.m_mem, self.s_cmd, self.s_in):
             self.add_endpoint(ep)
         self._mem_bw = int(self.mem_dwidth)
+        self._word_t = _word_type(self.mem_dwidth)
+        self._fill = FILL_CYCLES * self.clk.period
+        self.transfer_spans: list[float] = []
 
     @property
     def Cmd(self) -> type[MWCmd]:
@@ -170,14 +197,16 @@ class MemWStream(HwComponent):
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden (NOT extracted — codegen is the fixed ``s2a`` template).  Free-running:
-        dequeue an :class:`MWCmd`, drain its ``n_words`` off ``s_in``, and pure-write the burst to
-        ``m_mem`` at the word-aligned byte address."""
-        wbytes = _word_bytes(self._mem_bw)
+        dequeue an :class:`MWCmd`, drain its ``n_words`` off ``s_in`` (pipelined — the first-word
+        anchor), and pure-write the burst through a word-typed
+        :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap."""
         while True:
             cmd: MWCmd = yield from self.s_cmd.get(MWCmd)
             byte_addr = int(cmd.byte_addr)
             nw = int(cmd.n_words)
-            assert byte_addr % wbytes == 0, (
-                f"MemWStream: byte_addr {byte_addr} not word-aligned (word={wbytes}B)")
-            words = yield from self.s_in.get(nwords_max=nw)     # nw packed data words
-            yield from self.m_mem.write(words, byte_addr)       # pure-write burst
+            t_start = self.now
+            words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
+            region = self.m_mem.region(byte_addr, self._word_t, word_bw=self._mem_bw)
+            yield from region.write_slice_pipelined(
+                0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
+            self.transfer_spans.append(self.now - t_start)
