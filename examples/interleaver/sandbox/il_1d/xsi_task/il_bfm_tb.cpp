@@ -33,7 +33,7 @@
 // Problem constants (must match interleaver_task_tb.cpp)
 // ---------------------------------------------------------------------------
 static const int  N        = 256;
-static const int  NJ       = 4;
+static const int  NJ       = 8;   // >4 so steady-state period (slope) separates from fill/drain latency
 static const int  MEM_DW   = 64;
 static const int  BPW      = MEM_DW / 8;              // bytes per word = 8
 static const int  MEM_NW   = 8192;                    // total words
@@ -164,6 +164,7 @@ int main() {
     uint32_t h_cmd_valid = 0;
     // AXIS done slave
     int      done_count = 0;
+    long     done_cyc[NJ];              // cycle each done token arrived -> per-job period = the slope
     const uint32_t h_done_ready = 1;    // always ready
     // gmem0 read-slave FSM
     enum { AR_IDLE, R_SEND } g0_state = AR_IDLE;
@@ -245,7 +246,7 @@ int main() {
 
         // --- apply beat effects, advance FSMs, compute next held inputs ---
         if (cmd_beat) { ++cmd_idx; h_cmd_valid = (cmd_idx < NJ) ? 1u : 0u; }
-        if (done_beat) { ++done_count; }
+        if (done_beat) { done_cyc[done_count] = cyc; ++done_count; }
 
         // gmem0 read slave
         if (g0_ar_beat) {
@@ -318,6 +319,12 @@ int main() {
 
     long latency = (drain >= 0) ? drain : cyc;   // cycle the last done arrived (excludes post-done drain)
     std::printf("interleaver XSI BFM: n=%d nj=%d cycles=%ld done=%d/%d\n", N, NJ, latency, done_count, NJ);
+    // Per-job done cycle + period (delta from previous). Steady-state period = throughput; job 0 = fill latency.
+    std::printf("  per-job done cycles (period in parens):\n   ");
+    for (int j = 0; j < done_count; ++j)
+        std::printf(" j%d=%ld(%s%ld)", j, done_cyc[j],
+                    j ? "+" : "fill=", j ? done_cyc[j] - done_cyc[j-1] : done_cyc[j]);
+    std::printf("\n  bus floor ~= n/job for MEM_DW=64 (2 elems/word); 2n for MEM_DW=32\n");
     xsi.close();
     if (fails) {
         std::printf("FAILED test: %d mismatched elements\n", fails);
