@@ -9,7 +9,10 @@ import numpy as np
 import simpy
 
 from waveflow.hw.dataschema import Words
-from waveflow.hw.interface import Interface, InterfaceEndpoint, StreamIFMaster, StreamIFSlave
+from waveflow.hw.interface import (
+    Interface, InterfaceEndpoint, StreamIFMaster, StreamIFSlave,
+    port_read, port_write,
+)
 from waveflow.simulation.simobj import ProcessGen
 
 
@@ -80,6 +83,7 @@ class SchemaTransferIFMaster(InterfaceEndpoint):
         )
         self._transport = StreamTransport(master_ep=self.stream_ep)
 
+    @port_write
     def write(self, obj: Any) -> ProcessGen[None]:
         """Serialize *obj* and transmit through the transport."""
         yield from self._transport.write_words(obj.serialize(word_bw=self.bitwidth))
@@ -129,6 +133,7 @@ class SchemaTransferIFSlave(InterfaceEndpoint):
         if self.rx_proc is not None:
             yield self.env.process(self.rx_proc(obj))
 
+    @port_read
     def get(self) -> ProcessGen[Any]:
         """Pull and deserialize the next burst (pull model).
 
@@ -200,6 +205,7 @@ class ArrayTransferIFMaster(InterfaceEndpoint):
         )
         self._transport = StreamTransport(master_ep=self.stream_ep)
 
+    @port_write
     def write(self, elements) -> ProcessGen[None]:
         """Serialize *elements* and transmit as one burst.
 
@@ -282,6 +288,7 @@ class ArrayTransferIFSlave(InterfaceEndpoint):
         if self.rx_proc is not None:
             yield self.env.process(self.rx_proc(elements))
 
+    @port_read
     def get(self, count: int) -> ProcessGen[np.ndarray | list]:
         """Pull and deserialize exactly *count* elements (pull model).
 

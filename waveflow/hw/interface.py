@@ -63,6 +63,108 @@ def _not_implemented_synth(ctx, inputs, outputs):
 
 RxProc = TypeAlias = Callable[[Words], ProcessGen[None]]
 
+
+# ---------------------------------------------------------------------------
+# Endpoint direction-as-capability (roadmap Phase 1)
+# ---------------------------------------------------------------------------
+#
+# A transaction endpoint (a memory master, a stream side) physically carries a
+# read channel, a write channel, or both.  ``@port_read`` / ``@port_write`` tag
+# the concrete transaction methods with the channel they exercise, and
+# :meth:`InterfaceEndpoint.as_dir` hands out a *capability view* — a proxy that
+# exposes only the matching-direction subset.  Binding a read-only endpoint
+# (``ep.as_dir('R')``) then makes a stray write a loud ``AttributeError`` at
+# wire-up, and (later) lets codegen emit a ``const`` pointer for that binding.
+#
+# The tags are purely additive: every existing call site keeps calling the
+# endpoint directly, so poly/histogram are untouched.
+
+def port_read(fn):
+    """Tag a transaction method as exercising the **read** channel (``'R'``).
+
+    Read by :meth:`InterfaceEndpoint.as_dir`'s capability view; additive, so an
+    already-``@synthesizable`` method keeps all its other markers."""
+    fn.__port_dir__ = 'R'
+    return fn
+
+
+def port_write(fn):
+    """Tag a transaction method as exercising the **write** channel (``'W'``)."""
+    fn.__port_dir__ = 'W'
+    return fn
+
+
+#: Substrings that classify an *untagged* method by name when no explicit
+#: ``__port_dir__`` is present (the heuristic fallback).
+_PORT_DIR_READ_HINTS = ('read', 'get', 'peek', 'poll')
+_PORT_DIR_WRITE_HINTS = ('write', 'put')
+
+
+def _classify_port_dir(name, attr):
+    """Classify endpoint attribute *name* as ``'R'`` / ``'W'`` / ``None``.
+
+    An explicit ``@port_read`` / ``@port_write`` tag wins.  Otherwise a callable
+    is classified by a name heuristic (read/get/peek/poll → read;
+    write/put → write); anything unmatched — and every non-callable — is
+    ``None`` (untyped, allowed on any direction)."""
+    explicit = getattr(attr, '__port_dir__', None)
+    if explicit in ('R', 'W'):
+        return explicit
+    if not callable(attr):
+        return None
+    lname = name.lower()
+    if any(h in lname for h in _PORT_DIR_READ_HINTS):
+        return 'R'
+    if any(h in lname for h in _PORT_DIR_WRITE_HINTS):
+        return 'W'
+    return None
+
+
+class CapabilityView:
+    """A direction-restricted proxy over an :class:`InterfaceEndpoint`.
+
+    Built by :meth:`InterfaceEndpoint.as_dir` for a ``'R'`` or ``'W'`` binding.
+    Attribute access delegates to the wrapped endpoint, but a method whose
+    classified direction (see :func:`_classify_port_dir`) conflicts with the
+    bound direction raises :class:`AttributeError` — so a read-only binding
+    cannot write, and vice versa.  Untyped members (fields, helpers) pass
+    through unrestricted."""
+
+    __slots__ = ('_endpoint', '_direction')
+
+    def __init__(self, endpoint: "InterfaceEndpoint", direction: str) -> None:
+        object.__setattr__(self, '_endpoint', endpoint)
+        object.__setattr__(self, '_direction', direction)
+
+    def __getattr__(self, name: str):
+        endpoint = object.__getattribute__(self, '_endpoint')
+        direction = object.__getattribute__(self, '_direction')
+        attr = getattr(endpoint, name)
+        d = _classify_port_dir(name, attr)
+        if d is not None and d != direction:
+            want = 'read' if d == 'R' else 'write'
+            raise AttributeError(
+                f"{type(endpoint).__name__}.{name} is a {want}-direction "
+                f"operation and is not accessible on a '{direction}' capability "
+                f"view of this endpoint"
+            )
+        return attr
+
+    @property
+    def endpoint(self) -> "InterfaceEndpoint":
+        """The underlying (unrestricted) endpoint this view wraps."""
+        return object.__getattribute__(self, '_endpoint')
+
+    @property
+    def direction(self) -> str:
+        """The bound direction of this view (``'R'`` or ``'W'``)."""
+        return object.__getattribute__(self, '_direction')
+
+    def __repr__(self) -> str:
+        endpoint = object.__getattribute__(self, '_endpoint')
+        direction = object.__getattribute__(self, '_direction')
+        return f"<CapabilityView {direction} of {endpoint!r}>"
+
 @dataclass
 class InterfaceEndpoint(SimObj):
     """
@@ -99,6 +201,25 @@ class InterfaceEndpoint(SimObj):
             The name of the interface side to bind to.
         """
         interface.bind(ep_name, self)
+
+    def as_dir(self, direction: str) -> "InterfaceEndpoint | CapabilityView":
+        """Return a capability view of this endpoint restricted to *direction*.
+
+        ``'RW'`` returns the endpoint itself (full, unrestricted access).
+        ``'R'`` / ``'W'`` return a :class:`CapabilityView` proxy that exposes
+        only the matching-direction transaction methods — a read view raises
+        :class:`AttributeError` on a write call and vice versa (see
+        :func:`_classify_port_dir` for how methods are classified).  This is the
+        direction-as-capability contract: a component binds an endpoint under the
+        one direction it actually uses, so the wrong-direction call fails at
+        wire-up rather than silently in simulation."""
+        if direction not in ('R', 'W', 'RW'):
+            raise ValueError(
+                f"as_dir: direction must be 'R', 'W', or 'RW', got {direction!r}"
+            )
+        if direction == 'RW':
+            return self
+        return CapabilityView(self, direction)
 
 
 @dataclass
@@ -493,6 +614,7 @@ class StreamIFSlave(QueuedTransferIFSlave):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
+    @port_read
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetStmt)
     def get(self, schema_type=None, count=None, *, nwords_max=None):
         """Pull the next burst from the buffer, optionally deserializing it.
@@ -540,6 +662,7 @@ class StreamIFSlave(QueuedTransferIFSlave):
 
         return schema_type().deserialize(raw_words, word_bw=self.bitwidth)
 
+    @port_read
     def get_pipelined(self, schema_type=None, count=None):
         """Pull the next burst and return ``(data, tstart)`` where ``tstart``
         is the SimPy time when the first word of the burst arrived.
@@ -605,6 +728,7 @@ class StreamIFMaster(QueuedTransferIFMaster):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
+    @port_write
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamWriteStmt)
     def write(self, data) -> ProcessGen[None]:
         """Write a burst to the bound interface, serializing typed data.
@@ -634,6 +758,7 @@ class StreamIFMaster(QueuedTransferIFMaster):
             )
         yield self.process(self._make_write_call(raw_words))
 
+    @port_write
     def write_pipelined(self, data, t_out_start: float):
         """Write a burst modelling pipeline overlap via ``t_out_start``.
 
