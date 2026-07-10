@@ -232,16 +232,63 @@ that keeps a load/store dataflow correct (see `plans/dataflow_mod.md`).  The gen
 An `Interface` bound between two endpoints (`add_if` + `bind`) is *one* logical connection that
 renders differently per target — the same graph edge, three ways:
 
-| interface kind      | pysim               | composite kernel (intra-IP) | system (inter-IP)          |
-| ------------------- | ------------------- | --------------------------- | -------------------------- |
-| stream              | SimPy queue         | `hls::stream` FIFO          | AXI4-Stream                |
-| memory (read/write) | backing array + txn | BRAM / `m_axi` to the mem   | `m_axi` → interconnect/mem |
+| interface kind      | pysim               | composite kernel (intra-IP)      | system (inter-IP)          |
+| ------------------- | ------------------- | -------------------------------- | -------------------------- |
+| stream              | SimPy queue         | `hls::stream` FIFO               | AXI4-Stream                |
+| memory (read/write) | backing array + txn | BRAM / `m_axi` to the mem        | `m_axi` → interconnect/mem |
+| **block (`SOBIF`)** | ping-pong buffer    | `hls::stream_of_blocks<T[N],2>`  | (compose two IPs; N/A now) |
 
 So the lowering is determined by two things: the interface **kind** (stream vs memory) and the
 parent's **role** (composite → on-chip FIFO/BRAM; system → AXI between IPs).  This should reuse the
 existing `Interface` class — the internal `add_if` is the same master↔slave transactional connection
 already used to wire top-level components in a `Simulation`, just scoped inside a parent.  It is not a
 new mechanism; it is the existing one made hierarchical.
+
+### `SOBIF` — the block interface (resident random-access double-buffer)
+
+`SOBIF` is a distinct interface **kind**, not a flag on `StreamIF`, because the semantics genuinely
+differ: a stream is sequential element/word FIFO dequeue; a `SOBIF` hands over a whole **block**
+(`elem_type = DataArray[T,N]`) with **acquire/release** (`write_lock`/`read_lock`) semantics and a
+**random-access** consumer.  It still subclasses `QueuedTransferIF` (reuse the master/slave connect +
+SimPy plumbing); the new parts are only block granularity, the lock handover, and the random-access
+API.  It lowers to `hls::stream_of_blocks<T[N],2>` (the depth-2 ping-pong).  The producer is the
+`write_lock` side (e.g. `Fill`); the consumer is the `read_lock` side (e.g. `Gather`).  **Fill and
+Gather MUST be separate components** — the ping-pong overlap requires it (fill block j+1 while gather
+reads block j), and the DTLP rule forbids folding either into an `m_axi` owner.
+
+**Throughput is a property the `SOBIF` consumer advertises** (feeds the LT timing model), and gather vs
+scatter are NOT symmetric:
+
+- **random-READ consumer (gather `Y[i]=X[P[i]]`)** → `n / min(LW, 2)`.  A BRAM has two physical ports;
+  the ping-pong gives the reader *both* (the writer is on the other buffer), so 2 arbitrary reads/cycle
+  are FREE (verified in sob3 RTL: dual-port memcore, no replication).  Cap is 2; `LW>2` needs block
+  replication.
+- **random-WRITE consumer (scatter `Y[P[i]]=X[i]`)** → `n`.  Two arbitrary writes can't be *proven*
+  conflict-free (WAW), so Vitis serializes them regardless of ports — unless the index stream carries a
+  **permutation guarantee**, which licenses `#pragma HLS DEPENDENCE ... false` → `n/2`.  Reads are
+  order-independent; writes are not.  This asymmetry is why the input-side resident block rides the
+  free dual-port down but the output-side one does not.
+
+For MEM_DW=64 the interleaver is read-bound at `n` with `LW=2` (measured 295 cyc/job) — the sweet
+spot; `LW>2` only helps at MEM_DW≥128.
+
+### The concrete memory-endpoint components
+
+The "stream-wrapped memory" pattern above is realized by two pre-written, reusable `HwComponent`s whose
+kernel body is FIXED (the validated sandbox `a2s`/`s2a`), parameterized only by `MEM_DW`:
+
+- **`MemRStream`** — `m_mem: MMIFMaster @port_read` + `s_cmd: StreamIFSlave[MRCmd]` + `m_out:
+  StreamIFMaster[word_t]`.  Sole `m_axi` read owner; processes an `MRCmd{byte_addr, n_words}` queue in
+  order and bursts words out.  Transparent to what the words *are* — "P then X" is just two queued
+  commands; the receiver splits by count.
+- **`MemWStream`** — the mirror (`@port_write`, `s_in` word stream → pure-write burst).
+
+A pure-stream **`Sequencer`** (touches no memory) issues the ordered `MRCmd`/`MWCmd` from the app
+command and forwards `n_words` to the compute tiles and to a tiny count-driven **`Demux`** (splits
+`m_out` into `p_words`/`x_words`).  Because the split counts are the same `n_words` the Sequencer
+enqueued, there is a single source of truth and no need for `TLAST`.  **Multi-master arbitration**
+(the `n_masters` arbiter) is deferred until 2+ modules share one memory; **`TLAST`/AXI4-Stream framing**
+is the later robustness upgrade.  Implementation sequence in `plans/mem_stream_impl.md`.
 
 ## Code Generation for Synthesizable Vitis Kernels
 
