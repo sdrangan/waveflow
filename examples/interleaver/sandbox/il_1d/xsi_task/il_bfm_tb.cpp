@@ -206,8 +206,10 @@ int main() {
     // -----------------------------------------------------------------------
     long cyc = 0;
     bool timed_out = false;
-    for (;;) {
-        if (done_count >= NJ) break;
+    long drain = -1;                 // cycle at which the last done arrived; then keep clocking so the
+    for (;;) {                        // final posted write burst lands (done can fire before B response).
+        if (drain >= 0 && (cyc - drain) >= 512) break;
+        if (done_count >= NJ && drain < 0) drain = cyc;
         if (cyc >= MAX_CYCLES) { timed_out = true; break; }
         ++cyc;
 
@@ -314,7 +316,8 @@ int main() {
         }
     }
 
-    std::printf("interleaver XSI BFM: n=%d nj=%d cycles=%ld done=%d/%d\n", N, NJ, cyc, done_count, NJ);
+    long latency = (drain >= 0) ? drain : cyc;   // cycle the last done arrived (excludes post-done drain)
+    std::printf("interleaver XSI BFM: n=%d nj=%d cycles=%ld done=%d/%d\n", N, NJ, latency, done_count, NJ);
     xsi.close();
     if (fails) {
         std::printf("FAILED test: %d mismatched elements\n", fails);
