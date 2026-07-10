@@ -119,3 +119,49 @@ class MemMgrStep(Buildable):
         if not src_path.exists():
             raise FileNotFoundError(f"MemMgr source file not found: {src_path}")
         return src_path.read_text(encoding="utf-8")
+
+
+class MemStreamStep(Buildable):
+    """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
+    output directory.
+
+    ``mem_r_stream_task.h`` / ``mem_w_stream_task.h`` hold the width-templated
+    (``template<int MEM_DW>``) single-firing ``hls::task`` bodies (the validated sandbox
+    ``a2s`` / ``s2a``).  Copied verbatim — the generated ``mem_stream`` top instantiates them at a
+    concrete width — mirroring :class:`StreamUtilsStep` / :class:`MemMgrStep` (read_text ->
+    write_text from ``waveflow/build/``).
+
+    Parameters
+    ----------
+    output_dir : str | Path
+        Directory path **relative to** ``BuildConfig.root_dir`` where the task headers are written.
+        Defaults to ``"."`` (the root directory).
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        """Output directory path relative to ``BuildConfig.root_dir``."""
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {
+            "mem_r_stream_task": self._output_dir / "mem_r_stream_task.h",
+            "mem_w_stream_task": self._output_dir / "mem_w_stream_task.h",
+        }
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        src_names: dict[str, str] = {
+            "mem_r_stream_task": "mem_r_stream_task.h",
+            "mem_w_stream_task": "mem_w_stream_task.h",
+        }
+        if key not in src_names:
+            raise KeyError(f"Unknown MemStreamStep output key: {key!r}")
+        src_path = _SRC_DIR / src_names[key]
+        if not src_path.exists():
+            raise FileNotFoundError(f"MemStream source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")
