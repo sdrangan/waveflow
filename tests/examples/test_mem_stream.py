@@ -12,16 +12,16 @@ from pathlib import Path
 
 
 def test_mrcmd_schema_single_source():
-    """MRCmd / MWCmd pack {byte_addr, n_words} into one 64-bit word (LSB-first)."""
+    """MRCmd / MWCmd pack {word_index, n_words} into one 64-bit word (LSB-first)."""
     from waveflow.hw.mem_stream import MRCmd, MWCmd
 
     assert MRCmd.nwords_per_inst(64) == 1
     assert MRCmd.nwords_per_inst(32) == 2
-    c = MRCmd(byte_addr=800, n_words=128)
+    c = MRCmd(word_index=100, n_words=128)
     w = c.serialize(word_bw=64)
-    assert int(w[0]) == 800 | (128 << 32)          # byte_addr low, n_words high
+    assert int(w[0]) == 100 | (128 << 32)          # word_index low, n_words high
     d = MRCmd().deserialize(w, word_bw=64)
-    assert int(d.byte_addr) == 800 and int(d.n_words) == 128
+    assert int(d.word_index) == 100 and int(d.n_words) == 128
     # mirror schema
     assert MWCmd.nwords_per_inst(64) == 1
 
@@ -39,6 +39,16 @@ def test_mem_w_stream_pysim_golden():
     from examples.interleaver.mem_stream_sim import run_write
     for nw in (128, 1, 257):
         assert run_write(n_words=nw).transfer_spans
+
+
+def test_mem_stream_word_addressed():
+    """The command is an element/word coordinate, so a **word-addressed** memory (byte_addressable
+    =False) takes the *identical* word_index command a byte-addressed one does and reads/writes the
+    same words — proving the arena convention (Region._word_bytes absorbs the address unit)."""
+    from examples.interleaver.mem_stream_sim import run_read, run_write
+    for nw in (128, 1, 257):
+        assert run_read(n_words=nw, byte_addressable=False).transfer_spans
+        assert run_write(n_words=nw, byte_addressable=False).transfer_spans
 
 
 def test_mem_stream_read_write_overlap():

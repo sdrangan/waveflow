@@ -14,7 +14,7 @@ import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave, Words
 from waveflow.hw.memif import DirectMMIF
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import AddrUnit, MemComponent
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 
@@ -84,24 +84,32 @@ class WordSink(SimObj):
 # Read harness — MemRStream bursts a region onto m_out
 # ---------------------------------------------------------------------------
 
-def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> "MemRStream":
+def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
+             byte_addressable: bool = True) -> "MemRStream":
     """Load a known word-run into memory, command a ``MemRStream`` to burst it, and check the
     stream output equals the region.  Returns the component (``transfer_spans`` carries the
-    modeled overlapped read+write span for the timing check)."""
+    modeled overlapped read+write span for the timing check).
+
+    ``byte_addressable`` selects the memory's addressing unit (byte-addressed AXI DRAM vs a
+    word-addressed on-chip memory).  The command carries the same **word_index** either way — the
+    arena convention: ``Region._word_bytes`` absorbs byte-vs-word, so both take identical commands."""
     sim = Simulation()
     clk = Clock(freq=100e6)
 
+    addr_unit = AddrUnit.byte if byte_addressable else AddrUnit.word
     mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
-                       word_size=mem_dwidth, addr_size=32)
-    # Reserve up to the region and pre-load a known pattern (raw words, untimed).
+                       word_size=mem_dwidth, addr_size=32, addr_unit=addr_unit)
+    # Reserve a prefix, then the burst region; both live in one flat arena at base 0 (bind_base
+    # default).  The burst begins at word offset `base_words` — the command's element coordinate.
     mem.alloc(base_words)
-    base_addr = mem.alloc(n_words)               # byte address of the burst region
+    base_addr = mem.alloc(n_words)               # native-unit address of the burst region
+    word_index = base_words                      # element coordinate within the base-0 arena
     known = (np.arange(n_words, dtype=np.uint64) * 2654435761 + 12345) & ((1 << mem_dwidth) - 1)
     mem._mem.write(base_addr, known.astype(np.uint64))
 
     rstream = MemRStream(name="rstream", sim=sim, mem_dwidth=mem_dwidth)
     driver = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                       cmds=[MRCmd(byte_addr=base_addr, n_words=n_words)])
+                       cmds=[MRCmd(word_index=word_index, n_words=n_words)])
     sink = WordSink(sim=sim, bitwidth=mem_dwidth)
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
@@ -112,7 +120,7 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> 
     out_if.bind(ep_name="master", endpoint=rstream.m_out)
     out_if.bind(ep_name="slave", endpoint=sink.stream_ep)
 
-    mem_if = DirectMMIF(sim=sim, clk=clk)
+    mem_if = DirectMMIF(sim=sim, clk=clk, byte_addressable=byte_addressable)
     mem_if.bind("master", rstream.m_mem)
     mem_if.bind("slave", mem.s_mm)
 
@@ -121,8 +129,8 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> 
     got = np.concatenate(sink.words) if sink.words else np.array([], dtype=np.uint64)
     ok = np.array_equal(got.astype(np.uint64), known.astype(np.uint64))
     span_cyc = (rstream.transfer_spans[-1] / clk.period) if rstream.transfer_spans else 0.0
-    print(f"[read] n_words={n_words} base=0x{base_addr:x} got={len(got)} words "
-          f"ok={ok} span={span_cyc:.1f}cyc (~n_words+fill overlap; 2*n_words is sequential)")
+    print(f"[read] n_words={n_words} word_index={word_index} unit={addr_unit.name} got={len(got)} "
+          f"words ok={ok} span={span_cyc:.1f}cyc (~n_words+fill overlap; 2*n_words is sequential)")
     assert ok, f"MemRStream mismatch:\n got={got[:8]}\n exp={known[:8]}"
     return rstream
 
@@ -131,22 +139,26 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> 
 # Write harness — MemWStream drains a stream into a region
 # ---------------------------------------------------------------------------
 
-def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) -> "MemWStream":
+def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
+              byte_addressable: bool = True) -> "MemWStream":
     """Command a ``MemWStream`` to drain a known word-run off s_in into memory, then check the
     region equals the input.  Returns the component (``transfer_spans`` carries the modeled
-    overlapped drain+store span)."""
+    overlapped drain+store span).  ``byte_addressable`` selects the memory addressing unit; the
+    command carries the same **word_index** either way (the arena convention)."""
     sim = Simulation()
     clk = Clock(freq=100e6)
 
+    addr_unit = AddrUnit.byte if byte_addressable else AddrUnit.word
     mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
-                       word_size=mem_dwidth, addr_size=32)
+                       word_size=mem_dwidth, addr_size=32, addr_unit=addr_unit)
     mem.alloc(base_words)
-    base_addr = mem.alloc(n_words)
+    base_addr = mem.alloc(n_words)               # native-unit address of the burst region
+    word_index = base_words                      # element coordinate within the base-0 arena
     known = (np.arange(n_words, dtype=np.uint64) * 40503 + 7) & ((1 << mem_dwidth) - 1)
 
     wstream = MemWStream(name="wstream", sim=sim, mem_dwidth=mem_dwidth)
     cmd_drv = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                        cmds=[MWCmd(byte_addr=base_addr, n_words=n_words)])
+                        cmds=[MWCmd(word_index=word_index, n_words=n_words)])
     dat_drv = WordDriver(sim=sim, bitwidth=mem_dwidth, bursts=[known.astype(np.uint64)])
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
@@ -157,7 +169,7 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) ->
     in_if.bind(ep_name="master", endpoint=dat_drv.stream_ep)
     in_if.bind(ep_name="slave", endpoint=wstream.s_in)
 
-    mem_if = DirectMMIF(sim=sim, clk=clk)
+    mem_if = DirectMMIF(sim=sim, clk=clk, byte_addressable=byte_addressable)
     mem_if.bind("master", wstream.m_mem)
     mem_if.bind("slave", mem.s_mm)
 
@@ -166,7 +178,8 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64) ->
     got = mem._mem.read(base_addr, n_words).astype(np.uint64)
     ok = np.array_equal(got, known.astype(np.uint64))
     span_cyc = (wstream.transfer_spans[-1] / clk.period) if wstream.transfer_spans else 0.0
-    print(f"[write] n_words={n_words} base=0x{base_addr:x} ok={ok} span={span_cyc:.1f}cyc")
+    print(f"[write] n_words={n_words} word_index={word_index} unit={addr_unit.name} "
+          f"ok={ok} span={span_cyc:.1f}cyc")
     assert ok, f"MemWStream mismatch:\n got={got[:8]}\n exp={known[:8]}"
     return wstream
 
