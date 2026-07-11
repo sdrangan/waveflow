@@ -805,6 +805,144 @@ class StreamIFMaster(QueuedTransferIFMaster):
 
 
 # ---------------------------------------------------------------------------
+# SOBIF — the block interface (resident random-access double-buffer)
+# ---------------------------------------------------------------------------
+#
+# A distinct interface KIND (not a flag on StreamIF): a stream hands over one
+# element/word at a time (sequential FIFO dequeue); a SOBIF hands over a whole
+# *block* (elem_type = DataArray[T, N]) with acquire/release (write_lock /
+# read_lock) semantics and a RANDOM-ACCESS consumer.  It lowers to
+# ``hls::stream_of_blocks<T[N], 2>`` (the depth-2 ping-pong); the producer is the
+# ``write_lock`` side (Fill), the consumer the ``read_lock`` side (Gather).  Fill
+# and Gather MUST be separate components — the overlap requires filling block j+1
+# while gathering block j (plans/component.md, memory
+# reference-hls-stream-of-blocks-pingpong).
+#
+# The pysim models the depth-2 ping-pong with a free-buffer counter + a ready
+# queue, so the sim exhibits the overlap: the producer can acquire and fill the
+# second buffer while the consumer still holds (random-reads) the first.
+
+
+def _block_dtype(bitwidth: int) -> np.dtype:
+    """The numpy word dtype for a SOBIF block element (uint32 for <=32-bit, else uint64)."""
+    return np.dtype(np.uint32) if int(bitwidth) <= 32 else np.dtype(np.uint64)
+
+
+@dataclass
+class SobIFMaster(InterfaceEndpoint):
+    """Producer (``write_lock``) side of a :class:`StreamOfBlocksIF`.
+
+    Acquires a free block buffer, fills it (whole-block), then commits it to the
+    consumer.  In codegen this is the ``hls::write_lock<T[N]>`` scope inside the
+    producer task (e.g. ``Fill``)."""
+
+    bitwidth: int = 32
+    block_n: int = 1
+    type_name = 'sob_if_master'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def acquire_write(self) -> ProcessGen[np.ndarray]:
+        """Block until a buffer is free, then return a fresh zero-filled block to fill."""
+        if self.interface is None:
+            raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
+        return (yield from self.interface.acquire_write())
+
+    def commit_write(self, block: np.ndarray) -> ProcessGen[None]:
+        """Release the filled *block* to the consumer (the ``write_lock`` scope exit)."""
+        yield from self.interface.commit_write(block)
+
+
+@dataclass
+class SobIFSlave(InterfaceEndpoint):
+    """Consumer (``read_lock``) side of a :class:`StreamOfBlocksIF`.
+
+    Acquires the filled block, random-accesses it (``b[idx]``), then releases the
+    buffer back to the producer.  In codegen this is the ``hls::read_lock<T[N]>``
+    scope inside the consumer task (e.g. ``Gather``).
+
+    ``throughput`` is the consumer's advertised access rate (feeds the LT model):
+    a random-READ gather is ``n/min(LW,2)`` (dual-port free 2nd read), a
+    random-WRITE scatter is ``n`` (WAW-serialized).  Not used for the P3
+    element-granular toy; recorded for the P4 word-granular gather."""
+
+    bitwidth: int = 32
+    block_n: int = 1
+    throughput: str = "gather"      # "gather" (random-read) | "scatter" (random-write)
+    type_name = 'sob_if_slave'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def acquire_read(self) -> ProcessGen[np.ndarray]:
+        """Block until the producer commits a block, then return it for random access."""
+        if self.interface is None:
+            raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
+        return (yield from self.interface.acquire_read())
+
+    def release_read(self) -> ProcessGen[None]:
+        """Release the consumed buffer back to the producer (the ``read_lock`` scope exit)."""
+        yield from self.interface.release_read()
+
+
+@dataclass
+class StreamOfBlocksIF(QueuedTransferIF):
+    """The block interface (``SOBIF``): a depth-2 ping-pong buffer between one
+    :class:`SobIFMaster` producer and one :class:`SobIFSlave` consumer.
+
+    Subclasses :class:`QueuedTransferIF` (reuse the master/slave connect + SimPy
+    env plumbing); the new parts are block granularity (``block_n`` elements per
+    handover), the ``write_lock`` / ``read_lock`` handover, and the random-access
+    consumer.  pysim: a free-buffer counter (``depth`` buffers) + a ready queue, so
+    the producer fills buffer *j+1* while the consumer random-reads buffer *j* —
+    the overlap.  Codegen: ``hls::stream_of_blocks<ap_uint<bitwidth>[block_n], depth>``."""
+
+    block_n: int = 1
+    depth: int = 2
+    type_name = 'stream_of_blocks_if'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def __post_init__(self) -> None:
+        self.endpoint_names = ('master', 'slave')
+        super().__post_init__()
+        # depth-2 ping-pong: `depth` free buffers; a ready queue of committed blocks.
+        self._free = simpy.Container(self.env, init=self.depth, capacity=self.depth)
+        self._ready = simpy.Store(self.env, capacity=self.depth)
+
+    def acquire_write(self) -> ProcessGen[np.ndarray]:
+        yield self._free.get(1)
+        return np.zeros(self.block_n, dtype=_block_dtype(self.bitwidth or 32))
+
+    def commit_write(self, block: np.ndarray) -> ProcessGen[None]:
+        yield self._ready.put(np.array(block, copy=True))
+
+    def acquire_read(self) -> ProcessGen[np.ndarray]:
+        block = yield self._ready.get()
+        return block
+
+    def release_read(self) -> ProcessGen[None]:
+        yield self._free.put(1)
+
+    def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
+        if ep_name not in ('master', 'slave'):
+            raise KeyError(
+                f"StreamOfBlocksIF only has 'master' and 'slave' sides, but got '{ep_name}'")
+        if ep_name == "master" and not isinstance(endpoint, SobIFMaster):
+            raise TypeError("master side of StreamOfBlocksIF must bind to SobIFMaster")
+        if ep_name == "slave" and not isinstance(endpoint, SobIFSlave):
+            raise TypeError("slave side of StreamOfBlocksIF must bind to SobIFSlave")
+        self._validate_and_set_bitwidth(endpoint)
+        if endpoint.block_n != self.block_n:
+            raise ValueError(
+                f"Endpoint block_n={endpoint.block_n} does not match "
+                f"interface block_n={self.block_n}")
+        super().bind(ep_name, endpoint)
+
+
+# ---------------------------------------------------------------------------
 # Crossbar interface
 # ---------------------------------------------------------------------------
 
