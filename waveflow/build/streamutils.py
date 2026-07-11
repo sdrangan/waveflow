@@ -152,12 +152,18 @@ class MemStreamStep(Buildable):
         return {
             "mem_r_stream_task": self._output_dir / "mem_r_stream_task.h",
             "mem_w_stream_task": self._output_dir / "mem_w_stream_task.h",
+            # Composition (Phase 2) bodies: the pure-stream Sequencer and the
+            # done-emitting write variant used by the MemCopy composite top.
+            "mem_seq_task": self._output_dir / "mem_seq_task.h",
+            "mem_w_stream_done_task": self._output_dir / "mem_w_stream_done_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
         src_names: dict[str, str] = {
             "mem_r_stream_task": "mem_r_stream_task.h",
             "mem_w_stream_task": "mem_w_stream_task.h",
+            "mem_seq_task": "mem_seq_task.h",
+            "mem_w_stream_done_task": "mem_w_stream_done_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")

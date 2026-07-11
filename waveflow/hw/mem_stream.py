@@ -46,6 +46,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+import numpy as np
+
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_component import HwComponent, HwParam
@@ -78,6 +80,22 @@ class MWCmd(DataList):
         "word_index": {"schema": Word32, "description": "element/word offset within the bound buffer"},
         "n_words":    {"schema": Word32, "description": "number of packed words to write"},
     }
+
+
+@dataclass(frozen=True)
+class KernelTask:
+    """The fixed ``hls::task`` body descriptor a composable component exposes for the composite
+    codegen (:func:`~examples.interleaver.mem_copy.composite_top_spec`).
+
+    * ``task_fn`` — the width-templated body function (e.g. ``mem_r_stream_task``).
+    * ``header`` — the copied body header to ``#include`` (e.g. ``mem_r_stream_task.h``).
+    * ``signature`` — the component's **endpoint attribute names in task-argument order**.  The
+      composite generator resolves each attr's endpoint to either a top-level port name or an
+      internal FIFO name (from the interface graph), yielding the concrete call args.  This is the
+      seam that makes the top *graph-derived* rather than hand-written."""
+    task_fn: str
+    header: str
+    signature: tuple[str, ...]
 
 
 #: Schema classes the gen-include step emits C++ headers for (consumed by the kernel templates).
@@ -152,6 +170,13 @@ class MemRStream(HwComponent):
     def Cmd(self) -> type[MRCmd]:
         return MRCmd
 
+    def kernel_task(self) -> "KernelTask":
+        """The fixed ``hls::task`` body descriptor for the composite codegen: the task-fn name, the
+        copied body header, and the **endpoint attribute names in signature order** (so the composite
+        top generator resolves each to a top-level port or an internal FIFO — see
+        :func:`examples.interleaver.mem_copy.composite_top_spec`)."""
+        return KernelTask("mem_r_stream_task", "mem_r_stream_task.h", ("s_cmd", "m_mem", "m_out"))
+
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden (NOT extracted — codegen is the fixed ``a2s`` template).  Free-running:
         dequeue an :class:`MRCmd`, read the word-run off ``m_mem`` through a word-typed
@@ -190,6 +215,11 @@ class MemWStream(HwComponent):
 
     mem_dwidth: HwParam[int] = 64
     mem_awidth: HwParam[int] = 32
+    #: When ``True`` the endpoint also exposes an ``s_done`` :class:`StreamIFMaster` and emits one
+    #: completion token (= words written) per job — the composition variant used by the ``MemCopy``
+    #: composite (its fixed body is ``mem_w_stream_done_task``).  Default ``False`` keeps the
+    #: standalone Gate-1 kernel (3-arg ``mem_w_stream_task``) unchanged.
+    emit_done: bool = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -202,7 +232,13 @@ class MemWStream(HwComponent):
         self.s_in = StreamIFSlave(
             name=f"{self.name}_s_in", sim=self.sim, bitwidth=int(self.mem_dwidth),
             has_tlast=False)
-        for ep in (self.m_mem, self.s_cmd, self.s_in):
+        eps = [self.m_mem, self.s_cmd, self.s_in]
+        if self.emit_done:
+            self.s_done = StreamIFMaster(
+                name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
+                has_tlast=False)
+            eps.append(self.s_done)
+        for ep in eps:
             self.add_endpoint(ep)
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
@@ -221,11 +257,22 @@ class MemWStream(HwComponent):
     def Cmd(self) -> type[MWCmd]:
         return MWCmd
 
+    def kernel_task(self) -> KernelTask:
+        """The fixed ``hls::task`` body descriptor for the composite codegen.  The ``emit_done``
+        variant is the 4-arg ``mem_w_stream_done_task`` (adds ``s_done``); the default is the
+        standalone 3-arg ``mem_w_stream_task`` (unchanged Gate-1 body)."""
+        if self.emit_done:
+            return KernelTask(
+                "mem_w_stream_done_task", "mem_w_stream_done_task.h",
+                ("s_cmd", "s_in", "m_mem", "s_done"))
+        return KernelTask("mem_w_stream_task", "mem_w_stream_task.h", ("s_cmd", "s_in", "m_mem"))
+
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden (NOT extracted — codegen is the fixed ``s2a`` template).  Free-running:
         dequeue an :class:`MWCmd`, drain its ``n_words`` off ``s_in`` (pipelined — the first-word
         anchor), and pure-write the burst through a word-typed
-        :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap."""
+        :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap.  With
+        ``emit_done`` it then writes one completion token (= words written) on ``s_done``."""
         while True:
             cmd: MWCmd = yield from self.s_cmd.get(MWCmd)
             w0 = int(cmd.word_index)
@@ -238,3 +285,5 @@ class MemWStream(HwComponent):
             yield from region.write_slice_pipelined(
                 w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
             self.transfer_spans.append(self.now - t_start)
+            if self.emit_done:
+                yield from self.s_done.write(np.array([nw], dtype=np.uint64))
