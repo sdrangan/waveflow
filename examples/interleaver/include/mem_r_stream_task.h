@@ -11,7 +11,6 @@
 // never also locks a stream_of_blocks).  Verify via XSI — ap_ctrl_none Vitis cosim is unreliable.
 #include "hls_stream.h"
 #include <ap_int.h>
-#include "memmgr.hpp"
 #include "m_r_cmd.h"
 
 // AXI->stream: dequeue one MRCmd, burst n_words words out. word_index is an element/word coordinate

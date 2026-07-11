@@ -9,7 +9,6 @@
 // The sole m_axi WRITE owner touches ONLY streams.  Verify via XSI — ap_ctrl_none cosim is unreliable.
 #include "hls_stream.h"
 #include <ap_int.h>
-#include "memmgr.hpp"
 #include "m_w_cmd.h"
 
 // stream->AXI: dequeue one MWCmd, pure-write n_words words. word_index is an element/word coordinate
