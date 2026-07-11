@@ -17,7 +17,7 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
-from examples.interleaver.interleaver import Interleaver, InterleaverCmd
+from examples.interleaver.interleaver import Interleaver, InterleaverCmd, InterleaverSob
 from examples.interleaver.mem_stream_sim import CmdDriver, WordSink
 
 
@@ -31,8 +31,9 @@ def _pack(vals: np.ndarray, lw: int) -> np.ndarray:
     return words
 
 
-def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64) -> "Interleaver":
-    """Run the Interleaver composite over *nj* back-to-back jobs (all size *n*) and check
+def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=Interleaver):
+    """Run the *comp_class* interleaver composite (the stream/SOB-mix :class:`Interleaver` or the
+    P-SOB :class:`InterleaverSob`) over *nj* back-to-back jobs (all size *n*) and check
     Y[j][i]=X[j][P[i]] bit-exact.  Returns the composite (gather.job_end_cyc = the completion
     timeline)."""
     sim = Simulation()
@@ -57,7 +58,7 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64) -> "Interle
         cmds.append(InterleaverCmd(p_off=pw, x_off=xw, y_off=yj, n=n))
         expected.append((yj, _pack(Xj[P].astype(np.uint32), lw)))   # golden Y[i]=X[P[i]]
 
-    il = Interleaver(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n)
+    il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n)
     driver = CmdDriver(sim=sim, bitwidth=mem_dwidth, cmds=cmds)
     done_sink = WordSink(sim=sim, bitwidth=mem_dwidth)
 
@@ -84,16 +85,17 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64) -> "Interle
         ok = ok and job_ok
     ndone = len(done_sink.words)
     per_job = [round(c) for c in il.gather.job_end_cyc]
-    print(f"[interleaver] nj={nj} n={n} ok={ok} done={ndone} gather_done_cyc={per_job}")
-    assert ok, "Interleaver mismatch (Y != X[P])"
+    print(f"[{comp_class.__name__}] nj={nj} n={n} ok={ok} done={ndone} gather_done_cyc={per_job}")
+    assert ok, f"{comp_class.__name__} mismatch (Y != X[P])"
     assert ndone == nj, f"expected {nj} done tokens, got {ndone}"
     return il
 
 
 def run_and_check() -> bool:
-    run_interleaver(nj=1)                     # single job
-    run_interleaver(nj=3)                     # back-to-back
-    print("interleaver pysim golden: PASSED")
+    for cc in (Interleaver, InterleaverSob):
+        run_interleaver(nj=1, comp_class=cc)                     # single job
+        run_interleaver(nj=3, comp_class=cc)                     # back-to-back
+    print("interleaver pysim golden (both variants): PASSED")
     return True
 
 
