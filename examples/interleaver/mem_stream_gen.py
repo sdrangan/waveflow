@@ -81,11 +81,13 @@ def _axis_port(name: str, width: int) -> ExtPort:
                    (f"#pragma HLS INTERFACE axis port={name}",))
 
 
-def _maxi_port(name: str, width: int, *, const: bool) -> ExtPort:
-    """An ``m_axi`` master port.  The read owner is ``const`` (the ``@port_read`` capability -> a
-    stray write is a compile error) and gets ``#pragma HLS stable``; the write owner is plain."""
+def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
+    """An ``m_axi`` master port on *bundle* (one AXI bundle per distinct memory port — a composite
+    with independent read/write memories places them on ``gmem0``/``gmem1``).  The read owner is
+    ``const`` (the ``@port_read`` capability -> a stray write is a compile error) and gets
+    ``#pragma HLS stable``; the write owner is plain."""
     qual = "const " if const else ""
-    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=slave bundle=gmem0 depth=8192"]
+    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=slave bundle={bundle} depth=8192"]
     if const:
         pragmas.append(f"#pragma HLS stable variable={name}")
     return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas))
