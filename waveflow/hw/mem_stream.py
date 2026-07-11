@@ -91,11 +91,14 @@ class KernelTask:
     * ``header`` — the copied body header to ``#include`` (e.g. ``mem_r_stream_task.h``).
     * ``signature`` — the component's **endpoint attribute names in task-argument order**.  The
       composite generator resolves each attr's endpoint to either a top-level port name or an
-      internal FIFO name (from the interface graph), yielding the concrete call args.  This is the
-      seam that makes the top *graph-derived* rather than hand-written."""
+      internal FIFO/block name (from the interface graph), yielding the concrete call args.  This is
+      the seam that makes the top *graph-derived* rather than hand-written.
+    * ``template_args`` — the baked-concrete C++ template arguments in order (``(mem_dwidth,)`` for a
+      width-templated body; ``(elem_bw, N)`` for the ``<EW, N>`` compute tiles)."""
     task_fn: str
     header: str
     signature: tuple[str, ...]
+    template_args: tuple[int, ...] = ()
 
 
 #: Schema classes the gen-include step emits C++ headers for (consumed by the kernel templates).
@@ -175,7 +178,8 @@ class MemRStream(HwComponent):
         copied body header, and the **endpoint attribute names in signature order** (so the composite
         top generator resolves each to a top-level port or an internal FIFO — see
         :func:`examples.interleaver.mem_copy.composite_top_spec`)."""
-        return KernelTask("mem_r_stream_task", "mem_r_stream_task.h", ("s_cmd", "m_mem", "m_out"))
+        return KernelTask("mem_r_stream_task", "mem_r_stream_task.h", ("s_cmd", "m_mem", "m_out"),
+                          template_args=(int(self.mem_dwidth),))
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden (NOT extracted — codegen is the fixed ``a2s`` template).  Free-running:
@@ -264,8 +268,9 @@ class MemWStream(HwComponent):
         if self.emit_done:
             return KernelTask(
                 "mem_w_stream_done_task", "mem_w_stream_done_task.h",
-                ("s_cmd", "s_in", "m_mem", "s_done"))
-        return KernelTask("mem_w_stream_task", "mem_w_stream_task.h", ("s_cmd", "s_in", "m_mem"))
+                ("s_cmd", "s_in", "m_mem", "s_done"), template_args=(int(self.mem_dwidth),))
+        return KernelTask("mem_w_stream_task", "mem_w_stream_task.h", ("s_cmd", "s_in", "m_mem"),
+                          template_args=(int(self.mem_dwidth),))
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden (NOT extracted — codegen is the fixed ``s2a`` template).  Free-running:

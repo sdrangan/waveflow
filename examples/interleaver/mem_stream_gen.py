@@ -57,9 +57,13 @@ class ExtPort:
 
 @dataclass(frozen=True)
 class TaskInst:
-    """One ``hls::task`` instantiation inside the top: the width-templated body + its call args."""
+    """One ``hls::task`` instantiation inside the top: the templated body + its call args.
+
+    ``template_args`` are the baked-concrete template arguments in order — ``(64,)`` for a
+    width-templated mem-stream body (``mem_r_stream_task<64>``), ``(32, 256)`` for the
+    ``<EW, N>``-templated compute tiles (``fill_task<32, 256>``)."""
     task_fn: str            # e.g. "mem_r_stream_task"
-    width: int              # baked-concrete MEM_DW, e.g. 64
+    template_args: tuple[int, ...]   # baked-concrete template args, e.g. (64,) or (32, 256)
     args: tuple[str, ...]   # arg names (external ports and/or internal streams), in signature order
     header: str             # the task-body header to include
 
@@ -67,13 +71,14 @@ class TaskInst:
 @dataclass(frozen=True)
 class TopSpec:
     """A generated free-running (``ap_ctrl_none``) ``hls::task`` top.  For a standalone kernel there
-    is one task and no internal streams; a composite (P2) adds tasks + ``hls_thread_local`` streams
-    wiring their internal edges, keeping the external ports the composite's boundary."""
+    is one task and no internal streams; a composite (P2/P3) adds tasks + ``hls_thread_local`` streams
+    (or ``stream_of_blocks``) wiring their internal edges, keeping the external ports the boundary."""
     top_name: str
     ports: tuple[ExtPort, ...]              # external interface ports (signature order)
     tasks: tuple[TaskInst, ...]
     cmd_headers: tuple[str, ...]            # command struct headers to include
     internal_streams: tuple[str, ...] = ()  # hls_thread_local decls (empty for a standalone kernel)
+    extra_includes: tuple[str, ...] = ()    # extra system headers (e.g. hls_streamofblocks.h)
 
 
 def _axis_port(name: str, width: int) -> ExtPort:
@@ -101,7 +106,7 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
             ports=(_axis_port("s_cmd", width),
                    _maxi_port("m_mem", width, const=True),
                    _axis_port("m_out", width)),
-            tasks=(TaskInst("mem_r_stream_task", width, ("s_cmd", "m_mem", "m_out"),
+            tasks=(TaskInst("mem_r_stream_task", (width,), ("s_cmd", "m_mem", "m_out"),
                             "mem_r_stream_task.h"),),
             cmd_headers=(MRCmd.resolved_include_filename(),),
         )
@@ -111,7 +116,7 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
             ports=(_axis_port("s_cmd", width),
                    _axis_port("s_in", width),
                    _maxi_port("m_mem", width, const=False)),
-            tasks=(TaskInst("mem_w_stream_task", width, ("s_cmd", "s_in", "m_mem"),
+            tasks=(TaskInst("mem_w_stream_task", (width,), ("s_cmd", "s_in", "m_mem"),
                             "mem_w_stream_task.h"),),
             cmd_headers=(MWCmd.resolved_include_filename(),),
         )
@@ -136,6 +141,7 @@ def render_top(spec: TopSpec) -> str:
     lines += [f'#include "{h}"' for h in includes]
     lines.append("#include <ap_int.h>")
     lines.append('#include "memmgr.hpp"')
+    lines += [f'#include "{h}"' for h in spec.extra_includes]   # e.g. hls_streamofblocks.h (SOBIF)
     lines += [f'#include "{h}"' for h in spec.cmd_headers]
     lines += [f'#include "{h}"' for h in task_headers]
     lines.append("")
@@ -151,8 +157,9 @@ def render_top(spec: TopSpec) -> str:
         lines.append(f"    {s}")
     for i, t in enumerate(spec.tasks):
         call_args = ", ".join(t.args)
+        targs = ", ".join(str(a) for a in t.template_args)
         lines.append(
-            f"    hls_thread_local hls::task t{i}({t.task_fn}<{t.width}>, {call_args});")
+            f"    hls_thread_local hls::task t{i}({t.task_fn}<{targs}>, {call_args});")
     lines.append("}")
     return "\n".join(lines) + "\n"
 

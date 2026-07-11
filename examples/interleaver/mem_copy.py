@@ -49,13 +49,12 @@ from examples.interleaver.mem_stream_gen import (  # noqa: E402
     DEFAULT_MEM_DW,
     GEN_DIR,
     INCLUDE_DIR,
-    ExtPort,
-    TaskInst,
-    TopSpec,
-    _axis_port,
-    _maxi_port,
     render_tcl,
     render_top,
+)
+from examples.interleaver.composite_gen import (  # noqa: E402
+    StreamEdge,
+    composite_top_spec,
 )
 
 # --- command field type (fixed width — element/word coordinates, the word_index convention) -------
@@ -111,7 +110,8 @@ class Sequencer(HwComponent):
         return CopyCmd
 
     def kernel_task(self) -> KernelTask:
-        return KernelTask("mem_seq_task", "mem_seq_task.h", ("s_cmd", "mr_cmd", "mw_cmd"))
+        return KernelTask("mem_seq_task", "mem_seq_task.h", ("s_cmd", "mr_cmd", "mw_cmd"),
+                          template_args=(int(self.mem_dwidth),))
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden: read a :class:`CopyCmd`, emit ``MRCmd{src_off, n}`` then
@@ -171,11 +171,11 @@ class MemCopy(HwComponent):
             self.add_if(i)
 
         # --- graph descriptors the composite generator walks -------------------------------------
-        #: Internal edges (fifo_name, master_ep, slave_ep) -> one hls_thread_local FIFO each.
+        #: Internal edges -> one hls_thread_local hls::stream FIFO each (all StreamEdge here).
         self.internal_edges = [
-            ("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd),
-            ("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd),
-            ("copy_data", self.rstream.m_out, self.wstream.s_in),
+            StreamEdge("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd),
+            StreamEdge("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd),
+            StreamEdge("copy_data", self.rstream.m_out, self.wstream.s_in),
         ]
         #: Boundary ports (name, endpoint, kind, bundle) — order == top signature order.
         self.boundary = [
@@ -184,6 +184,8 @@ class MemCopy(HwComponent):
             ("m_out", self.wstream.m_mem, "maxi_write", "gmem1"),
             ("s_done", self.wstream.s_done, "axis_out", None),
         ]
+        #: Command-struct headers the generated top #includes (single source with the pysim .get()).
+        self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
 
         # convenience refs for the sim harness (the boundary endpoints live on the children)
         self.s_cmd = self.seq.s_cmd
@@ -192,71 +194,8 @@ class MemCopy(HwComponent):
         self.s_done = self.wstream.s_done
 
 
-# ---------------------------------------------------------------------------
-# Graph -> composite TopSpec (the real Phase-2 deliverable / the P4 seam)
-# ---------------------------------------------------------------------------
-
-def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtPort:
-    """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas)."""
-    if kind in ("axis_in", "axis_out"):
-        return _axis_port(name, width)
-    if kind == "maxi_read":
-        return _maxi_port(name, width, const=True, bundle=bundle or "gmem0")
-    if kind == "maxi_write":
-        return _maxi_port(name, width, const=False, bundle=bundle or "gmem1")
-    raise ValueError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
-
-
-def composite_top_spec(comp: MemCopy, width: int = DEFAULT_MEM_DW) -> TopSpec:
-    """Derive the composite :class:`TopSpec` from *comp*'s component/interface graph.
-
-    Walks three things off the built parent and needs nothing hand-written per top:
-
-    1. ``comp.internal_edges`` -> one ``hls_thread_local hls::stream`` per edge, and a map
-       *endpoint -> FIFO name* (both the master and slave side of an edge resolve to the same FIFO).
-    2. ``comp.boundary`` -> the external ports (AXIS / ``m_axi`` bundles) and a map
-       *endpoint -> top-port name*.
-    3. ``comp.ordered_subcomps`` -> one ``hls::task`` per active child; each child's
-       :meth:`~waveflow.hw.mem_stream.KernelTask` signature (endpoint attr names) is resolved through
-       the two maps above to concrete call args.
-
-    Because the args come from the graph, the standalone kernel (one node, no edges) and this
-    composite fall out of the *same* generator — the seam Phase 4 extends with SOB/compute tiles."""
-    ep_arg: dict[int, str] = {}
-
-    internal_streams: list[str] = []
-    for fifo_name, m_ep, s_ep in comp.internal_edges:
-        ep_arg[id(m_ep)] = fifo_name
-        ep_arg[id(s_ep)] = fifo_name
-        internal_streams.append(f"hls_thread_local hls::stream<ap_uint<{width}> > {fifo_name};")
-
-    ports: list[ExtPort] = []
-    for name, ep, kind, bundle in comp.boundary:
-        ep_arg[id(ep)] = name
-        ports.append(_boundary_port(name, kind, width, bundle))
-
-    tasks: list[TaskInst] = []
-    for sub in comp.ordered_subcomps:
-        kt = sub.kernel_task()
-        args: list[str] = []
-        for attr in kt.signature:
-            ep = getattr(sub, attr)
-            arg = ep_arg.get(id(ep))
-            if arg is None:
-                raise ValueError(
-                    f"composite_top_spec: {type(sub).__name__}.{attr} is not wired to any internal "
-                    f"edge or boundary port of {type(comp).__name__} — cannot resolve its task arg")
-            args.append(arg)
-        tasks.append(TaskInst(kt.task_fn, width, tuple(args), kt.header))
-
-    cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
-    return TopSpec(
-        top_name=comp.cpp_kernel_name,
-        ports=tuple(ports),
-        tasks=tuple(tasks),
-        cmd_headers=cmd_headers,
-        internal_streams=tuple(internal_streams),
-    )
+# The graph -> composite TopSpec derivation lives in composite_gen.composite_top_spec (imported
+# above and re-exported here for callers/tests); MemCopy just supplies the graph descriptors above.
 
 
 # ---------------------------------------------------------------------------

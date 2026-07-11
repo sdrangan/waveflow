@@ -156,6 +156,9 @@ class MemStreamStep(Buildable):
             # done-emitting write variant used by the MemCopy composite top.
             "mem_seq_task": self._output_dir / "mem_seq_task.h",
             "mem_w_stream_done_task": self._output_dir / "mem_w_stream_done_task.h",
+            # Compute tiles (Phase 3): the SOBIF producer/consumer (pure-AXIS).
+            "fill_task": self._output_dir / "fill_task.h",
+            "gather_task": self._output_dir / "gather_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -164,6 +167,8 @@ class MemStreamStep(Buildable):
             "mem_w_stream_task": "mem_w_stream_task.h",
             "mem_seq_task": "mem_seq_task.h",
             "mem_w_stream_done_task": "mem_w_stream_done_task.h",
+            "fill_task": "fill_task.h",
+            "gather_task": "gather_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")
