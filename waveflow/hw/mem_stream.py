@@ -8,8 +8,9 @@ only by ``MEM_DW``.  They are framework code (they depend only on ``waveflow.hw`
 keeps only instantiation, build orchestration, and the sandbox.
 
 * :class:`MemRStream` — the sole ``m_axi`` **read** owner: dequeues an :class:`MRCmd`
-  ``{byte_addr, n_words}`` and bursts ``n_words`` packed words out on ``m_out`` (word-granular,
-  one word/cycle).
+  ``{word_index, n_words}`` and bursts ``n_words`` packed words out on ``m_out`` (word-granular,
+  one word/cycle).  ``word_index`` is an element/word coordinate relative to the bound buffer base
+  (the addressing convention — unit-agnostic; see ``plans/component.md`` and :meth:`bind_base`).
 * :class:`MemWStream` — the mirror: dequeues an :class:`MWCmd`, drains ``n_words`` words off
   ``s_in`` and pure-writes them to memory (word-aligned burst).
 
@@ -46,32 +47,36 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.dataschema import DataList, IntField, MemAddr
+from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_component import HwComponent, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import MMIFMaster
 from waveflow.simulation.simobj import ProcessGen
 
 # --- command field types (fixed widths — a plain DataList, no ParamSchema) ----------------------
-Addr32 = MemAddr.specialize(bitwidth=32)          # byte address into the shared region
-Word32 = IntField.specialize(bitwidth=32, signed=False)   # word / element count
+# ``word_index`` is an **element / word coordinate** relative to the bound buffer base, NOT a byte
+# address — the addressing convention (plans/component.md): ``m_mem`` is already a word pointer, so a
+# word-index command needs no byte<->word conversion in generated logic; the physical base lives in
+# the ``offset=slave`` register (set once, via :meth:`bind_base`) and ``Region._word_bytes`` + the AXI
+# hardware absorb byte-vs-word.  So the command is unit-agnostic.
+Word32 = IntField.specialize(bitwidth=32, signed=False)   # word / element coordinate or count
 
 
 class MRCmd(DataList):
     """One ``MemRStream`` command (host/sequencer -> ``s_cmd``): burst ``n_words`` packed words
-    starting at the word-aligned byte address ``byte_addr``."""
+    starting at ``word_index`` (element/word offset within the bound buffer, unit-agnostic)."""
     elements = {
-        "byte_addr": {"schema": Addr32, "description": "word-aligned byte address of the burst"},
-        "n_words":   {"schema": Word32, "description": "number of packed words to read"},
+        "word_index": {"schema": Word32, "description": "element/word offset within the bound buffer"},
+        "n_words":    {"schema": Word32, "description": "number of packed words to read"},
     }
 
 
 class MWCmd(DataList):
     """One ``MemWStream`` command (host/sequencer -> ``s_cmd``): drain ``n_words`` words off
-    ``s_in`` and pure-write them starting at the word-aligned byte address ``byte_addr``."""
+    ``s_in`` and pure-write them starting at ``word_index`` (element/word offset, unit-agnostic)."""
     elements = {
-        "byte_addr": {"schema": Addr32, "description": "word-aligned byte address of the burst"},
-        "n_words":   {"schema": Word32, "description": "number of packed words to write"},
+        "word_index": {"schema": Word32, "description": "element/word offset within the bound buffer"},
+        "n_words":    {"schema": Word32, "description": "number of packed words to write"},
     }
 
 
@@ -126,9 +131,22 @@ class MemRStream(HwComponent):
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
         self._fill = FILL_CYCLES * self.clk.period
+        #: Physical base of the bound buffer (the ``offset=slave`` register value, host domain) —
+        #: set once via :meth:`bind_base`.  Default 0: the single-arena / flat-array mode (sim & BFM),
+        #: where the command frame is base-relative so "base 0" holds in the command coordinate system.
+        self._base = 0
         #: Per-command modeled transfer span (seconds) — read-start → write-complete.  Overlapped,
         #: so ~ (n_words + fill)·period, not ~2·n_words·period (observability / the timing test).
         self.transfer_spans: list[float] = []
+
+    def bind_base(self, base: int = 0) -> None:
+        """Set the bound buffer's physical base (the ``offset=slave`` register, host domain).
+
+        The addressing convention (plans/component.md): the host writes the buffer's physical base
+        **once**, then issues commands in **word offsets** within it.  The base is a native-unit
+        address (``Region._word_bytes`` + the AXI hardware absorb byte-vs-word); the default 0 is the
+        flat single-arena mode used by the sim harness and the BFM."""
+        self._base = int(base)
 
     @property
     def Cmd(self) -> type[MRCmd]:
@@ -142,14 +160,14 @@ class MemRStream(HwComponent):
         command queue (sim drains when the driver stops), mirroring the sob3 ``load_task``."""
         while True:
             cmd: MRCmd = yield from self.s_cmd.get(MRCmd)
-            byte_addr = int(cmd.byte_addr)
+            w0 = int(cmd.word_index)
             nw = int(cmd.n_words)
             t_start = self.now
-            # Region owns byte↔word: base = the command's byte address, element = one MEM_DW word,
-            # so element coord == word index and byte_of()/word_bw do the conversion (no hand-rolled
-            # byte_addr_to_word_index / align-assert on the accelerator).
-            region = self.m_mem.region(byte_addr, self._word_t, word_bw=self._mem_bw)
-            words, t0 = yield from region.read_slice_pipelined(0, nw)
+            # The command is an element coordinate relative to the buffer base: index the word-typed
+            # Region (base = the bound physical base) by [word_index, word_index+n_words).  Region
+            # owns byte↔word (byte_of()/word_bw), so no hand-rolled byte_addr_to_word_index / align.
+            region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+            words, t0 = yield from region.read_slice_pipelined(w0, w0 + nw)
             # early-anchor the output at the first-word-available time + pipeline fill: the read and
             # write OVERLAP (write_pipelined shortens its wait when the anchor is already past).
             yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
@@ -189,7 +207,15 @@ class MemWStream(HwComponent):
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
         self._fill = FILL_CYCLES * self.clk.period
+        #: Physical base of the bound buffer (the ``offset=slave`` register value) — see
+        #: :meth:`MemRStream.bind_base`.  Default 0: the flat single-arena mode (sim & BFM).
+        self._base = 0
         self.transfer_spans: list[float] = []
+
+    def bind_base(self, base: int = 0) -> None:
+        """Set the bound buffer's physical base (the ``offset=slave`` register, host domain) — the
+        mirror of :meth:`MemRStream.bind_base`.  Commands then carry word offsets within it."""
+        self._base = int(base)
 
     @property
     def Cmd(self) -> type[MWCmd]:
@@ -202,11 +228,13 @@ class MemWStream(HwComponent):
         :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap."""
         while True:
             cmd: MWCmd = yield from self.s_cmd.get(MWCmd)
-            byte_addr = int(cmd.byte_addr)
+            w0 = int(cmd.word_index)
             nw = int(cmd.n_words)
             t_start = self.now
             words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
-            region = self.m_mem.region(byte_addr, self._word_t, word_bw=self._mem_bw)
+            # Element coordinate relative to the buffer base: index the word-typed Region (base = the
+            # bound physical base) at [word_index, ...).  Region owns byte↔word (no hand conversion).
+            region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
             yield from region.write_slice_pipelined(
-                0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
+                w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
             self.transfer_spans.append(self.now - t_start)
