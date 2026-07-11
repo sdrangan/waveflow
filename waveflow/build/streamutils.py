@@ -166,6 +166,13 @@ class MemStreamStep(Buildable):
             # P-SOB interleaver variant (Phase 4b): both P and X resident SOB blocks.
             "split_fill_task": self._output_dir / "split_fill_task.h",
             "gather_two_sob_task": self._output_dir / "gather_two_sob_task.h",
+            # Canonical six-stage interleaver (Phase 4c): a forwarded per-job token through every tile.
+            "cmd_rx_task": self._output_dir / "cmd_rx_task.h",
+            "il_mem_r_task": self._output_dir / "il_mem_r_task.h",
+            "il_load_task": self._output_dir / "il_load_task.h",
+            "il_compute_task": self._output_dir / "il_compute_task.h",
+            "il_store_task": self._output_dir / "il_store_task.h",
+            "il_mem_w_task": self._output_dir / "il_mem_w_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -181,6 +188,12 @@ class MemStreamStep(Buildable):
             "gather_word_task": "gather_word_task.h",
             "split_fill_task": "split_fill_task.h",
             "gather_two_sob_task": "gather_two_sob_task.h",
+            "cmd_rx_task": "cmd_rx_task.h",
+            "il_mem_r_task": "il_mem_r_task.h",
+            "il_load_task": "il_load_task.h",
+            "il_compute_task": "il_compute_task.h",
+            "il_store_task": "il_store_task.h",
+            "il_mem_w_task": "il_mem_w_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")
