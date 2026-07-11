@@ -278,9 +278,9 @@ The "stream-wrapped memory" pattern above is realized by two pre-written, reusab
 kernel body is FIXED (the validated sandbox `a2s`/`s2a`), parameterized only by `MEM_DW`:
 
 - **`MemRStream`** — `m_mem: MMIFMaster @port_read` + `s_cmd: StreamIFSlave[MRCmd]` + `m_out:
-  StreamIFMaster[word_t]`.  Sole `m_axi` read owner; processes an `MRCmd{byte_addr, n_words}` queue in
-  order and bursts words out.  Transparent to what the words *are* — "P then X" is just two queued
-  commands; the receiver splits by count.
+  StreamIFMaster[word_t]`.  Sole `m_axi` read owner; processes an `MRCmd{word_index, n_words}` queue in
+  order (element coordinates — see *Addressing convention* below) and bursts words out.  Transparent to
+  what the words *are* — "P then X" is just two queued commands; the receiver splits by count.
 - **`MemWStream`** — the mirror (`@port_write`, `s_in` word stream → pure-write burst).
 
 A pure-stream **`Sequencer`** (touches no memory) issues the ordered `MRCmd`/`MWCmd` from the app
@@ -310,6 +310,42 @@ generalizes the per-endpoint `t0` anchor used above into a first-class, composab
 stream-boundary counterpart of the block-handover overlap.  Deferred (P1.5 models within-endpoint
 overlap only); connects to `project-pipeline-timing` (the `get_pipelined`/`write_pipelined` anchors it
 would carry).
+
+### Addressing convention
+
+There are **three distinct address domains**, and the byte-vs-word question only lives in the first:
+
+| domain | owner | unit | where it lives |
+| ------ | ----- | ---- | -------------- |
+| **physical base** | host / allocator | the memory's native unit (byte for AXI DRAM, word for on-chip) | the `offset=slave` register, set **once** per buffer |
+| **command offset** | the calling module (`Sequencer`) | **element / word — unit-agnostic** | `MRCmd`/`MWCmd.word_index` |
+| **kernel access** | the generated kernel | word index into `m_mem` | `m_mem[word_index + w]` |
+
+The pivot is that **`m_mem` is already a word pointer (`ap_uint<MEM_DW>*`)**, so a command carrying a
+*word index* needs **no `byte_addr_to_word_index` in the kernel** — the AXI hardware turns
+`word_index` into `base + word_index·(MEM_DW/8)` bytes, and the byte↔word arithmetic never appears in
+generated logic.  Byte-vs-word of the underlying memory is absorbed in exactly two framework spots: the
+`offset` register (host writes the physical base verbatim) and `Region._word_bytes` (the sim twin,
+which returns `MEM_DW/8` for byte-addressed, `1` for word-addressed).  **The calling module therefore
+works purely in element coordinates and never needs the address unit for commands.**
+
+**Preferred mode now — single arena.**  The host `allocate()`s **one** large buffer, writes its base
+(`device_address`, byte) into the `offset` register once (`bind_base`), and manages P/X/Y as **word
+offsets** within it (a bump/arena allocator in software).  This is the common accelerator pattern and
+matches the BFM; the cost is that the host owns sub-allocation (no independent `free`/resize of a
+sub-buffer).  In sim/BFM the base is 0 (flat array); on real PynQ it is the non-zero `device_address`,
+but the *command frame is always base-relative*, so "base 0" holds in the coordinate system commands
+live in.
+
+**Deferred — PynQ-managed multi-buffer (a superset, additive).**  When PynQ manages many independent
+buffers (a distinct physical base each), the command must carry the **per-buffer base** — most cleanly
+a **separate command type** (`MRCmdAbs` / a `(base, word_index)` descriptor), since `DataList` commands
+are fixed-layout (adding a field means a schema change, but a new command type leaves the arena `MRCmd`
+untouched).  Only the command schema **and** the leaf kernel's address computation change (the unit
+re-enters the command — the "arbitrary absolute address" tradeoff); the DTLP separation, the compute
+tiles, the composition, and the whole codegen path are unchanged.  So it slots in as a second
+`MemRStream`/`MemWStream` variant coexisting with the arena one — the arena mode is the specialization
+where the base is fixed in the register instead of per-command.
 
 ## Code Generation for Synthesizable Vitis Kernels
 
