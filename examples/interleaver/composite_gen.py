@@ -31,13 +31,22 @@ from examples.interleaver.mem_stream_gen import (
 
 @dataclass(frozen=True)
 class StreamEdge:
-    """A stream internal edge (the P2 default) -> ``hls_thread_local hls::stream<ap_uint<W> >``."""
+    """A stream internal edge (the P2 default) -> ``hls_thread_local hls::stream<ap_uint<W> >``.
+
+    ``depth`` (optional) sets the FIFO depth via ``#pragma HLS STREAM`` — the only edge that needs it
+    is the interleaver's ``p_words`` (P is loaded first and buffered whole while X fills the block, so
+    the FIFO must hold ``>= n/LW`` words; this is exactly sob3's ``#pragma HLS STREAM ... depth=1024``).
+    ``None`` uses the default depth-2 FIFO.  This is edge configuration, not a new codegen kind."""
     name: str
     master_ep: object
     slave_ep: object
+    depth: int | None = None
 
     def decl(self, width: int) -> str:
-        return f"hls_thread_local hls::stream<ap_uint<{width}> > {self.name};"
+        line = f"hls_thread_local hls::stream<ap_uint<{width}> > {self.name};"
+        if self.depth is not None:
+            line += f"\n    #pragma HLS STREAM variable={self.name} depth={self.depth}"
+        return line
 
 
 @dataclass(frozen=True)

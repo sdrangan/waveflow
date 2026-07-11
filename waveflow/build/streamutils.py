@@ -159,6 +159,10 @@ class MemStreamStep(Buildable):
             # Compute tiles (Phase 3): the SOBIF producer/consumer (pure-AXIS).
             "fill_task": self._output_dir / "fill_task.h",
             "gather_task": self._output_dir / "gather_task.h",
+            # Full interleaver tiles (Phase 4): sequencer / demux / word-granular gather.
+            "interleaver_seq_task": self._output_dir / "interleaver_seq_task.h",
+            "demux_task": self._output_dir / "demux_task.h",
+            "gather_word_task": self._output_dir / "gather_word_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -169,6 +173,9 @@ class MemStreamStep(Buildable):
             "mem_w_stream_done_task": "mem_w_stream_done_task.h",
             "fill_task": "fill_task.h",
             "gather_task": "gather_task.h",
+            "interleaver_seq_task": "interleaver_seq_task.h",
+            "demux_task": "demux_task.h",
+            "gather_word_task": "gather_word_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")
