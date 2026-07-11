@@ -19,8 +19,8 @@ inline void MRCmd::dump_json(std::ostream& os, int indent, int level) const {
     os << "{";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
-    os << "\"byte_addr\": ";
-    os << static_cast<unsigned long long>(this->byte_addr);
+    os << "\"word_index\": ";
+    os << static_cast<unsigned long long>(this->word_index);
     os << ",";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
@@ -33,7 +33,7 @@ inline void MRCmd::dump_json(std::ostream& os, int indent, int level) const {
 
 inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
-    bool seen_root_byte_addr = false;
+    bool seen_root_word_index = false;
     bool seen_root_n_words = false;
     bool first = true;
     while (true) {
@@ -48,9 +48,9 @@ inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
     first = false;
     std::string key = streamutils::json_parse_string(json_text, pos);
     streamutils::json_expect_char(json_text, pos, ':');
-    if (key == "byte_addr") {
-        seen_root_byte_addr = true;
-        this->byte_addr = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    if (key == "word_index") {
+        seen_root_word_index = true;
+        this->word_index = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
     else if (key == "n_words") {
         seen_root_n_words = true;
@@ -60,8 +60,8 @@ inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
     }
     }
-    if (!seen_root_byte_addr) {
-    throw std::runtime_error("Malformed JSON: missing required key 'byte_addr'.");
+    if (!seen_root_word_index) {
+    throw std::runtime_error("Malformed JSON: missing required key 'word_index'.");
     }
     if (!seen_root_n_words) {
     throw std::runtime_error("Malformed JSON: missing required key 'n_words'.");

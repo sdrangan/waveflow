@@ -11,7 +11,7 @@
 #include "streamutils_hls.h"
 
 struct MRCmd {
-    ap_uint<32> byte_addr;  // word-aligned byte address of the burst
+    ap_uint<32> word_index;  // element/word offset within the bound buffer
     ap_uint<32> n_words;  // number of packed words to read
 
     static constexpr int bitwidth = 64;
@@ -40,14 +40,14 @@ struct MRCmd {
 
     static ap_uint<bitwidth> pack_to_uint(const MRCmd& data) {
         ap_uint<bitwidth> res = 0;
-        res.range(31, 0) = data.byte_addr;
+        res.range(31, 0) = data.word_index;
         res.range(63, 32) = data.n_words;
         return res;
     }
 
     static MRCmd unpack_from_uint(const ap_uint<bitwidth>& packed) {
         MRCmd data;
-        data.byte_addr = (ap_uint<32>)(packed.range(31, 0));
+        data.word_index = (ap_uint<32>)(packed.range(31, 0));
         data.n_words = (ap_uint<32>)(packed.range(63, 32));
         return data;
     }
@@ -60,13 +60,13 @@ struct MRCmd {
     }
 
     static void write_array_impl(word_bw_tag<32>, const MRCmd* self, ap_uint<32> x[]) {
-        x[0] = self->byte_addr;
+        x[0] = self->word_index;
         x[1] = self->n_words;
     }
 
     static void write_array_impl(word_bw_tag<64>, const MRCmd* self, ap_uint<64> x[]) {
         x[0] = 0;
-        x[0].range(31, 0) = self->byte_addr;
+        x[0].range(31, 0) = self->word_index;
         x[0].range(63, 32) = self->n_words;
     }
 
@@ -84,7 +84,7 @@ struct MRCmd {
 
     static void write_stream_impl(word_bw_tag<32>, const MRCmd* self, hls::stream<ap_uint<32>> &s) {
             ap_uint<32> w = 0;
-        w = self->byte_addr;
+        w = self->word_index;
         s.write(w);
         w = 0;
         w = self->n_words;
@@ -94,7 +94,7 @@ struct MRCmd {
 
     static void write_stream_impl(word_bw_tag<64>, const MRCmd* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
-        w.range(31, 0) = self->byte_addr;
+        w.range(31, 0) = self->word_index;
         w.range(63, 32) = self->n_words;
         s.write(w);
         w = 0;
@@ -115,7 +115,7 @@ struct MRCmd {
 
     static void write_axi4_stream_impl(word_bw_tag<32>, const MRCmd* self, hls::stream<streamutils::axi4s_word<32>> &s, bool tlast) {
             ap_uint<32> w = 0;
-        w = self->byte_addr;
+        w = self->word_index;
         streamutils::write_axi4_word<32>(s, w, false);
         w = 0;
         w = self->n_words;
@@ -125,7 +125,7 @@ struct MRCmd {
 
     static void write_axi4_stream_impl(word_bw_tag<64>, const MRCmd* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
-        w.range(31, 0) = self->byte_addr;
+        w.range(31, 0) = self->word_index;
         w.range(63, 32) = self->n_words;
         streamutils::write_axi4_word<64>(s, w, tlast);
         w = 0;
@@ -144,12 +144,12 @@ struct MRCmd {
     }
 
     static void read_array_impl(word_bw_tag<32>, MRCmd* self, const ap_uint<32> x[]) {
-        self->byte_addr = (ap_uint<32>)(x[0]);
+        self->word_index = (ap_uint<32>)(x[0]);
         self->n_words = (ap_uint<32>)(x[1]);
     }
 
     static void read_array_impl(word_bw_tag<64>, MRCmd* self, const ap_uint<64> x[]) {
-        self->byte_addr = (ap_uint<32>)(x[0].range(31, 0));
+        self->word_index = (ap_uint<32>)(x[0].range(31, 0));
         self->n_words = (ap_uint<32>)(x[0].range(63, 32));
     }
 
@@ -168,7 +168,7 @@ struct MRCmd {
     static void read_stream_impl(word_bw_tag<32>, MRCmd* self, hls::stream<ap_uint<32>> &s) {
             ap_uint<32> w = 0;
         w = s.read();
-        self->byte_addr = (ap_uint<32>)(w);
+        self->word_index = (ap_uint<32>)(w);
         w = s.read();
         self->n_words = (ap_uint<32>)(w);
     }
@@ -176,7 +176,7 @@ struct MRCmd {
     static void read_stream_impl(word_bw_tag<64>, MRCmd* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
         w = s.read();
-        self->byte_addr = (ap_uint<32>)(w.range(31, 0));
+        self->word_index = (ap_uint<32>)(w.range(31, 0));
         self->n_words = (ap_uint<32>)(w.range(63, 32));
     }
 
@@ -206,7 +206,7 @@ struct MRCmd {
             w = axis_word.data;
             last = axis_word.last;
         }
-        self->byte_addr = (ap_uint<32>)(w);
+        self->word_index = (ap_uint<32>)(w);
         if (tl != streamutils::tlast_status::no_tlast) {
             tl = streamutils::tlast_status::tlast_early;
             return;
@@ -242,7 +242,7 @@ struct MRCmd {
             w = axis_word.data;
             last = axis_word.last;
         }
-        self->byte_addr = (ap_uint<32>)(w.range(31, 0));
+        self->word_index = (ap_uint<32>)(w.range(31, 0));
         if (tl != streamutils::tlast_status::no_tlast) {
             tl = streamutils::tlast_status::tlast_early;
             return;

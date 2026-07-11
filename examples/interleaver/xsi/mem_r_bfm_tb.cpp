@@ -48,8 +48,11 @@ int main() {
     // 1) Backing memory: known pattern in [BASE_W, BASE_W+N).
     std::vector<uint64_t> mem(MEM_NW, 0);
     for (int i = 0; i < N; ++i) mem[BASE_W + i] = known_word(i);
-    const uint32_t base_addr = (uint32_t)(BASE_W * BPW);
-    const uint64_t cmd_word  = (uint64_t)base_addr | ((uint64_t)(uint32_t)N << 32);  // {byte_addr, n_words}
+    // Command carries an ELEMENT/WORD coordinate (= the old word-aligned byte addr / BPW). The
+    // offset=slave register stays pinned to 0, so the kernel's m_mem[word_index] drives
+    // ARADDR = word_index*BPW — the AXI slave's araddr/BPW->word decode below is unchanged.
+    const uint32_t word_index = (uint32_t)BASE_W;
+    const uint64_t cmd_word   = (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32);  // {word_index, n_words}
 
     // 2) Open the elaborated design.
     std::string design = "xsim.dir/mem_r_stream/xsimk.dll";

@@ -38,8 +38,11 @@ static uint64_t known_word(int i) { return ((uint64_t)i * 40503ULL + 7ULL); }
 
 int main() {
     std::vector<uint64_t> mem(MEM_NW, 0);
-    const uint32_t base_addr = (uint32_t)(BASE_W * BPW);
-    const uint64_t cmd_word  = (uint64_t)base_addr | ((uint64_t)(uint32_t)N << 32);
+    // Command carries an ELEMENT/WORD coordinate (= the old word-aligned byte addr / BPW). The
+    // offset=slave register stays pinned to 0, so the kernel's m_mem[word_index] drives
+    // AWADDR = word_index*BPW — the AXI slave's awaddr/BPW->word decode below is unchanged.
+    const uint32_t word_index = (uint32_t)BASE_W;
+    const uint64_t cmd_word   = (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32);  // {word_index, n_words}
 
     std::string design = "xsim.dir/mem_w_stream/xsimk.dll";
     std::string engine = "xv_simulator_kernel.dll";
