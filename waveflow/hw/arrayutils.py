@@ -590,6 +590,22 @@ def _gen_read_array_elem_specializations(
             "",
             "template<>",
             f"{indent}struct read_array_elem_impl<{bw}> {{",
+        ])
+        # run_lane(w, k): unpack lane k (0..pf-1) of one packed word — the SINGLE source of the
+        # per-lane packing contract, reused by run() below and by elem_read<W> (the random access).
+        if pfv >= 1:
+            lines.append(f"{i1}static value_type run_lane(const ap_uint<{bw}>& w, int k) {{")
+            lines.append(f"{i2}#pragma HLS INLINE")
+            lines.append(f"{i2}switch (k) {{")
+            for j in range(pfv):
+                lo = j * elem_bw
+                hi = lo + elem_bw - 1
+                rhs_expr = elem_type.from_uint_expr(f"w.range({hi}, {lo})")
+                lines.append(f"{i3}case {j}: return {rhs_expr};")
+            lines.append(f"{i2}}}")
+            lines.append(f"{i2}return value_type();")
+            lines.append(f"{i1}}}")
+        lines.extend([
             f"{i1}static void run(const ap_uint<{bw}>* src, value_type* out, int n) {{",
             f"{i2}#pragma HLS INLINE",
         ])
@@ -599,11 +615,8 @@ def _gen_read_array_elem_specializations(
             lines.append(f"{i2}}}")
             lines.append(f"{i2}ap_uint<{bw}> w = src[0];")
             for j in range(pfv):
-                lo = j * elem_bw
-                hi = lo + elem_bw - 1
-                rhs_expr = elem_type.from_uint_expr(f"w.range({hi}, {lo})")
                 lines.append(f"{i2}if (n > {j}) {{")
-                lines.append(f"{i3}out[{j}] = {rhs_expr};")
+                lines.append(f"{i3}out[{j}] = run_lane(w, {j});")
                 lines.append(f"{i2}}}")
         else:
             if elem_bw <= bw:
@@ -661,6 +674,22 @@ def _gen_write_array_elem_specializations(
             "",
             "template<>",
             f"{indent}struct write_array_elem_impl<{bw}> {{",
+        ])
+        # write_lane(w, k, v): pack value v into lane k (0..pf-1) of a word in place — the SINGLE
+        # source of the per-lane packing contract, reused by run() below and by elem_write<W> (the
+        # lane read-modify-write random access).
+        if pfv >= 1:
+            lines.append(f"{i1}static void write_lane(ap_uint<{bw}>& w, int k, const value_type& v) {{")
+            lines.append(f"{i2}#pragma HLS INLINE")
+            lines.append(f"{i2}switch (k) {{")
+            for j in range(pfv):
+                lo = j * elem_bw
+                hi = lo + elem_bw - 1
+                rhs_expr = elem_type.to_uint_value_expr("v")
+                lines.append(f"{i3}case {j}: w.range({hi}, {lo}) = {rhs_expr}; break;")
+            lines.append(f"{i2}}}")
+            lines.append(f"{i1}}}")
+        lines.extend([
             f"{i1}static void run(const value_type* in, ap_uint<{bw}>* dst, int n) {{",
             f"{i2}#pragma HLS INLINE",
         ])
@@ -670,11 +699,8 @@ def _gen_write_array_elem_specializations(
             lines.append(f"{i2}}}")
             lines.append(f"{i2}ap_uint<{bw}> w = 0;")
             for j in range(pfv):
-                lo = j * elem_bw
-                hi = lo + elem_bw - 1
-                rhs_expr = elem_type.to_uint_value_expr(f"in[{j}]")
                 lines.append(f"{i2}if (n > {j}) {{")
-                lines.append(f"{i3}w.range({hi}, {lo}) = {rhs_expr};")
+                lines.append(f"{i3}write_lane(w, {j}, in[{j}]);")
                 lines.append(f"{i2}}}")
             lines.append(f"{i2}dst[0] = w;")
         else:
@@ -966,6 +992,29 @@ def _gen_lane_helpers(
         f"{indent}inline void write_axi4_stream_lane(const value_type src[{lc}], {axis} s, bool tlast = false, int n = {lc}) {{",
         f"{i1}#pragma HLS INLINE",
         f"{i1}write_axi4_stream_elem_impl<word_bw>::run(s, src, tlast, {sel});",
+        f"{indent}}}",
+        "",
+        "// --- element random access (Phase 3): read/write ONE packed element by index i ---",
+        "// iw = i / LW, k = i % LW  (LW = lane_capacity<W>(), compile-time; a power-of-two LW is a",
+        "// shift/mask).  Reuses the shared run_lane / write_lane (the single packing-contract source)",
+        "// -- the word-granular random-access gather/scatter primitive Phase 4's Gather consumes.",
+        "// Requires pf >= 1 (element fits in one word); a wide element (pf == 0) is not supported.",
+        "template<int word_bw>",
+        f"{indent}inline value_type elem_read(const ap_uint<word_bw>* src, int i) {{",
+        f"{i1}#pragma HLS INLINE",
+        f'{i1}static_assert(pf<word_bw>() >= 1, "elem_read requires pf>=1 (element fits in one word)");',
+        f"{i1}return read_array_elem_impl<word_bw>::run_lane(src[i / lane_capacity<word_bw>()], "
+        "i % lane_capacity<word_bw>());",
+        f"{indent}}}",
+        "",
+        "template<int word_bw>",
+        f"{indent}inline void elem_write(const value_type& v, ap_uint<word_bw>* dst, int i) {{",
+        f"{i1}#pragma HLS INLINE",
+        f'{i1}static_assert(pf<word_bw>() >= 1, "elem_write requires pf>=1 (element fits in one word)");',
+        f"{i1}const int iw = i / lane_capacity<word_bw>();",
+        f"{i1}ap_uint<word_bw> w = dst[iw];",
+        f"{i1}write_array_elem_impl<word_bw>::write_lane(w, i % lane_capacity<word_bw>(), v);",
+        f"{i1}dst[iw] = w;",
         f"{indent}}}",
     ])
 
