@@ -17,7 +17,9 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
-from examples.interleaver.interleaver import Interleaver, InterleaverCmd, InterleaverSob
+from examples.interleaver.interleaver import (
+    Interleaver, InterleaverCanon, InterleaverCmd, InterleaverSob,
+)
 from examples.interleaver.mem_stream_sim import CmdDriver, WordSink
 
 
@@ -92,10 +94,10 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
 
 
 def run_and_check() -> bool:
-    for cc in (Interleaver, InterleaverSob):
+    for cc in (Interleaver, InterleaverSob, InterleaverCanon):
         run_interleaver(nj=1, comp_class=cc)                     # single job
         run_interleaver(nj=3, comp_class=cc)                     # back-to-back
-    print("interleaver pysim golden (both variants): PASSED")
+    print("interleaver pysim golden (all three variants): PASSED")
     return True
 
 
