@@ -163,6 +163,9 @@ class MemStreamStep(Buildable):
             "interleaver_seq_task": self._output_dir / "interleaver_seq_task.h",
             "demux_task": self._output_dir / "demux_task.h",
             "gather_word_task": self._output_dir / "gather_word_task.h",
+            # P-SOB interleaver variant (Phase 4b): both P and X resident SOB blocks.
+            "split_fill_task": self._output_dir / "split_fill_task.h",
+            "gather_two_sob_task": self._output_dir / "gather_two_sob_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -176,6 +179,8 @@ class MemStreamStep(Buildable):
             "interleaver_seq_task": "interleaver_seq_task.h",
             "demux_task": "demux_task.h",
             "gather_word_task": "gather_word_task.h",
+            "split_fill_task": "split_fill_task.h",
+            "gather_two_sob_task": "gather_two_sob_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")

@@ -40,6 +40,7 @@ from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwComponent, HwParam  # noqa: E402
 from waveflow.hw.interface import (  # noqa: E402
+    SobIFMaster,
     SobIFSlave,
     StreamOfBlocksIF,
     StreamIF,
@@ -311,6 +312,184 @@ class Interleaver(HwComponent):
 
 
 # ---------------------------------------------------------------------------
+# P-SOB variant — the symmetric topology (both P and X are resident SOB blocks)
+# ---------------------------------------------------------------------------
+#
+# Same Sequencer / MemRStream / MemWStream; Demux+Fill collapse into ONE SplitFill task
+# (stream-in -> two SOB blocks), and Gather reads two SOBs instead of a p_words stream + one SOB.
+# Simpler graph (5 tasks, no deep p_words FIFO) and a decisive A/B test of the nj=8 deadlock: only
+# two SobEdges are needed (composite_gen already handles SobEdge — no generator change).
+
+
+@dataclass
+class SplitFill(HwComponent):
+    """Merge of Demux + Fill: read the ``mem_in`` run (P words then X words, ``nw`` each) and
+    write-lock-fill two resident blocks — ``p_blk`` (first ``nw``) + ``x_blk`` (next ``nw``).
+    Pure-stream-in, two-SOB-out (no m_axi).  Fixed ``split_fill_task``."""
+
+    cpp_kernel_name: ClassVar[str | None] = "split_fill"
+
+    mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
+    n: HwParam[int] = DEFAULT_N
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.mem_dwidth)
+        self.lw = w // 32
+        self.nw = _nwords(int(self.n), self.lw)
+        self.mem_in = StreamIFSlave(name=f"{self.name}_mem_in", sim=self.sim, bitwidth=w,
+                                    has_tlast=False)
+        self.p_blk = SobIFMaster(name=f"{self.name}_p_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        self.x_blk = SobIFMaster(name=f"{self.name}_x_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        for ep in (self.mem_in, self.p_blk, self.x_blk):
+            self.add_endpoint(ep)
+        self._dtype = np.uint32 if w <= 32 else np.uint64
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("split_fill_task", "split_fill_task.h", ("mem_in", "p_blk", "x_blk"),
+                          template_args=(int(self.mem_dwidth), self.nw))
+
+    def run_proc(self) -> ProcessGen[None]:
+        nw = self.nw
+        while True:
+            pblock = yield from self.p_blk.acquire_write()        # P block (write-lock)
+            pw = yield from self.mem_in.get(nwords_max=nw)        # P burst
+            pblock[:pw.shape[0]] = pw.astype(self._dtype)
+            yield from self.p_blk.commit_write(pblock)
+            xblock = yield from self.x_blk.acquire_write()        # X block (write-lock)
+            xw = yield from self.mem_in.get(nwords_max=nw)        # X burst
+            xblock[:xw.shape[0]] = xw.astype(self._dtype)
+            yield from self.x_blk.commit_write(xblock)
+
+
+@dataclass
+class GatherTwoSob(HwComponent):
+    """Gather from two resident SOBs: read-lock ``p_blk`` (index block, read sequentially) + ``x_blk``
+    (source block, random ``elem_read<MEM_DW>``); per output word do ``LW`` random reads and pack.
+    Fixed ``gather_two_sob_task``."""
+
+    cpp_kernel_name: ClassVar[str | None] = "gather_two_sob"
+
+    mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
+    n: HwParam[int] = DEFAULT_N
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.mem_dwidth)
+        self.lw = w // 32
+        self.nw = _nwords(int(self.n), self.lw)
+        self.p_blk = SobIFSlave(name=f"{self.name}_p_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        self.x_blk = SobIFSlave(name=f"{self.name}_x_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        self.y_out = StreamIFMaster(name=f"{self.name}_y_out", sim=self.sim, bitwidth=w,
+                                    has_tlast=False)
+        for ep in (self.p_blk, self.x_blk, self.y_out):
+            self.add_endpoint(ep)
+        self.job_end_cyc: list[float] = []
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("gather_two_sob_task", "gather_two_sob_task.h",
+                          ("p_blk", "x_blk", "y_out"),
+                          template_args=(int(self.mem_dwidth), self.nw))
+
+    def run_proc(self) -> ProcessGen[None]:
+        lw, nw = self.lw, self.nw
+        while True:
+            pblock = yield from self.p_blk.acquire_read()         # index block (read-lock)
+            xblock = yield from self.x_blk.acquire_read()         # source block (read-lock)
+            y = np.zeros(nw, dtype=np.uint64)
+            for w in range(nw):
+                pword = int(pblock[w])                            # sequential index word
+                yword = 0
+                for lane in range(lw):
+                    idx = (pword >> (32 * lane)) & 0xFFFFFFFF          # P[w*LW+lane]
+                    xword = int(xblock[idx // lw])                    # elem_read: x_blk word idx/LW
+                    xv = (xword >> (32 * (idx % lw))) & 0xFFFFFFFF     # lane idx%LW
+                    yword |= xv << (32 * lane)
+                y[w] = yword
+            yield from self.p_blk.release_read()
+            yield from self.x_blk.release_read()
+            yield from self.y_out.write(y)
+            self.job_end_cyc.append(self.now / self.clk.period)
+
+
+@dataclass
+class InterleaverSob(HwComponent):
+    """The P-SOB interleaver composite: ``Seq -> MemRStream -> SplitFill ->(p_blk,x_blk SOB)->
+    GatherTwoSob -> MemWStream``.  Five sub-components; four StreamEdges (mr_cmd, mw_cmd, mem_out,
+    y_words) + two SobEdges (p_blk, x_blk).  No deep p_words FIFO (P is now resident)."""
+
+    cpp_kernel_name: ClassVar[str | None] = "interleaver_sob"
+
+    mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
+    n: HwParam[int] = DEFAULT_N
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.mem_dwidth)
+        n = int(self.n)
+        self.lw = w // 32
+        self.nw = _nwords(n, self.lw)
+
+        self.seq = InterleaverSeq(name=f"{self.name}_seq", sim=self.sim, mem_dwidth=w, n=n,
+                                  clk=self.clk)
+        self.rstream = MemRStream(name=f"{self.name}_r", sim=self.sim, mem_dwidth=w, clk=self.clk)
+        self.split = SplitFill(name=f"{self.name}_split", sim=self.sim, mem_dwidth=w, n=n,
+                               clk=self.clk)
+        self.gather = GatherTwoSob(name=f"{self.name}_gather", sim=self.sim, mem_dwidth=w, n=n,
+                                   clk=self.clk)
+        self.wstream = MemWStream(name=f"{self.name}_w", sim=self.sim, mem_dwidth=w, emit_done=True,
+                                  clk=self.clk)
+        for c in (self.seq, self.rstream, self.split, self.gather, self.wstream):
+            self.add_comp(c)
+        self.ordered_subcomps = [self.seq, self.rstream, self.split, self.gather, self.wstream]
+
+        def _sif(name, master, slave):
+            iface = StreamIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk, bitwidth=w)
+            iface.bind("master", master)
+            iface.bind("slave", slave)
+            self.add_if(iface)
+
+        def _sobif(name, master, slave):
+            iface = StreamOfBlocksIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk,
+                                     bitwidth=w, block_n=self.nw)
+            iface.bind("master", master)
+            iface.bind("slave", slave)
+            self.add_if(iface)
+
+        _sif("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd)
+        _sif("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd)
+        _sif("mem_out", self.rstream.m_out, self.split.mem_in)
+        _sobif("p_blk", self.split.p_blk, self.gather.p_blk)
+        _sobif("x_blk", self.split.x_blk, self.gather.x_blk)
+        _sif("y_words", self.gather.y_out, self.wstream.s_in)
+
+        self.internal_edges = [
+            StreamEdge("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd),
+            StreamEdge("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd),
+            StreamEdge("mem_out", self.rstream.m_out, self.split.mem_in),
+            SobEdge("p_blk", self.split.p_blk, self.gather.p_blk, elem_bw=w, block_n=self.nw),
+            SobEdge("x_blk", self.split.x_blk, self.gather.x_blk, elem_bw=w, block_n=self.nw),
+            StreamEdge("y_words", self.gather.y_out, self.wstream.s_in),
+        ]
+        self.boundary = [
+            ("s_cmd", self.seq.s_cmd, "axis_in", None),
+            ("m_in", self.rstream.m_mem, "maxi_read", "gmem0"),
+            ("m_out", self.wstream.m_mem, "maxi_write", "gmem1"),
+            ("s_done", self.wstream.s_done, "axis_out", None),
+        ]
+        self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
+        self.extra_includes = ("hls_streamofblocks.h",)
+
+        self.s_cmd = self.seq.s_cmd
+        self.m_in = self.rstream.m_mem
+        self.m_out = self.wstream.m_mem
+        self.s_done = self.wstream.s_done
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -331,25 +510,38 @@ def gen_headers(config: BuildConfig, mem_dwidth: int = DEFAULT_MEM_DW) -> None:
     gen_array_utils(IlElem, [int(mem_dwidth)], cfg=config, streamutils_dir=INCLUDE_DIR)
 
 
-def generate(out_dir: Path = HERE, mem_dwidth: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> Path:
-    """Generate headers + the Interleaver composite top .cpp + its csynth .tcl into *out_dir*."""
-    from waveflow.simulation.simulation import Simulation
-
-    config = BuildConfig(root_dir=out_dir, params={})
-    gen_headers(config, mem_dwidth=mem_dwidth)
-
-    comp = Interleaver(name="interleaver", sim=Simulation(), mem_dwidth=mem_dwidth, n=n)
+def _emit_top(comp, out_dir: Path, mem_dwidth: int) -> Path:
+    """Render *comp*'s composite top .cpp + csynth .tcl into ``out_dir/gen`` + ``out_dir``."""
     spec = composite_top_spec(comp, width=mem_dwidth)
-
     gen = out_dir / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
-    tcl = out_dir / f"{spec.top_name}.tcl"
-    tcl.write_text(render_tcl(spec.top_name), encoding="utf-8")
-    print(f"generated {cpp.relative_to(out_dir)} + {tcl.name}")
+    (out_dir / f"{spec.top_name}.tcl").write_text(render_tcl(spec.top_name), encoding="utf-8")
+    print(f"generated {cpp.relative_to(out_dir)} + {spec.top_name}.tcl")
     return cpp
+
+
+def generate(out_dir: Path = HERE, mem_dwidth: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> Path:
+    """Generate headers + the (stream/SOB-mix) Interleaver composite top .cpp + .tcl into *out_dir*."""
+    from waveflow.simulation.simulation import Simulation
+
+    config = BuildConfig(root_dir=out_dir, params={})
+    gen_headers(config, mem_dwidth=mem_dwidth)
+    comp = Interleaver(name="interleaver", sim=Simulation(), mem_dwidth=mem_dwidth, n=n)
+    return _emit_top(comp, out_dir, mem_dwidth)
+
+
+def generate_sob(out_dir: Path = HERE, mem_dwidth: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> Path:
+    """Generate headers + the P-SOB :class:`InterleaverSob` composite top .cpp + .tcl into *out_dir*."""
+    from waveflow.simulation.simulation import Simulation
+
+    config = BuildConfig(root_dir=out_dir, params={})
+    gen_headers(config, mem_dwidth=mem_dwidth)
+    comp = InterleaverSob(name="interleaver_sob", sim=Simulation(), mem_dwidth=mem_dwidth, n=n)
+    return _emit_top(comp, out_dir, mem_dwidth)
 
 
 if __name__ == "__main__":
     generate()
+    generate_sob()
