@@ -1,5 +1,5 @@
-"""interleaver_sim.py — pysim golden harness for the full :class:`~examples.interleaver.interleaver.
-Interleaver` composite (Phase 4, Gate 4).
+"""interleaver_sim.py — pysim golden harness for the canonical
+:class:`~examples.interleaver.interleaver.InterleaverCanon` composite.
 
 Wires the composite's boundary to a command driver (``s_cmd``), a done sink (``s_done``), and one shared
 flat memory reached by both the read (gmem0) and write (gmem1) masters through a 2-master AXI-MM
@@ -17,9 +17,7 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
-from examples.interleaver.interleaver import (
-    Interleaver, InterleaverCanon, InterleaverCmd, InterleaverSob,
-)
+from examples.interleaver.interleaver import InterleaverCanon, InterleaverCmd
 from examples.interleaver.mem_stream_sim import CmdDriver, WordSink
 
 
@@ -33,11 +31,10 @@ def _pack(vals: np.ndarray, lw: int) -> np.ndarray:
     return words
 
 
-def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=Interleaver):
-    """Run the *comp_class* interleaver composite (the stream/SOB-mix :class:`Interleaver` or the
-    P-SOB :class:`InterleaverSob`) over *nj* back-to-back jobs (all size *n*) and check
-    Y[j][i]=X[j][P[i]] bit-exact.  Returns the composite (gather.job_end_cyc = the completion
-    timeline)."""
+def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=InterleaverCanon):
+    """Run the *comp_class* interleaver composite (the canonical :class:`InterleaverCanon`) over *nj*
+    back-to-back jobs (all size *n*) and check Y[j][i]=X[j][P[i]] bit-exact.  Returns the composite
+    (gather.job_end_cyc = the completion timeline)."""
     sim = Simulation()
     clk = Clock(freq=100e6)
     lw = mem_dwidth // 32
@@ -94,10 +91,9 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
 
 
 def run_and_check() -> bool:
-    for cc in (Interleaver, InterleaverSob, InterleaverCanon):
-        run_interleaver(nj=1, comp_class=cc)                     # single job
-        run_interleaver(nj=3, comp_class=cc)                     # back-to-back
-    print("interleaver pysim golden (all three variants): PASSED")
+    run_interleaver(nj=1)                     # single job
+    run_interleaver(nj=3)                     # back-to-back
+    print("interleaver_canon pysim golden: PASSED")
     return True
 
 

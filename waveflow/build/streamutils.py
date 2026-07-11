@@ -156,17 +156,7 @@ class MemStreamStep(Buildable):
             # done-emitting write variant used by the MemCopy composite top.
             "mem_seq_task": self._output_dir / "mem_seq_task.h",
             "mem_w_stream_done_task": self._output_dir / "mem_w_stream_done_task.h",
-            # Compute tiles (Phase 3): the SOBIF producer/consumer (pure-AXIS).
-            "fill_task": self._output_dir / "fill_task.h",
-            "gather_task": self._output_dir / "gather_task.h",
-            # Full interleaver tiles (Phase 4): sequencer / demux / word-granular gather.
-            "interleaver_seq_task": self._output_dir / "interleaver_seq_task.h",
-            "demux_task": self._output_dir / "demux_task.h",
-            "gather_word_task": self._output_dir / "gather_word_task.h",
-            # P-SOB interleaver variant (Phase 4b): both P and X resident SOB blocks.
-            "split_fill_task": self._output_dir / "split_fill_task.h",
-            "gather_two_sob_task": self._output_dir / "gather_two_sob_task.h",
-            # Canonical six-stage interleaver (Phase 4c): a forwarded per-job token through every tile.
+            # Canonical six-stage interleaver tiles: a forwarded per-job token through every tile.
             "cmd_rx_task": self._output_dir / "cmd_rx_task.h",
             "il_mem_r_task": self._output_dir / "il_mem_r_task.h",
             "il_load_task": self._output_dir / "il_load_task.h",
@@ -181,13 +171,6 @@ class MemStreamStep(Buildable):
             "mem_w_stream_task": "mem_w_stream_task.h",
             "mem_seq_task": "mem_seq_task.h",
             "mem_w_stream_done_task": "mem_w_stream_done_task.h",
-            "fill_task": "fill_task.h",
-            "gather_task": "gather_task.h",
-            "interleaver_seq_task": "interleaver_seq_task.h",
-            "demux_task": "demux_task.h",
-            "gather_word_task": "gather_word_task.h",
-            "split_fill_task": "split_fill_task.h",
-            "gather_two_sob_task": "gather_two_sob_task.h",
             "cmd_rx_task": "cmd_rx_task.h",
             "il_mem_r_task": "il_mem_r_task.h",
             "il_load_task": "il_load_task.h",

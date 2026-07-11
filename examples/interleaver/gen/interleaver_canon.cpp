@@ -8,8 +8,6 @@
 #include "memmgr.hpp"
 #include "hls_streamofblocks.h"
 #include "il_cmd.h"
-#include "m_r_cmd.h"
-#include "m_w_cmd.h"
 #include "cmd_rx_task.h"
 #include "il_mem_r_task.h"
 #include "il_load_task.h"
