@@ -1,9 +1,17 @@
 # Plan: New `docs/guide/concurrency` section
 
-> **Cadence: write these docs only AFTER the timing (LT) model is complete.** The *structural*
-> implementation ([`mem_stream_impl.md`](./mem_stream_impl.md)) is DONE and merged (PR #106); the one
-> remaining piece is the loosely-timed model (the compute-stage yield / end-to-end LT). Every page is
-> anchored on a design that is already RTL-verified — do not write ahead of the anchor.
+> **Blocker status: the LT timing model is NOT built yet — but it gates only two things.** The
+> *structural* implementation ([`mem_stream_impl.md`](./mem_stream_impl.md)) is DONE, merged (PR #106),
+> and RTL-verified. The one missing piece is the **loosely-timed model** (the compute-stage yield /
+> end-to-end LT — see "As-built reality" below). It blocks **only**:
+>   1. `concurrency/python/timing.md` (the timing-contract page), and
+>   2. the `calib/*` / `timing_model/*` re-anchoring + FIR retirement (Succession strategy, below).
+>
+> **Leave those two blank / deferred for now.** *Everything else is writable today* against the merged
+> design — `index.md`, `subcomponent.md`, `sob.md` (python + hls), `lcs.md` (structural), `multiin.md`,
+> all of `hls/*`, and `interface/sob.md`. Do **not** wait on the LT model to start those. (The
+> [`build_flow_docs.md`](./build_flow_docs.md) pages — tcl/xsi/bfm — are likewise all writable now; the
+> build flow has no LT dependency.)
 
 ## As-built reality (from the merged PR #106 — reconcile the plan below against this)
 
@@ -168,17 +176,23 @@ serialization the forwarded token imposes, not just the per-stage rates.
 
 Every page pins to the XSI-verified sandbox artifact under `examples/interleaver/sandbox/`.
 
-## Sequencing (after Gate 4)
+## Sequencing (Gate 4 is DONE/merged — these are writable now unless marked BLOCKED)
 
-1. `interface/sob.md` — SOB mechanics in isolation; add the third lowering-table row (writable once
-   Phase 3/SOBIF is built + XSI-green).
+Writable today (structural — the design is merged + RTL-verified):
+1. `interface/sob.md` — SOB mechanics in isolation; add the third lowering-table row.
 2. `concurrency/index.md` — the model spine + DATAFLOW-vs-task-network positioning.
-3. `python/subcomponent.md` (MemCopy) → `python/sob.md` (SOB toy) → `python/lcs.md` (interleaver).
-4. `python/timing.md` — the timing contract, after the pysim emergent period is validated against 295.
-5. `hls/synth_types.md` → `hls/hlstask.md` → `hls/sob.md` → `hls/codegen.md`.
-6. `python/multiin.md` — Demux; arbitration stub.
-7. Add `concurrency/` to [`docs/guide/index.md`](../docs/guide/index.md); fix cross-links; frontmatter
+3. `python/subcomponent.md` (MemCopy) → `python/sob.md` (SOB toy) → `python/lcs.md` (interleaver,
+   structural).
+4. `hls/synth_types.md` → `hls/hlstask.md` → `hls/sob.md` → `hls/codegen.md`.
+5. `python/multiin.md` — multi-input (il_load/il_compute); arbitration stub.
+6. Add `concurrency/` to [`docs/guide/index.md`](../docs/guide/index.md); fix cross-links; frontmatter
    link-gate discipline (`audience` / `api` / `summary`) per [project-docs-three-arc-reorg].
+
+**BLOCKED on the LT timing model (leave blank for now):**
+7. `python/timing.md` — the timing contract, written only *after* the pysim emergent period is validated
+   against the measured **414 cyc/job**. Stub the page (heading + "TODO: pending LT model") if a nav slot
+   is wanted, but do not write the body.
+8. The `calib/*` / `timing_model/*` re-anchoring + FIR retirement (see Succession strategy).
 
 ## Succession strategy for the FIR / single-kernel-dataflow story (NOT archive)
 
@@ -191,7 +205,7 @@ Decision: **do not move or rewrite the FIR** — it still anchors the entire `ca
   "not the preferred concurrency model / being generalized / earlier study" banner below the H1. No
   files moved; no hard links to the not-yet-published `concurrency/` section (prose forward-refs only).
 - **Succession, as the concurrency section lands:**
-  1. Build the interleaver LT timing model (the missing piece).
+  1. Build the interleaver LT timing model — **NOT built yet; this is the blocker for steps 2–3.**
   2. Re-anchor `calib/*` and `timing_model/*` onto the interleaver; wire the banners' prose forward-refs
      into real `concurrency/` links.
   3. Only then retire/trim the FIR docs + code (`examples/rowwise_fir/` → `examples/_archive/`, the
