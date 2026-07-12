@@ -9,6 +9,21 @@ has_children: true
 
 Waveflow's build system models the full path from a Python design to its Vitis HLS outputs as a directed acyclic graph of typed steps. Each step declares the named artifacts it **consumes** and **produces** — files on disk *or* in-memory Python objects — and the DAG wires dependencies automatically, runs steps in topological order, propagates failures, and skips steps whose outputs are already fresh. The result is a single Python pipeline that can carry a design from schema declaration through code generation, Python simulation, Vitis C-sim, C-synth, and report inspection, with incremental rebuilds and one source of truth for what gets built and why.
 
+## One flow, with a fork at the RTL rung
+
+There is one build flow and one fidelity ladder. The front half is shared:
+
+`schema/codegen -> pysim golden -> csim -> csynth`
+
+The flow forks only at the final RTL-exercising rung, based on top execution model:
+
+| top kind | RTL rung |
+|---|---|
+| single-kernel top (`ap_ctrl_hs`, register-map launched) | [Vitis cosim](./vitis.md) |
+| composite free-running task-network top (`ap_ctrl_none`) | [XSI + BFM](./xsi.md) |
+
+That fork is two realizations of one flow, not two separate flows.
+
 ## Why it's useful
 
 - **One DAG, one command.** `dag.run(config)` executes every step in the right order. No shell scripts, no make.
@@ -25,6 +40,9 @@ Waveflow's build system models the full path from a Python design to its Vitis H
 - [Code Generation Steps](./codegen.md) — built-in steps that ship with Waveflow for generating C++ headers from Python schemas.
 - [Python Simulation Pattern](./python.md) — recipe for writing a step that runs a SimPy simulation and produces in-memory or file artifacts.
 - [Vitis Pattern](./vitis.md) — recipe for invoking Vitis HLS C-sim / C-synth and parsing the resulting reports.
+- [Authoring `run.tcl`](./tcl.md) — the Vitis script shared by both single-kernel and composite flows.
+- [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
+- [Writing a BFM testbench](./bfm.md) — the hand-authored cycle-driver for AXI-MM + AXI-Stream.
 
 ## Quick example
 

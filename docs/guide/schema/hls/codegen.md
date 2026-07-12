@@ -15,6 +15,10 @@ Python schema definition — the struct, its field types, and its serialization 
 the single source of truth, so the kernel can never drift from the Python model. Headers are produced by
 `BuildDag` steps; for the full build walkthrough see the [Build System guide](../../build/).
 
+This page covers **code generation responsibilities** (what files/types get produced). For **build/execution
+responsibilities** (how synthesized RTL is compiled and run, including the XSI run flow), see
+[XSI Build Rung](../../build/xsi.md).
+
 ## Generating include files for a schema
 
 Suppose we have a simple [DataList](../python/datalists.md) schema:
@@ -120,3 +124,4 @@ case — is covered in [Vectorization](../../vectorization/hls/raw.md).
 - [Serialization](./serialization.md) — moving a single schema value over each interface.
 - [Vitis: raw arrays](../../vectorization/hls/raw.md) — *using* the array utils: the lane loop and `read_array_slice`.
 - [Build System](../../build/) — the full `BuildDag` walkthrough.
+- [XSI Build Rung](../../build/xsi.md) — building/executing synthesized RTL (distinct from codegen).
