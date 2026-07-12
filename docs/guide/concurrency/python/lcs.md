@@ -32,7 +32,9 @@ interleaver XSI/test comments.
 
 For the generated canonical interleaver, steady-state is **414 cycles/job**.  
 The **295 cycles/job** figure belongs to the earlier hand-written sob3 reference, not this generated
-canonical topology.
+canonical topology. The generated canonical path keeps strict per-job token forwarding through all six
+stages (robustness against the `nj=8` deadlock class), which reduces load/compute overlap versus the
+hand-written sob3 schedule and explains the higher period.
 
 ## Reusable vs bespoke
 
