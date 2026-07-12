@@ -13,7 +13,7 @@ summary: "The dataflow hook pattern: the hook owns the WHOLE load-compute-store 
 > to load-compute-store: a **single hand-written kernel** that owns the whole pipeline via one
 > `#pragma HLS DATAFLOW` region. The current direction models concurrency as a **generated multi-task
 > network** of composed sub-components (the `hls::task` interleaver / `MemRStream`+`MemWStream`+SOBIF
-> path — Concurrency section, in progress). The single-kernel technique here remains valid for one
+> path — see [Concurrency](../concurrency/)). The single-kernel technique here remains valid for one
 > self-contained accelerator, but it is being superseded as *the* concurrency story and will be
 > replaced/retired over time.
 
@@ -145,3 +145,4 @@ The two are the two faces of the same load-compute-store accelerator.
 - [Kernel transfer reference](./reference.md) — the in-kernel transfer calls and the element-coordinate convention.
 - [Rowwise FIR example](../../examples/rowwise_fir/) — the full worked walkthrough; this hook is its [Writing the dataflow hook](../../examples/rowwise_fir/kernel_hook.md) page.
 - [`examples/rowwise_fir`](../../../examples/rowwise_fir/fir.py) — the source: the hook ([`fir_dataflow.tpp`](../../../examples/rowwise_fir/fir_dataflow.tpp)), the generated top, and the bit-exact golden.
+- [Concurrency](../concurrency/) — the canonical multi-task (`hls::task`) LCS direction.
