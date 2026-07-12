@@ -17,6 +17,7 @@ This section is the **Python transactional model**: the interface classes, their
 
 - [Overview](./overview.md) — the core model: `Interface` vs endpoint, the `Words` type, latency, and the SimPy lifecycle.
 - [Stream Interfaces](./stream.md) — unidirectional streams (`StreamIF`, `CrossBarIF`) and pipelined transfer.
+- [Stream-of-Blocks Interface](./sob.md) — block handoff (`DataArray[T, N]`) over `write_lock` / `read_lock`.
 - [MM Interfaces](./aximm.md) — memory-mapped read/write (`AXIMMCrossBarIF`, `DirectMMIF`).
 - [Polling Overhead](./poll.md) — the loosely-timed polling model (`MMIFMaster.poll_until`): bandwidth steal + discovery latency.
 - [AXI-MM Command Queue](./mmqueue.md) — the in-memory command ring (`AXIMMQueue`): control moved off the stream and into shared memory.
@@ -28,4 +29,3 @@ This section is the **Python transactional model**: the interface classes, their
 
 - [Hardware Components](../components/) — declaring the ports (these endpoints) on a component.
 - [Custom Hooks](../custom_hooks/) — the synthesizable side: using an interface inside a kernel body (the `#pragma HLS INTERFACE` ports and the `read_stream` / `m_axi` calls on it).
-
