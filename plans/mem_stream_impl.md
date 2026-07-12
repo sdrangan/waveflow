@@ -1,5 +1,12 @@
 # Implementation plan: `MemRStream` / `MemWStream` + generated free-running load-store-compute
 
+> **STATUS: DONE — merged to `main` (PR #106, 2026-07-12).** P1–P4 all landed + XSI-verified. The
+> `nj=8` deadlock this plan's naïve P4 hit (`done = tasks+1`) was fixed by a **forwarded per-job token**
+> (the canonical `cmd_rx → mem_r → load → compute → store → mem_w`, not the P4 graph as first drawn);
+> see memory `reference-freerun-pipeline-token-pacing` + `project-interleaver-generated-complete` for
+> the outcome, measured timing, and open follow-ups (timing calibration, throughput overlap, auto-gen
+> bodies). The mix/P-SOB/sob_toy variants were scaffolding and were removed in cleanup.
+
 **Goal.** Turn the hand-validated free-running interleaver (sandbox `interleaver_task_sob3.cpp`) into
 *generated* Waveflow code: a small set of reusable component types (`MemRStream`, `MemWStream`, a
 `SOBIF` interface, `elem_read`/`elem_write` primitives) that compose into a hierarchical `HwComponent`
