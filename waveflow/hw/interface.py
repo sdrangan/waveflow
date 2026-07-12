@@ -63,6 +63,108 @@ def _not_implemented_synth(ctx, inputs, outputs):
 
 RxProc = TypeAlias = Callable[[Words], ProcessGen[None]]
 
+
+# ---------------------------------------------------------------------------
+# Endpoint direction-as-capability (roadmap Phase 1)
+# ---------------------------------------------------------------------------
+#
+# A transaction endpoint (a memory master, a stream side) physically carries a
+# read channel, a write channel, or both.  ``@port_read`` / ``@port_write`` tag
+# the concrete transaction methods with the channel they exercise, and
+# :meth:`InterfaceEndpoint.as_dir` hands out a *capability view* — a proxy that
+# exposes only the matching-direction subset.  Binding a read-only endpoint
+# (``ep.as_dir('R')``) then makes a stray write a loud ``AttributeError`` at
+# wire-up, and (later) lets codegen emit a ``const`` pointer for that binding.
+#
+# The tags are purely additive: every existing call site keeps calling the
+# endpoint directly, so poly/histogram are untouched.
+
+def port_read(fn):
+    """Tag a transaction method as exercising the **read** channel (``'R'``).
+
+    Read by :meth:`InterfaceEndpoint.as_dir`'s capability view; additive, so an
+    already-``@synthesizable`` method keeps all its other markers."""
+    fn.__port_dir__ = 'R'
+    return fn
+
+
+def port_write(fn):
+    """Tag a transaction method as exercising the **write** channel (``'W'``)."""
+    fn.__port_dir__ = 'W'
+    return fn
+
+
+#: Substrings that classify an *untagged* method by name when no explicit
+#: ``__port_dir__`` is present (the heuristic fallback).
+_PORT_DIR_READ_HINTS = ('read', 'get', 'peek', 'poll')
+_PORT_DIR_WRITE_HINTS = ('write', 'put')
+
+
+def _classify_port_dir(name, attr):
+    """Classify endpoint attribute *name* as ``'R'`` / ``'W'`` / ``None``.
+
+    An explicit ``@port_read`` / ``@port_write`` tag wins.  Otherwise a callable
+    is classified by a name heuristic (read/get/peek/poll → read;
+    write/put → write); anything unmatched — and every non-callable — is
+    ``None`` (untyped, allowed on any direction)."""
+    explicit = getattr(attr, '__port_dir__', None)
+    if explicit in ('R', 'W'):
+        return explicit
+    if not callable(attr):
+        return None
+    lname = name.lower()
+    if any(h in lname for h in _PORT_DIR_READ_HINTS):
+        return 'R'
+    if any(h in lname for h in _PORT_DIR_WRITE_HINTS):
+        return 'W'
+    return None
+
+
+class CapabilityView:
+    """A direction-restricted proxy over an :class:`InterfaceEndpoint`.
+
+    Built by :meth:`InterfaceEndpoint.as_dir` for a ``'R'`` or ``'W'`` binding.
+    Attribute access delegates to the wrapped endpoint, but a method whose
+    classified direction (see :func:`_classify_port_dir`) conflicts with the
+    bound direction raises :class:`AttributeError` — so a read-only binding
+    cannot write, and vice versa.  Untyped members (fields, helpers) pass
+    through unrestricted."""
+
+    __slots__ = ('_endpoint', '_direction')
+
+    def __init__(self, endpoint: "InterfaceEndpoint", direction: str) -> None:
+        object.__setattr__(self, '_endpoint', endpoint)
+        object.__setattr__(self, '_direction', direction)
+
+    def __getattr__(self, name: str):
+        endpoint = object.__getattribute__(self, '_endpoint')
+        direction = object.__getattribute__(self, '_direction')
+        attr = getattr(endpoint, name)
+        d = _classify_port_dir(name, attr)
+        if d is not None and d != direction:
+            want = 'read' if d == 'R' else 'write'
+            raise AttributeError(
+                f"{type(endpoint).__name__}.{name} is a {want}-direction "
+                f"operation and is not accessible on a '{direction}' capability "
+                f"view of this endpoint"
+            )
+        return attr
+
+    @property
+    def endpoint(self) -> "InterfaceEndpoint":
+        """The underlying (unrestricted) endpoint this view wraps."""
+        return object.__getattribute__(self, '_endpoint')
+
+    @property
+    def direction(self) -> str:
+        """The bound direction of this view (``'R'`` or ``'W'``)."""
+        return object.__getattribute__(self, '_direction')
+
+    def __repr__(self) -> str:
+        endpoint = object.__getattribute__(self, '_endpoint')
+        direction = object.__getattribute__(self, '_direction')
+        return f"<CapabilityView {direction} of {endpoint!r}>"
+
 @dataclass
 class InterfaceEndpoint(SimObj):
     """
@@ -99,6 +201,25 @@ class InterfaceEndpoint(SimObj):
             The name of the interface side to bind to.
         """
         interface.bind(ep_name, self)
+
+    def as_dir(self, direction: str) -> "InterfaceEndpoint | CapabilityView":
+        """Return a capability view of this endpoint restricted to *direction*.
+
+        ``'RW'`` returns the endpoint itself (full, unrestricted access).
+        ``'R'`` / ``'W'`` return a :class:`CapabilityView` proxy that exposes
+        only the matching-direction transaction methods — a read view raises
+        :class:`AttributeError` on a write call and vice versa (see
+        :func:`_classify_port_dir` for how methods are classified).  This is the
+        direction-as-capability contract: a component binds an endpoint under the
+        one direction it actually uses, so the wrong-direction call fails at
+        wire-up rather than silently in simulation."""
+        if direction not in ('R', 'W', 'RW'):
+            raise ValueError(
+                f"as_dir: direction must be 'R', 'W', or 'RW', got {direction!r}"
+            )
+        if direction == 'RW':
+            return self
+        return CapabilityView(self, direction)
 
 
 @dataclass
@@ -493,6 +614,7 @@ class StreamIFSlave(QueuedTransferIFSlave):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
+    @port_read
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetStmt)
     def get(self, schema_type=None, count=None, *, nwords_max=None):
         """Pull the next burst from the buffer, optionally deserializing it.
@@ -540,6 +662,7 @@ class StreamIFSlave(QueuedTransferIFSlave):
 
         return schema_type().deserialize(raw_words, word_bw=self.bitwidth)
 
+    @port_read
     def get_pipelined(self, schema_type=None, count=None):
         """Pull the next burst and return ``(data, tstart)`` where ``tstart``
         is the SimPy time when the first word of the burst arrived.
@@ -605,6 +728,7 @@ class StreamIFMaster(QueuedTransferIFMaster):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
+    @port_write
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamWriteStmt)
     def write(self, data) -> ProcessGen[None]:
         """Write a burst to the bound interface, serializing typed data.
@@ -634,6 +758,7 @@ class StreamIFMaster(QueuedTransferIFMaster):
             )
         yield self.process(self._make_write_call(raw_words))
 
+    @port_write
     def write_pipelined(self, data, t_out_start: float):
         """Write a burst modelling pipeline overlap via ``t_out_start``.
 
@@ -677,6 +802,144 @@ class StreamIFMaster(QueuedTransferIFMaster):
         raise NotImplementedError(
             "StreamIFMaster.push_array is codegen-only in v1; use write() for sim."
         )
+
+
+# ---------------------------------------------------------------------------
+# SOBIF — the block interface (resident random-access double-buffer)
+# ---------------------------------------------------------------------------
+#
+# A distinct interface KIND (not a flag on StreamIF): a stream hands over one
+# element/word at a time (sequential FIFO dequeue); a SOBIF hands over a whole
+# *block* (elem_type = DataArray[T, N]) with acquire/release (write_lock /
+# read_lock) semantics and a RANDOM-ACCESS consumer.  It lowers to
+# ``hls::stream_of_blocks<T[N], 2>`` (the depth-2 ping-pong); the producer is the
+# ``write_lock`` side (Fill), the consumer the ``read_lock`` side (Gather).  Fill
+# and Gather MUST be separate components — the overlap requires filling block j+1
+# while gathering block j (plans/component.md, memory
+# reference-hls-stream-of-blocks-pingpong).
+#
+# The pysim models the depth-2 ping-pong with a free-buffer counter + a ready
+# queue, so the sim exhibits the overlap: the producer can acquire and fill the
+# second buffer while the consumer still holds (random-reads) the first.
+
+
+def _block_dtype(bitwidth: int) -> np.dtype:
+    """The numpy word dtype for a SOBIF block element (uint32 for <=32-bit, else uint64)."""
+    return np.dtype(np.uint32) if int(bitwidth) <= 32 else np.dtype(np.uint64)
+
+
+@dataclass
+class SobIFMaster(InterfaceEndpoint):
+    """Producer (``write_lock``) side of a :class:`StreamOfBlocksIF`.
+
+    Acquires a free block buffer, fills it (whole-block), then commits it to the
+    consumer.  In codegen this is the ``hls::write_lock<T[N]>`` scope inside the
+    producer task (e.g. ``Fill``)."""
+
+    bitwidth: int = 32
+    block_n: int = 1
+    type_name = 'sob_if_master'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def acquire_write(self) -> ProcessGen[np.ndarray]:
+        """Block until a buffer is free, then return a fresh zero-filled block to fill."""
+        if self.interface is None:
+            raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
+        return (yield from self.interface.acquire_write())
+
+    def commit_write(self, block: np.ndarray) -> ProcessGen[None]:
+        """Release the filled *block* to the consumer (the ``write_lock`` scope exit)."""
+        yield from self.interface.commit_write(block)
+
+
+@dataclass
+class SobIFSlave(InterfaceEndpoint):
+    """Consumer (``read_lock``) side of a :class:`StreamOfBlocksIF`.
+
+    Acquires the filled block, random-accesses it (``b[idx]``), then releases the
+    buffer back to the producer.  In codegen this is the ``hls::read_lock<T[N]>``
+    scope inside the consumer task (e.g. ``Gather``).
+
+    ``throughput`` is the consumer's advertised access rate (feeds the LT model):
+    a random-READ gather is ``n/min(LW,2)`` (dual-port free 2nd read), a
+    random-WRITE scatter is ``n`` (WAW-serialized).  Not used for the P3
+    element-granular toy; recorded for the P4 word-granular gather."""
+
+    bitwidth: int = 32
+    block_n: int = 1
+    throughput: str = "gather"      # "gather" (random-read) | "scatter" (random-write)
+    type_name = 'sob_if_slave'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def acquire_read(self) -> ProcessGen[np.ndarray]:
+        """Block until the producer commits a block, then return it for random access."""
+        if self.interface is None:
+            raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
+        return (yield from self.interface.acquire_read())
+
+    def release_read(self) -> ProcessGen[None]:
+        """Release the consumed buffer back to the producer (the ``read_lock`` scope exit)."""
+        yield from self.interface.release_read()
+
+
+@dataclass
+class StreamOfBlocksIF(QueuedTransferIF):
+    """The block interface (``SOBIF``): a depth-2 ping-pong buffer between one
+    :class:`SobIFMaster` producer and one :class:`SobIFSlave` consumer.
+
+    Subclasses :class:`QueuedTransferIF` (reuse the master/slave connect + SimPy
+    env plumbing); the new parts are block granularity (``block_n`` elements per
+    handover), the ``write_lock`` / ``read_lock`` handover, and the random-access
+    consumer.  pysim: a free-buffer counter (``depth`` buffers) + a ready queue, so
+    the producer fills buffer *j+1* while the consumer random-reads buffer *j* —
+    the overlap.  Codegen: ``hls::stream_of_blocks<ap_uint<bitwidth>[block_n], depth>``."""
+
+    block_n: int = 1
+    depth: int = 2
+    type_name = 'stream_of_blocks_if'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def __post_init__(self) -> None:
+        self.endpoint_names = ('master', 'slave')
+        super().__post_init__()
+        # depth-2 ping-pong: `depth` free buffers; a ready queue of committed blocks.
+        self._free = simpy.Container(self.env, init=self.depth, capacity=self.depth)
+        self._ready = simpy.Store(self.env, capacity=self.depth)
+
+    def acquire_write(self) -> ProcessGen[np.ndarray]:
+        yield self._free.get(1)
+        return np.zeros(self.block_n, dtype=_block_dtype(self.bitwidth or 32))
+
+    def commit_write(self, block: np.ndarray) -> ProcessGen[None]:
+        yield self._ready.put(np.array(block, copy=True))
+
+    def acquire_read(self) -> ProcessGen[np.ndarray]:
+        block = yield self._ready.get()
+        return block
+
+    def release_read(self) -> ProcessGen[None]:
+        yield self._free.put(1)
+
+    def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
+        if ep_name not in ('master', 'slave'):
+            raise KeyError(
+                f"StreamOfBlocksIF only has 'master' and 'slave' sides, but got '{ep_name}'")
+        if ep_name == "master" and not isinstance(endpoint, SobIFMaster):
+            raise TypeError("master side of StreamOfBlocksIF must bind to SobIFMaster")
+        if ep_name == "slave" and not isinstance(endpoint, SobIFSlave):
+            raise TypeError("slave side of StreamOfBlocksIF must bind to SobIFSlave")
+        self._validate_and_set_bitwidth(endpoint)
+        if endpoint.block_n != self.block_n:
+            raise ValueError(
+                f"Endpoint block_n={endpoint.block_n} does not match "
+                f"interface block_n={self.block_n}")
+        super().bind(ep_name, endpoint)
 
 
 # ---------------------------------------------------------------------------

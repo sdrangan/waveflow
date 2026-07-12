@@ -62,7 +62,9 @@ from typing import Any, Callable, ClassVar
 import numpy as np
 import simpy
 
-from waveflow.hw.interface import InterfaceEndpoint, QueuedTransferIF, Words
+from waveflow.hw.interface import (
+    InterfaceEndpoint, QueuedTransferIF, Words, port_read, port_write,
+)
 from waveflow.hw.hwstmt import MMArrayReadStmt, MMArrayWriteStmt, SynthCallStmt
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
@@ -348,6 +350,7 @@ class MMIFMaster(InterfaceEndpoint):
     # Raw word transfers
     # ------------------------------------------------------------------
 
+    @port_write
     def write(self, words: Words, global_addr: int,
               tstart: float | None = None) -> ProcessGen[None]:
         """Write a burst of words to *global_addr*.
@@ -360,6 +363,7 @@ class MMIFMaster(InterfaceEndpoint):
         yield self.process(
             self.interface.write(words, global_addr, self.master_port, tstart=tstart))
 
+    @port_read
     def read(self, nwords: int, global_addr: int) -> ProcessGen[Words]:
         """Read *nwords* from *global_addr* and return the word array."""
         self._check_bound()
@@ -371,6 +375,7 @@ class MMIFMaster(InterfaceEndpoint):
     # Polling (the LT polling-overhead model)
     # ------------------------------------------------------------------
 
+    @port_read
     @synthesizable(stmt_class=PollUntilStmt)
     def poll_until(
         self,
@@ -445,6 +450,7 @@ class MMIFMaster(InterfaceEndpoint):
         words = yield from self.read(nwords, addr)
         return schema_type().deserialize(words, word_bw=word_bw)
 
+    @port_write
     @synthesizable(stmt_class=MMArrayWriteStmt)
     def write_array(
         self,
@@ -492,6 +498,7 @@ class MMIFMaster(InterfaceEndpoint):
             words = _pack_array(elements, elem_type=element_type, word_bw=word_bw)
         return words
 
+    @port_read
     @synthesizable(stmt_class=MMArrayReadStmt)
     def read_array(
         self,
@@ -696,6 +703,22 @@ class Region:
     word_bw: int = 32
     on_transfer: OnTransfer | None = None
 
+    def as_dir(self, direction: str) -> "Region | Any":
+        """Return a capability view of this region restricted to *direction*.
+
+        Mirrors :meth:`InterfaceEndpoint.as_dir` for the element-coordinate memory
+        view: ``'R'`` exposes ``read_slice`` (blocks ``write_slice``), ``'W'`` the
+        inverse, ``'RW'`` the full region.  The interleaver store binds its output
+        region as ``'W'`` so a stray read is caught at wire-up."""
+        from waveflow.hw.interface import CapabilityView
+        if direction not in ('R', 'W', 'RW'):
+            raise ValueError(
+                f"as_dir: direction must be 'R', 'W', or 'RW', got {direction!r}"
+            )
+        if direction == 'RW':
+            return self
+        return CapabilityView(self, direction)
+
     @property
     def _elem_bytes(self) -> int:
         return (self.element_type.nwords_per_inst(self.word_bw)
@@ -715,6 +738,7 @@ class Region:
             return None
         return getattr(resolver(self.byte_of(i0)), "bus_timing", None)
 
+    @port_read
     def read_slice(self, i0: int, i1: int) -> ProcessGen[Any]:
         """Read elements ``[i0, i1)`` (element coordinates) and return the deserialized array —
         the sim twin of ``read_array_slice<W>(mem, i0, i1, x)``.  The interconnect holds the
@@ -725,6 +749,7 @@ class Region:
             self.on_transfer("read", int(i0), nw, t0, t1)
         return data
 
+    @port_write
     def write_slice(
         self, i0: int, elements: Any, element_type: type | None = None,
     ) -> ProcessGen[None]:
@@ -737,6 +762,7 @@ class Region:
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
 
+    @port_read
     def read_slice_pipelined(
         self, i0: int, i1: int, t_out_start: float | None = None, num_trans: int = 1,
     ) -> ProcessGen[tuple[Any, float]]:
@@ -771,6 +797,7 @@ class Region:
             self.on_transfer("read", int(i0), nwords, t0, t1)
         return data, tstart
 
+    @port_write
     def write_slice_pipelined(
         self, i0: int, elements: Any, t_out_start: float, num_trans: int = 1,
         element_type: type | None = None, min_span: float | None = None,

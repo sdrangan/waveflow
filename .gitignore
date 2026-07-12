@@ -142,6 +142,10 @@ examples/_archive/conv2d/waveflow_conv2d_proj/
 examples/_archive/conv2d/logs/
 examples/_archive/conv2d/data/
 
+# Interleaver DATAFLOW de-risk sandbox (exploratory scratch; C1-C6 variants + generated Vitis
+# projects/VCDs. Findings are captured in plans/dataflow_mod.md; regenerate via run_interleaver.py.)
+examples/interleaver/sandbox/
+
 
 
 
