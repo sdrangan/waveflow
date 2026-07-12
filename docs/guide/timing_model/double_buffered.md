@@ -9,6 +9,13 @@ summary: "The double-buffered (ping-pong) timing model: load(n) ∥ process(n-1)
 
 # Double-buffered processing
 
+> **Status — being generalized.** This three-process (load ∥ compute ∥ store) model was Waveflow's
+> first concurrency timing model, developed for the single-kernel [dataflow](../custom_hooks/dataflow.md)
+> FIR. It remains the conceptual ancestor of the current direction — a **task-network** timing model
+> where N composed sub-components each carry their own per-stage yield and steady-state emerges from
+> backpressure on bounded channels (Concurrency section, in progress). Kept for reference; expect it to
+> be folded into the task-network model over time.
+
 **Double-buffered** (or **ping-pong**) processing sits between [block](./block.md) and
 [streaming](./streaming.md) on the [overlap continuum](./index.md#three-flows-one-continuum). It
 overlaps at **block** granularity: while block *n* is loading, block *n-1* is being computed and

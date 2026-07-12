@@ -7,6 +7,13 @@ has_children: true
 
 # Rowwise FIR
 
+> **Status — earlier concurrency study, no longer the preferred model.** This example was Waveflow's
+> *initial* load-compute-store study, built as a **single hand-written `#pragma HLS DATAFLOW` kernel**.
+> The current direction models load-compute-store as a **generated multi-task network** (the
+> interleaver — Concurrency section, in progress). This example is kept for reference (and still anchors
+> the calibration guide) but will be replaced/retired over time. Its calibration story is the intended
+> anchor to migrate onto the interleaver's timing model.
+
 **Rowwise FIR** is a per-matrix-row FIR filter accelerator — `Y[i,j] = Σ_t h[t]·X[i, j−t]` over every
 row of an input matrix. It is the example where Waveflow turns **inward**: it reuses
 [`shared_mem`](../shared_mem/)'s **AXI-stream control** (the command on `s_in`, the response on

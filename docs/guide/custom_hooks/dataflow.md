@@ -9,6 +9,14 @@ summary: "The dataflow hook pattern: the hook owns the WHOLE load-compute-store 
 
 # Dataflow — load, compute, store pipeline
 
+> **Status — not the preferred concurrency model.** This page documents Waveflow's *initial* approach
+> to load-compute-store: a **single hand-written kernel** that owns the whole pipeline via one
+> `#pragma HLS DATAFLOW` region. The current direction models concurrency as a **generated multi-task
+> network** of composed sub-components (the `hls::task` interleaver / `MemRStream`+`MemWStream`+SOBIF
+> path — Concurrency section, in progress). The single-kernel technique here remains valid for one
+> self-contained accelerator, but it is being superseded as *the* concurrency story and will be
+> replaced/retired over time.
+
 The [block](./block.md) pattern lets codegen move the data and leaves the hook as pure compute over
 a materialized array. The **dataflow** pattern is the opposite extreme: the hook owns the **entire
 load-compute-store pipeline** — the load burst, the compute, *and* the store burst — wired together
