@@ -336,3 +336,42 @@ class HwComponent(Component):
                 object.__setattr__(
                     self, name, HwParamValue(int(value), name)
                 )
+
+
+class SynthComp(HwComponent):
+    """Base for components that generate **synthesizable** C++.
+
+    A plain :class:`HwComponent` may be a *behavioral*, simulation-only model of
+    hardware Waveflow does not generate (a data converter, a memory, a channel).
+    Subclassing ``SynthComp`` declares "this component is synthesizable" and runs
+    a construction-time synthesizability check.
+
+    The concrete execution-model subclasses set ``_kernel_method`` to the method
+    the codegen lowers as the kernel body:
+    :class:`~waveflow.hw.hw_freerun.FreeRunComp` (``run_iter``), a host-activated
+    component (``on_start``), :class:`~waveflow.hw.hw_testbench.HwTestbench`
+    (``main``). See ``docs/guide/components/taxonomy.md``.
+    """
+
+    #: The method :func:`~waveflow.build.hwcodegen.extract_kernel` lowers as the
+    #: kernel body; execution-model subclasses override it.
+    _kernel_method: ClassVar[str] = 'run_proc'
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self._check_synthesizable()
+
+    def _check_synthesizable(self) -> None:
+        """Construction-time synthesizability check.
+
+        The base rule: the declared kernel-entry method must actually be
+        implemented (not left abstract). Execution-model subclasses extend this
+        with their own contract.
+        """
+        cls = type(self)
+        entry = getattr(cls, self._kernel_method, None)
+        if entry is None or getattr(entry, '__isabstractmethod__', False):
+            raise TypeError(
+                f"{cls.__name__} is a SynthComp but does not implement its "
+                f"kernel-entry method '{self._kernel_method}()'."
+            )

@@ -50,7 +50,8 @@ import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_component import HwParam
+from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import MMIFMaster
 from waveflow.simulation.simobj import ProcessGen
@@ -119,7 +120,7 @@ def _word_type(mem_dwidth: int) -> type[IntField]:
 
 
 @dataclass
-class MemRStream(HwComponent):
+class MemRStream(FreeRunComp):
     """The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst.
 
     Endpoints (added in :meth:`__post_init__`): ``m_mem`` (:class:`MMIFMaster`, bound **read**),
@@ -181,30 +182,28 @@ class MemRStream(HwComponent):
         return KernelTask("mem_r_stream_task", "mem_r_stream_task.h", ("s_cmd", "m_mem", "m_out"),
                           template_args=(int(self.mem_dwidth),))
 
-    def run_proc(self) -> ProcessGen[None]:
-        """The pysim golden (NOT extracted — codegen is the fixed ``a2s`` template).  Free-running:
-        dequeue an :class:`MRCmd`, read the word-run off ``m_mem`` through a word-typed
+    def run_iter(self) -> ProcessGen[None]:
+        """The pysim golden — one firing = one command (NOT extracted; codegen is the fixed ``a2s``
+        template).  Dequeue an :class:`MRCmd`, read the word-run off ``m_mem`` through a word-typed
         :class:`~waveflow.hw.memif.Region` (which owns byte↔word), and burst it out on ``m_out``
-        **early-anchored** so the read and write overlap (``~n_words + fill``).  Blocks on an empty
-        command queue (sim drains when the driver stops), mirroring the sob3 ``load_task``."""
-        while True:
-            cmd: MRCmd = yield from self.s_cmd.get(MRCmd)
-            w0 = int(cmd.word_index)
-            nw = int(cmd.n_words)
-            t_start = self.now
-            # The command is an element coordinate relative to the buffer base: index the word-typed
-            # Region (base = the bound physical base) by [word_index, word_index+n_words).  Region
-            # owns byte↔word (byte_of()/word_bw), so no hand-rolled byte_addr_to_word_index / align.
-            region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
-            words, t0 = yield from region.read_slice_pipelined(w0, w0 + nw)
-            # early-anchor the output at the first-word-available time + pipeline fill: the read and
-            # write OVERLAP (write_pipelined shortens its wait when the anchor is already past).
-            yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
-            self.transfer_spans.append(self.now - t_start)
+        **early-anchored** so the read and write overlap (``~n_words + fill``)."""
+        cmd: MRCmd = yield from self.s_cmd.get(MRCmd)
+        w0 = int(cmd.word_index)
+        nw = int(cmd.n_words)
+        t_start = self.now
+        # The command is an element coordinate relative to the buffer base: index the word-typed
+        # Region (base = the bound physical base) by [word_index, word_index+n_words).  Region
+        # owns byte↔word (byte_of()/word_bw), so no hand-rolled byte_addr_to_word_index / align.
+        region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+        words, t0 = yield from region.read_slice_pipelined(w0, w0 + nw)
+        # early-anchor the output at the first-word-available time + pipeline fill: the read and
+        # write OVERLAP (write_pipelined shortens its wait when the anchor is already past).
+        yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
+        self.transfer_spans.append(self.now - t_start)
 
 
 @dataclass
-class MemWStream(HwComponent):
+class MemWStream(FreeRunComp):
     """The mirror of :class:`MemRStream`: the sole ``m_axi`` **write** owner.  An :class:`MWCmd`
     queue + an ``s_in`` word stream -> a pure-write, word-aligned burst into ``m_mem``.
 
@@ -272,23 +271,22 @@ class MemWStream(HwComponent):
         return KernelTask("mem_w_stream_task", "mem_w_stream_task.h", ("s_cmd", "s_in", "m_mem"),
                           template_args=(int(self.mem_dwidth),))
 
-    def run_proc(self) -> ProcessGen[None]:
-        """The pysim golden (NOT extracted — codegen is the fixed ``s2a`` template).  Free-running:
-        dequeue an :class:`MWCmd`, drain its ``n_words`` off ``s_in`` (pipelined — the first-word
-        anchor), and pure-write the burst through a word-typed
+    def run_iter(self) -> ProcessGen[None]:
+        """The pysim golden — one firing = one command (NOT extracted; codegen is the fixed ``s2a``
+        template).  Dequeue an :class:`MWCmd`, drain its ``n_words`` off ``s_in`` (pipelined — the
+        first-word anchor), and pure-write the burst through a word-typed
         :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap.  With
         ``emit_done`` it then writes one completion token (= words written) on ``s_done``."""
-        while True:
-            cmd: MWCmd = yield from self.s_cmd.get(MWCmd)
-            w0 = int(cmd.word_index)
-            nw = int(cmd.n_words)
-            t_start = self.now
-            words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
-            # Element coordinate relative to the buffer base: index the word-typed Region (base = the
-            # bound physical base) at [word_index, ...).  Region owns byte↔word (no hand conversion).
-            region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
-            yield from region.write_slice_pipelined(
-                w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
-            self.transfer_spans.append(self.now - t_start)
-            if self.emit_done:
-                yield from self.s_done.write(np.array([nw], dtype=np.uint64))
+        cmd: MWCmd = yield from self.s_cmd.get(MWCmd)
+        w0 = int(cmd.word_index)
+        nw = int(cmd.n_words)
+        t_start = self.now
+        words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
+        # Element coordinate relative to the buffer base: index the word-typed Region (base = the
+        # bound physical base) at [word_index, ...).  Region owns byte↔word (no hand conversion).
+        region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+        yield from region.write_slice_pipelined(
+            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
+        self.transfer_spans.append(self.now - t_start)
+        if self.emit_done:
+            yield from self.s_done.write(np.array([nw], dtype=np.uint64))
