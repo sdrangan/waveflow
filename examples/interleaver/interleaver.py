@@ -39,7 +39,8 @@ from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsSte
 from waveflow.hw.arrayutils import gen_array_utils  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
-from waveflow.hw.hw_component import HwComponent, HwParam  # noqa: E402
+from waveflow.hw.hw_component import HwParam  # noqa: E402
+from waveflow.hw.hw_composite import CompositeComp  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import (  # noqa: E402
     SobIFMaster,
@@ -365,7 +366,7 @@ class IlMemW(FreeRunComp):
 
 
 @dataclass
-class InterleaverCanon(HwComponent):
+class InterleaverCanon(CompositeComp):
     """The canonical six-stage interleaver with a forwarded per-job token: ``cmd_rx -> il_mem_r ->
     il_load -> il_compute -> il_store -> il_mem_w``.  Five Cmd StreamEdges (the token, one per hop) +
     three data StreamEdges (pwords, xwords, ywords) + three SobEdges (p_blk, x_blk, y_blk)."""
