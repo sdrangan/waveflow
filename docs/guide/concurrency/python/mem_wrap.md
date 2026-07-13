@@ -67,7 +67,9 @@ finished" signal for a sequencer or host.
 
 The wrappers turn "touch memory" into "read a stream / write a stream," so a memory-to-memory operation
 is just a pipeline between them. Here is a copy that **squares each sample** on the way through — read
-`src`, square, write `dst`:
+`src`, square, write `dst`. `Sequencer` and `Square` are free-running leaves, so — like `MemRStream` /
+`MemWStream` themselves — they subclass [`FreeRunComp`](../../components/taxonomy.md) and implement
+**`run_iter`** (one firing); see [Sub-components](./subcomponent.md) for why.
 
 ```python
 Word32 = IntField.specialize(bitwidth=32, signed=False)
@@ -84,7 +86,7 @@ class CopyCmd(DataList):
 
 
 @dataclass
-class Sequencer(HwComponent):
+class Sequencer(FreeRunComp):
     """Turn one CopyCmd into an MRCmd (read src) and an MWCmd (write dst)."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -96,16 +98,15 @@ class Sequencer(HwComponent):
         for ep in (self.s_cmd, self.mr_cmd, self.mw_cmd):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            cmd = yield from self.s_cmd.get(CopyCmd)
-            n = int(cmd.n_words)
-            yield from self.mr_cmd.write(MRCmd(word_index=int(cmd.src_off), n_words=n))
-            yield from self.mw_cmd.write(MWCmd(word_index=int(cmd.dst_off), n_words=n))
+    def run_iter(self) -> ProcessGen[None]:
+        cmd = yield from self.s_cmd.get(CopyCmd)
+        n = int(cmd.n_words)
+        yield from self.mr_cmd.write(MRCmd(word_index=int(cmd.src_off), n_words=n))
+        yield from self.mw_cmd.write(MWCmd(word_index=int(cmd.dst_off), n_words=n))
 
 
 @dataclass
-class Square(HwComponent):
+class Square(FreeRunComp):
     """Element-wise y = x**2 over a Float32 word stream (WORD_BW = 32 ⇒ one sample per word)."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -116,10 +117,9 @@ class Square(HwComponent):
         for ep in (self.s_in, self.m_out):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            x = yield from self.s_in.get(Float32, count=1)      # one sample
-            yield from self.m_out.write(array(Float32, x.val ** 2))
+    def run_iter(self) -> ProcessGen[None]:
+        x = yield from self.s_in.get(Float32, count=1)          # one sample
+        yield from self.m_out.write(array(Float32, x.val ** 2))
 ```
 
 The composite wires `Sequencer → MemRStream → Square → MemWStream` — two command edges and two data

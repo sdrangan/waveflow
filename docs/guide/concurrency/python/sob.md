@@ -92,6 +92,10 @@ uses — and `Compute` unpacks a whole word block into a typed vector with
 with `elem_read`; the golden does not need to — that is a synthesis concern, see
 [Concurrency (HLS) — SOB](../hls/sob.md).)
 
+`Load` and `Compute` are free-running leaves, so they subclass
+[`FreeRunComp`](../../components/taxonomy.md) and implement **`run_iter`** (one firing) rather than a
+hand-rolled `run_proc` loop — see [Sub-components](./subcomponent.md) for why.
+
 ```python
 from dataclasses import dataclass, field
 
@@ -101,6 +105,7 @@ from waveflow.hw.arrayutils import array, read_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, FloatField
 from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import (SobIFMaster, SobIFSlave, StreamIFMaster,
                                    StreamIFSlave, StreamOfBlocksIF)
 from waveflow.simulation.simobj import ProcessGen
@@ -121,7 +126,7 @@ NWORDS = HalfVec.nwords_per_inst(WORD_BW)   # packed words per half-block
 
 
 @dataclass
-class Load(HwComponent):
+class Load(FreeRunComp):
     """Move the word stream x into two resident half-blocks — no unpacking, just words."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -133,18 +138,17 @@ class Load(HwComponent):
         for ep in (self.x, self.xtop_blk, self.xbot_blk):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            top = yield from self.xtop_blk.acquire_write()      # a fresh word buffer
-            top[:] = yield from self.x.get(nwords_max=NWORDS)    # first N samples (as words)
-            yield from self.xtop_blk.commit_write(top)
-            bot = yield from self.xbot_blk.acquire_write()
-            bot[:] = yield from self.x.get(nwords_max=NWORDS)    # next N samples
-            yield from self.xbot_blk.commit_write(bot)
+    def run_iter(self) -> ProcessGen[None]:
+        top = yield from self.xtop_blk.acquire_write()          # a fresh word buffer
+        top[:] = yield from self.x.get(nwords_max=NWORDS)        # first N samples (as words)
+        yield from self.xtop_blk.commit_write(top)
+        bot = yield from self.xbot_blk.acquire_write()
+        bot[:] = yield from self.x.get(nwords_max=NWORDS)        # next N samples
+        yield from self.xbot_blk.commit_write(bot)
 
 
 @dataclass
-class Compute(HwComponent):
+class Compute(FreeRunComp):
     """z[i] = x[i] + x[2N-1-i] = (xtop + flip(xbot))[i]."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -156,16 +160,15 @@ class Compute(HwComponent):
         for ep in (self.xtop_blk, self.xbot_blk, self.z):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            top = yield from self.xtop_blk.acquire_read()
-            bot = yield from self.xbot_blk.acquire_read()
-            xtop = read_array(top, elem_type=Float32, word_bw=WORD_BW, shape=N)   # unpack whole block
-            xbot = read_array(bot, elem_type=Float32, word_bw=WORD_BW, shape=N)
-            z = xtop.val + np.flipud(xbot.val)                  # plain NumPy over the typed vectors
-            yield from self.z.write(array(Float32, z))          # pack back to WORD_BW words
-            yield from self.xtop_blk.release_read()
-            yield from self.xbot_blk.release_read()
+    def run_iter(self) -> ProcessGen[None]:
+        top = yield from self.xtop_blk.acquire_read()
+        bot = yield from self.xbot_blk.acquire_read()
+        xtop = read_array(top, elem_type=Float32, word_bw=WORD_BW, shape=N)   # unpack whole block
+        xbot = read_array(bot, elem_type=Float32, word_bw=WORD_BW, shape=N)
+        z = xtop.val + np.flipud(xbot.val)                  # plain NumPy over the typed vectors
+        yield from self.z.write(array(Float32, z))          # pack back to WORD_BW words
+        yield from self.xtop_blk.release_read()
+        yield from self.xbot_blk.release_read()
 ```
 
 The composite wires them with **two SOB edges** (`Load` is the master/producer, `Compute` the

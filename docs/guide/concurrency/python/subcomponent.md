@@ -46,7 +46,19 @@ flowchart LR
     relu -->|y| yout
 ```
 
-Each leaf is a trivial one-in / one-out stream stage:
+Each leaf is a trivial one-in / one-out stream stage. They **loop forever, one job per iteration**, so
+they subclass [`FreeRunComp`](../../components/taxonomy.md) and implement **`run_iter`** — *one firing*
+of the loop — rather than writing `run_proc` with a hand-rolled `while True`:
+
+- it **declares** the component free-running (it lowers to a free-running `ap_ctrl_none` `hls::task`), so
+  codegen never has to infer that from a `while` loop;
+- `run_iter` maps **one-to-one** to the generated `hls::task` body — the runtime re-fires it each job, so
+  the infinite loop lives in the base, not your code;
+- its base [`SynthComp`](../../components/taxonomy.md) checks at construction that you actually
+  implemented `run_iter`.
+
+Keep any persistent state on `self` (it lowers to `static` locals); there is no "before the loop" in an
+`hls::task`.
 
 ```python
 from dataclasses import dataclass, field
@@ -57,6 +69,7 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import FloatField
 from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.simulation.simobj import ProcessGen
 
@@ -64,7 +77,7 @@ Float32 = FloatField.specialize(bitwidth=32)
 
 
 @dataclass
-class Linear(HwComponent):
+class Linear(FreeRunComp):
     """z = 2·x + 3, one value at a time off a Float32 stream."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -75,14 +88,13 @@ class Linear(HwComponent):
         for ep in (self.x, self.z):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            x = yield from self.x.get(Float32, count=1)      # a 1-element DataArray
-            yield from self.z.write(array(Float32, 2.0 * x.val + 3.0))
+    def run_iter(self) -> ProcessGen[None]:
+        x = yield from self.x.get(Float32, count=1)          # a 1-element DataArray
+        yield from self.z.write(array(Float32, 2.0 * x.val + 3.0))
 
 
 @dataclass
-class Relu(HwComponent):
+class Relu(FreeRunComp):
     """y = max(z, 0)."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -93,10 +105,9 @@ class Relu(HwComponent):
         for ep in (self.z, self.y):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            z = yield from self.z.get(Float32, count=1)
-            yield from self.y.write(array(Float32, np.maximum(z.val, 0.0)))
+    def run_iter(self) -> ProcessGen[None]:
+        z = yield from self.z.get(Float32, count=1)
+        yield from self.y.write(array(Float32, np.maximum(z.val, 0.0)))
 ```
 
 The composite wires them into the pipeline `x → linear → z → relu → y`:
@@ -110,7 +121,7 @@ class Neuron(HwComponent):
     def __post_init__(self) -> None:
         super().__post_init__()
 
-        # 1. sub-components — each runs its own run_proc concurrently
+        # 1. sub-components — each runs its own run_iter loop concurrently
         self.linear = Linear(name=f"{self.name}_linear", sim=self.sim, clk=self.clk)
         self.relu = Relu(name=f"{self.name}_relu", sim=self.sim, clk=self.clk)
         self.add_comp(self.linear)

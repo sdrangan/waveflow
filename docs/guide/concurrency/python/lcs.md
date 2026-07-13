@@ -94,14 +94,14 @@ degenerate case of it.)
 The tiles are **free-running** (`ap_ctrl_none`) — none is "started"; they all loop forever. Left
 unbounded, they race ahead of one another and the pipeline fills until it deadlocks (the `nj=8` class,
 `done == #tasks + 1`). The fix is a **forwarded token**: `cmd_rx` emits one token per job, and *every*
-stage reads it on `cmd_in` and passes it on `cmd_out` **before** doing its own work:
+stage — each a [`FreeRunComp`](../../components/taxonomy.md) — reads it on `cmd_in` and passes it on
+`cmd_out` **before** doing its own work. That work is one firing of `run_iter`; the base loops it:
 
 ```python
-def run_proc(self):
-    while True:
-        cmd = yield from self.cmd_in.get(InterleaverCmd)   # wait my turn
-        yield from self.cmd_out.write(cmd)                 # release the next stage
-        ...                                                # then do this stage's work
+def run_iter(self):
+    cmd = yield from self.cmd_in.get(InterleaverCmd)   # wait my turn
+    yield from self.cmd_out.write(cmd)                 # release the next stage
+    ...                                                # then do this stage's work
 ```
 
 That paces each tile to **one job in flight** — a stage cannot start job *n+1* until it has passed job
@@ -115,20 +115,19 @@ output block, gathers, then releases — the [SOB](./sob.md) acquire / commit / 
 
 ```python
 @dataclass
-class IlCompute(HwComponent):
-    def run_proc(self):
-        while True:
-            cmd = yield from self.cmd_in.get(InterleaverCmd)
-            yield from self.cmd_out.write(cmd)             # forward the token
+class IlCompute(FreeRunComp):
+    def run_iter(self):
+        cmd = yield from self.cmd_in.get(InterleaverCmd)
+        yield from self.cmd_out.write(cmd)             # forward the token
 
-            p = yield from self.p_blk.acquire_read()       # both inputs resident
-            x = yield from self.x_blk.acquire_read()
-            y = yield from self.y_blk.acquire_write()
-            for i in range(n):
-                y[i] = x[p[i]]                             # the gather (functional shape)
-            yield from self.p_blk.release_read()
-            yield from self.x_blk.release_read()
-            yield from self.y_blk.commit_write(y)          # hand the output block on
+        p = yield from self.p_blk.acquire_read()       # both inputs resident
+        x = yield from self.x_blk.acquire_read()
+        y = yield from self.y_blk.acquire_write()
+        for i in range(n):
+            y[i] = x[p[i]]                             # the gather (functional shape)
+        yield from self.p_blk.release_read()
+        yield from self.x_blk.release_read()
+        yield from self.y_blk.commit_write(y)          # hand the output block on
 ```
 
 (The real `il_compute` is **word-granular** — `p_blk` / `x_blk` hold packed words and the gather unpacks
