@@ -740,9 +740,9 @@ class HwStmtExtractor:
         cls = self._duts.get(dut_local)
         if cls is None or not isinstance(cls, type):
             return None
-        from waveflow.simulation.simulation import Simulation
+        from waveflow.build.elaborate import elaborate
         try:
-            comp = cls(name="_codegen", sim=Simulation())
+            comp = elaborate(cls)
         except Exception:
             return None
         return getattr(comp, 'regmap', None)

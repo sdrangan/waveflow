@@ -1188,14 +1188,14 @@ def _iter_variants(comp_class):
     from ``comp_class.param_supports`` (if any) with the variant overrides
     applied via the normal ``__init__`` path — no immutability bypass.
     """
+    from waveflow.build.elaborate import elaborate
     from waveflow.hw.hw_component import validate_param_supports
-    from waveflow.simulation.simulation import Simulation
 
     validate_param_supports(comp_class)
-    yield "", comp_class(name="_codegen", sim=Simulation())
+    yield "", elaborate(comp_class)
     ps = getattr(comp_class, 'param_supports', None) or {}
     for suffix, overrides in ps.items():
-        yield suffix, comp_class(name="_codegen", sim=Simulation(), **overrides)
+        yield suffix, elaborate(comp_class, overrides)
 
 
 def header_to_cpp(
@@ -1522,12 +1522,8 @@ def tb_to_cpp(stmt: HwStmt, ctx: TbCodegenCtx) -> str:
 
 def _emit_dut_bind(stmt: DutBindStmt, ctx: TbCodegenCtx) -> str:
     """Emit stream + regmap-field local decls for the bound DUT."""
-    from waveflow.simulation.simulation import Simulation
-    dut = stmt.comp_class(
-        name=f"_{stmt.local_name}",
-        sim=Simulation(),
-        **stmt.kwargs,
-    )
+    from waveflow.build.elaborate import elaborate
+    dut = elaborate(stmt.comp_class, stmt.kwargs, name=f"_{stmt.local_name}")
     ctx.duts[stmt.local_name] = dut
     pad = ctx.pad()
     lines: list[str] = []
@@ -1976,11 +1972,11 @@ def _testbench_cpp(tb_class) -> str:
     one ``<elem>_array_utils_tb.h`` per array element type used, and
     explicit ``include/<schema>.h`` lines for structured schemas).
     """
+    from waveflow.build.elaborate import elaborate
     from waveflow.build.hwcodegen import extract_testbench
-    from waveflow.simulation.simulation import Simulation
 
     kn = cpp_kernel_name(tb_class)
-    tb = tb_class(name="_codegen", sim=Simulation())
+    tb = elaborate(tb_class)
     tree = extract_testbench(tb)
     ctx = TbCodegenCtx(comp=tb, indent=1)
     body = tb_to_cpp(tree, ctx)

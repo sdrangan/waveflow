@@ -480,11 +480,13 @@ def _emit_top(comp, out_dir: Path, mem_dwidth: int) -> Path:
 
 def generate_canon(out_dir: Path = HERE, mem_dwidth: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> Path:
     """Generate headers + the canonical six-stage :class:`InterleaverCanon` top .cpp + .tcl."""
-    from waveflow.simulation.simulation import Simulation
+    from waveflow.build.elaborate import elaborate
 
     config = BuildConfig(root_dir=out_dir, params={})
     gen_headers(config, mem_dwidth=mem_dwidth)
-    comp = InterleaverCanon(name="interleaver_canon", sim=Simulation(), mem_dwidth=mem_dwidth, n=n)
+    comp = elaborate(
+        InterleaverCanon, {"mem_dwidth": mem_dwidth, "n": n}, name="interleaver_canon"
+    )
     return _emit_top(comp, out_dir, mem_dwidth)
 
 

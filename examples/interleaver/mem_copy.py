@@ -220,12 +220,12 @@ def gen_headers(config: BuildConfig) -> None:
 
 def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
     """Generate headers + the MemCopy composite top .cpp + its csynth .tcl into *out_dir*."""
-    from waveflow.simulation.simulation import Simulation
+    from waveflow.build.elaborate import elaborate
 
     config = BuildConfig(root_dir=out_dir, params={})
     gen_headers(config)
 
-    comp = MemCopy(name="mem_copy", sim=Simulation(), mem_dwidth=width)
+    comp = elaborate(MemCopy, {"mem_dwidth": width}, name="mem_copy")
     spec = composite_top_spec(comp, width=width)
 
     gen = out_dir / GEN_DIR
