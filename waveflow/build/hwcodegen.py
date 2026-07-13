@@ -1265,10 +1265,12 @@ class HwStmtExtractor:
 def extract_kernel(comp) -> HwStmt:
     """Extract the kernel body and return a fully-resolved ``HwStmt`` tree.
 
-    Picks ``on_start`` if the component has a ``VitisRegMapMMIFSlave``
-    endpoint, otherwise ``run_proc``.  The returned tree has every ``ast.*``
-    node replaced with the real Python value and every output ``HwVar``
-    typed where possible.
+    The kernel-entry method is chosen by
+    :func:`~waveflow.build.hwresolve.select_kernel_method` (an explicit
+    ``_kernel_method`` wins, else ``on_start`` when the component carries a
+    ``VitisRegMapMMIFSlave``, else ``run_proc``).  The returned tree has every
+    ``ast.*`` node replaced with the real Python value and every output
+    ``HwVar`` typed where possible.
 
     For ``HwTestbench`` subclasses this routes to :func:`extract_testbench`
     instead — the testbench-mode entry point is ``main()`` with a different
@@ -1276,13 +1278,10 @@ def extract_kernel(comp) -> HwStmt:
     """
     if getattr(type(comp), '_is_testbench', False):
         return extract_testbench(comp)
-    from waveflow.build.hwresolve import resolve_kernel  # local: avoid cycle
-    from waveflow.hw.regmap import VitisRegMapMMIFSlave
-    for ep in getattr(comp, 'endpoints', {}).values():
-        if isinstance(ep, VitisRegMapMMIFSlave):
-            tree = HwStmtExtractor(comp, method_name='on_start').extract()
-            return resolve_kernel(tree, comp)
-    tree = HwStmtExtractor(comp, method_name='run_proc').extract()
+    # local imports: avoid an import cycle with hwresolve
+    from waveflow.build.hwresolve import resolve_kernel, select_kernel_method
+    method_name = select_kernel_method(comp)
+    tree = HwStmtExtractor(comp, method_name=method_name).extract()
     return resolve_kernel(tree, comp)
 
 
