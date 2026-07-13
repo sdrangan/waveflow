@@ -2809,8 +2809,10 @@ class DataList(DataSchema):
                 return child
             if isinstance(child, DataArray):
                 return child.val
-            # Generic fallback for other DataSchema subclasses (e.g. VarDataArray).
-            return child.val
+            # Generic fallback for DataSchema subclasses added after DataArray
+            # (e.g. VarDataArray).  All concrete DataSchema subclasses expose .val.
+            if hasattr(child, "val"):
+                return child.val
         raise AttributeError(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -2827,8 +2829,14 @@ class DataList(DataSchema):
             elif isinstance(child, DataArray):
                 child.val = value
             else:
-                # Generic fallback for other DataSchema subclasses (e.g. VarDataArray).
-                child.val = value
+                # Generic fallback for DataSchema subclasses added after DataArray
+                # (e.g. VarDataArray).  All concrete DataSchema subclasses expose .val.
+                if hasattr(child, "val"):
+                    child.val = value
+                else:
+                    raise TypeError(
+                        f"Unsupported child schema type for attribute '{name}'."
+                    )
             return
         object.__setattr__(self, name, value)
 
@@ -4647,7 +4655,7 @@ class VarDataArray(DataSchema):
         iword0: int = 0,
     ) -> tuple[int, int]:
         cls = self.__class__
-        active_len = len(self._val) if self._val is not None else 0
+        active_len = len(self._val)
 
         # Write the length field first.
         IntFieldLen = IntField.specialize(cls.nbits_len, signed=False)
