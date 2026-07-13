@@ -60,9 +60,15 @@ DEFAULT_MEM_DW = 64
 DEFAULT_N = 256
 
 # The block element type (32-bit, unsigned): its array-utils header supplies elem_read<MEM_DW> for the
-# word-granular Gather.  The name fixes the header/namespace to il_elem_array_utils(.h).
-IlElem = IntField.specialize(bitwidth=32, signed=False, include_dir=INCLUDE_DIR)
-IlElem.__name__ = "IlElem"
+# word-granular Gather.  The class name fixes the header/namespace to il_elem_array_utils(.h).
+#
+# It is a distinct *subclass* rather than ``specialize(...).__name__ = "IlElem"``: ``specialize`` returns
+# a cached class keyed by (bitwidth, signed, include_dir), so that shared object is the very same
+# ``UInt32`` another example (shared_mem/hist) specializes with the same key — renaming it in place would
+# corrupt that example's codegen (its array-utils namespace derives from ``__name__``).  A subclass gets
+# its own name while inheriting bitwidth/signed/include_dir/cpp_type untouched.
+class IlElem(IntField.specialize(bitwidth=32, signed=False, include_dir=INCLUDE_DIR)):  # type: ignore[misc]
+    pass
 
 # --- command field type (element/word coordinates — the word_index convention) --------------------
 Word32 = IntField.specialize(bitwidth=32, signed=False)
