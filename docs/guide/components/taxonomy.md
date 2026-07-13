@@ -21,24 +21,26 @@ target). Here we go by row — by role.
 
 ```
 HwComponent
-├── Synthesizable        @synthesizable compute → codegen emits a Vitis kernel
-│   ├── Host-activated    carries a VitisRegMapMMIFSlave · you write on_start · runs once per trigger
-│   └── Free-running      no regmap · you write run_proc · loops over its ports forever
-│       ├── ap_ctrl_hs      a single self-looping kernel (cosim-able)
-│       └── ap_ctrl_none    the hls::task tiles of a composite (XSI-only — can't Vitis-cosim)
-├── Testbench            is_testbench / HwTestbench → codegen routes to main() (a driver, not logic)
+├── Synthesizable  (SynthComp)      @synthesizable compute → codegen emits a Vitis kernel
+│   ├── Host-activated              on_start · ap_ctrl_hs · runs once per trigger (regmap-carrying)
+│   └── Free-running  (FreeRunComp) run_iter · one firing per job, looped by the base
+│       ├── ap_ctrl_none    the hls::task tiles of a composite (XSI-only — can't Vitis-cosim)
+│       └── ap_ctrl_hs      a single self-looping kernel (LoopComp, future — cosim-able)
+├── Testbench  (HwTestbench)        main() → a driver, not logic
 │   ├── Sequential         the sequential C++ testbench (today)
 │   └── SystemC/SC_THREAD   concurrent TB for free-running & multi-block designs (future)
-└── Behavioral           no @synthesizable · never run through codegen · a SimPy model only
+└── Behavioral                     plain HwComponent · no @synthesizable · never run through codegen
     (vendor IP: RFDC ADC/DAC · memories · RF channels · host/DMA models)
 ```
 
 ## Synthesizable
 
 A component with [`@synthesizable`](../../../waveflow/hw/synth.py) compute; codegen turns it into a
-Vitis HLS kernel (its C++ realization is [Component structure](../comp_codegen/structure.md)). As
-[overview noted](./overview.md#execution-models), the kind is selected **automatically** from the
-component's endpoints — you don't set it.
+Vitis HLS kernel (its C++ realization is [Component structure](../comp_codegen/structure.md)).
+Synthesizable components subclass [`SynthComp`](../../../waveflow/hw/hw_component.py) — the
+"generates C++" base, whose `__post_init__` runs a construction-time **synthesizability check**. Which
+*kind* of synthesizable component it is follows from the concrete class you pick; each class declares
+its `control_mode` and its kernel-entry method.
 
 ### Host-activated (invocation)
 
@@ -49,13 +51,16 @@ minimal case; `poly` uses this as a control path alongside streamed sample data.
 
 ### Free-running (continuous)
 
-No regmap; you implement **`run_proc`**, a long-lived loop over the component's stream / `m_axi` ports.
-The HLS control protocol splits this further, and the split matters for verification:
+Subclass [`FreeRunComp`](../../../waveflow/hw/hw_freerun.py) and implement **`run_iter`** — *one firing*
+(the body the `hls::task` runtime re-fires; the infinite loop is the base's, not yours). `FreeRunComp`
+sets `control_mode = FREE_RUNNING` explicitly, so codegen never has to detect a `while` loop at the
+root. The HLS control protocol splits this further, and the split matters for verification:
 
-- **`ap_ctrl_hs`** — a single self-looping kernel (started once, runs until done). Cosim-able.
 - **`ap_ctrl_none`** — the truly free-running `hls::task` tiles of a composite. They carry no control
   ports, and an `ap_ctrl_none` + `m_axi` kernel **cannot be Vitis-cosim'd**, so it is verified on the
   [XSI rung](../build/xsi.md) instead. The [interleaver](../concurrency/) tiles are this kind.
+- **`ap_ctrl_hs`** — a single self-looping kernel (started once, runs until done). Cosim-able; a
+  dedicated `LoopComp` for it is future work.
 
 ## Testbench
 
@@ -84,15 +89,20 @@ identified by role and usage, not by a flag — you simply never point the gener
 
 ## How the kind is selected
 
-The generator picks the mode from the component, in this order (the selection code lives in
+The kind is the component's **class**, which declares its kernel-entry method and `control_mode` (the
+selection lives in
 [`extract_kernel`](../comp_codegen/structure.md#the-execution-model-free-running-vs-regmap-launched)):
 
-| The component… | Role | Kernel entry |
+| The component's class… | Role | Kernel entry |
 |---|---|---|
-| is an `HwTestbench` / `is_testbench=True` | Testbench | `main()` |
+| [`HwTestbench`](./hwtestbench.md) (`is_testbench`) | Testbench | `main()` |
+| [`FreeRunComp`](../../../waveflow/hw/hw_freerun.py) | Free-running (`ap_ctrl_none`) | `run_iter` |
 | carries a `VitisRegMapMMIFSlave` | Host-activated | `on_start` |
-| otherwise (and is run through codegen) | Free-running | `run_proc` |
-| is never run through codegen (no `@synthesizable`) | Behavioral | — (simulation only) |
+| plain `HwComponent`, no `@synthesizable` | Behavioral | — (simulation only) |
+
+`FreeRunComp` and `SynthComp` exist today — they declare the execution model and check synthesizability
+at construction. Explicit `run_iter` *extraction* in `extract_kernel` lands with the first
+auto-extracted free-running kernel; the current free-running components use fixed template bodies.
 
 ## See also
 

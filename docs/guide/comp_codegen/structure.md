@@ -54,6 +54,13 @@ component's endpoints and, if any is a `VitisRegMapMMIFSlave`, extracts `on_star
 extracts `run_proc`. (For `HwTestbench` subclasses it routes to `main()` instead — see
 [Testbench](./testbench.md).)
 
+> **Declaring the mode by class.** Rather than have the mode inferred, a component can *declare* it: a
+> [`FreeRunComp`](../components/taxonomy.md) sets `control_mode = FREE_RUNNING` and implements
+> **`run_iter`** — *one firing*, the `hls::task` body the runtime re-fires (the `while True` is the
+> base's). Codegen then never has to recognize a `while` loop at the extracted root. The full
+> class-per-execution-model hierarchy (`SynthComp` / `FreeRunComp` / host-activated / `HwTestbench`) is
+> [Component taxonomy](../components/taxonomy.md).
+
 The regmap-launched body is *invocation-style*: it reads inputs from the register map, computes, and
 writes the result, returning once. From
 [`examples/regmap/simp_fun.py`](../../../examples/regmap/simp_fun.py):

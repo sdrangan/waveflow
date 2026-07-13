@@ -40,6 +40,7 @@ from waveflow.hw.arrayutils import gen_array_utils  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwComponent, HwParam  # noqa: E402
+from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import (  # noqa: E402
     SobIFMaster,
     SobIFSlave,
@@ -108,7 +109,7 @@ def _word_t(mem_dwidth: int) -> type:
 
 
 @dataclass
-class CmdRx(HwComponent):
+class CmdRx(FreeRunComp):
     """Stage 1: read the app command off the ``s_cmd`` AXIS boundary and emit the per-job token."""
 
     cpp_kernel_name: ClassVar[str | None] = "cmd_rx"
@@ -129,14 +130,13 @@ class CmdRx(HwComponent):
         return KernelTask("cmd_rx_task", "cmd_rx_task.h", ("s_cmd", "cmd_out"),
                           template_args=(int(self.mem_dwidth),))
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            cmd = yield from self.s_cmd.get(_TOKEN)
-            yield from self.cmd_out.write(cmd)
+    def run_iter(self) -> ProcessGen[None]:
+        cmd = yield from self.s_cmd.get(_TOKEN)
+        yield from self.cmd_out.write(cmd)
 
 
 @dataclass
-class IlMemR(HwComponent):
+class IlMemR(FreeRunComp):
     """Stage 2 (m_axi read owner, gmem0): token -> burst P->pwords + X->xwords -> forward token."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_mem_r"
@@ -167,22 +167,21 @@ class IlMemR(HwComponent):
                           ("cmd_in", "m_mem", "cmd_out", "pwords", "xwords"),
                           template_args=(int(self.mem_dwidth), self.nw))
 
-    def run_proc(self) -> ProcessGen[None]:
+    def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
-        while True:
-            cmd = yield from self.cmd_in.get(_TOKEN)
-            yield from self.cmd_out.write(cmd)
-            region = self.m_mem.region(0, self._wt, word_bw=self._bw)
-            pw = int(cmd.p_off)
-            pdata, _ = yield from region.read_slice_pipelined(pw, pw + nw)
-            yield from self.pwords.write(np.asarray(pdata))
-            xw = int(cmd.x_off)
-            xdata, _ = yield from region.read_slice_pipelined(xw, xw + nw)
-            yield from self.xwords.write(np.asarray(xdata))
+        cmd = yield from self.cmd_in.get(_TOKEN)
+        yield from self.cmd_out.write(cmd)
+        region = self.m_mem.region(0, self._wt, word_bw=self._bw)
+        pw = int(cmd.p_off)
+        pdata, _ = yield from region.read_slice_pipelined(pw, pw + nw)
+        yield from self.pwords.write(np.asarray(pdata))
+        xw = int(cmd.x_off)
+        xdata, _ = yield from region.read_slice_pipelined(xw, xw + nw)
+        yield from self.xwords.write(np.asarray(xdata))
 
 
 @dataclass
-class IlLoad(HwComponent):
+class IlLoad(FreeRunComp):
     """Stage 3 (stream->SOB): token + pwords/xwords -> fill p_blk/x_blk -> forward token."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_load"
@@ -214,23 +213,22 @@ class IlLoad(HwComponent):
                           ("cmd_in", "pwords", "xwords", "cmd_out", "p_blk", "x_blk"),
                           template_args=(int(self.mem_dwidth), self.nw))
 
-    def run_proc(self) -> ProcessGen[None]:
+    def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
-        while True:
-            cmd = yield from self.cmd_in.get(_TOKEN)
-            yield from self.cmd_out.write(cmd)
-            pblock = yield from self.p_blk.acquire_write()
-            pw = yield from self.pwords.get(nwords_max=nw)
-            pblock[:pw.shape[0]] = pw.astype(self._dtype)
-            yield from self.p_blk.commit_write(pblock)
-            xblock = yield from self.x_blk.acquire_write()
-            xw = yield from self.xwords.get(nwords_max=nw)
-            xblock[:xw.shape[0]] = xw.astype(self._dtype)
-            yield from self.x_blk.commit_write(xblock)
+        cmd = yield from self.cmd_in.get(_TOKEN)
+        yield from self.cmd_out.write(cmd)
+        pblock = yield from self.p_blk.acquire_write()
+        pw = yield from self.pwords.get(nwords_max=nw)
+        pblock[:pw.shape[0]] = pw.astype(self._dtype)
+        yield from self.p_blk.commit_write(pblock)
+        xblock = yield from self.x_blk.acquire_write()
+        xw = yield from self.xwords.get(nwords_max=nw)
+        xblock[:xw.shape[0]] = xw.astype(self._dtype)
+        yield from self.x_blk.commit_write(xblock)
 
 
 @dataclass
-class IlCompute(HwComponent):
+class IlCompute(FreeRunComp):
     """Stage 4 (pure SOB->SOB): token + read-lock p_blk/x_blk -> gather into y_blk -> forward token."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_compute"
@@ -259,31 +257,30 @@ class IlCompute(HwComponent):
                           ("cmd_in", "p_blk", "x_blk", "cmd_out", "y_blk"),
                           template_args=(int(self.mem_dwidth), self.nw))
 
-    def run_proc(self) -> ProcessGen[None]:
+    def run_iter(self) -> ProcessGen[None]:
         lw, nw = self.lw, self.nw
-        while True:
-            cmd = yield from self.cmd_in.get(_TOKEN)
-            yield from self.cmd_out.write(cmd)
-            pblock = yield from self.p_blk.acquire_read()
-            xblock = yield from self.x_blk.acquire_read()
-            yblock = yield from self.y_blk.acquire_write()
-            for w in range(nw):
-                pword = int(pblock[w])
-                yword = 0
-                for lane in range(lw):
-                    idx = (pword >> (32 * lane)) & 0xFFFFFFFF
-                    xword = int(xblock[idx // lw])
-                    xv = (xword >> (32 * (idx % lw))) & 0xFFFFFFFF
-                    yword |= xv << (32 * lane)
-                yblock[w] = yword
-            yield from self.p_blk.release_read()
-            yield from self.x_blk.release_read()
-            yield from self.y_blk.commit_write(yblock)
-            self.job_end_cyc.append(self.now / self.clk.period)
+        cmd = yield from self.cmd_in.get(_TOKEN)
+        yield from self.cmd_out.write(cmd)
+        pblock = yield from self.p_blk.acquire_read()
+        xblock = yield from self.x_blk.acquire_read()
+        yblock = yield from self.y_blk.acquire_write()
+        for w in range(nw):
+            pword = int(pblock[w])
+            yword = 0
+            for lane in range(lw):
+                idx = (pword >> (32 * lane)) & 0xFFFFFFFF
+                xword = int(xblock[idx // lw])
+                xv = (xword >> (32 * (idx % lw))) & 0xFFFFFFFF
+                yword |= xv << (32 * lane)
+            yblock[w] = yword
+        yield from self.p_blk.release_read()
+        yield from self.x_blk.release_read()
+        yield from self.y_blk.commit_write(yblock)
+        self.job_end_cyc.append(self.now / self.clk.period)
 
 
 @dataclass
-class IlStore(HwComponent):
+class IlStore(FreeRunComp):
     """Stage 5 (SOB->stream): token + read-lock y_blk -> ywords stream -> forward token."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_store"
@@ -311,17 +308,16 @@ class IlStore(HwComponent):
                           ("cmd_in", "y_blk", "cmd_out", "ywords"),
                           template_args=(int(self.mem_dwidth), self.nw))
 
-    def run_proc(self) -> ProcessGen[None]:
-        while True:
-            cmd = yield from self.cmd_in.get(_TOKEN)
-            yield from self.cmd_out.write(cmd)
-            yblock = yield from self.y_blk.acquire_read()
-            yield from self.ywords.write(np.asarray(yblock))
-            yield from self.y_blk.release_read()
+    def run_iter(self) -> ProcessGen[None]:
+        cmd = yield from self.cmd_in.get(_TOKEN)
+        yield from self.cmd_out.write(cmd)
+        yblock = yield from self.y_blk.acquire_read()
+        yield from self.ywords.write(np.asarray(yblock))
+        yield from self.y_blk.release_read()
 
 
 @dataclass
-class IlMemW(HwComponent):
+class IlMemW(FreeRunComp):
     """Stage 6 (m_axi write owner, gmem1): token + ywords -> write Y -> emit token on s_done (after
     the write burst — the commit-timed completion)."""
 
@@ -351,16 +347,15 @@ class IlMemW(HwComponent):
                           ("cmd_in", "ywords", "m_mem", "s_done"),
                           template_args=(int(self.mem_dwidth), self.nw))
 
-    def run_proc(self) -> ProcessGen[None]:
+    def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
-        while True:
-            cmd = yield from self.cmd_in.get(_TOKEN)
-            yw = int(cmd.y_off)
-            words = yield from self.ywords.get(nwords_max=nw)
-            region = self.m_mem.region(0, self._wt, word_bw=self._bw)
-            yield from region.write_slice_pipelined(
-                yw, np.asarray(words), t_out_start=self.now, element_type=self._wt)
-            yield from self.s_done.write(cmd)        # commit-timed completion token
+        cmd = yield from self.cmd_in.get(_TOKEN)
+        yw = int(cmd.y_off)
+        words = yield from self.ywords.get(nwords_max=nw)
+        region = self.m_mem.region(0, self._wt, word_bw=self._bw)
+        yield from region.write_slice_pipelined(
+            yw, np.asarray(words), t_out_start=self.now, element_type=self._wt)
+        yield from self.s_done.write(cmd)        # commit-timed completion token
 
 
 @dataclass
