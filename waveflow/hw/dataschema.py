@@ -198,6 +198,99 @@ class DataSchema(ABC):
             return 1
         return int(packed.shape[0])
 
+    # -- max / active size APIs ------------------------------------------------
+    # The "max" (class-level) APIs give the worst-case allocation size, used for
+    # codegen and buffer sizing.  The "active" (instance-level) APIs give the
+    # actual serialized size for the current runtime value.  For fixed-size
+    # schemas both are identical; ``VarDataArray`` and ``DataList`` containers
+    # that hold one override the active variants to return the true live size.
+
+    @classmethod
+    def get_bitwidth_max(cls) -> int:
+        """Return the maximum (declared/static) bitwidth for this schema type.
+
+        Alias for :meth:`get_bitwidth` that makes the max/active distinction
+        explicit.  Subclasses should override ``get_bitwidth`` rather than this
+        method.
+        """
+        return cls.get_bitwidth()
+
+    def get_bitwidth_active(self) -> int:
+        """Return the active bitwidth for this runtime value.
+
+        For fixed-size schemas this equals :meth:`get_bitwidth_max`.
+        ``VarDataArray`` overrides this to return ``nbits_len + len(val) *
+        elem_bitwidth``; ``DataList`` overrides it to sum its children's active
+        bitwidths.
+        """
+        return self.__class__.get_bitwidth_max()
+
+    @classmethod
+    def nwords_max(cls, word_bw: int) -> int:
+        """Return the maximum (declared/static) word count at ``word_bw``.
+
+        Alias for :meth:`nwords_per_inst` with a clearer name.
+        """
+        return cls.nwords_per_inst(word_bw)
+
+    def nwords_active(self, word_bw: int) -> int:
+        """Return the active serialized word count for this runtime value.
+
+        Uses :meth:`_active_size_recursive` to mirror the actual serialization
+        cursor movement, so the result is always consistent with what
+        :meth:`serialize` produces.
+        """
+        if word_bw <= 0:
+            raise ValueError("word_bw must be positive.")
+        curr_ipos, curr_iword = self._active_size_recursive(
+            word_bw=word_bw, ipos0=0, iword0=0
+        )
+        n = curr_iword + (1 if curr_ipos > 0 else 0)
+        return n if n > 0 else 1
+
+    def _active_size_recursive(
+        self,
+        word_bw: int,
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        """Simulate the serialization cursor advance for the active value.
+
+        Default delegates to :meth:`_serialize_recursive` with a scratch words
+        list, which is correct for fixed-size schemas (cursor movement is
+        independent of values).  ``DataList`` overrides this to walk children
+        individually so that variable-length children propagate their active
+        cursor correctly.  ``VarDataArray`` relies on the default because its
+        ``_serialize_recursive`` already uses the active element count.
+        """
+        words: list[int] = [0]
+        return self._serialize_recursive(
+            word_bw=word_bw, words=words, ipos0=ipos0, iword0=iword0
+        )
+
+    @classmethod
+    def _max_cursor_step(
+        cls,
+        word_bw: int,
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        """Advance a packing cursor by this schema's **maximum** serialized size.
+
+        Used by :meth:`DataList.nwords_per_inst` to compute the worst-case word
+        count when one or more children are variable-length (e.g.
+        :class:`VarDataArray`).
+
+        Default: serialize a default (zero-initialized) instance.  For
+        fixed-size schemas this is identical to the actual max size.
+        :class:`VarDataArray` overrides this to simulate max-length layout.
+        :class:`DataList` overrides this to walk its children's max steps.
+        """
+        words: list[int] = [0]
+        return cls()._serialize_recursive(
+            word_bw=word_bw, words=words, ipos0=ipos0, iword0=iword0
+        )
+
     def serialize(self, word_bw: int = 32) -> Words:
         """Serialize this runtime value into packed hardware words."""
         if word_bw <= 0:
@@ -2621,6 +2714,74 @@ class DataList(DataSchema):
 
         return curr_ipos, curr_iword
 
+    def get_bitwidth_active(self) -> int:
+        """Return the active bitwidth: sum of each child's active bitwidth.
+
+        Overrides :meth:`DataSchema.get_bitwidth_active` so that a ``DataList``
+        containing a :class:`VarDataArray` member propagates variable length
+        upward automatically.
+        """
+        return sum(child.get_bitwidth_active() for child in self._children.values())
+
+    def _active_size_recursive(
+        self,
+        word_bw: int,
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        """Walk each child's ``_active_size_recursive`` in order.
+
+        Overrides :meth:`DataSchema._active_size_recursive` to chain children
+        individually, so that a :class:`VarDataArray` child advances the cursor
+        by its active (not max) size and the remaining fixed children continue
+        from the updated cursor position.
+        """
+        curr_ipos = ipos0
+        curr_iword = iword0
+        for name, _ in self.__class__._iter_element_schemas():
+            curr_ipos, curr_iword = self._children[name]._active_size_recursive(
+                word_bw=word_bw,
+                ipos0=curr_ipos,
+                iword0=curr_iword,
+            )
+        return curr_ipos, curr_iword
+
+    @classmethod
+    def nwords_per_inst(cls, word_bw: int) -> int:
+        """Return the maximum word count for one instance at ``word_bw``.
+
+        Overrides the base implementation to use :meth:`_max_cursor_step` for
+        each child schema so that :class:`VarDataArray` children contribute
+        their worst-case (max-length) size rather than the default-instance
+        (zero-length) size.
+        """
+        if word_bw <= 0:
+            raise ValueError("word_bw must be positive.")
+        curr_ipos = 0
+        curr_iword = 0
+        for _, schema_cls in cls._iter_element_schemas():
+            curr_ipos, curr_iword = schema_cls._max_cursor_step(
+                word_bw=word_bw, ipos0=curr_ipos, iword0=curr_iword
+            )
+        n = curr_iword + (1 if curr_ipos > 0 else 0)
+        return n if n > 0 else 1
+
+    @classmethod
+    def _max_cursor_step(
+        cls,
+        word_bw: int,
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        """Advance cursor by the max layout of this ``DataList``."""
+        curr_ipos = ipos0
+        curr_iword = iword0
+        for _, schema_cls in cls._iter_element_schemas():
+            curr_ipos, curr_iword = schema_cls._max_cursor_step(
+                word_bw=word_bw, ipos0=curr_ipos, iword0=curr_iword
+            )
+        return curr_ipos, curr_iword
+
     @property
     def val(self) -> dict[str, Any]:
         """Return a nested runtime snapshot of child values."""
@@ -2648,6 +2809,8 @@ class DataList(DataSchema):
                 return child
             if isinstance(child, DataArray):
                 return child.val
+            # Generic fallback for other DataSchema subclasses (e.g. VarDataArray).
+            return child.val
         raise AttributeError(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -2664,7 +2827,8 @@ class DataList(DataSchema):
             elif isinstance(child, DataArray):
                 child.val = value
             else:
-                raise TypeError(f"Unsupported child schema type for attribute '{name}'.")
+                # Generic fallback for other DataSchema subclasses (e.g. VarDataArray).
+                child.val = value
             return
         object.__setattr__(self, name, value)
 
@@ -4214,6 +4378,522 @@ class DataArray(DataSchema):
         return bool(np.array_equal(v1, v2))
 
 
+class VarDataArray(DataSchema):
+    """Variable-length array schema with an in-band length field.
+
+    Stores at most ``len_max`` elements of ``elem_type``.  The serialized layout
+    is **length-first** and **bit-contiguous**::
+
+        [length : nbits_len][elem0][elem1]...[elemN-1]
+
+    where ``N = len(self.val) <= len_max`` is the active element count.
+
+    The *declared / max* bitwidth (used for codegen and buffer allocation) is::
+
+        get_bitwidth() == nbits_len + len_max * elem_type.get_bitwidth()
+
+    The *active* bitwidth for a specific instance is::
+
+        get_bitwidth_active() == nbits_len + len(val) * elem_type.get_bitwidth()
+
+    Use :meth:`specialize` to create a concrete subclass::
+
+        UInt16VarArr = VarDataArray.specialize(
+            elem_type=IntField.specialize(16, signed=False),
+            len_max=32,
+        )
+        obj = UInt16VarArr()
+        obj.val = np.array([10, 20, 30], dtype=np.uint32)
+
+    Parameters
+    ----------
+    elem_type:
+        A :class:`DataSchema` subclass that defines the element type.  Also
+        accepted as the ``elem_type`` keyword for ``specialize()``.
+    len_max:
+        Maximum active length.  Non-negative; zero is allowed (always empty).
+    nbits_len:
+        Bit-width of the in-band length field.  If omitted, defaults to
+        ``max(1, int(len_max).bit_length())`` which can represent ``0..len_max``.
+    """
+
+    elem_type: ClassVar[type[DataSchema] | None] = None
+    len_max: ClassVar[int] = 0
+    nbits_len: ClassVar[int] = 1
+    can_gen_include: ClassVar[bool] = False
+    allowed_specialize_kwargs: ClassVar[set[str]] = DataSchema.allowed_specialize_kwargs
+    _specializations: ClassVar[dict[tuple[Any, ...], type["VarDataArray"]]] = {}
+
+    def __init__(self, value: Any = None):
+        self._val = self.__class__.init_value()
+        if value is not None:
+            self.val = value
+
+    # -- element type accessor -------------------------------------------------
+
+    @classmethod
+    def _elem_type(cls) -> type[DataSchema]:
+        if cls.elem_type is None:
+            raise TypeError(f"{cls.__name__} does not define elem_type.")
+        return cls.elem_type
+
+    # -- specialize ------------------------------------------------------------
+
+    @classmethod
+    @defer_if_symbolic
+    def specialize(
+        cls,
+        elem_type: type[DataSchema],
+        len_max: int,
+        nbits_len: int | None = None,
+        **kwargs: Any,
+    ) -> type["VarDataArray"]:
+        """Return a cached subclass with the given element type and max length.
+
+        Parameters
+        ----------
+        elem_type:
+            The element schema class.
+        len_max:
+            Maximum active length (``>= 0``).
+        nbits_len:
+            Bit-width of the length field.  Defaults to
+            ``max(1, int(len_max).bit_length())``.
+        **kwargs:
+            Structural overrides (``include_dir``, ``include_filename``,
+            ``cpp_repr``).
+        """
+        if not isinstance(elem_type, type) or not issubclass(elem_type, DataSchema):
+            raise TypeError("elem_type must be a DataSchema subclass.")
+        len_max = int(len_max)
+        if len_max < 0:
+            raise ValueError("len_max must be non-negative.")
+        if nbits_len is None:
+            nbits_len = max(1, len_max.bit_length())
+        else:
+            nbits_len = int(nbits_len)
+            if nbits_len < 1:
+                raise ValueError("nbits_len must be at least 1.")
+
+        overrides = cls.validate_specialize_kwargs(kwargs)
+        override_items = tuple(sorted(overrides.items()))
+        key = (cls, elem_type, len_max, nbits_len, override_items)
+        cached = cls._specializations.get(key)
+        if cached is not None:
+            return cached
+
+        subclass_name = f"{elem_type.__name__}VarArray"
+        specialized_attrs = cls.merge_specialize_attrs(
+            {
+                "elem_type": elem_type,
+                "len_max": len_max,
+                "nbits_len": nbits_len,
+                "can_gen_include": True,
+                "__module__": cls.__module__,
+                "__doc__": (
+                    f"Specialized VarDataArray: elem_type={elem_type.__name__}, "
+                    f"len_max={len_max}, nbits_len={nbits_len}."
+                ),
+            },
+            overrides,
+        )
+        specialized = type(subclass_name, (cls,), specialized_attrs)
+        cls._specializations[key] = specialized
+        return specialized
+
+    # -- runtime value ---------------------------------------------------------
+
+    @classmethod
+    def init_value(cls) -> Any:
+        """Return an empty (zero-length) active value."""
+        if cls.elem_type is None:
+            return []
+        elem_init = cls._elem_type().init_value()
+        if isinstance(elem_init, np.generic):
+            return np.zeros((0,), dtype=np.asarray(elem_init).dtype)
+        if isinstance(elem_init, np.ndarray):
+            return np.zeros((0,) + tuple(elem_init.shape), dtype=elem_init.dtype)
+        return []
+
+    def __len__(self) -> int:
+        """Return the active number of elements."""
+        return len(self._val)
+
+    def __repr__(self) -> str:
+        elem = type(self).elem_type
+        elem_name = elem.__name__ if elem is not None else "?"
+        return (
+            f"{type(self).__name__}(elem_type={elem_name}, "
+            f"len={len(self._val)}, len_max={type(self).len_max})"
+        )
+
+    @property
+    def val(self) -> Any:
+        """Return the active array (length ``<= len_max``)."""
+        return self._val
+
+    @val.setter
+    def val(self, value: Any) -> None:
+        if isinstance(value, self.__class__):
+            value = value.val
+        self._val = self._convert(value)
+
+    def _convert(self, value: Any) -> Any:
+        cls = self.__class__
+        elem_cls = cls._elem_type()
+        elem_init = elem_cls.init_value()
+
+        if isinstance(elem_init, np.generic):
+            arr = np.asarray(value, dtype=np.asarray(elem_init).dtype)
+            if arr.ndim == 0:
+                arr = arr.reshape(1)
+            elif arr.ndim != 1:
+                raise ValueError(
+                    f"{cls.__name__}.val expects a 1-D array for scalar elements; "
+                    f"got shape {arr.shape}."
+                )
+        elif isinstance(elem_init, np.ndarray):
+            elem_shape = tuple(elem_init.shape)
+            arr = np.asarray(value, dtype=elem_init.dtype)
+            expected_ndim = 1 + len(elem_shape)
+            if arr.ndim != expected_ndim:
+                raise ValueError(
+                    f"{cls.__name__}.val expects a {expected_ndim}-D array; "
+                    f"got {arr.ndim}."
+                )
+            if tuple(arr.shape[1:]) != elem_shape:
+                raise ValueError(
+                    f"{cls.__name__}.val element shape must be {elem_shape}; "
+                    f"got {arr.shape[1:]}."
+                )
+        else:
+            arr = list(value)
+
+        active = len(arr)
+        if active > cls.len_max:
+            raise ValueError(
+                f"{cls.__name__}.val length {active} exceeds len_max={cls.len_max}."
+            )
+        return arr
+
+    # -- size APIs (max / active) ----------------------------------------------
+
+    @classmethod
+    def get_bitwidth(cls) -> int:
+        """Return the maximum packed bitwidth (length field + max elements)."""
+        return cls.nbits_len + cls.len_max * cls._elem_type().get_bitwidth()
+
+    def get_bitwidth_active(self) -> int:
+        """Return the active packed bitwidth for the current value."""
+        return (
+            self.__class__.nbits_len
+            + len(self._val) * self.__class__._elem_type().get_bitwidth()
+        )
+
+    @classmethod
+    def nwords_per_inst(cls, word_bw: int) -> int:
+        """Return the maximum word count (length field + ``len_max`` elements)."""
+        if word_bw <= 0:
+            raise ValueError("word_bw must be positive.")
+
+        # Simulate cursor for max-length layout.
+        IntFieldLen = IntField.specialize(cls.nbits_len, signed=False)
+        len_field = IntFieldLen()
+        words: list[int] = [0]
+        curr_ipos, curr_iword = len_field._serialize_recursive(word_bw, words, 0, 0)
+
+        child = cls._elem_type()()
+        for _ in range(cls.len_max):
+            curr_ipos, curr_iword = child._serialize_recursive(
+                word_bw, words, curr_ipos, curr_iword
+            )
+
+        n = curr_iword + (1 if curr_ipos > 0 else 0)
+        return n if n > 0 else 1
+
+    @classmethod
+    def _max_cursor_step(
+        cls,
+        word_bw: int,
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        """Advance cursor by the **maximum** (len_max-length) serialized layout.
+
+        Overrides :meth:`DataSchema._max_cursor_step` so that when a
+        :class:`DataList` calls this method to compute its worst-case
+        :meth:`nwords_per_inst`, it gets the full max-length cursor advance
+        rather than the zero-length default-instance advance.
+        """
+        IntFieldLen = IntField.specialize(cls.nbits_len, signed=False)
+        words: list[int] = [0]
+        curr_ipos, curr_iword = IntFieldLen()._serialize_recursive(
+            word_bw, words, ipos0, iword0
+        )
+        child = cls._elem_type()()
+        for _ in range(cls.len_max):
+            curr_ipos, curr_iword = child._serialize_recursive(
+                word_bw, words, curr_ipos, curr_iword
+            )
+        return curr_ipos, curr_iword
+
+    # -- serialization ---------------------------------------------------------
+
+    def _serialize_recursive(
+        self,
+        word_bw: int,
+        words: list[int],
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        cls = self.__class__
+        active_len = len(self._val) if self._val is not None else 0
+
+        # Write the length field first.
+        IntFieldLen = IntField.specialize(cls.nbits_len, signed=False)
+        len_field = IntFieldLen()
+        len_field.val = active_len
+        curr_ipos, curr_iword = len_field._serialize_recursive(
+            word_bw, words, ipos0, iword0
+        )
+
+        # Write the active elements.
+        child = cls._elem_type()()
+        for i in range(active_len):
+            child.val = self._val[i]
+            curr_ipos, curr_iword = child._serialize_recursive(
+                word_bw, words, curr_ipos, curr_iword
+            )
+
+        return curr_ipos, curr_iword
+
+    def _deserialize_recursive(
+        self,
+        word_bw: int,
+        words: list[int],
+        ipos0: int = 0,
+        iword0: int = 0,
+    ) -> tuple[int, int]:
+        cls = self.__class__
+
+        # Read the length field.
+        IntFieldLen = IntField.specialize(cls.nbits_len, signed=False)
+        len_field = IntFieldLen()
+        curr_ipos, curr_iword = len_field._deserialize_recursive(
+            word_bw, words, ipos0, iword0
+        )
+        active_len = int(len_field.val)
+        if active_len > cls.len_max:
+            raise ValueError(
+                f"{cls.__name__}: deserialized length {active_len} exceeds "
+                f"len_max={cls.len_max}."
+            )
+
+        # Read the active elements.
+        child = cls._elem_type()()
+        elem_init = cls._elem_type().init_value()
+
+        if isinstance(elem_init, np.generic):
+            dtype = np.asarray(elem_init).dtype
+            result: Any = np.zeros(active_len, dtype=dtype)
+            for i in range(active_len):
+                curr_ipos, curr_iword = child._deserialize_recursive(
+                    word_bw, words, curr_ipos, curr_iword
+                )
+                result[i] = child.val
+        elif isinstance(elem_init, np.ndarray):
+            result = np.zeros((active_len,) + tuple(elem_init.shape), dtype=elem_init.dtype)
+            for i in range(active_len):
+                curr_ipos, curr_iword = child._deserialize_recursive(
+                    word_bw, words, curr_ipos, curr_iword
+                )
+                result[i] = child.val
+        else:
+            result = []
+            for i in range(active_len):
+                curr_ipos, curr_iword = child._deserialize_recursive(
+                    word_bw, words, curr_ipos, curr_iword
+                )
+                result.append(child.val)
+
+        self._val = result
+        return curr_ipos, curr_iword
+
+    # -- equality / closeness --------------------------------------------------
+
+    def is_close(
+        self,
+        other: DataSchema,
+        rel_tol: float | None = None,
+        abs_tol: float | None = 1e-8,
+    ) -> bool:
+        if not isinstance(other, self.__class__):
+            return False
+        if len(self._val) != len(other._val):
+            return False
+        if len(self._val) == 0:
+            return True
+        v1 = np.asarray(self._val)
+        v2 = np.asarray(other._val)
+        if v1.shape != v2.shape:
+            return False
+        if np.issubdtype(v1.dtype, np.floating) or np.issubdtype(v2.dtype, np.floating):
+            kwargs: dict[str, float] = {}
+            if rel_tol is not None:
+                kwargs["rtol"] = rel_tol
+            if abs_tol is not None:
+                kwargs["atol"] = abs_tol
+            return bool(np.all(np.isclose(v1.astype(float), v2.astype(float), **kwargs)))
+        return bool(np.array_equal(v1, v2))
+
+    def to_dict(self) -> Any:
+        """Return a JSON-serializable representation (list of element values)."""
+        if isinstance(self._val, np.ndarray):
+            return self._val.tolist()
+        return list(self._val)
+
+    def from_dict(self, data: Any) -> "VarDataArray":
+        """Populate this instance from a list of element values."""
+        self.val = data
+        return self
+
+    # -- C++ code generation ---------------------------------------------------
+
+    @classmethod
+    def cpp_class_name(cls) -> str:
+        if cls.cpp_repr is not None:
+            return cls.cpp_repr
+        return cls.__name__
+
+    @classmethod
+    def get_dependencies(cls) -> list[type[DataSchema]]:
+        elem_cls = cls._elem_type()
+        if elem_cls.can_gen_include and elem_cls is not cls:
+            return [elem_cls]
+        return []
+
+    @classmethod
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+        """Generate a C++ struct for this ``VarDataArray``.
+
+        The struct holds an in-band ``len`` field and a fixed-capacity ``data``
+        array.  For :class:`DataField` element types the struct also emits
+        ``write_array`` / ``read_array`` helpers for each requested word width.
+        Complex element types (``DataList``, nested ``DataArray``) produce only
+        the data members and static constants; write/read helpers for those
+        cases are left for a future implementation.
+        """
+        cls_name = cls.cpp_class_name()
+        elem_cls = cls._elem_type()
+        elem_cpp = elem_cls.cpp_class_name()
+        elem_bw = elem_cls.get_bitwidth()
+
+        i1 = cls._get_indent(1)
+        i2 = cls._get_indent(2)
+        i3 = cls._get_indent(3)
+
+        lines = [f"struct {cls_name} {{"]
+        lines.append(f"{i1}ap_uint<{cls.nbits_len}> len;")
+        lines.append(f"{i1}{elem_cpp} data[{cls.len_max}];")
+        lines.append("")
+        lines.append(f"{i1}static constexpr int len_max = {cls.len_max};")
+        lines.append(f"{i1}static constexpr int nbits_len = {cls.nbits_len};")
+        lines.append(f"{i1}static constexpr int bitwidth = {cls.get_bitwidth()};")
+
+        if word_bw_supported:
+            # nwords_active<word_bw>() — runtime cursor simulation.
+            # Only valid when elem_bw <= word_bw (same constraint as DataField).
+            lines.append("")
+            lines.append(f"{i1}// nwords_active<word_bw>(): word count for the active length.")
+            lines.append(f"{i1}template<int word_bw>")
+            lines.append(f"{i1}int nwords_active() const {{")
+            lines.append(f"{i2}int ipos = 0, iword = 0;")
+            lines.append(f"{i2}// length field: {cls.nbits_len} bits")
+            lines.append(f"{i2}if (ipos + {cls.nbits_len} > word_bw) {{ ++iword; ipos = 0; }}")
+            lines.append(f"{i2}ipos += {cls.nbits_len};")
+            lines.append(f"{i2}if (ipos == word_bw) {{ ++iword; ipos = 0; }}")
+            lines.append(f"{i2}// active elements: {elem_bw} bits each")
+            lines.append(f"{i2}for (int i = 0; i < static_cast<int>(this->len); ++i) {{")
+            lines.append(f"{i3}if (ipos + {elem_bw} > word_bw) {{ ++iword; ipos = 0; }}")
+            lines.append(f"{i3}ipos += {elem_bw};")
+            lines.append(f"{i3}if (ipos == word_bw) {{ ++iword; ipos = 0; }}")
+            lines.append(f"{i2}}}")
+            lines.append(f"{i2}return iword + (ipos > 0 ? 1 : 0);")
+            lines.append(f"{i1}}}")
+
+            # Per-word-width write_array / read_array (DataField elements only).
+            if issubclass(elem_cls, DataField):
+                for bw in word_bw_supported:
+                    lines.append("")
+                    lines.append(
+                        f"{i1}void write_array(ap_uint<{bw}> x[]) const {{"
+                    )
+                    lines.append(f"{i2}const int n_out = nwords_active<{bw}>();")
+                    lines.append(f"{i2}for (int w = 0; w < n_out; ++w) x[w] = 0;")
+                    lines.append(f"{i2}int ipos = 0, iword = 0;")
+                    lines.append(f"{i2}// length field")
+                    lines.append(
+                        f"{i2}if (ipos + {cls.nbits_len} > {bw}) {{ ++iword; ipos = 0; }}"
+                    )
+                    lines.append(
+                        f"{i2}x[iword].range(ipos + {cls.nbits_len} - 1, ipos) = this->len;"
+                    )
+                    lines.append(f"{i2}ipos += {cls.nbits_len};")
+                    lines.append(f"{i2}if (ipos == {bw}) {{ ++iword; ipos = 0; }}")
+                    lines.append(f"{i2}// active elements")
+                    lines.append(
+                        f"{i2}for (int i = 0; i < static_cast<int>(this->len); ++i) {{"
+                    )
+                    elem_uint = elem_cls.to_uint_value_expr("this->data[i]")
+                    lines.append(f"{i3}ap_uint<{elem_bw}> elem_bits = {elem_uint};")
+                    lines.append(
+                        f"{i3}if (ipos + {elem_bw} > {bw}) {{ ++iword; ipos = 0; }}"
+                    )
+                    lines.append(
+                        f"{i3}x[iword].range(ipos + {elem_bw} - 1, ipos) = elem_bits;"
+                    )
+                    lines.append(f"{i3}ipos += {elem_bw};")
+                    lines.append(f"{i3}if (ipos == {bw}) {{ ++iword; ipos = 0; }}")
+                    lines.append(f"{i2}}}")
+                    lines.append(f"{i1}}}")
+
+                    lines.append("")
+                    lines.append(
+                        f"{i1}void read_array(const ap_uint<{bw}> x[]) {{"
+                    )
+                    lines.append(f"{i2}int ipos = 0, iword = 0;")
+                    lines.append(f"{i2}// length field")
+                    lines.append(
+                        f"{i2}if (ipos + {cls.nbits_len} > {bw}) {{ ++iword; ipos = 0; }}"
+                    )
+                    lines.append(
+                        f"{i2}this->len = x[iword].range(ipos + {cls.nbits_len} - 1, ipos);"
+                    )
+                    lines.append(f"{i2}ipos += {cls.nbits_len};")
+                    lines.append(f"{i2}if (ipos == {bw}) {{ ++iword; ipos = 0; }}")
+                    lines.append(f"{i2}// active elements")
+                    lines.append(
+                        f"{i2}for (int i = 0; i < static_cast<int>(this->len); ++i) {{"
+                    )
+                    lines.append(
+                        f"{i3}if (ipos + {elem_bw} > {bw}) {{ ++iword; ipos = 0; }}"
+                    )
+                    lines.append(
+                        f"{i3}ap_uint<{elem_bw}> elem_bits = "
+                        f"x[iword].range(ipos + {elem_bw} - 1, ipos);"
+                    )
+                    lines.append(
+                        f"{i3}this->data[i] = {elem_cls.from_uint_expr('elem_bits')};"
+                    )
+                    lines.append(f"{i3}ipos += {elem_bw};")
+                    lines.append(f"{i3}if (ipos == {bw}) {{ ++iword; ipos = 0; }}")
+                    lines.append(f"{i2}}}")
+                    lines.append(f"{i1}}}")
+
+        lines.append("};")
+        return "\n".join(lines)
+
+
 class DataSchemaStep(Buildable):
     """Buildable that generates C++ include headers for a :class:`DataSchema` class.
 
@@ -4501,6 +5181,7 @@ __all__ = [
     "BooleanField",
     "DataList",
     "DataArray",
+    "VarDataArray",
     "ParamSchema",
 ]
 

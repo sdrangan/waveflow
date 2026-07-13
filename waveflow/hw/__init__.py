@@ -11,6 +11,7 @@ from .dataschema import (
     IntField,
     MemAddr,
     ParamSchema,
+    VarDataArray,
     Words,
 )
 from .param import Expr, LazyField, Param, defer_if_symbolic, pmax, pmin
@@ -67,6 +68,7 @@ __all__ = [
     "BooleanField",
     "DataList",
     "DataArray",
+    "VarDataArray",
     "ParamSchema",
     "Param",
     "Expr",
