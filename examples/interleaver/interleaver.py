@@ -60,9 +60,15 @@ DEFAULT_MEM_DW = 64
 DEFAULT_N = 256
 
 # The block element type (32-bit, unsigned): its array-utils header supplies elem_read<MEM_DW> for the
-# word-granular Gather.  The name fixes the header/namespace to il_elem_array_utils(.h).
-IlElem = IntField.specialize(bitwidth=32, signed=False, include_dir=INCLUDE_DIR)
-IlElem.__name__ = "IlElem"
+# word-granular Gather.  The class name fixes the header/namespace to il_elem_array_utils(.h).
+#
+# It is a distinct *subclass* rather than ``specialize(...).__name__ = "IlElem"``: ``specialize`` returns
+# a cached class keyed by (bitwidth, signed, include_dir), so that shared object is the very same
+# ``UInt32`` another example (shared_mem/hist) specializes with the same key — renaming it in place would
+# corrupt that example's codegen (its array-utils namespace derives from ``__name__``).  A subclass gets
+# its own name while inheriting bitwidth/signed/include_dir/cpp_type untouched.
+class IlElem(IntField.specialize(bitwidth=32, signed=False, include_dir=INCLUDE_DIR)):  # type: ignore[misc]
+    pass
 
 # --- command field type (element/word coordinates — the word_index convention) --------------------
 Word32 = IntField.specialize(bitwidth=32, signed=False)
@@ -480,11 +486,13 @@ def _emit_top(comp, out_dir: Path, mem_dwidth: int) -> Path:
 
 def generate_canon(out_dir: Path = HERE, mem_dwidth: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> Path:
     """Generate headers + the canonical six-stage :class:`InterleaverCanon` top .cpp + .tcl."""
-    from waveflow.simulation.simulation import Simulation
+    from waveflow.build.elaborate import elaborate
 
     config = BuildConfig(root_dir=out_dir, params={})
     gen_headers(config, mem_dwidth=mem_dwidth)
-    comp = InterleaverCanon(name="interleaver_canon", sim=Simulation(), mem_dwidth=mem_dwidth, n=n)
+    comp = elaborate(
+        InterleaverCanon, {"mem_dwidth": mem_dwidth, "n": n}, name="interleaver_canon"
+    )
     return _emit_top(comp, out_dir, mem_dwidth)
 
 

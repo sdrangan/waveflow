@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from waveflow.build.build import BuildConfig, BuildStep
+from waveflow.build.elaborate import elaborate
 from waveflow.build.hwcodegen import extract_kernel
 from waveflow.build.hwgen import (
     _collect_hooks_with_params,
@@ -13,7 +14,6 @@ from waveflow.build.hwgen import (
     kernel_files_to_str,
 )
 from waveflow.hw.hw_component import HwComponent
-from waveflow.simulation.simulation import Simulation
 
 
 @dataclass(kw_only=True)
@@ -72,7 +72,7 @@ class HlsCodegenStep(BuildStep):
 
         Extension is ``"tpp"`` if the hook is templated, ``"cpp"`` otherwise.
         """
-        comp = self.comp_class(name="_codegen", sim=Simulation())
+        comp = elaborate(self.comp_class)
         tree = extract_kernel(comp)
         result: list[tuple[str, str]] = []
         for hook, tparams in _collect_hooks_with_params(tree):
