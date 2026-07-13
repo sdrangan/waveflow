@@ -9,10 +9,12 @@ summary: "How a Python HwComponent is generated into Vitis-ready C++: the HLS re
 
 # Component Code Generation
 
-WaveFlow generates **Vitis-ready C++ for every [`HwComponent`](../components/)**. You write the
-component once in Python — its ports, its parameters, its behavior — and the generator emits a
-top-level HLS kernel with the right AXI interfaces, the C++ type lowering, and the build-ready file
-set, all from that single source.
+WaveFlow generates **Vitis-ready C++** for the **synthesizable and testbench**
+[kinds of `HwComponent`](../components/taxonomy.md) —
+[behavioral](../components/taxonomy.md#behavioral-simulation-only) components model hardware it does not
+generate and have no C++. For the ones it *does* generate, you write the component once in Python — its
+ports, its parameters, its behavior — and the generator emits a top-level HLS kernel with the right AXI
+interfaces, the C++ type lowering, and the build-ready file set, all from that single source.
 
 This chapter covers **what the generator produces automatically**: the structure of a generated
 component, how each endpoint becomes an HLS port, the execution model it lowers to, what the

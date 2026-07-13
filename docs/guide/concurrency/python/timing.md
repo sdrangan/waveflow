@@ -1,7 +1,8 @@
 ---
-title: Concurrency (Python) — Timing contract (stub)
-parent: Concurrency
-nav_order: 5
+title: Timing contract (stub)
+parent: Python
+grand_parent: Concurrency
+nav_order: 6
 audience: python
 summary: "TODO stub: LT timing contract for task-network concurrency is pending validation against the generated canonical interleaver period."
 ---

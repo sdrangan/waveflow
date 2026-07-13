@@ -1,7 +1,8 @@
 ---
-title: Concurrency (Python) — Multi-input stages
-parent: Concurrency
-nav_order: 4
+title: Multi-input stages
+parent: Python
+grand_parent: Concurrency
+nav_order: 5
 audience: python
 api: [IlLoad, IlCompute, StreamIF, StreamOfBlocksIF]
 summary: "How canonical interleaver stages consume multiple inputs: `il_load` (two stream inputs to two SOB outputs) and `il_compute` (two SOB read-lock inputs). Includes arbitration status."

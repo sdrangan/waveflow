@@ -1,7 +1,8 @@
 ---
-title: Concurrency (HLS) — Sub-component to hls::task
-parent: Concurrency
-nav_order: 7
+title: Sub-component to hls::task
+parent: HLS
+grand_parent: Concurrency
+nav_order: 2
 audience: hls
 api: [KernelTask, composite_top_spec, hls::task]
 summary: "How hierarchical sub-components lower to `hls::task` calls via `KernelTask` signatures and graph-derived argument resolution."

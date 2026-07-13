@@ -4,50 +4,25 @@ parent: Guide
 nav_order: 8.5
 has_children: true
 audience: python
-summary: "Waveflow concurrency model: hierarchical components lowering to free-running `hls::task` networks, and how that canonical path relates to the older single-kernel `#pragma HLS DATAFLOW` realization."
+summary: "Waveflow's concurrency model: hierarchical composite components whose sub-components run in parallel, lowered to free-running hls::task networks. Split into the Python model and its HLS realization."
 ---
-
 # Concurrency
 
-Waveflow now has two documented load-compute-store realizations:
+*Concurrency* is fundamental to hardware: modules run in parallel, and that parallelism is where
+hardware's throughput comes from. Waveflow models it directly — each `HwComponent` defines a `run_proc`
+that spawns a process running in parallel in the simulation.
 
-1. **Single-kernel DATAFLOW** (`#pragma HLS DATAFLOW`) in
-   [Custom Hooks: Dataflow](../custom_hooks/dataflow.md).
-2. **Multi-component task network** (`hls::task`) generated from hierarchical components
-   (the interleaver path).
+A component built from **sub-components** wired together is a **composite**: a hierarchical
+`HwComponent` whose children run concurrently (like `InterleaverCanon` and its six tiles). This section
+has two halves:
 
-The task-network realization is the **canonical direction going forward**. The single-kernel DATAFLOW
-page remains valid and is kept for existing flows.
-
-## Canonical task-network shape (interleaver)
-
-The generated canonical topology is:
-
-`cmd_rx → il_mem_r → il_load → il_compute → il_store → il_mem_w → s_done`
-
-This is a free-running `ap_ctrl_none` network composed from sub-components and internal edges, then
-lowered by composite codegen.
-
-## In this section
-
-### Python modeling
-
-- [Sub-components and stream wiring](./python/subcomponent.md)
-- [SOB as a modeling pattern](./python/sob.md)
-- [Load-compute-store task network](./python/lcs.md)
-- [Multi-input stages](./python/multiin.md)
-- [Timing contract (stub)](./python/timing.md)
-
-### HLS realization
-
-- [Synthesis types and caveats](./hls/synth_types.md)
-- [Sub-component lowering to `hls::task`](./hls/hlstask.md)
-- [SOB synthesis/performance notes](./hls/sob.md)
-- [Composite codegen wiring](./hls/codegen.md)
+- **[Python model](./python/)** — how to describe composite systems hierarchically in Python, including
+  the important **load-compute-store** dataflow class.
+- **[HLS realization](./hls/)** — how composite systems are generated into Vitis as free-running
+  `hls::task` networks.
 
 ## See also
 
-- [Custom Hooks: Dataflow](../custom_hooks/dataflow.md) — single-kernel LCS.
-- [Component structure](../comp_codegen/structure.md) — free-running vs launched kernel modes.
-- [Endpoint interfaces](../comp_codegen/interface.md) — stream/memory port lowering.
-- [Hardware Components](../components/) and [Interfaces](../interface/) — Python-side declarations.
+- [Custom Hooks: Dataflow](../custom_hooks/dataflow.md) — the single-kernel `#pragma HLS DATAFLOW` realization of load-compute-store (the contrast with the task-network path here).
+- [Component structure](../comp_codegen/structure.md) — free-running vs. launched kernel modes.
+- [Hardware Components](../components/) and [Interfaces](../interface/) — the Python-side declarations composites are built from.

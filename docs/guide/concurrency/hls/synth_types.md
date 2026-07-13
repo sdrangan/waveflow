@@ -1,7 +1,8 @@
 ---
-title: Concurrency (HLS) — Synthesis types
-parent: Concurrency
-nav_order: 6
+title: Synthesis types
+parent: HLS
+grand_parent: Concurrency
+nav_order: 1
 audience: hls
 api: [hls::task, ap_ctrl_none]
 summary: "Synthesis model for Waveflow task networks: free-running `ap_ctrl_none` task composition, and the `hls::task` + `m_axi` ownership caveat used by the interleaver path."

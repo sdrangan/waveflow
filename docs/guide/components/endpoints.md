@@ -1,7 +1,7 @@
 ---
 title: Endpoint methods
 parent: Hardware Components
-nav_order: 2
+nav_order: 3
 audience: python
 applies_to: [HwComponent]
 api: [StreamIFSlave, StreamIFMaster, MMIFMaster, MMIFSlave, VitisRegMapMMIFSlave, ArrayTransferIFSlave, SchemaTransferIFSlave]

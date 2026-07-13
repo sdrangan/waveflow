@@ -1,7 +1,8 @@
 ---
-title: Concurrency (HLS) — Composite codegen
-parent: Concurrency
-nav_order: 9
+title: Composite codegen
+parent: HLS
+grand_parent: Concurrency
+nav_order: 4
 audience: hls
 api: [MemStreamStep, render_top, composite_top_spec, TopSpec]
 summary: "How concurrency codegen is assembled: fixed task headers from MemStreamStep, template instantiation, and generated static/thread-local internal channel wiring."

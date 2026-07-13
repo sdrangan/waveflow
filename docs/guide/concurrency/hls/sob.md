@@ -1,7 +1,8 @@
 ---
-title: Concurrency (HLS) — SOB synthesis notes
-parent: Concurrency
-nav_order: 8
+title: SOB synthesis notes
+parent: HLS
+grand_parent: Concurrency
+nav_order: 3
 audience: hls
 api: [hls::stream_of_blocks, hls::write_lock, hls::read_lock]
 summary: "SOB in task-network synthesis: depth-2 block channels with lock scopes, DTLP-oriented ownership split, and gather/scatter throughput notes."
