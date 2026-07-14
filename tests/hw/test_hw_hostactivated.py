@@ -108,3 +108,87 @@ def test_run_once_stream_bearing_is_follow_on():
     dut = elaborate(PolyAccelComponent)
     with pytest.raises(NotImplementedError, match="stream-bearing"):
         dut.run_once(1)
+
+
+# ---------------------------------------------------------------------------
+# run_once_sim — the sim-driven invocation (drives on_start through SimPy)
+# ---------------------------------------------------------------------------
+
+from dataclasses import field  # noqa: E402
+from typing import Any  # noqa: E402
+
+from waveflow.hw.clock import Clock  # noqa: E402
+from waveflow.simulation.simobj import SimObj  # noqa: E402
+from waveflow.simulation.simulation import Simulation  # noqa: E402
+
+
+@dataclass(kw_only=True)
+class _InvokeDriver(SimObj):
+    """Tiny process that drives ``dut.run_once_sim(*args)`` and records result + timing."""
+    dut: Any
+    args: tuple
+    result: Any = None
+    t0: float = 0.0
+    t1: float = 0.0
+
+    def run_proc(self) -> ProcessGen[None]:
+        self.t0 = self.now
+        self.result = yield from self.dut.run_once_sim(*self.args)
+        self.t1 = self.now
+
+
+@dataclass
+class _HAYield(HostActivated):
+    """A HostActivated whose on_start *yields* a timeout (a latency model) then copies x -> y."""
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    delay_cycles: int = 5
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.regmap = VitisRegMap({
+            "x": RegField(_Int32, RegAccess.RW),
+            "y": RegField(_Int32, RegAccess.R),
+        })
+        self.regmap.set("y", 0)
+        self.s_lite = VitisRegMapMMIFSlave(
+            name=f"{self.name}_s_lite", sim=self.sim, bitwidth=32,
+            regmap=self.regmap, on_start=self.on_start)
+        self.add_endpoint(self.s_lite)
+
+    def on_start(self) -> ProcessGen[None]:
+        yield self.timeout(self.delay_cycles * self.clk.period)
+        self.regmap.set("y", self.regmap.get("x"))
+
+
+def test_run_once_sim_matches_run_once_for_synchronous_on_start():
+    """With simp_fun's synchronous on_start, run_once_sim returns the same value as run_once."""
+    from examples.regmap.simp_fun import SimpFunComponent
+    for x, a, b in [(5, 3, 2), (0, 7, 1), (2, -5, 3), (-4, -2, 0)]:
+        expected = int(elaborate(SimpFunComponent).run_once(x, a, b).val)
+
+        sim = Simulation()
+        dut = SimpFunComponent(name="dut", sim=sim)
+        drv = _InvokeDriver(name="drv", sim=sim, dut=dut, args=(x, a, b))
+        sim.run_sim()
+        assert int(drv.result.val) == expected, (x, a, b)
+
+
+def test_run_once_sim_advances_clock_for_yielding_on_start():
+    """A yielding on_start (yield self.timeout(...)) advances the sim clock; t1 - t0 > 0."""
+    sim = Simulation()
+    clk = Clock(freq=100e6)
+    dut = _HAYield(name="dut", sim=sim, clk=clk, delay_cycles=5)
+    drv = _InvokeDriver(name="drv", sim=sim, dut=dut, args=(42,))
+    sim.run_sim()
+    assert drv.t1 - drv.t0 > 0
+    assert drv.t1 - drv.t0 == 5 * clk.period
+    assert int(drv.result.val) == 42
+
+
+def test_run_once_sim_wrong_arg_count_raises():
+    from examples.regmap.simp_fun import SimpFunComponent
+    sim = Simulation()
+    dut = SimpFunComponent(name="dut", sim=sim)
+    with pytest.raises(TypeError, match=r"takes 3 input"):
+        # A generator only runs on first advance; drive it to trip the check.
+        list(dut.run_once_sim(1, 2))

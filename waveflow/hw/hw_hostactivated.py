@@ -74,6 +74,45 @@ class HostActivated(HwComponent):
     # Invocation — one call, mirroring the generated C++ function call
     # ------------------------------------------------------------------
 
+    def _invoke_fields(self) -> tuple[Any, list[str], list[str]]:
+        """Derive the invocation regmap + input/output field names from the endpoints.
+
+        Shared by :meth:`run_once` (synchronous) and :meth:`run_once_sim` (sim-driven) so the
+        two invocation paths cannot drift.  Returns ``(regmap, inputs, outputs)`` where:
+
+        - ``regmap`` is the component's :class:`~waveflow.hw.regmap.VitisRegMap` (from its
+          :class:`~waveflow.hw.regmap.VitisRegMapMMIFSlave` endpoint);
+        - ``inputs`` = host-writable fields (``RW`` / ``W``), declaration order — the positional
+          args, matching :func:`~waveflow.build.hwgen.kernel_signature`;
+        - ``outputs`` = host-readable fields (``R``), declaration order — the return value(s).
+
+        The auto ``ap_*`` control regs are skipped.  Stream-bearing kernels (input
+        ``StreamIFSlave`` / output ``StreamIFMaster``, e.g. ``poly``) need push/pop marshalling
+        and raise :class:`NotImplementedError` — that is a follow-on.
+        """
+        from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+        from waveflow.hw.regmap import RegAccess, VitisRegMapMMIFSlave
+
+        # 5a scope: pure regmap-scalar. Stream push/pop marshalling is a Phase-5b follow-on.
+        if any(isinstance(v, (StreamIFSlave, StreamIFMaster)) for v in vars(self).values()):
+            raise NotImplementedError(
+                f"{type(self).__name__}.run_once: stream-bearing invocation is a Phase-5b follow-on; "
+                f"only pure-regmap host-activated kernels are supported today."
+            )
+        slave = next(
+            (v for v in vars(self).values() if isinstance(v, VitisRegMapMMIFSlave)), None)
+        if slave is None:
+            raise TypeError(
+                f"{type(self).__name__}.run_once: no VitisRegMapMMIFSlave endpoint found — a "
+                f"HostActivated must carry a regmap."
+            )
+        regmap = slave.regmap
+        # Walk the fields in declaration order (== kernel-signature order), skipping the auto ap_* regs.
+        app = [(n, f) for n, f in regmap._fields.items() if not f.is_vitis_auto]
+        inputs = [n for n, f in app if f.access in (RegAccess.RW, RegAccess.W)]
+        outputs = [n for n, f in app if f.access is RegAccess.R]
+        return regmap, inputs, outputs
+
     def run_once(self, *args: Any) -> Any:
         """Invoke this kernel **once** and return its output(s) — the Python mirror of the C++ call.
 
@@ -100,29 +139,9 @@ class HostActivated(HwComponent):
         **Scope (Phase 5a): pure regmap-scalar** (``simp_fun``-style).  Stream-bearing kernels
         (input ``StreamIFSlave`` / output ``StreamIFMaster``, e.g. ``poly``) need push/pop marshalling
         and are a follow-on — they raise :class:`NotImplementedError` here.  A ``on_start`` that yields
-        (a latency/stream model) likewise needs a sim-driven path and is a follow-on.
+        (a latency/stream model) likewise needs a sim-driven path — use :meth:`run_once_sim`.
         """
-        from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
-        from waveflow.hw.regmap import RegAccess, VitisRegMapMMIFSlave
-
-        # 5a scope: pure regmap-scalar. Stream push/pop marshalling is a Phase-5b follow-on.
-        if any(isinstance(v, (StreamIFSlave, StreamIFMaster)) for v in vars(self).values()):
-            raise NotImplementedError(
-                f"{type(self).__name__}.run_once: stream-bearing invocation is a Phase-5b follow-on; "
-                f"only pure-regmap host-activated kernels are supported today."
-            )
-        slave = next(
-            (v for v in vars(self).values() if isinstance(v, VitisRegMapMMIFSlave)), None)
-        if slave is None:
-            raise TypeError(
-                f"{type(self).__name__}.run_once: no VitisRegMapMMIFSlave endpoint found — a "
-                f"HostActivated must carry a regmap."
-            )
-        regmap = slave.regmap
-        # Walk the fields in declaration order (== kernel-signature order), skipping the auto ap_* regs.
-        app = [(n, f) for n, f in regmap._fields.items() if not f.is_vitis_auto]
-        inputs = [n for n, f in app if f.access in (RegAccess.RW, RegAccess.W)]
-        outputs = [n for n, f in app if f.access is RegAccess.R]
+        regmap, inputs, outputs = self._invoke_fields()
         if len(args) != len(inputs):
             raise TypeError(
                 f"{type(self).__name__}.run_once() takes {len(inputs)} input(s) {inputs}, "
@@ -134,8 +153,36 @@ class HostActivated(HwComponent):
         if result is not None:
             raise NotImplementedError(
                 f"{type(self).__name__}.run_once: on_start yields (a generator) — a sim-driven "
-                f"invocation is a follow-on; the scalar case expects a synchronous on_start."
+                f"invocation is a follow-on; use run_once_sim (drive it inside a Simulation)."
             )
+        outs = [regmap.get(name) for name in outputs]
+        return outs[0] if len(outs) == 1 else tuple(outs)
+
+    def run_once_sim(self, *args: Any) -> ProcessGen[Any]:
+        """Sim-driven mirror of :meth:`run_once`: drive ``on_start`` through SimPy so the caller
+        can **time** the invocation::
+
+            t0 = self.now
+            y  = yield from dut.run_once_sim(x, a, b)   # advances the clock through on_start
+            t1 = self.now                               # total transaction latency
+
+        Same endpoint-derived signature as :meth:`run_once` (see :meth:`_invoke_fields`), so the two
+        cannot drift.  Works whether ``on_start`` yields (a latency/stream model — this drives it and
+        advances the clock) or is synchronous (``on_start`` returns ``None`` — the ``yield from`` is
+        skipped, so this behaves like :meth:`run_once`).  Must be driven inside a running
+        :class:`~waveflow.simulation.simulation.Simulation` (it is a generator).
+        """
+        regmap, inputs, outputs = self._invoke_fields()
+        if len(args) != len(inputs):
+            raise TypeError(
+                f"{type(self).__name__}.run_once_sim() takes {len(inputs)} input(s) {inputs}, "
+                f"got {len(args)}"
+            )
+        for name, value in zip(inputs, args):
+            regmap.set(name, value)
+        result = self.on_start()      # the kernel body — the _launch core, not re-implemented
+        if result is not None:
+            yield from result         # drives a yielding on_start; advances the clock
         outs = [regmap.get(name) for name in outputs]
         return outs[0] if len(outs) == 1 else tuple(outs)
 
