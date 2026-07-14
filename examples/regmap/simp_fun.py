@@ -187,7 +187,10 @@ class SimpFunTBHls(HwTestbench):
         dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
         dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
         dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
-        dut.run()
+        # The one-call invocation (Phase 5b): run_once's args reference the input regmap fields by
+        # name (declaration order), so this lowers 1:1 to the same C++ kernel call `simp_fun(x, a, b,
+        # y)` the explicit `dut.run()` form emitted — byte-identical.
+        dut.run_once(dut.regmap.get("x"), dut.regmap.get("a"), dut.regmap.get("b"))
 
         dut.regmap.write_status_json(
             self.data_dir + "/regmap_status.json",
