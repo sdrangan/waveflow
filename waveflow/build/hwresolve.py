@@ -72,13 +72,42 @@ def resolve_testbench(tree: HwStmt, comp) -> HwStmt:
     return tree
 
 
-def _kernel_method(comp):
-    """Mirror extract_kernel's selection: on_start if regmap-bearing, else run_proc."""
+def select_kernel_method(comp) -> str:
+    """The single source of truth for which method codegen lowers as the kernel body.
+
+    Priority:
+
+    1. A **testbench** (``_is_testbench``) routes to ``main``.
+    2. An explicitly declared ``_kernel_method`` ClassVar wins — e.g.
+       :class:`~waveflow.hw.hw_freerun.FreeRunComp` declares ``'run_iter'``. (Plain
+       ``HwComponent`` subclasses do not carry this attribute; only ``SynthComp``
+       and below do.)
+    3. Otherwise the **regmap-presence** fallback: a
+       :class:`~waveflow.hw.regmap.VitisRegMapMMIFSlave` endpoint means the kernel
+       is host-activated -> ``on_start``.
+    4. Otherwise ``run_proc``.
+
+    Both :func:`~waveflow.build.hwcodegen.extract_kernel` (which method to *extract*)
+    and :func:`_kernel_method` (which method's ``__globals__`` set the *resolution*
+    scope) route through this, so the two selections never drift.
+    """
+    cls = type(comp)
+    if getattr(cls, '_is_testbench', False):
+        return 'main'
+    explicit = getattr(cls, '_kernel_method', None)
+    if explicit is not None:
+        return explicit
     from waveflow.hw.regmap import VitisRegMapMMIFSlave
     for ep in getattr(comp, 'endpoints', {}).values():
         if isinstance(ep, VitisRegMapMMIFSlave):
-            return comp.on_start
-    return comp.run_proc
+            return 'on_start'
+    return 'run_proc'
+
+
+def _kernel_method(comp):
+    """The bound method codegen resolves against (its ``__module__``/``__globals__``
+    set the resolution scope), selected by :func:`select_kernel_method`."""
+    return getattr(comp, select_kernel_method(comp))
 
 
 def _walk(stmt, scope, comp, module, globs):

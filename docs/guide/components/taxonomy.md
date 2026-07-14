@@ -4,8 +4,8 @@ parent: Hardware Components
 nav_order: 2
 audience: python
 applies_to: [HwComponent]
-api: [HwComponent, VitisRegMapMMIFSlave, synthesizable, HwTestbench]
-summary: "The kinds of HwComponent, classified by role: synthesizable (host-activated on_start vs. free-running run_proc, the latter ap_ctrl_hs or ap_ctrl_none), testbench (sequential now, SystemC later), and behavioral simulation-only models of hardware Waveflow does not generate (RFDC, memories, channels). A component's role is fixed; its realization changes with the build target."
+api: [HwComponent, CompositeComp, FreeRunComp, VitisRegMapMMIFSlave, synthesizable, HwTestbench]
+summary: "The kinds of HwComponent, classified by role: synthesizable — leaf (host-activated on_start vs. free-running run_iter, the latter ap_ctrl_hs or ap_ctrl_none) or composite (bodyless/passive CompositeComp, codegen = the composite top) — testbench (sequential now, SystemC later), and behavioral simulation-only models of hardware Waveflow does not generate (RFDC, memories, channels). A component's role is fixed; its realization changes with the build target."
 ---
 
 # Component taxonomy
@@ -21,11 +21,15 @@ target). Here we go by row — by role.
 
 ```
 HwComponent
-├── Synthesizable  (SynthComp)      @synthesizable compute → codegen emits a Vitis kernel
-│   ├── Host-activated              on_start · ap_ctrl_hs · runs once per trigger (regmap-carrying)
-│   └── Free-running  (FreeRunComp) run_iter · one firing per job, looped by the base
-│       ├── ap_ctrl_none    the hls::task tiles of a composite (XSI-only — can't Vitis-cosim)
-│       └── ap_ctrl_hs      a single self-looping kernel (LoopComp, future — cosim-able)
+├── Synthesizable                       codegen emits Vitis C++
+│   ├── Leaf  (SynthComp)               @synthesizable compute → a kernel body
+│   │   ├── Host-activated              on_start · ap_ctrl_hs · runs once per trigger (regmap-carrying)
+│   │   └── Free-running  (FreeRunComp) run_iter · one firing per job, looped by the base
+│   │       ├── ap_ctrl_none    the hls::task tiles of a composite (XSI-only — can't Vitis-cosim)
+│   │       └── ap_ctrl_hs      a single self-looping kernel (LoopComp, future — cosim-able)
+│   └── Composite  (CompositeComp)      add_comp children · NO body of its own · passive · structural
+│       codegen = the composite top (one hls::task per child + a channel per edge); execution model
+│       follows the boundary (a regmap on the boundary ⇒ host-activated top)
 ├── Testbench  (HwTestbench)        main() → a driver, not logic
 │   ├── Sequential         the sequential C++ testbench (today)
 │   └── SystemC/SC_THREAD   concurrent TB for free-running & multi-block designs (future)
@@ -62,6 +66,23 @@ root. The HLS control protocol splits this further, and the split matters for ve
 - **`ap_ctrl_hs`** — a single self-looping kernel (started once, runs until done). Cosim-able; a
   dedicated `LoopComp` for it is future work.
 
+### Composite (structural)
+
+Subclass [`CompositeComp`](../../../waveflow/hw/hw_composite.py). A composite is **bodyless**: it owns
+sub-components (`add_comp`) wired by internal interfaces (`add_if`) and has **no `run_iter`/`run_proc`
+body of its own** — its children do the work. It is therefore **passive** (`run_proc` stays the SimObj
+default `None`, so no process is scheduled at this level; the children are independently-scheduled
+`SimObj`s). It is a *sibling* of `FreeRunComp`, not a subclass — a composite is-not-a free-running leaf,
+so defining `run_iter` on one is rejected at class-definition time.
+
+Its C++ is the **composite top** — one `hls::task` per active child plus one channel per internal edge,
+derived from the graph by `composite_top_spec`, not from an extracted body. Its execution model is
+**not fixed by the class**: it *follows the boundary* — a regmap on the boundary makes the top
+host-activated (`ap_ctrl_hs`), a pure stream/`m_axi` boundary makes it free-running (`ap_ctrl_none`).
+So `control_mode` is left `AUTO`/derived. The [concurrency](../concurrency/) composites — `Neuron`,
+`RevAvg`, `MemSquare`, and the [interleaver](../concurrency/)'s `InterleaverCanon` (and `MemCopy`) — are
+`CompositeComp`s.
+
 ## Testbench
 
 `is_testbench=True` (an [`HwTestbench`](./hwtestbench.md) subclass); codegen routes to **`main()`** and
@@ -96,6 +117,7 @@ selection lives in
 | The component's class… | Role | Kernel entry |
 |---|---|---|
 | [`HwTestbench`](./hwtestbench.md) (`is_testbench`) | Testbench | `main()` |
+| [`CompositeComp`](../../../waveflow/hw/hw_composite.py) | Composite (structural) | — (composite top from the graph) |
 | [`FreeRunComp`](../../../waveflow/hw/hw_freerun.py) | Free-running (`ap_ctrl_none`) | `run_iter` |
 | carries a `VitisRegMapMMIFSlave` | Host-activated | `on_start` |
 | plain `HwComponent`, no `@synthesizable` | Behavioral | — (simulation only) |
