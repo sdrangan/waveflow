@@ -4,19 +4,19 @@ parent: Python
 grand_parent: Concurrency
 nav_order: 1
 audience: python
-api: [HwComponent, StreamIF, add_comp, add_if]
+api: [CompositeComp, FreeRunComp, StreamIF, add_comp, add_if]
 summary: "Building a composite from concurrent sub-components: add_comp registers each child (its run_proc runs in parallel), add_if wires an internal StreamIF edge between two children, and the composite exposes its children's ports as its own boundary. Walked through a two-stage linear→relu pipeline."
 ---
 
 # Sub-components
 
 Synthesizable composite systems in WaveFlow are defined **hierarchically**: a single top-level
-`HwComponent` represents the overall composite, and it can hold **sub-components**. Each sub-component
-is itself a `HwComponent` and may in turn hold its own sub-components — a tree of **parent** and
-**child** components.
+[`CompositeComp`](../../components/composite.md) represents the overall composite, and it holds
+**sub-components**. Each sub-component is itself a `HwComponent` (usually a `FreeRunComp` leaf) and may
+in turn hold its own sub-components — a tree of **parent** and **child** components.
 
-The top-level composite usually has **no `run_proc` of its own** — its behavior *is* its children
-running concurrently. Two methods build the tree:
+A composite has **no `run_proc` of its own** — its behavior *is* its children running concurrently. Two
+methods build the tree:
 
 - **`add_comp(child)`** — register a sub-component. Each child's `run_proc` runs as its own concurrent
   process in the simulation.
@@ -53,12 +53,12 @@ of the loop — rather than writing `run_proc` with a hand-rolled `while True`:
 - it **declares** the component free-running (it lowers to a free-running `ap_ctrl_none` `hls::task`), so
   codegen never has to infer that from a `while` loop;
 - `run_iter` maps **one-to-one** to the generated `hls::task` body — the runtime re-fires it each job, so
-  the infinite loop lives in the base, not your code;
-- its base [`SynthComp`](../../components/taxonomy.md) checks at construction that you actually
-  implemented `run_iter`.
+  the infinite loop lives in the base, not your code (`FreeRunComp` declares `run_iter` abstract, so a
+  subclass that forgets it is a clear error).
 
-Keep any persistent state on `self` (it lowers to `static` locals); there is no "before the loop" in an
-`hls::task`.
+Each firing is one job — there is no "before the loop" in an `hls::task`. (These leaves are stateless;
+carrying state *across* firings in a generated kernel is still being built — see
+[Free-running components](../../components/freerun.md).)
 
 ```python
 from dataclasses import dataclass, field
@@ -68,7 +68,7 @@ import numpy as np
 from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import FloatField
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.simulation.simobj import ProcessGen
@@ -114,7 +114,7 @@ The composite wires them into the pipeline `x → linear → z → relu → y`:
 
 ```python
 @dataclass
-class Neuron(HwComponent):
+class Neuron(CompositeComp):
     """Composite: y = max(2·x + 3, 0), computed by two concurrent sub-components."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 

@@ -58,8 +58,8 @@ extracts `run_proc`. (For `HwTestbench` subclasses it routes to `main()` instead
 > [`FreeRunComp`](../components/taxonomy.md) sets `control_mode = FREE_RUNNING` and implements
 > **`run_iter`** — *one firing*, the `hls::task` body the runtime re-fires (the `while True` is the
 > base's). Codegen then never has to recognize a `while` loop at the extracted root. The full
-> class-per-execution-model hierarchy (`SynthComp` / `FreeRunComp` / host-activated / `HwTestbench`) is
-> [Component taxonomy](../components/taxonomy.md).
+> class-per-execution-model hierarchy (`HostActivated` / `FreeRunComp` / `CompositeComp`, plus the
+> off-tree `SeqTB` testbench) is [Component taxonomy](../components/taxonomy.md).
 
 The regmap-launched body is *invocation-style*: it reads inputs from the register map, computes, and
 writes the result, returning once. From
