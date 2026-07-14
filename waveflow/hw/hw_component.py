@@ -246,6 +246,10 @@ class HwComponent(Component):
 
     Subclasses annotate synthesis template parameters with ``HwParam[T]``
     and mark compute methods with ``@synthesizable``.
+
+    Carrying ``@synthesizable`` compute (and being pointed at codegen) is a *usage* axis, not a class
+    fact: a plain ``HwComponent`` with no ``@synthesizable`` methods is a **behavioral**,
+    simulation-only model (a data converter, a memory, a channel) that never generates C++.
     """
 
     control_mode: ClassVar[ControlMode] = ControlMode.AUTO
@@ -336,60 +340,3 @@ class HwComponent(Component):
                 object.__setattr__(
                     self, name, HwParamValue(int(value), name)
                 )
-
-
-class SynthComp(HwComponent):
-    """Base for components that generate **synthesizable** C++.
-
-    A plain :class:`HwComponent` may be a *behavioral*, simulation-only model of
-    hardware Waveflow does not generate (a data converter, a memory, a channel).
-    Subclassing ``SynthComp`` declares "this component is synthesizable" and runs
-    a construction-time synthesizability check.
-
-    The concrete execution-model subclasses set ``_kernel_method`` to the method
-    the codegen lowers as the kernel body:
-    :class:`~waveflow.hw.hw_freerun.FreeRunComp` (``run_iter``), a host-activated
-    component (``on_start``), :class:`~waveflow.hw.hw_testbench.HwTestbench`
-    (``main``). See ``docs/guide/components/taxonomy.md``.
-    """
-
-    #: Class-level **intent metadata**: the method this kind lowers as its kernel body — declared by
-    #: the execution-model subclass (``FreeRunComp`` → ``run_iter``, ``HostActivated`` → ``on_start``).
-    #: ``None`` (the base default) means *no declared entry* — a bare ``SynthComp`` with no execution
-    #: model, whose entry is inferred at codegen.
-    #:
-    #: Construction verifies the declared entry exists (:meth:`_check_synthesizable`); ``None`` skips
-    #: that check.  The **codegen dispatch itself is class-based**
-    #: (:func:`~waveflow.build.codegen_dispatch.codegen_path`), not a read of this string, so this is
-    #: intent, not the mechanism.  (Keeping it ``None`` rather than a concrete ``'run_proc'`` avoids
-    #: falsely asserting a bare ``SynthComp`` declares ``run_proc``.)
-    _kernel_method: ClassVar[str | None] = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self._check_synthesizable()
-
-    def _check_synthesizable(self) -> None:
-        """Construction-time synthesizability check.
-
-        The base rule: the declared kernel-entry method must actually be
-        implemented (not left abstract). Execution-model subclasses extend this
-        with their own contract.
-
-        When ``_kernel_method`` is ``None`` (the entry is *inferred* at codegen),
-        there is no single declared method to verify here — the inference picks
-        ``on_start``/``run_proc``, both of which exist (``on_start`` is
-        user-provided on a regmap kernel; ``run_proc`` has a passive default).
-        Subclasses that declare a concrete entry (``FreeRunComp``,
-        ``HostActivated``) are still checked below.
-        """
-        method_name = self._kernel_method
-        if method_name is None:
-            return
-        cls = type(self)
-        entry = getattr(cls, method_name, None)
-        if entry is None or getattr(entry, '__isabstractmethod__', False):
-            raise TypeError(
-                f"{cls.__name__} is a SynthComp but does not implement its "
-                f"kernel-entry method '{method_name}()'."
-            )

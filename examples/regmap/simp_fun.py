@@ -9,7 +9,7 @@ from waveflow.hw.aximm import DirectMMIF, MMIFMaster
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_hostactivated import HostActivated
-from waveflow.hw.hw_testbench import HwTestbench
+from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import sim_only, synthesizable
 from waveflow.simulation.logger import Logger, NullLogger
@@ -179,7 +179,7 @@ class SimpFunSimResult:
         }
 
 
-class SimpFunTBHls(HwTestbench):
+class SimpFunTBHls(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:

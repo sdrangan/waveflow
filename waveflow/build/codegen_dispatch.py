@@ -7,7 +7,7 @@ the dispatch decision now comes from the component's kind, not a ``_kernel_metho
 
 | Component class | kind | Extracts |
 |---|---|---|
-| :class:`~waveflow.hw.hw_testbench.HwTestbench` (``_is_testbench``) | ``testbench`` | ``main`` |
+| :class:`~waveflow.hw.hw_testbench.SeqTB` (``_is_testbench``) | ``testbench`` | ``main`` |
 | :class:`~waveflow.hw.hw_composite.CompositeComp` | ``composite`` | — (the graph → ``composite_top_spec``) |
 | :class:`~waveflow.hw.hw_hostactivated.HostActivated` | ``leaf`` | ``on_start`` |
 | :class:`~waveflow.hw.hw_freerun.FreeRunComp` | ``leaf`` | ``run_iter`` |
@@ -53,7 +53,7 @@ def codegen_path(comp) -> CodegenPath:
 
     cls = type(comp)
     # Testbench — a sequential main() driver. Keyed on the flag (not isinstance) so a mixin-declared
-    # testbench that sets `_is_testbench` without inheriting HwTestbench still routes here.
+    # testbench that sets `_is_testbench` without inheriting SeqTB still routes here.
     if getattr(cls, '_is_testbench', False):
         return CodegenPath('testbench', 'main')
     # Composite — no body of its own; codegen is the graph (composite_top_spec), not an extraction.

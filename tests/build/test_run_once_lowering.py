@@ -19,7 +19,6 @@ from waveflow.hw.hw_testbench import HwTestbench
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.hwstmt import KernelCallStmt
 from waveflow.simulation.simobj import ProcessGen
-from waveflow.simulation.simulation import Simulation
 
 from examples.regmap.simp_fun import SimpFunComponent, SimpFunTBHls
 
@@ -78,7 +77,7 @@ def test_migrated_simp_fun_tb_emits_the_kernel_call():
 
 
 def test_run_once_extracts_to_a_kernel_call():
-    tree = extract_testbench(SimpFunTBHls(name="tb", sim=Simulation()))
+    tree = extract_testbench(SimpFunTBHls(name="tb"))
     assert any(isinstance(s, KernelCallStmt) for s in tree.stmts)
 
 
@@ -116,14 +115,14 @@ class _LiteralArgTB(HwTestbench):
 
 def test_run_once_wrong_arg_count_raises():
     with pytest.raises(SynthesisError, match=r"takes 3 input arg"):
-        extract_testbench(_BadCountTB(name="tb", sim=Simulation()))
+        extract_testbench(_BadCountTB(name="tb"))
 
 
 def test_run_once_wrong_field_name_raises():
     with pytest.raises(SynthesisError, match=r"references field 'b'.*position is 'a'"):
-        extract_testbench(_WrongFieldTB(name="tb", sim=Simulation()))
+        extract_testbench(_WrongFieldTB(name="tb"))
 
 
 def test_run_once_literal_arg_raises():
     with pytest.raises(SynthesisError, match=r"must be dut.regmap.get"):
-        extract_testbench(_LiteralArgTB(name="tb", sim=Simulation()))
+        extract_testbench(_LiteralArgTB(name="tb"))

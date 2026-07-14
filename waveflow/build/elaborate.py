@@ -81,8 +81,15 @@ def _build(comp_class: type, overrides: dict[str, Any], name: str) -> Any:
     The single low-level construction primitive shared by :func:`elaborate`
     and :func:`assert_param_pure` (the latter must build without recursing
     back into the purity gate).
+
+    A ``SimObj``-derived component (``HwComponent``) takes ``sim=``; a sim-less
+    :class:`~waveflow.hw.hw_testbench.SeqTB` testbench (a plain ``NamedObject``) does not, so the
+    ``sim=`` kwarg is passed only when the class actually accepts it.
     """
-    return comp_class(name=name, sim=ElabContext(), **overrides)
+    from waveflow.simulation.simobj import SimObj
+    if isinstance(comp_class, type) and issubclass(comp_class, SimObj):
+        return comp_class(name=name, sim=ElabContext(), **overrides)
+    return comp_class(name=name, **overrides)
 
 
 def elaborate(

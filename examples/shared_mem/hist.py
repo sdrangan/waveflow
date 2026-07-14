@@ -34,7 +34,7 @@ from waveflow.hw.arrayutils import get_nwords, read_array, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField, MemAddr
 from waveflow.hw.hw_component import HwComponent, HwParam
-from waveflow.hw.hw_testbench import HwTestbench
+from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
 from waveflow.hw.memory import AddrUnit, MemComponent, Memory
@@ -498,7 +498,7 @@ def connect(sim: Simulation, ctrl: HistController, accel: HistAccel,
 # ---------------------------------------------------------------------------
 
 @dataclass
-class HistTBHls(HwTestbench):
+class HistTBHls(SeqTB):
     """Sequential codegen-source testbench for the histogram kernel.
 
     ``main()`` lowers to ``gen/hist_tb.cpp``: read the command + input buffers

@@ -39,7 +39,7 @@ import numpy.typing as npt
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField, MemAddr
 from waveflow.hw.hw_component import HwComponent, HwParam
-from waveflow.hw.hw_testbench import HwTestbench
+from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
 from waveflow.hw.memory import MemComponent
@@ -210,7 +210,7 @@ def run_sim(x: np.ndarray, *, clk_freq: float = 1e9) -> np.ndarray:
 # Codegen-source testbench (lowered to gen/block_scale_tb.cpp)
 # ---------------------------------------------------------------------------
 @dataclass
-class BlockScaleTBHls(HwTestbench):
+class BlockScaleTBHls(SeqTB):
     """Sequential codegen-source testbench for the block-scale kernel.
 
     ``main()`` lowers to ``gen/block_scale_tb.cpp``: read the command + operand

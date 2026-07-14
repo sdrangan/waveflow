@@ -14,7 +14,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField
 from waveflow.hw.hw_component import HwConst, HwParam
 from waveflow.hw.hw_hostactivated import HostActivated
-from waveflow.hw.hw_testbench import HwTestbench
+from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
 from waveflow.hw.regmap import (
@@ -333,7 +333,7 @@ class SampArray(DataArray):
 
 
 @dataclass
-class PolyTBHls(HwTestbench):
+class PolyTBHls(SeqTB):
     """Codegen-source testbench for the polynomial accelerator kernel.
 
     ``main()`` is a sequential Python program: instantiate the DUT,

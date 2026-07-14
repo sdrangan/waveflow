@@ -8,7 +8,7 @@ model ``poly`` / ``simp_fun`` use; ``HostActivated`` makes it an explicit, **cla
 instead of a plain :class:`~waveflow.hw.hw_component.HwComponent` reaching ``on_start`` only through a
 regmap fallback.
 
-It is a :class:`~waveflow.hw.hw_component.SynthComp` that declares ``_kernel_method = 'on_start'``.
+It is a :class:`~waveflow.hw.hw_component.HwComponent` that declares ``_kernel_method = 'on_start'``.
 Codegen dispatch is by class (:func:`~waveflow.build.codegen_dispatch.codegen_path`): a
 ``HostActivated`` lowers ``on_start`` as its kernel body. See ``plans/exec_model_classes.md`` and
 ``docs/guide/components/taxonomy.md``.
@@ -18,23 +18,22 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Any, ClassVar
 
-from waveflow.hw.hw_component import ControlMode, SynthComp
+from waveflow.hw.hw_component import ControlMode, HwComponent
 from waveflow.simulation.simobj import ProcessGen
 
 
-class HostActivated(SynthComp):
+class HostActivated(HwComponent):
     """A host-activated (regmap-launched) synthesizable leaf: implement :meth:`on_start`.
 
     Contract:
 
     - Carries a :class:`~waveflow.hw.regmap.VitisRegMapMMIFSlave` (the ``ap_start``/``ap_done`` +
       register file). This is the *defining* property; because a component's endpoints are populated
-      by the subclass ``__post_init__`` **after** the ``SynthComp`` super-chain runs (the same
+      by the subclass ``__post_init__`` **after** the ``HwComponent`` super-chain runs (the same
       construction-ordering limit :class:`~waveflow.hw.hw_composite.CompositeComp` hits with its
       children), it is not construction-checked here — it is enforced by the codegen path (a kernel
       with no regmap emits no ``s_axilite`` control interface).
-    - Implements :meth:`on_start` — verified at construction by
-      :meth:`~waveflow.hw.hw_component.SynthComp._check_synthesizable` via ``_kernel_method``.
+    - Implements :meth:`on_start` — the entry the codegen path lowers as the kernel body.
     - Must **not** define ``run_iter`` — that is a *free-running* leaf's entry
       (:class:`~waveflow.hw.hw_freerun.FreeRunComp`); a host-activated leaf runs once per trigger, not
       continuously. Enforced at class-definition time (:meth:`__init_subclass__`).
@@ -45,10 +44,9 @@ class HostActivated(SynthComp):
     #: consumer later — see ``plans/exec_model_classes.md``), so this changes no generated output.
     control_mode: ClassVar[ControlMode] = ControlMode.PER_INVOCATION
 
-    #: Intent metadata (and the entry :meth:`~waveflow.hw.hw_component.SynthComp._check_synthesizable`
-    #: verifies exists at construction): a host-activated leaf's body is ``on_start``.  The codegen
-    #: dispatch is class-based (:func:`~waveflow.build.codegen_dispatch.codegen_path`); this states the
-    #: same intent declaratively.
+    #: Intent metadata: a host-activated leaf's body is ``on_start``.  The codegen dispatch is
+    #: class-based (:func:`~waveflow.build.codegen_dispatch.codegen_path`); this states the same
+    #: intent declaratively.
     _kernel_method: ClassVar[str] = 'on_start'
 
     def __init_subclass__(cls, **kwargs) -> None:

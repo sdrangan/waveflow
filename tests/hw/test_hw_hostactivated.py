@@ -8,7 +8,7 @@ import pytest
 from waveflow.build.codegen_dispatch import CodegenPath, codegen_path
 from waveflow.build.elaborate import elaborate
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import ControlMode, SynthComp
+from waveflow.hw.hw_component import ControlMode, HwComponent
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.simulation.simobj import ProcessGen
@@ -30,8 +30,8 @@ class _HA(HostActivated):
         yield
 
 
-def test_hostactivated_is_a_synthcomp():
-    assert issubclass(HostActivated, SynthComp)
+def test_hostactivated_is_a_hwcomponent():
+    assert issubclass(HostActivated, HwComponent)
 
 
 def test_hostactivated_declares_on_start_entry():
@@ -53,16 +53,6 @@ def test_hostactivated_rejects_run_iter():
         class _Bad(HostActivated):
             def run_iter(self):  # noqa: ANN201
                 yield
-
-
-def test_hostactivated_requires_on_start_implemented():
-    """SynthComp._check_synthesizable verifies the declared entry (on_start) exists at construction."""
-    @dataclass
-    class _NoOnStart(HostActivated):
-        pass
-
-    with pytest.raises(TypeError, match="on_start"):
-        elaborate(_NoOnStart)
 
 
 def test_migrated_examples_are_hostactivated():

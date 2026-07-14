@@ -20,11 +20,11 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import ClassVar
 
-from waveflow.hw.hw_component import ControlMode, SynthComp
+from waveflow.hw.hw_component import ControlMode, HwComponent
 from waveflow.simulation.simobj import ProcessGen
 
 
-class FreeRunComp(SynthComp):
+class FreeRunComp(HwComponent):
     """A free-running synthesizable component: implement :meth:`run_iter` (one firing); the base loops
     it forever. Lowers to a free-running ``ap_ctrl_none`` ``hls::task``."""
 

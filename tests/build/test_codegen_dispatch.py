@@ -71,13 +71,11 @@ def test_plain_free_running_hwcomponent_dispatches_to_run_proc():
     assert codegen_path(elaborate(_Plain)) == CodegenPath("leaf", "run_proc")
 
 
-def test_regmap_synthcomp_dispatches_to_on_start_by_class():
-    """A bare regmap-bearing SynthComp (not FreeRunComp/HostActivated) is dispatched by the interim
+def test_regmap_hwcomponent_dispatches_to_on_start_by_class():
+    """A bare regmap-bearing HwComponent (not FreeRunComp/HostActivated) is dispatched by the interim
     regmap fallback -> on_start; the class, not a _kernel_method string, decides."""
-    from waveflow.hw.hw_component import SynthComp
-
     @dataclass
-    class _RegmapSynth(SynthComp):
+    class _RegmapPlain(HwComponent):
         def __post_init__(self):
             super().__post_init__()
             _add_regmap(self)
@@ -85,7 +83,7 @@ def test_regmap_synthcomp_dispatches_to_on_start_by_class():
         def on_start(self) -> ProcessGen[None]:
             yield
 
-    assert codegen_path(elaborate(_RegmapSynth)) == CodegenPath("leaf", "on_start")
+    assert codegen_path(elaborate(_RegmapPlain)) == CodegenPath("leaf", "on_start")
 
 
 def test_hostactivated_subclass_beats_regmap_fallback_ordering():

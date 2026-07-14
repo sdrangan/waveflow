@@ -17,9 +17,8 @@ from waveflow.build.hwcodegen import (
     extract_kernel,
     extract_testbench,
 )
-from waveflow.hw.hw_testbench import HwTestbench
+from waveflow.hw.hw_testbench import HwTestbench, SeqTB
 from waveflow.hw.hwstmt import SeqStmt
-from waveflow.simulation.simulation import Simulation
 
 
 pytestmark = pytest.mark.phase1
@@ -29,11 +28,14 @@ pytestmark = pytest.mark.phase1
 # Phase 1 — class + routing
 # ---------------------------------------------------------------------------
 
-def test_hw_testbench_is_a_hwcomponent():
-    """``HwTestbench`` inherits from ``HwComponent`` so it picks up the
-    ``HwParam`` / ``HwConst`` machinery and the simulation lifecycle."""
+def test_seqtb_is_a_named_object_not_a_hwcomponent():
+    """``SeqTB`` is a sim-less :class:`NamedObject` — a program that drives a kernel, **not** a
+    ``HwComponent``/``SimObj`` hardware object.  ``HwTestbench`` is a deprecated alias of ``SeqTB``."""
     from waveflow.hw.hw_component import HwComponent
-    assert issubclass(HwTestbench, HwComponent)
+    from waveflow.named import NamedObject
+    assert issubclass(SeqTB, NamedObject)
+    assert not issubclass(SeqTB, HwComponent)
+    assert HwTestbench is SeqTB
 
 
 def test_hw_testbench_marker_is_set():
@@ -48,7 +50,7 @@ def test_hw_testbench_marker_is_set():
 def test_base_main_raises_not_implemented():
     """The base-class ``main()`` is a placeholder that fails fast when a
     subclass forgets to override it."""
-    tb = HwTestbench(name='unused', sim=Simulation())
+    tb = HwTestbench(name='unused')
     with pytest.raises(NotImplementedError, match='main'):
         tb.main()
 
@@ -66,7 +68,7 @@ class _EmptyTB(HwTestbench):
 def test_extract_testbench_routes_through_main():
     """``extract_testbench`` reads ``comp.main`` (not ``run_proc``) and
     produces a tree without raising on the trivial body."""
-    tb = _EmptyTB(name='tb', sim=Simulation())
+    tb = _EmptyTB(name='tb')
     tree = extract_testbench(tb)
     assert isinstance(tree, SeqStmt)
     assert tree.stmts == []
@@ -76,7 +78,7 @@ def test_extract_kernel_dispatches_testbench_subclasses():
     """The legacy ``extract_kernel`` entry point auto-routes testbench
     subclasses through ``extract_testbench`` — callers don't need to
     branch on the marker."""
-    tb = _EmptyTB(name='tb', sim=Simulation())
+    tb = _EmptyTB(name='tb')
     tree = extract_kernel(tb)
     assert isinstance(tree, SeqStmt)
 
@@ -84,7 +86,7 @@ def test_extract_kernel_dispatches_testbench_subclasses():
 def test_extractor_carries_is_testbench_flag():
     """The mode flag is plumbed through; ``HwStmtExtractor`` stashes it
     so Phase 3/4 emitter logic can branch on the extractor's mode."""
-    tb = _EmptyTB(name='tb', sim=Simulation())
+    tb = _EmptyTB(name='tb')
     ext = HwStmtExtractor(tb, method_name='main', is_testbench=True)
     assert ext._is_testbench is True
     # Default is False — preserves backwards compat for kernel-mode callers.
@@ -216,7 +218,7 @@ def test_phase3_extractor_produces_dut_bind_and_kernel_call():
     into a SeqStmt of [DutBindStmt, KernelCallStmt]."""
     from waveflow.build.hwcodegen import extract_testbench
     from waveflow.hw.hwstmt import DutBindStmt, KernelCallStmt
-    tb = _PolyTBPhase3(name='tb', sim=Simulation())
+    tb = _PolyTBPhase3(name='tb')
     tree = extract_testbench(tb)
     assert isinstance(tree, SeqStmt)
     assert len(tree.stmts) == 2
@@ -264,7 +266,7 @@ def test_phase3_rejects_positional_dut_args():
             dut = PolyAccelComponent("bad")  # noqa: F841
             dut.run()
 
-    tb = _BadPositionalTB(name='tb', sim=Simulation())
+    tb = _BadPositionalTB(name='tb')
     with pytest.raises(SynthesisError, match="keyword arguments only"):
         extract_testbench(tb)
 
@@ -284,7 +286,7 @@ def test_phase3_dut_run_with_args_is_rejected():
             dut = PolyAccelComponent()
             dut.run(42)
 
-    tb = _BadRunArgsTB(name='tb', sim=Simulation())
+    tb = _BadRunArgsTB(name='tb')
     with pytest.raises(SynthesisError, match="dut.run\\(\\) takes no positional arguments"):
         extract_testbench(tb)
 
@@ -433,7 +435,7 @@ def test_phase4_extractor_unknown_method_raises():
             data_hdr.bogus_method("foo")
             dut.run()
 
-    tb = _UnknownMethodTB(name='tb', sim=Simulation())
+    tb = _UnknownMethodTB(name='tb')
     with pytest.raises(SynthesisError):
         extract_testbench(tb)
 
@@ -453,7 +455,7 @@ def test_phase4_count_kwarg_required_for_array_ops():
             samp_in.read_uint32_file_array(self.data_dir + "/x.bin")
             dut.run()
 
-    tb = _MissingCountTB(name='tb', sim=Simulation())
+    tb = _MissingCountTB(name='tb')
     with pytest.raises(SynthesisError, match="requires count"):
         extract_testbench(tb)
 
