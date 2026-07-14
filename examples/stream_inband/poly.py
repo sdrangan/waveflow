@@ -12,7 +12,8 @@ import numpy.typing as npt
 from waveflow.hw.arrayutils import array, read_array, read_uint32_file, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField
-from waveflow.hw.hw_component import HwComponent, HwConst, HwParam
+from waveflow.hw.hw_component import HwConst, HwParam
+from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_testbench import HwTestbench
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
@@ -150,7 +151,7 @@ class PolySimResult:
 
 
 @dataclass
-class PolyAccelComponent(HwComponent):
+class PolyAccelComponent(HostActivated):
     """SimPy model of the polynomial accelerator kernel.
 
     Control/status is exposed via an AXI-Lite VitisRegMap; the host writes

@@ -4,7 +4,7 @@ parent: Hardware Components
 nav_order: 2
 audience: python
 applies_to: [HwComponent]
-api: [HwComponent, CompositeComp, FreeRunComp, VitisRegMapMMIFSlave, synthesizable, HwTestbench]
+api: [HwComponent, CompositeComp, FreeRunComp, HostActivated, VitisRegMapMMIFSlave, synthesizable, HwTestbench]
 summary: "The kinds of HwComponent, classified by role: synthesizable — leaf (host-activated on_start vs. free-running run_iter, the latter ap_ctrl_hs or ap_ctrl_none) or composite (bodyless/passive CompositeComp, codegen = the composite top) — testbench (sequential now, SystemC later), and behavioral simulation-only models of hardware Waveflow does not generate (RFDC, memories, channels). A component's role is fixed; its realization changes with the build target."
 ---
 
@@ -23,7 +23,7 @@ target). Here we go by row — by role.
 HwComponent
 ├── Synthesizable                       codegen emits Vitis C++
 │   ├── Leaf  (SynthComp)               @synthesizable compute → a kernel body
-│   │   ├── Host-activated              on_start · ap_ctrl_hs · runs once per trigger (regmap-carrying)
+│   │   ├── Host-activated (HostActivated) on_start · ap_ctrl_hs · runs once per trigger (regmap-carrying)
 │   │   └── Free-running  (FreeRunComp) run_iter · one firing per job, looped by the base
 │   │       ├── ap_ctrl_none    the hls::task tiles of a composite (XSI-only — can't Vitis-cosim)
 │   │       └── ap_ctrl_hs      a single self-looping kernel (LoopComp, future — cosim-able)
@@ -48,10 +48,18 @@ its `control_mode` and its kernel-entry method.
 
 ### Host-activated (invocation)
 
-Carries a [`VitisRegMapMMIFSlave`](./endpoints.md); you implement **`on_start`**. The host writes
-`ap_start`; the kernel reads its inputs from the register map, computes, writes the results, and returns
-— one run per trigger (`ap_ctrl_hs`, with the `ap_start` / `ap_done` handshake). `simp_fun` is the
-minimal case; `poly` uses this as a control path alongside streamed sample data.
+Subclass [`HostActivated`](../../../waveflow/hw/hw_hostactivated.py): carry a
+[`VitisRegMapMMIFSlave`](./endpoints.md) and implement **`on_start`**. The host writes `ap_start`; the
+kernel reads its inputs from the register map, computes, writes the results, and returns — one run per
+trigger (`ap_ctrl_hs`, with the `ap_start` / `ap_done` handshake). It declares
+`_kernel_method = 'on_start'` (so codegen lowers `on_start` directly, not via the regmap fallback) and
+`control_mode = PER_INVOCATION`; a class-level check rejects a `run_iter` (that is a *free-running*
+leaf's entry). `simp_fun` is the minimal case; `poly` uses this as a control path alongside streamed
+sample data.
+
+> **Not every regmap-shaped kernel is host-activated.** `hist` and `vmac` are stream-controlled
+> (`run_proc`, `ap_ctrl_hs`, **no** regmap) — a single self-looping kernel, the future `LoopComp` kind
+> below, *not* `HostActivated`. They stay plain `HwComponent` until that class lands.
 
 ### Free-running (continuous)
 
@@ -119,12 +127,15 @@ selection lives in
 | [`HwTestbench`](./hwtestbench.md) (`is_testbench`) | Testbench | `main()` |
 | [`CompositeComp`](../../../waveflow/hw/hw_composite.py) | Composite (structural) | — (composite top from the graph) |
 | [`FreeRunComp`](../../../waveflow/hw/hw_freerun.py) | Free-running (`ap_ctrl_none`) | `run_iter` |
-| carries a `VitisRegMapMMIFSlave` | Host-activated | `on_start` |
+| [`HostActivated`](../../../waveflow/hw/hw_hostactivated.py) (or any regmap-carrying comp) | Host-activated | `on_start` |
 | plain `HwComponent`, no `@synthesizable` | Behavioral | — (simulation only) |
 
-`FreeRunComp` and `SynthComp` exist today — they declare the execution model and check synthesizability
-at construction. Explicit `run_iter` *extraction* in `extract_kernel` lands with the first
-auto-extracted free-running kernel; the current free-running components use fixed template bodies.
+`SynthComp`, `FreeRunComp`, and `HostActivated` exist today — they declare the execution model and check
+synthesizability at construction (`HostActivated` powers `poly` and `simp_fun`). The `SynthComp`
+`_kernel_method` default is `None` ("infer") — a concrete default would beat the regmap fallback and
+mis-resolve a regmap-bearing `SynthComp` to `run_proc`. Explicit `run_iter` *extraction* in
+`extract_kernel` lands with the first auto-extracted free-running kernel; the current free-running
+components use fixed template bodies.
 
 ## See also
 
