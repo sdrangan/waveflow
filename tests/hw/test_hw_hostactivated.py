@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import pytest
 
+from waveflow.build.codegen_dispatch import CodegenPath, codegen_path
 from waveflow.build.elaborate import elaborate
-from waveflow.build.hwresolve import select_kernel_method
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_component import ControlMode, SynthComp
 from waveflow.hw.hw_hostactivated import HostActivated
@@ -42,8 +42,8 @@ def test_hostactivated_control_mode_per_invocation():
     assert HostActivated.control_mode == ControlMode.PER_INVOCATION
 
 
-def test_hostactivated_selects_on_start():
-    assert select_kernel_method(elaborate(_HA)) == "on_start"
+def test_hostactivated_dispatches_to_on_start():
+    assert codegen_path(elaborate(_HA)) == CodegenPath("leaf", "on_start")
 
 
 def test_hostactivated_rejects_run_iter():

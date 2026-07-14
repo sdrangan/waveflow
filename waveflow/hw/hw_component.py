@@ -353,17 +353,16 @@ class SynthComp(HwComponent):
     (``main``). See ``docs/guide/components/taxonomy.md``.
     """
 
-    #: The method :func:`~waveflow.build.hwcodegen.extract_kernel` lowers as the
-    #: kernel body.  ``None`` (the base default) means **infer** — codegen's
-    #: :func:`~waveflow.build.hwresolve.select_kernel_method` picks ``on_start``
-    #: when the component carries a regmap, else ``run_proc``.  An execution-model
-    #: subclass sets a concrete name to declare its entry explicitly
-    #: (``FreeRunComp`` → ``run_iter``, ``HostActivated`` → ``on_start``).
+    #: Class-level **intent metadata**: the method this kind lowers as its kernel body — declared by
+    #: the execution-model subclass (``FreeRunComp`` → ``run_iter``, ``HostActivated`` → ``on_start``).
+    #: ``None`` (the base default) means *no declared entry* — a bare ``SynthComp`` with no execution
+    #: model, whose entry is inferred at codegen.
     #:
-    #: It must **not** default to a concrete ``'run_proc'`` here: ``select_kernel_method``
-    #: gives an explicit ``_kernel_method`` priority over the regmap fallback, so a
-    #: concrete default would mis-resolve a regmap-bearing ``SynthComp`` to
-    #: ``run_proc`` instead of ``on_start`` (the ``_kernel_method``/regmap trap).
+    #: Construction verifies the declared entry exists (:meth:`_check_synthesizable`); ``None`` skips
+    #: that check.  The **codegen dispatch itself is class-based**
+    #: (:func:`~waveflow.build.codegen_dispatch.codegen_path`), not a read of this string, so this is
+    #: intent, not the mechanism.  (Keeping it ``None`` rather than a concrete ``'run_proc'`` avoids
+    #: falsely asserting a bare ``SynthComp`` declares ``run_proc``.)
     _kernel_method: ClassVar[str | None] = None
 
     def __post_init__(self) -> None:
