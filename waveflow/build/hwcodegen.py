@@ -1003,6 +1003,18 @@ class HwStmtExtractor:
         # yield from self.ep.method(...)
         if isinstance(val, ast.YieldFrom):
             return self._make_call_stmt_from_node(val.value, node)
+        # `yield self.timeout(...)` — a @sim_only latency model.  C-sim is untimed,
+        # so a bare yield of a @sim_only call carries no hardware meaning and is
+        # stripped (mirrors the @sim_only handling for direct-call expr stmts).
+        if isinstance(val, ast.Yield):
+            if isinstance(val.value, ast.Call):
+                method = self._resolve_method(val.value.func)
+                if getattr(method, '_is_sim_only', False):
+                    return None
+            raise SynthesisError(
+                f"Non-synthesizable 'yield' at line {node.lineno}; only a 'yield from' of a "
+                f"synthesizable call or a 'yield' of a @sim_only call (e.g. self.timeout) is allowed"
+            )
         # self.hook(...) — direct call, no yield from
         if isinstance(val, ast.Call):
             method = self._resolve_method(val.func)

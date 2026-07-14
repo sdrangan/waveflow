@@ -63,36 +63,39 @@ def test_migrated_examples_are_hostactivated():
 
 
 # ---------------------------------------------------------------------------
-# run_once — the one-call invocation (Phase 5a)
+# run_once — the one-call invocation.
+#
+# simp_fun's on_start now *yields* (it models its own latency), so the
+# synchronous run_once raises on it — the functional checks below drive
+# run_once_sim inside a Simulation instead (see the run_once_sim section).
+# run_once itself stays the synchronous path, exercised via a synchronous
+# fixture (`_HASync`).
 # ---------------------------------------------------------------------------
-
-def _explicit_simp_fun(dut, x, a, b):
-    """The explicit regmap.set / on_start / regmap.get sequence run_once replaces."""
-    dut.regmap.set("x", x)
-    dut.regmap.set("a", a)
-    dut.regmap.set("b", b)
-    dut.on_start()
-    return dut.regmap.get("y")
-
-
-def test_run_once_matches_explicit_sequence():
-    from examples.regmap.simp_fun import SimpFunComponent
-    for x, a, b in [(5, 3, 2), (0, 7, 1), (2, -5, 3), (-4, -2, 0)]:
-        once = elaborate(SimpFunComponent).run_once(x, a, b)
-        expl = _explicit_simp_fun(elaborate(SimpFunComponent), x, a, b)
-        assert int(once.val) == int(expl.val), (x, a, b)
-
 
 def test_run_once_computes_relu_affine():
     from examples.regmap.simp_fun import SimpFunComponent
-    assert int(elaborate(SimpFunComponent).run_once(5, 3, 2).val) == 17   # relu(3*5+2)
-    assert int(elaborate(SimpFunComponent).run_once(2, -5, 3).val) == 0   # relu(-10+3) -> 0
+    assert int(_run_once_sim(SimpFunComponent, 5, 3, 2).val) == 17   # relu(3*5+2)
+    assert int(_run_once_sim(SimpFunComponent, 2, -5, 3).val) == 0   # relu(-10+3) -> 0
+
+
+def test_run_once_synchronous_on_start():
+    """run_once (synchronous) still works for a kernel whose on_start returns None."""
+    dut = elaborate(_HASync)
+    assert int(dut.run_once(7).val) == 8
 
 
 def test_run_once_call_alias():
+    """``dut(x)`` is the __call__ alias of the synchronous run_once."""
+    dut = elaborate(_HASync)
+    assert int(dut(41).val) == 42
+
+
+def test_run_once_raises_on_yielding_on_start():
+    """A yielding on_start needs the sim-driven path; synchronous run_once says so."""
     from examples.regmap.simp_fun import SimpFunComponent
     dut = elaborate(SimpFunComponent)
-    assert int(dut(5, 3, 2).val) == 17
+    with pytest.raises(NotImplementedError, match="run_once_sim"):
+        dut.run_once(5, 3, 2)
 
 
 def test_run_once_wrong_arg_count_raises():
@@ -138,6 +141,35 @@ class _InvokeDriver(SimObj):
 
 
 @dataclass
+class _HASync(HostActivated):
+    """A HostActivated whose on_start is synchronous (returns None): y = x + 1."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.regmap = VitisRegMap({
+            "x": RegField(_Int32, RegAccess.RW),
+            "y": RegField(_Int32, RegAccess.R),
+        })
+        self.regmap.set("y", 0)
+        self.s_lite = VitisRegMapMMIFSlave(
+            name=f"{self.name}_s_lite", sim=self.sim, bitwidth=32,
+            regmap=self.regmap, on_start=self.on_start)
+        self.add_endpoint(self.s_lite)
+
+    def on_start(self):  # synchronous — no yield, returns None
+        self.regmap.set("y", _Int32(int(self.regmap.get("x").val) + 1))
+
+
+def _run_once_sim(comp_class, *args):
+    """Build a Simulation, drive ``comp_class.run_once_sim(*args)`` to completion, return result."""
+    sim = Simulation()
+    dut = comp_class(name="dut", sim=sim)
+    drv = _InvokeDriver(name="drv", sim=sim, dut=dut, args=args)
+    sim.run_sim()
+    return drv.result
+
+
+@dataclass
 class _HAYield(HostActivated):
     """A HostActivated whose on_start *yields* a timeout (a latency model) then copies x -> y."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
@@ -160,17 +192,19 @@ class _HAYield(HostActivated):
         self.regmap.set("y", self.regmap.get("x"))
 
 
-def test_run_once_sim_matches_run_once_for_synchronous_on_start():
-    """With simp_fun's synchronous on_start, run_once_sim returns the same value as run_once."""
-    from examples.regmap.simp_fun import SimpFunComponent
+def test_run_once_sim_matches_golden_for_yielding_on_start():
+    """run_once_sim drives simp_fun's yielding on_start and returns the relu-affine golden."""
+    from examples.regmap.simp_fun import SimpFunComponent, relu_affine
     for x, a, b in [(5, 3, 2), (0, 7, 1), (2, -5, 3), (-4, -2, 0)]:
-        expected = int(elaborate(SimpFunComponent).run_once(x, a, b).val)
+        result = _run_once_sim(SimpFunComponent, x, a, b)
+        assert int(result.val) == relu_affine(x, a, b), (x, a, b)
 
-        sim = Simulation()
-        dut = SimpFunComponent(name="dut", sim=sim)
-        drv = _InvokeDriver(name="drv", sim=sim, dut=dut, args=(x, a, b))
-        sim.run_sim()
-        assert int(drv.result.val) == expected, (x, a, b)
+
+def test_run_once_sim_matches_run_once_for_synchronous_on_start():
+    """For a synchronous on_start, run_once_sim returns the same value as run_once."""
+    for x in [7, 0, -3, 41]:
+        expected = int(elaborate(_HASync).run_once(x).val)
+        assert int(_run_once_sim(_HASync, x).val) == expected, x
 
 
 def test_run_once_sim_advances_clock_for_yielding_on_start():

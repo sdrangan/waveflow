@@ -126,6 +126,12 @@ class SimObj(NamedObject):
     def timeout(self, delay: float) -> simpy.events.Timeout:
         """Convenience wrapper around ``env.timeout``.
 
+        Marked ``@sim_only`` (applied at module end to avoid a circular import): a
+        timeout models simulation latency and has no hardware meaning, so the kernel
+        extractor strips ``yield self.timeout(...)`` from an extracted body (C-sim is
+        untimed).
+
+
         Parameters
         ----------
         delay : float
@@ -251,3 +257,15 @@ class SimObj(NamedObject):
         """Clear collected action history and overlap records."""
         self.action_history.clear()
         self.action_overlaps.clear()
+
+
+# ``SimObj.timeout`` is simulation-only latency: the kernel extractor must strip
+# ``yield self.timeout(...)`` from an extracted body (``on_start`` / ``run_iter``),
+# since C-sim is untimed.  The ``@sim_only`` marker is applied here — at module end,
+# after ``SimObj`` is fully defined — rather than as an inline decorator, because
+# ``waveflow.hw.synth`` pulls in ``waveflow.hw`` (which imports this module), so a
+# top-of-file import would form a circular import.  ``synth`` itself has no deps, so
+# by this point the marker imports cleanly.
+from waveflow.hw.synth import sim_only as _sim_only  # noqa: E402
+
+SimObj.timeout = _sim_only(SimObj.timeout)  # type: ignore[method-assign]

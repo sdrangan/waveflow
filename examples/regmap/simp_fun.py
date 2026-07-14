@@ -95,6 +95,10 @@ class SimpFunComponent(HostActivated):
         # ap_done is auto-managed by VitisRegMapMMIFSlave: cleared on ap_start,
         # set when on_start returns. The kernel only writes its result.
         self._log("kernel_busy", 1)
+        # Model the kernel's own compute latency here (was a testbench pre-poll wait).
+        # ``self.timeout`` is @sim_only, so the kernel extractor strips this yield —
+        # the generated C++ stays byte-identical (C-sim is untimed).
+        yield self.timeout(self.latency_cycles * self.clk.period)
         y = self.compute(
             self.regmap.get("x"),
             self.regmap.get("a"),
@@ -137,10 +141,9 @@ class SimpFunHost(SimObj):
         yield from rm.set("b", self.case.b)
         self._log("ap_start_host", 1)
         yield from rm.start()
-        # Skip the first few cycles before polling — the host knows the
-        # kernel cannot possibly be done before this many cycles, so the
-        # initial reads would be wasted bus traffic.
-        yield self.timeout(self.latency_cycles * self.clk.period)
+        # The kernel now models its own compute latency inside on_start (it yields
+        # a timeout), so the host genuinely polls ap_done until it flips — no
+        # artificial pre-poll wait here.
 
         # Polls ap_done at ``poll_interval_cycles`` clocks per read. In
         # production you would wait on the AXI-Lite interrupt line instead;

@@ -29,7 +29,12 @@ def test_simp_fun_python_sim_matches_expected_outputs(tmp_path: Path) -> None:
     assert y == 11
     assert summary["passed"] is True
     assert summary["ap_done"] == 1
-    assert py_timing["transaction_cycles"] == 5
+    # Latency now lives in the kernel (on_start yields a 4-cycle timeout) and the host
+    # genuinely polls ap_done instead of pre-waiting the exact kernel latency. The kernel
+    # finishes at cycle 4; the host's first poll reads ap_done=0 and catches it on the
+    # second poll (poll_interval=4 cycles), so the honest transaction latency is 6 cycles
+    # (was 5, an artifact of the old pre-poll wait + single read).
+    assert py_timing["transaction_cycles"] == 6
 
 
 def test_simp_fun_codegen_emits_kernel_tb_and_impl(tmp_path: Path) -> None:
