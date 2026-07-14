@@ -1265,23 +1265,28 @@ class HwStmtExtractor:
 def extract_kernel(comp) -> HwStmt:
     """Extract the kernel body and return a fully-resolved ``HwStmt`` tree.
 
-    The kernel-entry method is chosen by
-    :func:`~waveflow.build.hwresolve.select_kernel_method` (an explicit
-    ``_kernel_method`` wins, else ``on_start`` when the component carries a
-    ``VitisRegMapMMIFSlave``, else ``run_proc``).  The returned tree has every
+    The path is chosen by :func:`~waveflow.build.codegen_dispatch.codegen_path`
+    (typed dispatch on the component's class): a ``testbench`` routes to
+    :func:`extract_testbench` (``main``); a ``leaf`` extracts its entry method
+    (``HostActivated`` → ``on_start``, ``FreeRunComp`` → ``run_iter``, else the
+    regmap fallback ``on_start``/``run_proc``).  The returned tree has every
     ``ast.*`` node replaced with the real Python value and every output
     ``HwVar`` typed where possible.
 
-    For ``HwTestbench`` subclasses this routes to :func:`extract_testbench`
-    instead — the testbench-mode entry point is ``main()`` with a different
-    rule profile.
+    A ``composite`` component has no body of its own — its codegen is the graph
+    (:func:`composite_top_spec`), so extracting one here is a usage error.
     """
-    if getattr(type(comp), '_is_testbench', False):
+    from waveflow.build.codegen_dispatch import codegen_path
+    path = codegen_path(comp)
+    if path.kind == 'testbench':
         return extract_testbench(comp)
-    # local imports: avoid an import cycle with hwresolve
-    from waveflow.build.hwresolve import resolve_kernel, select_kernel_method
-    method_name = select_kernel_method(comp)
-    tree = HwStmtExtractor(comp, method_name=method_name).extract()
+    if path.kind == 'composite':
+        raise SynthesisError(
+            f"{type(comp).__name__} is a composite: it has no kernel body to extract; "
+            f"its codegen is the sub-component graph (composite_top_spec)."
+        )
+    from waveflow.build.hwresolve import resolve_kernel  # local: avoid an import cycle
+    tree = HwStmtExtractor(comp, method_name=path.method).extract()
     return resolve_kernel(tree, comp)
 
 

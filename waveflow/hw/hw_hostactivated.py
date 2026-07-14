@@ -4,13 +4,14 @@ A ``HostActivated`` is the **invocation** execution model: it carries a
 :class:`~waveflow.hw.regmap.VitisRegMapMMIFSlave`, and the host writes ``ap_start`` to launch
 :meth:`on_start` — one run per trigger (``ap_ctrl_hs``: the ``ap_start``/``ap_done`` handshake). The
 kernel reads its inputs from the register map, computes, writes results, and returns. This is the
-model ``poly`` / ``hist`` / ``simp_fun`` / ``vmac`` already use; ``HostActivated`` makes it an
-explicit, checked class instead of a plain :class:`~waveflow.hw.hw_component.HwComponent` reaching
-``on_start`` only through ``select_kernel_method``'s regmap fallback.
+model ``poly`` / ``simp_fun`` use; ``HostActivated`` makes it an explicit, **class-dispatched** kind
+instead of a plain :class:`~waveflow.hw.hw_component.HwComponent` reaching ``on_start`` only through a
+regmap fallback.
 
-It is a :class:`~waveflow.hw.hw_component.SynthComp` that declares ``_kernel_method = 'on_start'``, so
-codegen lowers ``on_start`` as the kernel body directly (no reliance on the regmap fallback). See
-``plans/exec_model_classes.md`` and ``docs/guide/components/taxonomy.md``.
+It is a :class:`~waveflow.hw.hw_component.SynthComp` that declares ``_kernel_method = 'on_start'``.
+Codegen dispatch is by class (:func:`~waveflow.build.codegen_dispatch.codegen_path`): a
+``HostActivated`` lowers ``on_start`` as its kernel body. See ``plans/exec_model_classes.md`` and
+``docs/guide/components/taxonomy.md``.
 """
 from __future__ import annotations
 
@@ -42,9 +43,10 @@ class HostActivated(SynthComp):
     #: consumer later — see ``plans/exec_model_classes.md``), so this changes no generated output.
     control_mode: ClassVar[ControlMode] = ControlMode.PER_INVOCATION
 
-    #: The kernel body codegen lowers.  Declared explicitly (not inferred): a host-activated leaf is a
-    #: regmap-bearing ``SynthComp``, and declaring ``'on_start'`` states the intent directly rather
-    #: than relying on ``select_kernel_method``'s regmap fallback.
+    #: Intent metadata (and the entry :meth:`~waveflow.hw.hw_component.SynthComp._check_synthesizable`
+    #: verifies exists at construction): a host-activated leaf's body is ``on_start``.  The codegen
+    #: dispatch is class-based (:func:`~waveflow.build.codegen_dispatch.codegen_path`); this states the
+    #: same intent declaratively.
     _kernel_method: ClassVar[str] = 'on_start'
 
     def __init_subclass__(cls, **kwargs) -> None:
