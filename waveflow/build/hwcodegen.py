@@ -313,6 +313,24 @@ class HwStmtExtractor:
                     )
             return KernelCallStmt(local_name=receiver_chain.id, mem_local=mem_local)
 
+        # `dut.run_once(dut.regmap.get("f0"), dut.regmap.get("f1"), ...)` — the invocation form
+        # (Phase 5b).  It lowers to the SAME kernel call as `dut.run()`: run_once's positional args
+        # reference the *input* regmap fields (RW/W) by name, in declaration order, so the field
+        # locals (already declared + populated) are passed straight through and the emitted call is
+        # identical.  We map by field name/access, never by naive arg position.
+        if (
+            attr == 'run_once'
+            and isinstance(receiver_chain, ast.Name)
+            and receiver_chain.id in self._duts
+        ):
+            if call.keywords:
+                raise SynthesisError(
+                    f"dut.run_once() takes only positional field args "
+                    f"(line {parent.lineno})"
+                )
+            self._validate_run_once_args(receiver_chain.id, call.args, parent)
+            return KernelCallStmt(local_name=receiver_chain.id, mem_local=None)
+
         # `<schema_local>.read_uint32_file*(...)` / `.write_uint32_file*(...)`
         if (
             attr in _TB_FILE_IO_METHODS
@@ -746,6 +764,73 @@ class HwStmtExtractor:
         except Exception:
             return None
         return getattr(comp, 'regmap', None)
+
+    def _run_once_arg_field(self, arg: ast.expr) -> str | None:
+        """If *arg* is ``<dut>.regmap.get("<field>")``, return ``"<field>"``; else ``None``.
+
+        This is how a ``run_once`` positional arg names the input regmap field it fills — the field
+        local (populated earlier by a ``read_uint32_file`` / ``set``) is passed straight through.
+        """
+        if (
+            isinstance(arg, ast.Call)
+            and isinstance(arg.func, ast.Attribute)
+            and arg.func.attr == 'get'
+            and isinstance(arg.func.value, ast.Attribute)
+            and arg.func.value.attr == 'regmap'
+            and isinstance(arg.func.value.value, ast.Name)
+            and arg.func.value.value.id in self._duts
+            and len(arg.args) == 1
+            and not arg.keywords
+            and isinstance(arg.args[0], ast.Constant)
+            and isinstance(arg.args[0].value, str)
+        ):
+            return arg.args[0].value
+        return None
+
+    def _validate_run_once_args(
+        self, dut_local: str, args: list[ast.expr], parent: ast.stmt,
+    ) -> None:
+        """Check ``dut.run_once(...)`` args reference the DUT's input regmap fields by name.
+
+        Phase-5b scope (pure regmap-scalar): each positional arg must be
+        ``dut.regmap.get("<field>")`` naming the *input* field (``RW``/``W``, non-``is_vitis_auto``)
+        in that position, taken in declaration order.  Binding is by **name/access**, not naive
+        position — so an output field interleaved among the inputs cannot be mis-mapped.  Output
+        (``R``) fields are not passed positionally; the generated call carries them as out-params
+        (identical to ``dut.run()``).  Richer forms — literal/local args needing an input-field
+        assignment, a captured ``z = dut.run_once(...)`` return, or stream I/O — are follow-ons.
+        """
+        from waveflow.hw.regmap import RegAccess
+
+        regmap = self._dut_regmap_or_none(dut_local)
+        if regmap is None:
+            raise SynthesisError(
+                f"dut.run_once() on '{dut_local}': DUT has no regmap to invoke "
+                f"(line {parent.lineno})"
+            )
+        inputs = [
+            name for name, fld in regmap._fields.items()
+            if not fld.is_vitis_auto and fld.access in (RegAccess.RW, RegAccess.W)
+        ]
+        if len(args) != len(inputs):
+            raise SynthesisError(
+                f"dut.run_once() takes {len(inputs)} input arg(s) {inputs}, got {len(args)} "
+                f"(line {parent.lineno})"
+            )
+        for i, (arg, field) in enumerate(zip(args, inputs)):
+            ref = self._run_once_arg_field(arg)
+            if ref is None:
+                raise SynthesisError(
+                    f"dut.run_once() arg {i} must be dut.regmap.get(\"{field}\") — a run_once TB "
+                    f"arg references its input regmap field by name (Phase 5b) "
+                    f"(line {parent.lineno})"
+                )
+            if ref != field:
+                raise SynthesisError(
+                    f"dut.run_once() arg {i} references field '{ref}', but the input field in that "
+                    f"position is '{field}' — args must match the input fields in declaration order "
+                    f"(line {parent.lineno})"
+                )
 
     def _extract_count_kwarg(
         self,

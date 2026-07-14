@@ -70,3 +70,51 @@ def test_migrated_examples_are_hostactivated():
     from examples.stream_inband.poly import PolyAccelComponent
     assert issubclass(SimpFunComponent, HostActivated)
     assert issubclass(PolyAccelComponent, HostActivated)
+
+
+# ---------------------------------------------------------------------------
+# run_once — the one-call invocation (Phase 5a)
+# ---------------------------------------------------------------------------
+
+def _explicit_simp_fun(dut, x, a, b):
+    """The explicit regmap.set / on_start / regmap.get sequence run_once replaces."""
+    dut.regmap.set("x", x)
+    dut.regmap.set("a", a)
+    dut.regmap.set("b", b)
+    dut.on_start()
+    return dut.regmap.get("y")
+
+
+def test_run_once_matches_explicit_sequence():
+    from examples.regmap.simp_fun import SimpFunComponent
+    for x, a, b in [(5, 3, 2), (0, 7, 1), (2, -5, 3), (-4, -2, 0)]:
+        once = elaborate(SimpFunComponent).run_once(x, a, b)
+        expl = _explicit_simp_fun(elaborate(SimpFunComponent), x, a, b)
+        assert int(once.val) == int(expl.val), (x, a, b)
+
+
+def test_run_once_computes_relu_affine():
+    from examples.regmap.simp_fun import SimpFunComponent
+    assert int(elaborate(SimpFunComponent).run_once(5, 3, 2).val) == 17   # relu(3*5+2)
+    assert int(elaborate(SimpFunComponent).run_once(2, -5, 3).val) == 0   # relu(-10+3) -> 0
+
+
+def test_run_once_call_alias():
+    from examples.regmap.simp_fun import SimpFunComponent
+    dut = elaborate(SimpFunComponent)
+    assert int(dut(5, 3, 2).val) == 17
+
+
+def test_run_once_wrong_arg_count_raises():
+    from examples.regmap.simp_fun import SimpFunComponent
+    dut = elaborate(SimpFunComponent)
+    with pytest.raises(TypeError, match=r"takes 3 input"):
+        dut.run_once(1, 2)
+
+
+def test_run_once_stream_bearing_is_follow_on():
+    """Phase 5a is regmap-scalar only; a stream-bearing kernel (poly) raises a clear follow-on error."""
+    from examples.stream_inband.poly import PolyAccelComponent
+    dut = elaborate(PolyAccelComponent)
+    with pytest.raises(NotImplementedError, match="stream-bearing"):
+        dut.run_once(1)
