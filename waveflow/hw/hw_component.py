@@ -354,8 +354,17 @@ class SynthComp(HwComponent):
     """
 
     #: The method :func:`~waveflow.build.hwcodegen.extract_kernel` lowers as the
-    #: kernel body; execution-model subclasses override it.
-    _kernel_method: ClassVar[str] = 'run_proc'
+    #: kernel body.  ``None`` (the base default) means **infer** — codegen's
+    #: :func:`~waveflow.build.hwresolve.select_kernel_method` picks ``on_start``
+    #: when the component carries a regmap, else ``run_proc``.  An execution-model
+    #: subclass sets a concrete name to declare its entry explicitly
+    #: (``FreeRunComp`` → ``run_iter``, ``HostActivated`` → ``on_start``).
+    #:
+    #: It must **not** default to a concrete ``'run_proc'`` here: ``select_kernel_method``
+    #: gives an explicit ``_kernel_method`` priority over the regmap fallback, so a
+    #: concrete default would mis-resolve a regmap-bearing ``SynthComp`` to
+    #: ``run_proc`` instead of ``on_start`` (the ``_kernel_method``/regmap trap).
+    _kernel_method: ClassVar[str | None] = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -367,11 +376,21 @@ class SynthComp(HwComponent):
         The base rule: the declared kernel-entry method must actually be
         implemented (not left abstract). Execution-model subclasses extend this
         with their own contract.
+
+        When ``_kernel_method`` is ``None`` (the entry is *inferred* at codegen),
+        there is no single declared method to verify here — the inference picks
+        ``on_start``/``run_proc``, both of which exist (``on_start`` is
+        user-provided on a regmap kernel; ``run_proc`` has a passive default).
+        Subclasses that declare a concrete entry (``FreeRunComp``,
+        ``HostActivated``) are still checked below.
         """
+        method_name = self._kernel_method
+        if method_name is None:
+            return
         cls = type(self)
-        entry = getattr(cls, self._kernel_method, None)
+        entry = getattr(cls, method_name, None)
         if entry is None or getattr(entry, '__isabstractmethod__', False):
             raise TypeError(
                 f"{cls.__name__} is a SynthComp but does not implement its "
-                f"kernel-entry method '{self._kernel_method}()'."
+                f"kernel-entry method '{method_name}()'."
             )

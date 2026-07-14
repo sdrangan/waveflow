@@ -8,7 +8,7 @@ from typing import ClassVar
 from waveflow.hw.aximm import DirectMMIF, MMIFMaster
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_testbench import HwTestbench
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import sim_only, synthesizable
@@ -59,7 +59,7 @@ def default_cases() -> list[SimpFunCase]:
 
 
 @dataclass
-class SimpFunComponent(HwComponent):
+class SimpFunComponent(HostActivated):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
     cpp_namespace: ClassVar[str | None] = "simp_fun_impl"
 
