@@ -14,8 +14,16 @@
 - **Phase 2 C — design-options report** (`plans/codegen_source_options.md`): the clean `SeqTB`-off-`SimObj`
   split is option (c), a hierarchy-wide refactor; **deferred to a dedicated "C-real" PR** (below); the
   cosmetic Option B deliberately not shipped.
-- **Next:** Phase 3 (`HostActivated`), which also fixes the `_kernel_method`/regmap trap (Open Questions).
-  Then C-real (independent, not urgent).
+- **Phase 3 DONE (merged, `9379046`):** `HostActivated` (regmap-launched leaf, `_kernel_method='on_start'`)
+  + the `_kernel_method`/regmap **trap fix** (`SynthComp._kernel_method` default `'run_proc'` → `None`).
+  Migrated `simp_fun` + `poly` byte-identical; `hist`/`vmac` correctly stay `HwComponent` (stream-controlled,
+  future `LoopComp`).
+- **Next: typed codegen dispatch** (see "Typed codegen dispatch" below) — dispatch codegen by component
+  *class* over the shared extraction engine, retiring `select_kernel_method`/`_kernel_method`. **Honest
+  framing:** with the trap fixed and no multi-target consumer yet, this is mostly a *clarity/structure*
+  refactor now; its decisive payoff (one component → multiple target outputs, e.g. `hls::task` **and**
+  SystemC) is future. Reasonable as the committed direction; deferrable until SystemC-gen makes the target
+  axis load-bearing.
 
 ## The conceptual model: three orthogonal axes + inferred targets
 
@@ -165,14 +173,42 @@ must **enforce** by contract what DataSchema gets by construction. Same principl
 2. **A — `CompositeComp`** (passive sibling; retrofit `InterleaverCanon`/`MemCopy`) + **B —
    `select_kernel_method`** (kernel-entry unification) — **DONE / merged.** **C — `CodegenSource`/`SeqTB`**
    is a design-options report (`codegen_source_options.md`), deferred to "C-real".
-3. **`HostActivated`** (NEXT) — formalize `on_start`/`PER_INVOCATION` as a class; migrate `poly`/`regmap`
-   opportunistically (byte-identical); keep the regmap-presence fallback. **Must fix the `_kernel_method`
-   trap** (Open Questions): a regmap-bearing `SynthComp` must resolve to `on_start`, not the `run_proc`
-   default. Independent of C-real.
-4. **C-real** — the `CodegenSource`/`SeqTB` refactor per `codegen_source_options.md` (two byte-identical
-   checkpoints). Not urgent; testbench-side; independent of Phase 3.
-5. **Deferred:** `ThreadTB`/`SystemCTestbench` + BFM generation; `LoopComp` (+ new `ControlMode`); invert
+3. **`HostActivated`** + the `_kernel_method` trap fix — **DONE / merged.**
+4. **Typed codegen dispatch** (NEXT — see section below) — dispatch codegen by component class over the
+   shared extraction engine; retire `select_kernel_method`/`_kernel_method`. Byte-identical. Mostly a
+   clarity/structure refactor now; the multi-target payoff is future.
+5. **C-real** — the `CodegenSource`/`SeqTB` refactor per `codegen_source_options.md` (two byte-identical
+   checkpoints). Not urgent; testbench-side; independent.
+6. **Deferred:** `ThreadTB`/`SystemCTestbench` + BFM generation; `LoopComp` (+ new `ControlMode`); invert
    `SynthComp` to a capability when SystemC-gen lands.
+
+## Typed codegen dispatch (Phase 4)
+
+Replace the generic body-selector (`select_kernel_method` + `_kernel_method`) with **dispatch by
+component class**, over the *shared* extraction engine (`HwStmtExtractor(comp, method_name=…)` and
+`composite_top_spec`). Each kind's codegen knows its own `method + emitter + pragma`:
+
+| Component class | Extracts | Output |
+|---|---|---|
+| `HostActivated` | `on_start` | ap_ctrl_hs kernel (s_axilite) |
+| `FreeRunComp` | `run_iter` | `ap_ctrl_none` `hls::task` body |
+| plain free-running `HwComponent` | `run_proc` | (interim, un-migrated leaves) |
+| `CompositeComp` | — (the graph) | composite top (`composite_top_spec`) |
+| `SeqTB` / `HwTestbench` | `main` | `<kernel>_tb.cpp` |
+
+- **Shared engine underneath** — the typed steps are *thin*: they supply the method/emitter/pragma; they
+  do NOT each re-implement extraction. DRY preserved; only the generic *resolver* is retired.
+- **Sets up the target axis** — this is the codegen-side of the realization matrix
+  (`overview/targets.md`): a component realizes to *multiple* targets (`hls::task` **and** SystemC
+  `SC_THREAD`). A single `_kernel_method` string can't express "which output"; a `(class × target)`
+  dispatch can. That is the decisive justification, and it is **future** (no SystemC-gen yet).
+- **Discipline:** byte-identical across every kernel + `*_tb.cpp` + composite top; suite at baseline. The
+  current dispatch is already partly typed (`is_testbench` → testbench path; composites →
+  `composite_top_spec`); this unifies the leaf path (`on_start`/`run_iter`/`run_proc`) into the same
+  class-typed structure.
+- **Honest status:** with the trap fixed (Phase 3), the *immediate* win is clarity + an explicit BuildDAG,
+  not correctness. Deferrable until a multi-target consumer makes it load-bearing — but it removes the
+  generic resolver, so doing it before more codegen piles onto `select_kernel_method` is defensible.
 
 ## Docs updates (do alongside the phases)
 
