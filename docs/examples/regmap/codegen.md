@@ -34,10 +34,10 @@ dag.add(HlsCodegenStep(
 
 Three constructor arguments are doing the work:
 
-- **`comp_class`** — the Python class to lower. `SimpFunComponent` is the `HwComponent` with the `VitisRegMap`; `SimpFunTBHls` is the `HwTestbench` with the `main()` host-side sequence. Same step type, two different inputs.
+- **`comp_class`** — the Python class to lower. `SimpFunComponent` is the `HostActivated` kernel with the `VitisRegMap`; `SimpFunTBHls` is the `SeqTB` with the `main()` host-side sequence. Same step type, two different inputs.
 - **`output_dir="gen"`** — where the auto-generated, framework-owned files land. The `gen/` directory is `.gitignored` and treated as a build product — every run rewrites it from scratch.
 - **`impl_dir="."`** — where the **sticky** hand-written hook files land. "Sticky" means: the framework writes a stub once if the file does not exist, then leaves it alone forever. Edits to the impl file survive every subsequent rebuild. This is the seam through which the user owns the compute body without owning the wrapper.
-- **`is_testbench=True`** — flips `HlsCodegenStep` into testbench mode: the generated artifact is a single `<top>_tb.cpp` with a `main()` function instead of the kernel `.hpp` / `.cpp` pair. The same Python source — the `HwTestbench.main()` method — produces the C++ host code.
+- **`is_testbench=True`** — flips `HlsCodegenStep` into testbench mode: the generated artifact is a single `<top>_tb.cpp` with a `main()` function instead of the kernel `.hpp` / `.cpp` pair. The same Python source — the `SeqTB.main()` method — produces the C++ host code.
 
 For a fuller treatment of `HlsCodegenStep`, see [Build System – HLS codegen](../../guide/build/codegen.md).
 

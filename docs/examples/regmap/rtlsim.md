@@ -203,4 +203,4 @@ This is the last page in the Vitis Register Map walkthrough. For the broader fra
 
 - [Build System](../../guide/build/index.md) — the full BuildDag reference.
 - [Register Maps](../../guide/interface/regmap.md) — the underlying regmap abstractions.
-- [Components](../../guide/components/index.md) — `HwComponent` and `HwTestbench` deep dive.
+- [Components](../../guide/components/index.md) — the component kinds (`HostActivated`, `FreeRunComp`, `CompositeComp`) deep dive.
