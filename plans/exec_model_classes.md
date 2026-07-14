@@ -2,12 +2,20 @@
 
 ## Status
 
-- **Phase 1 DONE (merged, `3dc5f2c` + `651f880`):** `SynthComp` + `FreeRunComp` (`run_iter`), retrofit of
-  `MemRStream`/`MemWStream` + the six interleaver tiles, docs (`taxonomy.md`, `structure.md`,
-  `concurrency/python/*`). Goldens byte-identical; construction-time synthesizability check works.
-- The design has since **grown substantially** (this rewrite). A new prerequisite — **Phase 0, the
-  elaboration contract** — was identified and should land *before* further class work. Everything below
-  is design-only until approved.
+- **Phase 1 DONE (merged):** `SynthComp` + `FreeRunComp` (`run_iter`), retrofit of `MemRStream`/`MemWStream`
+  + the six interleaver tiles, docs. Goldens byte-identical; construction-time synthesizability check works.
+- **Phase 0 DONE (merged, `7430d5d`):** the elaboration contract — `waveflow/build/elaborate.py`:
+  `elaborate(class, params)` is the single codegen instantiation entry; a sim-free `ElabContext`; a
+  param-purity determinism gate keyed per `(class, param-set)`. Byte-identical output; caught + fixed a
+  real latent bug (`IlElem` shared-class mutation).
+- **Phase 2 A+B DONE (merged, `302132b`):** `CompositeComp` (passive bodyless sibling; `__init_subclass__`
+  rejects `run_iter`) + `select_kernel_method` (one source of truth for the kernel entry). Byte-identical;
+  baseline-green.
+- **Phase 2 C — design-options report** (`plans/codegen_source_options.md`): the clean `SeqTB`-off-`SimObj`
+  split is option (c), a hierarchy-wide refactor; **deferred to a dedicated "C-real" PR** (below); the
+  cosmetic Option B deliberately not shipped.
+- **Next:** Phase 3 (`HostActivated`), which also fixes the `_kernel_method`/regmap trap (Open Questions).
+  Then C-real (independent, not urgent).
 
 ## The conceptual model: three orthogonal axes + inferred targets
 
@@ -152,16 +160,19 @@ must **enforce** by contract what DataSchema gets by construction. Same principl
 
 ## Phases / sequencing
 
-0. **Elaboration contract** (Phase 0) — `elaborate(class, params)`, sim-free context, param-purity
-   determinism check, key-by-param-set. **Prerequisite; do first.**
+0. **Elaboration contract** — `elaborate(class, params)`, sim-free context, param-purity gate. **DONE / merged.**
 1. `FreeRunComp` + `SynthComp` + retrofit — **DONE / merged.**
-2. **`CompositeComp`** (passive sibling) + **`CodegenSource`** factoring + `SeqTB` off `HwComponent` +
-   `extract_kernel` `_kernel_method` dispatch. Retrofit composites (`InterleaverCanon`, `MemCopy`,
-   `MemSquare`). Verify composite goldens.
-3. **`HostActivated`** — formalize `on_start`/`PER_INVOCATION`; migrate `poly`/`regmap` opportunistically;
-   keep the regmap-presence inference fallback.
-4. **Deferred:** `ThreadTB`/`SystemCTestbench` + BFM generation (from the boundary spec); `LoopComp`
-   (+ new `ControlMode`); invert `SynthComp` to a capability when SystemC-gen lands.
+2. **A — `CompositeComp`** (passive sibling; retrofit `InterleaverCanon`/`MemCopy`) + **B —
+   `select_kernel_method`** (kernel-entry unification) — **DONE / merged.** **C — `CodegenSource`/`SeqTB`**
+   is a design-options report (`codegen_source_options.md`), deferred to "C-real".
+3. **`HostActivated`** (NEXT) — formalize `on_start`/`PER_INVOCATION` as a class; migrate `poly`/`regmap`
+   opportunistically (byte-identical); keep the regmap-presence fallback. **Must fix the `_kernel_method`
+   trap** (Open Questions): a regmap-bearing `SynthComp` must resolve to `on_start`, not the `run_proc`
+   default. Independent of C-real.
+4. **C-real** — the `CodegenSource`/`SeqTB` refactor per `codegen_source_options.md` (two byte-identical
+   checkpoints). Not urgent; testbench-side; independent of Phase 3.
+5. **Deferred:** `ThreadTB`/`SystemCTestbench` + BFM generation; `LoopComp` (+ new `ControlMode`); invert
+   `SynthComp` to a capability when SystemC-gen lands.
 
 ## Docs updates (do alongside the phases)
 
@@ -173,11 +184,19 @@ must **enforce** by contract what DataSchema gets by construction. Same principl
 
 ## Open questions
 
-- [ ] `CodegenSource` name / exactly what it carries (`cpp_kernel_name`, `HwParam` machinery,
-      `param_supports`) vs. what stays `HwComponent`-only (endpoints, `run_proc`, `control_mode`).
+- [ ] **The `_kernel_method`/regmap trap (fix in Phase 3).** `SynthComp._kernel_method` defaults to
+      `'run_proc'`, and `select_kernel_method` (hwresolve.py) gives an explicit `_kernel_method` **priority
+      over the regmap check**. So a regmap-bearing `SynthComp` that relies on the default resolves to
+      `run_proc` instead of `on_start`. Dormant today (only `SynthComp` subclass is `FreeRunComp`, which
+      overrides to `run_iter` and is never extracted). Fix options: `HostActivated` declares
+      `_kernel_method='on_start'`; and/or default `_kernel_method` to `None` and let the regmap fallback
+      fire — but that collides with `SynthComp._check_synthesizable` (`getattr(cls, self._kernel_method)`),
+      and `select_kernel_method` lives in `build/` so `hw/` can't call it (layering). Resolve carefully.
+- [ ] `CodegenSource`: covered by `plans/codegen_source_options.md` (Option C / "C-real").
 - [ ] `HostActivated` name (vs `HostActivatedComp` / `LaunchedComp`).
-- [ ] Does the sim-free elaboration context need a real-ish env for `__post_init__` code that touches
-      `sim`, or can structural declaration be fully decoupled from sim wiring?
+- [ ] The two Phase-0 review notes (defer): purity signature is a *multiset* (order/name-agnostic) — could
+      tighten to ordered to catch order impurities; `ElabContext` skips `super().__init__` (safe only while
+      `Simulation.__init__` stays trivial — a defensive comment/replication would future-proof).
 - [ ] Structural-equality notion for the determinism check (compare endpoints + sub-comp graph +
       interface bindings; ignore names/identity).
 
