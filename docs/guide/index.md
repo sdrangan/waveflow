@@ -16,5 +16,6 @@ Welcome to Waveflow.  This folder will have guides to use the Waveflow functiona
 - [Timing Analysis Tools](./timing)
 - [Hardware Interfaces](./interface/overview.md)
 - [Build System](./build/)
+- [Realization Flows](./flows/)
 - [Concurrency](./concurrency/)
 - [AI Tooling](./ai_tooling/)
