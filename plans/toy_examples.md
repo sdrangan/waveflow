@@ -94,6 +94,44 @@ So the claim these toys earn is: *"this is real code, it runs, the docs match it
 synthesizes."* Keep `freerun.md`/`composite.md` honest about that distinction, and let the check family
 make the synthesis claim checkable later.
 
+## Findings (implemented — `examples/toy/`, `tests/examples/test_toy.py`)
+
+Both flagged defects were real, and the codegen probe found a third:
+
+1. **`composite.md`'s missing `clk=` — confirmed a hard error.** `StreamIF` requires a clock
+   (`QueuedTransferIF.__post_init__` raises `ValueError: clock must be provided for StreamIF`), because
+   it models a transfer as `nwords / clk.freq`. The doc's snippet could never have run; the working
+   `Neuron` and both real composites (`MemCopy`, `InterleaverCanon`) all pass `clk=`. Doc fixed; pinned
+   by `test_streamif_requires_clk`.
+2. **`Square`'s array-operator body — the doc's claim was correct, it runs.** `x * x` / `x + x` work on
+   two `DataArray`s and return a *derived* element-type-preserving `DataArray` (not a `Vec`). Scalars
+   are unsupported in either order — `x * 0.5` raises (no scalar operands in v1) and `0.5 * x` raises
+   (no `__rmul__`) — so the toys only ever combine two `DataArray`s. Documented, pinned by
+   `test_square_body_uses_array_operators_not_numpy`.
+3. **`kernel_files_to_str(Square)` succeeds but emits the wrong thing — silently.** This is the
+   finding worth recording: there is no exception, so nothing today would catch it.
+   - The `@synthesizable square` body is **not extracted**. `@synthesizable` marks a *hook boundary*
+     (`_collect_hooks` turns each call into a `FunctionStmt`), so codegen emits a declaration plus a
+     `// TODO: implement square` stub for a **hand-written** impl — the same arrangement as the
+     checked-in `examples/regmap/simp_fun_compute_impl.cpp` ("Hand-written scalar math hook"). So
+     `x * x` is a pysim golden; it never lowers to C++. The guide's "keeping the math pure is what lets
+     it lower to hardware" was misleading and has been corrected.
+   - The generated top is **`ap_ctrl_hs`** (`#pragma HLS INTERFACE s_axilite port=return
+     bundle=control`), **not** the free-running `ap_ctrl_none` `hls::task` `freerun.md` describes.
+     `ap_ctrl_none` is emitted **nowhere** in `waveflow/build/`; `codegen_dispatch` names the method to
+     extract but explicitly defers the target/pragma axis ("*and, later, the target/pragma*").
+
+   Both gaps are pinned by `test_square_codegen_is_not_yet_a_free_running_task`, which fails loudly when
+   either closes. This is exactly the report `check(Square, "free_running_kernel")` should produce.
+4. **The composite toy declares no codegen descriptors.** `composite_top_spec` needs
+   `ordered_subcomps`/`internal_edges`/`boundary`, maintained by hand *in addition to* `add_comp`/
+   `add_if` (the two real composites keep both in sync manually). `ScaledSquare` has none — out of
+   scope per above; pinned by `test_scaled_square_declares_no_codegen_descriptors`.
+
+Anti-rot: `test_doc_python_blocks_are_verbatim_from_toy` asserts every ```python block on
+`freerun.md`/`composite.md` appears **verbatim** in `examples/toy/toy.py`, so a paraphrase or a drifted
+toy fails CI.
+
 ## Verification
 
 - Run via the venv: `../pysilicon-venv/Scripts/python.exe -m pytest -m "not vitis"` with `PYTHONPATH=.`;
