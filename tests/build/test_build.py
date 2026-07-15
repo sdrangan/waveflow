@@ -226,19 +226,23 @@ class TestBuildable:
 # ---------------------------------------------------------------------------
 
 class TestBuildDag:
-    def _make_step(self, name: str) -> BuildStep:
-        class _Step(BuildStep):
+    def test_add_and_run_single_step(self, tmp_path):
+        ran: list[str] = []
+
+        class Alpha(BuildStep):
             def run(self, config, **kwargs):
+                ran.append("Alpha")
                 return {}
 
-        _Step.__name__ = name
-        return _Step()
-
-    def test_add_and_run_single_step(self, tmp_path):
         dag = BuildDag()
-        dag.add(self._make_step("Alpha"))
-        results = dag.run(BuildConfig(root_dir=tmp_path))
+        dag.add(Alpha())
+        # force=True: Alpha produces no files, so without it the incremental-build
+        # skip logic returns BuildResult(success=True, skipped=True) and `success`
+        # passes without the step ever running.
+        results = dag.run(BuildConfig(root_dir=tmp_path), force=True)
         assert results["Alpha"].success is True
+        assert results["Alpha"].skipped is False
+        assert ran == ["Alpha"]
 
     def test_run_executes_in_topological_order(self, tmp_path):
         order: list[str] = []

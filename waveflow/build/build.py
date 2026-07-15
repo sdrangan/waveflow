@@ -505,9 +505,12 @@ class BuildDag:
         on_step_begin, on_step_end : callable, optional
             Progress callbacks.  ``on_step_begin(step, will_run, paths)``
             fires before each step; ``will_run`` is True if the step will
-            actually execute (False = skipped, including dep-failure skips),
-            and ``paths`` maps each file-artifact name to its resolved path.
+            actually execute (False = skipped by the freshness check), and
+            ``paths`` maps each file-artifact name to its resolved path.
             ``on_step_end(step, result)`` fires after, with the BuildResult.
+            Note that once a step fails the build halts, so neither callback
+            fires for the steps after it — they are never reached, and get no
+            entry in the returned mapping at all.
 
         Returns a mapping of step name → :class:`BuildResult`.
         """
