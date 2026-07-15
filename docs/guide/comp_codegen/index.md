@@ -97,11 +97,13 @@ or that it is correct at all. That is what the example's C-simulation and co-sim
 
 ## In this section
 
-**Start with [Component structure](./structure.md)** — how a component becomes a kernel — and
-[Extractor](./extractor.md) for what your body may contain. Those two are what you need to *write* a
+**Start with [Automatic vs. manual](./automatic.md)** — where the generator stops and you begin — then
+[Component structure](./structure.md) for how a component becomes a kernel, and
+[Extractor](./extractor.md) for what your body may contain. Those three are what you need to *write* a
 component. The rest is reference: reach for it when you look inside the generated C++, which mostly
 means when you write a [hook](../custom_hooks/).
 
+- [Automatic vs. manual](./automatic.md) — what codegen writes and what you write: everything structural is generated; the compute inside a `@synthesizable` hook is yours.
 - [Component structure](./structure.md) — how an `HwComponent` becomes a Vitis HLS top-level function: the kernel entry, the execution model, where hooks come from, and the **contract** for when a component lowers at all.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
 - [Extractor](./extractor.md) — the synthesizable subset: what the rules are, why each exists, and `check` as their callable form.
