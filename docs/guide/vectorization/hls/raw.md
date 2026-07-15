@@ -7,6 +7,7 @@ audience: hls
 api: [pf, lane_capacity, get_nwords, read_array_lane, write_array_lane, read_array_slice, write_array_slice]
 summary: "Vectorized arrays in raw storage — a flat C array; the packing factor and lanes, read_array_slice over a local buffer, and the canonical lane loop (with the pf=0 wide-element case)."
 ---
+
 # Vectorized arrays in Vitis — `raw` storage
 
 Just as each [data schema](../../schema/hls/codegen.md) has a bit-exact Vitis C++ counterpart, so does each
@@ -41,9 +42,8 @@ dag.run(cfg)
 ```
 
 **Artifact:**  The above code builds two files:
-
-- `include/float32_array_utils.h` containing the class definition and helpers to be used in synthesizable code
-- `float32_array_utils_tb.h` for helpers that may not be synthesizable (like file I/O) that can the testbench.
+-  `include/float32_array_utils.h` containing the class definition and helpers to be used in synthesizable code
+- `float32_array_utils_tb.h` for helpers that may not be synthesizable (like file I/O) that can the testbench. 
 
 The first file declares the `float32_array_utils::` namespace with the geometry constants
 (`pf<>` / `lane_capacity<>` / `get_nwords<>`), the element-range `read_array_slice`/`write_array_slice`, the
@@ -74,7 +74,7 @@ element type in Python, regenerate, and the C++ follows.
 
 ## Packing factors
 
-As discussed in the section on [serialization](../../schema/hls/serialization.md),  arrays must be transferred over **channels**, such as AXI4-streams, or memory-mapped interfaces.  These channels may have **word bitwidth**, typically denoted `word_bw`, that may be larger or smaller than the bitwidth of each element of the array.  The generated include files provide methods to **serialize** and **deserialize** arrays of elements over channels of any width.
+As discussed in the section on [serialization](../../schema/hls/serialization.md),  arrays must be transferred over **channels**, such as AXI4-streams, or memory-mapped interfaces.  These channels may have **word bitwidth**, typically denoted `word_bw`, that may be larger or smaller than the bitwidth of each element of the array.  The generated include files provide methods to **serialize** and **deserialize** arrays of elements over channels of any width. 
 
 Given a `word_bw`, two dual quantities describe how the elements line up with the words:
 
@@ -99,6 +99,7 @@ class Point2D(DataList):
 This structure will have a `bitwidth = 64`.
 After we generate the include file `point_2d.hpp`:  We can obtain the parameters:
 
+
 ```cpp
 #include "point_2d_array_utils.h"
 namespace point2d = point2d_array_utils;
@@ -111,17 +112,19 @@ static constexpr int wpe     = point2d::get_nwords<WORD_BW>(1);    // ceil(64 / 
 Each `pf` element slot in a word is a **lane**. When `pf ≥ 1`, a loop that touches all `pf` lanes per cycle
 does `pf` elements of work per cycle — so **`WORD_BW` is the throughput lever**. For the 64-bit `Point2D`:
 
-| `WORD_BW` | `pf = ⌊WORD_BW/64⌋`    | `words_per_elem = ⌈64/WORD_BW⌉` |
-| ----------- | -------------------------- | ----------------------------------- |
-| 32          | 0 — element spans 2 words | 2                                   |
-| 64          | 1                          | 1                                   |
-| 128         | 2                          | 1                                   |
-| 256         | 4                          | 1                                   |
-| 512         | 8                          | 1                                   |
+| `WORD_BW` | `pf = ⌊WORD_BW/64⌋` | `words_per_elem = ⌈64/WORD_BW⌉` |
+|---|---|---|
+| 32  | 0 — element spans 2 words | 2 |
+| 64  | 1 | 1 |
+| 128 | 2 | 1 |
+| 256 | 4 | 1 |
+| 512 | 8 | 1 |
 
 At `WORD_BW = 32` the element is wider than the word, so `pf` is 0 and each `Point2D` occupies two words;
 from `WORD_BW = 64` up, whole elements fit per word. (For the schema-level view — `n_words` and the
 per-transfer cycle cost — see [Serialization](../../schema/hls/serialization.md).)
+
+
 
 ## Reading and writing a range — `read_array_slice`
 
@@ -191,7 +194,8 @@ The three pragmas are what vectorize the loop:
 The **running pointers** `xp`/`yp` are a small but real win: advancing by a constant `WPU` words per iteration
 gives the address directly, rather than `x_words + i / PF` — avoiding a per-iteration hardware divide.
 
-The same loop covers the **wide-element regime for free**: when `pf = 0`, `LW = 1` and `WPU = ⌈element_bits / WORD_BW⌉`, so each step pulls one element across `WPU` words and HLS relaxes `II` to `WPU` — one element per
+The same loop covers the **wide-element regime for free**: when `pf = 0`, `LW = 1` and `WPU = ⌈element_bits /
+WORD_BW⌉`, so each step pulls one element across `WPU` words and HLS relaxes `II` to `WPU` — one element per
 `WPU` cycles, the honest cost of a wide element. There is no `pf = 0` special case, and the `n` argument is
 simply ignored (`LW = 1`).
 

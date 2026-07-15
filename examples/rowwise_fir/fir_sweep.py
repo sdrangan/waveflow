@@ -108,41 +108,21 @@ def cosim_point(n_row: int, n_col: int, n_jobs: int = NJOBS) -> dict:
     write_bursts, read_bursts, clk_ns = vp.extract_aximm_bursts(clk_name=clk, aximm_sigs=aximm_sigs)
     clk_ns = float(clk_ns)
 
-    # s_in command stream: t(cmd_write)[job] = the start of job's FIRCmd packet (per-command AXIS
-    # burst).  The fill is anchored here (not the first X-read), so it absorbs ALL the lead-in —
-    # command decode + the h-read (a resident read_array_slice, ~30 cyc) + the X ramp + the FP fill.
-    s_in_sigs, _ = vp.add_axiss_signals(name="s_in", ignore_multiple=True)
-    cmd_bursts, _ = vp.extract_axis_bursts(clk_name=clk, axis_sigs=s_in_sigs)
-    cmd_starts = sorted(float(b["tstart"]) for b in cmd_bursts)   # command starts (ns), in order
-
     layout = job_layout(n_row, n_col, n_jobs)
     per_job = []
     for j in layout:
-        x_rd = _attribute(read_bursts, j["x_off"], j["x_off"] + j["x_words"])         # X (the INPUT) only
-        all_rd = _attribute(read_bursts, j["x_off"], j["x_off"] + j["x_words"] + T)   # X + h (for period)
+        rd = _attribute(read_bursts, j["x_off"], j["x_off"] + j["x_words"] + T)  # X + h
         wr = _attribute(write_bursts, j["y_off"], j["y_off"] + j["y_words"])
-        xs, rs, ws = _span(x_rd), _span(all_rd), _span(wr)
-        cmd_ns = cmd_starts[j["job"]] if j["job"] < len(cmd_starts) else None
-        # The two calibration targets, measured directly from bus/stream timestamps:
-        #   t(cmd write)    = start of this job's command packet (cmd_ns)
-        #   t(first output) = first Y-write beat (ws.start)
-        #   t(last output)  = last  Y-write beat (ws.end)
-        # fill    = t(first output) - t(cmd write)   (all initial-processing latency: cmd + h + ramp + FP)
-        # compute = t(last output)  - t(first output)   (the II=1 production span; NOT write occupancy)
-        fill_cyc = (ws["start_ns"] - cmd_ns) / clk_ns if (cmd_ns is not None and ws) else None
-        compute_cyc = (ws["end_ns"] - ws["start_ns"]) / clk_ns if ws else None
+        rs, ws = _span(rd), _span(wr)
         per_job.append({"job": j["job"],
-                        "cmd_start_ns": cmd_ns,                              # t(cmd write)
-                        "x_read_start_ns": xs["start_ns"] if xs else None,   # first X-read (diagnostic)
-                        "load_start_ns": rs["start_ns"] if rs else None,     # first read (h), for the period
+                        "load_start_ns": rs["start_ns"] if rs else None,
                         "load_span_cyc": (rs["end_ns"] - rs["start_ns"]) / clk_ns if rs else None,
                         "load_words": rs["words"] if rs else 0,
-                        "store_start_ns": ws["start_ns"] if ws else None,    # t(first output)
-                        "store_end_ns": ws["end_ns"] if ws else None,        # t(last output)
-                        "store_span_cyc": compute_cyc,
+                        "store_start_ns": ws["start_ns"] if ws else None,
+                        "store_span_cyc": (ws["end_ns"] - ws["start_ns"]) / clk_ns if ws else None,
                         "store_words": ws["words"] if ws else 0,
-                        "fill_cyc": fill_cyc,
-                        "compute_cyc": compute_cyc})
+                        "fill_cyc": (ws["start_ns"] - rs["start_ns"]) / clk_ns
+                        if (rs and ws) else None})
 
     # Steady per-job period = the inter-job spacing of the BOTTLENECK stage.  Loads run ahead
     # (cross-job overlap), so the load-start spacing under-reads; the store-start spacing is the
@@ -156,12 +136,11 @@ def cosim_point(n_row: int, n_col: int, n_jobs: int = NJOBS) -> dict:
     load_period = spacing("load_start_ns")
     store_period = spacing("store_start_ns")
     period_cyc = store_period if store_period is not None else load_period
-    # Single-job latency = job 0's completion (last Y-write) measured from t(cmd write) — the
-    # per-job reference (NOT sim start, which folds in the one-time RTL/reset startup).
+    # Single-job latency = first job's completion (store end) from sim start.
     pj0 = per_job[0]
     l1_cyc = None
-    if pj0["store_end_ns"] is not None and pj0["cmd_start_ns"] is not None:
-        l1_cyc = (pj0["store_end_ns"] - pj0["cmd_start_ns"]) / clk_ns
+    if pj0["store_start_ns"] is not None and pj0["store_span_cyc"] is not None:
+        l1_cyc = pj0["store_start_ns"] / clk_ns + pj0["store_span_cyc"]
 
     return {
         "n_row": n_row, "n_col": n_col, "n_jobs": n_jobs, "clk_ns": clk_ns,

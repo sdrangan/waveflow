@@ -1,24 +1,27 @@
-"""fir_calibrate.py — fit the per-kernel COMPUTE models from the cosim sweep; validate (Gate B).
+"""fir_calibrate.py — occupancy-based, near-fit-free cycle model from the cosim sweep (Stage B).
 
-Level 2 of the two-level calibration (see project-two-level-calibration): the bus transfer time is
-the platform's (bus_characterize.py), configured on the memory slave.  Here we fit ONLY the
-accelerator's compute, from a contention-free per-job measurement on the bus:
+Replaces the retired matrix-LT calibration.  The free-running kernel's timing is **composed from
+physical, deterministic components**, not fitted end-to-end (the matrix-LT philosophy,
+``project-matrix-lt-fir-build``; and the empirical finding that span-based end-to-end fits are
+contaminated by stalls + interleaved beats — measure *occupancy*, not span):
 
-  * **fill**        = t(first Y-write) − t(first X-read)                 -> fill_model  (L0)
-  * **compute_body** = t(last Y-write) − t(first Y-write) = store_span   -> compute_model
-                     (row_setup·(n_row-1) + beat·bulk; the II=1 production span the store hides under)
+  * **bus occupancy = transfer beats == nwords** — asserted exact across the sweep (the load moves
+    ``read_words`` beats, the store ``write_words``).  Zero fit.
+  * **compute II=1** — ``n_rows*n_cols`` input samples.  Zero fit (``compute_beat_cyc = 1``).
+  * the load + store **serialize on the one ``gmem`` bundle in practice** (VCD: <10% burst
+    overlap), so per job the bus moves ``read_words + write_words`` beats — a structural
+    composition, not a fit.  (NB the bundle itself is full-duplex — ``sandbox/duplex_toy`` shows
+    read+write cosim ≈ max for both one process and two DATAFLOW processes — so this is the FIR's
+    dataflow-dynamics serialization, ~2× throughput headroom, not a bus limit.)
 
-both read straight out of ``fir_sweep.py``'s per-job VCD burst spans (``fill_cyc`` / ``store_span_cyc``).
-The models are :class:`~waveflow.calib.LinCalibModel`s (fir.py ``make_fill_model`` /
-``make_compute_model``); ``fit(corpus).save_model()`` drops the per-model artifacts
-(``fir_fill_model.json`` / ``fir_compute_model.json``) the sim loads.
+The **single calibrated residual** is ``beta`` — the m_axi sustained cyc/beat (the Vitis
+random-stall efficiency) — fit from ``period`` vs ``occupancy`` (slope = ``beta``, intercept =
+``bus_job_cyc``, the per-job address/command setup).  ``pipe_fill_cyc`` (the command stream-in +
+DATAFLOW fill/drain lead-in) is then set from the single-job-latency residual.  The end-to-end
+period/latency are **emergent** (the sim composes the components over the shared bus) and are
+*validated*, not fitted target-by-target — incl. a held-out size point.
 
-**Gate B** — the payoff of the two-level split: with the platform bus model + these compute fits
-(both fit in ISOLATION), the LOADED end-to-end period/latency must fall out of the sim with **zero
-end-to-end fitting**.  ``validate()`` runs the sim (which just loaded the fitted models) per size and
-compares to the cosim sweep's period + single-job latency, incl. a held-out size.
-
-Usage (project venv; reads results/cosim_sweep.json from ``fir_sweep.py --sweep``)::
+Usage (project venv; reads results/cosim_sweep.json from fir_sweep.py --sweep)::
 
     PYTHONPATH=../../.. ../../../pysilicon-venv/Scripts/python.exe fir_calibrate.py
 """
@@ -28,66 +31,61 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
 
-from waveflow.calib import CalibDataFrame                                   # noqa: E402
-from examples.rowwise_fir.fir import make_compute_model, make_fill_model   # noqa: E402
-from examples.rowwise_fir.fir_golden import T                              # noqa: E402
+from examples.rowwise_fir.fir_golden import T   # noqa: E402
 
 RESULTS = HERE / "results"
 SWEEP_JSON = RESULTS / "cosim_sweep.json"
-REPORT_JSON = RESULTS / "fir_calibration_report.json"
+CALIB_JSON = RESULTS / "fir_calibration.json"
+
+COMPUTE_BEAT_CYC = 1.0          # II=1: one input sample per cycle (physical, not fitted)
 
 
-# --- corpus: per-point job-0 fill + compute_body (contention-free), in TIME (clk_period folded) --
+def _occ(pt: dict) -> int:
+    j0 = pt["per_job"][0]
+    return j0["load_words"] + j0["store_words"]
 
-def corpus(points: list[dict]) -> CalibDataFrame:
-    db = CalibDataFrame(["n_row", "n_col", "clk_period", "fill_time", "compute_time",
-                         "fill_cyc", "compute_cyc"])
+
+def assert_occupancy_deterministic(points: list[dict]) -> None:
+    """The component check: every transfer's beats == nwords (the deterministic occupancy)."""
     for p in points:
         j0 = p["per_job"][0]
-        if j0.get("fill_cyc") is None or j0.get("compute_cyc") is None:
-            continue
-        cp = float(p["clk_ns"]) * 1e-9
-        db.add_datapoint({"n_row": p["n_row"], "n_col": p["n_col"], "clk_period": cp,
-                          "fill_time": j0["fill_cyc"] * cp, "compute_time": j0["compute_cyc"] * cp,
-                          "fill_cyc": j0["fill_cyc"], "compute_cyc": j0["compute_cyc"]})
-    return db
+        if j0["load_words"] != p["read_words"] or j0["store_words"] != p["write_words"]:
+            raise AssertionError(
+                f"occupancy not deterministic at {p['n_row']}x{p['n_col']}: "
+                f"load {j0['load_words']} vs read {p['read_words']}, "
+                f"store {j0['store_words']} vs write {p['write_words']}")
 
 
 def fit(points: list[dict], holdout: tuple[int, int]) -> dict:
-    """Fit + save the two compute models on the (holdout-excluded) sweep; return a diagnostics dict."""
+    """Fit ``beta`` + ``bus_job_cyc`` from period-vs-occupancy, then ``pipe_fill_cyc`` from the
+    single-job-latency residual.  Excludes the holdout from the fit."""
     train = [p for p in points if (p["n_row"], p["n_col"]) != holdout]
-    db = corpus(train)
-    fill = make_fill_model().fit(db)
-    comp = make_compute_model().fit(db)
-    fill.save_model()
-    comp.save_model()
+    occ = np.array([_occ(p) for p in train], dtype=float)
+    per = np.array([p["period_cyc"] for p in train], dtype=float)
+    beta, bus_job = np.linalg.lstsq(np.vstack([occ, np.ones_like(occ)]).T, per, rcond=None)[0]
 
-    # per-point predicted vs actual (cycles), incl. the holdout (a genuine test)
-    def rows(model, tgt_cyc_key: str) -> list[dict]:
-        out = []
-        for p in points:
-            j0 = p["per_job"][0]
-            actual = j0.get(tgt_cyc_key)
-            if actual is None:
-                continue
-            cp = float(p["clk_ns"]) * 1e-9
-            pred_cyc = model.predict({"n_row": p["n_row"], "n_col": p["n_col"], "clk_period": cp}) / cp
-            out.append({"point": [p["n_row"], p["n_col"]], "held_out": (p["n_row"], p["n_col"]) == holdout,
-                        "pred": round(pred_cyc, 1), "actual": round(actual, 1),
-                        "rel_err": round(abs(pred_cyc - actual) / actual, 4) if actual else None})
-        return out
-
-    return {"fill_coeffs": fill.coeffs, "compute_coeffs": comp.coeffs,
-            "fill": rows(fill, "fill_cyc"), "compute": rows(comp, "compute_cyc")}
+    # pipe_fill: mean( L1 - [read*beta + bus_job + n_rows*n_cols*compute_beat + write*beta] )
+    resid = []
+    for p in train:
+        rw = p["read_words"] * beta + bus_job + p["write_words"] * beta
+        comp = p["n_row"] * p["n_col"] * COMPUTE_BEAT_CYC
+        resid.append(p["single_job_latency_cyc"] - (rw + comp))
+    pipe_fill = float(np.mean(resid))
+    return {"bus_beat_cyc": round(float(beta), 4), "bus_job_cyc": round(float(bus_job), 2),
+            "compute_beat_cyc": COMPUTE_BEAT_CYC, "pipe_fill_cyc": round(pipe_fill, 2)}
 
 
-# --- Gate B: the emergent loaded sim (having just loaded the fitted models) vs the cosim sweep ----
+# --- emergent validation (run the actual sim with the fitted params) -----------
 
 def _sim_period(nr: int, nc: int, n_jobs: int = 4) -> float:
+    """Steady per-job period from the sim: a mid (fully-contended) inter-job store-end spacing
+    (NOT the final spacing, which is the pipeline drain)."""
     from examples.rowwise_fir.fir_sim import FIRSim, make_specs
     sim = FIRSim(make_specs([(nr, nc)] * n_jobs, seed=0))
     sim.run()
@@ -98,6 +96,7 @@ def _sim_period(nr: int, nc: int, n_jobs: int = 4) -> float:
 
 
 def _sim_latency(nr: int, nc: int) -> float:
+    """Single-job latency from the sim: store_end − cmd_arrive (no inter-job store contention)."""
     from examples.rowwise_fir.fir_sim import FIRSim, make_specs
     sim = FIRSim(make_specs([(nr, nc)], seed=0))
     sim.run()
@@ -109,57 +108,64 @@ def _sim_latency(nr: int, nc: int) -> float:
 
 
 def validate(points: list[dict], holdout: tuple[int, int]) -> dict:
+    """Gate B — the **emergent** sim (with the fitted params just written) vs the cosim sweep,
+    per size, including the held-out point.  No extra Vitis."""
     rows = []
     for p in points:
         nr, nc = p["n_row"], p["n_col"]
-        if p.get("period_cyc") is None or p.get("single_job_latency_cyc") is None:
-            continue
         sp, sl = _sim_period(nr, nc), _sim_latency(nr, nc)
-        rows.append({"point": [nr, nc], "held_out": (nr, nc) == holdout,
-                     "period": {"sim": round(sp, 1), "cosim": p["period_cyc"],
-                                "rel_err": round(abs(sp - p["period_cyc"]) / p["period_cyc"], 4)},
-                     "latency": {"sim": round(sl, 1), "cosim": p["single_job_latency_cyc"],
-                                 "rel_err": round(abs(sl - p["single_job_latency_cyc"])
-                                                  / p["single_job_latency_cyc"], 4)}})
-    return {"per_point": rows,
+        rec = {"point": [nr, nc], "held_out": (nr, nc) == holdout,
+               "occupancy": _occ(p),
+               "period": {"sim": round(sp, 1), "cosim": p["period_cyc"],
+                          "rel_err": round(abs(sp - p["period_cyc"]) / p["period_cyc"], 4)},
+               "latency": {"sim": round(sl, 1), "cosim": p["single_job_latency_cyc"],
+                           "rel_err": round(abs(sl - p["single_job_latency_cyc"])
+                                            / p["single_job_latency_cyc"], 4)}}
+        rows.append(rec)
+    amortized = [r for r in rows if r["occupancy"] >= 128]   # the throughput regime
+    ho = next(r for r in rows if r["held_out"])
+    return {"per_point": rows, "holdout": ho,
             "worst_period_rel_err": round(max(r["period"]["rel_err"] for r in rows), 4),
-            "worst_latency_rel_err": round(max(r["latency"]["rel_err"] for r in rows), 4)}
-
-
-def _print_fit(diag: dict) -> None:
-    print(f"fill_model coeffs   : {diag['fill_coeffs']}")
-    print(f"compute_model coeffs: {diag['compute_coeffs']}")
-    for name in ("fill", "compute"):
-        print(f"\n  {name}: pred vs actual (cyc)   [* = held out]")
-        for r in diag[name]:
-            star = " *" if r["held_out"] else ""
-            print(f"    {str(r['point']):>10}  pred={r['pred']:>7}  actual={r['actual']:>7}  "
-                  f"rel_err={r['rel_err']}{star}")
+            "worst_latency_rel_err": round(max(r["latency"]["rel_err"] for r in rows), 4),
+            "worst_period_rel_err_amortized": round(max(r["period"]["rel_err"] for r in amortized), 4),
+            "worst_latency_rel_err_amortized": round(max(r["latency"]["rel_err"] for r in amortized), 4)}
 
 
 def main() -> None:
     data = json.loads(SWEEP_JSON.read_text(encoding="utf-8"))
     points = data["points"]
     holdout = tuple(data["holdout"])
+    assert_occupancy_deterministic(points)
+    print("occupancy deterministic (beats == nwords): OK for all "
+          f"{len(points)} points")
 
-    diag = fit(points, holdout)
-    print("=== compute-model fit (contention-free per-job fill + store_span) ===")
-    _print_fit(diag)
+    params = fit(points, holdout)
+    print(f"fitted: {params}")
 
-    val = validate(points, holdout)
-    report = {"T": T, "clk_ns": points[0]["clk_ns"], "njobs": data["njobs"],
-              "holdout": list(holdout), "fit": diag, "gate_b": val}
-    REPORT_JSON.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    calib = {
+        "model": "occupancy-based, near-fit-free: bus occupancy = beats == nwords (exact); "
+                 "compute II=1 (exact); FIR serializes load+store on the shared gmem bundle "
+                 "(VCD <10% overlap; bundle is full-duplex per duplex_toy -> ~2x headroom), so "
+                 "read+write occupancy ADD; single residual beta = m_axi sustained cyc/beat "
+                 "(period vs occupancy); end-to-end period/latency EMERGENT, validated not fitted.",
+        "T": T, "clk_ns": data["points"][0]["clk_ns"], "njobs": data["njobs"],
+        "holdout": list(holdout), "model_params": params,
+        "occupancy_deterministic": True,
+    }
+    # write params first so the sim (FIRTiming.from_calibration) picks them up for validation
+    CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
+    calib["validation"] = validate(points, holdout)
+    CALIB_JSON.write_text(json.dumps(calib, indent=2) + "\n", encoding="utf-8")
 
-    print("\n=== Gate B (loaded sim with the fitted models vs cosim) ===")
-    print(f"worst period  rel_err: {val['worst_period_rel_err']*100:.1f}%")
-    print(f"worst latency rel_err: {val['worst_latency_rel_err']*100:.1f}%")
-    for r in val["per_point"]:
-        star = " *held-out" if r["held_out"] else ""
-        print(f"  {str(r['point']):>10}  period sim={r['period']['sim']:>7} cosim={r['period']['cosim']:>7}"
-              f" ({r['period']['rel_err']*100:.1f}%)   lat sim={r['latency']['sim']:>7}"
-              f" cosim={r['latency']['cosim']:>7} ({r['latency']['rel_err']*100:.1f}%){star}")
-    print(f"\nwrote {REPORT_JSON}")
+    v = calib["validation"]
+    print("\n=== Gate B (emergent sim with fitted params vs cosim) ===")
+    print(f"worst period   rel_err: all {v['worst_period_rel_err']*100:.1f}%  "
+          f"amortized {v['worst_period_rel_err_amortized']*100:.1f}%")
+    print(f"worst latency  rel_err: all {v['worst_latency_rel_err']*100:.1f}%  "
+          f"amortized {v['worst_latency_rel_err_amortized']*100:.1f}%")
+    print(f"holdout {v['holdout']['point']}: period {v['holdout']['period']}, "
+          f"latency {v['holdout']['latency']}")
+    print(f"\nwrote {CALIB_JSON}")
 
 
 if __name__ == "__main__":

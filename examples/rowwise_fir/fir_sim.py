@@ -52,15 +52,8 @@ from examples.rowwise_fir.fir_golden import fir_golden  # noqa: E402
 # TODO: promote this to a dedicated bus-calibration example teaching (a) characterize a bus from a
 # pure copy kernel, (b) calibrate a kernel against a known bus model.  Kept here (as documented
 # platform constants) for now — a full new example is out of scope.
-#
-# MEASURED by bus_characterize.py (results/bus_char.json): the single-burst (<=256-word) per-
-# direction channel occupancy is ~= nwords, dead clean -> setup~=0, per_word~=1 for read AND write.
-# (The multi-burst N=512 point is a copy-kernel store-starves-for-load pacing artifact, NOT a bus
-# gap, so it's excluded from the fit.)  Gate B (loaded FIR vs cosim) validates these + the
-# full-duplex assumption; if it shows a systematic offset, the ~8-16 cyc/job of address latency
-# hinted by the steady period is the first thing to add back.
-BUS_SETUP_CYC = 0.0       # per-burst address latency: ~0 measured (single-burst, this cosim's m_axi)
-BUS_PER_WORD_CYC = 1.0    # beats/cycle for a healthy II=1 full-width burst (measured ~1)
+BUS_SETUP_CYC = 22.0      # AR/AW -> first-data address latency, per burst (from loadstore_iso)
+BUS_PER_WORD_CYC = 1.0    # beats/cycle for a healthy II=1 full-width burst
 
 
 @dataclass(frozen=True)

@@ -40,8 +40,7 @@ def _attr(bursts, lo_w, hi_w):
         return None
     t0 = min(float(b.get("data_tstart", b["tstart"])) for b in sel)
     t1 = max(float(b["data_tend"]) for b in sel)
-    t_ar = min(float(b["tstart"]) for b in sel)   # address-issue (AR/AW) start
-    return t0, t1, t_ar, sum(_beats(b) for b in sel)
+    return t0, t1, sum(_beats(b) for b in sel)
 
 
 def run(n: int, nj: int) -> dict:
@@ -76,10 +75,7 @@ def run(n: int, nj: int) -> dict:
         wr = _attr(wbursts, yoff, yoff + n)
         jobs.append({"j": j,
                      "load": (rd[0] / clk_ns, rd[1] / clk_ns) if rd else None,
-                     "store": (wr[0] / clk_ns, wr[1] / clk_ns) if wr else None,
-                     # channel OCCUPANCY per job = AR/AW-issue -> last data (setup + beats), cyc
-                     "load_occ": (rd[1] - rd[2]) / clk_ns if rd else None,
-                     "store_occ": (wr[1] - wr[2]) / clk_ns if wr else None})
+                     "store": (wr[0] / clk_ns, wr[1] / clk_ns) if wr else None})
 
     # overlap of load(N) read window with store(N-1) write window (cycles), and steady period
     overlaps, store_ends = [], []
