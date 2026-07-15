@@ -590,3 +590,127 @@ def test_write_status_json_filter_emits_debug_log():
         "expected at least one debug log mentioning the dropped ap_done "
         f"field; got: {[r.getMessage() for r in records]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 — the extractor accepts a yielding (process-form) main().
+#
+# A single-process ``SeqTB.main()`` may ``yield`` to model timing, using the
+# process forms ``run_once_sim`` / ``write`` / ``get``.  Those forms lower to
+# the SAME C++ the synchronous ``run_once`` / ``push`` / ``pop`` forms emit —
+# the equivalence proof below diffs a yielding rewrite against its synchronous
+# twin byte-for-byte.
+# ---------------------------------------------------------------------------
+
+from examples.regmap.simp_fun import SimpFunComponent, SimpFunTBHls  # noqa: E402
+from examples.stream_inband.poly import (  # noqa: E402
+    PolyAccelComponent as _PolyAccel,
+    PolyCmdHdr as _PolyCmdHdr,
+    PolyRespHdr as _PolyRespHdr,
+    PolyTBHls as _PolyTBHls,
+    SampArray as _SampArray,
+)
+
+
+@dataclass
+class _SimpFunTBProc(SeqTB):
+    """Yielding rewrite of :class:`SimpFunTBHls`: a stripped
+    ``yield self.timeout(...)`` (op 1) and a captured
+    ``y = yield from dut.run_once_sim(...)`` (op 2) in place of the synchronous
+    ``dut.run_once(...)``."""
+
+    cpp_kernel_name: ClassVar[str | None] = "simp_fun"
+
+    def main(self):  # type: ignore[override]
+        dut = SimpFunComponent()
+        dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
+        dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
+        dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
+        yield self.timeout(4)
+        # `y` captures the kernel's output field — the point of op 2.  It is
+        # deliberately unused here (this TB reads outputs via write_status_json);
+        # the capture must lower to no extra C++ to stay byte-identical.
+        y = yield from dut.run_once_sim(  # noqa: F841
+            dut.regmap.get("x"), dut.regmap.get("a"), dut.regmap.get("b"))
+        dut.regmap.write_status_json(
+            self.data_dir + "/regmap_status.json",
+            fields=["ap_done", "y"],
+        )
+
+
+@dataclass
+class _PolyTBProc(SeqTB):
+    """Yielding rewrite of :class:`PolyTBHls` exercising the stream process
+    forms (op 3): ``yield from ep.write(...)`` for the input pushes and
+    ``x = yield from ep.get(Schema[, count=...])`` for the output pops."""
+
+    cpp_kernel_name: ClassVar[str | None] = "poly"
+
+    def main(self):  # type: ignore[override]
+        dut = _PolyAccel()
+        dut.regmap.read_uint32_file_array(
+            "coeffs", self.data_dir + "/coeffs.bin", count=4)
+        data_hdr = _PolyCmdHdr()
+        data_hdr.read_uint32_file(self.data_dir + "/data_cmd_hdr.bin")
+        samp_in = _SampArray()
+        samp_in.read_uint32_file_array(
+            self.data_dir + "/samp_in_data.bin", count=data_hdr.nsamp)
+        end_hdr = _PolyCmdHdr()
+        end_hdr.read_uint32_file(self.data_dir + "/end_cmd_hdr.bin")
+
+        yield from dut.s_in.write(data_hdr)
+        yield from dut.s_in.write(samp_in, count=data_hdr.nsamp)
+        yield from dut.s_in.write(end_hdr)
+
+        dut.run()
+
+        resp_hdr = yield from dut.m_out.get(_PolyRespHdr)
+        samp_out = yield from dut.m_out.get(_SampArray, count=data_hdr.nsamp)
+
+        resp_hdr.write_uint32_file(self.data_dir + "/resp_hdr_data.bin")
+        samp_out.write_uint32_file_array(
+            self.data_dir + "/samp_out_data.bin", count=data_hdr.nsamp)
+
+        dut.regmap.write_status_json(
+            self.data_dir + "/regmap_status.json",
+            fields=["halted", "error", "tx_id"])
+
+
+def test_run_once_sim_capture_equals_run_once_byte_for_byte():
+    """Op 2: ``[y =] yield from dut.run_once_sim(...)`` (plus a stripped
+    ``yield self.timeout(...)``) lowers to the exact same ``*_tb.cpp`` as the
+    synchronous ``dut.run_once(...)`` twin."""
+    from waveflow.build.hwgen import tb_files_to_str
+    proc = tb_files_to_str(_SimpFunTBProc)
+    sync = tb_files_to_str(SimpFunTBHls)
+    assert proc == sync
+
+
+def test_stream_write_get_equals_push_pop_byte_for_byte():
+    """Op 3: ``yield from ep.write(...)`` / ``x = yield from ep.get(...)`` lower
+    to the exact same ``*_tb.cpp`` as the synchronous ``ep.push`` / ``ep.pop``
+    twin (scalar and array forms)."""
+    from waveflow.build.hwgen import tb_files_to_str
+    proc = tb_files_to_str(_PolyTBProc)
+    sync = tb_files_to_str(_PolyTBHls)
+    assert proc == sync
+
+
+def test_timeout_yield_is_stripped():
+    """Op 1: a bare ``yield self.timeout(...)`` (a @sim_only latency model)
+    carries no hardware meaning and is stripped in testbench mode — the emitted
+    C++ contains no trace of it."""
+    from waveflow.build.hwgen import tb_files_to_str
+    body = tb_files_to_str(_SimpFunTBProc)["simp_fun_tb.cpp"]
+    assert "timeout" not in body
+
+
+def test_run_once_sim_and_run_once_lower_identically():
+    """The IR-level guarantee behind op 2: both invocation forms emit the same
+    kernel call statement."""
+    from waveflow.build.hwgen import tb_files_to_str
+    assert (
+        tb_files_to_str(_SimpFunTBProc)["simp_fun_tb.cpp"]
+        == tb_files_to_str(SimpFunTBHls)["simp_fun_tb.cpp"]
+    )
+    assert "simp_fun(x, a, b, y);" in tb_files_to_str(_SimpFunTBProc)["simp_fun_tb.cpp"]

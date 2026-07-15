@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from waveflow.hw.synth import sim_only
 from waveflow.named import NamedObject
 
 
@@ -67,6 +68,24 @@ class SeqTB(NamedObject):
         """Sequential testbench body. Subclasses override this."""
         raise NotImplementedError(
             f"{type(self).__name__} must override main()."
+        )
+
+    @sim_only
+    def timeout(self, delay: float) -> object:
+        """Advance simulated time by *delay* — a clock model for a yielding
+        ``main()`` (``yield self.timeout(...)``).
+
+        Marked ``@sim_only``: C-sim is untimed, so the extractor **strips** a
+        bare ``yield self.timeout(...)`` (it carries no hardware meaning), the
+        same way it strips a ``@sim_only`` call in ``on_start``/``run_proc``.
+        Codegen never executes this stub.  Making a single-process ``SeqTB``
+        actually *run* this in SimPy (so the yields advance a real clock) is the
+        Stage-2 follow-on; until then it fails loud if invoked.
+        """
+        raise NotImplementedError(
+            "SeqTB.timeout is codegen-only in v1 (the extractor strips "
+            "`yield self.timeout(...)`); a runnable single-process SeqTB is a "
+            "follow-on (Stage 2)."
         )
 
 

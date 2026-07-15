@@ -233,6 +233,36 @@ class HwStmtExtractor:
         the kernel-mode handler (for stmts that have identical semantics in
         both modes, e.g. ``return``, ``if``, bare docstring constants).
         """
+        # Process (yielding) forms of TB ops.  A single-process ``SeqTB.main()``
+        # may ``yield`` to model timing; those yields carry no C-sim meaning, so
+        # a ``yield from`` of a TB call lowers to the SAME IR as its synchronous
+        # twin (byte-identical C++):
+        #   ``[y =] yield from dut.run_once_sim(...)`` == ``dut.run_once(...)``
+        #   ``yield from ep.write(data)``             == ``ep.push(data)``
+        #   ``x = yield from ep.get(Schema[, count])``== ``ep.pop(x)``
+        # A bare ``yield self.timeout(...)`` (a @sim_only latency model) is
+        # stripped by the shared kernel-mode handler (`_visit_expr_stmt`), which
+        # this method deliberately falls through to.
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.YieldFrom):
+            inner = stmt.value.value
+            if isinstance(inner, ast.Call):
+                result = self._visit_tb_yield_from(inner, [], stmt)
+                if result is not None:
+                    return result
+        if (
+            isinstance(stmt, (ast.Assign, ast.AnnAssign))
+            and isinstance(stmt.value, ast.YieldFrom)
+            and isinstance(stmt.value.value, ast.Call)
+        ):
+            targets = (
+                list(stmt.targets)
+                if isinstance(stmt, ast.Assign)
+                else [stmt.target]
+            )
+            result = self._visit_tb_yield_from(stmt.value.value, targets, stmt)
+            if result is not None:
+                return result
+
         # `name = <ClassRef>(**kwargs)` — DUT / schema / MemComponent binding,
         # or `name = <mem>.read_array(...)` — m_axi read-back.
         if (
@@ -371,6 +401,67 @@ class HwStmtExtractor:
                 parent=parent,
             )
 
+        return None
+
+    def _visit_tb_yield_from(
+        self,
+        call: ast.Call,
+        targets: list[ast.expr],
+        parent: ast.stmt,
+    ) -> HwStmt | None:
+        """Lower the *process* (yielding) form of a TB op to the SAME IR as its
+        synchronous twin.
+
+        Handles ``[y =] yield from dut.run_once_sim(...)`` (a
+        :class:`KernelCallStmt`, identical to ``dut.run_once(...)``, plus an
+        optional return-capture) and ``yield from ep.write(data)`` /
+        ``x = yield from ep.get(Schema[, count=...])`` (a
+        :class:`TbStreamIOStmt`, identical to ``ep.push``/``ep.pop``).  Returns
+        ``None`` if *call* is not a recognized TB process op, so the caller can
+        fall through to the kernel-mode handlers.
+        """
+        if not isinstance(call.func, ast.Attribute):
+            return None
+        attr = call.func.attr
+        receiver = call.func.value
+
+        # `[y =] yield from dut.run_once_sim(...)` — the sim-driven invocation.
+        # Lowers 1:1 to the same kernel call as `dut.run_once(...)` (Phase 5b):
+        # the positional args reference the input regmap fields by name/access,
+        # and the return (if captured) binds to the DUT's *output* fields — an
+        # alias that emits no C++ (the out-param locals are already declared by
+        # the DutBindStmt and passed by the kernel call), so run_once and
+        # run_once_sim are byte-identical.
+        if (
+            attr == 'run_once_sim'
+            and isinstance(receiver, ast.Name)
+            and receiver.id in self._duts
+        ):
+            if call.keywords:
+                raise SynthesisError(
+                    f"dut.run_once_sim() takes only positional field args "
+                    f"(line {parent.lineno})"
+                )
+            self._validate_run_once_args(receiver.id, call.args, parent)
+            self._bind_run_once_outputs(receiver.id, targets, parent)
+            return KernelCallStmt(local_name=receiver.id, mem_local=None)
+
+        # `yield from dut.<ep>.write(...)` / `x = yield from dut.<ep>.get(...)`
+        # — the process forms of push/pop.
+        if (
+            attr in ('write', 'get')
+            and isinstance(receiver, ast.Attribute)
+            and isinstance(receiver.value, ast.Name)
+            and receiver.value.id in self._duts
+        ):
+            return self._make_stream_proc_stmt(
+                dut_local=receiver.value.id,
+                endpoint_attr=receiver.attr,
+                method_attr=attr,
+                call=call,
+                targets=targets,
+                parent=parent,
+            )
         return None
 
     # ------------------------------------------------------------------
@@ -831,6 +922,160 @@ class HwStmtExtractor:
                     f"position is '{field}' — args must match the input fields in declaration order "
                     f"(line {parent.lineno})"
                 )
+
+    def _dut_output_fields(self, dut_local: str) -> list[tuple[str, object]]:
+        """Return the DUT's *output* regmap fields — ``R`` access, non
+        ``is_vitis_auto`` — as ``(name, schema)`` in declaration order.
+
+        These are the fields the C++ kernel carries as out-params and the
+        return value of :meth:`~waveflow.hw.hw_hostactivated.HostActivated.run_once_sim`.
+        """
+        from waveflow.hw.regmap import RegAccess
+
+        regmap = self._dut_regmap_or_none(dut_local)
+        if regmap is None:
+            return []
+        return [
+            (name, fld.schema)
+            for name, fld in regmap._fields.items()
+            if not fld.is_vitis_auto and fld.access is RegAccess.R
+        ]
+
+    def _capture_target_names(
+        self, targets: list[ast.expr], parent: ast.stmt,
+    ) -> list[str]:
+        """Flatten assignment targets (a single ``Name`` or a ``Tuple`` of
+        ``Name``s) to a list of local names.  Raises on any other shape."""
+        names: list[str] = []
+        for t in targets:
+            if isinstance(t, ast.Name):
+                names.append(t.id)
+            elif isinstance(t, ast.Tuple):
+                for elt in t.elts:
+                    if not isinstance(elt, ast.Name):
+                        raise SynthesisError(
+                            f"run_once_sim() return must be captured into plain "
+                            f"local names (line {parent.lineno})"
+                        )
+                    names.append(elt.id)
+            else:
+                raise SynthesisError(
+                    f"run_once_sim() return must be captured into a local name "
+                    f"(line {parent.lineno})"
+                )
+        return names
+
+    def _bind_run_once_outputs(
+        self, dut_local: str, targets: list[ast.expr], parent: ast.stmt,
+    ) -> None:
+        """Bind the capture targets of ``y = yield from dut.run_once_sim(...)``
+        to the DUT's output regmap fields (in declaration order).
+
+        Emits **no** C++: the output-field locals are already declared by the
+        ``DutBindStmt`` and passed as out-params in the kernel call, so
+        capturing the return only makes the name available to later statements.
+        This is what keeps ``run_once`` and ``run_once_sim`` byte-identical.
+        """
+        if not targets:
+            return
+        names = self._capture_target_names(targets, parent)
+        outputs = self._dut_output_fields(dut_local)
+        if len(names) != len(outputs):
+            raise SynthesisError(
+                f"run_once_sim() on '{dut_local}' returns {len(outputs)} output "
+                f"field(s) {[n for n, _ in outputs]}, but {len(names)} capture "
+                f"target(s) {names} were given (line {parent.lineno})"
+            )
+        for local_name, (_fname, schema) in zip(names, outputs):
+            self._tb_locals[local_name] = schema
+
+    def _make_stream_proc_stmt(
+        self,
+        dut_local: str,
+        endpoint_attr: str,
+        method_attr: str,
+        call: ast.Call,
+        targets: list[ast.expr],
+        parent: ast.stmt,
+    ) -> HwStmt:
+        """Lower ``ep.write(...)`` / ``ep.get(...)`` (the process forms) to the
+        SAME IR as ``ep.push(...)`` / ``ep.pop(...)``.
+
+        ``write``/``get`` distinguish scalar vs array by the presence of a
+        ``count=`` keyword (``push`` vs ``push_array``); ``get`` supplies the
+        output *schema class* as its first positional arg, so it expands to a
+        declaration (the ``SchemaBindStmt`` a synchronous ``pop`` gets from a
+        prior ``x = Schema()``) plus the pop itself.
+        """
+        from waveflow.hw.dataschema import DataSchema
+
+        has_count = any(kw.arg == 'count' for kw in call.keywords)
+        if method_attr == 'get':
+            if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+                raise SynthesisError(
+                    f"ep.get(...) return must be captured into a single local "
+                    f"(line {parent.lineno})"
+                )
+            local_name = targets[0].id
+            if not call.args:
+                raise SynthesisError(
+                    f"ep.get(Schema, ...) requires a schema-class argument "
+                    f"(line {parent.lineno})"
+                )
+            cls = self._resolve_tb_class(call.args[0])
+            if not (isinstance(cls, type) and issubclass(cls, DataSchema)):
+                raise SynthesisError(
+                    f"ep.get(...) first arg must be a DataSchema subclass "
+                    f"(line {parent.lineno})"
+                )
+            count = (
+                self._extract_count_kwarg(call, 'get', parent)
+                if has_count else None
+            )
+            # Register + declare the output local (mirrors `x = Schema()`), then
+            # pop into it — two IR statements, emitted inline (a SeqStmt joins
+            # with '\n', no extra scope), byte-identical to the pop twin.
+            self._tb_locals[local_name] = cls
+            bind = SchemaBindStmt(local_name=local_name, schema_class=cls)
+            io = TbStreamIOStmt(
+                dut_local=dut_local,
+                endpoint_attr=endpoint_attr,
+                value_local=local_name,
+                is_pop=True,
+                is_array=has_count,
+                count=count,
+            )
+            return SeqStmt(stmts=[bind, io])
+
+        # method_attr == 'write'
+        if targets:
+            raise SynthesisError(
+                f"ep.write(...) does not return a value to capture "
+                f"(line {parent.lineno})"
+            )
+        if not call.args or not isinstance(call.args[0], ast.Name):
+            raise SynthesisError(
+                f"ep.write(value) value must be a local-name reference "
+                f"(line {parent.lineno})"
+            )
+        value_local = call.args[0].id
+        if value_local not in self._tb_locals:
+            raise SynthesisError(
+                f"ep.write({value_local}, ...) — '{value_local}' is not a bound "
+                f"schema local (line {parent.lineno})"
+            )
+        count = (
+            self._extract_count_kwarg(call, 'write', parent)
+            if has_count else None
+        )
+        return TbStreamIOStmt(
+            dut_local=dut_local,
+            endpoint_attr=endpoint_attr,
+            value_local=value_local,
+            is_pop=False,
+            is_array=has_count,
+            count=count,
+        )
 
     def _extract_count_kwarg(
         self,
