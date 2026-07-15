@@ -359,10 +359,10 @@ def test_function_stmt_with_typed_output():
         inputs=[HwVar(name='cmd', typ=None)],
         outputs=[HwVar(name='err', typ=DemoError)],
     )
-    # _ctx() uses bare HwComponent → resolved_namespace == "hw".
+    # _ctx() uses bare HwComponent → cpp_kernel_name "hw" -> namespace "hw_impl".
     # IntEnum return types render as ap_uint<8> to match what the hook
     # forward decl actually returns (cpp_type maps IntEnum → ap_uint<8>).
-    assert to_cpp(stmt, _ctx()) == "    ap_uint<8> err = hw::process(cmd);"
+    assert to_cpp(stmt, _ctx()) == "    ap_uint<8> err = hw_impl::process(cmd);"
 
 
 def test_function_stmt_no_outputs():
@@ -372,7 +372,7 @@ def test_function_stmt_no_outputs():
         inputs=[HwVar(name='cmd', typ=None)],
         outputs=[],
     )
-    assert to_cpp(stmt, _ctx()) == "    hw::process(cmd);"
+    assert to_cpp(stmt, _ctx()) == "    hw_impl::process(cmd);"
 
 
 def test_function_stmt_with_endpoint_arg():
@@ -390,7 +390,7 @@ def test_function_stmt_with_endpoint_arg():
         inputs=[HwVar(name='cmd', typ=None), s_in, m_out],
         outputs=[],
     )
-    assert to_cpp(stmt, ctx) == "    hw::process(cmd, s_in, m_out);"
+    assert to_cpp(stmt, ctx) == "    hw_impl::process(cmd, s_in, m_out);"
 
 
 def test_function_stmt_opt_out_no_qualifier():
@@ -544,10 +544,20 @@ def test_cpp_kernel_name_override():
 # Namespace Phase 1: resolved_namespace
 # ---------------------------------------------------------------------------
 
-def test_resolved_namespace_default_uses_kernel_name():
-    from waveflow.build.hwgen import resolved_namespace
+def test_resolved_namespace_default_is_kernel_name_plus_impl():
+    """The default must DERIVE from the kernel name without EQUALLING it.
+
+    A namespace and a function cannot share a name in the same scope — emitting
+    `void demo(...)` beside `namespace demo {...}` is ill-formed C++ ("redeclared as
+    different kind of entity").  This test previously asserted the namespace WAS the
+    kernel name, which pinned exactly that bug; it went unnoticed because every
+    hook-emitting component overrides `cpp_namespace` by hand, so the default had never
+    been used with a hook.
+    """
+    from waveflow.build.hwgen import cpp_kernel_name, resolved_namespace
     from tests.hw.test_resolve import DemoComponent
-    assert resolved_namespace(DemoComponent) == "demo"
+    assert resolved_namespace(DemoComponent) == "demo_impl"
+    assert resolved_namespace(DemoComponent) != cpp_kernel_name(DemoComponent)
 
 
 def test_resolved_namespace_explicit_string():
@@ -574,8 +584,9 @@ def test_resolved_namespace_explicit_none_is_auto():
     class _NsAuto(HwComponent):
         cpp_namespace: ClassVar[str | None] = None
 
-    # Auto-derives from cpp_kernel_name; default of HwComponent name is "hw".
-    assert resolved_namespace(_NsAuto) == cpp_kernel_name_for(_NsAuto)
+    # Auto-derives from cpp_kernel_name (default of HwComponent name is "hw"), with
+    # `_impl` appended so the namespace cannot collide with the kernel function itself.
+    assert resolved_namespace(_NsAuto) == f"{cpp_kernel_name_for(_NsAuto)}_impl"
 
 
 def cpp_kernel_name_for(cls):
@@ -797,7 +808,7 @@ def test_header_to_cpp_demo_component_substrings():
         '#include "include/demo_cmd_hdr.h"',
         "void demo(",
         ");",  # forward decl terminator
-        "namespace demo {",
+        "namespace demo_impl {",
         "ap_uint<8> process(DemoCmdHdr cmd);",
     ]:
         assert sub in hpp, f"Missing substring: {sub!r}\n--- hpp ---\n{hpp}"
@@ -805,7 +816,7 @@ def test_header_to_cpp_demo_component_substrings():
     # Kernel decl must be outside (before) the namespace block;
     # the hook decl must be inside.
     kernel_idx = hpp.index("void demo(")
-    ns_idx = hpp.index("namespace demo {")
+    ns_idx = hpp.index("namespace demo_impl {")
     process_idx = hpp.index("ap_uint<8> process(DemoCmdHdr cmd);")
     assert kernel_idx < ns_idx < process_idx
 
@@ -905,7 +916,7 @@ def test_impl_stub_to_cpp_substrings():
     stub = impl_stub_to_cpp(comp, process)
     for sub in [
         '#include "demo.hpp"',
-        "namespace demo {",
+        "namespace demo_impl {",
         "ap_uint<8> process(DemoCmdHdr cmd) {",
         "// TODO: implement process",
         "return ap_uint<8>(0);",
@@ -1011,7 +1022,7 @@ def test_kernel_body_to_cpp_demo_component_contains_expected_substrings():
         "cmd.read_axi4_stream<32>(s_in);",
         "if (cmd.cmd_type == DemoCmdType::END)",
         "return;",
-        "ap_uint<8> err = demo::process(cmd",
+        "ap_uint<8> err = demo_impl::process(cmd",
         # err is ap_uint<8>; cast the enum literal so the != comparison compiles.
         "if (err != (ap_uint<8>)static_cast<unsigned int>(DemoError::OK))",
         "error = err;",
@@ -1202,7 +1213,7 @@ def test_header_to_cpp_non_templated_hook_no_tpp_include():
     # No tpp include for a non-templated hook.
     assert "_impl.tpp" not in hpp
     # No template prefix either.
-    assert "template <" not in hpp.split("namespace demo {")[1]
+    assert "template <" not in hpp.split("namespace demo_impl {")[1]
 
 
 def test_header_to_cpp_templated_hook_emits_template_and_tpp_include():
@@ -1246,7 +1257,7 @@ def test_impl_stub_to_tpp_substrings():
         "axi4s_word<in_bw>",
         "// TODO: implement process",
         "return ap_uint<8>(0);",
-        "namespace tcomp {",
+        "namespace tcomp_impl {",
     ]:
         assert sub in stub, f"Missing substring: {sub!r}\n--- stub ---\n{stub}"
 
