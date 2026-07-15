@@ -20,6 +20,9 @@ stream/``m_axi`` boundary makes it free-running (``ap_ctrl_none``).  So ``contro
 """
 from __future__ import annotations
 
+from typing import ClassVar
+
+from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.hw_component import HwComponent
 
 
@@ -31,6 +34,12 @@ class CompositeComp(HwComponent):
     walks).  They must **not** define ``run_iter`` — a composite has no body; its children do the work.
     That contract is enforced at class-definition time (:meth:`__init_subclass__`).
     """
+
+    #: The codegen targets that **exist for this kind** — a composite is the multi-task DUT of
+    #: Flows 2/3 (one ``hls::task`` per child + one channel per internal edge, ``ap_ctrl_none``).
+    #: Not implemented yet; see :class:`~waveflow.hw.hw_hostactivated.HostActivated` for why this is
+    #: ``potential_`` and not ``supported_``.
+    potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
     def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)

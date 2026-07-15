@@ -111,6 +111,23 @@ SystemC path (Flow 3), not C-simulation."*
 
 ## Stage 4 — the component-level contract
 
+### First: migrate the two un-migrated leaves (found by Stage 2)
+
+`HistAccel` and `BlockScaleComponent` are **plain `HwComponent`s with a `run_proc` body** — the
+"interim un-migrated leaf" that `codegen_dispatch` still handles via its regmap fallback. So
+`kernel_files_to_str` **works** for them while `check` **cannot answer**: that is *two of the four real
+kernels*, and it is a false negative, not a real verdict.
+
+Stage 2 makes `check` say this honestly (it names the migration and explicitly does not claim they
+won't generate — the caller can watch them generate). But the fix is to migrate them onto an
+execution-model class, and it belongs here because it is exactly the structural half of the contract.
+Note neither has an `on_start`, so this is not a rename: it is deciding what kind they actually are
+(their `run_proc` extracts today, which is the `FreeRunComp`-shaped path, but `run_iter` is the
+migrated spelling). Gate on byte-identical C++ — the dispatch already routes them to the same method,
+so a correct migration changes nothing.
+
+### The contract
+
 The thing the docs quote. Built on Stage 2:
 
 > A `HostActivated` synthesizes to a **standalone Vitis kernel** iff
