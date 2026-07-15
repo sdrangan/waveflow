@@ -11,7 +11,7 @@ RegField             — Dataclass declaring one field (schema, access, hooks)
 RegMap               — Ordered collection of RegFields with numpy word buffers
 RegMapAccessError    — Raised on access-mode violation or bad offset
 RegMapMMIFSlave      — MMIFSlave subclass dispatching to a RegMap
-VitisRegMap          — RegMap with auto-prepended ap_start at 0x00
+VitisRegMap          — RegMap mirroring Vitis's s_axilite control layout
 VitisRegMapMMIFSlave — RegMapMMIFSlave with Vitis kernel launch lifecycle
 Bit                  — IntField.specialize(bitwidth=1, signed=False)
 """
@@ -33,6 +33,9 @@ from waveflow.simulation.simobj import ProcessGen
 # Single-bit unsigned integer field alias.
 # Could become a real class in a future version.
 Bit: type[IntField] = IntField.specialize(bitwidth=1, signed=False)
+
+# One whole 32-bit bus word — the Vitis GIER/IER/ISR registers.
+Uint32Word: type[IntField] = IntField.specialize(bitwidth=32, signed=False)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +87,26 @@ class RegMapAccessError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _bit_width_of(schema: type[DataSchema]) -> int:
+    """Return the bit width of a scalar *schema*, for bit-packed fields.
+
+    Only schemas carrying an explicit ``bitwidth`` (``IntField`` and its
+    specializations, ``EnumField``, …) may be packed into a shared word.
+    """
+    width = getattr(schema, "bitwidth", None)
+    if not isinstance(width, int):
+        raise ValueError(
+            f"Schema {schema.__name__} has no integer 'bitwidth'; it cannot be "
+            "packed into a shared word (bit_offset=...)."
+        )
+    return width
+
+
+# ---------------------------------------------------------------------------
 # RegField — one field declaration
 # ---------------------------------------------------------------------------
 
@@ -100,6 +123,12 @@ class RegField:
     on_write:    Hook fired per-word after the backing store update
     on_read:     Hook fired per-word after reading the backing store
     offset:      Manual byte offset; None = auto-assign in declaration order
+    bit_offset:  Bit position of this field's LSB *within* the word at
+                 ``offset``.  ``None`` (default) = the field owns its word(s)
+                 exclusively.  When set, several fields share one word (as
+                 Vitis packs ap_start/ap_done/ap_idle/ap_ready into 0x00);
+                 ``offset`` must then be given explicitly and the schema must
+                 be a scalar with a ``bitwidth`` that fits in one bus word.
     """
 
     schema:      type[DataSchema]
@@ -108,6 +137,7 @@ class RegField:
     on_write:    Callable[[str, int, int], None] | None = None
     on_read:     Callable[[str, int, int], None] | None = None
     offset:      int | None = None
+    bit_offset:  int | None = None
     is_vitis_auto: bool = False   # True for fields Vitis auto-generates (ap_start, etc.)
                                   # — present in PySim but skipped in C++ codegen.
 
@@ -124,7 +154,18 @@ class RegMap:
     The backing store is word-aligned; each field's words are consecutive.
     Host-side access goes through write_word / read_word (called by
     RegMapMMIFSlave). Owner-side access goes through get / set.
+
+    A field declaring ``bit_offset`` is *packed*: it occupies a bit range of
+    the word at its ``offset`` and shares that word with other bit-fields.
+    Packed fields still get their own backing buffer holding the unshifted
+    value, so ``get`` / ``set`` are identical for packed and unpacked fields;
+    only the bus-level word composition differs.
     """
+
+    #: Byte offset spacing between successive auto-assigned fields.  The base
+    #: RegMap packs fields tightly (one word each); VitisRegMap overrides this
+    #: to reproduce Vitis's data-word + control-word stride.
+    _auto_start: int = 0
 
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None:
         self.bitwidth = bitwidth
@@ -146,23 +187,57 @@ class RegMap:
         # ------------------------------------------------------------------
         occupied: set[int] = set()
         self._offsets: dict[str, int] = {}
+        self._bit_offsets: dict[str, int] = {}
+        self._packed_words: dict[int, list[str]] = {}
 
-        # Pass 1: register manually-placed offsets and detect overlaps.
+        # Pass 1a: packed bit-fields.  Several may share one word, so overlap
+        # is checked per *bit* rather than per word.
+        bit_claimed: dict[int, int] = {}
         for name, f in fields.items():
-            if f.offset is not None:
-                nwords = f.schema.nwords_per_inst(bitwidth)
-                for k in range(nwords):
-                    pos = f.offset + k * word_bytes
-                    if pos in occupied:
-                        raise ValueError(
-                            f"Field '{name}' at offset 0x{f.offset:x} overlaps "
-                            f"with another field at byte 0x{pos:x}."
-                        )
-                    occupied.add(pos)
-                self._offsets[name] = f.offset
+            if f.bit_offset is None:
+                continue
+            if f.offset is None:
+                raise ValueError(
+                    f"Field '{name}' sets bit_offset={f.bit_offset} but no offset; "
+                    "packed fields must name the word they live in."
+                )
+            width = _bit_width_of(f.schema)
+            if f.bit_offset < 0 or f.bit_offset + width > bitwidth:
+                raise ValueError(
+                    f"Field '{name}': bits [{f.bit_offset}:{f.bit_offset + width - 1}] "
+                    f"do not fit in a {bitwidth}-bit word."
+                )
+            mask = ((1 << width) - 1) << f.bit_offset
+            if bit_claimed.get(f.offset, 0) & mask:
+                raise ValueError(
+                    f"Field '{name}' at offset 0x{f.offset:02x} bit {f.bit_offset} "
+                    "overlaps another packed field's bits."
+                )
+            bit_claimed[f.offset] = bit_claimed.get(f.offset, 0) | mask
+            self._offsets[name] = f.offset
+            self._bit_offsets[name] = f.bit_offset
+            self._packed_words.setdefault(f.offset, []).append(name)
+            occupied.add(f.offset)
+
+        # Pass 1b: manually-placed whole-word fields; detect overlaps (including
+        # against packed words, which pass 1a has already marked occupied).
+        for name, f in fields.items():
+            if f.offset is None or f.bit_offset is not None:
+                continue
+            nwords = f.schema.nwords_per_inst(bitwidth)
+            for k in range(nwords):
+                pos = f.offset + k * word_bytes
+                if pos in occupied:
+                    raise ValueError(
+                        f"Field '{name}' at offset 0x{f.offset:x} overlaps "
+                        f"with another field at byte 0x{pos:x}."
+                    )
+                occupied.add(pos)
+            self._offsets[name] = f.offset
 
         # Pass 2: auto-assign remaining fields in declaration order.
-        next_free = 0
+        next_free = self._auto_start
+        align = self._auto_align_bytes(word_bytes)
         for name, f in fields.items():
             if f.offset is not None:
                 continue
@@ -170,11 +245,11 @@ class RegMap:
             while not all(
                 (next_free + k * word_bytes) not in occupied for k in range(nwords)
             ):
-                next_free += word_bytes
+                next_free += align
             self._offsets[name] = next_free
             for k in range(nwords):
                 occupied.add(next_free + k * word_bytes)
-            next_free += nwords * word_bytes
+            next_free += self._auto_stride_bytes(nwords, word_bytes)
 
         # ------------------------------------------------------------------
         # Backing store — zero-initialised, one numpy array per field.
@@ -184,6 +259,21 @@ class RegMap:
             name: np.zeros(f.schema.nwords_per_inst(bitwidth), dtype=dtype)
             for name, f in fields.items()
         }
+
+    # ------------------------------------------------------------------
+    # Auto-placement policy (overridden by VitisRegMap)
+    # ------------------------------------------------------------------
+
+    def _auto_align_bytes(self, word_bytes: int) -> int:
+        """Granularity the auto-placer steps by when hunting for a free slot."""
+        return word_bytes
+
+    def _auto_stride_bytes(self, nwords: int, word_bytes: int) -> int:
+        """Bytes consumed by an auto-placed field of *nwords* words.
+
+        The base RegMap packs tightly: a field consumes exactly its own words.
+        """
+        return nwords * word_bytes
 
     # ------------------------------------------------------------------
     # Layout queries
@@ -199,6 +289,18 @@ class RegMap:
     def nwords_of(self, name: str) -> int:
         """Return the number of bus words occupied by field *name*."""
         return int(self._fields[name].schema.nwords_per_inst(self.bitwidth))
+
+    def bit_offset_of(self, name: str) -> int | None:
+        """Return the LSB bit position of packed field *name* within its word,
+        or ``None`` if the field owns its word(s) exclusively."""
+        if name not in self._fields:
+            raise KeyError(f"No field '{name}' in this RegMap.")
+        return self._bit_offsets.get(name)
+
+    def bit_fields_at_offset(self, byte_offset: int) -> list[str]:
+        """Return the packed field names sharing the word at *byte_offset*
+        (in declaration order), or ``[]`` if that word is not bit-packed."""
+        return list(self._packed_words.get(byte_offset, ()))
 
     def total_size_bytes(self) -> int:
         """Return the total byte span of this RegMap."""
@@ -278,9 +380,22 @@ class RegMap:
     # ------------------------------------------------------------------
 
     def field_name_at_offset(self, byte_offset: int) -> tuple[str, int]:
-        """Return (field_name, sub_word_index) for *byte_offset*, or raise."""
+        """Return (field_name, sub_word_index) for the whole-word field at
+        *byte_offset*, or raise.
+
+        ``sub_word_index`` is the index of this word *within a multi-word
+        field* — it is not a bit position.  Bit-packed words have no single
+        owning field, so they raise here; use :meth:`bit_fields_at_offset`.
+        """
+        if byte_offset in self._packed_words:
+            raise RegMapAccessError(
+                f"Byte offset 0x{byte_offset:x} is a bit-packed word shared by "
+                f"{self._packed_words[byte_offset]}; use bit_fields_at_offset()."
+            )
         word_bytes = self.bitwidth // 8
         for name, off in self._offsets.items():
+            if name in self._bit_offsets:
+                continue
             for k in range(self.nwords_of(name)):
                 if off + k * word_bytes == byte_offset:
                     return name, k
@@ -363,26 +478,60 @@ class BoundRegMap:
 
         Raw values are wrapped via ``schema(value)`` to match the kernel
         side's :meth:`RegMap.set` ergonomics.
+
+        A bit-packed field costs the same single word write as an unpacked
+        one: the word is composed with this field's bits in place and zeros
+        elsewhere — no read-modify-write.  That mirrors the hardware, where a
+        word write drives every writable bit of the word.
+
+        Consequence: if a packed word holds *several* writable fields, setting
+        one zeroes the others, exactly as it would on the bus.  A caller that
+        needs to preserve a neighbour must compose the word itself.  This does
+        not bite VitisRegMap's 0x00 control word, where ap_start is the only
+        writable bit and ap_done / ap_idle / ap_ready are read-only.
         """
         f = self._regmap._fields[name]
         if not isinstance(value, f.schema):
             value = f.schema(value)
         addr = self._base_addr + self._regmap.offset_of(name)
-        yield from self._master.write_schema(value, addr=addr)
+        lo = self._regmap.bit_offset_of(name)
+        if lo is None:
+            yield from self._master.write_schema(value, addr=addr)
+            return
+        width = _bit_width_of(f.schema)
+        words = value.serialize(word_bw=self._regmap.bitwidth)
+        raw = (int(words[0]) & ((1 << width) - 1)) << lo
+        yield from self._master.write_schema(self._word_schema()(raw), addr=addr)
 
     def get(self, name: str) -> ProcessGen[Any]:
-        """Read field ``name`` over the master bus and return a native value."""
+        """Read field ``name`` over the master bus and return a native value.
+
+        A bit-packed field costs one word read; its bits are extracted from
+        the shared word.
+        """
         f = self._regmap._fields[name]
         addr = self._base_addr + self._regmap.offset_of(name)
-        obj = yield from self._master.read_schema(f.schema, addr=addr)
+        lo = self._regmap.bit_offset_of(name)
+        if lo is None:
+            obj = yield from self._master.read_schema(f.schema, addr=addr)
+            return self._to_native(obj, f.schema)
+        word = yield from self._master.read_schema(self._word_schema(), addr=addr)
+        width = _bit_width_of(f.schema)
+        raw = (int(word.val) >> lo) & ((1 << width) - 1)
+        dtype = np.uint32 if self._regmap.bitwidth <= 32 else np.uint64
+        obj = f.schema().deserialize(
+            np.array([raw], dtype=dtype), word_bw=self._regmap.bitwidth
+        )
         return self._to_native(obj, f.schema)
+
+    def _word_schema(self) -> type[IntField]:
+        """Unsigned IntField spanning one whole bus word — used to move a
+        bit-packed field's containing word across the bus."""
+        return IntField.specialize(bitwidth=self._regmap.bitwidth, signed=False)
 
     def start(self) -> ProcessGen[None]:
         """Write 1 to ``ap_start`` (only valid on a :class:`VitisRegMap`)."""
-        yield from self._master.write_schema(
-            Bit(1),
-            addr=self._base_addr + self._regmap.offset_of("ap_start"),
-        )
+        yield from self.set("ap_start", 1)
 
     def poll_end(
         self,
@@ -469,13 +618,17 @@ class RegMapMMIFSlave(MMIFSlave):
         word_bytes = self.bitwidth // 8
         for i in range(len(words)):
             byte_addr = local_addr + i * word_bytes
+            raw_val = int(words[i])
+            packed = self.regmap.bit_fields_at_offset(byte_addr)
+            if packed:
+                self._write_packed_word(byte_addr, packed, raw_val)
+                continue
             name, sub_word = self.regmap.field_name_at_offset(byte_addr)
             f = self.regmap._fields[name]
             if f.access == RegAccess.R:
                 raise RegMapAccessError(
                     f"Host write to read-only field '{name}' at 0x{byte_addr:x}."
                 )
-            raw_val = int(words[i])
             # Update backing store (W1C masking applied inside write_word).
             self.regmap.write_word(name, sub_word, raw_val, source="host")
             # Hook fires after backing-store update, before W1S auto-clear.
@@ -486,6 +639,31 @@ class RegMapMMIFSlave(MMIFSlave):
                 self.regmap._buffers[name][sub_word] = 0
         yield self.timeout(0)
 
+    def _write_packed_word(
+        self, byte_addr: int, packed: list[str], raw_val: int
+    ) -> None:
+        """Decompose a host write to a bit-packed word.
+
+        Read-only bits *ignore* the write rather than raising: a packed word
+        mixes R and W bits, and the hardware slave likewise decodes only the
+        writable bits (e.g. Vitis's 0x00 latches ap_start from WDATA[0] and
+        drops the rest).  Raising would make it impossible to write ap_start
+        without also "writing" the read-only ap_done beside it.
+        """
+        for name in packed:
+            f = self.regmap._fields[name]
+            if f.access == RegAccess.R:
+                continue
+            lo = self.regmap.bit_offset_of(name)
+            assert lo is not None
+            width = _bit_width_of(f.schema)
+            bits = (raw_val >> lo) & ((1 << width) - 1)
+            self.regmap.write_word(name, 0, bits, source="host")
+            if f.on_write is not None:
+                f.on_write(name, 0, bits)
+            if f.access == RegAccess.W1S:
+                self.regmap._buffers[name][0] = 0
+
     def _rx_read(self, nwords: int, local_addr: int) -> ProcessGen[Words]:
         """Per-word read dispatch: validate access, read buffer, fire hooks."""
         word_bytes = self.bitwidth // 8
@@ -493,6 +671,10 @@ class RegMapMMIFSlave(MMIFSlave):
         result = np.zeros(nwords, dtype=dtype)
         for i in range(nwords):
             byte_addr = local_addr + i * word_bytes
+            packed = self.regmap.bit_fields_at_offset(byte_addr)
+            if packed:
+                result[i] = self._read_packed_word(packed)
+                continue
             name, sub_word = self.regmap.field_name_at_offset(byte_addr)
             f = self.regmap._fields[name]
             if f.access == RegAccess.W:
@@ -507,6 +689,26 @@ class RegMapMMIFSlave(MMIFSlave):
         yield self.timeout(0)
         return result  # type: ignore[return-value]
 
+    def _read_packed_word(self, packed: list[str]) -> int:
+        """Compose a bit-packed word from its constituent fields' buffers.
+
+        Write-only bits read back as 0 (the hardware drives no read data for
+        them) rather than raising — see :meth:`_write_packed_word`.
+        """
+        word_val = 0
+        for name in packed:
+            f = self.regmap._fields[name]
+            if f.access == RegAccess.W:
+                continue
+            lo = self.regmap.bit_offset_of(name)
+            assert lo is not None
+            width = _bit_width_of(f.schema)
+            bits = self.regmap.read_word(name, 0)
+            if f.on_read is not None:
+                f.on_read(name, 0, bits)
+            word_val |= (bits & ((1 << width) - 1)) << lo
+        return word_val
+
 
 # ---------------------------------------------------------------------------
 # VitisRegMap — RegMap with Vitis ap_ctrl_hs conventions (v1)
@@ -514,49 +716,160 @@ class RegMapMMIFSlave(MMIFSlave):
 
 
 class VitisRegMap(RegMap):
-    """RegMap with Vitis ap_ctrl_hs control conventions auto-applied.
+    """RegMap mirroring the s_axilite control layout Vitis HLS generates.
 
-    Prepends ``ap_start`` (W1S) at 0x00 and ``ap_done`` (R) at 0x04; user fields
-    start at 0x08.  A future v2 would pack the remaining control bits (ap_idle,
-    ap_ready, auto_restart) into one word plus optional GIE/IER/ISR interrupt
-    registers.
+    Layout (verified against the ``simp_fun`` csynth artifacts —
+    ``solution1/.autopilot/db/coregen/control.h`` and the ``ADDR_*``
+    localparams in ``simp_fun_control_s_axi.v``)::
+
+        0x00 : Control signals  bit0 ap_start (RW/COH), bit1 ap_done (R/COR),
+                                bit2 ap_idle (R),       bit3 ap_ready (R/COR),
+                                bit7 auto_restart (RW), bit9 interrupt (R)
+        0x04 : Global Interrupt Enable Register (GIER)
+        0x08 : IP Interrupt Enable Register (IER)
+        0x0c : IP Interrupt Status Register (ISR)
+        0x10 : first user field  (0x14 : its control word / reserved)
+        0x18 : second user field (0x1c : …)
+        …
+
+    So the four control signals are *bits of one word at 0x00* — not registers
+    of their own — and 32-bit scalar arguments start at 0x10 on an 8-byte
+    stride (one data word plus one control/reserved word each).
+
+    What this models, and what it does not
+    -------------------------------------
+    The *layout* mirrors Vitis.  The *side effects* are modelled only as far
+    as the simulator needs:
+
+    - ``ap_start`` is W1S here (auto-clears once the launch hook has run)
+      where hardware is COH (clears on the ap_ready handshake).  Same net
+      effect for a sim that launches synchronously.
+    - ``ap_done`` / ``ap_ready`` are **not** clear-on-read here; they are set
+      when ``on_start`` returns and cleared on the next ``ap_start``.  A host
+      may therefore read ``ap_done`` repeatedly and keep seeing 1, where real
+      hardware clears it on the first read of 0x00.
+    - ``gier`` / ``ier`` / ``isr`` are plain storage: writing them enables no
+      interrupt, and ``isr`` does not implement toggle-on-write.  There is no
+      interrupt line in the simulation.
+    - ``auto_restart`` (bit 7) and ``interrupt`` (bit 9) are not modelled.
+
+    Nothing yet *enforces* that this layout tracks Vitis; ``control.h`` is the
+    authoritative artifact a conformance test could check against.
     """
 
+    #: User arguments begin after the 16-byte control/interrupt block.
+    _auto_start: int = 0x10
+
+    #: Byte offset of the packed control word.
+    CTRL_OFFSET: int = 0x00
+    #: Bytes reserved for control + interrupt registers before user fields.
+    CTRL_BLOCK_BYTES: int = 0x10
+
+    def _auto_align_bytes(self, word_bytes: int) -> int:
+        # Vitis places every scalar argument on an 8-byte boundary.
+        return 8
+
+    def _auto_stride_bytes(self, nwords: int, word_bytes: int) -> int:
+        """Bytes Vitis consumes per scalar argument: the field's data words
+        plus one control word, rounded up to the 8-byte argument grid.
+
+        Verified for 32-bit scalars (1 data word + 1 control word = 8 bytes:
+        x@0x10/x_ctrl@0x14, a@0x18/a_ctrl@0x1c, …).  The generalization to
+        multi-word fields follows the same data+control rule but is *not*
+        verified against a local artifact — in particular Vitis maps array
+        arguments on s_axilite as a BRAM-backed region, which this does not
+        attempt to reproduce.
+        """
+        raw = (nwords + 1) * word_bytes
+        return ((raw + 7) // 8) * 8
+
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None:
-        word_bytes = bitwidth // 8
-        reserved_offsets = {0x00, 0x04}
+        if bitwidth != 32:
+            raise ValueError(
+                f"VitisRegMap requires bitwidth=32 (got {bitwidth}): the Vitis "
+                "s_axilite control interface is a 32-bit bus, and the 0x00/0x04/"
+                "0x08/0x0c control block is defined on 4-byte words."
+            )
         for name, f in fields.items():
             if name.startswith("ap_"):
                 raise ValueError(
                     f"Field name '{name}' begins with reserved prefix 'ap_'."
                 )
-            if f.offset in reserved_offsets:
+            if f.offset is not None and f.offset < self.CTRL_BLOCK_BYTES:
                 raise ValueError(
                     f"Field '{name}' specifies offset=0x{f.offset:02x}, which "
-                    "collides with an auto-prepended ap_* register (ap_start@0x00, "
-                    "ap_done@0x04)."
+                    f"falls inside the reserved Vitis control block "
+                    f"(0x00-0x{self.CTRL_BLOCK_BYTES - 1:02x}: ap_ctrl word, GIER, "
+                    "IER, ISR). User fields start at 0x10."
                 )
         ctrl: dict[str, RegField] = {
             "ap_start": RegField(
                 Bit,
                 RegAccess.W1S,
                 offset=0x00,
-                description="Start the kernel (Vitis ap_ctrl_hs)",
+                bit_offset=0,
+                description="Start the kernel (Vitis ap_ctrl_hs; hardware is RW/COH)",
                 is_vitis_auto=True,
             ),
             "ap_done": RegField(
                 Bit,
                 RegAccess.R,
+                offset=0x00,
+                bit_offset=1,
+                description=(
+                    "Set by the slave when on_start returns; cleared on ap_start "
+                    "(hardware is R/COR)"
+                ),
+                is_vitis_auto=True,
+            ),
+            "ap_idle": RegField(
+                Bit,
+                RegAccess.R,
+                offset=0x00,
+                bit_offset=2,
+                description="1 while no on_start invocation is in flight",
+                is_vitis_auto=True,
+            ),
+            "ap_ready": RegField(
+                Bit,
+                RegAccess.R,
+                offset=0x00,
+                bit_offset=3,
+                description=(
+                    "Set alongside ap_done when on_start returns (hardware is "
+                    "R/COR, and pulses independently on a pipelined kernel)"
+                ),
+                is_vitis_auto=True,
+            ),
+            "gier": RegField(
+                Uint32Word,
+                RegAccess.RW,
                 offset=0x04,
-                description="Set by the slave when on_start returns; cleared on ap_start",
+                description="Global Interrupt Enable Register — storage only",
+                is_vitis_auto=True,
+            ),
+            "ier": RegField(
+                Uint32Word,
+                RegAccess.RW,
+                offset=0x08,
+                description="IP Interrupt Enable Register — storage only",
+                is_vitis_auto=True,
+            ),
+            "isr": RegField(
+                Uint32Word,
+                RegAccess.RW,
+                offset=0x0C,
+                description="IP Interrupt Status Register — storage only",
                 is_vitis_auto=True,
             ),
         }
         super().__init__({**ctrl, **fields}, bitwidth=bitwidth)
+        # ap_idle reads 1 out of reset: nothing is running yet.
+        self.set("ap_idle", 1)
 
     def start(self, master: MMIFMaster, base_addr: int = 0) -> ProcessGen[None]:
         """Convenience host-side launch: write 1 to ``ap_start``."""
-        yield from master.write_schema(Bit(1), addr=base_addr + self.offset_of("ap_start"))
+        yield from self.bind_master(master, base_addr).set("ap_start", 1)
 
 
 # ---------------------------------------------------------------------------
@@ -573,9 +886,10 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
     1. If ``on_start`` is already running, the write is silently ignored
        (mirrors Vitis ap_ctrl_hs gating by ap_idle).  The W1S auto-clear
        of ap_start still fires.
-    2. Otherwise the slave spawns ``env.process(on_start())`` and marks
-       itself busy.
-    3. When ``on_start`` returns, the slave marks itself idle.
+    2. Otherwise the slave spawns ``env.process(on_start())``, clears the
+       ``ap_done`` / ``ap_ready`` bits of 0x00 and drops ``ap_idle``.
+    3. When ``on_start`` returns, the slave raises ``ap_done`` / ``ap_ready``
+       / ``ap_idle`` again.
     """
 
     regmap:   VitisRegMap                           = field(kw_only=True)
@@ -597,18 +911,21 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
     def _on_ap_start(self, name: str, sub_word: int, value: int) -> None:
         """Hook installed on ap_start; spawns _launch() if not busy.
 
-        Clears the auto-prepended ``ap_done`` field before launching so a
-        subsequent host poll cannot see a stale completion from the
-        previous transaction.
+        Clears the ``ap_done`` / ``ap_ready`` completion bits before launching
+        so a subsequent host poll cannot see a stale completion from the
+        previous transaction.  (Hardware clears them on read instead — see
+        :class:`VitisRegMap`.)
         """
         if self._busy:
             return
         self.regmap.set("ap_done", 0)
+        self.regmap.set("ap_ready", 0)
+        self.regmap.set("ap_idle", 0)
         self._busy = True
         self.env.process(self._launch())
 
     def _launch(self) -> ProcessGen[None]:
-        """Runs on_start() and sets ap_done + clears _busy when it returns."""
+        """Runs on_start() and raises the completion bits when it returns."""
         try:
             if self.on_start is not None:
                 result = self.on_start()
@@ -616,4 +933,6 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
                     yield from result
         finally:
             self.regmap.set("ap_done", 1)
+            self.regmap.set("ap_ready", 1)
+            self.regmap.set("ap_idle", 1)
             self._busy = False

@@ -464,39 +464,227 @@ class TestBoundRegMap:
 
 
 class TestVitisRegMap:
-    def test_prepends_ap_start_and_ap_done(self) -> None:
-        """VitisRegMap auto-prepends ap_start at 0x00 and ap_done at 0x04;
-        user fields land at 0x08 and beyond."""
+    def test_control_signals_are_bits_of_word_zero(self) -> None:
+        """The four ap_* control signals are bits of the single 0x00 control
+        word — not registers of their own.
+
+        Pinned against the layout Vitis HLS actually generates, per
+        ``examples/regmap/waveflow_simp_fun_proj/solution1/.autopilot/db/
+        coregen/control.h`` (and the ``ADDR_*`` localparams in the generated
+        ``simp_fun_control_s_axi.v``)::
+
+            0x00 : bit0 ap_start (RW/COH), bit1 ap_done (R/COR),
+                   bit2 ap_idle (R),       bit3 ap_ready (R/COR)
+
+        If this fails, either the model drifted or Vitis changed its layout —
+        check control.h before "fixing" the test.
+        """
+        rm = VitisRegMap({"halted": RegField(Bit, RegAccess.R)})
+        for name in ("ap_start", "ap_done", "ap_idle", "ap_ready"):
+            assert rm.offset_of(name) == 0x00, f"{name} must live in the 0x00 word"
+        assert rm.bit_offset_of("ap_start") == 0
+        assert rm.bit_offset_of("ap_done")  == 1
+        assert rm.bit_offset_of("ap_idle")  == 2
+        assert rm.bit_offset_of("ap_ready") == 3
+        # All four share one word, so 0x00 has no single owning field.
+        assert rm.bit_fields_at_offset(0x00) == [
+            "ap_start", "ap_done", "ap_idle", "ap_ready",
+        ]
+
+    def test_interrupt_block_offsets(self) -> None:
+        """0x04/0x08/0x0c are GIER/IER/ISR — see control.h."""
+        rm = VitisRegMap({"halted": RegField(Bit, RegAccess.R)})
+        assert rm.offset_of("gier") == 0x04
+        assert rm.offset_of("ier")  == 0x08
+        assert rm.offset_of("isr")  == 0x0C
+
+    def test_user_fields_start_at_0x10_with_8_byte_stride(self) -> None:
+        """32-bit scalar arguments start at 0x10 on an 8-byte stride (one data
+        word + one control word each).
+
+        Pinned against control.h for the ``simp_fun`` kernel, whose four int32
+        arguments land at x@0x10, a@0x18, b@0x20, y@0x28.
+        """
         rm = VitisRegMap({
-            "halted": RegField(Bit,      RegAccess.R),
-            "error":  RegField(ErrField, RegAccess.R),
+            "x": RegField(Uint32, RegAccess.RW),
+            "a": RegField(Uint32, RegAccess.RW),
+            "b": RegField(Uint32, RegAccess.RW),
+            "y": RegField(Uint32, RegAccess.R),
         })
-        assert rm.offset_of("ap_start") == 0x00
-        assert rm.offset_of("ap_done")  == 0x04
-        assert rm.offset_of("halted")   == 0x08
-        assert rm.offset_of("error")    == 0x0C
+        assert rm.offset_of("x") == 0x10
+        assert rm.offset_of("a") == 0x18
+        assert rm.offset_of("b") == 0x20
+        assert rm.offset_of("y") == 0x28
 
     def test_rejects_ap_prefix(self) -> None:
         with pytest.raises(ValueError, match="ap_"):
             VitisRegMap({"ap_custom": RegField(Bit, RegAccess.R)})
 
-    def test_rejects_offset_zero_collision(self) -> None:
-        with pytest.raises(ValueError):
-            VitisRegMap({"cfg": RegField(Bit, RegAccess.RW, offset=0x00)})
+    def test_rejects_non_32_bit_width(self) -> None:
+        """Vitis's s_axilite control interface is a 32-bit bus; the control
+        block is defined on 4-byte words."""
+        with pytest.raises(ValueError, match="bitwidth=32"):
+            VitisRegMap({"x": RegField(Bit, RegAccess.RW)}, bitwidth=64)
 
-    def test_rejects_offset_four_collision_with_ap_done(self) -> None:
+    @pytest.mark.parametrize("offset", [0x00, 0x04, 0x08, 0x0C])
+    def test_rejects_offsets_inside_control_block(self, offset: int) -> None:
+        """User fields may not land in 0x00-0x0f (ap_ctrl word, GIER, IER, ISR)."""
         with pytest.raises(ValueError):
-            VitisRegMap({"cfg": RegField(Bit, RegAccess.RW, offset=0x04)})
+            VitisRegMap({"cfg": RegField(Bit, RegAccess.RW, offset=offset)})
 
     def test_user_fields_at_nonzero_offsets(self) -> None:
         rm = VitisRegMap({
-            "a": RegField(Bit, RegAccess.R, offset=0x10),
-            "b": RegField(Bit, RegAccess.RW),  # auto → 0x08 (after ap_start, ap_done)
+            "a": RegField(Bit, RegAccess.R, offset=0x18),
+            "b": RegField(Bit, RegAccess.RW),  # auto → 0x10 (first user slot)
         })
         assert rm.offset_of("ap_start") == 0x00
-        assert rm.offset_of("ap_done")  == 0x04
-        assert rm.offset_of("b")        == 0x08
-        assert rm.offset_of("a")        == 0x10
+        assert rm.offset_of("b")        == 0x10
+        assert rm.offset_of("a")        == 0x18
+
+
+class TestVitisControlWordPacking:
+    """Bus-level composition of the shared 0x00 control word."""
+
+    def test_start_writes_bit0_of_control_word(self) -> None:
+        """``start()`` puts a 1 in bit 0 of 0x00 — one write, as before."""
+        rm = VitisRegMap({"x": RegField(Bit, RegAccess.R)})
+        h = _SlaveHarness.build(rm)
+        seen: list[tuple[int, int]] = []
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(h.master)
+            rm._fields["ap_start"].on_write = lambda n, sw, v: seen.append((sw, v))
+            yield from rb.start()
+
+        h.run(proc)
+        assert seen == [(0, 1)], "ap_start must latch a 1 from bit 0 of the word"
+
+    def test_read_composes_all_control_bits(self) -> None:
+        """A raw word read of 0x00 returns the packed bits, not one field."""
+        rm = VitisRegMap({"x": RegField(Bit, RegAccess.R)})
+        rm.set("ap_done", 1)    # bit 1
+        rm.set("ap_ready", 1)   # bit 3
+        rm.set("ap_idle", 1)    # bit 2
+        h = _SlaveHarness.build(rm)
+        got: list[int] = []
+
+        def proc() -> ProcessGen[None]:
+            word = yield from h.master.read_schema(Uint32, addr=0x00)
+            got.append(int(word.val))
+
+        h.run(proc)
+        # ap_start=0, ap_done=1, ap_idle=1, ap_ready=1 -> 0b1110
+        assert got == [0b1110]
+
+    def test_read_only_bits_ignore_writes(self) -> None:
+        """Writing 0x00 must not raise just because read-only ap_done shares
+        the word — the hardware slave decodes only the writable bits."""
+        rm = VitisRegMap({"x": RegField(Bit, RegAccess.R)})
+        rm.set("ap_done", 1)
+        h = _SlaveHarness.build(rm)
+
+        def proc() -> ProcessGen[None]:
+            yield from h.master.write_schema(Uint32(0xFFFF_FFFF), addr=0x00)
+
+        h.run(proc)
+        assert rm.read_word("ap_done", 0) == 1, "R bit must be untouched by a host write"
+
+    def test_field_name_at_offset_rejects_packed_word(self) -> None:
+        """0x00 has no single owning field; callers must ask for the bit list."""
+        rm = VitisRegMap({"x": RegField(Bit, RegAccess.R)})
+        with pytest.raises(RegMapAccessError, match="bit-packed"):
+            rm.field_name_at_offset(0x00)
+
+    def test_bound_get_extracts_each_bit(self) -> None:
+        """BoundRegMap.get pulls each field out of the shared word."""
+        rm = VitisRegMap({"x": RegField(Bit, RegAccess.R)})
+        rm.set("ap_done", 1)
+        rm.set("ap_idle", 0)
+        rm.set("ap_ready", 1)
+        h = _SlaveHarness.build(rm)
+        got: dict[str, int] = {}
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(h.master)
+            for name in ("ap_start", "ap_done", "ap_idle", "ap_ready"):
+                got[name] = yield from rb.get(name)
+
+        h.run(proc)
+        assert got == {"ap_start": 0, "ap_done": 1, "ap_idle": 0, "ap_ready": 1}
+
+
+class TestRegMapBitPacking:
+    """Bit-packing is a general RegMap facility, not a Vitis special case."""
+
+    def test_rejects_overlapping_bits(self) -> None:
+        with pytest.raises(ValueError, match="overlaps"):
+            RegMap({
+                "a": RegField(Bit, RegAccess.RW, offset=0x00, bit_offset=0),
+                "b": RegField(Bit, RegAccess.RW, offset=0x00, bit_offset=0),
+            })
+
+    def test_rejects_bit_offset_without_offset(self) -> None:
+        with pytest.raises(ValueError, match="no offset"):
+            RegMap({"a": RegField(Bit, RegAccess.RW, bit_offset=3)})
+
+    def test_rejects_bits_past_end_of_word(self) -> None:
+        with pytest.raises(ValueError, match="do not fit"):
+            RegMap({"a": RegField(Uint32, RegAccess.RW, offset=0x00, bit_offset=8)})
+
+    def test_whole_word_field_cannot_overlap_packed_word(self) -> None:
+        with pytest.raises(ValueError, match="overlaps"):
+            RegMap({
+                "bits": RegField(Bit,    RegAccess.RW, offset=0x00, bit_offset=0),
+                "word": RegField(Uint32, RegAccess.RW, offset=0x00),
+            })
+
+    def test_multi_bit_field_round_trips(self) -> None:
+        """A packed field wider than one bit keeps its value across the bus."""
+        Nibble = IntField.specialize(bitwidth=4, signed=False)
+        rm = RegMap({
+            "lo": RegField(Nibble, RegAccess.RW, offset=0x00, bit_offset=0),
+            "hi": RegField(Nibble, RegAccess.RW, offset=0x00, bit_offset=4),
+        })
+        h = _SlaveHarness.build(rm)
+        got: dict[str, int] = {}
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(h.master)
+            yield from rb.set("hi", 0xA)
+            got["buffer"] = int(rm.read_word("hi", 0))
+            got["hi"] = yield from rb.get("hi")
+
+        h.run(proc)
+        assert got["buffer"] == 0xA, "buffer holds the unshifted value"
+        assert got["hi"] == 0xA, "get() shifts it back out of bits [7:4]"
+
+    def test_packed_write_clobbers_neighbouring_writable_bits(self) -> None:
+        """Setting one field of a shared word writes the *whole* word, so any
+        other writable bits in it are zeroed.
+
+        This is what the hardware does — a host that wants to preserve a
+        neighbour must compose the word itself.  It is not a problem for
+        VitisRegMap's 0x00, where ap_start is the only writable bit and the
+        rest are read-only (and so ignore writes entirely).
+        """
+        Nibble = IntField.specialize(bitwidth=4, signed=False)
+        rm = RegMap({
+            "lo": RegField(Nibble, RegAccess.RW, offset=0x00, bit_offset=0),
+            "hi": RegField(Nibble, RegAccess.RW, offset=0x00, bit_offset=4),
+        })
+        h = _SlaveHarness.build(rm)
+        got: dict[str, int] = {}
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(h.master)
+            yield from rb.set("hi", 0xA)
+            yield from rb.set("lo", 0x5)   # writes word 0x0005 -> hi is cleared
+            got["hi"] = yield from rb.get("hi")
+            got["lo"] = yield from rb.get("lo")
+
+        h.run(proc)
+        assert got["lo"] == 0x5
+        assert got["hi"] == 0x0, "no read-modify-write: the word write cleared hi"
 
 
 class TestVitisRegMapStart:
@@ -731,8 +919,10 @@ class TestVitisRegMapApDone:
         def proc() -> ProcessGen[None]:
             yield from rm.start(master, base_addr=0)
             yield sim.env.timeout(5)  # on_start completes
-            val = yield from master.read_schema(Bit, addr=rm.offset_of("ap_done"))
-            ap_done_reads.append(int(val.val))
+            # ap_done is bit 1 of the 0x00 control word, so it must be read
+            # through the bit-aware BoundRegMap rather than a raw word read.
+            val = yield from rm.bind_master(master).get("ap_done")
+            ap_done_reads.append(int(val))
 
         done = sim.env.event()
 
@@ -765,13 +955,15 @@ class TestVitisRegMapApDone:
         ap_done_after_relaunch: list[int] = []
 
         def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(master)
             yield from rm.start(master, base_addr=0)
             yield sim.env.timeout(10)  # first on_start finishes; ap_done = 1
-            val1 = yield from master.read_schema(Bit, addr=rm.offset_of("ap_done"))
-            ap_done_after_first.append(int(val1.val))
+            # ap_done is bit 1 of the 0x00 control word — read it bit-aware.
+            val1 = yield from rb.get("ap_done")
+            ap_done_after_first.append(int(val1))
             yield from rm.start(master, base_addr=0)   # ap_done must clear immediately
-            val2 = yield from master.read_schema(Bit, addr=rm.offset_of("ap_done"))
-            ap_done_after_relaunch.append(int(val2.val))
+            val2 = yield from rb.get("ap_done")
+            ap_done_after_relaunch.append(int(val2))
 
         done = sim.env.event()
 
