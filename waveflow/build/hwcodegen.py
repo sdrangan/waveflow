@@ -50,6 +50,32 @@ class SynthesisError(Exception):
 
 _PIPELINED_OP_NAMES = frozenset({'get_pipelined', 'write_pipelined'})
 
+#: The SimPy spawn method.  ``<env>.process(gen)`` schedules *gen* as a **new** process that runs
+#: alongside its caller — the one construct that makes a body concurrent by definition.
+_SPAWN_METHOD_NAME = 'process'
+
+
+def _is_env_ref(node: ast.expr) -> bool:
+    """Is *node* an expression whose last name segment is ``env``?
+
+    The receiver half of the spawn shape (see :meth:`HwStmtExtractor._validate_no_concurrency`).
+    True for ``env``, ``self.env``, ``sim.env``, ``self.sim.env`` — every spelling of "the SimPy
+    environment" that occurs in this codebase — and false for anything else.
+
+    Deliberately narrow.  It matches on the *name* ``env`` rather than trying to resolve the
+    receiver to a real ``simpy.Environment``, because the rule must hold syntactically: an
+    extracted body is parsed, not executed, and a ``SeqTB`` has no ``env`` attribute to resolve
+    against in the first place.  The cost of the narrowness is that an aliased environment
+    (``e = self.env; e.process(...)``) is not seen; the benefit is that ``self.process(...)`` —
+    which :mod:`waveflow.hw.interface` and :mod:`waveflow.simulation.simobj` use heavily as a
+    library-internal spawn wrapper — cannot be mistaken for a user body's fan-out.
+    """
+    if isinstance(node, ast.Name):
+        return node.id == 'env'
+    if isinstance(node, ast.Attribute):
+        return node.attr == 'env'
+    return False
+
 
 class HwStmtExtractor:
     """Parse ``run_proc`` of an ``HwComponent`` into an ``HwStmt`` tree.
@@ -103,6 +129,12 @@ class HwStmtExtractor:
             raise SynthesisError(
                 f"{self._method_name} source did not parse as a function"
             )
+        # The sequential gate applies in BOTH modes: every target this extractor feeds is
+        # sequential, so a spawn is disqualifying for a kernel body exactly as for a TB main().
+        # It runs FIRST because it is the most fundamental verdict available — a concurrent body
+        # is the wrong *flow*, and saying so beats reporting whatever rule the fan-out's arguments
+        # happen to trip on the way past.
+        self._validate_no_concurrency(func_def)
         if not self._is_testbench:
             # The implicit-capture rule applies to @synthesizable hook bodies
             # and on_start/run_proc.  Testbench main() bodies legitimately
@@ -195,6 +227,52 @@ class HwStmtExtractor:
                 )
 
         _Validator().visit(func_def)
+
+    # ------------------------------------------------------------------
+    # Sequential-gate pre-pass
+    # ------------------------------------------------------------------
+
+    def _validate_no_concurrency(self, func_def: ast.FunctionDef) -> None:
+        """Reject a body that **spawns** a SimPy process — ``<env>.process(...)``.
+
+        Every target this extractor feeds is *sequential*: a Vitis ``int main()`` or a
+        straight-line kernel body.  A spawn forks a coroutine that runs alongside the rest of the
+        body, so such a body has no straight-line lowering at all — it is a **structural**
+        mismatch with the target, not a missing feature.  Without this rule the fan-out fails
+        downstream at :meth:`_require_synthesizable` with *"Call to non-synthesizable method
+        'process'"* — true, but it sends the author off to add a ``@synthesizable`` marker to
+        SimPy, when the real answer is a different flow.
+
+        **The detected shape**, and only it: an attribute call ``.process(...)`` whose receiver is
+        an ``env``-ish expression (see :func:`_is_env_ref`) — ``env.process(...)``,
+        ``self.env.process(...)``, ``sim.env.process(...)``, ``self.sim.env.process(...)``.
+
+        **This is a gate, not a proof — do not read it as one.**  It rejects a syntactic construct
+        that *certainly* implies concurrency; it does **not** certify that a body which passes is
+        sequential.  Semantic interleaving (a testbench that interleaves writes and reads with the
+        DUT running in between) is undecidable in general, and nothing here attempts it.  Passing
+        this pre-pass means "no spawn was written", not "this body is sequential".
+        """
+        method_name = self._method_name
+        for node in ast.walk(func_def):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute)
+                    and func.attr == _SPAWN_METHOD_NAME
+                    and _is_env_ref(func.value)):
+                continue
+            lineno = getattr(node, 'lineno', '?')
+            raise SynthesisError(
+                f"Concurrent process spawn '{ast.unparse(func)}(...)' at line {lineno} of "
+                f"{method_name}(). This body is concurrent: it spawns a coroutine that runs "
+                f"alongside the rest of the body, so it has no straight-line lowering — neither "
+                f"a sequential Vitis 'int main()' testbench nor a straight-line kernel body can "
+                f"express the fork. It needs the SystemC path (Flow 3, free-running and "
+                f"concurrently driven), not C-simulation; see docs/guide/flows/. If the body is "
+                f"in fact sequential, run the coroutine inline ('yield from <call>') rather than "
+                f"spawning it."
+            )
 
     # ------------------------------------------------------------------
     # Statement dispatch
