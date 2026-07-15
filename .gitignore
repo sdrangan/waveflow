@@ -39,7 +39,10 @@ hls/
 _build/
 _build.hw/
 _build.sw/
-build/
+# NOTE: keep this anchored to the Vitis csim output. A bare `build/` matches ANY directory named
+# `build` at any depth, which silently swallows source dirs (tests/build/, docs/guide/build/,
+# waveflow/build/). See the Distribution artifacts section below.
+**/csim/build/
 *.db
 *.pb
 **/dfx_runtime.txt
@@ -82,7 +85,11 @@ __pycache__/
 # Distribution artifacts
 *.egg-info/
 dist/
-build/
+# Anchored with a leading slash ON PURPOSE: setuptools only ever emits build/ at the repo root.
+# Unanchored, `build/` matches any directory named `build` at any depth — it silently swallowed
+# tests/build/ (losing test_build.py, never committed) and docs/guide/build/, and forced the
+# `!waveflow/build/` negation that used to live at the bottom of this file.
+/build/
 
 # IDE/editor settings
 .idea/
@@ -151,6 +158,5 @@ examples/interleaver/sandbox/
 
 experiment/
 
-# Allow build directory in waveflow
-!waveflow/build/
-!**/guide/build/headless_output.txt
+# (The `!waveflow/build/` and `!**/guide/build/headless_output.txt` negations that used to live here
+# are gone: they existed only to undo the unanchored `build/` rules, which are now targeted.)
