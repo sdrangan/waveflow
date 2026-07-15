@@ -5,7 +5,7 @@ nav_order: 4
 audience: python
 applies_to: [FreeRunComp]
 api: [FreeRunComp, StreamIFSlave, StreamIFMaster, synthesizable]
-summary: "FreeRunComp — the synthesizable HwComponent that runs continuously: you implement run_iter (one firing) and the base repeats it forever, lowering to a free-running ap_ctrl_none hls::task. Walked through a stateless Square kernel (y = x² over an n-vector) whose compute lives in a @synthesizable pure function using the array operators. Cross-iteration state is a work in progress."
+summary: "FreeRunComp — the synthesizable HwComponent that runs continuously: you implement run_iter (one firing) and the base repeats it forever; the intended target is a free-running ap_ctrl_none hls::task. Walked through the tested, stateless Square toy (y = x² over an n-vector) whose compute lives in a @synthesizable pure function using the array operators. Square is a pysim model in synthesizable form, not a generated kernel — auto-extraction of run_iter is a known gap. Cross-iteration state is a work in progress."
 ---
 
 # Free-running components
@@ -15,28 +15,26 @@ summary: "FreeRunComp — the synthesizable HwComponent that runs continuously: 
 A [`FreeRunComp`](../../../waveflow/hw/hw_freerun.py) is a synthesizable `HwComponent` that runs
 **continuously** — a streaming datapath rather than a host-triggered one. You implement **`run_iter`**:
 *one firing*, the work for a single job. The base repeats it forever (`run_proc` is a `while True` over
-`run_iter`, the discrete-event stand-in for the hardware re-firing). It lowers to a free-running
-**`ap_ctrl_none`** `hls::task` — a block with no control handshake that the runtime re-fires per job.
-Contrast with a [host-activated](./hostactivated.md) kernel, which runs once per `ap_start`.
+`run_iter`, the discrete-event stand-in for the hardware re-firing). Its **intended** realization is a
+free-running **`ap_ctrl_none`** `hls::task` — a block with no control handshake that the runtime
+re-fires per job. Contrast with a [host-activated](./hostactivated.md) kernel, which runs once per
+`ap_start`.
+
+That target is what the class *declares* (`control_mode = FREE_RUNNING`), not yet what codegen emits —
+see [what this example claims](#what-this-example-claims) below.
 
 ## A simple example — `Square`
 
-`Square` squares an *n*-vector each firing — `y = x²`, element-wise:
+[`examples/toy/toy.py`](../../../examples/toy/toy.py) squares an *n*-vector each firing — `y = x²`,
+element-wise:
 
 ```python
-from dataclasses import dataclass
-from typing import ClassVar
-
-from waveflow.hw.dataschema import DataArray, FloatField
-from waveflow.hw.hw_freerun import FreeRunComp
-from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
-from waveflow.hw.synth import synthesizable
-from waveflow.simulation.simobj import ProcessGen
-
 Float32 = FloatField.specialize(bitwidth=32)
+
 
 class Vec(DataArray):
     """The stream payload: an n-vector of Float32 (here n = 4)."""
+
     element_type = Float32
     static = True
     max_shape = (4,)
@@ -44,11 +42,15 @@ class Vec(DataArray):
 
 @dataclass
 class Square(FreeRunComp):
+    """y = x*x, element-wise over one Vec per firing."""
+
     cpp_kernel_name: ClassVar[str | None] = "square"
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.x_in  = StreamIFSlave( name=f"{self.name}_x_in",  sim=self.sim, bitwidth=32)
+        self.x_in = StreamIFSlave(name=f"{self.name}_x_in", sim=self.sim, bitwidth=32)
         self.y_out = StreamIFMaster(name=f"{self.name}_y_out", sim=self.sim, bitwidth=32)
         self.add_endpoint(self.x_in)
         self.add_endpoint(self.y_out)
@@ -63,7 +65,7 @@ class Square(FreeRunComp):
         return x * x                           # element-wise y = x², the array-operator idiom
 ```
 
-Two things make this the **synthesizable** form, where the [moving-average](./overview.md) intro was
+Two things make this the **synthesizable form**, where the [moving-average](./overview.md) intro was
 not:
 
 - **`run_iter` is one firing.** It reads one payload, computes, writes one — no hand-rolled `while`
@@ -71,8 +73,36 @@ not:
 - **The compute is a `@synthesizable` pure function.** `square` takes its input as an *argument* and
   returns the result using the type-preserving [array operators](../vectorization/) (`x * x`), not raw
   NumPy. A `@synthesizable` method may read its arguments, endpoints, reg-maps, and `HwParam` values —
-  but **not** mutable `self.X` state (the extractor rejects it). Keeping the math pure is what lets it
-  lower to hardware.
+  but **not** mutable `self.X` state (the extractor rejects it).
+
+The array operators combine two `DataArray`s and preserve the element type. They do **not** accept a
+scalar operand — `x * 0.5` and `0.5 * x` both raise `TypeError`; use `.val` for a raw NumPy escape
+hatch, or wrap the scalar in a `DataArray`.
+
+## What this example claims
+
+It is **real, executed code**: [`tests/examples/test_toy.py`](../../../tests/examples/test_toy.py)
+runs `Square` in the pysim and checks `y = x²`, so this page cannot silently drift from it.
+
+It is **not** a generated kernel. No `FreeRunComp` is auto-extracted today, and `Square` is no
+exception — `kernel_files_to_str(Square)` returns files, but **not** the ones described above:
+
+- The **`square` body is not extracted.** `@synthesizable` marks a *hook boundary*: codegen emits a
+  declaration plus a `// TODO: implement square` stub for a **hand-written** C++ impl (exactly the
+  arrangement of the checked-in [`simp_fun_compute_impl.cpp`](../../../examples/regmap/simp_fun_compute_impl.cpp)).
+  The `x * x` above is the **pysim golden**; it does not itself lower to C++.
+- The generated top is **`ap_ctrl_hs`**, not the free-running `ap_ctrl_none` `hls::task` described
+  above. The class declares `control_mode = FREE_RUNNING`, but codegen does not yet act on it.
+- The emitted header **would not compile**. `Square` does not set `cpp_namespace`, and the default
+  derives it from the *kernel name* — so the header declares `void square(...)` and
+  `namespace square { ... }` in one scope, which C++ rejects as a redeclaration. Every real
+  component sidesteps this by hand-setting `<kernel>_impl` (`simp_fun_impl`, `poly_impl`,
+  `hist_impl`, …). If you write a `FreeRunComp` today, **set `cpp_namespace` explicitly.**
+
+The real free-running kernels (`MemRStream`/`MemWStream`) hand off *fixed hand-written* `hls::task`
+bodies via `kernel_task()`; their `run_iter` is a pysim golden only. So the claim `Square` earns is
+*"this is real code, it runs, and this page matches it"* — not *"this synthesizes"*. All three gaps
+are pinned by a test, so they will fail loudly the day they close.
 
 ## State comes later
 
