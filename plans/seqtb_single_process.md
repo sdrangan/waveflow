@@ -47,14 +47,54 @@ synchronous forms, so a yielding `main()` and the current synchronous `main()` a
 scratch `_PolyTBProc` using `yield from`) produces the **same** `*_tb.cpp` as its synchronous twin. This
 is the safe, bounded first slice — **do this stage first and stop for review.**
 
+> **Stage 1 DONE** (`422de26`, pushed): the extractor accepts a yielding `main()`; `run_once_sim` /
+> `write` / `get` lower byte-identical to `run_once` / `push` / `pop`.
+
 ## Stage 2 — `SeqTB` runnable as one process (the timing payoff)
 
-Make `SeqTB.main()` *run* in Python as a single SimPy process (give `SeqTB` a throwaway `sim`, or a run
-harness that spawns `main()` as one process), with `write`/`get`/`run_once_sim` working in sim (not
-raising). This yields a **timed Python golden straight from the `SeqTB`** — the thing that lets
-`SimpFunHost` be deleted (its per-step logging role can stay as an optional "debug" `SimObj`, but the
-default timing comes from the single-process `SeqTB`). `push`/`pop` become thin sync aliases of
-`write`/`get` (or are retired).
+Decided design (all four D-questions settled with the user):
+
+- **D1 — in-process timing via `@sim_only`.** The `SeqTB` gets `@sim_only` timer methods
+  (`_start_timer` / `_stop_timer_and_log`) that read `self.now` and log **inside** them, so `main()` only
+  ever makes bare `@sim_only` *calls* — which the extractor already strips (`_visit_stmt_tb` falls
+  through to `_visit_expr_stmt`'s `@sim_only` skip). **No extractor change needed.** `main()` never
+  bare-reads `self.now`.
+- **D2 — ambient sim.** Add a "current `Simulation`" context (a `contextvar`) that
+  `Component.__post_init__` picks up when no `sim=` is passed. So `dut = SimpFunComponent()` in `main()`
+  is identical for both modes (codegen: no sim; run: the ambient sim). *This is the load-bearing new
+  mechanism — keep it small and well-tested.*
+- **D3 — regmap-only.** Only `run_once_sim` needs to run in sim; **do not** make stream `write`/`get`
+  runnable yet (that's a later sub-stage for `poly`).
+- **D4 — demote `SimpFunHost`.** Default timing comes from the `SeqTB`; keep `SimpFunHost` present but
+  unused-by-default (deletable later). Per-step timing is not needed — the VCD carries it.
+
+**Scope (i):** runnable + timing + retire `SimpFunHost` from the default flow. **Leave the input
+`regmap.get(...)` round-trip** in the `simp_fun` TB for now — removing it needs read-into-local or the
+`DataList`-in-TB primitive, which is a **separate follow-on** (Stage 2b).
+
+Concrete steps:
+
+1. **Ambient sim** — `contextvar` in `waveflow/simulation/simulation.py` (a `@contextmanager` on
+   `Simulation`, e.g. `with sim.as_current():`), read by `Component.__post_init__` (or `SimObj`) when
+   `sim is None`. Existing explicit-`sim=` callers unaffected.
+2. **Runnable `SeqTB`** — a harness (a `SeqTB.run()` method and/or a `PySimStep` path) that: creates a
+   fresh `Simulation`, enters `as_current()`, spawns `main()` as **one** process, runs to completion,
+   and exposes `self.now` to the `@sim_only` timers. `main()`'s `yield from dut.run_once_sim(...)` drives
+   `on_start` (which yields its latency), advancing the clock.
+3. **`simp_fun` TB rewrite** — `SimpFunTBHls.main()` → read inputs (regmap file I/O, unchanged) →
+   `_start_timer()` → `y = yield from dut.run_once_sim(dut.regmap.get("x"), ...)` → `_stop_timer_and_log()`
+   → `write_status_json`. **Byte-identical `*_tb.cpp`.**
+4. **`PySimStep` swap** — run the `SeqTB` for the functional golden **and** `py_timing` (total
+   transaction cycles from the timer); stop using `SimpFunHost` in the DAG (leave the class in the file).
+5. **Verify** — byte-identical `*_tb.cpp` for all four TBs; **re-run `simp_fun_build.py --through
+   validate_timing --force`** (Vitis) and confirm PASS (the new `py_timing` vs RTL within the ±4
+   tolerance — expect a small shift, that's fine); full `pytest -m "not vitis"` ⊆ baseline.
+
+## Stage 2b (follow-on) — clean the input
+
+Add the codegen primitive to read a `uint32` file into a plain local / a `DataList` input struct in a TB,
+so `run_once_sim(inp.x, inp.a, inp.b)` drops the `regmap.get(...)` round-trip and the example reads the
+way the user sketched. Its own bounded item.
 
 ## Stage 3 — the sequential-subset gate (first slice of `check_extractable`)
 
