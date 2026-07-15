@@ -5,7 +5,7 @@ nav_order: 7
 has_children: true
 audience: hls
 api: [check, generate, potential_targets]
-summary: "Waveflow generates HLS and related C++ from certain HwComponents — automatically for the mechanical parts (top function, AXI pragmas, regmap struct, testbench harness), semi-automatically where you supply the compute body as a hook. Each distinct code output is a target; this section covers the two that are built (control_driven_kernel, sequential_vitis_tb) and names the five that are not. check(subject, target) answers whether a given component would lower, running the same rules generate does."
+summary: "Waveflow generates HLS and related C++ from certain HwComponents — automatically for the mechanical parts (top function, AXI pragmas, regmap struct, testbench harness), semi-automatically where you supply the compute body as a hook. Each distinct code output is a target; this section covers the two that are built (control_driven_kernel, sequential_vitis_tb) and names the five that are not. check(source, target) answers whether a given component would lower, running the same rules generate does."
 ---
 
 # Component Code Generation
@@ -50,17 +50,30 @@ is what lets `check()` answer precisely — see below. They are the future work 
 > `check()`'s answer, not the class's. Synthesizability is a codegen axis, not a class fact
 > ([taxonomy](../components/taxonomy.md)).
 
-## One dispatch, two modes
+## Validation and generation
 
-Codegen answers two questions over the same `(subject × target)` pair:
+Generating a target takes one input — a **source**. A source is a Python class: the `HwComponent`
+you want realized (`SimpFunComponent`), or the [`SeqTB`](../components/) that drives it
+(`SimpFunTBHls`). You never name a method; the entry follows from the component's *kind*
+(`HostActivated` → `on_start`, `FreeRunComp` → `run_iter`, `SeqTB` → `main`, and a `CompositeComp` has
+no body at all — its codegen is the sub-component graph).
+
+Generation is then two steps over the same `(source × target)` pair:
 
 ```
-generate(subject, target)  =  validate(subject, target) + emit(...)
-check(subject, target)     =  validate(subject, target)          -> (ok, err_msg)
+validate(source, target)   — can this source be lowered to this target?
+emit(source, target)       — write the C++
+
+generate(source, target)  =  validate + emit
+check(source, target)     =  validate          -> (ok, err_msg)
 ```
 
-`generate` is fail-loud: a build wants the traceback. `check` is the **predicate** form of the identical
-rules — it is what makes *"certain `HwComponent`s"* precise rather than folklore:
+Splitting them is what makes codegen **fail-loud**: the source is inspected first, and one that cannot
+be lowered raises rather than quietly emitting something wrong. Where possible the error names the
+actual problem and the fix — not just *"cannot synthesize"*.
+
+`check` is the same validation with the exception turned into a verdict. It is what makes *"certain
+`HwComponent`s"* precise rather than folklore — you can ask:
 
 ```python
 >>> from waveflow.build.codegen_check import check
@@ -70,11 +83,17 @@ rules — it is what makes *"certain `HwComponent`s"* precise rather than folklo
 (False, "'concurrent_systemc_tb' is not a potential target for SimpFunComponent; ...")
 ```
 
-**`check` knows no rules of its own.** It runs the *real* extraction, throws the tree away, and turns
-the raise into a verdict — so it cannot report a rule codegen does not enforce, nor miss one it does. A
-separate "lightweight" checker would be a shadow that drifts; running the same code is the design. The
-rules themselves live in the [Extractor](./extractor.md), and adding one there makes `check` report it
-for free.
+**`check` knows no rules of its own.** It runs the *real* validation, throws the result away, and
+reports what happened — so it cannot claim a rule codegen does not enforce, nor miss one it does. A
+separate "lightweight" checker would drift; running the same code is the design. The rules live in the
+[Extractor](./extractor.md), and adding one there makes `check` report it for free.
+
+### What validation does not cover
+
+Validation checks the parts Waveflow generates. It says nothing about the parts you write:
+a **[custom hook](../custom_hooks/) body is never verified** — codegen emits its declaration and a
+stub, and the C++ you fill in is yours. Nothing checks that it matches the Python it was derived from,
+or that it is correct at all. That is what the example's C-simulation and co-simulation are for.
 
 ## In this section
 

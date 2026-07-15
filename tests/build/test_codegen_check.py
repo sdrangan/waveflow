@@ -1,4 +1,4 @@
-"""Tests for ``check(subject, target)`` — :mod:`waveflow.build.codegen_check`.
+"""Tests for ``check(source, target)`` — :mod:`waveflow.build.codegen_check`.
 
 Two things are under test, and they are different in kind:
 
@@ -100,25 +100,25 @@ def test_the_local_baseline_fixture_really_passes():
 
 
 # ==============================================================================================
-# The real subjects — everything that lowers today must say so
+# The real sources — everything that lowers today must say so
 # ==============================================================================================
 
 @pytest.mark.parametrize(
-    "subject",
+    "source",
     [SimpFunComponent, HistAccel, SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls],
     ids=lambda c: c.__name__,
 )
-def test_real_subjects_pass(subject):
-    """Every subject codegen actually emits today passes its (only) potential target.
+def test_real_sources_pass(source):
+    """Every source codegen actually emits today passes its (only) potential target.
 
     This is the anti-shadow gate: these all run through Vitis, so a `False` here would mean `check`
     invented a rule the extractor does not have.
     """
-    assert check(subject) == (True, None)
+    assert check(source) == (True, None)
 
 
 @pytest.mark.parametrize(
-    "subject, target",
+    "source, target",
     [
         (SimpFunComponent, CONTROL_DRIVEN_KERNEL),
         (HistAccel, CONTROL_DRIVEN_KERNEL),
@@ -129,13 +129,13 @@ def test_real_subjects_pass(subject):
     ],
     ids=lambda x: getattr(x, "__name__", x),
 )
-def test_naming_the_target_explicitly_agrees_with_the_default(subject, target):
+def test_naming_the_target_explicitly_agrees_with_the_default(source, target):
     """`target=None` resolves to the kind's single potential target — same verdict either way."""
-    assert check(subject, target) == (True, None)
-    assert check(subject, target) == check(subject)
+    assert check(source, target) == (True, None)
+    assert check(source, target) == check(source)
 
 
-def test_subject_may_be_a_class_or_an_instance():
+def test_source_may_be_a_class_or_an_instance():
     """`check(SimpFunComponent)` and `check(<a SimpFunComponent>)` ask the same question.
 
     A class is elaborated internally; an instance is used as-is (it is already elaborated).
@@ -252,7 +252,7 @@ def test_check_and_generate_disagree_about_square_on_purpose():
 
 @dataclass
 class _NoDeclaredTargets(_MinimalHostActivated):
-    """A kind that declares no targets — stand-in for a subject off the execution-model classes."""
+    """A kind that declares no targets — stand-in for a source off the execution-model classes."""
 
     cpp_kernel_name: ClassVar[str | None] = "no_targets"
     cpp_namespace: ClassVar[str | None] = "no_targets_impl"
@@ -292,7 +292,7 @@ def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle(
 
     (HistAccel used to be the other one.  It is now a HostActivated — see
     `test_hist_is_migrated_and_checkable` below — which is why this covers BlockScaleComponent
-    alone.  When block_scale migrates too, this test has no subject left and should be deleted
+    alone.  When block_scale migrates too, this test has no source left and should be deleted
     along with `_no_targets_message`'s HwComponent branch; `_NoDeclaredTargets` above already
     covers the message shape synthetically.)
 
