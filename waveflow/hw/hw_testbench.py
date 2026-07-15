@@ -47,9 +47,15 @@ class SeqTB(NamedObject):
     - pops the DUT's response streams (``dut.m_out.pop(...)``),
     - reads regmap status and writes the comparison artifacts to disk.
 
-    Concurrent stimulus/capture coroutines (``env.process(...)``) are not
-    supported in v1 — the body must be straight-line.  See
-    ``plans/hwcomponent_testbench_codegen_plan.md`` Phase 14 scope.
+    Concurrent stimulus/capture coroutines (``env.process(...)``) are not supported — the body
+    must be straight-line.  This is **enforced**, not merely documented: the extractor's
+    sequential gate (``HwStmtExtractor._validate_no_concurrency``) rejects a spawn and names the
+    SystemC path (Flow 3) as the fix, so ``check(MyTB, "sequential_vitis_tb")`` reports it too.
+
+    That gate is a **gate, not a proof**.  It rejects the syntactic construct that certainly
+    implies concurrency; it does not certify that a body which passes is sequential (semantic
+    interleaving is undecidable in general).  See ``docs/guide/flows/`` and
+    ``plans/codegen_check_family.md`` Stage 3.
 
     Not a ``SimObj``: a ``SeqTB`` takes no ``sim=`` at construction — only ``name=`` (inherited from
     :class:`~waveflow.named.NamedObject`).
