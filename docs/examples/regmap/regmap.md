@@ -84,7 +84,7 @@ slave). The `port=return` pragma is what adds the **control registers**
 monitored over that same slave.
 
 In Waveflow you declare the matching register map in Python, and `VitisRegMap`
-lays it out to match the generated slave one-for-one:
+mirrors the layout Vitis documents for that slave:
 
 ```python
 Int32 = IntField.specialize(bitwidth=32, signed=True)
@@ -97,44 +97,61 @@ self.regmap = VitisRegMap({
 })
 ```
 
-Using `VitisRegMap` (rather than a plain `RegMap`) is what auto-prepends the
-Vitis control registers, so the Python offsets line up with the generated slave.
+Using `VitisRegMap` (rather than a plain `RegMap`) is what adds the Vitis control
+block and places your fields where Vitis places its scalar arguments.
+
+### Vitis-added control registers
+
+Vitis prepends a fixed 16-byte control region to every `s_axilite`-controlled
+kernel. The four control signals are **bits of a single word at `0x00`** — not
+registers of their own:
+
+| Offset | Register | Bit | Access | Role |
+| ------ | -------- | --- | ------ | ---- |
+| `0x00` | `ap_start` | 0 | RW / COH | Host writes `1` to launch the kernel. Clears on the `ap_ready` handshake. |
+| `0x00` | `ap_done`  | 1 | R / COR  | Reads `1` once the kernel has finished and `y` is valid. Clears on read. |
+| `0x00` | `ap_idle`  | 2 | R        | `1` while no invocation is in flight. |
+| `0x00` | `ap_ready` | 3 | R / COR  | Kernel is ready for new inputs. Clears on read. |
+| `0x00` | `auto_restart` | 7 | RW | Re-launch automatically on completion. |
+| `0x00` | `interrupt` | 9 | R | Interrupt status. |
+| `0x04` | `gier` | — | RW | Global Interrupt Enable Register. |
+| `0x08` | `ier`  | — | RW | IP Interrupt Enable Register. |
+| `0x0C` | `isr`  | — | R / TOW | IP Interrupt Status Register. |
+
+Together `ap_start` / `ap_done` implement Vitis's **`ap_ctrl_hs`** ("handshake")
+control protocol. The host uses `ap_done` to know when `y` is ready without
+needing an interrupt line. (`COH` = clear on handshake, `COR` = clear on read,
+`TOW` = toggle on write.)
 
 ### Application registers
 
-These are the four fields you declare — the kernel's actual arguments and result:
+These are the four fields you declare — the kernel's actual arguments and result.
+Vitis places 32-bit scalar arguments from `0x10` on an **8-byte stride**: each one
+gets a data word plus a control/reserved word beside it.
 
 | Offset | Register | Schema | Access | Role |
 | ------ | -------- | ------ | ------ | ---- |
-| `0x08` | `x` | `Int32` | RW | Input operand — the value to apply the map to |
-| `0x0C` | `a` | `Int32` | RW | Multiplicative coefficient |
-| `0x10` | `b` | `Int32` | RW | Bias term |
-| `0x14` | `y` | `Int32` | R  | Result — `max(0, a*x + b)` |
+| `0x10` | `x` | `Int32` | RW | Input operand — the value to apply the map to |
+| `0x14` | —   | —       | —  | reserved (control word for `x`) |
+| `0x18` | `a` | `Int32` | RW | Multiplicative coefficient |
+| `0x1C` | —   | —       | —  | reserved |
+| `0x20` | `b` | `Int32` | RW | Bias term |
+| `0x24` | —   | —       | —  | reserved |
+| `0x28` | `y` | `Int32` | R  | Result — `max(0, a*x + b)` |
+| `0x2C` | —   | —       | —  | control word for `y` (`y_ap_vld`) |
 
 The access mode encodes the host/kernel contract: `RW` (read-write) registers are
 host *inputs* the kernel reads; `R` (read-only) registers are kernel *outputs*
 the host reads back. The host never writes `y`.
 
-### Vitis-added control registers
-
-Vitis prepends a small fixed control region to every `s_axilite`-controlled
-kernel, and `VitisRegMap` mirrors it so the Python layout matches one-for-one:
-
-| Offset | Register | Access | Role |
-| ------ | --------- | ------ | ---- |
-| `0x00` | `ap_start` | W1S | Host writes `1` to launch the kernel. Auto-clears once the kernel starts running. |
-| `0x04` | `ap_done`  | R   | Reads `1` once the kernel has finished and the result in `y` is valid. |
-
-Together these implement Vitis's **`ap_ctrl_hs`** ("handshake") control protocol.
-`W1S` means *write-1-to-set*: writing `1` triggers a launch and the bit clears
-itself automatically. The host uses `ap_done` to know when `y` is ready without
-needing an interrupt line.
-
-> The real Vitis control word packs several more bits — `ap_idle`, `ap_ready`,
-> `auto_restart` — into the `0x00` register; Waveflow's `VitisRegMap` models the
-> two registers this example needs. See the
-> [Register Maps guide](../../guide/interface/regmap.md) for the full
-> control-register reference.
+> **What the model does and does not reproduce.** `VitisRegMap` mirrors the
+> *layout* above, and models `ap_start`, `ap_done`, `ap_idle` and `ap_ready`.
+> It does **not** model the clear-on-read (`COR`) semantics: the simulator's
+> `ap_done` is cleared on the next `ap_start` rather than by the read itself, so
+> a host may read it twice and see `1` both times. `gier`/`ier`/`isr` are plain
+> storage — there is no interrupt line in the simulation — and `auto_restart` /
+> `interrupt` are not modelled. See the
+> [Register Maps guide](../../guide/interface/regmap.md) for the full reference.
 
 ## The execution model
 
@@ -143,13 +160,13 @@ transactions:
 
 1. **Write the inputs.** Host writes `x`, `a`, `b` to their offsets (one AXI-Lite
    write each).
-2. **Launch.** Host writes `1` to `ap_start` (`0x00`).
+2. **Launch.** Host writes `1` to bit 0 of the control word (`0x00`).
 3. **Kernel runs.** It reads `x`/`a`/`b`, computes `max(0, a*x + b)`, writes `y`,
    and sets `ap_done`.
-4. **Poll for completion.** Host reads `ap_done` (`0x04`) repeatedly until it
-   reads `1`. (On real hardware you would usually wait on an interrupt instead;
-   polling is the simple, pedagogical path.)
-5. **Read the result.** Host reads `y` (`0x14`).
+4. **Poll for completion.** Host reads the control word (`0x00`) repeatedly until
+   bit 1 (`ap_done`) reads `1`. (On real hardware you would usually wait on an
+   interrupt instead; polling is the simple, pedagogical path.)
+5. **Read the result.** Host reads `y` (`0x28`).
 
 This start-then-poll handshake is the essence of the AXI-Lite control model.
 
@@ -163,20 +180,48 @@ offset:
 ```python
 rm = self.regmap.bind_master(self.master, base_addr=self.base_addr)
 
-yield from rm.set("x", case.x)      # AXI-Lite write -> 0x08
-yield from rm.set("a", case.a)      #               -> 0x0C
-yield from rm.set("b", case.b)      #               -> 0x10
-yield from rm.start()               # write 1 to ap_start (0x00)
-ap_done = yield from rm.poll_end(   # poll ap_done (0x04) until it reads 1
+yield from rm.set("x", case.x)      # AXI-Lite write -> 0x10
+yield from rm.set("a", case.a)      #               -> 0x18
+yield from rm.set("b", case.b)      #               -> 0x20
+yield from rm.start()               # write 1 to bit 0 of 0x00 (ap_start)
+ap_done = yield from rm.poll_end(   # read 0x00, test bit 1, until it reads 1
     interval=..., max_polls=...,
 )
-y = yield from rm.get("y")          # AXI-Lite read <- 0x14
+y = yield from rm.get("y")          # AXI-Lite read <- 0x28
 ```
 
-Crucially, the **same `VitisRegMap` object** drives the SimPy simulation here, the
-generated Vitis HLS kernel's interface, and (eventually) the host driver — so the
-register offsets can never drift between the model, the hardware, and the
-firmware.
+Bit-packed fields cost no extra bus traffic: `rm.start()` is a single word write
+composing `ap_start` into bit 0, and each `poll_end` read is a single word read
+that extracts bit 1. You address fields by *name*, so the packing stays an
+implementation detail of the layout.
+
+### How the offsets stay honest
+
+It is worth being precise about what keeps the Python model and the hardware
+agreeing, because it is easy to overclaim here.
+
+The offsets above are **not** shared with the kernel. Codegen emits no addresses
+at all — the generated C++ just declares `s_axilite` pragmas, and **Vitis** picks
+the offsets when it synthesises the slave. The Python offsets are used only
+*inside* the simulation, where `BoundRegMap` writes `base + offset_of(name)` and
+the slave decodes the same table. Both ends read one table, so the sim is
+self-consistent by construction, and re-laying-out the map cannot change a single
+byte of generated C++.
+
+What that buys is a model that **mirrors** Vitis's documented layout — so the
+addresses you read here are the addresses a real host driver would use. What it
+does *not* buy is enforcement: nothing currently checks that the mirror stays in
+sync, so a future Vitis release could move an offset and the model would drift
+silently. The authoritative artifact is `control.h`, which Vitis writes next to
+the generated RTL:
+
+```
+waveflow_simp_fun_proj/solution1/.autopilot/db/coregen/control.h
+```
+
+Teaching a build step to parse that file and diff it against `VitisRegMap` would
+turn the mirror into a checked contract. That conformance test does not exist yet
+— it is follow-on work.
 
 ---
 

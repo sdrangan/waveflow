@@ -13,14 +13,14 @@ We first describe how to build a python model for a hardware component with a Vi
 
 
 
-Waveflow's [`VitisRegMap`](../../guide/interface/regmap.md) class mirrors this layout exactly: the user declares each register as a Python `RegField` with its data schema and access mode (`R`, `W`, `RW`, `W1C`, `W1S`), and Waveflow prepends the same Vitis control registers automatically. The same declaration drives the Python simulation, the generated HLS pragmas, and the host-side offset map.
+Waveflow's [`VitisRegMap`](../../guide/interface/regmap.md) class mirrors this layout: the user declares each register as a Python `RegField` with its data schema and access mode (`R`, `W`, `RW`, `W1C`, `W1S`), and Waveflow adds the same Vitis control block automatically. The one declaration drives the Python simulation, the generated HLS pragmas, and the host-side offset map.
 
 Vitis HLS automatically generates this AXI-Lite slave whenever a kernel function has `#pragma HLS interface s_axilite` on its scalar arguments and on `return`. The Vitis-generated slave includes:
 
-- A user-defined region with one register per scalar argument (allocated by Vitis in declaration order).
-- A reserved control region that Vitis adds at offsets `0x00–0x10`: `ap_start`, `ap_done`, `ap_idle`, `ap_ready`, and interrupt enables. The host writes `ap_start` to launch the kernel; the kernel writes `ap_done` when it returns.
+- A reserved control region at offsets `0x00–0x0f`: one control word at `0x00` packing `ap_start` (bit 0), `ap_done` (bit 1), `ap_idle` (bit 2) and `ap_ready` (bit 3), followed by the interrupt registers `gier` (`0x04`), `ier` (`0x08`) and `isr` (`0x0c`). The host writes `ap_start` to launch the kernel; the kernel raises `ap_done` when it returns.
+- A user-defined region starting at `0x10`, with one register per scalar argument in declaration order — each on an 8-byte stride (a data word plus a control/reserved word).
 
-Waveflow's [`VitisRegMap`](../../guide/interface/regmap.md) class mirrors this layout. The user declares only the application registers; the framework auto-prepends `ap_start` (W1S, offset `0x00`) and `ap_done` (R, offset `0x04`), and the [`VitisRegMapMMIFSlave`](../../guide/interface/regmap.md) that wraps the regmap manages their values automatically.
+Waveflow's [`VitisRegMap`](../../guide/interface/regmap.md) class mirrors this layout. The user declares only the application registers; the framework adds the control block, and the [`VitisRegMapMMIFSlave`](../../guide/interface/regmap.md) that wraps the regmap manages the control bits automatically.
 
 ## Describing the Register Map in Python
 
@@ -38,7 +38,9 @@ self.regmap = VitisRegMap({
 })
 ```
 
-After construction, the layout is `ap_start@0x00`, `ap_done@0x04`, `x@0x08`, `a@0x0C`, `b@0x10`, `y@0x14` — the same layout Vitis HLS allocates from the equivalent `s_axilite` pragmas. The host-side offset map and the synthesized AXI-Lite slave use the same `name → offset` mapping, so there is one source of truth.
+After construction, the layout is `ap_start@0x00` bit 0, `ap_done@0x00` bit 1, then `x@0x10`, `a@0x18`, `b@0x20`, `y@0x28` — mirroring the layout Vitis HLS allocates from the equivalent `s_axilite` pragmas, which it records in `<proj>/solution1/.autopilot/db/coregen/control.h`.
+
+Note what does and does not follow from that. The generated C++ contains no offsets at all — Vitis derives them from the `s_axilite` pragmas — so these Python offsets are used only *inside* the simulation, where the host proxy and the slave read the same table. That makes the model self-consistent, and it makes the addresses you see here the ones a real driver would use. It does not make them *enforced*: nothing yet diffs `VitisRegMap` against `control.h`, so the mirror could drift silently if Vitis changed its layout.
 
 The full set of `RegAccess` modes and the access matrix they imply is documented in [Register Maps](../../guide/interface/regmap.md).
 
