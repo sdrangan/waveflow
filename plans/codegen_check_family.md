@@ -40,17 +40,46 @@ wrong.** Build the family first; let it prove what is genuinely per-class:
 
 ## Stage 1 — the target axis (no behavior change)
 
-- Extend the dispatch to `(subject × target)`. Initial targets: **`vitis_kernel`**, **`vitis_tb`**.
-  (Future, from [`plans/seqtb_single_process.md`](./seqtb_single_process.md) / the flows:
-  `systemc_tb`, `xsi_bfm`.)
-- Declare per-class support as a ClassVar, house style (read by `build/` via `getattr`):
-  ```python
-  class HwComponent(Component):
-      supported_targets: ClassVar[frozenset[str]] = frozenset({"vitis_kernel"})
-  class SeqTB(NamedObject):
-      supported_targets: ClassVar[frozenset[str]] = frozenset({"vitis_tb"})
-  ```
-- **Gate:** pure addition — all generated C++ byte-identical.
+**Target vocabulary — drawn verbatim from the four rows of
+[`docs/guide/flows/index.md`](../docs/guide/flows/index.md)**, so the code and the docs use one set of
+words:
+
+| Flow | DUT target | TB target |
+|---|---|---|
+| 1 · Control-driven kernel | `control_driven_kernel` | `sequential_vitis_tb` |
+| 2 · Free-running, sequentially driven | `free_running_kernel` / `composite_kernel` | `sequential_xsi_tb` |
+| 3 · Free-running, concurrently driven | *(same as Flow 2)* | `concurrent_systemc_tb` |
+| 4 · Full system, on hardware | `bitstream` | — (host software) |
+
+Implement **`control_driven_kernel`** and **`sequential_vitis_tb`** only; declare the rest as known
+names that are not yet reachable.
+
+> **The DUT and TB targets are different species — do not oversell the axis.** The TB targets are a real
+> choice (one `main()`, three lowerings). The DUT targets are ~1:1 with the class (`HostActivated` →
+> `control_driven_kernel`), so for a DUT the axis is a *name and a validation hook*, not a fork. It still
+> earns its place: it is what lets `check(cls, "concurrent_systemc_tb")` answer *"not a potential target
+> for this kind"*.
+
+Declare per-class targets as a ClassVar, house style (read by `build/` via `getattr`):
+
+```python
+class HostActivated(HwComponent):
+    potential_targets: ClassVar[frozenset[str]] = frozenset({"control_driven_kernel"})
+class FreeRunComp(HwComponent):
+    potential_targets: ClassVar[frozenset[str]] = frozenset({"free_running_kernel"})
+class CompositeComp(HwComponent):
+    potential_targets: ClassVar[frozenset[str]] = frozenset({"composite_kernel"})
+class SeqTB(NamedObject):
+    potential_targets: ClassVar[frozenset[str]] = frozenset({"sequential_vitis_tb"})
+```
+
+> **Why `potential_`, not `supported_`.** "Supported" reads as a guarantee, which would sneak
+> synthesizability back onto the class — exactly what removing `SynthComp` was meant to stop (see
+> `docs/guide/components/taxonomy.md`: *synthesizability is a codegen/usage axis, not a class fact*).
+> `potential_targets` declares **the paths that exist for this kind**; `check()` answers **whether this
+> particular component actually makes it**. The class states the kind; the predicate states the fitness.
+
+**Gate:** pure addition — all generated C++ byte-identical.
 
 ## Stage 2 — factor `validate` out of `generate`
 
@@ -106,11 +135,18 @@ Structural rule (a) + body rule (b). Same shape for the other kinds.
   "where the kernel body comes from", so "when does it lower at all" belongs beside it.
 - *(Alternative if the family outgrows `index.md`: a dedicated `targets.md` at nav 7.)*
 
+## Depends on
+
+[`plans/toy_examples.md`](./toy_examples.md) — the tested `Square` (`FreeRunComp`) and `Double`→`Square`
+(`CompositeComp`) toys are this plan's **fixtures**: a subject that passes `check`, per kind, plus the
+crafted variants that fail. (`simp_fun` already serves as the tested `HostActivated`.) The two plans are
+independently reviewable, but land the toys first so the check tests have something real to check.
+
 ## Not in scope
 
 - The `CodegenSource` base — revisit **after** the family exists, with evidence (see Context).
-- `systemc_tb` / `xsi_bfm` targets — declare the axis, don't implement them (they are the flows' future
-  work).
+- `sequential_xsi_tb` / `concurrent_systemc_tb` / `bitstream` targets — declare the names, don't
+  implement them (they are the flows' future work).
 - Collecting *all* violations per pass — first-violation is fine for v1.
 
 ## Verification
