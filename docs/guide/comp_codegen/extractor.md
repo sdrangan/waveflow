@@ -3,43 +3,168 @@ title: Extractor
 parent: Component Code Generation
 nav_order: 3
 audience: hls
-api: [HwStmtExtractor, extract_kernel, SynthesisError]
-summary: "How HwStmtExtractor parses the synthesizable subset of a component's Python (on_start / run_proc, or main for a testbench) into the HwStmt IR, failing fast with SynthesisError on unsupported patterns."
+api: [HwStmtExtractor, extract_kernel, extract_testbench, SynthesisError, check]
+summary: "Extraction reads a component's entry method as source (it never runs it), parses it, and translates it into HwStmt — a small hardware IR of ~25 statement types that sits between the Python and the C++. Only a limited set of Python statements and a fixed vocabulary of endpoint operations can be extracted today; anything else raises SynthesisError rather than emitting doubtful C++. check(source, target) is the same rules as a predicate."
 ---
 
 # Extractor
 
-## Concept
+## What extraction is
 
-The extractor stage parses Python component methods into a constrained hardware IR (`HwStmt`). It enforces the synthesizable subset at build time, so unsupported patterns fail fast with `SynthesisError` instead of generating ambiguous C++.
+**Extraction is reading your Python and rewriting it as hardware.** The generator takes the
+component's entry method — `on_start`, `run_iter`, or a testbench's `main` — and translates it
+statement by statement into a form the C++ emitter understands.
 
-Kernel extraction selects `on_start` when a component carries a `VitisRegMapMMIFSlave`, otherwise `run_proc`. Testbench extraction routes to `main()` and enables a different rule profile through `is_testbench=True`.
+The important part: **extraction never runs your method.** It reads the *source text*, parses it, and
+works on the syntax tree. So the generator sees `y = self.compute(x)` as a *shape* — an assignment
+whose value is a call — and never as a value. This is why the accepted subset is small and why it is
+defined syntactically: the generator only knows what it can *read*.
 
-## API
+## The sequence: Python → HwStmt → C++
 
-- [`HwStmtExtractor`](../../../waveflow/build/hwcodegen.py) parses method source into `HwStmt`.
-- [`extract_kernel(comp) -> HwStmt`](../../../waveflow/build/hwcodegen.py) chooses kernel entry point and resolves symbols.
-- [`extract_testbench(comp) -> HwStmt`](../../../waveflow/build/hwcodegen.py) extracts `HwTestbench.main()`.
-- [`@synthesizable`](../../../waveflow/hw/synth.py) marks callable methods for extraction and lowering.
-- Implicit-capture checks and pipelined-op restrictions are enforced in [`HwStmtExtractor`](../../../waveflow/build/hwcodegen.py).
+Extraction is the middle of a three-step pipeline:
 
-## Example
-
-From [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py), `PolyAccelComponent.on_start()` and `@synthesizable evaluate(...)` are extracted as kernel IR, while `PolyTBHls.main()` is extracted through testbench mode.
-
-```python
-@synthesizable
-def evaluate(self, cmd_hdr, s_in, m_out, coeffs):
-    samp_in, tstart = yield from s_in.get_pipelined(Float32, count=cmd_hdr.nsamp)
-    yield from m_out.write_pipelined(array(Float32, y), t_out_start)
+```
+your method  ──parse──>  Python AST  ──extract──>  HwStmt  ──emit──>  C++
+                                        (rules)     (IR)
 ```
 
-The extractor permits this hook body, but blocks pipelined stream ops at top-level kernel/testbench bodies.
+1. **Parse.** `inspect.getsource(method)` reads the method's text and `ast.parse` turns it into a
+   Python **AST** (abstract syntax tree) — Python's own structural representation of the code.
+2. **Extract.** [`HwStmtExtractor`](../../../waveflow/build/hwcodegen.py) walks that tree and builds an
+   **`HwStmt`** tree. This is where every rule is enforced: anything it cannot translate raises
+   `SynthesisError` here, before a line of C++ exists.
+3. **Resolve.** A second pass replaces leftover AST nodes with the real Python values they refer to and
+   types each variable — turning a *reference* to `MAX_NDATA` into the number `1024`.
+4. **Emit.** [Codegen](./codegen.md) walks the resolved `HwStmt` tree and writes C++.
 
-## Quick reference
+### What an IR is, and why there is one
 
-- Use `extract_kernel` for normal `HwComponent` classes.
-- Use `extract_testbench` for `HwTestbench` classes.
-- Mark hardware-callable helpers with `@synthesizable`.
-- Keep non-hardware helpers as `@sim_only` when they appear in extracted methods.
-- Expect build-time errors for non-synthesizable AST patterns.
+An **IR** — *intermediate representation* — is a deliberately small language sitting between the input
+and the output. `HwStmt` is Waveflow's: about 25 statement types
+([`waveflow/hw/hwstmt.py`](../../../waveflow/hw/hwstmt.py)) such as `SeqStmt` (do these in order),
+`WhileStmt`, `CaseStmt`, `FunctionStmt` (call a hook), `MMArrayReadStmt` (burst-read from memory), and
+`KernelCallStmt` (a testbench invoking the DUT).
+
+It is **neither Python nor C++** — it is the set of things hardware can do, which both can be mapped
+onto. Two reasons it earns its place:
+
+- **The rules are checked exactly once.** By the time the emitter runs, the tree is already known to be
+  translatable, so the emitter contains no validation and cannot disagree with the extractor about what
+  is legal.
+- **One input, many outputs.** The same `HwStmt` tree is what lets one component lower to more than one
+  [target](./index.md) without re-reading the Python.
+
+## What can be extracted today
+
+**Only a limited set of Python, plus a fixed vocabulary of endpoint operations.** This is today's
+extent, not a ceiling — it grows as targets and patterns need it. Everything below is verified against
+the current extractor.
+
+The mental model that matters: this is **not "Python minus a few features"**. The extractor recognizes
+a *fixed list of shapes*. If a statement is not on the list, it is rejected — not attempted.
+
+### Statements
+
+| Python | Status |
+|---|---|
+| `y = <call>` — plain assignment | **accepted** |
+| `x: T = yield from <endpoint call>` — annotated binding | **accepted** (annotation allowed *only* with `yield from`) |
+| a bare call, e.g. `self.regmap.set("y", y)` | **accepted** |
+| `if` / `elif` / `else` | **accepted** (see conditions) |
+| `return`, `return <local>` | **accepted** |
+| `while True:` + `continue` | **accepted** — the free-running loop |
+| a docstring | **accepted** (ignored) |
+| `while <condition>:` | rejected — only `while True:` |
+| `for` | rejected |
+| `break` | rejected |
+| `pass` | rejected |
+| `try` / `except`, `with`, `assert`, `raise`, `del` | rejected |
+| `y += 1` — augmented assignment | rejected |
+| `x: T = <call>` — annotation without `yield from` | rejected |
+
+Two of these surprise people. **`pass` is rejected** — it is not a no-op to the extractor, it is an
+unrecognized statement type. And **`break` is rejected**, so a `while True:` body has no exit: that is
+the point, it is a block that runs forever, re-firing per job.
+
+### Conditions
+
+Conditions lower to a `CaseStmt`, which today handles **equality against a constant only**:
+
+| Condition | Status |
+|---|---|
+| `if x == 0:` / `if x != 0:` | **accepted** |
+| `if x == SomeEnum.MEMBER:` | **accepted** |
+| `if x > 0:` / `if x >= 0:` | rejected — only `==` and `!=` |
+| `if a and b:` / `if not a:` | rejected |
+
+This is why kernels are written to compare a status against a constant rather than range-check a value.
+Richer conditions need an expression IR, which is deliberate future work — `hist` works around it by
+making a read unconditional (a zero-length burst is a no-op) rather than guarding it with `>`.
+
+### Endpoint operations
+
+Beyond plain statements, the extractor recognizes a fixed vocabulary of **operations on endpoints** —
+each in a rigid call shape, because each maps to one IR node:
+
+- **Streams** — `yield from ep.get(Schema)`, `yield from ep.get(Schema, count=n)`, `yield from
+  ep.write(value)`
+- **Register maps** — `self.regmap.get("field")`, `self.regmap.set("field", value)`
+- **Memory** — `read_array` / `write_array` on an `m_axi` master, which lower to burst reads and writes
+- **Hooks** — a call to any [`@synthesizable`](../custom_hooks/) method
+- **Testbench-only** — `dut.run()`, `dut.run_once(...)`, `ep.push(v)` / `ep.pop(v)`, schema file I/O,
+  `mem.alloc_array(...)`
+
+Their argument shapes are strict — `mem.alloc_array(buf, ElemT, count=…)` and nothing else — and most
+of the extractor's error messages are about exactly this. The strictness is the price of each call
+mapping onto one IR node with no inference.
+
+## The rules that are not about syntax
+
+Four rules are about *meaning* rather than statement shape. These are the ones worth internalising:
+
+**No reads of mutable `self.X`.** A kernel body may read its arguments, its endpoints, its reg-map, its
+`HwParam` values, and `DataSchema` types. It may **not** read mutable instance state:
+
+> `Implicit capture of 'self.gain' at line 2. Reads of self.X inside a synthesizable method are
+> forbidden unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the value @sim_only or pass it
+> explicitly.`
+
+The reason is that `self.gain` is a Python value at *elaboration* time; in hardware it is either a
+constant baked into the design or a register someone must write. Silently choosing one would be
+guessing, so the extractor makes you say which. (This is also why cross-firing state is a
+[work in progress](../components/freerun.md).)
+
+**Only `@synthesizable` calls.** A call to a plain method is rejected — mark it `@synthesizable` to make
+it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (that is how
+`self.timeout(...)` models latency in simulation and emits nothing).
+
+**No concurrency.** Spawning a SimPy process (`env.process(...)`) is rejected, because every target this
+extractor feeds is sequential — there is no straight-line lowering for a fork. The message points at the
+SystemC path ([Flow 3](../flows/)). Honest limit: this is a **gate, not a proof**. It rejects the
+syntax that certainly implies concurrency; it cannot certify that a body is sequential.
+
+**A leaf must be structurally flat.** A component that lowers to one kernel function may not own
+sub-components or internal interfaces — a single function has nowhere to put them. See the
+[contract](./structure.md).
+
+## Asking without generating
+
+Every rule above raises `SynthesisError` during extraction, which is what makes generation fail-loud.
+To ask the same question *without* generating, use [`check`](./index.md):
+
+```python
+>>> from waveflow.build.codegen_check import check
+>>> check(SimpFunComponent)
+(True, None)
+```
+
+`check` runs this same extractor and turns the raise into a verdict. It carries no rules of its own, so
+it cannot report a rule the generator does not enforce, nor miss one it does — **a rule added here is
+reported by `check` for free.**
+
+## See also
+
+- [Component structure](./structure.md) — the contract for when a component lowers at all.
+- [Custom Hooks](../custom_hooks/) — writing the bodies the extractor deliberately does not translate.
+- [Codegen](./codegen.md) — what the emitter does with the resolved `HwStmt` tree.
