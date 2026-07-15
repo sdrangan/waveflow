@@ -93,11 +93,16 @@ exception — `kernel_files_to_str(Square)` returns files, but **not** the ones 
   The `x * x` above is the **pysim golden**; it does not itself lower to C++.
 - The generated top is **`ap_ctrl_hs`**, not the free-running `ap_ctrl_none` `hls::task` described
   above. The class declares `control_mode = FREE_RUNNING`, but codegen does not yet act on it.
+- The emitted header **would not compile**. `Square` does not set `cpp_namespace`, and the default
+  derives it from the *kernel name* — so the header declares `void square(...)` and
+  `namespace square { ... }` in one scope, which C++ rejects as a redeclaration. Every real
+  component sidesteps this by hand-setting `<kernel>_impl` (`simp_fun_impl`, `poly_impl`,
+  `hist_impl`, …). If you write a `FreeRunComp` today, **set `cpp_namespace` explicitly.**
 
 The real free-running kernels (`MemRStream`/`MemWStream`) hand off *fixed hand-written* `hls::task`
 bodies via `kernel_task()`; their `run_iter` is a pysim golden only. So the claim `Square` earns is
-*"this is real code, it runs, and this page matches it"* — not *"this synthesizes"*. Both gaps are
-pinned by a test, so they will fail loudly the day they close.
+*"this is real code, it runs, and this page matches it"* — not *"this synthesizes"*. All three gaps
+are pinned by a test, so they will fail loudly the day they close.
 
 ## State comes later
 

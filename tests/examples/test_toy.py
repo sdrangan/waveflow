@@ -225,8 +225,15 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     2. The top is `ap_ctrl_hs`, NOT the free-running `ap_ctrl_none` `hls::task` the page describes —
        `ap_ctrl_none` is emitted nowhere in `waveflow/build/`.  `codegen_dispatch` names the method
        to extract but explicitly leaves the target/pragma axis for later.
+    3. The emitted header is **not valid C++**.  `Square` does not set `cpp_namespace`, so
+       `hwgen.resolved_namespace` defaults it to the *kernel name* — emitting `void square(...)` and
+       `namespace square {...}` into the same scope, which is ill-formed ("redeclared as different
+       kind of entity").  Every real component dodges this by hand-setting `<kernel>_impl`
+       (`simp_fun_impl`, `hist_impl`, `poly_impl`, `mem_r_stream_impl`, ...) — a 100% opt-out rate,
+       which is itself the evidence that the default is unusable whenever a hook exists.  The toy is
+       the first component to take the default, so it is the first to expose it.
 
-    When either gap closes this test fails loudly — which is the point: that is the signal to update
+    When any gap closes this test fails loudly — which is the point: that is the signal to update
     the doc.  This is what `check(Square, "free_running_kernel")` is meant to report once
     plans/codegen_check_family.md lands.
     """
@@ -242,6 +249,10 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     assert "s_axilite port=return" in files["square.cpp"]
     assert "ap_ctrl_none" not in files["square.cpp"]
     assert "hls::task" not in files["square.cpp"]
+
+    # Gap 3: the namespace collides with the kernel function name -> ill-formed C++.
+    assert "void square(" in files["square.hpp"]
+    assert "namespace square {" in files["square.hpp"]
 
 
 def test_scaled_square_declares_no_codegen_descriptors():
