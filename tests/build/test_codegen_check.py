@@ -11,6 +11,8 @@ Two things are under test, and they are different in kind:
 """
 from __future__ import annotations
 
+import ast
+import textwrap
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -30,6 +32,7 @@ from waveflow.hw.codegen_targets import (
 )
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_hostactivated import HostActivated
+from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
@@ -413,6 +416,178 @@ def test_gate4_does_not_swallow_non_synthesis_errors():
 
     with pytest.raises(RuntimeError, match="elaboration is broken"):
         check(_ExplodesOnElaboration, CONTROL_DRIVEN_KERNEL)
+
+
+# ==============================================================================================
+# Gate 4 — the sequential gate (Stage 3), the family's only NEW rule.
+#
+# It lives in the extractor (`HwStmtExtractor._validate_no_concurrency`), not here — so `check`
+# reports it for free and `generate` enforces it too.  A rule added to `codegen_check.py` instead
+# would be the "shadow" this module's docstring forbids.
+#
+# It is a GATE, NOT A PROOF: it rejects a syntactic construct that certainly implies concurrency;
+# it does not certify that a body which passes is sequential.  The tests below are written to that
+# claim and no stronger one.
+# ==============================================================================================
+
+class _SequentialTB(SeqTB):
+    """A straight-line TB that passes `check` — the baseline the spawn below deviates from.
+
+    `simp_fun`'s TB shape: read the operands from disk, drive one timed invocation inline via
+    `yield from`.  (`yield from ()` is NOT an extractable body shape — gate 4 rejects it — so the
+    fixtures mirror the real `yield from dut.run_once_sim(...)` spelling.)
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "simp_fun"
+
+    def main(self):
+        dut = SimpFunComponent()
+        x = Int32().read_uint32_file(self.data_dir + "/x.bin")
+        a = Int32().read_uint32_file(self.data_dir + "/a.bin")
+        b = Int32().read_uint32_file(self.data_dir + "/b.bin")
+        yield from dut.run_once_sim(x, a, b)
+
+
+class _ConcurrentTB(_SequentialTB):
+    """Violation (c): `main()` SPAWNS the invocation instead of running it inline.
+
+    The ONLY deviation from `_SequentialTB` is `yield from` -> `self.sim.env.process(...)`: the
+    invocation now runs *alongside* the rest of `main()` rather than in it.  That is not a missing
+    feature of the Vitis lowering, it is a different execution model — there is no `int main()`
+    that means this.
+    """
+
+    def main(self):
+        dut = SimpFunComponent()
+        x = Int32().read_uint32_file(self.data_dir + "/x.bin")
+        a = Int32().read_uint32_file(self.data_dir + "/a.bin")
+        b = Int32().read_uint32_file(self.data_dir + "/b.bin")
+        self.sim.env.process(dut.run_once_sim(x, a, b))     # <-- fan-out: a second process
+
+
+def test_the_sequential_tb_fixture_really_passes():
+    """Guard the fixture: the spawn below is only meaningful if the shape it starts from lowers."""
+    assert check(_SequentialTB, SEQUENTIAL_VITIS_TB) == (True, None)
+
+
+def test_gate4_concurrent_tb_is_rejected_and_named_as_concurrent():
+    ok, msg = check(_ConcurrentTB, SEQUENTIAL_VITIS_TB)
+    assert ok is False
+    assert "concurrent" in msg.lower(), "the message must name the CONCURRENCY, not a symptom"
+    assert "self.sim.env.process" in msg, "the message must name the offending spawn"
+    assert "main()" in msg
+
+
+def test_gate4_concurrent_tb_message_points_at_the_systemc_path():
+    """The message must name the real fix — a different flow, not a missing marker."""
+    _, msg = check(_ConcurrentTB, SEQUENTIAL_VITIS_TB)
+    assert "SystemC" in msg
+    assert "Flow 3" in msg
+    assert "docs/guide/flows" in msg, "point at the flow that will support it"
+    assert "straight-line" in msg
+
+
+def test_gate4_concurrent_message_is_better_than_the_old_generic_one():
+    """Before Stage 3 this fell through to "Call to non-synthesizable method 'process'".
+
+    That was TRUE and useless: it sends the author off to mark SimPy `@synthesizable`, when the
+    real answer is that the testbench belongs on another flow.  The new message must not be that.
+    """
+    _, msg = check(_ConcurrentTB, SEQUENTIAL_VITIS_TB)
+    assert "non-synthesizable method" not in msg
+    assert "Mark it @synthesizable or @sim_only" not in msg
+
+
+def test_gate4_concurrent_rejection_relays_the_extractor_verbatim():
+    """The rule is the EXTRACTOR's, not this module's — so `generate` enforces it too.
+
+    If `check` could reject a spawn that `extract_testbench` accepts, the rule would have been
+    added to `codegen_check.py`: a shadow that can drift from what codegen does.
+    """
+    from waveflow.build.hwcodegen import SynthesisError, extract_testbench
+
+    tb = elaborate(_ConcurrentTB)
+    with pytest.raises(SynthesisError) as excinfo:
+        extract_testbench(tb)
+
+    ok, msg = check(_ConcurrentTB, SEQUENTIAL_VITIS_TB)
+    assert ok is False
+    assert msg == str(excinfo.value)
+
+
+# ----------------------------------------------------------------------------------------------
+# The detection SHAPE — an attribute call `.process(...)` on an `env`-ish receiver.
+#
+# Narrow on purpose.  The negatives matter as much as the positives: `waveflow/hw/interface.py`
+# and `waveflow/simulation/simobj.py` spawn via `self.process(...)` as a library internal, and a
+# rule broad enough to catch that shape would be guessing.
+# ----------------------------------------------------------------------------------------------
+
+def _run_spawn_gate(body: str) -> None:
+    """Run ONLY the sequential-gate pre-pass over a `main()` built from *body*."""
+    from waveflow.build.hwcodegen import HwStmtExtractor
+
+    src = "def main(self):\n" + textwrap.indent(textwrap.dedent(body), "    ")
+    func_def = ast.parse(src).body[0]
+    HwStmtExtractor(comp=None, method_name="main")._validate_no_concurrency(func_def)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "env.process(stim())",
+        "self.env.process(stim())",
+        "sim.env.process(stim())",
+        "self.sim.env.process(stim())",
+        "yield env.process(stim())",              # spawned, then joined — still a fork
+        "p = self.sim.env.process(stim())",       # bound to a name
+        "if x == 1:\n    env.process(stim())",    # nested in a statement
+    ],
+)
+def test_every_env_spawn_spelling_is_caught(body):
+    from waveflow.build.hwcodegen import SynthesisError
+
+    with pytest.raises(SynthesisError, match="Concurrent process spawn"):
+        _run_spawn_gate(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # `self.process(...)` — the library-internal spawn wrapper (interface.py, simobj.py).
+        # The receiver is not env-ish, so the gate does not fire.  See the report/limitation note:
+        # this is a spelling we deliberately do NOT catch.
+        "self.process(gen())",
+        "yield self.process(self._make_write_call(words))",
+        # An `env` receiver, but not the spawn method.
+        "yield self.env.timeout(10)",
+        "yield self.timeout(self.clk.period)",
+        # `.process` on something that is plainly not an environment.
+        "self.image.process(frame)",
+        "dut.run_once(x)",
+    ],
+)
+def test_the_gate_does_not_fire_on_non_spawns(body):
+    _run_spawn_gate(body)     # must not raise
+
+
+def test_no_real_kernel_or_tb_trips_the_sequential_gate():
+    """Stage 3's stated gate: the new rule fires on NOTHING that exists today.
+
+    Driven through the real extractor rather than `check`, because two of the four kernels
+    (HistAccel, BlockScaleComponent) are un-migrated plain HwComponents that `check` abstains on
+    at gate 2 — they would never reach gate 4, so a `check`-level assertion would prove nothing
+    about them.  `extract_*` is what `generate` runs, so this covers all four for real.
+    """
+    from examples.block_scale.block_scale import BlockScaleComponent
+    from examples.shared_mem.hist import HistAccel
+    from examples.stream_inband.poly import PolyAccelComponent
+    from waveflow.build.hwcodegen import extract_kernel, extract_testbench
+
+    for cls in (SimpFunComponent, PolyAccelComponent, HistAccel, BlockScaleComponent):
+        extract_kernel(elaborate(cls))          # must not raise
+    for cls in (SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls):
+        extract_testbench(elaborate(cls))       # must not raise
 
 
 # ==============================================================================================
