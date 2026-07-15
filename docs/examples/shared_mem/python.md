@@ -10,7 +10,7 @@ has_children: false
 This page builds the histogram accelerator as a Waveflow `HwComponent`. The
 [concept page](aximm.md) covered *why* the data lives in memory and the control
 on a stream; here we write the Python that says *how* — the command/response
-schemas, the kernel's three ports, and the `run_proc` body that validates,
+schemas, the kernel's three data ports, and the `on_start` body that validates,
 reads, computes, and writes back. Every excerpt is from
 [`examples/shared_mem/hist.py`](../../../examples/shared_mem/hist.py) and
 [`hist.py`](../../../examples/shared_mem/hist.py).
@@ -119,14 +119,14 @@ checks against. They are the one place the buffer sizes are declared.
 
 ## The kernel body
 
-`run_proc` is the kernel — the body Vitis runs once per command under the
-`ap_ctrl_hs` handshake. It reads exactly as the [execution model](aximm.md)
-described: get the command, validate it, read the two inputs, compute, write the
-counts, respond.
+`on_start` is the kernel — the body Vitis runs once per `ap_start`, the handshake
+`HistAccel`'s `HostActivated` base exposes through its control-only regmap. It reads
+exactly as the [execution model](aximm.md) described: get the command, validate it,
+read the two inputs, compute, write the counts, respond.
 
 ```python
-# examples/shared_mem/hist.py — HistAccel.run_proc
-def run_proc(self) -> ProcessGen[None]:
+# examples/shared_mem/hist.py — HistAccel.on_start
+def on_start(self) -> ProcessGen[None]:
     cmd: HistCmd = yield from self.s_in.get(HistCmd)
 
     status = yield from self.validate(cmd)

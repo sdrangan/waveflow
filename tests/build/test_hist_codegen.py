@@ -95,13 +95,23 @@ def test_counts_write_lowers_to_uint32_array_utils():
 
 
 def test_kernel_signature_and_pragmas():
-    """Full kernel signature: stream + m_axi ports, ap_ctrl_hs, depth constant."""
+    """Full kernel signature: stream + m_axi ports, s_axilite control, depth constant.
+
+    ``port=return`` is ``s_axilite`` (not ``ap_ctrl_hs``) since HistAccel became a
+    ``HostActivated``: ``m_axi ... offset=slave`` already forces a control slave into existence to
+    carry ``m_mem``'s base at ``0x10``, and it used to declare ``0x00 : reserved`` with no ap_start
+    logic — i.e. the kernel needed a CPU for the base address *and* a second agent to pulse a bare
+    ``ap_start`` wire.  The control-only ``VitisRegMap({})`` fills that reserved slot in the slave
+    that was already there; it adds **no** application registers, which is why the argument list
+    below is unchanged and the command still rides in-band on ``s_in``.
+    """
     from waveflow.build.hwgen import kernel_to_cpp
     cpp = kernel_to_cpp(HistAccel)
     assert "ap_uint<32>* m_mem" in cpp
     assert ("#pragma HLS INTERFACE m_axi port=m_mem offset=slave "
             "bundle=gmem depth=m_mem_depth") in cpp
-    assert "#pragma HLS INTERFACE ap_ctrl_hs port=return" in cpp
+    assert "#pragma HLS INTERFACE s_axilite port=return       bundle=control" in cpp
+    assert "ap_ctrl_hs" not in cpp, "the control plane moved onto the AXI-Lite slave"
 
 
 def test_kernel_lowers_hooks_and_three_array_ops():

@@ -11,7 +11,10 @@ kernel/testbench files — `hist.py` is the source of truth.
 
 - **Signature / pragmas:** `void hist(s_in, m_out, m_mem)` — two AXI4-Stream
   ports + one `m_axi` pointer; `m_axi` pragma `offset=slave bundle=gmem
-  depth=...`, plus `ap_ctrl_hs port=return`.
+  depth=...`, plus `s_axilite port=return bundle=control` (HistAccel is a
+  `HostActivated` with a control-only `VitisRegMap({})`: no application registers,
+  so the signature carries no regmap args — `ap_start`/`ap_done` just fill the slot
+  `offset=slave` already reserved at `0x00` of the control slave).
 - **Three array ops** lower to resident-range slice bursts (element coordinates):
   `float32_array_utils::read_array_slice<32>(ptr, 0, n, data)` for data and edges,
   `uint32_array_utils::write_array_slice<32>(counts, ptr, 0, n)` for counts, each via

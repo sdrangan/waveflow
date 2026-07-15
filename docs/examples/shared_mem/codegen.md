@@ -29,7 +29,7 @@ for fname, content in tb_files_to_str(HistTBHls).items():
     (gen / fname).write_text(content)          # gen/hist_tb.cpp
 ```
 
-`kernel_to_cpp(HistAccel)` lowers the `run_proc` body; `tb_files_to_str(HistTBHls)`
+`kernel_to_cpp(HistAccel)` lowers the `on_start` body; `tb_files_to_str(HistTBHls)`
 lowers the testbench's `main()`. Both come from the **same Python source** you
 already simulated — there is no second description of the kernel to keep in sync.
 
@@ -63,7 +63,7 @@ void hist(
 #pragma HLS INTERFACE axis port=s_in
 #pragma HLS INTERFACE axis port=m_out
 #pragma HLS INTERFACE m_axi port=m_mem offset=slave bundle=gmem depth=m_mem_depth
-#pragma HLS INTERFACE ap_ctrl_hs port=return
+#pragma HLS INTERFACE s_axilite port=return       bundle=control
 ```
 
 - **`s_in` / `m_out`** become AXI4-Stream ports (`axis`) — the command in, the
@@ -83,13 +83,19 @@ void hist(
 
   i.e. `data` (`max_ndata`) + `edges` (`max_nbins`) + `counts` (`max_nbins`).
   The `max_ndata` / `max_nbins` HwParams from the Python model drive this directly.
-- **`ap_ctrl_hs`** is the start/done handshake — the same control contract as the
-  [regmap example](../regmap/), here implicit on the kernel rather than exposed as
-  registers.
+- **`s_axilite port=return`** is the start/done handshake, exposed as registers in the
+  control slave — the same control contract as the [regmap example](../regmap/).
+  It comes from `HistAccel` being a `HostActivated` with a **control-only**
+  `VitisRegMap({})`: no application registers, because the command rides in-band on
+  `s_in`. Note the slave is *not* new — `offset=slave` on the `m_axi` pragma above
+  already forced one into existence to hold `m_mem`'s base address at `0x10`, and it
+  declared `0x00` as *reserved*. Declaring the kind is what fills `0x00` with
+  `ap_start`/`ap_done`, so one CPU both programs the base address and launches the
+  kernel, over the same interface.
 
 ## The body: validate, then multi-buffer bursts
 
-The lowered `run_proc` reads exactly like the Python it came from:
+The lowered `on_start` reads exactly like the Python it came from:
 
 ```cpp
 // gen/hist.cpp
