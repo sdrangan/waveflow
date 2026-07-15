@@ -729,8 +729,14 @@ class CosimStep(BuildStep):
         data_dir = config.root_dir / "data"
         case = HistCase(ndata=ndata, nbins=nbins, seed=seed)
         data, edges = case.write_inputs(data_dir)
+        # trace_level goes to run.tcl RAW. Two different vocabularies share this
+        # param name: run.tcl validates against {none port all} and hands it to
+        # `cosim_design -trace_level`, which wants the level; vcd_trace() maps to the
+        # xsim glob ("none" -> "*") and belongs on the GenerateVcdStep path below.
+        # Passing vcd_trace() here sent "*" to run.tcl, which rejected it — so the
+        # default `--trace-level none` made `--through cosim` fail outright.
         _run_tcl(config, start_at="csim", through="cosim",
-                 trace_level=vcd_trace(trace_level), live_output=live_output)
+                 trace_level=trace_level, live_output=live_output)
         ok, detail = case.check_outputs(data_dir, data, edges)
         if not ok:
             raise RuntimeError(f"Cosim output mismatch (reference vector): {detail}")
