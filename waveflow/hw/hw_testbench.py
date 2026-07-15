@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from waveflow.hw.codegen_targets import SEQUENTIAL_VITIS_TB
 from waveflow.hw.synth import sim_only
 from waveflow.named import NamedObject
 
@@ -57,6 +58,14 @@ class SeqTB(NamedObject):
     #: Override the generated C++ kernel/testbench base name — set to match the DUT (e.g.
     #: ``cpp_kernel_name = "poly"`` on a ``PolyTBHls`` yields ``gen/poly_tb.cpp``).
     cpp_kernel_name: ClassVar[str | None] = None
+
+    #: The codegen targets that **exist for this kind**.  Unlike the DUT kinds (~1:1 with the class),
+    #: the TB targets are a *real* choice — one ``main()``, three lowerings (Vitis C-sim ``int main()``,
+    #: an XSI BFM, a SystemC harness).  ``SeqTB`` declares only the sequential Vitis lowering: the
+    #: other two drive a *free-running* DUT and are Flow 2/3 future work, so they belong to whatever
+    #: kind grows them, not here.  See :class:`~waveflow.hw.hw_hostactivated.HostActivated` for why
+    #: this is ``potential_`` and not ``supported_``.
+    potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_VITIS_TB})
 
     #: Class-level marker. ``HlsCodegenStep.is_testbench`` auto-detects via
     #: ``issubclass(comp_class, SeqTB)`` and falls back to this flag if

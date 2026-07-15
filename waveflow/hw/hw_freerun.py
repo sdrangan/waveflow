@@ -20,6 +20,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import ClassVar
 
+from waveflow.hw.codegen_targets import FREE_RUNNING_KERNEL
 from waveflow.hw.hw_component import ControlMode, HwComponent
 from waveflow.simulation.simobj import ProcessGen
 
@@ -30,6 +31,13 @@ class FreeRunComp(HwComponent):
 
     control_mode: ClassVar[ControlMode] = ControlMode.FREE_RUNNING
     _kernel_method: ClassVar[str] = 'run_iter'
+
+    #: The codegen targets that **exist for this kind** — a free-running leaf is the single-task DUT
+    #: of Flows 2/3.  It declares the *path*, not a guarantee: the target is not implemented yet, and
+    #: even once it is, :func:`~waveflow.build.codegen_check.check` is what answers whether a given
+    #: component makes it.  (See :class:`~waveflow.hw.hw_hostactivated.HostActivated` for why this is
+    #: ``potential_`` and not ``supported_``.)
+    potential_targets: ClassVar[frozenset[str]] = frozenset({FREE_RUNNING_KERNEL})
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden: drive :meth:`run_iter` forever (the runtime's re-firing, in the DES)."""

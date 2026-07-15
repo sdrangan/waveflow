@@ -18,6 +18,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Any, ClassVar
 
+from waveflow.hw.codegen_targets import CONTROL_DRIVEN_KERNEL
 from waveflow.hw.hw_component import ControlMode, HwComponent
 from waveflow.simulation.simobj import ProcessGen
 
@@ -43,6 +44,17 @@ class HostActivated(HwComponent):
     #: intent; ``control_mode`` is not yet consumed by the pragma emitter (that rides with a real
     #: consumer later — see ``plans/exec_model_classes.md``), so this changes no generated output.
     control_mode: ClassVar[ControlMode] = ControlMode.PER_INVOCATION
+
+    #: The codegen targets that **exist for this kind** — a host-activated leaf is the DUT of
+    #: Flow 1 (``ap_ctrl_hs`` + ``s_axilite``), and of no other flow.
+    #:
+    #: Deliberately **not** ``supported_targets``: "supported" would read as a guarantee, sneaking
+    #: synthesizability back onto the class — the very thing removing ``SynthComp`` was meant to stop
+    #: (``docs/guide/components/taxonomy.md``: *synthesizability is a codegen/usage axis, not a class
+    #: fact*).  The class states the **kind**; :func:`~waveflow.build.codegen_check.check` states the
+    #: **fitness** of a particular component.  Read by ``build/`` via ``getattr`` (house style, same as
+    #: ``cpp_kernel_name`` / ``control_mode``).
+    potential_targets: ClassVar[frozenset[str]] = frozenset({CONTROL_DRIVEN_KERNEL})
 
     #: Intent metadata: a host-activated leaf's body is ``on_start``.  The codegen dispatch is
     #: class-based (:func:`~waveflow.build.codegen_dispatch.codegen_path`); this states the same
