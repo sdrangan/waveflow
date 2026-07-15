@@ -10,6 +10,16 @@ summary: "How each declared endpoint on an HwComponent is realized as a Vitis HL
 
 # Endpoint interfaces
 
+> **Most of the time you do not need this page.** Declare an endpoint in Python and the mapping to
+> Vitis ports is handled for you — codegen derives the kernel's whole argument list and every
+> `#pragma HLS INTERFACE` from your endpoints, and you never write one by hand.
+>
+> You need it when you look *inside* the generated kernel. Chiefly: **writing a
+> [custom hook](../custom_hooks/)**, because the C++ arguments your hook receives *are* these ports —
+> you cannot write the body without knowing that a stream endpoint arrives as an
+> `hls::stream<axi4s_word<bw>>&` and an `m_axi` master as a plain pointer. Also when reading a
+> synthesized block's port list to integrate or debug it.
+
 ## Concept
 
 A generated kernel's argument list and its `#pragma HLS INTERFACE` block are derived directly from
