@@ -94,7 +94,7 @@ cd examples/regmap
 python simp_fun_build.py --through gen_tb
 ```
 
-This will execute `build_inputs → py_sim → extract_py_timing → gen_kernel → gen_tb` and stop before invoking Vitis. After it lands, inspect the generated files in `gen/` and confirm `simp_fun_compute_impl.cpp` exists in the example directory.
+This will execute `build_inputs → system_sim → py_sim → gen_kernel → gen_tb` and stop before invoking Vitis. After it lands, inspect the generated files in `gen/` and confirm `simp_fun_compute_impl.cpp` exists in the example directory.
 
 ## Next
 

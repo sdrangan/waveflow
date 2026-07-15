@@ -156,4 +156,5 @@ That's the full Python model — one regmap declaration, one kernel hook, one ho
 
 ## Next
 
-- [Python Simulation](./pysim.md) — running this model in SimPy with the host-side testbench and logging the cycle timing that the synthesis pages later validate against.
+- [System simulation](./pysim.md) — running the kernel and host together in SimPy, and confirming the model works before any testbench exists.
+- [Sequential execution](./seqtb.md) — the `SeqTB` that invokes the kernel directly, and produces the golden and the cycle timing the synthesis pages validate against.

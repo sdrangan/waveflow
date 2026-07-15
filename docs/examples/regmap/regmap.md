@@ -181,6 +181,6 @@ firmware.
 ---
 
 The rest of this example follows the same accelerator through the full Waveflow
-flow: [the Python model](python.md), [running it in SimPy](pysim.md),
-[generating the Vitis kernel](codegen.md), and
-[validating the RTL](rtlsim.md).
+flow: [the Python model](python.md), [system simulation](pysim.md),
+[sequential execution](seqtb.md), [generating the Vitis kernel](codegen.md),
+and [validating the RTL](rtlsim.md).

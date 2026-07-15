@@ -104,7 +104,7 @@ dag.add(ExtractCosimTimingStep(
 ))
 ```
 
-This step reads Vitis's cosim report (typically `<solution>/sim/report/simp_fun_cosim.rpt`), extracts the per-transaction cycle latency, and writes it as a structured `cosim_timing.json` with the same shape as the `py_timing.json` produced by `ExtractPyTimingStep` on the Python side. The matching shape is what makes the next step's comparison trivial.
+This step reads Vitis's cosim report (typically `<solution>/sim/report/simp_fun_cosim.rpt`), extracts the per-transaction cycle latency, and writes it as a structured `cosim_timing.json` with the same shape as the `py_timing.json` the [`SeqTB`](./seqtb.md) produces on the Python side (the `py_sim` step). The matching shape is what makes the next step's comparison trivial — and the two measure the same thing: co-simulation drives the kernel directly, exactly as `run_once_sim` does.
 
 `ExtractCosimTimingStep` is a generic build step from `waveflow.build.cosim_steps` — not poly-specific or simp_fun-specific. Any kernel run through this pipeline gets the same JSON shape on the cosim side.
 
