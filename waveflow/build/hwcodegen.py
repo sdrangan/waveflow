@@ -1811,6 +1811,43 @@ class HwStmtExtractor:
 # ---------------------------------------------------------------------------
 
 
+def _validate_leaf_is_flat(comp) -> None:
+    """A leaf lowers to ONE kernel function, so it must not own a sub-graph.
+
+    The *structural* half of the component contract (``plans/codegen_check_family.md``
+    Stage 4); the body half is the rest of the extractor.  A leaf becomes a single C++
+    function, and a single function has nowhere to put a sub-component or an internal
+    channel between two of them.
+
+    Without this the failure is **silent, not loud**: the extractor walks only the entry
+    method, so a ``HostActivated`` carrying a child emitted a perfectly well-formed
+    kernel that *never mentioned the child* — and ``check()`` returned ``(True, None)``
+    about it.  Dropping half a design without a word is exactly what this family exists
+    to stop.
+
+    Lives here rather than in :mod:`waveflow.build.codegen_check` on purpose: rules live
+    in the extractor so ``generate`` enforces them and ``check`` relays them, and the two
+    cannot drift.  See that module's docstring.
+    """
+    kids = sorted(getattr(comp, 'sub_comps', None) or {})
+    internal = sorted(getattr(comp, 'interfaces', None) or {})
+    if not (kids or internal):
+        return
+    owned = []
+    if kids:
+        owned.append(f"sub-components {kids}")
+    if internal:
+        owned.append(f"internal interfaces {internal}")
+    raise SynthesisError(
+        f"{type(comp).__name__} lowers to a single kernel function, but it owns "
+        f"{' and '.join(owned)}. A single function has nowhere to put them, so emitting "
+        f"one would silently drop them. Either inline that behaviour into this "
+        f"component's own body, or make it a CompositeComp — whose codegen IS the "
+        f"sub-component graph (one task per child, one channel per internal edge). "
+        f"See docs/guide/flows/."
+    )
+
+
 def extract_kernel(comp) -> HwStmt:
     """Extract the kernel body and return a fully-resolved ``HwStmt`` tree.
 
@@ -1824,6 +1861,8 @@ def extract_kernel(comp) -> HwStmt:
 
     A ``composite`` component has no body of its own — its codegen is the graph
     (:func:`composite_top_spec`), so extracting one here is a usage error.
+
+    A ``leaf`` must also be *structurally* a leaf: see :func:`_validate_leaf_is_flat`.
     """
     from waveflow.build.codegen_dispatch import codegen_path
     path = codegen_path(comp)
@@ -1834,6 +1873,7 @@ def extract_kernel(comp) -> HwStmt:
             f"{type(comp).__name__} is a composite: it has no kernel body to extract; "
             f"its codegen is the sub-component graph (composite_top_spec)."
         )
+    _validate_leaf_is_flat(comp)
     from waveflow.build.hwresolve import resolve_kernel  # local: avoid an import cycle
     tree = HwStmtExtractor(comp, method_name=path.method).extract()
     return resolve_kernel(tree, comp)

@@ -61,7 +61,9 @@ void loadstore_iso(hls::stream<ap_uint<32> >& s_in, hls::stream<ap_uint<32> >& m
                    ap_uint<MEM_DW>* gmem) {
 #pragma HLS INTERFACE axis port=s_in
 #pragma HLS INTERFACE axis port=m_out
-#pragma HLS INTERFACE m_axi port=gmem bundle=gmem offset=slave depth=8192
+// max_burst_length=256 matches the generated kernels (hwgen kernel_signature), so this pure-copy
+// kernel characterizes the bus the SAME way the FIR drives it (used by bus_characterize.py).
+#pragma HLS INTERFACE m_axi port=gmem bundle=gmem offset=slave depth=8192 max_read_burst_length=256 max_write_burst_length=256
 #pragma HLS INTERFACE ap_ctrl_hs port=return
 #pragma HLS DATAFLOW
     hls::stream<Cmd> ld_ctrl("ld_ctrl");

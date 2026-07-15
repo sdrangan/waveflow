@@ -7,7 +7,6 @@ audience: python
 api: [HwComponent, transaction_queue, MMIFMaster.region]
 summary: "FIRAccel as a HwComponent: three persistent SimPy stage processes (load / compute / store) handing off through fictitious inter-stage messages, a host-facing run_proc that pulls commands off the queue and kicks the pipeline without blocking, one shared golden (execute), and element-coordinate Region slices for memory access."
 ---
-
 # The Python model
 
 `FIRAccel` ([`fir.py`](../../../examples/rowwise_fir/fir.py)) is a single

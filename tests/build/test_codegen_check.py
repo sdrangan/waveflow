@@ -629,3 +629,76 @@ def test_every_declared_potential_target_is_a_known_name():
     """A kind cannot declare a target the vocabulary does not know."""
     for kind in (SimpFunComponent, Square, ScaledSquare, SimpFunTBHls):
         assert potential_targets(kind) <= ALL_TARGETS, kind.__name__
+
+
+# ==============================================================================================
+# The component contract — the STRUCTURAL half (Stage 4)
+#
+#   A leaf lowers to a standalone Vitis kernel iff
+#     (a) it owns no sub-components / internal interfaces   <- these tests
+#     (b) its body passes the extractor's rules             <- the gate-4 tests above
+# ==============================================================================================
+
+@dataclass
+class _HostWithAChild(SimpFunComponent):
+    """A HostActivated that also owns a sub-component — structurally not a leaf."""
+
+    cpp_kernel_name: ClassVar[str | None] = "host_with_a_child"
+    cpp_namespace: ClassVar[str | None] = "host_with_a_child_impl"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.kid = Square(name=f"{self.name}_kid", sim=self.sim, clk=self.clk)
+        self.add_comp(self.kid)
+
+
+def test_structural_rule_a_leaf_owning_a_subcomponent_is_rejected():
+    """Regression for a SILENT failure: this used to emit a kernel and check said (True, None).
+
+    The extractor walks only the entry method, so a leaf carrying a child produced a
+    well-formed kernel that never mentioned the child — half the design dropped without a
+    word.  The message must name the real fix (CompositeComp), not just refuse.
+    """
+    ok, msg = check(_HostWithAChild)
+    assert ok is False
+    assert "single kernel function" in msg
+    assert "silently drop" in msg
+    assert "CompositeComp" in msg
+    assert "_codegen_kid" in msg, "the message must name WHICH child"
+
+
+def test_structural_rule_lives_in_the_extractor_so_generate_enforces_it_too():
+    """The rule must be fail-loud in codegen, not merely reported by check().
+
+    If this ever passes `generate`, the rule has been moved into codegen_check.py — i.e.
+    it became a shadow that can drift from what codegen accepts.  See codegen_check's
+    module docstring.
+    """
+    from waveflow.build.hwcodegen import SynthesisError
+    from waveflow.build.hwgen import kernel_files_to_str
+
+    with pytest.raises(SynthesisError, match="single kernel function"):
+        kernel_files_to_str(_HostWithAChild)
+
+
+def test_check_relays_the_structural_rule_verbatim():
+    """check() must not re-word the extractor — it must BE the extractor's answer."""
+    from waveflow.build.hwcodegen import SynthesisError, extract_kernel
+
+    comp = elaborate(_HostWithAChild)
+    try:
+        extract_kernel(comp)
+    except SynthesisError as e:
+        raised = str(e)
+    else:
+        pytest.fail("extract_kernel did not raise")
+
+    assert check(_HostWithAChild) == (False, raised)
+
+
+def test_the_real_leaves_are_flat_so_the_contract_holds_for_them():
+    """(a) holds for every real leaf — the rule is a guard, not a burden."""
+    for cls in (SimpFunComponent, HistAccel, Square):
+        comp = elaborate(cls)
+        assert not comp.sub_comps, cls.__name__
+        assert not comp.interfaces, cls.__name__
