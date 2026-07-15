@@ -1002,14 +1002,33 @@ def resolved_namespace(comp_class) -> str | None:
     string is the namespace name to wrap hooks in. Resolution rules:
 
     - ``cpp_namespace = ""`` → ``None`` (opt out; hooks emitted in global).
-    - ``cpp_namespace = None`` → auto-derive from :func:`cpp_kernel_name`.
+    - ``cpp_namespace = None`` → auto-derive as ``<kernel>_impl``.
     - ``cpp_namespace = "<name>"`` → return ``"<name>"`` verbatim.
+
+    **Why the default appends ``_impl`` rather than reusing the kernel name.**  The
+    namespace and the kernel function land in the *same* scope, so naming them alike is
+    ill-formed C++ — g++ rejects ``void square(...);`` beside ``namespace square {...}``
+    with *"redeclared as different kind of entity"*.  The old default returned
+    :func:`cpp_kernel_name` verbatim and so could only ever produce code that would not
+    compile — for any component with a hook.
+
+    It survived because it had never met one: every hook-emitting component hand-writes
+    ``<kernel>_impl`` (``simp_fun_impl``, ``poly_impl``, ``hist_impl``,
+    ``block_scale_impl``, ``mem_r_stream_impl``, ``mem_w_stream_impl``, ``mem_copy_impl``,
+    ``fir_impl``), and the seven that *do* take the default (``CmdRx``, ``IlMemR``,
+    ``IlLoad``, ``IlCompute``, ``IlStore``, ``IlMemW``, ``InterleaverCanon``) emit no
+    hooks, so no ``namespace`` block is ever written for them and nothing collides.  The
+    default was safe only by accident.  ``examples/toy``'s ``Square`` was the first
+    component to take it *with* a hook, which is how this surfaced.
+
+    Appending ``_impl`` makes the common case correct by construction and matches what
+    every component already writes by hand — so this changes no existing kernel's output.
     """
     ns = getattr(comp_class, 'cpp_namespace', None)
     if ns == "":
         return None
     if ns is None:
-        return cpp_kernel_name(comp_class)
+        return f"{cpp_kernel_name(comp_class)}_impl"
     return ns
 
 

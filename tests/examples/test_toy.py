@@ -225,15 +225,11 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     2. The top is `ap_ctrl_hs`, NOT the free-running `ap_ctrl_none` `hls::task` the page describes —
        `ap_ctrl_none` is emitted nowhere in `waveflow/build/`.  `codegen_dispatch` names the method
        to extract but explicitly leaves the target/pragma axis for later.
-    3. The emitted header is **not valid C++**.  `Square` does not set `cpp_namespace`, so
-       `hwgen.resolved_namespace` defaults it to the *kernel name* — emitting `void square(...)` and
-       `namespace square {...}` into the same scope, which is ill-formed ("redeclared as different
-       kind of entity").  The collision needs a `namespace` block, which is emitted only when a
-       component has `@synthesizable` hooks: every hook-emitting component overrides `cpp_namespace`
-       to `<kernel>_impl` (`simp_fun_impl`, `poly_impl`, `hist_impl`, ...), while the seven that DO
-       take the default (`CmdRx`, `IlMemR`, `IlLoad`, `IlCompute`, `IlStore`, `IlMemW`,
-       `InterleaverCanon`) emit no hooks, so nothing collides for them.  The default is safe only by
-       accident — it has never met a hook, and `Square` is the first to take it with one.
+
+    (A third gap lived here: the default `cpp_namespace` emitted a namespace named after the kernel
+    function, which is ill-formed C++.  `Square` was the first component to take that default *with*
+    a hook, which is how it surfaced.  Fixed — the default is now `<kernel>_impl`, and this test's
+    failure is what forced the update.  See `test_namespace_default_is_kernel_impl`.)
 
     When any gap closes this test fails loudly — which is the point: that is the signal to update
     the doc.  This is what `check(Square, "free_running_kernel")` is meant to report once
@@ -252,32 +248,57 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     assert "ap_ctrl_none" not in files["square.cpp"]
     assert "hls::task" not in files["square.cpp"]
 
-    # Gap 3: the namespace collides with the kernel function name -> ill-formed C++.
+    # The namespace no longer collides with the kernel function name (was gap 3).
     assert "void square(" in files["square.hpp"]
-    assert "namespace square {" in files["square.hpp"]
+    assert "namespace square_impl {" in files["square.hpp"]
 
 
-def test_namespace_default_is_safe_elsewhere_only_because_nothing_hooks_it():
-    """Pins the *scope* of gap 3, because the prose version of this claim was already wrong once.
+def test_namespace_default_is_kernel_impl():
+    """The default `cpp_namespace` must not collide with the kernel function name.
 
-    An earlier draft asserted a "100% opt-out rate" — that every component hand-sets `cpp_namespace`.
-    Not so: seven interleaver components take the default and resolve namespace == kernel name.  They
-    are fine only because the colliding `namespace` block is emitted solely for `@synthesizable`
-    hooks, and they have none.  The default is safe by accident, not by design.
+    A namespace and a function in the same scope cannot share a name — g++ rejects
+    `void square(...);` beside `namespace square {...}` with "redeclared as different kind
+    of entity".  The old default returned the kernel name verbatim, so it could only ever
+    produce code that would not compile, for any component with a hook.
 
-    If someone "fixes" the default to `<kernel>_impl`, this test and the one above both fail — which
-    is correct, and the signal to update freerun.md and plans/codegen_check_family.md.
+    It survived because it had never met one: every hook-emitting component hand-writes
+    `<kernel>_impl`, and the components that take the default emit no hooks, so no
+    `namespace` block is written and nothing collides.  `Square` was the first to take the
+    default *with* a hook.  The default now appends `_impl` — matching what every component
+    already wrote by hand, which is why it changed no existing kernel's output.
     """
-    from waveflow.build.hwgen import cpp_kernel_name, kernel_files_to_str, resolved_namespace
+    from waveflow.build.hwgen import cpp_kernel_name, resolved_namespace
 
     from examples.interleaver.interleaver import CmdRx
 
-    # It really does take the colliding default...
-    assert resolved_namespace(CmdRx) == cpp_kernel_name(CmdRx) == "cmd_rx"
+    # The default derives from, but never equals, the kernel name.
+    for cls in (Square, Double, CmdRx):
+        kern = cpp_kernel_name(cls)
+        ns = resolved_namespace(cls)
+        assert ns == f"{kern}_impl", cls.__name__
+        assert ns != kern, f"{cls.__name__}: namespace collides with the kernel function"
 
-    # ...and is unharmed only because no hook means no `namespace` block to collide with.
+    # An explicit setting still wins verbatim, and "" still opts out entirely.
+    from examples.regmap.simp_fun import SimpFunComponent
+
+    assert resolved_namespace(SimpFunComponent) == "simp_fun_impl"
+
+
+def test_components_taking_the_default_emit_no_hooks_so_nothing_regressed():
+    """Why fixing the default changed no existing output — the guard on that claim.
+
+    Recorded because the prose version of this was already wrong once: an earlier draft
+    asserted a "100% opt-out rate" (that every component hand-sets `cpp_namespace`).  Not
+    so — seven interleaver components take the default.  They are unaffected only because
+    they emit no hooks, hence no `namespace` block.  If one grows a hook, its emitted
+    namespace changes, and this test says so.
+    """
+    from waveflow.build.hwgen import kernel_files_to_str
+
+    from examples.interleaver.interleaver import CmdRx
+
     files = kernel_files_to_str(CmdRx)
-    assert not any("impl" in name for name in files), "CmdRx grew a hook — gap 3 now bites it"
+    assert not any("impl" in name for name in files), "CmdRx grew a hook — re-check the default"
     assert not any("namespace " in text for text in files.values())
 
 
