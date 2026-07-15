@@ -18,16 +18,22 @@ try:
     from examples.regmap.simp_fun import (
         DEFAULT_VECTOR,
         Int32,
+        SimpFunCase,
         SimpFunComponent,
         SimpFunTBHls,
+        simulate_case,
+        write_sim_summary,
     )
     from examples.regmap.timing_diagram import write_timing_diagram
 except ModuleNotFoundError:
     from simp_fun import (  # type: ignore[no-redef]
         DEFAULT_VECTOR,
         Int32,
+        SimpFunCase,
         SimpFunComponent,
         SimpFunTBHls,
+        simulate_case,
+        write_sim_summary,
     )
     from timing_diagram import write_timing_diagram  # type: ignore[no-redef]
 
@@ -61,6 +67,60 @@ class BuildInputsStep(BuildStep):
         Int32(int(a)).write_uint32_file(a_path)
         Int32(int(b)).write_uint32_file(b_path)
         return {"x_in": x_path, "a_in": a_path, "b_in": b_path, "data_dir": out_dir}
+
+
+@dataclass(kw_only=True)
+class SystemSimStep(BuildStep):
+    """**System simulation** — the Python-only path: a host ``SimObj`` driving the DUT
+    *concurrently* over a real AXI-Lite link.
+
+    This is the first checkpoint in the example's progression: once the DUT and the host exist,
+    you can simulate the whole system and *confirm it works* — before writing any testbench.
+    The host does the real register-map protocol (write ``x``/``a``/``b`` → set ``ap_start`` →
+    poll ``ap_done`` → read ``y``), so this is the one path that demonstrates the interface this
+    example is about, and the only one that yields a **per-step** event trace.
+
+    It is **Python-only by nature**, not by omission: the host and the DUT are two *concurrent*
+    processes, which has no straight-line C++ ``int main()`` lowering.  Reaching RTL with a
+    concurrent system model needs the XSI/SystemC path — future work.  The *sequential*
+    counterpart (:class:`PySimStep`, the ``SeqTB``) is what carries on into C-sim and co-sim.
+
+    Driven by the **same** ``x``/``a``/``b`` vector as the ``SeqTB`` and the C-sim, so both
+    simulation paths independently produce the same ``y``.  Fails the build when the run does not
+    verify, so "it ran" is never mistaken for "it is correct".
+    """
+
+    description = "Run the Python-only system simulation (host SimObj + DUT) and verify it."
+    consumes = ["simp_fun_source", "x_in", "a_in", "b_in"]
+    produces = {
+        "system_sim": Path("results/system_sim.json"),
+        "system_sim_log": Path("results/system_sim_log.csv"),
+    }
+    params = {"clk_freq": 100e6, "latency_cycles": 4}
+
+    def run(self, config: BuildConfig, x_in, a_in, b_in, clk_freq, latency_cycles, **_) -> dict:
+        # Read the vector back from the input files the rest of the DAG uses, so the system sim
+        # and the SeqTB golden are driven by identical stimulus.
+        x = int(Int32().read_uint32_file(x_in).val)
+        a = int(Int32().read_uint32_file(a_in).val)
+        b = int(Int32().read_uint32_file(b_in).val)
+
+        log_path = config.root_dir / "results" / "system_sim_log.csv"
+        result = simulate_case(
+            SimpFunCase(x=x, a=a, b=b),
+            clk_freq=clk_freq,
+            latency_cycles=latency_cycles,
+            log_file=log_path,
+        )
+        out_path = config.root_dir / "results" / "system_sim.json"
+        write_sim_summary(out_path, result)
+        if not result.passed:
+            raise RuntimeError(
+                f"System simulation did not verify: y={result.y} "
+                f"(expected {result.case.expected_y}), ap_done={result.ap_done}. "
+                f"See {out_path}."
+            )
+        return {"system_sim": out_path, "system_sim_log": log_path}
 
 
 @dataclass(kw_only=True)
@@ -263,6 +323,9 @@ def build_simp_fun_dag() -> BuildDag:
     dag.add(SourceStep(artifact="timing_diagram_source", path=_SOURCE_DIR / "timing_diagram.py"))
 
     dag.add(BuildInputsStep(name="build_inputs"))
+    # The example's progression: write the DUT + host, confirm the whole system in Python
+    # (system_sim), then write the SeqTB and take *it* on to C-sim / co-sim (py_sim onward).
+    dag.add(SystemSimStep(name="system_sim"))
     dag.add(PySimStep(name="py_sim"))
 
     dag.add(HlsCodegenStep(
