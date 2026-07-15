@@ -126,15 +126,33 @@ Note neither has an `on_start`, so this is not a rename: it is deciding what kin
 migrated spelling). Gate on byte-identical C++ — the dispatch already routes them to the same method,
 so a correct migration changes nothing.
 
-### The contract
+### The contract — **BUILT** (2026-07-15)
 
-The thing the docs quote. Built on Stage 2:
+The thing the docs quote:
 
 > A `HostActivated` synthesizes to a **standalone Vitis kernel** iff
-> **(a)** it has no sub-components / internal interfaces, and
-> **(b)** its `on_start` passes `check(..., target="control_driven_kernel")`.
+> **(a)** it owns no sub-components / internal interfaces, and
+> **(b)** its `on_start` passes the extractor's body rules.
+>
+> `check(cls, "control_driven_kernel")` answers **both** — (a) and (b) are two halves of one
+> verdict, not two calls.
 
-Structural rule (a) + body rule (b). Same shape for the other kinds.
+Structural rule (a) = `_validate_leaf_is_flat` in `hwcodegen.py`, called from `extract_kernel` for
+every `leaf` kind. Body rule (b) = the rest of the extractor. Same shape for the other kinds: a
+`CompositeComp` is the inverse (it *must* own a graph, and `extract_kernel` already rejects it as
+having no body of its own).
+
+**Rule (a) closed a silent hole, which is why it earns its place.** A `HostActivated` carrying a
+sub-component used to emit a well-formed kernel that **never mentioned the child** — the extractor
+walks only the entry method — and `check()` returned `(True, None)` about it. Half a design dropped
+without a word. Demonstrated, then fixed, then pinned.
+
+It lives in the **extractor, not `codegen_check.py`** — so `generate` is fail-loud and `check` relays
+it. A test asserts `check`'s message is byte-equal to the raised `SynthesisError`, so the day someone
+moves the rule into `check` (making it a shadow that can drift), that test fails.
+
+**Gate:** pure rejection — accepts nothing new, so all generated C++ byte-identical (verified). No
+real leaf trips it (`simp_fun`, `hist`, `poly`, `block_scale`, `Square`, `Double` are all flat).
 
 ### Fold in: the `cpp_namespace` default emits ill-formed C++
 
