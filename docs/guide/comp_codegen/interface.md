@@ -22,13 +22,13 @@ masters**.
 |---|---|---|
 | `StreamIFMaster` / `StreamIFSlave` | `hls::stream<streamutils::axi4s_word<bw>>& <name>` | `#pragma HLS INTERFACE axis port=<name>` |
 | `VitisRegMapMMIFSlave` (per field) | `<cpp_type>& <field>` (or `<elem>[<count>]` for a raw array field) | `#pragma HLS INTERFACE s_axilite port=<field> bundle=control` |
-| m_axi master (e.g. `MMIFMaster` / `DirectMMIF` master) | `ap_uint<bw>* <name>` | `#pragma HLS INTERFACE m_axi port=<name> offset=slave bundle=gmem depth=<name>_depth` |
+| m_axi master (e.g. `MMIFMaster` / `DirectMMIF` master) | `ap_uint<bw>* <name>` | `#pragma HLS INTERFACE m_axi port=<name> offset=slave bundle=gmem depth=<name>_depth` — **plus** `s_axilite port=<name> bundle=control` when the component has a regmap (see below) |
 
 ## Stream endpoints → `axis`
 
 Every stream endpoint becomes an `hls::stream` reference of AXI4-Stream words, with an `axis`
 interface pragma. The word bitwidth is the endpoint's concrete `bitwidth` (or the variant's
-`HwParamValue`). From [`examples/stream_inband/gen/poly.hpp`](../../../examples/stream_inband/gen/poly.hpp):
+`HwParamValue`). The generated `poly` kernel:
 
 ```cpp
 void poly(
@@ -64,8 +64,8 @@ The `ap_start` / `ap_done` control bits are not emitted as data ports; they are 
 ## m_axi master → `m_axi` pointer
 
 A memory-mapped master endpoint becomes an `ap_uint<bw>*` pointer with an `m_axi` pragma
-(`offset=slave bundle=gmem`), the burst region bounded by a generated `<name>_depth` header
-constant. From [`examples/shared_mem/gen/hist.hpp`](../../../examples/shared_mem/gen/hist.hpp):
+(`offset=slave bundle=gmem`), the burst region bounded by a generated `<name>_depth` header constant.
+The generated `hist` kernel:
 
 ```cpp
 void hist(
@@ -79,13 +79,51 @@ void hist(
 this pointer inside the body — the lane/slice transactions — is [Custom Hooks](../custom_hooks/)
 material.
 
+### `offset=slave` needs a home for the pointer
+
+`offset=slave` means the pointer's **base address is not a port** — it arrives in an AXI-Lite register
+that the host writes before launching. But `bundle=gmem` names the *`m_axi`* bundle; it says nothing
+about *where that offset register lives*. So when the component has a regmap, codegen also emits
+
+```cpp
+#pragma HLS INTERFACE s_axilite port=m_mem  bundle=control
+```
+
+binding the offset register into the **same** `control` slave as `ap_start`/`ap_done`. Without it Vitis
+silently invents a *second* AXI-Lite bundle for the offset alone, and the kernel exposes two address
+spaces (`s_axi_control` **and** an auto-named `s_axi_control_r`) — one block, two slaves, for no reason.
+
+> **A component with an m_axi but no regmap still has this problem.** There is no `control` bundle for
+> the offset to join, so Vitis auto-creates one *and* `ap_start` stays on raw pins — meaning the block
+> needs two different masters: one to write the base address over AXI-Lite, another to pulse a wire.
+> `block_scale` is in this state today. `hist` was, until it gained a regmap and became
+> [`HostActivated`](../components/hostactivated.md). This is a good reason to give a memory-mapped
+> kernel a regmap even when it has no scalar arguments to put in one.
+
 ## The control protocol on `return`
 
-Which protocol binds the `return` port follows from the endpoint mix (in `kernel_signature`):
+`ap_ctrl_hs` is the **protocol** — `ap_start` / `ap_done` / `ap_idle` / `ap_ready`. Which pragma binds
+the `return` port decides only *how those signals are reached*, and follows from the endpoint mix (in
+`kernel_signature`):
 
-- a regmap slave is present ⇒ `s_axilite ... bundle=control` (host-launched via `ap_start`/`ap_done`);
-- else m_axi masters are present ⇒ `ap_ctrl_hs`;
-- else (stream-only) ⇒ `s_axilite ... bundle=control`.
+| Endpoint mix | `return` binds | What the RTL exposes |
+|---|---|---|
+| a regmap slave is present | `s_axilite ... bundle=control` | `ap_start` is **not a port** — Vitis generates a `<kernel>_control_s_axi` adapter that drives it from register `0x00` |
+| else m_axi masters present | `ap_ctrl_hs` | `ap_start`/`ap_done`/`ap_idle`/`ap_ready` are **top-level pins**, driven by whatever instantiates the block |
+| else (stream-only) | `s_axilite ... bundle=control` | as the first row |
+
+The first row is worth dwelling on, because it explains a name: **`s_axilite port=return` does not give
+you a different kernel — it gives you the same pin-driven core plus a generated AXI-Lite→pin adapter.**
+That adapter is a real, separate RTL module, and `on_start` is *its* callback — which is why `on_start`
+exists exactly when a regmap does.
+
+Neither row is "better": a host-launched accelerator (XRT) *needs* the AXI-Lite control registers,
+while a block launched by another block inside an IPI system wants the raw pins. See
+[Realization Flows](../flows/).
+
+> `ap_ctrl_none` — free-running, no handshake at all — is a third protocol that nothing generates yet
+> (the `free_running_kernel` [target](./index.md)). Note a component whose entry is `run_proc` rather
+> than `on_start` is **not** free-running; it is `ap_ctrl_hs` on raw pins, per the middle row.
 
 ## How a slave endpoint's handler binds
 
