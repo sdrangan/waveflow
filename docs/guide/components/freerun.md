@@ -95,9 +95,10 @@ exception — `kernel_files_to_str(Square)` returns files, but **not** the ones 
   above. The class declares `control_mode = FREE_RUNNING`, but codegen does not yet act on it.
 - The emitted header **would not compile**. `Square` does not set `cpp_namespace`, and the default
   derives it from the *kernel name* — so the header declares `void square(...)` and
-  `namespace square { ... }` in one scope, which C++ rejects as a redeclaration. Every real
-  component sidesteps this by hand-setting `<kernel>_impl` (`simp_fun_impl`, `poly_impl`,
-  `hist_impl`, …). If you write a `FreeRunComp` today, **set `cpp_namespace` explicitly.**
+  `namespace square { ... }` in one scope, which C++ rejects as a redeclaration. That block is emitted
+  only for `@synthesizable` hooks, and every hook-bearing component overrides `cpp_namespace` to
+  `<kernel>_impl` (`simp_fun_impl`, `poly_impl`, `hist_impl`, …) — so the default has simply never met
+  a hook before. If you write a `FreeRunComp` today, **set `cpp_namespace` explicitly.**
 
 The real free-running kernels (`MemRStream`/`MemWStream`) hand off *fixed hand-written* `hls::task`
 bodies via `kernel_task()`; their `run_iter` is a pysim golden only. So the claim `Square` earns is

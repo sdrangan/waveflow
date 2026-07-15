@@ -228,10 +228,12 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     3. The emitted header is **not valid C++**.  `Square` does not set `cpp_namespace`, so
        `hwgen.resolved_namespace` defaults it to the *kernel name* — emitting `void square(...)` and
        `namespace square {...}` into the same scope, which is ill-formed ("redeclared as different
-       kind of entity").  Every real component dodges this by hand-setting `<kernel>_impl`
-       (`simp_fun_impl`, `hist_impl`, `poly_impl`, `mem_r_stream_impl`, ...) — a 100% opt-out rate,
-       which is itself the evidence that the default is unusable whenever a hook exists.  The toy is
-       the first component to take the default, so it is the first to expose it.
+       kind of entity").  The collision needs a `namespace` block, which is emitted only when a
+       component has `@synthesizable` hooks: every hook-emitting component overrides `cpp_namespace`
+       to `<kernel>_impl` (`simp_fun_impl`, `poly_impl`, `hist_impl`, ...), while the seven that DO
+       take the default (`CmdRx`, `IlMemR`, `IlLoad`, `IlCompute`, `IlStore`, `IlMemW`,
+       `InterleaverCanon`) emit no hooks, so nothing collides for them.  The default is safe only by
+       accident — it has never met a hook, and `Square` is the first to take it with one.
 
     When any gap closes this test fails loudly — which is the point: that is the signal to update
     the doc.  This is what `check(Square, "free_running_kernel")` is meant to report once
@@ -253,6 +255,30 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     # Gap 3: the namespace collides with the kernel function name -> ill-formed C++.
     assert "void square(" in files["square.hpp"]
     assert "namespace square {" in files["square.hpp"]
+
+
+def test_namespace_default_is_safe_elsewhere_only_because_nothing_hooks_it():
+    """Pins the *scope* of gap 3, because the prose version of this claim was already wrong once.
+
+    An earlier draft asserted a "100% opt-out rate" — that every component hand-sets `cpp_namespace`.
+    Not so: seven interleaver components take the default and resolve namespace == kernel name.  They
+    are fine only because the colliding `namespace` block is emitted solely for `@synthesizable`
+    hooks, and they have none.  The default is safe by accident, not by design.
+
+    If someone "fixes" the default to `<kernel>_impl`, this test and the one above both fail — which
+    is correct, and the signal to update freerun.md and plans/codegen_check_family.md.
+    """
+    from waveflow.build.hwgen import cpp_kernel_name, kernel_files_to_str, resolved_namespace
+
+    from examples.interleaver.interleaver import CmdRx
+
+    # It really does take the colliding default...
+    assert resolved_namespace(CmdRx) == cpp_kernel_name(CmdRx) == "cmd_rx"
+
+    # ...and is unharmed only because no hook means no `namespace` block to collide with.
+    files = kernel_files_to_str(CmdRx)
+    assert not any("impl" in name for name in files), "CmdRx grew a hook — gap 3 now bites it"
+    assert not any("namespace " in text for text in files.values())
 
 
 def test_scaled_square_declares_no_codegen_descriptors():

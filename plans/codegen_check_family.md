@@ -127,10 +127,22 @@ a component with a hook emits `void square(...)` **and** `namespace square { ...
 is ill-formed C++ (*"redeclared as different kind of entity"*, confirmed against g++), and codegen raises
 nothing.
 
-Every real component hand-sets `<kernel>_impl` — `simp_fun_impl`, `poly_impl`, `hist_impl`,
-`block_scale_impl`, `mem_r_stream_impl`, `mem_copy_impl`, `fir_impl`. **A 100% opt-out rate is the
-evidence: the default is unusable whenever a hook exists**, and it has survived only because nobody has
-ever used it.
+**Precisely when it fires** (measured 2026-07-15 — an earlier draft of this section overclaimed a "100%
+opt-out rate"; the real picture is narrower and more interesting):
+
+- The collision needs a `namespace <ns> { ... }` block to actually be emitted, which happens **only when
+  the component has `@synthesizable` hooks**.
+- **Every hook-emitting component overrides** `cpp_namespace` to `<kernel>_impl` — `simp_fun_impl`,
+  `poly_impl`, `hist_impl`, `block_scale_impl`, `mem_r_stream_impl`, `mem_w_stream_impl`,
+  `mem_copy_impl`, `fir_impl`.
+- **Seven components *do* take the default** — `CmdRx`, `IlMemR`, `IlLoad`, `IlCompute`, `IlStore`,
+  `IlMemW`, `InterleaverCanon` all resolve namespace == kernel name — but they emit **no hooks**
+  (verified: `kernel_files_to_str(CmdRx)` emits no `namespace` block and no `_impl` stub), so nothing
+  collides. (`IlCompute` does not even extract — it raises on implicit capture of `self.lw`; the
+  interleaver reaches C++ by the `composite_gen`/`kernel_task` path, not this one.)
+
+So the default is **safe only by accident** — it has never met a hook. It breaks the moment a
+hook-bearing component takes it, and `Square` is the first to do so.
 
 Two candidate fixes — decide when implementing:
 
@@ -177,8 +189,9 @@ independently reviewable, but land the toys first so the check tests have someth
 ## Verification
 
 - Run via the venv: `../pysilicon-venv/Scripts/python.exe -m pytest -m "not vitis"`; failures ⊆ the
-  documented baseline (`test_build`×9 + `dataschema_poly`×1 + `poly` timing×5 — see
-  [[project-test-baseline-failures]]).
+  documented baseline, which is **6**: `dataschema_poly`×1 + `poly` timing×5. (The `test_build`×9 that
+  used to be quoted here were a git-ignored local-only file; recovered and fixed in `e1b4a99` — they
+  now pass. See [[project-test-baseline-failures]].)
 - **Byte-identical C++ at every stage** for all kernels and all four TBs (`kernel_files_to_str` /
   `tb_files_to_str`, dict-equal before/after). The family is a refactor; the only new rule is Stage 3,
   which nothing existing trips.
