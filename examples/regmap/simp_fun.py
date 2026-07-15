@@ -187,21 +187,24 @@ class SimpFunTBHls(SeqTB):
 
     def main(self) -> None:
         dut = SimpFunComponent()
-        dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
-        dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
-        dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
+        # Read each input straight into a local via the standard schema file-IO spelling
+        # (Stage 2b).  This is the same `Schema().read_uint32_file(path)` a build script uses,
+        # so it needs no special runtime: a run of `main()` gets real `Int32`s back and passes
+        # them into the kernel below — no loading them into the DUT's regmap fields and reading
+        # them back out again.  In codegen each read lowers to the C++ file read that fills the
+        # kernel's input arg.
+        x = Int32().read_uint32_file(self.data_dir + "/x.bin")
+        a = Int32().read_uint32_file(self.data_dir + "/a.bin")
+        b = Int32().read_uint32_file(self.data_dir + "/b.bin")
         # Single-process timed invocation (Stage 2): `run_once_sim` drives the kernel's `on_start`
         # through SimPy so the clock advances, and the two `@sim_only` timer calls bracket it to
         # capture the transaction latency in-process.  For codegen this is byte-identical to the
         # synchronous form: `run_once_sim` lowers to the SAME `simp_fun(x, a, b, y)` kernel call as
         # `run_once` (Stage 1), and the bare `@sim_only` timer calls are stripped by the extractor.
         self._start_timer()
-        # `y` is the Stage-1 return-capture: in codegen it aliases the kernel's `y` output field
-        # (emitting no C++); at run time it holds the computed result.  Unused after here — the
-        # golden is read back from `write_status_json` below — but kept to mirror the invocation.
-        y = yield from dut.run_once_sim(  # noqa: F841
-            dut.regmap.get("x"), dut.regmap.get("a"), dut.regmap.get("b")
-        )
+        # The return is not captured: the output is read back through `write_status_json` below,
+        # which is what both the C-sim and the Python run compare against.
+        yield from dut.run_once_sim(x, a, b)
         self._stop_timer_and_log()
 
         dut.regmap.write_status_json(

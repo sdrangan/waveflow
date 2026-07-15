@@ -714,3 +714,115 @@ def test_run_once_sim_and_run_once_lower_identically():
         == tb_files_to_str(SimpFunTBHls)["simp_fun_tb.cpp"]
     )
     assert "simp_fun(x, a, b, y);" in tb_files_to_str(_SimpFunTBProc)["simp_fun_tb.cpp"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 2b — read an input file into a plain local (drop the round-trip).
+#
+# ``x = Int32().read_uint32_file(path)`` is the standard schema file-IO
+# spelling, so it needs no new runtime — a run of ``main()`` gets a real
+# ``Int32`` back and passes it straight into ``run_once_sim(x, a, b)``, instead
+# of loading the DUT's regmap fields and reading them back out again.  In
+# codegen the local aliases the input field's C++ local (the input-side mirror
+# of the Stage-1 output capture), so it lowers to the C++ the round-trip form
+# already emitted.
+# ---------------------------------------------------------------------------
+
+from examples.regmap.simp_fun import Int32 as _Int32  # noqa: E402
+from waveflow.hw.dataschema import IntField as _IntField  # noqa: E402
+
+#: A schema that is *not* any simp_fun field's type.  Module-level because the
+#: extractor resolves a TB's class references out of ``main.__globals__``.
+_Uint8 = _IntField.specialize(bitwidth=8, signed=False)
+
+
+@dataclass
+class _SimpFunTBRoundTrip(SeqTB):
+    """The pre-Stage-2b ``SimpFunTBHls``: inputs go into the DUT's regmap fields
+    and come back out via ``dut.regmap.get(...)`` — the round-trip Stage 2b removes."""
+
+    cpp_kernel_name: ClassVar[str | None] = "simp_fun"
+
+    def main(self):  # type: ignore[override]
+        dut = SimpFunComponent()
+        dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
+        dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
+        dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
+        yield from dut.run_once_sim(
+            dut.regmap.get("x"), dut.regmap.get("a"), dut.regmap.get("b"))
+        dut.regmap.write_status_json(
+            self.data_dir + "/regmap_status.json",
+            fields=["ap_done", "y"],
+        )
+
+
+def test_file_read_into_local_equals_regmap_round_trip_byte_for_byte():
+    """The payoff, and the gate: reading each input into a local and passing the
+    values straight in generates the *same* ``simp_fun_tb.cpp`` as the round-trip
+    twin — the round-trip was only ever a Python-side detour."""
+    from waveflow.build.hwgen import tb_files_to_str
+    assert tb_files_to_str(SimpFunTBHls) == tb_files_to_str(_SimpFunTBRoundTrip)
+
+
+def test_file_read_into_local_fills_the_kernel_input_arg():
+    """The local is the kernel's input arg: the read lands in the field local the
+    call passes, so no extra declaration or copy is emitted."""
+    from waveflow.build.hwgen import tb_files_to_str
+    body = tb_files_to_str(SimpFunTBHls)["simp_fun_tb.cpp"]
+    assert "simp_fun(x, a, b, y);" in body
+    assert body.count("ap_int<32> x = 0;") == 1
+    assert 'data_dir + std::string("/x.bin")' in body
+
+
+def test_file_read_local_must_name_an_input_field():
+    """A read into a local that names no input field of a bound DUT is rejected —
+    v1 has no lowering for a free-standing local (it would need its own C++ decl
+    and an arg-carrying kernel call)."""
+    from waveflow.build.hwcodegen import SynthesisError, extract_testbench
+
+    @dataclass
+    class _BadLocalTB(SeqTB):
+        cpp_kernel_name: ClassVar[str | None] = "simp_fun"
+
+        def main(self):  # type: ignore[override]
+            dut = SimpFunComponent()
+            z = _Int32().read_uint32_file(self.data_dir + "/z.bin")
+            yield from dut.run_once_sim(z, z, z)
+
+    with pytest.raises(SynthesisError, match="no bound DUT has an input field 'z'"):
+        extract_testbench(_BadLocalTB(name='tb'))
+
+
+def test_file_read_local_cannot_name_an_output_field():
+    """Output (``R``) fields are the kernel's out-params, not inputs to fill."""
+    from waveflow.build.hwcodegen import SynthesisError, extract_testbench
+
+    @dataclass
+    class _OutputFieldTB(SeqTB):
+        cpp_kernel_name: ClassVar[str | None] = "simp_fun"
+
+        def main(self):  # type: ignore[override]
+            dut = SimpFunComponent()
+            y = _Int32().read_uint32_file(self.data_dir + "/y.bin")
+            yield from dut.run_once_sim(y, y, y)
+
+    with pytest.raises(SynthesisError, match="no bound DUT has an input field 'y'"):
+        extract_testbench(_OutputFieldTB(name='tb'))
+
+
+def test_file_read_schema_must_match_the_field():
+    """The read must fill the field it is passed to, so the schema must be the
+    field's declared type — a mismatch would silently emit a wrong-width read."""
+    from waveflow.build.hwcodegen import SynthesisError, extract_testbench
+
+    @dataclass
+    class _WrongSchemaTB(SeqTB):
+        cpp_kernel_name: ClassVar[str | None] = "simp_fun"
+
+        def main(self):  # type: ignore[override]
+            dut = SimpFunComponent()
+            x = _Uint8().read_uint32_file(self.data_dir + "/x.bin")
+            yield from dut.run_once_sim(x, x, x)
+
+    with pytest.raises(SynthesisError, match="is declared as Int32"):
+        extract_testbench(_WrongSchemaTB(name='tb'))

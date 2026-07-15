@@ -81,6 +81,12 @@ class HwStmtExtractor:
         self._duts: dict[str, object] = {}      # local_name -> HwComponent instance
         self._tb_locals: dict[str, object] = {} # local_name -> object (binding)
         self._mems: dict[str, object] = {}      # local_name -> MemComponent class
+        # TB locals that alias a bound DUT's *input* regmap field local (Stage 2b):
+        # local_name -> (dut_local, field_name).  Populated by
+        # ``x = <Schema>().read_uint32_file(path)``; consumed by ``run_once``/
+        # ``run_once_sim`` arg validation so ``run_once_sim(x, a, b)`` passes the
+        # values straight in.  See :meth:`_try_schema_file_read`.
+        self._tb_field_locals: dict[str, tuple[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -281,6 +287,9 @@ class HwStmtExtractor:
             schema_bind = self._try_schema_bind(local_name, stmt.value, stmt)
             if schema_bind is not None:
                 return schema_bind
+            file_read = self._try_schema_file_read(local_name, stmt.value, stmt)
+            if file_read is not None:
+                return file_read
             mem_read = self._try_mem_read_array(local_name, stmt.value, stmt)
             if mem_read is not None:
                 return mem_read
@@ -488,6 +497,115 @@ class HwStmtExtractor:
             )
         self._tb_locals[local_name] = cls
         return SchemaBindStmt(local_name=local_name, schema_class=cls)
+
+    def _try_schema_file_read(
+        self,
+        local_name: str,
+        call_node: ast.Call,
+        parent_stmt: ast.stmt,
+    ) -> "HwStmt | None":
+        """``x = <Schema>().read_uint32_file(<path>)`` — read a uint32-packed input
+        file into a plain TB **local** (Stage 2b).
+
+        This is the standard schema file-IO spelling
+        (:meth:`~waveflow.hw.dataschema.DataSchema.read_uint32_file`, the same
+        ``PolyCmdHdr().read_uint32_file(path)`` a build script uses), so it needs **no**
+        new runtime: a run of ``main()`` gets a real schema instance back, and
+        ``dut.run_once_sim(x, a, b)`` passes those values straight in.  It replaces the
+        input *round-trip* (``regmap.read_uint32_file("x", p)`` then ``regmap.get("x")``).
+
+        **v1 scope — the input-side mirror of the Stage-1 output capture.**  *local_name*
+        must name an **input** regmap field (``RW``/``W``, non-``is_vitis_auto``) of a bound
+        DUT, and ``<Schema>`` must be that field's schema.  Because the C++ local for that
+        field is already declared by the ``DutBindStmt`` (exactly as
+        ``y = yield from dut.run_once_sim(...)`` aliases the *output* field local and emits
+        no declaration of its own), the read lowers to the same
+        :class:`~waveflow.hw.hwstmt.TbRegmapFileReadStmt` the round-trip form emitted — so
+        the generated C++ is unchanged while the Python drops the round-trip.  Reads into a
+        free-standing local (one that names no input field) would need a fresh C++ decl plus
+        arg-carrying kernel calls; that is a follow-on.
+
+        Returns ``None`` if *call_node* is not this shape, so the caller falls through.
+        """
+        from waveflow.hw.dataschema import DataSchema
+
+        if not (
+            isinstance(call_node.func, ast.Attribute)
+            and call_node.func.attr == 'read_uint32_file'
+            and isinstance(call_node.func.value, ast.Call)
+        ):
+            return None
+        ctor = call_node.func.value
+        cls = self._resolve_tb_class(ctor.func)
+        if not (isinstance(cls, type) and issubclass(cls, DataSchema)):
+            return None
+        if ctor.args or ctor.keywords:
+            raise SynthesisError(
+                f"<Schema>().read_uint32_file(path): the schema construction takes no "
+                f"arguments (line {parent_stmt.lineno})"
+            )
+        if len(call_node.args) != 1 or call_node.keywords:
+            raise SynthesisError(
+                f"<Schema>().read_uint32_file(path) takes exactly one path argument "
+                f"(line {parent_stmt.lineno})"
+            )
+        dut_local = self._resolve_input_field_local(local_name, cls, parent_stmt)
+        # Record the alias for run_once/run_once_sim arg validation.  Deliberately NOT
+        # registered in ``_tb_locals``: that table means "a schema local with its own C++
+        # storage" (a struct/raw-array a push/pop or write_uint32_file can target), which
+        # this scalar field alias is not.
+        self._tb_field_locals[local_name] = (dut_local, local_name)
+        return TbRegmapFileReadStmt(
+            dut_local=dut_local,
+            field_name=local_name,
+            path=call_node.args[0],
+            count=None,
+        )
+
+    def _resolve_input_field_local(
+        self, local_name: str, cls: type, parent_stmt: ast.stmt,
+    ) -> str:
+        """Resolve *local_name* to the bound DUT whose **input** regmap field it names.
+
+        Returns the DUT's local name.  Raises :class:`SynthesisError` when no bound DUT
+        (or more than one) has an input field so named, or when *cls* is not that field's
+        declared schema — the read must fill the field it is passed to.
+        """
+        from waveflow.hw.regmap import RegAccess
+
+        matches: list[tuple[str, object]] = []
+        for dut_local in self._duts:
+            regmap = self._dut_regmap_or_none(dut_local)
+            if regmap is None:
+                continue
+            fld = regmap._fields.get(local_name)
+            if (
+                fld is not None
+                and not fld.is_vitis_auto
+                and fld.access in (RegAccess.RW, RegAccess.W)
+            ):
+                matches.append((dut_local, fld))
+        if not matches:
+            raise SynthesisError(
+                f"'{local_name} = {cls.__name__}().read_uint32_file(...)': a testbench "
+                f"file read must name an input regmap field (RW/W) of a bound DUT — no "
+                f"bound DUT has an input field '{local_name}' (line {parent_stmt.lineno})"
+            )
+        if len(matches) > 1:
+            duts = ", ".join(d for d, _ in matches)
+            raise SynthesisError(
+                f"'{local_name} = {cls.__name__}().read_uint32_file(...)': input field "
+                f"'{local_name}' is ambiguous — it is declared by DUTs {duts} "
+                f"(line {parent_stmt.lineno})"
+            )
+        dut_local, fld = matches[0]
+        if fld.schema is not cls:
+            raise SynthesisError(
+                f"'{local_name} = {cls.__name__}().read_uint32_file(...)': input field "
+                f"'{local_name}' is declared as {fld.schema.__name__}, not {cls.__name__} "
+                f"(line {parent_stmt.lineno})"
+            )
+        return dut_local
 
     def _try_mem_bind(
         self,
@@ -856,12 +974,22 @@ class HwStmtExtractor:
             return None
         return getattr(comp, 'regmap', None)
 
-    def _run_once_arg_field(self, arg: ast.expr) -> str | None:
-        """If *arg* is ``<dut>.regmap.get("<field>")``, return ``"<field>"``; else ``None``.
+    def _run_once_arg_field(self, dut_local: str, arg: ast.expr) -> str | None:
+        """Return the input regmap field of *dut_local* that a ``run_once`` positional
+        *arg* names, else ``None``.
 
-        This is how a ``run_once`` positional arg names the input regmap field it fills — the field
-        local (populated earlier by a ``read_uint32_file`` / ``set``) is passed straight through.
+        Two accepted spellings, both naming the field whose local is passed straight through:
+
+        - ``<dut>.regmap.get("<field>")`` — the field read back out of the DUT;
+        - ``<field>`` — a plain TB local bound by ``<field> = <Schema>().read_uint32_file(path)``
+          (Stage 2b), which drops the round-trip.  Only locals registered in
+          ``_tb_field_locals`` qualify: those alias the DUT's input-field C++ local, so passing
+          one emits the identical kernel-call arg.  The alias must belong to the DUT being
+          invoked — a local naming *another* DUT's field is not this DUT's arg.
         """
+        if isinstance(arg, ast.Name) and arg.id in self._tb_field_locals:
+            owner, field = self._tb_field_locals[arg.id]
+            return field if owner == dut_local else None
         if (
             isinstance(arg, ast.Call)
             and isinstance(arg.func, ast.Attribute)
@@ -909,11 +1037,12 @@ class HwStmtExtractor:
                 f"(line {parent.lineno})"
             )
         for i, (arg, field) in enumerate(zip(args, inputs)):
-            ref = self._run_once_arg_field(arg)
+            ref = self._run_once_arg_field(dut_local, arg)
             if ref is None:
                 raise SynthesisError(
-                    f"dut.run_once() arg {i} must be dut.regmap.get(\"{field}\") — a run_once TB "
-                    f"arg references its input regmap field by name (Phase 5b) "
+                    f"dut.run_once() arg {i} must be dut.regmap.get(\"{field}\") or the local "
+                    f"'{field}' bound by '{field} = <Schema>().read_uint32_file(...)' — a "
+                    f"run_once TB arg references its input regmap field by name "
                     f"(line {parent.lineno})"
                 )
             if ref != field:

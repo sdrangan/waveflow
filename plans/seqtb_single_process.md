@@ -96,6 +96,18 @@ Add the codegen primitive to read a `uint32` file into a plain local / a `DataLi
 so `run_once_sim(inp.x, inp.a, inp.b)` drops the `regmap.get(...)` round-trip and the example reads the
 way the user sketched. Its own bounded item.
 
+> **Stage 2b DONE**: the input round-trip is gone. `x = Int32().read_uint32_file(path)` — the **standard
+> schema file-IO spelling** (`DataSchema.read_uint32_file`, the same `PolyCmdHdr().read_uint32_file(p)` a
+> build script uses), so it needed **no new runtime**: a run of `main()` gets a real `Int32` back and
+> `run_once_sim(x, a, b)` passes it straight in. In codegen the local **aliases the input field's C++
+> local** — the input-side mirror of the Stage-1 output capture (`y = yield from run_once_sim(...)`) —
+> so it lowers to the same `TbRegmapFileReadStmt` the round-trip emitted and **all four `*_tb.cpp` stay
+> byte-identical** (`simp_fun` included; the round-trip was only ever a Python-side detour). Vitis
+> `--through validate_timing --force` PASSES (`pass:true`, py 4 vs cosim 5 cyc). v1 scope: the local must
+> name an input regmap field (`RW`/`W`) of a bound DUT and carry that field's schema — a **free-standing**
+> local (naming no field) would need its own C++ decl plus an arg-carrying `KernelCallStmt`, as would a
+> `DataList` input struct; both remain follow-ons.
+
 ## Stage 3 — the sequential-subset gate (first slice of `check_extractable`)
 
 Statically reject what has no straight-line `int main()` lowering: `env.process(...)` fan-out and
