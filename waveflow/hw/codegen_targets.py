@@ -1,7 +1,7 @@
 """codegen_targets.py — the canonical codegen **target** vocabulary.
 
-A *target* names **what a subject lowers to**: the other axis of codegen's
-``(subject × target)`` dispatch.  The subject says *what is being realized* (a
+A *target* names **what a source lowers to**: the other axis of codegen's
+``(source × target)`` dispatch.  The source says *what is being realized* (a
 ``HostActivated``, a ``SeqTB``, …); the target says *which realization*.
 
 **The vocabulary is shared with** :doc:`docs/guide/flows/index.md <../../docs/guide/flows/index.md>`
@@ -24,8 +24,8 @@ Only Flow 1 is built: :data:`IMPLEMENTED_TARGETS` is
 ``{control_driven_kernel, sequential_vitis_tb}``.  The rest are declared as
 **known names that are not yet reachable** — naming them is what lets
 :func:`~waveflow.build.codegen_check.check` distinguish *"that target does not
-exist for this kind of subject"* from *"that target exists but is not built
-yet"* from *"that target is built, and this subject does/does not make it"*.
+exist for this kind of source"* from *"that target exists but is not built
+yet"* from *"that target is built, and this source does/does not make it"*.
 
 **Zero-import leaf.** This module imports nothing from ``waveflow`` — on
 purpose.  It is read from both ``hw/`` (where each kind declares its
