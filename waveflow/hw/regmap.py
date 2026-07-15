@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -236,6 +237,41 @@ class RegMap:
                 f"Serialized length {len(words)} != expected {nwords} for '{name}'."
             )
         self._buffers[name][:] = words
+
+    # ------------------------------------------------------------------
+    # Testbench file I/O (runtime side of the codegen-only TB spellings)
+    # ------------------------------------------------------------------
+    #
+    # ``dut.regmap.read_uint32_file(...)`` / ``dut.regmap.write_status_json(...)``
+    # are recognized by the *testbench extractor* as AST patterns and lowered to
+    # C++ (``waveflow/build/hwcodegen.py``) — codegen never calls these methods.
+    # They exist here so a single-process ``SeqTB.main()`` can also **run** in
+    # Python (the Stage-2 runnable path): the runtime behaviour mirrors the
+    # emitted C++ (read a packed uint32 field from disk; dump selected fields as
+    # a JSON status record) so the Python golden matches the C-sim result.
+
+    def read_uint32_file(self, name: str, file_path: str | Path) -> None:
+        """Load field *name* from a uint32-packed binary file (runtime mirror of
+        the emitted ``streamutils::read_uint32_file``)."""
+        f = self._fields[name]
+        value = f.schema().read_uint32_file(file_path)
+        self.set(name, value)
+
+    def write_status_json(self, file_path: str | Path, *, fields: list[str]) -> None:
+        """Write the current values of *fields* as a JSON status record (runtime
+        mirror of the emitted status-JSON writer).  Each field is dumped as an
+        integer, matching the scalar regmap fields a status file carries."""
+        import json
+
+        if not fields:
+            raise ValueError("write_status_json requires a non-empty fields list")
+        data: dict[str, int] = {}
+        for name in fields:
+            val = self.get(name)
+            data[name] = int(getattr(val, "val", val))
+        out_path = Path(file_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Bus-level word access (used by RegMapMMIFSlave)

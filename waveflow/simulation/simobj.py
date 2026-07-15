@@ -64,7 +64,15 @@ class SimObj(NamedObject):
         """Initialize the process registry and register with the simulation."""
         super().__post_init__()
         if self.sim is None:
-            raise ValueError("sim must be provided.")
+            # No explicit ``sim=`` — fall back to the ambient Simulation, if one is active
+            # (a ``with sim.as_current():`` block, e.g. the runnable SeqTB harness).  This is
+            # the only new sim-resolution path; explicit-``sim=`` construction is untouched, and
+            # with no ambient sim set the original "sim must be provided" contract still holds.
+            from .simulation import current_simulation
+            ambient = current_simulation()
+            if ambient is None:
+                raise ValueError("sim must be provided.")
+            self.sim = ambient
 
         self.processes: list[simpy.events.Process] = []
         self._process_factories: list[tuple[str, ProcessFactory]] = []

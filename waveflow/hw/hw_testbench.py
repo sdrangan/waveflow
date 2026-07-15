@@ -21,10 +21,15 @@ codegen-source class that produces a Vitis HLS ``main()`` C++ file.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from waveflow.hw.synth import sim_only
 from waveflow.named import NamedObject
+
+if TYPE_CHECKING:
+    import simpy
+
+    from waveflow.simulation.simulation import Simulation
 
 
 @dataclass
@@ -61,7 +66,10 @@ class SeqTB(NamedObject):
 
     #: Framework-provided handle on the testbench's data directory.  Reads
     #: of ``self.data_dir`` inside ``main()`` lower to the C++ ``data_dir``
-    #: local that ``int main()`` populates from ``argv``.
+    #: local that ``int main()`` populates from ``argv``.  It is a ClassVar for
+    #: codegen (a fixed spelling), but the runnable :meth:`run` harness sets it
+    #: as an *instance* attribute so a build can point ``main()`` at a concrete
+    #: directory without disturbing the codegen default.
     data_dir: ClassVar[str] = "data"
 
     def main(self) -> None:
@@ -70,23 +78,101 @@ class SeqTB(NamedObject):
             f"{type(self).__name__} must override main()."
         )
 
-    @sim_only
-    def timeout(self, delay: float) -> object:
-        """Advance simulated time by *delay* — a clock model for a yielding
-        ``main()`` (``yield self.timeout(...)``).
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        # Runnable-harness state (Stage 2).  ``None`` until :meth:`run` drives
+        # ``main()`` inside a Simulation; the ``@sim_only`` timers read it.
+        self._sim: "Simulation | None" = None
+        self._t_start: float | None = None
+        self._t_end: float | None = None
 
-        Marked ``@sim_only``: C-sim is untimed, so the extractor **strips** a
-        bare ``yield self.timeout(...)`` (it carries no hardware meaning), the
-        same way it strips a ``@sim_only`` call in ``on_start``/``run_proc``.
-        Codegen never executes this stub.  Making a single-process ``SeqTB``
-        actually *run* this in SimPy (so the yields advance a real clock) is the
-        Stage-2 follow-on; until then it fails loud if invoked.
+    # ------------------------------------------------------------------
+    # Runnable single-process harness (Stage 2)
+    # ------------------------------------------------------------------
+
+    @property
+    def now(self) -> float:
+        """Current simulated time — valid only while :meth:`run` drives ``main()``."""
+        if self._sim is None:
+            raise RuntimeError(
+                f"{type(self).__name__}.now is only available while run() is driving "
+                f"main() inside a Simulation."
+            )
+        return float(self._sim.env.now)
+
+    def run(self, *, data_dir: str | None = None) -> None:
+        """Drive ``main()`` as **one** SimPy process to completion.
+
+        Creates a fresh :class:`~waveflow.simulation.simulation.Simulation`, makes it the
+        *ambient* sim (so a bare ``dut = SimpFunComponent()`` inside ``main()`` binds to it —
+        identical to the codegen no-sim form), spawns ``main()`` as a single process, and runs
+        the environment to quiescence.  ``main()`` must be a generator (it ``yield``s to model
+        timing, e.g. ``yield from dut.run_once_sim(...)``); the yields advance a real clock, so
+        the ``@sim_only`` timers below capture an honest transaction latency.
         """
-        raise NotImplementedError(
-            "SeqTB.timeout is codegen-only in v1 (the extractor strips "
-            "`yield self.timeout(...)`); a runnable single-process SeqTB is a "
-            "follow-on (Stage 2)."
-        )
+        from waveflow.simulation.simulation import Simulation
+
+        sim = Simulation()
+        self._sim = sim
+        if data_dir is not None:
+            # Instance attribute shadows the ClassVar for this run only.
+            self.data_dir = data_dir  # type: ignore[misc]
+        with sim.as_current():
+            proc = self.main()
+            if proc is None:
+                raise TypeError(
+                    f"{type(self).__name__}.run() requires a yielding main() (a generator); "
+                    f"got a plain function.  A runnable SeqTB models timing via `yield from "
+                    f"dut.run_once_sim(...)`."
+                )
+            sim.env.process(proc)
+            sim.env.run()
+
+    def transaction_seconds(self) -> float:
+        """Elapsed simulated time between :meth:`_start_timer` and :meth:`_stop_timer_and_log`."""
+        if self._t_start is None or self._t_end is None:
+            raise RuntimeError(
+                "transaction timer not populated — main() must call _start_timer() and "
+                "_stop_timer_and_log() around the invocation."
+            )
+        return float(self._t_end) - float(self._t_start)
+
+    @sim_only
+    def _start_timer(self) -> None:
+        """Mark the start of the timed transaction (reads ``self.now`` in-process).
+
+        ``@sim_only``: ``main()`` makes only a **bare call** to this, which the testbench
+        extractor strips (it falls through to the shared ``@sim_only``-call skip) — so the
+        generated C++ is unchanged.  In a run it records the current simulated time.
+        """
+        self._t_start = self.now
+
+    @sim_only
+    def _stop_timer_and_log(self) -> None:
+        """Mark the end of the timed transaction (reads ``self.now`` in-process).
+
+        ``@sim_only`` like :meth:`_start_timer`: a bare call is stripped by the extractor.
+        """
+        self._t_end = self.now
+
+    @sim_only
+    def timeout(self, delay: float) -> "simpy.events.Timeout":
+        """Advance simulated time by *delay* — a clock model for a yielding ``main()``
+        (``yield self.timeout(...)``).
+
+        Marked ``@sim_only``: C-sim is untimed, so the extractor **strips** a bare
+        ``yield self.timeout(...)`` (it carries no hardware meaning), the same way it strips a
+        ``@sim_only`` call in ``on_start``/``run_proc``; the generated C++ is unaffected.  While
+        :meth:`run` is driving ``main()`` this returns a real SimPy timeout so the yields advance
+        the clock; outside a run it fails loud.
+        """
+        if self._sim is None:
+            raise RuntimeError(
+                "SeqTB.timeout requires run() to be driving main() inside a Simulation."
+            )
+        if delay < 0:
+            raise ValueError("delay must be non-negative.")
+        return self._sim.env.timeout(delay)
 
 
 #: Deprecated alias — testbenches historically subclassed ``HwTestbench``.  Kept so existing

@@ -8,33 +8,29 @@ from waveflow.build.build import BuildConfig
 
 
 def test_simp_fun_python_sim_matches_expected_outputs(tmp_path: Path) -> None:
+    # Stage 2: the golden + py_timing now come from running the single-process ``SeqTB`` (the
+    # same ``main()`` that lowers to the C++ testbench), not from the retired ``SimpFunHost``.
     results = build_simp_fun_dag().run(
         BuildConfig(root_dir=tmp_path, params={
             "x": DEFAULT_VECTOR["x"],
             "a": DEFAULT_VECTOR["a"],
             "b": DEFAULT_VECTOR["b"],
-            "latency_cycles": 4,
         }),
-        through="extract_py_timing",
+        through="py_sim",
     )
 
     assert results["build_inputs"].success
     assert results["py_sim"].success
-    assert results["extract_py_timing"].success
 
     y = int(Int32().read_uint32_file(results["py_sim"].path("sim_dir") / "y.bin").val)
-    summary = json.loads(results["py_sim"].path("sim_summary").read_text(encoding="utf-8"))
-    py_timing = json.loads(results["extract_py_timing"].path("py_timing").read_text(encoding="utf-8"))
+    py_timing = json.loads(results["py_sim"].path("py_timing").read_text(encoding="utf-8"))
 
     assert y == 11
-    assert summary["passed"] is True
-    assert summary["ap_done"] == 1
-    # Latency now lives in the kernel (on_start yields a 4-cycle timeout) and the host
-    # genuinely polls ap_done instead of pre-waiting the exact kernel latency. The kernel
-    # finishes at cycle 4; the host's first poll reads ap_done=0 and catches it on the
-    # second poll (poll_interval=4 cycles), so the honest transaction latency is 6 cycles
-    # (was 5, an artifact of the old pre-poll wait + single read).
-    assert py_timing["transaction_cycles"] == 6
+    assert py_timing["source"] == "seq_tb"
+    # The SeqTB times just the kernel transaction: ``run_once_sim`` drives ``on_start``, whose
+    # 4-cycle compute-latency timeout is the whole bracketed interval (the timer wraps only the
+    # invocation, not the host-side regmap set/poll overhead the old SimpFunHost path included).
+    assert py_timing["transaction_cycles"] == 4
 
 
 def test_simp_fun_codegen_emits_kernel_tb_and_impl(tmp_path: Path) -> None:

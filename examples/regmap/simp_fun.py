@@ -190,10 +190,19 @@ class SimpFunTBHls(SeqTB):
         dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
         dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
         dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
-        # The one-call invocation (Phase 5b): run_once's args reference the input regmap fields by
-        # name (declaration order), so this lowers 1:1 to the same C++ kernel call `simp_fun(x, a, b,
-        # y)` the explicit `dut.run()` form emitted — byte-identical.
-        dut.run_once(dut.regmap.get("x"), dut.regmap.get("a"), dut.regmap.get("b"))
+        # Single-process timed invocation (Stage 2): `run_once_sim` drives the kernel's `on_start`
+        # through SimPy so the clock advances, and the two `@sim_only` timer calls bracket it to
+        # capture the transaction latency in-process.  For codegen this is byte-identical to the
+        # synchronous form: `run_once_sim` lowers to the SAME `simp_fun(x, a, b, y)` kernel call as
+        # `run_once` (Stage 1), and the bare `@sim_only` timer calls are stripped by the extractor.
+        self._start_timer()
+        # `y` is the Stage-1 return-capture: in codegen it aliases the kernel's `y` output field
+        # (emitting no C++); at run time it holds the computed result.  Unused after here — the
+        # golden is read back from `write_status_json` below — but kept to mirror the invocation.
+        y = yield from dut.run_once_sim(  # noqa: F841
+            dut.regmap.get("x"), dut.regmap.get("a"), dut.regmap.get("b")
+        )
+        self._stop_timer_and_log()
 
         dut.regmap.write_status_json(
             self.data_dir + "/regmap_status.json",

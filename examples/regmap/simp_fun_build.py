@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 from dataclasses import dataclass
@@ -19,22 +18,16 @@ try:
     from examples.regmap.simp_fun import (
         DEFAULT_VECTOR,
         Int32,
-        SimpFunCase,
         SimpFunComponent,
         SimpFunTBHls,
-        simulate_case,
-        write_sim_summary,
     )
     from examples.regmap.timing_diagram import write_timing_diagram
 except ModuleNotFoundError:
     from simp_fun import (  # type: ignore[no-redef]
         DEFAULT_VECTOR,
         Int32,
-        SimpFunCase,
         SimpFunComponent,
         SimpFunTBHls,
-        simulate_case,
-        write_sim_summary,
     )
     from timing_diagram import write_timing_diagram  # type: ignore[no-redef]
 
@@ -72,71 +65,43 @@ class BuildInputsStep(BuildStep):
 
 @dataclass(kw_only=True)
 class PySimStep(BuildStep):
-    description = "Run the Python regmap simulation and write results/sim/."
+    description = "Run the single-process SeqTB golden and write results/sim/ + py_timing."
     consumes = ["simp_fun_source", "x_in", "a_in", "b_in"]
     produces = {
         "sim_dir": Path("results/sim"),
-        "log": Path("results/sim_log.csv"),
-        "sim_summary": Path("results/sim_summary.json"),
+        "py_timing": Path("results/py_timing.json"),
     }
-    params = {"clk_freq": 100e6, "latency_cycles": 4, "log_file": "results/sim_log.csv"}
-
-    def expected_paths(self, config: BuildConfig) -> dict[str, Path]:
-        log_file = config.params.get("log_file", self.params["log_file"])
-        return {"log": config.root_dir / log_file}
-
-    def run(self, config: BuildConfig, x_in, a_in, b_in, clk_freq, latency_cycles, log_file, **_) -> dict:
-        x = int(Int32().read_uint32_file(x_in).val)
-        a = int(Int32().read_uint32_file(a_in).val)
-        b = int(Int32().read_uint32_file(b_in).val)
-        case = SimpFunCase(x=x, a=a, b=b)
-        log_path = config.root_dir / log_file
-        result = simulate_case(case, clk_freq=clk_freq, latency_cycles=latency_cycles,
-                               log_file=log_path)
-        sim_dir = config.root_dir / "results" / "sim"
-        sim_dir.mkdir(parents=True, exist_ok=True)
-        Int32(result.y).write_uint32_file(sim_dir / "y.bin")
-        (sim_dir / "regmap_status.json").write_text(
-            json.dumps({"ap_done": int(result.ap_done), "y": int(result.y)}, indent=2),
-            encoding="utf-8",
-        )
-        summary_path = write_sim_summary(config.root_dir / "results" / "sim_summary.json", result)
-        return {"sim_dir": sim_dir, "log": log_path, "sim_summary": summary_path}
-
-
-@dataclass(kw_only=True)
-class ExtractPyTimingStep(BuildStep):
-    description = "Extract structured transaction timing from the Python sim log."
-    consumes = ["log"]
-    produces = {"py_timing": Path("results/py_timing.json")}
     params = {"clk_freq": 100e6}
 
-    def run(self, config: BuildConfig, log, clk_freq, **_) -> dict:
-        events: dict[str, float] = {}
-        with open(log, newline="") as f:
-            for row in csv.DictReader(f):
-                event = row["event"]
-                if event not in events:
-                    events[event] = float(row["time"])
-        t_start = events.get("ap_start_host")
-        t_end = events.get("host_done", events.get("kernel_done"))
-        if t_start is None or t_end is None:
-            raise RuntimeError(f"Missing timing events in log: {list(events)}")
-        transaction_seconds = t_end - t_start
+    def run(self, config: BuildConfig, x_in, a_in, b_in, clk_freq, **_) -> dict:
+        # Stage-2 swap: the timed Python golden now comes from the *same* ``SeqTB.main()`` that
+        # lowers to the C++ testbench (``SimpFunHost`` is retired from the DAG).  The SeqTB reads
+        # x/a/b from a single ``data_dir`` and writes ``regmap_status.json`` there, so we stage
+        # the inputs into ``sim_dir`` and let ``main()`` produce the golden status file directly.
+        sim_dir = config.root_dir / "results" / "sim"
+        sim_dir.mkdir(parents=True, exist_ok=True)
+        for src in (x_in, a_in, b_in):
+            (sim_dir / Path(src).name).write_bytes(Path(src).read_bytes())
+
+        tb = SimpFunTBHls(name="simp_fun_tb_golden")
+        tb.run(data_dir=str(sim_dir))
+
+        status = json.loads((sim_dir / "regmap_status.json").read_text(encoding="utf-8"))
+        Int32(int(status["y"])).write_uint32_file(sim_dir / "y.bin")
+
+        # ``py_timing`` — total transaction cycles from the in-process SeqTB timer (the interval
+        # bracketing ``run_once_sim``, which drives the kernel's ``on_start`` latency).
+        transaction_seconds = tb.transaction_seconds()
         transaction_cycles = int(round(transaction_seconds * clk_freq))
-        out_path = config.root_dir / "results" / "py_timing.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps({
+        py_timing_path = config.root_dir / "results" / "py_timing.json"
+        py_timing_path.parent.mkdir(parents=True, exist_ok=True)
+        py_timing_path.write_text(json.dumps({
             "transaction_cycles": transaction_cycles,
             "transaction_seconds": transaction_seconds,
             "clk_freq": float(clk_freq),
-            "source": "py_sim",
-            "events": {
-                "ap_start_host": t_start,
-                "host_done": t_end,
-            },
+            "source": "seq_tb",
         }, indent=2), encoding="utf-8")
-        return {"py_timing": out_path}
+        return {"sim_dir": sim_dir, "py_timing": py_timing_path}
 
 
 @dataclass(kw_only=True)
@@ -299,7 +264,6 @@ def build_simp_fun_dag() -> BuildDag:
 
     dag.add(BuildInputsStep(name="build_inputs"))
     dag.add(PySimStep(name="py_sim"))
-    dag.add(ExtractPyTimingStep(name="extract_py_timing"))
 
     dag.add(HlsCodegenStep(
         name="gen_kernel",
@@ -354,7 +318,7 @@ def main() -> None:
     run_dag_cli(
         build_simp_fun_dag,
         description="Run the regmap example.",
-        default_through="extract_py_timing",
+        default_through="py_sim",
         root_dir=_SOURCE_DIR,
         extra_args=[
             (("--x",), {"type": int, "default": DEFAULT_VECTOR["x"]}),
