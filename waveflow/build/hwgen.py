@@ -756,6 +756,24 @@ def kernel_signature(comp, variant_suffix: str = "") -> str:
             f"bundle=gmem depth={attr}_depth "
             f"max_read_burst_length=256 max_write_burst_length=256"
         )
+    # Bind each m_axi port's offset register to the SAME s_axilite bundle as the
+    # control word.  `offset=slave` means the pointer's base address arrives in an
+    # AXI-Lite register, but `bundle=gmem` above names only the *m_axi* bundle — it
+    # says nothing about where that offset register lives.  Without an explicit
+    # binding Vitis silently auto-creates a second s_axilite bundle for it, and the
+    # kernel exposes TWO AXI-Lite address spaces: `s_axi_control` (the control word)
+    # and `s_axi_control_r` (the offset, at 0x10 behind four reserved words).  One
+    # block, two slaves, for no reason.  Verified by csynth both ways: with this
+    # pragma the top has a single `s_axi_control` carrying 0x00 control + 0x10 m_mem.
+    #
+    # Guarded on the regmap because a kernel with no control slave has no `control`
+    # bundle to join — that is the ap_ctrl_hs branch below, where the offset keeps
+    # its own auto-named slave.
+    if regmap_slave is not None:
+        for attr, _ep in mm_masters:
+            pragma_lines.append(
+                f"#pragma HLS INTERFACE s_axilite port={attr:<12} bundle=control"
+            )
     # Control protocol on the return port: s_axilite when a regmap drives
     # control (poly), else ap_ctrl_hs for stream-controlled kernels (histogram /
     # this toy — decision 2/3).

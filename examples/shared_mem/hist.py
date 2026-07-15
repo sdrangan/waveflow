@@ -17,9 +17,13 @@ component, and a SimPy harness all live in this module; the cosim/burst harness
 (``HistTest``) and the build DAG live in :mod:`hist_build`. ``HistAccel`` is the
 codegen source; ``HistogramAccel`` is the numpy golden it is validated against.
 
-Control is AXI-Stream + ``ap_ctrl_hs`` (the command rides ``s_in``, the response
-rides ``m_out``); the data lives in memory over ``m_mem``. The codegen root is
-``run_proc`` (stream-controlled, no regmap).
+The **command** rides in-band on ``s_in`` and the response on ``m_out``; the data
+lives in memory over ``m_mem``. The **control plane** is separate: ``HistAccel`` is
+a :class:`~waveflow.hw.hw_hostactivated.HostActivated`, so a control-only
+``VitisRegMap({})`` puts ``ap_start``/``ap_done`` in the AXI-Lite slave that
+``m_axi ... offset=slave`` already forces into existence (it carries ``m_mem``'s
+base at ``0x10`` and previously left ``0x00`` *reserved*). The codegen root is
+``on_start``.
 """
 from __future__ import annotations
 
@@ -33,11 +37,13 @@ import numpy.typing as npt
 from waveflow.hw.arrayutils import get_nwords, read_array, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField, MemAddr
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_component import HwParam
+from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
 from waveflow.hw.memory import AddrUnit, MemComponent, Memory
+from waveflow.hw.regmap import VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
@@ -303,14 +309,26 @@ def golden_counts(
 # ---------------------------------------------------------------------------
 
 @dataclass
-class HistAccel(HwComponent):
+class HistAccel(HostActivated):
     """Synthesizable histogram kernel — the codegen source for the generated kernel (``gen/hist.cpp``).
 
-    ``run_proc`` is the kernel body (stream-controlled, so the codegen root is
-    ``run_proc``): read one :class:`HistCmd`, validate it into a status, read the
-    data + bin edges from memory over ``m_mem``, bin them in the ``compute`` hook,
-    write the counts back, and emit one :class:`HistResp`. It is written to read
-    cleanly as the source the generated kernel is lowered from (decision 4).
+    ``on_start`` is the kernel body (one ``ap_start`` invocation): read one
+    :class:`HistCmd`, validate it into a status, read the data + bin edges from
+    memory over ``m_mem``, bin them in the ``compute`` hook, write the counts
+    back, and emit one :class:`HistResp`. It is written to read cleanly as the
+    source the generated kernel is lowered from (decision 4).
+
+    **The command stays in-band on** ``s_in`` — that is the ``shared_mem`` lesson
+    and the point of the example; only the *control* plane is host-activated. The
+    ``VitisRegMap({})`` below declares **no application registers**: its whole job
+    is ``ap_start``/``ap_done``. The AXI-Lite slave is not new — ``m_axi ...
+    offset=slave`` already forced one into existence to carry ``m_mem``'s base at
+    ``0x10``, and it declared ``0x00 : reserved`` with zero ``ap_start`` logic. So
+    the kernel needed *two* masters: a CPU for the base address and something else
+    to pulse an ``ap_start`` wire. Deriving from
+    :class:`~waveflow.hw.hw_hostactivated.HostActivated` fills the reserved slot in
+    the slave that was already there, and makes the component's kind explicit
+    (``check(HistAccel)`` can now answer).
     """
 
     cpp_kernel_name: ClassVar[str | None] = "hist"
@@ -329,11 +347,22 @@ class HistAccel(HwComponent):
         self.s_in  = StreamIFSlave( name=f'{self.name}_s_in',  sim=self.sim, bitwidth=self.in_bw)
         self.m_out = StreamIFMaster(name=f'{self.name}_m_out', sim=self.sim, bitwidth=self.out_bw)
         self.m_mem = MMIFMaster(    name=f'{self.name}_m_mem', sim=self.sim, bitwidth=self.mem_bw)
-        for ep in (self.s_in, self.m_out, self.m_mem):
+        # Control-only regmap: no application registers — the command rides in-band on
+        # ``s_in``.  This exists purely so ap_start/ap_done land at 0x00 of the AXI-Lite
+        # slave that ``m_axi ... offset=slave`` already creates for ``m_mem`` (0x10).
+        self.regmap = VitisRegMap({})
+        self.s_lite = VitisRegMapMMIFSlave(
+            name=f'{self.name}_s_lite',
+            sim=self.sim,
+            bitwidth=32,
+            regmap=self.regmap,
+            on_start=self.on_start,
+        )
+        for ep in (self.s_in, self.m_out, self.m_mem, self.s_lite):
             self.add_endpoint(ep)
 
-    def run_proc(self) -> ProcessGen[None]:
-        """Kernel body (single ap_ctrl_hs invocation).
+    def on_start(self) -> ProcessGen[None]:
+        """Kernel body (single ``ap_start``/``ap_done`` invocation).
 
         ``validate`` returns a status; a non-NO_ERROR status takes the early-
         return path (an ``!=`` against a constant, which the extractor lowers
@@ -416,9 +445,16 @@ class HistAccel(HwComponent):
 class HistController(SimObj):
     """Drives one histogram transaction against the accelerator.
 
-    Allocates three regions in the shared memory (data, edges, counts) in order,
-    writes the inputs, pushes the command, waits for the response, and reads the
-    kernel-produced counts back.
+    Plays the **CPU**: allocates three regions in the shared memory (data, edges,
+    counts) in order, writes the inputs, pulses ``ap_start`` over AXI-Lite, pushes
+    the command, waits for the response, and reads the kernel-produced counts back.
+
+    The ``ap_start`` write is what makes the control plane coherent (mirrors
+    :class:`~examples.stream_inband.poly.PolyTB`): the same master that writes the
+    ``m_mem`` base address into the AXI-Lite slave at ``0x10`` now also launches the
+    kernel from ``0x00`` of that same slave, instead of a second, unmodelled agent
+    pulsing a bare ``ap_start`` wire.  The command itself still rides in-band on
+    ``s_in`` — only control moved.
     """
 
     mem: MemComponent
@@ -433,11 +469,13 @@ class HistController(SimObj):
         super().__post_init__()
         self.m_cmd  = StreamIFMaster(name=f'{self.name}_m_cmd',  sim=self.sim, bitwidth=self.word_bw)
         self.s_resp = StreamIFSlave( name=f'{self.name}_s_resp', sim=self.sim, bitwidth=self.word_bw)
+        self.m_lite = MMIFMaster(    name=f'{self.name}_m_lite', sim=self.sim, bitwidth=32)
         self.data_addr:  int | None = None
         self.edge_addr:  int | None = None
         self.count_addr: int | None = None
         self.resp: HistResp | None = None
         self.counts: npt.NDArray[np.uint32] | None = None
+        self._regmap_ref: VitisRegMap | None = None
 
     def run_proc(self) -> ProcessGen[None]:
         bw = self.word_bw
@@ -460,6 +498,10 @@ class HistController(SimObj):
             yield from self.mem.m_mm.write_array(
                 np.asarray(self.bin_edges, dtype=np.float32), Float32, self.edge_addr, word_bw=bw)
 
+        # Launch the kernel (ap_start at 0x00 of the AXI-Lite slave).  on_start then
+        # blocks on s_in.get until the in-band command below arrives.
+        yield from self._regmap().bind_master(self.m_lite).start()
+
         # Issue the command and await the response.
         cmd = HistCmd(
             tx_id=self.tx_id,
@@ -478,19 +520,30 @@ class HistController(SimObj):
         out = yield from self.mem.m_mm.read_array(Uint32Field, nbins, self.count_addr, word_bw=bw)
         self.counts = np.asarray(out, dtype=np.uint32)
 
+    def _regmap(self) -> VitisRegMap:
+        if self._regmap_ref is None:
+            raise RuntimeError(
+                "HistController._regmap_ref is unset; call connect() before run_sim()."
+            )
+        return self._regmap_ref
+
 
 def connect(sim: Simulation, ctrl: HistController, accel: HistAccel,
             mem: MemComponent, clk: Clock) -> None:
-    """Wire controller ↔ accelerator (two StreamIFs) and accelerator → memory."""
+    """Wire controller ↔ accelerator (two StreamIFs + AXI-Lite) and accelerator → memory."""
     in_stream  = StreamIF(sim=sim, clk=clk)
     out_stream = StreamIF(sim=sim, clk=clk)
     mem_link   = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)
+    lite_link  = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)
     in_stream.bind( "master", ctrl.m_cmd)
     in_stream.bind( "slave",  accel.s_in)
     out_stream.bind("master", accel.m_out)
     out_stream.bind("slave",  ctrl.s_resp)
     mem_link.bind(  "master", accel.m_mem)
     mem_link.bind(  "slave",  mem.s_mm)
+    lite_link.bind( "master", ctrl.m_lite)
+    lite_link.bind( "slave",  accel.s_lite)
+    ctrl._regmap_ref = accel.regmap
 
 
 # ---------------------------------------------------------------------------

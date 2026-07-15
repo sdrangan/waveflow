@@ -55,10 +55,11 @@ the output stream, while all the bulk data moves over `m_axi`.
 > **Why split control from data?** The command is a few small fields; the data is
 > kilobytes. Putting the command on its own narrow stream keeps it cheap and
 > ordered (one command in, one response out, like a function call), while the
-> wide `m_axi` master is reserved for the high-bandwidth payload. The kernel's
-> control protocol is Vitis's `ap_ctrl_hs` handshake — the same start/done
-> contract the [regmap](../regmap/) example drove through registers, here driven
-> by the arrival of a command word.
+> wide `m_axi` master is reserved for the high-bandwidth payload. The kernel is
+> *launched* by the same `ap_start`/`ap_done` handshake the [regmap](../regmap/)
+> example drove through registers — a launched kernel then blocks waiting for a
+> command word to arrive. Launch and command are separate: the host says *go*
+> over AXI-Lite, the command says *what* over the stream.
 
 This is the **shared-memory pattern**: control over a stream, payload in memory
 addressed by pointers carried in the command. (A *memory-backed* control queue —
@@ -145,7 +146,7 @@ kernel issues typed array operations against its memory master, and the framewor
 lowers them to the right AXI bursts:
 
 ```python
-# examples/shared_mem/hist.py — HistAccel.run_proc (excerpt)
+# examples/shared_mem/hist.py — HistAccel.on_start (excerpt)
 data = yield from self.m_mem.read_array(
     Float32, cmd.ndata, cmd.data_addr, max_count=self.max_ndata)
 edges = yield from self.m_mem.read_array(

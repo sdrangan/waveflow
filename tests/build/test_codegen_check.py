@@ -39,7 +39,7 @@ from waveflow.simulation.simobj import ProcessGen
 
 from examples.block_scale.block_scale import BlockScaleTBHls
 from examples.regmap.simp_fun import SimpFunComponent, SimpFunTBHls
-from examples.shared_mem.hist import HistTBHls
+from examples.shared_mem.hist import HistAccel, HistTBHls
 from examples.stream_inband.poly import PolyTBHls
 from examples.toy.toy import ScaledSquare, Square
 
@@ -105,7 +105,7 @@ def test_the_local_baseline_fixture_really_passes():
 
 @pytest.mark.parametrize(
     "subject",
-    [SimpFunComponent, SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls],
+    [SimpFunComponent, HistAccel, SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls],
     ids=lambda c: c.__name__,
 )
 def test_real_subjects_pass(subject):
@@ -121,6 +121,7 @@ def test_real_subjects_pass(subject):
     "subject, target",
     [
         (SimpFunComponent, CONTROL_DRIVEN_KERNEL),
+        (HistAccel, CONTROL_DRIVEN_KERNEL),
         (SimpFunTBHls, SEQUENTIAL_VITIS_TB),
         (PolyTBHls, SEQUENTIAL_VITIS_TB),
         (HistTBHls, SEQUENTIAL_VITIS_TB),
@@ -283,11 +284,17 @@ def test_target_none_needs_exactly_one_potential_target():
 
 
 def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle():
-    """The real un-migrated kernels: check() cannot answer, and must say why *usefully*.
+    """The real un-migrated kernel: check() cannot answer, and must say why *usefully*.
 
-    HistAccel and BlockScaleComponent are plain HwComponents with a run_proc body — the "interim
-    un-migrated leaf" that codegen_dispatch explicitly still handles.  So `kernel_files_to_str`
-    WORKS for them while `check` cannot answer: two of the four real kernels.
+    BlockScaleComponent is a plain HwComponent with a run_proc body — the "interim un-migrated
+    leaf" that codegen_dispatch explicitly still handles.  So `kernel_files_to_str` WORKS for it
+    while `check` cannot answer: one of the four real kernels.
+
+    (HistAccel used to be the other one.  It is now a HostActivated — see
+    `test_hist_is_migrated_and_checkable` below — which is why this covers BlockScaleComponent
+    alone.  When block_scale migrates too, this test has no subject left and should be deleted
+    along with `_no_targets_message`'s HwComponent branch; `_NoDeclaredTargets` above already
+    covers the message shape synthetically.)
 
     The trap this pins: with an empty potential_targets, *no* target name can pass gate 2, so a
     message saying "name one explicitly" is a dead end — the caller tries a name, gets refused, and
@@ -295,21 +302,42 @@ def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle(
     won't generate (the caller can watch it generate).
     """
     from examples.block_scale.block_scale import BlockScaleComponent
-    from examples.shared_mem.hist import HistAccel
 
-    for cls in (HistAccel, BlockScaleComponent):
-        for target in (None, CONTROL_DRIVEN_KERNEL, FREE_RUNNING_KERNEL):
-            ok, msg = check(cls, target)
-            assert ok is False
-            assert "not been migrated to an execution-model class" in msg
-            assert "name one explicitly" not in msg, "dead-end advice: no name can pass gate 2"
-            # It must not deny what the caller can see codegen do.
-            assert "NOT a claim that it will not generate" in msg
+    for target in (None, CONTROL_DRIVEN_KERNEL, FREE_RUNNING_KERNEL):
+        ok, msg = check(BlockScaleComponent, target)
+        assert ok is False
+        assert "not been migrated to an execution-model class" in msg
+        assert "name one explicitly" not in msg, "dead-end advice: no name can pass gate 2"
+        # It must not deny what the caller can see codegen do.
+        assert "NOT a claim that it will not generate" in msg
 
     # The disagreement is real, not hypothetical: generate succeeds where check abstains.
     from waveflow.build.hwgen import kernel_files_to_str
 
-    assert kernel_files_to_str(HistAccel), "HistAccel migrated? then update this test and the message"
+    assert kernel_files_to_str(BlockScaleComponent), \
+        "BlockScaleComponent migrated? then update this test and the message"
+
+
+def test_hist_is_migrated_and_checkable():
+    """HistAccel is a HostActivated: `check` now returns a real verdict where it used to abstain.
+
+    This is the structural half of the Stage-4 contract, and the pair to the test above.  hist
+    keeps its command **in-band on s_in** — only the control plane moved onto the regmap.  The
+    regmap is control-only (`VitisRegMap({})`, no application registers), which is what fills the
+    `0x00 : reserved` slot in the AXI-Lite slave that `m_axi ... offset=slave` already forced into
+    existence for `m_mem` at `0x10`.
+    """
+    from examples.shared_mem.hist import HistAccel
+
+    assert issubclass(HistAccel, HostActivated)
+    assert potential_targets(HistAccel) == frozenset({CONTROL_DRIVEN_KERNEL})
+    assert check(HistAccel) == (True, None)
+    assert check(HistAccel, CONTROL_DRIVEN_KERNEL) == (True, None)
+
+    # The control plane is the ONLY thing that moved: no application registers were added, so the
+    # kernel signature is unchanged and the command still rides in-band on s_in.
+    comp = elaborate(HistAccel)
+    assert [n for n, f in comp.regmap._fields.items() if not f.is_vitis_auto] == []
 
 
 # ==============================================================================================
@@ -574,13 +602,12 @@ def test_the_gate_does_not_fire_on_non_spawns(body):
 def test_no_real_kernel_or_tb_trips_the_sequential_gate():
     """Stage 3's stated gate: the new rule fires on NOTHING that exists today.
 
-    Driven through the real extractor rather than `check`, because two of the four kernels
-    (HistAccel, BlockScaleComponent) are un-migrated plain HwComponents that `check` abstains on
-    at gate 2 — they would never reach gate 4, so a `check`-level assertion would prove nothing
-    about them.  `extract_*` is what `generate` runs, so this covers all four for real.
+    Driven through the real extractor rather than `check`, because one of the four kernels
+    (BlockScaleComponent) is still an un-migrated plain HwComponent that `check` abstains on at
+    gate 2 — it would never reach gate 4, so a `check`-level assertion would prove nothing about
+    it.  `extract_*` is what `generate` runs, so this covers all four for real.
     """
     from examples.block_scale.block_scale import BlockScaleComponent
-    from examples.shared_mem.hist import HistAccel
     from examples.stream_inband.poly import PolyAccelComponent
     from waveflow.build.hwcodegen import extract_kernel, extract_testbench
 
