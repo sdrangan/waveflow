@@ -269,7 +269,7 @@ class _TwoTargets(_MinimalHostActivated):
 def test_target_none_needs_exactly_one_potential_target():
     ok, msg = check(_NoDeclaredTargets)
     assert ok is False
-    assert "no potential codegen targets" in msg
+    assert "not been migrated to an execution-model class" in msg
 
     ok, msg = check(_TwoTargets)
     assert ok is False
@@ -277,6 +277,36 @@ def test_target_none_needs_exactly_one_potential_target():
 
     # ...but naming one resolves it.
     assert check(_TwoTargets, CONTROL_DRIVEN_KERNEL) == (True, None)
+
+
+def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle():
+    """The real un-migrated kernels: check() cannot answer, and must say why *usefully*.
+
+    HistAccel and BlockScaleComponent are plain HwComponents with a run_proc body — the "interim
+    un-migrated leaf" that codegen_dispatch explicitly still handles.  So `kernel_files_to_str`
+    WORKS for them while `check` cannot answer: two of the four real kernels.
+
+    The trap this pins: with an empty potential_targets, *no* target name can pass gate 2, so a
+    message saying "name one explicitly" is a dead end — the caller tries a name, gets refused, and
+    learns nothing.  The message must instead name the migration, and must not claim the component
+    won't generate (the caller can watch it generate).
+    """
+    from examples.block_scale.block_scale import BlockScaleComponent
+    from examples.shared_mem.hist import HistAccel
+
+    for cls in (HistAccel, BlockScaleComponent):
+        for target in (None, CONTROL_DRIVEN_KERNEL, FREE_RUNNING_KERNEL):
+            ok, msg = check(cls, target)
+            assert ok is False
+            assert "not been migrated to an execution-model class" in msg
+            assert "name one explicitly" not in msg, "dead-end advice: no name can pass gate 2"
+            # It must not deny what the caller can see codegen do.
+            assert "NOT a claim that it will not generate" in msg
+
+    # The disagreement is real, not hypothetical: generate succeeds where check abstains.
+    from waveflow.build.hwgen import kernel_files_to_str
+
+    assert kernel_files_to_str(HistAccel), "HistAccel migrated? then update this test and the message"
 
 
 # ==============================================================================================

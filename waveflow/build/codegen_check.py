@@ -53,6 +53,32 @@ def potential_targets(subject) -> frozenset[str]:
     return frozenset(getattr(_subject_class(subject), "potential_targets", frozenset()))
 
 
+def _no_targets_message(cls: type) -> str:
+    """Explain an empty ``potential_targets`` — without sending the caller round in a circle.
+
+    Naming a target explicitly cannot help here (gate 2 rejects every name against an empty set), so
+    this must not say "name one explicitly".  For the case that actually occurs — a plain
+    ``HwComponent`` that predates the execution-model classes — the honest answer names the migration
+    *and* admits that codegen still emits for it, so a caller who has watched ``generate`` succeed is
+    not told something they can see is false.
+    """
+    from waveflow.hw.hw_component import HwComponent
+
+    if isinstance(cls, type) and issubclass(cls, HwComponent):
+        return (
+            f"{cls.__name__} is a plain HwComponent: it has not been migrated to an execution-model "
+            f"class (HostActivated / FreeRunComp / CompositeComp), so no codegen target is declared "
+            f"for its kind and check() cannot answer for it. Note this is NOT a claim that it will "
+            f"not generate — codegen still emits for un-migrated leaves through the interim fallback "
+            f"in codegen_dispatch (extracting on_start when a regmap is present, else run_proc). "
+            f"Migrating it onto an execution-model class is what makes it checkable."
+        )
+    return (
+        f"{cls.__name__} is not a codegen subject: it declares no potential targets and is not a "
+        f"HwComponent or SeqTB. Known targets: {_sorted(ALL_TARGETS)}."
+    )
+
+
 def _resolve_target(subject, cls: type) -> tuple[str | None, str | None]:
     """Pick the implied target when the caller named none.
 
@@ -63,10 +89,7 @@ def _resolve_target(subject, cls: type) -> tuple[str | None, str | None]:
     if len(targets) == 1:
         return next(iter(targets)), None
     if not targets:
-        return None, (
-            f"{cls.__name__} declares no potential codegen targets, so there is no target to "
-            f"default to; name one explicitly. Known targets: {_sorted(ALL_TARGETS)}."
-        )
+        return None, _no_targets_message(cls)
     return None, (
         f"{cls.__name__} has several potential targets ({_sorted(targets)}), so the target cannot "
         f"be inferred; name one explicitly."
@@ -117,6 +140,9 @@ def check(subject, target: str | None = None) -> tuple[bool, str | None]:
 
     # Gate 2 — does this path exist for this KIND?  (The class states the kind.)
     kind_targets = potential_targets(subject)
+    if not kind_targets:
+        # Empty is not "you picked the wrong one of several" — no name would work. Say the real thing.
+        return False, _no_targets_message(cls)
     if target not in kind_targets:
         return False, (
             f"{target!r} is not a potential target for {cls.__name__}; its potential targets are "
