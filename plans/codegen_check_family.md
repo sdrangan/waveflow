@@ -115,9 +115,34 @@ The thing the docs quote. Built on Stage 2:
 
 > A `HostActivated` synthesizes to a **standalone Vitis kernel** iff
 > **(a)** it has no sub-components / internal interfaces, and
-> **(b)** its `on_start` passes `check(..., target="vitis_kernel")`.
+> **(b)** its `on_start` passes `check(..., target="control_driven_kernel")`.
 
 Structural rule (a) + body rule (b). Same shape for the other kinds.
+
+### Fold in: the `cpp_namespace` default emits ill-formed C++
+
+Found by the toys (2026-07-15) — the first component to *take* the default. `resolved_namespace`
+([`hwgen.py:994`](../waveflow/build/hwgen.py)) resolves `cpp_namespace = None` to the **kernel name**, so
+a component with a hook emits `void square(...)` **and** `namespace square { ... }` into one scope. That
+is ill-formed C++ (*"redeclared as different kind of entity"*, confirmed against g++), and codegen raises
+nothing.
+
+Every real component hand-sets `<kernel>_impl` — `simp_fun_impl`, `poly_impl`, `hist_impl`,
+`block_scale_impl`, `mem_r_stream_impl`, `mem_copy_impl`, `fir_impl`. **A 100% opt-out rate is the
+evidence: the default is unusable whenever a hook exists**, and it has survived only because nobody has
+ever used it.
+
+Two candidate fixes — decide when implementing:
+
+- **Default to `f"{kernel_name}_impl"`.** Makes the common case correct by construction and matches what
+  every component already writes by hand. Should be byte-identical for all existing kernels precisely
+  *because* they all override it — which the Stage-2 gate would confirm.
+- **Fail loud** when the resolved namespace equals the kernel name and a hook is emitted.
+
+They compose (fix the default *and* keep the guard as a `check` rule). This belongs here rather than in
+[`toy_examples.md`](./toy_examples.md) because it is exactly what `check(..., "free_running_kernel")`
+should catch: **silently wrong output, not a loud failure**. The toys pin the current broken behavior in
+a characterization test, so whichever fix lands will fail that test loudly and force the doc update.
 
 ## Docs — `guide/comp_codegen` (where this belongs)
 
