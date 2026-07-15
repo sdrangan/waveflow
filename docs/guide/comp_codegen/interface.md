@@ -56,7 +56,7 @@ void simp_fun(
 );
 ```
 
-The auto-prepended `ap_start` / `ap_done` registers are not emitted as data ports; they are the
+The `ap_start` / `ap_done` control bits are not emitted as data ports; they are the
 **control protocol**. When a regmap drives the component, the kernel's `return` port also binds
 `s_axilite ... bundle=control`, giving the host the `ap_start`/`ap_done` handshake that launches the
 [regmap-launched](./structure.md) `on_start` body.

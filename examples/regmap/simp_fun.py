@@ -69,8 +69,11 @@ class SimpFunComponent(HostActivated):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        # VitisRegMap auto-prepends ap_start (W1S) at 0x00 and ap_done (R)
-        # at 0x04; the user only declares the application registers below.
+        # VitisRegMap adds the Vitis control block: ap_start (bit 0) and
+        # ap_done (bit 1) share the control word at 0x00, and 0x04/0x08/0x0c
+        # are GIER/IER/ISR.  The user declares only the application registers
+        # below; they land at 0x10, 0x18, 0x20, 0x28 (Vitis's 8-byte scalar
+        # stride), matching solution1/.autopilot/db/coregen/control.h.
         self.regmap = VitisRegMap({
             "x": RegField(Int32, RegAccess.RW, description="Input operand"),
             "a": RegField(Int32, RegAccess.RW, description="Multiply coefficient"),

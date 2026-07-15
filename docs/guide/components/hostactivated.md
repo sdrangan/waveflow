@@ -45,7 +45,8 @@ class SimpFunComponent(HostActivated):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        # VitisRegMap auto-prepends ap_start / ap_done; you declare only the app registers.
+        # VitisRegMap adds the Vitis control block (ap_start / ap_done are bits
+        # of the 0x00 word); you declare only the app registers, from 0x10 up.
         self.regmap = VitisRegMap({
             "x": RegField(Int32, RegAccess.RW, description="Input operand"),
             "a": RegField(Int32, RegAccess.RW, description="Multiply coefficient"),

@@ -405,22 +405,28 @@ For composite fields, callers that need "all words written" semantics must track
 
 ## VitisRegMap
 
-A `VitisRegMap` is a `RegMap` subclass that auto-prepends the standard Vitis HLS `ap_ctrl_hs` control registers. The user only declares their own kernel-specific fields; `ap_start` (W1S, `0x00`) and `ap_done` (R, `0x04`) are added automatically, and the [`VitisRegMapMMIFSlave`](#vitisregmapmmifslave) manages their values (it clears `ap_done` on launch and sets it when the kernel returns).
+A `VitisRegMap` is a `RegMap` subclass that reproduces the s_axilite control layout Vitis HLS generates. The user only declares their own kernel-specific fields; the control block is added automatically, and the [`VitisRegMapMMIFSlave`](#vitisregmapmmifslave) manages the control bits (it clears `ap_done` on launch and sets it when the kernel returns).
+
+The control block occupies the first 16 bytes, and **user fields start at `0x10` on an 8-byte stride** — Vitis gives each 32-bit scalar argument a data word plus a control/reserved word:
+
+| Offset | Contents |
+|--------|----------|
+| `0x00` | Control word — `ap_start` (bit 0), `ap_done` (bit 1), `ap_idle` (bit 2), `ap_ready` (bit 3) |
+| `0x04` | `gier` — Global Interrupt Enable Register |
+| `0x08` | `ier` — IP Interrupt Enable Register |
+| `0x0C` | `isr` — IP Interrupt Status Register |
+| `0x10` | first user field (`0x14` reserved), then `0x18`, `0x20`, … |
+
+The four `ap_*` signals are **bits of one word**, not registers of their own. See [Bit-packed fields](#bit-packed-fields) for the mechanism, and [Fidelity](#fidelity-what-is-and-is-not-modelled) for what the model does not reproduce.
 
 ```python
 class VitisRegMap(RegMap):
-    """RegMap with Vitis ap_ctrl_hs control conventions auto-applied.
-
-    Prepends `ap_start` (W1S) at 0x00 and `ap_done` (R) at 0x04; user fields
-    start at 0x08.  A future v2 packs the remaining control bits (ap_idle,
-    ap_ready, auto_restart) into one word plus optional GIE/IER/ISR interrupt
-    registers.
-    """
+    """RegMap mirroring the s_axilite control layout Vitis HLS generates."""
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None: ...
 
     def start(self, master: MMIFMaster, base_addr: int = 0) -> ProcessGen[None]:
-        """Convenience: host-side launch.  Equivalent to writing 1 to
-        `base_addr + offset_of("ap_start")` over the master endpoint."""
+        """Convenience: host-side launch.  Writes 1 to bit 0 of the control
+        word at `base_addr` over the master endpoint."""
 ```
 
 Use site:
@@ -433,12 +439,26 @@ POLY_REGMAP = VitisRegMap({
     "tx_id":        RegField(TxIdField,      RegAccess.R,   description="TX id of halted txn"),
     "coeffs":       RegField(CoeffArray,     RegAccess.RW,  description="Default coefficients"),
 })
-# offset_of("ap_start") == 0x00, offset_of("ap_done") == 0x04, offset_of("status_clear") == 0x08, etc.
+# offset_of("ap_start") == 0x00 with bit_offset_of("ap_start") == 0
+# offset_of("ap_done")  == 0x00 with bit_offset_of("ap_done")  == 1
+# offset_of("status_clear") == 0x10, offset_of("halted") == 0x18, etc.
 ```
 
-User-declared field names beginning with `ap_` are rejected at construction time to prevent collisions with current and future Vitis-reserved names.
+`VitisRegMap` requires `bitwidth=32` — the Vitis s_axilite control bus is 32 bits wide and the control block is defined on 4-byte words.
 
-Waveflow's control region is a simplification of Vitis's real control word. Vitis packs `ap_start`, `ap_done`, `ap_idle`, `ap_ready`, and `auto_restart` into one 32-bit register at `0x00` with bit-level access semantics. Waveflow instead exposes `ap_start` and `ap_done` as **two separate full-word registers** (`0x00` and `0x04`) — enough for the launch-then-poll lifecycle, and simpler to model. Host code that writes `1` to `0x00` to launch is bit-compatible with Vitis; the packed `ap_idle` / `ap_ready` / `auto_restart` bits are not yet modeled. See [Planned (v2)](#planned-vitisregmap-v2-control-register).
+User-declared field names beginning with `ap_` are rejected at construction time to prevent collisions with current and future Vitis-reserved names, as are manual offsets inside the reserved `0x00`–`0x0f` control block.
+
+### Fidelity: what is and is not modelled
+
+The *layout* mirrors Vitis. The *side effects* are modelled only as far as the simulator needs:
+
+- **`ap_done` / `ap_ready` are not clear-on-read.** Real hardware clears them when the host reads `0x00` (`COR`). The model clears them on the next `ap_start` instead, so a host can read `ap_done` repeatedly and keep seeing `1`.
+- **`ap_start` is `W1S`, not `COH`.** It auto-clears once the launch hook has run rather than on the `ap_ready` handshake — the same net effect for a sim that launches synchronously.
+- **`gier` / `ier` / `isr` are plain storage.** There is no interrupt line in the simulation; writing them enables nothing, and `isr` does not implement toggle-on-write.
+- **`auto_restart` (bit 7) and `interrupt` (bit 9) are not modelled** at all.
+- **The multi-word stride is unverified.** The 8-byte stride is confirmed for 32-bit scalars. Fields spanning several words follow the same data-words-plus-control-word rule, but Vitis maps array arguments on s_axilite as a BRAM-backed region, which `VitisRegMap` does not reproduce.
+
+Nothing currently *enforces* that this layout tracks Vitis. The offsets are not shared with the kernel — codegen emits no addresses, and Vitis assigns them from the `s_axilite` pragmas — so the Python table is used only inside the simulation, by both `BoundRegMap` and the slave. The authoritative artifact is the `control.h` that Vitis writes beside the generated RTL (`<proj>/solution1/.autopilot/db/coregen/control.h`); a build step that parses it and diffs it against `VitisRegMap` would turn today's mirror into a checked contract. That conformance test is follow-on work.
 
 ---
 
@@ -471,8 +491,8 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
 
 ### What the slave does not do
 
-- The slave **does** auto-manage `ap_done` (cleared on launch, set on return), but does **not** set any *user* status field. Error codes, transaction IDs, sticky flags, etc. are kernel-specific and remain the kernel author's responsibility (set via `regmap.set(name, value)` before `return`ing).
-- The slave does **not** model `ap_idle` / `ap_ready` / `auto_restart` as readable registers yet (deferred to v2 — see below).
+- The slave **does** auto-manage `ap_done` / `ap_ready` / `ap_idle` (cleared on launch, set on return), but does **not** set any *user* status field. Error codes, transaction IDs, sticky flags, etc. are kernel-specific and remain the kernel author's responsibility (set via `regmap.set(name, value)` before `return`ing).
+- The slave does **not** clear `ap_done` / `ap_ready` on read, and does **not** model `auto_restart` — see [Not yet modelled](#not-yet-modelled).
 
 ---
 
@@ -506,7 +526,8 @@ class CoeffArray(DataArray):
     static = True
     max_shape = (ncoeff,)
 
-# Only user-defined fields are declared; ap_start is auto-prepended at 0x00.
+# Only user-defined fields are declared; the Vitis control block (0x00-0x0f)
+# is added automatically, so these land from 0x10 up.
 POLY_REGMAP_FIELDS = {
     "status_clear": RegField(Bit,            RegAccess.W1C, description="Clear halted/error"),
     "halted":       RegField(Bit,            RegAccess.R,   description="1 = halted on error"),
@@ -585,56 +606,49 @@ if halted:
     yield from poly.regmap.start(cpu, base_addr=POLY_BASE)        # re-launch
 ```
 
-The same `VitisRegMap` object drives the SimPy simulation, the (planned) HLS pragma generation, and the (planned) host driver class — see below.
+The same `VitisRegMap` object drives the SimPy simulation and would drive the (planned) HLS pragma generation and host driver class — see below. Note that this is a single *declaration* of the fields, not a single source of the offsets: codegen emits no addresses, and Vitis assigns them from the `s_axilite` pragmas. `VitisRegMap` mirrors the layout Vitis documents; nothing yet checks the mirror — see [Fidelity](#fidelity-what-is-and-is-not-modelled).
 
 ---
 
-## Planned: VitisRegMap v2 control register
+## Bit-packed fields
 
-Today `VitisRegMap` exposes `ap_start` (`0x00`) and `ap_done` (`0x04`) as two separate full-word registers — enough for the launch-then-poll lifecycle. v2 would pack them, plus the remaining control bits, into the single bit-packed `ap_ctrl_hs` register at `0x00` that Vitis HLS actually generates, with bit-level access semantics within one bus word.
-
-### Bit layout at offset 0x00
-
-| Bit | Name           | Access | Notes                                         |
-|-----|----------------|--------|-----------------------------------------------|
-| 0   | `ap_start`     | W1S    | auto-clears when slave begins running on_start |
-| 1   | `ap_done`      | COR    | set when on_start returns; cleared on host read |
-| 2   | `ap_idle`      | R      | 1 when on_start is not running                |
-| 3   | `ap_ready`     | R      | 1 when ready to accept the next ap_start      |
-| 7   | `auto_restart` | RW     | when 1, slave re-invokes on_start immediately on return |
-
-Three new infrastructure pieces are needed to support this:
-
-- **`RegAccess.COR`** (clear-on-read): host reads return the current value, then the backing store is zeroed.
-- **`BitField` / packed-field support in `RegField`**: multiple named bit fields at the same byte offset, each with its own access mode. `RegField.bits = {"ap_start": 0, "ap_done": 1, ...}` or a parallel declaration syntax.
-- **`auto_restart` semantics in `VitisRegMapMMIFSlave`**: when the bit is set and `on_start` returns, the slave immediately re-invokes `on_start` without requiring another host write.
-
-### Optional interrupt registers
-
-A `VitisRegMap(..., interrupts=True)` flag adds the standard Vitis interrupt registers:
-
-| Offset | Name | Width | Description                          |
-|--------|------|-------|--------------------------------------|
-| 0x04   | GIE  | 1     | Global interrupt enable              |
-| 0x08   | IER  | 2     | Interrupt enable for ap_done, ap_ready |
-| 0x0C   | ISR  | 2     | Interrupt status (W1C)               |
-
-When `ap_done` asserts and the corresponding IER bit is set, the slave fires an `interrupt_event` (a SimPy event) that the host model can `yield` on instead of polling.
-
-### Host-side accessors
-
-The auto-generated driver class gets per-bit accessors mirroring Vitis's generated `xpoly.h`:
+Several fields can share one bus word. A field declares `bit_offset` — the position of its LSB within the word at `offset` — and then occupies just that bit range:
 
 ```python
-drv.start()                # write 1 to ap_start
-drv.is_done()              # read ap_done (clears it)
-drv.is_idle()              # read ap_idle
-drv.set_auto_restart(True) # write bit 7 of control
-drv.enable_interrupts()    # write GIE, IER
-yield from drv.wait_interrupt()   # yield on the slave's interrupt_event
+RegMap({
+    "ap_start": RegField(Bit, RegAccess.W1S, offset=0x00, bit_offset=0),
+    "ap_done":  RegField(Bit, RegAccess.R,   offset=0x00, bit_offset=1),
+})
 ```
 
-User code that targets v1 (writes `1` to `0x00` to launch) continues to work in v2 — the only change is that more bits at `0x00` become readable and the control register loses its "single ap_start bit" simplification.
+This is the mechanism `VitisRegMap` uses for the `0x00` control word. Rules:
+
+- A packed field must name its `offset` explicitly, and its schema must be a scalar with a `bitwidth` that fits in the word. Overlapping bit ranges raise `ValueError` at construction.
+- Each packed field still gets **its own backing buffer holding the unshifted value**, so owner-side `get()` / `set()` are identical for packed and unpacked fields. Only the bus-level word composition differs.
+- `field_name_at_offset()` raises on a packed word — it has no single owning field. Use `bit_fields_at_offset(offset)` to list the fields sharing it, and `bit_offset_of(name)` to get one field's position.
+
+Layout queries:
+
+```python
+rm.bit_offset_of("ap_done")       # 1  (None for an unpacked field)
+rm.bit_fields_at_offset(0x00)     # ["ap_start", "ap_done", "ap_idle", "ap_ready"]
+```
+
+### Bus semantics
+
+Packing costs no extra transactions. `BoundRegMap.get(name)` reads the containing word and extracts the field's bits; `set(name, value)` composes a word with the field's bits in place and zeros elsewhere, then issues **one** write — there is no read-modify-write.
+
+That mirrors the hardware, where a word write drives every writable bit of the word, and it has two consequences:
+
+- **Read-only bits ignore writes rather than raising.** A packed word mixes `R` and writable bits, so writing `ap_start` cannot be an access violation just because read-only `ap_done` sits beside it. The hardware slave likewise decodes only the writable bits.
+- **Writing one field of a word holding *several writable* fields zeroes the others** — exactly as it would on the bus. A caller that needs to preserve a neighbour must compose the word itself. This does not bite the Vitis control word, where `ap_start` is the only writable bit.
+
+### Not yet modelled
+
+- **`RegAccess.COR`** (clear-on-read): host reads return the current value, then the backing store is zeroed. Real `ap_done` / `ap_ready` are `COR`; the model clears them on the next `ap_start` instead.
+- **`auto_restart` semantics in `VitisRegMapMMIFSlave`**: when bit 7 is set and `on_start` returns, the slave would immediately re-invoke `on_start` without another host write.
+- **Interrupts.** `gier` / `ier` / `isr` exist as storage only. Wiring them up would mean firing an `interrupt_event` (a SimPy event) when `ap_done` asserts with the matching `ier` bit set, so a host model could `yield` on it instead of polling.
+- **A `control.h` conformance test.** Nothing checks the modelled layout against the artifact Vitis emits — see [Fidelity](#fidelity-what-is-and-is-not-modelled).
 
 ---
 
@@ -653,14 +667,15 @@ Renders a table suitable for inclusion in design docs:
 ```markdown
 ### POLY register map
 
-| Offset | Name         | Access | Width | Description                  |
-|--------|--------------|--------|-------|------------------------------|
-| 0x00   | ap_start     | W1S    | 1     | Start kernel                 |
-| 0x04   | status_clear | W1C    | 1     | Clear halted/error           |
-| 0x08   | halted       | R      | 1     | 1 = halted on error          |
-| 0x0C   | error        | R      | 8     | Last error code              |
-| 0x10   | tx_id        | R      | 16    | TX id of halted txn          |
-| 0x14   | coeffs[4]    | RW     | 4×32  | Default coefficients         |
+| Offset | Bit | Name         | Access | Width | Description                  |
+|--------|-----|--------------|--------|-------|------------------------------|
+| 0x00   | 0   | ap_start     | W1S    | 1     | Start kernel                 |
+| 0x00   | 1   | ap_done      | R      | 1     | Kernel finished              |
+| 0x10   | —   | status_clear | W1C    | 1     | Clear halted/error           |
+| 0x18   | —   | halted       | R      | 1     | 1 = halted on error          |
+| 0x20   | —   | error        | R      | 8     | Last error code              |
+| 0x28   | —   | tx_id        | R      | 16    | TX id of halted txn          |
+| 0x30   | —   | coeffs[4]    | RW     | 4×32  | Default coefficients         |
 ```
 
 ### C header
@@ -673,14 +688,18 @@ Generates `#define`s for offsets and bit widths, plus a packed struct for compos
 
 ```c
 /* Auto-generated from POLY_REGMAP — do not edit. */
-#define POLY_AP_START_OFFSET     0x00u
-#define POLY_STATUS_CLEAR_OFFSET 0x04u
-#define POLY_HALTED_OFFSET       0x08u
-#define POLY_ERROR_OFFSET        0x0Cu
-#define POLY_TX_ID_OFFSET        0x10u
-#define POLY_COEFFS_OFFSET       0x14u
+#define POLY_AP_CTRL_OFFSET      0x00u
+#define POLY_AP_START_BIT        0u
+#define POLY_AP_DONE_BIT         1u
+#define POLY_STATUS_CLEAR_OFFSET 0x10u
+#define POLY_HALTED_OFFSET       0x18u
+#define POLY_ERROR_OFFSET        0x20u
+#define POLY_TX_ID_OFFSET        0x28u
+#define POLY_COEFFS_OFFSET       0x30u
 #define POLY_COEFFS_COUNT        4u
 ```
+
+Such a generator would also be the natural place to diff the modelled layout against Vitis's `control.h` and fail loudly on drift.
 
 ### Python driver class
 
