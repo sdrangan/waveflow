@@ -11,15 +11,17 @@ The [`Memory`](./python.md) model above is the *host-side*, byte-addressed view 
 vectors and lay out buffers. This page covers the complementary *hardware-side* piece: two reusable,
 free-running (`ap_ctrl_none`) HLS components — `MemRStream` and `MemWStream` — that stream a run of
 words between an AXI memory port and an on-chip stream, plus `MemCopy`, a small composite that chains
-them into a generated (not hand-written) multi-task memcpy kernel. All three live in
-[`examples/interleaver`](../../../examples/interleaver/) and `waveflow/hw/mem_stream.py`.
+them into a multi-task memcpy kernel whose top is generated from the component graph (the task bodies
+themselves are hand-written — see [What generates, and what does not](#what-generates-and-what-does-not)).
+All three live in [`examples/interleaver`](../../../examples/interleaver/) and
+`waveflow/hw/mem_stream.py`.
 
 ## Why a separate memory model here
 
 `MemRStream`/`MemWStream` are framework components (`waveflow.hw.mem_stream`), not example code — any
 accelerator can compose them as its load/store stage. Their kernel body is **fixed**: a hand-validated
 `hls::task` (the interleaver sandbox's `a2s`/`s2a`), parameterized only by the memory word width
-(`MEM_DW`). Codegen for these two is a **template copy**, not a `run_proc` extraction — the canonical
+(`MEM_DW`). Codegen for these two is a **template copy**, not a `run_iter` extraction — the canonical
 C++ bodies live in `waveflow/build/mem_r_stream_task.h` / `mem_w_stream_task.h` and are copied verbatim
 into each example's `include/` directory by `MemStreamStep`.
 
@@ -96,29 +98,37 @@ class MemComplete(ParamSchema):
 ```
 
 `xfer_msg` is an opaque, fixed-capacity array (`max_xfer_len` words, default 8) — the component never
-interprets it, only carries it through. `MemCopy`'s `Sequencer` uses slot 0 as a per-job index:
+interprets it, only carries it through. `MemCopy`'s `Sequencer` uses slot 0 as a per-job index. One
+firing of the free-running loop is one command:
 
 ```python
-# From examples/interleaver/mem_copy.py (Sequencer.run_proc)
-xfer_msg = np.zeros(self._xfer_msg_len, dtype=np.uint32)
-xfer_msg[0] = self._job_idx
-yield from self.mr_cmd.write(
-    MRCmd(addr=int(cmd.src_off), len=n, xfer_len=1, xfer_msg=xfer_msg))
-yield from self.mw_cmd.write(
-    MWCmd(addr=int(cmd.dst_off), len=n, xfer_len=1, xfer_msg=xfer_msg))
+# From examples/interleaver/mem_copy.py (Sequencer.run_iter)
+cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
+msg = self.next_xfer_msg()
+mr = self.make_mr_cmd(cmd, msg)
+yield from self.mr_cmd.write(mr)
+mw = self.make_mw_cmd(cmd, msg)
+yield from self.mw_cmd.write(mw)
 ```
 
-On the generated C++ side, the same job-index stamping survives across firings because the
-`hls::task` runtime re-invokes the function without resetting its frame — a `static` local persists:
+The per-job counter is deliberately **not** in `run_iter` — it lives behind the `@synthesizable`
+`next_xfer_msg` hook. Two rules force that split, and they are worth knowing before you write your own
+sequencer: a lowered body may not read mutable `self.X`, and constructing a `DataSchema` is not in the
+extractor's vocabulary (so the commands are built in hooks too, not inline). A hook is a *declaration*
+whose C++ you write by hand — which is exactly where the counter is allowed to live:
 
 ```cpp
-// From waveflow/build/mem_seq_task.h
+// From waveflow/build/mem_seq_task.h — hand-written, not lowered from the Python above
 static ap_uint<32> job_idx = 0;
 ...
 xfer_msg.data[0] = job_idx;
 ...
 ++job_idx;
 ```
+
+The `static` is what makes the stamping survive across firings: the `hls::task` runtime re-invokes the
+body without resetting its frame. That correspondence between `run_iter` and the `.h` is **not
+checked by anything** — see [What generates, and what does not](#what-generates-and-what-does-not).
 
 `xfer_msg` is backed by `UInt32Array` (`ap_uint<32> data[8]`), which is **not** directly subscriptable
 in C++ — always index through `.data[i]`, both when reading a command's cookie and when writing the
@@ -132,13 +142,14 @@ COPY_MSG: for (int i = 0; i < 8; ++i) {
 }
 ```
 
-## `MemCopy`: a generated, not hand-written, composite
+## `MemCopy`: a graph-derived top over hand-written bodies
 
 `MemCopy` (`examples/interleaver/mem_copy.py`) chains a pure-stream `Sequencer` into `MemRStream` ->
 `MemWStream` over two internal command FIFOs and one data FIFO, all `StreamIF`s declared with
-`add_comp`/`add_if`. The generated top is **derived from that graph** — `composite_top_spec` walks the
-sub-components' `kernel_task()` signatures and the interface graph and resolves each task argument to
-either a top-level port or an internal `hls_thread_local` FIFO, rather than a hand-written template:
+`add_comp`/`add_if`. The split matters: the **top** is generated, the **task bodies** are not. The top
+is **derived from that graph** — `composite_top_spec` walks the sub-components' `kernel_task()`
+signatures and the interface graph and resolves each task argument to either a top-level port or an
+internal `hls_thread_local` FIFO, rather than a hand-written template:
 
 ```python
 # From examples/interleaver/mem_copy.py (MemCopy.__post_init__)
@@ -167,6 +178,34 @@ def kernel_task(self) -> KernelTask:
     return KernelTask("mem_w_stream_task", "mem_w_stream_task.h", ("s_cmd", "s_in", "m_mem"),
                       template_args=(int(self.mem_dwidth),))
 ```
+
+## What generates, and what does not
+
+All three components are `FreeRunComp`s, but that declares an *execution model* — it does not mean
+codegen writes their bodies. For a `MemCopy`-shaped design today:
+
+| Piece | Where it comes from |
+|---|---|
+| The composite top (ports, FIFOs, task instantiation, pragmas) | **Generated** from the component/interface graph by `composite_top_spec` |
+| Each task body (`mem_seq_task.h`, `mem_r_stream_task.h`, …) | **Hand-written**, copied verbatim by `MemStreamStep` |
+| `run_iter` | The **pysim golden** — never lowered |
+
+So a `FreeRunComp`'s Python earns its keep three ways — it is the functional golden, the graph the top
+is derived from, and the timing model — but it does not produce the body. **Nothing mechanically ties
+`run_iter` to its `.h`.** They are two independent implementations that agree only because tests check
+each against the same expectations: the pysim golden on the Python side, XSI on the RTL side. Keeping
+them in agreement is the author's job, and drift is silent — hand-written task headers have drifted
+from their schema before. If you change one, change the other, and lean on the tests to prove it.
+
+This is the interim state, not the destination. `free_running_kernel` is a declared target
+(`waveflow/hw/codegen_targets.py`) that is **not implemented**: `IMPLEMENTED_TARGETS` is
+`{control_driven_kernel, sequential_vitis_tb}`. `Sequencer.run_iter` is nevertheless written in the
+shape the extractor accepts (`get` -> hook -> `write`) and does lower today as a leaf — pinned by
+`test_sequencer_run_iter_is_extractable` — but the emitted code is not wired into the composite,
+because it emits an `s_axilite`/`ap_ctrl_hs` top rather than `ap_ctrl_none`, and it emits
+`streamutils::axi4s_word<W>` streams where these tasks take `hls::stream<ap_uint<W>>` +
+`read_stream<W>`. Closing those two gaps is what would let a generated body replace `mem_seq_task.h`;
+`test_sequencer_codegen_gaps_are_still_open` fails when either closes.
 
 ## Verifying via XSI, not Vitis C/RTL cosim
 
