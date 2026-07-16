@@ -37,13 +37,13 @@ the connective tissue between the map, the machinery, the mechanism, and the ins
 ```
 guide/flows/
   index.md              the realization paths at a glance (a small map keyed to overview/targets.md)
-  host_seqtb_cosim.md   HostActivated kernel · SeqTB · Vitis cosim          [BUILT — write now]
+  control_kernel.md   HostActivated kernel · SeqTB · Vitis cosim          [BUILT — write now]
   composite_xsi.md      CompositeComp · XSI · (today: HAND-WRITTEN BFM)      [PARTIAL — the hand-BFM flow only]
   composite_systemc.md  CompositeComp · generated SystemC TB · XSI          [FUTURE — ThreadTB/SystemC-gen deferred]
   bitstream_ipi.md      Vivado IPI · bitstream / .xsa                        [FUTURE — rfsoc_4x2_bringup.md]
 ```
 
-- **`host_seqtb_cosim.md` (writable now):** the fully-built path. `HostActivated` → `on_start` kernel
+- **`control_kernel.md` (writable now):** the fully-built path. `HostActivated` → `on_start` kernel
   (ap_ctrl_hs, s_axilite) via typed dispatch; `SeqTB`/`HwTestbench.main()` → `<kernel>_tb.cpp`; the
   `BuildDag` steps (codegen → csim → csynth → cosim) + artifacts; verified against the pysim golden.
   Anchor: `regmap`/`simp_fun` (and `poly`). **Fold in `run_once`** once Phase 5b lands — the testbench
@@ -58,7 +58,7 @@ guide/flows/
 
 ## Sequencing
 
-1. `guide/flows/index.md` + **`host_seqtb_cosim.md`** — the one real flow. After Phase 5b so `run_once`
+1. `guide/flows/index.md` + **`control_kernel.md`** — the one real flow. After Phase 5b so `run_once`
    is part of it.
 2. `composite_xsi.md` — the hand-BFM XSI flow (exists; the interleaver anchors it).
 3. Stubs for `composite_systemc.md` / `bitstream_ipi.md` — forward-pointers, gated on their code.

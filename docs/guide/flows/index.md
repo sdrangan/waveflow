@@ -24,7 +24,7 @@ The paths split along two axes:
 
 | Flow | DUT output | Testbench | Status |
 |---|---|---|---|
-| [1 · Control-driven kernel](./host_seqtb_cosim.md) | a **control-driven kernel** (`ap_ctrl_hs` + `s_axilite`) | **sequential Vitis TB** — a [`SeqTB`](../components/) run in C-sim / co-sim | **Built** |
+| [1 · Control-driven kernel](./control_kernel.md) | a **control-driven kernel** (`ap_ctrl_hs` + `s_axilite`) | **sequential Vitis TB** — a [`SeqTB`](../components/) run in C-sim / co-sim | **Built** |
 | [2 · Free-running, sequentially driven](./freerun_seq.md) | a **free-running kernel** *or* **composite kernel** (`ap_ctrl_none`) | **sequential XSI TB** — a cycle-based BFM | **In work** — BFM hand-written |
 | [3 · Free-running, concurrently driven](./freerun_conc.md) | *same* free-running / composite kernel | **concurrent SystemC TB** — `SC_THREAD` agents | **In work** |
 | [4 · Full system, on hardware](./bitstream_ipi.md) | an **FPGA bitstream** (IPI system) | host software (no TB) | **Future** |
