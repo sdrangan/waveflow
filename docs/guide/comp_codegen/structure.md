@@ -12,16 +12,47 @@ summary: "How an HwComponent becomes a kernel: a leaf generates one top-level fu
 
 ## Concept
 
-A **leaf** [`HwComponent`](../components/) generates **one Vitis HLS top-level function** — the kernel.
+Every `HwComponent` that generates code generates **one kernel** — a single Vitis HLS **top-level
+function**, the unit Vitis synthesizes into an IP block. That is what "kernel" means throughout this
+guide.
+
 Its arguments correspond one-to-one to the component's declared **endpoints**; how each endpoint type
-becomes a port (`hls::stream` / `m_axi` / `s_axilite`), and which control protocol binds `return`, is
-[Endpoint interfaces](./interface.md).
+becomes a port (`hls::stream` / `m_axi` / `s_axilite`) is [Endpoint interfaces](./interface.md).
 
 The function name defaults to the class name in `snake_case` with a trailing `_component` stripped
 (`PolyAccelComponent → poly_accel`), overridable with `cpp_kernel_name: ClassVar[str] = "..."`.
 
-A [`CompositeComp`](../components/composite.md) is the exception: it has no body of its own, so it does
-not generate *a* function — its codegen is the sub-component graph.
+## Who starts the kernel: `ap_ctrl_hs` vs `ap_ctrl_none`
+
+A kernel needs an answer to one question — **who starts it?** Vitis calls the answer the kernel's
+*block-level control protocol*, and it is set on the `return` port. Two answers matter here, and the
+terms appear throughout this guide:
+
+**`ap_ctrl_hs`** — "handshake". Somebody starts it, once per run. The block carries four control
+signals: **`ap_start`** ("go"), **`ap_done`** ("finished"), plus `ap_idle` and `ap_ready`. The caller
+raises `ap_start`, the kernel runs to completion, raises `ap_done`, and stops. **This makes the kernel a
+function**: arguments in, one run, a return. Who raises `ap_start` is a *separate* question —
+[a host over AXI-Lite, or another block on a wire](./interface.md).
+
+**`ap_ctrl_none`** — no handshake at all. There is no `ap_start` and no `ap_done`, because the block is
+never started and never finishes: it runs **forever**, consuming its input streams as data arrives and
+stalling when they are empty. Its pace comes from back-pressure, not from a caller.
+
+The consequence runs through everything else:
+
+| | `ap_ctrl_hs` | `ap_ctrl_none` |
+|---|---|---|
+| Is it a function you can call? | **yes** — that is what a handshake is | **no** — it never returns |
+| Can a testbench just call it? | yes, and Vitis builds the RTL harness for you | no — the RTL must be driven directly ([Flow 2](../flows/freerun_seq.md)) |
+| May it carry `m_axi` / `s_axilite`? | yes | **no** — a free-running interface is stream-only |
+| Which [flow](../flows/) | [1](../flows/control_kernel.md) | [2](../flows/freerun_seq.md) / [3](../flows/freerun_conc.md) |
+
+> **Everything Waveflow generates today is `ap_ctrl_hs`.** `ap_ctrl_none` is the
+> [`free_running_kernel`](./index.md) target, which is not built — so a `FreeRunComp` currently emits an
+> `ap_ctrl_hs` top despite declaring `control_mode = FREE_RUNNING`. That is a real gap, not a subtlety.
+>
+> And note a component whose entry is `run_proc` rather than `on_start` is **not** thereby
+> free-running — it is `ap_ctrl_hs` with its control on raw pins. The two are easy to conflate.
 
 ## Which method becomes the kernel body
 
@@ -31,11 +62,17 @@ The entry follows from the component's **kind**. You never name it; the class st
 |---|---|---|
 | [`HostActivated`](../components/hostactivated.md) | `on_start` | it runs once per launch — `on_start` is the regmap slave's callback |
 | [`FreeRunComp`](../components/freerun.md) | `run_iter` | *one firing*; the `while True` belongs to the base, not your code |
-| [`CompositeComp`](../components/composite.md) | — | no body; the graph is the codegen |
+| [`CompositeComp`](../components/composite.md) | — (see below) | its body comes from the graph, not a method |
 | plain `HwComponent` | `on_start` if it has a regmap, else `run_proc` | the un-migrated leaf — see below |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
 routes to `main()` instead ([Testbench](./testbench.md)).
+
+**A composite still generates a kernel** — the same single top-level function as any other component.
+What differs is only where its *contents* come from: a [`CompositeComp`](../components/composite.md)
+declares no body, so instead of extracting a method, codegen builds the function from the
+**sub-component graph** — one `hls::task` per child, one channel declaration per internal edge, and the
+boundary endpoints as its ports. Same output shape, different source.
 
 > **The plain-`HwComponent` row is not scaffolding.** It is a real shape: a kernel with no regmap, whose
 > arguments arrive as ports rather than registers, and whose body is `run_proc`. `block_scale` is one.
