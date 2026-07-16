@@ -27,6 +27,7 @@ from waveflow.hw.dataschema import (
     FloatField,
     IntField,
     MemAddr,
+    VarDataArray,
 )
 
 
@@ -1137,3 +1138,279 @@ def test_dataarray_subclass_invalid_cpp_storage_raises():
             max_shape = (4,)
             static = True
             cpp_storage = "hybrid"
+
+
+# ---------------------------------------------------------------------------
+# VarDataArray tests
+# ---------------------------------------------------------------------------
+
+U8_V = IntField.specialize(bitwidth=8, signed=False)
+U16_V = IntField.specialize(bitwidth=16, signed=False)
+F32_V = FloatField.specialize(bitwidth=32)
+
+VU8 = VarDataArray.specialize(elem_type=U8_V, len_max=10)
+VU16 = VarDataArray.specialize(elem_type=U16_V, len_max=5)
+VF32 = VarDataArray.specialize(elem_type=F32_V, len_max=8)
+
+
+def test_vardataarray_default_nbits_len():
+    """nbits_len defaults to max(1, len_max.bit_length())."""
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=0).nbits_len == 1
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=1).nbits_len == 1
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=2).nbits_len == 2
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=3).nbits_len == 2
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=4).nbits_len == 3
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=10).nbits_len == 4
+    assert VarDataArray.specialize(elem_type=U8_V, len_max=100).nbits_len == 7
+
+
+def test_vardataarray_custom_nbits_len():
+    V = VarDataArray.specialize(elem_type=U8_V, len_max=10, nbits_len=8)
+    assert V.nbits_len == 8
+    assert V.get_bitwidth() == 8 + 10 * 8
+
+
+def test_vardataarray_nbits_len_too_small_raises():
+    with pytest.raises(ValueError, match="nbits_len"):
+        VarDataArray.specialize(elem_type=U8_V, len_max=10, nbits_len=0)
+
+
+def test_vardataarray_len_max_negative_raises():
+    with pytest.raises(ValueError, match="len_max"):
+        VarDataArray.specialize(elem_type=U8_V, len_max=-1)
+
+
+def test_vardataarray_get_bitwidth_max():
+    # nbits_len=4 for len_max=10, elem_bw=8
+    assert VU8.get_bitwidth() == 4 + 10 * 8
+    assert VU8.get_bitwidth_max() == VU8.get_bitwidth()
+
+
+def test_vardataarray_init_empty():
+    v = VU8()
+    assert len(v) == 0
+    assert v.get_bitwidth_active() == VU8.nbits_len
+
+
+def test_vardataarray_zero_active_serialize_deserialize():
+    v = VU8()
+    packed = v.serialize(word_bw=32)
+    assert packed.shape == (1,)
+    v2 = VU8()
+    v2.deserialize(packed, word_bw=32)
+    assert len(v2) == 0
+    assert v.is_close(v2)
+
+
+def test_vardataarray_nonzero_active_serialize_deserialize():
+    v = VU8()
+    v.val = np.array([10, 20, 30], dtype=np.uint32)
+    packed = v.serialize(word_bw=32)
+    v2 = VU8()
+    v2.deserialize(packed, word_bw=32)
+    assert v.is_close(v2)
+    assert np.array_equal(v2.val, [10, 20, 30])
+
+
+def test_vardataarray_max_active_serialize_deserialize():
+    v = VU8()
+    v.val = np.arange(10, dtype=np.uint32)
+    packed = v.serialize(word_bw=32)
+    assert packed.shape == (VU8.nwords_per_inst(32),)
+    v2 = VU8()
+    v2.deserialize(packed, word_bw=32)
+    assert v.is_close(v2)
+    assert np.array_equal(v2.val, np.arange(10))
+
+
+def test_vardataarray_assignment_exceeds_len_max_raises():
+    v = VU8()
+    with pytest.raises(ValueError, match="len_max"):
+        v.val = np.arange(11, dtype=np.uint32)
+
+
+def test_vardataarray_get_bitwidth_active_vs_max():
+    v = VU8()
+    v.val = np.array([1, 2, 3], dtype=np.uint32)
+    assert v.get_bitwidth_active() < VU8.get_bitwidth_max()
+    assert v.get_bitwidth_active() == VU8.nbits_len + 3 * 8
+
+
+def test_vardataarray_nwords_active_le_nwords_max():
+    v = VU8()
+    v.val = np.array([1, 2, 3], dtype=np.uint32)
+    assert v.nwords_active(32) <= VU8.nwords_max(32)
+
+
+def test_vardataarray_nwords_active_matches_serialized_length():
+    v = VU8()
+    v.val = np.array([10, 20, 30, 40, 50], dtype=np.uint32)
+    packed = v.serialize(word_bw=32)
+    assert v.nwords_active(32) == len(packed)
+
+
+def test_vardataarray_length_first_serialization():
+    """Deserializing must read in-band length, not use an external parameter."""
+    v = VU8()
+    v.val = np.array([0xAA, 0xBB], dtype=np.uint32)
+    packed = v.serialize(word_bw=32)
+    # Manually check: bits [0 : nbits_len-1] should encode length=2
+    nbits_len = VU8.nbits_len
+    mask = (1 << nbits_len) - 1
+    encoded_len = int(packed[0]) & mask
+    assert encoded_len == 2
+
+
+def test_vardataarray_float_roundtrip():
+    v = VF32()
+    v.val = np.array([1.5, -2.0, 3.14], dtype=np.float32)
+    packed = v.serialize(word_bw=32)
+    v2 = VF32()
+    v2.deserialize(packed, word_bw=32)
+    assert v.is_close(v2)
+
+
+def test_vardataarray_specialize_caches():
+    A = VarDataArray.specialize(elem_type=U8_V, len_max=10)
+    B = VarDataArray.specialize(elem_type=U8_V, len_max=10)
+    assert A is B
+
+
+def test_vardataarray_specialize_different_args_different_classes():
+    A = VarDataArray.specialize(elem_type=U8_V, len_max=5)
+    B = VarDataArray.specialize(elem_type=U8_V, len_max=10)
+    assert A is not B
+
+
+def test_vardataarray_exported_from_hw_init():
+    from waveflow.hw import VarDataArray as PublicVarDataArray
+    assert PublicVarDataArray is VarDataArray
+
+
+# ---------------------------------------------------------------------------
+# DataList containing VarDataArray
+# ---------------------------------------------------------------------------
+
+_VArr5 = VarDataArray.specialize(elem_type=U16_V, len_max=5)
+
+
+class PacketWithVarData(DataList):
+    elements = {
+        "header": U8_V,
+        "payload": _VArr5,
+        "footer": U8_V,
+    }
+
+
+def test_datalist_with_vardataarray_get_bitwidth():
+    # max bitwidth: 8 + (3 + 5*16) + 8 = 8 + 83 + 8 = 99
+    assert PacketWithVarData.get_bitwidth() == 8 + (3 + 5 * 16) + 8
+
+
+def test_datalist_with_vardataarray_nwords_per_inst():
+    """nwords_per_inst for DataList with VarDataArray gives worst-case count."""
+    pkt = PacketWithVarData()
+    assert PacketWithVarData.nwords_per_inst(32) >= pkt.nwords_active(32)
+
+
+def test_datalist_with_vardataarray_get_bitwidth_active():
+    pkt = PacketWithVarData()
+    pkt.header = 1
+    pkt.payload = np.array([100, 200], dtype=np.uint32)
+    pkt.footer = 2
+    active = pkt.get_bitwidth_active()
+    # 8 + (3 + 2*16) + 8 = 8 + 35 + 8 = 51
+    assert active == 8 + (3 + 2 * 16) + 8
+
+
+def test_datalist_with_vardataarray_nwords_active_matches_serialized():
+    pkt = PacketWithVarData()
+    pkt.header = 0xAB
+    pkt.payload = np.array([10, 20, 30], dtype=np.uint32)
+    pkt.footer = 0xCD
+    packed = pkt.serialize(word_bw=32)
+    assert pkt.nwords_active(32) == len(packed)
+
+
+def test_datalist_with_vardataarray_roundtrip():
+    pkt = PacketWithVarData()
+    pkt.header = 0xAB
+    pkt.payload = np.array([100, 200, 300], dtype=np.uint32)
+    pkt.footer = 0xCD
+    packed = pkt.serialize(word_bw=32)
+    pkt2 = PacketWithVarData()
+    pkt2.deserialize(packed, word_bw=32)
+    assert pkt.is_close(pkt2)
+    assert pkt2.header == 0xAB
+    assert np.array_equal(pkt2.payload, [100, 200, 300])
+    assert pkt2.footer == 0xCD
+
+
+def test_datalist_with_empty_vardataarray_roundtrip():
+    pkt = PacketWithVarData()
+    pkt.header = 1
+    # payload stays empty (default)
+    pkt.footer = 2
+    packed = pkt.serialize(word_bw=32)
+    pkt2 = PacketWithVarData()
+    pkt2.deserialize(packed, word_bw=32)
+    assert pkt.is_close(pkt2)
+    assert len(pkt2.payload) == 0
+
+
+def test_datalist_with_max_vardataarray_roundtrip():
+    pkt = PacketWithVarData()
+    pkt.header = 0xFF
+    pkt.payload = np.array([1, 2, 3, 4, 5], dtype=np.uint32)
+    pkt.footer = 0x01
+    packed = pkt.serialize(word_bw=32)
+    assert len(packed) == PacketWithVarData.nwords_per_inst(32)
+    pkt2 = PacketWithVarData()
+    pkt2.deserialize(packed, word_bw=32)
+    assert pkt.is_close(pkt2)
+
+
+def test_datalist_nwords_active_le_nwords_max():
+    pkt = PacketWithVarData()
+    pkt.payload = np.array([1], dtype=np.uint32)
+    assert pkt.nwords_active(32) <= PacketWithVarData.nwords_per_inst(32)
+
+
+# ---------------------------------------------------------------------------
+# Base DataSchema max/active aliases
+# ---------------------------------------------------------------------------
+
+def test_dataschema_get_bitwidth_max_alias():
+    assert U8_V.get_bitwidth_max() == U8_V.get_bitwidth()
+
+
+def test_dataschema_get_bitwidth_active_default():
+    u = U8_V()
+    assert u.get_bitwidth_active() == U8_V.get_bitwidth()
+
+
+def test_dataschema_nwords_max_alias():
+    assert U8_V.nwords_max(32) == U8_V.nwords_per_inst(32)
+
+
+def test_dataschema_nwords_active_default():
+    u = U8_V()
+    assert u.nwords_active(32) == U8_V.nwords_per_inst(32)
+
+
+# ---------------------------------------------------------------------------
+# VarDataArray C++ codegen
+# ---------------------------------------------------------------------------
+
+def test_vardataarray_gen_include_decl_structure():
+    VSmall = VarDataArray.specialize(elem_type=U8_V, len_max=4)
+    decl = VSmall._gen_include_decl(word_bw_supported=[32])
+    assert "struct UInt8VarArray" in decl
+    assert "ap_uint<3> len;" in decl     # nbits_len=3 for len_max=4
+    assert "data[4];" in decl
+    assert "static constexpr int len_max = 4;" in decl
+    assert "static constexpr int nbits_len = 3;" in decl
+    assert "static constexpr int bitwidth = " in decl
+    assert "nwords_active" in decl
+    assert "write_array" in decl
+    assert "read_array" in decl
