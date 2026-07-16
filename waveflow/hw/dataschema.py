@@ -2980,6 +2980,9 @@ class DataArray(DataSchema):
     def __getitem__(self, key):
         return self.val[key]
 
+    def __setitem__(self, key, value):
+        self.val[key] = value
+
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.val, dtype=dtype)
 

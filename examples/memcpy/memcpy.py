@@ -89,10 +89,14 @@ class MemcpyIdentity(CompositeComp):
         self.add_if(copy_if)
 
         # Boundary: command and memory ports
-        self.s_cmd = self.mem_r.s_cmd
-        self.m_in = self.mem_r.m_mem
-        self.m_out = self.mem_w.m_mem
-        self.s_done = self.mem_r.s_done  # completion signal
+        self.s_cmd_r = self.mem_r.s_cmd   # MemRStream read command
+        self.s_cmd_w = self.mem_w.s_cmd   # MemWStream write command
+        self.m_in = self.mem_r.m_mem      # MemRStream read from gmem0
+        self.m_out = self.mem_w.m_mem     # MemWStream write to gmem1
+        self.s_done = self.mem_r.s_done if self.mem_r.emit_done else None  # completion signal (if enabled)
+
+        # For backward compat: expose read command as default s_cmd
+        self.s_cmd = self.s_cmd_r
 
         # Define internal edges for codegen
         from examples.interleaver.composite_gen import StreamEdge
@@ -102,10 +106,10 @@ class MemcpyIdentity(CompositeComp):
 
         # Define boundary ports for codegen
         self.boundary = [
-            ("s_cmd", self.mem_r.s_cmd, "axis_in", None),
+            ("s_cmd_r", self.mem_r.s_cmd, "axis_in", None),
+            ("s_cmd_w", self.mem_w.s_cmd, "axis_in", None),
             ("m_in", self.mem_r.m_mem, "maxi_read", "gmem0"),
             ("m_out", self.mem_w.m_mem, "maxi_write", "gmem1"),
-            ("s_done", self.mem_r.s_done, "axis_out", None),
         ]
 
 
