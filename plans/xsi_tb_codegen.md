@@ -190,17 +190,115 @@ is untouched for the same reason.
   restated in C++. One statement of a test, two backends (pysim, XSI) — the same relationship
   `mem_copy_sim.py` already has to the golden.
 
-## Stage 5 — `sequential_xsi_tb`: emit the thin `main()`
+## Stage 5 — the TB is a `CompositeComp` (**premise replaced 2026-07-16**)
 
-Only now is there something small enough to be worth generating. `SEQUENTIAL_XSI_TB` is already a
-declared target ("a cycle-based XSI BFM driving a free-running DUT"), and `extract_testbench` already
-lowers a sequential `main()` in which blocking stream ops and DUT construction are legal — the exact
-shape Stage 2 leaves behind.
+**The original premise was wrong, and the open question is answered — negatively.** Stage 5 used to
+ask: is `sequential_xsi_tb` just `sequential_vitis_tb`'s extraction with a different emitter backend?
+**No.** A `SeqTB.main()` is a sequential program against a **DUT-as-C++-function** — `yield from
+dut.run_once_sim(x, a, b)` lowers to a direct `simp_fun(x,a,b,y)` call, and csim *calls* the kernel.
+Under XSI the DUT is **elaborated RTL behind a dll**; there is no function to call. "Blocking" means a
+call in one and *run cycles until a condition* in the other. Same rules, different semantics — a new
+path, not a retarget.
 
-**Open question, to verify not assume:** is `sequential_xsi_tb` the *same extraction* as
-`sequential_vitis_tb` with a different emitter backend? If yes this stage is an emitter, not a path.
-If no, the difference is the finding. Do not design Stage 5 until Stages 1-2 have shown what the thin
-TB actually looks like.
+Worse, the obvious lowering is actively harmful. Lower `write(); get(); write(); get()` per job and
+you serialise the pipeline: correct memcpy, bit-exact golden, every test green — and ~334 cyc/job
+instead of ~177, silently destroying the thing the design exists to demonstrate.
+
+### The framing that replaces it (user's, and it dissolves the problem)
+
+**Run a fixed N cycles with no early termination.** Then there is no sequencing to schedule, because
+nothing blocks — and the pipelining survives *by construction*, for the same reason it survives today:
+the source never waits. The TB stops being a program and becomes **a concurrent network of
+components**, which is the abstraction we already have:
+
+- `AxiMasterSource` / `AxiSlaveSink` / `MemEmulation` — participants, each with ports.
+- `TBTop` — a `CompositeComp` holding those three **plus the DUT**, wired by interfaces.
+- The generated `main()` — instantiate the participants, loop N cycles, step each one.
+
+Two build steps: `CodegenXSI(c)` per participant, `CodegenXSITB(c: CompositeComp, ncycles: int)`.
+
+**It already exists, one abstraction short.** `mem_copy_sim.py::run_copy()` *is* `TBTop`:
+`MemComponent` (= MemEmulation), `CmdDriver` (= AxiMasterSource), `WordSink` (= AxiSlaveSink), the
+`MemCopy` DUT, and their `StreamIF`/`AXIMMCrossBarIF` bindings. It simply is not declared as a
+`CompositeComp`, so `composite_top_spec` cannot walk it. Declaring it is not new machinery — it is
+naming something already written, and it makes one object generate **both** the pysim run and the XSI
+TB. That is "one statement, two backends" arriving as a consequence rather than a feature.
+
+### The refinement that shrinks it
+
+**Do not *lower* the BFM models — *map* them.** `AxisMaster`'s FSM is already written and cycle-exact;
+extracting an equivalent from Python would be re-deriving verified code. A participant declares which
+library model it is, exactly as `kernel_task()` declares which hand-written `hls::task` body a
+component uses:
+
+```python
+def kernel_task(self):  return KernelTask("mem_seq_task", "mem_seq_task.h", (...), ...)   # existing
+def bfm_model(self):    return BfmModel("AxisMaster", ("stream_ep",), ctor_args=("cmd_words",))  # proposed
+```
+
+So `CodegenXSI` is a **resolver**, not an extractor — the same shape as `composite_top_spec`: walk the
+graph, resolve each participant's ports to RTL prefixes (that is `render_ports_h`, already built),
+emit constructions. No new extraction rules, no cycle-FSM lowering. That is the difference between a
+large project and a medium one.
+
+**File I/O finishes Stage 4.** If the source reads a file and the sink dumps one, the C++ does **no
+checking at all** — the golden moves to Python comparing files, where it already lives. That also
+kills the last duplication Stage 4 left (`known_word`, stated in both `mem_copy_sim.py` and the TB).
+
+### Open questions
+
+- **What *kind* is a TB participant?** Not `FreeRunComp` — that means "lowers to an `hls::task`", and
+  `AxisMaster` is not synthesizable. A new kind with `potential_targets = {xsi_bfm_model}`. This is
+  precisely the `(class x target)` axis `CodegenPath.kind` was built for ([[codegen_check_family]]:
+  "one component lowering to `hls::task` **and** SystemC").
+- **How is N chosen?** A parameter works first. Better: the **LT timing model predicts cycles**, so
+  `N = predicted x margin` closes a loop — the transaction-level model sizes the RTL sim, and a wild
+  miss is itself a finding. Measurement survives either way: the sink records *when* words arrived, so
+  time-to-completion is still observable; only the loop bound becomes fixed.
+
+## Stage 5b — the flows collapse (**consequence of the above**)
+
+**Flow 3's premise is refuted by what Stage 1 built.** `docs/guide/flows/freerun_conc.md` justifies the
+SystemC flow as lifting "the single-threaded-BFM limitation — independent streams get independent,
+concurrent drivers". But the BFM is not single-threaded in the sense that matters: `s_cmd` / `s_done` /
+`gmem0` / `gmem1` are **four independent agents**, each sampling its own handshakes and advancing its
+own FSM every cycle. The single `for(;;)` is a **scheduler, not a serialiser**. Flow 3 was designed to
+solve a limitation the implementation does not have.
+
+The flows index already names the real axis, one line above its own table: *is the DUT control-driven
+(which Vitis **can** co-simulate) or free-running (which it **cannot** — so it drops to RTL)?* That is
+the whole distinction. "Sequential vs concurrent TB" was an artifact of assuming a BFM must be one
+sequential program.
+
+**So there are two flows, not four:**
+
+| Flow | DUT | TB |
+|---|---|---|
+| **A** | control-driven kernel (`ap_ctrl_hs` + `s_axilite`) | sequential Vitis TB (csim / cosim) — the vendor drives it |
+| **B** | free-running composite (`ap_ctrl_none`) | concurrent XSI TB — we drive it, because Vitis cannot |
+
+(Flow 4 / bitstream is **deployment, not a TB flow** — it belongs on a different axis, not in this
+table.)
+
+**What dropping SystemC costs, stated so it is a decision and not a hope.** `SC_THREAD` lets an agent
+*block* — write `send; wait; decide; send` sequentially and let a scheduler interleave. Our models
+cannot block; they are FSMs. For library models that is free (written once). It bites only for a
+**custom sequential agent at RTL level**, which has never come up — and pysim already has coroutines
+(`yield from`) where they are ergonomic, so the loss is confined to that one case. If it ever
+appears: hand-write that FSM, or add a coroutine shim then. Against that: no SystemC library, no
+`xsc`/`xelab` harness, and one fewer flow to document and maintain
+([[reference-systemc-xsim-windows-xsi]] proved the mechanism works — proven is not the same as needed).
+
+**Vocabulary consequences** (`waveflow/hw/codegen_targets.py`, `docs/guide/flows/`), to do with the
+Stage 5 work, not before it:
+- `concurrent_systemc_tb` — **delete**.
+- `sequential_xsi_tb` — **rename**; "sequential" is what mis-framed this stage. It is `xsi_tb` (single-
+  threaded C++ loop, concurrent model network).
+- `free_running_kernel` vs `composite_kernel` — likely **merge**: `mem_stream_gen.top_spec_for` already
+  says a standalone kernel is "the 1-task degenerate case" and uses the same generator. Two names, one
+  product. Worth confirming before acting.
+- Deleting a target name is not cosmetic: `check()` rejects unknown names, so the vocabulary is load-
+  bearing. Do it with the code, not ahead of it.
 
 ## Stage 6 — homes (deferred until after Stages 1-2, deliberately)
 
