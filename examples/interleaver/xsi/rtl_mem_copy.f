@@ -13,7 +13,7 @@
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_seq_task_64_Pipeline_VITIS_LOOP_153_1.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_seq_task_64_Pipeline_VITIS_LOOP_153_11.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_seq_task_64_s.v
-../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_seq_task_64_s_r_xfer_msg_RAM_AUTO_1R1W.v
+../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_seq_task_64_s_mr_xfer_msg_RAM_AUTO_1R1W.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_done_task_64_Pipeline_S2A.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_done_task_64_Pipeline_VITIS_LOOP_140_1.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_done_task_64_Pipeline_VITIS_LOOP_317_1.v

@@ -81,12 +81,12 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
 def test_sequencer_run_iter_is_extractable():
     """Sequencer is a FreeRunComp whose run_iter lowers as a leaf: ``get`` -> hook -> ``write``.
 
-    This is NOT what MemCopy builds with — the composite uses the hand-written ``mem_seq_task.h``
-    named by ``kernel_task()``.  It pins the claim in Sequencer's docstring that the class is written
-    in the extractable shape, so the claim cannot rot silently: the per-job counter stays behind the
+    This IS what MemCopy builds with: ``TaskBodyStep`` generates ``include/mem_seq_task.h`` from
+    ``run_iter``, and the composite top instantiates it as ``mem_seq_task<64>``.  The test pins the
+    shape that makes that possible, so it cannot rot silently: the per-job counter stays behind the
     ``@synthesizable`` ``next_xfer_msg`` boundary (a lowered body may not read mutable ``self.X``),
     and the commands are built in hooks (constructing a DataSchema is not in the extractor's
-    vocabulary).  Inlining either back into ``run_iter`` fails here.
+    vocabulary).  Inlining either back into ``run_iter`` fails here — and would break the build.
     """
     from waveflow.build.codegen_dispatch import codegen_path
     from waveflow.build.hwcodegen import extract_kernel
@@ -111,12 +111,15 @@ def test_sequencer_run_iter_is_extractable():
 
 
 def test_sequencer_codegen_gaps_are_still_open():
-    """TRIPWIRE, not an endorsement: the two gaps that keep Sequencer's lowering out of the composite.
+    """TRIPWIRE: the gaps in the STANDALONE-top product (kernel_files_to_str), not the task body.
+
+    These two gaps no longer block MemCopy — the composite builds a *generated* task body via
+    ``TaskBodyStep``, and a body needs neither an ``ap_ctrl_none`` pragma (bodies carry no pragmas)
+    nor a boundary stream type.  What they still block is ``free_running_kernel``: Sequencer compiled
+    as its OWN ``ap_ctrl_none`` top, which is a different declared target.
 
     If this test FAILS, that is probably good news — someone implemented ``free_running_kernel`` or
-    aligned the stream convention.  Re-read Sequencer's docstring and ``kernel_task()``: the composite
-    may now be able to drop ``mem_seq_task.h`` and generate the body instead.  Update both, then
-    delete this test.
+    aligned the stream convention.  Update the docs and delete this test.
     """
     from waveflow.build.hwgen import kernel_files_to_str
     from waveflow.hw.codegen_targets import FREE_RUNNING_KERNEL, IMPLEMENTED_TARGETS

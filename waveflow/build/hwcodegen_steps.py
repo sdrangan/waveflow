@@ -12,6 +12,7 @@ from waveflow.build.hwgen import (
     _collect_hooks_with_params,
     cpp_kernel_name,
     kernel_files_to_str,
+    task_files_to_str,
 )
 from waveflow.hw.hw_component import HwComponent
 
@@ -172,3 +173,97 @@ class HlsCodegenStep(BuildStep):
         path = out_root / filename
         path.write_text(files[filename], encoding="utf-8")
         return {f"{kn}_tb": path}
+
+
+@dataclass(kw_only=True)
+class TaskBodyStep(BuildStep):
+    """Generate a composite **task body** ``<name>_task.h`` + one impl stub per hook.
+
+    The task-body twin of :class:`HlsCodegenStep`, and it keeps that step's file-lifecycle contract
+    verbatim because the reasoning is identical:
+
+    - ``<name>_task.h`` is **always rewritten** into ``output_dir`` (the example's ``include/``).  It
+      is derived from ``run_iter``; editing it by hand would be lost, which the banner says.
+    - ``<name>_<hook>_impl.{cpp,tpp}`` lives in ``impl_dir`` (defaulting to ``output_dir``) and is
+      written **only if absent**.  The hook bodies are *hand-written source* — the generator emits a
+      ``TODO`` stub once and never touches it again, so edits survive rebuilds.
+
+    Point ``impl_dir`` at the example root, where the other hand-written hooks already live
+    (``examples/shared_mem/hist_compute_impl.cpp``).  Do **not** leave it defaulting into a
+    regenerated ``gen/`` or ``include/`` directory: the sticky rule protects the file from *this*
+    step, not from whatever else cleans that directory.
+
+    Emits the body only.  The composite top that instantiates it comes from
+    :func:`~waveflow.build.composite_gen.composite_top_spec`, and the hook ``.cpp`` files must be
+    added to the csynth project (``render_tcl(extra_sources=...)``) or the link cannot resolve them.
+    """
+
+    description: str = (
+        "Generate an hls::task body header (+ sticky hook impl stubs) from a FreeRunComp."
+    )
+    params: ClassVar[dict] = {}
+
+    comp_class: type[HwComponent]
+    source_artifact: str
+    output_dir: str = "."
+    impl_dir: str | None = None  # None = use output_dir
+    task_name: str | None = None  # None = f"{cpp_kernel_name}_task"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self._kernel_name = cpp_kernel_name(self.comp_class)
+        self._task_name = self.task_name or f"{self._kernel_name}_task"
+        self._impl_dir = self.impl_dir if self.impl_dir is not None else self.output_dir
+        self._hook_info = self._discover_hooks()
+
+    def _discover_hooks(self) -> list[tuple[str, str]]:
+        """Return ``[(hook_name, extension)]`` per hook — ``tpp`` if templated, else ``cpp``."""
+        comp = elaborate(self.comp_class)
+        tree = extract_kernel(comp)
+        return [
+            (hook.__name__, "tpp" if tparams else "cpp")  # type: ignore[attr-defined]
+            for hook, tparams in _collect_hooks_with_params(tree)
+        ]
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.source_artifact]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        d: dict[str, Path] = {
+            self._task_name: Path(self.output_dir) / f"{self._task_name}.h",
+        }
+        impl_dir = Path(self._impl_dir)
+        for hook_name, ext in self._hook_info:
+            d[f"{self._kernel_name}_{hook_name}_impl"] = (
+                impl_dir / f"{self._kernel_name}_{hook_name}_impl.{ext}"
+            )
+        return d
+
+    def run(self, config: BuildConfig, **_) -> dict[str, Any]:
+        files = task_files_to_str(self.comp_class, task_name=self._task_name)
+        root_dir = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
+        out_root = root_dir / self.output_dir
+        impl_root = root_dir / self._impl_dir
+        out_root.mkdir(parents=True, exist_ok=True)
+        impl_root.mkdir(parents=True, exist_ok=True)
+
+        artifacts: dict[str, Any] = {}
+
+        # Always overwrite the body header: it is derived from run_iter.
+        header = f"{self._task_name}.h"
+        path = out_root / header
+        path.write_text(files[header], encoding="utf-8")
+        artifacts[self._task_name] = path
+
+        # Sticky impl stubs: hand-written source, written only if absent.
+        kn = self._kernel_name
+        for hook_name, ext in self._hook_info:
+            filename = f"{kn}_{hook_name}_impl.{ext}"
+            p = impl_root / filename
+            if not p.exists():
+                p.write_text(files[filename], encoding="utf-8")
+            artifacts[f"{kn}_{hook_name}_impl"] = p
+
+        return artifacts

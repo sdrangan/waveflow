@@ -1,49 +1,35 @@
-#ifndef WAVEFLOW_BUILD_MEM_SEQ_TASK_H
-#define WAVEFLOW_BUILD_MEM_SEQ_TASK_H
-// mem_seq_task.h — the FIXED Sequencer body for the MemCopy composite (Phase 2, plans/mem_stream_impl.md).
-// A pure-stream, single-firing hls::task body (the runtime re-fires it per command; NO internal command
-// loop): dequeue one CopyCmd{src_off, dst_off, n_words} and issue one MRCmd{src_off, n} + one
-// MWCmd{dst_off, n} — a straight copy needs no demux.  Touches ONLY streams (no m_axi), so it composes
-// as an internal hls::task wired to MemRStream/MemWStream via hls_thread_local FIFOs.  Copied verbatim
-// into a kernel's include dir by waveflow.build.streamutils.MemStreamStep and instantiated at a
-// concrete width by the generated composite top (mem_seq_task<64>).  Word-granular (ap_uint<MEM_DW>);
-// all offsets are element/word coordinates (the addr convention — plans/component.md).  A static
-// per-instance job counter stamps xfer_msg[0] so a downstream MemComplete echo can be correlated back
-// to the job that issued it (mirrors the pysim Sequencer.run_proc golden).
+#ifndef WAVEFLOW_GEN_MEM_SEQ_TASK_H
+#define WAVEFLOW_GEN_MEM_SEQ_TASK_H
+// mem_seq_task.h -- GENERATED from Sequencer.run_iter by waveflow (build/hwgen.py::task_files_to_str).  DO NOT EDIT: regenerate instead.
+// A single firing = one hls::task invocation; the runtime re-fires it, so there is no
+// command loop here and no INTERFACE pragma (the composite top owns the interface).
+// The @synthesizable hook bodies are HAND-WRITTEN and are not lowered from the Python.
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "copy_cmd.h"
+#include "u_int32_array.h"
 #include "m_r_cmd.h"
 #include "m_w_cmd.h"
-#include "u_int32_array.h"
 
-// CopyCmd -> {MRCmd, MWCmd}: element coordinates pass through verbatim (no byte<->word conversion).
-template <int MEM_DW>
-static void mem_seq_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
-                         hls::stream<ap_uint<MEM_DW> >& mr_cmd,
-                         hls::stream<ap_uint<MEM_DW> >& mw_cmd) {
-    static ap_uint<32> job_idx = 0;
-    CopyCmd c;
-    c.read_stream<MEM_DW>(s_cmd);
-    UInt32Array xfer_msg;
-INIT_MSG: for (int i = 0; i < 8; ++i) {
-#pragma HLS UNROLL
-        xfer_msg.data[i] = 0;
-    }
-    xfer_msg.data[0] = job_idx;
-    MRCmd r;
-    r.addr      = c.src_off;
-    r.len       = c.n_words;
-    r.xfer_len  = 1;
-    r.xfer_msg  = xfer_msg;
-    r.write_stream<MEM_DW>(mr_cmd);
-    MWCmd w;
-    w.addr      = c.dst_off;
-    w.len       = c.n_words;
-    w.xfer_len  = 1;
-    w.xfer_msg  = xfer_msg;
-    w.write_stream<MEM_DW>(mw_cmd);
-    ++job_idx;
+namespace mem_seq_impl {
+    UInt32Array next_xfer_msg();
+    MRCmd make_mr_cmd(CopyCmd cmd, UInt32Array msg);
+    MWCmd make_mw_cmd(CopyCmd cmd, UInt32Array msg);
 }
 
-#endif  // WAVEFLOW_BUILD_MEM_SEQ_TASK_H
+template <int MEM_DWIDTH>
+static void mem_seq_task(
+    hls::stream<ap_uint<MEM_DWIDTH> >& s_cmd,
+    hls::stream<ap_uint<MEM_DWIDTH> >& mr_cmd,
+    hls::stream<ap_uint<MEM_DWIDTH> >& mw_cmd
+) {
+    CopyCmd cmd;
+    cmd.read_stream<MEM_DWIDTH>(s_cmd);
+    UInt32Array msg = mem_seq_impl::next_xfer_msg();
+    MRCmd mr = mem_seq_impl::make_mr_cmd(cmd, msg);
+    mr.write_stream<MEM_DWIDTH>(mr_cmd);
+    MWCmd mw = mem_seq_impl::make_mw_cmd(cmd, msg);
+    mw.write_stream<MEM_DWIDTH>(mw_cmd);
+}
+
+#endif  // WAVEFLOW_GEN_MEM_SEQ_TASK_H

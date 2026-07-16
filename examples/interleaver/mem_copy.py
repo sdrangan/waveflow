@@ -31,7 +31,8 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
 
-from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
+from waveflow.build.build import BuildConfig, BuildDag, SourceStep  # noqa: E402
+from waveflow.build.hwcodegen_steps import TaskBodyStep  # noqa: E402
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
@@ -91,26 +92,29 @@ class Sequencer(FreeRunComp):
     Endpoints: ``s_cmd`` (:class:`StreamIFSlave` carrying :class:`CopyCmd`, the top boundary),
     ``mr_cmd`` / ``mw_cmd`` (:class:`StreamIFMaster`, internal edges to the two mem-streams).
 
-    **What generates today, and what does not.**  The C++ that MemCopy actually builds with is the
-    hand-written ``mem_seq_task.h`` named by :meth:`kernel_task` — copied verbatim, not lowered from
-    this class (the same contract as MemRStream/MemWStream).  :meth:`run_iter` is the **pysim
-    golden**, and nothing mechanically ties the two: keeping them in agreement is on you, and the
-    only thing that checks it is the tests.
+    **This body is GENERATED from :meth:`run_iter`** — the first one in the codebase that is.
+    ``TaskBodyStep`` lowers it to ``include/mem_seq_task.h`` (templated, ``static``, pragma-free over
+    ``hls::stream<ap_uint<W>>``), which the composite top instantiates as ``mem_seq_task<64>``.
+    Verified end-to-end: identical csynth (latency/II 21, 283 LUT, 526 FF; same RTL module set) and
+    identical XSI behaviour (``cycles=3347``, 16/16 jobs, zero ``xfer_msg`` echo mismatches) against
+    the hand-written body it replaced.  Contrast MemRStream/MemWStream, whose bodies own ``m_axi``
+    and stay hand-written and copied.
 
-    :meth:`run_iter` is nevertheless written in the *extractable* shape — ``get`` -> hook -> ``write``
-    — so it lowers today as a leaf (``extract_kernel``/``kernel_files_to_str`` both succeed; pinned
-    by ``test_sequencer_run_iter_is_extractable``).  It is not wired into the composite because the
-    emitted code has two known gaps: it emits an ``s_axilite``/``ap_ctrl_hs`` top rather than
-    ``ap_ctrl_none`` (``free_running_kernel`` is a declared-but-unimplemented target), and it emits
-    ``streamutils::axi4s_word<W>`` streams where the composite's tasks use ``hls::stream<ap_uint<W>>``
-    + ``read_stream<W>``.  Closing those two is what would let this class replace ``mem_seq_task.h``.
+    **What is still hand-written: the three hooks.**  Codegen derives the body's *structure* — the
+    stream read, the calls, the two writes, in ``run_iter``'s order — not its leaf computation.
+    ``mem_seq_{next_xfer_msg,make_mr_cmd,make_mw_cmd}_impl.cpp`` live at the example root and are
+    **sticky**: ``TaskBodyStep`` writes each as a TODO stub once, only if absent, then never touches
+    it again.  Nothing mechanically ties a hook's C++ to the Python above it — that agreement is
+    yours to keep, and only the tests check it.
 
-    **Why the state lives behind a hook.**  The extractor forbids reading mutable ``self.X`` in a
-    lowered body (``_validate_no_implicit_capture``), and FreeRunComp cross-iteration state is not
-    wired — so the per-job counter cannot appear in :meth:`run_iter` directly.  Putting it behind the
-    ``@synthesizable`` :meth:`next_xfer_msg` boundary is what makes the body extractable: the hook is
-    a *declaration*, and its hand-written C++ owns the ``static ap_uint<32> job_idx`` (which is
-    exactly what ``mem_seq_task.h`` already does)."""
+    **Why the shape is `get` -> hook -> `write`.**  Two extractor rules force it, and neither is
+    stylistic.  A lowered body may not read mutable ``self.X``
+    (``_validate_no_implicit_capture``) and FreeRunComp cross-iteration state is not wired, so the
+    per-job counter cannot appear in :meth:`run_iter` — it lives behind the ``@synthesizable``
+    :meth:`next_xfer_msg` boundary, whose hand-written C++ owns the ``static ap_uint<32> job_idx``.
+    And constructing a ``DataSchema`` is not in the extractor's vocabulary at all (``x = MRCmd(...)``
+    and even bare ``x = MRCmd()`` are rejected), so the commands are built in hooks too.  Pinned by
+    ``test_sequencer_run_iter_is_extractable``."""
 
     cpp_kernel_name: ClassVar[str | None] = "mem_seq"
     cpp_namespace: ClassVar[str | None] = "mem_seq_impl"
@@ -262,9 +266,26 @@ class MemCopy(CompositeComp):
 # Driver
 # ---------------------------------------------------------------------------
 
+#: The Sequencer's hand-written hook bodies, at the example root (where every other hand-written hook
+#: lives — cf. ``examples/shared_mem/hist_compute_impl.cpp``).  ``TaskBodyStep`` writes each as a TODO
+#: stub **once, only if absent**, then never touches it again; these are edited source, not output.
+#: They must be added to the csynth project: the generated ``mem_seq_task.h`` calls across a TU
+#: boundary, so unlike a self-contained hand-written body the link cannot resolve them otherwise.
+SEQ_HOOK_SOURCES = (
+    "mem_seq_next_xfer_msg_impl.cpp",
+    "mem_seq_make_mr_cmd_impl.cpp",
+    "mem_seq_make_mw_cmd_impl.cpp",
+)
+
+
 def gen_headers(config: BuildConfig) -> None:
-    """Generate the command-struct headers + memmgr.hpp + streamutils_hls.h + the fixed task-body
-    headers (mem_seq / mem_r_stream / mem_w_stream_done) into ``include/``."""
+    """Generate the command-struct headers + memmgr.hpp + streamutils_hls.h + the task-body headers
+    into ``include/``.
+
+    Two kinds of task body land here, and the difference is the point: ``MemStreamStep`` **copies**
+    the fixed hand-written ``mem_r_stream_task.h`` / ``mem_w_stream_done_task.h`` (they own ``m_axi``,
+    which task-body codegen does not do), while ``TaskBodyStep`` **generates** ``mem_seq_task.h`` from
+    :meth:`Sequencer.run_iter` and drops its hook stubs at the example root."""
     inner = BuildDag()
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
@@ -278,12 +299,28 @@ def gen_headers(config: BuildConfig) -> None:
         raise RuntimeError(f"gen-include failed: {failed}")
 
 
+def gen_task_bodies(config: BuildConfig) -> None:
+    """Generate ``mem_seq_task.h`` from :meth:`Sequencer.run_iter` into ``include/``, and its hook
+    stubs at the example root (``impl_dir="."``) — never into ``include/`` or ``gen/``, which are
+    regenerated.  Same shape as ``fir_build.py``'s sticky ``fir_pipeline_impl.tpp``."""
+    inner = BuildDag()
+    inner.add(SourceStep(artifact="mem_copy_source", path=HERE / "mem_copy.py"))
+    inner.add(TaskBodyStep(name="gen_seq_task", comp_class=Sequencer,
+                           source_artifact="mem_copy_source",
+                           output_dir=INCLUDE_DIR, impl_dir="."))
+    results = inner.run(config, force=True)
+    failed = [n for n, r in results.items() if not r.success]
+    if failed:
+        raise RuntimeError(f"task-body gen failed: {failed}")
+
+
 def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
     """Generate headers + the MemCopy composite top .cpp + its csynth .tcl into *out_dir*."""
     from waveflow.build.elaborate import elaborate
 
     config = BuildConfig(root_dir=out_dir, params={})
     gen_headers(config)
+    gen_task_bodies(config)
 
     comp = elaborate(MemCopy, {"mem_dwidth": width}, name="mem_copy")
     spec = composite_top_spec(comp, width=width)
@@ -293,7 +330,7 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
     tcl = out_dir / f"{spec.top_name}.tcl"
-    tcl.write_text(render_tcl(spec.top_name), encoding="utf-8")
+    tcl.write_text(render_tcl(spec.top_name, extra_sources=SEQ_HOOK_SOURCES), encoding="utf-8")
     print(f"generated {cpp.relative_to(out_dir)} + {tcl.name}")
     return {spec.top_name: cpp}
 
