@@ -11,8 +11,10 @@
 #include <string>
 #include <vector>
 #include "bfm/xsi_bfm.h"
+#include "mem_r_stream_ports.h"      // GENERATED from the same TopSpec as the top's pragmas
 
 using namespace wfbfm;
+namespace ports = mem_r_stream_ports;
 
 static const int  N        = 128;                    // words to burst
 static const int  MEM_DW   = 64;
@@ -22,16 +24,6 @@ static const int  BASE_W   = 64;                     // region base (word index)
 static const long MAX_CYCLES = 2000000L;
 
 static uint64_t known_word(int i) { return ((uint64_t)i * 2654435761ULL + 12345ULL); }
-
-// Every TB-driven input this harness does not otherwise drive: the offset=slave register (-> base 0),
-// the unused write side of gmem0, and a quiescent control slave.
-static const char* const ZERO_PORTS[] = {
-    "s_axi_control_AWVALID","s_axi_control_AWADDR","s_axi_control_WVALID","s_axi_control_WDATA",
-    "s_axi_control_WSTRB","s_axi_control_ARVALID","s_axi_control_ARADDR","s_axi_control_RREADY",
-    "s_axi_control_BREADY",
-    "m_axi_gmem0_AWREADY","m_axi_gmem0_WREADY","m_axi_gmem0_BVALID","m_axi_gmem0_BRESP",
-    "m_axi_gmem0_BID","m_axi_gmem0_BUSER","m_axi_gmem0_RRESP","m_axi_gmem0_RID","m_axi_gmem0_RUSER",
-};
 
 int main() {
     // 1) Backing memory: known pattern in [BASE_W, BASE_W+N).
@@ -49,12 +41,12 @@ int main() {
     };
 
     // 2) Open the design and model its three interfaces.
-    XsiSim sim("xsim.dir/mem_r_stream/xsimk.dll", "mem_r_bfm.wdb");
-    sim.pin_low(ZERO_PORTS, sizeof(ZERO_PORTS)/sizeof(ZERO_PORTS[0]));
+    XsiSim sim(ports::DESIGN_DLL, "mem_r_bfm.wdb");
+    sim.pin_low(ports::ZERO_PORTS, ports::ZERO_PORTS_N);
 
-    AxisMaster     s_cmd(sim.dut(), "s_cmd", cmd_words);
-    AxisSlave      m_out(sim.dut(), "m_out");
-    AxiMmReadSlave gmem0(sim.dut(), "m_axi_gmem0", mem);
+    AxisMaster     s_cmd(sim.dut(), ports::s_cmd, cmd_words);
+    AxisSlave      m_out(sim.dut(), ports::m_out);
+    AxiMmReadSlave gmem0(sim.dut(), ports::m_mem, mem);
 
     auto sample = [&]{ s_cmd.sample(); m_out.sample(); gmem0.sample(); };
     auto update = [&]{ s_cmd.update(); m_out.update(); gmem0.update(); };

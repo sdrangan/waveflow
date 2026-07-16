@@ -60,6 +60,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
     SobEdge,
     StreamEdge,
     composite_top_spec,
+    render_ports_h,
     render_tcl,
     render_top,
 )
@@ -502,6 +503,9 @@ def _emit_top(comp, out_dir: Path, mem_dwidth: int) -> Path:
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
     (out_dir / f"{spec.top_name}.tcl").write_text(render_tcl(spec.top_name), encoding="utf-8")
+    ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
+    ports_h.parent.mkdir(parents=True, exist_ok=True)
+    ports_h.write_text(render_ports_h(spec), encoding="utf-8")
     print(f"generated {cpp.relative_to(out_dir)} + {spec.top_name}.tcl")
     return cpp
 

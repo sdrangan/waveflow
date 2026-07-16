@@ -18,8 +18,10 @@
 #include <string>
 #include <vector>
 #include "bfm/xsi_bfm.h"
+#include "mem_copy_ports.h"      // GENERATED from the same TopSpec that emits the top's pragmas
 
 using namespace wfbfm;
+namespace ports = mem_copy_ports;
 
 static const int  MEM_DW   = 64;
 static const int  BPW      = MEM_DW / 8;             // bytes per word = 8
@@ -38,18 +40,6 @@ static uint64_t known_word(int job, int i) {
     return ((uint64_t)i * 2654435761ULL + 12345ULL + (uint64_t)job * 7919ULL);
 }
 
-// Every TB-driven input this harness does not otherwise drive: the offset=slave registers (-> base
-// 0), the unused write side of gmem0, the unused read side of gmem1, and a quiescent control slave.
-static const char* const ZERO_PORTS[] = {
-    "s_axi_control_AWVALID","s_axi_control_AWADDR","s_axi_control_WVALID","s_axi_control_WDATA",
-    "s_axi_control_WSTRB","s_axi_control_ARVALID","s_axi_control_ARADDR","s_axi_control_RREADY",
-    "s_axi_control_BREADY",
-    "m_axi_gmem0_AWREADY","m_axi_gmem0_WREADY","m_axi_gmem0_BVALID","m_axi_gmem0_BRESP",
-    "m_axi_gmem0_BID","m_axi_gmem0_BUSER","m_axi_gmem0_RRESP","m_axi_gmem0_RID","m_axi_gmem0_RUSER",
-    "m_axi_gmem1_ARREADY","m_axi_gmem1_RVALID","m_axi_gmem1_RDATA","m_axi_gmem1_RLAST",
-    "m_axi_gmem1_RRESP","m_axi_gmem1_RID","m_axi_gmem1_RUSER","m_axi_gmem1_BID","m_axi_gmem1_BUSER",
-};
-
 int main() {
     // 1) Shared backing memory: a known pattern in each source region.
     FlatMemory mem(MEM_NW, BPW);
@@ -63,14 +53,16 @@ int main() {
         cmd_words.push_back((uint64_t)(uint32_t)N);
     }
 
-    // 2) Open the design and model its four interfaces.
-    XsiSim sim("xsim.dir/mem_copy/xsimk.dll", "mem_copy_bfm.wdb");
-    sim.pin_low(ZERO_PORTS, sizeof(ZERO_PORTS)/sizeof(ZERO_PORTS[0]));
+    // 2) Open the design and model its four interfaces.  Every port name comes from the generated
+    // binding, which is derived from the same TopSpec that emitted the top's interface pragmas —
+    // so this TB cannot name a port the kernel does not have.
+    XsiSim sim(ports::DESIGN_DLL, "mem_copy_bfm.wdb");
+    sim.pin_low(ports::ZERO_PORTS, ports::ZERO_PORTS_N);
 
-    AxisMaster      s_cmd (sim.dut(), "s_cmd", cmd_words);
-    AxisSlave       s_done(sim.dut(), "s_done");
-    AxiMmReadSlave  gmem0 (sim.dut(), "m_axi_gmem0", mem);
-    AxiMmWriteSlave gmem1 (sim.dut(), "m_axi_gmem1", mem);
+    AxisMaster      s_cmd (sim.dut(), ports::s_cmd,  cmd_words);
+    AxisSlave       s_done(sim.dut(), ports::s_done);
+    AxiMmReadSlave  gmem0 (sim.dut(), ports::m_in,  mem);
+    AxiMmWriteSlave gmem1 (sim.dut(), ports::m_out, mem);
 
     auto sample = [&]{ s_cmd.sample(); s_done.sample(); gmem0.sample(); gmem1.sample(); };
     auto update = [&]{ s_cmd.update(); s_done.update(); gmem0.update(); gmem1.update(); };

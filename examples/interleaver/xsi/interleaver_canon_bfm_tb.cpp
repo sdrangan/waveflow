@@ -18,8 +18,10 @@
 #include <string>
 #include <vector>
 #include "bfm/xsi_bfm.h"
+#include "interleaver_canon_ports.h"      // GENERATED from the same TopSpec as the top's pragmas
 
 using namespace wfbfm;
+namespace ports = interleaver_canon_ports;
 
 // VERDICT: PASS — forwarding a per-job token through every stage BREAKS the done==#tasks+1 law.
 // nj=8 -> 8/8 (mix hung at 7/8, P-SOB at 6/8) and nj=16 -> 16/16 (truly unbounded, not a higher
@@ -37,19 +39,6 @@ static const long MAX_CYCLES = 2000000L;
 static uint32_t fbits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
 static int   Pidx(int i)        { return ((i * 13 + 5) % N); }
 static float Xval(int j, int k) { return (float)((float)k * 0.5f - 3.0f + (float)j); }
-
-// Every TB-driven input this harness does not otherwise drive: the offset=slave registers (-> base
-// 0), the unused write side of gmem0, and the unused read side of gmem1.
-static const char* const ZERO_PORTS[] = {
-    "s_axi_control_AWVALID","s_axi_control_AWADDR","s_axi_control_WVALID","s_axi_control_WDATA",
-    "s_axi_control_WSTRB","s_axi_control_ARVALID","s_axi_control_ARADDR","s_axi_control_RREADY",
-    "s_axi_control_BREADY",
-    "m_axi_gmem0_AWREADY","m_axi_gmem0_WREADY","m_axi_gmem0_BVALID","m_axi_gmem0_BRESP",
-    "m_axi_gmem0_BID","m_axi_gmem0_BUSER","m_axi_gmem0_RRESP","m_axi_gmem0_RID","m_axi_gmem0_RUSER",
-    "m_axi_gmem1_ARREADY","m_axi_gmem1_RVALID","m_axi_gmem1_RDATA","m_axi_gmem1_RLAST",
-    "m_axi_gmem1_RRESP","m_axi_gmem1_RID","m_axi_gmem1_RUSER","m_axi_gmem1_BRESP",
-    "m_axi_gmem1_BID","m_axi_gmem1_BUSER",
-};
 
 int main() {
     // 1) Shared memory + commands. Layout per job: P then X then Y, NW words each, base = j*3*NW.
@@ -74,13 +63,13 @@ int main() {
         cmd_flat.push_back((uint64_t)(uint32_t)yj | ((uint64_t)(uint32_t)N << 32));
     }
     // 2) Open the design and model its four interfaces.
-    XsiSim sim("xsim.dir/interleaver_canon/xsimk.dll", "interleaver_canon_bfm.wdb");
-    sim.pin_low(ZERO_PORTS, sizeof(ZERO_PORTS)/sizeof(ZERO_PORTS[0]));
+    XsiSim sim(ports::DESIGN_DLL, "interleaver_canon_bfm.wdb");
+    sim.pin_low(ports::ZERO_PORTS, ports::ZERO_PORTS_N);
 
-    AxisMaster      s_cmd (sim.dut(), "s_cmd", cmd_flat);
-    AxisSlave       s_done(sim.dut(), "s_done");
-    AxiMmReadSlave  gmem0 (sim.dut(), "m_axi_gmem0", mem);
-    AxiMmWriteSlave gmem1 (sim.dut(), "m_axi_gmem1", mem);
+    AxisMaster      s_cmd (sim.dut(), ports::s_cmd, cmd_flat);
+    AxisSlave       s_done(sim.dut(), ports::s_done);
+    AxiMmReadSlave  gmem0 (sim.dut(), ports::m_in, mem);
+    AxiMmWriteSlave gmem1 (sim.dut(), ports::m_out, mem);
 
     auto sample = [&]{ s_cmd.sample(); s_done.sample(); gmem0.sample(); gmem1.sample(); };
     auto update = [&]{ s_cmd.update(); s_done.update(); gmem0.update(); gmem1.update(); };

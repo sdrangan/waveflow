@@ -59,6 +59,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
     INCLUDE_DIR,
     StreamEdge,
     composite_top_spec,
+    render_ports_h,
     render_tcl,
     render_top,
 )
@@ -331,7 +332,10 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     cpp.write_text(render_top(spec), encoding="utf-8")
     tcl = out_dir / f"{spec.top_name}.tcl"
     tcl.write_text(render_tcl(spec.top_name, extra_sources=SEQ_HOOK_SOURCES), encoding="utf-8")
-    print(f"generated {cpp.relative_to(out_dir)} + {tcl.name}")
+    ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
+    ports_h.parent.mkdir(parents=True, exist_ok=True)
+    ports_h.write_text(render_ports_h(spec), encoding="utf-8")
+    print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
     return {spec.top_name: cpp}
 
 

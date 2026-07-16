@@ -33,6 +33,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
     TopSpec,
     _axis_port,
     _maxi_port,
+    render_ports_h,
     render_tcl,
     render_top,
 )
@@ -53,9 +54,9 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
     if comp_class is MemRStream:
         return TopSpec(
             top_name="mem_r_stream",
-            ports=(_axis_port("s_cmd", width),
+            ports=(_axis_port("s_cmd", width, kind="axis_in"),
                    _maxi_port("m_mem", width, const=True),
-                   _axis_port("m_out", width)),
+                   _axis_port("m_out", width, kind="axis_out")),
             tasks=(TaskInst("mem_r_stream_task", (width,), ("s_cmd", "m_mem", "m_out"),
                             "mem_r_stream_task.h"),),
             cmd_headers=(MRCmd.resolved_include_filename(),),
@@ -63,8 +64,8 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
     if comp_class is MemWStream:
         return TopSpec(
             top_name="mem_w_stream",
-            ports=(_axis_port("s_cmd", width),
-                   _axis_port("s_in", width),
+            ports=(_axis_port("s_cmd", width, kind="axis_in"),
+                   _axis_port("s_in", width, kind="axis_in"),
                    _maxi_port("m_mem", width, const=False)),
             tasks=(TaskInst("mem_w_stream_task", (width,), ("s_cmd", "s_in", "m_mem"),
                             "mem_w_stream_task.h"),),
@@ -107,8 +108,11 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
         cpp.write_text(render_top(spec), encoding="utf-8")
         tcl = out_dir / f"{spec.top_name}.tcl"
         tcl.write_text(render_tcl(spec.top_name), encoding="utf-8")
+        ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
+        ports_h.parent.mkdir(parents=True, exist_ok=True)
+        ports_h.write_text(render_ports_h(spec), encoding="utf-8")
         written[spec.top_name] = cpp
-        print(f"generated {cpp.relative_to(out_dir)} + {tcl.name}")
+        print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
     return written
 
 

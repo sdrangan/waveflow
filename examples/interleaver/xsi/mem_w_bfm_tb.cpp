@@ -10,8 +10,10 @@
 #include <string>
 #include <vector>
 #include "bfm/xsi_bfm.h"
+#include "mem_w_stream_ports.h"      // GENERATED from the same TopSpec as the top's pragmas
 
 using namespace wfbfm;
+namespace ports = mem_w_stream_ports;
 
 static const int  N        = 128;
 static const int  MEM_DW   = 64;
@@ -21,16 +23,6 @@ static const int  BASE_W   = 64;
 static const long MAX_CYCLES = 2000000L;
 
 static uint64_t known_word(int i) { return ((uint64_t)i * 40503ULL + 7ULL); }
-
-// Every TB-driven input this harness does not otherwise drive: the offset=slave register (-> base 0),
-// the unused read side of gmem0, and a quiescent control slave.
-static const char* const ZERO_PORTS[] = {
-    "s_axi_control_AWVALID","s_axi_control_AWADDR","s_axi_control_WVALID","s_axi_control_WDATA",
-    "s_axi_control_WSTRB","s_axi_control_ARVALID","s_axi_control_ARADDR","s_axi_control_RREADY",
-    "s_axi_control_BREADY",
-    "m_axi_gmem0_ARREADY","m_axi_gmem0_RVALID","m_axi_gmem0_RDATA","m_axi_gmem0_RLAST",
-    "m_axi_gmem0_RRESP","m_axi_gmem0_RID","m_axi_gmem0_RUSER",
-};
 
 int main() {
     FlatMemory mem(MEM_NW, BPW);
@@ -49,12 +41,12 @@ int main() {
     for (int i = 0; i < N; ++i) in_words.push_back(known_word(i));
 
     // Open the design and model its three interfaces.
-    XsiSim sim("xsim.dir/mem_w_stream/xsimk.dll", "mem_w_bfm.wdb");
-    sim.pin_low(ZERO_PORTS, sizeof(ZERO_PORTS)/sizeof(ZERO_PORTS[0]));
+    XsiSim sim(ports::DESIGN_DLL, "mem_w_bfm.wdb");
+    sim.pin_low(ports::ZERO_PORTS, ports::ZERO_PORTS_N);
 
-    AxisMaster      s_cmd(sim.dut(), "s_cmd", cmd_words);
-    AxisMaster      s_in (sim.dut(), "s_in",  in_words);
-    AxiMmWriteSlave gmem0(sim.dut(), "m_axi_gmem0", mem);
+    AxisMaster      s_cmd(sim.dut(), ports::s_cmd, cmd_words);
+    AxisMaster      s_in (sim.dut(), ports::s_in,  in_words);
+    AxiMmWriteSlave gmem0(sim.dut(), ports::m_mem, mem);
 
     auto sample = [&]{ s_cmd.sample(); s_in.sample(); gmem0.sample(); };
     auto update = [&]{ s_cmd.update(); s_in.update(); gmem0.update(); };

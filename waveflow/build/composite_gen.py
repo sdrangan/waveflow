@@ -36,9 +36,32 @@ DEFAULT_MEM_DW = 64
 
 @dataclass(frozen=True)
 class ExtPort:
-    """One external interface port of the generated top: its C++ param decl + interface pragmas."""
+    """One external interface port of the generated top: its C++ param decl + interface pragmas.
+
+    ``name`` / ``kind`` / ``bundle`` are kept alongside the rendered strings so the spec stays
+    *answerable* rather than only renderable.  A testbench needs to bind the same ports this port
+    declares (``s_cmd`` -> ``s_cmd_TVALID``; a ``maxi_read`` on ``gmem0`` -> ``m_axi_gmem0_ARVALID``),
+    and deriving both from ONE spec is what stops the TB drifting from the kernel — see
+    :func:`render_ports_h`.  Without these the triple is lost in the ``decl`` string.
+    """
     decl: str
     pragmas: tuple[str, ...]
+    name: str = ""                  # the boundary port name, e.g. "s_cmd" / "m_in"
+    kind: str = ""                  # axis_in | axis_out | maxi_read | maxi_write
+    bundle: str | None = None       # m_axi bundle for maxi_* kinds, else None
+
+    @property
+    def xsi_prefix(self) -> str:
+        """The RTL port-name prefix this port presents to a testbench.
+
+        Mechanical, per Vitis: an AXIS port keeps its own name (``s_cmd`` -> ``s_cmd_TDATA``), an
+        ``m_axi`` port is named after its BUNDLE, not the port (``m_in`` on ``gmem0`` ->
+        ``m_axi_gmem0_ARVALID``).  That asymmetry is exactly the sort of thing a hand-written TB gets
+        wrong once and then carries.
+        """
+        if self.kind in ("maxi_read", "maxi_write"):
+            return f"m_axi_{self.bundle}"
+        return self.name
 
 
 @dataclass(frozen=True)
@@ -67,9 +90,13 @@ class TopSpec:
     extra_includes: tuple[str, ...] = ()    # extra system headers (e.g. hls_streamofblocks.h)
 
 
-def _axis_port(name: str, width: int) -> ExtPort:
+def _axis_port(name: str, width: int, kind: str = "axis_in") -> ExtPort:
+    """An AXIS boundary port.  *kind* (``axis_in``/``axis_out``) does not change the emitted C++ — a
+    kernel's ``hls::stream&`` is the same either way — but it records the DIRECTION, which is what a
+    testbench needs to know whether to model a master or a slave against it."""
     return ExtPort(f"hls::stream<ap_uint<{width}> >& {name}",
-                   (f"#pragma HLS INTERFACE axis port={name}",))
+                   (f"#pragma HLS INTERFACE axis port={name}",),
+                   name=name, kind=kind, bundle=None)
 
 
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
@@ -81,7 +108,8 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
     pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=slave bundle={bundle} depth=8192"]
     if const:
         pragmas.append(f"#pragma HLS stable variable={name}")
-    return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas))
+    return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
+                   name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +155,7 @@ class SobEdge:
 def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtPort:
     """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas)."""
     if kind in ("axis_in", "axis_out"):
-        return _axis_port(name, width)
+        return _axis_port(name, width, kind=kind)
     if kind == "maxi_read":
         return _maxi_port(name, width, const=True, bundle=bundle or "gmem0")
     if kind == "maxi_write":
@@ -233,6 +261,90 @@ def render_top(spec: TopSpec) -> str:
         lines.append(
             f"    hls_thread_local hls::task t{i}({t.task_fn}<{targs}>, {call_args});")
     lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+#: Channels of an m_axi bundle a testbench does NOT drive, by bundle kind.  The complement of what
+#: the BFM's slave model drives: for a READ bundle the TB owns ARREADY/R*, so everything on the write
+#: side (plus the R sidebands it does not source) is pinned low; for a WRITE bundle the TB owns
+#: AWREADY/WREADY/B*, so the read side (plus the B sidebands) is pinned.  Pinned, not left floating:
+#: an undriven input is X, and X on a handshake is a hang with no diagnostic.
+_MAXI_UNDRIVEN = {
+    "maxi_read": ("AWREADY", "WREADY", "BVALID", "BRESP", "BID", "BUSER",
+                  "RRESP", "RID", "RUSER"),
+    "maxi_write": ("ARREADY", "RVALID", "RDATA", "RLAST", "RRESP", "RID", "RUSER",
+                   "BRESP", "BID", "BUSER"),
+}
+
+#: The AXI-Lite control slave Vitis creates for `offset=slave` m_axi ports.  Pinning it quiescent is
+#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.
+_CONTROL_UNDRIVEN = (
+    "s_axi_control_AWVALID", "s_axi_control_AWADDR", "s_axi_control_WVALID", "s_axi_control_WDATA",
+    "s_axi_control_WSTRB", "s_axi_control_ARVALID", "s_axi_control_ARADDR", "s_axi_control_RREADY",
+    "s_axi_control_BREADY",
+)
+
+
+def render_ports_h(spec: TopSpec) -> str:
+    """Emit ``<top>_ports.h`` — the testbench's port binding, derived from *spec*.
+
+    **Why this exists.**  A TB must name the same RTL ports the top's ``#pragma HLS INTERFACE`` lines
+    create.  Hand-written, those two lists drift silently: rename a bundle and the TB keeps compiling
+    and starts hanging.  Deriving both from ONE ``TopSpec`` makes that drift impossible by
+    construction — this is the same spec :func:`render_top` renders the pragmas from.
+
+    Emits, per boundary port, the RTL name prefix a BFM model binds against (an AXIS port keeps its
+    own name; an ``m_axi`` port is named after its bundle), plus ``ZERO_PORTS`` — every TB-driven
+    input the models do not otherwise drive, derived from the bundle kinds rather than hand-listed.
+
+    Deliberately NOT parsed out of the generated RTL or the csynth report: those are downstream of
+    the thing the TB is supposed to be testing, so binding to them would make a broken kernel look
+    self-consistent.
+    """
+    ns = f"{spec.top_name}_ports"
+    guard = f"WAVEFLOW_GEN_{ns.upper()}_H"
+    lines = [
+        f"#ifndef {guard}",
+        f"#define {guard}",
+        f"// {ns}.h -- GENERATED by waveflow (build/composite_gen.py::render_ports_h) from the SAME",
+        f"// TopSpec that emits {spec.top_name}'s interface pragmas.  DO NOT EDIT: regenerate instead.",
+        "// One spec, two consumers -- so a testbench cannot drift from the kernel it drives.",
+        "",
+        f"namespace {ns} {{",
+        "",
+        f'static const char* const TOP        = "{spec.top_name}";',
+        f'static const char* const DESIGN_DLL = "xsim.dir/{spec.top_name}/xsimk.dll";',
+        "",
+    ]
+    for p in spec.ports:
+        comment = p.kind if p.kind else "?"
+        if p.bundle:
+            comment += f" on {p.bundle}"
+        lines.append(f'static const char* const {p.name:<8} = "{p.xsi_prefix}";   // {comment}')
+
+    zero: list[str] = []
+    if any(p.kind in ("maxi_read", "maxi_write") for p in spec.ports):
+        zero.extend(_CONTROL_UNDRIVEN)
+    for p in spec.ports:
+        for ch in _MAXI_UNDRIVEN.get(p.kind, ()):
+            zero.append(f"{p.xsi_prefix}_{ch}")
+
+    lines += [
+        "",
+        "// Every TB-driven input the interface models above do not themselves drive.  Absent names",
+        "// are skipped at bind time (XsiSim::pin_low), so this may name channels a given kernel",
+        "// does not expose.",
+        "static const char* const ZERO_PORTS[] = {",
+    ]
+    lines += [f'    "{z}",' for z in zero]
+    lines += [
+        "};",
+        "static const int ZERO_PORTS_N = (int)(sizeof(ZERO_PORTS)/sizeof(ZERO_PORTS[0]));",
+        "",
+        f"}}  // namespace {ns}",
+        "",
+        f"#endif  // {guard}",
+    ]
     return "\n".join(lines) + "\n"
 
 
