@@ -348,6 +348,32 @@ def render_ports_h(spec: TopSpec) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_rtl_f(top_name: str, root) -> str:
+    """Emit the ``xvlog`` file list (``rtl_<top>.f``) for *top*'s elaborated RTL.
+
+    **Why generate it.**  This list was hand-maintained, and it names RTL modules explicitly — so a
+    module rename silently invalidates it.  Combined with a cached ``xsimk.dll`` that is how a stale
+    ``.f`` fakes a PASS: xvlog compiles a file set that no longer matches the design, xelab reuses
+    what it already built, and the run goes green while proving nothing.  It bit us for real when a
+    generated task body renamed ``..._s_r_xfer_msg_RAM`` to ``..._s_mr_xfer_msg_RAM`` (the body's
+    local is ``mr``, not ``r``).
+
+    *root* is the example directory holding ``<top>_proj/``; paths are emitted relative to the
+    sibling ``xsi/`` directory the ``.f`` lives in.  Requires csynth to have run.
+    """
+    from pathlib import Path
+
+    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
+    if not vdir.is_dir():
+        raise FileNotFoundError(
+            f"No elaborated RTL at {vdir} — run csynth for '{top_name}' before generating its .f"
+        )
+    names = sorted(p.name for p in vdir.glob("*.v"))
+    if not names:
+        raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
+    return "".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
+
+
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).

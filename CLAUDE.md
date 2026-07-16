@@ -19,11 +19,17 @@ pytest tests/examples/
 # Run a single test file
 pytest tests/hw/test_dataschema.py
 
-# Skip slow Vitis HLS integration tests (default behavior — they require Vitis installed)
-pytest -m "not vitis"
+# Skip the slow toolchain tests (the usual dev loop — they need Vitis / Vivado installed)
+pytest -m "not vitis and not xsi"
 
-# Run only Vitis HLS integration tests
+# Run only Vitis HLS integration tests (csynth / csim / cosim)
 pytest -m vitis
+
+# Run only the XSI RTL gates: the four free-running kernels driven through real RTL by the BFM
+# library, asserting exact cycle counts (414 / 432 / 3347 / 3469).  Needs Vivado xsim + mingw g++
+# AND a prior csynth of each top (they skip loudly if the RTL is absent).  See
+# plans/xsi_tb_codegen.md.
+pytest -m xsi
 
 # Lint / format
 ruff check waveflow/

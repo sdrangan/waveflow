@@ -59,6 +59,7 @@ testpaths = ["tests"]
 norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}", "examples/_archive"]
 markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",
+    "xsi: marks tests as requiring Vivado xsim + mingw g++ AND a prior csynth (RTL-level BFM gates)",
     "phase1: HwComponent codegen phase 14 — phase 1 (HwTestbench + extractor mode)",
     "phase2: HwComponent codegen phase 14 — phase 2 (HlsCodegenStep.is_testbench)",
     "phase3: HwComponent codegen phase 14 — phase 3 (DUT binding + dut.run)",
