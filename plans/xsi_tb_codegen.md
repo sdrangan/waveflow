@@ -53,7 +53,22 @@ sim.run_until([&]{ return s_done.count() == NUM_CMDS; });
 The table above. Recorded here because it is the evidence for "library, not codegen"; if a later
 stage is tempted to emit protocol, re-read it.
 
-## Stage 1 — extract the BFM library from the four working TBs
+## Stage 1 — extract the BFM library from the four working TBs — **DONE (`709bb1e`, 2026-07-16)**
+
+All four TBs run on `xsi/bfm/xsi_bfm.h`; every gate held from a fully clean rebuild.
+`956 -> 495` lines across the four, `+347` shared, and **zero** protocol constructs left in any TB.
+Stage 2 (thin to scenario + golden) fell out with it — that is all the TBs now contain.
+
+What the extraction taught, which designing the API would not have:
+- `mem_w` drains on the **B response**, not the word count → `AxiMmWriteSlave::saw_b()`. "All the
+  data went out" is not "the write completed"; a TB draining on `w_count` alone can stop before the
+  last burst is acknowledged.
+- `interleaver_canon` records **per-job done cycles** (that print *is* the throughput measurement),
+  so the sink models words while the TB derives timing from its beat count.
+- The `sample`/`update`/`drive` split is load-bearing, not stylistic: a beat is decided from values
+  sampled *before* the rising edge and applied *after* it.
+
+
 
 **Pure refactor. Zero behaviour change.** Factor `mem_r` / `mem_w` / `mem_copy` /
 `interleaver_canon` TBs onto a shared BFM in `examples/interleaver/xsi/bfm/` (location revisited in
