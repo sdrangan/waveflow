@@ -184,6 +184,7 @@ public:
             if (wlast_) { state_ = B_RESP; h_wready_ = 0; h_bvalid_ = 1; }
             else        { ++beat_; }
         } else if (b_beat_) {
+            saw_b_ = true;
             state_ = AW_IDLE; h_bvalid_ = 0; h_awready_ = 1;
         }
     }
@@ -194,8 +195,12 @@ public:
         d_.put1(P_bvalid,  h_bvalid_);
     }
 
-    int w_count() const { return w_count_; }    ///< total W beats accepted (a progress metric)
-    int state() const   { return (int)state_; }
+    int  w_count() const { return w_count_; }   ///< total W beats accepted (a progress metric)
+    int  state() const   { return (int)state_; }
+    /// True once a B response has been consummated.  A write is not observable until B: "all the
+    /// data went out" is not the same as "the write completed", so a TB that drains on w_count
+    /// alone can stop before the last burst is acknowledged.
+    bool saw_b() const   { return saw_b_; }
 
 private:
     Dut& d_; FlatMemory& mem_;
@@ -205,6 +210,7 @@ private:
     State    state_ = AW_IDLE;
     uint64_t addrw_ = 0; uint32_t len_ = 0, beat_ = 0;
     int      w_count_ = 0;
+    bool     saw_b_ = false;
     uint32_t h_awready_ = 1, h_wready_ = 0, h_bvalid_ = 0;
     uint32_t awvalid_ = 0, wvalid_ = 0, wstrb_ = 0, wlast_ = 0, bready_ = 0, awlen_ = 0;
     uint64_t awaddr_ = 0, wdata_ = 0;
