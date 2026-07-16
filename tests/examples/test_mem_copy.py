@@ -78,6 +78,59 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
         assert (tmp_path / "include" / h).exists(), h
 
 
+def test_sequencer_run_iter_is_extractable():
+    """Sequencer is a FreeRunComp whose run_iter lowers as a leaf: ``get`` -> hook -> ``write``.
+
+    This is NOT what MemCopy builds with — the composite uses the hand-written ``mem_seq_task.h``
+    named by ``kernel_task()``.  It pins the claim in Sequencer's docstring that the class is written
+    in the extractable shape, so the claim cannot rot silently: the per-job counter stays behind the
+    ``@synthesizable`` ``next_xfer_msg`` boundary (a lowered body may not read mutable ``self.X``),
+    and the commands are built in hooks (constructing a DataSchema is not in the extractor's
+    vocabulary).  Inlining either back into ``run_iter`` fails here.
+    """
+    from waveflow.build.codegen_dispatch import codegen_path
+    from waveflow.build.hwcodegen import extract_kernel
+    from waveflow.build.hwgen import kernel_files_to_str
+    from waveflow.simulation.simulation import Simulation
+    from examples.interleaver.mem_copy import Sequencer
+
+    seq = Sequencer(name="seq", sim=Simulation(), mem_dwidth=64)
+    path = codegen_path(seq)
+    assert (path.kind, path.method) == ("leaf", "run_iter")
+    extract_kernel(seq)                                  # raises SynthesisError if the shape breaks
+
+    files = kernel_files_to_str(Sequencer)
+    body = files["mem_seq.cpp"]
+    # the three hooks are declarations; their bodies are hand-written stubs, not lowered Python.
+    for hook in ("next_xfer_msg", "make_mr_cmd", "make_mw_cmd"):
+        assert f"mem_seq_impl::{hook}" in body, f"{hook} not called from the generated body"
+        assert f"mem_seq_{hook}_impl.cpp" in files, f"{hook} stub not emitted"
+    assert "job_idx" not in body, "the counter must stay in the hook, not the lowered body"
+    # one firing per command: the hls::task runtime re-fires, so no loop belongs here.
+    assert "while" not in body and "for (" not in body
+
+
+def test_sequencer_codegen_gaps_are_still_open():
+    """TRIPWIRE, not an endorsement: the two gaps that keep Sequencer's lowering out of the composite.
+
+    If this test FAILS, that is probably good news — someone implemented ``free_running_kernel`` or
+    aligned the stream convention.  Re-read Sequencer's docstring and ``kernel_task()``: the composite
+    may now be able to drop ``mem_seq_task.h`` and generate the body instead.  Update both, then
+    delete this test.
+    """
+    from waveflow.build.hwgen import kernel_files_to_str
+    from waveflow.hw.codegen_targets import FREE_RUNNING_KERNEL, IMPLEMENTED_TARGETS
+    from examples.interleaver.mem_copy import Sequencer
+
+    assert FREE_RUNNING_KERNEL not in IMPLEMENTED_TARGETS
+
+    body = kernel_files_to_str(Sequencer)["mem_seq.cpp"]
+    # Gap 1: emits a control-driven top, not the ap_ctrl_none a free-running hls::task needs.
+    assert "s_axilite port=return" in body and "ap_ctrl_none" not in body
+    # Gap 2: emits axi4s_word streams; the composite's tasks take hls::stream<ap_uint<W>> + read_stream<W>.
+    assert "axi4s_word" in body and "ap_uint" not in body
+
+
 def test_composite_top_spec_is_graph_derived():
     """The composite TopSpec is derived from the sub_comps + internal interfaces (add_comp/add_if),
     not hand-written: each task arg resolves an endpoint to a FIFO or boundary port."""

@@ -35,9 +35,11 @@ from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
-from waveflow.hw.hw_component import HwComponent, HwParam  # noqa: E402
+from waveflow.hw.hw_component import HwParam  # noqa: E402
 from waveflow.hw.hw_composite import CompositeComp  # noqa: E402
+from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
+from waveflow.hw.synth import synthesizable  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
     KernelTask,
     MRCmd,
@@ -83,14 +85,34 @@ SCHEMA_CLASSES = [CopyCmd, MRCmd, MWCmd, MemComplete, XferMsgArr]
 
 
 @dataclass
-class Sequencer(HwComponent):
+class Sequencer(FreeRunComp):
     """Pure-stream command sequencer: dequeue one :class:`CopyCmd` and issue one :class:`MRCmd` +
     one :class:`MWCmd` (a straight copy needs no demux — Phase 4 splits P/X).  Active, touches ONLY
-    streams, so it composes as an internal ``hls::task``.  Codegen is the fixed ``mem_seq_task``
-    body; :meth:`run_proc` is the pysim golden.
+    streams, so it composes as an internal ``hls::task``.
 
     Endpoints: ``s_cmd`` (:class:`StreamIFSlave` carrying :class:`CopyCmd`, the top boundary),
-    ``mr_cmd`` / ``mw_cmd`` (:class:`StreamIFMaster`, internal edges to the two mem-streams)."""
+    ``mr_cmd`` / ``mw_cmd`` (:class:`StreamIFMaster`, internal edges to the two mem-streams).
+
+    **What generates today, and what does not.**  The C++ that MemCopy actually builds with is the
+    hand-written ``mem_seq_task.h`` named by :meth:`kernel_task` — copied verbatim, not lowered from
+    this class (the same contract as MemRStream/MemWStream).  :meth:`run_iter` is the **pysim
+    golden**, and nothing mechanically ties the two: keeping them in agreement is on you, and the
+    only thing that checks it is the tests.
+
+    :meth:`run_iter` is nevertheless written in the *extractable* shape — ``get`` -> hook -> ``write``
+    — so it lowers today as a leaf (``extract_kernel``/``kernel_files_to_str`` both succeed; pinned
+    by ``test_sequencer_run_iter_is_extractable``).  It is not wired into the composite because the
+    emitted code has two known gaps: it emits an ``s_axilite``/``ap_ctrl_hs`` top rather than
+    ``ap_ctrl_none`` (``free_running_kernel`` is a declared-but-unimplemented target), and it emits
+    ``streamutils::axi4s_word<W>`` streams where the composite's tasks use ``hls::stream<ap_uint<W>>``
+    + ``read_stream<W>``.  Closing those two is what would let this class replace ``mem_seq_task.h``.
+
+    **Why the state lives behind a hook.**  The extractor forbids reading mutable ``self.X`` in a
+    lowered body (``_validate_no_implicit_capture``), and FreeRunComp cross-iteration state is not
+    wired — so the per-job counter cannot appear in :meth:`run_iter` directly.  Putting it behind the
+    ``@synthesizable`` :meth:`next_xfer_msg` boundary is what makes the body extractable: the hook is
+    a *declaration*, and its hand-written C++ owns the ``static ap_uint<32> job_idx`` (which is
+    exactly what ``mem_seq_task.h`` already does)."""
 
     cpp_kernel_name: ClassVar[str | None] = "mem_seq"
     cpp_namespace: ClassVar[str | None] = "mem_seq_impl"
@@ -123,20 +145,42 @@ class Sequencer(HwComponent):
         return KernelTask("mem_seq_task", "mem_seq_task.h", ("s_cmd", "mr_cmd", "mw_cmd"),
                           template_args=(int(self.mem_dwidth),))
 
-    def run_proc(self) -> ProcessGen[None]:
-        """The pysim golden: read a :class:`CopyCmd`, emit ``MRCmd{src_off, n}`` then
-        ``MWCmd{dst_off, n}`` — element coordinates pass through verbatim (no byte<->word) — with
-        ``xfer_msg[0]`` carrying the job index so the completion echo can be correlated back."""
-        while True:
-            cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
-            n = int(cmd.n_words)
-            xfer_msg = np.zeros(self._xfer_msg_len, dtype=np.uint32)
-            xfer_msg[0] = self._job_idx
-            yield from self.mr_cmd.write(
-                MRCmd(addr=int(cmd.src_off), len=n, xfer_len=1, xfer_msg=xfer_msg))
-            yield from self.mw_cmd.write(
-                MWCmd(addr=int(cmd.dst_off), len=n, xfer_len=1, xfer_msg=xfer_msg))
-            self._job_idx += 1
+    @synthesizable
+    def next_xfer_msg(self) -> XferMsgArr:
+        """Hook: the per-job correlation cookie — ``xfer_msg[0] = job_idx``, then advance.
+
+        The counter is the component's only cross-firing state, and it lives here rather than in
+        :meth:`run_iter` because a lowered body may not read mutable ``self.X``.  The hand-written
+        C++ owns it as a ``static ap_uint<32> job_idx``; there is no ``self._job_idx`` in the
+        generated code, and nothing lowers this Python."""
+        msg = np.zeros(self._xfer_msg_len, dtype=np.uint32)
+        msg[0] = self._job_idx
+        self._job_idx += 1
+        return msg
+
+    @synthesizable
+    def make_mr_cmd(self, cmd: CopyCmd, msg: XferMsgArr) -> MRCmd:
+        """Hook: ``CopyCmd`` -> the read command.  Element coordinates pass through verbatim (no
+        byte<->word conversion).  Building the command is a hook, not inline in :meth:`run_iter`,
+        because constructing a DataSchema is not in the extractor's vocabulary."""
+        return MRCmd(addr=int(cmd.src_off), len=int(cmd.n_words), xfer_len=1, xfer_msg=msg)
+
+    @synthesizable
+    def make_mw_cmd(self, cmd: CopyCmd, msg: XferMsgArr) -> MWCmd:
+        """Hook: ``CopyCmd`` -> the write command, carrying the same job cookie as the read."""
+        return MWCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), xfer_len=1, xfer_msg=msg)
+
+    def run_iter(self) -> ProcessGen[None]:
+        """The pysim golden — one firing = one :class:`CopyCmd` (the ``hls::task`` runtime re-fires
+        it; there is no command loop here).  Read a command, stamp a job cookie, and issue
+        ``MRCmd{src_off, n}`` then ``MWCmd{dst_off, n}`` carrying that same cookie, so the
+        ``MemComplete`` echo can be correlated back to the job that issued it."""
+        cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
+        msg = self.next_xfer_msg()
+        mr = self.make_mr_cmd(cmd, msg)
+        yield from self.mr_cmd.write(mr)
+        mw = self.make_mw_cmd(cmd, msg)
+        yield from self.mw_cmd.write(mw)
 
 
 @dataclass
