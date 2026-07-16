@@ -72,11 +72,25 @@ designed against a presumed `HwParam` surface — and it was wrong and got rever
 (`plans/codegen_source_options.md`). Do not repeat that here. The API is whatever falls out of making
 four real TBs share code.
 
-**Gate:** all four XSI TBs still PASS *and* print identical cycle counts. A behaviour change here is a
-bug, not an improvement — the point of this stage is to hold behaviour fixed while the shape moves.
+**Gate — the recorded baseline (2026-07-16, all four PASS from a clean `run.bat`):**
 
-**Watch:** `xsi/rtl_<top>.f` lists RTL files explicitly and a stale `.f` plus a cached `xsimk.dll` can
-fake a PASS (`project-mem-stream-phase2-gate2`). Regenerate before believing any result in this plan.
+| TB | `run.bat <top> <tb>` | result | **cycles** |
+|---|---|---|---|
+| `mem_r_stream` | `mem_r_stream mem_r_bfm_tb` | PASSED, collected=128 | **414** |
+| `mem_w_stream` | `mem_w_stream mem_w_bfm_tb` | PASSED, w_count=128 | **432** |
+| `mem_copy` | `mem_copy mem_copy_bfm_tb` | PASSED, done=16, w_count=2048, job_fails=0 | **3347** |
+| `interleaver_canon` | `interleaver_canon interleaver_canon_bfm_tb` | PASSED, done=8/8, n=256 nj=8 | **3469** |
+
+Every step of Stages 1-2 must reproduce these four numbers exactly. A behaviour change here is a bug,
+not an improvement — the point of the stage is to hold behaviour fixed while the shape moves. (These
+are the *hand-written* `mem_seq_task.h` numbers; `mem_copy_proj` was restored to it after the
+generated-body csynth experiment.)
+
+**Watch:** `xsi/rtl_<top>.f` lists RTL files explicitly, is **hand-maintained** (nothing generates it —
+only `run.bat` reads it), and a stale `.f` plus a cached `xsimk.dll` can fake a PASS
+(`project-mem-stream-phase2-gate2`). It is also RTL-module-name-sensitive: swapping in the generated
+`mem_seq_task.h` renames `..._s_r_xfer_msg_RAM_...` to `..._s_mr_xfer_msg_RAM_...` (the body's local
+is `mr`, not `r`), which the `.f` names explicitly. Regenerate before believing any result here.
 
 ## Stage 2 — thin each TB to scenario + golden
 
@@ -121,15 +135,27 @@ shape Stage 2 leaves behind.
 If no, the difference is the finding. Do not design Stage 5 until Stages 1-2 have shown what the thin
 TB actually looks like.
 
-## Stage 6 — homes (deferred, deliberately)
+## Stage 6 — homes (deferred until after Stages 1-2, deliberately)
 
-Three placement questions this plan touches but must not be blocked by:
+**Decision (2026-07-16): `mem_copy` stays in `examples/interleaver/` until Stage 1-2 are done, then
+the two get pulled apart** — at which point what each actually needs is *visible* rather than guessed.
+Stage 1 wants the four TBs co-located and building against one `xsi/` workspace (shared
+`xsi_loader.cpp/h`, `xsi_shared_lib.h`, `run.bat`, `xsim.dir`), because extraction from all four is
+what discovers the API. Moving `mem_copy`'s TB out first would fight that and invent a directory
+structure Stage 1 would then rebuild.
 
-- The BFM library is framework, not example code. So are `composite_gen` / `mem_stream_gen`, which
-  already live in `examples/interleaver/` while `waveflow/build/hwgen.py` and `waveflow/hw/
-  hw_composite.py` reference them *from their docstrings* — a layering inversion. Promoting them to
-  `waveflow/build/` is the prerequisite for `mem_copy` moving to its own `examples/mem_copy/` (today
-  that move would only convert an intra-example import into a cross-example one).
+**Done:** `composite_gen` promoted to `waveflow/build/composite_gen.py` (`7b1c617`) — it was framework
+parked in an example, and `waveflow/build/hwgen.py` + `waveflow/hw/hw_composite.py` referenced it from
+their docstrings (a layering inversion). This was the genuine prerequisite and is independently
+valuable.
+
+**Still shared, surfaced by attempting the move — promote as Stage 6, informed by Stages 1-2:**
+
+- The BFM library itself (Stage 1's output) is framework.
+- `mem_stream_sim`'s `CmdDriver` / `WordSink`: `mem_copy_sim.py` imports them, so the pysim helpers
+  are shared infrastructure too (~30 lines, easy).
+- The `xsi/` workspace: `xsi_loader.cpp/h`, `xsi_shared_lib.h`, `run.bat`, and the common `xsim.dir`.
+  All four TBs build from it. This is the one Stage 1 restructures.
 - Hand-written hook `.cpp` bodies have no home: `gen/` is regenerated and would clobber them. This
   blocks *adopting* the generated task body, independent of anything in this plan.
 - Rename scheme (`project-example-rename-scheme`): `mem_copy` vs `memcpy`.
