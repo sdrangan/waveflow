@@ -4821,7 +4821,12 @@ class VarDataArray(DataSchema):
             lines.append(f"{i2}ipos += {cls.nbits_len};")
             lines.append(f"{i2}if (ipos == word_bw) {{ ++iword; ipos = 0; }}")
             lines.append(f"{i2}// active elements: {elem_bw} bits each")
-            lines.append(f"{i2}for (int i = 0; i < static_cast<int>(this->len); ++i) {{")
+            lines.append(f"{i2}// Clamp to len_max: `len` is nbits_len wide, so it can encode values ABOVE len_max (4 bits -> 0..15 when len_max=8). Unclamped, an out-of-range len (it is read off the WIRE) indexes past data[len_max]. The clamp also gives HLS a compile-time trip count, which `i < len` alone does not.")
+            lines.append(
+                f"{i2}const int n_act = static_cast<int>(this->len) < len_max"
+                f" ? static_cast<int>(this->len) : len_max;"
+            )
+            lines.append(f"{i2}for (int i = 0; i < n_act; ++i) {{")
             lines.append(f"{i3}if (ipos + {elem_bw} > word_bw) {{ ++iword; ipos = 0; }}")
             lines.append(f"{i3}ipos += {elem_bw};")
             lines.append(f"{i3}if (ipos == word_bw) {{ ++iword; ipos = 0; }}")
@@ -4849,8 +4854,13 @@ class VarDataArray(DataSchema):
                     lines.append(f"{i2}ipos += {cls.nbits_len};")
                     lines.append(f"{i2}if (ipos == {bw}) {{ ++iword; ipos = 0; }}")
                     lines.append(f"{i2}// active elements")
+                    lines.append(f"{i2}// Clamp to len_max: `len` is nbits_len wide, so it can encode values ABOVE len_max (4 bits -> 0..15 when len_max=8). Unclamped, an out-of-range len (it is read off the WIRE) indexes past data[len_max]. The clamp also gives HLS a compile-time trip count, which `i < len` alone does not.")
                     lines.append(
-                        f"{i2}for (int i = 0; i < static_cast<int>(this->len); ++i) {{"
+                        f"{i2}const int n_act = static_cast<int>(this->len) < len_max"
+                        f" ? static_cast<int>(this->len) : len_max;"
+                    )
+                    lines.append(
+                        f"{i2}for (int i = 0; i < n_act; ++i) {{"
                     )
                     elem_uint = elem_cls.to_uint_value_expr("this->data[i]")
                     lines.append(f"{i3}ap_uint<{elem_bw}> elem_bits = {elem_uint};")
@@ -4880,8 +4890,13 @@ class VarDataArray(DataSchema):
                     lines.append(f"{i2}ipos += {cls.nbits_len};")
                     lines.append(f"{i2}if (ipos == {bw}) {{ ++iword; ipos = 0; }}")
                     lines.append(f"{i2}// active elements")
+                    lines.append(f"{i2}// Clamp to len_max: `len` is nbits_len wide, so it can encode values ABOVE len_max (4 bits -> 0..15 when len_max=8). Unclamped, an out-of-range len (it is read off the WIRE) indexes past data[len_max]. The clamp also gives HLS a compile-time trip count, which `i < len` alone does not.")
                     lines.append(
-                        f"{i2}for (int i = 0; i < static_cast<int>(this->len); ++i) {{"
+                        f"{i2}const int n_act = static_cast<int>(this->len) < len_max"
+                        f" ? static_cast<int>(this->len) : len_max;"
+                    )
+                    lines.append(
+                        f"{i2}for (int i = 0; i < n_act; ++i) {{"
                     )
                     lines.append(
                         f"{i3}if (ipos + {elem_bw} > {bw}) {{ ++iword; ipos = 0; }}"
