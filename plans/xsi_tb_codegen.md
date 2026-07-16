@@ -115,7 +115,28 @@ visible) or a gap in the library (fix the library).
 
 **Gate:** same as Stage 1. Bit-exact, same cycle counts.
 
-## Stage 3 — derive the port binding from `TopSpec`
+## Stage 3 — derive the port binding from `TopSpec` — **DONE (`5c64537`, 2026-07-16)**
+
+`render_ports_h(spec)` emits `<top>_ports.h`; all four TBs bind through it, and not one hand-written
+port name or pin-low list remains. Gates unchanged (414/432/3347/3469). Pinned by
+`tests/build/test_ports_header.py`, including the drift claim itself and the never-pin-what-you-drive
+condition. The enabling fix was in the **spec**, not the renderer: `ExtPort` kept only rendered
+strings, so `(name, kind, bundle)` was lost — `TopSpec` could be *rendered* but not *asked*. It now
+carries the triple, and `xsi_prefix` encodes the asymmetry (AXIS keeps its own name; `m_axi` is named
+after its **bundle**). `ZERO_PORTS` is derived as the complement of what the BFM drives.
+
+One real difference the gate adjudicated: the derived set pins `m_axi_gmem1_BRESP`, which mem_copy's
+hand list omitted while interleaver's had it — the two hand lists had drifted from *each other*.
+`3347` unchanged, so it is inert, and the inconsistency is gone. Exactly the class of bug this stage
+exists to make impossible.
+
+**Still open — the other half of drift:** `rtl_<top>.f` remains hand-maintained. A `.f` generator was
+validated this session (it reproduced the tracked file byte-for-byte before being trusted on a
+renamed-RAM case) but is not wired into any build step. Until it is, a renamed RTL module plus a
+cached `xsimk.dll` can still fake a PASS.
+
+### Original notes
+
 
 `P_cmd_data = d.port("s_cmd_TDATA")` is not information — it is `("s_cmd", axis_in)` from the
 boundary spec plus Vitis's mechanical naming (`<port>_TDATA`, `m_axi_<bundle>_ARVALID`). The same
