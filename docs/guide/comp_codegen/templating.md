@@ -26,11 +26,14 @@ value** or a **template-parameter name**, depending on where it lands:
   [`_stream_template_arg`](../../../waveflow/build/hwgen.py), which **always emits the literal integer**
   from the endpoint's `bitwidth` (the variant's `HwParamValue`). So a `StreamIFMaster` declared with
   `out_bw = 64` becomes `hls::stream<streamutils::axi4s_word<64>>&` in the top.
-- **`.tpp` hook → template parameter.** A hand-written hook is emitted as a *templated* function
-  (`hook_signature(method, template_params=…)` gives its stream args names like `WORD_BW`), so the
-  hook stub is written to a `.tpp` rather than a `.cpp` — [`HlsCodegenStep`](../../../waveflow/build/hwcodegen_steps.py)
-  selects the extension per hook. Emitting it as `.tpp` keeps the template definition visible through
-  the generated header's include path while the impl file stays sticky across rebuilds.
+- **`.tpp` hook → template parameter.** A hook that takes a *stream* argument is emitted as a
+  **templated** function (`hook_signature(method, template_params=…)` names its stream args `WORD_BW`
+  and so on), so its stub is written to a `.tpp` rather than a `.cpp` —
+  [`HlsCodegenStep`](../../../waveflow/build/hwcodegen_steps.py) selects the extension per hook.
+  Emitting it as `.tpp` keeps the template definition visible through the generated header's include
+  path while the impl file stays [sticky](./codegen.md) across rebuilds. `poly`'s `evaluate` hook takes
+  `s_in` / `m_out`, so it lands in `poly_evaluate_impl.tpp`; a hook with no stream argument (like
+  `simp_fun`'s `compute`) is concrete and lands in a plain `.cpp`.
 
 The decision between the two is `HwParamValue.param_name`: `SynthContext.cpp_param(name)` returns the
 template-parameter name for a `HwParam` field, or `repr(value)` for a plain literal.
@@ -50,16 +53,24 @@ concrete kernel tops**. Each variant key maps to a dict of `HwParam` overrides; 
 `<cpp_kernel_name>_<key>` for each, alongside the default `<cpp_kernel_name>`.
 
 ```python
-class MyKernel(HwComponent):
-    cpp_kernel_name = "my_kernel"
+@dataclass
+class VarKernel(FreeRunComp):
+    cpp_kernel_name: ClassVar[str | None] = "var_kernel"
+    param_supports: ClassVar[dict] = {"bw64": {"in_bw": 64}, "bw128": {"in_bw": 128}}
+
     in_bw: HwParam[int] = 32
-    param_supports = {
-        "bw64":  {"in_bw": 64},
-        "bw128": {"in_bw": 128},
-    }
+    # ... endpoints declared with bitwidth=self.in_bw
 ```
 
-emits `my_kernel`, `my_kernel_bw64`, and `my_kernel_bw128` — three concrete tops with fixed widths.
+emits `var_kernel`, `var_kernel_bw64`, and `var_kernel_bw128` — three concrete tops whose ports carry
+literal widths of 32, 64 and 128, with no `template <...>` block on any of them.
+
+> **No example in this repo uses `param_supports`**, so there is no worked reference to read — the
+> snippet above is synthetic (though its output is verified). Where you *have* seen per-configuration
+> kernels, as in `examples/vmac`'s `gen/ob8_q0_o0_m16/` tree, they come from a different mechanism: the
+> build script generates a source set per configuration rather than one class declaring its variants.
+> Reach for `param_supports` when one component should ship several fixed-width tops; reach for a build
+> sweep when the configurations differ by more than `HwParam` values.
 
 The mechanism: `_iter_variants(comp_class)` first validates with
 [`validate_param_supports`](../../../waveflow/hw/hw_component.py), then yields the default variant
