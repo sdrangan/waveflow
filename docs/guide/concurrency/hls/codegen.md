@@ -33,5 +33,5 @@ So the standalone mem-stream kernels and the six-stage interleaver use the same 
 ## See also
 
 - [`examples/interleaver/mem_stream_gen.py`](../../../../examples/interleaver/mem_stream_gen.py)
-- [`examples/interleaver/composite_gen.py`](../../../../examples/interleaver/composite_gen.py)
+- [`waveflow/build/composite_gen.py`](../../../../waveflow/build/composite_gen.py)
 - [`waveflow/build/streamutils.py`](../../../../waveflow/build/streamutils.py)

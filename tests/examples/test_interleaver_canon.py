@@ -62,7 +62,7 @@ def test_interleaver_canon_token_edges():
     """The graph forwards the token through exactly five Cmd StreamEdges + three SobEdges, using only
     StreamEdge + SobEdge (composite_top_spec derives the six-task top with no generator change)."""
     from waveflow.simulation.simulation import Simulation
-    from examples.interleaver.composite_gen import SobEdge, StreamEdge, composite_top_spec
+    from waveflow.build.composite_gen import SobEdge, StreamEdge, composite_top_spec
     from examples.interleaver.interleaver import InterleaverCanon
 
     comp = InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256)

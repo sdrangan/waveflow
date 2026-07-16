@@ -1,7 +1,7 @@
 """interleaver.py — the canonical six-stage load-compute-store interleaver (the final generated shape).
 
 The teachable anatomy AND the nj=8 fix: a free-running (ap_ctrl_none) ``hls::task`` network generated
-by :func:`~examples.interleaver.composite_gen.composite_top_spec` in which one ``InterleaverCmd`` token
+by :func:`~waveflow.build.composite_gen.composite_top_spec` in which one ``InterleaverCmd`` token
 per job is emitted by ``cmd_rx`` and read-then-forwarded by every stage, pacing each tile to one job in
 flight (sob3's structure) so the pipeline never fills to the ``done == #tasks + 1`` depth the earlier
 stream/SOB-mix and P-SOB variants deadlocked at.  XSI-verified bit-exact ``Y[i]=X[P[i]]`` at nj=8 (8/8)
@@ -54,8 +54,15 @@ from waveflow.hw.memif import MMIFMaster  # noqa: E402
 from waveflow.hw.mem_stream import KernelTask, WORD_BW_SUPPORTED  # noqa: E402
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 
-from examples.interleaver.composite_gen import SobEdge, StreamEdge, composite_top_spec  # noqa: E402
-from examples.interleaver.mem_stream_gen import GEN_DIR, INCLUDE_DIR, render_tcl, render_top  # noqa: E402
+from waveflow.build.composite_gen import (  # noqa: E402
+    GEN_DIR,
+    INCLUDE_DIR,
+    SobEdge,
+    StreamEdge,
+    composite_top_spec,
+    render_tcl,
+    render_top,
+)
 
 DEFAULT_MEM_DW = 64
 DEFAULT_N = 256

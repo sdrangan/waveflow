@@ -52,16 +52,14 @@ from waveflow.hw.mem_stream import (  # noqa: E402
 )
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 
-from examples.interleaver.mem_stream_gen import (  # noqa: E402
+from waveflow.build.composite_gen import (  # noqa: E402
     DEFAULT_MEM_DW,
     GEN_DIR,
     INCLUDE_DIR,
-    render_tcl,
-    render_top,
-)
-from examples.interleaver.composite_gen import (  # noqa: E402
     StreamEdge,
     composite_top_spec,
+    render_tcl,
+    render_top,
 )
 
 # --- command field type (fixed width — element/word coordinates, the word_index convention) -------

@@ -310,7 +310,7 @@ def test_scaled_square_declares_no_codegen_descriptors():
     their `add_comp`/`add_if` graph.  The toy deliberately declares none of them — backing the claim
     made in docs/guide/components/composite.md.  Adding them is out of scope (plans/toy_examples.md).
     """
-    from examples.interleaver.composite_gen import composite_top_spec
+    from waveflow.build.composite_gen import composite_top_spec
 
     dut = ScaledSquare(name="ss", sim=Simulation(), clk=Clock(freq=100e6))
     for attr in ("ordered_subcomps", "internal_edges", "boundary"):

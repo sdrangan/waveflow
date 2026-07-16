@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 #:   kernel's boundary ports.  The default, and what every ``control_driven_kernel`` emits today.
 #: * ``'word'`` — ``hls::stream<ap_uint<W>>`` + ``read_stream<W>`` / ``write_stream<W>``.  Plain
 #:   word-granular streams, the convention every hand-written ``hls::task`` body uses
-#:   (``waveflow/build/mem_*_task.h``) and that ``composite_gen``'s ``hls_thread_local`` internal
+#:   (``waveflow/build/mem_*_task.h``) and that :mod:`waveflow.build.composite_gen`'s ``hls_thread_local`` internal
 #:   FIFOs are declared with.  A task body wired into a composite MUST use this — an ``axi4s_word``
 #:   body will not bind to an ``ap_uint`` FIFO.
 STREAM_FLAVORS = ('axi4s', 'word')

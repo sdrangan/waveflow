@@ -182,7 +182,7 @@ class GatherToy(CompositeComp):
         self.add_if(self._sob_if)
 
         # Define internal edges for codegen (compatible with composite_top_spec)
-        from examples.interleaver.composite_gen import SobEdge
+        from waveflow.build.composite_gen import SobEdge
         self.internal_edges = [
             SobEdge("blk", self.fill.m_out, self.gather.s_in, elem_bw=w, block_n=int(self.block_n)),
         ]

@@ -2,7 +2,7 @@
 
 A ``CompositeComp`` is a **structural** component: it owns sub-components (:meth:`add_comp`) wired by
 internal interfaces (:meth:`add_if`), and has **no kernel body of its own**.  Its C++ is the composite
-top (:func:`examples.interleaver.composite_gen.composite_top_spec` — one ``hls::task`` per active
+top (:func:`waveflow.build.composite_gen.composite_top_spec` — one ``hls::task`` per active
 child + one channel per internal edge), not an extracted ``run_iter``/``run_proc`` body.
 
 It is a **passive sibling** of :class:`~waveflow.hw.hw_freerun.FreeRunComp`, *not* a subclass — a

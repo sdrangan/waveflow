@@ -34,5 +34,5 @@ Do not mix incompatible resource ownership in one task unless a specific design 
 
 ## See also
 
-- [`examples/interleaver/composite_gen.py`](../../../../examples/interleaver/composite_gen.py)
+- [`waveflow/build/composite_gen.py`](../../../../waveflow/build/composite_gen.py)
 - [`waveflow/hw/mem_stream.py`](../../../../waveflow/hw/mem_stream.py)
