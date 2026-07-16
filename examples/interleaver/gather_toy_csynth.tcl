@@ -20,10 +20,6 @@ set_part {xc7z020clg484-1}
 # Clock period: 10ns (100MHz)
 create_clock -period 10
 
-# HLS synthesis options
-config_compile -pipeline_style flp
-config_compile -name_opt 1
-
 # Run C-Synthesis
 if {[catch {csynth_design} res]} {
     puts "WAVEFLOW_ERROR: gather_toy csynth failed."

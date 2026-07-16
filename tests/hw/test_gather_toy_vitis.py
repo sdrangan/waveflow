@@ -7,6 +7,8 @@ Synthesizes the gather_toy_top kernel using Vitis HLS and verifies:
 
 Run: pytest tests/hw/test_gather_toy_vitis.py -m vitis
 """
+import re
+
 import pytest
 from pathlib import Path
 from waveflow.toolchain.toolchain import find_vitis_path, run_vitis_hls
@@ -57,20 +59,37 @@ def test_gather_toy_csynth():
 
 @pytest.mark.vitis
 def test_gather_toy_stream_of_blocks_interface():
-    """Verify that the SOBIF interface is correctly generated in RTL."""
-    # After csynth, check that the RTL contains hls::stream_of_blocks instantiation
-    output_dir = Path(__file__).parent / "gather_toy_hls"
-    verilog_files = list((output_dir / "gather_toy_hls" / "solution1" / "syn" / "verilog").glob("*.v"))
+    """Verify the SOBIF channel lowered to a real depth-2 ping-pong buffer in RTL.
 
-    assert len(verilog_files) > 0, "No Verilog files generated"
+    Vitis never emits the literal string "stream_of_blocks" into RTL, so the evidence that the
+    SOB lowered correctly is structural: the `sob` channel becomes its own RAM module whose
+    BufferCount is the stream depth (2 = ping-pong) and whose AddressRange is the block length
+    (BLOCK_N = 8 words), and the top instantiates it between the two task modules.
+    """
+    verilog_dir = Path(__file__).parent / "gather_toy_hls" / "gather_toy_hls" / "solution1" / "syn" / "verilog"
+    assert verilog_dir.is_dir(), (
+        f"No RTL at {verilog_dir} — run test_gather_toy_csynth first (it generates it)."
+    )
 
-    # Search for stream_of_blocks in RTL
-    sob_found = False
-    for verilog_file in verilog_files:
-        content = verilog_file.read_text()
-        if "stream_of_blocks" in content or "ping_pong_buffer" in content:
-            sob_found = True
-            print(f"✓ Found SOBIF instance in {verilog_file.name}")
-            break
+    sob_rams = list(verilog_dir.glob("*_sob_RAM_*.v"))
+    assert sob_rams, (
+        f"No SOB buffer module (*_sob_RAM_*.v) in {verilog_dir}. "
+        f"Found instead: {sorted(p.name for p in verilog_dir.glob('*.v'))}"
+    )
 
-    assert sob_found, "SOBIF (stream_of_blocks) interface not found in generated RTL"
+    # The *_memcore variant is the inner RAM primitive; the wrapper carries the buffer params.
+    wrapper = min(sob_rams, key=lambda p: len(p.name))
+    content = wrapper.read_text()
+    assert re.search(r"BufferCount\s*=\s*2", content), (
+        f"{wrapper.name} is not a depth-2 ping-pong (BufferCount != 2):\n{content[:600]}"
+    )
+    assert re.search(r"AddressRange\s*=\s*8", content), (
+        f"{wrapper.name} does not hold a BLOCK_N=8 block (AddressRange != 8):\n{content[:600]}"
+    )
+
+    # The buffer must actually sit between fill and gather in the top, not dangle.
+    top = (verilog_dir / "gather_toy_top.v").read_text()
+    for mod in (wrapper.stem, "fill_64_8", "gather_64_8"):
+        assert mod in top, f"gather_toy_top.v does not instantiate {mod}"
+
+    print(f"✓ SOBIF lowered to depth-2 ping-pong: {wrapper.name}")
