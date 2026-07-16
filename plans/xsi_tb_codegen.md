@@ -150,7 +150,28 @@ wrong answer into an error.
 **Not** by parsing RTL or reports: those are downstream artifacts, and reading them back would make
 the TB depend on the thing it is supposed to test.
 
-## Stage 4 — scenario and golden from the Python
+## Stage 4 — scenario and golden from the Python — **PARTLY DONE (`1f976b9`, 2026-07-16)**
+
+**Done — the schema-drift half.** `mem_copy`'s command words are now the *output* of the real
+`CopyCmd.serialize()`, emitted into `xsi/mem_copy_vectors.h` (`render_vectors_h`, plain C++ no HLS
+types); `DONE_WORDS` is `MemComplete.nwords_per_inst(width)`. The scenario lives in `mem_copy.py` as
+`XSI_*`. Two toolchain-free tests run in the fast loop: the committed header must match what the
+schema produces now (verified to fail), and `CMD_WORDS` must *be* `serialize()`'s output (so a
+hand-rolled packer cannot come back).
+
+**The constraint that decided the design:** an XSI TB is host-compiled by mingw g++ against the xsim
+headers only, and `copy_cmd.h` needs `ap_int.h`/`hls_stream.h`. So a TB *cannot call the schema* —
+which is why the duplication existed. Emitting serialize()'s output removes the second
+implementation; generating a plain-C++ packer would have re-created it.
+
+**Not done — the pattern half.** `known_word` is still stated in both `mem_copy_sim.py` and the TB.
+Unifying means emitting the whole arena image as data. Deliberately deferred: a drifted *pattern*
+still tests a copy, whereas a drifted *packing rule* sends malformed commands and makes the test
+meaningless — that was the one worth removing. `interleaver_canon`'s scenario (`Pidx`/`Xval`/`fbits`)
+is untouched for the same reason.
+
+### Original notes
+
 
 - `cmd_words` packing is `CopyCmd.serialize(word_bw=64)` re-implemented by hand in C++. Use the
   schema. This is the same silent-drift class as hand-written task headers drifting from their schema.
