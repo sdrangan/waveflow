@@ -1414,3 +1414,89 @@ def test_vardataarray_gen_include_decl_structure():
     assert "nwords_active" in decl
     assert "write_array" in decl
     assert "read_array" in decl
+
+
+# ---------------------------------------------------------------------------
+# VarDataArray — the limits.
+#
+# These pin what VarDataArray CANNOT do, because the tests above imply otherwise.
+# `test_datalist_with_vardataarray_roundtrip` proves a DataList can HOLD one (in
+# Python), and `test_vardataarray_gen_include_decl_structure` proves a STANDALONE
+# one emits C++.  A reader reasonably composes those two into "a DataList with a
+# VarDataArray member generates C++".  It does not — and that composition is the
+# only reason the schema was written.  So state it.
+# ---------------------------------------------------------------------------
+
+def test_datalist_with_vardataarray_cannot_generate_cpp():
+    """A VarDataArray member blocks its DataList's C++ generation.  KNOWN LIMIT.
+
+    DataList's generator is *static-cursor*: `_gen_write_recursive` returns
+    `(lines, ipos, iword)` where the positions are Python ints fixed at GENERATION
+    time, and it emits straight-line code.  A VarDataArray's size is only known at
+    RUNTIME, so it cannot return a static cursor — hence the base-class stub raises
+    rather than a subclass simply being missing.
+
+    This is structural, not an oversight: making it work needs runtime cursors, a
+    last-member-only rule (nothing may follow a runtime cursor), and variable-length
+    stream framing in every reader.  Until then VarDataArray is usable standalone in
+    Python and in C++, but NOT as a DataList member in C++.
+
+    When that changes, this test fails — which is the signal to delete it.
+    """
+    U32 = IntField.specialize(bitwidth=32, signed=False)
+    Msg = VarDataArray.specialize(elem_type=U32, len_max=8)
+
+    class _CmdWithMsg(DataList):
+        elements = {"word_index": U32, "n_words": U32, "transfer_msg": Msg}
+
+    # A standalone VarDataArray generates fine...
+    assert "struct" in Msg._gen_include_decl(word_bw_supported=[64])
+
+    # ...but the same schema inside a DataList does not.
+    with pytest.raises(NotImplementedError, match="does not implement write generation"):
+        _CmdWithMsg._gen_include_decl(word_bw_supported=[64])
+
+
+def test_datalist_with_vardataarray_has_no_fixed_wire_size():
+    """The other half of the same problem: the wire contract is constexpr, the payload is not.
+
+    `nwords_per_inst` is what generated C++ and the XSI BFMs use to size a command
+    (a reader does exactly one `s.read()` of that many words).  With a VarDataArray
+    member it reports the WORST CASE while the actual serialization varies with the
+    message length — so a variable-length member is not an added field, it is a new
+    framing protocol.
+    """
+    U32 = IntField.specialize(bitwidth=32, signed=False)
+    Msg = VarDataArray.specialize(elem_type=U32, len_max=8)
+
+    class _CmdWithMsg(DataList):
+        elements = {"word_index": U32, "n_words": U32, "transfer_msg": Msg}
+
+    fixed = _CmdWithMsg.nwords_per_inst(64)          # the constexpr the C++ trusts
+    obj = _CmdWithMsg()
+    sizes = []
+    for n in (0, 4, 8):
+        obj.transfer_msg = np.arange(n, dtype=np.uint32)
+        sizes.append(len(obj.serialize(word_bw=64)))
+
+    assert sizes == [2, 4, 6], sizes          # actual, varies with the message
+    assert fixed == 6                         # declared, always the worst case
+    assert len(set(sizes)) > 1, "if this is constant the framing objection is gone"
+
+
+def test_vardataarray_cpp_clamps_len_to_len_max():
+    """`len` is read off the WIRE and is nbits_len wide, so it can exceed len_max.
+
+    len_max=8 -> nbits_len=4 -> len encodes 0..15 against data[8].  Unclamped, the
+    emitted `for (i = 0; i < len; ++i) data[i] = ...` writes out of bounds on a
+    malformed length, and HLS gets no trip count.  Both loops must clamp.
+    """
+    U32 = IntField.specialize(bitwidth=32, signed=False)
+    Msg = VarDataArray.specialize(elem_type=U32, len_max=8)
+    assert Msg.nbits_len == 4 and Msg.len_max == 8      # 4 bits => 0..15 vs data[8]
+
+    decl = Msg._gen_include_decl(word_bw_supported=[64])
+    assert "i < static_cast<int>(this->len)" not in decl, "unclamped loop bound"
+    assert decl.count("n_act = static_cast<int>(this->len) < len_max") == 3, \
+        "all three loops (nwords_active, write_array, read_array) must clamp"
+    assert decl.count("for (int i = 0; i < n_act; ++i)") == 3
