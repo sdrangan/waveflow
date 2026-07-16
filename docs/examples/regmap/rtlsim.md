@@ -138,12 +138,18 @@ Either is worth investigating before bumping the tolerance.
 ```json
 {
   "pass": true,
-  "py_cycles": 5,
-  "cosim_cycles": 6,
+  "py_cycles": 4,
+  "cosim_cycles": 5,
   "delta": 1,
-  "tolerance": 4
+  "tolerance": 4,
+  "py_timing_path": ".../results/py_timing.json",
+  "cosim_timing_path": ".../results/cosim_timing.json"
 }
 ```
+
+Those are the real numbers for this kernel: the Python model predicts **4** cycles, the RTL takes **5**,
+and the one-cycle delta is inside the tolerance of 4. The two paths point back at the inputs, so a
+verdict is traceable to the measurements it came from.
 
 The `pass` bit is what CI gates on; the four numeric fields are what a future model-tuning step would consume. If `pass` is `false`, the step also raises `RuntimeError` with the same fields in the message so the failure is visible without opening the JSON.
 

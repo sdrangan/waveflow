@@ -79,7 +79,7 @@ The contract this file fulfills is implicitly defined by the Python class: the `
 
 Three things are worth flagging:
 
-- **The `simp_fun_impl` namespace** matches `SimpFunComponent.cpp_namespace`. Picking a kernel-specific namespace prevents the compute function's name from colliding with the kernel function's name (both are called `simp_fun` if you don't override).
+- **The `simp_fun_impl` namespace** matches `SimpFunComponent.cpp_namespace`. It could be dropped: the default is `<kernel>_impl`, so this component would land in `simp_fun_impl` even without the override. The namespace must not simply be the kernel name — a namespace and a function cannot share a name in one scope — which is why the default appends `_impl` rather than reusing it. See [Codegen](../../guide/comp_codegen/codegen.md).
 - **`#pragma HLS INLINE`** asks Vitis to inline the compute into its caller. For a function this small that is almost always the right choice; for a heavier compute body you would drop the inline and let Vitis schedule it as its own pipelined region.
 - **`ap_int<32>`** is the Vitis fixed-width type that maps to the Python `Int32` (specialised `IntField(bitwidth=32, signed=True)`). The framework picks the C++ type from the schema; the user just uses what the generated header declares.
 
