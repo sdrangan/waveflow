@@ -181,40 +181,71 @@ def kernel_task(self) -> KernelTask:
 
 ## What generates, and what does not
 
-All three components are `FreeRunComp`s, but that declares an *execution model* — it does not mean
-codegen writes their bodies. For a `MemCopy`-shaped design today:
+All three components are `FreeRunComp`s, but that declares an *execution model* — it does not by
+itself mean codegen writes their bodies. For a `MemCopy`-shaped design today:
 
 | Piece | Where it comes from |
 |---|---|
-| The composite top (ports, FIFOs, task instantiation, pragmas) | **Generated** from the component/interface graph by `composite_top_spec` |
-| Each task body (`mem_seq_task.h`, `mem_r_stream_task.h`, …) | **Hand-written**, copied verbatim by `MemStreamStep` |
-| `run_iter` | The **pysim golden** — never lowered |
+| The composite top (ports, FIFOs, task instantiation, pragmas) | **Generated** from the component/interface graph — `composite_top_spec` |
+| `mem_seq_task.h` (the Sequencer's body) | **Generated** from `Sequencer.run_iter` — `TaskBodyStep` |
+| `mem_r_stream_task.h`, `mem_w_stream_done_task.h` | **Hand-written**, copied verbatim by `MemStreamStep` — they own `m_axi`, which task-body emission refuses |
+| The Sequencer's `@synthesizable` hooks | **Hand-written**, sticky at the example root — the generator writes a `TODO` stub once, only if absent |
+| The testbench's port binding | **Generated** from the same `TopSpec` as the top's pragmas — `render_ports_h` |
 
-So a `FreeRunComp`'s Python earns its keep three ways — it is the functional golden, the graph the top
-is derived from, and the timing model — but it does not produce the body. **Nothing mechanically ties
-`run_iter` to its `.h`.** They are two independent implementations that agree only because tests check
-each against the same expectations: the pysim golden on the Python side, XSI on the RTL side. Keeping
-them in agreement is the author's job, and drift is silent — hand-written task headers have drifted
-from their schema before. If you change one, change the other, and lean on the tests to prove it.
+So the line is not "tops generate, bodies don't". It is **`m_axi`**: a stream-only leaf's body lowers
+from its `run_iter`; a body that owns a memory port does not, and stays hand-written. `MemRStream`'s
+`run_iter` is a pysim golden and nothing else; `Sequencer`'s is the source of its C++.
 
-This is the interim state, not the destination. `free_running_kernel` is a declared target
-(`waveflow/hw/codegen_targets.py`) that is **not implemented**: `IMPLEMENTED_TARGETS` is
-`{control_driven_kernel, sequential_vitis_tb}`. `Sequencer.run_iter` is nevertheless written in the
-shape the extractor accepts (`get` -> hook -> `write`) and does lower today as a leaf — pinned by
-`test_sequencer_run_iter_is_extractable` — but the emitted code is not wired into the composite,
-because it emits an `s_axilite`/`ap_ctrl_hs` top rather than `ap_ctrl_none`, and it emits
-`streamutils::axi4s_word<W>` streams where these tasks take `hls::stream<ap_uint<W>>` +
-`read_stream<W>`. Closing those two gaps is what would let a generated body replace `mem_seq_task.h`;
-`test_sequencer_codegen_gaps_are_still_open` fails when either closes.
+**What is still yours to keep in agreement.** Two things, and they are different in kind:
+
+- **The hooks.** Codegen derives the body's *structure* — the stream read, the calls, the writes, in
+  `run_iter`'s order — not its leaf computation. `mem_seq_next_xfer_msg_impl.cpp` and friends are
+  hand-written, and **nothing mechanically ties a hook's C++ to the Python above it**. Only the tests
+  check that.
+- **The m_axi bodies.** `mem_r_stream_task.h` and its `run_iter` are two independent implementations
+  that agree only because tests check each against the same expectations — the pysim golden on the
+  Python side, XSI on the RTL side. Drift is silent here; hand-written task headers have drifted from
+  their schema before.
+
+Anything *generated* — the top, `mem_seq_task.h`, the port binding, the testbench's command words —
+cannot drift by construction, which is the point of generating it. Do not hand-edit those; the banner
+on each says so, and a regenerate will overwrite you.
+
+`free_running_kernel` remains a declared-but-unimplemented target
+(`waveflow/hw/codegen_targets.py`; `IMPLEMENTED_TARGETS` is `{control_driven_kernel,
+sequential_vitis_tb}`) — but that is a *different* product: a leaf compiled as its **own**
+`ap_ctrl_none` top. It is not what `MemCopy` needs, and its absence does not block anything here: a
+task body carries no interface pragmas at all, so `ap_ctrl_none` never applies to one.
+`test_sequencer_codegen_gaps_are_still_open` tracks that separate target.
 
 ## Verifying via XSI, not Vitis C/RTL cosim
 
 Because these kernels are free-running (`ap_ctrl_none`), Vitis's C/RTL cosim refuses them — cosim
 requires an `ap_ctrl_hs`-style start/done handshake. Verification instead drives the elaborated RTL
-directly through XSI (`xsim.dir/<top>/xsimk.dll`) with a hand-written, cycle-based AXI-MM + AXI-Stream
-BFM testbench (`examples/interleaver/xsi/*.cpp`). See [XSI](../build/xsi.md) for the general harness
-setup (`xvlog`/`xelab`/`run.bat`); the mem-stream testbenches (`mem_r_bfm_tb.cpp`, `mem_w_bfm_tb.cpp`,
-`mem_copy_bfm_tb.cpp`) follow that pattern directly.
+directly through XSI (`xsim.dir/<top>/xsimk.dll`) with a cycle-based AXI-MM + AXI-Stream BFM. See
+[XSI](../build/xsi.md) for the harness setup (`xvlog`/`xelab`/`run.bat`).
+
+The protocol is **not** written per testbench. `xsi/bfm/xsi_bfm.h` supplies `AxiMmReadSlave`,
+`AxiMmWriteSlave`, `AxisMaster`, `AxisSlave`, `FlatMemory`, and `XsiSim`; a TB is the scenario and the
+golden check, and nothing else. Each model implements `sample` / `update` / `drive`, and that split is
+load-bearing rather than stylistic: a beat is decided from values sampled **before** the rising edge
+and applied **after** it, so collapsing the phases changes when a transfer is seen.
+
+```cpp
+// From examples/interleaver/xsi/mem_copy_bfm_tb.cpp — the whole cycle loop.
+sim.clock_low();
+sample();          // read kernel outputs, latch beat flags (VALID && READY)
+sim.clock_high();
+update();          // apply this cycle's beats, advance FSMs
+drive();           // present held values for the next cycle
+```
+
+**The gates are real, and exact.** `pytest -m xsi` drives all four kernels through RTL and asserts
+their cycle counts — `mem_r_stream` 414, `mem_w_stream` 432, `mem_copy` 3347, `interleaver_canon`
+3469. Exact, not bounds: a count that moves is a real behaviour change worth a human look, and an
+inequality would absorb a regression silently. Each gate regenerates `rtl_<top>.f` from the RTL on
+disk and deletes `xsim.dir/<top>` first — a hand-stale file list plus a cached `xsimk.dll` is how an
+XSI run goes green while proving nothing.
 
 ### Sending a multi-word command over `s_cmd`
 
