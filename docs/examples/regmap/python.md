@@ -81,7 +81,12 @@ def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
     return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))
 ```
 
-The `@synthesizable` decorator marks `compute` as a method whose body will be lowered to C++ by the codegen pipeline (covered on the [code generation](./codegen.md) page). `on_start` is sim-only; in the generated kernel it is replaced by Vitis's normal kernel-entry control flow.
+These two methods have **opposite** fates in codegen, and it is worth being precise about which is which:
+
+- **`on_start` becomes the kernel body.** It is read from source and translated statement by statement — the register reads, the call, the register write. It is *not* sim-only.
+- **`compute` is not translated at all.** `@synthesizable` marks a **hook boundary**: codegen emits a *declaration* and a call to it, then a stub for you to fill in. Its C++ lives in the hand-written [`simp_fun_compute_impl.cpp`](../../../examples/regmap/simp_fun_compute_impl.cpp); the Python body above stays as the simulation golden and is never lowered.
+
+What Vitis supplies is not `on_start`'s body but the **launch** around it: the `s_axilite` adapter that decodes a write to `ap_start` and raises `ap_done` on return — `on_start` is that adapter's callback, which is why it exists exactly when a regmap does. See [Component structure](../../guide/comp_codegen/structure.md) and [Automatic vs. manual](../../guide/comp_codegen/automatic.md).
 
 ## Creating the Host
 

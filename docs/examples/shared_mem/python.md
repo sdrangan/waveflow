@@ -83,7 +83,7 @@ its three **ports** are the two control streams and the one memory master.
 ```python
 # examples/shared_mem/hist.py
 @dataclass
-class HistAccel(HwComponent):
+class HistAccel(HostActivated):
     cpp_kernel_name: ClassVar[str | None] = "hist"
     cpp_namespace:   ClassVar[str | None] = "hist_impl"
 
@@ -99,18 +99,42 @@ class HistAccel(HwComponent):
         self.s_in  = StreamIFSlave( name=f'{self.name}_s_in',  sim=self.sim, bitwidth=self.in_bw)
         self.m_out = StreamIFMaster(name=f'{self.name}_m_out', sim=self.sim, bitwidth=self.out_bw)
         self.m_mem = MMIFMaster(    name=f'{self.name}_m_mem', sim=self.sim, bitwidth=self.mem_bw)
-        for ep in (self.s_in, self.m_out, self.m_mem):
+        # Control-only regmap: no application registers — the command rides in-band on s_in.
+        self.regmap = VitisRegMap({})
+        self.s_lite = VitisRegMapMMIFSlave(
+            name=f'{self.name}_s_lite', sim=self.sim, bitwidth=32,
+            regmap=self.regmap, on_start=self.on_start,
+        )
+        for ep in (self.s_in, self.m_out, self.m_mem, self.s_lite):
             self.add_endpoint(ep)
 ```
 
-Three ports, three roles:
+Four ports:
 
-1. **`s_in`** — an `StreamIFSlave`. The kernel *receives* the `HistCmd` here; the
+1. **`s_in`** — a `StreamIFSlave`. The kernel *receives* the `HistCmd` here; the
    host is the stream master.
-2. **`m_out`** — an `StreamIFMaster`. The kernel *sends* the `HistResp` here.
+2. **`m_out`** — a `StreamIFMaster`. The kernel *sends* the `HistResp` here.
 3. **`m_mem`** — an [`MMIFMaster`](../../guide/interface/index.md). This is the
    AXI memory-mapped master, the new interface this example introduces. The
    kernel issues array reads and writes through it; the bulk data flows here.
+4. **`s_lite`** — the AXI-Lite control slave, carrying **only** `ap_start` / `ap_done`.
+
+### Why a control-only regmap
+
+`VitisRegMap({})` declares **no application registers** — which looks odd until you see what it is for.
+**The command stays in-band on `s_in`; that is this example's whole lesson.** Only the *control* plane
+moves.
+
+And the AXI-Lite slave is not new. `m_axi ... offset=slave` **already forced one into existence** to
+carry `m_mem`'s base address at `0x10` — and that slave declared `0x00 : reserved` with no `ap_start`
+logic at all. So the kernel needed **two masters**: a CPU to write the base address over AXI-Lite, and
+something else entirely to pulse an `ap_start` wire. Deriving from
+[`HostActivated`](../../guide/components/hostactivated.md) fills the reserved slot in the slave that was
+already there — one master, one address space — and makes the component's kind explicit, so
+[`check(HistAccel)`](../../guide/comp_codegen/index.md) can answer for it.
+
+Compare [`simp_fun`](../regmap/python.md), where the regmap carries the arguments too; here it carries
+nothing but the handshake.
 
 The `max_ndata` / `max_nbins` HwParams are load-bearing for codegen: they become
 the compile-time array bounds in the generated kernel (`float data[max_ndata]`),

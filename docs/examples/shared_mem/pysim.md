@@ -54,8 +54,13 @@ Three SimObjs share one `Simulation` and one `Clock`:
 ## The controller — one transaction, end to end
 
 `HistController.run_proc` is the host-side sequence the [concept page](aximm.md)
-laid out: allocate the three regions, stage the inputs, issue the command, await
+laid out: allocate the three regions, stage the inputs, **launch the kernel**, issue the command, await
 the response, read the counts back.
+
+Note the order: the controller raises `ap_start` **before** sending the command. The kernel's
+[`on_start`](./python.md) then blocks on `s_in.get(...)` until the in-band command arrives. One master
+does both — which is the point of the [control-only regmap](./python.md#why-a-control-only-regmap): the
+same host that programs the memory base address also launches the kernel.
 
 ```python
 # examples/shared_mem/hist.py — HistController.run_proc
@@ -71,6 +76,10 @@ self.count_addr = self.mem.alloc(count_nwords)
 yield from self.mem.m_mm.write_array(self.data, Float32, self.data_addr, word_bw=bw)
 if nedges > 0:
     yield from self.mem.m_mm.write_array(self.bin_edges, Float32, self.edge_addr, word_bw=bw)
+
+# Launch the kernel (ap_start at 0x00 of the AXI-Lite slave).  on_start then
+# blocks on s_in.get until the in-band command below arrives.
+yield from self._regmap().bind_master(self.m_lite).start()
 
 # Issue the command and await the response.
 cmd = HistCmd(tx_id=self.tx_id,
