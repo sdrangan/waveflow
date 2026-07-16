@@ -1,0 +1,170 @@
+# Plan: the XSI testbench — library first, then `sequential_xsi_tb`
+
+## Context
+
+Flow 2's DUT half now generates: a composite's `ap_ctrl_none` top comes from the component graph
+(`composite_top_spec`), and as of `e833a13` its task **bodies** come from `run_iter`
+(`task_files_to_str`). The TB half does not. `examples/interleaver/xsi/mem_copy_bfm_tb.cpp` is 290
+lines, ~230 of them one `main()`; the four XSI TBs total 956 lines. They are hand-written, and asking
+a user to write one is asking them to hand-implement an AXI4 slave.
+
+**The measurement that decides the approach (2026-07-16).** The AXI read/write FSM in
+`interleaver_canon_bfm_tb.cpp` is **line-for-line identical** to `mem_copy_bfm_tb.cpp`'s — same five
+states (`AR_IDLE`/`R_SEND`, `AW_IDLE`/`W_RECV`/`B_RESP`), same `wstrb` read-modify-write, same `rlast`
+arithmetic — differing only by a `g0_`/`g1_` prefix because that design has two bundles. It is
+copy-paste-and-rename, four times. What `mem_copy_bfm_tb.cpp` is actually made of:
+
+| Part | ~lines | Nature | Wants to be |
+|---|---|---|---|
+| AXI read/write FSMs, `driveAll`, cycle loop, sampling | ~90 | design-independent | **library** (duplicated x4) |
+| XSI open, reset, timeout, zero-pinning of undriven inputs | ~40 | boilerplate | **library** |
+| Port handles (`P_cmd_data` .. `P_bready`) | ~31 | derivable from the boundary | generated |
+| `s_done` accumulate + `xfer_msg[0]` echo check | ~17 | schema-aware | generated |
+| Scenario (`N`, `NUM_CMDS`, `SRC_W[]`, `DST_W[]`, `known_word`) | ~18 | per-test | generated |
+| `cmd_words` packing (`src \| dst<<32`) | ~7 | **`CopyCmd.serialize()`, re-written by hand in C++** | generated |
+| Golden check (dst region == src region) | ~22 | per-test | generated |
+
+~45% library, ~35% generated, ~20% boilerplate.
+
+**Why the host-activated TB was easy and this is not.** `SeqTB.main()` is a *sequential program that
+calls the DUT through a driver*; Vitis csim supplies the protocol underneath. There is an abstraction
+boundary, so lowering `main()` is a small job. For a free-running DUT under XSI **there is no
+abstraction** — the TB *is* the protocol peer, cycle by cycle. The difficulty is not that XSI is
+harder to generate; it is that we are generating into a missing layer.
+
+**The move: do not generate the protocol. Build the abstraction, and the monster stops existing.**
+Emitting ~90 lines of AXI FSM per design would produce the same code every time, in the language
+where it is hardest to review, to solve what one library solves once. With a BFM library the residue
+is a sequential program against an API — the shape we already generate well:
+
+```cpp
+XsiSim sim("xsim.dir/mem_copy/xsimk.dll");
+FlatMemory mem(8192);
+AxiMmReadSlave  gmem0(sim, "m_axi_gmem0", mem);
+AxiMmWriteSlave gmem1(sim, "m_axi_gmem1", mem);
+AxisMaster s_cmd(sim, "s_cmd");
+AxisSlave  s_done(sim, "s_done");
+for (auto& j : jobs) s_cmd.push(j.serialize());
+sim.run_until([&]{ return s_done.count() == NUM_CMDS; });
+```
+
+## Stage 0 — measure (DONE 2026-07-16)
+
+The table above. Recorded here because it is the evidence for "library, not codegen"; if a later
+stage is tempted to emit protocol, re-read it.
+
+## Stage 1 — extract the BFM library from the four working TBs
+
+**Pure refactor. Zero behaviour change.** Factor `mem_r` / `mem_w` / `mem_copy` /
+`interleaver_canon` TBs onto a shared BFM in `examples/interleaver/xsi/bfm/` (location revisited in
+Stage 6):
+
+- `XsiSim` — open/close, clock phases, reset, `run_until(pred, max_cycles)`, timeout reporting.
+- `FlatMemory` — the `std::vector<uint64_t>` arena + `wstrb` RMW.
+- `AxiMmReadSlave` / `AxiMmWriteSlave` — one per bundle, constructed with a port prefix
+  (`m_axi_gmem0`), owning the FSM that is currently inlined and renamed per design.
+- `AxisMaster` / `AxisSlave` — `push(words)` / `count()` / `words()`.
+- Zero-pinning: drive every TB-driven input not otherwise claimed to 0, by enumeration.
+
+**Why first, and why not "design the API".** The four TBs are working witnesses; extracting from them
+*discovers* the API instead of guessing it. We guessed an API once on this codebase — `CodegenSource`,
+designed against a presumed `HwParam` surface — and it was wrong and got reverted
+(`plans/codegen_source_options.md`). Do not repeat that here. The API is whatever falls out of making
+four real TBs share code.
+
+**Gate:** all four XSI TBs still PASS *and* print identical cycle counts. A behaviour change here is a
+bug, not an improvement — the point of this stage is to hold behaviour fixed while the shape moves.
+
+**Watch:** `xsi/rtl_<top>.f` lists RTL files explicitly and a stale `.f` plus a cached `xsimk.dll` can
+fake a PASS (`project-mem-stream-phase2-gate2`). Regenerate before believing any result in this plan.
+
+## Stage 2 — thin each TB to scenario + golden
+
+With the library in place each TB should be ~20-30 lines: build the arena, push commands, run until
+done, check. Anything that will not thin is a finding — it is either genuinely per-design (keep it
+visible) or a gap in the library (fix the library).
+
+**Gate:** same as Stage 1. Bit-exact, same cycle counts.
+
+## Stage 3 — derive the port binding from `TopSpec`
+
+`P_cmd_data = d.port("s_cmd_TDATA")` is not information — it is `("s_cmd", axis_in)` from the
+boundary spec plus Vitis's mechanical naming (`<port>_TDATA`, `m_axi_<bundle>_ARVALID`). The same
+`TopSpec` that emitted the top's `#pragma HLS INTERFACE` lines determines every port name.
+
+**Derive the TB's binding from that one spec** and the TB cannot drift from the kernel by
+construction: one spec, two consumers. Cross-check each derived name through `get_port_number` at
+startup and **fail loudly** if absent — which also converts the stale-`.f` false-PASS from a silent
+wrong answer into an error.
+
+**Not** by parsing RTL or reports: those are downstream artifacts, and reading them back would make
+the TB depend on the thing it is supposed to test.
+
+## Stage 4 — scenario and golden from the Python
+
+- `cmd_words` packing is `CopyCmd.serialize(word_bw=64)` re-implemented by hand in C++. Use the
+  schema. This is the same silent-drift class as hand-written task headers drifting from their schema.
+- `DONE_WORDS = 5` is `MemComplete.nwords_per_inst(64)`.
+- `SRC_W[]`/`DST_W[]`/`known_word()`/the golden check are the pysim harness's `run_copy(jobs=...)`
+  restated in C++. One statement of a test, two backends (pysim, XSI) — the same relationship
+  `mem_copy_sim.py` already has to the golden.
+
+## Stage 5 — `sequential_xsi_tb`: emit the thin `main()`
+
+Only now is there something small enough to be worth generating. `SEQUENTIAL_XSI_TB` is already a
+declared target ("a cycle-based XSI BFM driving a free-running DUT"), and `extract_testbench` already
+lowers a sequential `main()` in which blocking stream ops and DUT construction are legal — the exact
+shape Stage 2 leaves behind.
+
+**Open question, to verify not assume:** is `sequential_xsi_tb` the *same extraction* as
+`sequential_vitis_tb` with a different emitter backend? If yes this stage is an emitter, not a path.
+If no, the difference is the finding. Do not design Stage 5 until Stages 1-2 have shown what the thin
+TB actually looks like.
+
+## Stage 6 — homes (deferred, deliberately)
+
+Three placement questions this plan touches but must not be blocked by:
+
+- The BFM library is framework, not example code. So are `composite_gen` / `mem_stream_gen`, which
+  already live in `examples/interleaver/` while `waveflow/build/hwgen.py` and `waveflow/hw/
+  hw_composite.py` reference them *from their docstrings* — a layering inversion. Promoting them to
+  `waveflow/build/` is the prerequisite for `mem_copy` moving to its own `examples/mem_copy/` (today
+  that move would only convert an intra-example import into a cross-example one).
+- Hand-written hook `.cpp` bodies have no home: `gen/` is regenerated and would clobber them. This
+  blocks *adopting* the generated task body, independent of anything in this plan.
+- Rename scheme (`project-example-rename-scheme`): `mem_copy` vs `memcpy`.
+
+## Depends on
+
+- Nothing in Stages 1-2 — they are a refactor of code that already works.
+- Stage 3 needs `TopSpec` reachable from the TB generator (Stage 6's promotion makes this clean, but
+  is not required to prototype).
+- Stage 5 needs Stages 1-4.
+
+## Not in scope
+
+- **Generating AXI protocol code.** The anti-goal of this plan. See Stage 0.
+- Vitis C/RTL cosim: it refuses `ap_ctrl_none`. XSI is the only RTL path for a free-running DUT.
+- SystemC / `concurrent_systemc_tb` (Flow 3). The BFM library is plausibly shared with it; do not
+  design for that until Flow 2 works.
+- `free_running_kernel` (a leaf as its own top). Different target; not needed for composites.
+
+## Verification
+
+- **Stages 1-2:** all four XSI TBs PASS with identical cycle counts, from a regenerated `.f`. This is
+  the whole safety net — four working witnesses held bit-exact through a refactor.
+- **Stage 3:** every derived port name resolves via `get_port_number`; a deliberately wrong name must
+  fail loudly rather than silently skip (the current `if (p >= 0)` zero-pinning idiom hides typos).
+- **Stages 4-5:** a generated TB reproduces the hand-written TB's result on `mem_copy` — same jobs,
+  same cycle count, same PASS. `mem_copy` is the right first target: it has both an m_axi read and an
+  m_axi write bundle plus two AXIS ports, so it exercises every BFM piece, and it already has a
+  working TB to diff against.
+
+## Notes carried in
+
+- **csynth OK is not evidence of correctness.** Nested-struct-by-value silently DCEs a kernel while
+  csynth reports success (`reference-hls-hook-csynth-gotchas`). Every claim in this plan is gated on
+  XSI, not csynth.
+- The generated task body (`e833a13`) is csynth-verified equivalent to the hand-written one — same
+  RTL module set, identical latency/II/LUT/FF — but has **never been run**. XSI via this plan is what
+  would prove it functionally.
