@@ -13,17 +13,17 @@
 #include <ap_int.h>
 #include "m_r_cmd.h"
 
-// AXI->stream: dequeue one MRCmd, burst n_words words out. word_index is an element/word coordinate
+// AXI->stream: dequeue one MRCmd, burst len words out. addr is an element/word coordinate
 // (m_mem is already a word pointer, so no byte<->word conversion — the offset=slave base + AXI HW
-// turn m_mem[word_index] into ARADDR = base + word_index*(MEM_DW/8)). Word rate.
+// turn m_mem[addr] into ARADDR = base + addr*(MEM_DW/8)). Word rate.
 template <int MEM_DW>
 static void mem_r_stream_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
                               const ap_uint<MEM_DW>* m_mem,
                               hls::stream<ap_uint<MEM_DW> >& m_out) {
     MRCmd c;
     c.read_stream<MEM_DW>(s_cmd);
-    const int w0 = (int)c.word_index;
-    const int nw = (int)c.n_words;
+    const int w0 = (int)c.addr;
+    const int nw = (int)c.len;
 A2S: for (int w = 0; w < nw; ++w) {
 #pragma HLS PIPELINE II=1
         m_out.write(m_mem[w0 + w]);

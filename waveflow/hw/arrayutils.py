@@ -941,6 +941,7 @@ def _gen_lane_helpers(
     """
     indent = elem_type._get_indent(indent_level)
     i1 = elem_type._get_indent(indent_level + 1)
+    i2 = elem_type._get_indent(indent_level + 2)
     lc = "lane_capacity<word_bw>()"
     sel = "pf<word_bw>() >= 1 ? n : 1"
     axis = "hls::stream<streamutils::axi4s_word<word_bw>>&"
@@ -1011,10 +1012,18 @@ def _gen_lane_helpers(
         f"{indent}inline void elem_write(const value_type& v, ap_uint<word_bw>* dst, int i) {{",
         f"{i1}#pragma HLS INLINE",
         f'{i1}static_assert(pf<word_bw>() >= 1, "elem_write requires pf>=1 (element fits in one word)");',
-        f"{i1}const int iw = i / lane_capacity<word_bw>();",
-        f"{i1}ap_uint<word_bw> w = dst[iw];",
-        f"{i1}write_array_elem_impl<word_bw>::write_lane(w, i % lane_capacity<word_bw>(), v);",
-        f"{i1}dst[iw] = w;",
+        f"{i1}// Specialization: when pf == 1 (element fills the whole word), skip RMW and write directly.",
+        f"{i1}// When pf > 1 (multiple lanes per word), fall back to lane read-modify-write.",
+        f"{i1}if constexpr (pf<word_bw>() == 1) {{",
+        f"{i2}// Fast path: element == word width. Direct write, no RMW.",
+        f"{i2}dst[i] = {elem_type.to_uint_value_expr('v')};",
+        f"{i1}}} else {{",
+        f"{i2}// Slow path: multiple lanes per word. RMW to update one lane.",
+        f"{i2}const int iw = i / lane_capacity<word_bw>();",
+        f"{i2}ap_uint<word_bw> w = dst[iw];",
+        f"{i2}write_array_elem_impl<word_bw>::write_lane(w, i % lane_capacity<word_bw>(), v);",
+        f"{i2}dst[iw] = w;",
+        f"{i1}}}",
         f"{indent}}}",
     ])
 

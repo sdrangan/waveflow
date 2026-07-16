@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+import numpy as np
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
@@ -40,9 +42,11 @@ from waveflow.hw.mem_stream import (  # noqa: E402
     KernelTask,
     MRCmd,
     MWCmd,
+    MemComplete,
     MemRStream,
     MemWStream,
     WORD_BW_SUPPORTED,
+    XferMsgArr,
 )
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 
@@ -75,7 +79,7 @@ class CopyCmd(DataList):
 
 
 #: Schema classes the gen-include step emits C++ headers for (the composite's command structs).
-SCHEMA_CLASSES = [CopyCmd, MRCmd, MWCmd]
+SCHEMA_CLASSES = [CopyCmd, MRCmd, MWCmd, MemComplete, XferMsgArr]
 
 
 @dataclass
@@ -105,6 +109,11 @@ class Sequencer(HwComponent):
             name=f"{self.name}_mw_cmd", sim=self.sim, bitwidth=w, has_tlast=False)
         for ep in (self.s_cmd, self.mr_cmd, self.mw_cmd):
             self.add_endpoint(ep)
+        #: Per-job correlation cookie: the job index, so xfer_msg is genuinely exercised (round-tripped
+        #: on MemComplete) rather than merely tolerated.  Length from MRCmd's own max_xfer_len default
+        #: (introspected, not hardcoded — both MRCmd/MWCmd share it).
+        self._job_idx = 0
+        self._xfer_msg_len = MRCmd._params["max_xfer_len"].default
 
     @property
     def Cmd(self) -> type[CopyCmd]:
@@ -116,12 +125,18 @@ class Sequencer(HwComponent):
 
     def run_proc(self) -> ProcessGen[None]:
         """The pysim golden: read a :class:`CopyCmd`, emit ``MRCmd{src_off, n}`` then
-        ``MWCmd{dst_off, n}`` — element coordinates pass through verbatim (no byte<->word)."""
+        ``MWCmd{dst_off, n}`` — element coordinates pass through verbatim (no byte<->word) — with
+        ``xfer_msg[0]`` carrying the job index so the completion echo can be correlated back."""
         while True:
             cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
             n = int(cmd.n_words)
-            yield from self.mr_cmd.write(MRCmd(word_index=int(cmd.src_off), n_words=n))
-            yield from self.mw_cmd.write(MWCmd(word_index=int(cmd.dst_off), n_words=n))
+            xfer_msg = np.zeros(self._xfer_msg_len, dtype=np.uint32)
+            xfer_msg[0] = self._job_idx
+            yield from self.mr_cmd.write(
+                MRCmd(addr=int(cmd.src_off), len=n, xfer_len=1, xfer_msg=xfer_msg))
+            yield from self.mw_cmd.write(
+                MWCmd(addr=int(cmd.dst_off), len=n, xfer_len=1, xfer_msg=xfer_msg))
+            self._job_idx += 1
 
 
 @dataclass

@@ -12,18 +12,24 @@ from pathlib import Path
 
 
 def test_mrcmd_schema_single_source():
-    """MRCmd / MWCmd pack {word_index, n_words} into one 64-bit word (LSB-first)."""
+    """MRCmd / MWCmd pack {addr, len, xfer_len, xfer_msg[max_xfer_len]} (LSB-first): word0 =
+    addr | (len<<32), word1 = xfer_len | (xfer_msg[0]<<32), remaining words carry xfer_msg[1:]."""
     from waveflow.hw.mem_stream import MRCmd, MWCmd
+    import numpy as np
 
-    assert MRCmd.nwords_per_inst(64) == 1
-    assert MRCmd.nwords_per_inst(32) == 2
-    c = MRCmd(word_index=100, n_words=128)
+    assert MRCmd.nwords_per_inst(64) == 6            # 2 (addr/len, xfer_len/msg[0]) + 4 (msg[1:8])
+    assert MRCmd.nwords_per_inst(32) == 11
+    xfer_msg = np.zeros(8, dtype=np.uint32)
+    xfer_msg[0] = 42
+    c = MRCmd(addr=100, len=128, xfer_len=1, xfer_msg=xfer_msg)
     w = c.serialize(word_bw=64)
-    assert int(w[0]) == 100 | (128 << 32)          # word_index low, n_words high
+    assert int(w[0]) == 100 | (128 << 32)          # addr low, len high
+    assert int(w[1]) == 1 | (42 << 32)             # xfer_len low, xfer_msg[0] high
     d = MRCmd().deserialize(w, word_bw=64)
-    assert int(d.word_index) == 100 and int(d.n_words) == 128
+    assert int(d.addr) == 100 and int(d.len) == 128 and int(d.xfer_len) == 1
+    assert int(np.array(d.xfer_msg)[0]) == 42
     # mirror schema
-    assert MWCmd.nwords_per_inst(64) == 1
+    assert MWCmd.nwords_per_inst(64) == 6
 
 
 def test_mem_r_stream_pysim_golden():

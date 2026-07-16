@@ -1,5 +1,5 @@
-#ifndef INCLUDE_M_R_CMD_TB_H
-#define INCLUDE_M_R_CMD_TB_H
+#ifndef INCLUDE_MEM_COMPLETE_TB_H
+#define INCLUDE_MEM_COMPLETE_TB_H
 
 #include <cctype>
 #include <cstdlib>
@@ -12,18 +12,13 @@
 
 #include "u_int32_array_tb.h"
 
-#define WAVEFLOW_ENABLE_M_R_CMD_TB_H_MEMBERS
-#include "m_r_cmd.h"
-#undef WAVEFLOW_ENABLE_M_R_CMD_TB_H_MEMBERS
+#define WAVEFLOW_ENABLE_MEM_COMPLETE_TB_H_MEMBERS
+#include "mem_complete.h"
+#undef WAVEFLOW_ENABLE_MEM_COMPLETE_TB_H_MEMBERS
 
-inline void MRCmd::dump_json(std::ostream& os, int indent, int level) const {
+inline void MemComplete::dump_json(std::ostream& os, int indent, int level) const {
     const int step = (indent < 0) ? 0 : indent;
     os << "{";
-    os << "\n";
-    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
-    os << "\"addr\": ";
-    os << static_cast<unsigned long long>(this->addr);
-    os << ",";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
     os << "\"len\": ";
@@ -48,9 +43,8 @@ inline void MRCmd::dump_json(std::ostream& os, int indent, int level) const {
     os << "}";
 }
 
-inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
+inline void MemComplete::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
-    bool seen_root_addr = false;
     bool seen_root_len = false;
     bool seen_root_xfer_len = false;
     bool seen_root_xfer_msg = false;
@@ -67,11 +61,7 @@ inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
     first = false;
     std::string key = streamutils::json_parse_string(json_text, pos);
     streamutils::json_expect_char(json_text, pos, ':');
-    if (key == "addr") {
-        seen_root_addr = true;
-        this->addr = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
-    }
-    else if (key == "len") {
+    if (key == "len") {
         seen_root_len = true;
         this->len = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
@@ -94,9 +84,6 @@ inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
     }
     }
-    if (!seen_root_addr) {
-    throw std::runtime_error("Malformed JSON: missing required key 'addr'.");
-    }
     if (!seen_root_len) {
     throw std::runtime_error("Malformed JSON: missing required key 'len'.");
     }
@@ -108,7 +95,7 @@ inline void MRCmd::load_json(const std::string& json_text, size_t& pos) {
     }
 }
 
-inline void MRCmd::load_json(std::istream& is) {
+inline void MemComplete::load_json(std::istream& is) {
     std::string json_text((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
     size_t pos = 0;
     streamutils::json_skip_ws(json_text, pos);
@@ -119,7 +106,7 @@ inline void MRCmd::load_json(std::istream& is) {
     }
 }
 
-inline void MRCmd::dump_json_file(const char* file_path, int indent) const {
+inline void MemComplete::dump_json_file(const char* file_path, int indent) const {
     std::ofstream ofs(file_path);
     if (!ofs) {
         throw std::runtime_error("Failed to open output JSON file.");
@@ -127,7 +114,7 @@ inline void MRCmd::dump_json_file(const char* file_path, int indent) const {
     this->dump_json(ofs, indent);
 }
 
-inline void MRCmd::load_json_file(const char* file_path) {
+inline void MemComplete::load_json_file(const char* file_path) {
     std::ifstream ifs(file_path);
     if (!ifs) {
         throw std::runtime_error("Failed to open input JSON file.");
@@ -135,4 +122,4 @@ inline void MRCmd::load_json_file(const char* file_path) {
     this->load_json(ifs);
 }
 
-#endif // INCLUDE_M_R_CMD_TB_H
+#endif // INCLUDE_MEM_COMPLETE_TB_H

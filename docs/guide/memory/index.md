@@ -69,3 +69,4 @@ The histogram example demonstrates the full round-trip:
 
 - [Using Memory in Python](./python.md) — how to create a `Memory`, allocate regions, and serialize arrays.
 - [Memory Interfaces in Vitis HLS](./vitis.md) — how the memory model maps to `m_axi` and local-array interfaces.
+- [Streaming Memory Kernels](./memstream.md) — `MemRStream`/`MemWStream`/`MemCopy`: reusable free-running load/store components, element-coordinate commands, and XSI verification.

@@ -9,6 +9,8 @@
 #include "copy_cmd.h"
 #include "m_r_cmd.h"
 #include "m_w_cmd.h"
+#include "mem_complete.h"
+#include "u_int32_array.h"
 #include "mem_seq_task.h"
 #include "mem_r_stream_task.h"
 #include "mem_w_stream_done_task.h"

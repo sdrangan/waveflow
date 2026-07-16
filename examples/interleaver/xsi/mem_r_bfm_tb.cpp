@@ -48,11 +48,16 @@ int main() {
     // 1) Backing memory: known pattern in [BASE_W, BASE_W+N).
     std::vector<uint64_t> mem(MEM_NW, 0);
     for (int i = 0; i < N; ++i) mem[BASE_W + i] = known_word(i);
-    // Command carries an ELEMENT/WORD coordinate (= the old word-aligned byte addr / BPW). The
-    // offset=slave register stays pinned to 0, so the kernel's m_mem[word_index] drives
-    // ARADDR = word_index*BPW — the AXI slave's araddr/BPW->word decode below is unchanged.
+    // MRCmd{addr, len, xfer_len, xfer_msg[8]} packs to 6 words at MEM_DW=64: word0 = addr|(len<<32),
+    // word1 = xfer_len|(xfer_msg[0]<<32), words2-5 = xfer_msg[1:8] (2 per word) — all zero here (the
+    // job-index cookie is only exercised by the mem_copy composite BFM).
     const uint32_t word_index = (uint32_t)BASE_W;
-    const uint64_t cmd_word   = (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32);  // {word_index, n_words}
+    std::vector<uint64_t> cmd_words = {
+        (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32),
+        0ULL,
+        0ULL, 0ULL, 0ULL, 0ULL,
+    };
+    const int NCMDW = (int)cmd_words.size();
 
     // 2) Open the elaborated design.
     std::string design = "xsim.dir/mem_r_stream/xsimk.dll";
@@ -97,8 +102,8 @@ int main() {
     }
 
     // 3) Held TB-driven state + FSMs.
-    uint32_t h_cmd_valid = 1;            // one command to send
-    bool     cmd_sent = false;
+    int      cmd_widx = 0;               // next s_cmd word to present
+    uint32_t h_cmd_valid = 1;
     std::vector<uint64_t> got; got.reserve(N);
     const uint32_t h_out_ready = 1;      // always ready to receive
     enum { AR_IDLE, R_SEND } g_state = AR_IDLE;
@@ -106,7 +111,7 @@ int main() {
     uint32_t h_arready = 1, h_rvalid = 0, h_rlast = 0; uint64_t h_rdata = 0;
 
     auto driveAll = [&]() {
-        d.putW(P_cmd_data, cmd_word);
+        d.putW(P_cmd_data, (cmd_widx < NCMDW) ? cmd_words[cmd_widx] : 0);
         d.put1(P_cmd_valid, h_cmd_valid);
         d.put1(P_out_ready, h_out_ready);
         d.put1(P_arready, h_arready);
@@ -146,7 +151,10 @@ int main() {
 
         d.put1(P_clk, 1); xsi.run(10);      // rising edge
 
-        if (cmd_beat && !cmd_sent) { cmd_sent = true; h_cmd_valid = 0; }
+        if (cmd_beat && cmd_widx < NCMDW) {
+            ++cmd_widx;
+            h_cmd_valid = (cmd_widx < NCMDW) ? 1u : 0u;
+        }
         if (out_beat) got.push_back(s_out_data);
 
         if (ar_beat) {
@@ -161,8 +169,8 @@ int main() {
     }
 
     if (timed_out) {
-        std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld got=%zu/%d cmd_sent=%d g_state=%d\n",
-                     cyc, got.size(), N, (int)cmd_sent, (int)g_state);
+        std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld got=%zu/%d cmd_widx=%d/%d g_state=%d\n",
+                     cyc, got.size(), N, cmd_widx, NCMDW, (int)g_state);
         xsi.close();
         return 1;
     }

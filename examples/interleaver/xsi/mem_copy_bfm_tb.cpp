@@ -26,9 +26,13 @@ static const int  MEM_DW   = 64;
 static const int  BPW      = MEM_DW / 8;             // bytes per word = 8
 static const int  MEM_NW   = 8192;
 static const int  N        = 128;                    // words per copy
-static const int  NUM_CMDS = 2;                      // back-to-back jobs
-static const int  SRC_W[NUM_CMDS] = { 64, 512 };     // source word offsets
-static const int  DST_W[NUM_CMDS] = { 2048, 4096 };  // destination word offsets
+static const int  NUM_CMDS = 16;                     // back-to-back jobs
+// s_done now streams one MemComplete{len,xfer_len,xfer_msg[8]} per job (word_bw=64):
+// word0 = len|(xfer_len<<32), word1 = xfer_msg[0]|(xfer_msg[1]<<32), words2-4 = xfer_msg[2:8]
+// (MemComplete.nwords_per_inst(64) == 5) — the sequencer stamps xfer_msg[0] with the job index.
+static const int  DONE_WORDS = 5;
+static const int  SRC_W[NUM_CMDS] = { 64, 192, 320, 448, 576, 704, 832, 960, 1088, 1216, 1344, 1472, 1600, 1728, 1856, 1984 };
+static const int  DST_W[NUM_CMDS] = { 4096, 4224, 4352, 4480, 4608, 4736, 4864, 4992, 5120, 5248, 5376, 5504, 5632, 5760, 5888, 6016 };
 static const long MAX_CYCLES = 2000000L;
 
 typedef s_xsi_vlog_logicval LV;
@@ -127,7 +131,10 @@ int main() {
     // 3) Held TB-driven state + FSMs.
     int      cmd_widx = 0;               // next s_cmd word to present
     uint32_t h_cmd_valid = 1;
-    int      done_count = 0;
+    int      done_count = 0;             // completed jobs (5 s_done words each)
+    int      done_widx  = 0;             // word offset within the current MemComplete
+    uint64_t done_word1 = 0;             // xfer_msg[0]|(xfer_msg[1]<<32), for the job-index echo check
+    int      job_fails  = 0;
     const uint32_t h_done_ready = 1;     // always ready to accept done tokens
     // gmem0 read FSM
     enum { AR_IDLE, R_SEND } g_rstate = AR_IDLE;
@@ -170,6 +177,7 @@ int main() {
         d.put1(P_clk, 0); xsi.run(10);      // low phase: sample outputs
         uint32_t s_cmd_ready  = d.get1(P_cmd_ready);
         uint32_t s_done_valid = d.get1(P_done_valid);
+        uint64_t s_done_data  = d.getW(P_done_data);
         uint32_t arvalid = d.get1(P_arvalid);
         uint64_t araddr  = d.getW(P_araddr);
         uint32_t arlen   = (uint32_t)(d.getW(P_arlen) & 0xFF);
@@ -198,8 +206,23 @@ int main() {
             ++cmd_widx;
             h_cmd_valid = (cmd_widx < NCMDW) ? 1u : 0u;
         }
-        // AXIS s_done slave: count completion tokens.
-        if (done_beat) ++done_count;
+        // AXIS s_done slave: count MemComplete words; on the 5th, close out one job and check the
+        // xfer_msg[0] job-index echo (captured at word1, low 32 bits of xfer_msg[0]).
+        if (done_beat) {
+            if (done_widx == 1) done_word1 = s_done_data;
+            ++done_widx;
+            if (done_widx >= DONE_WORDS) {
+                uint32_t got_job = (uint32_t)done_word1;
+                uint32_t exp_job = (uint32_t)done_count;
+                if (got_job != exp_job) {
+                    if (job_fails < 8) std::fprintf(stderr, "  job %u: xfer_msg echo got=%u exp=%u\n",
+                                                    exp_job, got_job, exp_job);
+                    ++job_fails;
+                }
+                done_widx = 0;
+                ++done_count;
+            }
+        }
 
         // gmem0 read FSM.
         if (ar_beat) {
@@ -254,11 +277,12 @@ int main() {
             }
         }
     }
-    std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld\n",
-                NUM_CMDS, N, done_count, w_count, cyc);
+    std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld job_fails=%d\n",
+                NUM_CMDS, N, done_count, w_count, cyc, job_fails);
     xsi.close();
-    if (fails || done_count != NUM_CMDS) {
-        std::printf("FAILED test: %d mismatches, done=%d/%d\n", fails, done_count, NUM_CMDS);
+    if (fails || done_count != NUM_CMDS || job_fails) {
+        std::printf("FAILED test: %d mismatches, done=%d/%d, %d job-index echo mismatches\n",
+                    fails, done_count, NUM_CMDS, job_fails);
         return 1;
     }
     std::printf("PASSED test\n");

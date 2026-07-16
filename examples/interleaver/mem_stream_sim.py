@@ -109,7 +109,7 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
 
     rstream = MemRStream(name="rstream", sim=sim, mem_dwidth=mem_dwidth)
     driver = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                       cmds=[MRCmd(word_index=word_index, n_words=n_words)])
+                       cmds=[MRCmd(addr=word_index, len=n_words)])
     sink = WordSink(sim=sim, bitwidth=mem_dwidth)
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
@@ -158,7 +158,7 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
 
     wstream = MemWStream(name="wstream", sim=sim, mem_dwidth=mem_dwidth)
     cmd_drv = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                        cmds=[MWCmd(word_index=word_index, n_words=n_words)])
+                        cmds=[MWCmd(addr=word_index, len=n_words)])
     dat_drv = WordDriver(sim=sim, bitwidth=mem_dwidth, bursts=[known.astype(np.uint64)])
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)

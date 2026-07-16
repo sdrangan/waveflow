@@ -94,9 +94,11 @@ before SOB/compute complexity is added.
 - **`elem_read` / `elem_write<W>`** in `waveflow/hw/arrayutils.py` (generator) — index-based random
   single-element access on a packed word array: `iw=i/LW; k=i%LW` (compile-time shifts), reusing the
   existing `read_array_elem_impl` `range()` unpack (factor out a `run_lane(word,k)`; do NOT duplicate
-  the packing contract). `elem_write` is a lane-RMW (same care as `write_array_slice_rmw`). Regenerate
-  headers; add a case to the Vitis conformance harness (`test_arrayutils`): `elem_read(pack(v),i)==v[i]`
-  bit-exact.
+  the packing contract). `elem_write` is a lane-RMW (same care as `write_array_slice_rmw`). **Optimization:
+  specialize on `LW=1` (element bitwidth == word bitwidth) to emit a direct write, no RMW** — use
+  `word_bw_tag` overload pattern (existing in dataschema.py) so generated code avoids read+mask+write
+  when not needed. Regenerate headers; add a case to the Vitis conformance harness (`test_arrayutils`):
+  `elem_read(pack(v),i)==v[i]` bit-exact.
 - **`SOBIF`** interface type — subclass `QueuedTransferIF` (reuse master/slave connect + SimPy
   plumbing). New parts only: block granularity (`elem_type = DataArray[T,N]`), acquire/release
   (`write_lock`/`read_lock`) semantics, random-access consumer API. pysim = ping-pong buffer handover;

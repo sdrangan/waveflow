@@ -292,23 +292,24 @@ class FIRAccel(HwComponent):
         self.process(self._store_stage(data, store_q, m_out))
 
         while True:
+            t_cmd = self.now                    # command-write time: the fill/latency reference
             cmd: FIRCmd = yield from s_in.get(FIRCmd)
             if int(cmd.op) == int(FIROp.end):
-                load_q.put(("end", None))
+                load_q.put(("end", None, None))
                 return
             self._ev("cmd_arrive", int(cmd.tx_id), n_rows=int(cmd.n_rows), n_cols=int(cmd.n_cols))
-            load_q.put(("job", cmd))            # kick load without blocking -> jobs overlap
+            load_q.put(("job", cmd, t_cmd))     # kick load without blocking -> jobs overlap
 
     # --- the three persistent stage processes (sim-only; the kernel's DATAFLOW stages) ---
     def _load_stage(self, data, load_q, comp_q) -> ProcessGen[None]:
         """Read h (taps) + X off the AR/R channel via anchored ``read_slice_pipelined`` (one burst
-        each, ``num_trans=1``).  h is read FIRST and holds the AR/R channel (``setup+T``), so the
-        X-read burst starts only *after* it — the X-read's returned ``tstart`` (its burst start, =
-        ``t_begin + h_span``) is the honest fill anchor forwarded to ``compute`` (NOT the optimistic
-        load-entry ``t_begin``, which would ignore the h-read delay).  A bad-size job streams no
-        data (a balanced ``bad`` marker, like the kernel)."""
+        each, ``num_trans=1``) — this models the R-channel OCCUPANCY (for throughput).  The fill
+        anchor forwarded to ``compute`` is ``t_cmd`` (the command-write time), NOT the X-read start:
+        the fill absorbs all initial-processing latency (command decode + the h-read + the X ramp +
+        FP fill), so the h-read's setup-heavy cost doesn't need separate modeling.  A bad-size job
+        streams no data (a balanced ``bad`` marker, like the kernel)."""
         while True:
-            kind, cmd = yield load_q.get()
+            kind, cmd, t_cmd = yield load_q.get()
             if kind == "end":
                 comp_q.put(("end", None, None))
                 return
@@ -317,23 +318,20 @@ class FIRAccel(HwComponent):
                 comp_q.put(("bad", cmd, None))
                 continue
             n_rows, n_cols = int(cmd.n_rows), int(cmd.n_cols)
-            t_begin = self.now                              # load entry (h-read burst anchor)
             self._ev("load_begin", tx)
             hf, _ = yield from data.read_slice_pipelined(
-                int(cmd.h_off), int(cmd.h_off) + T, t_out_start=t_begin, num_trans=1)
-            # X reads AFTER h on the same R channel; its burst start (returned tstart) already
-            # carries the h-read delay — the honest anchor for the fill/store (t_begin is optimistic).
-            Xf, x_read_start = yield from data.read_slice_pipelined(
+                int(cmd.h_off), int(cmd.h_off) + T, t_out_start=self.now, num_trans=1)
+            Xf, _ = yield from data.read_slice_pipelined(   # X after h on the same R channel
                 int(cmd.x_off), int(cmd.x_off) + n_rows * n_cols, num_trans=1)
             self._ev("load_end", tx)
             X = np.asarray(Xf, dtype=np.float32).reshape(n_rows, n_cols)
-            comp_q.put(("job", cmd, (X, np.asarray(hf, dtype=np.float32), x_read_start)))
+            comp_q.put(("job", cmd, (X, np.asarray(hf, dtype=np.float32), t_cmd)))
 
     def _compute_stage(self, comp_q, store_q) -> ProcessGen[None]:
         """The streaming shift-register FIR (II=1) — the ONE shared golden.  Holds **no** bus
         channel (so it overlaps load(N+1)/store(N)); its timing is carried into the store's
-        anchored span: the store's early anchor ``x_read_start + t_fill`` and its compute-shadow
-        floor ``min_span = compute_body`` (the II=1 production span)."""
+        anchored span: the store's early anchor ``t_cmd + t_fill`` and its compute-shadow floor
+        ``min_span = compute_body`` (the II=1 production span)."""
         while True:
             kind, cmd, payload = yield comp_q.get()
             if kind == "end":
@@ -344,14 +342,15 @@ class FIRAccel(HwComponent):
                 continue
             tx = int(cmd.tx_id)
             n_rows, n_cols = int(cmd.n_rows), int(cmd.n_cols)
-            X, h, x_read_start = payload
+            X, h, t_cmd = payload
             self._ev("compute_begin", tx)
             Y = self.execute(X, h)
             # The two learned COMPUTE estimates (seconds; clk_period folded into the model features).
-            # t_fill = ramp from the X-read burst start to the first Y output; compute_body = the
-            # II=1 production span the store then hides under (the write's min_span floor).
+            # t_fill = ramp from the command-write time to the first Y output (absorbs cmd decode +
+            # h-read + X ramp + FP fill); compute_body = the II=1 production span the store then hides
+            # under (the write's min_span floor).
             row = {"n_row": n_rows, "n_col": n_cols, "clk_period": self.clk.period}
-            t_store_anchor = x_read_start + self.fill_model.predict(row)
+            t_store_anchor = t_cmd + self.fill_model.predict(row)
             compute_body = self.compute_model.predict(row)
             self._ev("compute_end", tx)
             store_q.put(("job", cmd, (Y, t_store_anchor, compute_body)))

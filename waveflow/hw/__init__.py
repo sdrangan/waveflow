@@ -33,6 +33,11 @@ from .schema_transfer_interface import (
     SchemaTransferIFSlave,
     StreamTransport,
 )
+from .interface import (
+    SobIFMaster,
+    SobIFSlave,
+    StreamOfBlocksIF,
+)
 from .memif import (
     AXIMMAddressRange,
     AXIMMCrossBarIF,
@@ -91,6 +96,9 @@ __all__ = [
     "ArrayTransferIFMaster",
     "ArrayTransferIFSlave",
     "ArrayTransferIF",
+    "SobIFMaster",
+    "SobIFSlave",
+    "StreamOfBlocksIF",
     "AXIMMAddressRange",
     "AXIMMCrossBarIF",
     "AXIMMProtocol",

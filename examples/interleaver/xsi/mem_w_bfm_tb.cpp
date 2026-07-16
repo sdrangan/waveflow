@@ -42,7 +42,13 @@ int main() {
     // offset=slave register stays pinned to 0, so the kernel's m_mem[word_index] drives
     // AWADDR = word_index*BPW — the AXI slave's awaddr/BPW->word decode below is unchanged.
     const uint32_t word_index = (uint32_t)BASE_W;
-    const uint64_t cmd_word   = (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32);  // {word_index, n_words}
+    // MWCmd{addr, len, xfer_len, xfer_msg[8]} packs to 6 words at MEM_DW=64 (mirrors mem_r_bfm_tb.cpp).
+    std::vector<uint64_t> cmd_words = {
+        (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32),
+        0ULL,
+        0ULL, 0ULL, 0ULL, 0ULL,
+    };
+    const int NCMDW = (int)cmd_words.size();
 
     std::string design = "xsim.dir/mem_w_stream/xsimk.dll";
     std::string engine = "xv_simulator_kernel.dll";
@@ -88,7 +94,8 @@ int main() {
     }
 
     // Held TB-driven state + FSMs.
-    uint32_t h_cmd_valid = 1; bool cmd_sent = false;
+    uint32_t h_cmd_valid = 1;
+    int      cmd_widx = 0;               // next s_cmd word to present
     int      in_idx = 0;                 // next data word to present
     uint32_t h_in_valid = 1;
     int      w_count = 0;                // words accepted by the write slave
@@ -99,7 +106,7 @@ int main() {
     uint32_t h_awready = 1, h_wready = 0, h_bvalid = 0;
 
     auto driveAll = [&]() {
-        d.putW(P_cmd_data, cmd_word);
+        d.putW(P_cmd_data, (cmd_widx < NCMDW) ? cmd_words[cmd_widx] : 0);
         d.put1(P_cmd_valid, h_cmd_valid);
         d.putW(P_in_data, (in_idx < N) ? known_word(in_idx) : 0);
         d.put1(P_in_valid, h_in_valid);
@@ -141,7 +148,10 @@ int main() {
 
         d.put1(P_clk, 1); xsi.run(10);
 
-        if (cmd_beat && !cmd_sent) { cmd_sent = true; h_cmd_valid = 0; }
+        if (cmd_beat && cmd_widx < NCMDW) {
+            ++cmd_widx;
+            h_cmd_valid = (cmd_widx < NCMDW) ? 1u : 0u;
+        }
         if (in_beat) { ++in_idx; h_in_valid = (in_idx < N) ? 1u : 0u; }
 
         if (aw_beat) {
@@ -166,8 +176,8 @@ int main() {
     }
 
     if (timed_out) {
-        std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld w_count=%d/%d in_idx=%d cmd_sent=%d g_state=%d\n",
-                     cyc, w_count, N, in_idx, (int)cmd_sent, (int)g_state);
+        std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld w_count=%d/%d in_idx=%d cmd_widx=%d/%d g_state=%d\n",
+                     cyc, w_count, N, in_idx, cmd_widx, NCMDW, (int)g_state);
         xsi.close();
         return 1;
     }
