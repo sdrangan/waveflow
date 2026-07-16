@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "bfm/xsi_bfm.h"
+#include "xsi_bfm.h"
 #include "mem_w_stream_ports.h"      // GENERATED from the same TopSpec as the top's pragmas
 
 using namespace wfbfm;

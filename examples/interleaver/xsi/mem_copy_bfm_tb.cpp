@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "bfm/xsi_bfm.h"
+#include "xsi_bfm.h"
 #include "mem_copy_ports.h"      // GENERATED from the same TopSpec that emits the top's pragmas
 #include "mem_copy_vectors.h"    // GENERATED: the scenario + CopyCmd.serialize()'s own output
 

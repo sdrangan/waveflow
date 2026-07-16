@@ -183,3 +183,56 @@ class MemStreamStep(Buildable):
         if not src_path.exists():
             raise FileNotFoundError(f"MemStream source file not found: {src_path}")
         return src_path.read_text(encoding="utf-8")
+
+
+class XsiHarnessStep(Buildable):
+    """Build step that copies the XSI testbench harness into an example's ``xsi/`` directory.
+
+    The harness is **framework**, not example code: ``xsi_bfm.h`` models AXI4 / AXI4-Stream and knows
+    nothing about any kernel (see :mod:`waveflow.build.xsi`), and ``xsi_loader`` + ``run.bat`` are the
+    generic XSI flow.  They lived in ``examples/interleaver/xsi/`` only because that is where the
+    first four testbenches were written, which made any second example wanting XSI reach across into
+    a sibling example.
+
+    Copied rather than included-in-place for the same reason the task-body headers are (cf.
+    :class:`MemStreamStep`): each example builds in its own directory, and ``run.bat`` compiles the
+    testbench against files beside it.
+
+    Parameters
+    ----------
+    output_dir : str | Path
+        Directory path **relative to** ``BuildConfig.root_dir`` — the example's ``xsi/``.
+    """
+
+    def __init__(self, output_dir: str | Path = "xsi") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {
+            "xsi_bfm": self._output_dir / "xsi_bfm.h",
+            "xsi_loader_h": self._output_dir / "xsi_loader.h",
+            "xsi_loader_cpp": self._output_dir / "xsi_loader.cpp",
+            "xsi_shared_lib": self._output_dir / "xsi_shared_lib.h",
+            "xsi_run_bat": self._output_dir / "run.bat",
+        }
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        src_names = {
+            "xsi_bfm": "xsi_bfm.h",
+            "xsi_loader_h": "xsi_loader.h",
+            "xsi_loader_cpp": "xsi_loader.cpp",
+            "xsi_shared_lib": "xsi_shared_lib.h",
+            "xsi_run_bat": "run.bat",
+        }
+        if key not in src_names:
+            raise KeyError(f"Unknown XsiHarnessStep output key: {key!r}")
+        src_path = _SRC_DIR / "xsi" / src_names[key]
+        if not src_path.exists():
+            raise FileNotFoundError(f"XSI harness source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")

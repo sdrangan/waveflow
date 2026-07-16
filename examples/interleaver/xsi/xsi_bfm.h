@@ -21,7 +21,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include "../xsi_loader.h"
+#include "xsi_loader.h"
 
 namespace wfbfm {
 

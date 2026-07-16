@@ -33,7 +33,12 @@ sys.path.insert(0, str(REPO))
 
 from waveflow.build.build import BuildConfig, BuildDag, SourceStep  # noqa: E402
 from waveflow.build.hwcodegen_steps import TaskBodyStep  # noqa: E402
-from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
+from waveflow.build.streamutils import (  # noqa: E402
+    MemMgrStep,
+    MemStreamStep,
+    StreamUtilsStep,
+    XsiHarnessStep,
+)
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwParam  # noqa: E402
@@ -291,6 +296,8 @@ def gen_headers(config: BuildConfig) -> None:
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
     inner.add(MemStreamStep(output_dir=INCLUDE_DIR))
+    # The XSI harness (BFM + loader + run.bat) is framework; copy it beside the testbench.
+    inner.add(XsiHarnessStep(output_dir="xsi"))
     for cls in SCHEMA_CLASSES:
         inner.add(DataSchemaStep(cls, word_bw_supported=WORD_BW_SUPPORTED,
                                  include_dir=INCLUDE_DIR))

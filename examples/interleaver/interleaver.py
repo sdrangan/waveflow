@@ -35,7 +35,12 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
 
 from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
-from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
+from waveflow.build.streamutils import (  # noqa: E402
+    MemMgrStep,
+    MemStreamStep,
+    StreamUtilsStep,
+    XsiHarnessStep,
+)
 from waveflow.hw.arrayutils import gen_array_utils  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataArray, DataList, DataSchemaStep, IntField  # noqa: E402

@@ -37,7 +37,12 @@ from waveflow.build.composite_gen import (  # noqa: E402
     render_tcl,
     render_top,
 )
-from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
+from waveflow.build.streamutils import (  # noqa: E402
+    MemMgrStep,
+    MemStreamStep,
+    StreamUtilsStep,
+    XsiHarnessStep,
+)
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
     MRCmd,
@@ -86,6 +91,8 @@ def gen_headers(config: BuildConfig) -> None:
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
     inner.add(MemStreamStep(output_dir=INCLUDE_DIR))   # mem_{r,w}_stream_task.h (the fixed bodies)
+    # The XSI harness (BFM + loader + run.bat) is framework; copy it beside the testbench.
+    inner.add(XsiHarnessStep(output_dir="xsi"))
     for cls in SCHEMA_CLASSES:
         inner.add(DataSchemaStep(cls, word_bw_supported=WORD_BW_SUPPORTED,
                                  include_dir=INCLUDE_DIR))
