@@ -78,6 +78,56 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
         assert (tmp_path / "include" / h).exists(), h
 
 
+def test_xsi_vectors_header_is_current():
+    """The committed mem_copy_vectors.h must equal what the schema produces NOW.
+
+    This is the check that makes Stage 4 stick, and it deliberately needs no toolchain so it runs in
+    the fast loop. The XSI TB cannot call CopyCmd::write_stream — it is host-compiled and cannot
+    include copy_cmd.h (ap_int/hls_stream) — so its command words are the *output* of
+    CopyCmd.serialize(), baked into a generated header. That removes the second implementation, but
+    it leaves the header able to go stale: change CopyCmd's layout and the TB would keep driving the
+    old words, testing the wrong thing while passing.
+
+    If this fails: re-run `python examples/interleaver/mem_copy.py`.
+    """
+    from pathlib import Path as _P
+    from examples.interleaver.mem_copy import render_xsi_vectors
+
+    committed = (_P(__file__).resolve().parents[2] / "examples" / "interleaver" / "xsi"
+                 / "mem_copy_vectors.h").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert render_xsi_vectors(64) == committed, (
+        "xsi/mem_copy_vectors.h is stale — the schema or scenario changed under it. "
+        "Regenerate: python examples/interleaver/mem_copy.py"
+    )
+
+
+def test_xsi_vectors_are_the_schemas_own_serialization():
+    """The generated words ARE CopyCmd.serialize()'s output, not a re-derivation of it.
+
+    Pins the property the header exists for. If someone 'optimises' the generator into a hand-rolled
+    packer, the second implementation is back and this fails.
+    """
+    import re
+
+    from examples.interleaver.mem_copy import (
+        XSI_DST_W, XSI_N, XSI_SRC_W, CopyCmd, render_xsi_vectors,
+    )
+    from waveflow.hw.mem_stream import MemComplete
+
+    h = render_xsi_vectors(64)
+    emitted = [int(x) for x in re.search(r"CMD_WORDS\[\d+\] = \{ ([^}]*) \}", h).group(1)
+               .replace("ULL", "").split(",")]
+
+    expect: list[int] = []
+    for s, d in zip(XSI_SRC_W, XSI_DST_W):
+        expect.extend(int(w) for w in CopyCmd(src_off=s, dst_off=d, n_words=XSI_N)
+                      .serialize(word_bw=64))
+    assert emitted == expect
+
+    # s_done framing is a schema fact, not a testbench constant.
+    assert f"DONE_WORDS = {MemComplete.nwords_per_inst(64)};" in h
+
+
 def test_sequencer_run_iter_is_extractable():
     """Sequencer is a FreeRunComp whose run_iter lowers as a leaf: ``get`` -> hook -> ``write``.
 

@@ -19,39 +19,34 @@
 #include <vector>
 #include "bfm/xsi_bfm.h"
 #include "mem_copy_ports.h"      // GENERATED from the same TopSpec that emits the top's pragmas
+#include "mem_copy_vectors.h"    // GENERATED: the scenario + CopyCmd.serialize()'s own output
 
 using namespace wfbfm;
 namespace ports = mem_copy_ports;
+namespace vec = mem_copy_vectors;
 
-static const int  MEM_DW   = 64;
-static const int  BPW      = MEM_DW / 8;             // bytes per word = 8
-static const int  MEM_NW   = 8192;
-static const int  N        = 128;                    // words per copy
-static const int  NUM_CMDS = 16;                     // back-to-back jobs
-// s_done streams one MemComplete{len,xfer_len,xfer_msg[8]} per job (word_bw=64):
-// word0 = len|(xfer_len<<32), word1 = xfer_msg[0]|(xfer_msg[1]<<32), words2-4 = xfer_msg[2:8]
-// (MemComplete.nwords_per_inst(64) == 5) — the sequencer stamps xfer_msg[0] with the job index.
-static const int  DONE_WORDS = 5;
-static const int  SRC_W[NUM_CMDS] = { 64, 192, 320, 448, 576, 704, 832, 960, 1088, 1216, 1344, 1472, 1600, 1728, 1856, 1984 };
-static const int  DST_W[NUM_CMDS] = { 4096, 4224, 4352, 4480, 4608, 4736, 4864, 4992, 5120, 5248, 5376, 5504, 5632, 5760, 5888, 6016 };
+// The scenario (N / NUM_CMDS / SRC_W / DST_W), the s_done framing (DONE_WORDS =
+// MemComplete.nwords_per_inst), and the command words all come from the generated header.  In
+// particular this TB no longer packs CopyCmd itself: CMD_WORDS is what CopyCmd.serialize() actually
+// produced, so there is no second implementation of the packing rule to drift from the schema.
+static const int  BPW        = vec::MEM_DW / 8;      // bytes per word = 8
 static const long MAX_CYCLES = 2000000L;
 
+// The memory pattern.  Still stated here AND in mem_copy_sim.py's run_copy() — see the note at the
+// bottom of gen_xsi_vectors(); unifying it means emitting the whole arena image as data.
 static uint64_t known_word(int job, int i) {
     return ((uint64_t)i * 2654435761ULL + 12345ULL + (uint64_t)job * 7919ULL);
 }
 
 int main() {
     // 1) Shared backing memory: a known pattern in each source region.
-    FlatMemory mem(MEM_NW, BPW);
-    for (int j = 0; j < NUM_CMDS; ++j)
-        for (int i = 0; i < N; ++i) mem[SRC_W[j] + i] = known_word(j, i);
+    FlatMemory mem(vec::MEM_NW, BPW);
+    for (int j = 0; j < vec::NUM_CMDS; ++j)
+        for (int i = 0; i < vec::N; ++i) mem[vec::SRC_W[j] + i] = known_word(j, i);
 
-    // CopyCmd stream words (2 per command): word0 = src|(dst<<32), word1 = n_words.
-    std::vector<uint64_t> cmd_words;
-    for (int j = 0; j < NUM_CMDS; ++j) {
-        cmd_words.push_back((uint64_t)(uint32_t)SRC_W[j] | ((uint64_t)(uint32_t)DST_W[j] << 32));
-        cmd_words.push_back((uint64_t)(uint32_t)N);
-    }
+    // CopyCmd stream words, straight from the schema's serialize() via the generated header.
+    std::vector<uint64_t> cmd_words(vec::CMD_WORDS,
+                                    vec::CMD_WORDS + vec::NUM_CMDS * vec::CMD_WORDS_PER_CMD);
 
     // 2) Open the design and model its four interfaces.  Every port name comes from the generated
     // binding, which is derived from the same TopSpec that emitted the top's interface pragmas —
@@ -73,9 +68,9 @@ int main() {
     // 3) Cycle loop.  Drain a fixed tail after the last job so any trailing bus activity settles.
     long cyc = 0, drain = -1; bool timed_out = false;
     for (;;) {
-        int done_count = (int)(s_done.count() / DONE_WORDS);
+        int done_count = (int)(s_done.count() / vec::DONE_WORDS);
         if (drain >= 0 && (cyc - drain) >= 512) break;
-        if (done_count >= NUM_CMDS && drain < 0) drain = cyc;
+        if (done_count >= vec::NUM_CMDS && drain < 0) drain = cyc;
         if (cyc >= MAX_CYCLES) { timed_out = true; break; }
         ++cyc;
 
@@ -86,11 +81,11 @@ int main() {
         drive();
     }
 
-    const int done_count = (int)(s_done.count() / DONE_WORDS);
+    const int done_count = (int)(s_done.count() / vec::DONE_WORDS);
     if (timed_out) {
         std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld done=%d/%d w_count=%d cmd_widx=%d/%d "
                      "g_rstate=%d g_wstate=%d\n",
-                     cyc, done_count, NUM_CMDS, gmem1.w_count(), s_cmd.sent(), s_cmd.total(),
+                     cyc, done_count, vec::NUM_CMDS, gmem1.w_count(), s_cmd.sent(), s_cmd.total(),
                      gmem0.state(), gmem1.state());
         sim.close();
         return 1;
@@ -99,9 +94,9 @@ int main() {
     // 4) Golden check: every destination region equals its source region (a memcpy), and each job's
     // MemComplete echoes back the xfer_msg[0] job index the sequencer stamped.
     int fails = 0, job_fails = 0;
-    for (int j = 0; j < NUM_CMDS; ++j) {
-        for (int i = 0; i < N; ++i) {
-            uint64_t exp = known_word(j, i), got = mem[DST_W[j] + i];
+    for (int j = 0; j < vec::NUM_CMDS; ++j) {
+        for (int i = 0; i < vec::N; ++i) {
+            uint64_t exp = known_word(j, i), got = mem[vec::DST_W[j] + i];
             if (got != exp) {
                 if (fails < 8) std::fprintf(stderr, "  job %d word %d: got 0x%016llx exp 0x%016llx\n",
                                             j, i, (unsigned long long)got, (unsigned long long)exp);
@@ -110,7 +105,7 @@ int main() {
         }
     }
     for (int j = 0; j < done_count; ++j) {
-        uint32_t got_job = (uint32_t)s_done.words()[j * DONE_WORDS + 1];   // low 32b of xfer_msg[0]
+        uint32_t got_job = (uint32_t)s_done.words()[j * vec::DONE_WORDS + 1];   // low 32b of xfer_msg[0]
         if (got_job != (uint32_t)j) {
             if (job_fails < 8) std::fprintf(stderr, "  job %u: xfer_msg echo got=%u exp=%u\n",
                                             (unsigned)j, got_job, (unsigned)j);
@@ -118,11 +113,11 @@ int main() {
         }
     }
     std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld job_fails=%d\n",
-                NUM_CMDS, N, done_count, gmem1.w_count(), cyc, job_fails);
+                vec::NUM_CMDS, vec::N, done_count, gmem1.w_count(), cyc, job_fails);
     sim.close();
-    if (fails || done_count != NUM_CMDS || job_fails) {
+    if (fails || done_count != vec::NUM_CMDS || job_fails) {
         std::printf("FAILED test: %d mismatches, done=%d/%d, %d job-index echo mismatches\n",
-                    fails, done_count, NUM_CMDS, job_fails);
+                    fails, done_count, vec::NUM_CMDS, job_fails);
         return 1;
     }
     std::printf("PASSED test\n");

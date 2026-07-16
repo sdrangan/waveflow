@@ -300,6 +300,76 @@ def gen_headers(config: BuildConfig) -> None:
         raise RuntimeError(f"gen-include failed: {failed}")
 
 
+#: The XSI testbench's scenario: NUM_CMDS back-to-back copies of N words, each from SRC_W[j] to
+#: DST_W[j] (element/word coordinates in one flat arena).  Stated HERE, in Python, because the
+#: testbench's command words are the output of ``CopyCmd.serialize()`` — see :func:`gen_xsi_vectors`.
+#: Back-to-back jobs are the point: they exercise the ``hls::task`` re-fire across commands.
+XSI_N        = 128
+XSI_NUM_CMDS = 16
+XSI_MEM_NW   = 8192
+XSI_SRC_W = [64 + 128 * j for j in range(XSI_NUM_CMDS)]
+XSI_DST_W = [4096 + 128 * j for j in range(XSI_NUM_CMDS)]
+
+
+def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
+    """Render ``mem_copy_vectors.h``'s contents.  Split from :func:`gen_xsi_vectors` so a test can
+    compare the committed header against what the schema produces *now* without writing anything —
+    that check is what catches a schema change leaving the header stale, and it needs no toolchain."""
+    from waveflow.build.composite_gen import render_vectors_h
+
+    cmd_words: list[int] = []
+    for s, d in zip(XSI_SRC_W, XSI_DST_W):
+        cmd = CopyCmd(src_off=s, dst_off=d, n_words=XSI_N)
+        cmd_words.extend(int(w) for w in cmd.serialize(word_bw=width))
+
+    return render_vectors_h(
+        "mem_copy_vectors",
+        scalars={
+            "MEM_DW": width,
+            "MEM_NW": XSI_MEM_NW,
+            "N": XSI_N,
+            "NUM_CMDS": XSI_NUM_CMDS,
+            # MemComplete{len, xfer_len, xfer_msg[8]} -> nwords_per_inst(64) == 5.  Introspected:
+            # the s_done framing is the schema's business, not the testbench's.
+            "DONE_WORDS": MemComplete.nwords_per_inst(width),
+            "CMD_WORDS_PER_CMD": len(cmd_words) // XSI_NUM_CMDS,
+        },
+        arrays={
+            "SRC_W": ("int", XSI_SRC_W),
+            "DST_W": ("int", XSI_DST_W),
+            # CopyCmd.serialize(word_bw) output, concatenated: CMD_WORDS_PER_CMD words per command.
+            "CMD_WORDS": ("uint64_t", cmd_words),
+        },
+        note=("Scenario source: examples/interleaver/mem_copy.py (XSI_* constants).\n"
+              "CMD_WORDS = CopyCmd.serialize(word_bw) per job, concatenated."),
+    )
+
+
+def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
+    """Emit ``xsi/mem_copy_vectors.h`` — the XSI testbench's scenario + its command words.
+
+    The command words come from :meth:`CopyCmd.serialize`, the same call the pysim golden packs with.
+    The testbench previously hand-packed ``src | dst<<32`` in C++, which was a second implementation
+    of a schema rule with nothing checking the two agreed.  It could not simply *call* the schema:
+    an XSI TB is host-compiled and cannot include ``copy_cmd.h`` (ap_int/hls_stream).  Emitting
+    serialize()'s output resolves that without creating a second implementation.
+
+    ``DONE_WORDS`` is introspected from :class:`MemComplete` rather than hardcoded to 5 for the same
+    reason — it is ``nwords_per_inst(width)``, a schema fact, not a testbench constant.
+
+    **Still duplicated, deliberately:** the memory pattern (``known_word``) is stated both here (in
+    ``mem_copy_sim.py``'s ``run_copy``) and in the TB's C++.  Unifying it means emitting the whole
+    arena image as data (16 x 128 words), which is a different trade than the command words: a
+    drifted *pattern* still tests a copy, whereas a drifted *packing rule* sends malformed commands
+    and makes the test meaningless.  The latter is what this function removes.
+    """
+    h = render_xsi_vectors(width)
+    path = out_dir / "xsi" / "mem_copy_vectors.h"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(h, encoding="utf-8")
+    return path
+
+
 def gen_task_bodies(config: BuildConfig) -> None:
     """Generate ``mem_seq_task.h`` from :meth:`Sequencer.run_iter` into ``include/``, and its hook
     stubs at the example root (``impl_dir="."``) — never into ``include/`` or ``gen/``, which are
@@ -335,7 +405,9 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
-    print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
+    vec_h = gen_xsi_vectors(out_dir, width=width)
+    print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name} "
+          f"+ xsi/{vec_h.name}")
     return {spec.top_name: cpp}
 
 
