@@ -35,7 +35,8 @@ you**: it wraps your C testbench so each call becomes an `ap_start` → wait-for
 against the synthesized RTL. You write a program; you get a cycle-accurate measurement.
 
 That is exactly what the next flow loses. A free-running kernel never returns, so there is nothing to
-call and nothing for Vitis to wrap — which is why [Flow 2](./freerun_seq.md) must drive the RTL
+call and nothing for Vitis to wrap — which is why the [free-running, sequentially driven](./freerun_seq.md)
+flow must drive the RTL
 directly with a hand-written BFM.
 
 ## The recipe
@@ -132,4 +133,4 @@ same flow, one page per step, against real code:
 - [Component structure](../comp_codegen/structure.md) — the contract for when a component lowers at all.
 - [Testbench](../comp_codegen/testbench.md) — how a `SeqTB`'s `main()` becomes the `int main()` this flow runs.
 - [Build System](../build/) — the `BuildDag` machinery behind the table above.
-- [Flow 2](./freerun_seq.md) — the same sequential testbench, against a DUT Vitis cannot wrap.
+- [Free-running, sequentially driven](./freerun_seq.md) — the same sequential testbench, against a DUT Vitis cannot wrap.

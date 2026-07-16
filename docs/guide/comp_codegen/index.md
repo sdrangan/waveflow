@@ -43,7 +43,7 @@ Each *kind* of component declares the targets that exist for it, as `potential_t
 
 **This section describes the two that are built.** The other five are *named* rather than silent, which
 is what lets `check()` answer precisely — see below. They are the future work of
-[Flows 2–4](../flows/); nothing generates them today.
+the [free-running and bitstream flows](../flows/); nothing generates them today.
 
 > **`potential_`, not `supported_`.** A class declares the paths that exist **for its kind** — not a
 > promise about any particular component. Whether *this* component actually makes it down one is

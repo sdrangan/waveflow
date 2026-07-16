@@ -8,13 +8,13 @@ summary: "Flow 3 — the same free-running DUT as Flow 2 (a free-running kernel 
 
 # Flow 3 — Free-running, concurrently driven
 
-**DUT output:** the *same* **free-running kernel** or **composite kernel** as
-[Flow 2](./freerun_seq.md) — one `ap_ctrl_none` [task](../components/freerun.md) or a
+**DUT output:** the *same* **free-running kernel** or **composite kernel** as the
+[sequentially driven](./freerun_seq.md) flow — one `ap_ctrl_none` [task](../components/freerun.md) or a
 [composite](../components/composite.md) network of them.
 **Testbench:** a **concurrent SystemC TB** — a harness where each stimulus/capture agent is its own
 `SC_THREAD`, driving the elaborated RTL in `xsim` through **XSI**.
 
-The DUT is identical to Flow 2; only the driver changes. Making it concurrent lifts the
+The DUT is identical to the [sequentially driven](./freerun_seq.md) flow; only the driver changes. Making it concurrent lifts the
 single-threaded-BFM limitation — independent streams get independent, concurrent drivers with real
 backpressure, restoring the simulation model's parallel-process feel at the RTL level.
 

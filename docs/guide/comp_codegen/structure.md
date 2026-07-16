@@ -1,3 +1,5 @@
+ 
+
 ---
 title: Component structure
 parent: Component Code Generation
@@ -7,7 +9,6 @@ applies_to: [HwComponent]
 api: [kernel_files_to_str, cpp_kernel_name, extract_kernel, synthesizable, check]
 summary: "How an HwComponent becomes a kernel: a leaf generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, FreeRunComp -> run_iter, CompositeComp -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
 ---
-
 # Component structure
 
 ## Concept
@@ -40,12 +41,12 @@ stalling when they are empty. Its pace comes from back-pressure, not from a call
 
 The consequence runs through everything else:
 
-| | `ap_ctrl_hs` | `ap_ctrl_none` |
-|---|---|---|
-| Is it a function you can call? | **yes** — that is what a handshake is | **no** — it never returns |
-| Can a testbench just call it? | yes, and Vitis builds the RTL harness for you | no — the RTL must be driven directly ([Flow 2](../flows/freerun_seq.md)) |
-| May it carry `m_axi` / `s_axilite`? | yes | **no** — a free-running interface is stream-only |
-| Which [flow](../flows/) | [1](../flows/control_kernel.md) | [2](../flows/freerun_seq.md) / [3](../flows/freerun_conc.md) |
+|                                        | `ap_ctrl_hs`                                | `ap_ctrl_none`                                                         |
+| -------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
+| Is it a function you can call?         | **yes** — that is what a handshake is  | **no** — it never returns                                         |
+| Can a testbench just call it?          | yes, and Vitis builds the RTL harness for you | no — the RTL must be driven directly ([free-running, sequentially driven](../flows/freerun_seq.md)) |
+| May it carry`m_axi` / `s_axilite`? | yes                                           | **no** — a free-running interface is stream-only                  |
+| Which [flow](../flows/) | [Control-driven kernel](../flows/control_kernel.md) | [Free-running, sequentially](../flows/freerun_seq.md) or [concurrently driven](../flows/freerun_conc.md) |
 
 > **Everything Waveflow generates today is `ap_ctrl_hs`.** `ap_ctrl_none` is the
 > [`free_running_kernel`](./index.md) target, which is not built — so a `FreeRunComp` currently emits an
@@ -58,12 +59,12 @@ The consequence runs through everything else:
 
 The entry follows from the component's **kind**. You never name it; the class states it.
 
-| Kind | Entry extracted | Why |
-|---|---|---|
-| [`HostActivated`](../components/hostactivated.md) | `on_start` | it runs once per launch — `on_start` is the regmap slave's callback |
-| [`FreeRunComp`](../components/freerun.md) | `run_iter` | *one firing*; the `while True` belongs to the base, not your code |
-| [`CompositeComp`](../components/composite.md) | — (see below) | its body comes from the graph, not a method |
-| plain `HwComponent` | `on_start` if it has a regmap, else `run_proc` | the un-migrated leaf — see below |
+| Kind                                               | Entry extracted                                    | Why                                                                   |
+| -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
+| [`HostActivated`](../components/hostactivated.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
+| [`FreeRunComp`](../components/freerun.md)         | `run_iter`                                       | *one firing*; the `while True` belongs to the base, not your code |
+| [`CompositeComp`](../components/composite.md)     | — (see below)                                     | its body comes from the graph, not a method                           |
+| plain`HwComponent`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated leaf — see below                                     |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
 routes to `main()` instead ([Testbench](./testbench.md)).
@@ -112,9 +113,9 @@ The C++ for `compute` lives in the checked-in
 
 Where that stub file lands is the *only* thing `impl_file=` changes:
 
-| Form | Body | Stub file |
-|---|---|---|
-| `@synthesizable` | hand-written | `<kernel>_<hook>_impl.cpp` (the default) |
+| Form                                  | Body         | Stub file                                          |
+| ------------------------------------- | ------------ | -------------------------------------------------- |
+| `@synthesizable`                    | hand-written | `<kernel>_<hook>_impl.cpp` (the default)         |
 | `@synthesizable(impl_file="x.tpp")` | hand-written | `x.tpp` — a `.tpp` when the hook is templated |
 
 Both are hand-written. Neither lowers your Python. Writing those bodies is

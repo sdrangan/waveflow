@@ -85,7 +85,8 @@ Spawning a SimPy process is **rejected** — not deferred:
 > the SystemC path (Flow 3), not C-simulation.
 
 A `sequential_vitis_tb` *is* a `int main()`; there is nowhere for a fork to go. A concurrently-driven
-testbench is a different [target](./index.md) (`concurrent_systemc_tb`, Flow 3) and is not built yet.
+testbench is a different [target](./index.md) — `concurrent_systemc_tb`, the
+[free-running, concurrently driven](../flows/freerun_conc.md) flow — and is not built yet.
 Honest limit: this is a **gate, not a proof** — it rejects the syntax that certainly forks, but cannot
 certify that a body is sequential.
 
@@ -118,7 +119,8 @@ Note `cpp_kernel_name` on the TB names the **DUT**, not the testbench — that i
 ## Quick reference
 
 - A `SeqTB` is the source for `sequential_vitis_tb`; `main()` → `<kernel>_tb.cpp`.
-- Keep `main()` straight-line — `env.process(...)` is rejected, with a message pointing at Flow 3.
+- Keep `main()` straight-line — `env.process(...)` is rejected, with a message pointing at the
+  [concurrently driven](../flows/freerun_conc.md) flow.
 - Invoke once with `dut.run()` / `dut.run_once(...)` / `yield from dut.run_once_sim(...)` — all one kernel call.
 - Streams use `push`/`pop` (+ `_array`) here, never the `get`/`write` process forms.
 - `@sim_only` calls (e.g. the timers) are stripped and emit nothing.

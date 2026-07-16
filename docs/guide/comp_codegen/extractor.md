@@ -141,7 +141,7 @@ it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (t
 
 **No concurrency.** Spawning a SimPy process (`env.process(...)`) is rejected, because every target this
 extractor feeds is sequential — there is no straight-line lowering for a fork. The message points at the
-SystemC path ([Flow 3](../flows/)). Honest limit: this is a **gate, not a proof**. It rejects the
+SystemC path ([free-running, concurrently driven](../flows/freerun_conc.md)). Honest limit: this is a **gate, not a proof**. It rejects the
 syntax that certainly implies concurrency; it cannot certify that a body is sequential.
 
 **A leaf must be structurally flat.** A component that lowers to one kernel function may not own
