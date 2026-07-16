@@ -4,7 +4,7 @@
 // Gate: MemWStream drains N known words off s_in and pure-writes them to mem[BASE_W .. BASE_W+N);
 // the backing memory region equals the input bit-exact.  TB drives s_cmd (master), s_in (master),
 // and the gmem0 AXI write slave (AWREADY / WREADY / B*); the read side + control are pinned to 0.
-// All three are the reusable models in bfm/xsi_bfm.h.
+// All three are the reusable models in xsi_bfm.h.
 #include <cstdio>
 #include <cstdint>
 #include <string>
@@ -86,7 +86,11 @@ int main() {
             ++fails;
         }
     }
-    std::printf("mem_w_stream XSI BFM: N=%d w_count=%d cycles=%ld\n", N, gmem0.w_count(), cyc);
+    // `cycles` is time-to-last-completion, NOT the loop count — see the note in mem_r_bfm_tb.cpp.
+    // The drain tail is a testbench constant; folding it into the headline number hides the work.
+    const long latency = (drain >= 0) ? drain : cyc;
+    std::printf("mem_w_stream XSI BFM: N=%d w_count=%d cycles=%ld (tail=%ld)\n",
+                N, gmem0.w_count(), latency, cyc - latency);
     sim.close();
     if (fails) { std::printf("FAILED test: %d mismatched words\n", fails); return 1; }
     std::printf("PASSED test\n");

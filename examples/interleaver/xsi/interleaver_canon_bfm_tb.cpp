@@ -126,8 +126,12 @@ int main() {
         }
     }
 
+    // `cycles` is time-to-last-job-done, NOT the loop count (which includes a fixed drain tail) —
+    // see the note in mem_r_bfm_tb.cpp.  This TB already reported it correctly; the other three did
+    // not, and were fixed to match.
     long latency = (drain >= 0) ? drain : cyc;
-    std::printf("interleaver_canon XSI BFM: n=%d nj=%d cycles=%ld done=%d/%d\n", N, NJ, latency, done_count, NJ);
+    std::printf("interleaver_canon XSI BFM: n=%d nj=%d cycles=%ld (tail=%ld) done=%d/%d\n",
+                N, NJ, latency, cyc - latency, done_count, NJ);
     std::printf("  per-job done cycles (period in parens):\n   ");
     for (int j = 0; j < done_count; ++j)
         std::printf(" j%d=%ld(%s%ld)", j, done_cyc[j],

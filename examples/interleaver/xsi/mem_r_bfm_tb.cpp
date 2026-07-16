@@ -2,7 +2,7 @@
 // MemRStream kernel (gen/mem_r_stream.cpp) in xsim on Windows.
 //
 // The kernel is ap_ctrl_none (free-running); Vitis C/RTL cosim refuses it, so we drive the elaborated
-// RTL directly through XSI.  Its three interfaces are modelled by the reusable BFM (bfm/xsi_bfm.h):
+// RTL directly through XSI.  Its three interfaces are modelled by the reusable BFM (xsi_bfm.h):
 // an AXIS master on s_cmd, an AXIS slave on m_out, and an AXI-MM read slave on gmem0 serving one flat
 // arena.  Gate: MemRStream bursts mem[BASE_W .. BASE_W+N) onto m_out, and the collected stream equals
 // the memory region bit-exact.
@@ -88,7 +88,13 @@ int main() {
             ++fails;
         }
     }
-    std::printf("mem_r_stream XSI BFM: N=%d collected=%zu cycles=%ld\n", N, got.size(), cyc);
+    // `cycles` is time-to-last-word, NOT the loop count: the loop runs a fixed drain tail past
+    // completion to let trailing bus activity settle, and that tail is a testbench constant with
+    // nothing to do with the design. Reporting `cyc` would bury ~158 cycles of work under +256 of
+    // tail, and would move if anyone touched the constant.
+    const long latency = (drain >= 0) ? drain : cyc;
+    std::printf("mem_r_stream XSI BFM: N=%d collected=%zu cycles=%ld (tail=%ld)\n",
+                N, got.size(), latency, cyc - latency);
     sim.close();
     if (fails || (int)got.size() != N) { std::printf("FAILED test: %d mismatches (got %zu)\n", fails, got.size()); return 1; }
     std::printf("PASSED test\n");

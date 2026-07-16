@@ -241,11 +241,19 @@ drive();           // present held values for the next cycle
 ```
 
 **The gates are real, and exact.** `pytest -m xsi` drives all four kernels through RTL and asserts
-their cycle counts — `mem_r_stream` 414, `mem_w_stream` 432, `mem_copy` 3347, `interleaver_canon`
-3469. Exact, not bounds: a count that moves is a real behaviour change worth a human look, and an
-inequality would absorb a regression silently. Each gate regenerates `rtl_<top>.f` from the RTL on
-disk and deletes `xsim.dir/<top>` first — a hand-stale file list plus a cached `xsimk.dll` is how an
-XSI run goes green while proving nothing.
+their cycle counts — `mem_r_stream` 158, `mem_w_stream` 176, `mem_copy` 2835, `interleaver_canon`
+3469, each measured to *last completion* (the loop's fixed drain tail is reported separately, since
+it is a testbench constant and not a property of the design). Exact, not bounds: a count that moves
+is a real behaviour change worth a human look, and an inequality would absorb a regression silently.
+Each gate regenerates `rtl_<top>.f` from the RTL on disk and deletes `xsim.dir/<top>` first — a
+hand-stale file list plus a cached `xsimk.dll` is how an XSI run goes green while proving nothing.
+
+Those numbers are also where the free-running pipeline becomes visible. `mem_copy` copies 16 jobs in
+2835 cycles — **~177 cycles/job**, against **~176** for a *single* `mem_w_stream` write on its own.
+The reads hide entirely behind the writes: per-job cost is `max(read, write)`, not `read + write`
+(158 + 176 = 334). Nothing in the testbench asks for that. It falls out of `AxisMaster` offering the
+next command the moment the kernel accepts the last one, so the Sequencer is already handling job
+*j+1* while `MemWStream` is still storing job *j*. It is the whole reason the tasks are free-running.
 
 ### Sending a multi-word command over `s_cmd`
 

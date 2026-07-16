@@ -87,19 +87,29 @@ designed against a presumed `HwParam` surface — and it was wrong and got rever
 (`plans/codegen_source_options.md`). Do not repeat that here. The API is whatever falls out of making
 four real TBs share code.
 
-**Gate — the recorded baseline (2026-07-16, all four PASS from a clean `run.bat`):**
+**Gate — the recorded baseline.** Automated as `pytest -m xsi` (`06032cd`); numbers **re-recorded
+2026-07-16** when the reporting bug below was fixed:
 
-| TB | `run.bat <top> <tb>` | result | **cycles** |
+| TB | result | **cycles** (to last completion) | drain tail |
 |---|---|---|---|
-| `mem_r_stream` | `mem_r_stream mem_r_bfm_tb` | PASSED, collected=128 | **414** |
-| `mem_w_stream` | `mem_w_stream mem_w_bfm_tb` | PASSED, w_count=128 | **432** |
-| `mem_copy` | `mem_copy mem_copy_bfm_tb` | PASSED, done=16, w_count=2048, job_fails=0 | **3347** |
-| `interleaver_canon` | `interleaver_canon interleaver_canon_bfm_tb` | PASSED, done=8/8, n=256 nj=8 | **3469** |
+| `mem_r_stream` | PASSED, collected=128 | **158** | 256 |
+| `mem_w_stream` | PASSED, w_count=128 | **176** | 256 |
+| `mem_copy` | PASSED, done=16, w_count=2048, job_fails=0 | **2835** | 512 |
+| `interleaver_canon` | PASSED, done=8/8, n=256 nj=8 | **3469** | 512 |
 
-Every step of Stages 1-2 must reproduce these four numbers exactly. A behaviour change here is a bug,
-not an improvement — the point of the stage is to hold behaviour fixed while the shape moves. (These
-are the *hand-written* `mem_seq_task.h` numbers; `mem_copy_proj` was restored to it after the
-generated-body csynth experiment.)
+**The originally-recorded 414 / 432 / 3347 were wrong** — not the designs, the *measurement*. Three
+of the four TBs printed `cyc` (work **+** a fixed drain tail) under the label `cycles=`, while
+`interleaver_canon` printed time-to-last-done. So the two small kernels were reporting numbers that
+were *majority tail*, and any of them would have shifted if someone touched a testbench constant.
+All four now report time-to-last-completion with `(tail=N)` shown separately.
+
+**What the numbers say, now that they say anything:** `mem_copy` is 2835/16 = **~177 cyc/job**
+against **~176** for ONE write on its own. The reads hide *entirely* behind the writes — per-job cost
+is `max(read, write) = 176`, not `read + write = 334`. That ~1.9x is the free-running pipeline, and
+it is exactly what Stage 5 must not destroy.
+
+A cycle count that moves is a real behaviour change — a regression or an improvement — and both want
+a human look. Exact, never a bound.
 
 **Watch:** `xsi/rtl_<top>.f` lists RTL files explicitly, is **hand-maintained** (nothing generates it —
 only `run.bat` reads it), and a stale `.f` plus a cached `xsimk.dll` can fake a PASS
@@ -118,7 +128,7 @@ visible) or a gap in the library (fix the library).
 ## Stage 3 — derive the port binding from `TopSpec` — **DONE (`5c64537`, 2026-07-16)**
 
 `render_ports_h(spec)` emits `<top>_ports.h`; all four TBs bind through it, and not one hand-written
-port name or pin-low list remains. Gates unchanged (414/432/3347/3469). Pinned by
+port name or pin-low list remains. Gates unchanged (then 414/432/3347/3469; re-recorded below). Pinned by
 `tests/build/test_ports_header.py`, including the drift claim itself and the never-pin-what-you-drive
 condition. The enabling fix was in the **spec**, not the renderer: `ExtPort` kept only rendered
 strings, so `(name, kind, bundle)` was lost — `TopSpec` could be *rendered* but not *asked*. It now

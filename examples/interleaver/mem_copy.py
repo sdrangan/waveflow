@@ -102,8 +102,9 @@ class Sequencer(FreeRunComp):
     ``TaskBodyStep`` lowers it to ``include/mem_seq_task.h`` (templated, ``static``, pragma-free over
     ``hls::stream<ap_uint<W>>``), which the composite top instantiates as ``mem_seq_task<64>``.
     Verified end-to-end: identical csynth (latency/II 21, 283 LUT, 526 FF; same RTL module set) and
-    identical XSI behaviour (``cycles=3347``, 16/16 jobs, zero ``xfer_msg`` echo mismatches) against
-    the hand-written body it replaced.  Contrast MemRStream/MemWStream, whose bodies own ``m_axi``
+    identical XSI behaviour (16/16 jobs, zero ``xfer_msg`` echo mismatches; ``cycles=3347`` as the
+    gate then reported it — the same run reads 2835 since the reporting fix, which subtracted the
+    testbench's fixed drain tail) against the hand-written body it replaced.  Contrast MemRStream/MemWStream, whose bodies own ``m_axi``
     and stay hand-written and copied.
 
     **What is still hand-written: the three hooks.**  Codegen derives the body's *structure* — the

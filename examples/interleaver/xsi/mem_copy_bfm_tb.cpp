@@ -6,7 +6,7 @@
 //
 // The kernel is ap_ctrl_none (free-running); Vitis C/RTL cosim refuses it, so we drive the elaborated
 // RTL directly through XSI.  Its four boundary interfaces are modelled by the reusable BFM
-// (bfm/xsi_bfm.h) rather than hand-rolled here:
+// (xsi_bfm.h) rather than hand-rolled here:
 //   * s_cmd  (AXIS slave  on the kernel; TB master) — streams CopyCmd{src_off,dst_off,n_words}, 2
 //             words each; back-to-back commands exercise the hls::task re-fire across jobs.
 //   * s_done (AXIS master on the kernel; TB slave)  — one MemComplete per job.
@@ -112,8 +112,13 @@ int main() {
             ++job_fails;
         }
     }
-    std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld job_fails=%d\n",
-                vec::NUM_CMDS, vec::N, done_count, gmem1.w_count(), cyc, job_fails);
+    // `cycles` is time-to-last-job-done, NOT the loop count — see the note in mem_r_bfm_tb.cpp.
+    // This is the number the pipelining shows up in: ~177 cyc/job across 16 jobs, against ~176 for
+    // ONE write on its own (mem_w) — i.e. the reads hide entirely behind the writes.  Folding in
+    // the +512 drain tail would inflate it to ~209/job and obscure exactly that.
+    const long latency = (drain >= 0) ? drain : cyc;
+    std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld (tail=%ld) job_fails=%d\n",
+                vec::NUM_CMDS, vec::N, done_count, gmem1.w_count(), latency, cyc - latency, job_fails);
     sim.close();
     if (fails || done_count != vec::NUM_CMDS || job_fails) {
         std::printf("FAILED test: %d mismatches, done=%d/%d, %d job-index echo mismatches\n",

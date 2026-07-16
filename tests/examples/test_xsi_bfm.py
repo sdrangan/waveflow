@@ -28,11 +28,22 @@ HERE = Path(__file__).resolve().parents[2] / "examples" / "interleaver"
 XSI = HERE / "xsi"
 
 #: (top, tb basename, expected cycles, a substring proving the golden actually ran).
-#: Recorded 2026-07-16 from a clean rebuild; see plans/xsi_tb_codegen.md.
+#:
+#: `cycles` is **time to last completion**, not the loop count: each TB runs a fixed drain tail past
+#: completion to let trailing bus activity settle, and that tail is a testbench constant with nothing
+#: to do with the design.  Re-recorded 2026-07-16 when that was fixed — three of the four TBs had
+#: been reporting `cyc` (work + tail), so 414/432/3347 were majority-tail for the two small kernels
+#: and inflated for mem_copy.  Only interleaver_canon was already reporting it correctly, which is
+#: why its number is unchanged.  The DESIGNS did not change; the measurement did.
+#:
+#: What the numbers say: mem_copy is 2835/16 = ~177 cyc/job against ~176 for ONE write on its own,
+#: i.e. the reads hide entirely behind the writes — per-job cost is max(read, write) = 176, not
+#: read+write = 334.  That ~1.9x is the free-running pipeline, and it is what a generated testbench
+#: would have to preserve (see plans/xsi_tb_codegen.md Stage 5).
 GATES = [
-    ("mem_r_stream", "mem_r_bfm_tb", 414, "collected=128"),
-    ("mem_w_stream", "mem_w_bfm_tb", 432, "w_count=128"),
-    ("mem_copy", "mem_copy_bfm_tb", 3347, "done=16 w_count=2048"),
+    ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
+    ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
+    ("mem_copy", "mem_copy_bfm_tb", 2835, "done=16 w_count=2048"),
     ("interleaver_canon", "interleaver_canon_bfm_tb", 3469, "done=8/8"),
 ]
 
