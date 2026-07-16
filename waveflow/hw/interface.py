@@ -833,23 +833,29 @@ class SobIFMaster(InterfaceEndpoint):
     """Producer (``write_lock``) side of a :class:`StreamOfBlocksIF`.
 
     Acquires a free block buffer, fills it (whole-block), then commits it to the
-    consumer.  In codegen this is the ``hls::write_lock<T[N]>`` scope inside the
+    consumer.  In codegen this is the ``hls::write_lock<T>`` scope inside the
     producer task (e.g. ``Fill``)."""
 
-    bitwidth: int = 32
-    block_n: int = 1
+    element_type: type["DataSchema"] | None = None
     type_name = 'sob_if_master'
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
-    def acquire_write(self) -> ProcessGen[np.ndarray]:
-        """Block until a buffer is free, then return a fresh zero-filled block to fill."""
+    @property
+    def bitwidth(self) -> int:
+        """Compute bitwidth from element_type (for compatibility)."""
+        if self.element_type is None:
+            return 32
+        return self.element_type().get_bitwidth()
+
+    def acquire_write(self) -> ProcessGen["DataSchema"]:
+        """Block until a buffer is free, then return a fresh typed block instance to fill."""
         if self.interface is None:
             raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
         return (yield from self.interface.acquire_write())
 
-    def commit_write(self, block: np.ndarray) -> ProcessGen[None]:
+    def commit_write(self, block: "DataSchema") -> ProcessGen[None]:
         """Release the filled *block* to the consumer (the ``write_lock`` scope exit)."""
         yield from self.interface.commit_write(block)
 
@@ -859,23 +865,31 @@ class SobIFSlave(InterfaceEndpoint):
     """Consumer (``read_lock``) side of a :class:`StreamOfBlocksIF`.
 
     Acquires the filled block, random-accesses it (``b[idx]``), then releases the
-    buffer back to the producer.  In codegen this is the ``hls::read_lock<T[N]>``
+    buffer back to the producer.  In codegen this is the ``hls::read_lock<T>``
     scope inside the consumer task (e.g. ``Gather``).
+
+    ``element_type`` is any DataSchema (scalar, composite, or DataArray).
 
     ``throughput`` is the consumer's advertised access rate (feeds the LT model):
     a random-READ gather is ``n/min(LW,2)`` (dual-port free 2nd read), a
     random-WRITE scatter is ``n`` (WAW-serialized).  Not used for the P3
     element-granular toy; recorded for the P4 word-granular gather."""
 
-    bitwidth: int = 32
-    block_n: int = 1
+    element_type: type["DataSchema"] | None = None
     throughput: str = "gather"      # "gather" (random-read) | "scatter" (random-write)
     type_name = 'sob_if_slave'
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
-    def acquire_read(self) -> ProcessGen[np.ndarray]:
+    @property
+    def bitwidth(self) -> int:
+        """Compute bitwidth from element_type (for compatibility)."""
+        if self.element_type is None:
+            return 32
+        return self.element_type().get_bitwidth()
+
+    def acquire_read(self) -> ProcessGen["DataSchema"]:
         """Block until the producer commits a block, then return it for random access."""
         if self.interface is None:
             raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
@@ -892,13 +906,13 @@ class StreamOfBlocksIF(QueuedTransferIF):
     :class:`SobIFMaster` producer and one :class:`SobIFSlave` consumer.
 
     Subclasses :class:`QueuedTransferIF` (reuse the master/slave connect + SimPy
-    env plumbing); the new parts are block granularity (``block_n`` elements per
-    handover), the ``write_lock`` / ``read_lock`` handover, and the random-access
-    consumer.  pysim: a free-buffer counter (``depth`` buffers) + a ready queue, so
+    env plumbing); the new parts are block granularity (any DataSchema element_type),
+    the ``write_lock`` / ``read_lock`` handover, and the random-access consumer.
+    pysim: a free-buffer counter (``depth`` buffers) + a ready queue, so
     the producer fills buffer *j+1* while the consumer random-reads buffer *j* —
-    the overlap.  Codegen: ``hls::stream_of_blocks<ap_uint<bitwidth>[block_n], depth>``."""
+    the overlap.  Codegen: ``hls::stream_of_blocks<T, depth>`` where T is element_type."""
 
-    block_n: int = 1
+    element_type: type["DataSchema"] | None = None
     depth: int = 2
     type_name = 'stream_of_blocks_if'
 
@@ -906,24 +920,33 @@ class StreamOfBlocksIF(QueuedTransferIF):
         super().__init_subclass__(**kwargs)
 
     def __post_init__(self) -> None:
+        if self.element_type is None:
+            raise ValueError("StreamOfBlocksIF requires element_type to be set")
+        # Compute bitwidth from element_type for parent class validation
+        if self.bitwidth is None:
+            self.bitwidth = self.element_type().get_bitwidth()
         self.endpoint_names = ('master', 'slave')
         super().__post_init__()
         # depth-2 ping-pong: `depth` free buffers; a ready queue of committed blocks.
         self._free = simpy.Container(self.env, init=self.depth, capacity=self.depth)
         self._ready = simpy.Store(self.env, capacity=self.depth)
 
-    def acquire_write(self) -> ProcessGen[np.ndarray]:
+    def acquire_write(self) -> ProcessGen["DataSchema"]:
+        """Acquire a free buffer and return a fresh typed block instance to fill."""
         yield self._free.get(1)
-        return np.zeros(self.block_n, dtype=_block_dtype(self.bitwidth or 32))
+        return self.element_type()
 
-    def commit_write(self, block: np.ndarray) -> ProcessGen[None]:
-        yield self._ready.put(np.array(block, copy=True))
+    def commit_write(self, block: "DataSchema") -> ProcessGen[None]:
+        """Commit the filled block to the consumer's ready queue."""
+        yield self._ready.put(block)
 
-    def acquire_read(self) -> ProcessGen[np.ndarray]:
+    def acquire_read(self) -> ProcessGen["DataSchema"]:
+        """Acquire a committed block for random access."""
         block = yield self._ready.get()
         return block
 
     def release_read(self) -> ProcessGen[None]:
+        """Release the block back to the free pool."""
         yield self._free.put(1)
 
     def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
@@ -934,11 +957,10 @@ class StreamOfBlocksIF(QueuedTransferIF):
             raise TypeError("master side of StreamOfBlocksIF must bind to SobIFMaster")
         if ep_name == "slave" and not isinstance(endpoint, SobIFSlave):
             raise TypeError("slave side of StreamOfBlocksIF must bind to SobIFSlave")
-        self._validate_and_set_bitwidth(endpoint)
-        if endpoint.block_n != self.block_n:
+        if endpoint.element_type != self.element_type:
             raise ValueError(
-                f"Endpoint block_n={endpoint.block_n} does not match "
-                f"interface block_n={self.block_n}")
+                f"Endpoint element_type={endpoint.element_type} does not match "
+                f"interface element_type={self.element_type}")
         super().bind(ep_name, endpoint)
 
 

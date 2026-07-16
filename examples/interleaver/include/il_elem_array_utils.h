@@ -274,10 +274,18 @@ template<int word_bw>
 inline void elem_write(const value_type& v, ap_uint<word_bw>* dst, int i) {
     #pragma HLS INLINE
     static_assert(pf<word_bw>() >= 1, "elem_write requires pf>=1 (element fits in one word)");
-    const int iw = i / lane_capacity<word_bw>();
-    ap_uint<word_bw> w = dst[iw];
-    write_array_elem_impl<word_bw>::write_lane(w, i % lane_capacity<word_bw>(), v);
-    dst[iw] = w;
+    // Specialization: when pf == 1 (element fills the whole word), skip RMW and write directly.
+    // When pf > 1 (multiple lanes per word), fall back to lane read-modify-write.
+    if constexpr (pf<word_bw>() == 1) {
+        // Fast path: element == word width. Direct write, no RMW.
+        dst[i] = v;
+    } else {
+        // Slow path: multiple lanes per word. RMW to update one lane.
+        const int iw = i / lane_capacity<word_bw>();
+        ap_uint<word_bw> w = dst[iw];
+        write_array_elem_impl<word_bw>::write_lane(w, i % lane_capacity<word_bw>(), v);
+        dst[iw] = w;
+    }
 }
 
 // --- range methods (Phase 1b): element-indexed [i0, i1) over memory, on the lane methods ---

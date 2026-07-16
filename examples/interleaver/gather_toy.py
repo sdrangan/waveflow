@@ -39,6 +39,13 @@ INCLUDE_DIR = "include"
 # --- word type: element/word coordinate or count (for streaming) -------
 Word32 = IntField.specialize(bitwidth=32, signed=False)
 
+# --- block type: array of 64-bit words (typed block for SOBIF) -------
+WordBlock = DataArray.specialize(
+    element_type=IntField.specialize(bitwidth=64, signed=False),
+    max_shape=(8,),
+    member_name="words"
+)
+
 
 @dataclass
 class Fill(HwComponent):
@@ -60,16 +67,15 @@ class Fill(HwComponent):
     def __post_init__(self) -> None:
         super().__post_init__()
         w = int(self.mem_dwidth)
-        bn = int(self.block_n)
 
         # Input stream (word-granular)
         self.s_in = StreamIFSlave(
             name=f"{self.name}_s_in", sim=self.sim, bitwidth=w, has_tlast=False)
         self.add_endpoint(self.s_in)
 
-        # Output SOBIF master endpoint (block-granular)
+        # Output SOBIF master endpoint (typed block)
         self.m_out = SobIFMaster(name=f"{self.name}_m_out", sim=self.sim,
-                                bitwidth=w, block_n=bn)
+                                element_type=WordBlock)
         self.add_endpoint(self.m_out)
 
     def kernel_task(self) -> KernelTask:
@@ -77,10 +83,10 @@ class Fill(HwComponent):
                           template_args=(int(self.mem_dwidth), int(self.block_n)))
 
     def run_proc(self) -> ProcessGen[None]:
-        """Pysim golden: read block_n words, commit one block, repeat."""
+        """Pysim golden: read block_n words, commit one typed block, repeat."""
         bn = int(self.block_n)
         while True:
-            block = np.zeros(bn, dtype=np.uint64)
+            block = yield from self.m_out.acquire_write()
             for i in range(bn):
                 w: int = yield from self.s_in.get(int)
                 block[i] = w
@@ -108,11 +114,10 @@ class Gather(HwComponent):
     def __post_init__(self) -> None:
         super().__post_init__()
         w = int(self.mem_dwidth)
-        bn = int(self.block_n)
 
-        # Input SOBIF slave endpoint (block-granular)
+        # Input SOBIF slave endpoint (typed block)
         self.s_in = SobIFSlave(name=f"{self.name}_s_in", sim=self.sim,
-                              bitwidth=w, block_n=bn)
+                              element_type=WordBlock)
         self.add_endpoint(self.s_in)
 
         # Output stream (word-granular)
@@ -155,13 +160,12 @@ class GatherToy(CompositeComp):
     def __post_init__(self) -> None:
         super().__post_init__()
         w = int(self.mem_dwidth)
-        bn = int(self.block_n)
 
         # Sub-components
         self.fill = Fill(name=f"{self.name}_fill", sim=self.sim, mem_dwidth=w,
-                         block_n=bn, clk=self.clk)
+                         block_n=int(self.block_n), clk=self.clk)
         self.gather = Gather(name=f"{self.name}_gather", sim=self.sim, mem_dwidth=w,
-                             block_n=bn, clk=self.clk)
+                             block_n=int(self.block_n), clk=self.clk)
         for c in (self.fill, self.gather):
             self.add_comp(c)
         self.ordered_subcomps = [self.fill, self.gather]
@@ -171,12 +175,23 @@ class GatherToy(CompositeComp):
             name=f"{self.name}_sob_if",
             sim=self.sim,
             clk=self.clk,
-            bitwidth=w,
-            block_n=bn,
+            element_type=WordBlock,
         )
         self._sob_if.bind("master", self.fill.m_out)
         self._sob_if.bind("slave", self.gather.s_in)
         self.add_if(self._sob_if)
+
+        # Define internal edges for codegen (compatible with composite_top_spec)
+        from examples.interleaver.composite_gen import SobEdge
+        self.internal_edges = [
+            SobEdge("blk", self.fill.m_out, self.gather.s_in, elem_bw=w, block_n=int(self.block_n)),
+        ]
+
+        # Define boundary ports for codegen
+        self.boundary = [
+            ("s_in", self.fill.s_in, "axis_in", None),
+            ("m_out", self.gather.m_out, "axis_out", None),
+        ]
 
         # Boundary (convenience refs)
         self.s_in = self.fill.s_in

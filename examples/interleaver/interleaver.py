@@ -38,7 +38,7 @@ from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
 from waveflow.hw.arrayutils import gen_array_utils  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
-from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
+from waveflow.hw.dataschema import DataArray, DataList, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwParam  # noqa: E402
 from waveflow.hw.hw_composite import CompositeComp  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
@@ -73,6 +73,16 @@ class IlElem(IntField.specialize(bitwidth=32, signed=False, include_dir=INCLUDE_
 
 # --- command field type (element/word coordinates — the word_index convention) --------------------
 Word32 = IntField.specialize(bitwidth=32, signed=False)
+
+
+def _make_word_block(mem_dwidth: int, nw: int) -> type:
+    """Create a typed WordBlock: DataArray of mem_dwidth-bit words, up to nw elements."""
+    word_elem = IntField.specialize(bitwidth=int(mem_dwidth), signed=False)
+    return DataArray.specialize(
+        element_type=word_elem,
+        max_shape=(int(nw),),
+        member_name="words"
+    )
 
 
 class InterleaverCmd(DataList):
@@ -209,8 +219,9 @@ class IlLoad(FreeRunComp):
                                     has_tlast=False)
         self.cmd_out = StreamIFMaster(name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w,
                                       has_tlast=False)
-        self.p_blk = SobIFMaster(name=f"{self.name}_p_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
-        self.x_blk = SobIFMaster(name=f"{self.name}_x_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        word_block = _make_word_block(w, self.nw)
+        self.p_blk = SobIFMaster(name=f"{self.name}_p_blk", sim=self.sim, element_type=word_block)
+        self.x_blk = SobIFMaster(name=f"{self.name}_x_blk", sim=self.sim, element_type=word_block)
         for ep in (self.cmd_in, self.pwords, self.xwords, self.cmd_out, self.p_blk, self.x_blk):
             self.add_endpoint(ep)
         self._dtype = np.uint32 if w <= 32 else np.uint64
@@ -250,11 +261,12 @@ class IlCompute(FreeRunComp):
         self.nw = _nwords(int(self.n), self.lw)
         self.cmd_in = StreamIFSlave(name=f"{self.name}_cmd_in", sim=self.sim, bitwidth=w,
                                     has_tlast=False)
-        self.p_blk = SobIFSlave(name=f"{self.name}_p_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
-        self.x_blk = SobIFSlave(name=f"{self.name}_x_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        word_block = _make_word_block(w, self.nw)
+        self.p_blk = SobIFSlave(name=f"{self.name}_p_blk", sim=self.sim, element_type=word_block)
+        self.x_blk = SobIFSlave(name=f"{self.name}_x_blk", sim=self.sim, element_type=word_block)
         self.cmd_out = StreamIFMaster(name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w,
                                       has_tlast=False)
-        self.y_blk = SobIFMaster(name=f"{self.name}_y_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        self.y_blk = SobIFMaster(name=f"{self.name}_y_blk", sim=self.sim, element_type=word_block)
         for ep in (self.cmd_in, self.p_blk, self.x_blk, self.cmd_out, self.y_blk):
             self.add_endpoint(ep)
         self.job_end_cyc: list[float] = []
@@ -302,7 +314,8 @@ class IlStore(FreeRunComp):
         self.nw = _nwords(int(self.n), self.lw)
         self.cmd_in = StreamIFSlave(name=f"{self.name}_cmd_in", sim=self.sim, bitwidth=w,
                                     has_tlast=False)
-        self.y_blk = SobIFSlave(name=f"{self.name}_y_blk", sim=self.sim, bitwidth=w, block_n=self.nw)
+        word_block = _make_word_block(w, self.nw)
+        self.y_blk = SobIFSlave(name=f"{self.name}_y_blk", sim=self.sim, element_type=word_block)
         self.cmd_out = StreamIFMaster(name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w,
                                       has_tlast=False)
         self.ywords = StreamIFMaster(name=f"{self.name}_ywords", sim=self.sim, bitwidth=w,
@@ -403,8 +416,9 @@ class InterleaverCanon(CompositeComp):
             self.add_if(iface)
 
         def _sobif(name, master, slave):
+            word_block = _make_word_block(w, self.nw)
             iface = StreamOfBlocksIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk,
-                                     bitwidth=w, block_n=self.nw)
+                                     element_type=word_block)
             iface.bind("master", master)
             iface.bind("slave", slave)
             self.add_if(iface)
