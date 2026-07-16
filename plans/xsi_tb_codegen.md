@@ -245,6 +245,40 @@ large project and a medium one.
 checking at all** — the golden moves to Python comparing files, where it already lives. That also
 kills the last duplication Stage 4 left (`known_word`, stated in both `mem_copy_sim.py` and the TB).
 
+### Early termination is an ADD-ON, deliberately staged second
+
+Fixed N is **correct on its own** — it just wastes wall-clock. So build it first and settle the risky
+question (does the pipelining survive?) before the convenient one. Then add termination as a
+participant the scheduler polls: a class holding whatever it needs to decide, exposing a predicate the
+loop checks each cycle.
+
+`XsiSim.run_until(pred, max_cycles, drain)` was in this plan's own Stage 1 sketch and **got dropped
+during the extraction** — each TB's loop had its own tangled drain-and-measure logic, so no common
+shape presented itself. It is the seam this reopens:
+
+```cpp
+sim.run(N);                                  // base case: fixed N, nothing blocks
+sim.run_until(pred, max_cycles, drain);      // add-on: stop early, then drain K more
+```
+
+**Declare the condition; do not lower a predicate.** The same "map, don't lower" rule as `bfm_model()`.
+An arbitrary Python lambda over participants would need real extraction; a *declaration* from a small
+vocabulary is data:
+
+```python
+self.stop_when = ExpectWords(self.done_sink, njobs * DONE_WORDS)   # -> `s_done.count() >= 80`
+```
+
+That also drags today's magic drain constants (512 / 256, different per TB, unexplained) into the open
+as an explicit parameter of the stop declaration.
+
+**The trap, learned the hard way (`8405415`).** Termination and measurement must stay strictly
+separate: **the terminator decides when to stop; the SINK reports when it completed.** Those were
+entangled in three of the four hand-written TBs — the loop counter (stop time, including a fixed drain
+tail) was printed as `cycles=`, so `mem_r`'s headline number was 62% tail and `mem_copy`'s was inflated
+by 512. If a terminator's drain leaks back into the reported number, 3347 returns. Whatever `run_until`
+looks like, time-to-completion comes from the participant that observed the completion.
+
 ### Open questions
 
 - **What *kind* is a TB participant?** Not `FreeRunComp` — that means "lowers to an `hls::task`", and
@@ -254,7 +288,12 @@ kills the last duplication Stage 4 left (`known_word`, stated in both `mem_copy_
 - **How is N chosen?** A parameter works first. Better: the **LT timing model predicts cycles**, so
   `N = predicted x margin` closes a loop — the transaction-level model sizes the RTL sim, and a wild
   miss is itself a finding. Measurement survives either way: the sink records *when* words arrived, so
-  time-to-completion is still observable; only the loop bound becomes fixed.
+  time-to-completion is still observable; only the loop bound becomes fixed. Once early termination
+  lands, `max_cycles` plays the same role as the timeout backstop.
+- **Is a terminator a participant or a predicate?** It watches *other participants* (the sink's word
+  count), not the DUT's RTL — so its "interface" is not an `Interface` in the pysim sense (a
+  transactional channel). It may be a monitor over the graph rather than a node in it. Worth settling
+  when the graph walk is written, not before.
 
 ## Stage 5b — the flows collapse (**consequence of the above**)
 
