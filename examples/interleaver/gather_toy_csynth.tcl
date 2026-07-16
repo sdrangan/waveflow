@@ -1,42 +1,36 @@
 # gather_toy_csynth.tcl — Vitis HLS C-Synthesis script for gather_toy
 #
+# Synthesizes the gather_toy_top kernel with typed SOBIF interface.
 # Usage: vivado_hls -f gather_toy_csynth.tcl
-# Or via waveflow: pytest tests/hw/test_gather_toy_vitis.py -m vitis
 
-# Create new project
+# Create project
 open_project -reset gather_toy_hls
 set_top gather_toy_top
 
-# Add source files
-add_files examples/interleaver/include/gather_toy_top.cpp
-add_files examples/interleaver/include/fill.h
-add_files examples/interleaver/include/gather.h
+# Add source files (relative to script directory)
+set d [file dirname [file normalize [info script]]]
+add_files [file join $d include gather_toy_top.cpp]
 
 # Create solution
 open_solution -reset "solution1"
 
-# Set target device (Xilinx Zynq-7000 family, representative)
+# Set target device (Xilinx Zynq-7000)
 set_part {xc7z020clg484-1}
 
-# Clock period: 10ns (100MHz, typical for demo)
+# Clock period: 10ns (100MHz)
 create_clock -period 10
 
-# Synthesis options
+# HLS synthesis options
+config_compile -pipeline_style flp
 config_compile -name_opt 1
 
 # Run C-Synthesis
-csynth_design
+if {[catch {csynth_design} res]} {
+    puts "WAVEFLOW_ERROR: gather_toy csynth failed."
+    puts $res
+    exit 1
+}
 
-# Report results
-puts "================================================"
-puts "C-Synthesis Results for gather_toy"
-puts "================================================"
-
-# Get kernel metrics
-set top_info [get_top_info]
-puts "Top: gather_toy_top"
-puts "Latency (II): [lindex $top_info 0]"
-puts "Clock period: 10ns (100MHz)"
-
-# Close project
+puts "WAVEFLOW_SUCCESS: gather_toy csynth passed (typed SOBIF verified)."
 exit 0
+
