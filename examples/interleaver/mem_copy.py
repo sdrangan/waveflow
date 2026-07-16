@@ -122,13 +122,15 @@ class Sequencer(FreeRunComp):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.mem_dwidth)
+        # Pass the HwParamValue itself, NOT int(self.mem_dwidth): the parameter identity is what
+        # lets codegen template the task body on `MEM_DWIDTH` rather than bake the default width.
+        # `int()` here would silently produce a 64-wide body for a 32-wide instance.
         self.s_cmd = StreamIFSlave(
-            name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=w, has_tlast=False)
+            name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
         self.mr_cmd = StreamIFMaster(
-            name=f"{self.name}_mr_cmd", sim=self.sim, bitwidth=w, has_tlast=False)
+            name=f"{self.name}_mr_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
         self.mw_cmd = StreamIFMaster(
-            name=f"{self.name}_mw_cmd", sim=self.sim, bitwidth=w, has_tlast=False)
+            name=f"{self.name}_mw_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
         for ep in (self.s_cmd, self.mr_cmd, self.mw_cmd):
             self.add_endpoint(ep)
         #: Per-job correlation cookie: the job index, so xfer_msg is genuinely exercised (round-tripped

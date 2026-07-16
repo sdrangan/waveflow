@@ -44,12 +44,29 @@ if TYPE_CHECKING:
     from waveflow.hw.hw_component import HwComponent
 
 
+#: How stream endpoints are typed and accessed in emitted C++.  The two conventions are not
+#: interchangeable and both are load-bearing:
+#:
+#: * ``'axi4s'`` — ``hls::stream<streamutils::axi4s_word<W>>`` + ``read_axi4_stream<W>`` /
+#:   ``write_axi4_stream<W>``.  The AXI4-Stream word (data + side-channels) used by a **top-level**
+#:   kernel's boundary ports.  The default, and what every ``control_driven_kernel`` emits today.
+#: * ``'word'`` — ``hls::stream<ap_uint<W>>`` + ``read_stream<W>`` / ``write_stream<W>``.  Plain
+#:   word-granular streams, the convention every hand-written ``hls::task`` body uses
+#:   (``waveflow/build/mem_*_task.h``) and that ``composite_gen``'s ``hls_thread_local`` internal
+#:   FIFOs are declared with.  A task body wired into a composite MUST use this — an ``axi4s_word``
+#:   body will not bind to an ``ap_uint`` FIFO.
+STREAM_FLAVORS = ('axi4s', 'word')
+
+
 @dataclass
 class CodegenCtx:
     comp: HwComponent
     params: dict[str, str] = field(default_factory=dict)
     endpoint_names: dict[int, str] = field(default_factory=dict)
     indent: int = 1
+    #: One of :data:`STREAM_FLAVORS`.  Defaults to ``'axi4s'`` so every existing caller keeps its
+    #: byte-identical output; only the task-body emitter passes ``'word'``.
+    stream_flavor: str = 'axi4s'
 
     def pad(self) -> str:
         return "    " * self.indent
@@ -60,6 +77,7 @@ class CodegenCtx:
             params=self.params,
             endpoint_names=self.endpoint_names,
             indent=self.indent + 1,
+            stream_flavor=self.stream_flavor,
         )
 
 
@@ -188,11 +206,12 @@ def _emit_stream_get(stmt: StreamGetStmt, ctx: CodegenCtx) -> str:
     cpp_type = schema_cls.cpp_class_name()
     ep = stmt.method.__self__  # type: ignore[attr-defined]
     stream_name = _endpoint_name(ep, ctx)
-    tmpl = _stream_template_arg(ep)
+    tmpl = _stream_template_arg(ep, ctx)
     pad = ctx.pad()
+    reader = 'read_axi4_stream' if ctx.stream_flavor == 'axi4s' else 'read_stream'
     return (
         f"{pad}{cpp_type} {out.name};\n"
-        f"{pad}{out.name}.read_axi4_stream<{tmpl}>({stream_name});"
+        f"{pad}{out.name}.{reader}<{tmpl}>({stream_name});"
     )
 
 
@@ -255,16 +274,29 @@ def _emit_stream_write(stmt: StreamWriteStmt, ctx: CodegenCtx) -> str:
     value = stmt.inputs[0]
     ep = stmt.method.__self__  # type: ignore[attr-defined]
     stream_name = _endpoint_name(ep, ctx)
-    tmpl = _stream_template_arg(ep)
+    tmpl = _stream_template_arg(ep, ctx)
     pad = ctx.pad()
+    if ctx.stream_flavor == 'word':
+        # The word-granular twin takes no TLAST argument — a plain ap_uint stream has no side
+        # channels to set (cf. waveflow/build/mem_seq_task.h: `r.write_stream<MEM_DW>(mr_cmd);`).
+        return f"{pad}{value.name}.write_stream<{tmpl}>({stream_name});"
     return f"{pad}{value.name}.write_axi4_stream<{tmpl}>({stream_name}, true);"
 
 
 def _emit_stream_drain(stmt: StreamDrainStmt, ctx: CodegenCtx) -> str:
     ep = stmt.method.__self__  # type: ignore[attr-defined]
     stream_name = _endpoint_name(ep, ctx)
-    tmpl = _stream_template_arg(ep)
+    tmpl = _stream_template_arg(ep, ctx)
     pad = ctx.pad()
+    if ctx.stream_flavor == 'word':
+        # Draining means "read until TLAST", and a plain ap_uint word stream has no TLAST to find.
+        # Fail loudly rather than emit a call that cannot compile against an ap_uint stream.
+        from waveflow.build.hwcodegen import SynthesisError
+        raise SynthesisError(
+            f"drain() on '{_endpoint_name(ep, ctx)}' has no meaning in a word-granular task body: "
+            f"an hls::stream<ap_uint<W>> carries no TLAST to drain to. Bound the read explicitly "
+            f"(e.g. read a count from the command) instead."
+        )
     return f"{pad}streamutils::flush_axi4_stream_to_tlast<{tmpl}>({stream_name});"
 
 
@@ -662,13 +694,23 @@ def _validate_no_name_collisions(comp) -> None:
         )
 
 
-def _stream_template_arg(ep) -> str:
+def _stream_template_arg(ep, ctx: CodegenCtx | None = None) -> str:
     """Return the template argument string for an endpoint's bitwidth.
 
-    Always emits the literal integer value.  Top-level kernels are now
-    concrete (no ``template <int ...>`` block); stream-type expressions
-    use the concrete bitwidth from the variant's ``HwParamValue``.
+    Defaults to the literal integer value: top-level kernels are concrete (no ``template <int ...>``
+    block), so stream-type expressions use the concrete bitwidth from the variant's
+    ``HwParamValue``.
+
+    A ``'word'``-flavour context is the exception — a task body IS templated on its width (the
+    composite instantiates ``mem_seq_task<64>``), so an endpoint whose bitwidth is a ``HwParamValue``
+    emits the **symbolic** C++ param name (``MEM_DWIDTH``) instead.  An endpoint with a hard-coded
+    bitwidth still emits the literal, which is correct: there is no parameter to be templated on.
     """
+    if ctx is not None and ctx.stream_flavor == 'word':
+        from waveflow.hw.hw_component import HwParamValue
+        bw = ep.bitwidth
+        if isinstance(bw, HwParamValue) and bw.param_name in ctx.params:
+            return ctx.params[bw.param_name]
     return str(int(ep.bitwidth))
 
 
@@ -790,6 +832,76 @@ def kernel_signature(comp, variant_suffix: str = "") -> str:
     arg_block = ",\n".join(arg_lines)
     pragma_block = "\n".join(pragma_lines)
     return f"void {name}(\n{arg_block}\n) {{\n{pragma_block}"
+
+
+def _reject_m_axi_task(comp) -> None:
+    """Refuse task-body emission for a component that owns an ``m_axi`` port.
+
+    Not a law of HLS — a free-running task may carry ``m_axi``; ``mem_r_stream_task.h`` does.  It is
+    a scope boundary: this emitter has not answered what an m_axi body needs (bundle naming, depth,
+    who owns the ``offset=slave`` register), so it refuses rather than emit something unreviewed.
+    The m_axi-owning bodies stay hand-written.
+    """
+    mm = _discover_mm_masters(comp)
+    if mm:
+        raise NotImplementedError(
+            f"{type(comp).__name__} has m_axi masters {[a for a, _ in mm]}; task-body emission is "
+            f"stream-only today. The m_axi-owning bodies (mem_r/mem_w_stream_task.h) stay "
+            f"hand-written."
+        )
+
+
+def task_template_params(comp, ctx: CodegenCtx) -> list[str]:
+    """The ordered, deduplicated C++ template-param names a task body is templated on.
+
+    One entry per distinct ``HwParam`` driving a stream endpoint's bitwidth (``mem_dwidth`` ->
+    ``MEM_DWIDTH``).  Endpoints with hard-coded widths contribute nothing — they need no parameter.
+    """
+    from waveflow.hw.hw_component import HwParamValue
+
+    params: list[str] = []
+    for _attr, ep in _discover_stream_endpoints(comp):
+        bw = ep.bitwidth
+        if isinstance(bw, HwParamValue):
+            cpp_name = ctx.params.get(bw.param_name)
+            if cpp_name is not None and cpp_name not in params:
+                params.append(cpp_name)
+    return params
+
+
+def task_signature(comp, ctx: CodegenCtx, task_name: str) -> str:
+    """Build a composite **task body** signature — the ``mem_seq_task.h`` shape.
+
+    Deliberately unlike :func:`kernel_signature`, in three ways that all follow from a task body not
+    being a top:
+
+    * **No ``#pragma HLS INTERFACE`` lines.**  The composite top owns the interface; a body wired to
+      an ``hls_thread_local`` FIFO has no interface of its own to declare.
+    * **Templated on width, and ``static``.**  The composite instantiates ``mem_seq_task<64>`` from
+      ``KernelTask.template_args``, and the header is ``#include``-ed into one translation unit per
+      example — ``static`` gives it internal linkage, exactly as the hand-written bodies do.
+    * **``hls::stream<ap_uint<W>>``, not ``axi4s_word``** — see :data:`STREAM_FLAVORS`.
+
+    Returns the signature through the opening ``{``; the caller appends the body and ``}``.
+    """
+    if ctx.stream_flavor != 'word':
+        raise ValueError(
+            f"task_signature requires a 'word'-flavour ctx (got {ctx.stream_flavor!r}): a task body "
+            f"wired to an ap_uint FIFO cannot take axi4s_word streams."
+        )
+    _validate_no_name_collisions(comp)
+    _reject_m_axi_task(comp)
+
+    tparams = task_template_params(comp, ctx)
+    arg_lines: list[str] = []
+    for attr, ep in _discover_stream_endpoints(comp):
+        tmpl = _stream_template_arg(ep, ctx)
+        arg_lines.append(f"    hls::stream<ap_uint<{tmpl}> >& {attr}")
+    arg_block = ",\n".join(arg_lines)
+    prefix = ""
+    if tparams:
+        prefix = "template <" + ", ".join(f"int {p}" for p in tparams) + ">\n"
+    return f"{prefix}static void {task_name}(\n{arg_block}\n) {{"
 
 
 def hook_signature(
@@ -1415,13 +1527,17 @@ def _stub_default_return(ret_cpp: str) -> str:
     return f"return {ret_cpp}{{}};"
 
 
-def impl_stub_to_cpp(comp, hook_method) -> str:
+def impl_stub_to_cpp(comp, hook_method, header_name: str | None = None) -> str:
     """Build the first-time stub content for one hook impl file.
 
     When a namespace is resolved for the component, the function
     definition is wrapped in a ``namespace <ns> { ... }`` block.
+
+    ``header_name`` overrides the header the stub includes.  It defaults to the kernel's
+    ``<component>.hpp``; the task-body emitter passes its ``<name>_task.h`` instead, since that
+    product has no ``.hpp``.
     """
-    header_name = f"{cpp_kernel_name(type(comp))}.hpp"
+    header_name = header_name or f"{cpp_kernel_name(type(comp))}.hpp"
     ret_cpp, args = hook_signature(hook_method)
     arg_str = ", ".join(arg_decl for _, arg_decl in args)
     default = _stub_default_return(ret_cpp)
@@ -2075,6 +2191,99 @@ def _array_utils_stem(elem_type) -> str:
     """Bridge to :func:`waveflow.hw.arrayutils._array_utils_stem`."""
     from waveflow.hw.arrayutils import _array_utils_stem as _stem
     return _stem(elem_type)
+
+
+def task_files_to_str(comp_class, task_name: str | None = None) -> dict[str, str]:
+    """Emit a composite **task body** for *comp_class* — the ``mem_seq_task.h`` product.
+
+    Returns ``{filename: contents}``: one ``<name>_task.h`` (the templated, ``static``, pragma-free
+    body over ``hls::stream<ap_uint<W>>``) plus one stub per ``@synthesizable`` hook.  This is the
+    leaf half of ``composite_kernel``: the body a composite's generated ``ap_ctrl_none`` top
+    instantiates as ``hls::task t0(<name>_task<64>, ...)``.  It is **not**
+    :func:`kernel_files_to_str`'s product, which is a standalone top (own interface pragmas,
+    ``axi4s_word`` boundary streams) and cannot be wired to an ``hls_thread_local`` ``ap_uint`` FIFO.
+
+    Only the default variant is emitted: a task body is templated on its width, so ``param_supports``
+    variants — which exist to give a *concrete top* one name per width — have nothing to add.
+
+    The hook stubs are first-time scaffolding, emitted with a ``TODO`` body: this generates the body's
+    *structure* from ``run_iter``, not its leaf computation.  You still write the hooks by hand, and
+    nothing checks them against the Python — see ``docs/guide/memory/memstream.md``.
+    """
+    from waveflow.build.hwcodegen import extract_kernel
+    from waveflow.hw.hw_component import SynthContext
+
+    kn = cpp_kernel_name(comp_class)
+    task = task_name or f"{kn}_task"
+    header = f"{task}.h"
+
+    default_comp = next(iter(_iter_variants(comp_class)))[1]
+    # Checked BEFORE extraction, on purpose: an m_axi-owning body is out of scope by construction,
+    # and extraction would otherwise fail first with an unrelated rule violation deep in the body
+    # (MemRStream trips the self.X capture rule), burying the real reason under a red herring.
+    _reject_m_axi_task(default_comp)
+    tree = extract_kernel(default_comp)
+    synth_ctx = SynthContext.from_component(default_comp)
+    ctx = CodegenCtx(
+        comp=default_comp, params=synth_ctx.params, indent=1, stream_flavor='word',
+    )
+
+    guard = f"WAVEFLOW_GEN_{task.upper()}_H"
+    lines = [
+        f"#ifndef {guard}",
+        f"#define {guard}",
+        f"// {header} -- GENERATED from {comp_class.__name__}.run_iter by waveflow "
+        f"(build/hwgen.py::task_files_to_str).  DO NOT EDIT: regenerate instead.",
+        f"// A single firing = one hls::task invocation; the runtime re-fires it, so there is no",
+        f"// command loop here and no INTERFACE pragma (the composite top owns the interface).",
+        f"// The @synthesizable hook bodies are HAND-WRITTEN and are not lowered from the Python.",
+        '#include "hls_stream.h"',
+        "#include <ap_int.h>",
+    ]
+    for s in _collect_schemas(tree, default_comp):
+        lines.append(f'#include "{_snake_case(s.cpp_class_name())}.h"')  # type: ignore[attr-defined]
+
+    hooks = _collect_hooks_with_params(tree)
+    if hooks:
+        ns = resolved_namespace(comp_class)
+        lines.append('')
+        indent = "    " if ns is not None else ""
+        if ns is not None:
+            lines.append(f"namespace {ns} {{")
+        for hook, tparams in hooks:
+            decl_lines = hook_signature_str(hook, template_params=tparams).split("\n")
+            decl_lines[-1] += ";"
+            for line in decl_lines:
+                lines.append(f"{indent}{line}")
+        if ns is not None:
+            lines.append("}")
+
+    lines.append('')
+    lines.append(task_signature(default_comp, ctx, task))
+    lines.append(to_cpp(tree, ctx))
+    lines.append('}')
+
+    # A templated hook lives in a .tpp that must be included after its declaration (mirrors
+    # header_to_cpp).  The .h lands in the same include/ dir as the .tpp, so the path is bare.
+    templated = [(h, p) for h, p in hooks if p]
+    if templated:
+        lines.append('')
+        for hook, _ in templated:
+            lines.append(f'#include "{kn}_{hook.__name__}_impl.tpp"')  # type: ignore[attr-defined]
+
+    lines.append('')
+    lines.append(f"#endif  // {guard}")
+
+    files = {header: "\n".join(lines) + "\n"}
+    for hook, tparams in hooks:
+        hname = hook.__name__  # type: ignore[attr-defined]
+        if tparams:
+            files[f"{kn}_{hname}_impl.tpp"] = impl_stub_to_tpp(default_comp, hook, tparams)
+        else:
+            files[f"{kn}_{hname}_impl.cpp"] = impl_stub_to_cpp(
+                default_comp, hook, header_name=header,
+            )
+    return files
 
 
 def kernel_files_to_str(
