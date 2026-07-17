@@ -8,6 +8,15 @@ summary: "Flow 3 — the same free-running DUT as Flow 2 (a free-running kernel 
 
 # Flow 3 — Free-running, concurrently driven
 
+> ⚠️ **SUPERSEDED — this flow was refuted and merged into [Flow 2](./freerun_seq.md).** The premise
+> here was that lifting Vitis's sequential-testbench limitation needed a concurrent SystemC harness
+> (one `SC_THREAD` per agent). It does not: the XSI BFM in Flow 2 drives every port cycle-by-cycle, so
+> it already *is* the concurrent harness — there is no sequential/concurrent split to justify two flows.
+> The realization vocabulary no longer contains `concurrent_systemc_tb`, and the flow table lists three
+> flows, not four. See `plans/xsi_tb_codegen.md` (SystemC refuted) and `plans/one_component_two_flows.md`
+> (the leaf/composite merge). This page is kept only for the design-history record below; nothing
+> generates a SystemC harness.
+
 **DUT output:** the *same* **free-running kernel** or **composite kernel** as the
 [sequentially driven](./freerun_seq.md) flow — one `ap_ctrl_none` [task](../components/freerun.md) or a
 [composite](../components/composite.md) network of them.

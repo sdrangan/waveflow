@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from waveflow.hw.codegen_targets import FREE_RUNNING_KERNEL
+from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.hw_component import ControlMode, HwComponent
 from waveflow.simulation.simobj import ProcessGen
 
@@ -49,13 +49,13 @@ class FreeRunComp(HwComponent):
     control_mode: ClassVar[ControlMode] = ControlMode.FREE_RUNNING
     _kernel_method: ClassVar[str] = 'run_iter'
 
-    #: The codegen targets that **exist for this kind** — a free-running kernel is the DUT of Flow 2.
-    #: It declares the *path*, not a guarantee: even once the target is implemented,
-    #: :func:`~waveflow.build.codegen_check.check` is what answers whether a given component makes it.
-    #: (See :class:`~waveflow.hw.hw_hostactivated.HostActivated` for why this is ``potential_`` and not
-    #: ``supported_``.)  A composite subclass renames this to ``composite_kernel`` until Stage 4 of
-    #: ``plans/one_component_two_flows.md`` collapses the two names.
-    potential_targets: ClassVar[frozenset[str]] = frozenset({FREE_RUNNING_KERNEL})
+    #: The codegen targets that **exist for this kind** — a free-running kernel is the DUT of Flow 2,
+    #: whether a leaf (one ``hls::task``) or a composite (one per child).  One target name,
+    #: ``composite_kernel``, for both: a leaf is the 1-task degenerate case.  It declares the *path*,
+    #: not a guarantee — :func:`~waveflow.build.codegen_check.check` is what answers whether a given
+    #: component actually makes it (see :class:`~waveflow.hw.hw_hostactivated.HostActivated` for why
+    #: this is ``potential_`` and not ``supported_``).
+    potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
     # -- kind: leaf (body) XOR composite (children) --------------------------------------------------
 

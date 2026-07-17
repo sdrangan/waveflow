@@ -3,15 +3,23 @@ title: Free-running, sequentially driven
 parent: Realization Flows
 nav_order: 2
 audience: python
-summary: "Flow 2 — a free-running DUT (a single free-running kernel or a composite kernel of hls::task tiles) verified at RTL by a sequential XSI TB: a cycle-based BFM driving the design in xsim through XSI. In work: the BFM is hand-written today; generating it from a SeqTB is the open build-step problem, with the interleaver as the intended first complete example."
+summary: "Flow 2 — a free-running DUT (a composite kernel: one hls::task for a leaf, one per child for a composite) verified at RTL by an XSI BFM, a cycle-based harness driving the design in xsim through XSI. Built: bit-exact for mem_r_stream / mem_copy / the interleaver, on a generated harness. This is now the single free-running flow — the former concurrent-SystemC Flow 3 was refuted and merged in."
 ---
 
-# Flow 2 — Free-running, sequentially driven
+# Flow 2 — Free-running kernel
 
-**DUT output:** a **free-running kernel** or a **composite kernel** — one or more `ap_ctrl_none`
+> **This is now the single free-running flow, and it is built.** Two earlier drafts folded in here:
+> the *concurrent SystemC* flow (old Flow 3) was refuted — the XSI BFM already drives every port
+> cycle-by-cycle, so it is the concurrent harness (see [freerun_conc.md](./freerun_conc.md)); and the
+> leaf-vs-composite target split (`free_running_kernel` / `composite_kernel`) collapsed to one target,
+> `composite_kernel`, with the `FreeRunComp` merge (`plans/one_component_two_flows.md`). The BFM was
+> hand-written when this page was first drafted; it is now **generated** (`tb_top_spec` +
+> `render_tb_harness`) and bit-exact under the XSI gates.
+
+**DUT output:** a **composite kernel** — one or more `ap_ctrl_none`
 [tasks](../components/freerun.md) (`hls::task t(foo, …)`), either a single task compiled as its own top
-or a [composite](../components/composite.md) network of them.
-**Testbench:** a **sequential XSI TB** — a cycle-based **BFM** that pumps the clock and models each
+(the 1-task case) or a [composite](../components/composite.md) network of them.
+**Testbench:** an **XSI BFM** — a cycle-based harness that pumps the clock and models each
 AXI-Stream / AXI-MM port, driving the elaborated RTL in `xsim` through **XSI**.
 
 Why RTL and not co-sim: an `ap_ctrl_none` + `m_axi` block **cannot be Vitis co-simulated**, so the

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from waveflow.hw.codegen_targets import COMPOSITE_KERNEL, FREE_RUNNING_KERNEL
+from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.hw_component import HwComponent
 from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.hw_freerun import FreeRunComp
@@ -21,18 +21,17 @@ def test_compositecomp_is_a_hwcomponent():
     assert issubclass(CompositeComp, HwComponent)
 
 
-def test_compositecomp_is_now_a_freerun_subclass():
-    """The merge is real: a composite IS a FreeRunComp. This replaces the old assertion that they were
-    disjoint siblings — that split is exactly what one_component_two_flows removed."""
-    assert issubclass(CompositeComp, FreeRunComp)
+def test_compositecomp_is_literally_freeruncomp():
+    """The merge is complete: after the target-name collapse, CompositeComp adds nothing over
+    FreeRunComp, so it IS FreeRunComp (a pure alias). This replaces both the old "disjoint siblings"
+    assertion and the interim "thin subclass" one. See plans/one_component_two_flows.md."""
+    assert CompositeComp is FreeRunComp
 
 
-def test_compositecomp_only_adds_the_target_name():
-    """The whole reason the subclass still exists: a composite lowers to composite_kernel, a leaf to
-    free_running_kernel — two names for one product, collapsed in Stage 4. Everything else is
-    inherited from FreeRunComp."""
+def test_leaf_and_composite_share_one_target():
+    """Both lower to composite_kernel — a leaf is the 1-task degenerate case, one product, one name."""
+    assert FreeRunComp.potential_targets == frozenset({COMPOSITE_KERNEL})
     assert CompositeComp.potential_targets == frozenset({COMPOSITE_KERNEL})
-    assert FreeRunComp.potential_targets == frozenset({FREE_RUNNING_KERNEL})
 
 
 def test_a_composite_with_children_is_passive():

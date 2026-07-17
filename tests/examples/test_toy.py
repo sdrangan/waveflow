@@ -6,7 +6,7 @@ quote this code verbatim, so executing it here is what stops those pages from si
 
 Scope is deliberately narrow — elaboration, the pysim golden, and the composite's structure.  These
 toys are a **tested pysim model in synthesizable form**, not a generated kernel; see
-``test_square_codegen_is_not_yet_a_free_running_task`` for the recorded gap, and ``examples/regmap``
+``test_square_codegen_is_not_yet_a_free_running_task`` for the recorded extractor gap, and ``examples/regmap``
 for a real end-to-end (build DAG + Vitis) example.
 """
 from __future__ import annotations
@@ -232,8 +232,9 @@ def test_square_codegen_is_not_yet_a_free_running_task():
     failure is what forced the update.  See `test_namespace_default_is_kernel_impl`.)
 
     When any gap closes this test fails loudly — which is the point: that is the signal to update
-    the doc.  This is what `check(Square, "free_running_kernel")` is meant to report once
-    plans/codegen_check_family.md lands.
+    the doc.  `check(Square, "composite_kernel")` now runs the real generator (composite_top_spec);
+    Square never wired the leaf machinery, so it currently raises rather than emitting this broken
+    top — see test_codegen_check.py::test_check_runs_the_real_generator_and_an_unwired_toy_still_cannot_lower.
     """
     from waveflow.build.hwgen import kernel_files_to_str
 

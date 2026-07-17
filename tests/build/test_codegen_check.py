@@ -23,12 +23,12 @@ from waveflow.build.elaborate import elaborate
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import (
     ALL_TARGETS,
+    BITSTREAM,
     COMPOSITE_KERNEL,
-    CONCURRENT_SYSTEMC_TB,
     CONTROL_DRIVEN_KERNEL,
-    FREE_RUNNING_KERNEL,
     IMPLEMENTED_TARGETS,
     SEQUENTIAL_VITIS_TB,
+    SEQUENTIAL_XSI_TB,
 )
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_hostactivated import HostActivated
@@ -150,7 +150,9 @@ def test_potential_targets_reads_the_classvar_for_class_and_instance():
     assert potential_targets(SimpFunComponent) == frozenset({CONTROL_DRIVEN_KERNEL})
     assert potential_targets(elaborate(SimpFunComponent)) == frozenset({CONTROL_DRIVEN_KERNEL})
     assert potential_targets(SimpFunTBHls) == frozenset({SEQUENTIAL_VITIS_TB})
-    assert potential_targets(Square) == frozenset({FREE_RUNNING_KERNEL})
+    # A leaf and a composite now share one target name — the merge collapsed free_running_kernel into
+    # composite_kernel (a leaf is the 1-task case). See plans/one_component_two_flows.md.
+    assert potential_targets(Square) == frozenset({COMPOSITE_KERNEL})
     assert potential_targets(ScaledSquare) == frozenset({COMPOSITE_KERNEL})
 
 
@@ -181,10 +183,11 @@ def test_gate1_fires_before_the_kind_check():
 # ==============================================================================================
 
 def test_gate2_target_not_potential_for_this_kind():
-    ok, msg = check(SimpFunComponent, CONCURRENT_SYSTEMC_TB)
+    # A host-activated DUT cannot lower to the XSI-TB target — a real name, wrong kind.
+    ok, msg = check(SimpFunComponent, SEQUENTIAL_XSI_TB)
     assert ok is False
     assert "not a potential target" in msg
-    assert CONCURRENT_SYSTEMC_TB in msg
+    assert SEQUENTIAL_XSI_TB in msg
     assert "SimpFunComponent" in msg
     assert CONTROL_DRIVEN_KERNEL in msg, "the message should name what IS potential"
 
@@ -199,51 +202,73 @@ def test_gate2_a_dut_target_is_not_a_tb_target():
 
 
 def test_gate2_beats_gate3_an_unimplemented_target_of_another_kind():
-    """`composite_kernel` is unimplemented AND not Square's kind — the kind answer is the useful one."""
-    ok, msg = check(Square, COMPOSITE_KERNEL)
+    """`bitstream` is unimplemented AND not Square's kind — the kind answer is the useful one.
+
+    (Was `composite_kernel`, which is now both Square's kind and implemented, so `bitstream` — the one
+    remaining unimplemented target, and one no source declares — plays the role.)"""
+    ok, msg = check(Square, BITSTREAM)
     assert ok is False
     assert "not a potential target" in msg
 
 
 # ==============================================================================================
 # Gate 3 — declared, but not implemented
+#
+# After the Flow-2 collapse, the ONLY unimplemented target is `bitstream`, and no real source
+# declares it — so gate 3 is exercised through a synthetic kind that does.
 # ==============================================================================================
 
-def test_gate3_free_running_kernel_is_declared_but_unimplemented():
-    ok, msg = check(Square, FREE_RUNNING_KERNEL)
+@dataclass
+class _BitstreamKind(_MinimalHostActivated):
+    """A kind whose only potential target is the (still-unimplemented) `bitstream` — the last live
+    case for gate 3 now that Flows 1 and 2 are built."""
+
+    cpp_kernel_name: ClassVar[str | None] = "bitstream_kind"
+    cpp_namespace: ClassVar[str | None] = "bitstream_kind_impl"
+    potential_targets: ClassVar[frozenset[str]] = frozenset({BITSTREAM})
+
+
+def test_gate3_bitstream_is_declared_but_unimplemented():
+    ok, msg = check(_BitstreamKind, BITSTREAM)
     assert ok is False
     assert "not implemented yet" in msg
-    assert FREE_RUNNING_KERNEL in msg
+    assert BITSTREAM in msg
     assert "docs/guide/flows" in msg, "the message should point at the flow that will build it"
 
 
-def test_gate3_composite_kernel_is_declared_but_unimplemented():
-    ok, msg = check(ScaledSquare)     # its only potential target
-    assert ok is False
-    assert "not implemented yet" in msg
-    assert COMPOSITE_KERNEL in msg
+def test_flow2_targets_are_now_implemented():
+    """The point of the collapse: composite_kernel + sequential_xsi_tb are BUILT, so they pass gate 3
+    and a well-formed Flow-2 component/testbench reaches gate 4 and validates via the real generator.
+
+    This is the pair to the old `test_gate3_*_is_declared_but_unimplemented` tests, inverted: what was
+    "declared but not built" is now built. See plans/one_component_two_flows.md."""
+    from examples.mem_copy.mem_copy import MemCopy
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+
+    assert {COMPOSITE_KERNEL, SEQUENTIAL_XSI_TB} <= IMPLEMENTED_TARGETS
+    assert check(MemCopy, COMPOSITE_KERNEL) == (True, None)          # composite DUT, real generator
+    assert check(MemCopyTB, SEQUENTIAL_XSI_TB) == (True, None)       # its XSI testbench
 
 
-def test_check_and_generate_disagree_about_square_on_purpose():
-    """`kernel_files_to_str(Square)` SUCCEEDS while `check(Square, "free_running_kernel")` says NO.
+def test_check_runs_the_real_generator_and_an_unwired_toy_still_cannot_lower():
+    """`kernel_files_to_str(Square)` SUCCEEDS, but `check(Square, "composite_kernel")` does NOT pass —
+    the point of the check family, updated for the collapse.
 
-    This looks like a contradiction and is instead the entire point of the family.
+    `generate` does not answer check's question: handed the `Square` toy it silently emits an
+    `ap_ctrl_hs` top with an unextracted hook body — *a different target than the one declared* — with
+    no exception (pinned in detail by test_toy.py::test_square_codegen_is_not_yet_a_free_running_task).
 
-    `generate` is not answering the question `check` asks.  Handed a `FreeRunComp`, codegen does not
-    say "I cannot emit a free-running task" — it silently emits an `ap_ctrl_hs` top with an
-    unextracted hook body (and an ill-formed namespace), i.e. *a different target than the one the
-    component declares*, with no exception.  `check` is what tells the truth `generate` does not:
-    `free_running_kernel` is not implemented, so nothing can lower to it today.
-
-    `tests/examples/test_toy.py::test_square_codegen_is_not_yet_a_free_running_task` pins that
-    broken emission in detail.  When the free-running path lands, BOTH tests must change together —
-    which is the alarm this test exists to be.
-    """
+    Now that `composite_kernel` is implemented, gate 4 runs the REAL generator (`composite_top_spec`)
+    for it. `Square` declares the target but never wired the leaf machinery (no `kernel_task`), so the
+    walk fails. INTERIM: the graph walk has no verdict exception yet, so this surfaces as a raised
+    `AttributeError` rather than a clean `(False, msg)` — the exception-taxonomy follow-up in
+    plans/one_component_two_flows.md is what turns it into a verdict. When it lands, this assertion
+    changes from `pytest.raises` to `(False, ...)`, and both tests move together."""
     from waveflow.build.hwgen import kernel_files_to_str
 
-    assert kernel_files_to_str(Square)                       # generate: fine
-    ok, msg = check(Square, FREE_RUNNING_KERNEL)             # check: no
-    assert ok is False and "not implemented yet" in msg
+    assert kernel_files_to_str(Square)                       # generate: fine (wrong target, silently)
+    with pytest.raises(AttributeError, match="kernel_task"):  # check: runs the real generator, fails
+        check(Square, COMPOSITE_KERNEL)
 
 
 # ==============================================================================================
@@ -266,7 +291,7 @@ class _TwoTargets(_MinimalHostActivated):
     cpp_kernel_name: ClassVar[str | None] = "two_targets"
     cpp_namespace: ClassVar[str | None] = "two_targets_impl"
     potential_targets: ClassVar[frozenset[str]] = frozenset(
-        {CONTROL_DRIVEN_KERNEL, FREE_RUNNING_KERNEL}
+        {CONTROL_DRIVEN_KERNEL, COMPOSITE_KERNEL}
     )
 
 
@@ -303,7 +328,7 @@ def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle(
     """
     from examples.block_scale.block_scale import BlockScaleComponent
 
-    for target in (None, CONTROL_DRIVEN_KERNEL, FREE_RUNNING_KERNEL):
+    for target in (None, CONTROL_DRIVEN_KERNEL, COMPOSITE_KERNEL):
         ok, msg = check(BlockScaleComponent, target)
         assert ok is False
         assert "not been migrated to an execution-model class" in msg

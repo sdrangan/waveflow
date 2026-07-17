@@ -9,10 +9,12 @@ checks the functional golden: each destination region equals a memcpy of its sou
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 
 from waveflow.hw.clock import Clock
+from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_component import HwParam
 from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.interface import StreamIF
@@ -42,6 +44,11 @@ class MemCopyTB(CompositeComp):
     exercise the free-running ``hls::task`` re-fire, and — because the driver never waits for a
     completion — they overlap, which is the whole point of the design.
     """
+
+    #: A testbench is not a synthesizable kernel — it lowers to the XSI harness (Flow 2's TB target),
+    #: not to ``composite_kernel`` (which it would otherwise inherit as a composite ``FreeRunComp``).
+    #: This is what makes ``check(MemCopyTB, "sequential_xsi_tb")`` reach gate 4 (tb_top_spec).
+    potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
 
     jobs: tuple = ((16, 4096 // 8, 128),)
     mem_dwidth: HwParam[int] = 64

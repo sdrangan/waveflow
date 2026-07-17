@@ -161,21 +161,21 @@ def test_sequencer_run_iter_is_extractable():
 
 
 def test_sequencer_codegen_gaps_are_still_open():
-    """TRIPWIRE: the gaps in the STANDALONE-top product (kernel_files_to_str), not the task body.
+    """TRIPWIRE: the gaps in the OLD extractor's STANDALONE-top path (kernel_files_to_str).
 
     These two gaps no longer block MemCopy — the composite builds a *generated* task body via
     ``TaskBodyStep``, and a body needs neither an ``ap_ctrl_none`` pragma (bodies carry no pragmas)
-    nor a boundary stream type.  What they still block is ``free_running_kernel``: Sequencer compiled
-    as its OWN ``ap_ctrl_none`` top, which is a different declared target.
+    nor a boundary stream type.  What they still block is the OLD extractor emitting Sequencer as its
+    own free-running top: `kernel_files_to_str` routes a `FreeRunComp` through the `control_driven`
+    extractor, which emits `ap_ctrl_hs` + `axi4s_word`, not the `ap_ctrl_none` task the design needs.
 
-    If this test FAILS, that is probably good news — someone implemented ``free_running_kernel`` or
-    aligned the stream convention.  Update the docs and delete this test.
+    Note this is the *extractor* path, distinct from the graph path `check(..., composite_kernel)` now
+    validates via `composite_top_spec` — that one IS implemented (Flow 2). This gap is the extractor's
+    free-running emission, still unbuilt. If this test FAILS, someone aligned the extractor or the
+    stream convention — update the docs and delete this test.
     """
     from waveflow.build.hwgen import kernel_files_to_str
-    from waveflow.hw.codegen_targets import FREE_RUNNING_KERNEL, IMPLEMENTED_TARGETS
     from examples.mem_copy.mem_copy import Sequencer
-
-    assert FREE_RUNNING_KERNEL not in IMPLEMENTED_TARGETS
 
     body = kernel_files_to_str(Sequencer)["mem_seq.cpp"]
     # Gap 1: emits a control-driven top, not the ap_ctrl_none a free-running hls::task needs.

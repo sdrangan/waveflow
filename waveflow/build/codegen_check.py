@@ -26,7 +26,14 @@ See ``plans/codegen_check_family.md``; the target vocabulary is
 """
 from __future__ import annotations
 
-from waveflow.hw.codegen_targets import ALL_TARGETS, IMPLEMENTED_TARGETS
+from waveflow.hw.codegen_targets import (
+    ALL_TARGETS,
+    COMPOSITE_KERNEL,
+    CONTROL_DRIVEN_KERNEL,
+    IMPLEMENTED_TARGETS,
+    SEQUENTIAL_VITIS_TB,
+    SEQUENTIAL_XSI_TB,
+)
 
 
 def _source_class(source) -> type:
@@ -115,7 +122,7 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
 
     1. **Unknown target** — not a name the vocabulary knows (a typo).
     2. **Not a potential target for the kind** — the name is real, but this kind has no such path
-       (``check(SomeHostActivated, "concurrent_systemc_tb")``).  This is the question the target axis
+       (``check(SomeHostActivated, "sequential_xsi_tb")``).  This is the question the target axis
        exists to answer.
     3. **Declared but not implemented** — the path exists for the kind but codegen cannot produce it
        yet (Flow 2/3/4 future work).
@@ -157,39 +164,62 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
             f"{_sorted(IMPLEMENTED_TARGETS)}). See docs/guide/flows/ for the flow that will build it."
         )
 
-    # Gate 4 — the rules.  Run the REAL extraction; the rules live there and nowhere else.
-    return _check_extracts(source, cls)
+    # Gate 4 — the rules.  Run the REAL generator for THIS target; the rules live there, nowhere else.
+    return _check_generates(source, cls, target)
 
 
-def _check_extracts(source, cls: type) -> tuple[bool, str | None]:
-    """Run the real extraction for *source* and turn a ``SynthesisError`` into a verdict.
+def _check_generates(source, cls: type, target: str) -> tuple[bool, str | None]:
+    """Run the real generator **for *target*** and turn its "cannot lower" signal into a verdict.
 
-    Deliberately calls :func:`~waveflow.build.hwcodegen.extract_testbench` /
-    :func:`~waveflow.build.hwcodegen.extract_kernel` and **discards the tree**: we want the rules
-    executed, not the output.  Every rule is inside them, so this cannot report a rule codegen does
-    not enforce, nor miss one it does.
+    Gate 4 must run *the same code* :func:`~waveflow.build.hwcodegen_steps` runs for *target* — a
+    second, "lightweight" copy of the rules would answer for rules that no longer exist and miss rules
+    that do.  But there is no single generator: a ``(source × target)`` matrix has several, and which
+    one applies is a property of the **target**, not the source's class.  So this dispatches on
+    *target* and runs that one, discarding its output (we want the rules executed, not the artifact):
+
+    * ``control_driven_kernel``  → :func:`~waveflow.build.hwcodegen.extract_kernel`
+    * ``sequential_vitis_tb``    → :func:`~waveflow.build.hwcodegen.extract_testbench`
+    * ``composite_kernel``       → :func:`~waveflow.build.composite_gen.composite_top_spec` (the graph
+      walk — a leaf is the 1-task case, so the same walk validates both)
+    * ``sequential_xsi_tb``      → :func:`~waveflow.build.composite_gen.tb_top_spec` (the TB graph walk)
+
+    **On the verdict exception.**  The two *extractor* paths raise ``SynthesisError`` for "not in the
+    synthesizable subset" — the one exception that is a legitimate *answer* to check's question;
+    anything else (``TypeError``/``AttributeError``/``ParamPurityError``/…) is a **bug**, and letting
+    it propagate keeps the traceback that explains it.  The two *graph* paths do not raise
+    ``SynthesisError`` — a malformed graph raises ``ValueError``/``TypeError`` — and those are **not
+    yet classified** as verdicts here: a well-formed composite/TB validates ``True`` by generating, and
+    a malformed one propagates loudly.  Giving the graph walk its own verdict exception (so check can
+    report "this graph will not lower" as ``(False, msg)`` instead of raising) is the deliberate
+    follow-up flagged in ``plans/one_component_two_flows.md`` — not folded in here to avoid changing
+    ``composite_top_spec``'s exception contract under its existing callers.
     """
-    # Local imports: hwgen/hwcodegen pull in the whole emitter, and this module is imported for a
-    # predicate.  (Matches the local-import style the rest of build/ uses to keep load order loose.)
+    # Local imports: the emitter/graph modules are heavy and this module is imported for a predicate.
     from waveflow.build.elaborate import elaborate
-    from waveflow.build.hwcodegen import (
-        SynthesisError,
-        extract_kernel,
-        extract_testbench,
-    )
+    from waveflow.build.hwcodegen import SynthesisError
 
     comp = elaborate(cls) if isinstance(source, type) else source
 
     try:
-        if getattr(cls, "_is_testbench", False):
-            extract_testbench(comp)
-        else:
+        if target == CONTROL_DRIVEN_KERNEL:
+            from waveflow.build.hwcodegen import extract_kernel
             extract_kernel(comp)
+        elif target == SEQUENTIAL_VITIS_TB:
+            from waveflow.build.hwcodegen import extract_testbench
+            extract_testbench(comp)
+        elif target == COMPOSITE_KERNEL:
+            from waveflow.build.composite_gen import composite_top_spec
+            composite_top_spec(comp)
+        elif target == SEQUENTIAL_XSI_TB:
+            from waveflow.build.composite_gen import tb_top_spec
+            tb_top_spec(comp)
+        else:
+            # Unreachable: gate 3 has already rejected any non-implemented target, and every
+            # implemented target is handled above. If this fires, IMPLEMENTED_TARGETS grew a name
+            # without a generator wired here.
+            raise AssertionError(
+                f"check gate 4 has no generator for implemented target {target!r}"
+            )
     except SynthesisError as e:
-        # SynthesisError ONLY. It is the extractor's "this is not in the synthesizable subset"
-        # verdict — the one exception that is a legitimate answer to the question `check` asks.
-        # Anything else (TypeError, AttributeError, ParamPurityError, ...) is a BUG in the source
-        # or in codegen, not a validation result; swallowing it would report "not synthesizable"
-        # for a broken elaboration and hide the traceback that explains it. Let it propagate.
         return False, str(e)
     return True, None
