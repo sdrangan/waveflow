@@ -190,7 +190,63 @@ is untouched for the same reason.
   restated in C++. One statement of a test, two backends (pysim, XSI) — the same relationship
   `mem_copy_sim.py` already has to the golden.
 
-## Stage 5 — the TB is a `CompositeComp` (**premise replaced 2026-07-16**)
+## Stage 5 — **LARGELY DONE** (`cb1933e`, `8b830fe`, 2026-07-17)
+
+`mem_copy`'s testbench runs on a **generated harness** and the gate holds at **2835**.
+
+    mem_copy_bfm_tb.cpp   290 hand-written  ->  89 hand-written
+                                            +  146 generated (harness + ports + vectors)
+                                            +  369 shared protocol library (written once)
+
+The 89 that remain are the test and nothing else — the memory pattern and the golden. That is the
+right residue: a component graph knows which models drive which ports; it cannot know what you meant
+to check.
+
+**Built:** `MemCopyTB(CompositeComp)` (pysim unchanged — its gate); `bfm_model()` on
+`CmdDriver`/`WordSink`/`MemComponent`; `tb_top_spec()` (the walk); `render_tb_harness()` (the emit).
+
+**What the walk settled, empirically rather than on paper:**
+- **The DUT's boundary is the spine.** Iterate boundary ports, not participants, so "did every RTL
+  port get a model?" is structural. An unwired port raises at generate time instead of hanging.
+- **One crossbar edge -> two slaves + a shared arena** — confirming edge-owned lowering. As
+  participants, the pysim and XSI graphs would need different nodes.
+- **Read-vs-write comes from the boundary KIND, not the memory.** A `MemComponent` need not know how
+  it is driven.
+- **Declaration order is construction order** — `sim` before any model, the shared arena before its
+  slaves.
+- **An `extra_arg` naming a shared object becomes a member; anything else becomes a ctor param.**
+  That rule is what makes `shared` do real work.
+
+**The "two scenarios" worry was not a decision.** "One statement, two backends" = **one class, two
+instantiations**, exactly like `MemCopy(mem_dwidth=...)`. `XSI_JOBS` is just `MemCopyTB`'s `jobs=`.
+`render_xsi_vectors` now reads everything off a real instance; the only output change was `MEM_NW`
+8192 -> 24640 (derived, not hand-picked) — `SRC_W`/`DST_W`/`CMD_WORDS` byte-identical, which is what
+proved it was the same scenario.
+
+### Open: it does NOT generalize to a leaf DUT (found 2026-07-17)
+
+`_find_dut` keys on `boundary`, and **only a composite declares one**. `MemRStream` has no
+`boundary` — a standalone mem-stream kernel's ports are hardcoded in
+`mem_stream_gen.top_spec_for`. So `mem_r`/`mem_w` cannot get a generated harness today.
+
+**This is the same gap as the `free_running_kernel` / `composite_kernel` merge** already flagged in
+Stage 5b. `top_spec_for`'s own docstring calls a standalone kernel *"the 1-task degenerate case"* —
+but it cannot actually BE that case while its ports are hand-listed instead of declared. Give a leaf
+a `boundary` and both fall out: `top_spec_for` becomes `composite_top_spec` with one task, and
+`tb_top_spec` walks a leaf DUT for free. **One fix, two payoffs** — worth doing together, and worth
+doing before generalising the TB emitter any further.
+
+### Not worth doing: emit `expected` as data
+
+Stage 4 left `known_word` stated in both the TB's C++ and `MemCopyTB.expected`, and an earlier note
+called closing it "next". On reflection: **no.** The TB writes the pattern into SRC, the DUT copies
+SRC->DST, the TB checks DST against the same pattern — it is **self-consistent**, so a drifted
+pattern still tests a real copy and cannot produce a wrong answer. Closing it costs a ~40KB header of
+2048 literals to remove a duplication with no failure mode. Contrast the *packing rule*, which was
+worth removing because a drift there sends malformed commands and makes the test meaningless. Same
+shape of duplication, opposite verdict — the difference is whether drift can lie.
+
+## Stage 5 (original framing) — the TB is a `CompositeComp` (**premise replaced 2026-07-16**)
 
 **The original premise was wrong, and the open question is answered — negatively.** Stage 5 used to
 ask: is `sequential_xsi_tb` just `sequential_vitis_tb`'s extraction with a different emitter backend?
