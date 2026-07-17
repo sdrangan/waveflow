@@ -251,11 +251,15 @@ class MemCopy(CompositeComp):
             StreamEdge("copy_data", self.rstream.m_out, self.wstream.s_in),
         ]
         #: Boundary ports (name, endpoint, kind, bundle) — order == top signature order.
+        # (name, endpoint, bundle).  No `kind`: the endpoint's TYPE says whether it is an input, an
+        # output, or a const/plain m_axi pointer -- restating it here could only ever disagree.
+        # `bundle` stays because it is genuinely not the endpoint's: MemWStream.m_mem is gmem0
+        # standalone and gmem1 here.  See plans/endpoint_types_not_tags.md.
         self.boundary = [
-            ("s_cmd", self.seq.s_cmd, "axis_in", None),
-            ("m_in", self.rstream.m_mem, "maxi_read", "gmem0"),
-            ("m_out", self.wstream.m_mem, "maxi_write", "gmem1"),
-            ("s_done", self.wstream.s_done, "axis_out", None),
+            ("s_cmd", self.seq.s_cmd, None),
+            ("m_in", self.rstream.m_mem, "gmem0"),
+            ("m_out", self.wstream.m_mem, "gmem1"),
+            ("s_done", self.wstream.s_done, None),
         ]
         #: Command-struct headers the generated top #includes (single source with the pysim .get()).
         self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))

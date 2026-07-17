@@ -55,7 +55,7 @@ from waveflow.hw.interface import (  # noqa: E402
     StreamIFMaster,
     StreamIFSlave,
 )
-from waveflow.hw.memif import MMIFMaster  # noqa: E402
+from waveflow.hw.memif import MMIFReadMaster, MMIFWriteMaster  # noqa: E402
 from waveflow.hw.mem_stream import KernelTask, WORD_BW_SUPPORTED  # noqa: E402
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 
@@ -181,7 +181,9 @@ class IlMemR(FreeRunComp):
         self.nw = _nwords(int(self.n), self.lw)
         self.cmd_in = StreamIFSlave(name=f"{self.name}_cmd_in", sim=self.sim, bitwidth=w,
                                     has_tlast=False)
-        self.m_mem = MMIFMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
+        # The sole m_axi READ owner -- the type declares it, so the const pointer + stable pragma
+        # derive from here rather than from a `kind` string in the composite's boundary.
+        self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
         self.cmd_out = StreamIFMaster(name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w,
                                       has_tlast=False)
         self.pwords = StreamIFMaster(name=f"{self.name}_pwords", sim=self.sim, bitwidth=w,
@@ -368,7 +370,8 @@ class IlMemW(FreeRunComp):
                                     has_tlast=False)
         self.ywords = StreamIFSlave(name=f"{self.name}_ywords", sim=self.sim, bitwidth=w,
                                     has_tlast=False)
-        self.m_mem = MMIFMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
+        # The sole m_axi WRITE owner (see IlMemR.m_mem).
+        self.m_mem = MMIFWriteMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
         self.s_done = StreamIFMaster(name=f"{self.name}_s_done", sim=self.sim, bitwidth=w,
                                      has_tlast=False)
         for ep in (self.cmd_in, self.ywords, self.m_mem, self.s_done):
@@ -465,10 +468,10 @@ class InterleaverCanon(CompositeComp):
             SobEdge("y_blk", self.compute.y_blk, self.store.y_blk, elem_bw=w, block_n=self.nw),
         ]
         self.boundary = [
-            ("s_cmd", self.rx.s_cmd, "axis_in", None),
-            ("m_in", self.memr.m_mem, "maxi_read", "gmem0"),
-            ("m_out", self.memw.m_mem, "maxi_write", "gmem1"),
-            ("s_done", self.memw.s_done, "axis_out", None),
+            ("s_cmd", self.rx.s_cmd, None),
+            ("m_in", self.memr.m_mem, "gmem0"),
+            ("m_out", self.memw.m_mem, "gmem1"),
+            ("s_done", self.memw.s_done, None),
         ]
         self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
         self.extra_includes = ("hls_streamofblocks.h",)

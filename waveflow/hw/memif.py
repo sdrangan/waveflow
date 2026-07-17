@@ -63,7 +63,7 @@ import numpy as np
 import simpy
 
 from waveflow.hw.interface import (
-    InterfaceEndpoint, QueuedTransferIF, Words, port_read, port_write,
+    InterfaceEndpoint, QueuedTransferIF, Words, _classify_port_dir, port_read, port_write,
 )
 from waveflow.hw.hwstmt import MMArrayReadStmt, MMArrayWriteStmt, SynthCallStmt
 from waveflow.hw.synth import synthesizable
@@ -677,6 +677,71 @@ class MMIFMaster(InterfaceEndpoint):
 
 
 #: A per-transfer instrumentation hook ``(rw, i0, nwords, tstart, tend) -> None`` — fired by
+# ---------------------------------------------------------------------------
+# Directional m_axi masters — the direction is the TYPE, not a tag beside it
+# ---------------------------------------------------------------------------
+
+class _DirectionalMMIFMaster(MMIFMaster):
+    """An :class:`MMIFMaster` that declares which channel direction it uses.
+
+    **Why the type and not a tag.**  Codegen needs to know whether an ``m_axi`` master is read-only
+    (``const T*`` + ``#pragma HLS stable``, AR/R channels) or written (``T*``, AW/W/B).  That is not
+    visible on a plain :class:`MMIFMaster` — ``MemRStream.m_mem`` and ``MemWStream.m_mem`` are the
+    same class — so the fact had to be supplied from the side: a hardcoded table in
+    ``mem_stream_gen.top_spec_for``, a ``kind`` string in every composite's ``boundary``, and the
+    unused ``as_dir``/``@port_read`` capability view.  Three side-channels for one missing
+    declaration.  Declaring it on the type is the same call this codebase already made for execution
+    models (``hw_freerun``: *"the execution model is declared by the class ... codegen never has to
+    infer"*) and for codegen kinds (*"class states the kind, check() states the fitness"*).  A tag is
+    invisible to ``check()``; a type is not.  See ``plans/endpoint_types_not_tags.md``.
+
+    The restriction is **derived, not hand-listed**: the transaction methods are already tagged
+    ``@port_read`` / ``@port_write``, so a wrong-direction call is refused by consulting the same
+    classifier :class:`CapabilityView` uses.  Adding a method to ``MMIFMaster`` therefore cannot
+    leave this class silently permissive.
+
+    Subclasses of :class:`MMIFMaster` on purpose: every ``isinstance(ep, MMIFMaster)`` downstream
+    (e.g. ``_discover_mm_masters``) keeps working.  A capability *view* would not — it is a proxy,
+    not an ``MMIFMaster``, so the port would vanish from codegen entirely.
+    """
+
+    #: ``'R'`` or ``'W'`` — set by the concrete subclass.
+    port_dir: ClassVar[str] = 'RW'
+
+    def __getattribute__(self, name: str):
+        attr = super().__getattribute__(name)
+        if name.startswith('_'):
+            return attr
+        want = object.__getattribute__(self, '__class__').port_dir
+        got = _classify_port_dir(name, attr)
+        if got is not None and got != want:
+            raise AttributeError(
+                f"{type(self).__name__}.{name} is a "
+                f"{'read' if got == 'R' else 'write'} operation, but this endpoint declares "
+                f"port_dir={want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
+                f"the direction is the type, so codegen can lower it without being told separately."
+            )
+        return attr
+
+
+class MMIFReadMaster(_DirectionalMMIFMaster):
+    """An ``m_axi`` master this component only **reads** through.
+
+    Lowers to ``const T* port`` + ``#pragma HLS stable`` (AR/R channels only).  The ``const`` makes a
+    stray write a compile error in the generated C++, and this class makes it an ``AttributeError``
+    in the Python model — the same claim, enforced at both levels, declared once.
+    """
+    port_dir: ClassVar[str] = 'R'
+
+
+class MMIFWriteMaster(_DirectionalMMIFMaster):
+    """An ``m_axi`` master this component only **writes** through.
+
+    Lowers to a plain ``T* port`` (AW/W/B channels).
+    """
+    port_dir: ClassVar[str] = 'W'
+
+
 #: :meth:`Region.read_slice` / :meth:`Region.write_slice` after each transfer so a loosely-timed
 #: component can record it (the timeline) without the data path ever unpacking timing.  ``rw`` is
 #: ``"read"`` / ``"write"``; ``i0`` is the element start index.

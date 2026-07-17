@@ -103,3 +103,69 @@ def test_mem_copy_binding_matches_its_real_boundary():
     # every axis port the top declares is bound by its own name
     for axis in ("s_cmd", "s_done"):
         assert f"#pragma HLS INTERFACE axis port={axis}" in top and f'"{axis}"' in h
+
+
+# ---------------------------------------------------------------------------
+# The direction is the TYPE, not a tag beside it (plans/endpoint_types_not_tags.md)
+# ---------------------------------------------------------------------------
+
+def test_kind_is_derived_from_the_endpoint_type():
+    """Lowering is a function of the type. Nothing infers; nothing is told separately."""
+    from waveflow.build.composite_gen import kind_of_endpoint
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.hw.memif import MMIFReadMaster, MMIFWriteMaster
+    from waveflow.simulation.simulation import Simulation
+
+    sim = Simulation()
+    assert kind_of_endpoint(StreamIFSlave(name="a", sim=sim, bitwidth=64)) == "axis_in"
+    assert kind_of_endpoint(StreamIFMaster(name="b", sim=sim, bitwidth=64)) == "axis_out"
+    assert kind_of_endpoint(MMIFReadMaster(name="r", sim=sim, bitwidth=64)) == "maxi_read"
+    assert kind_of_endpoint(MMIFWriteMaster(name="w", sim=sim, bitwidth=64)) == "maxi_write"
+
+
+def test_an_undeclared_maxi_master_is_refused_not_guessed():
+    """A bare MMIFMaster under-specifies: is its pointer const or plain?
+
+    Refusing is the point. It is legal hardware (read+write m_axi lowers to a plain pointer with all
+    channels), but guessing here is exactly the side-channel this design deletes -- and guessing
+    wrong emits a `const` pointer for a port that gets written. It caught a real case on the day it
+    landed: the interleaver's IlMemR/IlMemW had never declared their direction either.
+    """
+    import pytest
+    from waveflow.build.composite_gen import kind_of_endpoint
+    from waveflow.hw.memif import MMIFMaster
+    from waveflow.simulation.simulation import Simulation
+
+    bare = MMIFMaster(name="m", sim=Simulation(), bitwidth=64)
+    with pytest.raises(ValueError, match="does not declare a direction"):
+        kind_of_endpoint(bare)
+
+
+def test_a_read_master_refuses_a_write_in_the_model_too():
+    """The same declaration enforces at both levels: `const` in the emitted C++, AttributeError in
+    the Python model. The restriction is DERIVED from the @port_read/@port_write tags the methods
+    already carry, so adding a method to MMIFMaster cannot leave this silently permissive."""
+    import pytest
+    from waveflow.hw.memif import MMIFMaster, MMIFReadMaster
+    from waveflow.simulation.simulation import Simulation
+
+    r = MMIFReadMaster(name="r", sim=Simulation(), bitwidth=64)
+    assert isinstance(r, MMIFMaster), "downstream isinstance(ep, MMIFMaster) must keep working"
+    assert callable(r.read)
+    with pytest.raises(AttributeError, match="is a write operation"):
+        r.write
+
+
+def test_a_stated_kind_must_agree_with_the_type():
+    """Legacy 4-tuple boundaries still parse, but a disagreement is an error rather than a silent
+    win for one side -- one of the two is wrong, and trusting either is how a const pointer lands on
+    a written port."""
+    import pytest
+    from waveflow.build.composite_gen import _unpack_boundary
+    from waveflow.hw.memif import MMIFReadMaster
+    from waveflow.simulation.simulation import Simulation
+
+    ep = MMIFReadMaster(name="r", sim=Simulation(), bitwidth=64)
+    assert _unpack_boundary(("m_in", ep, "maxi_read", "gmem0")) == ("m_in", ep, "gmem0")
+    with pytest.raises(ValueError, match="declares kind 'maxi_write' but its endpoint"):
+        _unpack_boundary(("m_in", ep, "maxi_write", "gmem0"))

@@ -178,6 +178,62 @@ class SobEdge:
                 f"{self.depth}> {self.name};")
 
 
+def kind_of_endpoint(ep) -> str:
+    """The boundary kind an endpoint lowers to, **derived from its type**.
+
+    The direction is the type, not a tag beside it: a ``StreamIFSlave`` is an input, a
+    ``MMIFReadMaster`` is a ``const`` pointer.  Nothing infers, and nothing has to be told separately
+    — the same call this codebase already makes for execution models (``hw_freerun``: *"the execution
+    model is declared by the class ... codegen never has to infer"*).  See
+    ``plans/endpoint_types_not_tags.md``.
+
+    A bare :class:`~waveflow.hw.memif.MMIFMaster` is **refused**, not defaulted.  It is legal
+    hardware (a read+write ``m_axi`` lowers to a plain pointer with all channels), but it
+    under-specifies: guessing a direction here is exactly the side-channel this function exists to
+    delete, and guessing wrong emits a ``const`` pointer for a port that is written.
+    """
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFWriteMaster
+
+    if isinstance(ep, MMIFReadMaster):
+        return "maxi_read"
+    if isinstance(ep, MMIFWriteMaster):
+        return "maxi_write"
+    if isinstance(ep, MMIFMaster):
+        raise ValueError(
+            f"{type(ep).__name__} '{getattr(ep, 'name', '?')}' does not declare a direction, so its "
+            f"pointer cannot be lowered (const + stable, or plain?). Construct it as an "
+            f"MMIFReadMaster or MMIFWriteMaster — the direction is the type."
+        )
+    if isinstance(ep, StreamIFSlave):
+        return "axis_in"
+    if isinstance(ep, StreamIFMaster):
+        return "axis_out"
+    raise ValueError(f"no boundary kind for endpoint type {type(ep).__name__}")
+
+
+def _unpack_boundary(entry) -> tuple[str, object, str | None]:
+    """Accept a boundary entry as ``(name, ep, bundle)`` — or legacy ``(name, ep, kind, bundle)``.
+
+    The 4-tuple's ``kind`` is now **derived from the endpoint's type**, so stating it is a
+    restatement.  Legacy entries are still accepted, but the stated kind must *agree* with the type:
+    a disagreement means one of them is wrong, and silently trusting either is how a `const` pointer
+    ends up on a port that gets written.
+    """
+    if len(entry) == 3:
+        name, ep, bundle = entry
+        return name, ep, bundle
+    name, ep, kind, bundle = entry
+    derived = kind_of_endpoint(ep)
+    if kind != derived:
+        raise ValueError(
+            f"boundary port '{name}' declares kind {kind!r} but its endpoint "
+            f"({type(ep).__name__}) implies {derived!r}. The type is the source of truth — drop the "
+            f"kind from the boundary entry, or construct the endpoint with the direction you meant."
+        )
+    return name, ep, bundle
+
+
 def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtPort:
     """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas)."""
     if kind in ("axis_in", "axis_out"):
@@ -216,9 +272,10 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         internal_streams.append(edge.decl(width))
 
     ports: list[ExtPort] = []
-    for name, ep, kind, bundle in comp.boundary:
+    for entry in comp.boundary:
+        name, ep, bundle = _unpack_boundary(entry)
         ep_arg[id(ep)] = name
-        ports.append(_boundary_port(name, kind, width, bundle))
+        ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle))
 
     tasks: list[TaskInst] = []
     for sub in comp.ordered_subcomps:
@@ -368,7 +425,9 @@ def tb_top_spec(tb) -> TbSpec:
     shared: dict[str, tuple[str, str, tuple[str, ...]]] = {}
     models: list[BfmInst] = []
 
-    for name, ep, kind, bundle in dut.boundary:
+    for entry in dut.boundary:
+        name, ep, bundle = _unpack_boundary(entry)
+        kind = kind_of_endpoint(ep)
         port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
         part = None
         for peer in peers.get(id(ep), []):

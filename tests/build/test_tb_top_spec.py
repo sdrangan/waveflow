@@ -83,14 +83,16 @@ def test_the_boundary_is_the_spine_every_rtl_port_gets_a_model():
     unmodelled port is impossible rather than merely unlikely."""
     tb = _tb()
     spec = tb_top_spec(tb)
-    assert {m.name for m in spec.models} == {n for n, _ep, _k, _b in tb.dut.boundary}
+    assert {m.name for m in spec.models} == {e[0] for e in tb.dut.boundary}
 
 
 def test_an_unwired_dut_port_fails_loudly():
     """An unmodelled port would leave the kernel waiting on a wire nobody drives — a hang thousands
     of cycles later with no diagnostic. Refuse at generate time instead."""
     tb = _tb()
-    tb.dut.boundary = tuple(tb.dut.boundary) + (("s_ghost", object(), "axis_in", None),)
+    from waveflow.hw.interface import StreamIFSlave
+    ghost = StreamIFSlave(name="s_ghost", sim=tb.sim, bitwidth=64, has_tlast=False)
+    tb.dut.boundary = tuple(tb.dut.boundary) + (("s_ghost", ghost, None),)
     with pytest.raises(ValueError, match="not wired to any testbench participant"):
         tb_top_spec(tb)
 

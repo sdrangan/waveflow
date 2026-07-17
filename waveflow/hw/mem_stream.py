@@ -51,7 +51,7 @@ from waveflow.hw.dataschema import DataArray, IntField, ParamSchema
 from waveflow.hw.hw_component import HwParam
 from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
-from waveflow.hw.memif import MMIFMaster
+from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFWriteMaster
 from waveflow.hw.param import Param
 from waveflow.simulation.simobj import ProcessGen
 
@@ -197,9 +197,11 @@ class MemRStream(FreeRunComp):
         super().__post_init__()
         self._cmd_cls = MRCmd.specialize(max_xfer_len=int(self.max_xfer_len))
         self._complete_cls = MemComplete.specialize(max_xfer_len=int(self.max_xfer_len))
-        # m_mem is the sole read owner — bound 'R' so a stray write is a wire-up error and the
-        # generated pointer is const (the @port_read capability, plans/component.md).
-        self.m_mem = MMIFMaster(
+        # m_mem is the sole read owner, and the TYPE says so: a stray write is an AttributeError in
+        # the model and a compile error in the generated C++ (const pointer + #pragma HLS stable),
+        # both derived from this one declaration rather than restated in a codegen table.
+        # See plans/endpoint_types_not_tags.md.
+        self.m_mem = MMIFReadMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
         self.s_cmd = StreamIFSlave(
             name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),
@@ -304,7 +306,8 @@ class MemWStream(FreeRunComp):
         super().__post_init__()
         self._cmd_cls = MWCmd.specialize(max_xfer_len=int(self.max_xfer_len))
         self._complete_cls = MemComplete.specialize(max_xfer_len=int(self.max_xfer_len))
-        self.m_mem = MMIFMaster(
+        # The sole write owner — the type declares it (see MemRStream.m_mem above).
+        self.m_mem = MMIFWriteMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
         self.s_cmd = StreamIFSlave(
             name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),
