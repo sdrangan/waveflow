@@ -87,7 +87,41 @@ in declaration order — which is exactly what today's hand-written values alrea
 endpoint carries a default the parent may override. **Prefer the policy**: it deletes the last
 declaration instead of relocating it, and it cannot disagree with itself.
 
-## Stages
+## Status — Stages 1-4 DONE (91b240e, 7ca93d5, ecafaf3)
+
+Every stage held its gate: all four tops (`mem_r_stream`, `mem_w_stream`, `mem_copy`,
+`interleaver_canon`) and every generated header/`.tcl` come out **byte-identical**, `-m xsi` stays at
+8 passed, fast loop at the 6-failure baseline. A boundary entry went
+`(name, ep, "maxi_read", "gmem0")` -> `(name, ep)`, and `FreeRunComp` now declares nothing at all.
+
+All four predicted payoffs landed. Two things the work itself corrected:
+
+**`@port_read`/`@port_write` are NOT deletable — Stage 1 claimed them.** The plan below assumed
+nothing used the tags. That was true when written and false three commits later:
+`_DirectionalMMIFMaster` refuses a wrong-direction call by asking `_classify_port_dir`, which reads
+exactly those tags. So the tags are the *mechanism the types are built on*, not a rival to them.
+That is a better outcome than deleting them — the type is what codegen dispatches on, the tags are
+how the type enforces itself, and there is one place saying which methods read and which write.
+
+**`as_dir`/`CapabilityView` are still unclaimed** — test-only, no production caller, in both
+`interface.py` and `memif.py`. Which is the evidence the plan wanted. But per *Not in scope* below,
+delete only on confirmation: a type cannot express per-binding narrowing, so if that is ever wanted
+`as_dir` is the shape for it. Nothing wants it today.
+
+### Stage 5 — vocabulary (NOT done; needs a decision)
+
+Merging `free_running_kernel` into `composite_kernel` is now *justified by the code*: after Stage 3 a
+leaf walks through the same generator as a composite, so they are one product with N=1, not two. But
+`check()` rejects unknown target names, so the vocabulary is load-bearing and collapsing a declared
+name is a decision, not a refactor. Left for review.
+
+The other predicted payoff, also unbuilt: `tb_top_spec` can now walk a **leaf** DUT, so `mem_r_stream`
+and `mem_w_stream` could get generated XSI harnesses like `mem_copy`'s. What blocks it is not the
+walk — it is that `mem_stream_sim.py` builds its harnesses inside `run_read`/`run_write` functions
+rather than as a `CompositeComp` TB class, so there is no graph to walk. Restructuring that file is
+the actual task, and it is a choice about that file, not a consequence of this plan.
+
+## Stages (as planned)
 
 Each gated the same way, which is what makes this safe: **the generated `.cpp` must come out
 byte-identical**. This is a refactor; if the output moves, the change is wrong.
