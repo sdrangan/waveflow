@@ -2,6 +2,7 @@
 title: Full system, on hardware
 parent: Realization Flows
 nav_order: 4
+nav_exclude: true   # Future flow (not one of the two built sim flows) — hidden until built; kept for the record
 audience: python
 summary: "Flow 4 — the assembled multi-block system taken all the way to a bitstream: blocks exported as IP, wired in Vivado IPI, and run on the FPGA with the host CPU as the driver. No simulation. Future work on the RFSoC bring-up path."
 ---

@@ -2,6 +2,7 @@
 title: Free-running, concurrently driven
 parent: Realization Flows
 nav_order: 3
+nav_exclude: true   # SUPERSEDED (Flow 3 refuted, merged into flows/concurrent/) — kept for the record
 audience: python
 summary: "Flow 3 — the same free-running DUT as Flow 2 (a free-running kernel or composite of tasks), driven by a concurrent SystemC TB (one SC_THREAD per channel) in xsim through XSI, instead of a single sequential BFM. The long-term flow: it restores the parallel-process model at the RTL level. The XSI+SystemC mechanism is proven in isolation; generating the harness is future work."
 ---

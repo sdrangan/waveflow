@@ -2,6 +2,7 @@
 title: Free-running, sequentially driven
 parent: Realization Flows
 nav_order: 2
+nav_exclude: true   # SUPERSEDED by flows/concurrent/ — kept for content mining; remove when harvested
 audience: python
 summary: "Flow 2 — a free-running DUT (a composite kernel: one hls::task for a leaf, one per child for a composite) verified at RTL by an XSI BFM, a cycle-based harness driving the design in xsim through XSI. Built: bit-exact for mem_r_stream / mem_copy / the interleaver, on a generated harness. This is now the single free-running flow — the former concurrent-SystemC Flow 3 was refuted and merged in."
 ---

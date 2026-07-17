@@ -2,6 +2,7 @@
 title: Control-driven kernel
 parent: Realization Flows
 nav_order: 1
+nav_exclude: true   # SUPERSEDED by flows/sequential/ — kept for content mining; remove when harvested
 audience: python
 api: [HlsCodegenStep, FunctionalVerifyStep, ValidateTimingStep]
 summary: "Flow 1 — a control_driven_kernel verified by a sequential_vitis_tb through C-simulation and RTL co-simulation. The simplest path, because the kernel is a function: the testbench calls it, and Vitis generates the RTL harness for you. Three gates — bit-exact against the Python golden, pipeline II <= 1, and measured RTL cycles within tolerance of the Python prediction. Built and green; the worked instance is examples/regmap."
