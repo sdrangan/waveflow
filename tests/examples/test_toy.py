@@ -306,17 +306,23 @@ def test_scaled_square_declares_no_codegen_descriptors():
     """Characterization test: the composite toy is the pysim *shape*, not a generated top.
 
     `composite_top_spec` builds the top from the `ordered_subcomps` / `internal_edges` / `boundary`
-    descriptors that the real composites (`MemCopy`, `InterleaverCanon`) carry by hand alongside
-    their `add_comp`/`add_if` graph.  The toy deliberately declares none of them — backing the claim
-    made in docs/guide/components/composite.md.  Adding them is out of scope (plans/toy_examples.md).
+    descriptors that the real composites (`MemCopy`, `InterleaverCanon`) carry by hand alongside their
+    `add_comp`/`add_if` graph.  The toy declares none of them — backing the claim in
+    docs/guide/components/composite.md.  Adding them is out of scope (plans/toy_examples.md).
+
+    After the FreeRunComp merge (plans/one_component_two_flows.md) these are *derived* properties, so
+    they always resolve — "declares none" now means the toy never OVERRIDES them (the override lives
+    under the private `_boundary` / `_internal_edges` / `_ordered_subcomps` keys), leaving the derived
+    leaf-defaults, which are not a valid composite top.  `composite_top_spec` still refuses it — now
+    with a clear "composite ... does not declare self.boundary" error instead of an absent attribute.
     """
     from waveflow.build.composite_gen import composite_top_spec
 
     dut = ScaledSquare(name="ss", sim=Simulation(), clk=Clock(freq=100e6))
-    for attr in ("ordered_subcomps", "internal_edges", "boundary"):
-        assert not hasattr(dut, attr)
+    for key in ("_boundary", "_internal_edges", "_ordered_subcomps"):
+        assert key not in dut.__dict__, "the toy must not declare codegen descriptors"
 
-    with pytest.raises(AttributeError, match="internal_edges"):
+    with pytest.raises(TypeError, match="composite .* does not declare self.boundary"):
         composite_top_spec(dut, width=32)
 
 
