@@ -22,7 +22,7 @@ you never touch SimPy directly:
 - `self.event()` — create a bare event to wait on / fire.
 - `self.now` — the current simulation time.
 
-[Hardware components](../components/), [interfaces](../interface/), [loggers](./logging.md), and
+[Hardware components](../flows/components.md), [interfaces](../interface/), [loggers](./logging.md), and
 channels are all `SimObj`s — so the simplest possible simulation is just a couple of `SimObj`s with no
 hardware at all.
 
@@ -42,7 +42,7 @@ A *hardware* `SimObj` adds two synthesis-facing specifics: a regmap-launched com
 free-running `run_proc`, and `@sim_only` marks helpers that exist only for simulation and are excluded
 from synthesis extraction. Both are covered where the kernel is generated:
 [Component structure](../comp_codegen/structure.md),
-[Defining a component: Execution models](../components/overview.md#execution-models), and the
+[Defining a component: Execution models](../flows/components.md), and the
 [Extractor](../comp_codegen/extractor.md).
 
 ## Toy: two `SimObj`s interacting
@@ -114,7 +114,7 @@ consumer received: [0, 1, 2, 3, 4]
 
 The point: a complete, running simulation built from nothing but two `SimObj`s — *before* any
 interface or `HwComponent` enters the picture. Wiring `SimObj`s together with real transports is
-[Interfaces](../interface/); a hardware `SimObj` is a [Hardware Component](../components/).
+[Interfaces](../interface/); a hardware `SimObj` is a [Hardware Component](../flows/components.md).
 
 ## Quick reference
 

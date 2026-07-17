@@ -8,7 +8,7 @@ summary: "The Python side of composite systems: building a hierarchical HwCompon
 ---
 # Concurrency — the Python model
 
-A **composite** is a hierarchical [`HwComponent`](../../components/): it declares sub-components and
+A **composite** is a hierarchical [`HwComponent`](../../flows/components.md): it declares sub-components and
 wires their endpoints together with internal [interfaces](../../interface/), and each sub-component's
 `run_proc` runs as a concurrent process in the simulation. This half of the section is how you build one
 in Python.

@@ -18,8 +18,8 @@ summary: "Flow 2 — a free-running DUT (a composite kernel: one hls::task for a
 > `render_tb_harness`) and bit-exact under the XSI gates.
 
 **DUT output:** a **composite kernel** — one or more `ap_ctrl_none`
-[tasks](../components/freerun.md) (`hls::task t(foo, …)`), either a single task compiled as its own top
-(the 1-task case) or a [composite](../components/composite.md) network of them.
+[tasks](components.md) (`hls::task t(foo, …)`), either a single task compiled as its own top
+(the 1-task case) or a [composite](components.md) network of them.
 **Testbench:** an **XSI BFM** — a cycle-based harness that pumps the clock and models each
 AXI-Stream / AXI-MM port, driving the elaborated RTL in `xsim` through **XSI**.
 

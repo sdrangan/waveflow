@@ -18,7 +18,7 @@ them (the two loops and their calibration bridge); this page is the *catalog*.
 
 A target is a **path, not a tool.** "Behavioral simulation" isn't one module — producing it draws on the
 [schemas](../guide/schema/) (the payloads), the [interfaces](../guide/interface/) (the transactions),
-the [components](../guide/components/) (the behavior), and the [simulator](../guide/sim/) (the runtime).
+the [components](../guide/flows/components.md) (the behavior), and the [simulator](../guide/sim/) (the runtime).
 Each row names the parts it leans on.
 
 | Target | What it is | Fidelity | Draws on | Status |
@@ -48,7 +48,7 @@ datapath is *real* at every rung from C-sim up. But other roles realize differen
 So the same Python object carries different realizations, and Waveflow picks the right one per target —
 the single-source-of-truth idea extended past synthesizable kernels to the whole system. The by-block
 view of this — every role and how it realizes down the ladder — is the
-[component taxonomy](../guide/components/taxonomy.md).
+[component taxonomy](../guide/flows/components.md).
 
 ## What's built, and what's coming
 

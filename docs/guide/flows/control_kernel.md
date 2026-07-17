@@ -11,8 +11,8 @@ summary: "Flow 1 — a control_driven_kernel verified by a sequential_vitis_tb t
 # Flow 1 — Control-driven kernel
 
 **DUT:** a [`control_driven_kernel`](../comp_codegen/index.md) — a
-[`HostActivated`](../components/hostactivated.md) component realized as one `ap_ctrl_hs` HLS IP.
-**Testbench:** a [`sequential_vitis_tb`](../comp_codegen/testbench.md) — a [`SeqTB`](../components/)
+[`HostActivated`](components.md) component realized as one `ap_ctrl_hs` HLS IP.
+**Testbench:** a [`sequential_vitis_tb`](../comp_codegen/testbench.md) — a [`SeqTB`](components.md)
 whose `main()` *calls* the kernel, run under Vitis **C-simulation** (the C++ directly) and
 **co-simulation** (the generated RTL behind the same call).
 

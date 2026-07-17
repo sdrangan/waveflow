@@ -182,6 +182,6 @@ There are two synthesizable realizations of this overlap, and the FIR example ta
 - [Streaming processing](./streaming.md) — finer-grained overlap (per element) when the source delivers a continuous stream rather than discrete blocks.
 - [Dataflow custom hook](../custom_hooks/dataflow.md) — the synthesizable side: the three sub-functions in a `#pragma HLS DATAFLOW` region (the FIR realization).
 - [Fitting a timing model](./fit.md) / [Calibration](../calib/) — how the matrix-LT FIR's terms (occupancy, compute, `row_depth`) are measured from cosim and fit.
-- [Hardware Components](../components/) — declaring components and their ports; the home of the future hierarchical-composition milestone (synthesis path 2).
+- [Hardware Components](../flows/components.md) — declaring components and their ports; the home of the future hierarchical-composition milestone (synthesis path 2).
 - [Process generators](../sim/procgen.md) — spawning concurrent SimPy processes, the mechanism this flow relies on.
 - [`examples/rowwise_fir`](../../../examples/rowwise_fir/fir.py) — the worked, cosim-calibrated matrix-LT FIR.

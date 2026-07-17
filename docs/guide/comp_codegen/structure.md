@@ -61,16 +61,16 @@ The entry follows from the component's **kind**. You never name it; the class st
 
 | Kind                                               | Entry extracted                                    | Why                                                                   |
 | -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
-| [`HostActivated`](../components/hostactivated.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
-| [`FreeRunComp`](../components/freerun.md)         | `run_iter`                                       | *one firing*; the `while True` belongs to the base, not your code |
-| [`CompositeComp`](../components/composite.md)     | — (see below)                                     | its body comes from the graph, not a method                           |
+| [`HostActivated`](../flows/components.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
+| [`FreeRunComp`](../flows/components.md)         | `run_iter`                                       | *one firing*; the `while True` belongs to the base, not your code |
+| [`CompositeComp`](../flows/components.md)     | — (see below)                                     | its body comes from the graph, not a method                           |
 | plain`HwComponent`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated leaf — see below                                     |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
 routes to `main()` instead ([Testbench](./testbench.md)).
 
 **A composite still generates a kernel** — the same single top-level function as any other component.
-What differs is only where its *contents* come from: a [`CompositeComp`](../components/composite.md)
+What differs is only where its *contents* come from: a [`CompositeComp`](../flows/components.md)
 declares no body, so instead of extracting a method, codegen builds the function from the
 **sub-component graph** — one `hls::task` per child, one channel declaration per internal edge, and the
 boundary endpoints as its ports. Same output shape, different source.

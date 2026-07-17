@@ -79,5 +79,5 @@ with no data movement), then jump to the pattern that matches your operand.
 ## See also
 
 - [Component Code Generation](../comp_codegen/) — the auto-generated structure your hook plugs into.
-- [Hardware Components](../components/) — declaring the component (ports, `HwParam`) the hook belongs to.
+- [Hardware Components](../flows/components.md) — declaring the component (ports, `HwParam`) the hook belongs to.
 - [Serialization](../schema/hls/serialization.md) / [raw arrays](../vectorization/hls/raw.md) — the generated packing methods a hook calls.

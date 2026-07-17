@@ -10,7 +10,7 @@ summary: "FIRAccel as a HwComponent: three persistent SimPy stage processes (loa
 # The Python model
 
 `FIRAccel` ([`fir.py`](../../../examples/rowwise_fir/fir.py)) is a single
-[`HwComponent`](../../guide/components/) whose internal structure is three **concurrent** stage
+[`HwComponent`](../../guide/flows/components.md) whose internal structure is three **concurrent** stage
 processes. The shape is the [double-buffered timing model](../../guide/timing_model/double_buffered.md):
 you cannot model load ∥ compute ∥ store inside one coroutine, so each stage is its own process and they
 hand off through queues.

@@ -258,4 +258,4 @@ in Python.
 - [Stream Interfaces](./stream.md) — the one-channel FIFO this contrasts with.
 - [Concurrency → SOB](../concurrency/python/sob.md) — the modeling pattern, with the reverse-add worked example.
 - [Concurrency (HLS) → SOB](../concurrency/hls/sob.md) — `stream_of_blocks` synthesis and the gather/scatter throughput asymmetry.
-- [Defining a component](../components/overview.md) — where SOB endpoints are declared on components.
+- [Defining a component](../flows/components.md) — where SOB endpoints are declared on components.

@@ -68,7 +68,7 @@ finished" signal for a sequencer or host.
 The wrappers turn "touch memory" into "read a stream / write a stream," so a memory-to-memory operation
 is just a pipeline between them. Here is a copy that **squares each sample** on the way through — read
 `src`, square, write `dst`. `Sequencer` and `Square` are free-running leaves, so — like `MemRStream` /
-`MemWStream` themselves — they subclass [`FreeRunComp`](../../components/taxonomy.md) and implement
+`MemWStream` themselves — they subclass [`FreeRunComp`](../../flows/components.md) and implement
 **`run_iter`** (one firing); see [Sub-components](./subcomponent.md) for why.
 
 ```python

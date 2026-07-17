@@ -11,7 +11,7 @@ summary: "Building a composite from concurrent sub-components: add_comp register
 # Sub-components
 
 Synthesizable composite systems in WaveFlow are defined **hierarchically**: a single top-level
-[`CompositeComp`](../../components/composite.md) represents the overall composite, and it holds
+[`CompositeComp`](../../flows/components.md) represents the overall composite, and it holds
 **sub-components**. Each sub-component is itself a `HwComponent` (usually a `FreeRunComp` leaf) and may
 in turn hold its own sub-components — a tree of **parent** and **child** components.
 
@@ -47,7 +47,7 @@ flowchart LR
 ```
 
 Each leaf is a trivial one-in / one-out stream stage. They **loop forever, one job per iteration**, so
-they subclass [`FreeRunComp`](../../components/taxonomy.md) and implement **`run_iter`** — *one firing*
+they subclass [`FreeRunComp`](../../flows/components.md) and implement **`run_iter`** — *one firing*
 of the loop — rather than writing `run_proc` with a hand-rolled `while True`:
 
 - it **declares** the component free-running (it lowers to a free-running `ap_ctrl_none` `hls::task`), so
@@ -58,7 +58,7 @@ of the loop — rather than writing `run_proc` with a hand-rolled `while True`:
 
 Each firing is one job — there is no "before the loop" in an `hls::task`. (These leaves are stateless;
 carrying state *across* firings in a generated kernel is still being built — see
-[Free-running components](../../components/freerun.md).)
+[Free-running components](../../flows/components.md).)
 
 ```python
 from dataclasses import dataclass, field

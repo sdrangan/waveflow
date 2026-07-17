@@ -93,7 +93,7 @@ with `elem_read`; the golden does not need to — that is a synthesis concern, s
 [Concurrency (HLS) — SOB](../hls/sob.md).)
 
 `Load` and `Compute` are free-running leaves, so they subclass
-[`FreeRunComp`](../../components/taxonomy.md) and implement **`run_iter`** (one firing) rather than a
+[`FreeRunComp`](../../flows/components.md) and implement **`run_iter`** (one firing) rather than a
 hand-rolled `run_proc` loop — see [Sub-components](./subcomponent.md) for why.
 
 ```python

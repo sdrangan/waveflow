@@ -11,7 +11,7 @@ summary: "The C++ realization of component parameterization: HwParam values lowe
 # Templating
 
 This page is the **C++ realization** of component parameterization; the concept — what `HwParam` and
-`HwConst` are, and when to use each — is [Hardware Components: Parameterization](../components/parameterization.md).
+`HwConst` are, and when to use each — is [Hardware Components: Parameterization](../flows/parametrization.md).
 Here we cover how each lowers into generated code.
 
 ## How `HwParam` lowers
@@ -93,4 +93,4 @@ signatures** rather than a single templated top.
 - Hand-written hooks are **templated** — `HwParam` becomes a `.tpp` template parameter.
 - `HwConst` → `static constexpr` is **deferred**; the value still shapes structure via Python.
 - `param_supports` → one concrete `<kernel>_<key>` top per variant (default always emitted).
-- The concept and the `HwParam` vs `HwConst` framing are in [Parameterization](../components/parameterization.md).
+- The concept and the `HwParam` vs `HwConst` framing are in [Parameterization](../flows/parametrization.md).

@@ -10,7 +10,7 @@ summary: "The sequential_vitis_tb target: a SeqTB's main() lowers to a C++ int m
 
 # Testbench
 
-A [`SeqTB`](../components/) is the **source for the `sequential_vitis_tb`** [target](./index.md): its
+A [`SeqTB`](../flows/components.md) is the **source for the `sequential_vitis_tb`** [target](./index.md): its
 `main()` lowers to a C++ `int main()`, emitted as a single `<kernel>_tb.cpp`. That program is what
 Vitis C-simulation and co-simulation run against the generated kernel — so the same Python that drives
 your DUT in the sim also drives it in Vitis.

@@ -19,8 +19,8 @@ summary: "Flow 3 — the same free-running DUT as Flow 2 (a free-running kernel 
 > generates a SystemC harness.
 
 **DUT output:** the *same* **free-running kernel** or **composite kernel** as the
-[sequentially driven](./freerun_seq.md) flow — one `ap_ctrl_none` [task](../components/freerun.md) or a
-[composite](../components/composite.md) network of them.
+[sequentially driven](./freerun_seq.md) flow — one `ap_ctrl_none` [task](components.md) or a
+[composite](components.md) network of them.
 **Testbench:** a **concurrent SystemC TB** — a harness where each stimulus/capture agent is its own
 `SC_THREAD`, driving the elaborated RTL in `xsim` through **XSI**.
 

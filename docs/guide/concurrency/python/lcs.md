@@ -94,7 +94,7 @@ degenerate case of it.)
 The tiles are **free-running** (`ap_ctrl_none`) — none is "started"; they all loop forever. Left
 unbounded, they race ahead of one another and the pipeline fills until it deadlocks (the `nj=8` class,
 `done == #tasks + 1`). The fix is a **forwarded token**: `cmd_rx` emits one token per job, and *every*
-stage — each a [`FreeRunComp`](../../components/taxonomy.md) — reads it on `cmd_in` and passes it on
+stage — each a [`FreeRunComp`](../../flows/components.md) — reads it on `cmd_in` and passes it on
 `cmd_out` **before** doing its own work. That work is one firing of `run_iter`; the base loops it:
 
 ```python

@@ -107,7 +107,7 @@ spaces (`s_axi_control` **and** an auto-named `s_axi_control_r`) — one block, 
 > the offset to join, so Vitis auto-creates one *and* `ap_start` stays on raw pins — meaning the block
 > needs two different masters: one to write the base address over AXI-Lite, another to pulse a wire.
 > `block_scale` is in this state today. `hist` was, until it gained a regmap and became
-> [`HostActivated`](../components/hostactivated.md). This is a good reason to give a memory-mapped
+> [`HostActivated`](../flows/components.md). This is a good reason to give a memory-mapped
 > kernel a regmap even when it has no scalar arguments to put in one.
 
 ## The control protocol on `return`

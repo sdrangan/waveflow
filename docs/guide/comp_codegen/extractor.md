@@ -133,7 +133,7 @@ Four rules are about *meaning* rather than statement shape. These are the ones w
 The reason is that `self.gain` is a Python value at *elaboration* time; in hardware it is either a
 constant baked into the design or a register someone must write. Silently choosing one would be
 guessing, so the extractor makes you say which. (This is also why cross-firing state is a
-[work in progress](../components/freerun.md).)
+[work in progress](../flows/components.md).)
 
 **Only `@synthesizable` calls.** A call to a plain method is rejected — mark it `@synthesizable` to make
 it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (that is how
