@@ -182,9 +182,6 @@ class MemRStream(FreeRunComp):
     """
 
     cpp_kernel_name: ClassVar[str | None] = "mem_r_stream"
-    #: Standalone: the one m_axi port is gmem0.  A parent that assembles several overrides this in
-    #: its own boundary (MemCopy puts this same port on gmem0 and MemWStream's on gmem1).
-    standalone_bundles: ClassVar[dict[str, str]] = {"m_mem": "gmem0"}
     cpp_namespace: ClassVar[str | None] = "mem_r_stream_impl"
 
     mem_dwidth: HwParam[int] = 64      # MEM_DW — memory / stream word width (LW = MEM_DW/32)
@@ -292,8 +289,6 @@ class MemWStream(FreeRunComp):
     """
 
     cpp_kernel_name: ClassVar[str | None] = "mem_w_stream"
-    #: Standalone: the one m_axi port is gmem0 (see MemRStream).
-    standalone_bundles: ClassVar[dict[str, str]] = {"m_mem": "gmem0"}
     cpp_namespace: ClassVar[str | None] = "mem_w_stream_impl"
 
     mem_dwidth: HwParam[int] = 64

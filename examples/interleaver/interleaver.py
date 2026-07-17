@@ -467,11 +467,12 @@ class InterleaverCanon(CompositeComp):
             SobEdge("x_blk", self.load.x_blk, self.compute.x_blk, elem_bw=w, block_n=self.nw),
             SobEdge("y_blk", self.compute.y_blk, self.store.y_blk, elem_bw=w, block_n=self.nw),
         ]
+        # (name, endpoint) -- direction from the type, gmem bundle by declaration order.
         self.boundary = [
-            ("s_cmd", self.rx.s_cmd, None),
-            ("m_in", self.memr.m_mem, "gmem0"),
-            ("m_out", self.memw.m_mem, "gmem1"),
-            ("s_done", self.memw.s_done, None),
+            ("s_cmd", self.rx.s_cmd),
+            ("m_in", self.memr.m_mem),
+            ("m_out", self.memw.m_mem),
+            ("s_done", self.memw.s_done),
         ]
         self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
         self.extra_includes = ("hls_streamofblocks.h",)

@@ -212,36 +212,77 @@ def kind_of_endpoint(ep) -> str:
     raise ValueError(f"no boundary kind for endpoint type {type(ep).__name__}")
 
 
-def _unpack_boundary(entry) -> tuple[str, object, str | None]:
-    """Accept a boundary entry as ``(name, ep, bundle)`` — or legacy ``(name, ep, kind, bundle)``.
+def _unpack_boundary(entry) -> tuple[str, object]:
+    """A boundary entry is ``(name, endpoint)``. Nothing else is the declarer's to say.
 
-    The 4-tuple's ``kind`` is now **derived from the endpoint's type**, so stating it is a
-    restatement.  Legacy entries are still accepted, but the stated kind must *agree* with the type:
-    a disagreement means one of them is wrong, and silently trusting either is how a `const` pointer
-    ends up on a port that gets written.
+    It used to be ``(name, ep, kind, bundle)``. Both extra fields are gone:
+
+    * ``kind`` is the endpoint's TYPE (:func:`kind_of_endpoint`) — restating it could only disagree.
+    * ``bundle`` is the assembler's allocation, and :func:`bundle_map` decides it by policy.
+
+    Legacy 3- and 4-tuples are still accepted so old boundaries keep working, but a stated ``kind``
+    must AGREE with the type, and a stated ``bundle`` must agree with the policy. Silently trusting a
+    stated value is how a ``const`` pointer ends up on a port that gets written.
     """
-    if len(entry) == 3:
-        name, ep, bundle = entry
-        return name, ep, bundle
-    name, ep, kind, bundle = entry
-    derived = kind_of_endpoint(ep)
-    if kind != derived:
-        raise ValueError(
-            f"boundary port '{name}' declares kind {kind!r} but its endpoint "
-            f"({type(ep).__name__}) implies {derived!r}. The type is the source of truth — drop the "
-            f"kind from the boundary entry, or construct the endpoint with the direction you meant."
-        )
-    return name, ep, bundle
+    if len(entry) == 2:
+        return entry[0], entry[1]
+    name, ep = entry[0], entry[1]
+    if len(entry) == 4:
+        kind = entry[2]
+        derived = kind_of_endpoint(ep)
+        if kind != derived:
+            raise ValueError(
+                f"boundary port '{name}' declares kind {kind!r} but its endpoint "
+                f"({type(ep).__name__}) implies {derived!r}. The type is the source of truth — drop "
+                f"the kind from the boundary entry, or construct the endpoint with the direction you "
+                f"meant."
+            )
+    return name, ep
+
+
+def bundle_map(boundary) -> dict[str, str]:
+    """Assign an ``m_axi`` bundle to each memory port: **gmem0, gmem1, ... in declaration order.**
+
+    A bundle is an allocation decision by whoever assembles the top, not a fact about the port — the
+    same ``MemWStream.m_mem`` is ``gmem0`` standalone and ``gmem1`` inside ``MemCopy``. So it was the
+    one field a boundary still had to state by hand. A policy deletes that field rather than
+    relocating it, and unlike a hand-written value it cannot disagree with itself. It reproduces every
+    value that was hand-written here (verified byte-identical).
+
+    **The policy is one bundle per m_axi port**, so two ports CANNOT share a bundle. Nothing wants
+    that today. If something ever does — sharing costs AXI ports and serialises the traffic, so it is
+    a real design choice — it needs a way to be *asked for*, and that ask belongs on the assembler
+    (which allocates), not back on the port. AXIS ports have no bundle; they are named for themselves.
+    """
+    n = 0
+    out: dict[str, str] = {}
+    for entry in boundary:
+        name, ep = _unpack_boundary(entry)
+        if kind_of_endpoint(ep) in ("maxi_read", "maxi_write"):
+            out[name] = f"gmem{n}"
+            n += 1
+        if len(entry) == 4 and entry[3] is not None and out.get(name, None) != entry[3]:
+            raise ValueError(
+                f"boundary port '{name}' declares bundle {entry[3]!r} but the assembler's policy "
+                f"(gmem0, gmem1, ... in declaration order) gives {out.get(name)!r}. Drop the bundle "
+                f"from the boundary entry; if the order is wrong, reorder the boundary."
+            )
+    return out
 
 
 def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtPort:
-    """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas)."""
+    """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas).
+
+    *bundle* comes from :func:`bundle_map` (the assembler's policy) for the m_axi kinds, and is
+    ``None`` for AXIS. There is deliberately no per-kind default here: a default would be a second
+    place that decides bundles, and the two could drift.
+    """
     if kind in ("axis_in", "axis_out"):
         return _axis_port(name, width, kind=kind)
-    if kind == "maxi_read":
-        return _maxi_port(name, width, const=True, bundle=bundle or "gmem0")
-    if kind == "maxi_write":
-        return _maxi_port(name, width, const=False, bundle=bundle or "gmem1")
+    if kind in ("maxi_read", "maxi_write"):
+        if bundle is None:
+            raise ValueError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
+        return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle)
     raise ValueError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 
@@ -272,8 +313,10 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         internal_streams.append(edge.decl(width))
 
     ports: list[ExtPort] = []
+    bundles = bundle_map(comp.boundary)
     for entry in comp.boundary:
-        name, ep, bundle = _unpack_boundary(entry)
+        name, ep = _unpack_boundary(entry)
+        bundle = bundles.get(name)
         ep_arg[id(ep)] = name
         ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle))
 
@@ -425,8 +468,10 @@ def tb_top_spec(tb) -> TbSpec:
     shared: dict[str, tuple[str, str, tuple[str, ...]]] = {}
     models: list[BfmInst] = []
 
+    bundles = bundle_map(dut.boundary)
     for entry in dut.boundary:
-        name, ep, bundle = _unpack_boundary(entry)
+        name, ep = _unpack_boundary(entry)
+        bundle = bundles.get(name)
         kind = kind_of_endpoint(ep)
         port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
         part = None

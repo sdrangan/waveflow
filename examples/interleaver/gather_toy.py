@@ -189,8 +189,8 @@ class GatherToy(CompositeComp):
 
         # Define boundary ports for codegen
         self.boundary = [
-            ("s_in", self.fill.s_in, "axis_in", None),
-            ("m_out", self.gather.m_out, "axis_out", None),
+            ("s_in", self.fill.s_in),
+            ("m_out", self.gather.m_out),
         ]
 
         # Boundary (convenience refs)

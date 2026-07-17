@@ -1,1 +1,0 @@
-"work.mem_copy" -dll -s "mem_copy" -debug "typical" 

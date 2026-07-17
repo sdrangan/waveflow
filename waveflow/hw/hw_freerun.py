@@ -39,32 +39,24 @@ class FreeRunComp(HwComponent):
     #: ``potential_`` and not ``supported_``.)
     potential_targets: ClassVar[frozenset[str]] = frozenset({FREE_RUNNING_KERNEL})
 
-    #: ``m_axi`` bundle for each ``m_axi`` port when this leaf is compiled as its OWN top, keyed by
-    #: endpoint attribute name.  A standalone kernel has one bundle per memory port, and the first is
-    #: ``gmem0`` — but bundle assignment belongs to whoever assembles the top (the same
-    #: ``MemWStream.m_mem`` is ``gmem0`` standalone and ``gmem1`` inside ``MemCopy``), so a parent
-    #: overrides it in its own ``boundary``.  This is the standalone default, not a property of the
-    #: port.  See ``plans/endpoint_types_not_tags.md``.
-    standalone_bundles: ClassVar[dict[str, str]] = {}
 
     @property
-    def boundary(self) -> tuple[tuple[str, object, str | None], ...]:
+    def boundary(self) -> tuple[tuple[str, object], ...]:
         """This leaf's own boundary ports — **a standalone kernel IS the 1-task degenerate case**.
 
         Derived, not declared: the *order* is :meth:`kernel_task`'s signature (so the top's C++
         parameter list and the task's call args are literally the same list and cannot disagree), the
         *endpoint* is the attribute, and the *kind* comes from the endpoint's type
-        (:func:`~waveflow.build.composite_gen.kind_of_endpoint`).  Only the bundle is a choice, and
-        :attr:`standalone_bundles` carries the standalone default.
+        (:func:`~waveflow.build.composite_gen.kind_of_endpoint`).  The bundle is not here either: it
+        is the assembler's allocation, assigned by policy in this same declaration order
+        (:func:`~waveflow.build.composite_gen.bundle_map`).  So a leaf declares *nothing* — its
+        boundary is entirely a consequence of the ports it has and the task signature it exposes.
 
         With this, ``composite_top_spec`` walks a leaf exactly as it walks a composite — verified
         byte-identical against the hand-written table it replaced.  It is what lets
         ``free_running_kernel`` be ``composite_kernel`` with one task, rather than a second product.
         """
-        return tuple(
-            (attr, getattr(self, attr), self.standalone_bundles.get(attr))
-            for attr in self.kernel_task().signature
-        )
+        return tuple((attr, getattr(self, attr)) for attr in self.kernel_task().signature)
 
     @property
     def ordered_subcomps(self) -> list:

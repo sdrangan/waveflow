@@ -166,7 +166,7 @@ def test_a_stated_kind_must_agree_with_the_type():
     from waveflow.simulation.simulation import Simulation
 
     ep = MMIFReadMaster(name="r", sim=Simulation(), bitwidth=64)
-    assert _unpack_boundary(("m_in", ep, "maxi_read", "gmem0")) == ("m_in", ep, "gmem0")
+    assert _unpack_boundary(("m_in", ep, "maxi_read", "gmem0")) == ("m_in", ep)
     with pytest.raises(ValueError, match="declares kind 'maxi_write' but its endpoint"):
         _unpack_boundary(("m_in", ep, "maxi_write", "gmem0"))
 
@@ -203,3 +203,52 @@ def test_a_leaf_walks_exactly_like_a_composite():
     r.cmd_headers = ()
     kinds = {p.name: p.kind for p in composite_top_spec(r, width=64).ports}
     assert kinds == {"s_cmd": "axis_in", "m_mem": "maxi_read", "m_out": "axis_out"}
+
+
+def test_bundles_are_assigned_by_policy_not_declared():
+    """gmem0, gmem1, ... in boundary declaration order -- the last hand-written field, gone.
+
+    A bundle is an allocation by whoever assembles the top, not a fact about the port: the SAME
+    MemWStream.m_mem endpoint is gmem0 standalone and gmem1 inside MemCopy. That is exactly why it
+    could not move onto the type with `kind` did, and why a policy beats a declaration -- a policy
+    cannot disagree with itself.
+    """
+    from waveflow.build.composite_gen import bundle_map, composite_top_spec
+    from waveflow.hw.mem_stream import MemWStream
+    from waveflow.simulation.simulation import Simulation
+
+    # Standalone: the one m_axi port is the first, so gmem0 -- even though it is a WRITE port, which
+    # the old code special-cased to gmem1 and then had to override back.
+    w = MemWStream(name="mem_w_stream", sim=Simulation(), mem_dwidth=64)
+    w.cmd_headers = ()
+    assert bundle_map(w.boundary) == {"m_mem": "gmem0"}
+    assert [p.bundle for p in composite_top_spec(w, width=64).ports if p.bundle] == ["gmem0"]
+
+    # The same endpoint inside a composite: second m_axi port declared, so gmem1.
+    from examples.mem_copy.mem_copy import MemCopy
+    mc = MemCopy(name="mem_copy", sim=Simulation(), mem_dwidth=64)
+    assert bundle_map(mc.boundary) == {"m_in": "gmem0", "m_out": "gmem1"}
+    assert mc.wstream.m_mem is [e[1] for e in mc.boundary if e[0] == "m_out"][0],         "same endpoint object as the standalone case -- only the assembler differs"
+
+    # AXIS ports have no bundle; they are named for themselves.
+    assert "s_cmd" not in bundle_map(mc.boundary)
+
+
+def test_a_stated_bundle_that_contradicts_the_policy_fails_loudly():
+    """A legacy 4-tuple may still state a bundle, but if it disagrees with the policy one of them is
+    wrong, and picking either silently would put a port on the wrong AXI bundle -- an RTL-level
+    misroute that csim cannot see."""
+    import pytest
+    from waveflow.build.composite_gen import bundle_map
+    from waveflow.hw.memif import MMIFReadMaster, MMIFWriteMaster
+    from waveflow.simulation.simulation import Simulation
+
+    sim = Simulation()
+    r = MMIFReadMaster(name="r", sim=sim, bitwidth=64)
+    w = MMIFWriteMaster(name="w", sim=sim, bitwidth=64)
+    # Agrees: declaration order gives exactly these.
+    assert bundle_map([("m_in", r, "maxi_read", "gmem0"),
+                       ("m_out", w, "maxi_write", "gmem1")]) == {"m_in": "gmem0", "m_out": "gmem1"}
+    # Contradicts.
+    with pytest.raises(ValueError, match="declares bundle .* but the assembler's policy"):
+        bundle_map([("m_in", r, "maxi_read", "gmem1")])
