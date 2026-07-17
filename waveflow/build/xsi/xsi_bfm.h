@@ -275,17 +275,39 @@ public:
         beat_  = (valid_ && h_ready_);
     }
 
-    void update() { if (beat_) words_.push_back(data_); }
+    /// Records the cycle each word arrived, not just the word.
+    ///
+    /// The sink counts its own cycles: the phase contract calls `update()` exactly once per cycle,
+    /// so an internal counter IS the cycle number — no clock reference, no argument, no change to
+    /// the uniform model API.  This is what lets the TB's loop carry no measurement logic, and it
+    /// keeps a hard separation the hand-written TBs got wrong: **the sink reports when work
+    /// COMPLETED; the loop only decides when to stop looking.** Conflating those is how three of
+    /// four TBs printed a drain tail as if it were the design's latency.
+    void update() {
+        ++cycle_;                                   // 1-based: this is the cycle now executing
+        if (beat_) { words_.push_back(data_); beat_cycles_.push_back(cycle_); }
+    }
 
     void drive() { d_.put1(P_ready, h_ready_); }
 
     const std::vector<uint64_t>& words() const { return words_; }
     size_t count() const { return words_.size(); }
 
+    /// The cycle each accepted word arrived on (parallel to `words()`).
+    const std::vector<long>& beat_cycles() const { return beat_cycles_; }
+
+    /// Cycle the `n`-th word arrived, or -1 if fewer than `n` words have.  The completion time of a
+    /// run that expects `n` words is `cycle_of_word(n)`.
+    long cycle_of_word(size_t n) const {
+        return (n >= 1 && n <= beat_cycles_.size()) ? beat_cycles_[n - 1] : -1;
+    }
+
 private:
     Dut& d_;
     int P_data, P_valid, P_ready;
     std::vector<uint64_t> words_;
+    std::vector<long> beat_cycles_;
+    long cycle_ = 0;
     uint32_t h_ready_ = 1, valid_ = 0;
     uint64_t data_ = 0;
     bool beat_ = false;

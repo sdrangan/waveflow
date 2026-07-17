@@ -29,8 +29,12 @@ namespace vec = mem_copy_vectors;
 // MemComplete.nwords_per_inst), and the command words all come from the generated header.  In
 // particular this TB no longer packs CopyCmd itself: CMD_WORDS is what CopyCmd.serialize() actually
 // produced, so there is no second implementation of the packing rule to drift from the schema.
-static const int  BPW        = vec::MEM_DW / 8;      // bytes per word = 8
-static const long MAX_CYCLES = 2000000L;
+static const int  BPW      = vec::MEM_DW / 8;      // bytes per word = 8
+
+// How long to run.  Fixed, and comfortably past the ~2835 completion — the run costs a few
+// milliseconds either way, and undersizing it fails loudly (the done-count check below) rather than
+// quietly.  This is the number the LT timing model would eventually supply: `predicted x margin`.
+static const long N_CYCLES = 3400L;
 
 // The memory pattern.  Still stated here AND in mem_copy_sim.py's run_copy() — see the note at the
 // bottom of gen_xsi_vectors(); unifying it means emitting the whole arena image as data.
@@ -65,15 +69,19 @@ int main() {
 
     sim.reset(drive);
 
-    // 3) Cycle loop.  Drain a fixed tail after the last job so any trailing bus activity settles.
-    long cyc = 0, drain = -1; bool timed_out = false;
-    for (;;) {
-        int done_count = (int)(s_done.count() / vec::DONE_WORDS);
-        if (drain >= 0 && (cyc - drain) >= 512) break;
-        if (done_count >= vec::NUM_CMDS && drain < 0) drain = cyc;
-        if (cyc >= MAX_CYCLES) { timed_out = true; break; }
-        ++cyc;
-
+    // 3) Cycle loop — FIXED N, no early termination, no design knowledge.
+    //
+    // This is the shape a generated testbench can emit, and the reason is the point: nothing here
+    // blocks, so there is no sequencing to schedule and the DUT's pipelining survives BY
+    // CONSTRUCTION.  The source keeps offering commands the moment they are accepted, so the
+    // Sequencer is already on job j+1 while MemWStream is still storing job j — which is the whole
+    // ~1.9x.  A loop that instead did "drive job j, await job j, repeat" would produce a correct
+    // memcpy, a bit-exact golden, and ~334 cyc/job instead of ~177.
+    //
+    // Early termination is a later add-on (a polled predicate); it is an optimisation of wall-clock,
+    // not of correctness.  N just has to be comfortably past completion — undersize it and the
+    // done-count check below fails loudly rather than passing quietly.
+    for (long c = 0; c < N_CYCLES; ++c) {
         sim.clock_low();
         sample();
         sim.clock_high();
@@ -81,15 +89,11 @@ int main() {
         drive();
     }
 
-    const int done_count = (int)(s_done.count() / vec::DONE_WORDS);
-    if (timed_out) {
-        std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld done=%d/%d w_count=%d cmd_widx=%d/%d "
-                     "g_rstate=%d g_wstate=%d\n",
-                     cyc, done_count, vec::NUM_CMDS, gmem1.w_count(), s_cmd.sent(), s_cmd.total(),
-                     gmem0.state(), gmem1.state());
-        sim.close();
-        return 1;
-    }
+    // Completion time comes from the SINK, which timestamped each word — never from the loop, whose
+    // bound is a testbench constant.  Keeping those apart is exactly what the old `cycles=` bug got
+    // wrong (it reported loop count + drain tail as the design's latency).
+    const int  done_count = (int)(s_done.count() / vec::DONE_WORDS);
+    const long done_cycle = s_done.cycle_of_word((size_t)vec::NUM_CMDS * vec::DONE_WORDS);
 
     // 4) Golden check: every destination region equals its source region (a memcpy), and each job's
     // MemComplete echoes back the xfer_msg[0] job index the sequencer stamped.
@@ -112,13 +116,11 @@ int main() {
             ++job_fails;
         }
     }
-    // `cycles` is time-to-last-job-done, NOT the loop count — see the note in mem_r_bfm_tb.cpp.
-    // This is the number the pipelining shows up in: ~177 cyc/job across 16 jobs, against ~176 for
-    // ONE write on its own (mem_w) — i.e. the reads hide entirely behind the writes.  Folding in
-    // the +512 drain tail would inflate it to ~209/job and obscure exactly that.
-    const long latency = (drain >= 0) ? drain : cyc;
-    std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld (tail=%ld) job_fails=%d\n",
-                vec::NUM_CMDS, vec::N, done_count, gmem1.w_count(), latency, cyc - latency, job_fails);
+    // `cycles` is time-to-last-job-done, reported by the sink — NOT the loop bound, which is a
+    // testbench constant.  This is where the pipelining shows up: ~177 cyc/job across 16 jobs
+    // against ~176 for ONE write on its own (mem_w), i.e. the reads hide entirely behind the writes.
+    std::printf("mem_copy XSI BFM: jobs=%d N=%d done=%d w_count=%d cycles=%ld (ran=%ld) job_fails=%d\n",
+                vec::NUM_CMDS, vec::N, done_count, gmem1.w_count(), done_cycle, N_CYCLES, job_fails);
     sim.close();
     if (fails || done_count != vec::NUM_CMDS || job_fails) {
         std::printf("FAILED test: %d mismatches, done=%d/%d, %d job-index echo mismatches\n",
