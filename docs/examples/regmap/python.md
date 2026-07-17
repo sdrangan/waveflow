@@ -46,7 +46,7 @@ The full set of `RegAccess` modes and the access matrix they imply is documented
 
 ## Creating the Kernel with the Register Map
 
-The kernel is a `HostActivated` component (the [host-activated](../../guide/components/hostactivated.md) kind — it carries a regmap and the host launches it). It owns the regmap and binds it to a `VitisRegMapMMIFSlave` endpoint. The slave receives a host-side reference to the component's `on_start` method — the SimPy generator the framework invokes when the host writes `ap_start`.
+The kernel is a `HostActivated` component (the [host-activated](../../guide/flows/components.md) kind — it carries a regmap and the host launches it). It owns the regmap and binds it to a `VitisRegMapMMIFSlave` endpoint. The slave receives a host-side reference to the component's `on_start` method — the SimPy generator the framework invokes when the host writes `ap_start`.
 
 ```python
 @dataclass

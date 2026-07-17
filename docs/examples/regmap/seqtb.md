@@ -73,6 +73,36 @@ the elapsed time, so we use the process form.
 Either way, **both lower to the identical C++ call** — `simp_fun(x, a, b, y)`. The `yield from` is a
 simulation concern; it leaves no trace in the generated testbench.
 
+## The generated `int main()`
+
+`HlsCodegenStep(is_testbench=True)` lowers that `main()` to `gen/simp_fun_tb.cpp` — the same program in
+C++:
+
+```cpp
+#include "simp_fun.hpp"                        // the kernel it drives
+
+int main(int argc, char** argv) {
+    const std::string data_dir = (argc > 1) ? argv[1] : "data";
+    ap_int<32> x = 0, a = 0, b = 0, y = 0;
+
+    { std::ifstream _ifs((data_dir + "/x.bin").c_str(), std::ios::binary);   // read each input vector
+      uint32_t _word = 0; _ifs.read(reinterpret_cast<char*>(&_word), sizeof(_word));
+      x = (ap_int<32>)_word; }
+    // ... a.bin, b.bin the same ...
+
+    simp_fun(x, a, b, y);                       // <- run_once_sim lowered to ONE kernel call
+
+    std::ofstream _status((data_dir + "/regmap_status.json"));               // write the result
+    _status << "{\n  \"y\": " << (int)y << "\n}\n";
+    return 0;
+}
+```
+
+Read the shape against the Python: each `read_uint32_file` became a file read filling a kernel argument,
+`run_once_sim` became the single line `simp_fun(x, a, b, y)`, and `write_status_json` became the JSON
+write. The `@sim_only` timer calls left no trace. The whole testbench is *sequential* — read, call,
+write — which is exactly why Vitis can compile and run it directly.
+
 ## Timing it in-process
 
 The two timer calls bracket the invocation:
@@ -172,8 +202,10 @@ There is no second, hand-written C++ testbench to keep in sync, and no chance of
 the C-simulation testing different things — they are the same program.
 
 The [system simulation](./pysim.md) cannot make that trip: it is *concurrent*, and concurrency has no
-straight-line `int main()` to lower onto. Getting a concurrent system model onto RTL needs the XSI /
-SystemC path — future work. Sequential is what reaches Vitis today.
+straight-line `int main()` to lower onto. Driving a free-running design at RTL is the
+[concurrent flow](../../guide/flows/concurrent.md) instead — an XSI BFM in place of a sequential
+`int main()`. Sequential is what reaches Vitis's C-simulation and co-simulation; concurrent reaches the
+RTL through XSI.
 
 ## Next
 

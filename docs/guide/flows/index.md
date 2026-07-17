@@ -15,13 +15,13 @@ how the result is checked. There are two, and they split on **one axis: the DUT*
 
 ## The two flows
 
-**[Sequential (host-activated)](./sequential/)** — the DUT is a **control-driven kernel**
+**[Sequential (host-activated)](./sequential.md)** — the DUT is a **control-driven kernel**
 (`ap_ctrl_hs` + `s_axilite`) that the host launches and waits on. Because it has a start/done
 handshake, Vitis can drive it directly in C-simulation and C/RTL co-simulation, so the testbench is an
-ordinary sequential `int main()` (a [`SeqTB`](../components/)). Toy example throughout: `simp_fun`
+ordinary sequential `int main()` (a [`SeqTB`](./sequential.md)). Toy example throughout: `simp_fun`
 (`examples/regmap/simp_fun.py`). Targets: `control_driven_kernel` + `sequential_vitis_tb`.
 
-**[Concurrent (free-running)](./concurrent/)** — the DUT is a **free-running kernel**
+**[Concurrent (free-running)](./concurrent.md)** — the DUT is a **free-running kernel**
 (`ap_ctrl_none`): one `hls::task` for a leaf, one per child for a composite, wired by internal
 channels. It has no start/done handshake, so Vitis co-sim refuses it; verification instead drives the
 elaborated RTL cycle-by-cycle through an **XSI BFM**. Toy example throughout: `mem_copy`
@@ -34,5 +34,5 @@ software drives it) — is future work; it is not one of the two simulation flow
 
 ## See also
 
-- [Hardware Components](../components/) — the component kinds these flows take as input.
+- [Hardware components](./components.md) — the component kinds these flows take as input.
 - [Build System](../build/) — the `BuildDag` machinery these recipes invoke.

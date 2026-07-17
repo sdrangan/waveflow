@@ -63,8 +63,9 @@ same `SeqTB.main()` runs in Python, in C-simulation, and in co-simulation.
 Both paths are driven by the **same** `x`/`a`/`b` vector, so they independently produce the same `y` —
 the concurrent host-protocol model and the sequential direct-invocation model agreeing.
 
-> Simulating a *concurrent* system down at RTL is possible, but it needs the XSI / SystemC path rather
-> than C-simulation. That is future work.
+> Simulating a *concurrent* design down at RTL is the [concurrent flow](../../guide/flows/concurrent.md):
+> a free-running kernel Vitis cannot co-simulate, driven at RTL through an XSI BFM. That is the
+> [mem_copy example](../memcpy/); this page stays with the sequential path Vitis co-simulates directly.
 
 ## The progression
 
