@@ -36,6 +36,10 @@ class CmdDriver(SimObj):
 
     cmds: list = field(default_factory=list)
     bitwidth: int = 64
+    #: C++ expression naming the words this driver presents in the generated XSI testbench.  The
+    #: hand-written half of the TB declares it (from the schema's own serialize() — see
+    #: `render_vectors_h`); this participant only says *which* symbol to pass.
+    xsi_words: str = "cmd_words"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -44,6 +48,12 @@ class CmdDriver(SimObj):
     def run_proc(self) -> ProcessGen[None]:
         for c in self.cmds:
             yield from self.stream_ep.write(c)
+
+    def bfm_model(self):
+        """XSI twin: an ``AxisMaster`` offering *cmds*' serialized words on the port ``stream_ep``
+        is wired to.  Same words as ``run_proc`` above; only the timing model differs."""
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel("AxisMaster", ports=("stream_ep",), extra_args=(self.xsi_words,))
 
 
 @dataclass
@@ -81,3 +91,9 @@ class WordSink(SimObj):
     def rx_proc(self, words: Words) -> ProcessGen[None]:
         self.words.append(np.array(words, copy=True))
         yield self.timeout(0)
+
+    def bfm_model(self):
+        """XSI twin: an ``AxisSlave`` on the port ``stream_ep`` is wired to — always ready, keeps
+        everything, and timestamps each word so the testbench can report completion time."""
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel("AxisSlave", ports=("stream_ep",))

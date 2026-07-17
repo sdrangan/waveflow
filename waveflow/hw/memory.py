@@ -405,6 +405,11 @@ class MemComponent(SimObj):
     ``s_mm`` is an :class:`~waveflow.hw.memif.MMIFSlave` for external AXI-MM
     connections.
 
+    In a generated XSI testbench this maps to a :class:`~waveflow.build.xsi.FlatMemory` — the arena
+    the AXI-MM slave models serve out of.  It is declared ``shared``: two ``m_axi`` bundles
+    (gmem0 read + gmem1 write) are backed by ONE memory, so the emitter constructs the arena once
+    and hands it to both slave models rather than making one per bundle.
+
     Latency model
     -------------
     The memory models *access* latency; the interconnect models *bus* latency,
@@ -441,6 +446,31 @@ class MemComponent(SimObj):
     resource, so reads and writes to this memory mutually exclude — a single-port
     memory (a DDR model that shares R/W bandwidth, or single-port BRAM).  The default
     (full-duplex) gives independent AR/R and AW/W channels (real AXI)."""
+
+    def bfm_model(self):
+        """XSI twin: the ``FlatMemory`` arena the AXI-MM slave models serve out of.
+
+        ``shared`` is the point: two ``m_axi`` bundles are backed by ONE memory, so the emitter
+        constructs this once and hands it to both slave models rather than one per bundle.  Which
+        *kind* of slave serves each bundle (read vs write) is deliberately NOT this component's
+        business — it comes from the DUT boundary port's own kind, so a memory need not know how it
+        will be driven.
+
+        The C++ arguments come from this component's own fields, so nothing example-specific leaks
+        into the framework.
+
+        NOTE: the XSI slave models are independent and un-arbitrated, whereas
+        :class:`~waveflow.hw.memif.AXIMMCrossBarIF` models contention.  The two therefore describe
+        different systems and should be expected to disagree on timing — see
+        ``plans/xsi_tb_codegen.md``.
+        """
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel(
+            "FlatMemory",
+            ports=("s_mm",),
+            extra_args=(str(int(self.nwords_tot)), str(int(self.word_size) // 8)),
+            shared="mem",
+        )
 
     def __post_init__(self) -> None:
         # SimObj.__post_init__ assigns the default name and registers this

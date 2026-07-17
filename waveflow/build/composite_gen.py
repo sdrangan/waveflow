@@ -78,6 +78,32 @@ class TaskInst:
 
 
 @dataclass(frozen=True)
+class BfmModel:
+    """The XSI testbench model a participant lowers to — the testbench twin of :class:`TaskInst`.
+
+    A testbench participant does not *lower* to C++; it **maps** to a pre-written, cycle-exact model
+    in :mod:`waveflow.build.xsi` (``AxisMaster``, ``AxiMmReadSlave``, ...).  Extracting an equivalent
+    FSM from Python would be re-deriving verified code, so a participant just declares which model it
+    is — exactly as :meth:`~waveflow.hw.mem_stream.KernelTask` declares which hand-written
+    ``hls::task`` body a component uses.  That is what makes the TB emitter a *resolver* rather than
+    an extractor.
+
+    * ``cls`` — the C++ model class, e.g. ``"AxisMaster"``.
+    * ``ports`` — the participant's endpoint attribute names, in constructor order.  Each is resolved
+      through the TB graph to the RTL port prefix it ends up driving (see :func:`tb_top_spec`).
+    * ``extra_args`` — literal C++ expressions appended after the resolved ports, e.g. the words an
+      ``AxisMaster`` presents or the arena an ``AxiMmReadSlave`` serves.  They name things the
+      hand-written half of the testbench declares.
+    * ``shared`` — if set, this model is constructed once and *shared* by name rather than per
+      endpoint (the arena behind two m_axi bundles is one ``FlatMemory``, not two).
+    """
+    cls: str
+    ports: tuple[str, ...] = ()
+    extra_args: tuple[str, ...] = ()
+    shared: str | None = None
+
+
+@dataclass(frozen=True)
 class TopSpec:
     """A generated free-running (``ap_ctrl_none``) ``hls::task`` top.  For a standalone kernel there
     is one task and no internal streams; a composite adds tasks + ``hls_thread_local`` streams (or
@@ -262,6 +288,113 @@ def render_top(spec: TopSpec) -> str:
             f"    hls_thread_local hls::task t{i}({t.task_fn}<{targs}>, {call_args});")
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Testbench graph -> XSI model resolution
+# ---------------------------------------------------------------------------
+
+#: Which BFM model serves a DUT boundary port of each kind.  The AXIS entries are ``None`` because
+#: the *participant* decides there (a driver is an `AxisMaster`, a sink an `AxisSlave`); the m_axi
+#: entries are fixed because the kernel is the MASTER and the testbench must supply the missing
+#: slave — a memory does not get to choose whether it is read or written.
+_SLAVE_FOR_KIND = {
+    "maxi_read": "AxiMmReadSlave",
+    "maxi_write": "AxiMmWriteSlave",
+}
+
+
+@dataclass(frozen=True)
+class BfmInst:
+    """One model construction in the generated testbench: ``<cls> <name>(dut, "<prefix>", <args>);``"""
+    cls: str
+    name: str
+    xsi_prefix: str                  # the RTL port prefix this model drives
+    args: tuple[str, ...] = ()       # extra C++ args after the prefix
+
+
+@dataclass(frozen=True)
+class TbSpec:
+    """A generated XSI testbench harness, derived from a testbench `CompositeComp`'s graph."""
+    top_name: str                      # the DUT's top name (-> DESIGN_DLL, ports header)
+    shared: tuple[tuple[str, str, tuple[str, ...]], ...] = ()   # (cls, name, args) — e.g. FlatMemory
+    models: tuple[BfmInst, ...] = ()
+
+
+def _find_dut(tb):
+    """The one child that is the DUT: it has a ``boundary`` (RTL ports); participants have
+    ``bfm_model()``.  Not ``kernel_task`` — a CompositeComp DUT has none, only its children do."""
+    duts = [c for c in tb.ordered_subcomps if hasattr(c, "boundary")]
+    if len(duts) != 1:
+        raise ValueError(
+            f"{type(tb).__name__}: expected exactly one child with a `boundary` (the DUT); "
+            f"found {[type(d).__name__ for d in duts]}. A testbench drives one kernel."
+        )
+    return duts[0]
+
+
+def tb_top_spec(tb) -> TbSpec:
+    """Derive the XSI testbench harness from *tb*'s component/interface graph.
+
+    **The DUT's boundary is the spine.** Every RTL port the kernel exposes needs exactly one model to
+    drive or answer it, so the walk iterates the DUT's boundary rather than the participants — that
+    is what makes "did we cover every port?" structural instead of a review question.
+
+    For each boundary port: find which participant is wired to it (through the testbench's own
+    interfaces, by endpoint identity), then resolve the model. An AXIS port takes the participant's
+    declared class (`AxisMaster`/`AxisSlave`); an ``m_axi`` port takes the class its *kind* implies,
+    because the kernel is the master and the TB must supply the slave.
+
+    Participants declaring ``shared`` (a `MemComponent` -> one `FlatMemory` behind both bundles) are
+    constructed once and passed by name.
+    """
+    dut = _find_dut(tb)
+
+    # endpoint identity -> the participant it belongs to
+    owner: dict[int, object] = {}
+    for c in tb.ordered_subcomps:
+        if c is dut or not hasattr(c, "bfm_model"):
+            continue
+        for attr in c.bfm_model().ports:
+            owner[id(getattr(c, attr))] = c
+
+    # endpoint identity -> the other endpoints on its interface (so a DUT port finds its participant)
+    peers: dict[int, list] = {}
+    for iface in tb.interfaces.values():
+        eps = [ep for ep in getattr(iface, "endpoints", {}).values()]
+        for ep in eps:
+            peers.setdefault(id(ep), []).extend(e for e in eps if e is not ep)
+
+    shared: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+    models: list[BfmInst] = []
+
+    for name, ep, kind, bundle in dut.boundary:
+        port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
+        part = None
+        for peer in peers.get(id(ep), []):
+            if id(peer) in owner:
+                part = owner[id(peer)]
+                break
+        if part is None:
+            raise ValueError(
+                f"{type(tb).__name__}: DUT boundary port '{name}' is not wired to any testbench "
+                f"participant — nothing would drive it, and the run would hang on that port."
+            )
+        bm = part.bfm_model()
+        if bm.shared is not None:
+            shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args))
+            cls = _SLAVE_FOR_KIND.get(kind)
+            if cls is None:
+                raise ValueError(
+                    f"{type(tb).__name__}: participant {type(part).__name__} is shared but boundary "
+                    f"port '{name}' is kind {kind!r}, which names no slave model."
+                )
+            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
+        else:
+            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args))
+
+    return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
+                  models=tuple(models))
 
 
 #: Channels of an m_axi bundle a testbench does NOT drive, by bundle kind.  The complement of what

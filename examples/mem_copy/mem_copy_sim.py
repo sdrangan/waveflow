@@ -8,9 +8,13 @@ checks the functional golden: each destination region equals a memcpy of its sou
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import numpy as np
 
 from waveflow.hw.clock import Clock
+from waveflow.hw.hw_component import HwParam
+from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent
@@ -20,49 +24,90 @@ from examples.mem_copy.mem_copy import CopyCmd, MemCopy
 from waveflow.simulation.stream_tb import CmdDriver, WordSink
 
 
+@dataclass
+class MemCopyTB(CompositeComp):
+    """The testbench as a component graph: three participants + the DUT, wired by interfaces.
+
+    This is the same structure ``run_copy`` used to build inline as statements — a driver on
+    ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi`` bundles, and the
+    :class:`MemCopy` DUT.  Declaring it as a :class:`CompositeComp` changes nothing about the
+    simulation; it changes what the structure *is*.  **A function body is code; a component graph is
+    data** — and only data can be walked.  ``composite_top_spec`` cannot introspect statements that
+    have already executed, so a generator has no way to learn which participants exist or how they
+    are wired.  As a graph, the same information generates the XSI testbench
+    (:func:`~waveflow.build.composite_gen.tb_top_spec`) as well as running the pysim golden: one
+    statement, two backends.
+
+    ``jobs`` is a list of ``(src_off, dst_off, n_words)`` element-coordinate triples.  Multiple jobs
+    exercise the free-running ``hls::task`` re-fire, and — because the driver never waits for a
+    completion — they overlap, which is the whole point of the design.
+    """
+
+    jobs: tuple = ((16, 4096 // 8, 128),)
+    mem_dwidth: HwParam[int] = 64
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.mem_dwidth)
+        bpw = w // 8
+        jobs = list(self.jobs)
+
+        # One flat arena covering every source and destination region (byte-addressed, base 0).
+        self.arena_words = max(max(s, d) + n for s, d, n in jobs) + 16
+        self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+                                word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
+        self.mem.alloc(self.arena_words)             # one segment at word 0 (byte addr 0)
+
+        # Pre-load each source region with a known, per-job-distinct pattern; keep the expectation.
+        self.expected: list[np.ndarray] = []
+        for j, (src, dst, n) in enumerate(jobs):
+            known = (np.arange(n, dtype=np.uint64) * 2654435761 + 12345 + j * 7919) \
+                & ((1 << w) - 1)
+            self.mem._mem.write(src * bpw, known.astype(np.uint64))
+            self.expected.append(known.astype(np.uint64))
+
+        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
+        self.driver = CmdDriver(sim=self.sim, bitwidth=w,
+                                cmds=[CopyCmd(src_off=s, dst_off=d, n_words=n) for s, d, n in jobs])
+        self.done_sink = WordSink(sim=self.sim, bitwidth=w)
+
+        # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
+        for c in (self.dut, self.driver, self.done_sink, self.mem):
+            self.add_comp(c)
+        self.ordered_subcomps = [self.dut, self.driver, self.done_sink, self.mem]
+
+        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
+        cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
+        cmd_if.bind(ep_name="slave", endpoint=self.dut.s_cmd)
+        self.add_if(cmd_if)
+
+        done_if = StreamIF(name=f"{self.name}_done_if", sim=self.sim, clk=self.clk, bitwidth=w)
+        done_if.bind(ep_name="master", endpoint=self.dut.s_done)
+        done_if.bind(ep_name="slave", endpoint=self.done_sink.stream_ep)
+        self.add_if(done_if)
+
+        # Two m_axi bundles (read gmem0, write gmem1) over the one shared memory: a 2-master
+        # crossbar.  NOTE: the crossbar models contention; the XSI slave models do not — see
+        # plans/xsi_tb_codegen.md.  The two describe different systems on purpose.
+        xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
+                               nports_master=2, nports_slave=1, bitwidth=w)
+        xbar.bind("master_0", self.dut.m_in)          # MemRStream.m_mem (read)
+        xbar.bind("master_1", self.dut.m_out)         # MemWStream.m_mem (write)
+        xbar.bind("slave_0", self.mem.s_mm)
+        self.add_if(xbar)
+        assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
+
+
 def run_copy(jobs=((16, 4096 // 8, 128),), mem_dwidth: int = 64) -> "MemCopy":
-    """Run the ``MemCopy`` composite over *jobs* and check every copy is bit-exact.
+    """Run the :class:`MemCopyTB` graph and check every copy is bit-exact.
 
-    *jobs* is a list of ``(src_off, dst_off, n_words)`` element-coordinate triples; multiple jobs
-    exercise the free-running ``hls::task`` re-fire across commands (back-to-back copies).  Returns
-    the composite (``s_done`` token count == number of jobs)."""
+    Returns the DUT (``s_done`` token count == number of jobs).  The structure now lives in
+    ``MemCopyTB``; this is the driver: build it, run it, check it."""
     sim = Simulation()
-    clk = Clock(freq=100e6)
     bpw = mem_dwidth // 8
-
-    # One flat arena covering every source and destination region (byte-addressed, base 0).
-    arena_words = max(max(s, d) + n for s, d, n in jobs) + 16
-    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
-                       word_size=mem_dwidth, addr_size=32, nwords_tot=arena_words * 4)
-    mem.alloc(arena_words)                       # one segment at word 0 (byte addr 0)
-
-    # Pre-load each source region with a known, per-job-distinct pattern.
-    expected: list[np.ndarray] = []
-    for j, (src, dst, n) in enumerate(jobs):
-        known = (np.arange(n, dtype=np.uint64) * 2654435761 + 12345 + j * 7919) \
-            & ((1 << mem_dwidth) - 1)
-        mem._mem.write(src * bpw, known.astype(np.uint64))
-        expected.append(known.astype(np.uint64))
-
-    copier = MemCopy(name="copier", sim=sim, mem_dwidth=mem_dwidth)
-    driver = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                       cmds=[CopyCmd(src_off=s, dst_off=d, n_words=n) for s, d, n in jobs])
-    done_sink = WordSink(sim=sim, bitwidth=mem_dwidth)
-
-    cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
-    cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
-    cmd_if.bind(ep_name="slave", endpoint=copier.s_cmd)
-
-    done_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
-    done_if.bind(ep_name="master", endpoint=copier.s_done)
-    done_if.bind(ep_name="slave", endpoint=done_sink.stream_ep)
-
-    # Two m_axi bundles (read gmem0, write gmem1) over the one shared memory: a 2-master crossbar.
-    xbar = AXIMMCrossBarIF(sim=sim, clk=clk, nports_master=2, nports_slave=1, bitwidth=mem_dwidth)
-    xbar.bind("master_0", copier.m_in)           # MemRStream.m_mem (read)
-    xbar.bind("master_1", copier.m_out)          # MemWStream.m_mem (write)
-    xbar.bind("slave_0", mem.s_mm)
-    assign_address_ranges([mem.s_mm], [(0, arena_words * bpw)])
+    tb = MemCopyTB(name="tb", sim=sim, jobs=tuple(jobs), mem_dwidth=mem_dwidth)
+    mem, copier, done_sink, expected = tb.mem, tb.dut, tb.done_sink, tb.expected
 
     sim.run_sim()
 
