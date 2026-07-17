@@ -37,7 +37,7 @@ body** — plus three fields that turn out not to matter:
 | body | `run_iter` (abstract) | forbidden (`__init_subclass__`) | present XOR children |
 | `run_proc` | `while True: run_iter()` | none (passive; children own processes) | follows the body |
 | `boundary` etc. | derived (Stage 3) | declared | unchanged — same walk |
-| `control_mode` | `FREE_RUNNING` | `AUTO` | **delete: nothing reads it** |
+| `control_mode` | `FREE_RUNNING` | `AUTO` | `FREE_RUNNING` — the scheme *resolves* it (below) |
 | `potential_targets` | `{free_running_kernel}` | `{composite_kernel}` | `{composite_kernel, sequential_xsi_tb}` |
 
 **The cost, stated honestly.** `CompositeComp`'s "must not define `run_iter`" is a *class* fact
@@ -47,17 +47,28 @@ Later and weaker. It is the only thing the merge gives up, and it is worth it.
 
 ## Two findings that make the merge cheaper than it looks
 
-**`control_mode` is dead.** Nothing reads it. `codegen_check`'s docstring claims `build/` reads
-`cpp_kernel_name` / `control_mode` / `_is_testbench`; the function reads only `potential_targets`,
-and `composite_gen` emits `ap_ctrl_none` unconditionally (`render_top`). The only readers are tests
-asserting the declarations. So `FREE_RUNNING` vs `AUTO` — which looked like the question the merge
-must answer — costs nothing, because it is the same shape `types_not_tags` just spent four stages
-deleting: **a declared fact nothing dispatches on**.
+**`control_mode` is unread, but it is *honestly* unread — do not delete it.**
 
-`CompositeComp`'s docstring says "a composite's control mode *follows its boundary* — a regmap on the
-boundary makes the top host-activated (`ap_ctrl_hs` + `s_axilite`)". **That mechanism does not
-exist.** Same pathology as `hw_freerun`'s "state on self -> static locals" and `MemRStream`'s "bound
-read": a docstring describing a design that was never wired.
+*(Correcting this plan's own first draft, which said "dead, delete it". That was wrong, and wrong in
+a specific way worth naming: I checked that nothing reads it and stopped there. Declared-and-unread
+is not the same as dead. The question is whether it was **promised** a reader.)*
+
+It was. `plans/exec_model_classes.md:167` schedules one: *"honoring explicit `control_mode`. Keep the
+regmap-presence inference as a fallback."* And the docs are already straight about the gap —
+`guide/components/freerun.md`: *"The class declares `control_mode = FREE_RUNNING`, but codegen does
+not yet act on it"*; `guide/comp_codegen/structure.md`: *"a real gap, not a subtlety"*. So it has
+exactly the status of a declared-but-unimplemented **target**: a real name, not yet reachable. That
+is the pattern this repo uses on purpose, not the pattern it is trying to remove.
+
+What *is* wrong is one docstring. `hw_composite.py` says a composite's control mode "*follows* its
+boundary — a regmap on the boundary *makes* the top host-activated". Present tense, and nothing
+implements it. Fix the sentence, keep the field.
+
+**And the two-flow scheme resolves the question rather than dodging it.** `AUTO` was `CompositeComp`
+hedging about a *host-activated composite*. In this scheme that case is not a composite at all — a
+regmap boundary means Flow 1, which is `HostActivated`'s job. So the merged class is
+**`FREE_RUNNING` by definition**: Flow 2 is the free-running flow. The merge does not have to answer
+"`FREE_RUNNING` or `AUTO`?" — it deletes the case that made `AUTO` seem necessary.
 
 **`MemCopyTB.potential_targets == {'composite_kernel'}`** — inherited from `CompositeComp`, and
 wrong. A testbench does not lower to a synthesizable kernel; it lowers to `sequential_xsi_tb`. Not
@@ -119,9 +130,10 @@ Gated exactly as `types_not_tags` was, which is what makes it safe: **all four t
 must come out byte-identical**; `-m xsi` stays at 8 passed; fast loop at the 6-failure baseline. A
 refactor whose output moves is wrong.
 
-**Stage 1 — delete `control_mode`.** Dead, and it is the field that would otherwise force a decision
-during the merge. Drop the enum, the three declarations, the tests that assert them, and fix the two
-docstrings that describe the mechanism it never had. *Independent of the merge; do it first, alone.*
+**Stage 1 — fix `hw_composite.py`'s docstring.** One sentence: a composite's control mode does not
+"follow its boundary", because nothing derives it. Keep the field (see above). *Independent of the
+merge; do it first, alone.* Tiny, but it is the claim that sent this plan's first draft down the
+wrong path — a present-tense docstring is how a mechanism that does not exist gets believed.
 
 **Stage 2 — merge the classes.** One class (name TBD: `HwComp`? keep `FreeRunComp`?). Body XOR
 children as a post-construction invariant with the message `CompositeComp.__init_subclass__` has now.
