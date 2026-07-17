@@ -1,0 +1,33 @@
+{%- comment -%}
+  Section-local Previous / Next footer.
+
+  just-the-docs has no built-in prev/next, so this computes it from the current page's
+  siblings: pages with the same `parent` AND the same `grand_parent`, ordered by `nav_order`.
+  It renders ONLY on leaf pages (those that declare a `grand_parent`) — i.e. the reading pages
+  inside a sub-section — so section landings and the guide top level are left alone.
+
+  NOTE: verify with `bundle exec jekyll serve` after any change — a Liquid error breaks the build.
+{%- endcomment -%}
+{%- if page.grand_parent -%}
+  {%- assign siblings = site.html_pages | where: "parent", page.parent | where: "grand_parent", page.grand_parent -%}
+  {%- assign ordered = siblings | sort: "nav_order" -%}
+  {%- assign prev_page = nil -%}
+  {%- assign next_page = nil -%}
+  {%- assign passed = false -%}
+  {%- for p in ordered -%}
+    {%- if p.url == page.url -%}
+      {%- assign passed = true -%}
+    {%- elsif passed -%}
+      {%- if next_page == nil -%}{%- assign next_page = p -%}{%- endif -%}
+    {%- else -%}
+      {%- assign prev_page = p -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if prev_page or next_page -%}
+<hr aria-hidden="true">
+<nav class="page-prev-next" aria-label="Previous and next page" style="display:flex;justify-content:space-between;gap:1rem;font-size:0.9em;">
+  <span>{% if prev_page %}<a href="{{ prev_page.url | relative_url }}" rel="prev">&larr; {{ prev_page.title }}</a>{% endif %}</span>
+  <span>{% if next_page %}<a href="{{ next_page.url | relative_url }}" rel="next">{{ next_page.title }} &rarr;</a>{% endif %}</span>
+</nav>
+  {%- endif -%}
+{%- endif -%}
