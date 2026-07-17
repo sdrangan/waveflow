@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO))
 from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
 from waveflow.build.composite_gen import (  # noqa: E402
     DEFAULT_MEM_DW,
+    composite_top_spec,
     GEN_DIR,
     INCLUDE_DIR,
     TaskInst,
@@ -44,6 +45,7 @@ from waveflow.build.streamutils import (  # noqa: E402
     XsiHarnessStep,
 )
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
+from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
     MRCmd,
     MWCmd,
@@ -55,29 +57,23 @@ from waveflow.hw.mem_stream import (  # noqa: E402
 
 
 def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
-    """Build the :class:`TopSpec` for a standalone mem-stream kernel (the 1-task degenerate case)."""
-    if comp_class is MemRStream:
-        return TopSpec(
-            top_name="mem_r_stream",
-            ports=(_axis_port("s_cmd", width, kind="axis_in"),
-                   _maxi_port("m_mem", width, const=True),
-                   _axis_port("m_out", width, kind="axis_out")),
-            tasks=(TaskInst("mem_r_stream_task", (width,), ("s_cmd", "m_mem", "m_out"),
-                            "mem_r_stream_task.h"),),
-            cmd_headers=(MRCmd.resolved_include_filename(),),
-        )
-    if comp_class is MemWStream:
-        return TopSpec(
-            top_name="mem_w_stream",
-            ports=(_axis_port("s_cmd", width, kind="axis_in"),
-                   _axis_port("s_in", width, kind="axis_in"),
-                   _maxi_port("m_mem", width, const=False)),
-            tasks=(TaskInst("mem_w_stream_task", (width,), ("s_cmd", "s_in", "m_mem"),
-                            "mem_w_stream_task.h"),),
-            cmd_headers=(MWCmd.resolved_include_filename(),),
-        )
-    raise ValueError(f"no mem-stream top template for {comp_class!r}")
+    """The :class:`TopSpec` for a standalone mem-stream kernel — **walked, not tabulated**.
 
+    This used to be a hand-written table keyed on the class (``if comp_class is MemRStream:``) that
+    restated the component's own ports, their directions, and its task signature.  It is now the same
+    graph walk a composite gets: a leaf declares its ports (``FreeRunComp.boundary``, ordered by
+    ``kernel_task().signature``), their direction is their endpoint's type, and its one task is
+    itself.  A standalone kernel really is *the 1-task degenerate case* — it just could not say so
+    while its ports lived here.  See ``plans/endpoint_types_not_tags.md``.
+
+    Verified byte-identical against the table it replaced.
+    """
+    if comp_class not in (MemRStream, MemWStream):
+        raise ValueError(f"no mem-stream top for {comp_class!r}")
+    leaf = comp_class(name=comp_class.cpp_kernel_name, sim=Simulation(), mem_dwidth=width)
+    # The command struct header the generated top must include; the schema knows its own filename.
+    leaf.cmd_headers = (leaf._cmd_cls.resolved_include_filename(),)
+    return composite_top_spec(leaf, width=width)
 
 
 # ---------------------------------------------------------------------------

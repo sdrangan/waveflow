@@ -169,3 +169,37 @@ def test_a_stated_kind_must_agree_with_the_type():
     assert _unpack_boundary(("m_in", ep, "maxi_read", "gmem0")) == ("m_in", ep, "gmem0")
     with pytest.raises(ValueError, match="declares kind 'maxi_write' but its endpoint"):
         _unpack_boundary(("m_in", ep, "maxi_write", "gmem0"))
+
+
+def test_a_leaf_walks_exactly_like_a_composite():
+    """A standalone kernel IS the 1-task degenerate case -- it just could not say so before.
+
+    `top_spec_for` used to be a table keyed on the class that restated the component's own ports,
+    their directions and its task signature. Now a leaf declares (FreeRunComp.boundary, ordered by
+    kernel_task().signature), its direction is its endpoint's type, and its one task is itself -- so
+    composite_top_spec walks it. This pins that the walk still equals what the table produced;
+    if it ever diverges, the generated kernels move.
+    """
+    from waveflow.build.composite_gen import composite_top_spec
+    from waveflow.hw.mem_stream import MemRStream, MemWStream
+    from waveflow.simulation.simulation import Simulation
+
+    sim = Simulation()
+    for cls, top in ((MemRStream, "mem_r_stream"), (MemWStream, "mem_w_stream")):
+        leaf = cls(name=top, sim=sim, mem_dwidth=64)
+        leaf.cmd_headers = (leaf._cmd_cls.resolved_include_filename(),)
+        spec = composite_top_spec(leaf, width=64)
+
+        assert spec.top_name == top
+        assert len(spec.tasks) == 1, "a leaf has exactly one task -- itself"
+        # The top's C++ parameter list and the task's call args are literally the same list, so they
+        # cannot disagree. That is what deriving the order from the signature buys.
+        assert spec.tasks[0].args == leaf.kernel_task().signature
+        assert tuple(p.name for p in spec.ports) == leaf.kernel_task().signature
+        assert not spec.internal_streams, "a leaf wires nothing: every port is a boundary port"
+
+    # And the directions came from the endpoint types, not from a table.
+    r = MemRStream(name="mem_r_stream", sim=sim, mem_dwidth=64)
+    r.cmd_headers = ()
+    kinds = {p.name: p.kind for p in composite_top_spec(r, width=64).ports}
+    assert kinds == {"s_cmd": "axis_in", "m_mem": "maxi_read", "m_out": "axis_out"}
