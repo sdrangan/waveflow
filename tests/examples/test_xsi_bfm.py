@@ -24,8 +24,18 @@ import pytest
 
 from waveflow.build.composite_gen import render_rtl_f
 
-HERE = Path(__file__).resolve().parents[2] / "examples" / "interleaver"
-XSI = HERE / "xsi"
+EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+#: Which example directory owns each top.  They are no longer all in one place: mem_copy is its own
+#: example, with its own xsi/ workspace (its own xsim.dir, its own copy of the harness via
+#: XsiHarnessStep).  That separation is the point — an example that wants XSI no longer reaches into
+#: a sibling.
+ROOT_OF = {
+    "mem_r_stream": EXAMPLES / "interleaver",
+    "mem_w_stream": EXAMPLES / "interleaver",
+    "mem_copy": EXAMPLES / "mem_copy",
+    "interleaver_canon": EXAMPLES / "interleaver",
+}
 
 #: (top, tb basename, expected cycles, a substring proving the golden actually ran).
 #:
@@ -53,9 +63,9 @@ GATES = [
 #: check that read the file afterwards would compare the gate's own output against itself and could
 #: never fail.  (It ran green that way; the flaw only showed when the drift test was run alone.)
 _COMMITTED_F = {
-    top: (XSI / f"rtl_{top}.f").read_text(encoding="utf-8").replace("\r\n", "\n")
+    top: (ROOT_OF[top] / "xsi" / f"rtl_{top}.f").read_text(encoding="utf-8").replace("\r\n", "\n")
     for top, _tb, _c, _m in GATES
-    if (XSI / f"rtl_{top}.f").exists()
+    if (ROOT_OF[top] / "xsi" / f"rtl_{top}.f").exists()
 }
 
 
@@ -70,25 +80,27 @@ def _require(cond: bool, why: str) -> None:
 @pytest.mark.parametrize("top,tb,want_cycles,want_marker", GATES,
                          ids=[g[0] for g in GATES])
 def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
+    root = ROOT_OF[top]
+    xsi = root / "xsi"
     _require(os.name == "nt", "the XSI flow is a Windows .bat (xvlog/xelab/mingw)")
-    _require((XSI / "run.bat").exists(), f"{XSI / 'run.bat'}")
-    proj = HERE / f"{top}_proj" / "solution1" / "syn" / "verilog"
+    _require((xsi / "run.bat").exists(), f"{xsi / 'run.bat'}")
+    proj = root / f"{top}_proj" / "solution1" / "syn" / "verilog"
     _require(proj.is_dir(), f"no csynth RTL at {proj} — run {top}.tcl first")
 
     # 1) Regenerate the xvlog file list from the RTL that is actually on disk.  Never trust the
     # committed .f: it is the half of this flow that silently drifts (a renamed module leaves it
     # naming a file that no longer exists, and xvlog + a cached dll will happily go green).
-    (XSI / f"rtl_{top}.f").write_text(render_rtl_f(top, HERE), encoding="utf-8")
+    (xsi / f"rtl_{top}.f").write_text(render_rtl_f(top, root), encoding="utf-8")
 
     # 2) Force a clean build.  A cached xsimk.dll is the other half: xelab would reuse RTL elaborated
     # from a previous design and the run would prove nothing about the current one.
-    shutil.rmtree(XSI / "xsim.dir" / top, ignore_errors=True)
+    shutil.rmtree(xsi / "xsim.dir" / top, ignore_errors=True)
     for stale in (f"{tb}.exe", f"{tb}.o"):
-        (XSI / stale).unlink(missing_ok=True)
+        (xsi / stale).unlink(missing_ok=True)
 
     # ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and the bare form
     # fails with "not recognized as an internal or external command" rather than anything useful.
-    r = subprocess.run(["cmd", "/c", ".\\run.bat", top, tb], cwd=str(XSI),
+    r = subprocess.run(["cmd", "/c", ".\\run.bat", top, tb], cwd=str(xsi),
                        capture_output=True, text=True, timeout=1800)
     out = (r.stdout or "") + (r.stderr or "")
 
@@ -114,11 +126,12 @@ def test_committed_rtl_f_matches_the_rtl_on_disk(top: str):
     Compares against ``_COMMITTED_F`` (snapshotted at import), NOT the file on disk, because the
     gates rewrite it — reading it here would compare the gate's output against itself.
     """
-    proj = HERE / f"{top}_proj" / "solution1" / "syn" / "verilog"
+    root = ROOT_OF[top]
+    proj = root / f"{top}_proj" / "solution1" / "syn" / "verilog"
     _require(proj.is_dir(), f"no csynth RTL at {proj}")
     _require(top in _COMMITTED_F, f"no committed rtl_{top}.f")
 
-    assert render_rtl_f(top, HERE) == _COMMITTED_F[top], (
+    assert render_rtl_f(top, root) == _COMMITTED_F[top], (
         f"rtl_{top}.f has drifted from the elaborated RTL -- regenerate it (render_rtl_f). "
         f"A renamed RTL module leaves the committed list naming a file that no longer exists."
     )

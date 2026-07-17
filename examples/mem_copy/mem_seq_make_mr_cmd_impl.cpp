@@ -3,7 +3,7 @@
 namespace mem_seq_impl {
 // CopyCmd -> the read command.  Element coordinates pass through verbatim (no byte<->word
 // conversion) -- the addressing convention, plans/component.md.
-// Golden: examples/interleaver/mem_copy.py::Sequencer.make_mr_cmd.
+// Golden: examples/mem_copy/mem_copy.py::Sequencer.make_mr_cmd.
 MRCmd make_mr_cmd(CopyCmd cmd, UInt32Array msg) {
 #pragma HLS INLINE
     MRCmd r;

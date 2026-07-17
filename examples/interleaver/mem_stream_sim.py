@@ -17,6 +17,7 @@ from waveflow.hw.memif import DirectMMIF
 from waveflow.hw.memory import AddrUnit, MemComponent
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
+from waveflow.simulation.stream_tb import CmdDriver, WordDriver, WordSink
 
 from waveflow.hw.mem_stream import (
     MRCmd,
@@ -24,60 +25,6 @@ from waveflow.hw.mem_stream import (
     MemRStream,
     MemWStream,
 )
-
-
-# ---------------------------------------------------------------------------
-# Tiny drivers / sinks
-# ---------------------------------------------------------------------------
-
-@dataclass
-class CmdDriver(SimObj):
-    """Sends a list of command-schema instances onto a stream (one burst each)."""
-
-    cmds: list = field(default_factory=list)
-    bitwidth: int = 64
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
-
-    def run_proc(self) -> ProcessGen[None]:
-        for c in self.cmds:
-            yield from self.stream_ep.write(c)
-
-
-@dataclass
-class WordDriver(SimObj):
-    """Sends raw word bursts onto a stream (the ``MemWStream`` data source)."""
-
-    bursts: list = field(default_factory=list)   # list of np.uint word arrays
-    bitwidth: int = 64
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
-
-    def run_proc(self) -> ProcessGen[None]:
-        for b in self.bursts:
-            yield from self.stream_ep.write(np.asarray(b))
-
-
-@dataclass
-class WordSink(SimObj):
-    """Collects raw word bursts off a stream (the ``MemRStream`` output sink)."""
-
-    bitwidth: int = 64
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.words: list[np.ndarray] = []
-        self.stream_ep = StreamIFSlave(
-            sim=self.sim, bitwidth=self.bitwidth, has_tlast=False,
-            rx_proc=self.rx_proc, queue_size=64)
-
-    def rx_proc(self, words: Words) -> ProcessGen[None]:
-        self.words.append(np.array(words, copy=True))
-        yield self.timeout(0)
 
 
 # ---------------------------------------------------------------------------

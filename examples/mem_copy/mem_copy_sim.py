@@ -1,4 +1,4 @@
-"""mem_copy_sim.py — pysim golden harness for the :class:`~examples.interleaver.mem_copy.MemCopy`
+"""mem_copy_sim.py — pysim golden harness for the :class:`~examples.mem_copy.mem_copy.MemCopy`
 composite (Phase 2, ``plans/mem_stream_impl.md``).
 
 Wires the composite's boundary endpoints to a driver (``s_cmd``), a done sink (``s_done``), and one
@@ -16,8 +16,8 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
-from examples.interleaver.mem_copy import CopyCmd, MemCopy
-from examples.interleaver.mem_stream_sim import CmdDriver, WordSink
+from examples.mem_copy.mem_copy import CopyCmd, MemCopy
+from waveflow.simulation.stream_tb import CmdDriver, WordSink
 
 
 def run_copy(jobs=((16, 4096 // 8, 128),), mem_dwidth: int = 64) -> "MemCopy":

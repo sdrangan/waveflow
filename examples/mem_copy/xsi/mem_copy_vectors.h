@@ -4,7 +4,7 @@
 // DO NOT EDIT: regenerate instead.  Plain C++ (no HLS types) so a host-compiled testbench
 // can include it.  Command words are the output of the schema's own serialize() -- the
 // testbench never re-implements a packing rule, so it cannot drift from the schema.
-// Scenario source: examples/interleaver/mem_copy.py (XSI_* constants).
+// Scenario source: examples/mem_copy/mem_copy.py (XSI_* constants).
 // CMD_WORDS = CopyCmd.serialize(word_bw) per job, concatenated.
 #include <cstdint>
 

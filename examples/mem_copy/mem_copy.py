@@ -16,7 +16,7 @@ the degenerate 1-node case of exactly this generator — this is the seam Phase 
 
 Run (project venv, from repo root)::
 
-    PYTHONPATH=. pysilicon-venv/Scripts/python.exe examples/interleaver/mem_copy.py
+    PYTHONPATH=. pysilicon-venv/Scripts/python.exe examples/mem_copy/mem_copy.py
 """
 from __future__ import annotations
 
@@ -348,7 +348,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
             # CopyCmd.serialize(word_bw) output, concatenated: CMD_WORDS_PER_CMD words per command.
             "CMD_WORDS": ("uint64_t", cmd_words),
         },
-        note=("Scenario source: examples/interleaver/mem_copy.py (XSI_* constants).\n"
+        note=("Scenario source: examples/mem_copy/mem_copy.py (XSI_* constants).\n"
               "CMD_WORDS = CopyCmd.serialize(word_bw) per job, concatenated."),
     )
 

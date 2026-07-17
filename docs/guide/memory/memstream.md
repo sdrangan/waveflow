@@ -11,10 +11,13 @@ The [`Memory`](./python.md) model above is the *host-side*, byte-addressed view 
 vectors and lay out buffers. This page covers the complementary *hardware-side* piece: two reusable,
 free-running (`ap_ctrl_none`) HLS components — `MemRStream` and `MemWStream` — that stream a run of
 words between an AXI memory port and an on-chip stream, plus `MemCopy`, a small composite that chains
-them into a multi-task memcpy kernel whose top is generated from the component graph (the task bodies
-themselves are hand-written — see [What generates, and what does not](#what-generates-and-what-does-not)).
-All three live in [`examples/interleaver`](../../../examples/interleaver/) and
-`waveflow/hw/mem_stream.py`.
+them into a multi-task memcpy kernel whose top is generated from the component graph (which task
+bodies are generated and which are hand-written is the subject of [What generates, and what does
+not](#what-generates-and-what-does-not)).
+
+`MemRStream`/`MemWStream` are framework (`waveflow/hw/mem_stream.py`); `MemCopy` is its own worked
+example in [`examples/mem_copy`](../../../examples/mem_copy/), self-contained down to its own `xsi/`
+testbench workspace.
 
 ## Why a separate memory model here
 
@@ -102,7 +105,7 @@ interprets it, only carries it through. `MemCopy`'s `Sequencer` uses slot 0 as a
 firing of the free-running loop is one command:
 
 ```python
-# From examples/interleaver/mem_copy.py (Sequencer.run_iter)
+# From examples/mem_copy/mem_copy.py (Sequencer.run_iter)
 cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
 msg = self.next_xfer_msg()
 mr = self.make_mr_cmd(cmd, msg)
@@ -144,7 +147,7 @@ COPY_MSG: for (int i = 0; i < 8; ++i) {
 
 ## `MemCopy`: a graph-derived top over hand-written bodies
 
-`MemCopy` (`examples/interleaver/mem_copy.py`) chains a pure-stream `Sequencer` into `MemRStream` ->
+`MemCopy` (`examples/mem_copy/mem_copy.py`) chains a pure-stream `Sequencer` into `MemRStream` ->
 `MemWStream` over two internal command FIFOs and one data FIFO, all `StreamIF`s declared with
 `add_comp`/`add_if`. The split matters: the **top** is generated, the **task bodies** are not. The top
 is **derived from that graph** — `composite_top_spec` walks the sub-components' `kernel_task()`
@@ -152,7 +155,7 @@ signatures and the interface graph and resolves each task argument to either a t
 internal `hls_thread_local` FIFO, rather than a hand-written template:
 
 ```python
-# From examples/interleaver/mem_copy.py (MemCopy.__post_init__)
+# From examples/mem_copy/mem_copy.py (MemCopy.__post_init__)
 self.internal_edges = [
     StreamEdge("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd),
     StreamEdge("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd),

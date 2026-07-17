@@ -138,7 +138,7 @@ XferMsgArr = MRCmd.elements["xfer_msg"]["schema"]
 @dataclass(frozen=True)
 class KernelTask:
     """The fixed ``hls::task`` body descriptor a composable component exposes for the composite
-    codegen (:func:`~examples.interleaver.mem_copy.composite_top_spec`).
+    codegen (:func:`~examples.mem_copy.mem_copy.composite_top_spec`).
 
     * ``task_fn`` — the width-templated body function (e.g. ``mem_r_stream_task``).
     * ``header`` — the copied body header to ``#include`` (e.g. ``mem_r_stream_task.h``).

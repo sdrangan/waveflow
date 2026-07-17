@@ -47,6 +47,6 @@ def test_compositecomp_rejects_run_iter():
 
 def test_retrofit_composites_are_compositecomp():
     from examples.interleaver.interleaver import InterleaverCanon
-    from examples.interleaver.mem_copy import MemCopy
+    from examples.mem_copy.mem_copy import MemCopy
     assert issubclass(MemCopy, CompositeComp)
     assert issubclass(InterleaverCanon, CompositeComp)

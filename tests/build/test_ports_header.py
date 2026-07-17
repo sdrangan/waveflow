@@ -91,7 +91,7 @@ def test_mem_copy_binding_matches_its_real_boundary():
     emits the top's pragmas, so the two cannot disagree."""
     from waveflow.build.composite_gen import composite_top_spec, render_top
     from waveflow.build.elaborate import elaborate
-    from examples.interleaver.mem_copy import MemCopy
+    from examples.mem_copy.mem_copy import MemCopy
 
     comp = elaborate(MemCopy, {"mem_dwidth": 64}, name="mem_copy")
     spec = composite_top_spec(comp, width=64)

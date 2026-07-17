@@ -38,7 +38,7 @@ def test_freeruncomp_dispatches_to_run_iter():
 
 
 def test_compositecomp_dispatches_to_composite():
-    from examples.interleaver.mem_copy import MemCopy
+    from examples.mem_copy.mem_copy import MemCopy
     assert codegen_path(elaborate(MemCopy, {"mem_dwidth": 64})) == CodegenPath("composite", None)
 
 

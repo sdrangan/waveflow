@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from waveflow.build.hwgen import kernel_files_to_str, task_files_to_str
-from examples.interleaver.mem_copy import Sequencer
+from examples.mem_copy.mem_copy import Sequencer
 
 
 def _task_h() -> str:

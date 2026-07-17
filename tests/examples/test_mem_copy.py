@@ -5,7 +5,7 @@ memcpy's a word run from one region to another over internal FIFOs, and emits on
 job.  Plus the **graph-derived** composite codegen shape (the real Phase-2 deliverable): one
 ``ap_ctrl_none`` top instantiating three ``hls::task`` bodies wired by ``hls_thread_local`` streams,
 with two ``m_axi`` bundles + two AXIS ports on the boundary.  The csynth + XSI legs of Gate 2 need
-Vitis/Vivado and are driven out-of-band by ``examples/interleaver/mem_copy.py`` +
+Vitis/Vivado and are driven out-of-band by ``examples/mem_copy/mem_copy.py`` +
 ``examples/interleaver/xsi/run.bat``.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 def test_copycmd_schema_single_source():
     """CopyCmd packs {src_off, dst_off, n_words} — two 64-bit words at MEM_DW=64 (LSB-first)."""
-    from examples.interleaver.mem_copy import CopyCmd
+    from examples.mem_copy.mem_copy import CopyCmd
 
     assert CopyCmd.nwords_per_inst(64) == 2
     c = CopyCmd(src_off=16, dst_off=600, n_words=128)
@@ -28,7 +28,7 @@ def test_copycmd_schema_single_source():
 
 def test_mem_copy_pysim_golden():
     """MemCopy memcpy's a region bit-exact (run_copy asserts internally on mismatch)."""
-    from examples.interleaver.mem_copy_sim import run_copy
+    from examples.mem_copy.mem_copy_sim import run_copy
     for n in (128, 1, 257):                        # 1 = single word; 257 = multiple AXI bursts
         c = run_copy(jobs=((16, 600, n),))
         assert c.wstream.transfer_spans           # ran, recorded a span
@@ -37,7 +37,7 @@ def test_mem_copy_pysim_golden():
 def test_mem_copy_back_to_back():
     """Two CopyCmds to distinct offsets exercise the free-running hls::task re-fire across jobs;
     both copies are bit-exact and exactly two done tokens are emitted."""
-    from examples.interleaver.mem_copy_sim import run_copy
+    from examples.mem_copy.mem_copy_sim import run_copy
     run_copy(jobs=((16, 600, 128), (200, 900, 64)))
 
 
@@ -45,7 +45,7 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
     """The generated composite top is a free-running ap_ctrl_none top that instantiates the three
     sub-component task bodies and wires them with hls_thread_local internal streams derived from the
     component/interface graph — no #define MEM_DW, no while."""
-    from examples.interleaver.mem_copy import generate
+    from examples.mem_copy.mem_copy import generate
 
     generate(out_dir=tmp_path, width=64)
     src = (tmp_path / "gen" / "mem_copy.cpp").read_text()
@@ -88,16 +88,16 @@ def test_xsi_vectors_header_is_current():
     it leaves the header able to go stale: change CopyCmd's layout and the TB would keep driving the
     old words, testing the wrong thing while passing.
 
-    If this fails: re-run `python examples/interleaver/mem_copy.py`.
+    If this fails: re-run `python examples/mem_copy/mem_copy.py`.
     """
     from pathlib import Path as _P
-    from examples.interleaver.mem_copy import render_xsi_vectors
+    from examples.mem_copy.mem_copy import render_xsi_vectors
 
-    committed = (_P(__file__).resolve().parents[2] / "examples" / "interleaver" / "xsi"
+    committed = (_P(__file__).resolve().parents[2] / "examples" / "mem_copy" / "xsi"
                  / "mem_copy_vectors.h").read_text(encoding="utf-8").replace("\r\n", "\n")
     assert render_xsi_vectors(64) == committed, (
         "xsi/mem_copy_vectors.h is stale — the schema or scenario changed under it. "
-        "Regenerate: python examples/interleaver/mem_copy.py"
+        "Regenerate: python examples/mem_copy/mem_copy.py"
     )
 
 
@@ -109,7 +109,7 @@ def test_xsi_vectors_are_the_schemas_own_serialization():
     """
     import re
 
-    from examples.interleaver.mem_copy import (
+    from examples.mem_copy.mem_copy import (
         XSI_DST_W, XSI_N, XSI_SRC_W, CopyCmd, render_xsi_vectors,
     )
     from waveflow.hw.mem_stream import MemComplete
@@ -142,7 +142,7 @@ def test_sequencer_run_iter_is_extractable():
     from waveflow.build.hwcodegen import extract_kernel
     from waveflow.build.hwgen import kernel_files_to_str
     from waveflow.simulation.simulation import Simulation
-    from examples.interleaver.mem_copy import Sequencer
+    from examples.mem_copy.mem_copy import Sequencer
 
     seq = Sequencer(name="seq", sim=Simulation(), mem_dwidth=64)
     path = codegen_path(seq)
@@ -173,7 +173,7 @@ def test_sequencer_codegen_gaps_are_still_open():
     """
     from waveflow.build.hwgen import kernel_files_to_str
     from waveflow.hw.codegen_targets import FREE_RUNNING_KERNEL, IMPLEMENTED_TARGETS
-    from examples.interleaver.mem_copy import Sequencer
+    from examples.mem_copy.mem_copy import Sequencer
 
     assert FREE_RUNNING_KERNEL not in IMPLEMENTED_TARGETS
 
@@ -188,7 +188,7 @@ def test_composite_top_spec_is_graph_derived():
     """The composite TopSpec is derived from the sub_comps + internal interfaces (add_comp/add_if),
     not hand-written: each task arg resolves an endpoint to a FIFO or boundary port."""
     from waveflow.simulation.simulation import Simulation
-    from examples.interleaver.mem_copy import MemCopy, composite_top_spec
+    from examples.mem_copy.mem_copy import MemCopy, composite_top_spec
 
     comp = MemCopy(name="mc", sim=Simulation(), mem_dwidth=64)
     # graph is registered on the parent

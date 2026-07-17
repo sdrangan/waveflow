@@ -18,7 +18,7 @@ from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
 from examples.interleaver.interleaver import InterleaverCanon, InterleaverCmd
-from examples.interleaver.mem_stream_sim import CmdDriver, WordSink
+from waveflow.simulation.stream_tb import CmdDriver, WordSink
 
 
 def _pack(vals: np.ndarray, lw: int) -> np.ndarray:

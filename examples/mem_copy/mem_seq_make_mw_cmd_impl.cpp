@@ -3,7 +3,7 @@
 namespace mem_seq_impl {
 // CopyCmd -> the write command, carrying the SAME job cookie as the read (msg is passed in, not
 // re-stamped) so both halves of a copy correlate to one job.
-// Golden: examples/interleaver/mem_copy.py::Sequencer.make_mw_cmd.
+// Golden: examples/mem_copy/mem_copy.py::Sequencer.make_mw_cmd.
 MWCmd make_mw_cmd(CopyCmd cmd, UInt32Array msg) {
 #pragma HLS INLINE
     MWCmd w;
