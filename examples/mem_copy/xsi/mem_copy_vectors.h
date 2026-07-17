@@ -4,14 +4,15 @@
 // DO NOT EDIT: regenerate instead.  Plain C++ (no HLS types) so a host-compiled testbench
 // can include it.  Command words are the output of the schema's own serialize() -- the
 // testbench never re-implements a packing rule, so it cannot drift from the schema.
-// Scenario source: examples/mem_copy/mem_copy.py (XSI_* constants).
-// CMD_WORDS = CopyCmd.serialize(word_bw) per job, concatenated.
+// Derived from the MemCopyTB graph (examples/mem_copy/mem_copy_sim.py) built with
+// XSI_JOBS -- the same class the pysim golden runs, instantiated with this scenario.
+// CMD_WORDS = the driver's own commands, packed by CopyCmd.serialize(word_bw).
 #include <cstdint>
 
 namespace mem_copy_vectors {
 
 static const int MEM_DW = 64;
-static const int MEM_NW = 8192;
+static const int MEM_NW = 24640;
 static const int N = 128;
 static const int NUM_CMDS = 16;
 static const int DONE_WORDS = 5;

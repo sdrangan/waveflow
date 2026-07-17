@@ -65,6 +65,8 @@ from waveflow.build.composite_gen import (  # noqa: E402
     StreamEdge,
     composite_top_spec,
     render_ports_h,
+    render_tb_harness,
+    tb_top_spec,
     render_tcl,
     render_top,
 )
@@ -309,47 +311,79 @@ def gen_headers(config: BuildConfig) -> None:
 
 
 #: The XSI testbench's scenario: NUM_CMDS back-to-back copies of N words, each from SRC_W[j] to
-#: DST_W[j] (element/word coordinates in one flat arena).  Stated HERE, in Python, because the
-#: testbench's command words are the output of ``CopyCmd.serialize()`` — see :func:`gen_xsi_vectors`.
-#: Back-to-back jobs are the point: they exercise the ``hls::task`` re-fire across commands.
+#: DST_W[j] (element/word coordinates in one flat arena).  Back-to-back jobs are the point — they
+#: exercise the ``hls::task`` re-fire, and because the driver never waits for a completion they
+#: overlap, which is the ~1.9x the gate measures.
 XSI_N        = 128
 XSI_NUM_CMDS = 16
-XSI_MEM_NW   = 8192
 XSI_SRC_W = [64 + 128 * j for j in range(XSI_NUM_CMDS)]
 XSI_DST_W = [4096 + 128 * j for j in range(XSI_NUM_CMDS)]
 
+#: The same scenario as ``MemCopyTB``'s own ``jobs`` parameter.  This is what "one statement, two
+#: backends" actually means: **one class, two instantiations** — pysim builds a ``MemCopyTB`` with
+#: its jobs, the XSI generator builds one with these.  Nothing about the scenario is stated twice.
+XSI_JOBS = tuple((s, d, XSI_N) for s, d in zip(XSI_SRC_W, XSI_DST_W))
+
+
+def make_xsi_tb(width: int = DEFAULT_MEM_DW):
+    """The :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` instance the XSI testbench is
+    generated from.
+
+    Imported lazily: ``mem_copy_sim`` imports this module for :class:`MemCopy`/:class:`CopyCmd`, so a
+    module-level import here would be circular.  The testbench graph depends on the design; the
+    design's *generator* depends on the graph.
+    """
+    from waveflow.simulation.simulation import Simulation
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+
+    return MemCopyTB(name="xsi_tb", sim=Simulation(), mem_dwidth=width, jobs=XSI_JOBS)
+
 
 def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
-    """Render ``mem_copy_vectors.h``'s contents.  Split from :func:`gen_xsi_vectors` so a test can
-    compare the committed header against what the schema produces *now* without writing anything —
-    that check is what catches a schema change leaving the header stale, and it needs no toolchain."""
+    """Render ``mem_copy_vectors.h``'s contents **from the testbench graph**.
+
+    Everything here is read off a real :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` — the same
+    class the pysim golden runs — rather than restated: the commands are the ones its ``CmdDriver``
+    will send, packed by the schema's own ``serialize()``; the offsets are its ``jobs``; the arena is
+    the one its ``MemComponent`` declares.  So the XSI testbench and the pysim harness cannot
+    describe different tests.
+
+    Split from :func:`gen_xsi_vectors` so a test can compare the committed header against what the
+    graph produces *now* without writing anything — that is what catches a schema or scenario change
+    leaving the header stale, and it needs no toolchain.
+    """
     from waveflow.build.composite_gen import render_vectors_h
 
+    tb = make_xsi_tb(width)
+    jobs = list(tb.jobs)
+
+    # The words the driver will actually send, packed by the schema itself.
     cmd_words: list[int] = []
-    for s, d in zip(XSI_SRC_W, XSI_DST_W):
-        cmd = CopyCmd(src_off=s, dst_off=d, n_words=XSI_N)
+    for cmd in tb.driver.cmds:
         cmd_words.extend(int(w) for w in cmd.serialize(word_bw=width))
 
     return render_vectors_h(
         "mem_copy_vectors",
         scalars={
             "MEM_DW": width,
-            "MEM_NW": XSI_MEM_NW,
-            "N": XSI_N,
-            "NUM_CMDS": XSI_NUM_CMDS,
+            # The arena the graph's MemComponent declares -- not a second, hand-picked number.
+            "MEM_NW": int(tb.mem.nwords_tot),
+            "N": int(jobs[0][2]),
+            "NUM_CMDS": len(jobs),
             # MemComplete{len, xfer_len, xfer_msg[8]} -> nwords_per_inst(64) == 5.  Introspected:
             # the s_done framing is the schema's business, not the testbench's.
             "DONE_WORDS": MemComplete.nwords_per_inst(width),
-            "CMD_WORDS_PER_CMD": len(cmd_words) // XSI_NUM_CMDS,
+            "CMD_WORDS_PER_CMD": len(cmd_words) // len(jobs),
         },
         arrays={
-            "SRC_W": ("int", XSI_SRC_W),
-            "DST_W": ("int", XSI_DST_W),
+            "SRC_W": ("int", [s for s, _d, _n in jobs]),
+            "DST_W": ("int", [d for _s, d, _n in jobs]),
             # CopyCmd.serialize(word_bw) output, concatenated: CMD_WORDS_PER_CMD words per command.
             "CMD_WORDS": ("uint64_t", cmd_words),
         },
-        note=("Scenario source: examples/mem_copy/mem_copy.py (XSI_* constants).\n"
-              "CMD_WORDS = CopyCmd.serialize(word_bw) per job, concatenated."),
+        note=("Derived from the MemCopyTB graph (examples/mem_copy/mem_copy_sim.py) built with\n"
+              "XSI_JOBS -- the same class the pysim golden runs, instantiated with this scenario.\n"
+              "CMD_WORDS = the driver's own commands, packed by CopyCmd.serialize(word_bw)."),
     )
 
 
@@ -414,8 +448,12 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
     vec_h = gen_xsi_vectors(out_dir, width=width)
+    # The testbench harness: derived from the TB graph, not from this module.  The hand-written half
+    # of the testbench is the test itself -- what goes in memory and what is checked.
+    harness_h = out_dir / "xsi" / f"{spec.top_name}_tb_harness.h"
+    harness_h.write_text(render_tb_harness(tb_top_spec(make_xsi_tb(width))), encoding="utf-8")
     print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name} "
-          f"+ xsi/{vec_h.name}")
+          f"+ xsi/{vec_h.name} + xsi/{harness_h.name}")
     return {spec.top_name: cpp}
 
 
