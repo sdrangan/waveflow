@@ -121,17 +121,20 @@ extractor's vocabulary (so the commands are built in hooks too, not inline). A h
 whose C++ you write by hand — which is exactly where the counter is allowed to live:
 
 ```cpp
-// From waveflow/build/mem_seq_task.h — hand-written, not lowered from the Python above
+// From examples/mem_copy/mem_seq_next_xfer_msg_impl.cpp — the hand-written hook impl (not lowered)
 static ap_uint<32> job_idx = 0;
 ...
-xfer_msg.data[0] = job_idx;
+msg.data[0] = job_idx;
 ...
 ++job_idx;
 ```
 
-The `static` is what makes the stamping survive across firings: the `hls::task` runtime re-invokes the
-body without resetting its frame. That correspondence between `run_iter` and the `.h` is **not
-checked by anything** — see [What generates, and what does not](#what-generates-and-what-does-not).
+The counter lives in the **hook impl**, not the task body: `mem_seq_task.h` (the body) is *generated*
+from `run_iter` and pragma-free, so it has no place for a `static`; the `@synthesizable next_xfer_msg`
+hook is the hand-written declaration where one is allowed. The `static` is what makes the stamping
+survive across firings — the `hls::task` runtime re-invokes the body without resetting its frame. That
+the hook's C++ agrees with `next_xfer_msg`'s Python is **not checked by anything** — see [What
+generates, and what does not](#what-generates-and-what-does-not).
 
 `xfer_msg` is backed by `UInt32Array` (`ap_uint<32> data[8]`), which is **not** directly subscriptable
 in C++ — always index through `.data[i]`, both when reading a command's cookie and when writing the
@@ -162,12 +165,20 @@ self.internal_edges = [
     StreamEdge("copy_data", self.rstream.m_out, self.wstream.s_in),
 ]
 self.boundary = [
-    ("s_cmd", self.seq.s_cmd, "axis_in", None),
-    ("m_in", self.rstream.m_mem, "maxi_read", "gmem0"),
-    ("m_out", self.wstream.m_mem, "maxi_write", "gmem1"),
-    ("s_done", self.wstream.s_done, "axis_out", None),
+    ("s_cmd", self.seq.s_cmd),
+    ("m_in", self.rstream.m_mem),
+    ("m_out", self.wstream.m_mem),
+    ("s_done", self.wstream.s_done),
 ]
 ```
+
+A boundary entry is just `(name, endpoint)` — nothing else is the assembler's to state. The
+port's **direction** (an AXIS input vs output, a read vs write `m_axi`) is the endpoint's *type*:
+`m_in` is a `MMIFReadMaster`, `m_out` a `MMIFWriteMaster`, and `kind_of_endpoint` reads it off the
+class. The **gmem bundle** is assigned by policy — `gmem0`, `gmem1`, … in declaration order
+(`bundle_map`) — because the same `MemWStream.m_mem` is `gmem0` standalone and `gmem1` here, so it
+cannot be a fact about the port. Restating either would only create a second place to disagree
+(see `plans/endpoint_types_not_tags.md`).
 
 `MemRStream`/`MemWStream`'s own `kernel_task()` picks the 3-arg or 4-arg (`emit_done`) fixed body:
 
@@ -214,12 +225,20 @@ Anything *generated* — the top, `mem_seq_task.h`, the port binding, the testbe
 cannot drift by construction, which is the point of generating it. Do not hand-edit those; the banner
 on each says so, and a regenerate will overwrite you.
 
-`free_running_kernel` remains a declared-but-unimplemented target
-(`waveflow/hw/codegen_targets.py`; `IMPLEMENTED_TARGETS` is `{control_driven_kernel,
-sequential_vitis_tb}`) — but that is a *different* product: a leaf compiled as its **own**
-`ap_ctrl_none` top. It is not what `MemCopy` needs, and its absence does not block anything here: a
-task body carries no interface pragmas at all, so `ap_ctrl_none` never applies to one.
-`test_sequencer_codegen_gaps_are_still_open` tracks that separate target.
+The `MemCopy` top's own target is **`composite_kernel`**, and it *is* implemented
+(`waveflow/hw/codegen_targets.py`: `IMPLEMENTED_TARGETS` now carries `composite_kernel` and
+`sequential_xsi_tb` alongside the two Flow-1 targets). There is a single free-running DUT target: a
+leaf compiled as its own top is just the 1-task case of a composite, walked by the same
+`composite_top_spec` — the earlier `free_running_kernel` / `composite_kernel` split was one product
+under two names and collapsed with the `FreeRunComp` merge (`plans/one_component_two_flows.md`). So
+`check(MemCopy, "composite_kernel")` runs that real generator and passes.
+
+What is *not* built is a separate path: the **old extractor** emitting a `FreeRunComp` leaf as its own
+`ap_ctrl_none` top. `kernel_files_to_str(Sequencer)` routes through the `control_driven` extractor and
+emits an `ap_ctrl_hs` top, not a free-running one — but that never blocks `MemCopy`, whose task bodies
+carry no interface pragmas at all (so `ap_ctrl_none` never applies to a body).
+`test_sequencer_codegen_gaps_are_still_open` tracks that extractor gap, distinct from the graph path
+`check(…, "composite_kernel")` validates.
 
 ## Verifying via XSI, not Vitis C/RTL cosim
 
@@ -228,20 +247,42 @@ requires an `ap_ctrl_hs`-style start/done handshake. Verification instead drives
 directly through XSI (`xsim.dir/<top>/xsimk.dll`) with a cycle-based AXI-MM + AXI-Stream BFM. See
 [XSI](../build/xsi.md) for the harness setup (`xvlog`/`xelab`/`run.bat`).
 
-The protocol is **not** written per testbench. `xsi/bfm/xsi_bfm.h` supplies `AxiMmReadSlave`,
-`AxiMmWriteSlave`, `AxisMaster`, `AxisSlave`, `FlatMemory`, and `XsiSim`; a TB is the scenario and the
-golden check, and nothing else. Each model implements `sample` / `update` / `drive`, and that split is
-load-bearing rather than stylistic: a beat is decided from values sampled **before** the rising edge
-and applied **after** it, so collapsing the phases changes when a transfer is seen.
+Neither the protocol nor the cycle loop is written per testbench. The framework BFM library
+`waveflow/build/xsi/xsi_bfm.h` (copied beside each example's testbench) supplies `AxiMmReadSlave`,
+`AxiMmWriteSlave`, `AxisMaster`, `AxisSlave`, `FlatMemory`, and `XsiSim`. Each model implements
+`sample` / `update` / `drive`, and that split is load-bearing rather than stylistic: a beat is decided
+from values sampled **before** the rising edge and applied **after** it, so collapsing the phases
+changes when a transfer is seen.
 
 ```cpp
-// From examples/interleaver/xsi/mem_copy_bfm_tb.cpp — the whole cycle loop.
+// From waveflow/build/xsi/xsi_bfm.h — the phase order every model obeys.
 sim.clock_low();
 sample();          // read kernel outputs, latch beat flags (VALID && READY)
 sim.clock_high();
 update();          // apply this cycle's beats, advance FSMs
 drive();           // present held values for the next cycle
 ```
+
+Which models exist, which RTL port each one drives, and the fixed-N loop that steps them through those
+phases are **generated** — by `tb_top_spec` + `render_tb_harness` into `mem_copy_tb_harness.h`, walked
+from the *same* `MemCopyTB` component graph that runs the pysim golden (one statement, two backends).
+So the testbench file itself (`examples/mem_copy/xsi/mem_copy_bfm_tb.cpp`, ~90 lines) is almost
+entirely the **test** — the part a component graph cannot know: what to put in memory, and what to check
+afterward.
+
+```cpp
+// From examples/mem_copy/xsi/mem_copy_bfm_tb.cpp — the testbench, minus the golden check.
+mem_copy_tb::Harness h("mem_copy_bfm.wdb", cmd_words);   // GENERATED: models, phases, run loop
+for (int j = 0; j < vec::NUM_CMDS; ++j)                  // the TEST's stimulus: a known pattern
+    for (int i = 0; i < vec::N; ++i) h.mem[vec::SRC_W[j] + i] = known_word(j, i);
+h.run(N_CYCLES);                                         // step the generated harness
+// ... then: every DST region == its SRC region (a memcpy), and each MemComplete echoed its job index.
+```
+
+This is the same split as [`sequential_xsi_tb`](../flows/freerun_seq.md), Flow 2's testbench target:
+a `CompositeComp` testbench graph (DUT + BFM participants, wired by interfaces) is walked to the
+harness, exactly as the DUT graph is walked to the top. `check(MemCopyTB, "sequential_xsi_tb")` runs
+that generator.
 
 **The gates are real, and exact.** `pytest -m xsi` drives all four kernels through RTL and asserts
 their cycle counts — `mem_r_stream` 158, `mem_w_stream` 176, `mem_copy` 2835, `interleaver_canon`
