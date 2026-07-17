@@ -12,11 +12,18 @@ composite is-not-a free-running leaf.  It has no ``run_iter`` and does not overr
 independent scheduled ``SimObj`` s that own the concurrent processes.  There is no busy loop and no
 "must not terminate" — there is simply no process at this level to run.
 
-Execution model is **not** fixed by the class: a composite's control mode *follows its boundary* — a
-regmap on the boundary makes the top host-activated (``ap_ctrl_hs`` + ``s_axilite``), a pure
-stream/``m_axi`` boundary makes it free-running (``ap_ctrl_none``).  So ``control_mode`` is left
-``AUTO``/derived (do **not** hardcode it here).  See ``plans/exec_model_classes.md`` and
-``docs/guide/components/taxonomy.md``.
+``control_mode`` is left ``AUTO``, and — stated honestly — **nothing reads it today**.  The generator
+(:func:`~waveflow.build.composite_gen.render_top`) emits ``ap_ctrl_none`` unconditionally; it does not
+consult ``control_mode`` at all.  ``AUTO`` is a *declared-but-unimplemented* value, the same status a
+declared-but-unreachable codegen target has (see :mod:`waveflow.hw.codegen_targets`): a real name whose
+reader is future work, scheduled in ``plans/exec_model_classes.md`` ("honoring explicit
+``control_mode``; keep the regmap-presence inference as a fallback").
+
+Do **not** read ``AUTO`` as "the control mode is *derived* from the boundary" — no such derivation
+exists.  It is a plan, not a mechanism; a regmap boundary does not, today, make the top host-activated.
+When that reader is built, a regmap-bearing boundary is a Flow-1 (host-activated) case anyway, which is
+:class:`~waveflow.hw.hw_hostactivated.HostActivated`'s job, not a composite's.  See
+``plans/one_component_two_flows.md`` and ``docs/guide/components/taxonomy.md``.
 """
 from __future__ import annotations
 
