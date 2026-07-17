@@ -279,12 +279,107 @@ tail) was printed as `cycles=`, so `mem_r`'s headline number was 62% tail and `m
 by 512. If a terminator's drain leaks back into the reported number, 3347 returns. Whatever `run_until`
 looks like, time-to-completion comes from the participant that observed the completion.
 
+### The emitter's shape (settled in discussion 2026-07-16)
+
+**The interface owns its lowering — and this is the seam that already exists.** `composite_gen`'s own
+docstring says *"an edge declares how it lowers"*, and `StreamEdge.decl()` / `SobEdge.decl()` already
+do exactly that for the kernel target. The XSI emitter is that same seam with a second target hung off
+it, not new machinery:
+
+```
+walk sub-components  -> one XSI object each
+walk interfaces      -> ask the edge to emit its own connection code
+```
+
+- **"Does the edge need a class of its own?" collapses into the emit method.** An `xsi_decl()` that
+  returns `""` needed no class. One method, not two.
+- **The crossbar is what proves edge-owned lowering over participant-owned.** One edge emits **two**
+  objects sharing a third:
+  ```cpp
+  AxiMmReadSlave  gmem0(dut, "m_axi_gmem0", mem);
+  AxiMmWriteSlave gmem1(dut, "m_axi_gmem1", mem);   // same mem
+  ```
+  If those were *participants*, the pysim graph and the XSI graph would have different nodes and
+  "one statement, two backends" breaks on the first example. Because the **edge** owns it, one graph
+  serves both.
+
+**Why AXIS lowers to nothing and m_axi lowers to a whole FSM** — not arbitrary, and worth keeping:
+
+- **AXIS is point-to-point and both ends exist.** TB is master, DUT is slave (or vice versa); the RTL
+  implements its half of the handshake. Wires suffice.
+- **m_axi has no slave in the RTL at all.** The kernel is the *master* — it raises `ARVALID` and
+  expects `RDATA` back, and **nothing answers**. The TB is not connecting two peers, it is *supplying
+  a missing peer*. So `AxiMmReadSlave` is not a channel, it is **the other endpoint** — which in pysim
+  is `MemComponent.s_mm`, a real component's port. Hence one big FSM vs one string.
+
+### Grounded in the generated RTL, not theory (checked 2026-07-16)
+
+| connection | RTL |
+|---|---|
+| boundary AXIS (`s_cmd`) | **wires** — `input [63:0] s_cmd_TDATA;` straight into the task: `.s_cmd_TDATA(s_cmd_TDATA)` |
+| internal `hls::stream` (`mr_cmd`) | **a FIFO module** — `mem_copy_fifo_w64_d2_S mr_cmd_U(...)`, real logic and depth |
+| AXI interconnect / crossbar | **a real module** (decode, arbitration, routing) — but see below: the XSI TB has none |
+
+So the two emitters differ for a *physical* reason: the kernel emitter declares
+`hls_thread_local hls::stream<...> mr_cmd;` because there genuinely is an object in the hardware; the
+TB emitter emits a port binding because at the pin boundary there genuinely is not. The graph already
+encodes both (`StreamEdge.decl()` for internal, `_boundary_port()` for pins).
+
+### A modelling discrepancy this surfaced — pysim and XSI model DIFFERENT systems
+
+`AXIMMCrossBarIF` models contention: *"bus contention, occupancy timing, and duplex are properties of
+the interconnect"*, with a calibrated per-direction occupancy span and a half-duplex slave that
+"re-couples them onto one shared resource". **The XSI TB has no crossbar** — two independent BFM
+slaves at full rate that happen to share a `std::vector`.
+
+| | memory model |
+|---|---|
+| pysim (`AXIMMCrossBarIF`, 2 masters -> 1 slave) | one port, arbitrated, contended |
+| XSI (two BFM slaves, one array) | two independent ports, each full rate |
+
+Consequences, both real:
+- **2835 is a KERNEL number, not a system one.** It says "this kernel *can* overlap read and write
+  given independent full-rate ports" — `max(read, write)`, not `read+write`. Point both bundles at one
+  arbitrated DDR and the overlap shrinks. Defensible: csynth emits two separate `m_axi` bundles, so
+  the kernel really does have two ports; whether the *platform* merges them is Flow-4/IPI territory,
+  and this is exactly the two-level split in [[project-two-level-calibration]] (bus = platform
+  property, characterise once; only compute is per-accelerator).
+- **pysim and XSI should be EXPECTED to disagree on timing**, and that is the model, not a bug.
+  Nothing compares them today, so nobody would notice which is which. Worth knowing before someone
+  asks "why doesn't the LT model match the RTL?".
+
+### Corrections to this plan's own earlier claims
+
+- **`composite_top_spec` is NOT type-gated — it is fully duck-typed** (`id(ep)` identity +
+  `getattr(sub, attr)`; no `isinstance`, no `.endpoints` registry). So `SimObj` participants
+  (`CmdDriver`/`WordSink`/`MemComponent`) would walk **today**, given a `bfm_model()` and named
+  endpoint attrs. An earlier draft called the participant kind a blocker; it is **hygiene**
+  (checkability, the taxonomy), not capability. A *should*, not a *can't*.
+- **Corrected step order:** prototype the walk with duck-typing FIRST; decide the participant kind
+  after, once the walk has shown what it actually needs from a participant. Same reason as Stage 1
+  (`saw_b()` fell out of a witness; nobody would have designed it) and the reason `CodegenSource`
+  failed — it was designed against a presumed surface and reverted.
+
+### Deliberately deferred
+
+- **Channel-as-a-class** (an `AxiStream` object both ends `bind()` to, mirroring the Python
+  `Interface`). Rejected *for now* on one ground: **the binding is known at generate time** — the graph
+  already says `driver.stream_ep -(cmd_if)-> copier.s_cmd -> boundary "s_cmd"`, so the emitter
+  resolves it in Python and the C++ need not re-represent a compile-time fact at runtime (same
+  argument as `render_ports_h`). It **earns itself** the moment an edge needs *behaviour*:
+  instrumentation (log/count/inject backpressure), or a model->model channel (a monitor feeding a
+  scoreboard) where there is no RTL between and a real queue must exist. **Cheap to reverse** — it is
+  purely emitter output shape; the Python graph is identical either way.
+- **Which object emits what** (do the m_axi slave models belong to the `mem` participant or the
+  `xbar` edge?). Do **not** settle on paper. Write the walk for `mem_copy` and let it tell you.
+
 ### Open questions
 
 - **What *kind* is a TB participant?** Not `FreeRunComp` — that means "lowers to an `hls::task`", and
   `AxisMaster` is not synthesizable. A new kind with `potential_targets = {xsi_bfm_model}`. This is
   precisely the `(class x target)` axis `CodegenPath.kind` was built for ([[codegen_check_family]]:
-  "one component lowering to `hls::task` **and** SystemC").
+  "one component lowering to `hls::task` **and** SystemC"). **Not a blocker** — see the correction
+  above.
 - **How is N chosen?** A parameter works first. Better: the **LT timing model predicts cycles**, so
   `N = predicted x margin` closes a loop — the transaction-level model sizes the RTL sim, and a wild
   miss is itself a finding. Measurement survives either way: the sink records *when* words arrived, so
