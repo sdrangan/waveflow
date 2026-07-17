@@ -148,6 +148,41 @@ aspirational, and it is what lets one class carry two targets safely.
 `concurrent_systemc_tb`, fix `MemCopyTB`'s targets, update `docs/guide/flows/index.md` in the same
 commit.
 
+## Forward compatibility: `XSIParam` (a later addition, but Stage 3 reserves its room)
+
+A `FreeRunComp`'s `HwParam[int]` fields become C++ **template parameters** of the synthesized kernel
+(collected from `get_type_hints()`, baked concrete into the top). A TB participant wants a different
+kind of parameter — one that becomes a **constructor argument** of its generated XSI class, and that
+makes the class *non-synthesizable*:
+
+```python
+class AxiMasterSource(FreeRunComp):
+    word_bw:   HwParam[int]     = 64          # -> template<int word_bw>, if synthesized
+    data_file: XSIParam[str]    = "data.bin"  # -> constructor arg; synthesis REJECTS this class
+```
+
+**This fits the architecture without reserving anything special — as long as Stage 3 is built as
+planned.** The rejection is not a new predicate: it lives *inside the kernel generator* gate 4 runs.
+Collecting template params, the generator meets an `XSIParam`-annotated field, cannot turn it into a
+template arg, and raises `SynthesisError` — so `check(cls, "composite_kernel")` is `False` for free,
+no shadow rule. Asked for `sequential_xsi_tb`, the TB generator accepts it and emits the constructor
+arg. That is "one class, two targets" working exactly as designed: the class does not declare *what
+it is*; it fails to synthesize when asked, and passes when asked for the TB target. **Gate 4
+dispatching on target (Stage 3) is the hook that makes this additive rather than rework.**
+
+**It is not a foreign concept — it already exists imperatively.** A participant emits
+`AxisMaster s_cmd(sim.dut(), ports::s_cmd, cmd_words)`; the trailing `cmd_words` is a constructor arg
+carried today as `BfmModel(extra_args=("cmd_words",))` (`composite_gen.py`). `XSIParam` is the typed,
+declarative form of `extra_args`: a field the participant *declares*, from which codegen *derives* the
+arg — instead of hand-listing the C++ expression.
+
+**But it only has meaning once step 3 lands** (below): today's participants are `SimObj`s that *name*
+a hand-written XSI class, so there is no generated constructor to bind. `XSIParam` rides with step 3,
+not with the merge — it neither advances nor blocks the class merge. Its one cross-plan tie is
+parameterization: `HwParam` is slated to unify with the symbolic `Param` (`waveflow/hw/param.py`), and
+`XSIParam` is a third binding-site (synthesis-rejected, constructor-bound) that unification should
+leave a slot for.
+
 ## Not in scope
 
 **Step 3 of the proposal — generating BFM classes from Python bodies.** Today `bfm_model()` *names* a
