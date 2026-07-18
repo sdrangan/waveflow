@@ -420,7 +420,9 @@ class BfmInst:
 class TbSpec:
     """A generated XSI testbench harness, derived from a testbench `CompositeComp`'s graph."""
     top_name: str                      # the DUT's top name (-> DESIGN_DLL, ports header)
-    shared: tuple[tuple[str, str, tuple[str, ...]], ...] = ()   # (cls, name, args) — e.g. FlatMemory
+    #: (cls, name, ctor-args, dyn_params) — e.g. the FlatMemory arena two m_axi bundles share.  Its
+    #: DynParams (load_segs/dump_segs) attach here, not to the per-bundle models, so they emit once.
+    shared: tuple[tuple[str, str, tuple[str, ...], tuple[tuple[str, str], ...]], ...] = ()
     models: tuple[BfmInst, ...] = ()
 
 
@@ -439,8 +441,13 @@ def _find_dut(tb):
 def _render_dyn_value(value) -> str:
     """Render a ``DynParam`` value as a C++ initializer for a ``<model>.<field> = <expr>;`` line.
 
-    Extend per type as new DynParam kinds appear (e.g. a ``list[MemSeg]`` -> an aggregate initializer).
+    A value that knows its own C++ form provides ``to_cpp()`` (e.g. ``MemSeg``); a list/tuple becomes
+    an aggregate initializer of its elements.  Extend the scalar cases per type as needed.
     """
+    if hasattr(value, "to_cpp"):
+        return value.to_cpp()
+    if isinstance(value, (list, tuple)):
+        return "{ " + ", ".join(_render_dyn_value(v) for v in value) + " }"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -511,14 +518,16 @@ def tb_top_spec(tb) -> TbSpec:
         dyn = tuple((f, _render_dyn_value(v))
                     for f, v in sorted(discover_dyn_params(part).items()))
         if bm.shared is not None:
-            shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args))
+            # A shared object's DynParams (a memory's load/dump segs) attach to the shared entry so
+            # they emit once as `<shared>.<field> = ...;`; the per-bundle slave models carry none.
+            shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args, dyn))
             cls = _SLAVE_FOR_KIND.get(kind)
             if cls is None:
                 raise ValueError(
                     f"{type(tb).__name__}: participant {type(part).__name__} is shared but boundary "
                     f"port '{name}' is kind {kind!r}, which names no slave model."
                 )
-            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,), dyn))
+            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
         else:
             models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args, dyn))
 
@@ -547,7 +556,7 @@ def render_tb_harness(spec: TbSpec) -> str:
     ports_ns = f"{spec.top_name}_ports"
     guard = f"WAVEFLOW_GEN_{ns.upper()}_HARNESS_H"
 
-    shared_names = {name for _cls, name, _args in spec.shared}
+    shared_names = {name for _cls, name, *_ in spec.shared}
     # A ctor param is a value the *test* must supply: a plain identifier that is not a shared member.
     # A literal ctor arg (e.g. an empty word vector "{}") is not an identifier, so it is not a param.
     ctor_params: list[str] = []
@@ -581,7 +590,7 @@ def render_tb_harness(spec: TbSpec) -> str:
         "    // resolve a port against it, and a shared arena before the slaves that serve from it.",
         "    XsiSim sim;",
     ]
-    for cls, name, _args in spec.shared:
+    for cls, name, *_ in spec.shared:
         lines.append(f"    {cls} {name};")
     for m in spec.models:
         lines.append(f"    {m.cls} {m.name};")
@@ -593,7 +602,7 @@ def render_tb_harness(spec: TbSpec) -> str:
     params = ", ".join(f"const std::vector<uint64_t>& {p}" for p in ctor_params)
     sig = f"    explicit Harness(const std::string& wdb{', ' + params if params else ''})"
     inits = [f"sim({ports_ns}::DESIGN_DLL, wdb)"]
-    for cls, name, args in spec.shared:
+    for _cls, name, args, _dyn in spec.shared:
         inits.append(f"{name}({', '.join(args)})")
     for m in spec.models:
         a = ", ".join(("sim.dut()", f"{ports_ns}::{m.name}") + m.args)
@@ -607,12 +616,14 @@ def render_tb_harness(spec: TbSpec) -> str:
     lines.append(f"        sim.pin_low({ports_ns}::ZERO_PORTS, {ports_ns}::ZERO_PORTS_N);")
     lines.append("        // Register participants for the lifecycle phases (shared arenas first, so a")
     lines.append("        // memory's pre_sim runs before the models that serve from it).")
-    for _cls, name, _args in spec.shared:
+    for _cls, name, *_ in spec.shared:
         lines.append(f"        participants_.push_back(&{name});")
     for m in spec.models:
         lines.append(f"        participants_.push_back(&{m.name});")
-    dyn_lines = [f"        {m.name}.{field} = {expr};"
-                 for m in spec.models for field, expr in m.dyn_params]
+    dyn_lines = [f"        {name}.{field} = {expr};"
+                 for _cls, name, _args, dyn in spec.shared for field, expr in dyn]
+    dyn_lines += [f"        {m.name}.{field} = {expr};"
+                  for m in spec.models for field, expr in m.dyn_params]
     if dyn_lines:
         lines.append("        // Init-time config (DynParams): each is a knob the pysim participant")
         lines.append("        // carries, emitted here as a member assignment (e.g. a model's bundle).")

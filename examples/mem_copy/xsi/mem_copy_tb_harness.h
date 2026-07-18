@@ -51,6 +51,8 @@ struct Harness {
         participants_.push_back(&s_done);
         // Init-time config (DynParams): each is a knob the pysim participant
         // carries, emitted here as a member assignment (e.g. a model's bundle).
+        mem.dump_segs = { {0, 24640, "vectors/out"} };
+        mem.load_segs = { {0, 0, "vectors/mem_in"} };
         s_cmd.in_bundle = "vectors/s_cmd";
     }
     void pre_sim() { for (auto* p : participants_) p->pre_sim(); }

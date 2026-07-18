@@ -384,19 +384,37 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
 
 
 def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> None:
-    """Write mem_copy's XSI input **bundles** into ``<xsi_dir>/vectors/``.
+    """Write mem_copy's XSI input + golden **bundles** into ``<xsi_dir>/vectors/``.
 
-    Currently the command stream: ``vectors/s_cmd`` = the StreamDriver's own bursts (the CopyCmds the
-    pysim golden plays, packed by the schema's serialize()).  The generated harness loads it in
-    ``pre_sim`` (``s_cmd.in_bundle = "vectors/s_cmd"``), so the command words are on disk once — the
-    same bundle drives pysim and RTL, and the baked ``CMD_WORDS`` literal is gone.
+    - ``vectors/s_cmd``  — the command stream (the StreamDriver's own bursts, schema-packed); the
+      harness's ``AxisMaster`` loads it in ``pre_sim`` (the baked ``CMD_WORDS`` literal is gone);
+    - ``vectors/mem_in`` — the source arena (each source region filled with its known pattern); the
+      harness's memory loads it in ``pre_sim`` (``mem.load_segs``);
+    - ``vectors/golden`` — the expected arena after the copy (each destination region = the source
+      pattern); the TB compares the written destination regions against it.
 
-    (The memory pattern is still stated in the C++ TB; migrating it to bundles is a later step.)
+    The whole scenario — commands *and* the memory pattern — now lives once, here, in Python; nothing
+    is restated in the C++ TB (the ``known_word`` duplication is gone).
     """
     from waveflow.utils.burst_io import write_burst_bundle
 
     tb = make_xsi_tb(width)
-    write_burst_bundle(tb.driver.bursts, Path(xsi_dir) / "vectors" / "s_cmd")
+    jobs = list(tb.jobs)
+    mem_nw = int(tb.mem.nwords_tot)
+    vdir = Path(xsi_dir) / "vectors"
+
+    write_burst_bundle(tb.driver.bursts, vdir / "s_cmd")
+
+    # The source arena and the golden result: known_word(j, i) = i*C + 12345 + j*7919 (uint64), each
+    # job's pattern at its source region, and (after the memcpy) at its destination region.
+    mem_in = np.zeros(mem_nw, dtype=np.uint64)
+    golden = np.zeros(mem_nw, dtype=np.uint64)
+    for j, (src, dst, n) in enumerate(jobs):
+        known = np.arange(n, dtype=np.uint64) * np.uint64(2654435761) + np.uint64(12345 + j * 7919)
+        mem_in[src:src + n] = known
+        golden[dst:dst + n] = known
+    write_burst_bundle([mem_in], vdir / "mem_in")
+    write_burst_bundle([golden], vdir / "golden")
 
 
 def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:

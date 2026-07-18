@@ -55,7 +55,7 @@ def test_one_crossbar_becomes_two_slaves_sharing_one_arena():
     spec = tb_top_spec(_tb())
 
     assert len(spec.shared) == 1
-    cls, name, args = spec.shared[0]
+    cls, name, args, _dyn = spec.shared[0]
     assert cls == "FlatMemory" and name == "mem"
     assert args == ("2624", "8"), "arena size/bpw come from the MemComponent's own fields"
 

@@ -143,7 +143,7 @@ def discover_dyn_params(obj: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for name in _dyn_param_names(cls):
         val = getattr(obj, name, None)
-        if val is not None and val != getattr(cls, name, None):
+        if val:  # falsy (empty string / empty list / 0 / None) => nothing to emit
             out[name] = val
     return out
 

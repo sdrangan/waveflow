@@ -21,7 +21,7 @@ from waveflow.hw.hw_component import HwParam
 from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemComponent, MemSeg
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, MemCopy
@@ -68,6 +68,11 @@ class MemCopyTB(CompositeComp):
         self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         self.mem.alloc(self.arena_words)             # one segment at word 0 (byte addr 0)
+        # XSI: the memory seeds itself from vectors/mem_in in pre_sim and dumps vectors/out in post_sim
+        # -- DynParams the generated harness emits, so the source pattern lives once, in Python (see
+        # mem_copy.write_mem_copy_xsi_bundles).  Unused by the pysim run below, which seeds mem directly.
+        self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
+        self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 
         # Pre-load each source region with a known, per-job-distinct pattern; keep the expectation.
         self.expected: list[np.ndarray] = []

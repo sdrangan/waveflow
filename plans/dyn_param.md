@@ -132,10 +132,19 @@ main stops seeding memory by hand and the arena is a bundle like everything else
   functionally identical (`s_cmd(sim.dut(), ports::s_cmd, {})` + `s_cmd.in_bundle = "vectors/s_cmd";`),
   now DynParam-driven. `MemCopyTB` sets `in_bundle="vectors/s_cmd"` on its driver (a deterministic
   constant, so param-purity holds). Fast loop at baseline; `test_tb_top_spec` updated. **Uncommitted.**
-- **Stages 2 / 3 — not started.** Stage 2 needs a Python `MemSeg` + `list[MemSeg]` renderer (an
-  aggregate initializer), then `MemComponent.load_segs`/`dump_segs` + `StreamSink.out_bundle` as
-  DynParams, and migrating mem_copy/interleaver memory out of the hand-written main. Stage 3 is the
-  value-source unification.
+- **Stage 2 — DONE, `-m xsi` GREEN (2835 held).** `MemSeg` (frozen dataclass, `to_cpp()` ->
+  `{off, len, "bundle"}`) in `waveflow/hw/memory.py`; `MemComponent.load_segs`/`dump_segs:
+  DynParam[list[MemSeg]]`. `_render_dyn_value` now dispatches on `to_cpp()` + lists (aggregate
+  initializer); `discover_dyn_params` emits truthy values (so empty segs = nothing). A shared object's
+  DynParams attach to the `TbSpec.shared` entry (4-tuple now: cls, name, args, dyn) and emit once as
+  `mem.load_segs = { ... };` — not on the two per-bundle slave models. mem_copy's memory is bundle-
+  driven: `write_mem_copy_xsi_bundles` writes `mem_in` (source arena) + `golden` (dst arena);
+  `MemCopyTB` sets `mem.load_segs`/`dump_segs`; the main dropped `known_word` and checks the destination
+  regions against `vectors/golden`. **The `known_word` inline double-statement is gone** (interleaver
+  was already bundle-driven). `test_tb_top_spec` updated (shared 4-tuple). **`StreamSink.out_bundle`
+  deferred** — mem_copy's `s_done` is a structural `xfer_msg`/`tx_id` echo check, not a `known_word`
+  pattern, so it stays inline; add `out_bundle` when a sink genuinely needs to dump for Python compare.
+- **Stage 3 — not started.** Value-source unification (option a).
 
 ## Open questions
 

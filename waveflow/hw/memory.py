@@ -7,6 +7,7 @@ import numpy as np
 from enum import Enum
 
 from waveflow.hw.clock import Clock
+from waveflow.hw.hw_component import DynParam
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
 
@@ -395,6 +396,24 @@ class _DirectBackedMMIFMaster:
 # MemComponent — Component wrapping a Memory with MM interface endpoints
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class MemSeg:
+    """One memory region tied to a burst bundle — mirrors the C++ ``wfbfm::MemSeg``.
+
+    For a **load**, the bundle's words go to ``[off, off+len)`` (``length`` ignored — the bundle's own
+    length is used).  For a **dump**, ``[off, off+length)`` is written to ``bundle``.  ``off``/``length``
+    are word indices; ``bundle`` is a path rooted by the run dir (e.g. ``"vectors/mem_in"``).
+    """
+    off: int = 0
+    length: int = 0
+    bundle: str = ""
+
+    def to_cpp(self) -> str:
+        """Render as the C++ aggregate initializer ``{off, length, "bundle"}`` (field order matches
+        ``wfbfm::MemSeg``: off, len, bundle)."""
+        return f'{{{int(self.off)}, {int(self.length)}, "{self.bundle}"}}'
+
+
 @dataclass
 class MemComponent(SimObj):
     """
@@ -446,6 +465,13 @@ class MemComponent(SimObj):
     resource, so reads and writes to this memory mutually exclude — a single-port
     memory (a DDR model that shares R/W bandwidth, or single-port BRAM).  The default
     (full-duplex) gives independent AR/R and AW/W channels (real AXI)."""
+
+    #: XSI memory config (:class:`DynParam`\\ s): regions to load from bundles in ``pre_sim`` and dump
+    #: to bundles in ``post_sim``.  Empty (default) => the memory does nothing at pre/post_sim.  Set for
+    #: a generated XSI testbench; the harness emits them as ``mem.load_segs = { ... };``.  Unused in
+    #: pysim (the memory is seeded by the testbench directly).
+    load_segs: DynParam[list[MemSeg]] = field(default_factory=list)
+    dump_segs: DynParam[list[MemSeg]] = field(default_factory=list)
 
     def bfm_model(self):
         """XSI twin: the ``FlatMemory`` arena the AXI-MM slave models serve out of.
