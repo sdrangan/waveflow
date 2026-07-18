@@ -386,28 +386,23 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
     - ``vectors/golden`` — the expected arena after the copy (each destination region = the source
       pattern); the TB compares the written destination regions against it.
 
-    The whole scenario — commands *and* the memory pattern — now lives once, here, in Python; nothing
-    is restated in the C++ TB (the ``known_word`` duplication is gone).
+    The whole scenario — commands *and* the memory pattern — is stated exactly once, in
+    :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB`.  This function only *serializes* it: each
+    bundle is taken off the testbench (``driver.bursts`` / ``mem_image`` / ``golden_image``), never
+    recomputed, so the pysim run and the XSI run cannot diverge.
     """
     from waveflow.utils.burst_io import write_burst_bundle
 
     tb = make_xsi_tb(width)
-    jobs = list(tb.jobs)
-    mem_nw = int(tb.mem.nwords_tot)
     vdir = Path(xsi_dir) / "vectors"
 
+    # Every bundle is taken FROM the testbench, never recomputed here: the commands are the driver's
+    # own bursts, and the arena/golden are read off the memory the pysim run seeds.  The scenario is
+    # therefore stated exactly once -- in MemCopyTB.__post_init__ -- so pysim and XSI cannot start
+    # from different bytes.
     write_burst_bundle(tb.driver.bursts, vdir / "s_cmd")
-
-    # The source arena and the golden result: known_word(j, i) = i*C + 12345 + j*7919 (uint64), each
-    # job's pattern at its source region, and (after the memcpy) at its destination region.
-    mem_in = np.zeros(mem_nw, dtype=np.uint64)
-    golden = np.zeros(mem_nw, dtype=np.uint64)
-    for j, (src, dst, n) in enumerate(jobs):
-        known = np.arange(n, dtype=np.uint64) * np.uint64(2654435761) + np.uint64(12345 + j * 7919)
-        mem_in[src:src + n] = known
-        golden[dst:dst + n] = known
-    write_burst_bundle([mem_in], vdir / "mem_in")
-    write_burst_bundle([golden], vdir / "golden")
+    write_burst_bundle([tb.mem_image], vdir / "mem_in")
+    write_burst_bundle([tb.golden_image], vdir / "golden")
 
 
 def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW) -> None:

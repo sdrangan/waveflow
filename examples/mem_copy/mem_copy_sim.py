@@ -108,6 +108,8 @@ class MemCopyTB(CompositeComp):
         for c in (self.dut, self.driver, self.done_sink, self.mem):
             self.add_comp(c)
 
+        self._nwords_tot = int(self.mem.nwords_tot)
+
         cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
         cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
         cmd_if.bind(ep_name="slave", endpoint=self.dut.s_cmd)
@@ -128,6 +130,39 @@ class MemCopyTB(CompositeComp):
         xbar.bind("slave_0", self.mem.s_mm)
         self.add_if(xbar)
         assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
+
+
+    # -- the scenario as word images -------------------------------------------------------------
+    #
+    # The source pattern is written ONCE, into the arena above.  These read it back out, so the XSI
+    # bundles (`vectors/mem_in` / `vectors/golden`) and the pysim run are the same bytes by
+    # construction rather than by two formulas agreeing -- the same reason the command bundle is
+    # taken from `self.driver.bursts` rather than re-serialized.
+
+    @property
+    def mem_image(self) -> np.ndarray:
+        """The seeded arena: what the XSI memory loads in ``pre_sim`` as ``vectors/mem_in``.
+
+        Sized to the memory's full word count, but only ``arena_words`` is allocated (and only the
+        source regions within it are non-zero) — so the readable segment is read back and the rest
+        left zero, matching the flat arena the XSI ``FlatMemory`` starts from.
+        """
+        img = np.zeros(self._nwords_tot, dtype=np.uint64)
+        img[:self.arena_words] = np.asarray(self.mem._mem.read(0, self.arena_words),
+                                            dtype=np.uint64)
+        return img
+
+    @property
+    def golden_image(self) -> np.ndarray:
+        """The expected result as ``vectors/golden``.
+
+        Only the **destination** regions are populated — those are what the checker compares, and
+        each holds the very ``expected`` array the pysim golden asserts against.
+        """
+        g = np.zeros(self._nwords_tot, dtype=np.uint64)
+        for (_src, dst, n), exp in zip(self.jobs, self.expected):
+            g[dst:dst + n] = exp
+        return g
 
 
 def run_copy(jobs=((16, 4096 // 8, 128),), mem_dwidth: int = 64) -> "MemCopy":
