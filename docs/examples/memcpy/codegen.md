@@ -1,7 +1,7 @@
 ---
 title: Kernel codegen
 parent: Memory Copy
-nav_order: 3
+nav_order: 5
 ---
 
 # Kernel codegen

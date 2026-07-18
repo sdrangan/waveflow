@@ -74,7 +74,8 @@ tb.sim.run_sim()
 ```
 
 This is the *first* place the design is validated, and it catches most functional mistakes long before
-any C++ exists.
+any C++ exists. [Python simulation](./pysim.md) covers that rung in full — what it checks, the
+lifecycle, and the timing it reports (including how close it lands to the RTL).
 
 ## The same graph at the RTL rung
 
