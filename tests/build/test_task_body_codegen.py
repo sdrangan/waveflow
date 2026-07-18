@@ -48,17 +48,17 @@ def test_task_body_delegates_to_declared_hooks():
     files = task_files_to_str(Sequencer)
     h = files["mem_seq_task.h"]
 
-    for hook in ("next_xfer_msg", "make_mr_cmd", "make_mw_cmd"):
+    for hook in ("make_xfer_msg", "make_mr_cmd", "make_mw_cmd"):
         assert f"mem_seq_impl::{hook}(" in h, f"{hook} not called from the generated body"
         assert f"mem_seq_{hook}_impl.cpp" in files, f"{hook} stub not emitted"
     assert "namespace mem_seq_impl {" in h
 
     # The stub is scaffolding, not an implementation -- it must be obviously unfinished.
-    stub = files["mem_seq_next_xfer_msg_impl.cpp"]
-    assert "TODO: implement next_xfer_msg" in stub
+    stub = files["mem_seq_make_xfer_msg_impl.cpp"]
+    assert "TODO: implement make_xfer_msg" in stub
     assert '#include "mem_seq_task.h"' in stub, "stub must include the task header (it has no .hpp)"
 
-    # The per-job counter is the hook's business; it must not leak into the generated body.
+    # The cookie now comes from cmd.tx_id (no counter), so no cross-firing state leaks into the body.
     assert "job_idx" not in h
 
 
@@ -70,7 +70,7 @@ def test_task_body_ordering_matches_run_iter():
     body = h[h.index("static void mem_seq_task("):]
     order = [
         body.index("cmd.read_stream"),
-        body.index("next_xfer_msg"),
+        body.index("make_xfer_msg"),
         body.index("make_mr_cmd"),
         body.index("mr.write_stream"),
         body.index("make_mw_cmd"),

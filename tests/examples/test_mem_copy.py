@@ -14,16 +14,20 @@ from pathlib import Path
 
 
 def test_copycmd_schema_single_source():
-    """CopyCmd packs {src_off, dst_off, n_words} — two 64-bit words at MEM_DW=64 (LSB-first)."""
+    """CopyCmd packs {src_off, dst_off, n_words, tx_id} — two 64-bit words at MEM_DW=64 (LSB-first).
+
+    Four Word32 fields still pack into two 64-bit words (128 bits), so adding tx_id did not widen the
+    command; it fills word 1's previously-padding high half."""
     from examples.mem_copy.mem_copy import CopyCmd
 
     assert CopyCmd.nwords_per_inst(64) == 2
-    c = CopyCmd(src_off=16, dst_off=600, n_words=128)
+    c = CopyCmd(src_off=16, dst_off=600, n_words=128, tx_id=7)
     w = c.serialize(word_bw=64)
     assert int(w[0]) == 16 | (600 << 32)           # src_off low, dst_off high (word 0)
-    assert int(w[1]) == 128                         # n_words (word 1)
+    assert int(w[1]) == 128 | (7 << 32)            # n_words low, tx_id high (word 1)
     d = CopyCmd().deserialize(w, word_bw=64)
     assert int(d.src_off) == 16 and int(d.dst_off) == 600 and int(d.n_words) == 128
+    assert int(d.tx_id) == 7
 
 
 def test_mem_copy_pysim_golden():
@@ -119,8 +123,8 @@ def test_xsi_vectors_are_the_schemas_own_serialization():
                .replace("ULL", "").split(",")]
 
     expect: list[int] = []
-    for s, d in zip(XSI_SRC_W, XSI_DST_W):
-        expect.extend(int(w) for w in CopyCmd(src_off=s, dst_off=d, n_words=XSI_N)
+    for j, (s, d) in enumerate(zip(XSI_SRC_W, XSI_DST_W)):
+        expect.extend(int(w) for w in CopyCmd(src_off=s, dst_off=d, n_words=XSI_N, tx_id=j)
                       .serialize(word_bw=64))
     assert emitted == expect
 
@@ -133,10 +137,10 @@ def test_sequencer_run_iter_is_extractable():
 
     This IS what MemCopy builds with: ``TaskBodyStep`` generates ``include/mem_seq_task.h`` from
     ``run_iter``, and the composite top instantiates it as ``mem_seq_task<64>``.  The test pins the
-    shape that makes that possible, so it cannot rot silently: the per-job counter stays behind the
-    ``@synthesizable`` ``next_xfer_msg`` boundary (a lowered body may not read mutable ``self.X``),
-    and the commands are built in hooks (constructing a DataSchema is not in the extractor's
-    vocabulary).  Inlining either back into ``run_iter`` fails here — and would break the build.
+    shape that makes that possible, so it cannot rot silently: the correlation cookie and the two
+    commands are built in ``@synthesizable`` hooks (constructing a DataSchema is not in the extractor's
+    vocabulary), so ``run_iter`` is only ``get`` -> hook -> ``write``.  Inlining any of them back into
+    ``run_iter`` fails here — and would break the build.
     """
     from waveflow.build.codegen_dispatch import codegen_path
     from waveflow.build.hwcodegen import extract_kernel
@@ -152,7 +156,7 @@ def test_sequencer_run_iter_is_extractable():
     files = kernel_files_to_str(Sequencer)
     body = files["mem_seq.cpp"]
     # the three hooks are declarations; their bodies are hand-written stubs, not lowered Python.
-    for hook in ("next_xfer_msg", "make_mr_cmd", "make_mw_cmd"):
+    for hook in ("make_xfer_msg", "make_mr_cmd", "make_mw_cmd"):
         assert f"mem_seq_impl::{hook}" in body, f"{hook} not called from the generated body"
         assert f"mem_seq_{hook}_impl.cpp" in files, f"{hook} stub not emitted"
     assert "job_idx" not in body, "the counter must stay in the hook, not the lowered body"

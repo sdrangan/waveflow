@@ -52,7 +52,7 @@ int main() {
     const long done_cycle = h.s_done.cycle_of_word((size_t)vec::NUM_CMDS * vec::DONE_WORDS);
 
     // 4) Golden: every destination region equals its source region (a memcpy), and each job's
-    // MemComplete echoes back the xfer_msg[0] job index the sequencer stamped.
+    // MemComplete echoes back xfer_msg[0] = the tx_id the host set on the command (here tx_id == j).
     int fails = 0, job_fails = 0;
     for (int j = 0; j < vec::NUM_CMDS; ++j) {
         for (int i = 0; i < vec::N; ++i) {

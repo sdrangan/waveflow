@@ -14,8 +14,9 @@ struct CopyCmd {
     ap_uint<32> src_off;  // source element/word offset
     ap_uint<32> dst_off;  // destination element/word offset
     ap_uint<32> n_words;  // number of packed words to copy
+    ap_uint<32> tx_id;  // host transaction ID, echoed on completion
 
-    static constexpr int bitwidth = 96;
+    static constexpr int bitwidth = 128;
 
     template<int word_bw>
     struct word_bw_tag {};
@@ -27,7 +28,7 @@ struct CopyCmd {
     }
 
     static constexpr int nwords_value(word_bw_tag<32>) {
-            return 3;
+            return 4;
     }
 
     static constexpr int nwords_value(word_bw_tag<64>) {
@@ -44,6 +45,7 @@ struct CopyCmd {
         res.range(31, 0) = data.src_off;
         res.range(63, 32) = data.dst_off;
         res.range(95, 64) = data.n_words;
+        res.range(127, 96) = data.tx_id;
         return res;
     }
 
@@ -52,6 +54,7 @@ struct CopyCmd {
         data.src_off = (ap_uint<32>)(packed.range(31, 0));
         data.dst_off = (ap_uint<32>)(packed.range(63, 32));
         data.n_words = (ap_uint<32>)(packed.range(95, 64));
+        data.tx_id = (ap_uint<32>)(packed.range(127, 96));
         return data;
     }
 
@@ -66,6 +69,7 @@ struct CopyCmd {
         x[0] = self->src_off;
         x[1] = self->dst_off;
         x[2] = self->n_words;
+        x[3] = self->tx_id;
     }
 
     static void write_array_impl(word_bw_tag<64>, const CopyCmd* self, ap_uint<64> x[]) {
@@ -74,6 +78,7 @@ struct CopyCmd {
         x[0].range(63, 32) = self->dst_off;
         x[1] = 0;
         x[1].range(31, 0) = self->n_words;
+        x[1].range(63, 32) = self->tx_id;
     }
 
     template<int word_bw>
@@ -99,6 +104,9 @@ struct CopyCmd {
         w = self->n_words;
         s.write(w);
         w = 0;
+        w = self->tx_id;
+        s.write(w);
+        w = 0;
     }
 
     static void write_stream_impl(word_bw_tag<64>, const CopyCmd* self, hls::stream<ap_uint<64>> &s) {
@@ -108,7 +116,9 @@ struct CopyCmd {
         s.write(w);
         w = 0;
         w.range(31, 0) = self->n_words;
+        w.range(63, 32) = self->tx_id;
         s.write(w);
+        w = 0;
     }
 
     template<int word_bw>
@@ -133,6 +143,9 @@ struct CopyCmd {
         streamutils::write_axi4_word<32>(s, w, false);
         w = 0;
         w = self->n_words;
+        streamutils::write_axi4_word<32>(s, w, false);
+        w = 0;
+        w = self->tx_id;
         streamutils::write_axi4_word<32>(s, w, tlast);
         w = 0;
     }
@@ -144,7 +157,9 @@ struct CopyCmd {
         streamutils::write_axi4_word<64>(s, w, false);
         w = 0;
         w.range(31, 0) = self->n_words;
+        w.range(63, 32) = self->tx_id;
         streamutils::write_axi4_word<64>(s, w, tlast);
+        w = 0;
     }
 
     template<int word_bw>
@@ -163,12 +178,14 @@ struct CopyCmd {
         self->src_off = (ap_uint<32>)(x[0]);
         self->dst_off = (ap_uint<32>)(x[1]);
         self->n_words = (ap_uint<32>)(x[2]);
+        self->tx_id = (ap_uint<32>)(x[3]);
     }
 
     static void read_array_impl(word_bw_tag<64>, CopyCmd* self, const ap_uint<64> x[]) {
         self->src_off = (ap_uint<32>)(x[0].range(31, 0));
         self->dst_off = (ap_uint<32>)(x[0].range(63, 32));
         self->n_words = (ap_uint<32>)(x[1].range(31, 0));
+        self->tx_id = (ap_uint<32>)(x[1].range(63, 32));
     }
 
     template<int word_bw>
@@ -191,6 +208,8 @@ struct CopyCmd {
         self->dst_off = (ap_uint<32>)(w);
         w = s.read();
         self->n_words = (ap_uint<32>)(w);
+        w = s.read();
+        self->tx_id = (ap_uint<32>)(w);
     }
 
     static void read_stream_impl(word_bw_tag<64>, CopyCmd* self, hls::stream<ap_uint<64>> &s) {
@@ -200,6 +219,7 @@ struct CopyCmd {
         self->dst_off = (ap_uint<32>)(w.range(63, 32));
         w = s.read();
         self->n_words = (ap_uint<32>)(w.range(31, 0));
+        self->tx_id = (ap_uint<32>)(w.range(63, 32));
     }
 
     template<int word_bw>
@@ -258,6 +278,20 @@ struct CopyCmd {
         }
         self->n_words = (ap_uint<32>)(w);
         if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        if (last) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        {
+            auto axis_word = s.read();
+            w = axis_word.data;
+            last = axis_word.last;
+        }
+        self->tx_id = (ap_uint<32>)(w);
+        if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }
         if (last) {
@@ -298,6 +332,11 @@ struct CopyCmd {
             last = axis_word.last;
         }
         self->n_words = (ap_uint<32>)(w.range(31, 0));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        self->tx_id = (ap_uint<32>)(w.range(63, 32));
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }

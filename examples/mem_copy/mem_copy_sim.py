@@ -76,7 +76,8 @@ class MemCopyTB(CompositeComp):
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
         self.driver = CmdDriver(sim=self.sim, bitwidth=w,
-                                cmds=[CopyCmd(src_off=s, dst_off=d, n_words=n) for s, d, n in jobs])
+                                cmds=[CopyCmd(src_off=s, dst_off=d, n_words=n, tx_id=j)
+                                      for j, (s, d, n) in enumerate(jobs)])
         self.done_sink = WordSink(sim=self.sim, bitwidth=w)
 
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.

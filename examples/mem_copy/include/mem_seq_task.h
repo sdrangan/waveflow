@@ -12,7 +12,7 @@
 #include "m_w_cmd.h"
 
 namespace mem_seq_impl {
-    UInt32Array next_xfer_msg();
+    UInt32Array make_xfer_msg(CopyCmd cmd);
     MRCmd make_mr_cmd(CopyCmd cmd, UInt32Array msg);
     MWCmd make_mw_cmd(CopyCmd cmd, UInt32Array msg);
 }
@@ -25,7 +25,7 @@ static void mem_seq_task(
 ) {
     CopyCmd cmd;
     cmd.read_stream<MEM_DWIDTH>(s_cmd);
-    UInt32Array msg = mem_seq_impl::next_xfer_msg();
+    UInt32Array msg = mem_seq_impl::make_xfer_msg(cmd);
     MRCmd mr = mem_seq_impl::make_mr_cmd(cmd, msg);
     mr.write_stream<MEM_DWIDTH>(mr_cmd);
     MWCmd mw = mem_seq_impl::make_mw_cmd(cmd, msg);

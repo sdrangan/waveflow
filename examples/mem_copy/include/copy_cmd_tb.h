@@ -31,6 +31,11 @@ inline void CopyCmd::dump_json(std::ostream& os, int indent, int level) const {
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
     os << "\"n_words\": ";
     os << static_cast<unsigned long long>(this->n_words);
+    os << ",";
+    os << "\n";
+    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
+    os << "\"tx_id\": ";
+    os << static_cast<unsigned long long>(this->tx_id);
     os << "\n";
     for (int i = 0; i < (level) * step; ++i) { os << ' '; }
     os << "}";
@@ -41,6 +46,7 @@ inline void CopyCmd::load_json(const std::string& json_text, size_t& pos) {
     bool seen_root_src_off = false;
     bool seen_root_dst_off = false;
     bool seen_root_n_words = false;
+    bool seen_root_tx_id = false;
     bool first = true;
     while (true) {
     streamutils::json_skip_ws(json_text, pos);
@@ -66,6 +72,10 @@ inline void CopyCmd::load_json(const std::string& json_text, size_t& pos) {
         seen_root_n_words = true;
         this->n_words = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
+    else if (key == "tx_id") {
+        seen_root_tx_id = true;
+        this->tx_id = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    }
     else {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
     }
@@ -78,6 +88,9 @@ inline void CopyCmd::load_json(const std::string& json_text, size_t& pos) {
     }
     if (!seen_root_n_words) {
     throw std::runtime_error("Malformed JSON: missing required key 'n_words'.");
+    }
+    if (!seen_root_tx_id) {
+    throw std::runtime_error("Malformed JSON: missing required key 'tx_id'.");
     }
 }
 

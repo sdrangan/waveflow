@@ -4,7 +4,7 @@ puts "WAVEFLOW_INFO: mem_copy"
 open_project -reset mem_copy_proj
 set_top mem_copy
 add_files gen/mem_copy.cpp -cflags $cf
-add_files mem_seq_next_xfer_msg_impl.cpp -cflags $cf
+add_files mem_seq_make_xfer_msg_impl.cpp -cflags $cf
 add_files mem_seq_make_mr_cmd_impl.cpp -cflags $cf
 add_files mem_seq_make_mw_cmd_impl.cpp -cflags $cf
 open_solution -reset "solution1"

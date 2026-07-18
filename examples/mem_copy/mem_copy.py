@@ -84,6 +84,7 @@ class CopyCmd(DataList):
         "src_off": {"schema": Word32, "description": "source element/word offset"},
         "dst_off": {"schema": Word32, "description": "destination element/word offset"},
         "n_words": {"schema": Word32, "description": "number of packed words to copy"},
+        "tx_id":   {"schema": Word32, "description": "host transaction ID, echoed on completion"},
     }
 
 
@@ -111,19 +112,19 @@ class Sequencer(FreeRunComp):
 
     **What is still hand-written: the three hooks.**  Codegen derives the body's *structure* — the
     stream read, the calls, the two writes, in ``run_iter``'s order — not its leaf computation.
-    ``mem_seq_{next_xfer_msg,make_mr_cmd,make_mw_cmd}_impl.cpp`` live at the example root and are
+    ``mem_seq_{make_xfer_msg,make_mr_cmd,make_mw_cmd}_impl.cpp`` live at the example root and are
     **sticky**: ``TaskBodyStep`` writes each as a TODO stub once, only if absent, then never touches
     it again.  Nothing mechanically ties a hook's C++ to the Python above it — that agreement is
     yours to keep, and only the tests check it.
 
     **Why the shape is `get` -> hook -> `write`.**  Two extractor rules force it, and neither is
-    stylistic.  A lowered body may not read mutable ``self.X``
-    (``_validate_no_implicit_capture``) and FreeRunComp cross-iteration state is not wired, so the
-    per-job counter cannot appear in :meth:`run_iter` — it lives behind the ``@synthesizable``
-    :meth:`next_xfer_msg` boundary, whose hand-written C++ owns the ``static ap_uint<32> job_idx``.
-    And constructing a ``DataSchema`` is not in the extractor's vocabulary at all (``x = MRCmd(...)``
-    and even bare ``x = MRCmd()`` are rejected), so the commands are built in hooks too.  Pinned by
-    ``test_sequencer_run_iter_is_extractable``."""
+    stylistic.  Constructing a ``DataSchema`` is not in the extractor's vocabulary at all
+    (``x = MRCmd(...)`` and even bare ``x = MRCmd()`` are rejected), so the correlation cookie and the
+    two commands are all built in ``@synthesizable`` hooks — the cookie in :meth:`make_xfer_msg` (from
+    ``cmd.tx_id``), the commands in :meth:`make_mr_cmd` / :meth:`make_mw_cmd`.  (A lowered body also may
+    not read mutable ``self.X`` — ``_validate_no_implicit_capture`` — which is why the Sequencer keeps
+    no cross-firing state now that the cookie comes from the command rather than a counter.)
+    Pinned by ``test_sequencer_run_iter_is_extractable``."""
 
     cpp_kernel_name: ClassVar[str | None] = "mem_seq"
     cpp_namespace: ClassVar[str | None] = "mem_seq_impl"
@@ -144,10 +145,10 @@ class Sequencer(FreeRunComp):
             name=f"{self.name}_mw_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
         for ep in (self.s_cmd, self.mr_cmd, self.mw_cmd):
             self.add_endpoint(ep)
-        #: Per-job correlation cookie: the job index, so xfer_msg is genuinely exercised (round-tripped
-        #: on MemComplete) rather than merely tolerated.  Length from MRCmd's own max_xfer_len default
-        #: (introspected, not hardcoded — both MRCmd/MWCmd share it).
-        self._job_idx = 0
+        #: Correlation-cookie length, from MRCmd's own max_xfer_len default (introspected, not
+        #: hardcoded — both MRCmd/MWCmd share it).  The cookie VALUE is the command's ``tx_id`` (the
+        #: host's transaction ID), stamped in :meth:`make_xfer_msg` and echoed on ``MemComplete`` — so
+        #: the Sequencer holds no cross-firing state.
         self._xfer_msg_len = MRCmd._params["max_xfer_len"].default
 
     @property
@@ -159,16 +160,15 @@ class Sequencer(FreeRunComp):
                           template_args=(int(self.mem_dwidth),))
 
     @synthesizable
-    def next_xfer_msg(self) -> XferMsgArr:
-        """Hook: the per-job correlation cookie — ``xfer_msg[0] = job_idx``, then advance.
+    def make_xfer_msg(self, cmd: CopyCmd) -> XferMsgArr:
+        """Hook: the correlation cookie — ``xfer_msg[0] = cmd.tx_id``, the host's transaction ID.
 
-        The counter is the component's only cross-firing state, and it lives here rather than in
-        :meth:`run_iter` because a lowered body may not read mutable ``self.X``.  The hand-written
-        C++ owns it as a ``static ap_uint<32> job_idx``; there is no ``self._job_idx`` in the
-        generated code, and nothing lowers this Python."""
+        The value comes from the *command*, so the Sequencer keeps no cross-firing state: a completion
+        on ``s_done`` echoes this cookie, letting the host match it to the exact request it issued.
+        Building the array is a hook (not inline in :meth:`run_iter`) because array construction is not
+        in the extractor's vocabulary."""
         msg = np.zeros(self._xfer_msg_len, dtype=np.uint32)
-        msg[0] = self._job_idx
-        self._job_idx += 1
+        msg[0] = int(cmd.tx_id)
         return msg
 
     @synthesizable
@@ -189,7 +189,7 @@ class Sequencer(FreeRunComp):
         ``MRCmd{src_off, n}`` then ``MWCmd{dst_off, n}`` carrying that same cookie, so the
         ``MemComplete`` echo can be correlated back to the job that issued it."""
         cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
-        msg = self.next_xfer_msg()
+        msg = self.make_xfer_msg(cmd)
         mr = self.make_mr_cmd(cmd, msg)
         yield from self.mr_cmd.write(mr)
         mw = self.make_mw_cmd(cmd, msg)
@@ -284,7 +284,7 @@ class MemCopy(CompositeComp):
 #: They must be added to the csynth project: the generated ``mem_seq_task.h`` calls across a TU
 #: boundary, so unlike a self-contained hand-written body the link cannot resolve them otherwise.
 SEQ_HOOK_SOURCES = (
-    "mem_seq_next_xfer_msg_impl.cpp",
+    "mem_seq_make_xfer_msg_impl.cpp",
     "mem_seq_make_mr_cmd_impl.cpp",
     "mem_seq_make_mw_cmd_impl.cpp",
 )
