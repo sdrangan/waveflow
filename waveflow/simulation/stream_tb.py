@@ -89,6 +89,10 @@ class StreamSink(SimObj):
     """
 
     bitwidth: int = 64
+    #: If set, the generated XSI ``AxisSlave`` dumps its capture (words + arrival cycles) to this
+    #: bundle in ``post_sim`` -- a :class:`DynParam` the harness emits as ``s_done.out_bundle = "…";``.
+    #: Empty (the default) emits nothing.  Lets Python check the output stream + timing off-line.
+    out_bundle: DynParam[str] = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()

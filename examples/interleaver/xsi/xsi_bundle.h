@@ -54,6 +54,16 @@ struct BurstBundle {
         write(dir, words, bounds);
     }
 
+    /// Write a captured output stream: the words bundle (words/bounds/meta) **plus** ``cycles.bin`` —
+    /// the arrival cycle of each word (uint64, parallel to ``words``).  So the C++ side only records
+    /// timing; Python reads ``cycles.bin`` and computes completion time (cycle_of_word) off-line.
+    static void write_capture(const std::string& dir, const std::vector<uint64_t>& words,
+                              const std::vector<long>& cycles) {
+        write_one(dir, words);
+        std::vector<uint64_t> c(cycles.begin(), cycles.end());
+        write_u64(dir + "/cycles.bin", c);
+    }
+
 private:
     /// Create *dir* and any missing parents (like Python's write_burst_bundle), ignoring
     /// already-exists.  No std::filesystem — it does not link with the run.bat mingw.

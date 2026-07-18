@@ -54,6 +54,7 @@ struct Harness {
         mem.dump_segs = { {0, 24640, "vectors/out"} };
         mem.load_segs = { {0, 0, "vectors/mem_in"} };
         s_cmd.in_bundle = "vectors/s_cmd";
+        s_done.out_bundle = "vectors/s_done";
     }
     void pre_sim() { for (auto* p : participants_) p->pre_sim(); }
     void sample() { for (auto* p : participants_) p->sample(); }

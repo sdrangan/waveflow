@@ -55,6 +55,9 @@ class MemCopyTB(CompositeComp):
 
     jobs: tuple = ((16, 4096 // 8, 128),)
     mem_dwidth: HwParam[int] = 64
+    #: Fixed run bound for the generated XSI main (comfortably past the ~2835 completion; the drain
+    #: tail is a testbench constant, not the design's latency -- see the cycles note in the checker).
+    n_cycles: int = 3400
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -97,7 +100,9 @@ class MemCopyTB(CompositeComp):
             # generated XSI harness emits -- the bundle its AxisMaster loads, rooted at the s_cmd port.
             self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd",
                                        in_bundle="vectors/s_cmd")
-        self.done_sink = StreamSink(sim=self.sim, bitwidth=w)
+        # The sink dumps its capture (completion words + per-word arrival cycles) so Python checks the
+        # output stream AND the completion cycle off-line -- no golden in the generated C++ main.
+        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done")
 
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
         for c in (self.dut, self.driver, self.done_sink, self.mem):

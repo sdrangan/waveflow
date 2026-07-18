@@ -347,11 +347,11 @@ public:
 
     void drive() override { d_.put1(P_ready, h_ready_); }
 
-    //: Optional: if set, post_sim dumps the collected words as a single-burst bundle, so Python (or a
-    //: golden bundle) can compare the RTL output off-line rather than in hand-written C++.
+    //: Optional: if set, post_sim dumps the collected words + their arrival cycles (a capture bundle),
+    //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
     std::string out_bundle;
     void post_sim() override {
-        if (!out_bundle.empty()) BurstBundle::write_one(out_bundle, words_);
+        if (!out_bundle.empty()) BurstBundle::write_capture(out_bundle, words_, beat_cycles_);
     }
 
     const std::vector<uint64_t>& words() const { return words_; }

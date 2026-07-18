@@ -37,7 +37,7 @@ def test_walk_derives_exactly_the_hand_written_testbench():
     assert got == {
         # s_cmd is bundle-driven: empty ctor words ({}), and an in_bundle DynParam it loads in pre_sim.
         "s_cmd":  ("AxisMaster", "s_cmd", ("{}",), (("in_bundle", '"vectors/s_cmd"'),)),
-        "s_done": ("AxisSlave", "s_done", (), ()),
+        "s_done": ("AxisSlave", "s_done", (), (("out_bundle", '"vectors/s_done"'),)),
         "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",), ()),
         "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",), ()),
     }

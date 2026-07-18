@@ -66,6 +66,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
     composite_top_spec,
     render_ports_h,
     render_tb_harness,
+    render_tb_main,
     tb_top_spec,
     render_tcl,
     render_top,
@@ -417,6 +418,57 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
     write_burst_bundle([golden], vdir / "golden")
 
 
+def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW) -> None:
+    """Check mem_copy's XSI run from the dumped output bundles — the golden, in Python.
+
+    The generated C++ main only runs and dumps; every check lives here.  Reads what the run wrote:
+    ``vectors/out`` (the memory arena after the copy) and ``vectors/s_done`` (the completion stream +
+    per-word arrival ``cycles.bin``).  Asserts:
+
+    - **correctness** — every destination region equals the source pattern (a memcpy), vs
+      ``vectors/golden``;
+    - **completion** — one ``MemComplete`` per job, each echoing ``tx_id == j``;
+    - **timing** — the cycle the *last* ``MemComplete`` landed (time-to-last-completion, NOT the loop
+      bound) equals *want_cycles*.
+
+    Raises ``AssertionError`` on any mismatch; a missing output bundle (a run that did not regenerate
+    it) fails loudly on read.
+    """
+    from waveflow.hw.mem_stream import MemComplete
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    vdir = Path(xsi_dir) / "vectors"
+    tb = make_xsi_tb(width)
+    jobs = list(tb.jobs)
+    done_words = MemComplete.nwords_per_inst(width)
+
+    # 1) Correctness: each destination region equals the golden (the source pattern, copied).
+    out = read_burst_bundle(vdir / "out")[0]
+    golden = read_burst_bundle(vdir / "golden")[0]
+    for j, (_src, dst, n) in enumerate(jobs):
+        if not np.array_equal(out[dst:dst + n], golden[dst:dst + n]):
+            bad = int(np.argmax(out[dst:dst + n] != golden[dst:dst + n]))
+            raise AssertionError(
+                f"mem_copy job {j} word {bad}: dst 0x{int(out[dst + bad]):016x} != "
+                f"golden 0x{int(golden[dst + bad]):016x}")
+
+    # 2) Completion: one MemComplete per job, tx_id echoed (xfer_msg[0] low 32b == j).
+    s_done = read_burst_bundle(vdir / "s_done")[0]
+    assert len(s_done) == len(jobs) * done_words, (
+        f"mem_copy: s_done has {len(s_done)} words, expected {len(jobs)}*{done_words}")
+    for j in range(len(jobs)):
+        got_tx = int(s_done[j * done_words + 1]) & 0xFFFFFFFF
+        assert got_tx == j, f"mem_copy job {j}: tx_id echo got {got_tx}, expected {j}"
+
+    # 3) Timing: the cycle the LAST MemComplete word landed (cycle_of_word(n) == cycles[n-1]).  This is
+    #    time-to-last-completion, not the run's loop bound; a change here is a real behaviour change.
+    cycles = np.fromfile(vdir / "s_done" / "cycles.bin", dtype="<u8")
+    done_cycle = int(cycles[len(jobs) * done_words - 1])
+    assert done_cycle == want_cycles, (
+        f"mem_copy completion cycle moved: got {done_cycle}, expected {want_cycles} — a real behaviour "
+        f"change (regression, or an improvement worth re-recording).")
+
+
 def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
     """Emit ``xsi/mem_copy_vectors.h`` — the XSI testbench's scenario + its command words.
 
@@ -478,12 +530,17 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
     vec_h = gen_xsi_vectors(out_dir, width=width)
-    # The testbench harness: derived from the TB graph, not from this module.  The hand-written half
-    # of the testbench is the test itself -- what goes in memory and what is checked.
+    # The testbench harness AND main: both derived from the TB graph.  The main is now just
+    # construct-run-close (participants load/dump bundles), so it is generated too -- the only
+    # hand-written half is Python: the scenario (write_mem_copy_xsi_bundles) and the golden checker.
+    tb = make_xsi_tb(width)
+    tb_spec = tb_top_spec(tb)
     harness_h = out_dir / "xsi" / f"{spec.top_name}_tb_harness.h"
-    harness_h.write_text(render_tb_harness(tb_top_spec(make_xsi_tb(width))), encoding="utf-8")
+    harness_h.write_text(render_tb_harness(tb_spec), encoding="utf-8")
+    main_cpp = out_dir / "xsi" / f"{spec.top_name}_bfm_tb.cpp"
+    main_cpp.write_text(render_tb_main(tb_spec, tb.n_cycles), encoding="utf-8")
     print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name} "
-          f"+ xsi/{vec_h.name} + xsi/{harness_h.name}")
+          f"+ xsi/{vec_h.name} + xsi/{harness_h.name} + xsi/{main_cpp.name}")
     return {spec.top_name: cpp}
 
 
