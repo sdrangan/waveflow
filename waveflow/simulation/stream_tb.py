@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from waveflow.hw.hw_component import DynParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave, Words
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.utils.burst_io import read_burst_bundle
@@ -50,10 +51,10 @@ class StreamDriver(SimObj):
 
     bundle: str | Path | None = None   # a burst-bundle directory (waveflow.utils.burst_io)
     bitwidth: int = 64
-    #: C++ expression naming the words this driver presents in the generated XSI testbench.  The
-    #: hand-written half of the TB declares it (from the schema's own serialize() -- see
-    #: `render_vectors_h`); this participant only says *which* symbol to pass.
-    xsi_words: str = "cmd_words"
+    #: The bundle the generated XSI ``AxisMaster`` loads in ``pre_sim`` -- a :class:`DynParam`, i.e.
+    #: init-time config the harness emits as ``s_cmd.in_bundle = "<in_bundle>";``.  Empty (the default)
+    #: emits nothing.  A path rooted by the run dir, e.g. ``"vectors/s_cmd"``.
+    in_bundle: DynParam[str] = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -72,11 +73,12 @@ class StreamDriver(SimObj):
             yield from self.stream_ep.write(np.asarray(b))
 
     def bfm_model(self):
-        """XSI twin: a **bundle-driven** ``AxisMaster`` on the port ``stream_ep`` is wired to.  The
-        generated harness sets its ``in_bundle = "vectors/<name>"`` and it loads that in ``pre_sim`` —
-        the same on-disk bundle this driver plays in pysim, so both drive from one source."""
+        """XSI twin: an ``AxisMaster`` on the port ``stream_ep`` is wired to, constructed with empty
+        ctor words (``{}``).  Its stimulus comes from the ``in_bundle`` :class:`DynParam`, which the
+        generator emits as a member assignment and the model loads in ``pre_sim`` — the same on-disk
+        bundle this driver plays in pysim, so both drive from one source."""
         from waveflow.build.composite_gen import BfmModel
-        return BfmModel("AxisMaster", ports=("stream_ep",), bundle=True)
+        return BfmModel("AxisMaster", ports=("stream_ep",), extra_args=("{}",))
 
 
 @dataclass

@@ -101,10 +101,6 @@ class BfmModel:
     ports: tuple[str, ...] = ()
     extra_args: tuple[str, ...] = ()
     shared: str | None = None
-    #: If True, this model takes no baked vectors — it loads/dumps a burst bundle under ``vectors/``
-    #: (an ``AxisMaster`` reads ``vectors/<name>`` in ``pre_sim``).  The generator emits the config
-    #: (``<name>.in_bundle = "vectors/<name>";``); nothing is passed through the Harness constructor.
-    bundle: bool = False
 
 
 @dataclass(frozen=True)
@@ -415,7 +411,9 @@ class BfmInst:
     name: str
     xsi_prefix: str                  # the RTL port prefix this model drives
     args: tuple[str, ...] = ()       # extra C++ args after the prefix
-    bundle: bool = False             # loads/dumps vectors/<name> instead of taking baked args
+    #: Init-time config to emit after construction as ``<name>.<field> = <expr>;`` -- one entry per
+    #: DynParam the participant carries (field name, rendered C++ initializer).
+    dyn_params: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -438,6 +436,23 @@ def _find_dut(tb):
     return duts[0]
 
 
+def _render_dyn_value(value) -> str:
+    """Render a ``DynParam`` value as a C++ initializer for a ``<model>.<field> = <expr>;`` line.
+
+    Extend per type as new DynParam kinds appear (e.g. a ``list[MemSeg]`` -> an aggregate initializer).
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return '"' + value + '"'
+    raise TypeError(
+        f"DynParam value {value!r} ({type(value).__name__}) has no C++ rendering yet — "
+        f"add a case to _render_dyn_value."
+    )
+
+
 def tb_top_spec(tb) -> TbSpec:
     """Derive the XSI testbench harness from *tb*'s component/interface graph.
 
@@ -453,6 +468,8 @@ def tb_top_spec(tb) -> TbSpec:
     Participants declaring ``shared`` (a `MemComponent` -> one `FlatMemory` behind both bundles) are
     constructed once and passed by name.
     """
+    from waveflow.hw.hw_component import discover_dyn_params
+
     dut = _find_dut(tb)
 
     # endpoint identity -> the participant it belongs to
@@ -490,6 +507,9 @@ def tb_top_spec(tb) -> TbSpec:
                 f"participant — nothing would drive it, and the run would hang on that port."
             )
         bm = part.bfm_model()
+        # Init-time config: every DynParam the participant carries, rendered to a C++ initializer.
+        dyn = tuple((f, _render_dyn_value(v))
+                    for f, v in sorted(discover_dyn_params(part).items()))
         if bm.shared is not None:
             shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args))
             cls = _SLAVE_FOR_KIND.get(kind)
@@ -498,9 +518,9 @@ def tb_top_spec(tb) -> TbSpec:
                     f"{type(tb).__name__}: participant {type(part).__name__} is shared but boundary "
                     f"port '{name}' is kind {kind!r}, which names no slave model."
                 )
-            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
+            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,), dyn))
         else:
-            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args, bm.bundle))
+            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args, dyn))
 
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
                   models=tuple(models))
@@ -528,11 +548,12 @@ def render_tb_harness(spec: TbSpec) -> str:
     guard = f"WAVEFLOW_GEN_{ns.upper()}_HARNESS_H"
 
     shared_names = {name for _cls, name, _args in spec.shared}
-    # An extra arg naming a shared object is a member; anything else the test must supply.
+    # A ctor param is a value the *test* must supply: a plain identifier that is not a shared member.
+    # A literal ctor arg (e.g. an empty word vector "{}") is not an identifier, so it is not a param.
     ctor_params: list[str] = []
     for m in spec.models:
         for a in m.args:
-            if a not in shared_names and a not in ctor_params:
+            if a.isidentifier() and a not in shared_names and a not in ctor_params:
                 ctor_params.append(a)
 
     lines = [
@@ -575,10 +596,7 @@ def render_tb_harness(spec: TbSpec) -> str:
     for cls, name, args in spec.shared:
         inits.append(f"{name}({', '.join(args)})")
     for m in spec.models:
-        # A bundle model takes no baked vectors: it is constructed with an empty word vector and
-        # loads vectors/<name> in pre_sim (configured in the ctor body below).
-        extra = ("{}",) if m.bundle else m.args
-        a = ", ".join((f"sim.dut()", f"{ports_ns}::{m.name}") + extra)
+        a = ", ".join(("sim.dut()", f"{ports_ns}::{m.name}") + m.args)
         inits.append(f"{m.name}({a})")
     lines.append("")
     lines.append(sig)
@@ -593,12 +611,12 @@ def render_tb_harness(spec: TbSpec) -> str:
         lines.append(f"        participants_.push_back(&{name});")
     for m in spec.models:
         lines.append(f"        participants_.push_back(&{m.name});")
-    bundle_models = [m for m in spec.models if m.bundle]
-    if bundle_models:
-        lines.append("        // Bundle-driven models read their vectors from vectors/<name> in pre_sim")
-        lines.append("        // (the generator's config -- the same bundle the pysim StreamDriver plays).")
-        for m in bundle_models:
-            lines.append(f'        {m.name}.in_bundle = "vectors/{m.name}";')
+    dyn_lines = [f"        {m.name}.{field} = {expr};"
+                 for m in spec.models for field, expr in m.dyn_params]
+    if dyn_lines:
+        lines.append("        // Init-time config (DynParams): each is a knob the pysim participant")
+        lines.append("        // carries, emitted here as a member assignment (e.g. a model's bundle).")
+        lines.extend(dyn_lines)
     lines.append("    }")
 
     # The five lifecycle phases, each iterating the one participant list.  A participant that does

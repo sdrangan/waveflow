@@ -88,7 +88,10 @@ class MemCopyTB(CompositeComp):
         words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
         with tempfile.TemporaryDirectory() as _vd:
             write_burst_bundle(words, Path(_vd) / "cmd")
-            self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd")
+            # `bundle` is what the pysim driver plays (a temp dir); `in_bundle` is the DynParam the
+            # generated XSI harness emits -- the bundle its AxisMaster loads, rooted at the s_cmd port.
+            self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd",
+                                       in_bundle="vectors/s_cmd")
         self.done_sink = StreamSink(sim=self.sim, bitwidth=w)
 
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.

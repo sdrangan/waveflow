@@ -36,6 +36,27 @@ class HwParam(Generic[T]):
     """
 
 
+class DynParam(Generic[T]):
+    """Marks a field as an **init-time** parameter — a knob on a fixed artifact.
+
+    The third binding site in the ``Param`` family, distinguished from :class:`HwParam` by *when the
+    value binds*:
+
+    - ``HwParam`` binds at **build / elaboration**; the value is baked into the artifact, so distinct
+      values mean distinct artifacts (``mem_r_stream_32`` vs ``_64``).  The only kind synthesizable
+      code can take.
+    - ``DynParam`` binds at **init / pre-sim**; the value is set on the instance and, for a generated
+      model, emitted as a member assignment — *one* artifact serves all values.
+
+    The axis is binding time, not synthesizable-vs-not: ``DynParam``'s synthesizable cousin is a
+    regmap / ``s_axilite`` register (set at runtime over AXI-Lite, one bitstream for all values).  Its
+    first use is XSI testbench-model config (``StreamDriver.in_bundle``), where codegen collects the
+    ``DynParam`` fields (:func:`discover_dyn_params`) and emits ``<model>.<field> = <value>;``.
+
+    Bound **once at pre_sim and constant for the run** — *not* a per-cycle value.
+    """
+
+
 class HwConst(Generic[T]):
     """Marks a class attribute as a class-level constant.
 
@@ -93,6 +114,38 @@ def _hw_param_names(comp_class) -> set[str]:
             if typing.get_origin(hint) is HwParam:
                 names.add(n)
     return names
+
+
+def _dyn_param_names(cls) -> set[str]:
+    """Return the set of ``DynParam``-annotated field names on *cls* (mirrors ``_hw_param_names``)."""
+    names: set[str] = set()
+    for klass in cls.__mro__:
+        for n, hint in getattr(klass, '__annotations__', {}).items():
+            if isinstance(hint, str):
+                mod = sys.modules.get(klass.__module__)
+                globs: dict = vars(mod) if mod is not None else {}
+                try:
+                    hint = eval(hint, globs)  # noqa: S307
+                except Exception:
+                    continue
+            if typing.get_origin(hint) is DynParam:
+                names.add(n)
+    return names
+
+
+def discover_dyn_params(obj: Any) -> dict[str, Any]:
+    """Return ``{field: value}`` for every ``DynParam`` field of *obj* whose value differs from the
+    class default — the init-time knobs a generator emits as ``<model>.<field> = <value>;``.
+
+    A field left at its default (e.g. ``in_bundle == ""``) is omitted, so nothing is emitted for it.
+    """
+    cls = type(obj)
+    out: dict[str, Any] = {}
+    for name in _dyn_param_names(cls):
+        val = getattr(obj, name, None)
+        if val is not None and val != getattr(cls, name, None):
+            out[name] = val
+    return out
 
 
 def _resolve_variant_values(comp_class, overrides: dict[str, Any]) -> dict[str, Any]:

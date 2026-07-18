@@ -49,8 +49,8 @@ struct Harness {
         participants_.push_back(&m_in);
         participants_.push_back(&m_out);
         participants_.push_back(&s_done);
-        // Bundle-driven models read their vectors from vectors/<name> in pre_sim
-        // (the generator's config -- the same bundle the pysim StreamDriver plays).
+        // Init-time config (DynParams): each is a knob the pysim participant
+        // carries, emitted here as a member assignment (e.g. a model's bundle).
         s_cmd.in_bundle = "vectors/s_cmd";
     }
     void pre_sim() { for (auto* p : participants_) p->pre_sim(); }

@@ -33,13 +33,13 @@ def test_walk_derives_exactly_the_hand_written_testbench():
     spec = tb_top_spec(_tb())
     assert spec.top_name == "mem_copy"
 
-    got = {m.name: (m.cls, m.xsi_prefix, m.args, m.bundle) for m in spec.models}
+    got = {m.name: (m.cls, m.xsi_prefix, m.args, m.dyn_params) for m in spec.models}
     assert got == {
-        # s_cmd is bundle-driven: no baked args, loads vectors/s_cmd in pre_sim.
-        "s_cmd":  ("AxisMaster", "s_cmd", (), True),
-        "s_done": ("AxisSlave", "s_done", (), False),
-        "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",), False),
-        "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",), False),
+        # s_cmd is bundle-driven: empty ctor words ({}), and an in_bundle DynParam it loads in pre_sim.
+        "s_cmd":  ("AxisMaster", "s_cmd", ("{}",), (("in_bundle", '"vectors/s_cmd"'),)),
+        "s_done": ("AxisSlave", "s_done", (), ()),
+        "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",), ()),
+        "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",), ()),
     }
 
 
