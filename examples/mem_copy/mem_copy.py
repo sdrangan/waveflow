@@ -346,10 +346,10 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
     """Render ``mem_copy_vectors.h``'s contents **from the testbench graph**.
 
     Everything here is read off a real :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` — the same
-    class the pysim golden runs — rather than restated: the commands are the ones its ``CmdDriver``
-    will send, packed by the schema's own ``serialize()``; the offsets are its ``jobs``; the arena is
-    the one its ``MemComponent`` declares.  So the XSI testbench and the pysim harness cannot
-    describe different tests.
+    class the pysim golden runs — rather than restated: the words are the very ones its
+    ``StreamDriver`` will send (the schema-packed command bursts); the offsets are its ``jobs``; the
+    arena is the one its ``MemComponent`` declares.  So the XSI testbench and the pysim harness
+    cannot describe different tests.
 
     Split from :func:`gen_xsi_vectors` so a test can compare the committed header against what the
     graph produces *now* without writing anything — that is what catches a schema or scenario change
@@ -359,11 +359,6 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
 
     tb = make_xsi_tb(width)
     jobs = list(tb.jobs)
-
-    # The words the driver will actually send, packed by the schema itself.
-    cmd_words: list[int] = []
-    for cmd in tb.driver.cmds:
-        cmd_words.extend(int(w) for w in cmd.serialize(word_bw=width))
 
     return render_vectors_h(
         "mem_copy_vectors",
@@ -376,18 +371,32 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
             # MemComplete{len, xfer_len, xfer_msg[8]} -> nwords_per_inst(64) == 5.  Introspected:
             # the s_done framing is the schema's business, not the testbench's.
             "DONE_WORDS": MemComplete.nwords_per_inst(width),
-            "CMD_WORDS_PER_CMD": len(cmd_words) // len(jobs),
         },
         arrays={
             "SRC_W": ("int", [s for s, _d, _n in jobs]),
             "DST_W": ("int", [d for _s, d, _n in jobs]),
-            # CopyCmd.serialize(word_bw) output, concatenated: CMD_WORDS_PER_CMD words per command.
-            "CMD_WORDS": ("uint64_t", cmd_words),
         },
         note=("Derived from the MemCopyTB graph (examples/mem_copy/mem_copy_sim.py) built with\n"
               "XSI_JOBS -- the same class the pysim golden runs, instantiated with this scenario.\n"
-              "CMD_WORDS = the driver's own commands, packed by CopyCmd.serialize(word_bw)."),
+              "The command words are no longer baked here: they are the burst bundle xsi/vectors/s_cmd\n"
+              "that the harness loads in pre_sim -- written by write_mem_copy_xsi_bundles."),
     )
+
+
+def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> None:
+    """Write mem_copy's XSI input **bundles** into ``<xsi_dir>/vectors/``.
+
+    Currently the command stream: ``vectors/s_cmd`` = the StreamDriver's own bursts (the CopyCmds the
+    pysim golden plays, packed by the schema's serialize()).  The generated harness loads it in
+    ``pre_sim`` (``s_cmd.in_bundle = "vectors/s_cmd"``), so the command words are on disk once — the
+    same bundle drives pysim and RTL, and the baked ``CMD_WORDS`` literal is gone.
+
+    (The memory pattern is still stated in the C++ TB; migrating it to bundles is a later step.)
+    """
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    tb = make_xsi_tb(width)
+    write_burst_bundle(tb.driver.bursts, Path(xsi_dir) / "vectors" / "s_cmd")
 
 
 def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:

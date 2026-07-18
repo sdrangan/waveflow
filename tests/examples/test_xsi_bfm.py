@@ -22,9 +22,25 @@ from pathlib import Path
 
 import pytest
 
+from examples.interleaver.mem_stream_gen import (
+    write_interleaver_canon_xsi_bundles,
+    write_mem_r_xsi_bundles,
+    write_mem_w_xsi_bundles,
+)
+from examples.mem_copy.mem_copy import write_mem_copy_xsi_bundles
 from waveflow.build.composite_gen import render_rtl_f
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+#: Migrated tops whose scenario DATA (inputs + golden) is written as burst bundles into their xsi/
+#: workspace before the run — instead of being restated in the C++ TB.  The value writes the bundles;
+#: an absent top still bakes its own vectors in the (un-migrated) TB.
+_XSI_SETUP = {
+    "mem_r_stream": lambda xsi: write_mem_r_xsi_bundles(xsi),
+    "mem_w_stream": lambda xsi: write_mem_w_xsi_bundles(xsi),
+    "mem_copy": lambda xsi: write_mem_copy_xsi_bundles(xsi),
+    "interleaver_canon": lambda xsi: write_interleaver_canon_xsi_bundles(xsi),
+}
 
 #: Which example directory owns each top.  They are no longer all in one place: mem_copy is its own
 #: example, with its own xsi/ workspace (its own xsim.dir, its own copy of the harness via
@@ -97,6 +113,10 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     shutil.rmtree(xsi / "xsim.dir" / top, ignore_errors=True)
     for stale in (f"{tb}.exe", f"{tb}.o"):
         (xsi / stale).unlink(missing_ok=True)
+
+    # 2b) Migrated tops read their scenario (memory, command, golden) from bundles under vectors/ —
+    # write them now, from the one Python source, before the TB runs.
+    _XSI_SETUP.get(top, lambda _xsi: None)(xsi)
 
     # ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and the bare form
     # fails with "not recognized as an internal or external command" rather than anything useful.

@@ -20,6 +20,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
@@ -117,6 +119,108 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
         written[spec.top_name] = cpp
         print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
     return written
+
+
+def write_mem_r_xsi_bundles(xsi_dir: Path, n: int = 128, base_w: int = 64,
+                            mem_dw: int = 64) -> "np.ndarray":
+    """Write the mem_r XSI testbench's input + golden **bundles** into ``<xsi_dir>/vectors/``.
+
+    The scenario *data* lives here, in Python, as burst bundles — never restated in the C++ TB:
+
+    - ``vectors/mem_in`` — the region contents the kernel reads (loaded at word ``base_w``);
+    - ``vectors/cmd``    — the ``MRCmd`` the driver presents, packed by the schema's own serialize();
+    - ``vectors/golden`` — the expected output stream (MemRStream bursts the region onto m_out, so
+      the golden equals the region contents).
+
+    The *structural* constants (``n``, ``base_w``) must match ``mem_r_bfm_tb.cpp``; a drift surfaces
+    as a golden mismatch in the ``-m xsi`` gate, not silently.  Returns the golden array.
+    """
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    vdir = Path(xsi_dir) / "vectors"
+    mask = (1 << mem_dw) - 1
+    pattern = (np.arange(n, dtype=np.uint64) * 2654435761 + 12345) & mask
+    cmd = np.asarray(MRCmd(addr=base_w, len=n).serialize(word_bw=mem_dw), dtype=np.uint64)
+    write_burst_bundle([pattern], vdir / "mem_in")
+    write_burst_bundle([cmd], vdir / "cmd")
+    write_burst_bundle([pattern], vdir / "golden")
+    return pattern
+
+
+def write_mem_w_xsi_bundles(xsi_dir: Path, n: int = 128, base_w: int = 64,
+                            mem_dw: int = 64) -> "np.ndarray":
+    """Write the mem_w XSI testbench's input + golden **bundles** into ``<xsi_dir>/vectors/``.
+
+    MemWStream drains ``vectors/dat`` off s_in and pure-writes it to ``mem[base_w .. base_w+n)``, so:
+
+    - ``vectors/cmd``    — the ``MWCmd`` the command driver presents;
+    - ``vectors/dat``    — the input stream the data driver presents;
+    - ``vectors/golden`` — the expected memory region (equals ``dat``); the TB dumps the written
+      region to ``vectors/out`` and checks it against this.
+
+    Structural constants (``n``, ``base_w``) must match ``mem_w_bfm_tb.cpp``.  Returns the data array.
+    """
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    vdir = Path(xsi_dir) / "vectors"
+    mask = (1 << mem_dw) - 1
+    data = (np.arange(n, dtype=np.uint64) * 40503 + 7) & mask
+    cmd = np.asarray(MWCmd(addr=base_w, len=n).serialize(word_bw=mem_dw), dtype=np.uint64)
+    write_burst_bundle([cmd], vdir / "cmd")
+    write_burst_bundle([data], vdir / "dat")
+    write_burst_bundle([data], vdir / "golden")
+    return data
+
+
+def write_interleaver_canon_xsi_bundles(xsi_dir: Path, n: int = 256, nj: int = 8,
+                                        mem_dw: int = 64) -> None:
+    """Write interleaver_canon's XSI input + golden **bundles** into ``<xsi_dir>/vectors/``.
+
+    Per job ``j`` (base ``j*3*nw``): a P region (permutation indices), an X region (float32 values),
+    and a Y region (output = ``X[P]``).  Elements are lane-packed, ``lw = mem_dw/32`` per word:
+
+    - ``vectors/mem_in`` — the whole input arena (P + X packed), loaded at word 0;
+    - ``vectors/cmd``    — the ``InterleaverCmd`` stream (2 words per job);
+    - ``vectors/golden`` — the expected arena with the Y regions filled (``Y[i] = X[P[i]]``); the TB
+      compares the written Y regions against it.
+
+    Structural constants (``n``, ``nj``) must match ``interleaver_canon_bfm_tb.cpp``.
+    """
+    from examples.interleaver.interleaver import InterleaverCmd
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    lw = mem_dw // 32
+    nw = (n + lw - 1) // lw
+    mem_nw = 8192
+
+    def pack_lanes(elems) -> "np.ndarray":
+        e = np.asarray(elems, dtype=np.uint64)
+        w = np.zeros((len(e) + lw - 1) // lw, dtype=np.uint64)
+        for lane in range(lw):
+            s = e[lane::lw]
+            w[: len(s)] |= s << np.uint64(lane * 32)
+        return w
+
+    perm = ((np.arange(n) * 13 + 5) % n).astype(np.uint32)
+    arena = np.zeros(mem_nw, dtype=np.uint64)
+    golden = np.zeros(mem_nw, dtype=np.uint64)
+    cmd: list[int] = []
+    for j in range(nj):
+        base = j * 3 * nw
+        pw, xw, yj = base, base + nw, base + 2 * nw
+        xbits = (np.arange(n, dtype=np.float32) * np.float32(0.5) - np.float32(3.0)
+                 + np.float32(j)).view(np.uint32)
+        arena[pw:pw + nw] = pack_lanes(perm)
+        arena[xw:xw + nw] = pack_lanes(xbits)
+        golden[yj:yj + nw] = pack_lanes(xbits[perm])
+        cmd.extend(int(w) for w in np.asarray(
+            InterleaverCmd(p_off=pw, x_off=xw, y_off=yj, n=n).serialize(word_bw=mem_dw),
+            dtype=np.uint64))
+
+    vdir = Path(xsi_dir) / "vectors"
+    write_burst_bundle([arena], vdir / "mem_in")
+    write_burst_bundle([np.asarray(cmd, dtype=np.uint64)], vdir / "cmd")
+    write_burst_bundle([golden], vdir / "golden")
 
 
 if __name__ == "__main__":

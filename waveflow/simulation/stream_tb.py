@@ -1,14 +1,16 @@
-"""stream_tb.py — reusable pysim testbench participants: stream drivers and sinks.
+"""stream_tb.py — reusable pysim testbench participants: a stream driver and a stream sink.
 
 The Python-side counterparts of the XSI BFM models (:mod:`waveflow.build.xsi`): a
-:class:`CmdDriver` is what an ``AxisMaster`` is at RTL, a :class:`WordSink` is an ``AxisSlave``.
+:class:`StreamDriver` is what an ``AxisMaster`` is at RTL, a :class:`StreamSink` is an ``AxisSlave``.
 Both push/collect the same words; only the timing model differs — SimPy events here, cycle-by-cycle
 handshakes there.
 
 Framework, not example code: these lived in ``examples/interleaver/mem_stream_sim.py`` because that
 is where the first harness was written, which forced every other example's pysim harness to import
-across into a sibling example.  Nothing here knows about any particular kernel — they are typed by a
-stream's ``bitwidth`` and driven by whatever schema instances you hand them.
+across into a sibling example.  Nothing here knows about any particular kernel — nor about any
+**schema**: both participants see only raw words + burst boundaries.  The testbench, which is the one
+place that knows the schema, does the ``[c.serialize(bw) for c in cmds]`` conversion and hands the
+resulting word arrays here.
 
 They are :class:`~waveflow.simulation.simobj.SimObj`\\ s, not
 :class:`~waveflow.hw.component.Component`\\ s: a testbench participant needs a ``run_proc`` and an
@@ -17,64 +19,69 @@ true is an open question — see ``plans/xsi_tb_codegen.md``, "what kind is a TB
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave, Words
 from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.utils.burst_io import read_burst_bundle
 
 
 @dataclass
-class CmdDriver(SimObj):
-    """Sends a list of command-schema instances onto a stream (one burst each).
+class StreamDriver(SimObj):
+    """Plays a burst bundle onto a stream — a schema-blind, file-driven source.
 
-    The pysim twin of the XSI ``AxisMaster``: it offers each command in turn and lets the consumer
-    take them as fast as it accepts.  It never waits for a *response*, which is what leaves
+    The pysim twin of the XSI ``AxisMaster``: it offers each burst's words in turn and lets the
+    consumer take them as fast as it accepts.  It never waits for a *response*, which is what leaves
     downstream jobs free to overlap — the same property the RTL testbench depends on.
+
+    **The only vector input is a burst bundle** (a folder; see
+    :mod:`waveflow.utils.burst_io`) — never in-memory arrays and never a schema.  That is the point:
+    the same on-disk bundle drives the pysim driver *and* the RTL ``AxisMaster``, so both provably
+    play the identical bytes.  The testbench, which is the one place that knows the schema, serializes
+    its commands (``[c.serialize(bw) for c in cmds]``) and writes the bundle with
+    :func:`~waveflow.utils.burst_io.write_burst_bundle`; this driver just points at it.
+
+    The bundle is read **eagerly at construction**, so its files need only exist when the driver is
+    built (a testbench may write it to a temporary directory and let that go away).
     """
 
-    cmds: list = field(default_factory=list)
+    bundle: str | Path | None = None   # a burst-bundle directory (waveflow.utils.burst_io)
     bitwidth: int = 64
     #: C++ expression naming the words this driver presents in the generated XSI testbench.  The
-    #: hand-written half of the TB declares it (from the schema's own serialize() — see
+    #: hand-written half of the TB declares it (from the schema's own serialize() -- see
     #: `render_vectors_h`); this participant only says *which* symbol to pass.
     xsi_words: str = "cmd_words"
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
-
-    def run_proc(self) -> ProcessGen[None]:
-        for c in self.cmds:
-            yield from self.stream_ep.write(c)
-
-    def bfm_model(self):
-        """XSI twin: an ``AxisMaster`` offering *cmds*' serialized words on the port ``stream_ep``
-        is wired to.  Same words as ``run_proc`` above; only the timing model differs."""
-        from waveflow.build.composite_gen import BfmModel
-        return BfmModel("AxisMaster", ports=("stream_ep",), extra_args=(self.xsi_words,))
-
-
-@dataclass
-class WordDriver(SimObj):
-    """Sends raw word bursts onto a stream (a data source, e.g. for ``MemWStream``)."""
-
-    bursts: list = field(default_factory=list)   # list of np.uint word arrays
-    bitwidth: int = 64
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
+        if self.bundle is None:
+            raise ValueError("StreamDriver requires bundle=<burst-bundle directory>")
+        self.bursts = read_burst_bundle(self.bundle)
+        # The path is consumed here (eager load) and not retained: the loaded bursts are the
+        # driver's state, and they are deterministic, whereas a (possibly temp-dir) path is not.
+        # Keeping the path would make the driver's structure signature depend on it and trip the
+        # elaboration param-purity check.
+        self.bundle = None
         self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
 
     def run_proc(self) -> ProcessGen[None]:
         for b in self.bursts:
             yield from self.stream_ep.write(np.asarray(b))
 
+    def bfm_model(self):
+        """XSI twin: a **bundle-driven** ``AxisMaster`` on the port ``stream_ep`` is wired to.  The
+        generated harness sets its ``in_bundle = "vectors/<name>"`` and it loads that in ``pre_sim`` —
+        the same on-disk bundle this driver plays in pysim, so both drive from one source."""
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel("AxisMaster", ports=("stream_ep",), bundle=True)
+
 
 @dataclass
-class WordSink(SimObj):
-    """Collects raw word bursts off a stream (a data sink, e.g. for ``MemRStream``).
+class StreamSink(SimObj):
+    """Collects raw word bursts off a stream — a schema-blind sink.
 
     The pysim twin of the XSI ``AxisSlave``: always ready, keeps everything it is given.
     """

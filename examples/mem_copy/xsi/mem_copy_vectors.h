@@ -6,7 +6,8 @@
 // testbench never re-implements a packing rule, so it cannot drift from the schema.
 // Derived from the MemCopyTB graph (examples/mem_copy/mem_copy_sim.py) built with
 // XSI_JOBS -- the same class the pysim golden runs, instantiated with this scenario.
-// CMD_WORDS = the driver's own commands, packed by CopyCmd.serialize(word_bw).
+// The command words are no longer baked here: they are the burst bundle xsi/vectors/s_cmd
+// that the harness loads in pre_sim -- written by write_mem_copy_xsi_bundles.
 #include <cstdint>
 
 namespace mem_copy_vectors {
@@ -16,11 +17,9 @@ static const int MEM_NW = 24640;
 static const int N = 128;
 static const int NUM_CMDS = 16;
 static const int DONE_WORDS = 5;
-static const int CMD_WORDS_PER_CMD = 2;
 
 static const int SRC_W[16] = { 64, 192, 320, 448, 576, 704, 832, 960, 1088, 1216, 1344, 1472, 1600, 1728, 1856, 1984 };
 static const int DST_W[16] = { 4096, 4224, 4352, 4480, 4608, 4736, 4864, 4992, 5120, 5248, 5376, 5504, 5632, 5760, 5888, 6016 };
-static const uint64_t CMD_WORDS[32] = { 17592186044480ULL, 128ULL, 18141941858496ULL, 4294967424ULL, 18691697672512ULL, 8589934720ULL, 19241453486528ULL, 12884902016ULL, 19791209300544ULL, 17179869312ULL, 20340965114560ULL, 21474836608ULL, 20890720928576ULL, 25769803904ULL, 21440476742592ULL, 30064771200ULL, 21990232556608ULL, 34359738496ULL, 22539988370624ULL, 38654705792ULL, 23089744184640ULL, 42949673088ULL, 23639499998656ULL, 47244640384ULL, 24189255812672ULL, 51539607680ULL, 24739011626688ULL, 55834574976ULL, 25288767440704ULL, 60129542272ULL, 25838523254720ULL, 64424509568ULL };
 
 }  // namespace mem_copy_vectors
 

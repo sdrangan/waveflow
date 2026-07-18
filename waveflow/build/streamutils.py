@@ -216,6 +216,7 @@ class XsiHarnessStep(Buildable):
     def build_outputs(self) -> dict[str, Path]:
         return {
             "xsi_bfm": self._output_dir / "xsi_bfm.h",
+            "xsi_bundle": self._output_dir / "xsi_bundle.h",
             "xsi_loader_h": self._output_dir / "xsi_loader.h",
             "xsi_loader_cpp": self._output_dir / "xsi_loader.cpp",
             "xsi_shared_lib": self._output_dir / "xsi_shared_lib.h",
@@ -225,6 +226,7 @@ class XsiHarnessStep(Buildable):
     def generate(self, key: str, config: BuildConfig) -> str:
         src_names = {
             "xsi_bfm": "xsi_bfm.h",
+            "xsi_bundle": "xsi_bundle.h",
             "xsi_loader_h": "xsi_loader.h",
             "xsi_loader_cpp": "xsi_loader.cpp",
             "xsi_shared_lib": "xsi_shared_lib.h",

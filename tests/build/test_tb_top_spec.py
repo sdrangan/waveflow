@@ -22,23 +22,24 @@ def _tb(**kw):
 def test_walk_derives_exactly_the_hand_written_testbench():
     """Every model the hand-written mem_copy TB constructs, derived from the graph instead.
 
-    Cross-check against examples/mem_copy/xsi/mem_copy_bfm_tb.cpp:
+    Cross-check against the generated harness (examples/mem_copy/xsi/mem_copy_tb_harness.h):
 
-        FlatMemory      mem(vec::MEM_NW, BPW);
-        AxisMaster      s_cmd (sim.dut(), ports::s_cmd,  cmd_words);
+        FlatMemory      mem(...);
+        AxisMaster      s_cmd (sim.dut(), ports::s_cmd, {});   // s_cmd.in_bundle = "vectors/s_cmd";
         AxisSlave       s_done(sim.dut(), ports::s_done);
-        AxiMmReadSlave  gmem0 (sim.dut(), ports::m_in,  mem);
-        AxiMmWriteSlave gmem1 (sim.dut(), ports::m_out, mem);
+        AxiMmReadSlave  m_in  (sim.dut(), ports::m_in,  mem);
+        AxiMmWriteSlave m_out (sim.dut(), ports::m_out, mem);
     """
     spec = tb_top_spec(_tb())
     assert spec.top_name == "mem_copy"
 
-    got = {m.name: (m.cls, m.xsi_prefix, m.args) for m in spec.models}
+    got = {m.name: (m.cls, m.xsi_prefix, m.args, m.bundle) for m in spec.models}
     assert got == {
-        "s_cmd":  ("AxisMaster", "s_cmd", ("cmd_words",)),
-        "s_done": ("AxisSlave", "s_done", ()),
-        "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",)),
-        "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",)),
+        # s_cmd is bundle-driven: no baked args, loads vectors/s_cmd in pre_sim.
+        "s_cmd":  ("AxisMaster", "s_cmd", (), True),
+        "s_done": ("AxisSlave", "s_done", (), False),
+        "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",), False),
+        "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",), False),
     }
 
 

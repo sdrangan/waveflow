@@ -9,6 +9,9 @@ gather-completion timeline (the SOBIF ping-pong + free-running load overlap make
 """
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 
 from waveflow.hw.clock import Clock
@@ -18,7 +21,8 @@ from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
 from examples.interleaver.interleaver import InterleaverCanon, InterleaverCmd
-from waveflow.simulation.stream_tb import CmdDriver, WordSink
+from waveflow.simulation.stream_tb import StreamDriver, StreamSink
+from waveflow.utils.burst_io import write_burst_bundle
 
 
 def _pack(vals: np.ndarray, lw: int) -> np.ndarray:
@@ -58,8 +62,13 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
         expected.append((yj, _pack(Xj[P].astype(np.uint32), lw)))   # golden Y[i]=X[P[i]]
 
     il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n)
-    driver = CmdDriver(sim=sim, bitwidth=mem_dwidth, cmds=cmds)
-    done_sink = WordSink(sim=sim, bitwidth=mem_dwidth)
+    # Schema-blind, file-driven driver: serialize each command to words, write a burst bundle, point
+    # the driver at it.  The bundle is read eagerly, so the temp dir can go away after construction.
+    words = [np.asarray(c.serialize(word_bw=mem_dwidth), dtype=np.uint64) for c in cmds]
+    with tempfile.TemporaryDirectory() as _vd:
+        write_burst_bundle(words, Path(_vd) / "cmd")
+        driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, bundle=Path(_vd) / "cmd")
+    done_sink = StreamSink(sim=sim, bitwidth=mem_dwidth)
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
     cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)

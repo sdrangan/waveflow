@@ -35,10 +35,9 @@ static uint64_t known_word(int job, int i) {
 }
 
 int main() {
-    // 1) The harness: everything derived from the graph.  cmd_words are the driver's own commands.
-    std::vector<uint64_t> cmd_words(vec::CMD_WORDS,
-                                    vec::CMD_WORDS + vec::NUM_CMDS * vec::CMD_WORDS_PER_CMD);
-    mem_copy_tb::Harness h("mem_copy_bfm.wdb", cmd_words);
+    // 1) The harness: everything derived from the graph.  The command words are a burst bundle
+    //    (vectors/s_cmd) the harness loads in pre_sim -- no longer baked in or passed here.
+    mem_copy_tb::Harness h("mem_copy_bfm.wdb");
 
     // 2) The test's stimulus: a known pattern in each source region of the shared arena.
     for (int j = 0; j < vec::NUM_CMDS; ++j)

@@ -105,22 +105,24 @@ def test_xsi_vectors_header_is_current():
     )
 
 
-def test_xsi_vectors_are_the_schemas_own_serialization():
-    """The generated words ARE CopyCmd.serialize()'s output, not a re-derivation of it.
+def test_xsi_command_bundle_is_the_schemas_own_serialization(tmp_path):
+    """The XSI command **bundle**'s words ARE CopyCmd.serialize()'s output, not a re-derivation.
 
-    Pins the property the header exists for. If someone 'optimises' the generator into a hand-rolled
-    packer, the second implementation is back and this fails.
+    The harness loads ``vectors/s_cmd`` in pre_sim; its words are exactly what the schema packs, so no
+    second packing implementation exists to drift.  ``CMD_WORDS`` is gone from the header — the command
+    words live in the bundle now — and this pins the replacement.  Pure Python (no toolchain).
     """
-    import re
+    import numpy as np
 
     from examples.mem_copy.mem_copy import (
-        XSI_DST_W, XSI_N, XSI_SRC_W, CopyCmd, render_xsi_vectors,
+        XSI_DST_W, XSI_N, XSI_SRC_W, CopyCmd, render_xsi_vectors, write_mem_copy_xsi_bundles,
     )
     from waveflow.hw.mem_stream import MemComplete
+    from waveflow.utils.burst_io import BOUNDS_NAME, read_burst_bundle
 
-    h = render_xsi_vectors(64)
-    emitted = [int(x) for x in re.search(r"CMD_WORDS\[\d+\] = \{ ([^}]*) \}", h).group(1)
-               .replace("ULL", "").split(",")]
+    write_mem_copy_xsi_bundles(tmp_path, width=64)
+    got = read_burst_bundle(tmp_path / "vectors" / "s_cmd")
+    emitted = [int(w) for w in np.concatenate(got)]
 
     expect: list[int] = []
     for j, (s, d) in enumerate(zip(XSI_SRC_W, XSI_DST_W)):
@@ -128,7 +130,13 @@ def test_xsi_vectors_are_the_schemas_own_serialization():
                       .serialize(word_bw=64))
     assert emitted == expect
 
-    # s_done framing is a schema fact, not a testbench constant.
+    # bounds are cumulative end-indices; every CopyCmd packs to 2 words at MEM_DW=64.
+    bounds = np.fromfile(tmp_path / "vectors" / "s_cmd" / BOUNDS_NAME, dtype="<u8")
+    np.testing.assert_array_equal(bounds, 2 * np.arange(1, len(expect) // 2 + 1))
+
+    h = render_xsi_vectors(64)
+    assert "CMD_WORDS" not in h, "the command words moved to the bundle; the header must not bake them"
+    # s_done framing is a schema fact, still introspected into the header.
     assert f"DONE_WORDS = {MemComplete.nwords_per_inst(64)};" in h
 
 

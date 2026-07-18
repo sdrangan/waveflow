@@ -169,3 +169,6 @@ examples/*/xsi/*.log
 examples/*/xsi/*.jou
 examples/*/xsi/*.pb
 examples/*/xsi/.Xil/
+
+# Generated XSI test-vector bundles (written at gate time; data is *.bin, ignored above).
+examples/*/xsi/vectors/

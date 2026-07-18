@@ -8,7 +8,9 @@ checks the functional golden: each destination region equals a memcpy of its sou
 """
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -23,7 +25,8 @@ from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, MemCopy
-from waveflow.simulation.stream_tb import CmdDriver, WordSink
+from waveflow.simulation.stream_tb import StreamDriver, StreamSink
+from waveflow.utils.burst_io import write_burst_bundle
 
 
 @dataclass
@@ -75,10 +78,18 @@ class MemCopyTB(CompositeComp):
             self.expected.append(known.astype(np.uint64))
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
-        self.driver = CmdDriver(sim=self.sim, bitwidth=w,
-                                cmds=[CopyCmd(src_off=s, dst_off=d, n_words=n, tx_id=j)
-                                      for j, (s, d, n) in enumerate(jobs)])
-        self.done_sink = WordSink(sim=self.sim, bitwidth=w)
+        # The testbench owns the schema: it serializes each command into raw stream words, writes them
+        # as a burst bundle, and points the schema-blind StreamDriver at that bundle -- the one vector
+        # form the driver accepts (and, once wired, the same bundle the XSI harness reads).  The
+        # bundle is read eagerly, so the temp dir can go away right after construction.  `self.cmds` is
+        # kept so the XSI vectors can be re-derived from the very commands the driver sends.
+        self.cmds = [CopyCmd(src_off=s, dst_off=d, n_words=n, tx_id=j)
+                     for j, (s, d, n) in enumerate(jobs)]
+        words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
+        with tempfile.TemporaryDirectory() as _vd:
+            write_burst_bundle(words, Path(_vd) / "cmd")
+            self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd")
+        self.done_sink = StreamSink(sim=self.sim, bitwidth=w)
 
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
         for c in (self.dut, self.driver, self.done_sink, self.mem):

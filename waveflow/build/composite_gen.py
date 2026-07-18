@@ -101,6 +101,10 @@ class BfmModel:
     ports: tuple[str, ...] = ()
     extra_args: tuple[str, ...] = ()
     shared: str | None = None
+    #: If True, this model takes no baked vectors — it loads/dumps a burst bundle under ``vectors/``
+    #: (an ``AxisMaster`` reads ``vectors/<name>`` in ``pre_sim``).  The generator emits the config
+    #: (``<name>.in_bundle = "vectors/<name>";``); nothing is passed through the Harness constructor.
+    bundle: bool = False
 
 
 @dataclass(frozen=True)
@@ -411,6 +415,7 @@ class BfmInst:
     name: str
     xsi_prefix: str                  # the RTL port prefix this model drives
     args: tuple[str, ...] = ()       # extra C++ args after the prefix
+    bundle: bool = False             # loads/dumps vectors/<name> instead of taking baked args
 
 
 @dataclass(frozen=True)
@@ -495,7 +500,7 @@ def tb_top_spec(tb) -> TbSpec:
                 )
             models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
         else:
-            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args))
+            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args, bm.bundle))
 
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
                   models=tuple(models))
@@ -559,6 +564,10 @@ def render_tb_harness(spec: TbSpec) -> str:
         lines.append(f"    {cls} {name};")
     for m in spec.models:
         lines.append(f"    {m.cls} {m.name};")
+    lines.append("    // Every participant by base pointer, in construction order (shared arenas")
+    lines.append("    // first): the one list the five lifecycle phases iterate, mirroring how")
+    lines.append("    // Simulation.run_sim() drives its SimObjs.")
+    lines.append("    std::vector<wfbfm::XsiSimObj*> participants_;")
 
     params = ", ".join(f"const std::vector<uint64_t>& {p}" for p in ctor_params)
     sig = f"    explicit Harness(const std::string& wdb{', ' + params if params else ''})"
@@ -566,7 +575,10 @@ def render_tb_harness(spec: TbSpec) -> str:
     for cls, name, args in spec.shared:
         inits.append(f"{name}({', '.join(args)})")
     for m in spec.models:
-        a = ", ".join((f"sim.dut()", f"{ports_ns}::{m.name}") + m.args)
+        # A bundle model takes no baked vectors: it is constructed with an empty word vector and
+        # loads vectors/<name> in pre_sim (configured in the ctor body below).
+        extra = ("{}",) if m.bundle else m.args
+        a = ", ".join((f"sim.dut()", f"{ports_ns}::{m.name}") + extra)
         inits.append(f"{m.name}({a})")
     lines.append("")
     lines.append(sig)
@@ -575,11 +587,25 @@ def render_tb_harness(spec: TbSpec) -> str:
     lines.append("        // Every TB-driven input the models above do not themselves drive.  Absent")
     lines.append("        // names are skipped; an undriven input is X, and X on a handshake hangs.")
     lines.append(f"        sim.pin_low({ports_ns}::ZERO_PORTS, {ports_ns}::ZERO_PORTS_N);")
+    lines.append("        // Register participants for the lifecycle phases (shared arenas first, so a")
+    lines.append("        // memory's pre_sim runs before the models that serve from it).")
+    for _cls, name, _args in spec.shared:
+        lines.append(f"        participants_.push_back(&{name});")
+    for m in spec.models:
+        lines.append(f"        participants_.push_back(&{m.name});")
+    bundle_models = [m for m in spec.models if m.bundle]
+    if bundle_models:
+        lines.append("        // Bundle-driven models read their vectors from vectors/<name> in pre_sim")
+        lines.append("        // (the generator's config -- the same bundle the pysim StreamDriver plays).")
+        for m in bundle_models:
+            lines.append(f'        {m.name}.in_bundle = "vectors/{m.name}";')
     lines.append("    }")
 
-    for phase in ("sample", "update", "drive"):
-        body = " ".join(f"{m.name}.{phase}();" for m in spec.models)
-        lines.append(f"    void {phase}() {{ {body} }}")
+    # The five lifecycle phases, each iterating the one participant list.  A participant that does
+    # not override a phase inherits XsiSimObj's no-op, so a passive memory costs only empty calls and
+    # the per-cycle model order is unchanged from the old unrolled form.
+    for phase in ("pre_sim", "sample", "update", "drive", "post_sim"):
+        lines.append(f"    void {phase}() {{ for (auto* p : participants_) p->{phase}(); }}")
 
     lines += [
         "",
@@ -587,6 +613,7 @@ def render_tb_harness(spec: TbSpec) -> str:
         "    /// nothing blocks, so the DUT's pipelining survives by construction.  Undersize n and",
         "    /// the caller's own completion check fails loudly rather than passing quietly.",
         "    void run(long n_cycles) {",
+        "        pre_sim();                       // participants seed memory / load vectors",
         "        sim.reset([this]{ drive(); });",
         "        for (long c = 0; c < n_cycles; ++c) {",
         "            sim.clock_low();",
@@ -595,6 +622,7 @@ def render_tb_harness(spec: TbSpec) -> str:
         "            update();",
         "            drive();",
         "        }",
+        "        post_sim();                      // participants dump results / collect metrics",
         "    }",
         "",
         "    void close() { sim.close(); }",
