@@ -326,30 +326,8 @@ def test_scaled_square_declares_no_codegen_descriptors():
     with pytest.raises(TypeError, match="composite .* does not declare self.boundary"):
         composite_top_spec(dut, width=32)
 
-
-# --------------------------------------------------------------------------------------------
-# Doc sync — the guide quotes this file verbatim, so prove it still does
-# --------------------------------------------------------------------------------------------
-
-DOCS = Path(__file__).resolve().parents[2] / "docs" / "guide" / "components"
-TOY_SRC = Path(__file__).resolve().parents[2] / "examples" / "toy" / "toy.py"
-
-
-@pytest.mark.parametrize("page", ["freerun.md", "composite.md"])
-def test_doc_python_blocks_are_verbatim_from_toy(page):
-    """Every ```python block on these pages must appear verbatim in examples/toy/toy.py.
-
-    This is what makes the pages un-rottable: edit the toy without editing the doc (or paraphrase
-    the doc) and this fails.
-    """
-    text = (DOCS / page).read_text(encoding="utf-8")
-    src = TOY_SRC.read_text(encoding="utf-8")
-
-    blocks = re.findall(r"^```python\n(.*?)^```", text, re.MULTILINE | re.DOTALL)
-    assert blocks, f"{page} has no python blocks — did the example move?"
-
-    for block in blocks:
-        assert block.strip("\n") in src, (
-            f"{page}: this quoted block is not verbatim in {TOY_SRC.name} — "
-            f"copy it, do not paraphrase:\n{block}"
-        )
+# NOTE: `test_doc_python_blocks_are_verbatim_from_toy` was removed here — it pinned that the
+# Python blocks on docs/guide/components/{freerun,composite}.md were verbatim from examples/toy,
+# but that section was deleted in the flows-guide restructure (the taxonomy folded into
+# flows/components.md, which walks a different example). No doc quotes the toy verbatim now, so the
+# guard has no target. If a page quotes the toy again, restore a verbatim check against it.
