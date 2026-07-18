@@ -42,9 +42,11 @@ Concretely:
 | `solution1/syn/verilog/*.v` | Vitis csynth | Fully generated; do not hand-edit. |
 | `rtl_<top>.f` | you today (future step later) | Mostly listing generated `.v` paths. |
 | `xsi_loader.*`, `xsi_shared_lib.h`, `run.bat` | boilerplate per project | Usually copied/adapted (mostly path/version edits). |
-| `*_bfm_tb.cpp` | you | Primary hand-authored artifact; this is the core testbench logic. |
+| `*_bfm_tb.cpp` | generated, or you | Generated from the testbench graph when the TB is declared as a component graph (`mem_copy`); hand-assembled for the interleaver tops. Either way it composes framework bus models — it contains no per-cycle handshake code. |
 
-The BFM TB is where most engineering judgment lives. See [Writing a BFM testbench](./bfm.md).
+The bus models themselves (`AxisMaster`, `AxiMmReadSlave`, …) are framework code in
+`waveflow/build/xsi/xsi_bfm.h`, and scenario data crosses as burst bundles written by Python. See
+[BFM Testbenches](./bfm.md).
 
 ## Practical Windows/run-script notes
 
@@ -73,5 +75,5 @@ Be explicit about maturity:
 ## See also
 
 - [Build System index](./index.md) — one flow, fork at the RTL rung.
-- [Writing a BFM testbench](./bfm.md) — cycle-driving rules and patterns.
+- [BFM Testbenches](./bfm.md) — the bus models, the five-phase lifecycle, and how a TB is assembled.
 - [schema HLS codegen](../schema/hls/codegen.md) — generating the C++/HLS side consumed by build steps.

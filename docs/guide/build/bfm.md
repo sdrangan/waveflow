@@ -1,76 +1,139 @@
 ---
-title: Writing a BFM Testbench
+title: BFM Testbenches
 parent: Build System
 nav_order: 7
 ---
 
-# Writing a BFM testbench
+# BFM testbenches
 
-At the XSI rung, the BFM testbench is the primary hand-authored artifact. It is the cycle-level analog of the single-kernel sequential C++ testbench used in Vitis C-sim: same golden intent, but now you must explicitly drive bus handshakes each cycle.
+At the XSI rung, a C++ testbench drives the *generated RTL* cycle by cycle — the execution path for
+free-running `ap_ctrl_none` task networks, which Vitis cosim refuses to run.
 
-Reference implementation: [`examples/interleaver/xsi/interleaver_canon_bfm_tb.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/xsi/interleaver_canon_bfm_tb.cpp).
+What that testbench is made of has changed. The bus models are **framework code**, and for a
+testbench declared as a component graph the assembly is **generated** too. What you write is the
+scenario and the golden — in Python, on either side of the run.
 
-## What the BFM is responsible for
+## What you do not write
 
-1. Open the elaborated simulator DLL via XSI.
-2. Resolve DUT ports by name.
-3. Drive reset and clock.
-4. Drive AXI-Stream command input (`TVALID/TDATA`) and consume done/output streams (`TREADY`/`TVALID`).
-5. Emulate AXI-MM memory-side behavior for read and write channels.
-6. Check DUT outputs against golden reference values.
+Every AXI and AXI-Stream model lives in `waveflow/build/xsi/xsi_bfm.h` and is used as-is:
 
-## AXI-MM + AXI-Stream cycle-driving pattern
+| model | drives |
+|---|---|
+| `AxisMaster` | an AXI-Stream input — plays a burst bundle onto `TVALID`/`TDATA` |
+| `AxisSlave` | an AXI-Stream output — consumes on `TREADY`/`TVALID`, tagging each word with its arrival cycle |
+| `AxiMmReadSlave` | the `m_axi` read channels (AR/R), returning words beat-by-beat with `RLAST` |
+| `AxiMmWriteSlave` | the `m_axi` write channels (AW/W/B), applying `WSTRB` masks and answering with `BVALID` |
+| `FlatMemory` | the word arena behind one or more `m_axi` bundles |
 
-### AXI-Stream
+Burst bookkeeping, beat counters, `RLAST`/`WLAST` handling, byte-address-to-word conversion and the
+handshake accounting are all inside those classes. A testbench composes them; it does not reimplement
+them, and it contains no per-cycle bus code.
 
-- Keep held TB-side state (`cmd index`, `valid` flags, `done count`).
-- A beat occurs only on `TVALID && TREADY`.
-- Advance stream payload/index only after a successful beat.
+## One lifecycle, five phases
 
-### AXI-MM read channel model (AR/R)
+Every model derives from `XsiSimObj`, the C++ mirror of Python's `SimObj`. All five phases default to
+no-ops, so a model implements only what it needs:
 
-- When DUT handshakes `AR`, capture base address/length.
-- Enter an R-send state that returns memory words beat-by-beat.
-- Assert `RLAST` on final beat.
+| phase | when | typical use |
+|---|---|---|
+| `pre_sim()` | before reset | seed memory, load command vectors from a bundle |
+| `sample()` | clock **low** | read kernel outputs, latch beats (`VALID && READY`) |
+| `update()` | after the rising edge | apply this cycle's beats, advance FSMs |
+| `drive()` | end of cycle | present held values for the next cycle |
+| `post_sim()` | after the run | dump results to bundles, collect metrics |
 
-### AXI-MM write channel model (AW/W/B)
+The cycle loop just applies those phases in order across the participants. Sampling in the clock-low
+phase is what keeps handshake accounting consistent and avoids off-by-one timing errors — but that
+discipline now lives in the loop and the models, not in code you maintain per testbench.
 
-- Handshake `AW` to capture write burst metadata.
-- Accept `W` beats, applying `WSTRB` byte masks into the memory model.
-- Emit `BVALID` response after final write beat (`WLAST`).
+## Two ways to assemble one
 
-## Memory model behavior
+### Generated — from the testbench graph
 
-In the interleaver BFM, `gmem0`/`gmem1` are backed by one flat word array. Address math converts AXI byte addresses to memory words (`addr / bytes_per_word`). Burst bookkeeping tracks beat counters and last-beat behavior.
+When the testbench is declared as a component graph (a `CompositeComp` holding the DUT and its
+participants), walking it produces the harness *and* the `main`. `mem_copy` is the worked example:
+each participant declares its own BFM twin via `bfm_model()`, so the mapping is derived rather than
+maintained, and the entire hand-written C++ surface is:
 
-For command/input/output handling, the BFM packs input commands into stream words, then unpacks output words from memory/streams and compares to expected golden values.
+```cpp
+int main() {
+    mem_copy_tb::Harness h("mem_copy_bfm.wdb");
+    h.run(3400);
+    h.close();
+    return 0;
+}
+```
 
-## Handshake and sampling discipline
+Both that file and `xsi/mem_copy_tb_harness.h` are build outputs. Nothing is checked in C++ — the run
+dumps its results and Python compares them. See
+[the mem_copy testbench](../../examples/memcpy/testbench.md) for the whole path, and
+[stream drivers and sinks](../sim/stream_tb.md) for the participants themselves.
 
-The common pattern is:
+### Hand-assembled — a `main` that composes the models
 
-1. Drive TB outputs.
-2. Tick clock LOW and sample DUT outputs/ready-valid observations.
-3. Tick clock HIGH.
-4. Update TB state machines based on completed handshakes.
-5. Drive next-cycle outputs.
+The three interleaver tops (`mem_r_stream`, `mem_w_stream`, `interleaver_canon`) still assemble their
+own `main`. This is the right shape when the run needs a completion rule or a golden comparison the
+generated harness does not express yet — `interleaver_canon`, for instance, counts one job per *two*
+`s_done` beats, because its token is a 2-word `InterleaverCmd`.
 
-Sampling in the clock-LOW phase keeps handshake accounting consistent and avoids off-by-one timing errors.
+Even then there is no handshake code. You construct the models, point them at bundles, and run the
+phases:
+
+```cpp
+FlatMemory      mem(MEM_NW, BPW);
+AxisMaster      s_cmd (sim.dut(), ports::s_cmd, {});
+AxisSlave       s_done(sim.dut(), ports::s_done);
+AxiMmReadSlave  gmem0 (sim.dut(), ports::m_in,  mem);
+AxiMmWriteSlave gmem1 (sim.dut(), ports::m_out, mem);
+
+mem.load_segs   = { { (size_t)0, 0, "vectors/mem_in" } };   // seeded in pre_sim
+mem.dump_segs   = { { (size_t)0, (size_t)MEM_NW, "vectors/out" } };   // written in post_sim
+s_cmd.in_bundle = "vectors/cmd";
+
+std::vector<XsiSimObj*> parts = { &mem, &s_cmd, &s_done, &gmem0, &gmem1 };
+for (auto* p : parts) p->pre_sim();
+sim.reset([&]{ for (auto* p : parts) p->drive(); });
+
+for (;;) {
+    // ... termination checks ...
+    sim.clock_low();
+    for (auto* p : parts) p->sample();
+    sim.clock_high();
+    for (auto* p : parts) p->update();
+    for (auto* p : parts) p->drive();
+}
+for (auto* p : parts) p->post_sim();
+```
+
+The `_ports.h` header naming those port structs is generated from the same `TopSpec` as the top's
+own pragmas, so the testbench and the DUT cannot disagree about port names.
+
+Reference implementation:
+[`examples/interleaver/xsi/interleaver_canon_bfm_tb.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/xsi/interleaver_canon_bfm_tb.cpp).
+
+## Data crosses as bundles, not literals
+
+No scenario data is written in C++. Inputs — the command stream, the memory arena, the golden — are
+**burst bundles** (a folder of `words.bin` + `bounds.bin` + `meta.json`) written by a Python generator
+before the run; outputs are bundles written back during `post_sim`. The pattern is therefore stated
+once, in Python, and the C++ only plays and records it.
+
+This is what makes the concurrent flow structurally identical to the sequential one: Python writes the
+inputs, the kernel and testbench are generated, the toolchain runs them, and Python checks the outputs.
 
 ## Completion and throughput framing
 
-Record per-job completion cycles (for example each done token/job completion), then derive:
+`AxisSlave` records the arrival cycle of every word, so completion timing is available off-line
+(`cycles.bin` in the output bundle). From per-job completion cycles you get **fill latency** (the first
+completion) and the **steady-state period** (the delta between successive ones), and thus the
+pipeline's throughput.
 
-- **fill latency** (first completion cycle),
-- **steady-state period** (delta between successive completion cycles),
-- and thus throughput framing for the pipeline.
-
-This mirrors how single-kernel C++ TBs report correctness plus latency, but at explicit cycle granularity.
-
-## Forward-looking automation target
-
-A key future target is generating most BFM scaffolding from the component boundary port list (especially repetitive AXI channel plumbing). Today, `*_bfm_tb.cpp` remains the main hand-authored piece at this rung.
+One trap worth stating plainly: the meaningful number is **time-to-last-completion**, not the loop
+count. A run loops a fixed number of cycles and then drains, so the loop bound overstates the work —
+`mem_copy` finishes at 2835 inside a 3400-cycle loop. Compare completion cycles, never the total.
 
 ## See also
 
-- [XSI Build Rung](./xsi.md) — terminology and full compile/elaborate/run flow.
+- [XSI Build Rung](./xsi.md) — terminology and the full compile/elaborate/run flow.
+- [The mem_copy testbench](../../examples/memcpy/testbench.md) — the generated path end to end.
+- [Stream drivers and sinks](../sim/stream_tb.md) — the pysim participants and their BFM twins.

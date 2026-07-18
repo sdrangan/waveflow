@@ -137,18 +137,22 @@ transaction events vs. exact per-cycle handshakes).
 
 This is why one design description serves both: the [concurrent flow](../flows/concurrent.md) runs the
 identical graph as a fast Python check and as a cycle-accurate RTL test — and, because the driver plays
-a bundle, from the identical vectors too. The `AxisMaster` reading the driver's bundle directly (rather
-than a set of vectors baked into a generated header) is the last step being wired in — see
-[`plans/stream_tb_file_vectors.md`](https://github.com/sdrangan/waveflow/tree/main/plans/stream_tb_file_vectors.md).
-Writing the hand-authored half of that RTL testbench is [Writing a BFM Testbench](../build/bfm.md).
+a bundle, from the identical vectors too. The `AxisMaster` reads that same bundle directly: the
+participant carries an `in_bundle` [`DynParam`](../../../waveflow/hw/hw_component.py) which the
+generated harness emits as `s_cmd.in_bundle = "…";`, and the model loads it in `pre_sim`. No vectors are
+baked into a generated header, and neither side owns a second copy of the stimulus.
+
+How those models are composed into a runnable testbench — generated from the graph, or assembled by
+hand — is [BFM Testbenches](../build/bfm.md).
 
 ## Quick reference
 
 - `StreamDriver(sim=, bitwidth=, bundle=<dir>)` — a source; `bundle` is a burst-bundle folder
   ([`burst_io`](../../../waveflow/utils/burst_io.py)), read eagerly at construction. Its endpoint is
-  `stream_ep` (a master).
+  `stream_ep` (a master). Set `in_bundle` to give its RTL twin the same bundle at the XSI rung.
 - `StreamSink(sim=, bitwidth=)` — a sink; collects into `sink.words` (a list of word arrays). Its
-  endpoint is `stream_ep` (a slave).
+  endpoint is `stream_ep` (a slave). Set `out_bundle` and its RTL twin dumps what it captured — words
+  plus the arrival cycle of each — for Python to check after the run.
 - Both are schema-blind: the testbench serializes its commands
   (`[c.serialize(word_bw=bitwidth) for c in cmds]`) and writes the bundle with
   `write_burst_bundle(...)` before constructing the driver.
