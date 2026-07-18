@@ -158,27 +158,29 @@ signatures and the interface graph and resolves each task argument to either a t
 internal `hls_thread_local` FIFO, rather than a hand-written template:
 
 ```python
-# From examples/mem_copy/mem_copy.py (MemCopy.__post_init__)
-self.internal_edges = [
-    StreamEdge("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd),
-    StreamEdge("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd),
-    StreamEdge("copy_data", self.rstream.m_out, self.wstream.s_in),
-]
-self.boundary = [
-    ("s_cmd", self.seq.s_cmd),
-    ("m_in", self.rstream.m_mem),
-    ("m_out", self.wstream.m_mem),
-    ("s_done", self.wstream.s_done),
-]
+# From examples/mem_copy/mem_copy.py (MemCopy.__post_init__) -- the whole codegen declaration
+self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
 ```
 
-A boundary entry is just `(name, endpoint)` — nothing else is the assembler's to state. The
-port's **direction** (an AXIS input vs output, a read vs write `m_axi`) is the endpoint's *type*:
-`m_in` is a `MMIFReadMaster`, `m_out` a `MMIFWriteMaster`, and `kind_of_endpoint` reads it off the
-class. The **gmem bundle** is assigned by policy — `gmem0`, `gmem1`, … in declaration order
-(`bundle_map`) — because the same `MemWStream.m_mem` is `gmem0` standalone and `gmem1` here, so it
-cannot be a fact about the port. Restating either would only create a second place to disagree
-(see `plans/endpoint_types_not_tags.md`).
+That single line is all the assembler states, because everything else is already written down
+somewhere else and restating it would only create a second place to disagree (see
+`plans/endpoint_types_not_tags.md`):
+
+- the **internal FIFOs** are the `add_if` interfaces. `add_if` already records both endpoints and,
+  by the interface's type, how the edge lowers — a `StreamIF` to an `hls::stream`, a
+  `StreamOfBlocksIF` to a `stream_of_blocks` sized by its `element_type`. `derive_internal_edges`
+  reads them off the graph, naming each channel after its interface.
+- the **boundary endpoints and their order** are derived too: a child endpoint not bound to one of
+  the composite's own interfaces *is* a boundary port, walked in `add_comp` × `add_endpoint` order.
+- the port's **direction** (an AXIS input vs output, a read vs write `m_axi`) is the endpoint's
+  *type*: `m_in` is a `MMIFReadMaster`, `m_out` a `MMIFWriteMaster`, and `kind_of_endpoint` reads it
+  off the class.
+- the **gmem bundle** is assigned by policy — `gmem0`, `gmem1`, … in boundary order (`bundle_map`) —
+  because the same `MemWStream.m_mem` is `gmem0` standalone and `gmem1` here, so it cannot be a fact
+  about the port.
+
+Only the port *names* remain, and only because they cannot be derived: both mem streams call their
+AXI port `m_mem`, so `m_in` / `m_out` have to be stated.
 
 `MemRStream`/`MemWStream`'s own `kernel_task()` picks the 3-arg or 4-arg (`emit_done`) fixed body:
 

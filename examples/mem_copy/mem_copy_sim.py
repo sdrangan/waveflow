@@ -107,7 +107,6 @@ class MemCopyTB(CompositeComp):
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
         for c in (self.dut, self.driver, self.done_sink, self.mem):
             self.add_comp(c)
-        self.ordered_subcomps = [self.dut, self.driver, self.done_sink, self.mem]
 
         cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
         cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)

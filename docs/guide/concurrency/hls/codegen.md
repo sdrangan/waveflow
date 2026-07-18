@@ -15,7 +15,10 @@ Task-network codegen is graph-derived and template-based.
 ## Inputs to codegen
 
 - `MemStreamStep` copies fixed task-body headers (`cmd_rx_task.h`, `il_*_task.h`, mem-stream tasks).
-- component graph descriptors (`ordered_subcomps`, `internal_edges`, `boundary`) drive top assembly.
+- the component graph drives top assembly, and a composite declares almost none of it: the tasks are
+  its `add_comp` children, the internal channels are derived from its `add_if` interfaces
+  (`derive_internal_edges`), and the boundary endpoints/order are derived from the endpoints those
+  interfaces leave unbound (`derive_boundary`). Only the boundary port **names** are declared.
 - each child `KernelTask` contributes function/header/signature/template args.
 
 ## Generated top shape

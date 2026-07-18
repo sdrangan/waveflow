@@ -212,6 +212,93 @@ def kind_of_endpoint(ep) -> str:
     raise ValueError(f"no boundary kind for endpoint type {type(ep).__name__}")
 
 
+def _edge_name(comp, iface) -> str:
+    """The C++ channel variable name for *iface*: its own name, minus the owner prefix and ``_if``.
+
+    The interface is named ``f"{comp.name}_{edge}_if"`` by convention, so the edge name is already
+    written down — it does not need restating in a parallel list.
+    """
+    name = iface.name
+    prefix = f"{comp.name}_"
+    if name.startswith(prefix):
+        name = name[len(prefix):]
+    if name.endswith("_if"):
+        name = name[: -len("_if")]
+    return name
+
+
+def derive_internal_edges(comp) -> list:
+    """The internal edges of *comp*, **derived from the interfaces it registered with ``add_if``**.
+
+    ``add_if`` already "records the master↔slave connection so the composite codegen can lower it",
+    which is the whole content of an edge: the two endpoints, the channel name, and how it lowers.
+    So a composite that wires its children with ``add_if`` has already declared its edges, and a
+    parallel ``internal_edges`` list could only restate them — or disagree with them.
+
+    The lowering kind is the interface's TYPE, exactly as a boundary port's direction is its
+    endpoint's type (:func:`kind_of_endpoint`): a :class:`~waveflow.hw.interface.StreamIF` is a FIFO,
+    a :class:`~waveflow.hw.interface.StreamOfBlocksIF` is a ping-pong block channel whose element
+    width and block length come from its ``element_type`` (the single source the SOBIF refactor made
+    typed — restating them word-granularly on an edge is how the two drift apart).
+    """
+    from waveflow.hw.interface import StreamIF, StreamOfBlocksIF
+
+    edges: list = []
+    for iface in comp.interfaces.values():
+        name = _edge_name(comp, iface)
+        master = iface.endpoints.get("master")
+        slave = iface.endpoints.get("slave")
+        if master is None or slave is None:
+            raise ValueError(
+                f"derive_internal_edges: interface {iface.name!r} on {type(comp).__name__} is not "
+                f"bound on both sides (master={master!r}, slave={slave!r}) — an internal edge needs "
+                f"both, so this is a wiring bug, not an edge.")
+        if isinstance(iface, StreamOfBlocksIF):
+            et = iface.element_type
+            if et is None:
+                raise ValueError(
+                    f"derive_internal_edges: SOBIF {iface.name!r} has no element_type, so its block "
+                    f"width/length cannot be derived. Construct it with element_type=<DataArray>.")
+            edges.append(SobEdge(name, master, slave, elem_bw=int(et.element_type.bitwidth),
+                                 block_n=int(et.max_shape[0]), depth=int(iface.depth)))
+        elif isinstance(iface, StreamIF):
+            edges.append(StreamEdge(name, master, slave))
+        else:
+            raise ValueError(
+                f"derive_internal_edges: no edge lowering for interface type "
+                f"{type(iface).__name__} ({iface.name!r}). Add one here rather than hand-declaring "
+                f"the edge, so every composite lowers the same way.")
+    return edges
+
+
+def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
+    """Pair *names* with *comp*'s boundary endpoints, **derived from the component graph**.
+
+    A boundary port is simply a child endpoint that is *not* bound to one of this composite's own
+    internal interfaces — the graph already knows which those are, and in what order, because
+    ``add_endpoint`` records every port on its owner (insertion-ordered, exactly as ``add_comp``
+    records children).  So the endpoints and their order are derived; only the external *names* are
+    the declarer's to say, and they must be, because local port names collide: both ``MemRStream``
+    and ``MemWStream`` call their AXI port ``m_mem``, and the top needs ``m_in`` / ``m_out``.
+
+    Order is significant — :func:`bundle_map` assigns ``gmem`` bundles in boundary order — and it is
+    the walk order (children in ``add_comp`` order, ports in ``add_endpoint`` order).
+    """
+    internal = {id(ep) for iface in comp.interfaces.values()
+                for ep in iface.endpoints.values() if ep is not None}
+    eps = [ep for child in comp.ordered_subcomps
+           for ep in child.endpoints.values() if id(ep) not in internal]
+
+    if len(names) != len(eps):
+        got = ", ".join(getattr(e, "name", "?") for e in eps)
+        raise ValueError(
+            f"{type(comp).__name__}.boundary names {len(names)} port(s) {tuple(names)!r} but the "
+            f"graph has {len(eps)} unwired child endpoint(s): [{got}]. Every child endpoint not "
+            f"bound to an internal interface is a boundary port, so either a name is missing or a "
+            f"port was left unwired.")
+    return tuple(zip(names, eps))
+
+
 def _unpack_boundary(entry) -> tuple[str, object]:
     """A boundary entry is ``(name, endpoint)``. Nothing else is the declarer's to say.
 

@@ -4,7 +4,6 @@ parent: Memory Copy
 nav_order: 2
 has_children: true
 ---
-
 # Python Model
 
 This page builds the design in Python — the three [`FreeRunComp`](../../guide/flows/concurrent.md)
@@ -165,7 +164,6 @@ class MemCopy(CompositeComp):
                                   emit_done=True, clk=self.clk)
         for c in (self.seq, self.rstream, self.wstream):
             self.add_comp(c)
-        self.ordered_subcomps = [self.seq, self.rstream, self.wstream]
 ```
 
 **2. Wire the internal streams** with `add_if` — each `StreamIF` binds a master endpoint on one child to
@@ -180,28 +178,30 @@ a slave on another, and becomes an on-chip FIFO in the generated top:
             self.add_if(i)
 ```
 
-**3. Declare the graph the generator walks** — the internal edges and the boundary ports. The edges say
-what becomes an internal FIFO; the boundary says what becomes a top-level port. Each boundary entry is
-just `(name, endpoint)` — the endpoint's *type* gives the direction, and the `gmem` bundles fall out by
-declaration order:
+**3. Name the boundary ports.** That is the entire third step:
 
 ```python
-        self.internal_edges = [
-            StreamEdge("mr_cmd",    self.seq.mr_cmd,    self.rstream.s_cmd),
-            StreamEdge("mw_cmd",    self.seq.mw_cmd,    self.wstream.s_cmd),
-            StreamEdge("copy_data", self.rstream.m_out, self.wstream.s_in),
-        ]
-        self.boundary = [
-            ("s_cmd",  self.seq.s_cmd),        # command in
-            ("m_in",   self.rstream.m_mem),    # m_axi read  -> gmem0
-            ("m_out",  self.wstream.m_mem),    # m_axi write -> gmem1
-            ("s_done", self.wstream.s_done),   # completion out
-        ]
+        self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
 ```
 
-That is the whole composite: three children, three internal edges, four boundary ports, and no body of
-its own. Running it in Python — the `MemCopy` graph plus a testbench — is the concurrent simulation, and
-walking that same graph is how the generated kernel is built.
+Everything else about the graph is *derived from what you already wrote*, because declaring it twice is
+how two descriptions drift apart:
+
+| what the generator needs | where it comes from |
+|---|---|
+| which children become `hls::task`s, in what order | `add_comp` order |
+| the internal FIFOs and their C++ names | the `add_if` interfaces — each one *is* an edge, named after itself |
+| how each edge lowers | the interface's **type** (a `StreamIF` is an `hls::stream`; a `StreamOfBlocksIF` is a `stream_of_blocks` sized by its `element_type`) |
+| which endpoints are boundary ports, in what order | any child endpoint *not* bound to an internal interface, in `add_comp` × `add_endpoint` order |
+| each port's direction | the endpoint's **type** (`StreamIFSlave` → input, `MMIFWriteMaster` → written `m_axi`) |
+| the `gmem` bundle assignment | policy, applied in boundary order — `m_in` → gmem0, `m_out` → gmem1 |
+
+Only the *names* are yours to say, and only because they cannot be derived: both `MemRStream` and
+`MemWStream` call their AXI port `m_mem`, so the top's `m_in` / `m_out` have to be stated.
+
+That is the whole composite: three children, three wires, four port names, and no body of its own.
+Running it in Python — the `MemCopy` graph plus a testbench — is the concurrent simulation, and walking
+that same graph is how the generated kernel is built.
 
 ## Next
 

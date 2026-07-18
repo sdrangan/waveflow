@@ -91,22 +91,32 @@ class FreeRunComp(HwComponent):
     def boundary(self) -> tuple[tuple[str, object], ...]:
         """The top's boundary ports as ``(name, endpoint)`` pairs, in top-signature order.
 
-        A **composite** assigns this in ``__post_init__``.  A **leaf** derives it: the *order* is
-        :meth:`kernel_task`'s signature (so the top's C++ parameter list and the task's call args are
-        literally the same list and cannot disagree) and the *endpoint* is the attribute.  Direction
-        comes from the endpoint's type (:func:`~waveflow.build.composite_gen.kind_of_endpoint`) and the
-        bundle from the assembler's policy (:func:`~waveflow.build.composite_gen.bundle_map`), so a leaf
-        declares *nothing* — its boundary is a consequence of the ports it has and the signature it
-        exposes.  ``composite_top_spec`` walks a leaf exactly as it walks a composite.
+        A **composite** assigns the port *names* in ``__post_init__`` (``self.boundary = ["s_cmd",
+        ...]``); the endpoints and their order are derived from the graph by
+        :func:`~waveflow.build.composite_gen.derive_boundary` — a child endpoint not bound to one of
+        the composite's internal interfaces *is* a boundary port, in ``add_comp`` × ``add_endpoint``
+        order.  Only the names are declared, because local names collide (two children both call
+        their AXI port ``m_mem``).  A list of ``(name, endpoint)`` pairs is still accepted.
+
+        A **leaf** derives the whole thing: the *order* is :meth:`kernel_task`'s signature (so the
+        top's C++ parameter list and the task's call args are literally the same list and cannot
+        disagree) and the *endpoint* is the attribute.  Direction comes from the endpoint's type
+        (:func:`~waveflow.build.composite_gen.kind_of_endpoint`) and the bundle from the assembler's
+        policy (:func:`~waveflow.build.composite_gen.bundle_map`), so a leaf declares *nothing*.
+        ``composite_top_spec`` walks a leaf exactly as it walks a composite.
         """
         ov = self.__dict__.get('_boundary')
         if ov is not None:
+            if ov and all(isinstance(e, str) for e in ov):
+                from waveflow.build.composite_gen import derive_boundary
+                return derive_boundary(self, ov)
             return ov
         if self.sub_comps:
             raise TypeError(
                 f"{type(self).__name__} is a composite (has sub-components) but does not declare "
-                f"self.boundary; a composite must set its boundary ports in __post_init__. Only a leaf "
-                f"derives its boundary (from kernel_task()'s signature)."
+                f"self.boundary; a composite must name its boundary ports in __post_init__ (a list of "
+                f"port names, in add_comp x add_endpoint order). Only a leaf derives its boundary "
+                f"entirely (from kernel_task()'s signature)."
             )
         return tuple((attr, getattr(self, attr)) for attr in self.kernel_task().signature)
 
@@ -129,10 +139,21 @@ class FreeRunComp(HwComponent):
 
     @property
     def internal_edges(self) -> list:
-        """The internal channels wiring the sub-tasks.  A **leaf** wires nothing (every port is a
-        boundary port); a **composite** assigns this."""
+        """The internal channels wiring the sub-tasks.
+
+        A **leaf** wires nothing (every port is a boundary port).  A **composite** derives these from
+        the interfaces it registered with ``add_if`` — see
+        :func:`~waveflow.build.composite_gen.derive_internal_edges`.  ``add_if`` already records the
+        master↔slave connection *and* the lowering kind (its type), so declaring a parallel edge list
+        could only restate it or contradict it.  An explicit assignment still wins, for a composite
+        that needs an edge the graph does not describe."""
         ov = self.__dict__.get('_internal_edges')
-        return ov if ov is not None else []
+        if ov is not None:
+            return ov
+        if self.interfaces:
+            from waveflow.build.composite_gen import derive_internal_edges
+            return derive_internal_edges(self)
+        return []
 
     @internal_edges.setter
     def internal_edges(self, value) -> None:

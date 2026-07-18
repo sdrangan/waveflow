@@ -39,12 +39,19 @@ INCLUDE_DIR = "include"
 # --- word type: element/word coordinate or count (for streaming) -------
 Word32 = IntField.specialize(bitwidth=32, signed=False)
 
-# --- block type: array of 64-bit words (typed block for SOBIF) -------
-WordBlock = DataArray.specialize(
-    element_type=IntField.specialize(bitwidth=64, signed=False),
-    max_shape=(8,),
-    member_name="words"
-)
+# --- block type: array of mem_dwidth-bit words (typed block for SOBIF) -------
+def _make_word_block(mem_dwidth: int, block_n: int) -> type:
+    """Create a typed WordBlock: DataArray of ``mem_dwidth``-bit words, up to ``block_n`` elements.
+
+    Built from the params rather than fixed at import: the SOBIF's ``element_type`` is the single
+    source for the block's width and length (codegen derives ``stream_of_blocks<T[N]>`` from it), so
+    a constant here would silently disagree with ``block_n`` at any non-default value.
+    """
+    return DataArray.specialize(
+        element_type=IntField.specialize(bitwidth=int(mem_dwidth), signed=False),
+        max_shape=(int(block_n),),
+        member_name="words"
+    )
 
 
 @dataclass
@@ -75,7 +82,7 @@ class Fill(HwComponent):
 
         # Output SOBIF master endpoint (typed block)
         self.m_out = SobIFMaster(name=f"{self.name}_m_out", sim=self.sim,
-                                element_type=WordBlock)
+                                element_type=_make_word_block(w, int(self.block_n)))
         self.add_endpoint(self.m_out)
 
     def kernel_task(self) -> KernelTask:
@@ -117,7 +124,7 @@ class Gather(HwComponent):
 
         # Input SOBIF slave endpoint (typed block)
         self.s_in = SobIFSlave(name=f"{self.name}_s_in", sim=self.sim,
-                              element_type=WordBlock)
+                              element_type=_make_word_block(w, int(self.block_n)))
         self.add_endpoint(self.s_in)
 
         # Output stream (word-granular)
@@ -168,30 +175,22 @@ class GatherToy(CompositeComp):
                              block_n=int(self.block_n), clk=self.clk)
         for c in (self.fill, self.gather):
             self.add_comp(c)
-        self.ordered_subcomps = [self.fill, self.gather]
 
-        # Internal SOBIF interface (connects Fill.m_out -> Gather.s_in)
-        self._sob_if = StreamOfBlocksIF(
-            name=f"{self.name}_sob_if",
+        # Internal SOBIF interface (connects Fill.m_out -> Gather.s_in).  Its name carries the
+        # channel name codegen emits (`blk`), and its element_type carries the block's width and
+        # length -- so the edge itself is derived from this one statement.
+        self._blk_if = StreamOfBlocksIF(
+            name=f"{self.name}_blk_if",
             sim=self.sim,
             clk=self.clk,
-            element_type=WordBlock,
+            element_type=_make_word_block(w, int(self.block_n)),
         )
-        self._sob_if.bind("master", self.fill.m_out)
-        self._sob_if.bind("slave", self.gather.s_in)
-        self.add_if(self._sob_if)
+        self._blk_if.bind("master", self.fill.m_out)
+        self._blk_if.bind("slave", self.gather.s_in)
+        self.add_if(self._blk_if)
 
-        # Define internal edges for codegen (compatible with composite_top_spec)
-        from waveflow.build.composite_gen import SobEdge
-        self.internal_edges = [
-            SobEdge("blk", self.fill.m_out, self.gather.s_in, elem_bw=w, block_n=int(self.block_n)),
-        ]
-
-        # Define boundary ports for codegen
-        self.boundary = [
-            ("s_in", self.fill.s_in),
-            ("m_out", self.gather.m_out),
-        ]
+        # Boundary port NAMES; the endpoints and their order come from the graph.
+        self.boundary = ["s_in", "m_out"]
 
         # Boundary (convenience refs)
         self.s_in = self.fill.s_in

@@ -62,7 +62,6 @@ from waveflow.build.composite_gen import (  # noqa: E402
     DEFAULT_MEM_DW,
     GEN_DIR,
     INCLUDE_DIR,
-    StreamEdge,
     composite_top_spec,
     render_ports_h,
     render_tb_harness,
@@ -226,7 +225,6 @@ class MemCopy(CompositeComp):
             name=f"{self.name}_w", sim=self.sim, mem_dwidth=w, emit_done=True, clk=self.clk)
         for c in (self.seq, self.rstream, self.wstream):
             self.add_comp(c)
-        self.ordered_subcomps = [self.seq, self.rstream, self.wstream]
 
         # --- internal interfaces (add_if + bind): each an on-chip FIFO in codegen ---
         self._mr_if = StreamIF(
@@ -245,22 +243,16 @@ class MemCopy(CompositeComp):
             self.add_if(i)
 
         # --- graph descriptors the composite generator walks -------------------------------------
-        #: Internal edges -> one hls_thread_local hls::stream FIFO each (all StreamEdge here).
-        self.internal_edges = [
-            StreamEdge("mr_cmd", self.seq.mr_cmd, self.rstream.s_cmd),
-            StreamEdge("mw_cmd", self.seq.mw_cmd, self.wstream.s_cmd),
-            StreamEdge("copy_data", self.rstream.m_out, self.wstream.s_in),
-        ]
-        # (name, endpoint).  Nothing else is ours to say: the endpoint's TYPE gives the
-        # direction, and the gmem bundles are assigned by policy in this declaration order
-        # (bundle_map) -- m_in -> gmem0, m_out -> gmem1, as they were hand-written to be.
+        # The internal edges ARE the add_if calls above (each -> one hls_thread_local hls::stream),
+        # so there is nothing to declare: derive_internal_edges reads them off the graph.
+        #
+        # Boundary port NAMES only.  Nothing else is ours to say: the endpoints and their order are
+        # the unwired child ports in add_comp x add_endpoint order, the endpoint's TYPE gives the
+        # direction, and the gmem bundles are assigned by policy in this order (bundle_map) --
+        # m_in -> gmem0, m_out -> gmem1.  The names must be stated because the children's local names
+        # collide (both mem streams call their AXI port m_mem).
         # See plans/endpoint_types_not_tags.md.
-        self.boundary = [
-            ("s_cmd", self.seq.s_cmd),
-            ("m_in", self.rstream.m_mem),
-            ("m_out", self.wstream.m_mem),
-            ("s_done", self.wstream.s_done),
-        ]
+        self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
         #: Command-struct headers the generated top #includes (single source with the pysim .get()).
         self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
 
