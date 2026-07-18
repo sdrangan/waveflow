@@ -42,6 +42,7 @@ all objects at once.
 - [SimObj](./simobj.md) — the base object every simulation entity is, its three-phase lifecycle, and a toy two-`SimObj` producer/consumer simulation.
 - [Process generators](./procgen.md) — SimPy's `yield`-based concurrency for newcomers: events, pausing, parallel spawn, return values, and `ProcessGen[T]` hints.
 - [Running a simulation](./running.md) — instantiate components, wire them with `Interface` objects, build a `Simulation`, and call `run_sim()`.
+- [Stream drivers and sinks](./stream_tb.md) — the two reusable testbench participants (`StreamDriver` / `StreamSink`): schema-blind stimulus and capture, and the pysim twins of the XSI BFM models.
 - [Timing model](./timing.md) — `Clock` and how components / interfaces express cycle latency (the forward model that produces the timeline).
 - [Logging](./logging.md) — the `Logger` `SimObj`: recording timestamped events to a CSV for inspection and timing analysis.
 

@@ -17,7 +17,7 @@ drive a free-running kernel) but by driving the real RTL cycle-by-cycle through 
 In going through this example, you will learn to:
 
 - Model hardware as [**free-running component** classes](../../guide/flows/concurrent.md) (the `FreeRunComp` class in Waveflow), and interconnect them into **composite free-running components** to describe a target hardware object
-- Develop a **concurrent testbench** as a composite graph that wires the DUT to stimulus and capture, using Waveflow's built-in stream source/sink models (`CmdDriver`, `WordSink`)
+- Develop a **concurrent testbench** as a composite graph that wires the DUT to stimulus and capture, using Waveflow's built-in stream source/sink models (`StreamDriver`, `StreamSink`)
 - Run a Python **concurrent simulation** of the composite target hardware in conjunction with the testbench components
 - Generate a **concurrent Vitis C++ kernel** from the Python descriptions, where each sub-component becomes an **HLS task**
 - Synthesize the concurrent Vitis C++ kernel into RTL with **Vitis HLS C-synthesis** (the generated `mem_copy.tcl`)

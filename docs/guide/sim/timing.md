@@ -1,7 +1,7 @@
 ---
 title: Timing model
 parent: Simulation
-nav_order: 4
+nav_order: 5
 audience: python
 api: [Clock, Clock.period, SimObj.now, SimObj.timeout, SimObj.action]
 summary: "The forward timing model that produces the simulated timeline — Clock (frequency / period), how interfaces charge transfer latency in cycles, and how a component models compute latency with self.timeout / self.action. (Analyzing the result is Timing Analysis.)"
