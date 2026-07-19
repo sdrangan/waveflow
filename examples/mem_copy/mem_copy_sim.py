@@ -169,16 +169,24 @@ class MemCopyTB(FreeRunComp):
         return g
 
     def write_scenario(self, root) -> None:
-        """Materialize the input vectors under ``<root>/vectors`` and point the driver at them.
+        """Materialize **the whole scenario** under ``<root>/vectors`` and point the driver at it.
 
-        Writes the command bundle the driver plays (``vectors/s_cmd``) and sets ``driver.root`` so its
-        ``pre_sim`` resolves that path against *root* — the same on-disk bundle the XSI harness reads.
-        Call this before ``run_sim`` (pysim) or when writing the XSI vectors.  The memory scenario
-        (``mem_in``/``golden``) is still seeded in-process for pysim and written by
-        ``write_mem_copy_xsi_bundles`` for XSI; a later stage folds it in here.
+        The single scenario writer for both backends — pysim (``run_copy`` calls it before ``run_sim``)
+        and XSI (``write_mem_copy_xsi_bundles`` calls it with the ``xsi/`` dir).  Writes:
+
+        - ``vectors/s_cmd``  — the command stream the driver plays (``cmd_words``);
+        - ``vectors/mem_in`` — the source arena the XSI ``FlatMemory`` loads in ``pre_sim``;
+        - ``vectors/golden`` — the expected arena after the copy.
+
+        Sets ``driver.root`` so the driver's ``pre_sim`` resolves ``vectors/s_cmd`` against *root* — the
+        same on-disk bundle the XSI harness reads.  (pysim still reads the memory from the in-process
+        seed; ``mem_in`` is written for XSI and for when the memory load is unified.)
         """
         root = Path(root)
-        write_burst_bundle(self.cmd_words, root / "vectors" / "s_cmd")
+        vdir = root / "vectors"
+        write_burst_bundle(self.cmd_words, vdir / "s_cmd")
+        write_burst_bundle([self.mem_image], vdir / "mem_in")
+        write_burst_bundle([self.golden_image], vdir / "golden")
         self.driver.root = root
 
 
