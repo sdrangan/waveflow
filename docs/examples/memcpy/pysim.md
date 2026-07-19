@@ -3,7 +3,6 @@ title: Python Simulation
 parent: Memory Copy
 nav_order: 4
 ---
-
 # Python simulation
 
 The pysim rung runs the whole design — DUT, driver, sink, memory — as a SimPy discrete-event
@@ -15,30 +14,38 @@ simplified model of the design; it is the design, executed by a different backen
 
 ## Running it
 
+The example uses the standard build CLI; `pysim` is the default target:
+
 ```bash
-python examples/mem_copy/mem_copy_sim.py
+python examples/mem_copy/mem_copy_build.py --through pysim
 ```
 
 ```
-[copy] src=16 dst=512 n=128 ok=True
-[copy] jobs=1 done_tokens=1 all_ok=True
-[copy] src=16 dst=600 n=128 ok=True
-[copy] src=200 dst=900 n=64 ok=True
-[copy] jobs=2 done_tokens=2 all_ok=True
-mem_copy pysim golden: PASSED
+pysim:
+    results\pysim.json
+    RUNNING...
+[pysim] 16 jobs, all bit-exact, 16 done tokens, end=2214 cycles
+    PASSED
 ```
 
-Two scenarios: one copy, then two back-to-back copies at distinct offsets. The driver is the entry
-point for your own:
+That runs the canonical 16-job scenario and writes `results/pysim.json` (correctness + timing). It is
+the first `--through` target in the DAG (`--list-steps` shows `pysim → gen → csynth`); no toolchain,
+seconds not minutes.
+
+To drive your own scenario, call `run_copy` directly:
 
 ```python
+from examples.mem_copy.mem_copy import CopyJob
 from examples.mem_copy.mem_copy_sim import run_copy
 
-dut = run_copy(jobs=((16, 600, 128), (200, 900, 64)), mem_dwidth=64)
+dut = run_copy(jobs=(CopyJob(src_off=16, dst_off=600, n_words=128),
+                     CopyJob(src_off=200, dst_off=900, n_words=64)), mem_dwidth=64)
 ```
 
-Each job is a `(src_off, dst_off, n_words)` triple in **element/word coordinates**. `run_copy` builds
-the testbench, runs it, checks it, and hands back the DUT so you can inspect what happened.
+Each job is a [`CopyJob`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/mem_copy.py)
+— named fields in **word coordinates**, so you never have to remember an offset order (a bare
+`(src, dst, n)` tuple is accepted too and coerced). `run_copy` builds the testbench, runs it, checks
+it, and hands back the DUT so you can inspect what happened.
 
 ## What you write
 
@@ -54,31 +61,41 @@ them. Walking through it, in order.
 ```python
 @dataclass
 class MemCopyTB(FreeRunComp):
-    jobs: tuple = ((16, 4096 // 8, 128),)     # (src_off, dst_off, n_words) per job
+    jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)   # word coordinates
     mem_dwidth: HwParam[int] = 64
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 ```
+
+`jobs` is a tuple of [`CopyJob`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/mem_copy.py)s
+— named fields, all in word coordinates. `__post_init__` coerces each (a bare `(src, dst, n)` tuple is
+accepted too) into `self._jobs`.
 
 **Build the memory.** One flat arena large enough for every source and destination region, wrapped in
 a `MemComponent`. This is the participant behind *both* `m_axi` bundles:
 
 ```python
-        self.arena_words = max(max(s, d) + n for s, d, n in jobs) + 16
+        self.arena_words = max(max(job.src_off, job.dst_off) + job.n_words
+                               for job in self._jobs) + 16
         self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         self.mem.alloc(self.arena_words)
 ```
 
-**Seed the source, and remember what you expect.** This is the scenario. Write a known, per-job
-pattern into each source region, and keep the array to check against later:
+**Seed the source, and remember what you expect.** This is the scenario. Fill each source region with
+a per-job, full-width **seeded** pattern, and keep the array to check against later:
 
 ```python
         self.expected: list[np.ndarray] = []
-        for j, (src, dst, n) in enumerate(jobs):
-            known = (np.arange(n, dtype=np.uint64) * 2654435761 + 12345 + j * 7919) & ((1 << w) - 1)
-            self.mem._mem.write(src * bpw, known.astype(np.uint64))
-            self.expected.append(known.astype(np.uint64))
+        for j, job in enumerate(self._jobs):
+            rng = np.random.default_rng(0xC0FFEE + j)             # seeded -> reproducible
+            known = rng.integers(0, 1 << w, size=job.n_words, dtype=np.uint64)   # full width
+            self.mem._mem.write(job.src_off * bpw, known)
+            self.expected.append(known)
 ```
+
+The seed matters twice over: it exercises **every** bit of the word (a low-magnitude ramp like
+`arange(n)` would leave the top bits zero, so a bug dropping the high word half could pass unseen), and
+it stays **reproducible** — a failing run replays exactly from `0xC0FFEE + j`.
 
 **Instantiate the DUT** — the component under test, unchanged from how it is used anywhere else:
 
@@ -91,8 +108,8 @@ serializes them to raw stream words, writes them as a burst bundle, and points a
 The driver itself is schema-blind — it just plays words:
 
 ```python
-        self.cmds = [CopyCmd(src_off=s, dst_off=d, n_words=n, tx_id=j)
-                     for j, (s, d, n) in enumerate(jobs)]
+        self.cmds = [CopyCmd(src_off=job.src_off, dst_off=job.dst_off, n_words=job.n_words, tx_id=j)
+                     for j, job in enumerate(self._jobs)]
         words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
         with tempfile.TemporaryDirectory() as _vd:
             write_burst_bundle(words, Path(_vd) / "cmd")
@@ -181,7 +198,7 @@ Two traps worth knowing:
 The golden is a bit-exact comparison, per job, plus a completion count:
 
 ```python
-got = mem._mem.read(dst * bpw, n)
+got = mem._mem.read(job.dst_off * bpw, job.n_words)
 assert np.array_equal(got, expected)          # every destination word
 assert len(done_sink.words) == len(jobs)      # one MemComplete per job
 ```
@@ -208,11 +225,14 @@ spans  = tb.dut.rstream.transfer_spans         # per-transfer durations, seconds
 
 For the 16-job scenario the RTL gate uses (128 words per job):
 
-| measure | value |
-|---|---|
-| one job, end to end | 159 cycles |
-| 16 jobs, end to end | 2214 cycles |
-| per-transfer span | read 137 cycles, write 140 cycles |
+| measure             | value                             |
+| ------------------- | --------------------------------- |
+| one job, end to end | 159 cycles                        |
+| 16 jobs, end to end | 2214 cycles                       |
+| per-transfer span   | read 137 cycles, write 140 cycles |
+
+`--through pysim` records the end-to-end number to `results/pysim.json` (`end_cycles: 2214`); the
+per-transfer spans come off the run object as above.
 
 Those decompose exactly — `159 + 15 x 137 = 2214` — into a **fill latency** of 159 cycles and a
 **steady-state period** of 137 cycles per job. And the period is the interesting part: a job reads for
@@ -224,11 +244,11 @@ read and the write are overlapping — `max(read, write)`, not `read + write`. T
 The same scenario at the [XSI rung](./testbench.md) reports per-job completion cycles, so the two are
 directly comparable:
 
-| | pysim | RTL (XSI) | pysim / RTL |
-|---|---|---|---|
-| fill (first completion) | 159 | 171 | 93% |
-| steady-state period | 137 | 178 | 77% |
-| total, 16 jobs | 2214 | 2835 | 78% |
+|                         | pysim | RTL (XSI) | pysim / RTL |
+| ----------------------- | ----- | --------- | ----------- |
+| fill (first completion) | 159   | 171       | 93%         |
+| steady-state period     | 137   | 178       | 77%         |
+| total, 16 jobs          | 2214  | 2835      | 78%         |
 
 **pysim gets the architecture right and the absolute numbers optimistic.** Both agree the design is
 pipelined rather than sequential, both agree the period is dominated by one direction rather than the
