@@ -82,24 +82,16 @@ a `MemComponent`. This is the participant behind *both* `m_axi` bundles:
                                for job in self._jobs) + 16
         self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
-        self.mem.alloc(self.arena_words)
+        self.mem.alloc(int(self.mem.nwords_tot))       # full capacity: mem_in loads directly, no clip
+        self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]   # seeds itself in pre_sim, both backends
 ```
 
-**Seed the source, and remember what you expect.** This is the scenario. Fill each source region with
-a per-job, full-width **seeded** pattern, and keep the array to check against later:
-
-```python
-        self.expected: list[np.ndarray] = []
-        for j, job in enumerate(self._jobs):
-            rng = np.random.default_rng(0xC0FFEE + j)             # seeded -> reproducible
-            known = rng.integers(0, 1 << w, size=job.n_words, dtype=np.uint64)   # full width
-            self.mem._mem.write(job.src_off * bpw, known)
-            self.expected.append(known)
-```
-
-The seed matters twice over: it exercises **every** bit of the word (a low-magnitude ramp like
-`arange(n)` would leave the top bits zero, so a bug dropping the high word half could pass unseen), and
-it stays **reproducible** — a failing run replays exactly from `0xC0FFEE + j`.
+Notice `__post_init__` does **not** put any data in memory — it declares that the memory will load
+`vectors/mem_in` in `pre_sim` (a `load_segs` entry), exactly like the RTL memory. The *source pattern*
+is not a construction concern; it belongs to the scenario, which is written separately (see
+[write_scenario](#the-scenario-is-stated-once) below). That is why the arena is allocated to its full
+capacity here: the memory is then the same size as the RTL `FlatMemory`, so the whole `mem_in` image
+loads with no clipping.
 
 **Instantiate the DUT** — the component under test, unchanged from how it is used anywhere else:
 
@@ -165,11 +157,24 @@ materializes the vectors and points the participants at them:
 
 ```python
     def write_scenario(self, root) -> None:
-        write_burst_bundle(self.cmd_words,      root / "vectors" / "s_cmd")
-        write_burst_bundle([self.mem_image],    root / "vectors" / "mem_in")
-        write_burst_bundle([self.golden_image], root / "vectors" / "golden")
-        self.driver.root = root      # the driver resolves in_bundle against this in pre_sim
+        # compute the source patterns (seeded PRNG per job, full width) -> mem_in + golden + expected
+        mem_in, golden = np.zeros(self._nwords_tot), np.zeros(self._nwords_tot)
+        for j, job in enumerate(self._jobs):
+            known = np.random.default_rng(0xC0FFEE + j).integers(0, 1 << w, job.n_words, dtype=...)
+            mem_in[job.src_off:job.src_off + job.n_words] = known
+            golden[job.dst_off:job.dst_off + job.n_words] = known
+            self.expected.append(known)
+        write_burst_bundle(self.cmd_words, root / "vectors" / "s_cmd")
+        write_burst_bundle([mem_in],       root / "vectors" / "mem_in")
+        write_burst_bundle([golden],       root / "vectors" / "golden")
+        self.driver.root = root          # the driver and memory resolve their bundles against this
+        self.mem.root    = root          # ... in pre_sim
 ```
+
+The seed lives here, not in `__post_init__`, and it matters twice over: a full-width **seeded** pattern
+exercises **every** bit of the word (a low-magnitude ramp like `arange(n)` leaves the top bits zero, so
+a bug dropping the high word half could pass unseen), and it stays **reproducible** — a failing run
+replays exactly from `0xC0FFEE + j`.
 
 That structure/scenario split is why one class serves both backends cleanly: walking the graph
 generates the XSI harness (it never looks at the scenario), and `write_scenario` feeds a run.
@@ -186,19 +191,15 @@ purpose, which is part of why the pysim timing runs optimistic (see [below](#mea
 
 `write_scenario` is the **single** writer for both backends. pysim's `run_copy` calls it with a temp
 root before `run_sim`; the [XSI rung](./testbench.md)'s `write_mem_copy_xsi_bundles` is a one-line
-wrapper that calls the *same* method with the `xsi/` dir. Both materialize
-`vectors/{s_cmd,mem_in,golden}` from the testbench's own `cmd_words` / `mem_image` / `golden_image`, so
-the pysim run and the RTL run cannot start from different bytes — one writer, two roots.
+wrapper that calls the *same* method with the `xsi/` dir. It writes `vectors/{s_cmd,mem_in,golden}`
+from the one computed scenario, so the pysim run and the RTL run cannot start from different bytes —
+one writer, two roots.
 
-The driver reads that on-disk bundle in `pre_sim`, resolving the relative `in_bundle` against the root
-`write_scenario` set — the exact point, and the exact bytes, the C++ `AxisMaster` reads. One
-convention on both sides: *the bundle files exist before the sim starts.*
-
-One asymmetry remains, worth naming: the **commands** genuinely round-trip through the on-disk bundle
-in pysim (the driver loads `vectors/s_cmd` in `pre_sim`), while the **memory** is still seeded
-in-process — `mem_in` is written for the XSI memory but pysim reads the seed directly. Both derive from
-the one scenario; unifying the memory load too is a pending step (the arena is sized smaller than the
-full `mem_in` image, so it needs a clip).
+Both participants then read those on-disk bundles in `pre_sim`: the `StreamDriver` loads `s_cmd` and
+the `MemComponent` loads `mem_in`, each resolving its relative path against the root `write_scenario`
+set — the same lifecycle point, and the same bytes, the C++ `AxisMaster` and `FlatMemory` read. One
+convention on both sides: *the bundle files exist before the sim starts*, and both the commands **and**
+the memory genuinely round-trip through the on-disk vectors in pysim, not just at the RTL rung.
 
 ## The lifecycle
 

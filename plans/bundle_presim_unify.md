@@ -1,13 +1,14 @@
 # Unify the stream bundle: one path, loaded in `pre_sim`
 
-> **STATUS (2026-07-18):** Stages 1, 3, 4, 5 **DONE** (commits 194d926, 666c666, 59ab0cf, 7e14dd2) —
-> all gated (byte-identical codegen + 6-failure fast loop + `-m xsi` 158/176/2835/3469). `StreamDriver`
-> now has one input field (`in_bundle`) loaded in `pre_sim`; the `bundle` field is gone; `write_scenario`
-> is the single scenario writer for both backends. **Stage 2's memory-file read is DEFERRED**: pysim
-> memory is still seeded in-process (the arena is `arena_words`, `mem_in` is `nwords_tot`, and
-> `Memory.write` rejects a write past the segment — it needs a clip the `MemComponent` can't size on its
-> own). The command path is fully unified; the memory path derives from the same seed but pysim doesn't
-> read the file. See the Stage 2 scoping notes below.
+> **STATUS (2026-07-18): ALL STAGES DONE** (commits: S1 194d926, S3 666c666, S4 59ab0cf, S5 7e14dd2,
+> S2 674acc4) — all gated (byte-identical codegen + 6-failure fast loop + `-m xsi` 158/176/2835/3469).
+> `StreamDriver` has one input field (`in_bundle`) loaded in `pre_sim`; the `bundle` field is gone;
+> `write_scenario` is the single scenario writer; and **Stage 2 landed** — pysim's `MemComponent.pre_sim`
+> now loads `vectors/mem_in` too, mirroring the C++ `FlatMemory::pre_sim`. The deferral's arena-size
+> obstacle was dissolved by **option #2**: allocate the full `nwords_tot`, so the pysim arena is the same
+> size as the RTL memory and `mem_in` loads directly (no clip). Both commands and memory now round-trip
+> through the on-disk vectors in pysim, at the same lifecycle point as XSI. The seed moved into
+> `write_scenario`, so `__post_init__` is pure structure. **The refactor is complete.**
 
 ## Why
 
