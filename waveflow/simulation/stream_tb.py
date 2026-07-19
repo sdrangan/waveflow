@@ -45,28 +45,47 @@ class StreamDriver(SimObj):
     its commands (``[c.serialize(bw) for c in cmds]``) and writes the bundle with
     :func:`~waveflow.utils.burst_io.write_burst_bundle`; this driver just points at it.
 
-    The bundle is read **eagerly at construction**, so its files need only exist when the driver is
-    built (a testbench may write it to a temporary directory and let that go away).
+    The bundle is loaded in :meth:`pre_sim` — the same lifecycle phase the C++ ``AxisMaster`` loads
+    ``in_bundle`` in, so both backends read their bytes at the same point ("files exist before the sim
+    starts").  Its path is resolved at run time against :attr:`root` (never baked), so it works from
+    any working directory.
     """
 
-    bundle: str | Path | None = None   # a burst-bundle directory (waveflow.utils.burst_io)
-    bitwidth: int = 64
-    #: The bundle the generated XSI ``AxisMaster`` loads in ``pre_sim`` -- a :class:`DynParam`, i.e.
-    #: init-time config the harness emits as ``s_cmd.in_bundle = "<in_bundle>";``.  Empty (the default)
-    #: emits nothing.  A path rooted by the run dir, e.g. ``"vectors/s_cmd"``.
+    #: The bundle path both backends read.  A :class:`DynParam`, so the harness emits
+    #: ``s_cmd.in_bundle = "<in_bundle>";`` and the C++ ``AxisMaster`` loads it in ``pre_sim``; pysim's
+    #: :meth:`pre_sim` reads the same relative path, resolved against :attr:`root`.  A stable relative
+    #: string (e.g. ``"vectors/s_cmd"``) — purity-safe, never a temp path.
     in_bundle: DynParam[str] = ""
+    #: pysim run-time anchor for :attr:`in_bundle` (set by whoever materializes the scenario — an
+    #: example/build dir or a temp dir).  ``None`` → resolve against the process cwd.  Runtime config,
+    #: never part of the structure signature (the codegen testbench never sets it).
+    root: Path | None = None
+    #: DEPRECATED transitional path: a burst-bundle directory read **eagerly at construction**.  Kept
+    #: for callers not yet moved to ``in_bundle`` + :meth:`write_scenario`; removed once they migrate.
+    bundle: str | Path | None = None
+    bitwidth: int = 64
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.bundle is None:
-            raise ValueError("StreamDriver requires bundle=<burst-bundle directory>")
-        self.bursts = read_burst_bundle(self.bundle)
-        # The path is consumed here (eager load) and not retained: the loaded bursts are the
-        # driver's state, and they are deterministic, whereas a (possibly temp-dir) path is not.
-        # Keeping the path would make the driver's structure signature depend on it and trip the
-        # elaboration param-purity check.
-        self.bundle = None
+        #: ``None`` until loaded.  The eager ``bundle=`` path fills it here; otherwise :meth:`pre_sim`
+        #: loads it from :attr:`in_bundle`.
+        self.bursts = None
+        if self.bundle is not None:
+            self.bursts = read_burst_bundle(self.bundle)
+            self.bundle = None   # not retained: a (temp) path would trip the param-purity check
         self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
+
+    def pre_sim(self) -> None:
+        if self.bursts is not None:
+            return               # already loaded via the eager bundle= path
+        if not self.in_bundle:
+            raise ValueError(
+                "StreamDriver has neither bundle= nor in_bundle set; give it a bundle to play "
+                "(set in_bundle and materialize the scenario before run_sim).")
+        p = Path(self.in_bundle)
+        if self.root is not None and not p.is_absolute():
+            p = Path(self.root) / p
+        self.bursts = read_burst_bundle(p)
 
     def run_proc(self) -> ProcessGen[None]:
         for b in self.bursts:

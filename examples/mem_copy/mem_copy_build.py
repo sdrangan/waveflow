@@ -61,6 +61,8 @@ class PySimStep(BuildStep):
         w = int(mem_dwidth)
         bpw = w // 8
         tb = MemCopyTB(name="tb", sim=Simulation(), mem_dwidth=w, jobs=XSI_JOBS)
+        # Materialize the command bundle under the build root; the driver loads it in pre_sim.
+        tb.write_scenario(config.root_dir)
         tb.sim.run_sim()
 
         # Correctness: each destination region equals the source pattern the arena was seeded with.

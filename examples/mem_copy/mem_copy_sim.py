@@ -94,20 +94,16 @@ class MemCopyTB(FreeRunComp):
             self.expected.append(known)
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
-        # The testbench owns the schema: it serializes each command into raw stream words, writes them
-        # as a burst bundle, and points the schema-blind StreamDriver at that bundle -- the one vector
-        # form the driver accepts (and, once wired, the same bundle the XSI harness reads).  The
-        # bundle is read eagerly, so the temp dir can go away right after construction.  `self.cmds` is
-        # kept so the XSI vectors can be re-derived from the very commands the driver sends.
+        # The testbench owns the schema: it serializes each command into raw stream words.  Those words
+        # are the ONE source -- write_scenario materializes them to <root>/vectors/s_cmd, the driver
+        # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the
+        # XSI vectors are the same bytes.  `self.cmds` is kept for introspection.
         self.cmds = [CopyCmd(src_off=job.src_off, dst_off=job.dst_off, n_words=job.n_words, tx_id=j)
                      for j, job in enumerate(self._jobs)]
-        words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
-        with tempfile.TemporaryDirectory() as _vd:
-            write_burst_bundle(words, Path(_vd) / "cmd")
-            # `bundle` is what the pysim driver plays (a temp dir); `in_bundle` is the DynParam the
-            # generated XSI harness emits -- the bundle its AxisMaster loads, rooted at the s_cmd port.
-            self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd",
-                                       in_bundle="vectors/s_cmd")
+        self.cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
+        # in_bundle is the DynParam the XSI harness emits AND the path pysim's driver reads in pre_sim
+        # (resolved against the root write_scenario sets).  No temp dir, no eager read.
+        self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")
         # The sink dumps its capture (completion words + per-word arrival cycles) so Python checks the
         # output stream AND the completion cycle off-line -- no golden in the generated C++ main.
         self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done")
@@ -172,6 +168,19 @@ class MemCopyTB(FreeRunComp):
             g[job.dst_off:job.dst_off + job.n_words] = exp
         return g
 
+    def write_scenario(self, root) -> None:
+        """Materialize the input vectors under ``<root>/vectors`` and point the driver at them.
+
+        Writes the command bundle the driver plays (``vectors/s_cmd``) and sets ``driver.root`` so its
+        ``pre_sim`` resolves that path against *root* — the same on-disk bundle the XSI harness reads.
+        Call this before ``run_sim`` (pysim) or when writing the XSI vectors.  The memory scenario
+        (``mem_in``/``golden``) is still seeded in-process for pysim and written by
+        ``write_mem_copy_xsi_bundles`` for XSI; a later stage folds it in here.
+        """
+        root = Path(root)
+        write_burst_bundle(self.cmd_words, root / "vectors" / "s_cmd")
+        self.driver.root = root
+
 
 def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
              mem_dwidth: int = 64) -> "MemCopy":
@@ -185,7 +194,12 @@ def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
     tb = MemCopyTB(name="tb", sim=sim, jobs=tuple(jobs), mem_dwidth=mem_dwidth)
     mem, copier, done_sink = tb.mem, tb.dut, tb.done_sink
 
-    sim.run_sim()
+    # Materialize the command bundle into a temp dir that lives across the run (the driver reads it in
+    # pre_sim), then run.  The memory is seeded in-process by the TB, so only the command bundle needs
+    # a home on disk.
+    with tempfile.TemporaryDirectory() as _root:
+        tb.write_scenario(_root)
+        sim.run_sim()
 
     ok = True
     for job, exp in zip(tb._jobs, tb.expected):

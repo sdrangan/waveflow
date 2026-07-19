@@ -411,7 +411,7 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
 
     The whole scenario — commands *and* the memory pattern — is stated exactly once, in
     :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB`.  This function only *serializes* it: each
-    bundle is taken off the testbench (``driver.bursts`` / ``mem_image`` / ``golden_image``), never
+    bundle is taken off the testbench (``cmd_words`` / ``mem_image`` / ``golden_image``), never
     recomputed, so the pysim run and the XSI run cannot diverge.
     """
     from waveflow.utils.burst_io import write_burst_bundle
@@ -419,11 +419,10 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
     tb = make_xsi_tb(width)
     vdir = Path(xsi_dir) / "vectors"
 
-    # Every bundle is taken FROM the testbench, never recomputed here: the commands are the driver's
-    # own bursts, and the arena/golden are read off the memory the pysim run seeds.  The scenario is
-    # therefore stated exactly once -- in MemCopyTB.__post_init__ -- so pysim and XSI cannot start
-    # from different bytes.
-    write_burst_bundle(tb.driver.bursts, vdir / "s_cmd")
+    # Every bundle is taken FROM the testbench, never recomputed here: the commands are the words the
+    # driver plays, and the arena/golden are read off the memory the pysim run seeds.  The scenario is
+    # therefore stated exactly once -- in MemCopyTB -- so pysim and XSI cannot start from different bytes.
+    write_burst_bundle(tb.cmd_words, vdir / "s_cmd")
     write_burst_bundle([tb.mem_image], vdir / "mem_in")
     write_burst_bundle([tb.golden_image], vdir / "golden")
 
