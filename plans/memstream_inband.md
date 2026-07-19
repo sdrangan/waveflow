@@ -69,14 +69,24 @@ job (payload = coefficients) without change. The consumer owns decoding.
   the payload's boundary and its declared `xfer_len` cross-check each other (a mis-framed producer
   fails loudly instead of silently shifting the data behind it).
 
-  **DECISION (2026-07-18): internal framed channels move to the `'axi4s'` flavor.** TLAST is the
-  AXI4-Stream packet delimiter — designed for exactly this — and everything here is packet-based. It
-  also makes the protocol **self-describing in a VCD** (bursts are visible as distinct packets), which
-  is a recurring debugging win. The per-beat cost (1 bit + trivial last-logic) is negligible in fabric.
-  The real cost is the codegen surface: 10 fixed task bodies (`mem_*`, `il_*`, `cmd_rx`) use
-  `read_stream`/`write_stream` and signatures `hls::stream<ap_uint<W>>&`; `composite_gen`'s
-  `StreamEdge.decl` emits `hls::stream<ap_uint<W>>`; a body and its FIFO must agree (*"an `axi4s_word`
-  body will not bind to an `ap_uint` FIFO"*).
+  **DECISION (2026-07-18), REVISED after a csynth probe:** internal framed channels carry a
+  **`{data, last}` user struct** ("framed word"), **not** the `ap_axis` type. The probe
+  (`experiment/hls_task/probe_axi4s.cpp` vs `probe_framed.cpp`) found that Vitis 2025.1 **rejects
+  `ap_axis` on an internal FIFO** — `ERROR [HLS 214-208]: ap_axis ... must only be used for AXI-Stream
+  ports in the interface` — but a plain `struct {ap_uint<W> data; ap_uint<1> last;}` internal FIFO
+  **csynths clean (Fmax 195 MHz)** with the same relay-until-`last` shape. So:
+  - **Internal edges = a struct-typed FIFO** carrying the boundary bit; the relay reads until `.last`
+    and forwards verbatim (opacity preserved). VCD still shows `.last`, so boundaries stay visible.
+  - **`ap_axis` (real TLAST) stays on the top-level port**, converted `{data,last}` ↔ `ap_axis` by a
+    boundary adapter — exactly where the existing `axi4s_word` boundary convention already lives.
+
+  Why TLAST at all: everything here is packet-based, and the boundary bit is what lets the reader relay
+  an opaque packet it refuses to parse (a countless `get()` needs a boundary, not a count).
+
+  **The codegen surface** (unchanged estimate, different channel type): a new **`FramedEdge`** flavor in
+  `composite_gen` (struct-typed `hls_thread_local` FIFO) alongside `StreamEdge`; the framed task bodies
+  (proven pattern in `probe_framed.cpp`); a boundary adapter at the top port. The legacy `StreamEdge`
+  (`ap_uint<W>`) bodies are untouched — this is additive.
 
   **Sequencing — de-risk on the framed path first, do NOT big-bang flip the working bodies:**
   - **Stage 2** writes the framed `mem_stream` bodies on `'axi4s'` and csynth **+ cosim**s them. This is
