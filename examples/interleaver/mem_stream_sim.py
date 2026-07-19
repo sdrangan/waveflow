@@ -59,10 +59,10 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
 
     rstream = MemRStream(name="rstream", sim=sim, mem_dwidth=mem_dwidth)
     _cmd = MRCmd(addr=word_index, len=n_words)
-    with tempfile.TemporaryDirectory() as _vd:
-        write_burst_bundle([np.asarray(_cmd.serialize(word_bw=mem_dwidth), dtype=np.uint64)],
-                           Path(_vd) / "cmd")
-        driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, bundle=Path(_vd) / "cmd")
+    _vd = tempfile.TemporaryDirectory()          # lives across run_sim (driver loads in pre_sim)
+    write_burst_bundle([np.asarray(_cmd.serialize(word_bw=mem_dwidth), dtype=np.uint64)],
+                       Path(_vd.name) / "cmd")
+    driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
     sink = StreamSink(sim=sim, bitwidth=mem_dwidth)
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
@@ -111,12 +111,12 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
 
     wstream = MemWStream(name="wstream", sim=sim, mem_dwidth=mem_dwidth)
     _cmd = MWCmd(addr=word_index, len=n_words)
-    with tempfile.TemporaryDirectory() as _vd:
-        write_burst_bundle([np.asarray(_cmd.serialize(word_bw=mem_dwidth), dtype=np.uint64)],
-                           Path(_vd) / "cmd")
-        write_burst_bundle([known.astype(np.uint64)], Path(_vd) / "dat")
-        cmd_drv = StreamDriver(sim=sim, bitwidth=mem_dwidth, bundle=Path(_vd) / "cmd")
-        dat_drv = StreamDriver(sim=sim, bitwidth=mem_dwidth, bundle=Path(_vd) / "dat")
+    _vd = tempfile.TemporaryDirectory()          # lives across run_sim (drivers load in pre_sim)
+    write_burst_bundle([np.asarray(_cmd.serialize(word_bw=mem_dwidth), dtype=np.uint64)],
+                       Path(_vd.name) / "cmd")
+    write_burst_bundle([known.astype(np.uint64)], Path(_vd.name) / "dat")
+    cmd_drv = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
+    dat_drv = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="dat", root=Path(_vd.name))
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
     cmd_if.bind(ep_name="master", endpoint=cmd_drv.stream_ep)

@@ -63,11 +63,11 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
 
     il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n)
     # Schema-blind, file-driven driver: serialize each command to words, write a burst bundle, point
-    # the driver at it.  The bundle is read eagerly, so the temp dir can go away after construction.
+    # the driver at it.  The driver loads it in pre_sim, so the temp dir must live across run_sim.
     words = [np.asarray(c.serialize(word_bw=mem_dwidth), dtype=np.uint64) for c in cmds]
-    with tempfile.TemporaryDirectory() as _vd:
-        write_burst_bundle(words, Path(_vd) / "cmd")
-        driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, bundle=Path(_vd) / "cmd")
+    _vd = tempfile.TemporaryDirectory()
+    write_burst_bundle(words, Path(_vd.name) / "cmd")
+    driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
     done_sink = StreamSink(sim=sim, bitwidth=mem_dwidth)
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)

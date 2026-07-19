@@ -60,28 +60,18 @@ class StreamDriver(SimObj):
     #: example/build dir or a temp dir).  ``None`` → resolve against the process cwd.  Runtime config,
     #: never part of the structure signature (the codegen testbench never sets it).
     root: Path | None = None
-    #: DEPRECATED transitional path: a burst-bundle directory read **eagerly at construction**.  Kept
-    #: for callers not yet moved to ``in_bundle`` + :meth:`write_scenario`; removed once they migrate.
-    bundle: str | Path | None = None
     bitwidth: int = 64
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        #: ``None`` until loaded.  The eager ``bundle=`` path fills it here; otherwise :meth:`pre_sim`
-        #: loads it from :attr:`in_bundle`.
-        self.bursts = None
-        if self.bundle is not None:
-            self.bursts = read_burst_bundle(self.bundle)
-            self.bundle = None   # not retained: a (temp) path would trip the param-purity check
+        self.bursts = None       # loaded in pre_sim from in_bundle
         self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
 
     def pre_sim(self) -> None:
-        if self.bursts is not None:
-            return               # already loaded via the eager bundle= path
         if not self.in_bundle:
             raise ValueError(
-                "StreamDriver has neither bundle= nor in_bundle set; give it a bundle to play "
-                "(set in_bundle and materialize the scenario before run_sim).")
+                "StreamDriver.in_bundle is not set; set it and materialize the scenario "
+                "(write the bundle, set root) before run_sim.")
         p = Path(self.in_bundle)
         if self.root is not None and not p.is_absolute():
             p = Path(self.root) / p
