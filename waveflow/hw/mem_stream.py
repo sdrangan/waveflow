@@ -46,8 +46,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+import numpy as np
+
 from waveflow.hw.clock import Clock
-from waveflow.hw.dataschema import DataArray, IntField, ParamSchema
+from waveflow.hw.dataschema import DataArray, DataList, IntField, ParamSchema
 from waveflow.hw.hw_component import HwParam
 from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
@@ -129,6 +131,68 @@ class MemComplete(ParamSchema):
     }
 
 
+# ---------------------------------------------------------------------------------------------
+# In-band framed descriptors (``inband=True``) — see plans/memstream_inband.md
+#
+# The framed alternative to the two-stream (s_cmd + s_in) protocol.  One stream carries
+# ``[descriptor | payload (xfer_len words) | data (data_len words)]``, so the descriptor and its data
+# are contiguous and CANNOT be mispaired — the pairing is structural rather than an unenforced
+# "both streams stay in order" invariant.
+#
+# Note what is NOT here: no fixed ``xfer_msg`` array.  The payload rides in-band with a length prefix,
+# so the wire cost is per-instance (``xfer_len`` words) and the only bound is the consumer's local
+# buffer.  That is what removes the 32-bit/8-word cookie and its reserialization.
+# ---------------------------------------------------------------------------------------------
+
+
+class FwdCmd(DataList):
+    """In-band ``MemRStream`` descriptor: forward ``fwd_len`` words verbatim, then burst ``len`` words
+    read from ``addr``.
+
+    The relayed bursts are **opaque** — they are the downstream consumer's descriptor + payload, and
+    the reader never parses them.  That is what makes one reader serve any application (memcpy: a write
+    descriptor; poly: coefficients).
+
+    Relaying by **burst** (not word count) is what preserves opacity: the reader cannot know where the
+    consumer's descriptor ends and its payload begins, so it relays packet boundaries instead.  That is
+    why the in-band streams set ``has_tlast=True`` — a whole-burst read is only defined for a
+    packet-delimited stream (``StreamIFSlave.get()`` refuses a countless read otherwise)."""
+    cpp_repr: ClassVar[str] = "FwdCmd"
+    include_filename: ClassVar[str] = "fwd_cmd.h"
+
+    elements = {
+        "addr":        {"schema": Word32, "description": "element/word offset to read from"},
+        "len":         {"schema": Word32, "description": "number of packed words to read"},
+        "fwd_bursts":  {"schema": Word32,
+                        "description": "opaque bursts to relay verbatim BEFORE the data"},
+    }
+
+
+class WrCmd(DataList):
+    """In-band ``MemWStream`` descriptor: buffer the next ``xfer_len`` payload words, then drain ``len``
+    data words and pure-write them at ``addr``.  The payload is echoed on completion."""
+    cpp_repr: ClassVar[str] = "WrCmd"
+    include_filename: ClassVar[str] = "wr_cmd.h"
+
+    elements = {
+        "addr":     {"schema": Word32, "description": "element/word offset to write at"},
+        "len":      {"schema": Word32, "description": "number of packed data words to write"},
+        "xfer_len": {"schema": Word32, "description": "opaque payload words following this descriptor"},
+    }
+
+
+class WrComplete(DataList):
+    """In-band completion header: ``len`` words written, then ``xfer_len`` echoed payload words follow
+    it **in-band** on ``s_done`` (the same length-prefixed framing as the input)."""
+    cpp_repr: ClassVar[str] = "WrComplete"
+    include_filename: ClassVar[str] = "wr_complete.h"
+
+    elements = {
+        "len":      {"schema": Word32, "description": "number of data words written"},
+        "xfer_len": {"schema": Word32, "description": "echoed payload words that follow this header"},
+    }
+
+
 #: The (shared, cached) ``xfer_msg`` array schema at the default ``max_xfer_len=8`` — needed as its
 #: own :class:`~waveflow.hw.dataschema.DataSchemaStep` entry (a ``DataArray`` gen-includes its own
 #: header; ``MRCmd``/``MWCmd``/``MemComplete``'s headers only ``#include`` it, they don't emit it).
@@ -191,6 +255,11 @@ class MemRStream(FreeRunComp):
     #: :class:`MemComplete` echo (words read + the command's ``xfer_msg`` cookie) per job.  Default
     #: ``False`` keeps the standalone Gate-1 kernel (3-arg ``mem_r_stream_task``) unchanged.
     emit_done: bool = False
+    #: **In-band framing** (``plans/memstream_inband.md``).  When ``True`` the command stream carries
+    #: ``[FwdCmd | fwd_len opaque words]`` and this component forwards those words verbatim to
+    #: ``m_out`` before the data burst — a pure pass-through that never parses them, so one reader
+    #: serves any consumer.  Default ``False`` keeps the legacy :class:`MRCmd` protocol.
+    inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -203,17 +272,18 @@ class MemRStream(FreeRunComp):
         # See plans/endpoint_types_not_tags.md.
         self.m_mem = MMIFReadMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
+        # In-band mode relays OPAQUE bursts, which is only defined on a packet-delimited stream.
         self.s_cmd = StreamIFSlave(
             name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),
-            has_tlast=False)
+            has_tlast=bool(self.inband))
         self.m_out = StreamIFMaster(
             name=f"{self.name}_m_out", sim=self.sim, bitwidth=int(self.mem_dwidth),
-            has_tlast=False)
+            has_tlast=bool(self.inband))
         eps = [self.m_mem, self.s_cmd, self.m_out]
         if self.emit_done:
             self.s_done = StreamIFMaster(
                 name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
-                has_tlast=False)
+                has_tlast=bool(self.inband))
             eps.append(self.s_done)
         for ep in eps:
             self.add_endpoint(ep)
@@ -259,6 +329,9 @@ class MemRStream(FreeRunComp):
         **early-anchored** so the read and write overlap (``~n_words + fill``).  With ``emit_done`` it
         then writes a :class:`MemComplete` echo (words read + the command's ``xfer_msg`` cookie) on
         ``s_done``."""
+        if self.inband:
+            yield from self._run_iter_inband()
+            return
         cmd = yield from self.s_cmd.get(self._cmd_cls)
         w0 = int(cmd.addr)
         nw = int(cmd.len)
@@ -275,6 +348,28 @@ class MemRStream(FreeRunComp):
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
             yield from self.s_done.write(complete)
+
+    def _run_iter_inband(self) -> ProcessGen[None]:
+        """One framed transfer: forward the opaque prefix, then burst the data (``inband=True``).
+
+        Reads ``[FwdCmd | fwd_len words]`` off ``s_cmd`` and emits ``[those words | data]`` on
+        ``m_out``.  The forwarded words are **never parsed** — they are the downstream consumer's
+        descriptor + payload — and they are streamed straight through, so this component needs no
+        buffer at all (only the consumer, which must hold the payload across the data phase, does).
+        """
+        cmd = yield from self.s_cmd.get(FwdCmd)
+        t_start = self.now
+        # Relay each opaque burst whole, boundary included.  A countless get() returns the entire
+        # burst -- the only read that does not require knowing the contents, which is exactly what
+        # "do not parse the payload" demands.
+        for _ in range(int(cmd.fwd_bursts)):
+            burst = yield from self.s_cmd.get()
+            yield from self.m_out.write(np.asarray(burst))
+        w0, nw = int(cmd.addr), int(cmd.len)
+        region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+        words, t0 = yield from region.read_slice_pipelined(w0, w0 + nw)
+        yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
+        self.transfer_spans.append(self.now - t_start)
 
 
 @dataclass
@@ -300,6 +395,12 @@ class MemWStream(FreeRunComp):
     #: ``mem_w_stream_done_task``).  Default ``False`` keeps the standalone Gate-1 kernel (3-arg
     #: ``mem_w_stream_task``) unchanged.
     emit_done: bool = False
+    #: **In-band framing** (``plans/memstream_inband.md``).  When ``True`` there is **no ``s_cmd``**:
+    #: ``s_in`` carries ``[WrCmd | xfer_len payload words | len data words]``, so a descriptor can
+    #: never be paired with the wrong data.  ``max_xfer_len`` then bounds the local payload **buffer**
+    #: (this component must hold the payload across the data phase to echo it), not the protocol —
+    #: the wire cost is the per-instance ``xfer_len``.  Default ``False`` keeps the legacy protocol.
+    inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -309,17 +410,19 @@ class MemWStream(FreeRunComp):
         # The sole write owner — the type declares it (see MemRStream.m_mem above).
         self.m_mem = MMIFWriteMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
-        self.s_cmd = StreamIFSlave(
-            name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),
-            has_tlast=False)
+        if not self.inband:
+            self.s_cmd = StreamIFSlave(
+                name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),
+                has_tlast=False)
         self.s_in = StreamIFSlave(
             name=f"{self.name}_s_in", sim=self.sim, bitwidth=int(self.mem_dwidth),
-            has_tlast=False)
-        eps = [self.m_mem, self.s_cmd, self.s_in]
+            has_tlast=bool(self.inband))
+        # In-band: the descriptor rides on s_in, so there is no separate command port.
+        eps = [self.m_mem, self.s_in] if self.inband else [self.m_mem, self.s_cmd, self.s_in]
         if self.emit_done:
             self.s_done = StreamIFMaster(
                 name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
-                has_tlast=False)
+                has_tlast=bool(self.inband))
             eps.append(self.s_done)
         for ep in eps:
             self.add_endpoint(ep)
@@ -358,6 +461,9 @@ class MemWStream(FreeRunComp):
         :class:`~waveflow.hw.memif.Region` **early-anchored** so the drain and store overlap.  With
         ``emit_done`` it then writes a :class:`MemComplete` echo (words written + the command's
         ``xfer_msg`` cookie) on ``s_done``."""
+        if self.inband:
+            yield from self._run_iter_inband()
+            return
         cmd = yield from self.s_cmd.get(self._cmd_cls)
         w0 = int(cmd.addr)
         nw = int(cmd.len)
@@ -372,3 +478,40 @@ class MemWStream(FreeRunComp):
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
             yield from self.s_done.write(complete)
+
+    def _run_iter_inband(self) -> ProcessGen[None]:
+        """One framed transfer off ``s_in`` (``inband=True``) — the four-step state machine.
+
+        ``[WrCmd | xfer_len payload words | len data words]``: read the descriptor, buffer the opaque
+        payload, drain and pure-write the data, then echo ``[WrComplete | payload]``.  The descriptor
+        and its data are contiguous on one stream, so they cannot be mispaired — that is the point.
+        The payload is buffered (not streamed through) precisely because it is echoed *after* the
+        write; ``max_xfer_len`` bounds that buffer.
+        """
+        cmd = yield from self.s_in.get(WrCmd)
+        n_x = int(cmd.xfer_len)
+        if n_x > int(self.max_xfer_len):
+            raise ValueError(
+                f"{self.name}: xfer_len {n_x} exceeds the payload buffer bound max_xfer_len="
+                f"{int(self.max_xfer_len)} — raise max_xfer_len or shorten the payload.")
+        t_start = self.now
+        payload = None
+        if n_x:
+            # Whole-burst read, then cross-check against the descriptor's xfer_len.  The burst
+            # boundary and the length prefix verify each other -- a producer that framed the payload
+            # wrongly fails HERE, loudly, instead of silently shifting the data that follows.
+            payload = yield from self.s_in.get()
+            if len(payload) != n_x:
+                raise ValueError(
+                    f"{self.name}: payload burst carried {len(payload)} words but the descriptor "
+                    f"declared xfer_len={n_x} — producer framing is inconsistent.")
+        w0, nw = int(cmd.addr), int(cmd.len)
+        words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
+        region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+        yield from region.write_slice_pipelined(
+            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
+        self.transfer_spans.append(self.now - t_start)
+        if self.emit_done:
+            yield from self.s_done.write(WrComplete(len=nw, xfer_len=n_x))
+            if n_x:
+                yield from self.s_done.write(np.asarray(payload))

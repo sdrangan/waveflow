@@ -61,11 +61,16 @@ class StreamDriver(SimObj):
     #: never part of the structure signature (the codegen testbench never sets it).
     root: Path | None = None
     bitwidth: int = 64
+    #: Mark each burst's end with TLAST.  A bundle burst *is* a packet, so this is the natural framing
+    #: for a consumer that relays or reads whole bursts (``StreamIFSlave.get()`` with no count is only
+    #: defined on a packet-delimited stream).  Default ``False`` keeps existing graphs unchanged.
+    has_tlast: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.bursts = None       # loaded in pre_sim from in_bundle
-        self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth, has_tlast=False)
+        self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth,
+                                        has_tlast=self.has_tlast)
 
     def pre_sim(self) -> None:
         if not self.in_bundle:
@@ -102,12 +107,14 @@ class StreamSink(SimObj):
     #: bundle in ``post_sim`` -- a :class:`DynParam` the harness emits as ``s_done.out_bundle = "…";``.
     #: Empty (the default) emits nothing.  Lets Python check the output stream + timing off-line.
     out_bundle: DynParam[str] = ""
+    #: Accept TLAST-delimited packets (match the producer's framing).  Default ``False``.
+    has_tlast: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.words: list[np.ndarray] = []
         self.stream_ep = StreamIFSlave(
-            sim=self.sim, bitwidth=self.bitwidth, has_tlast=False,
+            sim=self.sim, bitwidth=self.bitwidth, has_tlast=self.has_tlast,
             rx_proc=self.rx_proc, queue_size=64)
 
     def rx_proc(self, words: Words) -> ProcessGen[None]:
