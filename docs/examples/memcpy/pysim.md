@@ -107,19 +107,21 @@ it stays **reproducible** — a failing run replays exactly from `0xC0FFEE + j`.
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
 ```
 
-**Make the command source.** The testbench owns the command schema: it builds one `CopyCmd` per job,
-serializes them to raw stream words, writes them as a burst bundle, and points a `StreamDriver` at it.
-The driver itself is schema-blind — it just plays words:
+**Make the command source.** The testbench owns the command schema: it builds one `CopyCmd` per job
+and serializes them to raw stream words (kept as `cmd_words`). The `StreamDriver` is schema-blind — it
+just plays a bundle, and it names the *path* it will read, not the data:
 
 ```python
         self.cmds = [CopyCmd(src_off=job.src_off, dst_off=job.dst_off, n_words=job.n_words, tx_id=j)
                      for j, job in enumerate(self._jobs)]
-        words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
-        with tempfile.TemporaryDirectory() as _vd:
-            write_burst_bundle(words, Path(_vd) / "cmd")
-            self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd",
-                                       in_bundle="vectors/s_cmd")
+        self.cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
+        self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")
 ```
+
+`in_bundle` is the *one* path both backends read: the generated XSI harness emits
+`s_cmd.in_bundle = "vectors/s_cmd";` and the C++ `AxisMaster` loads it in `pre_sim`; pysim's
+`StreamDriver` loads the same path in *its* `pre_sim`. The bytes are written once, by
+`write_scenario` (below) — no data lives on the driver at construction.
 
 **Make the completion sink** — a `StreamSink` collects the `MemComplete` records off `s_done`:
 
@@ -157,9 +159,24 @@ a design. Two streams, and one crossbar carrying both `m_axi` bundles onto the s
         assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
 ```
 
-That is the whole testbench. Notice what is *not* here: no clock or reset driving, no handshake logic,
-no per-cycle stepping, no golden written into the graph. Those are the framework's job — you described
-*what* is connected to *what*, and the simulation supplies the *how*.
+`__post_init__` builds the **structure** — the participants and their wiring. It writes no scenario
+data: the driver names a path, not bytes. The **scenario** is a separate step, `write_scenario`, which
+materializes the vectors and points the participants at them:
+
+```python
+    def write_scenario(self, root) -> None:
+        write_burst_bundle(self.cmd_words,      root / "vectors" / "s_cmd")
+        write_burst_bundle([self.mem_image],    root / "vectors" / "mem_in")
+        write_burst_bundle([self.golden_image], root / "vectors" / "golden")
+        self.driver.root = root      # the driver resolves in_bundle against this in pre_sim
+```
+
+That structure/scenario split is why one class serves both backends cleanly: walking the graph
+generates the XSI harness (it never looks at the scenario), and `write_scenario` feeds a run.
+
+Notice what is *not* in the testbench: no clock or reset driving, no handshake logic, no per-cycle
+stepping, no golden written into the graph. Those are the framework's job — you described *what* is
+connected to *what*, and the simulation supplies the *how*.
 
 One deliberate subtlety, called out in the source: the crossbar **models contention** between the two
 bundles, whereas the XSI slave models do not. The two rungs describe slightly different systems on
@@ -167,16 +184,21 @@ purpose, which is part of why the pysim timing runs optimistic (see [below](#mea
 
 ## The scenario is stated once
 
-Everything the walkthrough built above — the commands, the seeded source, the kept `expected` — is
-stated in `MemCopyTB` and nowhere else. The [XSI rung](./testbench.md) does not restate any of it: its
-vectors are *serialized from that same testbench* rather than recomputed. `write_mem_copy_xsi_bundles`
-takes the commands from `driver.bursts` and the arena and result from the testbench's `mem_image` /
-`golden_image`. So the pysim run and the RTL run cannot start from different bytes — one scenario, two
-serializations, not two scenarios that have to agree.
+`write_scenario` is the **single** writer for both backends. pysim's `run_copy` calls it with a temp
+root before `run_sim`; the [XSI rung](./testbench.md)'s `write_mem_copy_xsi_bundles` is a one-line
+wrapper that calls the *same* method with the `xsi/` dir. Both materialize
+`vectors/{s_cmd,mem_in,golden}` from the testbench's own `cmd_words` / `mem_image` / `golden_image`, so
+the pysim run and the RTL run cannot start from different bytes — one writer, two roots.
 
-Note the asymmetry, because it is easy to misread: the **commands** genuinely round-trip through a
-bundle even in pysim (written to a temp directory, read eagerly at construction), while the **memory**
-is seeded in-process and the bundle is derived from that seed for the C++ side.
+The driver reads that on-disk bundle in `pre_sim`, resolving the relative `in_bundle` against the root
+`write_scenario` set — the exact point, and the exact bytes, the C++ `AxisMaster` reads. One
+convention on both sides: *the bundle files exist before the sim starts.*
+
+One asymmetry remains, worth naming: the **commands** genuinely round-trip through the on-disk bundle
+in pysim (the driver loads `vectors/s_cmd` in `pre_sim`), while the **memory** is still seeded
+in-process — `mem_in` is written for the XSI memory but pysim reads the seed directly. Both derive from
+the one scenario; unifying the memory load too is a pending step (the arena is sized smaller than the
+full `mem_in` image, so it needs a clip).
 
 ## The lifecycle
 

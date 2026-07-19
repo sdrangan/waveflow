@@ -43,16 +43,17 @@ bundle, point the driver at it:
 cmds = [CopyCmd(src_off=s, dst_off=d, n_words=n) for s, d, n in jobs]   # the TB owns the schema
 words = [np.asarray(c.serialize(word_bw=64), dtype=np.uint64) for c in cmds]   # -> raw word bursts
 write_burst_bundle(words, vectors_dir / "cmd")                          # -> a bundle on disk
-driver = StreamDriver(sim=sim, bitwidth=64, bundle=vectors_dir / "cmd") # the driver just plays it
+driver = StreamDriver(sim=sim, bitwidth=64, in_bundle="cmd", root=vectors_dir)  # loaded in pre_sim
 ```
 
 `serialize(word_bw=64)` packs each `CopyCmd` exactly the way the stream endpoint would, so the words
 in the bundle are what the DUT expects. A `StreamSink` likewise collects raw words; turning them back
 into a schema (if you want to) is again the testbench's job.
 
-The bundle is read **eagerly**, when the driver is constructed — so its files only need to exist at
-that moment. A testbench that generates vectors on the fly can write them to a temporary directory and
-let it go away, as the example below does.
+The bundle is loaded in **`pre_sim`** — the same lifecycle phase the RTL `AxisMaster` loads it in — so
+its files must exist before the run starts, and the `root` it resolves against must outlive
+construction. A testbench that generates vectors on the fly writes them to a directory that lives
+across `run_sim` (a temp dir held for the run, as the example below does).
 
 ## A minimal simulation
 
@@ -79,10 +80,10 @@ clk = Clock(freq=100e6)
 bursts = [np.array([1, 2, 3], dtype=np.uint64),
           np.array([10, 20], dtype=np.uint64)]
 
-with tempfile.TemporaryDirectory() as d:
-    write_burst_bundle(bursts, Path(d) / "cmd")               # vectors -> a bundle on disk
-    driver = StreamDriver(name="drv", sim=sim, bitwidth=64, bundle=Path(d) / "cmd")
-    # the bundle is read here, eagerly, so the temp dir can go away now
+d = tempfile.TemporaryDirectory()                             # lives across run_sim
+write_burst_bundle(bursts, Path(d.name) / "cmd")              # vectors -> a bundle on disk
+driver = StreamDriver(name="drv", sim=sim, bitwidth=64, in_bundle="cmd", root=Path(d.name))
+# the driver loads the bundle in pre_sim, when sim.run_sim() starts
 
 sink = StreamSink(name="snk", sim=sim, bitwidth=64)
 
@@ -147,14 +148,15 @@ hand — is [BFM Testbenches](../build/bfm.md).
 
 ## Quick reference
 
-- `StreamDriver(sim=, bitwidth=, bundle=<dir>)` — a source; `bundle` is a burst-bundle folder
-  ([`burst_io`](../../../waveflow/utils/burst_io.py)), read eagerly at construction. Its endpoint is
-  `stream_ep` (a master). Set `in_bundle` to give its RTL twin the same bundle at the XSI rung.
+- `StreamDriver(sim=, bitwidth=, in_bundle=<rel>, root=<dir>)` — a source; loads its bundle in
+  `pre_sim`, resolving the relative `in_bundle` ([`burst_io`](../../../waveflow/utils/burst_io.py)
+  folder) against `root` at run time. The *same* `in_bundle` the RTL twin's `AxisMaster` loads, so both
+  read one bundle. Its endpoint is `stream_ep` (a master).
 - `StreamSink(sim=, bitwidth=)` — a sink; collects into `sink.words` (a list of word arrays). Its
   endpoint is `stream_ep` (a slave). Set `out_bundle` and its RTL twin dumps what it captured — words
   plus the arrival cycle of each — for Python to check after the run.
 - Both are schema-blind: the testbench serializes its commands
   (`[c.serialize(word_bw=bitwidth) for c in cmds]`) and writes the bundle with
-  `write_burst_bundle(...)` before constructing the driver.
+  `write_burst_bundle(...)`; the driver loads it in `pre_sim`, before the run.
 - Bind each `stream_ep` with a [`StreamIF`](../interface/), master to slave.
 - `bfm_model()` gives the RTL twin (`AxisMaster` / `AxisSlave`) for the [XSI testbench](../build/bfm.md).
