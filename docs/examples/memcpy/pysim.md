@@ -40,20 +40,117 @@ dut = run_copy(jobs=((16, 600, 128), (200, 900, 64)), mem_dwidth=64)
 Each job is a `(src_off, dst_off, n_words)` triple in **element/word coordinates**. `run_copy` builds
 the testbench, runs it, checks it, and hands back the DUT so you can inspect what happened.
 
+## What you write
+
+The entire hand-written surface for this rung is one class:
+`MemCopyTB(CompositeComp)` in [`mem_copy_sim.py`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/mem_copy_sim.py).
+Everything it *uses* — the driver, the sink, the memory model, the interfaces, the run loop — is
+framework. What you write is `__post_init__`: instantiate the participants around the DUT and wire
+them. Walking through it, in order.
+
+**Declare the knobs.** A testbench is a component, so its parameters are dataclass fields:
+
+```python
+@dataclass
+class MemCopyTB(CompositeComp):
+    jobs: tuple = ((16, 4096 // 8, 128),)     # (src_off, dst_off, n_words) per job
+    mem_dwidth: HwParam[int] = 64
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+```
+
+**Build the memory.** One flat arena large enough for every source and destination region, wrapped in
+a `MemComponent`. This is the participant behind *both* `m_axi` bundles:
+
+```python
+        self.arena_words = max(max(s, d) + n for s, d, n in jobs) + 16
+        self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+                                word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
+        self.mem.alloc(self.arena_words)
+```
+
+**Seed the source, and remember what you expect.** This is the scenario. Write a known, per-job
+pattern into each source region, and keep the array to check against later:
+
+```python
+        self.expected: list[np.ndarray] = []
+        for j, (src, dst, n) in enumerate(jobs):
+            known = (np.arange(n, dtype=np.uint64) * 2654435761 + 12345 + j * 7919) & ((1 << w) - 1)
+            self.mem._mem.write(src * bpw, known.astype(np.uint64))
+            self.expected.append(known.astype(np.uint64))
+```
+
+**Instantiate the DUT** — the component under test, unchanged from how it is used anywhere else:
+
+```python
+        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
+```
+
+**Make the command source.** The testbench owns the command schema: it builds one `CopyCmd` per job,
+serializes them to raw stream words, writes them as a burst bundle, and points a `StreamDriver` at it.
+The driver itself is schema-blind — it just plays words:
+
+```python
+        self.cmds = [CopyCmd(src_off=s, dst_off=d, n_words=n, tx_id=j)
+                     for j, (s, d, n) in enumerate(jobs)]
+        words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
+        with tempfile.TemporaryDirectory() as _vd:
+            write_burst_bundle(words, Path(_vd) / "cmd")
+            self.driver = StreamDriver(sim=self.sim, bitwidth=w, bundle=Path(_vd) / "cmd",
+                                       in_bundle="vectors/s_cmd")
+```
+
+**Make the completion sink** — a `StreamSink` collects the `MemComplete` records off `s_done`:
+
+```python
+        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done")
+```
+
+**Register the participants**, in the order the code generator should walk them:
+
+```python
+        for c in (self.dut, self.driver, self.done_sink, self.mem):
+            self.add_comp(c)
+```
+
+**Wire the graph.** Three interfaces, bound master-to-slave, exactly as sub-components are wired inside
+a design. Two streams, and one crossbar carrying both `m_axi` bundles onto the single arena:
+
+```python
+        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
+        cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)   # driver -> DUT command in
+        cmd_if.bind(ep_name="slave",  endpoint=self.dut.s_cmd)
+        self.add_if(cmd_if)
+
+        done_if = StreamIF(name=f"{self.name}_done_if", sim=self.sim, clk=self.clk, bitwidth=w)
+        done_if.bind(ep_name="master", endpoint=self.dut.s_done)        # DUT completions -> sink
+        done_if.bind(ep_name="slave",  endpoint=self.done_sink.stream_ep)
+        self.add_if(done_if)
+
+        xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
+                               nports_master=2, nports_slave=1, bitwidth=w)
+        xbar.bind("master_0", self.dut.m_in)     # read bundle  (gmem0)
+        xbar.bind("master_1", self.dut.m_out)    # write bundle (gmem1)
+        xbar.bind("slave_0",  self.mem.s_mm)     # ... both onto the one arena
+        self.add_if(xbar)
+        assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
+```
+
+That is the whole testbench. Notice what is *not* here: no clock or reset driving, no handshake logic,
+no per-cycle stepping, no golden written into the graph. Those are the framework's job — you described
+*what* is connected to *what*, and the simulation supplies the *how*.
+
+One deliberate subtlety, called out in the source: the crossbar **models contention** between the two
+bundles, whereas the XSI slave models do not. The two rungs describe slightly different systems on
+purpose, which is part of why the pysim timing runs optimistic (see [below](#measuring-timing)).
+
 ## The scenario is stated once
 
-Building `MemCopyTB` *is* building the scenario. From the `jobs` list it derives everything:
-
-| what | how |
-|---|---|
-| the commands | one `CopyCmd` per job, serialized and written as a burst bundle the `StreamDriver` plays |
-| the source data | a per-job pattern written straight into the arena |
-| the expectation | the same pattern, kept as `expected` for the comparison |
-
-The XSI vectors are then *serialized from that testbench* rather than recomputed —
-`write_mem_copy_xsi_bundles` takes the commands from `driver.bursts` and the arena and result from
-`mem_image` / `golden_image`. So the pysim run and the RTL run cannot start from different bytes:
-there is one scenario with two serializations, not two scenarios that have to agree.
+Everything the walkthrough built above — the commands, the seeded source, the kept `expected` — is
+stated in `MemCopyTB` and nowhere else. The [XSI rung](./testbench.md) does not restate any of it: its
+vectors are *serialized from that same testbench* rather than recomputed. `write_mem_copy_xsi_bundles`
+takes the commands from `driver.bursts` and the arena and result from the testbench's `mem_image` /
+`golden_image`. So the pysim run and the RTL run cannot start from different bytes — one scenario, two
+serializations, not two scenarios that have to agree.
 
 Note the asymmetry, because it is easy to misread: the **commands** genuinely round-trip through a
 bundle even in pysim (written to a temp directory, read eagerly at construction), while the **memory**
