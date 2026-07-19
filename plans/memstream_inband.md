@@ -69,13 +69,28 @@ job (payload = coefficients) without change. The consumer owns decoding.
   the payload's boundary and its declared `xfer_len` cross-check each other (a mis-framed producer
   fails loudly instead of silently shifting the data behind it).
 
-  **Consequence for Stage 2 (important):** internal task-to-task channels are declared
-  `hls::stream<ap_uint<W>>` (`'word'` flavor) and carry no TLAST, and *"an `axi4s_word` body will not
-  bind to an `ap_uint` FIFO"*. So the RTL side of the framed path needs the **`'axi4s'` flavor**
-  (`ap_axis<W,0,0,0>`) on those edges — a flavor switch for the framed bodies plus
-  `composite_gen`'s edge declaration. That cost was **not** in the original estimate; weigh it before
-  starting Stage 2. (Alternative: keep `'word'` internally and give the relay an explicit per-segment
-  word count, trading the reader's opacity for the cheaper channel type.)
+  **DECISION (2026-07-18): internal framed channels move to the `'axi4s'` flavor.** TLAST is the
+  AXI4-Stream packet delimiter — designed for exactly this — and everything here is packet-based. It
+  also makes the protocol **self-describing in a VCD** (bursts are visible as distinct packets), which
+  is a recurring debugging win. The per-beat cost (1 bit + trivial last-logic) is negligible in fabric.
+  The real cost is the codegen surface: 10 fixed task bodies (`mem_*`, `il_*`, `cmd_rx`) use
+  `read_stream`/`write_stream` and signatures `hls::stream<ap_uint<W>>&`; `composite_gen`'s
+  `StreamEdge.decl` emits `hls::stream<ap_uint<W>>`; a body and its FIFO must agree (*"an `axi4s_word`
+  body will not bind to an `ap_uint` FIFO"*).
+
+  **Sequencing — de-risk on the framed path first, do NOT big-bang flip the working bodies:**
+  - **Stage 2** writes the framed `mem_stream` bodies on `'axi4s'` and csynth **+ cosim**s them. This is
+    both the needed work and the **probe** for the one unverified toolchain question — *does
+    `hls::stream<ap_axis<W>>` as an internal `hls_thread_local` FIFO between `hls::task`s cosim clean in
+    2025.1?* (Should — it is a FIFO-of-structs between tasks — but the project does not assert cosim
+    without a gate.)
+  - **If green**, migrating the other 10 channels to `'axi4s'` (uniformity, VCD-legibility) is its
+    **own separate gated plan**, re-verifying 158/176/3469 as it goes — not risked in the same stroke
+    as new work.
+  - SOBIF/block edges are out of scope (already framed by block size).
+  - **Helper gap:** today's `axi4s` helpers (`write_axi4_word`, `flush_axi4_stream_to_tlast`) are
+    boundary-oriented; the **relay** use ("read one whole packet, forward it boundary-intact") likely
+    needs a small `read_axi4_packet` / `relay_axi4_packet` helper added in `streamutils_hls.h`.
 - **`VarDataArray` is not on the critical path.** Dynamic-sized schemas would make the *declaration*
   nicer later, but they cannot remove the bound in RTL (fixed hardware needs a buffer; `VarDataArray`
   itself carries `len_max`), and its codegen is unwired (`can_gen_include = False`).
