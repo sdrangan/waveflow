@@ -462,6 +462,20 @@ class DataSchema(ABC):
             if bw <= 0:
                 raise ValueError(f"word_bw values must be positive. Got {bw}.")
 
+        # framed_stream (plans/memstream_inband.md): the axi4_stream method, renamed.  framed_word is
+        # field-identical to axi4s_word, so the only differences are the stream C-type, the method
+        # name, and the per-beat writer (write_axi4_word -> the shared write_boundary_word<framed_word>).
+        # Generate-then-rename keeps one source of truth for the boundary-write logic.
+        if dst_type == "framed_stream":
+            import re
+            axi = cls.gen_write(dst_type="axi4_stream", word_bw_supported=word_bw_supported,
+                                indent_level=indent_level)
+            axi = axi.replace("write_axi4_stream", "write_framed_stream")
+            axi = axi.replace("streamutils::axi4s_word", "streamutils::framed_word")
+            axi = re.sub(r"streamutils::write_axi4_word<(\d+)>",
+                         r"streamutils::write_boundary_word<streamutils::framed_word<\1>, \1>", axi)
+            return axi
+
         if dst_type not in {"array", "stream", "axi4_stream"}:
             raise ValueError(f"Unsupported dst_type: {dst_type}.")
 
@@ -599,6 +613,16 @@ class DataSchema(ABC):
         for bw in word_bw_supported:
             if bw <= 0:
                 raise ValueError(f"word_bw values must be positive. Got {bw}.")
+
+        # framed_stream (plans/memstream_inband.md) reuses the axi4_stream method VERBATIM and renames
+        # it: framed_word is field-identical to axi4s_word (.data/.last), so the only differences are
+        # the stream C-type and the method name.  Generating-then-renaming keeps ONE source of truth
+        # for the boundary-read logic and touches no recursive generator.
+        if src_type == "framed_stream":
+            axi = cls.gen_read(src_type="axi4_stream", word_bw_supported=word_bw_supported,
+                               indent_level=indent_level)
+            return (axi.replace("read_axi4_stream", "read_framed_stream")
+                       .replace("streamutils::axi4s_word", "streamutils::framed_word"))
 
         if src_type not in {"array", "stream", "axi4_stream"}:
             raise ValueError(f"Unsupported src_type: {src_type}.")
@@ -854,7 +878,7 @@ class DataSchema(ABC):
         return merged
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         """Return the synthesizable declaration body emitted inside a generated header."""
         raise NotImplementedError(f"{cls.__name__} does not implement generated includes.")
 
@@ -2020,7 +2044,7 @@ class EnumField(DataField):
         return f"static_cast<{cls.cpp_class_name()}>(static_cast<unsigned int>({uint_expr}))"
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         enum_type = cls.enum_type
         if enum_type is None:
             raise TypeError(f"{cls.__name__} does not define enum_type.")
@@ -2582,7 +2606,7 @@ class DataList(DataSchema):
         return lines, curr_ipos, curr_iword
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         lines = [f"struct {cls.cpp_class_name()} {{"]
         for name, definition in cls._iter_elements():
             schema_cls = definition["schema"]
@@ -2629,7 +2653,7 @@ class DataList(DataSchema):
             lines.extend(unpack_decl.splitlines())
 
         if word_bw_supported:
-            for dst_type in ("array", "stream", "axi4_stream"):
+            for dst_type in (("array", "stream", "axi4_stream") + (("framed_stream",) if framed else ())):
                 lines.append("")
                 lines.extend(
                     cls.gen_write(
@@ -2639,7 +2663,7 @@ class DataList(DataSchema):
                     ).splitlines()
                 )
 
-            for src_type in ("array", "stream", "axi4_stream"):
+            for src_type in (("array", "stream", "axi4_stream") + (("framed_stream",) if framed else ())):
                 lines.append("")
                 lines.extend(
                     cls.gen_read(
@@ -4124,7 +4148,7 @@ class DataArray(DataSchema):
         return lines
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         lines = [f"struct {cls.cpp_class_name()} {{"]
         lines.extend(cls.gen_class_elems(indent_level=1))
         lines.append("")
@@ -4171,10 +4195,10 @@ class DataArray(DataSchema):
             lines.append("")
             lines.extend(stream_helpers.splitlines())
         if word_bw_supported:
-            for dst_type in ("array", "stream", "axi4_stream"):
+            for dst_type in (("array", "stream", "axi4_stream") + (("framed_stream",) if framed else ())):
                 lines.append("")
                 lines.extend(cls.gen_write(dst_type=dst_type, word_bw_supported=word_bw_supported, indent_level=1).splitlines())
-            for src_type in ("array", "stream", "axi4_stream"):
+            for src_type in (("array", "stream", "axi4_stream") + (("framed_stream",) if framed else ())):
                 lines.append("")
                 lines.extend(cls.gen_read(src_type=src_type, word_bw_supported=word_bw_supported, indent_level=1).splitlines())
         tb_member_declarations = cls._gen_tb_member_declarations(indent_level=1)
@@ -4784,7 +4808,7 @@ class VarDataArray(DataSchema):
         return []
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         """Generate a C++ struct for this ``VarDataArray``.
 
         The struct holds an in-band ``len`` field and a fixed-capacity ``data``
@@ -4946,6 +4970,7 @@ class DataSchemaStep(Buildable):
         word_bw_supported: list[int] | None = None,
         include_dir: str | None = None,
         include_filename: str | None = None,
+        framed: bool = False,
     ) -> None:
         if not schema_cls.can_gen_include:
             raise ValueError(
@@ -4956,6 +4981,9 @@ class DataSchemaStep(Buildable):
                 raise ValueError(f"word_bw values must be positive. Got {bw}.")
         self._schema = schema_cls
         self._word_bw: list[int] = list(word_bw_supported) if word_bw_supported else []
+        #: When True, also emit the framed_stream read/write methods (plans/memstream_inband.md).
+        #: Default False -> a schema's header is byte-identical to before.
+        self._framed: bool = framed
         self._include_dir: str = include_dir if include_dir is not None else schema_cls.include_dir
         self._include_filename: str | None = include_filename
         self._streamutils_output_dir: Path = Path(".")
@@ -5091,7 +5119,7 @@ class DataSchemaStep(Buildable):
             lines.extend(dep_include_lines)
             lines.append("")
 
-        lines.append(self._schema._gen_include_decl(word_bw_supported=self._word_bw))
+        lines.append(self._schema._gen_include_decl(word_bw_supported=self._word_bw, framed=self._framed))
         lines.extend([
             "",
             f"#endif // {self.include_guard()}",
