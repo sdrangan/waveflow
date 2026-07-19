@@ -53,12 +53,29 @@ job (payload = coefficients) without change. The consumer owns decoding.
 - **No opcode at the transport.** An opcode is a *routing* tag; it only earns its place at a router
   demuxing one stream to several handlers. Point-to-point needs none — the consumer knows its payload.
   A `StreamRouter` reading `{opcode, len}` is a later, optional layer (the SALSA multi-app path).
-- **No TLAST on internal channels.** Internal task-to-task channels are `hls::stream<ap_uint<W>>`
-  (`'word'` flavor); TLAST would require switching every fixed task body to the `'axi4s'` flavor
-  (`ap_axis<W,0,0,0>`), since *"an `axi4s_word` body will not bind to an `ap_uint` FIFO"*. And it would
-  be **redundant**: the consumer already knows `xfer_len`/`data_len` from the descriptor, so TLAST buys
-  only an assertion the generator already guarantees. Verify by **counting in the consumer** instead.
-  TLAST stays where it earns its keep — the top-level AXIS boundary.
+- **TLAST IS required on the framed channels — this reverses an earlier call.** The first draft of
+  this plan said TLAST was redundant "because the consumer already knows the lengths." Implementing it
+  disproved that. Two facts, found the hard way (Stage 1):
+  1. **The pysim stream model is burst-granular.** `StreamIFSlave.get()` consumes the *whole* next
+     burst and truncation is an error signal (*"a burst that was truncated … indicates a late/missing
+     TLAST"*). A descriptor and its payload therefore **cannot share a burst** — each logical segment
+     is its own burst.
+  2. **Relaying an opaque segment requires packet boundaries.** A countless `get()` (the only read
+     that does not require knowing the contents) is *refused* unless `has_tlast=True`. The reader must
+     relay bursts it refuses to parse, so it cannot supply a word count — it needs the boundary.
+
+  The "lengths make TLAST redundant" argument holds only for a consumer that *parses*. A **relay** that
+  by design refuses to parse has nothing to count with. So the framed streams set `has_tlast=True`, and
+  the payload's boundary and its declared `xfer_len` cross-check each other (a mis-framed producer
+  fails loudly instead of silently shifting the data behind it).
+
+  **Consequence for Stage 2 (important):** internal task-to-task channels are declared
+  `hls::stream<ap_uint<W>>` (`'word'` flavor) and carry no TLAST, and *"an `axi4s_word` body will not
+  bind to an `ap_uint` FIFO"*. So the RTL side of the framed path needs the **`'axi4s'` flavor**
+  (`ap_axis<W,0,0,0>`) on those edges — a flavor switch for the framed bodies plus
+  `composite_gen`'s edge declaration. That cost was **not** in the original estimate; weigh it before
+  starting Stage 2. (Alternative: keep `'word'` internally and give the relay an explicit per-segment
+  word count, trading the reader's opacity for the cheaper channel type.)
 - **`VarDataArray` is not on the critical path.** Dynamic-sized schemas would make the *declaration*
   nicer later, but they cannot remove the bound in RTL (fixed hardware needs a buffer; `VarDataArray`
   itself carries `len_max`), and its codegen is unwired (`can_gen_include = False`).
