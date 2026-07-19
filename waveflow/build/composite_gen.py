@@ -163,6 +163,31 @@ class StreamEdge:
 
 
 @dataclass(frozen=True)
+class FramedEdge:
+    """A **framed** internal edge -> ``hls_thread_local hls::stream<streamutils::framed_word<W> >``.
+
+    Like :class:`StreamEdge`, but the channel word carries a per-beat packet boundary
+    (``framed_word{data, last}``) so a consumer can relay an opaque packet it refuses to parse (a
+    countless read needs a boundary, not a count).  ``ap_axis`` cannot be used on an internal FIFO
+    (Vitis HLS 214-208), so the boundary rides on the ``framed_word`` struct instead; the real TLAST
+    lives only on the top-level ``axi4s`` boundary ports.  See ``plans/memstream_inband.md``.
+
+    Produced by ``derive_internal_edges`` for a ``StreamIF`` whose ``framed`` flag is set; a plain
+    ``StreamIF`` still lowers to a :class:`StreamEdge`, so nothing existing changes."""
+    name: str
+    master_ep: object
+    slave_ep: object
+    depth: int | None = None
+
+    def decl(self, width: int) -> str:
+        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{width}> > "
+                f"{self.name};")
+        if self.depth is not None:
+            line += f"\n    #pragma HLS STREAM variable={self.name} depth={self.depth}"
+        return line
+
+
+@dataclass(frozen=True)
 class SobEdge:
     """A block (SOBIF) internal edge -> ``hls_thread_local hls::stream_of_blocks<T[N], 2>`` (the
     depth-2 ping-pong)."""

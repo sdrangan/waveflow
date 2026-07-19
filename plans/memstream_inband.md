@@ -105,6 +105,26 @@ job (payload = coefficients) without change. The consumer owns decoding.
   nicer later, but they cannot remove the bound in RTL (fixed hardware needs a buffer; `VarDataArray`
   itself carries `len_max`), and its codegen is unwired (`can_gen_include = False`).
 
+## Codegen shape (settled during Stage 2 step 1)
+
+- **`framed_word<W> { ap_uint<W> data; ap_uint<1> last; }`** in `streamutils.hpp` — a strict subset of
+  `ap_axis`, **same member names** (`.data`/`.last`) so one template serves both.  (`ap_axis`'s C++
+  member is `.last`, not `.tlast` — the *signal* is TLAST; the *field* is `.last`.)
+- **Two read/write realizations, not three.** `read_stream`/`write_stream` for a bare `ap_uint<W>`
+  (the beat IS the data); **`read_boundary_word`/`write_boundary_word<WordT,W>`** shared by *both*
+  boundary-carrying words (`axi4s_word` at a port, `framed_word` internal) — the body only touches
+  `.data`/`.last`.  The write's `keep`/`strb` difference is isolated in `set_axis_aux` (overloaded:
+  no-op for `framed_word`, sets them for `axi4s_word`).  A template is **not** a runtime conditional —
+  each instantiation is separate, branch-free RTL, so DRY is free.
+- **Three *type*-flavors on one axis** — `word` / `framed` / `axi4s` = **no boundary / internal
+  boundary / interface boundary**.  The flavor selects the channel *type*; the two boundary flavors
+  share the one helper realization.
+- **`StreamIF.framed: bool = False`** (opt-in; default keeps everything byte-identical) — chosen over
+  reusing `has_tlast` because endpoints already default `has_tlast=True` and internal edges are always
+  `ap_uint` today; a fresh flag avoids silently re-typing existing edges.
+- **`FramedEdge`** (in `composite_gen`, mirrors `SobEdge`) emits the `framed_word` FIFO; produced by
+  `derive_internal_edges` only for a `framed` `StreamIF` (not wired yet — Stage 2 step 2).
+
 ## Staging (each stage leaves every gate green)
 
 **Blast radius:** `MemRStream`/`MemWStream` are used by **mem_copy** and the **standalone
