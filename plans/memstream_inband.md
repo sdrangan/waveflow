@@ -105,6 +105,22 @@ job (payload = coefficients) without change. The consumer owns decoding.
   nicer later, but they cannot remove the bound in RTL (fixed hardware needs a buffer; `VarDataArray`
   itself carries `len_max`), and its codegen is unwired (`can_gen_include = False`).
 
+## Stage 2 progress (2026-07-18)
+
+- **step 1 DONE** (91e6acb) — `framed_word` + shared boundary helpers in `streamutils`,
+  `StreamIF.framed`, `FramedEdge`. Inert, byte-identical, csynth-clean @195 MHz.
+- **step 2a DONE** (a65319a) — per-schema `read_framed_stream`/`write_framed_stream` (generate the
+  `axi4_stream` method, rename; framed_word is field-identical). On-demand via
+  `DataSchemaStep(framed=True)`; default byte-identical. The generated method from a real schema
+  (`WrCmd`) csynths @240 MHz.
+- **step 2b NEXT** (not started): (1) `derive_internal_edges` produces a `FramedEdge` when the
+  `StreamIF` is `framed`; (2) `hwgen` `'framed'` flavor so a task body's stream args type as
+  `framed_word` + call the framed methods; (3) the **framed `mem_r`/`mem_w` task bodies** (hand-written,
+  matching the pysim `run_iter` — read `FwdCmd`/`WrCmd` via `read_framed_stream`, relay opaque bursts
+  via `read_boundary_word`, write via `write_boundary_word`/`write_framed_stream`); (4) mark the
+  mem_stream command schemas `framed` at their `DataSchemaStep`. Then **Stage 3** wires mem_copy and
+  re-baselines the XSI cycle count (2835 shifts by the added descriptor/payload beats — derive it).
+
 ## Codegen shape (settled during Stage 2 step 1)
 
 - **`framed_word<W> { ap_uint<W> data; ap_uint<1> last; }`** in `streamutils.hpp` — a strict subset of
