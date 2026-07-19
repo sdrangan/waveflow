@@ -14,10 +14,10 @@ the dispatch decision now comes from the component's kind, not a ``_kernel_metho
 | plain :class:`~waveflow.hw.hw_component.HwComponent` + regmap | ``leaf`` | ``on_start`` (interim) |
 | plain free-running ``HwComponent`` | ``leaf`` | ``run_proc`` |
 
-Note the ``FreeRunComp`` rows: leaf vs composite is decided by **content** (does it have
-sub-components), not by class — a leaf is the 1-task degenerate case of a composite, and both are one
-class (see ``plans/one_component_two_flows.md``). ``CompositeComp`` is a thin subclass that only
-renames the target; it routes through the ``FreeRunComp`` row like any other.
+Note the ``FreeRunComp`` rows: standalone vs composite is decided by **content** (does it have
+sub-components), not by class — a standalone component is the 1-task degenerate case of a composite,
+and both are the *same* class (see ``plans/one_component_two_flows.md``). There is no separate
+composite class to route around; a composite is just a ``FreeRunComp`` that added children.
 
 The dispatch is *thin*: it only names the method (and, later, the target/pragma); it does **not**
 re-implement extraction. Layering is preserved — this lives in ``build/`` and imports ``hw/`` classes;

@@ -2,19 +2,21 @@
 
 **One class, two shapes.**  A ``FreeRunComp`` is either
 
-* a **leaf** — you implement :meth:`run_iter` (one firing) and the base loops it forever; it lowers
-  to a single free-running ``ap_ctrl_none`` ``hls::task`` whose body is that ``run_iter``; or
+* **standalone** — you implement :meth:`run_iter` (one firing) and the base loops it forever; it
+  lowers to a single free-running ``ap_ctrl_none`` ``hls::task`` whose body is that ``run_iter``; or
 * a **composite** — you ``add_comp`` sub-components (themselves ``FreeRunComp``\\ s) wired by
-  ``add_if`` interfaces, and declare the ``boundary`` / ``ordered_subcomps`` / ``internal_edges`` the
-  generator walks; it lowers to one ``hls::task`` per child plus one channel per internal edge.
+  ``add_if`` interfaces, and name the ``boundary`` ports the generator walks (``ordered_subcomps`` /
+  ``internal_edges`` are derived); it lowers to one ``hls::task`` per child plus one channel per
+  internal edge.
 
-A leaf is literally the **1-task degenerate case** of a composite: it has one task (itself) and no
-internal edges (see the derived :attr:`boundary` / :attr:`ordered_subcomps` / :attr:`internal_edges`
-below), so :func:`~waveflow.build.composite_gen.composite_top_spec` walks both through the *same*
-generator.  There is no separate composite class — a composite is a ``FreeRunComp`` that has
-sub-components instead of a body.  (``CompositeComp`` survives in ``hw_composite.py`` only as a thin
-subclass that renames the codegen target; it is the same machinery.  See
-``plans/one_component_two_flows.md``.)
+A standalone component is literally the **1-task degenerate case** of a composite: it has one task
+(itself) and no internal edges (see the derived :attr:`boundary` / :attr:`ordered_subcomps` /
+:attr:`internal_edges` below), so :func:`~waveflow.build.composite_gen.composite_top_spec` walks both
+through the *same* generator.  **There is no separate composite class** — the top level of a design or
+a testbench is a ``FreeRunComp`` too, and a composite is just one that has sub-components instead of a
+body.  The kind is decided by content, not type: :meth:`_kind` returns ``'standalone'`` or
+``'composite'`` by inspecting whether the component overrode ``run_iter`` or added children.  See
+``plans/one_component_two_flows.md``.
 
 **Body XOR children** is the invariant: exactly one of "overrides ``run_iter``" and "has
 sub-components" holds.  It is an *instance* fact, not a class fact — a subclass's children arrive in
@@ -57,12 +59,12 @@ class FreeRunComp(HwComponent):
     #: this is ``potential_`` and not ``supported_``).
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
-    # -- kind: leaf (body) XOR composite (children) --------------------------------------------------
+    # -- kind: standalone (body) XOR composite (children) --------------------------------------------
 
     def _kind(self) -> str:
-        """``'leaf'`` (overrides :meth:`run_iter`) or ``'composite'`` (has sub-components) — never both,
-        never neither.  The **body-XOR-children** invariant, enforced post-construction (children are
-        populated in the subclass ``__post_init__``, so this cannot run at base-construction time)."""
+        """``'standalone'`` (overrides :meth:`run_iter`) or ``'composite'`` (has sub-components) — never
+        both, never neither.  The **body-XOR-children** invariant, enforced post-construction (children
+        are populated in the subclass ``__post_init__``, so this cannot run at base-construction time)."""
         has_body = type(self).run_iter is not FreeRunComp.run_iter
         has_children = bool(self.sub_comps)
         if has_body and has_children:
@@ -72,12 +74,12 @@ class FreeRunComp(HwComponent):
                 f"sub-component, or drop the sub-components."
             )
         if has_body:
-            return 'leaf'
+            return 'standalone'
         if has_children:
             return 'composite'
         raise TypeError(
             f"{type(self).__name__} has neither a run_iter body nor sub-components; it must either "
-            f"implement run_iter (a leaf kernel) or add_comp sub-components (a composite)."
+            f"implement run_iter (a standalone kernel) or add_comp sub-components (a composite)."
         )
 
     # -- boundary / subcomps / edges: derived for a leaf, overridable for a composite ---------------
@@ -168,7 +170,7 @@ class FreeRunComp(HwComponent):
         This is a plain method, not a generator function, so it can return ``None`` for the composite
         case (a generator function would return a generator, never ``None``, and always be scheduled).
         """
-        return self._run_iter_forever() if self._kind() == 'leaf' else None
+        return self._run_iter_forever() if self._kind() == 'standalone' else None
 
     def _run_iter_forever(self) -> ProcessGen[None]:
         while True:

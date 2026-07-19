@@ -42,7 +42,6 @@ from waveflow.build.streamutils import (  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwParam  # noqa: E402
-from waveflow.hw.hw_composite import CompositeComp  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.synth import synthesizable  # noqa: E402
@@ -197,7 +196,7 @@ class Sequencer(FreeRunComp):
 
 
 @dataclass
-class MemCopy(CompositeComp):
+class MemCopy(FreeRunComp):
     """Hierarchical memcpy composite: ``Sequencer -> MemRStream -> MemWStream`` over internal FIFOs.
 
     Top-level endpoints (the composite boundary): ``s_cmd`` (:class:`CopyCmd` in), ``m_in``

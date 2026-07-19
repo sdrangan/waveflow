@@ -1,6 +1,6 @@
 """Tests for `tb_top_spec` — the XSI testbench harness derived from a testbench component graph.
 
-The claim under test: a testbench declared as a `CompositeComp` carries enough information to
+The claim under test: a testbench declared as a composite `FreeRunComp` carries enough information to
 *derive* the models the hand-written testbench constructs by hand. If this holds, `main()` is
 emittable; if it does not, Stage 5 is dead.
 
@@ -99,7 +99,7 @@ def test_an_unwired_dut_port_fails_loudly():
 
 
 def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
-    """Regression: `kernel_task` does NOT identify the DUT — a CompositeComp has none (only its
+    """Regression: `kernel_task` does NOT identify the DUT — a composite has none (only its
     children do), so both the DUT and the participants answer False. The discriminator is
     `boundary` (RTL ports) vs `bfm_model()` (a TB model)."""
     tb = _tb()

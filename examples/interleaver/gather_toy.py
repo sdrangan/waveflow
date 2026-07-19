@@ -26,7 +26,7 @@ from waveflow.build.build import BuildConfig  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataArray, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwComponent, HwParam  # noqa: E402
-from waveflow.hw.hw_composite import CompositeComp  # noqa: E402
+from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave, StreamOfBlocksIF, SobIFMaster, SobIFSlave  # noqa: E402
 from waveflow.hw.mem_stream import KernelTask, WORD_BW_SUPPORTED  # noqa: E402
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
@@ -147,7 +147,7 @@ class Gather(HwComponent):
 
 
 @dataclass
-class GatherToy(CompositeComp):
+class GatherToy(FreeRunComp):
     """Minimal pure-AXIS kernel: Fill -> SOBIF -> Gather (no m_axi, no compute).
 
     Endpoints (boundary): ``s_in`` (word input), ``m_out`` (word output).

@@ -18,7 +18,7 @@ import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_component import HwParam
-from waveflow.hw.hw_composite import CompositeComp
+from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent, MemSeg
@@ -30,13 +30,14 @@ from waveflow.utils.burst_io import write_burst_bundle
 
 
 @dataclass
-class MemCopyTB(CompositeComp):
+class MemCopyTB(FreeRunComp):
     """The testbench as a component graph: three participants + the DUT, wired by interfaces.
 
     This is the same structure ``run_copy`` used to build inline as statements — a driver on
     ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi`` bundles, and the
-    :class:`MemCopy` DUT.  Declaring it as a :class:`CompositeComp` changes nothing about the
-    simulation; it changes what the structure *is*.  **A function body is code; a component graph is
+    :class:`MemCopy` DUT.  Declaring it as a composite :class:`FreeRunComp` (one with sub-components,
+    not a ``run_iter`` body) changes nothing about the simulation; it changes what the structure *is*.
+    **A function body is code; a component graph is
     data** — and only data can be walked.  ``composite_top_spec`` cannot introspect statements that
     have already executed, so a generator has no way to learn which participants exist or how they
     are wired.  As a graph, the same information generates the XSI testbench

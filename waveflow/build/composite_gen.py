@@ -505,7 +505,7 @@ class BfmInst:
 
 @dataclass(frozen=True)
 class TbSpec:
-    """A generated XSI testbench harness, derived from a testbench `CompositeComp`'s graph."""
+    """A generated XSI testbench harness, derived from a testbench composite's graph."""
     top_name: str                      # the DUT's top name (-> DESIGN_DLL, ports header)
     #: (cls, name, ctor-args, dyn_params) — e.g. the FlatMemory arena two m_axi bundles share.  Its
     #: DynParams (load_segs/dump_segs) attach here, not to the per-bundle models, so they emit once.
@@ -515,7 +515,7 @@ class TbSpec:
 
 def _find_dut(tb):
     """The one child that is the DUT: it has a ``boundary`` (RTL ports); participants have
-    ``bfm_model()``.  Not ``kernel_task`` — a CompositeComp DUT has none, only its children do."""
+    ``bfm_model()``.  Not ``kernel_task`` — a composite DUT has none, only its children do."""
     duts = [c for c in tb.ordered_subcomps if hasattr(c, "boundary")]
     if len(duts) != 1:
         raise ValueError(
