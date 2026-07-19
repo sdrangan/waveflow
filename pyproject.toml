@@ -43,9 +43,15 @@ clean_examples = "waveflow.scripts.clean_examples:main"
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# Automatically find the waveflow package and scripts
+# Automatically find the waveflow package, scripts, and the examples.
+# `examples*` is installed so `from examples.mem_copy... import ...` resolves from ANY working
+# directory after `pip install -e` -- not only when the repo root is on sys.path.  The example
+# packages have no __init__.py (PEP 420 namespace packages), so discovery needs `namespaces = true`.
+# `_archive` is excluded to match the pytest ignore.
 [tool.setuptools.packages.find]
-include = ["waveflow*", "scripts*"]
+include = ["waveflow*", "scripts*", "examples*"]
+exclude = ["examples._archive*"]
+namespaces = true
 
 # Include non-Python files (schemas, templates, docs assets)
 [tool.setuptools]

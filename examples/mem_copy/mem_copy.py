@@ -20,7 +20,6 @@ Run (project venv, from repo root)::
 """
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -28,8 +27,6 @@ from typing import ClassVar
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
-sys.path.insert(0, str(REPO))
 
 from waveflow.build.build import BuildConfig, BuildDag, SourceStep  # noqa: E402
 from waveflow.build.hwcodegen_steps import TaskBodyStep  # noqa: E402

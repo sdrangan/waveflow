@@ -17,14 +17,11 @@ Run (project venv, from repo root)::
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
-sys.path.insert(0, str(REPO))
 
 from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
 from waveflow.build.composite_gen import (  # noqa: E402

@@ -20,11 +20,9 @@ The example uses the standard build CLI; `pysim` is the default target:
 python examples/mem_copy/mem_copy_build.py --through pysim
 ```
 
-> **Run from the repository root.** Waveflow's examples import each other by their full path
-> (`examples.mem_copy.…`), so the repo root must be on `sys.path` — which it is when the repo root is
-> your working directory, as above. The build CLI *also* works if you `cd examples/mem_copy` and run
-> `python mem_copy_build.py …`, but the interactive `from examples.mem_copy.…` snippets below assume
-> the repo root, so that is the convention this guide follows throughout.
+> **Works from any directory.** The examples are an installed package (`pip install -e ".[dev]"`), so
+> `from examples.mem_copy.… import …` and the build CLI resolve wherever you run them — the repo root,
+> the example directory, anywhere. No `PYTHONPATH` or `sys.path` juggling.
 
 ```
 pysim:
