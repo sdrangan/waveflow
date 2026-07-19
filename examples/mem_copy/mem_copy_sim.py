@@ -24,7 +24,7 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent, MemSeg
 from waveflow.simulation.simulation import Simulation
 
-from examples.mem_copy.mem_copy import CopyCmd, MemCopy
+from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.utils.burst_io import write_burst_bundle
 
@@ -54,7 +54,9 @@ class MemCopyTB(FreeRunComp):
     #: This is what makes ``check(MemCopyTB, "sequential_xsi_tb")`` reach gate 4 (tb_top_spec).
     potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
 
-    jobs: tuple = ((16, 4096 // 8, 128),)
+    #: The scenario: each a :class:`~examples.mem_copy.mem_copy.CopyJob` (word coordinates).  Bare
+    #: ``(src, dst, n)`` tuples are accepted too and coerced.
+    jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
     mem_dwidth: HwParam[int] = 64
     #: Fixed run bound for the generated XSI main (comfortably past the ~2835 completion; the drain
     #: tail is a testbench constant, not the design's latency -- see the cycles note in the checker).
@@ -65,10 +67,12 @@ class MemCopyTB(FreeRunComp):
         super().__post_init__()
         w = int(self.mem_dwidth)
         bpw = w // 8
-        jobs = list(self.jobs)
+        # Accept CopyJobs or bare (src, dst, n) tuples; work in CopyJobs from here on.
+        self._jobs = [CopyJob.coerce(j) for j in self.jobs]
 
         # One flat arena covering every source and destination region (byte-addressed, base 0).
-        self.arena_words = max(max(s, d) + n for s, d, n in jobs) + 16
+        self.arena_words = max(max(job.src_off, job.dst_off) + job.n_words
+                               for job in self._jobs) + 16
         self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         self.mem.alloc(self.arena_words)             # one segment at word 0 (byte addr 0)
@@ -78,13 +82,16 @@ class MemCopyTB(FreeRunComp):
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 
-        # Pre-load each source region with a known, per-job-distinct pattern; keep the expectation.
+        # Pre-load each source region with a per-job-distinct, FULL-WIDTH pattern; keep the
+        # expectation.  A seeded PRNG (not arange*k) so every one of the w bits is exercised -- a
+        # codegen bug that dropped the high word half would slip past a low-magnitude ramp -- while
+        # staying reproducible: a failure replays exactly from the seed.
         self.expected: list[np.ndarray] = []
-        for j, (src, dst, n) in enumerate(jobs):
-            known = (np.arange(n, dtype=np.uint64) * 2654435761 + 12345 + j * 7919) \
-                & ((1 << w) - 1)
-            self.mem._mem.write(src * bpw, known.astype(np.uint64))
-            self.expected.append(known.astype(np.uint64))
+        for j, job in enumerate(self._jobs):
+            rng = np.random.default_rng(0xC0FFEE + j)
+            known = rng.integers(0, 1 << w, size=job.n_words, dtype=np.uint64)
+            self.mem._mem.write(job.src_off * bpw, known)
+            self.expected.append(known)
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
         # The testbench owns the schema: it serializes each command into raw stream words, writes them
@@ -92,8 +99,8 @@ class MemCopyTB(FreeRunComp):
         # form the driver accepts (and, once wired, the same bundle the XSI harness reads).  The
         # bundle is read eagerly, so the temp dir can go away right after construction.  `self.cmds` is
         # kept so the XSI vectors can be re-derived from the very commands the driver sends.
-        self.cmds = [CopyCmd(src_off=s, dst_off=d, n_words=n, tx_id=j)
-                     for j, (s, d, n) in enumerate(jobs)]
+        self.cmds = [CopyCmd(src_off=job.src_off, dst_off=job.dst_off, n_words=job.n_words, tx_id=j)
+                     for j, job in enumerate(self._jobs)]
         words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
         with tempfile.TemporaryDirectory() as _vd:
             write_burst_bundle(words, Path(_vd) / "cmd")
@@ -161,39 +168,41 @@ class MemCopyTB(FreeRunComp):
         each holds the very ``expected`` array the pysim golden asserts against.
         """
         g = np.zeros(self._nwords_tot, dtype=np.uint64)
-        for (_src, dst, n), exp in zip(self.jobs, self.expected):
-            g[dst:dst + n] = exp
+        for job, exp in zip(self._jobs, self.expected):
+            g[job.dst_off:job.dst_off + job.n_words] = exp
         return g
 
 
-def run_copy(jobs=((16, 4096 // 8, 128),), mem_dwidth: int = 64) -> "MemCopy":
+def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
+             mem_dwidth: int = 64) -> "MemCopy":
     """Run the :class:`MemCopyTB` graph and check every copy is bit-exact.
 
-    Returns the DUT (``s_done`` token count == number of jobs).  The structure now lives in
+    ``jobs`` are :class:`~examples.mem_copy.mem_copy.CopyJob`\\ s (bare ``(src, dst, n)`` tuples are
+    coerced).  Returns the DUT (``s_done`` token count == number of jobs).  The structure lives in
     ``MemCopyTB``; this is the driver: build it, run it, check it."""
     sim = Simulation()
     bpw = mem_dwidth // 8
     tb = MemCopyTB(name="tb", sim=sim, jobs=tuple(jobs), mem_dwidth=mem_dwidth)
-    mem, copier, done_sink, expected = tb.mem, tb.dut, tb.done_sink, tb.expected
+    mem, copier, done_sink = tb.mem, tb.dut, tb.done_sink
 
     sim.run_sim()
 
     ok = True
-    for (src, dst, n), exp in zip(jobs, expected):
-        got = mem._mem.read(dst * bpw, n).astype(np.uint64)
+    for job, exp in zip(tb._jobs, tb.expected):
+        got = mem._mem.read(job.dst_off * bpw, job.n_words).astype(np.uint64)
         job_ok = np.array_equal(got, exp)
         ok = ok and job_ok
-        print(f"[copy] src={src} dst={dst} n={n} ok={job_ok}")
+        print(f"[copy] src={job.src_off} dst={job.dst_off} n={job.n_words} ok={job_ok}")
     ndone = len(done_sink.words)
-    print(f"[copy] jobs={len(jobs)} done_tokens={ndone} all_ok={ok}")
+    print(f"[copy] jobs={len(tb._jobs)} done_tokens={ndone} all_ok={ok}")
     assert ok, "MemCopy mismatch (dst region != src region)"
-    assert ndone == len(jobs), f"expected {len(jobs)} done tokens, got {ndone}"
+    assert ndone == len(tb._jobs), f"expected {len(tb._jobs)} done tokens, got {ndone}"
     return copier
 
 
 def run_and_check() -> bool:
-    run_copy()                                             # single copy
-    run_copy(jobs=((16, 600, 128), (200, 900, 64)))        # back-to-back, distinct offsets
+    run_copy()                                                    # single copy
+    run_copy(jobs=(CopyJob(16, 600, 128), CopyJob(200, 900, 64)))  # back-to-back, distinct offsets
     print("mem_copy pysim golden: PASSED")
     return True
 

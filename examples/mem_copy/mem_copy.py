@@ -87,6 +87,33 @@ class CopyCmd(DataList):
     }
 
 
+@dataclass(frozen=True)
+class CopyJob:
+    """One copy in a test **scenario**: copy ``n_words`` from word offset ``src_off`` to word offset
+    ``dst_off``.  All three are **word coordinates** (not bytes).
+
+    This is the scenario-level spec, distinct from :class:`CopyCmd` (the serialized on-wire command
+    the driver actually plays).  Named fields so a scenario reads without memorizing tuple order; a
+    plain ``(src_off, dst_off, n_words)`` tuple is still accepted anywhere a ``CopyJob`` is, via
+    :meth:`coerce`."""
+    src_off: int
+    dst_off: int
+    n_words: int
+
+    @classmethod
+    def coerce(cls, job: "CopyJob | tuple[int, int, int]") -> "CopyJob":
+        """Accept a ``CopyJob`` or a bare ``(src, dst, n)`` triple; return a ``CopyJob``.
+
+        The last branch rebuilds by field, which also handles a ``CopyJob`` from a *different import*
+        of this module — running ``mem_copy.py`` as a script makes its ``CopyJob`` a distinct class
+        object from the package-imported one, so a plain ``isinstance`` would spuriously fail."""
+        if isinstance(job, cls):
+            return job
+        if isinstance(job, tuple):
+            return cls(*job)
+        return cls(job.src_off, job.dst_off, job.n_words)
+
+
 #: Schema classes the gen-include step emits C++ headers for (the composite's command structs).
 SCHEMA_CLASSES = [CopyCmd, MRCmd, MWCmd, MemComplete, XferMsgArr]
 
@@ -317,7 +344,7 @@ XSI_DST_W = [4096 + 128 * j for j in range(XSI_NUM_CMDS)]
 #: The same scenario as ``MemCopyTB``'s own ``jobs`` parameter.  This is what "one statement, two
 #: backends" actually means: **one class, two instantiations** — pysim builds a ``MemCopyTB`` with
 #: its jobs, the XSI generator builds one with these.  Nothing about the scenario is stated twice.
-XSI_JOBS = tuple((s, d, XSI_N) for s, d in zip(XSI_SRC_W, XSI_DST_W))
+XSI_JOBS = tuple(CopyJob(s, d, XSI_N) for s, d in zip(XSI_SRC_W, XSI_DST_W))
 
 
 def make_xsi_tb(width: int = DEFAULT_MEM_DW):
@@ -350,7 +377,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
     from waveflow.build.composite_gen import render_vectors_h
 
     tb = make_xsi_tb(width)
-    jobs = list(tb.jobs)
+    jobs = [CopyJob.coerce(j) for j in tb.jobs]
 
     return render_vectors_h(
         "mem_copy_vectors",
@@ -358,15 +385,15 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
             "MEM_DW": width,
             # The arena the graph's MemComponent declares -- not a second, hand-picked number.
             "MEM_NW": int(tb.mem.nwords_tot),
-            "N": int(jobs[0][2]),
+            "N": int(jobs[0].n_words),
             "NUM_CMDS": len(jobs),
             # MemComplete{len, xfer_len, xfer_msg[8]} -> nwords_per_inst(64) == 5.  Introspected:
             # the s_done framing is the schema's business, not the testbench's.
             "DONE_WORDS": MemComplete.nwords_per_inst(width),
         },
         arrays={
-            "SRC_W": ("int", [s for s, _d, _n in jobs]),
-            "DST_W": ("int", [d for _s, d, _n in jobs]),
+            "SRC_W": ("int", [job.src_off for job in jobs]),
+            "DST_W": ("int", [job.dst_off for job in jobs]),
         },
         note=("Derived from the MemCopyTB graph (examples/mem_copy/mem_copy_sim.py) built with\n"
               "XSI_JOBS -- the same class the pysim golden runs, instantiated with this scenario.\n"
@@ -425,13 +452,14 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
 
     vdir = Path(xsi_dir) / "vectors"
     tb = make_xsi_tb(width)
-    jobs = list(tb.jobs)
+    jobs = [CopyJob.coerce(j) for j in tb.jobs]
     done_words = MemComplete.nwords_per_inst(width)
 
     # 1) Correctness: each destination region equals the golden (the source pattern, copied).
     out = read_burst_bundle(vdir / "out")[0]
     golden = read_burst_bundle(vdir / "golden")[0]
-    for j, (_src, dst, n) in enumerate(jobs):
+    for j, job in enumerate(jobs):
+        dst, n = job.dst_off, job.n_words
         if not np.array_equal(out[dst:dst + n], golden[dst:dst + n]):
             bad = int(np.argmax(out[dst:dst + n] != golden[dst:dst + n]))
             raise AssertionError(
