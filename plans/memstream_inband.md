@@ -125,6 +125,33 @@ job (payload = coefficients) without change. The consumer owns decoding.
 - **`FramedEdge`** (in `composite_gen`, mirrors `SobEdge`) emits the `framed_word` FIFO; produced by
   `derive_internal_edges` only for a `framed` `StreamIF` (not wired yet — Stage 2 step 2).
 
+## Stage 2 step 2 — per-schema framed methods (mapped; approach settled, one decision open)
+
+**Approach = (b), refined.** Because `framed_word` is **field-identical** to `axi4s_word` (`.data`/
+`.last`), the generated framed method is the `axi4_stream` method *typed on `framed_word`* — the whole
+recursive `.data`/`.last` machinery is reused verbatim, not duplicated (even more sharing than calling
+`read_boundary_word`, which stays for the hand-written task bodies). So `framed_stream` is added as a
+`src_type`/`dst_type` that the recursive generators treat exactly like `axi4_stream`, differing only in
+the method signature's stream type + name (`read_framed_stream`/`write_framed_stream`).
+
+**Surface (mapped in `dataschema.py`):** ~30 `src_type=="axi4_stream"` / `dst_type=="axi4_stream"`
+conditional sites across the base + `DataList` + `DataArray` + `VarDataArray` recursive read/write
+generators, the two signature branches in `gen_read`/`gen_write`, and the validation guards
+(465, 603). Mechanical (extend each `== "axi4_stream"` to include `"framed_stream"`), but wide and in
+the most delicate module — do it site-by-site with a csynth probe.
+
+**OPEN DECISION (footprint) — yours to make.** The generation loops
+(`for src_type in ("array","stream","axi4_stream")` at 2632/2642/4174/4177) emit one method per type
+per schema. Adding `"framed_stream"` there gives **every schema** a framed read/write method:
+- **(i) all schemas** — simplest, uniform, but changes *every* schema header (additive but not
+  byte-identical) and bloats headers with methods most schemas never use.
+- **(ii) on-demand** — generate framed methods only for schemas actually used on a framed stream (a
+  per-schema opt-in / driven by the graph). Minimal footprint, byte-identical for untouched schemas,
+  but needs plumbing "which schemas are framed."
+
+I recommend **(ii)** — it matches the `framed=False`-default, nothing-else-moves discipline the whole
+plan has held. But it's a real footprint tradeoff, so it's a decision to confirm before the sweep.
+
 ## Staging (each stage leaves every gate green)
 
 **Blast radius:** `MemRStream`/`MemWStream` are used by **mem_copy** and the **standalone
