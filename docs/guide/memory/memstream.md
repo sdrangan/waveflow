@@ -282,7 +282,7 @@ h.run(N_CYCLES);                                         // step the generated h
 ```
 
 This is the same split as [`sequential_xsi_tb`](../flows/freerun_seq.md), Flow 2's testbench target:
-a `CompositeComp` testbench graph (DUT + BFM participants, wired by interfaces) is walked to the
+a composite testbench graph (DUT + BFM participants, wired by interfaces) is walked to the
 harness, exactly as the DUT graph is walked to the top. `check(MemCopyTB, "sequential_xsi_tb")` runs
 that generator.
 

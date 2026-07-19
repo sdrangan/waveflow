@@ -35,8 +35,8 @@ Each *kind* of component declares the targets that exist for it, as `potential_t
 |---|---|---|
 | `control_driven_kernel` | [`HostActivated`](../flows/components.md) | **Built** |
 | `sequential_vitis_tb` | [`SeqTB`](../flows/components.md) | **Built** |
-| `free_running_kernel` | [`FreeRunComp`](../flows/components.md) | Named, not implemented |
-| `composite_kernel` | [`CompositeComp`](../flows/components.md) | Named, not implemented |
+| `free_running_kernel` | [`FreeRunComp`](../flows/components.md) (standalone) | Named, not implemented |
+| `composite_kernel` | [`FreeRunComp`](../flows/components.md) (composite) | Named, not implemented |
 | `sequential_xsi_tb` | — | Named, not implemented |
 | `concurrent_systemc_tb` | — | Named, not implemented |
 | `bitstream` | — | Named, not implemented |
@@ -55,8 +55,8 @@ the [free-running and bitstream flows](../flows/); nothing generates them today.
 Generating a target takes one input — a **source**. A source is a Python class: the `HwComponent`
 you want realized (`SimpFunComponent`), or the [`SeqTB`](../flows/components.md) that drives it
 (`SimpFunTBHls`). You never name a method; the entry follows from the component's *kind*
-(`HostActivated` → `on_start`, `FreeRunComp` → `run_iter`, `SeqTB` → `main`, and a `CompositeComp` has
-no body at all — its codegen is the sub-component graph).
+(`HostActivated` → `on_start`, a standalone `FreeRunComp` → `run_iter`, `SeqTB` → `main`, and a
+composite `FreeRunComp` has no body at all — its codegen is the sub-component graph).
 
 Generation is then two steps over the same `(source × target)` pair:
 

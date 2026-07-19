@@ -50,7 +50,7 @@ discipline now lives in the loop and the models, not in code you maintain per te
 
 ### Generated — from the testbench graph
 
-When the testbench is declared as a component graph (a `CompositeComp` holding the DUT and its
+When the testbench is declared as a component graph (a composite `FreeRunComp` holding the DUT and its
 participants), walking it produces the harness *and* the `main`. `mem_copy` is the worked example:
 each participant declares its own BFM twin via `bfm_model()`, so the mapping is derived rather than
 maintained, and the entire hand-written C++ surface is:

@@ -7,7 +7,7 @@ nav_order: 1
 audience: hls
 applies_to: [HwComponent]
 api: [kernel_files_to_str, cpp_kernel_name, extract_kernel, synthesizable, check]
-summary: "How an HwComponent becomes a kernel: a leaf generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, FreeRunComp -> run_iter, CompositeComp -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
+summary: "How an HwComponent becomes a kernel: a standalone component generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, standalone FreeRunComp -> run_iter, composite FreeRunComp -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
 ---
 # Component structure
 
@@ -62,16 +62,17 @@ The entry follows from the component's **kind**. You never name it; the class st
 | Kind                                               | Entry extracted                                    | Why                                                                   |
 | -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
 | [`HostActivated`](../flows/components.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
-| [`FreeRunComp`](../flows/components.md)         | `run_iter`                                       | *one firing*; the `while True` belongs to the base, not your code |
-| [`CompositeComp`](../flows/components.md)     | — (see below)                                     | its body comes from the graph, not a method                           |
-| plain`HwComponent`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated leaf — see below                                     |
+| [`FreeRunComp`](../flows/components.md) (standalone) | `run_iter`                                 | *one firing*; the `while True` belongs to the base, not your code |
+| [`FreeRunComp`](../flows/components.md) (composite)  | — (see below)                              | its body comes from the graph, not a method                           |
+| plain`HwComponent`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                    |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
 routes to `main()` instead ([Testbench](./testbench.md)).
 
 **A composite still generates a kernel** — the same single top-level function as any other component.
-What differs is only where its *contents* come from: a [`CompositeComp`](../flows/components.md)
-declares no body, so instead of extracting a method, codegen builds the function from the
+What differs is only where its *contents* come from: a composite (a
+[`FreeRunComp`](../flows/components.md) with sub-components) declares no body, so instead of extracting
+a method, codegen builds the function from the
 **sub-component graph** — one `hls::task` per child, one channel declaration per internal edge, and the
 boundary endpoints as its ports. Same output shape, different source.
 
@@ -136,9 +137,10 @@ Hooks are emitted into a namespace of `<kernel>_impl` by default, so the call si
 > **(a)** it owns no sub-components or internal interfaces, and
 > **(b)** its `on_start` passes the [extractor](./extractor.md)'s rules.
 
-Rule **(a)** is structural: a leaf becomes *one function*, and a single function has nowhere to put a
-sub-component or an internal channel. Emitting one anyway would silently drop them — so it raises, and
-the message points at `CompositeComp`, whose codegen *is* the graph. Rule **(b)** is the body.
+Rule **(a)** is structural: a standalone component becomes *one function*, and a single function has
+nowhere to put a sub-component or an internal channel. Emitting one anyway would silently drop them —
+so it raises, and the message points at making it a composite, whose codegen *is* the graph. Rule
+**(b)** is the body.
 
 The same shape holds for the other kinds, with the composite inverted: it *must* own a graph.
 

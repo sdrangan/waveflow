@@ -146,14 +146,14 @@ lowered from `run_iter` — the dividing line is `m_axi`). `MemWStream` here is 
 
 ## Writing the composite: `MemCopy`
 
-The composite is a `CompositeComp` (a `FreeRunComp` with sub-components instead of a body). It has **no
-`run_iter`** — its children do the work; it only declares structure. Three things, all in
-`__post_init__`:
+The composite is a `FreeRunComp` with sub-components instead of a `run_iter` body — that is what
+"composite" means here. It has **no `run_iter`** — its children do the work; it only declares
+structure. Three things, all in `__post_init__`:
 
 **1. Add the sub-components** (insertion order is the generated `hls::task` order):
 
 ```python
-class MemCopy(CompositeComp):
+class MemCopy(FreeRunComp):
     cpp_kernel_name: ClassVar[str | None] = "mem_copy"
 
     def __post_init__(self) -> None:
@@ -187,14 +187,14 @@ a slave on another, and becomes an on-chip FIFO in the generated top:
 Everything else about the graph is *derived from what you already wrote*, because declaring it twice is
 how two descriptions drift apart:
 
-| what the generator needs | where it comes from |
-|---|---|
-| which children become `hls::task`s, in what order | `add_comp` order |
-| the internal FIFOs and their C++ names | the `add_if` interfaces — each one *is* an edge, named after itself |
-| how each edge lowers | the interface's **type** (a `StreamIF` is an `hls::stream`; a `StreamOfBlocksIF` is a `stream_of_blocks` sized by its `element_type`) |
-| which endpoints are boundary ports, in what order | any child endpoint *not* bound to an internal interface, in `add_comp` × `add_endpoint` order |
-| each port's direction | the endpoint's **type** (`StreamIFSlave` → input, `MMIFWriteMaster` → written `m_axi`) |
-| the `gmem` bundle assignment | policy, applied in boundary order — `m_in` → gmem0, `m_out` → gmem1 |
+| what the generator needs                           | where it comes from                                                                                                                                  |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| which children become`hls::task`s, in what order | `add_comp` order                                                                                                                                   |
+| the internal FIFOs and their C++ names             | the`add_if` interfaces — each one *is* an edge, named after itself                                                                              |
+| how each edge lowers                               | the interface's**type** (a `StreamIF` is an `hls::stream`; a `StreamOfBlocksIF` is a `stream_of_blocks` sized by its `element_type`) |
+| which endpoints are boundary ports, in what order  | any child endpoint*not* bound to an internal interface, in `add_comp` × `add_endpoint` order                                                  |
+| each port's direction                              | the endpoint's**type** (`StreamIFSlave` → input, `MMIFWriteMaster` → written `m_axi`)                                                  |
+| the`gmem` bundle assignment                      | policy, applied in boundary order —`m_in` → gmem0, `m_out` → gmem1                                                                            |
 
 Only the *names* are yours to say, and only because they cannot be derived: both `MemRStream` and
 `MemWStream` call their AXI port `m_mem`, so the top's `m_in` / `m_out` have to be stated.

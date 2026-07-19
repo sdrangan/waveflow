@@ -43,7 +43,8 @@ the testbench, runs it, checks it, and hands back the DUT so you can inspect wha
 ## What you write
 
 The entire hand-written surface for this rung is one class:
-`MemCopyTB(CompositeComp)` in [`mem_copy_sim.py`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/mem_copy_sim.py).
+`MemCopyTB(FreeRunComp)` — a composite (a `FreeRunComp` with sub-components) — in
+[`mem_copy_sim.py`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/mem_copy_sim.py).
 Everything it *uses* — the driver, the sink, the memory model, the interfaces, the run loop — is
 framework. What you write is `__post_init__`: instantiate the participants around the DUT and wire
 them. Walking through it, in order.
@@ -52,7 +53,7 @@ them. Walking through it, in order.
 
 ```python
 @dataclass
-class MemCopyTB(CompositeComp):
+class MemCopyTB(FreeRunComp):
     jobs: tuple = ((16, 4096 // 8, 128),)     # (src_off, dst_off, n_words) per job
     mem_dwidth: HwParam[int] = 64
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
