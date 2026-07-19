@@ -63,6 +63,23 @@ loop at the **6-failure baseline** · **byte-identical generated code** (`gen/` 
   in-process seed from `__post_init__`. Fixes the seed-in-process-vs-file asymmetry.
 - `mem_image`/`golden_image` become the scenario written by `write_scenario`, read back for the check.
 
+**Scoping notes (from Stage 1 recon):**
+- **Blast radius is contained to mem_copy** — it is the *only* Python TB that sets `mem.load_segs`
+  (`mem_copy_sim.py:82`); the interleaver drives memory from hand-written C++ mains, not a Python
+  `MemComponent`. So a `MemComponent.pre_sim()` guarded on `if not self.load_segs: return` is a no-op
+  everywhere else. Still, it touches the **shared** `MemComponent` base (no `pre_sim`/`post_sim` today),
+  so review the change against other examples before merging.
+- **The real work is relocating the seed, not the lifecycle method.** Today `__post_init__` seeds the
+  arena in-process AND that seed is the source for `self.expected` and for `mem_image` (which *reads the
+  seeded arena*). Moving the load to `pre_sim` means: the seed computation (the PRNG loop) moves to
+  `write_scenario`, which computes the patterns → writes `vectors/mem_in` → stores `self.expected`; and
+  `mem_image` can no longer read the arena at construction (it is empty until `pre_sim`), so it must be
+  derived from the computed scenario instead. Do these together.
+- **Root resolution**: `MemComponent` needs the same `root` anchor as `StreamDriver` to resolve
+  `"vectors/mem_in"` at run time. Set it in `write_scenario` alongside `driver.root`.
+- **Don't break XSI**: `load_segs`/`dump_segs` stay `DynParam`s the harness emits; the C++ `FlatMemory`
+  still loads/dumps them. Only the *pysim* side gains a loader. Gate `-m xsi` 2835 as always.
+
 ### Stage 3 — One scenario writer
 - `write_mem_copy_xsi_bundles(xsi_dir)` becomes a thin wrapper over `tb.write_scenario(xsi_dir)` — the
   **single** producer of `vectors/{s_cmd,mem_in,golden}` for both backends. Document the anchor rule.
