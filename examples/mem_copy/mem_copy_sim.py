@@ -75,23 +75,19 @@ class MemCopyTB(FreeRunComp):
                                for job in self._jobs) + 16
         self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
-        self.mem.alloc(self.arena_words)             # one segment at word 0 (byte addr 0)
-        # XSI: the memory seeds itself from vectors/mem_in in pre_sim and dumps vectors/out in post_sim
-        # -- DynParams the generated harness emits, so the source pattern lives once, in Python (see
-        # mem_copy.write_mem_copy_xsi_bundles).  Unused by the pysim run below, which seeds mem directly.
+        # Allocate the full capacity so the memory is the same size as the RTL FlatMemory and the whole
+        # vectors/mem_in image loads directly in pre_sim (no clip).  The DUT still addresses only
+        # [0, arena_words) -- the extra is headroom for the image.
+        self.mem.alloc(int(self.mem.nwords_tot))
+        # Both backends seed the memory from vectors/mem_in in pre_sim (load_segs) and the RTL memory
+        # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
+        # MemComponent.pre_sim loads the same bundle (root set in write_scenario).
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 
-        # Pre-load each source region with a per-job-distinct, FULL-WIDTH pattern; keep the
-        # expectation.  A seeded PRNG (not arange*k) so every one of the w bits is exercised -- a
-        # codegen bug that dropped the high word half would slip past a low-magnitude ramp -- while
-        # staying reproducible: a failure replays exactly from the seed.
+        # The scenario (source patterns + expectation) is materialized in write_scenario, not here --
+        # __post_init__ is pure structure.
         self.expected: list[np.ndarray] = []
-        for j, job in enumerate(self._jobs):
-            rng = np.random.default_rng(0xC0FFEE + j)
-            known = rng.integers(0, 1 << w, size=job.n_words, dtype=np.uint64)
-            self.mem._mem.write(job.src_off * bpw, known)
-            self.expected.append(known)
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
         # The testbench owns the schema: it serializes each command into raw stream words.  Those words
@@ -136,58 +132,39 @@ class MemCopyTB(FreeRunComp):
         assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
 
 
-    # -- the scenario as word images -------------------------------------------------------------
-    #
-    # The source pattern is written ONCE, into the arena above.  These read it back out, so the XSI
-    # bundles (`vectors/mem_in` / `vectors/golden`) and the pysim run are the same bytes by
-    # construction rather than by two formulas agreeing -- the same reason the command bundle is
-    # taken from `self.driver.bursts` rather than re-serialized.
-
-    @property
-    def mem_image(self) -> np.ndarray:
-        """The seeded arena: what the XSI memory loads in ``pre_sim`` as ``vectors/mem_in``.
-
-        Sized to the memory's full word count, but only ``arena_words`` is allocated (and only the
-        source regions within it are non-zero) — so the readable segment is read back and the rest
-        left zero, matching the flat arena the XSI ``FlatMemory`` starts from.
-        """
-        img = np.zeros(self._nwords_tot, dtype=np.uint64)
-        img[:self.arena_words] = np.asarray(self.mem._mem.read(0, self.arena_words),
-                                            dtype=np.uint64)
-        return img
-
-    @property
-    def golden_image(self) -> np.ndarray:
-        """The expected result as ``vectors/golden``.
-
-        Only the **destination** regions are populated — those are what the checker compares, and
-        each holds the very ``expected`` array the pysim golden asserts against.
-        """
-        g = np.zeros(self._nwords_tot, dtype=np.uint64)
-        for job, exp in zip(self._jobs, self.expected):
-            g[job.dst_off:job.dst_off + job.n_words] = exp
-        return g
-
     def write_scenario(self, root) -> None:
-        """Materialize **the whole scenario** under ``<root>/vectors`` and point the driver at it.
+        """Materialize **the whole scenario** under ``<root>/vectors`` and point the participants at it.
 
         The single scenario writer for both backends — pysim (``run_copy`` calls it before ``run_sim``)
-        and XSI (``write_mem_copy_xsi_bundles`` calls it with the ``xsi/`` dir).  Writes:
+        and XSI (``write_mem_copy_xsi_bundles`` calls it with the ``xsi/`` dir).  Computes the source
+        patterns once (a seeded PRNG per job, full-width so every one of the ``w`` bits is exercised and
+        a dropped high half would show; reproducible from the seed), stores ``self.expected`` for the
+        check, and writes:
 
         - ``vectors/s_cmd``  — the command stream the driver plays (``cmd_words``);
-        - ``vectors/mem_in`` — the source arena the XSI ``FlatMemory`` loads in ``pre_sim``;
+        - ``vectors/mem_in`` — the source arena **both** memories load in ``pre_sim``;
         - ``vectors/golden`` — the expected arena after the copy.
 
-        Sets ``driver.root`` so the driver's ``pre_sim`` resolves ``vectors/s_cmd`` against *root* — the
-        same on-disk bundle the XSI harness reads.  (pysim still reads the memory from the in-process
-        seed; ``mem_in`` is written for XSI and for when the memory load is unified.)
+        Then points the driver and memory at *root* so their ``pre_sim`` resolves the relative bundle
+        paths against it — the same on-disk bundles the XSI harness reads.
         """
         root = Path(root)
         vdir = root / "vectors"
+        w = int(self.mem_dwidth)
+        mem_in = np.zeros(self._nwords_tot, dtype=np.uint64)
+        golden = np.zeros(self._nwords_tot, dtype=np.uint64)
+        self.expected = []
+        for j, job in enumerate(self._jobs):
+            rng = np.random.default_rng(0xC0FFEE + j)
+            known = rng.integers(0, 1 << w, size=job.n_words, dtype=np.uint64)
+            mem_in[job.src_off:job.src_off + job.n_words] = known
+            golden[job.dst_off:job.dst_off + job.n_words] = known
+            self.expected.append(known)
         write_burst_bundle(self.cmd_words, vdir / "s_cmd")
-        write_burst_bundle([self.mem_image], vdir / "mem_in")
-        write_burst_bundle([self.golden_image], vdir / "golden")
+        write_burst_bundle([mem_in], vdir / "mem_in")
+        write_burst_bundle([golden], vdir / "golden")
         self.driver.root = root
+        self.mem.root = root
 
 
 def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),

@@ -472,6 +472,10 @@ class MemComponent(SimObj):
     #: pysim (the memory is seeded by the testbench directly).
     load_segs: DynParam[list[MemSeg]] = field(default_factory=list)
     dump_segs: DynParam[list[MemSeg]] = field(default_factory=list)
+    #: pysim run-time anchor for the (relative) ``load_segs``/``dump_segs`` bundle paths — set by
+    #: whoever materializes the scenario (an example/build dir or a temp dir).  ``None`` → resolve
+    #: against the process cwd.  Runtime config; never emitted to codegen.
+    root: Any = None
 
     def bfm_model(self):
         """XSI twin: the ``FlatMemory`` arena the AXI-MM slave models serve out of.
@@ -536,6 +540,31 @@ class MemComponent(SimObj):
             # modeled aggregately by the poller registry, so the peek is free).
             peek_read=lambda nwords, local_addr: self._mem.read(local_addr, nwords),
         )
+
+    def pre_sim(self) -> None:
+        """Seed the memory from ``load_segs`` — the pysim mirror of the C++ ``FlatMemory::pre_sim``.
+
+        Empty ``load_segs`` (the default) => no-op: an in-process-seeded testbench sets nothing here.
+        A file-driven testbench sets ``load_segs`` (and :attr:`root`), and the memory loads each
+        region's bundle just like the RTL memory does — so both backends read the same ``mem_in``
+        bytes at the same lifecycle point.  Bundle paths are resolved against :attr:`root` at run time
+        (like the :class:`~waveflow.simulation.stream_tb.StreamDriver`), so a relative
+        ``"vectors/mem_in"`` works from any cwd.
+        """
+        super().pre_sim()
+        if not self.load_segs:
+            return
+        from pathlib import Path
+
+        from waveflow.utils.burst_io import read_burst_bundle
+
+        bpw = int(self.word_size) // 8
+        for seg in self.load_segs:
+            p = Path(seg.bundle)
+            if self.root is not None and not p.is_absolute():
+                p = Path(self.root) / p
+            words = np.concatenate([np.asarray(b, dtype=np.uint64) for b in read_burst_bundle(p)])
+            self._mem.write(seg.off * bpw, words)
 
     def _access_delay(self, nwords: int) -> float:
         """Modeled RAM access time (seconds) for an *nwords*-word transfer."""
