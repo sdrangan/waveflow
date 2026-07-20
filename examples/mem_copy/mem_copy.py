@@ -381,14 +381,15 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
     - ``vectors/golden`` — the expected arena after the copy (each destination region = the source
       pattern); the TB compares the written destination regions against it.
 
-    The whole scenario is stated exactly once, in
-    :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB`, and materialized by its
-    :meth:`~examples.mem_copy.mem_copy_sim.MemCopyTB.write_scenario` — the **single** scenario writer
-    for both backends.  This is a thin wrapper: it builds the testbench and writes its scenario into
-    ``<xsi_dir>/vectors``.  pysim's ``run_copy`` calls the same ``write_scenario`` with a temp root, so
-    the pysim run and the XSI run cannot start from different bytes.
+    The whole scenario is materialized by
+    :meth:`~examples.mem_copy.mem_copy_sim.MemCopySim.write_scenario` — the **single** scenario writer
+    for both backends.  This is a thin wrapper: it builds a :class:`MemCopySim` on the XSI scenario and
+    writes its bundles into ``<xsi_dir>/vectors``.  pysim's ``run`` calls the same ``write_scenario``
+    with a temp root, so the pysim run and the XSI run cannot start from different bytes.
     """
-    make_xsi_tb(width).write_scenario(Path(xsi_dir))
+    from examples.mem_copy.mem_copy_sim import MemCopySim
+
+    MemCopySim(jobs=XSI_JOBS, mem_dwidth=width).write_scenario(Path(xsi_dir))
 
 
 def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW) -> None:

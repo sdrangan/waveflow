@@ -31,18 +31,19 @@ from waveflow.utils.burst_io import write_burst_bundle
 
 @dataclass
 class MemCopyTB(FreeRunComp):
-    """The testbench as a component graph: three participants + the DUT, wired by interfaces.
+    """The testbench as a component **graph** — PURE structure: three participants + the DUT, wired by
+    interfaces (a driver on ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi``
+    bundles, and the :class:`MemCopy` DUT).
 
-    This is the same structure ``run_copy`` used to build inline as statements — a driver on
-    ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi`` bundles, and the
-    :class:`MemCopy` DUT.  Declaring it as a composite :class:`FreeRunComp` (one with sub-components,
-    not a ``run_iter`` body) changes nothing about the simulation; it changes what the structure *is*.
-    **A function body is code; a component graph is
-    data** — and only data can be walked.  ``composite_top_spec`` cannot introspect statements that
-    have already executed, so a generator has no way to learn which participants exist or how they
-    are wired.  As a graph, the same information generates the XSI testbench
-    (:func:`~waveflow.build.composite_gen.tb_top_spec`) as well as running the pysim golden: one
-    statement, two backends.
+    Declaring it as a composite :class:`FreeRunComp` (sub-components, not a ``run_iter`` body) is what
+    makes it *walkable*: **a function body is code; a component graph is data** — only data can be
+    introspected.  ``composite_top_spec`` / ``tb_top_spec`` cannot read statements that have already
+    executed, so a generator learns the participants and their wiring from this graph.  The same graph
+    generates the XSI testbench and runs the pysim golden — one structure, two backends.
+
+    What is deliberately **not** here: the scenario (source patterns, expectation) and the run/check
+    procedure.  Those are *code*, not structure, and live in :class:`MemCopySim`, which owns a
+    ``MemCopyTB`` and drives it.  ``__post_init__`` builds only the graph.
 
     ``jobs`` is a list of ``(src_off, dst_off, n_words)`` element-coordinate triples.  Multiple jobs
     exercise the free-running ``hls::task`` re-fire, and — because the driver never waits for a
@@ -84,10 +85,6 @@ class MemCopyTB(FreeRunComp):
         # MemComponent.pre_sim loads the same bundle (root set in write_scenario).
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
-
-        # The scenario (source patterns + expectation) is materialized in write_scenario, not here --
-        # __post_init__ is pure structure.
-        self.expected: list[np.ndarray] = []
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
         # The testbench owns the schema: it serializes each command into raw stream words.  Those words
@@ -133,72 +130,89 @@ class MemCopyTB(FreeRunComp):
         assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
 
 
+class MemCopySim:
+    """The **procedure** around a :class:`MemCopyTB` graph — the code half of the testbench.
+
+    A graph is data (walkable → the XSI harness); this is the code that *drives* it: materialize a
+    scenario onto disk, run the pysim golden, and check the result.  Splitting it out is the point:
+    ``MemCopyTB.__post_init__`` builds only structure, so nothing a generator walks is entangled with
+    file I/O or the golden.  :meth:`write_scenario` is still the **single** scenario writer both
+    backends share — pysim (:meth:`run`) and XSI (``write_mem_copy_xsi_bundles``) — so the two can
+    never start from different bytes.
+    """
+
+    def __init__(self, jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
+                 mem_dwidth: int = 64, name: str = "tb") -> None:
+        self.tb = MemCopyTB(name=name, sim=Simulation(), jobs=tuple(jobs), mem_dwidth=mem_dwidth)
+        #: The per-job source patterns, filled by :meth:`write_scenario` and read back by :meth:`check`.
+        self.expected: list[np.ndarray] = []
+
     def write_scenario(self, root) -> None:
-        """Materialize **the whole scenario** under ``<root>/vectors`` and point the participants at it.
+        """Materialize **the whole scenario** under ``<root>/vectors`` and point the graph's
+        participants at it.
 
-        The single scenario writer for both backends — pysim (``run_copy`` calls it before ``run_sim``)
-        and XSI (``write_mem_copy_xsi_bundles`` calls it with the ``xsi/`` dir).  Computes the source
-        patterns once (a seeded PRNG per job, full-width so every one of the ``w`` bits is exercised and
-        a dropped high half would show; reproducible from the seed), stores ``self.expected`` for the
-        check, and writes:
+        The single scenario writer for both backends.  Computes the source patterns once (a seeded PRNG
+        per job, full-width so every one of the ``w`` bits is exercised and a dropped high half would
+        show; reproducible from the seed), stores :attr:`expected` for the check, and writes:
 
-        - ``vectors/s_cmd``  — the command stream the driver plays (``cmd_words``);
+        - ``vectors/s_cmd``  — the command stream the driver plays (the TB's ``cmd_words``);
         - ``vectors/mem_in`` — the source arena **both** memories load in ``pre_sim``;
         - ``vectors/golden`` — the expected arena after the copy.
 
         Then points the driver and memory at *root* so their ``pre_sim`` resolves the relative bundle
         paths against it — the same on-disk bundles the XSI harness reads.
         """
+        tb = self.tb
         root = Path(root)
         vdir = root / "vectors"
-        w = int(self.mem_dwidth)
-        mem_in = np.zeros(self._nwords_tot, dtype=np.uint64)
-        golden = np.zeros(self._nwords_tot, dtype=np.uint64)
+        w = int(tb.mem_dwidth)
+        mem_in = np.zeros(tb._nwords_tot, dtype=np.uint64)
+        golden = np.zeros(tb._nwords_tot, dtype=np.uint64)
         self.expected = []
-        for j, job in enumerate(self._jobs):
+        for j, job in enumerate(tb._jobs):
             rng = np.random.default_rng(0xC0FFEE + j)
             known = rng.integers(0, 1 << w, size=job.n_words, dtype=np.uint64)
             mem_in[job.src_off:job.src_off + job.n_words] = known
             golden[job.dst_off:job.dst_off + job.n_words] = known
             self.expected.append(known)
-        write_burst_bundle(self.cmd_words, vdir / "s_cmd")
+        write_burst_bundle(tb.cmd_words, vdir / "s_cmd")
         write_burst_bundle([mem_in], vdir / "mem_in")
         write_burst_bundle([golden], vdir / "golden")
-        self.driver.root = root
-        self.mem.root = root
+        tb.driver.root = root
+        tb.mem.root = root
+
+    def run(self) -> "MemCopy":
+        """Materialize the scenario into a temp dir (the driver reads it in ``pre_sim``), run the SimPy
+        model, and check every copy is bit-exact.  Returns the DUT."""
+        with tempfile.TemporaryDirectory() as _root:
+            self.write_scenario(_root)
+            self.tb.sim.run_sim()
+        return self.check()
+
+    def check(self) -> "MemCopy":
+        """Assert every destination region equals its source pattern, and one ``CopyResp`` landed per
+        job.  Returns the DUT."""
+        tb = self.tb
+        bpw = int(tb.mem_dwidth) // 8
+        ok = True
+        for job, exp in zip(tb._jobs, self.expected):
+            got = tb.mem._mem.read(job.dst_off * bpw, job.n_words).astype(np.uint64)
+            job_ok = np.array_equal(got, exp)
+            ok = ok and job_ok
+            print(f"[copy] src={job.src_off} dst={job.dst_off} n={job.n_words} ok={job_ok}")
+        ndone = len(tb.done_sink.words)
+        print(f"[copy] jobs={len(tb._jobs)} done_bursts={ndone} all_ok={ok}")
+        assert ok, "MemCopy mismatch (dst region != src region)"
+        # Each job emits ONE framed s_done burst -- the echoed CopyResp (tx_id).
+        assert ndone == len(tb._jobs), f"expected {len(tb._jobs)} done bursts, got {ndone}"
+        return tb.dut
 
 
 def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
              mem_dwidth: int = 64) -> "MemCopy":
-    """Run the :class:`MemCopyTB` graph and check every copy is bit-exact.
-
-    ``jobs`` are :class:`~examples.mem_copy.mem_copy.CopyJob`\\ s (bare ``(src, dst, n)`` tuples are
-    coerced).  Returns the DUT (``s_done`` token count == number of jobs).  The structure lives in
-    ``MemCopyTB``; this is the driver: build it, run it, check it."""
-    sim = Simulation()
-    bpw = mem_dwidth // 8
-    tb = MemCopyTB(name="tb", sim=sim, jobs=tuple(jobs), mem_dwidth=mem_dwidth)
-    mem, copier, done_sink = tb.mem, tb.dut, tb.done_sink
-
-    # Materialize the command bundle into a temp dir that lives across the run (the driver reads it in
-    # pre_sim), then run.  The memory is seeded in-process by the TB, so only the command bundle needs
-    # a home on disk.
-    with tempfile.TemporaryDirectory() as _root:
-        tb.write_scenario(_root)
-        sim.run_sim()
-
-    ok = True
-    for job, exp in zip(tb._jobs, tb.expected):
-        got = mem._mem.read(job.dst_off * bpw, job.n_words).astype(np.uint64)
-        job_ok = np.array_equal(got, exp)
-        ok = ok and job_ok
-        print(f"[copy] src={job.src_off} dst={job.dst_off} n={job.n_words} ok={job_ok}")
-    ndone = len(done_sink.words)
-    print(f"[copy] jobs={len(tb._jobs)} done_bursts={ndone} all_ok={ok}")
-    assert ok, "MemCopy mismatch (dst region != src region)"
-    # Each job emits ONE framed s_done burst -- the echoed CopyResp (tx_id).
-    assert ndone == len(tb._jobs), f"expected {len(tb._jobs)} done bursts, got {ndone}"
-    return copier
+    """Build a :class:`MemCopySim`, run it, and check every copy is bit-exact — a thin convenience
+    over ``MemCopySim(jobs, mem_dwidth).run()``.  Returns the DUT."""
+    return MemCopySim(jobs=tuple(jobs), mem_dwidth=mem_dwidth).run()
 
 
 def run_and_check() -> bool:

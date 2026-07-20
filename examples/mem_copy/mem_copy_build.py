@@ -32,12 +32,10 @@ from waveflow.toolchain import toolchain
 
 try:
     from examples.mem_copy.mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate
-    from examples.mem_copy.mem_copy_sim import MemCopyTB
+    from examples.mem_copy.mem_copy_sim import MemCopySim
 except ModuleNotFoundError:  # run as a script from the example directory
     from mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate  # type: ignore[no-redef]
-    from mem_copy_sim import MemCopyTB  # type: ignore[no-redef]
-
-from waveflow.simulation.simulation import Simulation
+    from mem_copy_sim import MemCopySim  # type: ignore[no-redef]
 
 HERE = Path(__file__).resolve().parent
 
@@ -48,7 +46,7 @@ class PySimStep(BuildStep):
 
     The **first checkpoint**: no toolchain, seconds not minutes, and the place most functional
     mistakes surface before any C++ exists.  Runs the canonical 16-job scenario (``XSI_JOBS`` — the
-    same one the RTL gate drives), so the timing it records is directly comparable to the 2835-cycle
+    same one the RTL gate drives), so the timing it records is directly comparable to the 2908-cycle
     RTL number.  Fails the build on any mismatch, so "it ran" is never mistaken for "it is correct".
     """
 
@@ -60,14 +58,15 @@ class PySimStep(BuildStep):
     def run(self, config: BuildConfig, mem_dwidth, **_) -> dict:
         w = int(mem_dwidth)
         bpw = w // 8
-        tb = MemCopyTB(name="tb", sim=Simulation(), mem_dwidth=w, jobs=XSI_JOBS)
+        msim = MemCopySim(jobs=XSI_JOBS, mem_dwidth=w)
+        tb = msim.tb
         # Materialize the command bundle under the build root; the driver loads it in pre_sim.
-        tb.write_scenario(config.root_dir)
+        msim.write_scenario(config.root_dir)
         tb.sim.run_sim()
 
         # Correctness: each destination region equals the source pattern the arena was seeded with.
         fails = []
-        for j, (job, exp) in enumerate(zip(tb._jobs, tb.expected)):
+        for j, (job, exp) in enumerate(zip(tb._jobs, msim.expected)):
             got = tb.mem._mem.read(job.dst_off * bpw, job.n_words)
             if not (got == exp).all():
                 fails.append(j)
@@ -85,7 +84,7 @@ class PySimStep(BuildStep):
             "end_cycles": round(cycles),
             "done_tokens": ndone,
             "clk_freq": float(tb.clk.freq),
-            "note": "end-of-simulation, not time-to-last-completion; cf. the RTL 2835 (see pysim.md)",
+            "note": "end-of-simulation, not time-to-last-completion; cf. the RTL 2908 (see pysim.md)",
         }, indent=2), encoding="utf-8")
         print(f"[pysim] {len(tb._jobs)} jobs, all bit-exact, {ndone} done tokens, "
               f"end={round(cycles)} cycles")

@@ -45,20 +45,18 @@ def test_mem_copy_framed_desync_proof(tmp_path):
     writer decodes MemWCmd and writes dst.  Command/data ride one framed stream, so they cannot desync.
     See plans/memcopy_inband_integration.md."""
     import numpy as np
-    from waveflow.simulation.simulation import Simulation
     from examples.mem_copy.mem_copy import CopyJob
-    from examples.mem_copy.mem_copy_sim import MemCopyTB
+    from examples.mem_copy.mem_copy_sim import MemCopySim
 
     jobs = (CopyJob(16, 512, 128), CopyJob(200, 900, 64), CopyJob(400, 1300, 16))
-    sim = Simulation()
-    tb = MemCopyTB(name="tb", sim=sim, mem_dwidth=64, jobs=jobs)
-    tb.write_scenario(tmp_path)
-    sim.run_sim()
-    for job, exp in zip(tb._jobs, tb.expected):
-        got = tb.mem._mem.read(job.dst_off * 8, job.n_words).astype(np.uint64)
+    sim = MemCopySim(jobs=jobs, mem_dwidth=64)
+    sim.write_scenario(tmp_path)
+    sim.tb.sim.run_sim()
+    for job, exp in zip(sim.tb._jobs, sim.expected):
+        got = sim.tb.mem._mem.read(job.dst_off * 8, job.n_words).astype(np.uint64)
         assert np.array_equal(got, exp), f"framed copy wrong at dst={job.dst_off}"
     # one CopyResp burst per job
-    assert len(tb.done_sink.words) == len(jobs)
+    assert len(sim.tb.done_sink.words) == len(jobs)
 
 
 def test_mem_copy_back_to_back():
