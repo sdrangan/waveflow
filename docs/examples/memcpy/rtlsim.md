@@ -94,6 +94,11 @@ So use each rung for what it is good at:
   every edit.
 - **RTL** — the number you would quote. The `-m xsi` gate asserts **2908** exactly.
 
-Closing that ~22% gap is calibration work, and it is open: the timing model has parameters that can be
-fit against cosim, and that has not been done for this design yet. Until then, treat a pysim cycle count
-as a lower bound with the right shape, not a prediction.
+Closing that ~22% gap is calibration work. The **measurement** side of it is now built and is the
+subject of the next page: [Timing instrumentation](./timing.md) traces the internal channels and both
+`m_axi` bundles out of an RTL run and attributes the 183 cycles to named signals. The short version
+of what it finds — the gap is one cycle per word plus **two cycles per AXI burst**, and the writer,
+not the reader, is the bottleneck.
+
+Feeding those numbers back into the SimPy model is the part still open. Until that lands, treat a
+pysim cycle count as a lower bound with the right shape, not a prediction.

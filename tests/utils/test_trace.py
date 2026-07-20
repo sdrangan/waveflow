@@ -20,6 +20,8 @@ from waveflow.simulation.simulation import Simulation
 from waveflow.utils.trace import TraceBindError, load_trace
 
 VEC = {"tdata", "din", "dout", "ARADDR", "AWADDR", "RDATA", "WDATA", "ARLEN", "AWLEN"}
+#: The FIFO occupancy counters -- narrow vectors, not 1-bit flags.
+COUNTER = {"level", "cap"}
 
 
 def _widths(manifest: dict) -> dict[str, int]:
@@ -30,8 +32,9 @@ def _widths(manifest: dict) -> dict[str, int]:
     for p in manifest["boundary"]:
         out.update({s: (64 if k in VEC else 1) for k, s in p["signals"].items()})
     for c in manifest["channels"]:
-        for side in ("write", "read"):
-            out.update({s: (65 if k in VEC else 1) for k, s in c.get(side, {}).items()})
+        for side in ("write", "read", "depth"):
+            for k, s in c.get(side, {}).items():
+                out[s] = 65 if k in VEC else (3 if k in COUNTER else 1)
     return out
 
 

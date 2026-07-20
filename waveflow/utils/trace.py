@@ -31,7 +31,8 @@ from waveflow.utils.vcd import (
 #: Signals that may legitimately be absent, so a missing one is a fact about the design rather than
 #: a broken binding.  ``tlast``: a plain ``hls::stream<ap_uint<W> >`` boundary port has no TLAST
 #: wire (mem_copy's ``s_cmd``).  The AXI burst signals: absent on an AXI4-Lite bundle.
-_OPTIONAL = frozenset({"tlast", "AWLEN", "WLAST", "ARLEN", "RLAST", "BVALID", "BREADY"})
+_OPTIONAL = frozenset({"tlast", "AWLEN", "WLAST", "ARLEN", "RLAST", "BVALID", "BREADY",
+                       "level", "cap"})
 
 
 @dataclass(frozen=True)
@@ -208,6 +209,11 @@ class BoundTrace:
         A firing starts at its first input handshake -- on any channel it consumes -- after the
         previous firing completed.  That excludes time the component spent waiting to be *given*
         work, so a firing's span is its own cost plus whatever it stalled on mid-firing.
+
+        If a firing has **no** fresh arrival (its input was already buffered when it began, which
+        happens whenever an upstream driver runs ahead), the start falls back to the cycle after the
+        previous ``ap_done``.  The firing is still returned: it happened, and dropping it would make
+        the row count disagree with ``task_done_cycles`` and silently lose a sample.
         """
         view = self.component(inst)
         done = np.asarray(self.task_done_cycles(inst))
@@ -231,10 +237,36 @@ class BoundTrace:
         prev = -1
         for j, end in enumerate(done):
             after = arrivals[(arrivals > prev) & (arrivals <= end)]
-            if len(after):
-                firings.append(Firing(index=j, start=int(after[0]), end=int(end)))
+            start = int(after[0]) if len(after) else min(prev + 1, int(end))
+            firings.append(Firing(index=j, start=start, end=int(end)))
             prev = int(end)
         return tuple(firings)
+
+    def channel_blocked(self, name: str, lo: int, hi: int) -> int:
+        """Cycles in ``[lo, hi]`` where channel *name* sat at capacity — i.e. its producer was
+        blocked.
+
+        Read from the FIFO's own occupancy counters, not from the write handshake.  HLS gates the
+        write enable, so a producer stalled on a full channel never asserts ``write`` and a
+        ``write & !full_n`` metric reports zero backpressure while the producer is stuck.  Returns
+        ``0`` if the design exposes no counters for this channel.
+        """
+        ch = self.channel(name)
+        d = ch.get("depth", {})
+        lvl, cap = d.get("level"), d.get("cap")
+        if not lvl or not cap or lvl not in self.resolved or cap not in self.resolved:
+            return 0
+
+        def _s(bare):
+            n = self.resolved[bare]
+            self.parser.sig_info[n].get_values()
+            return np.asarray(resample_signal(self.parser.sig_info[n], self._grid()))
+
+        level, capacity = _s(lvl), _s(cap)
+        top = int(capacity.max()) if capacity.size else 0
+        if top <= 0:
+            return 0
+        return int((level[lo:hi + 1] >= top).sum())
 
     def component_bursts(self, inst: str) -> dict[str, dict]:
         """Every channel beat arriving at and leaving one component.
@@ -350,7 +382,7 @@ def load_trace(manifest: dict | str | Path, vcd_path: str | Path) -> BoundTrace:
         for key, sig in p["signals"].items():
             _resolve(key, sig, f"boundary {p['id']}")
     for c in manifest["channels"]:
-        for side in ("write", "read"):
+        for side in ("write", "read", "depth"):
             for key, sig in c.get(side, {}).items():
                 _resolve(key, sig, f"channel {c['id']}.{side}")
 

@@ -1,21 +1,28 @@
-"""BuildStep that emits a component's trace manifest.
+"""BuildSteps for the timing-trace rung: name the nets, run the RTL, extract the timing.
+
+The chain, all four of which are DAG steps:
+
+    CodegenTbStep -> AddVcdTopStep + TraceManifestStep -> RtlSimStep -> ExtractBurstsStep
+                     (the dumper)   (the net names)      (the VCD)     (the timing table)
+
+The first two are pure ``elaborate()`` and cost nothing; the third needs Vitis + Vivado; the fourth
+is pure waveform analysis.  ``ExtractBurstsStep``'s output is deliberately shaped as a *calibration
+table* -- one row per firing with ``{nwords, num_trans, span}`` -- because that is both what the
+figures need and what a ``CalibModel`` regresses over.  See ``plans/memcpy_timing_calibration.md``.
 
 The manifest maps the Python graph onto the RTL net names a waveform will carry (see
-:meth:`~waveflow.build.composite_gen.TopSpec.trace_manifest`).  It is a pure function of
-``elaborate()`` -- no Vitis, no RTL, no simulation -- so it belongs on the same rung as the C++
-codegen steps rather than downstream of csynth, and it is cheap enough to regenerate whenever the
-design source changes.
-
-Kept in its own module for the same reason :mod:`waveflow.build.cosim_steps` is: it is one small
-concern with one consumer (:mod:`waveflow.utils.trace`), and burying it in the C++ codegen module
-would suggest it emits C++.
+:meth:`~waveflow.build.composite_gen.TopSpec.trace_manifest`).  Kept in its own module for the same
+reason :mod:`waveflow.build.cosim_steps` is: one small concern with one consumer
+(:mod:`waveflow.utils.trace`), and burying it in the C++ codegen module would suggest it emits C++.
 """
 from __future__ import annotations
 
 import json
+import math
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 
 from waveflow.build.build import BuildConfig, BuildStep
 from waveflow.build.composite_gen import DEFAULT_MEM_DW, composite_top_spec
@@ -155,3 +162,190 @@ class TraceManifestStep(BuildStep):
         out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                             encoding="utf-8")
         return {"trace_manifest": out_path}
+
+
+@dataclass(kw_only=True)
+class RtlSimStep(BuildStep):
+    """Run the RTL through XSI **with tracing on**, producing ``<top>_trace.vcd``.
+
+    A thin wrapper over the example's ``xsi/run.bat``, which already does the whole flow
+    (``xvlog`` -> ``xelab -dll`` -> ``g++`` the BFM main -> execute).  Its third argument ``trace``
+    additionally elaborates the :class:`AddVcdTopStep` dumper as a second top, leaving the DUT and
+    every BFM port number untouched -- the cycle counts are identical either way.
+
+    **This step asserts nothing.**  It runs and produces an artifact; correctness stays with the
+    ``-m xsi`` gate in ``tests/examples/test_xsi_bfm.py``, which calls ``run.bat`` directly and
+    checks the exact cycle count.  Two callers of one script is deliberate: routing a green gate
+    through new code is how a gate quietly stops meaning what it meant.
+
+    Toolchain-gated: needs Vitis-synthesized RTL on disk plus Vivado ``xsim`` and a MinGW ``g++``.
+
+    Construction parameters
+    -----------------------
+    top, tb : str
+        Kernel top and BFM testbench basename, exactly as ``run.bat`` takes them.
+    xsi_dir : str
+        Directory holding ``run.bat`` (repo-relative).
+    prepare : callable | None
+        Called with the resolved ``xsi_dir`` before the run, to materialize the scenario bundles the
+        BFM reads (for mem_copy, ``write_mem_copy_xsi_bundles``).  The scenario is an *input* to the
+        run, so a step that did not write it would measure whatever was left behind.
+    """
+
+    description: str = "Run the RTL under XSI with $dumpvars tracing enabled."
+    params: ClassVar[dict] = {}
+
+    top: str
+    tb: str
+    xsi_dir: str = "xsi"
+    rtl_artifact: str = "report_dir"
+    dumper_artifact: str = "vcd_dumper"
+    prepare: Callable[[Path], None] | None = None
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.rtl_artifact, self.dumper_artifact]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {"trace_vcd": Path(self.xsi_dir) / f"{self.top}_trace.vcd"}
+
+    def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
+        root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
+        xsi = root / self.xsi_dir
+        vcd = xsi / f"{self.top}_trace.vcd"
+
+        if self.prepare is not None:
+            self.prepare(xsi)
+
+        # Delete first, then require it to reappear.  Re-running the built .exe does NOT regenerate
+        # the VCD -- only the full run.bat path, which re-elaborates, does -- so without this guard
+        # a failed or skipped run leaves the PREVIOUS trace on disk and everything downstream is
+        # silently measured from the wrong run.  Not hypothetical: it yielded an identical period
+        # at five different job sizes before it was caught.
+        vcd.unlink(missing_ok=True)
+
+        r = subprocess.run(["cmd", "/c", ".\\run.bat", self.top, self.tb, "trace"],
+                           cwd=str(xsi), capture_output=True, text=True, timeout=1800)
+        out = (r.stdout or "") + (r.stderr or "")
+        if "XSI_EXITCODE=0" not in out:
+            raise RuntimeError(f"{self.top}: XSI run did not complete cleanly:\n{out[-3000:]}")
+        if not vcd.exists():
+            raise RuntimeError(
+                f"{self.top}: run.bat completed but wrote no {vcd.name}. Is vcd_dumper_{self.top}.v "
+                f"present in {xsi} (AddVcdTopStep), and did run.bat get the `trace` argument?")
+        return {"trace_vcd": vcd}
+
+
+@dataclass(kw_only=True)
+class ExtractBurstsStep(BuildStep):
+    """Turn a traced run into a **timing table**: one row per component firing.
+
+    Binds the :class:`TraceManifestStep` manifest to the :class:`RtlSimStep` waveform and writes
+    what the figures and the calibration both need:
+
+    * ``firings`` -- per firing: ``span`` (first input handshake -> ``ap_done``), the regression
+      features ``nwords`` (m_axi beats moved) and ``num_trans`` (burst count), and ``blocked``
+      (cycles its output channel sat at capacity).
+    * ``channels`` -- per internal channel, packet and beat counts on both ends.
+    * ``boundary`` -- per port / bundle, burst and beat counts.
+
+    ``span`` is anchored on ``ap_done``, not on the last output beat, because an ``m_axi`` store is
+    posted: a component keeps working after its final stream beat.  On mem_copy's writer that is
+    155 vs 183 -- a 15% under-count that inverts which stage looks like the bottleneck.  See
+    :class:`waveflow.utils.trace.Firing`.
+
+    Pure waveform analysis: no toolchain, no simulation.
+    """
+
+    description: str = "Extract a per-firing timing table from a traced RTL run."
+    params: ClassVar[dict] = {}
+
+    manifest_artifact: str = "trace_manifest"
+    vcd_artifact: str = "trace_vcd"
+    output_path: str = "results/timing_events.json"
+    #: Words per AXI burst -- HLS's ``max_read_burst_length`` / ``max_write_burst_length``.
+    #: Recorded so a consumer can CHECK ``num_trans`` against ``ceil(nwords / max_burst_len)``
+    #: rather than assume it.
+    max_burst_len: int = 16
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.manifest_artifact, self.vcd_artifact]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {"timing_events": Path(self.output_path)}
+
+    def _firing_rows(self, bt) -> list[dict]:
+        rows: list[dict] = []
+        for task in bt.manifest["tasks"]:
+            view = bt.component(task["inst"])
+            try:
+                firings = bt.component_firings(task["inst"])
+            except ValueError:
+                continue                      # a source with no observable input has no window
+            out_ch = [c for c in view.outputs if bt.channel(c)["kind"] != "sob"]
+            maxi = [bt.port(p) for p in view.boundary if bt.port(p)["kind"] == "maxi"]
+
+            for f in firings:
+                nwords = num_trans = 0
+                for p in maxi:
+                    s = p["signals"]
+                    for beat_v, beat_r, addr_v, addr_r in (
+                            ("RVALID", "RREADY", "ARVALID", "ARREADY"),
+                            ("WVALID", "WREADY", "AWVALID", "AWREADY")):
+                        if beat_v not in s or addr_v not in s:
+                            continue
+                        beats = bt._handshakes(s[beat_v], s[beat_r])
+                        addrs = bt._handshakes(s[addr_v], s[addr_r])
+                        nwords += int(((beats >= f.start) & (beats <= f.end)).sum())
+                        num_trans += int(((addrs >= f.start) & (addrs <= f.end)).sum())
+                rows.append({
+                    "component": task["id"], "inst": task["inst"], "index": f.index,
+                    "start": f.start, "end": f.end, "span": f.span,
+                    "nwords": nwords, "num_trans": num_trans,
+                    "blocked": sum(bt.channel_blocked(c, f.start, f.end) for c in out_ch),
+                })
+        return rows
+
+    def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
+        from waveflow.utils.trace import load_trace
+
+        bt = load_trace(artifacts[self.manifest_artifact], artifacts[self.vcd_artifact])
+        man = bt.manifest
+
+        channels = []
+        for c in man["channels"]:
+            row = {"id": c["id"], "kind": c["kind"], "width": c["width"],
+                   "producer": c["producer"], "consumer": c["consumer"]}
+            if c["kind"] != "sob":
+                for side in ("write", "read"):
+                    pk, _ = bt.channel_bursts(c["id"], side=side)
+                    row[side] = {"packets": len(pk),
+                                 "beats": int(sum(len(p["data"]) for p in pk))}
+            channels.append(row)
+
+        boundary = []
+        for p in man["boundary"]:
+            if p["kind"] == "maxi":
+                wb, rb, _ = bt.aximm_bursts(p["id"])
+                boundary.append({
+                    "id": p["id"], "kind": "maxi", "directions": p["directions"],
+                    "write": {"bursts": len(wb),
+                              "beats": int(sum(len(b["data"]) for b in wb))},
+                    "read": {"bursts": len(rb),
+                             "beats": int(sum(len(b["data"]) for b in rb))}})
+            else:
+                bursts, _ = bt.port_bursts(p["id"])
+                boundary.append({"id": p["id"], "kind": p["kind"], "bursts": len(bursts),
+                                 "beats": int(sum(len(b["data"]) for b in bursts))})
+
+        events = {"version": 1, "top": man["top"], "max_burst_len": self.max_burst_len,
+                  "firings": self._firing_rows(bt), "channels": channels, "boundary": boundary}
+
+        root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
+        out_path = root / self.output_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return {"timing_events": out_path}

@@ -324,6 +324,11 @@ def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
     entry["read"] = {"dout": f"{ch.name}_dout",
                      "read": f"{cons}_{ch.name}_read",
                      "empty_n": f"{ch.name}_empty_n"}
+    # The FIFO's own occupancy counters.  These are the only RELIABLE way to see backpressure: HLS
+    # gates the write enable, so a task blocked on a full channel stalls its pipeline WITHOUT ever
+    # asserting `write` -- a `write & !full_n` metric reads zero even while the producer is stuck.
+    # Comparing `level` against `cap` is what actually located mem_copy's 30 cycles/job of blocking.
+    entry["depth"] = {"level": f"{ch.name}_num_data_valid", "cap": f"{ch.name}_fifo_cap"}
     return entry
 
 
