@@ -2,10 +2,15 @@
 // MemRStream kernel (gen/mem_r_stream.cpp) in xsim on Windows.
 //
 // The kernel is ap_ctrl_none (free-running); Vitis C/RTL cosim refuses it, so we drive the elaborated
-// RTL directly through XSI.  Its three interfaces are modelled by the reusable BFM (xsi_bfm.h):
-// an AXIS master on s_cmd, an AXIS slave on m_out, and an AXI-MM read slave on gmem0 serving one flat
+// RTL directly through XSI.  Its three interfaces are modelled by the reusable BFM (xsi_bfm.h): an
+// AXIS master on s_cmd, an AXIS slave on m_out, and an AXI-MM read slave on gmem0 serving one flat
 // arena.  Gate: MemRStream bursts mem[BASE_W .. BASE_W+N) onto m_out, and the collected stream equals
 // the memory region bit-exact.
+//
+// The scenario DATA is not stated here: the memory region, the command, and the golden output stream
+// are burst bundles under vectors/, written by mem_stream_gen.py::write_mem_r_xsi_bundles.  The models
+// load them in pre_sim and dump the collected output in post_sim (xsi_bundle.h), so the pattern lives
+// once, in Python.
 #include <cstdio>
 #include <cstdint>
 #include <string>
@@ -16,45 +21,37 @@
 using namespace wfbfm;
 namespace ports = mem_r_stream_ports;
 
-static const int  N        = 128;                    // words to burst
+// Structural constants — MUST match write_mem_r_xsi_bundles (the DATA is loaded from vectors/).
+static const int  N        = 128;                    // words the kernel bursts
 static const int  MEM_DW   = 64;
 static const int  BPW      = MEM_DW / 8;             // bytes per word = 8
 static const int  MEM_NW   = 8192;
 static const int  BASE_W   = 64;                     // region base (word index)
 static const long MAX_CYCLES = 2000000L;
 
-static uint64_t known_word(int i) { return ((uint64_t)i * 2654435761ULL + 12345ULL); }
-
 int main() {
-    // 1) Backing memory: known pattern in [BASE_W, BASE_W+N).
-    FlatMemory mem(MEM_NW, BPW);
-    for (int i = 0; i < N; ++i) mem[BASE_W + i] = known_word(i);
-
-    // MRCmd{addr, len, xfer_len, xfer_msg[8]} packs to 6 words at MEM_DW=64: word0 = addr|(len<<32),
-    // word1 = xfer_len|(xfer_msg[0]<<32), words2-5 = xfer_msg[1:8] (2 per word) — all zero here (the
-    // job-index cookie is only exercised by the mem_copy composite BFM).
-    const uint32_t word_index = (uint32_t)BASE_W;
-    std::vector<uint64_t> cmd_words = {
-        (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32),
-        0ULL,
-        0ULL, 0ULL, 0ULL, 0ULL,
-    };
-
-    // 2) Open the design and model its three interfaces.
-    XsiSim sim(ports::DESIGN_DLL, "mem_r_bfm.wdb");
+    // 1) The participants.  Memory seeds itself from vectors/mem_in at word BASE_W; the command
+    //    driver plays vectors/cmd; the output sink dumps what it collected to vectors/out.
+    FlatMemory     mem(MEM_NW, BPW);
+    XsiSim         sim(ports::DESIGN_DLL, "mem_r_bfm.wdb");
     sim.pin_low(ports::ZERO_PORTS, ports::ZERO_PORTS_N);
 
-    AxisMaster     s_cmd(sim.dut(), ports::s_cmd, cmd_words);
+    AxisMaster     s_cmd(sim.dut(), ports::s_cmd, {});
     AxisSlave      m_out(sim.dut(), ports::m_out);
     AxiMmReadSlave gmem0(sim.dut(), ports::m_mem, mem);
 
-    auto sample = [&]{ s_cmd.sample(); m_out.sample(); gmem0.sample(); };
-    auto update = [&]{ s_cmd.update(); m_out.update(); gmem0.update(); };
-    auto drive  = [&]{ s_cmd.drive();  m_out.drive();  gmem0.drive();  };
+    mem.load_segs    = { { (size_t)BASE_W, 0, "vectors/mem_in" } };
+    s_cmd.in_bundle  = "vectors/cmd";
+    m_out.out_bundle = "vectors/out";
 
-    sim.reset(drive);
+    // Declaration order = the old sample/update/drive order (memory first, no-op on the cycle
+    // phases) — so the schedule, and the cycle count, are unchanged from the hand-rolled loop.
+    std::vector<XsiSimObj*> parts = { &mem, &s_cmd, &m_out, &gmem0 };
 
-    // 3) Cycle loop.
+    for (auto* p : parts) p->pre_sim();          // seed memory + load the command before reset
+    sim.reset([&]{ for (auto* p : parts) p->drive(); });
+
+    // 2) Cycle loop.
     long cyc = 0, drain = -1; bool timed_out = false;
     for (;;) {
         if (drain >= 0 && (cyc - drain) >= 256) break;
@@ -63,11 +60,13 @@ int main() {
         ++cyc;
 
         sim.clock_low();
-        sample();
+        for (auto* p : parts) p->sample();
         sim.clock_high();
-        update();
-        drive();
+        for (auto* p : parts) p->update();
+        for (auto* p : parts) p->drive();
     }
+
+    for (auto* p : parts) p->post_sim();          // dump vectors/out
 
     const std::vector<uint64_t>& got = m_out.words();
     if (timed_out) {
@@ -77,26 +76,30 @@ int main() {
         return 1;
     }
 
-    // 4) Golden check.
+    // 3) Golden: the expected output stream is a bundle written from the same scenario, so the
+    //    pattern is stated once (in Python), not re-implemented here.
+    const std::vector<uint64_t> golden = BurstBundle::read_words("vectors/golden");
     int fails = 0;
-    for (int i = 0; i < N; ++i) {
-        uint64_t exp = known_word(i);
-        if (i >= (int)got.size() || got[i] != exp) {
-            if (fails < 8) std::fprintf(stderr, "  word %d: got 0x%016llx exp 0x%016llx\n",
-                                        i, (unsigned long long)(i < (int)got.size() ? got[i] : 0),
+    for (size_t i = 0; i < golden.size(); ++i) {
+        uint64_t exp = golden[i];
+        if (i >= got.size() || got[i] != exp) {
+            if (fails < 8) std::fprintf(stderr, "  word %zu: got 0x%016llx exp 0x%016llx\n",
+                                        i, (unsigned long long)(i < got.size() ? got[i] : 0),
                                         (unsigned long long)exp);
             ++fails;
         }
     }
     // `cycles` is time-to-last-word, NOT the loop count: the loop runs a fixed drain tail past
     // completion to let trailing bus activity settle, and that tail is a testbench constant with
-    // nothing to do with the design. Reporting `cyc` would bury ~158 cycles of work under +256 of
-    // tail, and would move if anyone touched the constant.
+    // nothing to do with the design.
     const long latency = (drain >= 0) ? drain : cyc;
     std::printf("mem_r_stream XSI BFM: N=%d collected=%zu cycles=%ld (tail=%ld)\n",
                 N, got.size(), latency, cyc - latency);
     sim.close();
-    if (fails || (int)got.size() != N) { std::printf("FAILED test: %d mismatches (got %zu)\n", fails, got.size()); return 1; }
+    if (fails || got.size() != golden.size()) {
+        std::printf("FAILED test: %d mismatches (got %zu)\n", fails, got.size());
+        return 1;
+    }
     std::printf("PASSED test\n");
     return 0;
 }

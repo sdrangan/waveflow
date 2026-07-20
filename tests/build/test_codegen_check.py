@@ -680,15 +680,15 @@ class _HostWithAChild(SimpFunComponent):
 def test_structural_rule_a_leaf_owning_a_subcomponent_is_rejected():
     """Regression for a SILENT failure: this used to emit a kernel and check said (True, None).
 
-    The extractor walks only the entry method, so a leaf carrying a child produced a
+    The extractor walks only the entry method, so a standalone component carrying a child produced a
     well-formed kernel that never mentioned the child — half the design dropped without a
-    word.  The message must name the real fix (CompositeComp), not just refuse.
+    word.  The message must name the real fix (make it a composite), not just refuse.
     """
     ok, msg = check(_HostWithAChild)
     assert ok is False
     assert "single kernel function" in msg
     assert "silently drop" in msg
-    assert "CompositeComp" in msg
+    assert "composite" in msg
     assert "_codegen_kid" in msg, "the message must name WHICH child"
 
 

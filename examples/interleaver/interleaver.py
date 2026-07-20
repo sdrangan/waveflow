@@ -23,7 +23,6 @@ Run (project venv, from repo root)::
 """
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -31,8 +30,6 @@ from typing import ClassVar
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
-sys.path.insert(0, str(REPO))
 
 from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
 from waveflow.build.streamutils import (  # noqa: E402
@@ -45,7 +42,6 @@ from waveflow.hw.arrayutils import gen_array_utils  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataArray, DataList, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_component import HwParam  # noqa: E402
-from waveflow.hw.hw_composite import CompositeComp  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import (  # noqa: E402
     SobIFMaster,
@@ -62,8 +58,6 @@ from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 from waveflow.build.composite_gen import (  # noqa: E402
     GEN_DIR,
     INCLUDE_DIR,
-    SobEdge,
-    StreamEdge,
     composite_top_spec,
     render_ports_h,
     render_tcl,
@@ -395,7 +389,7 @@ class IlMemW(FreeRunComp):
 
 
 @dataclass
-class InterleaverCanon(CompositeComp):
+class InterleaverCanon(FreeRunComp):
     """The canonical six-stage interleaver with a forwarded per-job token: ``cmd_rx -> il_mem_r ->
     il_load -> il_compute -> il_store -> il_mem_w``.  Five Cmd StreamEdges (the token, one per hop) +
     three data StreamEdges (pwords, xwords, ywords) + three SobEdges (p_blk, x_blk, y_blk)."""
@@ -422,7 +416,6 @@ class InterleaverCanon(CompositeComp):
         stages = [self.rx, self.memr, self.load, self.compute, self.store, self.memw]
         for c in stages:
             self.add_comp(c)
-        self.ordered_subcomps = stages
         self.gather = self.compute          # the completion-timeline probe (job_end_cyc)
 
         def _sif(name, master, slave):
@@ -454,26 +447,13 @@ class InterleaverCanon(CompositeComp):
         _sobif("x_blk", self.load.x_blk, self.compute.x_blk)
         _sobif("y_blk", self.compute.y_blk, self.store.y_blk)
 
-        self.internal_edges = [
-            StreamEdge("cmd0", self.rx.cmd_out, self.memr.cmd_in),
-            StreamEdge("cmd1", self.memr.cmd_out, self.load.cmd_in),
-            StreamEdge("cmd2", self.load.cmd_out, self.compute.cmd_in),
-            StreamEdge("cmd3", self.compute.cmd_out, self.store.cmd_in),
-            StreamEdge("cmd4", self.store.cmd_out, self.memw.cmd_in),
-            StreamEdge("pwords", self.memr.pwords, self.load.pwords),
-            StreamEdge("xwords", self.memr.xwords, self.load.xwords),
-            StreamEdge("ywords", self.store.ywords, self.memw.ywords),
-            SobEdge("p_blk", self.load.p_blk, self.compute.p_blk, elem_bw=w, block_n=self.nw),
-            SobEdge("x_blk", self.load.x_blk, self.compute.x_blk, elem_bw=w, block_n=self.nw),
-            SobEdge("y_blk", self.compute.y_blk, self.store.y_blk, elem_bw=w, block_n=self.nw),
-        ]
-        # (name, endpoint) -- direction from the type, gmem bundle by declaration order.
-        self.boundary = [
-            ("s_cmd", self.rx.s_cmd),
-            ("m_in", self.memr.m_mem),
-            ("m_out", self.memw.m_mem),
-            ("s_done", self.memw.s_done),
-        ]
+        # The eleven internal edges ARE the _sif/_sobif calls above: each add_if records both
+        # endpoints and (by its type) how the edge lowers -- a StreamIF to an hls::stream, a
+        # StreamOfBlocksIF to a stream_of_blocks sized by its element_type.  Derived, not restated.
+        #
+        # Boundary port NAMES only -- endpoints and order come from the graph, direction from the
+        # endpoint type, gmem bundle by policy in this order.
+        self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
         self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
         self.extra_includes = ("hls_streamofblocks.h",)
 

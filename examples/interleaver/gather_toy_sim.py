@@ -13,8 +13,6 @@ from typing import Generator
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
-sys.path.insert(0, str(REPO))
 
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.simobj import SimObj  # noqa: E402

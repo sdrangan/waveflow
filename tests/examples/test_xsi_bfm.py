@@ -1,8 +1,8 @@
 """The XSI RTL gates — the four free-running kernels driven through real RTL by the BFM library.
 
 **Why this file exists.**  These four cycle counts are the only evidence that the generated
-``ap_ctrl_none`` tops, the generated ``mem_seq_task.h`` body, and the BFM library are correct, and
-until now they were checked *by hand*.  A refactor that broke them would have gone unnoticed until
+``ap_ctrl_none`` tops, the hand-written framed/interleaver task bodies, and the BFM library are
+correct, and until now they were checked *by hand*.  A refactor that broke them would have gone unnoticed until
 someone happened to re-run ``run.bat``.  ``plans/xsi_tb_codegen.md`` records them as Stage 1's gate;
 this makes the gate real.
 
@@ -22,9 +22,32 @@ from pathlib import Path
 
 import pytest
 
+from examples.interleaver.mem_stream_gen import (
+    write_interleaver_canon_xsi_bundles,
+    write_mem_r_xsi_bundles,
+    write_mem_w_xsi_bundles,
+)
+from examples.mem_copy.mem_copy import check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles
 from waveflow.build.composite_gen import render_rtl_f
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+#: Migrated tops whose scenario DATA (inputs + golden) is written as burst bundles into their xsi/
+#: workspace before the run — instead of being restated in the C++ TB.  The value writes the bundles;
+#: an absent top still bakes its own vectors in the (un-migrated) TB.
+_XSI_SETUP = {
+    "mem_r_stream": lambda xsi: write_mem_r_xsi_bundles(xsi),
+    "mem_w_stream": lambda xsi: write_mem_w_xsi_bundles(xsi),
+    "mem_copy": lambda xsi: write_mem_copy_xsi_bundles(xsi),
+    "interleaver_canon": lambda xsi: write_interleaver_canon_xsi_bundles(xsi),
+}
+
+#: Tops whose generated C++ main just runs + dumps: correctness is checked HERE, in Python, from the
+#: output bundles the run wrote (memory arena + the sink's capture-with-cycles).  The value is called
+#: ``check(xsi_dir, want_cycles)`` and asserts.  A top absent here still self-checks in its C++ main.
+_XSI_CHECK = {
+    "mem_copy": check_mem_copy_xsi_outputs,
+}
 
 #: Which example directory owns each top.  They are no longer all in one place: mem_copy is its own
 #: example, with its own xsi/ workspace (its own xsim.dir, its own copy of the harness via
@@ -46,14 +69,16 @@ ROOT_OF = {
 #: and inflated for mem_copy.  Only interleaver_canon was already reporting it correctly, which is
 #: why its number is unchanged.  The DESIGNS did not change; the measurement did.
 #:
-#: What the numbers say: mem_copy is 2835/16 = ~177 cyc/job against ~176 for ONE write on its own,
-#: i.e. the reads hide entirely behind the writes — per-job cost is max(read, write) = 176, not
-#: read+write = 334.  That ~1.9x is the free-running pipeline, and it is what a generated testbench
-#: would have to preserve (see plans/xsi_tb_codegen.md Stage 5).
+#: What the numbers say: mem_copy is the IN-BAND forwarding chain (plans/memcopy_inband_integration.md)
+#: -- Sequencer frames [MemRCmd | MemWCmd | CopyResp], each stage strips its descriptor and relays the
+#: rest opaquely.  2908 = 163 + 15*183 (steady 183 cyc/job, no fill transient).  The reads hide behind
+#: the writes (per-job cost ~= max(read, write) + the in-band descriptor beats that ride ahead of each
+#: 128-word data burst), the ~1.9x free-running overlap the generated testbench preserves.  The s_done
+#: response is one CopyResp word per job.
 GATES = [
     ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
     ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
-    ("mem_copy", "mem_copy_bfm_tb", 2835, "done=16 w_count=2048"),
+    ("mem_copy", "mem_copy_bfm_tb", 2908, "done=16 w_count=2048"),
     ("interleaver_canon", "interleaver_canon_bfm_tb", 3469, "done=8/8"),
 ]
 
@@ -98,20 +123,37 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     for stale in (f"{tb}.exe", f"{tb}.o"):
         (xsi / stale).unlink(missing_ok=True)
 
+    # 2b) Migrated tops read their scenario (memory, command, golden) from bundles under vectors/ —
+    # write them now, from the one Python source, before the TB runs.
+    _XSI_SETUP.get(top, lambda _xsi: None)(xsi)
+
+    # 2c) Python-checked tops: the run WRITES its output bundles, so delete stale ones first -- a run
+    # that fails to regenerate them must fail on the checker's read, never pass on last time's output.
+    checker = _XSI_CHECK.get(top)
+    if checker is not None:
+        for od in ("out", "s_done"):
+            shutil.rmtree(xsi / "vectors" / od, ignore_errors=True)
+
     # ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and the bare form
     # fails with "not recognized as an internal or external command" rather than anything useful.
     r = subprocess.run(["cmd", "/c", ".\\run.bat", top, tb], cwd=str(xsi),
                        capture_output=True, text=True, timeout=1800)
     out = (r.stdout or "") + (r.stderr or "")
 
-    assert "PASSED test" in out, f"{top} XSI BFM did not pass:\n{out[-3000:]}"
-    assert want_marker in out, (
-        f"{top} printed PASSED but not '{want_marker}' — the golden may not have run:\n{out[-2000:]}"
-    )
-    assert f"cycles={want_cycles}" in out, (
-        f"{top} cycle count moved (want {want_cycles}).  That is a real behaviour change: either a\n"
-        f"regression, or an improvement worth re-recording in plans/xsi_tb_codegen.md.\n{out[-2000:]}"
-    )
+    if checker is not None:
+        # The generated main just runs + dumps; correctness (memcpy, done-count, tx_id, cycles) is
+        # checked HERE, in Python, from the dumped output bundles.  Confirm the run itself completed.
+        assert "XSI_EXITCODE=0" in out, f"{top} XSI run did not complete cleanly:\n{out[-3000:]}"
+        checker(xsi, want_cycles)
+    else:
+        assert "PASSED test" in out, f"{top} XSI BFM did not pass:\n{out[-3000:]}"
+        assert want_marker in out, (
+            f"{top} printed PASSED but not '{want_marker}' — the golden may not have run:\n{out[-2000:]}"
+        )
+        assert f"cycles={want_cycles}" in out, (
+            f"{top} cycle count moved (want {want_cycles}).  That is a real behaviour change: either a\n"
+            f"regression, or an improvement worth re-recording in plans/xsi_tb_codegen.md.\n{out[-2000:]}"
+        )
 
 
 @pytest.mark.xsi

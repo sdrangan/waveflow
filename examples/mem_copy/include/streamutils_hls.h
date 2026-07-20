@@ -16,6 +16,44 @@ namespace streamutils {
     template<int W>
     using axi4s_word = ap_axis<W, 0, 0, 0>;
 
+    // framed_word — the INTERNAL packet-carrying word (plans/memstream_inband.md).  Vitis rejects
+    // ap_axis on an internal hls::stream FIFO (HLS 214-208: reserved for interface ports), so an
+    // internal channel that must carry a packet boundary uses this plain struct instead.  Its members
+    // are named to MATCH ap_axis (.data / .last) so one templated helper serves both word types; it is
+    // a strict subset of ap_axis, minus the AXI-only keep/strb/user/id/dest.
+    template<int W>
+    struct framed_word {
+        ap_uint<W>   data;
+        ap_uint<1>   last;
+    };
+
+    // set_axis_aux — the ONLY difference between an axi4s beat and a framed beat on the write side:
+    // ap_axis carries keep/strb side-channels, framed_word does not.  Overload-resolved at compile
+    // time, so each instantiation of write_boundary_word below is separate, branch-free code.
+    template<int W> inline void set_axis_aux(framed_word<W>&)   {}                       // internal: none
+    template<int W> inline void set_axis_aux(axi4s_word<W>& w)  { w.keep = -1; w.strb = -1; }
+
+    // write_boundary_word / read_boundary_word — one realization for BOTH boundary-carrying word types
+    // (axi4s_word at a top-level port, framed_word on an internal FIFO), templated on the word type.
+    // The body only touches .data / .last, which both expose; the write's keep/strb difference is
+    // isolated in set_axis_aux.  A template is not a runtime conditional: WordT=axi4s_word and
+    // WordT=framed_word compile to two separate, fully-optimized functions.
+    template<typename WordT, int W>
+    inline void write_boundary_word(hls::stream<WordT>& s, ap_uint<W> data, bool last) {
+        WordT w;
+        w.data = data;
+        w.last = last;
+        set_axis_aux(w);
+        s.write(w);
+    }
+
+    template<typename WordT, int W>
+    inline ap_uint<W> read_boundary_word(hls::stream<WordT>& s, bool& last) {
+        WordT w = s.read();
+        last = (bool)w.last;
+        return w.data;
+    }
+
     enum class tlast_status {
         no_tlast,
         tlast_at_end,

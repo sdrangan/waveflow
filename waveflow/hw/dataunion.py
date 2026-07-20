@@ -205,14 +205,14 @@ class SchemaIDField(IntField):
         return result
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         registry = cls.registry
         if registry is None:
             raise TypeError(
                 f"{cls.__name__} does not have an associated registry; "
                 "call SchemaIDField.specialize(registry, bitwidth) first."
             )
-        _ = word_bw_supported
+        _ = (word_bw_supported, framed)
         bitwidth = cls.get_bitwidth()
         enum_name = cls.cpp_class_name()
         lines = [f"enum class {enum_name} : uint{bitwidth}_t {{"]
@@ -636,7 +636,7 @@ class DataUnion:
         return out_path
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None) -> str:
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         """Return the C++ struct body for this DataUnion."""
         if word_bw_supported is None:
             word_bw_supported = []

@@ -4,16 +4,17 @@ parent: Python
 grand_parent: Concurrency
 nav_order: 1
 audience: python
-api: [CompositeComp, FreeRunComp, StreamIF, add_comp, add_if]
+api: [FreeRunComp, StreamIF, add_comp, add_if]
 summary: "Building a composite from concurrent sub-components: add_comp registers each child (its run_proc runs in parallel), add_if wires an internal StreamIF edge between two children, and the composite exposes its children's ports as its own boundary. Walked through a two-stage linear→relu pipeline."
 ---
 
 # Sub-components
 
 Synthesizable composite systems in WaveFlow are defined **hierarchically**: a single top-level
-[`CompositeComp`](../../flows/components.md) represents the overall composite, and it holds
-**sub-components**. Each sub-component is itself a `HwComponent` (usually a `FreeRunComp` leaf) and may
-in turn hold its own sub-components — a tree of **parent** and **child** components.
+[`FreeRunComp`](../../flows/components.md) with sub-components — a *composite* — represents the overall
+system, and it holds **sub-components**. Each sub-component is itself a `HwComponent` (usually a
+standalone `FreeRunComp`) and may in turn hold its own sub-components — a tree of **parent** and
+**child** components.
 
 A composite has **no `run_proc` of its own** — its behavior *is* its children running concurrently. Two
 methods build the tree:
@@ -68,7 +69,6 @@ import numpy as np
 from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import FloatField
-from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.simulation.simobj import ProcessGen
@@ -114,7 +114,7 @@ The composite wires them into the pipeline `x → linear → z → relu → y`:
 
 ```python
 @dataclass
-class Neuron(CompositeComp):
+class Neuron(FreeRunComp):
     """Composite: y = max(2·x + 3, 0), computed by two concurrent sub-components."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 

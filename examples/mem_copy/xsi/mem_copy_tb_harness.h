@@ -26,11 +26,15 @@ struct Harness {
     AxiMmReadSlave m_in;
     AxiMmWriteSlave m_out;
     AxisSlave s_done;
+    // Every participant by base pointer, in construction order (shared arenas
+    // first): the one list the five lifecycle phases iterate, mirroring how
+    // Simulation.run_sim() drives its SimObjs.
+    std::vector<wfbfm::XsiSimObj*> participants_;
 
-    explicit Harness(const std::string& wdb, const std::vector<uint64_t>& cmd_words)
+    explicit Harness(const std::string& wdb)
       : sim(mem_copy_ports::DESIGN_DLL, wdb),
         mem(24640, 8),
-        s_cmd(sim.dut(), mem_copy_ports::s_cmd, cmd_words),
+        s_cmd(sim.dut(), mem_copy_ports::s_cmd, {}),
         m_in(sim.dut(), mem_copy_ports::m_in, mem),
         m_out(sim.dut(), mem_copy_ports::m_out, mem),
         s_done(sim.dut(), mem_copy_ports::s_done)
@@ -38,15 +42,31 @@ struct Harness {
         // Every TB-driven input the models above do not themselves drive.  Absent
         // names are skipped; an undriven input is X, and X on a handshake hangs.
         sim.pin_low(mem_copy_ports::ZERO_PORTS, mem_copy_ports::ZERO_PORTS_N);
+        // Register participants for the lifecycle phases (shared arenas first, so a
+        // memory's pre_sim runs before the models that serve from it).
+        participants_.push_back(&mem);
+        participants_.push_back(&s_cmd);
+        participants_.push_back(&m_in);
+        participants_.push_back(&m_out);
+        participants_.push_back(&s_done);
+        // Init-time config (DynParams): each is a knob the pysim participant
+        // carries, emitted here as a member assignment (e.g. a model's bundle).
+        mem.dump_segs = { {0, 24640, "vectors/out"} };
+        mem.load_segs = { {0, 0, "vectors/mem_in"} };
+        s_cmd.in_bundle = "vectors/s_cmd";
+        s_done.out_bundle = "vectors/s_done";
     }
-    void sample() { s_cmd.sample(); m_in.sample(); m_out.sample(); s_done.sample(); }
-    void update() { s_cmd.update(); m_in.update(); m_out.update(); s_done.update(); }
-    void drive() { s_cmd.drive(); m_in.drive(); m_out.drive(); s_done.drive(); }
+    void pre_sim() { for (auto* p : participants_) p->pre_sim(); }
+    void sample() { for (auto* p : participants_) p->sample(); }
+    void update() { for (auto* p : participants_) p->update(); }
+    void drive() { for (auto* p : participants_) p->drive(); }
+    void post_sim() { for (auto* p : participants_) p->post_sim(); }
 
     /// Run exactly *n_cycles*.  No early termination: see the note in the file header --
     /// nothing blocks, so the DUT's pipelining survives by construction.  Undersize n and
     /// the caller's own completion check fails loudly rather than passing quietly.
     void run(long n_cycles) {
+        pre_sim();                       // participants seed memory / load vectors
         sim.reset([this]{ drive(); });
         for (long c = 0; c < n_cycles; ++c) {
             sim.clock_low();
@@ -55,6 +75,7 @@ struct Harness {
             update();
             drive();
         }
+        post_sim();                      // participants dump results / collect metrics
     }
 
     void close() { sim.close(); }

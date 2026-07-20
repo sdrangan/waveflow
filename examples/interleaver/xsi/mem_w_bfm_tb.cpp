@@ -4,7 +4,10 @@
 // Gate: MemWStream drains N known words off s_in and pure-writes them to mem[BASE_W .. BASE_W+N);
 // the backing memory region equals the input bit-exact.  TB drives s_cmd (master), s_in (master),
 // and the gmem0 AXI write slave (AWREADY / WREADY / B*); the read side + control are pinned to 0.
-// All three are the reusable models in xsi_bfm.h.
+//
+// The scenario DATA is not stated here: the command, the input stream, and the golden memory region
+// are burst bundles under vectors/, written by mem_stream_gen.py::write_mem_w_xsi_bundles.  The
+// drivers load them in pre_sim; the memory dumps the written region to vectors/out in post_sim.
 #include <cstdio>
 #include <cstdint>
 #include <string>
@@ -15,6 +18,7 @@
 using namespace wfbfm;
 namespace ports = mem_w_stream_ports;
 
+// Structural constants — MUST match write_mem_w_xsi_bundles (the DATA is loaded from vectors/).
 static const int  N        = 128;
 static const int  MEM_DW   = 64;
 static const int  BPW      = MEM_DW / 8;
@@ -22,37 +26,26 @@ static const int  MEM_NW   = 8192;
 static const int  BASE_W   = 64;
 static const long MAX_CYCLES = 2000000L;
 
-static uint64_t known_word(int i) { return ((uint64_t)i * 40503ULL + 7ULL); }
-
 int main() {
-    FlatMemory mem(MEM_NW, BPW);
-
-    // The command carries an ELEMENT/WORD coordinate (= the old word-aligned byte addr / BPW). The
-    // offset=slave register stays pinned to 0, so the kernel's m_mem[word_index] drives
-    // AWADDR = word_index*BPW — the AXI slave's awaddr/BPW->word decode is unchanged.
-    const uint32_t word_index = (uint32_t)BASE_W;
-    // MWCmd{addr, len, xfer_len, xfer_msg[8]} packs to 6 words at MEM_DW=64 (mirrors mem_r_bfm_tb.cpp).
-    std::vector<uint64_t> cmd_words = {
-        (uint64_t)word_index | ((uint64_t)(uint32_t)N << 32),
-        0ULL,
-        0ULL, 0ULL, 0ULL, 0ULL,
-    };
-    std::vector<uint64_t> in_words;
-    for (int i = 0; i < N; ++i) in_words.push_back(known_word(i));
-
-    // Open the design and model its three interfaces.
-    XsiSim sim(ports::DESIGN_DLL, "mem_w_bfm.wdb");
+    // Participants.  The command + data drivers play vectors/cmd + vectors/dat; the memory dumps the
+    // region it was written to (vectors/out) in post_sim.
+    FlatMemory      mem(MEM_NW, BPW);
+    XsiSim          sim(ports::DESIGN_DLL, "mem_w_bfm.wdb");
     sim.pin_low(ports::ZERO_PORTS, ports::ZERO_PORTS_N);
 
-    AxisMaster      s_cmd(sim.dut(), ports::s_cmd, cmd_words);
-    AxisMaster      s_in (sim.dut(), ports::s_in,  in_words);
+    AxisMaster      s_cmd(sim.dut(), ports::s_cmd, {});
+    AxisMaster      s_in (sim.dut(), ports::s_in,  {});
     AxiMmWriteSlave gmem0(sim.dut(), ports::m_mem, mem);
 
-    auto sample = [&]{ s_cmd.sample(); s_in.sample(); gmem0.sample(); };
-    auto update = [&]{ s_cmd.update(); s_in.update(); gmem0.update(); };
-    auto drive  = [&]{ s_cmd.drive();  s_in.drive();  gmem0.drive();  };
+    s_cmd.in_bundle = "vectors/cmd";
+    s_in.in_bundle  = "vectors/dat";
+    mem.dump_segs   = { { (size_t)BASE_W, (size_t)N, "vectors/out" } };
 
-    sim.reset(drive);
+    // Declaration order = the old sample/update/drive order (memory first, no-op on the cycle phases).
+    std::vector<XsiSimObj*> parts = { &mem, &s_cmd, &s_in, &gmem0 };
+
+    for (auto* p : parts) p->pre_sim();          // load command + input stream before reset
+    sim.reset([&]{ for (auto* p : parts) p->drive(); });
 
     long cyc = 0, drain = -1; bool timed_out = false;
     for (;;) {
@@ -64,11 +57,13 @@ int main() {
         ++cyc;
 
         sim.clock_low();
-        sample();
+        for (auto* p : parts) p->sample();
         sim.clock_high();
-        update();
-        drive();
+        for (auto* p : parts) p->update();
+        for (auto* p : parts) p->drive();
     }
+
+    for (auto* p : parts) p->post_sim();          // dump mem[BASE_W..BASE_W+N) to vectors/out
 
     if (timed_out) {
         std::fprintf(stderr, "FAILED test: TIMEOUT cyc=%ld w_count=%d/%d in_idx=%d cmd_widx=%d/%d g_state=%d\n",
@@ -77,17 +72,19 @@ int main() {
         return 1;
     }
 
+    // Golden: the expected written region is a bundle (= the input stream), so the pattern is stated
+    // once, in Python.
+    const std::vector<uint64_t> golden = BurstBundle::read_words("vectors/golden");
     int fails = 0;
-    for (int i = 0; i < N; ++i) {
-        uint64_t exp = known_word(i), got = mem[BASE_W + i];
+    for (size_t i = 0; i < golden.size(); ++i) {
+        uint64_t exp = golden[i], got = mem[BASE_W + (int)i];
         if (got != exp) {
-            if (fails < 8) std::fprintf(stderr, "  word %d: got 0x%016llx exp 0x%016llx\n",
+            if (fails < 8) std::fprintf(stderr, "  word %zu: got 0x%016llx exp 0x%016llx\n",
                                         i, (unsigned long long)got, (unsigned long long)exp);
             ++fails;
         }
     }
     // `cycles` is time-to-last-completion, NOT the loop count — see the note in mem_r_bfm_tb.cpp.
-    // The drain tail is a testbench constant; folding it into the headline number hides the work.
     const long latency = (drain >= 0) ? drain : cyc;
     std::printf("mem_w_stream XSI BFM: N=%d w_count=%d cycles=%ld (tail=%ld)\n",
                 N, gmem0.w_count(), latency, cyc - latency);

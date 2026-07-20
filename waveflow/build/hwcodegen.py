@@ -1842,9 +1842,9 @@ def _validate_leaf_is_flat(comp) -> None:
         f"{type(comp).__name__} lowers to a single kernel function, but it owns "
         f"{' and '.join(owned)}. A single function has nowhere to put them, so emitting "
         f"one would silently drop them. Either inline that behaviour into this "
-        f"component's own body, or make it a CompositeComp — whose codegen IS the "
-        f"sub-component graph (one task per child, one channel per internal edge). "
-        f"See docs/guide/flows/."
+        f"component's own body, or make it a composite — a FreeRunComp with sub-components "
+        f"instead of a run_iter body, whose codegen IS the sub-component graph (one task per "
+        f"child, one channel per internal edge). See docs/guide/flows/."
     )
 
 

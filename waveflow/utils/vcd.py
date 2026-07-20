@@ -1,5 +1,6 @@
 import math
 import re
+from dataclasses import dataclass, field
 from enum import IntEnum
 from sys import prefix
 from typing import Literal
@@ -16,6 +17,57 @@ class AximmBeatType(IntEnum):
     TRANSFER = 0
     IDLE = 1
     STALL = 2
+
+
+@dataclass
+class AxisBurst:
+    """One AXI4-Stream burst as a per-beat timeline.
+
+    The canonical burst structure, produced by two sources so timing tooling is source-agnostic:
+    a live capture (the pysim ``StreamSink`` / its XSI ``AxisSlave`` twin) *or* a VCD post-analysis
+    (:meth:`VcdParser.extract_axis_bursts`).  Per-burst begin/end are just derived views of the
+    per-beat timeline (``tstart``, ``tstart + len(beat_type) * clk_period``); the valuable part is
+    ``beat_type`` — the occupancy timeline (where the gaps and backpressure are).
+
+    Attributes
+    ----------
+    data : np.ndarray
+        The transferred words (uint32), one per *transfer* beat.
+    start_idx : int
+        Clock-edge index of the first beat of the burst.
+    tstart : float
+        Time of the first beat (same units as the extractor's ``clk_period``).
+    beat_type : list[int]
+        Per-beat status over the whole burst span, each an :class:`AximmBeatType`:
+        ``0`` transfer, ``1`` idle (``tvalid=0``), ``2`` stall (``tready=0``).
+    """
+
+    data: np.ndarray
+    start_idx: int
+    tstart: float
+    beat_type: list[int] = field(default_factory=list)
+
+    @property
+    def n_transfers(self) -> int:
+        """Number of transfer beats (``== len(data)``)."""
+        return int(np.asarray(self.data).size)
+
+    @property
+    def n_beats(self) -> int:
+        """Total beats spanned, including idle/stall bubbles."""
+        return len(self.beat_type)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AxisBurst":
+        """Bridge a legacy ``extract_axis_bursts`` dict (``data``/``start_idx``/``tstart``/
+        ``beat_type``) into an ``AxisBurst`` — lets callers converge without the extractor itself
+        being rewritten yet (see ``plans/stream_tb_file_vectors.md``, Stage 4)."""
+        return cls(
+            data=np.asarray(d["data"], dtype=np.uint32),
+            start_idx=int(d["start_idx"]),
+            tstart=float(d["tstart"]),
+            beat_type=list(d["beat_type"]),
+        )
 
 
 def vcd_trace(trace_level: str) -> str:

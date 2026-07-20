@@ -1,6 +1,6 @@
 """Tests for `tb_top_spec` — the XSI testbench harness derived from a testbench component graph.
 
-The claim under test: a testbench declared as a `CompositeComp` carries enough information to
+The claim under test: a testbench declared as a composite `FreeRunComp` carries enough information to
 *derive* the models the hand-written testbench constructs by hand. If this holds, `main()` is
 emittable; if it does not, Stage 5 is dead.
 
@@ -22,23 +22,24 @@ def _tb(**kw):
 def test_walk_derives_exactly_the_hand_written_testbench():
     """Every model the hand-written mem_copy TB constructs, derived from the graph instead.
 
-    Cross-check against examples/mem_copy/xsi/mem_copy_bfm_tb.cpp:
+    Cross-check against the generated harness (examples/mem_copy/xsi/mem_copy_tb_harness.h):
 
-        FlatMemory      mem(vec::MEM_NW, BPW);
-        AxisMaster      s_cmd (sim.dut(), ports::s_cmd,  cmd_words);
+        FlatMemory      mem(...);
+        AxisMaster      s_cmd (sim.dut(), ports::s_cmd, {});   // s_cmd.in_bundle = "vectors/s_cmd";
         AxisSlave       s_done(sim.dut(), ports::s_done);
-        AxiMmReadSlave  gmem0 (sim.dut(), ports::m_in,  mem);
-        AxiMmWriteSlave gmem1 (sim.dut(), ports::m_out, mem);
+        AxiMmReadSlave  m_in  (sim.dut(), ports::m_in,  mem);
+        AxiMmWriteSlave m_out (sim.dut(), ports::m_out, mem);
     """
     spec = tb_top_spec(_tb())
     assert spec.top_name == "mem_copy"
 
-    got = {m.name: (m.cls, m.xsi_prefix, m.args) for m in spec.models}
+    got = {m.name: (m.cls, m.xsi_prefix, m.args, m.dyn_params) for m in spec.models}
     assert got == {
-        "s_cmd":  ("AxisMaster", "s_cmd", ("cmd_words",)),
-        "s_done": ("AxisSlave", "s_done", ()),
-        "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",)),
-        "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",)),
+        # s_cmd is bundle-driven: empty ctor words ({}), and an in_bundle DynParam it loads in pre_sim.
+        "s_cmd":  ("AxisMaster", "s_cmd", ("{}",), (("in_bundle", '"vectors/s_cmd"'),)),
+        "s_done": ("AxisSlave", "s_done", (), (("out_bundle", '"vectors/s_done"'),)),
+        "m_in":   ("AxiMmReadSlave", "m_axi_gmem0", ("mem",), ()),
+        "m_out":  ("AxiMmWriteSlave", "m_axi_gmem1", ("mem",), ()),
     }
 
 
@@ -54,7 +55,7 @@ def test_one_crossbar_becomes_two_slaves_sharing_one_arena():
     spec = tb_top_spec(_tb())
 
     assert len(spec.shared) == 1
-    cls, name, args = spec.shared[0]
+    cls, name, args, _dyn = spec.shared[0]
     assert cls == "FlatMemory" and name == "mem"
     assert args == ("2624", "8"), "arena size/bpw come from the MemComponent's own fields"
 
@@ -98,7 +99,7 @@ def test_an_unwired_dut_port_fails_loudly():
 
 
 def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
-    """Regression: `kernel_task` does NOT identify the DUT — a CompositeComp has none (only its
+    """Regression: `kernel_task` does NOT identify the DUT — a composite has none (only its
     children do), so both the DUT and the participants answer False. The discriminator is
     `boundary` (RTL ports) vs `bfm_model()` (a TB model)."""
     tb = _tb()

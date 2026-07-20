@@ -42,7 +42,8 @@ That fork is two realizations of one flow, not two separate flows.
 - [Vitis Pattern](./vitis.md) — recipe for invoking Vitis HLS C-sim / C-synth and parsing the resulting reports.
 - [Authoring `run.tcl`](./tcl.md) — the Vitis script shared by both single-kernel and composite flows.
 - [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
-- [Writing a BFM testbench](./bfm.md) — the hand-authored cycle-driver for AXI-MM + AXI-Stream.
+- [BFM Testbenches](./bfm.md) — the framework's AXI-MM / AXI-Stream models and their five-phase
+  lifecycle, assembled from the testbench graph or by hand.
 
 ## Quick example
 

@@ -46,7 +46,7 @@ def potential_targets(source) -> frozenset[str]:
 
     Reads the ``potential_targets`` ClassVar declared by each kind
     (:class:`~waveflow.hw.hw_hostactivated.HostActivated`,
-    :class:`~waveflow.hw.hw_freerun.FreeRunComp`, :class:`~waveflow.hw.hw_composite.CompositeComp`,
+    :class:`~waveflow.hw.hw_freerun.FreeRunComp` — standalone or composite,
     :class:`~waveflow.hw.hw_testbench.SeqTB`) via ``getattr`` — house style, the same way ``build/``
     reads ``cpp_kernel_name`` / ``control_mode`` / ``_is_testbench``.  A source that declares none
     (e.g. a plain :class:`~waveflow.hw.hw_component.HwComponent` not yet on an execution-model class)
@@ -74,7 +74,7 @@ def _no_targets_message(cls: type) -> str:
     if isinstance(cls, type) and issubclass(cls, HwComponent):
         return (
             f"{cls.__name__} is a plain HwComponent: it has not been migrated to an execution-model "
-            f"class (HostActivated / FreeRunComp / CompositeComp), so no codegen target is declared "
+            f"class (HostActivated / FreeRunComp), so no codegen target is declared "
             f"for its kind and check() cannot answer for it. Note this is NOT a claim that it will "
             f"not generate — codegen still emits for un-migrated leaves through the interim fallback "
             f"in codegen_dispatch (extracting on_start when a regmap is present, else run_proc). "

@@ -1,7 +1,8 @@
-"""toy.py — the minimal ``FreeRunComp`` / ``CompositeComp`` components the guide quotes.
+"""toy.py — the minimal ``FreeRunComp`` components the guide quotes (a standalone and a composite).
 
-These are **toys**: the smallest components that exercise each kind, kept small enough to read in
-one screen and to quote verbatim in ``docs/guide/components/``.  They are backed by
+These are **toys**: the smallest components that exercise each kind — a *standalone* ``FreeRunComp``
+(a ``run_iter`` body) and a *composite* ``FreeRunComp`` (sub-components, no body) — kept small enough
+to read in one screen and to quote verbatim in ``docs/guide/components/``.  They are backed by
 ``tests/examples/test_toy.py``, so the code on those pages is executed by CI and cannot silently rot.
 
 What they claim: *this is real code, it runs, and the docs match it* — a tested pysim model written
@@ -21,7 +22,6 @@ from typing import ClassVar
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, FloatField
-from waveflow.hw.hw_composite import CompositeComp
 from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.synth import synthesizable
@@ -89,7 +89,7 @@ class Double(FreeRunComp):
 
 
 @dataclass
-class ScaledSquare(CompositeComp):
+class ScaledSquare(FreeRunComp):
     """Composite: y = (2·x)², computed by two concurrent free-running sub-components."""
 
     cpp_kernel_name: ClassVar[str | None] = "scaled_square"

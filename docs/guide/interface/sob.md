@@ -175,6 +175,7 @@ The `gather_toy` kernel demonstrates type-safe block processing with gather sema
 from waveflow.hw.dataschema import DataArray, IntField
 from waveflow.hw.interface import SobIFSlave, SobIFMaster, StreamOfBlocksIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_freerun import FreeRunComp
 
 # Define a block type: 8 × uint64 words
 WordBlock = DataArray.specialize(
@@ -218,7 +219,7 @@ class Gather(HwComponent):
                 yield from self.m_out.write(int(block[i]))  # Direct access, no unpacking
             yield from self.s_in.release_read()
 
-class GatherToy(CompositeComp):
+class GatherToy(FreeRunComp):
     """Composite: Fill → SOBIF → Gather (proof-of-concept, no serialization overhead)."""
     def __post_init__(self):
         super().__post_init__()

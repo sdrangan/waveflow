@@ -90,16 +90,18 @@ There are exactly **two synthesizable kinds**, and each is the entry point to on
 - **[`HostActivated`](./sequential.md)** — the host launches it over a register map;
   writing `ap_start` runs its `on_start` once (read inputs, compute, write outputs, return). Use it for
   invocation-style accelerators. This is the **[sequential flow](./sequential.md)**.
-- **[`FreeRunComp`](./concurrent.md)** — a free-running component. A **leaf** implements
-  `run_iter` (one firing; the base loops it forever) and lowers to a single `hls::task`; a **composite**
-  has no body of its own — it wires sub-components, and each becomes its own `hls::task`. A leaf is just
-  the 1-task case of a composite, so they are **one class** (`CompositeComp` is an alias for
-  `FreeRunComp`, kept only for readable declarations). This is the **[concurrent flow](./concurrent.md)**.
+- **[`FreeRunComp`](./concurrent.md)** — a free-running component, in one of two shapes. A
+  **standalone** one implements `run_iter` (one firing; the base loops it forever) and lowers to a
+  single `hls::task`; a **composite** has no body of its own — it wires sub-components, and each becomes
+  its own `hls::task`. A standalone component is just the 1-task case of a composite, so they are
+  literally **one class** — there is no separate composite type; the top level of a design or a
+  testbench is a `FreeRunComp` too. This is the **[concurrent flow](./concurrent.md)**.
 
 > *Which* lifecycle method you implement is what distinguishes the kinds: `on_start` for a
-> host-launched component, `run_iter` for a free-running leaf, and neither for a composite (its
-> sub-components do the work). The kind is a property of the **class**, so codegen dispatches on it
-> directly rather than inferring the execution model from the shape of the code.
+> host-launched component, `run_iter` for a standalone free-running one, and neither for a composite
+> (its sub-components do the work). The kind is decided by **content** — a `run_iter` body vs
+> sub-components — so codegen dispatches on it directly rather than inferring the execution model from
+> the shape of the code.
 
 ## Next
 
@@ -107,9 +109,9 @@ Pick the kind your design is, and follow its flow:
 
 - **[Sequential (host-activated)](./sequential.md)** — a `HostActivated` component and a sequential Vitis
   testbench, verified in C-sim and co-sim.
-- **[Concurrent (free-running)](./concurrent.md)** — a `FreeRunComp` (leaf or composite), verified at RTL
-  through an XSI BFM.
+- **[Concurrent (free-running)](./concurrent.md)** — a `FreeRunComp` (standalone or composite), verified
+  at RTL through an XSI BFM.
 
 **Source of truth:** `waveflow/hw/component.py` (`Component`), `waveflow/hw/hw_component.py`
 (`HwComponent`), `waveflow/hw/hw_hostactivated.py` (`HostActivated`), `waveflow/hw/hw_freerun.py`
-(`FreeRunComp`), `waveflow/hw/hw_composite.py` (`CompositeComp` = `FreeRunComp`).
+(`FreeRunComp` — standalone or composite).

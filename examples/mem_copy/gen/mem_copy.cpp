@@ -7,14 +7,14 @@
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "memmgr.hpp"
+#include "streamutils_hls.h"
 #include "copy_cmd.h"
-#include "m_r_cmd.h"
-#include "m_w_cmd.h"
-#include "mem_complete.h"
-#include "u_int32_array.h"
-#include "mem_seq_task.h"
-#include "mem_r_stream_task.h"
-#include "mem_w_stream_done_task.h"
+#include "mem_r_cmd.h"
+#include "mem_w_cmd.h"
+#include "copy_resp.h"
+#include "mem_seq_framed_task.h"
+#include "mem_r_stream_framed_task.h"
+#include "mem_w_stream_framed_done_task.h"
 
 void mem_copy(
     hls::stream<ap_uint<64> >& s_cmd,
@@ -28,10 +28,9 @@ void mem_copy(
 #pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
-    hls_thread_local hls::stream<ap_uint<64> > mr_cmd;
-    hls_thread_local hls::stream<ap_uint<64> > mw_cmd;
-    hls_thread_local hls::stream<ap_uint<64> > copy_data;
-    hls_thread_local hls::task t0(mem_seq_task<64>, s_cmd, mr_cmd, mw_cmd);
-    hls_thread_local hls::task t1(mem_r_stream_task<64>, mr_cmd, m_in, copy_data);
-    hls_thread_local hls::task t2(mem_w_stream_done_task<64>, mw_cmd, copy_data, m_out, s_done);
+    hls_thread_local hls::stream<streamutils::framed_word<64> > cmd;
+    hls_thread_local hls::stream<streamutils::framed_word<64> > copy_data;
+    hls_thread_local hls::task t0(mem_seq_framed_task<64>, s_cmd, cmd);
+    hls_thread_local hls::task t1(mem_r_stream_framed_task<64>, cmd, m_in, copy_data);
+    hls_thread_local hls::task t2(mem_w_stream_framed_done_task<64, 8>, copy_data, m_out, s_done);
 }

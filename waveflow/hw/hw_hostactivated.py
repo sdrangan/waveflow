@@ -31,8 +31,8 @@ class HostActivated(HwComponent):
     - Carries a :class:`~waveflow.hw.regmap.VitisRegMapMMIFSlave` (the ``ap_start``/``ap_done`` +
       register file). This is the *defining* property; because a component's endpoints are populated
       by the subclass ``__post_init__`` **after** the ``HwComponent`` super-chain runs (the same
-      construction-ordering limit :class:`~waveflow.hw.hw_composite.CompositeComp` hits with its
-      children), it is not construction-checked here — it is enforced by the codegen path (a kernel
+      construction-ordering limit a composite :class:`~waveflow.hw.hw_freerun.FreeRunComp` hits with
+      its children), it is not construction-checked here — it is enforced by the codegen path (a kernel
       with no regmap emits no ``s_axilite`` control interface).
     - Implements :meth:`on_start` — the entry the codegen path lowers as the kernel body.
     - Must **not** define ``run_iter`` — that is a *free-running* leaf's entry
@@ -65,7 +65,7 @@ class HostActivated(HwComponent):
         super().__init_subclass__(**kwargs)
         # Class-level contract: a host-activated leaf runs once per trigger, so it must not carry a
         # free-running `run_iter`. HostActivated itself has no run_iter, so a truthy lookup means a
-        # subclass added one. (Mirrors CompositeComp's class-level check.)
+        # subclass added one. (Mirrors the FreeRunComp body-XOR-children check.)
         if getattr(cls, 'run_iter', None) is not None:
             raise TypeError(
                 f"{cls.__name__} is a HostActivated but defines run_iter(); a host-activated leaf "

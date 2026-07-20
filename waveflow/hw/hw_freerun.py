@@ -2,19 +2,21 @@
 
 **One class, two shapes.**  A ``FreeRunComp`` is either
 
-* a **leaf** — you implement :meth:`run_iter` (one firing) and the base loops it forever; it lowers
-  to a single free-running ``ap_ctrl_none`` ``hls::task`` whose body is that ``run_iter``; or
+* **standalone** — you implement :meth:`run_iter` (one firing) and the base loops it forever; it
+  lowers to a single free-running ``ap_ctrl_none`` ``hls::task`` whose body is that ``run_iter``; or
 * a **composite** — you ``add_comp`` sub-components (themselves ``FreeRunComp``\\ s) wired by
-  ``add_if`` interfaces, and declare the ``boundary`` / ``ordered_subcomps`` / ``internal_edges`` the
-  generator walks; it lowers to one ``hls::task`` per child plus one channel per internal edge.
+  ``add_if`` interfaces, and name the ``boundary`` ports the generator walks (``ordered_subcomps`` /
+  ``internal_edges`` are derived); it lowers to one ``hls::task`` per child plus one channel per
+  internal edge.
 
-A leaf is literally the **1-task degenerate case** of a composite: it has one task (itself) and no
-internal edges (see the derived :attr:`boundary` / :attr:`ordered_subcomps` / :attr:`internal_edges`
-below), so :func:`~waveflow.build.composite_gen.composite_top_spec` walks both through the *same*
-generator.  There is no separate composite class — a composite is a ``FreeRunComp`` that has
-sub-components instead of a body.  (``CompositeComp`` survives in ``hw_composite.py`` only as a thin
-subclass that renames the codegen target; it is the same machinery.  See
-``plans/one_component_two_flows.md``.)
+A standalone component is literally the **1-task degenerate case** of a composite: it has one task
+(itself) and no internal edges (see the derived :attr:`boundary` / :attr:`ordered_subcomps` /
+:attr:`internal_edges` below), so :func:`~waveflow.build.composite_gen.composite_top_spec` walks both
+through the *same* generator.  **There is no separate composite class** — the top level of a design or
+a testbench is a ``FreeRunComp`` too, and a composite is just one that has sub-components instead of a
+body.  The kind is decided by content, not type: :meth:`_kind` returns ``'standalone'`` or
+``'composite'`` by inspecting whether the component overrode ``run_iter`` or added children.  See
+``plans/one_component_two_flows.md``.
 
 **Body XOR children** is the invariant: exactly one of "overrides ``run_iter``" and "has
 sub-components" holds.  It is an *instance* fact, not a class fact — a subclass's children arrive in
@@ -57,12 +59,12 @@ class FreeRunComp(HwComponent):
     #: this is ``potential_`` and not ``supported_``).
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
-    # -- kind: leaf (body) XOR composite (children) --------------------------------------------------
+    # -- kind: standalone (body) XOR composite (children) --------------------------------------------
 
     def _kind(self) -> str:
-        """``'leaf'`` (overrides :meth:`run_iter`) or ``'composite'`` (has sub-components) — never both,
-        never neither.  The **body-XOR-children** invariant, enforced post-construction (children are
-        populated in the subclass ``__post_init__``, so this cannot run at base-construction time)."""
+        """``'standalone'`` (overrides :meth:`run_iter`) or ``'composite'`` (has sub-components) — never
+        both, never neither.  The **body-XOR-children** invariant, enforced post-construction (children
+        are populated in the subclass ``__post_init__``, so this cannot run at base-construction time)."""
         has_body = type(self).run_iter is not FreeRunComp.run_iter
         has_children = bool(self.sub_comps)
         if has_body and has_children:
@@ -72,12 +74,12 @@ class FreeRunComp(HwComponent):
                 f"sub-component, or drop the sub-components."
             )
         if has_body:
-            return 'leaf'
+            return 'standalone'
         if has_children:
             return 'composite'
         raise TypeError(
             f"{type(self).__name__} has neither a run_iter body nor sub-components; it must either "
-            f"implement run_iter (a leaf kernel) or add_comp sub-components (a composite)."
+            f"implement run_iter (a standalone kernel) or add_comp sub-components (a composite)."
         )
 
     # -- boundary / subcomps / edges: derived for a leaf, overridable for a composite ---------------
@@ -91,22 +93,32 @@ class FreeRunComp(HwComponent):
     def boundary(self) -> tuple[tuple[str, object], ...]:
         """The top's boundary ports as ``(name, endpoint)`` pairs, in top-signature order.
 
-        A **composite** assigns this in ``__post_init__``.  A **leaf** derives it: the *order* is
-        :meth:`kernel_task`'s signature (so the top's C++ parameter list and the task's call args are
-        literally the same list and cannot disagree) and the *endpoint* is the attribute.  Direction
-        comes from the endpoint's type (:func:`~waveflow.build.composite_gen.kind_of_endpoint`) and the
-        bundle from the assembler's policy (:func:`~waveflow.build.composite_gen.bundle_map`), so a leaf
-        declares *nothing* — its boundary is a consequence of the ports it has and the signature it
-        exposes.  ``composite_top_spec`` walks a leaf exactly as it walks a composite.
+        A **composite** assigns the port *names* in ``__post_init__`` (``self.boundary = ["s_cmd",
+        ...]``); the endpoints and their order are derived from the graph by
+        :func:`~waveflow.build.composite_gen.derive_boundary` — a child endpoint not bound to one of
+        the composite's internal interfaces *is* a boundary port, in ``add_comp`` × ``add_endpoint``
+        order.  Only the names are declared, because local names collide (two children both call
+        their AXI port ``m_mem``).  A list of ``(name, endpoint)`` pairs is still accepted.
+
+        A **leaf** derives the whole thing: the *order* is :meth:`kernel_task`'s signature (so the
+        top's C++ parameter list and the task's call args are literally the same list and cannot
+        disagree) and the *endpoint* is the attribute.  Direction comes from the endpoint's type
+        (:func:`~waveflow.build.composite_gen.kind_of_endpoint`) and the bundle from the assembler's
+        policy (:func:`~waveflow.build.composite_gen.bundle_map`), so a leaf declares *nothing*.
+        ``composite_top_spec`` walks a leaf exactly as it walks a composite.
         """
         ov = self.__dict__.get('_boundary')
         if ov is not None:
+            if ov and all(isinstance(e, str) for e in ov):
+                from waveflow.build.composite_gen import derive_boundary
+                return derive_boundary(self, ov)
             return ov
         if self.sub_comps:
             raise TypeError(
                 f"{type(self).__name__} is a composite (has sub-components) but does not declare "
-                f"self.boundary; a composite must set its boundary ports in __post_init__. Only a leaf "
-                f"derives its boundary (from kernel_task()'s signature)."
+                f"self.boundary; a composite must name its boundary ports in __post_init__ (a list of "
+                f"port names, in add_comp x add_endpoint order). Only a leaf derives its boundary "
+                f"entirely (from kernel_task()'s signature)."
             )
         return tuple((attr, getattr(self, attr)) for attr in self.kernel_task().signature)
 
@@ -129,10 +141,21 @@ class FreeRunComp(HwComponent):
 
     @property
     def internal_edges(self) -> list:
-        """The internal channels wiring the sub-tasks.  A **leaf** wires nothing (every port is a
-        boundary port); a **composite** assigns this."""
+        """The internal channels wiring the sub-tasks.
+
+        A **leaf** wires nothing (every port is a boundary port).  A **composite** derives these from
+        the interfaces it registered with ``add_if`` — see
+        :func:`~waveflow.build.composite_gen.derive_internal_edges`.  ``add_if`` already records the
+        master↔slave connection *and* the lowering kind (its type), so declaring a parallel edge list
+        could only restate it or contradict it.  An explicit assignment still wins, for a composite
+        that needs an edge the graph does not describe."""
         ov = self.__dict__.get('_internal_edges')
-        return ov if ov is not None else []
+        if ov is not None:
+            return ov
+        if self.interfaces:
+            from waveflow.build.composite_gen import derive_internal_edges
+            return derive_internal_edges(self)
+        return []
 
     @internal_edges.setter
     def internal_edges(self, value) -> None:
@@ -147,7 +170,7 @@ class FreeRunComp(HwComponent):
         This is a plain method, not a generator function, so it can return ``None`` for the composite
         case (a generator function would return a generator, never ``None``, and always be scheduled).
         """
-        return self._run_iter_forever() if self._kind() == 'leaf' else None
+        return self._run_iter_forever() if self._kind() == 'standalone' else None
 
     def _run_iter_forever(self) -> ProcessGen[None]:
         while True:

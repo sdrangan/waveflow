@@ -7,7 +7,9 @@ stream into a region.  The same functional truth the generated RTL is checked ag
 """
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -17,7 +19,8 @@ from waveflow.hw.memif import DirectMMIF
 from waveflow.hw.memory import AddrUnit, MemComponent
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
-from waveflow.simulation.stream_tb import CmdDriver, WordDriver, WordSink
+from waveflow.simulation.stream_tb import StreamDriver, StreamSink
+from waveflow.utils.burst_io import write_burst_bundle
 
 from waveflow.hw.mem_stream import (
     MRCmd,
@@ -55,9 +58,12 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
     mem._mem.write(base_addr, known.astype(np.uint64))
 
     rstream = MemRStream(name="rstream", sim=sim, mem_dwidth=mem_dwidth)
-    driver = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                       cmds=[MRCmd(addr=word_index, len=n_words)])
-    sink = WordSink(sim=sim, bitwidth=mem_dwidth)
+    _cmd = MRCmd(addr=word_index, len=n_words)
+    _vd = tempfile.TemporaryDirectory()          # lives across run_sim (driver loads in pre_sim)
+    write_burst_bundle([np.asarray(_cmd.serialize(word_bw=mem_dwidth), dtype=np.uint64)],
+                       Path(_vd.name) / "cmd")
+    driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
+    sink = StreamSink(sim=sim, bitwidth=mem_dwidth)
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
     cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
@@ -104,9 +110,13 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
     known = (np.arange(n_words, dtype=np.uint64) * 40503 + 7) & ((1 << mem_dwidth) - 1)
 
     wstream = MemWStream(name="wstream", sim=sim, mem_dwidth=mem_dwidth)
-    cmd_drv = CmdDriver(sim=sim, bitwidth=mem_dwidth,
-                        cmds=[MWCmd(addr=word_index, len=n_words)])
-    dat_drv = WordDriver(sim=sim, bitwidth=mem_dwidth, bursts=[known.astype(np.uint64)])
+    _cmd = MWCmd(addr=word_index, len=n_words)
+    _vd = tempfile.TemporaryDirectory()          # lives across run_sim (drivers load in pre_sim)
+    write_burst_bundle([np.asarray(_cmd.serialize(word_bw=mem_dwidth), dtype=np.uint64)],
+                       Path(_vd.name) / "cmd")
+    write_burst_bundle([known.astype(np.uint64)], Path(_vd.name) / "dat")
+    cmd_drv = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
+    dat_drv = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="dat", root=Path(_vd.name))
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
     cmd_if.bind(ep_name="master", endpoint=cmd_drv.stream_ep)

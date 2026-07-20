@@ -150,12 +150,19 @@ class MemStreamStep(Buildable):
     @property
     def build_outputs(self) -> dict[str, Path]:
         return {
+            # Standalone gate-1 mem-stream bodies (3-arg) + the done-emitting write variant.  Legacy
+            # two-stream composition bodies: MemCopy retired them for the framed trio below (they own
+            # m_axi, so all stay hand-written and copied rather than generated).
             "mem_r_stream_task": self._output_dir / "mem_r_stream_task.h",
             "mem_w_stream_task": self._output_dir / "mem_w_stream_task.h",
-            # Composition (Phase 2) body: the done-emitting write variant used by the MemCopy
-            # composite top.  mem_seq_task.h is NOT here -- the Sequencer's body is GENERATED from
-            # its run_iter by TaskBodyStep; copying a hand-written twin would overwrite it.
             "mem_w_stream_done_task": self._output_dir / "mem_w_stream_done_task.h",
+            # In-band/framed chain (plans/memcopy_inband_integration.md): Sequencer -> reader -> writer,
+            # what MemCopy is built from.  All three are hand-written (they construct descriptors and
+            # drive framed_word channels, neither in the extractor vocabulary) -- including the
+            # Sequencer body, unlike the retired two-stream sequencer that TaskBodyStep generated.
+            "mem_seq_framed_task": self._output_dir / "mem_seq_framed_task.h",
+            "mem_r_stream_framed_task": self._output_dir / "mem_r_stream_framed_task.h",
+            "mem_w_stream_framed_done_task": self._output_dir / "mem_w_stream_framed_done_task.h",
             # Canonical six-stage interleaver tiles: a forwarded per-job token through every tile.
             "cmd_rx_task": self._output_dir / "cmd_rx_task.h",
             "il_mem_r_task": self._output_dir / "il_mem_r_task.h",
@@ -170,6 +177,9 @@ class MemStreamStep(Buildable):
             "mem_r_stream_task": "mem_r_stream_task.h",
             "mem_w_stream_task": "mem_w_stream_task.h",
             "mem_w_stream_done_task": "mem_w_stream_done_task.h",
+            "mem_seq_framed_task": "mem_seq_framed_task.h",
+            "mem_r_stream_framed_task": "mem_r_stream_framed_task.h",
+            "mem_w_stream_framed_done_task": "mem_w_stream_framed_done_task.h",
             "cmd_rx_task": "cmd_rx_task.h",
             "il_mem_r_task": "il_mem_r_task.h",
             "il_load_task": "il_load_task.h",
@@ -216,6 +226,7 @@ class XsiHarnessStep(Buildable):
     def build_outputs(self) -> dict[str, Path]:
         return {
             "xsi_bfm": self._output_dir / "xsi_bfm.h",
+            "xsi_bundle": self._output_dir / "xsi_bundle.h",
             "xsi_loader_h": self._output_dir / "xsi_loader.h",
             "xsi_loader_cpp": self._output_dir / "xsi_loader.cpp",
             "xsi_shared_lib": self._output_dir / "xsi_shared_lib.h",
@@ -225,6 +236,7 @@ class XsiHarnessStep(Buildable):
     def generate(self, key: str, config: BuildConfig) -> str:
         src_names = {
             "xsi_bfm": "xsi_bfm.h",
+            "xsi_bundle": "xsi_bundle.h",
             "xsi_loader_h": "xsi_loader.h",
             "xsi_loader_cpp": "xsi_loader.cpp",
             "xsi_shared_lib": "xsi_shared_lib.h",

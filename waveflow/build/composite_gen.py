@@ -163,6 +163,31 @@ class StreamEdge:
 
 
 @dataclass(frozen=True)
+class FramedEdge:
+    """A **framed** internal edge -> ``hls_thread_local hls::stream<streamutils::framed_word<W> >``.
+
+    Like :class:`StreamEdge`, but the channel word carries a per-beat packet boundary
+    (``framed_word{data, last}``) so a consumer can relay an opaque packet it refuses to parse (a
+    countless read needs a boundary, not a count).  ``ap_axis`` cannot be used on an internal FIFO
+    (Vitis HLS 214-208), so the boundary rides on the ``framed_word`` struct instead; the real TLAST
+    lives only on the top-level ``axi4s`` boundary ports.  See ``plans/memstream_inband.md``.
+
+    Produced by ``derive_internal_edges`` for a ``StreamIF`` whose ``framed`` flag is set; a plain
+    ``StreamIF`` still lowers to a :class:`StreamEdge`, so nothing existing changes."""
+    name: str
+    master_ep: object
+    slave_ep: object
+    depth: int | None = None
+
+    def decl(self, width: int) -> str:
+        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{width}> > "
+                f"{self.name};")
+        if self.depth is not None:
+            line += f"\n    #pragma HLS STREAM variable={self.name} depth={self.depth}"
+        return line
+
+
+@dataclass(frozen=True)
 class SobEdge:
     """A block (SOBIF) internal edge -> ``hls_thread_local hls::stream_of_blocks<T[N], 2>`` (the
     depth-2 ping-pong)."""
@@ -210,6 +235,98 @@ def kind_of_endpoint(ep) -> str:
     if isinstance(ep, StreamIFMaster):
         return "axis_out"
     raise ValueError(f"no boundary kind for endpoint type {type(ep).__name__}")
+
+
+def _edge_name(comp, iface) -> str:
+    """The C++ channel variable name for *iface*: its own name, minus the owner prefix and ``_if``.
+
+    The interface is named ``f"{comp.name}_{edge}_if"`` by convention, so the edge name is already
+    written down — it does not need restating in a parallel list.
+    """
+    name = iface.name
+    prefix = f"{comp.name}_"
+    if name.startswith(prefix):
+        name = name[len(prefix):]
+    if name.endswith("_if"):
+        name = name[: -len("_if")]
+    return name
+
+
+def derive_internal_edges(comp) -> list:
+    """The internal edges of *comp*, **derived from the interfaces it registered with ``add_if``**.
+
+    ``add_if`` already "records the master↔slave connection so the composite codegen can lower it",
+    which is the whole content of an edge: the two endpoints, the channel name, and how it lowers.
+    So a composite that wires its children with ``add_if`` has already declared its edges, and a
+    parallel ``internal_edges`` list could only restate them — or disagree with them.
+
+    The lowering kind is the interface's TYPE, exactly as a boundary port's direction is its
+    endpoint's type (:func:`kind_of_endpoint`): a :class:`~waveflow.hw.interface.StreamIF` is a FIFO,
+    a :class:`~waveflow.hw.interface.StreamOfBlocksIF` is a ping-pong block channel whose element
+    width and block length come from its ``element_type`` (the single source the SOBIF refactor made
+    typed — restating them word-granularly on an edge is how the two drift apart).
+    """
+    from waveflow.hw.interface import StreamIF, StreamOfBlocksIF
+
+    edges: list = []
+    for iface in comp.interfaces.values():
+        name = _edge_name(comp, iface)
+        master = iface.endpoints.get("master")
+        slave = iface.endpoints.get("slave")
+        if master is None or slave is None:
+            raise ValueError(
+                f"derive_internal_edges: interface {iface.name!r} on {type(comp).__name__} is not "
+                f"bound on both sides (master={master!r}, slave={slave!r}) — an internal edge needs "
+                f"both, so this is a wiring bug, not an edge.")
+        if isinstance(iface, StreamOfBlocksIF):
+            et = iface.element_type
+            if et is None:
+                raise ValueError(
+                    f"derive_internal_edges: SOBIF {iface.name!r} has no element_type, so its block "
+                    f"width/length cannot be derived. Construct it with element_type=<DataArray>.")
+            edges.append(SobEdge(name, master, slave, elem_bw=int(et.element_type.bitwidth),
+                                 block_n=int(et.max_shape[0]), depth=int(iface.depth)))
+        elif isinstance(iface, StreamIF):
+            # A framed StreamIF lowers to a FramedEdge (framed_word FIFO, carries the packet
+            # boundary); a plain one to a StreamEdge (ap_uint FIFO).  See plans/memstream_inband.md.
+            if getattr(iface, "framed", False):
+                edges.append(FramedEdge(name, master, slave))
+            else:
+                edges.append(StreamEdge(name, master, slave))
+        else:
+            raise ValueError(
+                f"derive_internal_edges: no edge lowering for interface type "
+                f"{type(iface).__name__} ({iface.name!r}). Add one here rather than hand-declaring "
+                f"the edge, so every composite lowers the same way.")
+    return edges
+
+
+def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
+    """Pair *names* with *comp*'s boundary endpoints, **derived from the component graph**.
+
+    A boundary port is simply a child endpoint that is *not* bound to one of this composite's own
+    internal interfaces — the graph already knows which those are, and in what order, because
+    ``add_endpoint`` records every port on its owner (insertion-ordered, exactly as ``add_comp``
+    records children).  So the endpoints and their order are derived; only the external *names* are
+    the declarer's to say, and they must be, because local port names collide: both ``MemRStream``
+    and ``MemWStream`` call their AXI port ``m_mem``, and the top needs ``m_in`` / ``m_out``.
+
+    Order is significant — :func:`bundle_map` assigns ``gmem`` bundles in boundary order — and it is
+    the walk order (children in ``add_comp`` order, ports in ``add_endpoint`` order).
+    """
+    internal = {id(ep) for iface in comp.interfaces.values()
+                for ep in iface.endpoints.values() if ep is not None}
+    eps = [ep for child in comp.ordered_subcomps
+           for ep in child.endpoints.values() if id(ep) not in internal]
+
+    if len(names) != len(eps):
+        got = ", ".join(getattr(e, "name", "?") for e in eps)
+        raise ValueError(
+            f"{type(comp).__name__}.boundary names {len(names)} port(s) {tuple(names)!r} but the "
+            f"graph has {len(eps)} unwired child endpoint(s): [{got}]. Every child endpoint not "
+            f"bound to an internal interface is a boundary port, so either a name is missing or a "
+            f"port was left unwired.")
+    return tuple(zip(names, eps))
 
 
 def _unpack_boundary(entry) -> tuple[str, object]:
@@ -411,19 +528,24 @@ class BfmInst:
     name: str
     xsi_prefix: str                  # the RTL port prefix this model drives
     args: tuple[str, ...] = ()       # extra C++ args after the prefix
+    #: Init-time config to emit after construction as ``<name>.<field> = <expr>;`` -- one entry per
+    #: DynParam the participant carries (field name, rendered C++ initializer).
+    dyn_params: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
 class TbSpec:
-    """A generated XSI testbench harness, derived from a testbench `CompositeComp`'s graph."""
+    """A generated XSI testbench harness, derived from a testbench composite's graph."""
     top_name: str                      # the DUT's top name (-> DESIGN_DLL, ports header)
-    shared: tuple[tuple[str, str, tuple[str, ...]], ...] = ()   # (cls, name, args) — e.g. FlatMemory
+    #: (cls, name, ctor-args, dyn_params) — e.g. the FlatMemory arena two m_axi bundles share.  Its
+    #: DynParams (load_segs/dump_segs) attach here, not to the per-bundle models, so they emit once.
+    shared: tuple[tuple[str, str, tuple[str, ...], tuple[tuple[str, str], ...]], ...] = ()
     models: tuple[BfmInst, ...] = ()
 
 
 def _find_dut(tb):
     """The one child that is the DUT: it has a ``boundary`` (RTL ports); participants have
-    ``bfm_model()``.  Not ``kernel_task`` — a CompositeComp DUT has none, only its children do."""
+    ``bfm_model()``.  Not ``kernel_task`` — a composite DUT has none, only its children do."""
     duts = [c for c in tb.ordered_subcomps if hasattr(c, "boundary")]
     if len(duts) != 1:
         raise ValueError(
@@ -431,6 +553,28 @@ def _find_dut(tb):
             f"found {[type(d).__name__ for d in duts]}. A testbench drives one kernel."
         )
     return duts[0]
+
+
+def _render_dyn_value(value) -> str:
+    """Render a ``DynParam`` value as a C++ initializer for a ``<model>.<field> = <expr>;`` line.
+
+    A value that knows its own C++ form provides ``to_cpp()`` (e.g. ``MemSeg``); a list/tuple becomes
+    an aggregate initializer of its elements.  Extend the scalar cases per type as needed.
+    """
+    if hasattr(value, "to_cpp"):
+        return value.to_cpp()
+    if isinstance(value, (list, tuple)):
+        return "{ " + ", ".join(_render_dyn_value(v) for v in value) + " }"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return '"' + value + '"'
+    raise TypeError(
+        f"DynParam value {value!r} ({type(value).__name__}) has no C++ rendering yet — "
+        f"add a case to _render_dyn_value."
+    )
 
 
 def tb_top_spec(tb) -> TbSpec:
@@ -448,6 +592,8 @@ def tb_top_spec(tb) -> TbSpec:
     Participants declaring ``shared`` (a `MemComponent` -> one `FlatMemory` behind both bundles) are
     constructed once and passed by name.
     """
+    from waveflow.hw.hw_component import discover_dyn_params
+
     dut = _find_dut(tb)
 
     # endpoint identity -> the participant it belongs to
@@ -485,8 +631,13 @@ def tb_top_spec(tb) -> TbSpec:
                 f"participant — nothing would drive it, and the run would hang on that port."
             )
         bm = part.bfm_model()
+        # Init-time config: every DynParam the participant carries, rendered to a C++ initializer.
+        dyn = tuple((f, _render_dyn_value(v))
+                    for f, v in sorted(discover_dyn_params(part).items()))
         if bm.shared is not None:
-            shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args))
+            # A shared object's DynParams (a memory's load/dump segs) attach to the shared entry so
+            # they emit once as `<shared>.<field> = ...;`; the per-bundle slave models carry none.
+            shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args, dyn))
             cls = _SLAVE_FOR_KIND.get(kind)
             if cls is None:
                 raise ValueError(
@@ -495,7 +646,7 @@ def tb_top_spec(tb) -> TbSpec:
                 )
             models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
         else:
-            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args))
+            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args, dyn))
 
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
                   models=tuple(models))
@@ -522,12 +673,13 @@ def render_tb_harness(spec: TbSpec) -> str:
     ports_ns = f"{spec.top_name}_ports"
     guard = f"WAVEFLOW_GEN_{ns.upper()}_HARNESS_H"
 
-    shared_names = {name for _cls, name, _args in spec.shared}
-    # An extra arg naming a shared object is a member; anything else the test must supply.
+    shared_names = {name for _cls, name, *_ in spec.shared}
+    # A ctor param is a value the *test* must supply: a plain identifier that is not a shared member.
+    # A literal ctor arg (e.g. an empty word vector "{}") is not an identifier, so it is not a param.
     ctor_params: list[str] = []
     for m in spec.models:
         for a in m.args:
-            if a not in shared_names and a not in ctor_params:
+            if a.isidentifier() and a not in shared_names and a not in ctor_params:
                 ctor_params.append(a)
 
     lines = [
@@ -555,18 +707,22 @@ def render_tb_harness(spec: TbSpec) -> str:
         "    // resolve a port against it, and a shared arena before the slaves that serve from it.",
         "    XsiSim sim;",
     ]
-    for cls, name, _args in spec.shared:
+    for cls, name, *_ in spec.shared:
         lines.append(f"    {cls} {name};")
     for m in spec.models:
         lines.append(f"    {m.cls} {m.name};")
+    lines.append("    // Every participant by base pointer, in construction order (shared arenas")
+    lines.append("    // first): the one list the five lifecycle phases iterate, mirroring how")
+    lines.append("    // Simulation.run_sim() drives its SimObjs.")
+    lines.append("    std::vector<wfbfm::XsiSimObj*> participants_;")
 
     params = ", ".join(f"const std::vector<uint64_t>& {p}" for p in ctor_params)
     sig = f"    explicit Harness(const std::string& wdb{', ' + params if params else ''})"
     inits = [f"sim({ports_ns}::DESIGN_DLL, wdb)"]
-    for cls, name, args in spec.shared:
+    for _cls, name, args, _dyn in spec.shared:
         inits.append(f"{name}({', '.join(args)})")
     for m in spec.models:
-        a = ", ".join((f"sim.dut()", f"{ports_ns}::{m.name}") + m.args)
+        a = ", ".join(("sim.dut()", f"{ports_ns}::{m.name}") + m.args)
         inits.append(f"{m.name}({a})")
     lines.append("")
     lines.append(sig)
@@ -575,11 +731,27 @@ def render_tb_harness(spec: TbSpec) -> str:
     lines.append("        // Every TB-driven input the models above do not themselves drive.  Absent")
     lines.append("        // names are skipped; an undriven input is X, and X on a handshake hangs.")
     lines.append(f"        sim.pin_low({ports_ns}::ZERO_PORTS, {ports_ns}::ZERO_PORTS_N);")
+    lines.append("        // Register participants for the lifecycle phases (shared arenas first, so a")
+    lines.append("        // memory's pre_sim runs before the models that serve from it).")
+    for _cls, name, *_ in spec.shared:
+        lines.append(f"        participants_.push_back(&{name});")
+    for m in spec.models:
+        lines.append(f"        participants_.push_back(&{m.name});")
+    dyn_lines = [f"        {name}.{field} = {expr};"
+                 for _cls, name, _args, dyn in spec.shared for field, expr in dyn]
+    dyn_lines += [f"        {m.name}.{field} = {expr};"
+                  for m in spec.models for field, expr in m.dyn_params]
+    if dyn_lines:
+        lines.append("        // Init-time config (DynParams): each is a knob the pysim participant")
+        lines.append("        // carries, emitted here as a member assignment (e.g. a model's bundle).")
+        lines.extend(dyn_lines)
     lines.append("    }")
 
-    for phase in ("sample", "update", "drive"):
-        body = " ".join(f"{m.name}.{phase}();" for m in spec.models)
-        lines.append(f"    void {phase}() {{ {body} }}")
+    # The five lifecycle phases, each iterating the one participant list.  A participant that does
+    # not override a phase inherits XsiSimObj's no-op, so a passive memory costs only empty calls and
+    # the per-cycle model order is unchanged from the old unrolled form.
+    for phase in ("pre_sim", "sample", "update", "drive", "post_sim"):
+        lines.append(f"    void {phase}() {{ for (auto* p : participants_) p->{phase}(); }}")
 
     lines += [
         "",
@@ -587,6 +759,7 @@ def render_tb_harness(spec: TbSpec) -> str:
         "    /// nothing blocks, so the DUT's pipelining survives by construction.  Undersize n and",
         "    /// the caller's own completion check fails loudly rather than passing quietly.",
         "    void run(long n_cycles) {",
+        "        pre_sim();                       // participants seed memory / load vectors",
         "        sim.reset([this]{ drive(); });",
         "        for (long c = 0; c < n_cycles; ++c) {",
         "            sim.clock_low();",
@@ -595,6 +768,7 @@ def render_tb_harness(spec: TbSpec) -> str:
         "            update();",
         "            drive();",
         "        }",
+        "        post_sim();                      // participants dump results / collect metrics",
         "    }",
         "",
         "    void close() { sim.close(); }",
@@ -687,6 +861,34 @@ def render_ports_h(spec: TopSpec) -> str:
         f"}}  // namespace {ns}",
         "",
         f"#endif  // {guard}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_tb_main(spec: TbSpec, n_cycles: int) -> str:
+    """Emit ``<top>_bfm_tb.cpp`` — the whole TB ``main``, now derivable from the graph.
+
+    Once every participant loads its inputs in ``pre_sim`` and dumps its outputs in ``post_sim``, the
+    main is just: construct the generated harness, run a fixed number of cycles, close.  There is no
+    golden here — correctness is checked in Python from the dumped bundles (memory arena + the sink's
+    capture with per-word arrival cycles), so nothing example-specific remains in the C++.
+    """
+    ns = f"{spec.top_name}_tb"
+    lines = [
+        f"// {spec.top_name}_bfm_tb.cpp -- GENERATED by waveflow (build/composite_gen.py::render_tb_main)",
+        f"// from the {spec.top_name} testbench graph.  DO NOT EDIT: regenerate instead.",
+        "//",
+        "// The whole TB main: construct the generated harness, run a fixed number of cycles (the",
+        "// participants load their input bundles in pre_sim and dump their outputs in post_sim), then",
+        "// close.  No golden here -- correctness is checked in Python from the dumped output bundles.",
+        f'#include "{spec.top_name}_tb_harness.h"',
+        "",
+        "int main() {",
+        f'    {ns}::Harness h("{spec.top_name}_bfm.wdb");',
+        f"    h.run({int(n_cycles)});",
+        "    h.close();",
+        "    return 0;",
+        "}",
     ]
     return "\n".join(lines) + "\n"
 

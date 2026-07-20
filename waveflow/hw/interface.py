@@ -550,6 +550,19 @@ class StreamIF(QueuedTransferIF):
     callers of ``get()`` must always supply ``nwords_max``.
     """
 
+    framed: bool = False
+    """Whether this stream is a **framed** internal channel (plans/memstream_inband.md).
+
+    ``False`` (default) — the stream lowers to a plain word channel (``hls::stream<ap_uint<W>>``
+    internally, or the ``axi4s`` boundary flavour at a top-level port); nothing about existing
+    codegen changes.
+    ``True`` — an internal edge that carries a per-beat packet boundary, lowering to
+    ``hls::stream<streamutils::framed_word<W>>`` (a :class:`~waveflow.build.composite_gen.FramedEdge`).
+    The boundary bit is required for a consumer that relays an opaque packet it refuses to parse — a
+    countless read needs a boundary, not a count.  ``ap_axis`` cannot be used on an internal FIFO
+    (Vitis HLS 214-208), hence the ``framed_word`` struct.  Implies packet framing, so a framed stream
+    is also ``has_tlast`` in pysim (burst boundaries)."""
+
     type_name = 'stream_if'
 
     def __init_subclass__(cls, **kwargs):

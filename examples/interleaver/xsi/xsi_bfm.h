@@ -22,10 +22,30 @@
 #include <string>
 #include <vector>
 #include "xsi_loader.h"
+#include "xsi_bundle.h"
 
 namespace wfbfm {
 
 typedef s_xsi_vlog_logicval LV;
+
+// ---------------------------------------------------------------------------
+// XsiSimObj — the lifecycle a testbench participant shares, mirroring Python's
+// SimObj: pre_sim -> (sample / update / drive, once per cycle) -> post_sim.  All
+// five phases are virtual with no-op defaults, so a passive participant (a memory)
+// overrides only pre_sim/post_sim while a per-cycle model overrides only
+// sample/update/drive.  The Harness holds participants by base pointer and drives
+// each phase over one list, exactly as Simulation.run_sim() drives its SimObjs.
+// ---------------------------------------------------------------------------
+
+class XsiSimObj {
+public:
+    virtual ~XsiSimObj() = default;
+    virtual void pre_sim()  {}   ///< before reset: seed memory / load vectors from files
+    virtual void sample()   {}   ///< clk low: read kernel outputs, latch beat flags (VALID && READY)
+    virtual void update()   {}   ///< after the rising edge: apply this cycle's beats, advance FSMs
+    virtual void drive()    {}   ///< present held values for the next cycle
+    virtual void post_sim() {}   ///< after the run: dump results to files, collect metrics
+};
 
 // ---------------------------------------------------------------------------
 // Dut — typed port access over the XSI loader.
@@ -55,11 +75,38 @@ struct Dut {
 // FlatMemory — the word-addressed arena both m_axi bundles serve out of.
 // ---------------------------------------------------------------------------
 
-struct FlatMemory {
+/// One memory region tied to a burst bundle: for a load, `bundle`'s words go to `[off, off+len)`
+/// (`len` taken from the bundle); for a dump, `[off, off+len)` is written to `bundle`.  A list of
+/// these is the memory's "config" — set by whoever builds the harness (the generator emits it), so
+/// new modes (more segments, later cycle-by-cycle logging) are just more entries, no config file.
+struct MemSeg {
+    size_t off = 0;          ///< first word index of the region
+    size_t len = 0;          ///< words (dump only; a load uses the bundle's length)
+    std::string bundle;      ///< bundle directory, relative to the xsi/ run dir
+};
+
+struct FlatMemory : public XsiSimObj {
     std::vector<uint64_t> w;
     int bpw;                                  ///< bytes per word (MEM_DW/8)
 
     FlatMemory(size_t nwords, int bytes_per_word) : w(nwords, 0), bpw(bytes_per_word) {}
+
+    //: Optional file-backed lifecycle.  Empty lists => the memory does nothing at pre/post_sim (the
+    //: "do none" case); populated => it seeds / dumps the listed regions.
+    std::vector<MemSeg> load_segs, dump_segs;
+
+    void pre_sim() override {
+        for (const MemSeg& s : load_segs) {
+            std::vector<uint64_t> v = BurstBundle::read_words(s.bundle);
+            for (size_t i = 0; i < v.size() && s.off + i < w.size(); ++i) w[s.off + i] = v[i];
+        }
+    }
+    void post_sim() override {
+        for (const MemSeg& s : dump_segs) {
+            BurstBundle::write_one(s.bundle,
+                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + s.len));
+        }
+    }
 
     uint64_t  operator[](size_t i) const { return w[i]; }
     uint64_t& operator[](size_t i)       { return w[i]; }
@@ -85,7 +132,7 @@ struct FlatMemory {
 // Kernel drives AR* / RREADY; we drive ARREADY / R*.
 // ---------------------------------------------------------------------------
 
-class AxiMmReadSlave {
+class AxiMmReadSlave : public XsiSimObj {
 public:
     /// *prefix* is the bundle's port prefix, e.g. "m_axi_gmem0".
     AxiMmReadSlave(Dut& d, const std::string& prefix, FlatMemory& mem) : d_(d), mem_(mem) {
@@ -99,7 +146,7 @@ public:
         P_rlast   = d.port((prefix + "_RLAST").c_str());
     }
 
-    void sample() {
+    void sample() override {
         arvalid_ = d_.get1(P_arvalid);
         araddr_  = d_.getW(P_araddr);
         arlen_   = (uint32_t)(d_.getW(P_arlen) & 0xFF);
@@ -108,7 +155,7 @@ public:
         r_beat_  = (state_ == R_SEND)  && h_rvalid_ && rready_;
     }
 
-    void update() {
+    void update() override {
         if (ar_beat_) {
             addrw_ = mem_.word_index(araddr_); len_ = arlen_; beat_ = 0;
             state_ = R_SEND; h_arready_ = 0; h_rvalid_ = 1;
@@ -119,7 +166,7 @@ public:
         }
     }
 
-    void drive() {
+    void drive() override {
         d_.put1(P_arready, h_arready_);
         d_.put1(P_rvalid,  h_rvalid_);
         d_.putW(P_rdata,   h_rdata_);
@@ -144,7 +191,7 @@ private:
 // Kernel drives AW* / W* / BREADY; we drive AWREADY / WREADY / B*.
 // ---------------------------------------------------------------------------
 
-class AxiMmWriteSlave {
+class AxiMmWriteSlave : public XsiSimObj {
 public:
     AxiMmWriteSlave(Dut& d, const std::string& prefix, FlatMemory& mem) : d_(d), mem_(mem) {
         P_awvalid = d.port((prefix + "_AWVALID").c_str());
@@ -160,7 +207,7 @@ public:
         P_bready  = d.port((prefix + "_BREADY").c_str());
     }
 
-    void sample() {
+    void sample() override {
         awvalid_ = d_.get1(P_awvalid);
         awaddr_  = d_.getW(P_awaddr);
         awlen_   = (uint32_t)(d_.getW(P_awlen) & 0xFF);
@@ -174,7 +221,7 @@ public:
         b_beat_  = (state_ == B_RESP)  && h_bvalid_ && bready_;
     }
 
-    void update() {
+    void update() override {
         if (aw_beat_) {
             addrw_ = mem_.word_index(awaddr_); len_ = awlen_; beat_ = 0;
             state_ = W_RECV; h_awready_ = 0; h_wready_ = 1;
@@ -189,7 +236,7 @@ public:
         }
     }
 
-    void drive() {
+    void drive() override {
         d_.put1(P_awready, h_awready_);
         d_.put1(P_wready,  h_wready_);
         d_.put1(P_bvalid,  h_bvalid_);
@@ -223,7 +270,7 @@ private:
 
 /// Presents a fixed word vector on an AXIS slave port of the kernel, one word per accepted beat,
 /// dropping TVALID once every word has gone out.
-class AxisMaster {
+class AxisMaster : public XsiSimObj {
 public:
     AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words)
         : d_(d), words_(std::move(words)) {
@@ -233,16 +280,26 @@ public:
         h_valid_ = words_.empty() ? 0u : 1u;
     }
 
-    void sample() { ready_ = d_.get1(P_ready); beat_ = (h_valid_ && ready_); }
+    //: Optional: if set, pre_sim (re)loads the presented words from this bundle instead of the ctor
+    //: vector — so the driver plays the same on-disk vectors the pysim StreamDriver does.
+    std::string in_bundle;
+    void pre_sim() override {
+        if (in_bundle.empty()) return;
+        words_ = BurstBundle::read_words(in_bundle);
+        widx_ = 0;
+        h_valid_ = words_.empty() ? 0u : 1u;
+    }
 
-    void update() {
+    void sample() override { ready_ = d_.get1(P_ready); beat_ = (h_valid_ && ready_); }
+
+    void update() override {
         if (beat_ && widx_ < (int)words_.size()) {
             ++widx_;
             h_valid_ = (widx_ < (int)words_.size()) ? 1u : 0u;
         }
     }
 
-    void drive() {
+    void drive() override {
         d_.putW(P_data, (widx_ < (int)words_.size()) ? words_[widx_] : 0);
         d_.put1(P_valid, h_valid_);
     }
@@ -261,7 +318,7 @@ private:
 };
 
 /// Always-ready sink for an AXIS master port of the kernel; collects every word it emits.
-class AxisSlave {
+class AxisSlave : public XsiSimObj {
 public:
     AxisSlave(Dut& d, const std::string& prefix) : d_(d) {
         P_data  = d.port((prefix + "_TDATA").c_str());
@@ -269,7 +326,7 @@ public:
         P_ready = d.port((prefix + "_TREADY").c_str());
     }
 
-    void sample() {
+    void sample() override {
         valid_ = d_.get1(P_valid);
         data_  = d_.getW(P_data);
         beat_  = (valid_ && h_ready_);
@@ -283,12 +340,19 @@ public:
     /// keeps a hard separation the hand-written TBs got wrong: **the sink reports when work
     /// COMPLETED; the loop only decides when to stop looking.** Conflating those is how three of
     /// four TBs printed a drain tail as if it were the design's latency.
-    void update() {
+    void update() override {
         ++cycle_;                                   // 1-based: this is the cycle now executing
         if (beat_) { words_.push_back(data_); beat_cycles_.push_back(cycle_); }
     }
 
-    void drive() { d_.put1(P_ready, h_ready_); }
+    void drive() override { d_.put1(P_ready, h_ready_); }
+
+    //: Optional: if set, post_sim dumps the collected words + their arrival cycles (a capture bundle),
+    //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
+    std::string out_bundle;
+    void post_sim() override {
+        if (!out_bundle.empty()) BurstBundle::write_capture(out_bundle, words_, beat_cycles_);
+    }
 
     const std::vector<uint64_t>& words() const { return words_; }
     size_t count() const { return words_.size(); }
