@@ -1,5 +1,5 @@
-#ifndef INCLUDE_WR_CMD_TB_H
-#define INCLUDE_WR_CMD_TB_H
+#ifndef INCLUDE_MEM_W_CMD_TB_H
+#define INCLUDE_MEM_W_CMD_TB_H
 
 #include <cctype>
 #include <cstdlib>
@@ -10,11 +10,11 @@
 #include <string>
 #include "streamutils_tb.h"
 
-#define WAVEFLOW_ENABLE_WR_CMD_TB_H_MEMBERS
-#include "wr_cmd.h"
-#undef WAVEFLOW_ENABLE_WR_CMD_TB_H_MEMBERS
+#define WAVEFLOW_ENABLE_MEM_W_CMD_TB_H_MEMBERS
+#include "mem_w_cmd.h"
+#undef WAVEFLOW_ENABLE_MEM_W_CMD_TB_H_MEMBERS
 
-inline void WrCmd::dump_json(std::ostream& os, int indent, int level) const {
+inline void MemWCmd::dump_json(std::ostream& os, int indent, int level) const {
     const int step = (indent < 0) ? 0 : indent;
     os << "{";
     os << "\n";
@@ -29,18 +29,18 @@ inline void WrCmd::dump_json(std::ostream& os, int indent, int level) const {
     os << ",";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
-    os << "\"xfer_len\": ";
-    os << static_cast<unsigned long long>(this->xfer_len);
+    os << "\"fwd_bursts\": ";
+    os << static_cast<unsigned long long>(this->fwd_bursts);
     os << "\n";
     for (int i = 0; i < (level) * step; ++i) { os << ' '; }
     os << "}";
 }
 
-inline void WrCmd::load_json(const std::string& json_text, size_t& pos) {
+inline void MemWCmd::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
     bool seen_root_addr = false;
     bool seen_root_len = false;
-    bool seen_root_xfer_len = false;
+    bool seen_root_fwd_bursts = false;
     bool first = true;
     while (true) {
     streamutils::json_skip_ws(json_text, pos);
@@ -62,9 +62,9 @@ inline void WrCmd::load_json(const std::string& json_text, size_t& pos) {
         seen_root_len = true;
         this->len = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
-    else if (key == "xfer_len") {
-        seen_root_xfer_len = true;
-        this->xfer_len = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    else if (key == "fwd_bursts") {
+        seen_root_fwd_bursts = true;
+        this->fwd_bursts = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
     else {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
@@ -76,12 +76,12 @@ inline void WrCmd::load_json(const std::string& json_text, size_t& pos) {
     if (!seen_root_len) {
     throw std::runtime_error("Malformed JSON: missing required key 'len'.");
     }
-    if (!seen_root_xfer_len) {
-    throw std::runtime_error("Malformed JSON: missing required key 'xfer_len'.");
+    if (!seen_root_fwd_bursts) {
+    throw std::runtime_error("Malformed JSON: missing required key 'fwd_bursts'.");
     }
 }
 
-inline void WrCmd::load_json(std::istream& is) {
+inline void MemWCmd::load_json(std::istream& is) {
     std::string json_text((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
     size_t pos = 0;
     streamutils::json_skip_ws(json_text, pos);
@@ -92,7 +92,7 @@ inline void WrCmd::load_json(std::istream& is) {
     }
 }
 
-inline void WrCmd::dump_json_file(const char* file_path, int indent) const {
+inline void MemWCmd::dump_json_file(const char* file_path, int indent) const {
     std::ofstream ofs(file_path);
     if (!ofs) {
         throw std::runtime_error("Failed to open output JSON file.");
@@ -100,7 +100,7 @@ inline void WrCmd::dump_json_file(const char* file_path, int indent) const {
     this->dump_json(ofs, indent);
 }
 
-inline void WrCmd::load_json_file(const char* file_path) {
+inline void MemWCmd::load_json_file(const char* file_path) {
     std::ifstream ifs(file_path);
     if (!ifs) {
         throw std::runtime_error("Failed to open input JSON file.");
@@ -108,4 +108,4 @@ inline void WrCmd::load_json_file(const char* file_path) {
     this->load_json(ifs);
 }
 
-#endif // INCLUDE_WR_CMD_TB_H
+#endif // INCLUDE_MEM_W_CMD_TB_H

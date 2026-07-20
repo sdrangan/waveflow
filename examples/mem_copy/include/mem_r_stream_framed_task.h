@@ -11,16 +11,16 @@
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "streamutils_hls.h"
-#include "fwd_cmd.h"
+#include "mem_r_cmd.h"
 
-// framed s_cmd -> framed m_out.  Read FwdCmd (fixed words, last on its final word), relay fwd_bursts
+// framed s_cmd -> framed m_out.  Read MemRCmd (fixed words, last on its final word), relay fwd_bursts
 // opaque bursts word-for-word with their last bits intact, then burst len src words out with last on
 // the final data word.  addr is an element/word coordinate (m_mem is already a word pointer). Word rate.
 template <int MEM_DW>
 static void mem_r_stream_framed_task(hls::stream<streamutils::framed_word<MEM_DW> >& s_cmd,
                                      const ap_uint<MEM_DW>* m_mem,
                                      hls::stream<streamutils::framed_word<MEM_DW> >& m_out) {
-    FwdCmd c;
+    MemRCmd c;
     streamutils::tlast_status tl;
     c.read_framed_stream<MEM_DW>(s_cmd, tl);
     const int w0 = (int)c.addr;

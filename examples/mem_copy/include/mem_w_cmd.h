@@ -1,5 +1,5 @@
-#ifndef INCLUDE_FWD_CMD_H
-#define INCLUDE_FWD_CMD_H
+#ifndef INCLUDE_MEM_W_CMD_H
+#define INCLUDE_MEM_W_CMD_H
 
 #include <ap_int.h>
 #include <hls_stream.h>
@@ -10,10 +10,11 @@
 #endif
 #include "streamutils_hls.h"
 
-struct FwdCmd {
-    ap_uint<32> addr;  // element/word offset to read from
-    ap_uint<32> len;  // number of packed words to read
-    ap_uint<32> fwd_bursts;  // opaque bursts to relay verbatim BEFORE the data
+struct MemWCmd {
+    ap_uint<32> addr;  // element/word offset to write at
+    ap_uint<32> len;  // number of packed data words to write
+    // opaque bursts to buffer across the write, then echo on s_done
+    ap_uint<32> fwd_bursts;
 
     static constexpr int bitwidth = 96;
 
@@ -39,7 +40,7 @@ struct FwdCmd {
         return nwords_value(word_bw_tag<word_bw>{});
     }
 
-    static ap_uint<bitwidth> pack_to_uint(const FwdCmd& data) {
+    static ap_uint<bitwidth> pack_to_uint(const MemWCmd& data) {
         ap_uint<bitwidth> res = 0;
         res.range(31, 0) = data.addr;
         res.range(63, 32) = data.len;
@@ -47,8 +48,8 @@ struct FwdCmd {
         return res;
     }
 
-    static FwdCmd unpack_from_uint(const ap_uint<bitwidth>& packed) {
-        FwdCmd data;
+    static MemWCmd unpack_from_uint(const ap_uint<bitwidth>& packed) {
+        MemWCmd data;
         data.addr = (ap_uint<32>)(packed.range(31, 0));
         data.len = (ap_uint<32>)(packed.range(63, 32));
         data.fwd_bursts = (ap_uint<32>)(packed.range(95, 64));
@@ -56,19 +57,19 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void write_array_impl(word_bw_tag<word_bw>, const FwdCmd* self, ap_uint<word_bw> x[]) {
+    static void write_array_impl(word_bw_tag<word_bw>, const MemWCmd* self, ap_uint<word_bw> x[]) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_array");
         (void)self;
         (void)x;
     }
 
-    static void write_array_impl(word_bw_tag<32>, const FwdCmd* self, ap_uint<32> x[]) {
+    static void write_array_impl(word_bw_tag<32>, const MemWCmd* self, ap_uint<32> x[]) {
         x[0] = self->addr;
         x[1] = self->len;
         x[2] = self->fwd_bursts;
     }
 
-    static void write_array_impl(word_bw_tag<64>, const FwdCmd* self, ap_uint<64> x[]) {
+    static void write_array_impl(word_bw_tag<64>, const MemWCmd* self, ap_uint<64> x[]) {
         x[0] = 0;
         x[0].range(31, 0) = self->addr;
         x[0].range(63, 32) = self->len;
@@ -82,13 +83,13 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void write_stream_impl(word_bw_tag<word_bw>, const FwdCmd* self, hls::stream<ap_uint<word_bw>> &s) {
+    static void write_stream_impl(word_bw_tag<word_bw>, const MemWCmd* self, hls::stream<ap_uint<word_bw>> &s) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_stream");
         (void)self;
         (void)s;
     }
 
-    static void write_stream_impl(word_bw_tag<32>, const FwdCmd* self, hls::stream<ap_uint<32>> &s) {
+    static void write_stream_impl(word_bw_tag<32>, const MemWCmd* self, hls::stream<ap_uint<32>> &s) {
             ap_uint<32> w = 0;
         w = self->addr;
         s.write(w);
@@ -101,7 +102,7 @@ struct FwdCmd {
         w = 0;
     }
 
-    static void write_stream_impl(word_bw_tag<64>, const FwdCmd* self, hls::stream<ap_uint<64>> &s) {
+    static void write_stream_impl(word_bw_tag<64>, const MemWCmd* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->addr;
         w.range(63, 32) = self->len;
@@ -117,14 +118,14 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void write_axi4_stream_impl(word_bw_tag<word_bw>, const FwdCmd* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, bool tlast) {
+    static void write_axi4_stream_impl(word_bw_tag<word_bw>, const MemWCmd* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, bool tlast) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_axi4_stream");
         (void)self;
         (void)s;
         (void)tlast;
     }
 
-    static void write_axi4_stream_impl(word_bw_tag<32>, const FwdCmd* self, hls::stream<streamutils::axi4s_word<32>> &s, bool tlast) {
+    static void write_axi4_stream_impl(word_bw_tag<32>, const MemWCmd* self, hls::stream<streamutils::axi4s_word<32>> &s, bool tlast) {
             ap_uint<32> w = 0;
         w = self->addr;
         streamutils::write_axi4_word<32>(s, w, false);
@@ -137,7 +138,7 @@ struct FwdCmd {
         w = 0;
     }
 
-    static void write_axi4_stream_impl(word_bw_tag<64>, const FwdCmd* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
+    static void write_axi4_stream_impl(word_bw_tag<64>, const MemWCmd* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->addr;
         w.range(63, 32) = self->len;
@@ -153,14 +154,14 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void write_framed_stream_impl(word_bw_tag<word_bw>, const FwdCmd* self, hls::stream<streamutils::framed_word<word_bw>> &s, bool tlast) {
+    static void write_framed_stream_impl(word_bw_tag<word_bw>, const MemWCmd* self, hls::stream<streamutils::framed_word<word_bw>> &s, bool tlast) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_framed_stream");
         (void)self;
         (void)s;
         (void)tlast;
     }
 
-    static void write_framed_stream_impl(word_bw_tag<32>, const FwdCmd* self, hls::stream<streamutils::framed_word<32>> &s, bool tlast) {
+    static void write_framed_stream_impl(word_bw_tag<32>, const MemWCmd* self, hls::stream<streamutils::framed_word<32>> &s, bool tlast) {
             ap_uint<32> w = 0;
         w = self->addr;
         streamutils::write_boundary_word<streamutils::framed_word<32>, 32>(s, w, false);
@@ -173,7 +174,7 @@ struct FwdCmd {
         w = 0;
     }
 
-    static void write_framed_stream_impl(word_bw_tag<64>, const FwdCmd* self, hls::stream<streamutils::framed_word<64>> &s, bool tlast) {
+    static void write_framed_stream_impl(word_bw_tag<64>, const MemWCmd* self, hls::stream<streamutils::framed_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->addr;
         w.range(63, 32) = self->len;
@@ -189,19 +190,19 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void read_array_impl(word_bw_tag<word_bw>, FwdCmd* self, const ap_uint<word_bw> x[]) {
+    static void read_array_impl(word_bw_tag<word_bw>, MemWCmd* self, const ap_uint<word_bw> x[]) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_array");
         (void)self;
         (void)x;
     }
 
-    static void read_array_impl(word_bw_tag<32>, FwdCmd* self, const ap_uint<32> x[]) {
+    static void read_array_impl(word_bw_tag<32>, MemWCmd* self, const ap_uint<32> x[]) {
         self->addr = (ap_uint<32>)(x[0]);
         self->len = (ap_uint<32>)(x[1]);
         self->fwd_bursts = (ap_uint<32>)(x[2]);
     }
 
-    static void read_array_impl(word_bw_tag<64>, FwdCmd* self, const ap_uint<64> x[]) {
+    static void read_array_impl(word_bw_tag<64>, MemWCmd* self, const ap_uint<64> x[]) {
         self->addr = (ap_uint<32>)(x[0].range(31, 0));
         self->len = (ap_uint<32>)(x[0].range(63, 32));
         self->fwd_bursts = (ap_uint<32>)(x[1].range(31, 0));
@@ -213,13 +214,13 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void read_stream_impl(word_bw_tag<word_bw>, FwdCmd* self, hls::stream<ap_uint<word_bw>> &s) {
+    static void read_stream_impl(word_bw_tag<word_bw>, MemWCmd* self, hls::stream<ap_uint<word_bw>> &s) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_stream");
         (void)self;
         (void)s;
     }
 
-    static void read_stream_impl(word_bw_tag<32>, FwdCmd* self, hls::stream<ap_uint<32>> &s) {
+    static void read_stream_impl(word_bw_tag<32>, MemWCmd* self, hls::stream<ap_uint<32>> &s) {
             ap_uint<32> w = 0;
         w = s.read();
         self->addr = (ap_uint<32>)(w);
@@ -229,7 +230,7 @@ struct FwdCmd {
         self->fwd_bursts = (ap_uint<32>)(w);
     }
 
-    static void read_stream_impl(word_bw_tag<64>, FwdCmd* self, hls::stream<ap_uint<64>> &s) {
+    static void read_stream_impl(word_bw_tag<64>, MemWCmd* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
         w = s.read();
         self->addr = (ap_uint<32>)(w.range(31, 0));
@@ -244,14 +245,14 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void read_axi4_stream_impl(word_bw_tag<word_bw>, FwdCmd* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, streamutils::tlast_status &tl) {
+    static void read_axi4_stream_impl(word_bw_tag<word_bw>, MemWCmd* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, streamutils::tlast_status &tl) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_axi4_stream");
         (void)self;
         (void)s;
         (void)tl;
     }
 
-    static void read_axi4_stream_impl(word_bw_tag<32>, FwdCmd* self, hls::stream<streamutils::axi4s_word<32>> &s, streamutils::tlast_status &tl) {
+    static void read_axi4_stream_impl(word_bw_tag<32>, MemWCmd* self, hls::stream<streamutils::axi4s_word<32>> &s, streamutils::tlast_status &tl) {
             ap_uint<32> w = 0;
             tl = streamutils::tlast_status::no_tlast;
             bool last = false;
@@ -301,7 +302,7 @@ struct FwdCmd {
         }
     }
 
-    static void read_axi4_stream_impl(word_bw_tag<64>, FwdCmd* self, hls::stream<streamutils::axi4s_word<64>> &s, streamutils::tlast_status &tl) {
+    static void read_axi4_stream_impl(word_bw_tag<64>, MemWCmd* self, hls::stream<streamutils::axi4s_word<64>> &s, streamutils::tlast_status &tl) {
             ap_uint<64> w = 0;
             tl = streamutils::tlast_status::no_tlast;
             bool last = false;
@@ -354,14 +355,14 @@ struct FwdCmd {
     }
 
     template<int word_bw>
-    static void read_framed_stream_impl(word_bw_tag<word_bw>, FwdCmd* self, hls::stream<streamutils::framed_word<word_bw>> &s, streamutils::tlast_status &tl) {
+    static void read_framed_stream_impl(word_bw_tag<word_bw>, MemWCmd* self, hls::stream<streamutils::framed_word<word_bw>> &s, streamutils::tlast_status &tl) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_framed_stream");
         (void)self;
         (void)s;
         (void)tl;
     }
 
-    static void read_framed_stream_impl(word_bw_tag<32>, FwdCmd* self, hls::stream<streamutils::framed_word<32>> &s, streamutils::tlast_status &tl) {
+    static void read_framed_stream_impl(word_bw_tag<32>, MemWCmd* self, hls::stream<streamutils::framed_word<32>> &s, streamutils::tlast_status &tl) {
             ap_uint<32> w = 0;
             tl = streamutils::tlast_status::no_tlast;
             bool last = false;
@@ -411,7 +412,7 @@ struct FwdCmd {
         }
     }
 
-    static void read_framed_stream_impl(word_bw_tag<64>, FwdCmd* self, hls::stream<streamutils::framed_word<64>> &s, streamutils::tlast_status &tl) {
+    static void read_framed_stream_impl(word_bw_tag<64>, MemWCmd* self, hls::stream<streamutils::framed_word<64>> &s, streamutils::tlast_status &tl) {
             ap_uint<64> w = 0;
             tl = streamutils::tlast_status::no_tlast;
             bool last = false;
@@ -463,7 +464,7 @@ struct FwdCmd {
         read_framed_stream<word_bw>(s, tl);
     }
 
-#ifdef WAVEFLOW_ENABLE_FWD_CMD_TB_H_MEMBERS
+#ifdef WAVEFLOW_ENABLE_MEM_W_CMD_TB_H_MEMBERS
     void dump_json(std::ostream& os, int indent = 2, int level = 0) const;
     void load_json(const std::string& json_text, size_t& pos);
     void load_json(std::istream& is);
@@ -472,4 +473,4 @@ struct FwdCmd {
 #endif
 };
 
-#endif // INCLUDE_FWD_CMD_H
+#endif // INCLUDE_MEM_W_CMD_H

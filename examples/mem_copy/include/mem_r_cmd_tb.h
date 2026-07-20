@@ -1,5 +1,5 @@
-#ifndef INCLUDE_FWD_CMD_TB_H
-#define INCLUDE_FWD_CMD_TB_H
+#ifndef INCLUDE_MEM_R_CMD_TB_H
+#define INCLUDE_MEM_R_CMD_TB_H
 
 #include <cctype>
 #include <cstdlib>
@@ -10,11 +10,11 @@
 #include <string>
 #include "streamutils_tb.h"
 
-#define WAVEFLOW_ENABLE_FWD_CMD_TB_H_MEMBERS
-#include "fwd_cmd.h"
-#undef WAVEFLOW_ENABLE_FWD_CMD_TB_H_MEMBERS
+#define WAVEFLOW_ENABLE_MEM_R_CMD_TB_H_MEMBERS
+#include "mem_r_cmd.h"
+#undef WAVEFLOW_ENABLE_MEM_R_CMD_TB_H_MEMBERS
 
-inline void FwdCmd::dump_json(std::ostream& os, int indent, int level) const {
+inline void MemRCmd::dump_json(std::ostream& os, int indent, int level) const {
     const int step = (indent < 0) ? 0 : indent;
     os << "{";
     os << "\n";
@@ -36,7 +36,7 @@ inline void FwdCmd::dump_json(std::ostream& os, int indent, int level) const {
     os << "}";
 }
 
-inline void FwdCmd::load_json(const std::string& json_text, size_t& pos) {
+inline void MemRCmd::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
     bool seen_root_addr = false;
     bool seen_root_len = false;
@@ -81,7 +81,7 @@ inline void FwdCmd::load_json(const std::string& json_text, size_t& pos) {
     }
 }
 
-inline void FwdCmd::load_json(std::istream& is) {
+inline void MemRCmd::load_json(std::istream& is) {
     std::string json_text((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
     size_t pos = 0;
     streamutils::json_skip_ws(json_text, pos);
@@ -92,7 +92,7 @@ inline void FwdCmd::load_json(std::istream& is) {
     }
 }
 
-inline void FwdCmd::dump_json_file(const char* file_path, int indent) const {
+inline void MemRCmd::dump_json_file(const char* file_path, int indent) const {
     std::ofstream ofs(file_path);
     if (!ofs) {
         throw std::runtime_error("Failed to open output JSON file.");
@@ -100,7 +100,7 @@ inline void FwdCmd::dump_json_file(const char* file_path, int indent) const {
     this->dump_json(ofs, indent);
 }
 
-inline void FwdCmd::load_json_file(const char* file_path) {
+inline void MemRCmd::load_json_file(const char* file_path) {
     std::ifstream ifs(file_path);
     if (!ifs) {
         throw std::runtime_error("Failed to open input JSON file.");
@@ -108,4 +108,4 @@ inline void FwdCmd::load_json_file(const char* file_path) {
     this->load_json(ifs);
 }
 
-#endif // INCLUDE_FWD_CMD_TB_H
+#endif // INCLUDE_MEM_R_CMD_TB_H

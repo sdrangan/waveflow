@@ -196,8 +196,8 @@ def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
     ndone = len(done_sink.words)
     print(f"[copy] jobs={len(tb._jobs)} done_bursts={ndone} all_ok={ok}")
     assert ok, "MemCopy mismatch (dst region != src region)"
-    # Each job emits TWO framed s_done bursts -- the WrComplete header, then the echoed tx_id payload.
-    assert ndone == 2 * len(tb._jobs), f"expected {2 * len(tb._jobs)} done bursts, got {ndone}"
+    # Each job emits ONE framed s_done burst -- the echoed CopyResp (tx_id).
+    assert ndone == len(tb._jobs), f"expected {len(tb._jobs)} done bursts, got {ndone}"
     return copier
 
 

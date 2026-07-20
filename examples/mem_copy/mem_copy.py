@@ -41,13 +41,12 @@ from waveflow.hw.hw_component import HwParam  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
-    FwdCmd,
     KernelTask,
+    MemRCmd,
     MemRStream,
+    MemWCmd,
     MemWStream,
     WORD_BW_SUPPORTED,
-    WrCmd,
-    WrComplete,
 )
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 
@@ -81,6 +80,16 @@ class CopyCmd(DataList):
     }
 
 
+class CopyResp(DataList):
+    """The typed response the composite emits on ``s_done`` — mirroring the typed :class:`CopyCmd`
+    request.  The Sequencer frames it in-band as the tail of the command stream; the mem-streams relay
+    it opaquely and it lands on ``s_done`` when the write completes.  One field for now: the ``tx_id``
+    echoed back so the host can match a completion to the request it issued."""
+    elements = {
+        "tx_id": {"schema": Word32, "description": "the request's transaction ID, echoed on completion"},
+    }
+
+
 @dataclass(frozen=True)
 class CopyJob:
     """One copy in a test **scenario**: copy ``n_words`` from word offset ``src_off`` to word offset
@@ -109,20 +118,20 @@ class CopyJob:
 
 
 #: Schema classes the gen-include step emits C++ headers for (the composite's command structs).  The
-#: framed chain carries a CopyCmd in, FwdCmd/WrCmd descriptors on the internal edges, and a WrComplete
-#: echo out.  ``FRAMED_SCHEMAS`` is the subset whose header must also emit the ``framed_word``
-#: read/write methods (the descriptors that ride the internal edges).
-SCHEMA_CLASSES = [CopyCmd, FwdCmd, WrCmd, WrComplete]
-FRAMED_SCHEMAS = frozenset({FwdCmd, WrCmd})
+#: framed chain carries a CopyCmd in, then MemRCmd/MemWCmd descriptors + a CopyResp response framed
+#: onto the internal edges.  ``FRAMED_SCHEMAS`` is the subset that rides the framed edges, so their
+#: headers must also emit the ``framed_word`` read/write methods.
+SCHEMA_CLASSES = [CopyCmd, MemRCmd, MemWCmd, CopyResp]
+FRAMED_SCHEMAS = frozenset({MemRCmd, MemWCmd, CopyResp})
 
 
 @dataclass
 class Sequencer(FreeRunComp):
     """Framed command sequencer (plans/memcopy_inband_integration.md): dequeue one :class:`CopyCmd`
-    and emit ONE in-band framed command stream to the reader — ``[FwdCmd | WrCmd | payload]`` per job.
-    The writer's command (``WrCmd``) travels welded to (ahead of) its data, so a descriptor can never
-    be paired with the wrong burst.  Active, touches ONLY streams, so it composes as an internal
-    ``hls::task``.
+    and emit ONE in-band framed command stream to the chain — ``[MemRCmd | MemWCmd | CopyResp]`` per
+    job.  Each descriptor travels welded to (ahead of) its data, so a command can never be paired with
+    the wrong burst.  The Sequencer is the ONLY schema-aware stage — the mem-streams relay opaquely.
+    Active, touches ONLY streams, so it composes as an internal ``hls::task``.
 
     Endpoints: ``s_cmd`` (:class:`StreamIFSlave` carrying :class:`CopyCmd`, the top boundary word
     port), ``cmd_out`` (:class:`StreamIFMaster`, the framed edge to the reader).
@@ -131,9 +140,8 @@ class Sequencer(FreeRunComp):
     it constructs descriptors and drives a ``framed_word`` channel, neither in the extractor's
     vocabulary, so — unlike the ``m_axi``-free two-stream sequencer that preceded it, which was
     generated from ``run_iter`` — it is not extracted.  :meth:`run_iter` is the pysim golden twin.
-    The payload is the job's ``tx_id`` cookie (one word), echoed on ``WrComplete`` for host
-    correlation — the in-band equivalent of the retired ``xfer_msg`` array, carrying no cross-firing
-    state."""
+    The ``CopyResp`` carries the job's ``tx_id`` back to the host for correlation, and because the tag
+    comes from the command the Sequencer holds no cross-firing state."""
 
     cpp_kernel_name: ClassVar[str | None] = "mem_seq"
     cpp_namespace: ClassVar[str | None] = "mem_seq_impl"
@@ -148,7 +156,7 @@ class Sequencer(FreeRunComp):
         # `int()` here would silently produce a 64-wide body for a 32-wide instance.
         self.s_cmd = StreamIFSlave(
             name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
-        # One framed output: the reader reads FwdCmd then relays the opaque [WrCmd | payload].
+        # One framed output: the reader reads MemRCmd then relays the opaque [MemWCmd | CopyResp].
         self.cmd_out = StreamIFMaster(
             name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=True)
         for ep in (self.s_cmd, self.cmd_out):
@@ -164,21 +172,21 @@ class Sequencer(FreeRunComp):
                           template_args=(int(self.mem_dwidth),))
 
     def run_iter(self) -> ProcessGen[None]:
-        """The pysim golden — one firing, framed: read a :class:`CopyCmd` and emit the reader's framed
-        command stream ``[FwdCmd | WrCmd | payload]`` (three bursts).  The reader fetches
-        ``FwdCmd.len`` src words and relays the ``fwd_bursts`` opaque bursts (the ``WrCmd`` + the
-        payload) verbatim to the writer, which decodes ``WrCmd``, writes the data, and echoes the
-        payload.  The payload is the job's ``tx_id`` cookie (one word) — carried in-band, echoed on
-        ``WrComplete``, so the Sequencer holds no cross-firing state."""
+        """The pysim golden — one firing, framed: read a :class:`CopyCmd` and emit the forwarding
+        chain's command stream ``[MemRCmd | MemWCmd | CopyResp]`` (three bursts).  Each descriptor's
+        ``fwd_bursts`` says how many following bursts that stage relays: the reader (``MemRCmd``,
+        ``fwd_bursts=2``) relays the ``MemWCmd`` + ``CopyResp`` then appends its src data; the writer
+        (``MemWCmd``, ``fwd_bursts=1``) buffers the ``CopyResp`` across the write then emits it on
+        ``s_done``.  The Sequencer is the ONLY schema-aware stage — the mem-streams relay opaquely — and
+        it holds no cross-firing state (the ``tx_id`` comes from the command)."""
         w = int(self.mem_dwidth)
         cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
-        # FwdCmd: fetch n words from src_off, relay 2 opaque bursts (the WrCmd + the payload) first.
-        fwd = FwdCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
-        wr = WrCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), xfer_len=1)
-        payload = np.asarray([int(cmd.tx_id)], dtype=np.uint64)
-        yield from self.cmd_out.write(np.asarray(fwd.serialize(word_bw=w), dtype=np.uint64))
-        yield from self.cmd_out.write(np.asarray(wr.serialize(word_bw=w), dtype=np.uint64))
-        yield from self.cmd_out.write(payload)
+        memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
+        memw = MemWCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), fwd_bursts=1)
+        resp = CopyResp(tx_id=int(cmd.tx_id))
+        yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
+        yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
+        yield from self.cmd_out.write(np.asarray(resp.serialize(word_bw=w), dtype=np.uint64))
 
 
 @dataclass
@@ -217,7 +225,7 @@ class MemCopy(FreeRunComp):
 
         # --- internal interfaces (add_if + bind): each an on-chip FIFO in codegen ---
         # Two FRAMED edges: Sequencer -> reader (the framed command stream) and reader -> writer (the
-        # framed [WrCmd | payload | data]).  framed=True -> a framed_word FIFO in codegen.
+        # framed [MemWCmd | CopyResp | data]).  framed=True -> a framed_word FIFO in codegen.
         self._cmd_if = StreamIF(
             name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w, framed=True)
         self._cmd_if.bind("master", self.seq.cmd_out)
@@ -316,9 +324,9 @@ def make_xsi_tb(width: int = DEFAULT_MEM_DW):
 
 
 def _done_words(width: int) -> int:
-    """Words per ``s_done`` completion: the in-band ``WrComplete`` header + its echoed payload
-    (``xfer_len=1`` for mem_copy) — see the schema docs.  At ``w=64`` this is ``1 + 1 = 2``."""
-    return WrComplete.nwords_per_inst(width) + 1            # header + 1-word tx_id payload
+    """Words per ``s_done`` completion — one :class:`CopyResp` per job (``tx_id``).  At ``w=64`` this
+    is ``1``."""
+    return CopyResp.nwords_per_inst(width)
 
 
 def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
@@ -347,9 +355,9 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
             "MEM_NW": int(tb.mem.nwords_tot),
             "N": int(jobs[0].n_words),
             "NUM_CMDS": len(jobs),
-            # s_done framing per job, introspected from the schema (not the testbench): the in-band
-            # WrComplete header + 1-word tx_id payload == 2.  Informational in C++ (the AxisSlave
-            # captures whatever arrives); the Python checker slices per-job completions by it.
+            # s_done framing per job, introspected from the schema (not the testbench): one CopyResp
+            # (== 1 word, the tx_id).  Informational in C++ (the AxisSlave captures whatever arrives);
+            # the Python checker slices per-job completions by it.
             "DONE_WORDS": _done_words(width),
         },
         arrays={
@@ -392,8 +400,7 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
 
     - **correctness** — every destination region equals the source pattern (a memcpy), vs
       ``vectors/golden``;
-    - **completion** — one ``[WrComplete | payload]`` per job, each echoing ``tx_id == j`` (the payload
-      word, at completion-word offset ``+1``);
+    - **completion** — one ``CopyResp`` per job, each echoing ``tx_id == j`` (CopyResp word 0);
     - **timing** — the cycle the *last* completion word landed (time-to-last-completion, NOT the loop
       bound) equals *want_cycles*.
 
@@ -418,13 +425,12 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
                 f"mem_copy job {j} word {bad}: dst 0x{int(out[dst + bad]):016x} != "
                 f"golden 0x{int(golden[dst + bad]):016x}")
 
-    # 2) Completion: one [WrComplete | payload] per job, tx_id echoed as the payload word (completion-
-    #    word offset +1).
+    # 2) Completion: one CopyResp per job, its tx_id echoed (CopyResp word 0 == the job's tx_id == j).
     s_done = read_burst_bundle(vdir / "s_done")[0]
     assert len(s_done) == len(jobs) * done_words, (
         f"mem_copy: s_done has {len(s_done)} words, expected {len(jobs)}*{done_words}")
     for j in range(len(jobs)):
-        got_tx = int(s_done[j * done_words + 1]) & 0xFFFFFFFF
+        got_tx = int(s_done[j * done_words]) & 0xFFFFFFFF
         assert got_tx == j, f"mem_copy job {j}: tx_id echo got {got_tx}, expected {j}"
 
     # 3) Timing: the cycle the LAST completion word landed (cycle_of_word(n) == cycles[n-1]).  This is

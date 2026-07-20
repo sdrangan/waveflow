@@ -2,7 +2,7 @@
 
 Rung-0 (pysim) leg: the composite golden is bit-exact — ``Sequencer -> MemRStream -> MemWStream``
 memcpy's a word run from one region to another over TWO in-band framed FIFOs, and emits a
-``[WrComplete | payload]`` completion per job.  Plus the **graph-derived** composite codegen shape (the
+``CopyResp`` completion per job.  Plus the **graph-derived** composite codegen shape (the
 real Phase-2 deliverable): one ``ap_ctrl_none`` top instantiating three ``hls::task`` bodies wired by
 ``hls_thread_local`` ``framed_word`` streams derived from the component/interface graph, with two
 ``m_axi`` bundles + two AXIS ports on the boundary.  The csynth + XSI legs of Gate 2 need Vitis/Vivado
@@ -41,8 +41,8 @@ def test_mem_copy_pysim_golden():
 
 def test_mem_copy_framed_desync_proof(tmp_path):
     """The framed chain copies bit-exact across mixed-size jobs and echoes the right tx_id per job:
-    Sequencer frames [FwdCmd|WrCmd|payload], the reader relays the opaque prefix + fetches src, the
-    writer decodes WrCmd and writes dst.  Command/data ride one framed stream, so they cannot desync.
+    Sequencer frames [MemRCmd|MemWCmd|CopyResp], the reader relays the opaque prefix + fetches src, the
+    writer decodes MemWCmd and writes dst.  Command/data ride one framed stream, so they cannot desync.
     See plans/memcopy_inband_integration.md."""
     import numpy as np
     from waveflow.simulation.simulation import Simulation
@@ -57,8 +57,8 @@ def test_mem_copy_framed_desync_proof(tmp_path):
     for job, exp in zip(tb._jobs, tb.expected):
         got = tb.mem._mem.read(job.dst_off * 8, job.n_words).astype(np.uint64)
         assert np.array_equal(got, exp), f"framed copy wrong at dst={job.dst_off}"
-    # one WrComplete + payload burst-pair per job
-    assert len(tb.done_sink.words) == 2 * len(jobs)
+    # one CopyResp burst per job
+    assert len(tb.done_sink.words) == len(jobs)
 
 
 def test_mem_copy_back_to_back():
@@ -103,7 +103,7 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
 
     # the copied fixed body headers + framed command struct headers exist in include/.
     for h in ("mem_seq_framed_task.h", "mem_r_stream_framed_task.h", "mem_w_stream_framed_done_task.h",
-              "copy_cmd.h", "fwd_cmd.h", "wr_cmd.h", "wr_complete.h"):
+              "copy_cmd.h", "mem_r_cmd.h", "mem_w_cmd.h", "copy_resp.h"):
         assert (tmp_path / "include" / h).exists(), h
 
 
@@ -161,7 +161,7 @@ def test_xsi_command_bundle_is_the_schemas_own_serialization(tmp_path):
 
     h = render_xsi_vectors(64)
     assert "CMD_WORDS" not in h, "the command words moved to the bundle; the header must not bake them"
-    # s_done framing is a schema fact, still introspected into the header (WrComplete + payload == 2).
+    # s_done framing is a schema fact, still introspected into the header (one CopyResp == 1 word).
     assert f"DONE_WORDS = {_done_words(64)};" in h
 
 

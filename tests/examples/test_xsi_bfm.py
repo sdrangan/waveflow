@@ -69,17 +69,16 @@ ROOT_OF = {
 #: and inflated for mem_copy.  Only interleaver_canon was already reporting it correctly, which is
 #: why its number is unchanged.  The DESIGNS did not change; the measurement did.
 #:
-#: What the numbers say: mem_copy is the IN-BAND framed chain (plans/memcopy_inband_integration.md),
-#: 2910 = 165 + 15*183 (steady 183 cyc/job, no fill transient).  That is +75 over the retired
-#: two-stream design's 2835: the +5.4 cyc/job is the in-band WrCmd(2) + payload(1) = 3 relayed beats
-#: prepended to each 128-word data burst on the reader->writer edge (plus a couple of writer
-#: state-machine bubbles); the -6 is the shorter descriptor firing the first completion earlier.  The
-#: reads still hide behind the writes (per-job cost ~= max(read, write) + the framing beats), the
-#: ~1.9x free-running overlap the generated testbench preserves.
+#: What the numbers say: mem_copy is the IN-BAND forwarding chain (plans/memcopy_inband_integration.md)
+#: -- Sequencer frames [MemRCmd | MemWCmd | CopyResp], each stage strips its descriptor and relays the
+#: rest opaquely.  2908 = 163 + 15*183 (steady 183 cyc/job, no fill transient).  The reads hide behind
+#: the writes (per-job cost ~= max(read, write) + the in-band descriptor beats that ride ahead of each
+#: 128-word data burst), the ~1.9x free-running overlap the generated testbench preserves.  The s_done
+#: response is one CopyResp word per job.
 GATES = [
     ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
     ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
-    ("mem_copy", "mem_copy_bfm_tb", 2910, "done=16 w_count=2048"),
+    ("mem_copy", "mem_copy_bfm_tb", 2908, "done=16 w_count=2048"),
     ("interleaver_canon", "interleaver_canon_bfm_tb", 3469, "done=8/8"),
 ]
 

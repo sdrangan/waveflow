@@ -1,11 +1,13 @@
-"""Tests for the **in-band framed** MemRStream/MemWStream protocol (``inband=True``).
+"""Tests for the **in-band framed** MemRStream/MemWStream forwarding protocol (``inband=True``).
 
-The claim under test: with ``[descriptor | payload | data]`` on ONE stream, a descriptor can never be
-paired with the wrong data — the pairing is structural, not an "both streams stay in order" invariant.
-And the reader is a pure pass-through: it forwards the opaque prefix without parsing it, so one reader
-serves any consumer.  See ``plans/memstream_inband.md``.
+The claim under test: with ``[MemRCmd | MemWCmd | response | data]`` on ONE stream, a descriptor can
+never be paired with the wrong data — the pairing is structural, not a "both streams stay in order"
+invariant.  Both mem-streams relay opaquely: the reader forwards ``MemRCmd.fwd_bursts`` bursts and
+appends its data; the writer buffers ``MemWCmd.fwd_bursts`` bursts across the write and echoes them.
+Neither parses what it forwards, so one reader/writer serves any application.  See
+``plans/memcopy_inband_integration.md``.
 
-pysim only (Stage 1) — the fixed C++ task bodies are a later stage.
+pysim only — the fixed C++ task bodies are verified via XSI.
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ import pytest
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.mem_stream import FwdCmd, MemRStream, MemWStream, WrCmd, WrComplete
+from waveflow.hw.mem_stream import MemRCmd, MemRStream, MemWCmd, MemWStream
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
@@ -24,22 +26,22 @@ MEM_DW = 64
 BPW = MEM_DW // 8
 
 
-def _frame(src, dst, n, payload, w=MEM_DW):
+def _frame(src, dst, n, response, w=MEM_DW):
     """The **bursts** a sequencer puts on the reader's s_cmd for one framed copy.
 
-    Each logical segment is its own burst, because a `get` consumes a whole burst — that is also what
-    lets the reader relay the opaque segments without parsing them.  ``FwdCmd`` says how many bursts
-    to relay; those bursts are the WRITER's descriptor (+ payload), opaque to the reader.
-    """
-    wr = np.asarray(WrCmd(addr=dst, len=n, xfer_len=len(payload)).serialize(word_bw=w),
-                    dtype=np.uint64)
-    relay = [wr] + ([np.asarray(payload, dtype=np.uint64)] if len(payload) else [])
-    hdr = np.asarray(FwdCmd(addr=src, len=n, fwd_bursts=len(relay)).serialize(word_bw=w),
-                     dtype=np.uint64)
-    return [hdr, *relay]
+    ``[MemRCmd | MemWCmd | response]``: each logical segment is its own burst (a ``get`` consumes a
+    whole burst — that is what lets each stage relay the opaque segments without parsing them).
+    ``MemRCmd.fwd_bursts`` counts the bursts the reader relays (the ``MemWCmd`` + the response);
+    ``MemWCmd.fwd_bursts`` counts the bursts the writer buffers and echoes (the response)."""
+    resp = np.asarray(response, dtype=np.uint64)                       # one opaque response burst
+    memw = np.asarray(MemWCmd(addr=dst, len=n, fwd_bursts=1).serialize(word_bw=w), dtype=np.uint64)
+    relay = [memw, resp]
+    memr = np.asarray(MemRCmd(addr=src, len=n, fwd_bursts=len(relay)).serialize(word_bw=w),
+                      dtype=np.uint64)
+    return [memr, *relay]
 
 
-def _run(jobs, payloads, tmp_path, arena_words=4096):
+def _run(jobs, responses, tmp_path, arena_words=4096):
     """Build sequencer -> MemRStream(inband) -> MemWStream(inband) -> memory and run it."""
     sim = Simulation()
     clk = Clock(freq=100e6)
@@ -57,7 +59,7 @@ def _run(jobs, payloads, tmp_path, arena_words=4096):
     wr = MemWStream(name="wr", sim=sim, mem_dwidth=MEM_DW, inband=True, emit_done=True, clk=clk)
 
     # the sequencer: every segment of every job is its own burst, in order
-    words = [b for (s, d, n), p in zip(jobs, payloads) for b in _frame(s, d, n, p)]
+    words = [b for (s, d, n), p in zip(jobs, responses) for b in _frame(s, d, n, p)]
     bdir = tmp_path / "cmd"
     from waveflow.utils.burst_io import write_burst_bundle
     write_burst_bundle(words, bdir)
@@ -88,23 +90,20 @@ def _run(jobs, payloads, tmp_path, arena_words=4096):
 
 
 def test_inband_copy_is_bit_exact(tmp_path):
-    """A framed transfer copies correctly: descriptor, payload and data ride one stream."""
+    """A framed transfer copies correctly: two descriptors, a response and the data ride one stream."""
     jobs = [(16, 512, 64)]
     mem, _sink, expected = _run(jobs, [[0xA5A5]], tmp_path)
     got = mem._mem.read(512 * BPW, 64).astype(np.uint64)
     assert np.array_equal(got, expected[0])
 
 
-def test_payload_is_echoed_verbatim(tmp_path):
-    """The payload is opaque: the reader forwards it unparsed and the writer echoes it unchanged."""
-    payload = [0xDEADBEEF, 0x1234, 0xFFFF_FFFF_FFFF_FFFF]
-    mem, sink, _ = _run([(16, 512, 32)], [payload], tmp_path)
+def test_response_is_echoed_verbatim(tmp_path):
+    """The response is opaque: the reader forwards it unparsed and the writer echoes it unchanged —
+    the writer constructs no completion of its own."""
+    response = [0xDEADBEEF, 0x1234, 0xFFFF_FFFF_FFFF_FFFF]
+    mem, sink, _ = _run([(16, 512, 32)], [response], tmp_path)
     flat = np.concatenate([np.asarray(b) for b in sink.words])
-    hdr_n = WrComplete.nwords_per_inst(MEM_DW)
-    hdr = WrComplete().deserialize(flat[:hdr_n], word_bw=MEM_DW)
-    assert int(hdr.len) == 32, "WrComplete.len should report the data words written"
-    assert int(hdr.xfer_len) == len(payload), "WrComplete.xfer_len should report the payload length"
-    assert [int(x) for x in flat[hdr_n:hdr_n + len(payload)]] == payload, "payload echoed verbatim"
+    assert [int(x) for x in flat] == response, "the writer echoes the opaque response verbatim"
 
 
 def test_back_to_back_jobs_cannot_desync(tmp_path):
@@ -113,21 +112,21 @@ def test_back_to_back_jobs_cannot_desync(tmp_path):
     This is the property the two-stream protocol only had by luck of ordering.
     """
     jobs = [(16, 600, 32), (200, 900, 64), (400, 1200, 16)]
-    payloads = [[j] for j in range(len(jobs))]
-    mem, sink, expected = _run(jobs, payloads, tmp_path)
+    responses = [[j] for j in range(len(jobs))]
+    mem, sink, expected = _run(jobs, responses, tmp_path)
     for (_s, dst, n), exp in zip(jobs, expected):
         got = mem._mem.read(dst * BPW, n).astype(np.uint64)
         assert np.array_equal(got, exp), f"job at dst={dst} got the wrong data"
 
 
-def test_payload_over_buffer_bound_fails_loudly(tmp_path):
-    """max_xfer_len bounds the writer's payload BUFFER — overflowing it must raise, not truncate."""
-    with pytest.raises(Exception, match="exceeds the payload buffer bound"):
+def test_response_over_buffer_bound_fails_loudly(tmp_path):
+    """max_xfer_len bounds the writer's forward BUFFER — overflowing it must raise, not truncate."""
+    with pytest.raises(Exception, match="exceeds the buffer bound"):
         _run([(16, 512, 16)], [list(range(9))], tmp_path)   # default max_xfer_len = 8
 
 
 def test_legacy_two_stream_path_is_untouched():
-    """inband defaults to False and still exposes s_cmd — Stage 1 changes no existing behavior."""
+    """inband defaults to False and still exposes s_cmd — the framed mode changes no existing behavior."""
     sim = Simulation()
     w = MemWStream(name="legacy", sim=sim, mem_dwidth=MEM_DW)
     assert w.inband is False or int(w.inband) == 0

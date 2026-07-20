@@ -11,7 +11,7 @@
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_r_stream_framed_task_64_Pipeline_RELAY.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_r_stream_framed_task_64_s.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_seq_framed_task_64_s.v
-../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_framed_done_task_64_8_Pipeline_BUFP.v
+../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_framed_done_task_64_8_Pipeline_BUFF.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_framed_done_task_64_8_Pipeline_ECHO.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_framed_done_task_64_8_Pipeline_S2A.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_mem_w_stream_framed_done_task_64_8_s.v
