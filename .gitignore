@@ -170,5 +170,11 @@ examples/*/xsi/*.jou
 examples/*/xsi/*.pb
 examples/*/xsi/.Xil/
 
+# Waveform dumps from a traced XSI run: *.wdb from xsi_trace_all, *.vcd from a $dumpvars dumper
+# top. Regenerated per run and ~1-2MB each (a level-1 dump of mem_copy's top scope is 258 signals
+# / 1.0MB; interleaver_canon 363 / 1.7MB), so tracking them churns as hard as xsim.dir.
+examples/*/xsi/*.vcd
+examples/*/xsi/*.wdb
+
 # Generated XSI test-vector bundles (written at gate time; data is *.bin, ignored above).
 examples/*/xsi/vectors/

@@ -76,6 +76,20 @@ class TaskInst:
     args: tuple[str, ...]   # arg names (external ports and/or internal streams), in signature order
     header: str             # the task-body header to include
 
+    @property
+    def inst_name(self) -> str:
+        """The RTL instance name Vitis gives this task: ``<task_fn>_<template args>_U0``.
+
+        Verified against the csynth RTL of both traced designs (``mem_seq_framed_task`` + ``(64,)``
+        -> ``mem_seq_framed_task_64_U0``; ``il_compute_task`` + ``(64, 128)`` ->
+        ``il_compute_task_64_128_U0``) -- 9 instances, no mismatches.  Everything but the ``_U0``
+        suffix is codegen-owned, which is what makes the nets bindable from Python at all.
+
+        The suffix is a **prediction**: a second instance of the same body at the same template
+        args would be ``_U1``, and nothing here could tell them apart.  :meth:`TopSpec.trace_manifest`
+        rejects that case rather than emitting names that silently bind to the wrong instance."""
+        return "_".join([self.task_fn, *(str(a) for a in self.template_args)]) + "_U0"
+
 
 @dataclass(frozen=True)
 class BfmModel:
@@ -104,6 +118,38 @@ class BfmModel:
 
 
 @dataclass(frozen=True)
+class IntChannel:
+    """One internal channel of the generated top: its ``hls_thread_local`` decl + what it connects.
+
+    The internal-edge counterpart of :class:`ExtPort`, and for the same reason.  ``composite_top_spec``
+    used to keep only ``edge.decl(width)`` — a rendered string — so the spec could *emit* a channel
+    but could not *answer* anything about it.  Recovering the name from the decl means parsing C++
+    back out of a string, and the endpoints were simply gone.
+
+    What needs answering is the same question :class:`ExtPort` already answers for boundary ports:
+    which RTL nets does this become?  A channel named ``cmd`` between two ``hls::task`` bodies
+    lowers to the top-scope nets ``cmd_dout`` / ``cmd_empty_n`` / ``cmd_full_n``, plus
+    ``<producer_inst>_cmd_din`` / ``_cmd_write`` and ``<consumer_inst>_cmd_read`` — Vitis lifts
+    dataflow channel wires into the top scope beside the task instances.  Deriving those names from
+    THIS spec is what stops a trace/timing consumer drifting from the kernel.
+
+    * ``kind``  — ``stream`` (``ap_uint`` FIFO) | ``framed`` (``framed_word``, packet boundary in the
+      bit above the payload) | ``sob`` (``stream_of_blocks`` ping-pong).
+    * ``width`` — payload width ``W``.  For a ``framed`` channel the RTL net is ``W+1`` bits with
+      ``last`` on top; for ``sob`` it is the element width.
+    * ``master_task`` / ``slave_task`` — indices into :attr:`TopSpec.tasks`, i.e. the producer and
+      consumer.  Indices rather than names because two instances of the same task body are
+      distinct RTL instances but share a ``task_fn``.
+    """
+    decl: str
+    name: str = ""                      # the C++ channel variable, e.g. "cmd" / "copy_data"
+    kind: str = ""                      # stream | framed | sob
+    width: int = 0                      # payload width W
+    master_task: int | None = None      # index into TopSpec.tasks (producer)
+    slave_task: int | None = None       # index into TopSpec.tasks (consumer)
+
+
+@dataclass(frozen=True)
 class TopSpec:
     """A generated free-running (``ap_ctrl_none``) ``hls::task`` top.  For a standalone kernel there
     is one task and no internal streams; a composite adds tasks + ``hls_thread_local`` streams (or
@@ -112,8 +158,173 @@ class TopSpec:
     ports: tuple[ExtPort, ...]              # external interface ports (signature order)
     tasks: tuple[TaskInst, ...]
     cmd_headers: tuple[str, ...]            # command struct headers to include
-    internal_streams: tuple[str, ...] = ()  # hls_thread_local decls (empty for a standalone kernel)
+    channels: tuple[IntChannel, ...] = ()   # internal edges (empty for a standalone kernel)
     extra_includes: tuple[str, ...] = ()    # extra system headers (e.g. hls_streamofblocks.h)
+
+    @property
+    def internal_streams(self) -> tuple[str, ...]:
+        """The ``hls_thread_local`` decls, in channel order.
+
+        Derived from :attr:`channels` rather than stored, so there is one source for a channel and
+        the decl cannot drift from what the channel says it is."""
+        return tuple(c.decl for c in self.channels)
+
+    def trace_manifest(self) -> dict:
+        """The RTL net names this top lowers to, as a JSON-ready dict.
+
+        Turns the spec into the one thing a waveform consumer needs and cannot safely guess:
+        *which exact net* carries each channel, port and task boundary.  Derived entirely at
+        elaborate time -- no RTL is read, no simulation is run -- so it is cheap, DAG-cacheable and
+        unit-testable without Vivado.
+
+        **Why a manifest instead of matching names in the trace.**  Substring matching is not merely
+        fragile here, it is wrong: an interleaver trace contains both ``ywords_fifo_cap[2:0]`` (the
+        channel) and ``il_store_..._U0_ywords_fifo_cap[31:0]`` (the instance's own copy).  They differ
+        in width and meaning, and a matcher picks whichever it sees first.  The names are already
+        known here -- codegen chose them -- so binding is exact, and a name that has gone missing
+        fails loudly instead of silently extracting nothing.
+
+        Names are stored bare, without the ``[hi:lo]`` suffix a VCD appends to a vector; the loader
+        resolves that (see :func:`waveflow.utils.trace.load_trace`).
+
+        Scope is the top's own scope: boundary ports, inter-task channels, and per-task ``ap_*``
+        pins.  That is exactly what a level-1 ``$dumpvars`` of the top captures, because Vitis lifts
+        dataflow channel wires up beside the task instances.  Tracing *inside* a task body needs a
+        hierarchical path and a scan of the generated Verilog, and is not covered here.
+
+        Raises
+        ------
+        ValueError
+            If two tasks share a ``(task_fn, template_args)`` pair.  Both would predict the same
+            ``_U0`` instance, and every net derived from them would bind to whichever Vitis happened
+            to name first.  Neither current design does this; the guard exists so the day one does,
+            it is a build error rather than a wrong timing model.
+        """
+        seen: dict[tuple, str] = {}
+        for t in self.tasks:
+            key = (t.task_fn, t.template_args)
+            if key in seen:
+                raise ValueError(
+                    f"{self.top_name}: two tasks share the body {t.task_fn}{list(t.template_args)}, "
+                    f"so both predict instance {t.inst_name}. Vitis would name them _U0/_U1 and the "
+                    f"manifest cannot tell which is which -- resolving this needs the generated "
+                    f"Verilog, so the manifest declines rather than guess.")
+            seen[key] = t.inst_name
+
+        return {
+            "version": _TRACE_MANIFEST_VERSION,
+            "top": self.top_name,
+            # HLS names the generated kernel's clock and reset; they are not derived from the graph.
+            "clock": "ap_clk",
+            "reset": "ap_rst_n",
+            "tasks": [_task_trace(t) for t in self.tasks],
+            "boundary": _boundary_trace(self.ports),
+            "channels": [_channel_trace(c, self.tasks) for c in self.channels],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Trace manifest — the RTL net names the spec lowers to.
+#
+# Every rule below was checked against the csynth RTL of mem_copy and interleaver_canon.  They are
+# the whole reason the manifest can be derived from Python: Vitis picks only the `_U0` instance
+# suffix, and codegen owns everything else (channel names are the C++ variable names, port names
+# are the boundary names, `m_axi` nets are named after the bundle).
+# ---------------------------------------------------------------------------
+
+_TRACE_MANIFEST_VERSION = 1
+
+#: Control pins Vitis puts on every task instance.  In a free-running (`ap_ctrl_none`) top these are
+#: mostly degenerate -- `ap_idle` never asserts, so a task reads as busy for the whole run -- but
+#: `ap_done` pulses once per firing and is a free per-job completion event.
+_TASK_PINS = ("ap_start", "ap_done", "ap_idle", "ap_ready", "ap_continue")
+
+#: AXI4-Full signal groups.  `AWLEN`/`WLAST`/`ARLEN`/`RLAST` are absent on an AXI4-Lite bundle; the
+#: manifest names them anyway and the loader treats absence as "not this flavour" rather than an
+#: error (see `waveflow.utils.trace`).
+_AXI_WRITE_SIGS = ("AWADDR", "AWVALID", "AWREADY", "AWLEN",
+                   "WDATA", "WVALID", "WREADY", "WLAST", "BVALID", "BREADY")
+_AXI_READ_SIGS = ("ARADDR", "ARVALID", "ARREADY", "ARLEN",
+                  "RDATA", "RVALID", "RREADY", "RLAST")
+
+
+def _task_trace(task: TaskInst) -> dict:
+    # `args` are the channel / boundary-port names this task is wired to, in signature order.  They
+    # are what makes a component's OWN surface answerable -- "which streams does this component
+    # touch" is otherwise only derivable by scanning every channel for a matching endpoint.
+    return {"id": task.task_fn,
+            "inst": task.inst_name,
+            "args": list(task.args),
+            "signals": {p: f"{task.inst_name}_{p}" for p in _TASK_PINS}}
+
+
+def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
+    """Boundary ports, keyed the way the RTL names them.
+
+    Note the asymmetry :class:`ExtPort` exists to record: an AXIS port keeps its own name
+    (``s_cmd`` -> ``s_cmd_TVALID``) while an ``m_axi`` port is named after its BUNDLE
+    (``m_in`` on ``gmem0`` -> ``m_axi_gmem0_ARVALID``).  Two ports sharing a bundle are therefore
+    ONE entry here, carrying whichever directions they collectively use."""
+    entries: list[dict] = []
+    bundles: dict[str, set[str]] = {}          # insertion-ordered, so the output is deterministic
+    bundle_ports: dict[str, list[str]] = {}    # bundle -> the port names folded into it
+
+    for p in ports:
+        if p.kind in ("axis_in", "axis_out"):
+            entries.append({
+                "id": p.name,
+                "kind": p.kind,
+                "ports": [p.name],
+                "signals": {"tdata": f"{p.name}_TDATA",
+                            "tvalid": f"{p.name}_TVALID",
+                            "tready": f"{p.name}_TREADY",
+                            # Optional: a plain hls::stream<ap_uint<W> > boundary port has no TLAST
+                            # wire at all (mem_copy's s_cmd).  Named so a framed port still binds.
+                            "tlast": f"{p.name}_TLAST"},
+            })
+        elif p.kind in ("maxi_read", "maxi_write"):
+            bundle = p.bundle or p.name
+            bundles.setdefault(bundle, set()).add(
+                "read" if p.kind == "maxi_read" else "write")
+            bundle_ports.setdefault(bundle, []).append(p.name)
+
+    for bundle, dirs in bundles.items():
+        sigs: dict[str, str] = {}
+        if "read" in dirs:
+            sigs.update({s: f"m_axi_{bundle}_{s}" for s in _AXI_READ_SIGS})
+        if "write" in dirs:
+            sigs.update({s: f"m_axi_{bundle}_{s}" for s in _AXI_WRITE_SIGS})
+        # `ports` recovers the port -> bundle mapping.  A task's args name the PORT (`m_in`) while
+        # the RTL nets are named after the BUNDLE (`m_axi_gmem0_*`), and two ports can share one
+        # bundle -- without this, a task arg cannot be resolved back to its boundary entry.
+        entries.append({"id": bundle, "kind": "maxi", "ports": bundle_ports[bundle],
+                        "directions": sorted(dirs), "signals": sigs})
+    return entries
+
+
+def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
+    """One internal channel's nets, both ends.
+
+    The two ends are not redundant: the write side shows when the producer offered a word, the read
+    side when the consumer took it, and the gap between them is the channel's occupancy -- which is
+    the quantity a latency model actually wants."""
+    prod = tasks[ch.master_task].inst_name if ch.master_task is not None else None
+    cons = tasks[ch.slave_task].inst_name if ch.slave_task is not None else None
+    entry = {"id": ch.name, "kind": ch.kind, "width": ch.width,
+             "producer": prod, "consumer": cons}
+
+    if ch.kind == "sob":
+        # A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO: there is no
+        # din/write/full_n vocabulary to bind, so the channel is declared but has no burst view.
+        return entry
+
+    entry["write"] = {"din": f"{prod}_{ch.name}_din",
+                      "write": f"{prod}_{ch.name}_write",
+                      "full_n": f"{ch.name}_full_n"}
+    entry["read"] = {"dout": f"{ch.name}_dout",
+                     "read": f"{cons}_{ch.name}_read",
+                     "empty_n": f"{ch.name}_empty_n"}
+    return entry
 
 
 def _axis_port(name: str, width: int, kind: str = "axis_in") -> ExtPort:
@@ -403,14 +614,39 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtP
     raise ValueError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 
+def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
+    """Lower one internal edge to an :class:`IntChannel`.
+
+    The kind is the edge's TYPE, exactly as ``derive_internal_edges`` derives the edge from the
+    interface's type -- no table, no flag to keep in sync.  ``width`` is the payload ``W``: a
+    ``framed`` channel's RTL net is one bit wider (``last`` on top, see
+    :func:`waveflow.utils.vcd.split_framed_word`), and a ``sob`` channel carries its own element
+    width."""
+    if isinstance(edge, SobEdge):
+        kind, payload = "sob", edge.elem_bw
+    elif isinstance(edge, FramedEdge):
+        kind, payload = "framed", width
+    else:
+        kind, payload = "stream", width
+    return IntChannel(
+        decl=edge.decl(width),
+        name=edge.name,
+        kind=kind,
+        width=payload,
+        master_task=ep_task.get(id(edge.master_ep)),
+        slave_task=ep_task.get(id(edge.slave_ep)),
+    )
+
+
 def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     """Derive the composite :class:`TopSpec` from *comp*'s component/interface graph.
 
     Reads four things off the built parent, nothing hand-written per top:
 
-    1. ``comp.internal_edges`` -> one channel decl per edge (``edge.decl(width)`` — an ``hls::stream``
-       for a :class:`StreamEdge`, an ``hls::stream_of_blocks`` for a :class:`SobEdge`), and a map
-       *endpoint -> edge name* (both the master and slave side of an edge resolve to the same name).
+    1. ``comp.internal_edges`` -> one :class:`IntChannel` per edge (its ``hls_thread_local`` decl —
+       an ``hls::stream`` for a :class:`StreamEdge`, an ``hls::stream_of_blocks`` for a
+       :class:`SobEdge` — plus the name, kind, width and the producer/consumer task it connects),
+       and a map *endpoint -> edge name* (both the master and slave side resolve to the same name).
     2. ``comp.boundary`` -> the external ports (AXIS / ``m_axi`` bundles) and a map
        *endpoint -> top-port name*.
     3. ``comp.ordered_subcomps`` -> one ``hls::task`` per active child; each child's
@@ -423,11 +659,9 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     *same* generator."""
     ep_arg: dict[int, str] = {}
 
-    internal_streams: list[str] = []
     for edge in comp.internal_edges:
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
-        internal_streams.append(edge.decl(width))
 
     ports: list[ExtPort] = []
     bundles = bundle_map(comp.boundary)
@@ -437,7 +671,11 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         ep_arg[id(ep)] = name
         ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle))
 
+    # Tasks are built before channels so a channel can record WHICH task drives it: the producer
+    # and consumer task indices are what turn a channel name into RTL net names
+    # (`<producer_inst>_<ch>_write`), and only this loop knows which endpoint belongs to which task.
     tasks: list[TaskInst] = []
+    ep_task: dict[int, int] = {}
     for sub in comp.ordered_subcomps:
         kt = sub.kernel_task()
         args: list[str] = []
@@ -449,14 +687,17 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
                     f"composite_top_spec: {type(sub).__name__}.{attr} is not wired to any internal "
                     f"edge or boundary port of {type(comp).__name__} — cannot resolve its task arg")
             args.append(arg)
+            ep_task[id(ep)] = len(tasks)
         tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header))
+
+    channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 
     return TopSpec(
         top_name=comp.cpp_kernel_name,
         ports=tuple(ports),
         tasks=tuple(tasks),
         cmd_headers=tuple(getattr(comp, "cmd_headers", ())),
-        internal_streams=tuple(internal_streams),
+        channels=channels,
         extra_includes=tuple(getattr(comp, "extra_includes", ())),
     )
 

@@ -169,6 +169,9 @@ class SigInfo(object):
         self.is_clock = False
         self.time_scale = time_scale
         self.wid = wid
+        #: Samples that were X/Z and converted to 0; set by `get_values`.  Nonzero is normal for
+        #: an internal net (X before reset) and suspicious for a driven boundary port.
+        self.unknown_count = 0
 
         # Get time and value lists
         n  = len(tv)
@@ -253,13 +256,21 @@ class SigInfo(object):
 
         self.disp_values = []
         raw_values = []
+        self.unknown_count = 0
         for v in self.values:
             d = str(v)  # Default is to display original value
             num_value = 0
-            if not (v in {'x', 'X', 'z', 'Z'}):
+            # Unknown samples convert to 0.  The test is on the WHOLE string, not membership in
+            # {'x','z'}: a vector can be partially unknown ('x0000...'), which the scalar-only
+            # test missed -- it fell through to binary_str_to_numeric and raised.  Every internal
+            # RTL net is X before reset, so this is the normal case for anything except a
+            # BFM-driven boundary port.  `unknown_count` keeps it from being silent.
+            if re.fullmatch(r'[01]+', str(v)):
                 num_value = binary_str_to_numeric(
                     v, self.numeric_type, self.wid)
                 d = self.numeric_fmt_str % num_value
+            else:
+                self.unknown_count += 1
             raw_values.append(num_value)
             self.disp_values.append(d)
 
@@ -660,72 +671,132 @@ class VcdParser(object):
         clk_name: str
             Name of the clock signal.
         axis_sigs : dict[str, str]
-            Dictionary of AXI4-Stream signal names with keys:
-            'tdata', 'tvalid', 'tready', 'tlast'
+            Dictionary of AXI4-Stream signal names with keys 'tdata', 'tvalid', 'tready' and
+            optionally 'tlast'.  ``tlast`` may be absent or ``None``: a boundary port declared as
+            a plain ``hls::stream<ap_uint<W> >`` has no TLAST wire at all (mem_copy's ``s_cmd`` is
+            one), and framing begins only on the internal channel.  See
+            :func:`walk_handshake_bursts` for what an unframed channel returns.
 
         Returns
         -------
         bursts : list of dict
             Each dict has:
-            - 'data': list of tdata values in the burst
+            - 'data': np.ndarray of tdata values in the burst, in the signal's own dtype (a
+              64-bit TDATA stays 64-bit; this used to be cast to uint32, silently truncating)
             - 'start_idx': index of first beat in burst
             - 'beat_type':  list of status of each beat.
             beat_type[i] can be 0 (transfer, tvalid=tready=1), 1 (idle (tvalid=0)), 2 (stall (tready=0))
             - 'tstart': time of first beat in burst
+            - 'complete': True only if closed by an observed TLAST
         clk_period : float
             Estimated clock period in ns.
             Hence the time for beat i is tstart + i * clk_period
         """
-        bursts = []
-        current_burst = None
+        tlast_name = axis_sigs.get('tlast')
 
         # Ensure numeric values are computed for all required signals
         for sig_name in [clk_name, axis_sigs['tdata'], axis_sigs['tvalid'],
-                         axis_sigs['tready'], axis_sigs['tlast']]:
+                         axis_sigs['tready'], tlast_name]:
             if sig_name is not None and sig_name in self.sig_info:
                 self.sig_info[sig_name].get_values()
 
-        # Extract clock times and resample AXI-Stream signals
+        # Extract clock times and resample AXI-Stream signals.  Beats stay labelled by the true
+        # rising-edge time (`clk_times`), but the signals are READ just before the edge -- see
+        # `clock_sample_times` for why sampling on the edge miscounts handshakes.
         clk_sig = self.sig_info[clk_name]
         clk_times = extract_clock_times(clk_sig)
-        tdata = resample_signal(self.sig_info[axis_sigs['tdata']], clk_times)
-        tvalid = resample_signal(self.sig_info[axis_sigs['tvalid']], clk_times)
-        tready = resample_signal(self.sig_info[axis_sigs['tready']], clk_times)
-        tlast = resample_signal(self.sig_info[axis_sigs['tlast']]  , clk_times)
+        sample_times = clock_sample_times(clk_times)
+        tdata = resample_signal(self.sig_info[axis_sigs['tdata']], sample_times)
+        tvalid = resample_signal(self.sig_info[axis_sigs['tvalid']], sample_times)
+        tready = resample_signal(self.sig_info[axis_sigs['tready']], sample_times)
+        tlast = (resample_signal(self.sig_info[tlast_name], sample_times)
+                 if tlast_name is not None and tlast_name in self.sig_info else None)
 
-        for i in range(len(tdata)):
-            # Handshake occurs only when both valid and ready are high
-            if tvalid[i] and tready[i]:
-                if current_burst is None:
-                    # Start a new burst
-                    current_burst = {
-                        'data': [],
-                        'start_idx': i,
-                        'beat_type': [],
-                        'tstart': clk_times[i]
+        bursts = walk_handshake_bursts(tdata, tvalid, tready, tlast, clk_times)
+        clk_period = np.median(np.diff(clk_times))
 
-                    }
-                # Append this beat
-                current_burst['data'].append(tdata[i])
-                current_burst['beat_type'].append(0)  # transfer
+        return bursts, clk_period
 
-                if tlast[i]:
-                    # End of burst
-                    current_burst['data'] = np.array(current_burst['data']).astype(np.uint32)
-                    bursts.append(current_burst)
-                    current_burst = None
-            else:
-                if current_burst is not None:
-                    if not tvalid[i]:
-                        current_burst['beat_type'].append(1)  # idle
-                    elif not tready[i]:
-                        current_burst['beat_type'].append(2)  # stall
-                # Stall or idle → skip
-                continue
+    def extract_fifo_bursts(
+            self,
+            clk_name : str,
+            fifo_sigs : dict[str, str],
+            side : Literal['write', 'read'] = 'write',
+            data_width : int | None = None) -> tuple[list[dict], float]:
+        """
+        Extract bursts from an **internal HLS FIFO** channel.
 
-        # Estimate clock period
-        clk_diffs = np.diff(clk_times)
-        clk_period = np.median(clk_diffs)
+        The same valid/ready handshake as AXI4-Stream, in the vocabulary Vitis emits for a
+        dataflow channel between two ``hls::task`` bodies:
+
+        ===========  =============================  =============================
+        role         write side (producer)          read side (consumer)
+        ===========  =============================  =============================
+        data         ``<producer>_<ch>_din``        ``<ch>_dout``
+        valid        ``<producer>_<ch>_write``      ``<ch>_empty_n``
+        ready        ``<ch>_full_n``                ``<consumer>_<ch>_read``
+        ===========  =============================  =============================
+
+        These nets live in the **top** scope of an HLS DATAFLOW design -- Vitis lifts inter-task
+        channel wires up beside the task instances -- so they are observable from a level-1
+        ``$dumpvars`` of the top, with no hierarchical path to resolve.
+
+        Parameters
+        ----------
+        clk_name : str
+            Name of the clock signal.
+        fifo_sigs : dict[str, str]
+            Exact net names.  Write side needs 'din', 'write', 'full_n'; read side needs
+            'dout', 'read', 'empty_n'.  Bind these by exact name: a trace contains both
+            ``ywords_fifo_cap`` and ``il_store_..._U0_ywords_fifo_cap``, so substring matching
+            picks the wrong one.
+        side : {'write', 'read'}
+            Which end of the FIFO to observe.  The two differ: the write side shows when the
+            producer offered a word, the read side when the consumer took it, and the gap
+            between them is the channel's occupancy.
+        data_width : int | None
+            ``W`` of a ``framed_word<W>`` channel, whose net is ``W+1`` bits wide with ``last``
+            on top (see :func:`split_framed_word`).  ``None`` for an unframed channel, in which
+            case all accepted beats come back as one burst.
+
+        Returns
+        -------
+        bursts : list of dict
+            As :meth:`extract_axis_bursts`.
+        clk_period : float
+            Estimated clock period in ns.
+        """
+        if side == 'write':
+            data_key, valid_key, ready_key = 'din', 'write', 'full_n'
+        elif side == 'read':
+            data_key, valid_key, ready_key = 'dout', 'empty_n', 'read'
+        else:
+            raise ValueError(f"side must be 'write' or 'read', got {side!r}")
+
+        missing = [k for k in (data_key, valid_key, ready_key) if not fifo_sigs.get(k)]
+        if missing:
+            raise ValueError(
+                f"extract_fifo_bursts(side={side!r}) needs {data_key}/{valid_key}/{ready_key}; "
+                f"missing {missing}. Present: {sorted(k for k, v in fifo_sigs.items() if v)}")
+
+        for sig_name in [clk_name, fifo_sigs[data_key], fifo_sigs[valid_key],
+                         fifo_sigs[ready_key]]:
+            if sig_name in self.sig_info:
+                self.sig_info[sig_name].get_values()
+
+        clk_times = extract_clock_times(self.sig_info[clk_name])
+        sample_times = clock_sample_times(clk_times)
+        raw   = resample_signal(self.sig_info[fifo_sigs[data_key]], sample_times)
+        valid = resample_signal(self.sig_info[fifo_sigs[valid_key]], sample_times)
+        ready = resample_signal(self.sig_info[fifo_sigs[ready_key]], sample_times)
+
+        if data_width is None:
+            data, last = raw, None
+        else:
+            data, last = split_framed_word(raw, data_width)
+
+        bursts = walk_handshake_bursts(data, valid, ready, last, clk_times)
+        clk_period = np.median(np.diff(clk_times))
 
         return bursts, clk_period
 
@@ -738,9 +809,10 @@ class VcdParser(object):
 
         Supports both AXI4-Lite (without ``AWLEN``/``ARLEN``/``WLAST``/``RLAST``)
         and AXI4-Full (with burst-length and last-beat signals).  The method
-        resamples all signals at rising clock edges (using
-        :func:`extract_clock_times` and :func:`resample_signal`) and then
-        walks the resampled arrays to identify accepted handshakes.
+        resamples all signals just before each rising clock edge (using
+        :func:`extract_clock_times`, :func:`clock_sample_times` and
+        :func:`resample_signal`) and then walks the resampled arrays to identify
+        accepted handshakes.
 
         Parameters
         ----------
@@ -816,15 +888,17 @@ class VcdParser(object):
             if sig_name in self.sig_info:
                 self.sig_info[sig_name].get_values()
 
-        # Extract clock times
+        # Extract clock times.  Bursts stay labelled by the true rising-edge time (`clk_times`),
+        # but the signals are READ just before the edge -- see `clock_sample_times`.
         clk_sig = self.sig_info[clk_name]
         clk_times = extract_clock_times(clk_sig)
+        sample_times = clock_sample_times(clk_times)
 
         def _resample_key(key):
-            """Resample aximm_sigs[key] at clock edges, or return None."""
+            """Resample aximm_sigs[key] just before each clock edge, or return None."""
             name = aximm_sigs.get(key)
             if name and name in self.sig_info:
-                return resample_signal(self.sig_info[name], clk_times)
+                return resample_signal(self.sig_info[name], sample_times)
             return None
 
         # Resample write-side signals
@@ -1031,6 +1105,166 @@ def extract_clock_times(
     clk_times = np.array(clk_times)
 
     return clk_times
+
+
+#: Where inside the cycle to sample, as a fraction of the clock period *before* the rising edge.
+#: 0.25 puts the sample in the middle of the clock-low phase.  Half a period lands on the falling
+#: edge, which is another transition boundary and is ambiguous again.
+CLK_SAMPLE_FRAC = 0.25
+
+
+def clock_sample_times(
+        clk_times : np.ndarray,
+        frac : float = CLK_SAMPLE_FRAC) -> np.ndarray:
+    """
+    Sample points for reading synchronous signals, given the rising-edge times.
+
+    A flop samples the value its inputs held *during* the cycle leading up to the edge, but a VCD
+    records a change caused by that edge at the edge timestamp itself -- and
+    :func:`resample_signal` advances while ``sig_times[j] <= t``, so sampling AT ``clk_times``
+    returns the POST-edge value.  For a handshake (``VALID & READY``) that is not a clean
+    one-cycle shift: the two wires can move at the same timestamp in opposite directions, so
+    coincidences are both invented and destroyed.  On the mem_copy XSI trace this read AXI-MM
+    ``AW`` as 16 accepted addresses instead of 128, and ``W`` as 2032 beats instead of 2048.
+
+    Sampling slightly *before* the edge reads the values the flops actually captured.
+
+    Parameters
+    ----------
+    clk_times : np.ndarray
+        Rising-edge times, as returned by :func:`extract_clock_times`.
+    frac : float
+        Fraction of a clock period to step back from each edge.  Defaults to
+        :data:`CLK_SAMPLE_FRAC`.
+
+    Returns
+    -------
+    sample_times : np.ndarray
+        Times at which to resample.  Same length as *clk_times*, so cycle indices are unchanged
+        and results stay labelled by the true edge time.  Values before the first signal event
+        are safe: :func:`resample_signal` yields the initial value there.
+    """
+    clk_times = np.asarray(clk_times)
+    if len(clk_times) < 2:
+        return clk_times
+    period = np.median(np.diff(clk_times))
+    return clk_times - frac * period
+
+
+def split_framed_word(
+        values : np.ndarray,
+        data_width : int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Split ``streamutils::framed_word<W>`` samples into their data and ``last`` parts.
+
+    An internal Waveflow channel between two ``hls::task`` bodies cannot use ``ap_axis`` (Vitis HLS
+    214-208 forbids it on an internal FIFO), so the packet boundary rides as one extra bit above
+    the payload: a ``framed_word<64>`` is a 65-bit RTL net with ``last`` in bit 64.  There is no
+    TLAST wire to read -- it has to be unpacked from the data word.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Resampled samples of the ``*_din`` / ``*_dout`` net.  Either 1-D (``W+1 <= 64``) or, per
+        :class:`SigInfo`'s storage convention, 2-D ``(n, k)`` uint64 LSW-first (``W+1 > 64``).
+    data_width : int
+        ``W`` -- the payload width, i.e. the bit index of ``last``.
+
+    Returns
+    -------
+    data : np.ndarray
+        Payload, with the framing bit removed.
+    last : np.ndarray
+        The framing bit, 0 or 1 per sample.
+    """
+    v = np.asarray(values)
+    if v.ndim == 1:
+        if data_width >= 64:
+            raise ValueError(
+                f"framed_word<{data_width}> needs {data_width + 1} bits but the samples are 1-D "
+                f"({v.dtype}); SigInfo stores >64-bit signals as 2-D. Was the signal added with "
+                f"the right width?")
+        return v & ((1 << data_width) - 1), (v >> data_width) & 1
+
+    word, bit = divmod(data_width, 64)
+    if bit != 0:
+        raise ValueError(
+            f"framed_word<{data_width}>: `last` falls at bit {bit} of word {word}, so the payload "
+            f"straddles a 64-bit word boundary. Only whole-word payloads are unpacked today -- "
+            f"add the masking here if a non-multiple-of-64 wide channel appears.")
+    last = (v[:, word] >> 0) & 1
+    data = v[:, 0] if word == 1 else v[:, :word]
+    return data, last
+
+
+def walk_handshake_bursts(
+        data : np.ndarray,
+        valid : np.ndarray,
+        ready : np.ndarray,
+        last : np.ndarray | None,
+        clk_times : np.ndarray) -> list[dict]:
+    """
+    Walk one valid/ready channel and group its accepted beats into bursts.
+
+    The shared core behind :meth:`VcdParser.extract_axis_bursts` and
+    :meth:`VcdParser.extract_fifo_bursts`.  Every channel Waveflow observes -- an AXI4-Stream
+    boundary port, or an internal HLS FIFO whose handshake is spelled ``write``/``full_n`` and
+    ``read``/``empty_n`` -- reduces to the same four arrays, so the burst logic lives here once
+    and the protocol-specific naming stays in thin adapters.
+
+    Parameters
+    ----------
+    data, valid, ready : np.ndarray
+        Per-cycle samples, already resampled onto the clock grid.
+    last : np.ndarray | None
+        Per-cycle framing bit, or ``None`` for a channel with no packet boundary at all (a plain
+        ``hls::stream<ap_uint<W> >`` boundary port has no TLAST wire).  With ``None`` there is
+        nothing to delimit on, so **all** accepted beats are returned as a single burst: inventing
+        boundaries from idle gaps would split a packet at any stall, which is worse than declining
+        to guess.  Segment such a stream from the protocol instead (e.g. its job index).
+    clk_times : np.ndarray
+        Rising-edge times, used to label ``tstart``.
+
+    Returns
+    -------
+    bursts : list of dict
+        Keys ``data``, ``start_idx``, ``beat_type``, ``tstart`` (as consumed by
+        :meth:`AxisBurst.from_dict`), plus ``complete`` -- True only when the burst was closed by
+        an observed ``last``.  A burst still open when the trace ends is returned with
+        ``complete=False`` rather than silently dropped; its trailing idle/stall cycles are
+        trimmed, since they describe the end of the trace and not the packet.
+    """
+    src = np.asarray(data)
+    bursts : list[dict] = []
+    current : dict | None = None
+
+    def _close(cur : dict, complete : bool) -> None:
+        if cur['data']:
+            cur['data'] = np.asarray(cur['data'], dtype=src.dtype)
+        else:
+            shape = (0,) if src.ndim == 1 else (0, src.shape[1])
+            cur['data'] = np.empty(shape, dtype=src.dtype)
+        while cur['beat_type'] and cur['beat_type'][-1] != 0:
+            cur['beat_type'].pop()
+        cur['complete'] = complete
+        bursts.append(cur)
+
+    for i in range(len(clk_times)):
+        if valid[i] and ready[i]:
+            if current is None:
+                current = {'data': [], 'start_idx': i, 'beat_type': [], 'tstart': clk_times[i]}
+            current['data'].append(src[i])
+            current['beat_type'].append(0)                      # transfer
+            if last is not None and last[i]:
+                _close(current, True)
+                current = None
+        elif current is not None:
+            current['beat_type'].append(1 if not valid[i] else 2)   # idle : stall
+
+    if current is not None:
+        _close(current, False)
+    return bursts
+
 
 def resample_signal(
         sig_info : SigInfo,
