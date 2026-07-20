@@ -259,3 +259,41 @@ def test_binds_against_the_real_trace():
 
     for t in man["tasks"]:
         assert len(bt.task_done_cycles(t["inst"])) == 16, f"{t['id']} should fire once per job"
+
+
+@pytest.mark.xsi
+def test_firing_window_is_ap_done_anchored_not_last_output():
+    """The writer's firing does NOT end at its last stream output.
+
+    `m_axi` stores are posted: they retire when the adapter accepts the word, so MemWStream keeps
+    working for ~25 cycles after `s_done`.  Anchoring on the output beat measures 155 where the
+    firing is 183 -- a 15% under-count that made the bottleneck look like the faster stage.  This
+    pins the corrected anchor against the real trace.
+    """
+    from pathlib import Path
+
+    from examples.mem_copy.mem_copy import MemCopy
+
+    vcd = Path(__file__).resolve().parents[2] / "examples/mem_copy/xsi/mem_copy_trace.vcd"
+    if not vcd.exists():
+        pytest.skip(f"no traced run at {vcd} -- run.bat mem_copy mem_copy_bfm_tb trace")
+
+    man = composite_top_spec(
+        MemCopy(name="mc", sim=Simulation(), mem_dwidth=64), width=64).trace_manifest()
+    bt = load_trace(man, vcd)
+
+    firings = bt.component_firings("mem_w_stream_framed_done_task")
+    assert len(firings) == 16
+
+    # 100% utilised at n_words=128: every firing is the full period, with no idle between.
+    spans = [f.span for f in firings]
+    assert set(spans) == {183}, f"expected a uniform 183-cycle firing, got {sorted(set(spans))}"
+
+    # ...and the firings tile the timeline with no gap -- which is what "bottleneck" means.
+    for a, b in zip(firings, firings[1:]):
+        assert b.start == a.end + 1, "MemWStream re-arms immediately; no restart latency"
+
+    # The reader is the one that gets blocked: its first firing is clean, the rest are not.
+    r = bt.component_firings("mem_r_stream_framed_task")
+    assert r[0].span == 153, "job 0 is the only backpressure-free reader firing"
+    assert {f.span for f in r[1:]} == {183}, "later firings absorb 30 cycles of backpressure"

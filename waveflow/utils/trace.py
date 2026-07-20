@@ -54,6 +54,32 @@ class ComponentView:
     boundary: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class Firing:
+    """One firing of a component: ``start`` = its first input handshake, ``end`` = its ``ap_done``.
+
+    ``end`` is deliberately NOT the last output beat.  An ``m_axi`` store is POSTED -- it retires
+    when the adapter accepts the word, not when the beat is on the bus -- so a component keeps
+    working after its last stream output.  On mem_copy's writer, ``s_done`` fires 24 cycles before
+    the final W beat and 25 before the B response; anchoring on it under-measures the firing by
+    ~15% and made the writer look like the *slower* stage when it is the bottleneck.
+
+    ``ap_done`` has none of that ambiguity: HLS holds it until the firing's outstanding writes have
+    responded.  A free-running TOP has no control interface, but each ``hls::task`` instance inside
+    it is an ordinary ``ap_ctrl_hs`` block with ``ap_start``/``ap_continue`` tied to ``1'b1``, so
+    ``ap_done`` still pulses once per firing -- and Vitis lifts the pin into the top scope where a
+    level-1 ``$dumpvars`` sees it.
+    """
+    index: int
+    start: int
+    end: int
+
+    @property
+    def span(self) -> int:
+        """Cycles from first input to ``ap_done``, inclusive."""
+        return self.end - self.start + 1
+
+
 class TraceBindError(LookupError):
     """A manifest named a net the VCD does not contain.
 
@@ -86,6 +112,8 @@ class BoundTrace:
     clock: str
     resolved: dict[str, str] = field(default_factory=dict)
     missing: dict[str, list[str]] = field(default_factory=dict)
+    #: Cached clock-sample grid (mid clock-low; see `waveflow.utils.vcd.clock_sample_times`).
+    _sample_grid: np.ndarray | None = field(default=None, repr=False)
 
     # -- lookup helpers ----------------------------------------------------------------------
     def channel(self, name: str) -> dict:
@@ -155,8 +183,64 @@ class BoundTrace:
         return ComponentView(inst=task["inst"], id=task["id"],
                              inputs=inputs, outputs=outputs, boundary=boundary)
 
+    def _handshakes(self, valid: str, ready: str) -> np.ndarray:
+        """Cycle indices where a valid/ready pair fires."""
+        def _s(bare):
+            n = self.resolved[bare]
+            self.parser.sig_info[n].get_values()
+            return np.asarray(resample_signal(self.parser.sig_info[n], self._grid()))
+        return np.nonzero((_s(valid) != 0) & (_s(ready) != 0))[0]
+
+    def _grid(self) -> np.ndarray:
+        if self._sample_grid is None:
+            self._sample_grid = clock_sample_times(
+                extract_clock_times(self.parser.sig_info[self.clock]))
+        return self._sample_grid
+
+    def component_firings(self, inst: str) -> tuple[Firing, ...]:
+        """Per-firing windows for a component, anchored on ``ap_done``.
+
+        This is the right window for measuring a component's occupancy, and the reason is in
+        :class:`Firing`: a stream-beat-derived window is wrong whenever the component has posted
+        ``m_axi`` writes.  Use this rather than inferring a window from
+        :meth:`component_bursts`.
+
+        A firing starts at its first input handshake -- on any channel it consumes -- after the
+        previous firing completed.  That excludes time the component spent waiting to be *given*
+        work, so a firing's span is its own cost plus whatever it stalled on mid-firing.
+        """
+        view = self.component(inst)
+        done = np.asarray(self.task_done_cycles(inst))
+
+        ins: list[np.ndarray] = []
+        for cid in view.inputs:
+            ch = self.channel(cid)
+            if ch["kind"] == "sob":
+                continue
+            ins.append(self._handshakes(ch["read"]["empty_n"], ch["read"]["read"]))
+        for pid in view.boundary:
+            p = self.port(pid)
+            if p["kind"] == "axis_in":
+                ins.append(self._handshakes(p["signals"]["tvalid"], p["signals"]["tready"]))
+        if not ins:
+            raise ValueError(f"{inst!r} consumes no observable input channel, so a firing has no "
+                             f"start; use task_done_cycles() for completion events alone.")
+        arrivals = np.unique(np.concatenate(ins))
+
+        firings: list[Firing] = []
+        prev = -1
+        for j, end in enumerate(done):
+            after = arrivals[(arrivals > prev) & (arrivals <= end)]
+            if len(after):
+                firings.append(Firing(index=j, start=int(after[0]), end=int(end)))
+            prev = int(end)
+        return tuple(firings)
+
     def component_bursts(self, inst: str) -> dict[str, dict]:
         """Every channel beat arriving at and leaving one component.
+
+        For a component's *occupancy* use :meth:`component_firings` instead -- the last beat here
+        is not the end of its work when it has posted ``m_axi`` writes.
 
         Note which END of each channel is read, because it is easy to get backwards and the wrong
         one answers a different question: an INPUT channel is read from its ``read`` side (when this
@@ -196,8 +280,7 @@ class BoundTrace:
         """
         name = self.resolved[self._task(task_inst)["signals"]["ap_done"]]
         self.parser.sig_info[name].get_values()
-        clk = extract_clock_times(self.parser.sig_info[self.clock])
-        v = np.asarray(resample_signal(self.parser.sig_info[name], clock_sample_times(clk)))
+        v = np.asarray(resample_signal(self.parser.sig_info[name], self._grid()))
         return np.nonzero((v[1:] != 0) & (v[:-1] == 0))[0] + 1
 
 
