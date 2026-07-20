@@ -20,7 +20,15 @@ import pytest
 
 from vcdvcd import VCDVCD
 
-from waveflow.utils.vcd import AximmBeatType, SigInfo, VcdParser, vcd_trace
+from waveflow.utils.vcd import (
+    AximmBeatType,
+    SigInfo,
+    VcdParser,
+    clock_sample_times,
+    split_framed_word,
+    vcd_trace,
+    walk_handshake_bursts,
+)
 
 
 def test_vcd_trace_maps_levels():
@@ -813,3 +821,446 @@ class TestExtractAximmBurstsAddressHandshakeDedup:
         assert all(isinstance(bt, AximmBeatType) for bt in rb[0]["beat_type"])
         assert rb[0]["beat_type"][0] is AximmBeatType.IDLE
         assert AximmBeatType.TRANSFER in rb[0]["beat_type"]
+
+
+# ---------------------------------------------------------------------------
+# Sampling phase
+# ---------------------------------------------------------------------------
+#
+# Every fixture above changes its signals at t=8000/18000/28000 -- strictly BETWEEN clock edges.
+# That is not what real RTL does: a flop driven by the edge at T changes at T, and the VCD records
+# the new value at T.  So none of the fixtures above can tell edge-sampling from just-before-edge
+# sampling, and the phase fix would be silently revertible.
+#
+# This fixture reproduces the real condition.  ARVALID/ARREADY are raised between edges (t=8000)
+# and dropped exactly ON the edge at t=15000.  A flop clocked at 15000 captures the values that
+# were held during the preceding cycle -- VALID=1, READY=1 -- so the address IS accepted at cycle
+# 1.  Sampling at the edge instead reads the post-edge values (0, 0) and loses the burst entirely.
+# This is the mechanism behind the mem_copy trace reading AW=16 instead of AW=128.
+#
+#   t=0:     clk=0, ARADDR=0x70, ARVALID=0, ARREADY=0, RVALID=0, RREADY=1, RLAST=0
+#   t=5000:  clk=1  [cycle 0: nothing]
+#   t=8000:  ARVALID=1, ARREADY=1
+#   t=10000: clk=0
+#   t=15000: clk=1  [cycle 1: address accepted]  AND ARVALID=0, ARREADY=0 at the same timestamp
+#   t=18000: RVALID=1, RLAST=1
+#   t=20000: clk=0
+#   t=25000: clk=1  [cycle 2: single R beat, RLAST -> burst closes]
+#   t=28000: RVALID=0, RLAST=0
+#   t=30000: clk=0
+
+_AXIMM_EDGE_ALIGNED_VCD = """\
+$timescale 1ps $end
+$scope module top $end
+$var wire 1  A clk     $end
+$var wire 32 B ARADDR  $end
+$var wire 1  C ARVALID $end
+$var wire 1  D ARREADY $end
+$var wire 32 E RDATA   $end
+$var wire 1  F RVALID  $end
+$var wire 1  G RREADY  $end
+$var wire 1  H RLAST   $end
+$upscope $end
+$enddefinitions $end
+#0
+0A
+b00000000000000000000000001110000 B
+0C
+0D
+b00000000000000000000000011011101 E
+0F
+1G
+0H
+#5000
+1A
+#8000
+1C
+1D
+#10000
+0A
+#15000
+1A
+0C
+0D
+#18000
+1F
+1H
+#20000
+0A
+#25000
+1A
+#28000
+0F
+0H
+#30000
+0A
+"""
+
+
+@pytest.fixture
+def edge_aligned_parser(tmp_path):
+    p = tmp_path / "edge_aligned.vcd"
+    p.write_text(_AXIMM_EDGE_ALIGNED_VCD)
+
+    vcd = VCDVCD(str(p))
+    vp = VcdParser(vcd)
+    vp.add_signal("top.clk", short_name="clk")
+    vp.sig_info["top.clk"].is_clock = True
+    aximm_sigs = {
+        "ARADDR":  "top.ARADDR",
+        "ARVALID": "top.ARVALID",
+        "ARREADY": "top.ARREADY",
+        "RDATA":   "top.RDATA",
+        "RVALID":  "top.RVALID",
+        "RREADY":  "top.RREADY",
+        "RLAST":   "top.RLAST",
+    }
+    for sig in aximm_sigs.values():
+        vp.add_signal(sig)
+    return vp, aximm_sigs
+
+
+class TestClockSamplingPhase:
+    """The handshake must be read from the values the flops captured, not the post-edge ones."""
+
+    def test_sample_times_land_before_the_edge(self):
+        clk_times = np.array([5.0, 15.0, 25.0, 35.0])
+        st = clock_sample_times(clk_times)
+        assert np.allclose(st, [2.5, 12.5, 22.5, 32.5])
+        assert len(st) == len(clk_times), "cycle indices must stay aligned with the edges"
+
+    def test_sample_times_degenerate_input(self):
+        """Too few edges to infer a period: pass through rather than divide by nothing."""
+        assert np.array_equal(clock_sample_times(np.array([5.0])), np.array([5.0]))
+        assert len(clock_sample_times(np.array([]))) == 0
+
+    def test_edge_aligned_deassert_still_counts_the_handshake(self, edge_aligned_parser):
+        """VALID/READY dropping exactly ON the edge must not erase the accepted address.
+
+        Sampling at the rising edge reads the post-edge (0, 0) and yields zero bursts.
+        """
+        vp, aximm_sigs = edge_aligned_parser
+        _, rb, _ = vp.extract_aximm_bursts("top.clk", aximm_sigs)
+
+        assert len(rb) == 1, f"expected the address accepted at cycle 1, got {len(rb)} bursts"
+        assert int(rb[0]["addr"]) == 0x70
+        assert rb[0]["start_idx"] == 1
+
+    def test_edge_aligned_burst_labelled_by_true_edge_time(self, edge_aligned_parser):
+        """Beats are READ before the edge but must still be REPORTED at the edge time."""
+        vp, aximm_sigs = edge_aligned_parser
+        _, rb, clk_period = vp.extract_aximm_bursts("top.clk", aximm_sigs)
+
+        assert clk_period == pytest.approx(10.0)
+        assert rb[0]["tstart"] == pytest.approx(15.0), "must be the edge time, not 12.5"
+        assert len(rb[0]["data"]) == 1
+        assert int(rb[0]["data"][0]) == 0xDD
+
+
+# ---------------------------------------------------------------------------
+# framed_word unpacking
+# ---------------------------------------------------------------------------
+
+class TestSplitFramedWord:
+    """`last` rides one bit above the payload -- there is no TLAST wire on an internal FIFO."""
+
+    def test_narrow_channel_1d(self):
+        # framed_word<8> -> a 9-bit net, stored 1-D.
+        vals = np.array([0x001, 0x102, 0x0FF, 0x1FF], dtype=np.uint32)
+        data, last = split_framed_word(vals, 8)
+        assert list(data) == [1, 2, 0xFF, 0xFF]
+        assert list(last) == [0, 1, 0, 1]
+
+    def test_64bit_channel_is_2d(self):
+        # framed_word<64> -> a 65-bit net, stored (n, 2) uint64 LSW-first.
+        vals = np.array([[0xDEADBEEF, 0], [0xCAFE, 1]], dtype=np.uint64)
+        data, last = split_framed_word(vals, 64)
+        assert list(data) == [0xDEADBEEF, 0xCAFE]
+        assert list(last) == [0, 1]
+
+    def test_1d_too_narrow_fails_loud(self):
+        vals = np.array([1, 2], dtype=np.uint64)
+        with pytest.raises(ValueError, match="1-D"):
+            split_framed_word(vals, 64)
+
+    def test_payload_straddling_a_word_boundary_fails_loud(self):
+        vals = np.array([[1, 0], [2, 0]], dtype=np.uint64)
+        with pytest.raises(ValueError, match="straddles"):
+            split_framed_word(vals, 40)
+
+
+# ---------------------------------------------------------------------------
+# The shared burst walker
+# ---------------------------------------------------------------------------
+
+class TestWalkHandshakeBursts:
+    def test_unframed_channel_returns_one_burst(self):
+        """No framing signal -> no boundaries to invent, so all beats form a single burst."""
+        clk = np.arange(6, dtype=float)
+        data = np.array([10, 11, 12, 13, 14, 15], dtype=np.uint64)
+        valid = np.array([1, 1, 0, 0, 1, 0])
+        ready = np.array([1, 1, 1, 0, 1, 1])
+        bursts = walk_handshake_bursts(data, valid, ready, None, clk)
+        assert len(bursts) == 1
+        assert list(bursts[0]["data"]) == [10, 11, 14]
+        assert bursts[0]["complete"] is False, "nothing closed it -- there is no `last`"
+
+    def test_gap_does_not_split_an_unframed_burst(self):
+        """Splitting on idle would break a packet at any stall; the gap is recorded instead."""
+        clk = np.arange(4, dtype=float)
+        bursts = walk_handshake_bursts(
+            np.array([1, 2, 3, 4], dtype=np.uint64),
+            np.array([1, 0, 1, 0]), np.array([1, 1, 1, 1]), None, clk)
+        assert len(bursts) == 1
+        assert bursts[0]["beat_type"] == [0, 1, 0], "the idle cycle is kept, not used to split"
+
+    def test_trailing_idle_is_trimmed(self):
+        """Cycles after the final transfer describe the end of the trace, not the packet."""
+        clk = np.arange(5, dtype=float)
+        bursts = walk_handshake_bursts(
+            np.array([1, 2, 3, 4, 5], dtype=np.uint64),
+            np.array([1, 0, 0, 0, 0]), np.ones(5), None, clk)
+        assert bursts[0]["beat_type"] == [0]
+
+    def test_incomplete_burst_is_returned_not_dropped(self):
+        clk = np.arange(3, dtype=float)
+        last = np.array([0, 0, 0])
+        bursts = walk_handshake_bursts(
+            np.array([1, 2, 3], dtype=np.uint64),
+            np.ones(3), np.ones(3), last, clk)
+        assert len(bursts) == 1
+        assert bursts[0]["complete"] is False
+        assert list(bursts[0]["data"]) == [1, 2, 3]
+
+    def test_dtype_is_preserved(self):
+        """A 64-bit payload must not come back truncated to uint32."""
+        clk = np.arange(2, dtype=float)
+        big = np.array([0xDEADBEEFCAFEBABE, 0x0123456789ABCDEF], dtype=np.uint64)
+        bursts = walk_handshake_bursts(big, np.ones(2), np.ones(2), np.array([0, 1]), clk)
+        assert bursts[0]["data"].dtype == np.uint64
+        assert int(bursts[0]["data"][0]) == 0xDEADBEEFCAFEBABE
+
+
+# ---------------------------------------------------------------------------
+# Internal HLS FIFO channels
+# ---------------------------------------------------------------------------
+#
+# A framed_word<8> channel -> a 9-bit din/dout net, `last` in bit 8.  Both ends are driven so the
+# write side and the read side can be extracted from one trace.  din starts as an X VECTOR
+# ('xxxxxxxxx'), which is what every internal net looks like before reset -- the scalar-only
+# unknown test used to raise on exactly this.
+#
+#   cycle 0 : idle
+#   cycle 1 : both sides transfer word 1 (last=0)
+#   cycle 2 : write side STALLS (full_n=0); read side is IDLE (empty_n=0)
+#   cycle 3 : both sides transfer word 2 (last=1) -> packet closes
+#   cycle 4 : idle
+
+_FIFO_VCD = """\
+$timescale 1ps $end
+$scope module top $end
+$var wire 1 A clk     $end
+$var wire 9 B din [8:0] $end
+$var wire 1 C write   $end
+$var wire 1 D full_n  $end
+$var wire 9 E dout [8:0] $end
+$var wire 1 F read    $end
+$var wire 1 G empty_n $end
+$upscope $end
+$enddefinitions $end
+#0
+0A
+bxxxxxxxxx B
+0C
+1D
+bxxxxxxxxx E
+0F
+0G
+#5000
+1A
+#8000
+b000000001 B
+1C
+b000000001 E
+1F
+1G
+#10000
+0A
+#15000
+1A
+#18000
+0D
+0G
+#20000
+0A
+#25000
+1A
+#28000
+1D
+b100000010 B
+1G
+b100000010 E
+#30000
+0A
+#35000
+1A
+#38000
+0C
+0F
+0G
+#40000
+0A
+#45000
+1A
+#50000
+0A
+"""
+
+
+@pytest.fixture
+def fifo_parser(tmp_path):
+    p = tmp_path / "fifo.vcd"
+    p.write_text(_FIFO_VCD)
+    vcd = VCDVCD(str(p))
+    vp = VcdParser(vcd)
+    vp.add_signal("top.clk", short_name="clk")
+    vp.sig_info["top.clk"].is_clock = True
+    sigs = {"din": "top.din[8:0]", "write": "top.write", "full_n": "top.full_n",
+            "dout": "top.dout[8:0]", "read": "top.read", "empty_n": "top.empty_n"}
+    for s in sigs.values():
+        vp.add_signal(s, numeric_type="uint")
+    return vp, sigs
+
+
+class TestExtractFifoBursts:
+    def test_write_side_packet(self, fifo_parser):
+        vp, sigs = fifo_parser
+        bursts, period = vp.extract_fifo_bursts("top.clk", sigs, side="write", data_width=8)
+        assert period == pytest.approx(10.0)
+        assert len(bursts) == 1
+        assert list(bursts[0]["data"]) == [1, 2]
+        assert bursts[0]["complete"] is True, "bit 8 of the second word is `last`"
+
+    def test_write_side_sees_the_stall(self, fifo_parser):
+        """full_n low with write high is backpressure -- beat_type 2, not a dropped beat."""
+        vp, sigs = fifo_parser
+        bursts, _ = vp.extract_fifo_bursts("top.clk", sigs, side="write", data_width=8)
+        assert bursts[0]["beat_type"] == [0, 2, 0]
+
+    def test_read_side_sees_the_idle(self, fifo_parser):
+        """empty_n low with read high is starvation -- beat_type 1."""
+        vp, sigs = fifo_parser
+        bursts, _ = vp.extract_fifo_bursts("top.clk", sigs, side="read", data_width=8)
+        assert len(bursts) == 1
+        assert list(bursts[0]["data"]) == [1, 2]
+        assert bursts[0]["beat_type"] == [0, 1, 0]
+
+    def test_unframed_fifo_returns_one_burst(self, fifo_parser):
+        """Without data_width the framing bit is left in the payload and nothing delimits."""
+        vp, sigs = fifo_parser
+        bursts, _ = vp.extract_fifo_bursts("top.clk", sigs, side="write", data_width=None)
+        assert len(bursts) == 1
+        assert list(bursts[0]["data"]) == [0x001, 0x102], "raw 9-bit words, framing bit intact"
+
+    def test_missing_signal_names_fail_loud(self, fifo_parser):
+        vp, sigs = fifo_parser
+        with pytest.raises(ValueError, match="missing"):
+            vp.extract_fifo_bursts("top.clk", {"din": sigs["din"]}, side="write")
+
+    def test_bad_side_fails_loud(self, fifo_parser):
+        vp, sigs = fifo_parser
+        with pytest.raises(ValueError, match="side must be"):
+            vp.extract_fifo_bursts("top.clk", sigs, side="both")
+
+    def test_unknown_vector_samples_are_counted_not_fatal(self, fifo_parser):
+        """'xxxxxxxxx' before reset must convert to 0, not raise."""
+        vp, sigs = fifo_parser
+        vp.extract_fifo_bursts("top.clk", sigs, side="write", data_width=8)
+        assert vp.sig_info[sigs["din"]].unknown_count == 1
+
+
+# ---------------------------------------------------------------------------
+# AXI4-Stream without TLAST
+# ---------------------------------------------------------------------------
+#
+# mem_copy's `s_cmd` boundary port is a plain hls::stream<ap_uint<64> >: no TLAST wire exists, and
+# framing only begins on the internal channel.  64-bit payload also pins the dtype regression --
+# the old extractor cast burst data to uint32.
+
+_AXIS_W0 = 0xDEADBEEFCAFEBABE
+_AXIS_W1 = 0x0123456789ABCDEF
+
+_AXIS_NO_TLAST_VCD = f"""\
+$timescale 1ps $end
+$scope module top $end
+$var wire 1  A clk    $end
+$var wire 64 B TDATA [63:0] $end
+$var wire 1  C TVALID $end
+$var wire 1  D TREADY $end
+$upscope $end
+$enddefinitions $end
+#0
+0A
+b{'x' * 64} B
+0C
+1D
+#5000
+1A
+#8000
+b{_AXIS_W0:064b} B
+1C
+#10000
+0A
+#15000
+1A
+#18000
+b{_AXIS_W1:064b} B
+#20000
+0A
+#25000
+1A
+#28000
+0C
+#30000
+0A
+#35000
+1A
+#40000
+0A
+"""
+
+
+@pytest.fixture
+def axis_no_tlast_parser(tmp_path):
+    p = tmp_path / "axis_no_tlast.vcd"
+    p.write_text(_AXIS_NO_TLAST_VCD)
+    vcd = VCDVCD(str(p))
+    vp = VcdParser(vcd)
+    vp.add_signal("top.clk", short_name="clk")
+    vp.sig_info["top.clk"].is_clock = True
+    sigs = {"tdata": "top.TDATA[63:0]", "tvalid": "top.TVALID", "tready": "top.TREADY"}
+    for s in sigs.values():
+        vp.add_signal(s, numeric_type="uint")
+    return vp, sigs
+
+
+class TestExtractAxisBurstsWithoutTlast:
+    def test_absent_tlast_key_does_not_raise(self, axis_no_tlast_parser):
+        """`add_axiss_signals` already treats tlast as optional; the extractor used to
+        dereference sig_info[None] anyway."""
+        vp, sigs = axis_no_tlast_parser
+        assert "tlast" not in sigs
+        bursts, _ = vp.extract_axis_bursts("top.clk", sigs)
+        assert len(bursts) == 1
+        assert bursts[0]["complete"] is False
+
+    def test_explicit_none_tlast_also_works(self, axis_no_tlast_parser):
+        vp, sigs = axis_no_tlast_parser
+        bursts, _ = vp.extract_axis_bursts("top.clk", dict(sigs, tlast=None))
+        assert len(bursts) == 1
+
+    def test_64bit_data_is_not_truncated_to_uint32(self, axis_no_tlast_parser):
+        vp, sigs = axis_no_tlast_parser
+        bursts, _ = vp.extract_axis_bursts("top.clk", sigs)
+        assert bursts[0]["data"].dtype == np.uint64
+        assert [int(x) for x in bursts[0]["data"]] == [_AXIS_W0, _AXIS_W1]
