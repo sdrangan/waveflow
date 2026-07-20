@@ -33,7 +33,7 @@ All three are **framework** classes — you do not write them (see
 | participant | what it does |
 |---|---|
 | [`StreamDriver`](../../guide/sim/stream_tb.md) | plays a burst bundle of commands onto `s_cmd` |
-| [`StreamSink`](../../guide/sim/stream_tb.md) | collects the `MemComplete` records off `s_done` |
+| [`StreamSink`](../../guide/sim/stream_tb.md) | collects the `CopyResp` records off `s_done` |
 | `MemComponent` | the arena **both** `m_axi` bundles read and write |
 
 The memory being *one* component behind *two* bundles matters: `m_in` reads and `m_out` writes the same
@@ -137,15 +137,16 @@ nothing interprets it in C++.
 the three things that make the run correct:
 
 1. **the copy** — every destination region equals `vectors/golden`;
-2. **completion** — one `MemComplete` per job, each echoing back the `tx_id` the host set;
-3. **timing** — the cycle the *last* completion landed is exactly 2835.
+2. **completion** — one `CopyResp` per job, each echoing back the `tx_id` the host set;
+3. **timing** — the cycle the *last* completion landed is exactly 2908.
 
 That third one is worth understanding, because it is the check that catches silent regressions. It is
 **time-to-last-completion**, not the loop bound: the run loops a fixed 3400 cycles with a drain tail, but
-the *work* finishes at 2835 — `cycles.bin[n-1]` for the last completion word. Across 16 jobs that is
-~177 cycles/job, against ~176 for a single write on its own: the reads hide entirely behind the writes,
-`max(read, write)` rather than `read + write`. That number is a direct fingerprint of the free-running
-pipeline, so if a change perturbs the schedule, this assertion moves.
+the *work* finishes at 2908 — `cycles.bin[n-1]` for the last completion word. Across 16 jobs that is
+~183 cycles/job, against ~176 for a single write on its own: the reads hide behind the writes,
+`max(read, write)` plus the small in-band descriptor beats rather than `read + write`. That number is a
+direct fingerprint of the free-running pipeline, so if a change perturbs the schedule, this assertion
+moves.
 
 ## What you actually write
 

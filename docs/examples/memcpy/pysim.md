@@ -115,7 +115,7 @@ just plays a bundle, and it names the *path* it will read, not the data:
 `StreamDriver` loads the same path in *its* `pre_sim`. The bytes are written once, by
 `write_scenario` (below) — no data lives on the driver at construction.
 
-**Make the completion sink** — a `StreamSink` collects the `MemComplete` records off `s_done`:
+**Make the completion sink** — a `StreamSink` collects the `CopyResp` records off `s_done`:
 
 ```python
         self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done")
@@ -227,7 +227,7 @@ The golden is a bit-exact comparison, per job, plus a completion count:
 ```python
 got = mem._mem.read(job.dst_off * bpw, job.n_words)
 assert np.array_equal(got, expected)          # every destination word
-assert len(done_sink.words) == len(jobs)      # one MemComplete per job
+assert len(done_sink.words) == len(jobs)      # one CopyResp per job
 ```
 
 Both matter. The region compare catches a wrong address, a short burst, or a dropped word. The token
@@ -273,9 +273,9 @@ directly comparable:
 
 |                         | pysim | RTL (XSI) | pysim / RTL |
 | ----------------------- | ----- | --------- | ----------- |
-| fill (first completion) | 159   | 171       | 93%         |
-| steady-state period     | 137   | 178       | 77%         |
-| total, 16 jobs          | 2214  | 2835      | 78%         |
+| fill (first completion) | 156   | 163       | 96%         |
+| steady-state period     | 140   | 183       | 77%         |
+| total, 16 jobs          | 2256  | 2908      | 78%         |
 
 **pysim gets the architecture right and the absolute numbers optimistic.** Both agree the design is
 pipelined rather than sequential, both agree the period is dominated by one direction rather than the
@@ -287,7 +287,7 @@ So use each rung for what it is good at:
 
 - **pysim** — correctness, overlap and structure, deadlock, job accounting. Fast enough to run on
   every edit.
-- **RTL** — the number you would quote. The `-m xsi` gate asserts 2835 exactly, so a change that
+- **RTL** — the number you would quote. The `-m xsi` gate asserts 2908 exactly, so a change that
   perturbs the schedule fails loudly.
 
 Closing that ~22% gap is calibration work, and it is open: the timing model has parameters that can be
