@@ -153,6 +153,71 @@ class TestLookupErrors:
             bt.port_bursts("gmem0")
 
 
+class TestComponentView:
+    """"Trace this component" resolves to the channels incident on it.
+
+    A component is not itself traced at the top scope -- its channels are -- so its observable
+    surface is what arrives, what leaves, and which boundary entries it touches."""
+
+    def test_middle_of_the_chain(self, tmp_path, memcopy_manifest):
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", memcopy_manifest))
+        v = bt.component("mem_r_stream_framed_task")
+        assert v.inputs == ("cmd",)
+        assert v.outputs == ("copy_data",)
+        assert v.inst == "mem_r_stream_framed_task_64_U0"
+
+    def test_ends_of_the_chain(self, tmp_path, memcopy_manifest):
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", memcopy_manifest))
+        assert bt.component("mem_seq_framed_task").inputs == ()
+        assert bt.component("mem_w_stream_framed_done_task").outputs == ()
+
+    def test_boundary_resolves_a_port_arg_to_its_bundle(self, tmp_path, memcopy_manifest):
+        """A task arg names the PORT (`m_in`); the boundary entry is named after its BUNDLE
+        (`gmem0`), because that is what the RTL nets are named after."""
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", memcopy_manifest))
+        assert bt.component("mem_r_stream_framed_task").boundary == ("gmem0",)
+        assert set(bt.component("mem_w_stream_framed_done_task").boundary) == {"s_done", "gmem1"}
+
+    def test_accepts_instance_or_body_name(self, tmp_path, memcopy_manifest):
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", memcopy_manifest))
+        assert bt.component("mem_r_stream_framed_task") == \
+            bt.component("mem_r_stream_framed_task_64_U0")
+
+    def test_unknown_component_lists_the_known_ones(self, tmp_path, memcopy_manifest):
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", memcopy_manifest))
+        with pytest.raises(KeyError, match="mem_seq_framed_task"):
+            bt.component("nope")
+
+    def test_component_bursts_reads_the_correct_end_of_each_channel(
+            self, tmp_path, memcopy_manifest, monkeypatch):
+        """An input is read from its `read` side (when this component TOOK the word), an output
+        from its `write` side (when it OFFERED one).  The other end belongs to the peer."""
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", memcopy_manifest))
+        seen = []
+        real = bt.channel_bursts
+        monkeypatch.setattr(bt, "channel_bursts",
+                            lambda ch, side="write": (seen.append((ch, side)), real(ch, side))[1])
+
+        out = bt.component_bursts("mem_r_stream_framed_task")
+        assert seen == [("cmd", "read"), ("copy_data", "write")]
+        assert set(out) == {"in", "out"}
+        assert set(out["in"]) == {"cmd"} and set(out["out"]) == {"copy_data"}
+
+    def test_sob_channels_are_listed_but_have_no_burst_view(self, tmp_path):
+        from examples.interleaver.interleaver import InterleaverCanon
+        man = composite_top_spec(
+            InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256),
+            width=64).trace_manifest()
+        bt = load_trace(man, _write_vcd(tmp_path / "t.vcd", man))
+
+        v = bt.component("il_compute_task")
+        assert "x_blk" in v.inputs and "y_blk" in v.outputs, "the view still reports them"
+
+        b = bt.component_bursts("il_compute_task")
+        assert "x_blk" not in b["in"] and "y_blk" not in b["out"], "but they are skipped here"
+        assert "cmd2" in b["in"] and "cmd3" in b["out"]
+
+
 # ---------------------------------------------------------------------------
 # The drift gate: manifest x real waveform.
 # ---------------------------------------------------------------------------

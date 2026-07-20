@@ -31,6 +31,7 @@ from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli
+from waveflow.build.trace_steps import AddVcdTopStep, TraceManifestStep
 from waveflow.toolchain import toolchain
 
 try:
@@ -171,11 +172,22 @@ class CSynthStep(BuildStep):
 
 
 def build_mem_copy_dag() -> BuildDag:
+    from examples.mem_copy.mem_copy import MemCopy
+
     dag = BuildDag()
     dag.add(SourceStep(artifact="mem_copy_source", path=HERE / "mem_copy.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
     dag.add(CodegenTbStep(name="codegen_tb"))
+    # The trace pair.  Both are pure elaborate() -- no RTL input, no Vitis -- so they sit beside the
+    # codegen steps rather than downstream of csynth: the RTL net names are known before anything is
+    # synthesized, which is the whole premise.  `vcd_dumper` is what `run.bat <top> <tb> trace`
+    # elaborates as a second top; the manifest names what lands in the resulting waveform.
+    dag.add(AddVcdTopStep(name="vcd_dumper", comp_class=MemCopy,
+                          source_artifact="mem_copy_source", output_dir="xsi"))
+    dag.add(TraceManifestStep(name="trace_manifest", comp_class=MemCopy,
+                              source_artifact="mem_copy_source",
+                              output_path="results/mem_copy_trace.json"))
     dag.add(CSynthStep(name="csynth"))
     return dag
 

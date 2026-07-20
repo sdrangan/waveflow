@@ -249,8 +249,12 @@ _AXI_READ_SIGS = ("ARADDR", "ARVALID", "ARREADY", "ARLEN",
 
 
 def _task_trace(task: TaskInst) -> dict:
+    # `args` are the channel / boundary-port names this task is wired to, in signature order.  They
+    # are what makes a component's OWN surface answerable -- "which streams does this component
+    # touch" is otherwise only derivable by scanning every channel for a matching endpoint.
     return {"id": task.task_fn,
             "inst": task.inst_name,
+            "args": list(task.args),
             "signals": {p: f"{task.inst_name}_{p}" for p in _TASK_PINS}}
 
 
@@ -263,12 +267,14 @@ def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
     ONE entry here, carrying whichever directions they collectively use."""
     entries: list[dict] = []
     bundles: dict[str, set[str]] = {}          # insertion-ordered, so the output is deterministic
+    bundle_ports: dict[str, list[str]] = {}    # bundle -> the port names folded into it
 
     for p in ports:
         if p.kind in ("axis_in", "axis_out"):
             entries.append({
                 "id": p.name,
                 "kind": p.kind,
+                "ports": [p.name],
                 "signals": {"tdata": f"{p.name}_TDATA",
                             "tvalid": f"{p.name}_TVALID",
                             "tready": f"{p.name}_TREADY",
@@ -277,8 +283,10 @@ def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
                             "tlast": f"{p.name}_TLAST"},
             })
         elif p.kind in ("maxi_read", "maxi_write"):
-            bundles.setdefault(p.bundle or p.name, set()).add(
+            bundle = p.bundle or p.name
+            bundles.setdefault(bundle, set()).add(
                 "read" if p.kind == "maxi_read" else "write")
+            bundle_ports.setdefault(bundle, []).append(p.name)
 
     for bundle, dirs in bundles.items():
         sigs: dict[str, str] = {}
@@ -286,7 +294,10 @@ def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
             sigs.update({s: f"m_axi_{bundle}_{s}" for s in _AXI_READ_SIGS})
         if "write" in dirs:
             sigs.update({s: f"m_axi_{bundle}_{s}" for s in _AXI_WRITE_SIGS})
-        entries.append({"id": bundle, "kind": "maxi",
+        # `ports` recovers the port -> bundle mapping.  A task's args name the PORT (`m_in`) while
+        # the RTL nets are named after the BUNDLE (`m_axi_gmem0_*`), and two ports can share one
+        # bundle -- without this, a task arg cannot be resolved back to its boundary entry.
+        entries.append({"id": bundle, "kind": "maxi", "ports": bundle_ports[bundle],
                         "directions": sorted(dirs), "signals": sigs})
     return entries
 

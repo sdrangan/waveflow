@@ -34,6 +34,26 @@ from waveflow.utils.vcd import (
 _OPTIONAL = frozenset({"tlast", "AWLEN", "WLAST", "ARLEN", "RLAST", "BVALID", "BREADY"})
 
 
+@dataclass(frozen=True)
+class ComponentView:
+    """One component's observable surface, as seen from outside it.
+
+    At the top scope a component is not itself traced -- its *channels* are.  So "trace this
+    component" means: everything arriving on the channels it consumes, everything leaving on the
+    channels it produces, plus the boundary entries it touches directly.  That set is exactly the
+    port event trace a latency model is built from.
+
+    ``inputs`` / ``outputs`` are channel ids; ``boundary`` are boundary-entry ids (an AXIS port
+    name, or an ``m_axi`` BUNDLE -- note a task arg names the port, e.g. ``m_in``, while the entry
+    is named after its bundle, e.g. ``gmem0``).
+    """
+    inst: str
+    id: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    boundary: tuple[str, ...]
+
+
 class TraceBindError(LookupError):
     """A manifest named a net the VCD does not contain.
 
@@ -117,6 +137,55 @@ class BoundTrace:
             raise ValueError(f"boundary entry {bundle!r} is {p['kind']!r}, not an m_axi bundle.")
         return self.parser.extract_aximm_bursts(self.clock, self._sigs(p["signals"]))
 
+    # -- per-component views -----------------------------------------------------------------
+    def component(self, inst: str) -> ComponentView:
+        """Which streams a component touches, and in which direction.
+
+        Accepts either the RTL instance (``mem_r_stream_framed_task_64_U0``) or the task body name
+        (``mem_r_stream_framed_task``)."""
+        task = self._task(inst)
+        args = set(task.get("args", ()))
+
+        inputs = tuple(c["id"] for c in self.manifest["channels"]
+                       if c["consumer"] == task["inst"] and c["id"] in args)
+        outputs = tuple(c["id"] for c in self.manifest["channels"]
+                        if c["producer"] == task["inst"] and c["id"] in args)
+        boundary = tuple(p["id"] for p in self.manifest["boundary"]
+                         if args & set(p.get("ports", [p["id"]])))
+        return ComponentView(inst=task["inst"], id=task["id"],
+                             inputs=inputs, outputs=outputs, boundary=boundary)
+
+    def component_bursts(self, inst: str) -> dict[str, dict]:
+        """Every channel beat arriving at and leaving one component.
+
+        Note which END of each channel is read, because it is easy to get backwards and the wrong
+        one answers a different question: an INPUT channel is read from its ``read`` side (when this
+        component *took* the word) and an OUTPUT from its ``write`` side (when it *offered* one).
+        The other end belongs to the peer, and the gap between the two is the channel's occupancy.
+
+        Returns ``{"in": {channel: bursts}, "out": {channel: bursts}}``.  ``sob`` channels are
+        skipped -- they have no burst view.
+        """
+        view = self.component(inst)
+
+        def _side(ids, side):
+            out = {}
+            for ch in ids:
+                if self.channel(ch)["kind"] == "sob":
+                    continue
+                out[ch] = self.channel_bursts(ch, side=side)[0]
+            return out
+
+        return {"in": _side(view.inputs, "read"), "out": _side(view.outputs, "write")}
+
+    def _task(self, inst: str) -> dict:
+        for t in self.manifest["tasks"]:
+            if t["inst"] == inst or t["id"] == inst:
+                return t
+        raise KeyError(
+            f"no task {inst!r} in manifest for {self.manifest['top']!r}; have "
+            f"{[t['id'] for t in self.manifest['tasks']]}")
+
     def task_done_cycles(self, task_inst: str):
         """Rising edges of a task's ``ap_done`` -- one per firing.
 
@@ -125,14 +194,7 @@ class BoundTrace:
         still pulses once per job, which makes it a free per-job completion event -- but the
         matching START has to come from the job's first input handshake, not from ``ap_start``.
         """
-        for t in self.manifest["tasks"]:
-            if t["inst"] == task_inst or t["id"] == task_inst:
-                name = self.resolved[t["signals"]["ap_done"]]
-                break
-        else:
-            raise KeyError(f"no task {task_inst!r}; have "
-                           f"{[t['inst'] for t in self.manifest['tasks']]}")
-
+        name = self.resolved[self._task(task_inst)["signals"]["ap_done"]]
         self.parser.sig_info[name].get_values()
         clk = extract_clock_times(self.parser.sig_info[self.clock])
         v = np.asarray(resample_signal(self.parser.sig_info[name], clock_sample_times(clk)))
