@@ -6,19 +6,22 @@ Mirrors the other examples' ``*_build.py`` (regmap, block_scale, fir): a :class:
 
 Steps, in the order the flow teaches them:
 
-    pysim   -> run the MemCopyTB graph in SimPy, check every copy bit-exact, record timing.
-               The fast, no-toolchain checkpoint -- this is the default ``--through`` target.
-    gen     -> generate the ap_ctrl_none composite top + the XSI harness/main + headers.
-    csynth  -> Vitis HLS C-synthesis of the generated top (needs Vitis; produces the RTL the
-               ``-m xsi`` gate drives).
+    pysim       -> run the MemCopyTB graph in SimPy, check every copy bit-exact, record timing.
+                   The fast, no-toolchain checkpoint -- this is the default ``--through`` target.
+    codegen_dut -> lower the MemCopy DUT graph to the ap_ctrl_none composite top (+ tcl, ports, headers).
+    codegen_tb  -> lower the MemCopyTB graph to the XSI BFM harness + main + scenario constants.
+    csynth      -> Vitis HLS C-synthesis of the generated top (needs Vitis; produces the RTL the
+                   ``-m xsi`` gate drives).
 
 The RTL rung itself (drive the synthesized top through XSI, exact cycle count) is the ``-m xsi`` gate
 in ``tests/examples/test_xsi_bfm.py`` -- it needs Vivado xsim + a prior csynth and is orchestrated
 there rather than duplicated here.
 
-    python mem_copy_build.py --through pysim      # default; the golden + timing
+    python mem_copy_build.py --through pysim        # default; the golden + timing
     python mem_copy_build.py --list-steps
-    python mem_copy_build.py --through csynth      # needs Vitis
+    python mem_copy_build.py --through codegen_dut  # the DUT top
+    python mem_copy_build.py --through codegen_tb   # + the XSI harness
+    python mem_copy_build.py --through csynth       # needs Vitis
 """
 from __future__ import annotations
 
@@ -31,10 +34,10 @@ from waveflow.build.cli import run_dag_cli
 from waveflow.toolchain import toolchain
 
 try:
-    from examples.mem_copy.mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate
+    from examples.mem_copy.mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate_dut, generate_tb
     from examples.mem_copy.mem_copy_sim import MemCopySim
 except ModuleNotFoundError:  # run as a script from the example directory
-    from mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate  # type: ignore[no-redef]
+    from mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate_dut, generate_tb  # type: ignore[no-redef]
     from mem_copy_sim import MemCopySim  # type: ignore[no-redef]
 
 HERE = Path(__file__).resolve().parent
@@ -92,23 +95,49 @@ class PySimStep(BuildStep):
 
 
 @dataclass(kw_only=True)
-class GenStep(BuildStep):
-    """Generate the ap_ctrl_none composite top, the XSI harness + two-line main, and the headers.
+class CodegenDutStep(BuildStep):
+    """Lower the **DUT** ``MemCopy`` graph to an ``ap_ctrl_none`` ``hls::task`` top: the composite top
+    .cpp, its csynth .tcl, the port map, and the headers.
 
-    Every artifact is derived from the ``MemCopy`` / ``MemCopyTB`` graph (see
-    ``examples/mem_copy/mem_copy.py::generate``); nothing here is hand-written C++.
+    Every artifact is derived from the ``MemCopy`` graph (``mem_copy.py::generate_dut``); nothing here
+    is hand-written C++.
     """
 
-    description = "Generate the composite top, XSI harness/main, and headers."
+    description = "Lower the MemCopy graph to the ap_ctrl_none composite top (+ tcl, ports, headers)."
     consumes = ["mem_copy_source"]
-    produces = {"mem_copy_cpp": Path("gen/mem_copy.cpp"), "run_tcl": Path("mem_copy.tcl")}
+    produces = {"mem_copy_cpp": Path("gen/mem_copy.cpp"), "run_tcl": Path("mem_copy.tcl"),
+                "dut_ports": Path("xsi/mem_copy_ports.h")}
     params = {"mem_dwidth": DEFAULT_MEM_DW}
 
     def run(self, config: BuildConfig, mem_dwidth, **_) -> dict:
-        generate(out_dir=config.root_dir, width=int(mem_dwidth))
+        generate_dut(out_dir=config.root_dir, width=int(mem_dwidth))
         return {
             "mem_copy_cpp": config.root_dir / "gen" / "mem_copy.cpp",
             "run_tcl": config.root_dir / "mem_copy.tcl",
+            "dut_ports": config.root_dir / "xsi" / "mem_copy_ports.h",
+        }
+
+
+@dataclass(kw_only=True)
+class CodegenTbStep(BuildStep):
+    """Lower the **testbench** ``MemCopyTB`` graph to the XSI **harness**: the BFM harness, the two-line
+    main, and the scenario constants.
+
+    Derived from the ``MemCopyTB`` graph (``mem_copy.py::generate_tb``); the harness ``#include``s the
+    DUT's ``xsi/mem_copy_ports.h``, so this runs after :class:`CodegenDutStep`.
+    """
+
+    description = "Lower the MemCopyTB graph to the XSI BFM harness + main + scenario constants."
+    consumes = ["mem_copy_source", "dut_ports"]
+    produces = {"tb_harness": Path("xsi/mem_copy_tb_harness.h"),
+                "tb_main": Path("xsi/mem_copy_bfm_tb.cpp")}
+    params = {"mem_dwidth": DEFAULT_MEM_DW}
+
+    def run(self, config: BuildConfig, mem_dwidth, **_) -> dict:
+        generate_tb(out_dir=config.root_dir, width=int(mem_dwidth))
+        return {
+            "tb_harness": config.root_dir / "xsi" / "mem_copy_tb_harness.h",
+            "tb_main": config.root_dir / "xsi" / "mem_copy_bfm_tb.cpp",
         }
 
 
@@ -145,7 +174,8 @@ def build_mem_copy_dag() -> BuildDag:
     dag = BuildDag()
     dag.add(SourceStep(artifact="mem_copy_source", path=HERE / "mem_copy.py"))
     dag.add(PySimStep(name="pysim"))
-    dag.add(GenStep(name="gen"))
+    dag.add(CodegenDutStep(name="codegen_dut"))
+    dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
     return dag
 

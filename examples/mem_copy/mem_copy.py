@@ -468,12 +468,14 @@ def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
     return path
 
 
-def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
-    """Generate headers + the MemCopy composite top .cpp + its csynth .tcl into *out_dir*.
+def generate_dut(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
+    """Generate the **DUT**: headers + the MemCopy composite top .cpp + its csynth .tcl + the port map.
 
-    The framed chain (plans/memcopy_inband_integration.md): the framed schema set, the copied framed
-    task bodies (every body is a self-contained fixed header — no ``TaskBodyStep``, no hook stubs), and
-    a top with two ``framed_word`` FIFOs."""
+    This is the ``FreeRunComp`` graph lowered to an ``ap_ctrl_none`` ``hls::task`` top
+    (plans/memcopy_inband_integration.md): the framed schema set, the copied framed task bodies (every
+    body is a self-contained fixed header — no ``TaskBodyStep``, no hook stubs), and a top with two
+    ``framed_word`` FIFOs.  ``xsi/<top>_ports.h`` is the DUT's port map, which the testbench harness
+    (see :func:`generate_tb`) includes."""
     from waveflow.build.elaborate import elaborate
 
     config = BuildConfig(root_dir=out_dir, params={})
@@ -492,19 +494,36 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
+    print(f"generated DUT {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
+    return {spec.top_name: cpp}
+
+
+def generate_tb(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
+    """Generate the XSI **testbench**: the scenario constants + the BFM harness + the two-line main.
+
+    All three are derived from the :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` **graph**
+    (:func:`~waveflow.build.composite_gen.tb_top_spec`): the harness instantiates the BFM models on the
+    DUT's ports (it ``#include``s the ``<top>_ports.h`` :func:`generate_dut` emitted), and the main is
+    just construct-run-close (participants load/dump bundles).  The only hand-written half is Python:
+    the scenario (:func:`write_mem_copy_xsi_bundles`) and the golden checker."""
+    top = "mem_copy"
     vec_h = gen_xsi_vectors(out_dir, width=width)
-    # The testbench harness AND main: both derived from the TB graph.  The main is now just
-    # construct-run-close (participants load/dump bundles), so it is generated too -- the only
-    # hand-written half is Python: the scenario (write_mem_copy_xsi_bundles) and the golden checker.
     tb = make_xsi_tb(width)
     tb_spec = tb_top_spec(tb)
-    harness_h = out_dir / "xsi" / f"{spec.top_name}_tb_harness.h"
+    harness_h = out_dir / "xsi" / f"{top}_tb_harness.h"
     harness_h.write_text(render_tb_harness(tb_spec), encoding="utf-8")
-    main_cpp = out_dir / "xsi" / f"{spec.top_name}_bfm_tb.cpp"
+    main_cpp = out_dir / "xsi" / f"{top}_bfm_tb.cpp"
     main_cpp.write_text(render_tb_main(tb_spec, tb.n_cycles), encoding="utf-8")
-    print(f"generated {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name} "
-          f"+ xsi/{vec_h.name} + xsi/{harness_h.name} + xsi/{main_cpp.name}")
-    return {spec.top_name: cpp}
+    print(f"generated TB xsi/{vec_h.name} + xsi/{harness_h.name} + xsi/{main_cpp.name}")
+    return {"tb_harness": harness_h, "tb_main": main_cpp}
+
+
+def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
+    """Generate everything — the DUT (:func:`generate_dut`) then the XSI testbench
+    (:func:`generate_tb`).  A convenience over calling the two in order."""
+    r = generate_dut(out_dir, width=width)
+    generate_tb(out_dir, width=width)
+    return r
 
 
 if __name__ == "__main__":

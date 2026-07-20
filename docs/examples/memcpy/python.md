@@ -122,7 +122,7 @@ vocabulary. Keeping the Python golden and its C++ in agreement is your job; only
 > **The other kind of leaf.** A *stream-only* leaf whose `run_iter` is just `get` → `@synthesizable`
 > hook → `write` can instead have its body **generated** from `run_iter` (`TaskBodyStep`). `MemCopy`
 > has none — all three leaves here are hand-written — but the pattern is how the FIR pipeline is built;
-> see [Kernel codegen](./codegen.md).
+> see [DUT codegen](./codegen_dut.md).
 
 ## The mem-stream leaves
 
@@ -197,5 +197,6 @@ that same graph is how the generated kernel is built.
 
 ## Next
 
-[Kernel codegen](./codegen.md) — how this graph becomes the `ap_ctrl_none` top, and why every task body
-here is hand-written.
+[Testbench (Python)](./testbench.md) — the graph that surrounds this design, and running it in pysim.
+Then [DUT codegen](./codegen_dut.md) — how this graph becomes the `ap_ctrl_none` top, and why every
+task body here is hand-written.
