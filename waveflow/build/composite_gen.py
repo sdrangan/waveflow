@@ -287,7 +287,12 @@ def derive_internal_edges(comp) -> list:
             edges.append(SobEdge(name, master, slave, elem_bw=int(et.element_type.bitwidth),
                                  block_n=int(et.max_shape[0]), depth=int(iface.depth)))
         elif isinstance(iface, StreamIF):
-            edges.append(StreamEdge(name, master, slave))
+            # A framed StreamIF lowers to a FramedEdge (framed_word FIFO, carries the packet
+            # boundary); a plain one to a StreamEdge (ap_uint FIFO).  See plans/memstream_inband.md.
+            if getattr(iface, "framed", False):
+                edges.append(FramedEdge(name, master, slave))
+            else:
+                edges.append(StreamEdge(name, master, slave))
         else:
             raise ValueError(
                 f"derive_internal_edges: no edge lowering for interface type "
