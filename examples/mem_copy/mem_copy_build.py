@@ -48,6 +48,12 @@ except ModuleNotFoundError:  # run as a script from the example directory
                           generate_tb, write_mem_copy_xsi_bundles)
     from mem_copy_sim import MemCopySim  # type: ignore[no-redef]
 
+try:
+    from examples.mem_copy.mem_copy_figures import SyncDocsFiguresStep, TimingFiguresStep
+except ModuleNotFoundError:  # run as a script from the example directory
+    from mem_copy_figures import (SyncDocsFiguresStep,  # type: ignore[no-redef]
+                                  TimingFiguresStep)
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -203,6 +209,11 @@ def build_mem_copy_dag() -> BuildDag:
                        prepare=write_mem_copy_xsi_bundles))
     dag.add(ExtractBurstsStep(name="extract_bursts",
                               output_path="results/mem_copy_timing.json"))
+    # Figures are on-demand: `--through timing_figures` renders into results/ (gitignored), and
+    # `--through sync_docs_figures` promotes them into docs/ as committed assets, so a docs figure
+    # only changes when you mean it to and the change is a reviewable diff.
+    dag.add(TimingFiguresStep(name="timing_figures"))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
     return dag
 
 

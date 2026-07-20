@@ -70,35 +70,21 @@ run loops a fixed 3400 cycles with a drain tail, but the *work* finishes at 2908
 schedule, so if a change perturbs it, the assertion moves — a real behaviour change worth a human look,
 not an inequality that would absorb a regression silently.
 
-## Comparing timing to pysim
+## Which rung to trust for what
 
-The [pysim rung](./testbench.md) ran the *same graph* and reported per-job completion cycles, so the two
-are directly comparable:
+The [pysim rung](./testbench.md) ran the *same graph*, and the two agree on the **architectural**
+story: the design is pipelined, not sequential; the period is dominated by one direction
+(`max(read, write)`), not the sum; the job count and ordering match. They do **not** agree on the
+cycle count — pysim runs optimistic, because a transaction-level model does not reproduce every
+source of per-cycle contention in the generated RTL.
 
-|                         | pysim | RTL (XSI) | pysim / RTL |
-| ----------------------- | ----- | --------- | ----------- |
-| fill (first completion) | 156   | 163       | 96%         |
-| steady-state period     | 140   | 183       | 77%         |
-| total, 16 jobs          | 2256  | 2908      | 78%         |
-
-Both decompose the same way — `first + 15 × period` — and both tell the same **architectural** story:
-the design is pipelined, not sequential; the period is dominated by one direction (`max(read, write)`),
-not the sum; and the job count and ordering agree. But pysim runs **optimistic** — it under-counts the
-steady-state period by roughly a quarter, because a transaction-level model does not reproduce every
-source of per-cycle contention in the generated RTL (recall the pysim crossbar models contention the
-RTL slaves do not — the two describe slightly different systems on purpose).
-
-So use each rung for what it is good at:
+So use each for what it is good at:
 
 - **pysim** — correctness, overlap and structure, deadlock, job accounting. Fast enough to run on
   every edit.
 - **RTL** — the number you would quote. The `-m xsi` gate asserts **2908** exactly.
 
-Closing that ~22% gap is calibration work. The **measurement** side of it is now built and is the
-subject of the next page: [Timing instrumentation](./timing.md) traces the internal channels and both
-`m_axi` bundles out of an RTL run and attributes the 183 cycles to named signals. The short version
-of what it finds — the gap is one cycle per word plus **two cycles per AXI burst**, and the writer,
-not the reader, is the bottleneck.
-
-Feeding those numbers back into the SimPy model is the part still open. Until that lands, treat a
-pysim cycle count as a lower bound with the right shape, not a prediction.
+*Why* the two differ, and what to do about it, is the next page: [Timing
+instrumentation](./timing.md) traces the internal channels and both `m_axi` bundles out of an RTL
+run and attributes every cycle of the period to a named signal. Until that feeds back into the
+model, treat a pysim cycle count as a lower bound with the right shape, not a prediction.

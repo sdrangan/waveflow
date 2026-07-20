@@ -17,7 +17,16 @@ python examples/mem_copy/mem_copy_build.py --through extract_bursts
 ```
 
 That runs four steps beyond the [testbench codegen](./codegen_tb.md). Two of them cost nothing (they
-are pure `elaborate()`), one needs the toolchain, and the last is waveform analysis.
+are pure `elaborate()`), one needs the toolchain, and the last is waveform analysis. A fifth
+(`timing_figures`) renders the pictures on this page; `sync_docs_figures` promotes them into
+`docs/`.
+
+![Stage activity across the whole run](./images/timeline_full.svg)
+
+Every stage of the pipeline on one cycle axis, 16 jobs. Three things are visible before any
+analysis: the **183-cycle cadence**, the fact that `gmem0 R` (reads) and `gmem1 W` (writes) are busy
+*simultaneously* rather than in turn — the design really is pipelined — and that the writer's green
+band is nearly continuous while the command lanes at the top are almost entirely idle.
 
 ## The problem: XSI cannot see inside the kernel
 
@@ -130,9 +139,29 @@ uncontended:
 | `mem_r_stream` | 1–15 | 183 | **30** |
 | `mem_w_stream` | 0–15 | **183** | 0 |
 
+![Per-firing span, split into own work and waiting](./images/firing_spans.svg)
+
+Colour is the component's own work, grey is waiting on a full channel — and the bottleneck needs no
+arithmetic to spot. The writer is solid green at 183 on every firing: busy the entire period. The
+reader is 153 on firing 0, then 153 + 30 grey. And the sequencer is ~5 cycles of work against ~175
+of waiting: it finishes a command almost immediately and then sits behind everything downstream.
+
 The writer is never blocked — it is the bottleneck, 100% utilised at 183 of a 183-cycle period. The
 reader's 30 cycles are it waiting on a writer that is still draining. That is *emergent* congestion,
 not a component property, and it is exactly what must **not** be baked into a component's model.
+
+### Where the 30 cycles actually are
+
+![One job, beat by beat, with FIFO occupancy](./images/timeline_job.svg)
+
+One steady-state firing. The lower panel is the `copy_data` FIFO's occupancy, and the shaded band is
+it sitting **at capacity** — the reader blocked, unable to hand over its descriptor words, because
+the writer has not finished draining the *previous* job yet. Reading right to left across the top
+panel: the reader's `gmem0 AR` bursts only begin after that band clears.
+
+Look also at the far right of the top panel. `s_done out` fires, and `gmem1 W` **keeps going for
+another ~24 cycles afterwards**. That is the posted-write behaviour that makes `ap_done` the only
+honest place to end a firing.
 
 **Subtract the bus occupancy and a constant remains.** With `bus = nwords + 2 × (num_trans − 1)`:
 
