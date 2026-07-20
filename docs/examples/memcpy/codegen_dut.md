@@ -48,7 +48,7 @@ void mem_copy(hls::stream<ap_uint<64> >& s_cmd, const ap_uint<64>* m_in,
 ```
 
 Each edge is a `framed_word` FIFO (a `StreamIF(framed=True)`); each `m_axi` bundle is assigned by
-policy in boundary order (`m_in`→`gmem0`, `m_out`→`gmem1`); the writer's `max_xfer_len=8` rides along
+policy in boundary order (`m_in`→`gmem0`, `m_out`→`gmem1`); the writer's `max_fwd_words=8` rides along
 as a second template argument. There is no `#define` and no `while`: the width is a template argument,
 and the task runtime supplies the re-firing.
 

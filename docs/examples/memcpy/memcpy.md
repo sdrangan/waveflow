@@ -2,7 +2,6 @@
 title: Module Overview
 parent: Memory Copy
 nav_order: 1
-has_children: true
 ---
 # Memory Copy
 

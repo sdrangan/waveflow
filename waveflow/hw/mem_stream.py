@@ -377,7 +377,13 @@ class MemWStream(FreeRunComp):
 
     mem_dwidth: HwParam[int] = 64
     mem_awidth: HwParam[int] = 32
-    max_xfer_len: HwParam[int] = 8     # xfer_msg capacity — bridged into MWCmd/MemComplete's Param
+    max_xfer_len: HwParam[int] = 8     # LEGACY xfer_msg capacity — bridged into MWCmd/MemComplete's Param
+    #: **In-band only**: bound on the local forward **buffer** — the total words this component holds
+    #: across the write while relaying the response bursts (the C++ body's fixed ``fwd[MAX_FWD]``
+    #: array).  A bound on the *buffer*, not the protocol.  Distinct from :attr:`max_xfer_len`, which is
+    #: the legacy two-stream ``xfer_msg`` array capacity — the two meant the same number once and no
+    #: longer do, so they are separate knobs.
+    max_fwd_words: HwParam[int] = 8
     #: When ``True`` the endpoint also exposes an ``s_done`` :class:`StreamIFMaster` and emits one
     #: :class:`MemComplete` echo (words written + the command's ``xfer_msg`` cookie) per job — the
     #: composition variant used by the ``MemCopy`` composite (its fixed body is
@@ -386,9 +392,9 @@ class MemWStream(FreeRunComp):
     emit_done: bool = False
     #: **In-band framing** (``plans/memcopy_inband_integration.md``).  When ``True`` there is **no
     #: ``s_cmd``**: ``s_in`` carries ``[MemWCmd | fwd_bursts opaque bursts | len data words]``, so a
-    #: descriptor can never be paired with the wrong data.  ``max_xfer_len`` then bounds the local
-    #: forward **buffer** (this component holds the response bursts across the write, then echoes them),
-    #: not the protocol.  Default ``False`` keeps the legacy protocol.
+    #: descriptor can never be paired with the wrong data.  :attr:`max_fwd_words` then bounds the local
+    #: forward buffer (this component holds the response bursts across the write, then echoes them).
+    #: Default ``False`` keeps the legacy protocol.
     inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -439,12 +445,12 @@ class MemWStream(FreeRunComp):
         if self.inband:
             # In-band/framed writer (plans/memcopy_inband_integration.md): NO s_cmd -- the MemWCmd rides
             # in-band on the single framed s_in ([MemWCmd | response bursts | data]).  The forward buffer
-            # needs a compile-time bound, so max_xfer_len is a SECOND template arg
-            # (mem_w_stream_framed_done_task<MEM_DW, MAX_XFER>).  emit_done is implied here.
+            # needs a compile-time bound, so max_fwd_words is a SECOND template arg
+            # (mem_w_stream_framed_done_task<MEM_DW, MAX_FWD>).  emit_done is implied here.
             return KernelTask(
                 "mem_w_stream_framed_done_task", "mem_w_stream_framed_done_task.h",
                 ("s_in", "m_mem", "s_done"),
-                template_args=(int(self.mem_dwidth), int(self.max_xfer_len)))
+                template_args=(int(self.mem_dwidth), int(self.max_fwd_words)))
         if self.emit_done:
             return KernelTask(
                 "mem_w_stream_done_task", "mem_w_stream_done_task.h",
@@ -484,23 +490,23 @@ class MemWStream(FreeRunComp):
         opaque bursts (they are the response, and must not go out before the data is stored), drain and
         pure-write the ``len`` data words, then emit the buffered bursts on ``s_done``.  The writer
         never parses what it forwards — it constructs no completion of its own; the composite's
-        sequencer framed the response.  ``max_xfer_len`` bounds the buffer.
+        sequencer framed the response.  ``max_fwd_words`` bounds the buffer.
         """
         cmd = yield from self.s_in.get(MemWCmd)
         n_fwd = int(cmd.fwd_bursts)
         t_start = self.now
         # Buffer the opaque bursts to relay AFTER the write.  Whole-burst reads (the writer forwards
         # packet boundaries it does not understand); held across the store so the response lands last.
-        # max_xfer_len bounds the total buffered words (the C++ body's fixed fwd[MAX_XFER] array).
+        # max_fwd_words bounds the total buffered words (the C++ body's fixed fwd[MAX_FWD] array).
         fwd = []
         n_buf = 0
         for _ in range(n_fwd):
             burst = yield from self.s_in.get()
             n_buf += len(burst)
-            if n_buf > int(self.max_xfer_len):
+            if n_buf > int(self.max_fwd_words):
                 raise ValueError(
-                    f"{self.name}: forwarded {n_buf} words exceeds the buffer bound max_xfer_len="
-                    f"{int(self.max_xfer_len)} — raise max_xfer_len or shorten the response.")
+                    f"{self.name}: forwarded {n_buf} words exceeds the buffer bound max_fwd_words="
+                    f"{int(self.max_fwd_words)} — raise max_fwd_words or shorten the response.")
             fwd.append(np.asarray(burst))
         w0, nw = int(cmd.addr), int(cmd.len)
         words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)

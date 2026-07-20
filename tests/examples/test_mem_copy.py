@@ -7,7 +7,7 @@ real Phase-2 deliverable): one ``ap_ctrl_none`` top instantiating three ``hls::t
 ``hls_thread_local`` ``framed_word`` streams derived from the component/interface graph, with two
 ``m_axi`` bundles + two AXIS ports on the boundary.  The csynth + XSI legs of Gate 2 need Vitis/Vivado
 and are driven out-of-band by ``examples/mem_copy/mem_copy.py`` + ``examples/mem_copy/xsi/run.bat`` —
-the in-band gate is 2910 (plans/memcopy_inband_integration.md).
+the in-band gate is 2908 (plans/memcopy_inband_integration.md).
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
         assert f"hls_thread_local hls::stream<streamutils::framed_word<64> > {fifo};" in src
 
     # three tasks at a concrete width, wired exactly as the graph specifies (the writer's payload
-    # buffer bound max_xfer_len=8 is a second template arg).
+    # buffer bound max_fwd_words=8 is a second template arg).
     assert "hls_thread_local hls::task t0(mem_seq_framed_task<64>, s_cmd, cmd);" in src
     assert "hls_thread_local hls::task t1(mem_r_stream_framed_task<64>, cmd, m_in, copy_data);" in src
     assert ("hls_thread_local hls::task t2(mem_w_stream_framed_done_task<64, 8>, "

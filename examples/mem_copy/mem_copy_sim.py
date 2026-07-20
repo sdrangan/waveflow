@@ -59,7 +59,7 @@ class MemCopyTB(FreeRunComp):
     #: ``(src, dst, n)`` tuples are accepted too and coerced.
     jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
     mem_dwidth: HwParam[int] = 64
-    #: Fixed run bound for the generated XSI main (comfortably past the ~2910 completion; the drain
+    #: Fixed run bound for the generated XSI main (comfortably past the ~2908 completion; the drain
     #: tail is a testbench constant, not the design's latency -- see the cycles note in the checker).
     n_cycles: int = 3400
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))

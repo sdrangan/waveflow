@@ -2,7 +2,6 @@
 title: Python
 parent: Memory Copy
 nav_order: 2
-has_children: true
 ---
 # Python Model
 

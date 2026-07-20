@@ -120,9 +120,9 @@ def test_back_to_back_jobs_cannot_desync(tmp_path):
 
 
 def test_response_over_buffer_bound_fails_loudly(tmp_path):
-    """max_xfer_len bounds the writer's forward BUFFER — overflowing it must raise, not truncate."""
+    """max_fwd_words bounds the writer's forward BUFFER — overflowing it must raise, not truncate."""
     with pytest.raises(Exception, match="exceeds the buffer bound"):
-        _run([(16, 512, 16)], [list(range(9))], tmp_path)   # default max_xfer_len = 8
+        _run([(16, 512, 16)], [list(range(9))], tmp_path)   # default max_fwd_words = 8
 
 
 def test_legacy_two_stream_path_is_untouched():
