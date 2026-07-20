@@ -50,8 +50,24 @@ Sequencer ───────────────────────�
    boundary (`WrComplete` + payload words), self-describing via `WrComplete.xfer_len`.
 3. **XSI re-baseline** — drive framed mem_copy through RTL; the cycle count moves from 2835 by the
    added descriptor/payload beats (≈ `2835 + 16·(WrCmd_words + 1)`); **derive it and confirm
-   measured==derived WITH the user before accepting.**
-4. **retire** the two-stream path + the `inband` flag once framed is green.
+   measured==derived WITH the user before accepting.**  **DONE — gate = 2910 (user-accepted).**
+   Fresh `generate(inband=True)` → csynth (Fmax 111 MHz) → XSI: `XSI_EXITCODE=0`, 16/16 regions
+   bit-exact, 32 `s_done` words (16·`[WrComplete | payload]`), tx_ids 0..15 echoed.  Measured
+   `done_cycle=2910`; derived closed-form `165 + 15·183 = 2910` (steady **183 cyc/job**, no fill
+   transient).  Δ vs two-stream 2835 = `15·(183−177.6) + (165−171) = +81 − 6 = +75`: the +5.4 cyc/job
+   is the in-band `WrCmd`(2) + payload(1) = 3 relayed beats prepended to each 128-word data burst
+   (plus a couple of writer state-machine bubbles); the −6 is the shorter descriptor firing the first
+   completion earlier.  The plan's rough `2883` had the right mechanism but modeled the beats as
+   purely additive; the real effect is a throughput-cadence shift.  TB is inband-threaded
+   (`make_xsi_tb`/`render_xsi_vectors`/`check_mem_copy_xsi_outputs`/`write_mem_copy_xsi_bundles`,
+   `_done_words`, `DONE_WORDS=2`); the harness is framing-agnostic (a generic `AxisSlave` captures
+   `s_done`).  **Note:** a fresh two-stream `generate()` is *broken* (tx_ids all 0) because its
+   Sequencer body is generated + depends on hand-written hook stubs that regenerate as empty TODOs;
+   the in-band Sequencer is fully hand-written (no hooks), so it synthesizes correctly straight from
+   `generate()` — one less thing to maintain after Stage 4.
+4. **retire** the two-stream path + the `inband` flag once framed is green.  **Decided (user): full
+   retire** — flip the default to in-band, delete the two-stream bodies/edges/hooks/`MRCmd`/`MWCmd`/
+   `MemComplete` usage + the `inband` flag itself, update the XSI gate to 2910.  One clean commit.
 
 ## Notes
 - Keep `inband=False` the default until Stage 3 is XSI-green — nothing existing moves before then.

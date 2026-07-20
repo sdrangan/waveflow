@@ -432,21 +432,33 @@ XSI_DST_W = [4096 + 128 * j for j in range(XSI_NUM_CMDS)]
 XSI_JOBS = tuple(CopyJob(s, d, XSI_N) for s, d in zip(XSI_SRC_W, XSI_DST_W))
 
 
-def make_xsi_tb(width: int = DEFAULT_MEM_DW):
+def make_xsi_tb(width: int = DEFAULT_MEM_DW, inband: bool = False):
     """The :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` instance the XSI testbench is
     generated from.
 
     Imported lazily: ``mem_copy_sim`` imports this module for :class:`MemCopy`/:class:`CopyCmd`, so a
     module-level import here would be circular.  The testbench graph depends on the design; the
     design's *generator* depends on the graph.
-    """
+
+    ``inband`` builds the framed DUT (plans/memcopy_inband_integration.md).  The scenario (commands,
+    seed, golden) is identical; only the ``s_done`` framing differs (``WrComplete`` + payload, not the
+    5-word ``MemComplete``)."""
     from waveflow.simulation.simulation import Simulation
     from examples.mem_copy.mem_copy_sim import MemCopyTB
 
-    return MemCopyTB(name="xsi_tb", sim=Simulation(), mem_dwidth=width, jobs=XSI_JOBS)
+    return MemCopyTB(name="xsi_tb", sim=Simulation(), mem_dwidth=width, jobs=XSI_JOBS,
+                     inband=inband)
 
 
-def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
+def _done_words(width: int, inband: bool) -> int:
+    """Words per ``s_done`` completion: the two-stream ``MemComplete`` (5 at w=64), or the in-band
+    ``WrComplete`` header + its echoed payload (``xfer_len=1`` for mem_copy) — see the schema docs."""
+    if inband:
+        return WrComplete.nwords_per_inst(width) + 1        # header + 1-word tx_id payload
+    return MemComplete.nwords_per_inst(width)
+
+
+def render_xsi_vectors(width: int = DEFAULT_MEM_DW, inband: bool = False) -> str:
     """Render ``mem_copy_vectors.h``'s contents **from the testbench graph**.
 
     Everything here is read off a real :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` — the same
@@ -461,7 +473,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
     """
     from waveflow.build.composite_gen import render_vectors_h
 
-    tb = make_xsi_tb(width)
+    tb = make_xsi_tb(width, inband=inband)
     jobs = [CopyJob.coerce(j) for j in tb.jobs]
 
     return render_vectors_h(
@@ -472,9 +484,11 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
             "MEM_NW": int(tb.mem.nwords_tot),
             "N": int(jobs[0].n_words),
             "NUM_CMDS": len(jobs),
-            # MemComplete{len, xfer_len, xfer_msg[8]} -> nwords_per_inst(64) == 5.  Introspected:
-            # the s_done framing is the schema's business, not the testbench's.
-            "DONE_WORDS": MemComplete.nwords_per_inst(width),
+            # s_done framing per job, introspected from the schema (not the testbench): the two-stream
+            # MemComplete{len,xfer_len,xfer_msg[8]} == 5, or the in-band WrComplete header + 1-word
+            # tx_id payload == 2.  Informational in C++ (the AxisSlave captures whatever arrives); the
+            # Python checker slices per-job completions by it.
+            "DONE_WORDS": _done_words(width, inband),
         },
         arrays={
             "SRC_W": ("int", [job.src_off for job in jobs]),
@@ -487,7 +501,8 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
     )
 
 
-def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> None:
+def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW,
+                               inband: bool = False) -> None:
     """Write mem_copy's XSI input + golden **bundles** into ``<xsi_dir>/vectors/``.
 
     - ``vectors/s_cmd``  — the command stream (the StreamDriver's own bursts, schema-packed); the
@@ -504,10 +519,11 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
     ``<xsi_dir>/vectors``.  pysim's ``run_copy`` calls the same ``write_scenario`` with a temp root, so
     the pysim run and the XSI run cannot start from different bytes.
     """
-    make_xsi_tb(width).write_scenario(Path(xsi_dir))
+    make_xsi_tb(width, inband=inband).write_scenario(Path(xsi_dir))
 
 
-def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW) -> None:
+def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW,
+                               inband: bool = False) -> None:
     """Check mem_copy's XSI run from the dumped output bundles — the golden, in Python.
 
     The generated C++ main only runs and dumps; every check lives here.  Reads what the run wrote:
@@ -516,20 +532,22 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
 
     - **correctness** — every destination region equals the source pattern (a memcpy), vs
       ``vectors/golden``;
-    - **completion** — one ``MemComplete`` per job, each echoing ``tx_id == j``;
-    - **timing** — the cycle the *last* ``MemComplete`` landed (time-to-last-completion, NOT the loop
+    - **completion** — one completion per job, each echoing ``tx_id == j``;
+    - **timing** — the cycle the *last* completion word landed (time-to-last-completion, NOT the loop
       bound) equals *want_cycles*.
+
+    ``inband`` selects the framing (``WrComplete`` + 1-word payload vs the 5-word ``MemComplete``); the
+    ``tx_id`` echo sits at completion-word offset ``+1`` in both, so only ``done_words`` differs.
 
     Raises ``AssertionError`` on any mismatch; a missing output bundle (a run that did not regenerate
     it) fails loudly on read.
     """
-    from waveflow.hw.mem_stream import MemComplete
     from waveflow.utils.burst_io import read_burst_bundle
 
     vdir = Path(xsi_dir) / "vectors"
-    tb = make_xsi_tb(width)
+    tb = make_xsi_tb(width, inband=inband)
     jobs = [CopyJob.coerce(j) for j in tb.jobs]
-    done_words = MemComplete.nwords_per_inst(width)
+    done_words = _done_words(width, inband)
 
     # 1) Correctness: each destination region equals the golden (the source pattern, copied).
     out = read_burst_bundle(vdir / "out")[0]
@@ -542,7 +560,8 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
                 f"mem_copy job {j} word {bad}: dst 0x{int(out[dst + bad]):016x} != "
                 f"golden 0x{int(golden[dst + bad]):016x}")
 
-    # 2) Completion: one MemComplete per job, tx_id echoed (xfer_msg[0] low 32b == j).
+    # 2) Completion: one completion per job, tx_id echoed at completion-word offset +1 (xfer_msg[0]
+    #    low 32b for two-stream; the payload word for in-band).
     s_done = read_burst_bundle(vdir / "s_done")[0]
     assert len(s_done) == len(jobs) * done_words, (
         f"mem_copy: s_done has {len(s_done)} words, expected {len(jobs)}*{done_words}")
@@ -559,7 +578,8 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
         f"change (regression, or an improvement worth re-recording).")
 
 
-def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
+def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW,
+                    inband: bool = False) -> Path:
     """Emit ``xsi/mem_copy_vectors.h`` — the XSI testbench's scenario + its command words.
 
     The command words come from :meth:`CopyCmd.serialize`, the same call the pysim golden packs with.
@@ -577,7 +597,7 @@ def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
     drifted *pattern* still tests a copy, whereas a drifted *packing rule* sends malformed commands
     and makes the test meaningless.  The latter is what this function removes.
     """
-    h = render_xsi_vectors(width)
+    h = render_xsi_vectors(width, inband=inband)
     path = out_dir / "xsi" / "mem_copy_vectors.h"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(h, encoding="utf-8")
@@ -630,16 +650,13 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW,
     ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
-    if inband:
-        # STEP 3 wires the framed XSI testbench (vectors/harness/main); STEP 2's gate is csynth, which
-        # needs only the top + tcl + headers.  Return before the two-stream TB artifacts.
-        print(f"generated (inband) {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
-        return {spec.top_name: cpp}
-    vec_h = gen_xsi_vectors(out_dir, width=width)
+    vec_h = gen_xsi_vectors(out_dir, width=width, inband=inband)
     # The testbench harness AND main: both derived from the TB graph.  The main is now just
     # construct-run-close (participants load/dump bundles), so it is generated too -- the only
     # hand-written half is Python: the scenario (write_mem_copy_xsi_bundles) and the golden checker.
-    tb = make_xsi_tb(width)
+    # The harness is framing-agnostic (a generic AxisSlave captures s_done); inband changes only the
+    # DUT RTL and the s_done word count the Python checker slices by.
+    tb = make_xsi_tb(width, inband=inband)
     tb_spec = tb_top_spec(tb)
     harness_h = out_dir / "xsi" / f"{spec.top_name}_tb_harness.h"
     harness_h.write_text(render_tb_harness(tb_spec), encoding="utf-8")
