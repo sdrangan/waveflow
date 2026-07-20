@@ -104,6 +104,38 @@ class BfmModel:
 
 
 @dataclass(frozen=True)
+class IntChannel:
+    """One internal channel of the generated top: its ``hls_thread_local`` decl + what it connects.
+
+    The internal-edge counterpart of :class:`ExtPort`, and for the same reason.  ``composite_top_spec``
+    used to keep only ``edge.decl(width)`` — a rendered string — so the spec could *emit* a channel
+    but could not *answer* anything about it.  Recovering the name from the decl means parsing C++
+    back out of a string, and the endpoints were simply gone.
+
+    What needs answering is the same question :class:`ExtPort` already answers for boundary ports:
+    which RTL nets does this become?  A channel named ``cmd`` between two ``hls::task`` bodies
+    lowers to the top-scope nets ``cmd_dout`` / ``cmd_empty_n`` / ``cmd_full_n``, plus
+    ``<producer_inst>_cmd_din`` / ``_cmd_write`` and ``<consumer_inst>_cmd_read`` — Vitis lifts
+    dataflow channel wires into the top scope beside the task instances.  Deriving those names from
+    THIS spec is what stops a trace/timing consumer drifting from the kernel.
+
+    * ``kind``  — ``stream`` (``ap_uint`` FIFO) | ``framed`` (``framed_word``, packet boundary in the
+      bit above the payload) | ``sob`` (``stream_of_blocks`` ping-pong).
+    * ``width`` — payload width ``W``.  For a ``framed`` channel the RTL net is ``W+1`` bits with
+      ``last`` on top; for ``sob`` it is the element width.
+    * ``master_task`` / ``slave_task`` — indices into :attr:`TopSpec.tasks`, i.e. the producer and
+      consumer.  Indices rather than names because two instances of the same task body are
+      distinct RTL instances but share a ``task_fn``.
+    """
+    decl: str
+    name: str = ""                      # the C++ channel variable, e.g. "cmd" / "copy_data"
+    kind: str = ""                      # stream | framed | sob
+    width: int = 0                      # payload width W
+    master_task: int | None = None      # index into TopSpec.tasks (producer)
+    slave_task: int | None = None       # index into TopSpec.tasks (consumer)
+
+
+@dataclass(frozen=True)
 class TopSpec:
     """A generated free-running (``ap_ctrl_none``) ``hls::task`` top.  For a standalone kernel there
     is one task and no internal streams; a composite adds tasks + ``hls_thread_local`` streams (or
@@ -112,8 +144,16 @@ class TopSpec:
     ports: tuple[ExtPort, ...]              # external interface ports (signature order)
     tasks: tuple[TaskInst, ...]
     cmd_headers: tuple[str, ...]            # command struct headers to include
-    internal_streams: tuple[str, ...] = ()  # hls_thread_local decls (empty for a standalone kernel)
+    channels: tuple[IntChannel, ...] = ()   # internal edges (empty for a standalone kernel)
     extra_includes: tuple[str, ...] = ()    # extra system headers (e.g. hls_streamofblocks.h)
+
+    @property
+    def internal_streams(self) -> tuple[str, ...]:
+        """The ``hls_thread_local`` decls, in channel order.
+
+        Derived from :attr:`channels` rather than stored, so there is one source for a channel and
+        the decl cannot drift from what the channel says it is."""
+        return tuple(c.decl for c in self.channels)
 
 
 def _axis_port(name: str, width: int, kind: str = "axis_in") -> ExtPort:
@@ -403,14 +443,39 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtP
     raise ValueError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 
+def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
+    """Lower one internal edge to an :class:`IntChannel`.
+
+    The kind is the edge's TYPE, exactly as ``derive_internal_edges`` derives the edge from the
+    interface's type -- no table, no flag to keep in sync.  ``width`` is the payload ``W``: a
+    ``framed`` channel's RTL net is one bit wider (``last`` on top, see
+    :func:`waveflow.utils.vcd.split_framed_word`), and a ``sob`` channel carries its own element
+    width."""
+    if isinstance(edge, SobEdge):
+        kind, payload = "sob", edge.elem_bw
+    elif isinstance(edge, FramedEdge):
+        kind, payload = "framed", width
+    else:
+        kind, payload = "stream", width
+    return IntChannel(
+        decl=edge.decl(width),
+        name=edge.name,
+        kind=kind,
+        width=payload,
+        master_task=ep_task.get(id(edge.master_ep)),
+        slave_task=ep_task.get(id(edge.slave_ep)),
+    )
+
+
 def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     """Derive the composite :class:`TopSpec` from *comp*'s component/interface graph.
 
     Reads four things off the built parent, nothing hand-written per top:
 
-    1. ``comp.internal_edges`` -> one channel decl per edge (``edge.decl(width)`` — an ``hls::stream``
-       for a :class:`StreamEdge`, an ``hls::stream_of_blocks`` for a :class:`SobEdge`), and a map
-       *endpoint -> edge name* (both the master and slave side of an edge resolve to the same name).
+    1. ``comp.internal_edges`` -> one :class:`IntChannel` per edge (its ``hls_thread_local`` decl —
+       an ``hls::stream`` for a :class:`StreamEdge`, an ``hls::stream_of_blocks`` for a
+       :class:`SobEdge` — plus the name, kind, width and the producer/consumer task it connects),
+       and a map *endpoint -> edge name* (both the master and slave side resolve to the same name).
     2. ``comp.boundary`` -> the external ports (AXIS / ``m_axi`` bundles) and a map
        *endpoint -> top-port name*.
     3. ``comp.ordered_subcomps`` -> one ``hls::task`` per active child; each child's
@@ -423,11 +488,9 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     *same* generator."""
     ep_arg: dict[int, str] = {}
 
-    internal_streams: list[str] = []
     for edge in comp.internal_edges:
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
-        internal_streams.append(edge.decl(width))
 
     ports: list[ExtPort] = []
     bundles = bundle_map(comp.boundary)
@@ -437,7 +500,11 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         ep_arg[id(ep)] = name
         ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle))
 
+    # Tasks are built before channels so a channel can record WHICH task drives it: the producer
+    # and consumer task indices are what turn a channel name into RTL net names
+    # (`<producer_inst>_<ch>_write`), and only this loop knows which endpoint belongs to which task.
     tasks: list[TaskInst] = []
+    ep_task: dict[int, int] = {}
     for sub in comp.ordered_subcomps:
         kt = sub.kernel_task()
         args: list[str] = []
@@ -449,14 +516,17 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
                     f"composite_top_spec: {type(sub).__name__}.{attr} is not wired to any internal "
                     f"edge or boundary port of {type(comp).__name__} — cannot resolve its task arg")
             args.append(arg)
+            ep_task[id(ep)] = len(tasks)
         tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header))
+
+    channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 
     return TopSpec(
         top_name=comp.cpp_kernel_name,
         ports=tuple(ports),
         tasks=tuple(tasks),
         cmd_headers=tuple(getattr(comp, "cmd_headers", ())),
-        internal_streams=tuple(internal_streams),
+        channels=channels,
         extra_includes=tuple(getattr(comp, "extra_includes", ())),
     )
 
