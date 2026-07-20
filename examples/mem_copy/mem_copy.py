@@ -52,6 +52,7 @@ from waveflow.hw.mem_stream import (  # noqa: E402
     MemWStream,
     WORD_BW_SUPPORTED,
     WrCmd,
+    WrComplete,
     XferMsgArr,
 )
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
@@ -115,6 +116,13 @@ class CopyJob:
 
 #: Schema classes the gen-include step emits C++ headers for (the composite's command structs).
 SCHEMA_CLASSES = [CopyCmd, MRCmd, MWCmd, MemComplete, XferMsgArr]
+
+#: In-band/framed schema set (plans/memcopy_inband_integration.md): the framed chain carries a CopyCmd
+#: in, FwdCmd/WrCmd descriptors on the internal edges, and a WrComplete echo out — the two-stream
+#: MRCmd/MWCmd/MemComplete/XferMsgArr are not used.  ``FRAMED_SCHEMAS`` is the subset whose header must
+#: also emit the ``framed_word`` read/write methods (the descriptors that ride the internal edges).
+INBAND_SCHEMA_CLASSES = [CopyCmd, FwdCmd, WrCmd, WrComplete]
+FRAMED_SCHEMAS = frozenset({FwdCmd, WrCmd})
 
 
 @dataclass
@@ -193,6 +201,12 @@ class Sequencer(FreeRunComp):
         return CopyCmd
 
     def kernel_task(self) -> KernelTask:
+        if self.inband:
+            # The framed variant is a FIXED hand-written body (mem_seq_framed_task.h): it constructs
+            # descriptors and drives a framed_word channel, neither in the extractor vocabulary, so it
+            # is copied (not generated from run_iter).  One framed output edge (cmd_out) to the reader.
+            return KernelTask("mem_seq_framed_task", "mem_seq_framed_task.h", ("s_cmd", "cmd_out"),
+                              template_args=(int(self.mem_dwidth),))
         return KernelTask("mem_seq_task", "mem_seq_task.h", ("s_cmd", "mr_cmd", "mw_cmd"),
                           template_args=(int(self.mem_dwidth),))
 
@@ -343,7 +357,11 @@ class MemCopy(FreeRunComp):
         # See plans/endpoint_types_not_tags.md.
         self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
         #: Command-struct headers the generated top #includes (single source with the pysim .get()).
-        self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in SCHEMA_CLASSES))
+        #: In-band uses the framed schema set; the framed FIFO decls also need streamutils_hls.h (for
+        #: ``framed_word``), so the top extra-includes it — the same slot SOBIF uses for hls_streamofblocks.
+        schema_classes = INBAND_SCHEMA_CLASSES if ib else SCHEMA_CLASSES
+        self.cmd_headers = tuple(dict.fromkeys(c.resolved_include_filename() for c in schema_classes))
+        self.extra_includes = ("streamutils_hls.h",) if ib else ()
 
         # convenience refs for the sim harness (the boundary endpoints live on the children)
         self.s_cmd = self.seq.s_cmd
@@ -372,23 +390,27 @@ SEQ_HOOK_SOURCES = (
 )
 
 
-def gen_headers(config: BuildConfig) -> None:
+def gen_headers(config: BuildConfig, inband: bool = False) -> None:
     """Generate the command-struct headers + memmgr.hpp + streamutils_hls.h + the task-body headers
     into ``include/``.
 
     Two kinds of task body land here, and the difference is the point: ``MemStreamStep`` **copies**
     the fixed hand-written ``mem_r_stream_task.h`` / ``mem_w_stream_done_task.h`` (they own ``m_axi``,
     which task-body codegen does not do), while ``TaskBodyStep`` **generates** ``mem_seq_task.h`` from
-    :meth:`Sequencer.run_iter` and drops its hook stubs at the example root."""
+    :meth:`Sequencer.run_iter` and drops its hook stubs at the example root.
+
+    ``inband`` selects the framed schema set (:data:`INBAND_SCHEMA_CLASSES`); its descriptor headers
+    (:data:`FRAMED_SCHEMAS`) are emitted with the ``framed_word`` read/write methods (``framed=True``)."""
+    schema_classes = INBAND_SCHEMA_CLASSES if inband else SCHEMA_CLASSES
     inner = BuildDag()
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
     inner.add(MemStreamStep(output_dir=INCLUDE_DIR))
     # The XSI harness (BFM + loader + run.bat) is framework; copy it beside the testbench.
     inner.add(XsiHarnessStep(output_dir="xsi"))
-    for cls in SCHEMA_CLASSES:
+    for cls in schema_classes:
         inner.add(DataSchemaStep(cls, word_bw_supported=WORD_BW_SUPPORTED,
-                                 include_dir=INCLUDE_DIR))
+                                 include_dir=INCLUDE_DIR, framed=(cls in FRAMED_SCHEMAS)))
     results = inner.run(config, force=True)
     failed = [n for n, r in results.items() if not r.success]
     if failed:
@@ -577,15 +599,23 @@ def gen_task_bodies(config: BuildConfig) -> None:
         raise RuntimeError(f"task-body gen failed: {failed}")
 
 
-def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
-    """Generate headers + the MemCopy composite top .cpp + its csynth .tcl into *out_dir*."""
+def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW,
+             inband: bool = False) -> dict[str, Path]:
+    """Generate headers + the MemCopy composite top .cpp + its csynth .tcl into *out_dir*.
+
+    ``inband`` builds the framed variant (plans/memcopy_inband_integration.md): the framed schema set,
+    the copied framed task bodies (no ``TaskBodyStep`` — the framed Sequencer is a fixed hand-written
+    body, so there are no hook stubs either), and a top with two ``framed_word`` FIFOs."""
     from waveflow.build.elaborate import elaborate
 
     config = BuildConfig(root_dir=out_dir, params={})
-    gen_headers(config)
-    gen_task_bodies(config)
+    gen_headers(config, inband=inband)
+    if not inband:
+        # The two-stream Sequencer body is GENERATED from run_iter (+ its sticky hook stubs).  The
+        # framed Sequencer body is a fixed copied header (MemStreamStep) with no hooks, so skip this.
+        gen_task_bodies(config)
 
-    comp = elaborate(MemCopy, {"mem_dwidth": width}, name="mem_copy")
+    comp = elaborate(MemCopy, {"mem_dwidth": width, "inband": inband}, name="mem_copy")
     spec = composite_top_spec(comp, width=width)
 
     gen = out_dir / GEN_DIR
@@ -593,10 +623,18 @@ def generate(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Pat
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
     tcl = out_dir / f"{spec.top_name}.tcl"
-    tcl.write_text(render_tcl(spec.top_name, extra_sources=SEQ_HOOK_SOURCES), encoding="utf-8")
+    # In-band has no hook TUs (the framed bodies are self-contained); the two-stream Sequencer's hooks
+    # link across the generated mem_seq_task.h TU boundary and must be added to the project.
+    extra_sources = () if inband else SEQ_HOOK_SOURCES
+    tcl.write_text(render_tcl(spec.top_name, extra_sources=extra_sources), encoding="utf-8")
     ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
+    if inband:
+        # STEP 3 wires the framed XSI testbench (vectors/harness/main); STEP 2's gate is csynth, which
+        # needs only the top + tcl + headers.  Return before the two-stream TB artifacts.
+        print(f"generated (inband) {cpp.relative_to(out_dir)} + {tcl.name} + xsi/{ports_h.name}")
+        return {spec.top_name: cpp}
     vec_h = gen_xsi_vectors(out_dir, width=width)
     # The testbench harness AND main: both derived from the TB graph.  The main is now just
     # construct-run-close (participants load/dump bundles), so it is generated too -- the only

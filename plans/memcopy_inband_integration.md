@@ -39,7 +39,15 @@ Sequencer ───────────────────────�
    bit-exact for inband=True; inband=False byte-identical + fast loop 6-baseline.**
 2. **framed C++ bodies** — the hand-written framed `mem_r`/`mem_w`/`mem_seq` task bodies; mark the
    command schemas `framed` at their `DataSchemaStep`; the composite top declares the two `FramedEdge`
-   FIFOs.  **Gate: csynth.**
+   FIFOs.  **Gate: csynth.**  **DONE** — `waveflow/build/mem_seq_framed_task.h` /
+   `mem_r_stream_framed_task.h` / `mem_w_stream_framed_done_task.h` (copied by `MemStreamStep`);
+   `kernel_task()` inband branches on all three components; `generate(inband=True)` emits the framed
+   schema set (`INBAND_SCHEMA_CLASSES`, `FwdCmd`/`WrCmd` `framed=True`) and a top with two
+   `framed_word<64>` FIFOs + `mem_w_stream_framed_done_task<64, 8>`.  **csynth GREEN**
+   (`WAVEFLOW_CSYNTH_OK`, Fmax 111 MHz, no hook TUs); default two-stream byte-identical, fast loop at
+   the 6-failure baseline.  The boundary ports stay word-flavor (`ap_uint` + axis pragma, as every
+   existing top) — only the two internal edges are framed; the writer's `s_done` echo is a word
+   boundary (`WrComplete` + payload words), self-describing via `WrComplete.xfer_len`.
 3. **XSI re-baseline** — drive framed mem_copy through RTL; the cycle count moves from 2835 by the
    added descriptor/payload beats (≈ `2835 + 16·(WrCmd_words + 1)`); **derive it and confirm
    measured==derived WITH the user before accepting.**

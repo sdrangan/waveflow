@@ -315,6 +315,12 @@ class MemRStream(FreeRunComp):
         """The fixed ``hls::task`` body descriptor for the composite codegen.  The ``emit_done``
         variant is the 4-arg ``mem_r_stream_done_task`` (adds ``s_done``); the default is the
         standalone 3-arg ``mem_r_stream_task`` (unchanged Gate-1 body)."""
+        if self.inband:
+            # In-band/framed reader (plans/memcopy_inband_integration.md): reads a FwdCmd off the framed
+            # s_cmd, relays the opaque prefix, fetches src data.  Same 3-arg shape, framed_word edges.
+            return KernelTask(
+                "mem_r_stream_framed_task", "mem_r_stream_framed_task.h", ("s_cmd", "m_mem", "m_out"),
+                template_args=(int(self.mem_dwidth),))
         if self.emit_done:
             return KernelTask(
                 "mem_r_stream_done_task", "mem_r_stream_done_task.h",
@@ -447,6 +453,15 @@ class MemWStream(FreeRunComp):
         """The fixed ``hls::task`` body descriptor for the composite codegen.  The ``emit_done``
         variant is the 4-arg ``mem_w_stream_done_task`` (adds ``s_done``); the default is the
         standalone 3-arg ``mem_w_stream_task`` (unchanged Gate-1 body)."""
+        if self.inband:
+            # In-band/framed writer (plans/memcopy_inband_integration.md): NO s_cmd -- the WrCmd rides
+            # in-band on the single framed s_in ([WrCmd | payload | data]).  The payload buffer needs a
+            # compile-time bound, so max_xfer_len is a SECOND template arg (mem_w_stream_framed_done_task
+            # <MEM_DW, MAX_XFER>).  emit_done is implied (the composite always echoes completion).
+            return KernelTask(
+                "mem_w_stream_framed_done_task", "mem_w_stream_framed_done_task.h",
+                ("s_in", "m_mem", "s_done"),
+                template_args=(int(self.mem_dwidth), int(self.max_xfer_len)))
         if self.emit_done:
             return KernelTask(
                 "mem_w_stream_done_task", "mem_w_stream_done_task.h",

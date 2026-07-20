@@ -156,6 +156,13 @@ class MemStreamStep(Buildable):
             # composite top.  mem_seq_task.h is NOT here -- the Sequencer's body is GENERATED from
             # its run_iter by TaskBodyStep; copying a hand-written twin would overwrite it.
             "mem_w_stream_done_task": self._output_dir / "mem_w_stream_done_task.h",
+            # In-band/framed variants (plans/memcopy_inband_integration.md): the framed chain
+            # Sequencer -> reader -> writer.  All three are hand-written (they construct descriptors
+            # and drive framed_word channels, neither in the extractor vocabulary), so unlike the
+            # two-stream Sequencer body there is a framed mem_seq twin here.
+            "mem_seq_framed_task": self._output_dir / "mem_seq_framed_task.h",
+            "mem_r_stream_framed_task": self._output_dir / "mem_r_stream_framed_task.h",
+            "mem_w_stream_framed_done_task": self._output_dir / "mem_w_stream_framed_done_task.h",
             # Canonical six-stage interleaver tiles: a forwarded per-job token through every tile.
             "cmd_rx_task": self._output_dir / "cmd_rx_task.h",
             "il_mem_r_task": self._output_dir / "il_mem_r_task.h",
@@ -170,6 +177,9 @@ class MemStreamStep(Buildable):
             "mem_r_stream_task": "mem_r_stream_task.h",
             "mem_w_stream_task": "mem_w_stream_task.h",
             "mem_w_stream_done_task": "mem_w_stream_done_task.h",
+            "mem_seq_framed_task": "mem_seq_framed_task.h",
+            "mem_r_stream_framed_task": "mem_r_stream_framed_task.h",
+            "mem_w_stream_framed_done_task": "mem_w_stream_framed_done_task.h",
             "cmd_rx_task": "cmd_rx_task.h",
             "il_mem_r_task": "il_mem_r_task.h",
             "il_load_task": "il_load_task.h",
