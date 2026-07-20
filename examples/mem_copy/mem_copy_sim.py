@@ -58,10 +58,7 @@ class MemCopyTB(FreeRunComp):
     #: ``(src, dst, n)`` tuples are accepted too and coerced.
     jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
     mem_dwidth: HwParam[int] = 64
-    #: Build the in-band/framed DUT variant (plans/memcopy_inband_integration.md).  Default False =
-    #: the two-stream DUT.  The scenario (commands, seed, golden) is identical either way.
-    inband: bool = False
-    #: Fixed run bound for the generated XSI main (comfortably past the ~2835 completion; the drain
+    #: Fixed run bound for the generated XSI main (comfortably past the ~2910 completion; the drain
     #: tail is a testbench constant, not the design's latency -- see the cycles note in the checker).
     n_cycles: int = 3400
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
@@ -92,8 +89,7 @@ class MemCopyTB(FreeRunComp):
         # __post_init__ is pure structure.
         self.expected: list[np.ndarray] = []
 
-        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
-                           inband=bool(self.inband))
+        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
         # The testbench owns the schema: it serializes each command into raw stream words.  Those words
         # are the ONE source -- write_scenario materializes them to <root>/vectors/s_cmd, the driver
         # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the
@@ -107,7 +103,7 @@ class MemCopyTB(FreeRunComp):
         # The sink dumps its capture (completion words + per-word arrival cycles) so Python checks the
         # output stream AND the completion cycle off-line -- no golden in the generated C++ main.
         self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done",
-                                    has_tlast=bool(self.inband))
+                                    has_tlast=True)
 
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
         for c in (self.dut, self.driver, self.done_sink, self.mem):
@@ -198,9 +194,10 @@ def run_copy(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
         ok = ok and job_ok
         print(f"[copy] src={job.src_off} dst={job.dst_off} n={job.n_words} ok={job_ok}")
     ndone = len(done_sink.words)
-    print(f"[copy] jobs={len(tb._jobs)} done_tokens={ndone} all_ok={ok}")
+    print(f"[copy] jobs={len(tb._jobs)} done_bursts={ndone} all_ok={ok}")
     assert ok, "MemCopy mismatch (dst region != src region)"
-    assert ndone == len(tb._jobs), f"expected {len(tb._jobs)} done tokens, got {ndone}"
+    # Each job emits TWO framed s_done bursts -- the WrComplete header, then the echoed tx_id payload.
+    assert ndone == 2 * len(tb._jobs), f"expected {2 * len(tb._jobs)} done bursts, got {ndone}"
     return copier
 
 

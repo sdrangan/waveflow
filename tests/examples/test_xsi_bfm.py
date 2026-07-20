@@ -1,8 +1,8 @@
 """The XSI RTL gates — the four free-running kernels driven through real RTL by the BFM library.
 
 **Why this file exists.**  These four cycle counts are the only evidence that the generated
-``ap_ctrl_none`` tops, the generated ``mem_seq_task.h`` body, and the BFM library are correct, and
-until now they were checked *by hand*.  A refactor that broke them would have gone unnoticed until
+``ap_ctrl_none`` tops, the hand-written framed/interleaver task bodies, and the BFM library are
+correct, and until now they were checked *by hand*.  A refactor that broke them would have gone unnoticed until
 someone happened to re-run ``run.bat``.  ``plans/xsi_tb_codegen.md`` records them as Stage 1's gate;
 this makes the gate real.
 
@@ -69,14 +69,17 @@ ROOT_OF = {
 #: and inflated for mem_copy.  Only interleaver_canon was already reporting it correctly, which is
 #: why its number is unchanged.  The DESIGNS did not change; the measurement did.
 #:
-#: What the numbers say: mem_copy is 2835/16 = ~177 cyc/job against ~176 for ONE write on its own,
-#: i.e. the reads hide entirely behind the writes — per-job cost is max(read, write) = 176, not
-#: read+write = 334.  That ~1.9x is the free-running pipeline, and it is what a generated testbench
-#: would have to preserve (see plans/xsi_tb_codegen.md Stage 5).
+#: What the numbers say: mem_copy is the IN-BAND framed chain (plans/memcopy_inband_integration.md),
+#: 2910 = 165 + 15*183 (steady 183 cyc/job, no fill transient).  That is +75 over the retired
+#: two-stream design's 2835: the +5.4 cyc/job is the in-band WrCmd(2) + payload(1) = 3 relayed beats
+#: prepended to each 128-word data burst on the reader->writer edge (plus a couple of writer
+#: state-machine bubbles); the -6 is the shorter descriptor firing the first completion earlier.  The
+#: reads still hide behind the writes (per-job cost ~= max(read, write) + the framing beats), the
+#: ~1.9x free-running overlap the generated testbench preserves.
 GATES = [
     ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
     ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
-    ("mem_copy", "mem_copy_bfm_tb", 2835, "done=16 w_count=2048"),
+    ("mem_copy", "mem_copy_bfm_tb", 2910, "done=16 w_count=2048"),
     ("interleaver_canon", "interleaver_canon_bfm_tb", 3469, "done=8/8"),
 ]
 

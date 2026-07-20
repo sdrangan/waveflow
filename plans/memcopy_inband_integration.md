@@ -65,9 +65,24 @@ Sequencer ───────────────────────�
    Sequencer body is generated + depends on hand-written hook stubs that regenerate as empty TODOs;
    the in-band Sequencer is fully hand-written (no hooks), so it synthesizes correctly straight from
    `generate()` — one less thing to maintain after Stage 4.
-4. **retire** the two-stream path + the `inband` flag once framed is green.  **Decided (user): full
-   retire** — flip the default to in-band, delete the two-stream bodies/edges/hooks/`MRCmd`/`MWCmd`/
-   `MemComplete` usage + the `inband` flag itself, update the XSI gate to 2910.  One clean commit.
+4. **retire** the two-stream path + the `inband` flag once framed is green.  **DONE (full retire).**
+   `MemCopy`/`Sequencer` are in-band-only (composite `inband` flag gone; the Sequencer is a fixed
+   hand-written framed body, no `run_iter` extraction / hooks / `mr_cmd`/`mw_cmd`); `generate` and the
+   TB helpers dropped their `inband` params; `MRCmd`/`MWCmd`/`MemComplete`/`XferMsgArr` +
+   `gen_task_bodies` + `SEQ_HOOK_SOURCES` are gone from mem_copy.  `MemRStream`/`MemWStream` **keep**
+   their `inband` param (shared with the interleaver + standalone gate-1 kernels, which pass False) —
+   mem_copy always passes True.  Committed example dir regenerated + re-csynth'd (framed RTL, Fmax
+   111 MHz) + committed `rtl_mem_copy.f` refreshed; **XSI gate updated 2835 → 2910 and re-verified
+   green**; orphaned two-stream headers/hooks deleted.  `test_task_body_codegen.py` was decoupled from
+   the retired Sequencer onto a local `_HookSeq` fixture (the machinery — `task_files_to_str` — is
+   still live, used by the FIR).  Fast loop at the 6-failure baseline; all four XSI gates green
+   (158/176/**2910**/3469).
+
+## Consequence worth noting
+The retired Sequencer was the codebase's one *generated* composite task body (extracted from
+`run_iter`).  That showcase now lives only in the toy examples (Square/ScaledSquare) and the
+`_HookSeq` test fixture; the composite-task-body codegen (`task_files_to_str`/`TaskBodyStep`) is
+unchanged and still used by the FIR.
 
 ## Notes
 - Keep `inband=False` the default until Stage 3 is XSI-green — nothing existing moves before then.

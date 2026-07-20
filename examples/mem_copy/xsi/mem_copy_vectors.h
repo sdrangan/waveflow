@@ -16,7 +16,7 @@ static const int MEM_DW = 64;
 static const int MEM_NW = 24640;
 static const int N = 128;
 static const int NUM_CMDS = 16;
-static const int DONE_WORDS = 5;
+static const int DONE_WORDS = 2;
 
 static const int SRC_W[16] = { 64, 192, 320, 448, 576, 704, 832, 960, 1088, 1216, 1344, 1472, 1600, 1728, 1856, 1984 };
 static const int DST_W[16] = { 4096, 4224, 4352, 4480, 4608, 4736, 4864, 4992, 5120, 5248, 5376, 5504, 5632, 5760, 5888, 6016 };

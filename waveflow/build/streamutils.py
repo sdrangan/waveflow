@@ -150,16 +150,16 @@ class MemStreamStep(Buildable):
     @property
     def build_outputs(self) -> dict[str, Path]:
         return {
+            # Standalone gate-1 mem-stream bodies (3-arg) + the done-emitting write variant.  Legacy
+            # two-stream composition bodies: MemCopy retired them for the framed trio below (they own
+            # m_axi, so all stay hand-written and copied rather than generated).
             "mem_r_stream_task": self._output_dir / "mem_r_stream_task.h",
             "mem_w_stream_task": self._output_dir / "mem_w_stream_task.h",
-            # Composition (Phase 2) body: the done-emitting write variant used by the MemCopy
-            # composite top.  mem_seq_task.h is NOT here -- the Sequencer's body is GENERATED from
-            # its run_iter by TaskBodyStep; copying a hand-written twin would overwrite it.
             "mem_w_stream_done_task": self._output_dir / "mem_w_stream_done_task.h",
-            # In-band/framed variants (plans/memcopy_inband_integration.md): the framed chain
-            # Sequencer -> reader -> writer.  All three are hand-written (they construct descriptors
-            # and drive framed_word channels, neither in the extractor vocabulary), so unlike the
-            # two-stream Sequencer body there is a framed mem_seq twin here.
+            # In-band/framed chain (plans/memcopy_inband_integration.md): Sequencer -> reader -> writer,
+            # what MemCopy is built from.  All three are hand-written (they construct descriptors and
+            # drive framed_word channels, neither in the extractor vocabulary) -- including the
+            # Sequencer body, unlike the retired two-stream sequencer that TaskBodyStep generated.
             "mem_seq_framed_task": self._output_dir / "mem_seq_framed_task.h",
             "mem_r_stream_framed_task": self._output_dir / "mem_r_stream_framed_task.h",
             "mem_w_stream_framed_done_task": self._output_dir / "mem_w_stream_framed_done_task.h",
