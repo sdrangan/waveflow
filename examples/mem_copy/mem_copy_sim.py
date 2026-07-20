@@ -58,6 +58,9 @@ class MemCopyTB(FreeRunComp):
     #: ``(src, dst, n)`` tuples are accepted too and coerced.
     jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
     mem_dwidth: HwParam[int] = 64
+    #: Build the in-band/framed DUT variant (plans/memcopy_inband_integration.md).  Default False =
+    #: the two-stream DUT.  The scenario (commands, seed, golden) is identical either way.
+    inband: bool = False
     #: Fixed run bound for the generated XSI main (comfortably past the ~2835 completion; the drain
     #: tail is a testbench constant, not the design's latency -- see the cycles note in the checker).
     n_cycles: int = 3400
@@ -89,7 +92,8 @@ class MemCopyTB(FreeRunComp):
         # __post_init__ is pure structure.
         self.expected: list[np.ndarray] = []
 
-        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
+        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
+                           inband=bool(self.inband))
         # The testbench owns the schema: it serializes each command into raw stream words.  Those words
         # are the ONE source -- write_scenario materializes them to <root>/vectors/s_cmd, the driver
         # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the
@@ -102,7 +106,8 @@ class MemCopyTB(FreeRunComp):
         self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")
         # The sink dumps its capture (completion words + per-word arrival cycles) so Python checks the
         # output stream AND the completion cycle off-line -- no golden in the generated C++ main.
-        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done")
+        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done",
+                                    has_tlast=bool(self.inband))
 
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
         for c in (self.dut, self.driver, self.done_sink, self.mem):

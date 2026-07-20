@@ -38,6 +38,30 @@ def test_mem_copy_pysim_golden():
         assert c.wstream.transfer_spans           # ran, recorded a span
 
 
+def test_mem_copy_inband_pysim_golden(tmp_path):
+    """The in-band/framed MemCopy variant copies bit-exact: Sequencer frames [FwdCmd|WrCmd|payload],
+    the reader relays the opaque prefix + fetches src, the writer decodes WrCmd and writes dst.
+
+    The command/data cannot desync (one framed stream), and the default two-stream DUT is untouched.
+    See plans/memcopy_inband_integration.md.
+    """
+    import numpy as np
+    from waveflow.simulation.simulation import Simulation
+    from examples.mem_copy.mem_copy import CopyJob
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+
+    jobs = (CopyJob(16, 512, 128), CopyJob(200, 900, 64), CopyJob(400, 1300, 16))
+    sim = Simulation()
+    tb = MemCopyTB(name="tb", sim=sim, mem_dwidth=64, jobs=jobs, inband=True)
+    tb.write_scenario(tmp_path)
+    sim.run_sim()
+    for job, exp in zip(tb._jobs, tb.expected):
+        got = tb.mem._mem.read(job.dst_off * 8, job.n_words).astype(np.uint64)
+        assert np.array_equal(got, exp), f"inband copy wrong at dst={job.dst_off}"
+    # one WrComplete + payload burst-pair per job
+    assert len(tb.done_sink.words) == 2 * len(jobs)
+
+
 def test_mem_copy_back_to_back():
     """Two CopyCmds to distinct offsets exercise the free-running hls::task re-fire across jobs;
     both copies are bit-exact and exactly two done tokens are emitted."""

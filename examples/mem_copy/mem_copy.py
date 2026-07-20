@@ -43,6 +43,7 @@ from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.synth import synthesizable  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
+    FwdCmd,
     KernelTask,
     MRCmd,
     MWCmd,
@@ -50,6 +51,7 @@ from waveflow.hw.mem_stream import (  # noqa: E402
     MemRStream,
     MemWStream,
     WORD_BW_SUPPORTED,
+    WrCmd,
     XferMsgArr,
 )
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
@@ -153,6 +155,11 @@ class Sequencer(FreeRunComp):
     cpp_namespace: ClassVar[str | None] = "mem_seq_impl"
 
     mem_dwidth: HwParam[int] = 64
+    #: **In-band framing** (plans/memcopy_inband_integration.md).  When True the Sequencer emits ONE
+    #: framed command stream to the reader -- [FwdCmd | WrCmd | payload] per job -- instead of separate
+    #: MRCmd/MWCmd streams, so the writer's command travels welded to (ahead of) its data.  Default
+    #: False keeps the two-stream protocol.
+    inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -162,11 +169,18 @@ class Sequencer(FreeRunComp):
         # `int()` here would silently produce a 64-wide body for a 32-wide instance.
         self.s_cmd = StreamIFSlave(
             name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
-        self.mr_cmd = StreamIFMaster(
-            name=f"{self.name}_mr_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
-        self.mw_cmd = StreamIFMaster(
-            name=f"{self.name}_mw_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
-        for ep in (self.s_cmd, self.mr_cmd, self.mw_cmd):
+        if self.inband:
+            # One framed output: the reader reads FwdCmd then relays the opaque [WrCmd | payload].
+            self.cmd_out = StreamIFMaster(
+                name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=True)
+            eps = (self.s_cmd, self.cmd_out)
+        else:
+            self.mr_cmd = StreamIFMaster(
+                name=f"{self.name}_mr_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
+            self.mw_cmd = StreamIFMaster(
+                name=f"{self.name}_mw_cmd", sim=self.sim, bitwidth=self.mem_dwidth, has_tlast=False)
+            eps = (self.s_cmd, self.mr_cmd, self.mw_cmd)
+        for ep in eps:
             self.add_endpoint(ep)
         #: Correlation-cookie length, from MRCmd's own max_xfer_len default (introspected, not
         #: hardcoded — both MRCmd/MWCmd share it).  The cookie VALUE is the command's ``tx_id`` (the
@@ -218,6 +232,35 @@ class Sequencer(FreeRunComp):
         mw = self.make_mw_cmd(cmd, msg)
         yield from self.mw_cmd.write(mw)
 
+    def run_proc(self) -> ProcessGen[None] | None:
+        """pysim driver.  The two-stream body is :meth:`run_iter` (which codegen EXTRACTS, so it must
+        stay a pure synthesizable body — no ``if self.inband`` there).  The in-band variant is a
+        separate pysim loop, and its codegen is a hand-written framed task body (not extraction)."""
+        if self.inband:
+            return self._inband_forever()
+        return super().run_proc()
+
+    def _inband_forever(self) -> ProcessGen[None]:
+        while True:
+            yield from self._run_iter_inband()
+
+    def _run_iter_inband(self) -> ProcessGen[None]:
+        """One firing, framed: read a CopyCmd and emit the reader's framed command stream --
+        ``[FwdCmd | WrCmd | payload]`` (three bursts).  The reader fetches ``FwdCmd.len`` src words and
+        relays the ``fwd_bursts`` opaque bursts (the ``WrCmd`` + the payload) verbatim to the writer,
+        which decodes ``WrCmd``, writes the data, and echoes the payload.  The payload is the job's
+        ``tx_id`` cookie (one word) -- the same correlation as the two-stream ``xfer_msg``, carried
+        in-band rather than in a fixed array."""
+        w = int(self.mem_dwidth)
+        cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
+        # FwdCmd: fetch n words from src_off, relay 2 opaque bursts (the WrCmd + the payload) first.
+        fwd = FwdCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
+        wr = WrCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), xfer_len=1)
+        payload = np.asarray([int(cmd.tx_id)], dtype=np.uint64)
+        yield from self.cmd_out.write(np.asarray(fwd.serialize(word_bw=w), dtype=np.uint64))
+        yield from self.cmd_out.write(np.asarray(wr.serialize(word_bw=w), dtype=np.uint64))
+        yield from self.cmd_out.write(payload)
+
 
 @dataclass
 class MemCopy(FreeRunComp):
@@ -235,35 +278,58 @@ class MemCopy(FreeRunComp):
     cpp_namespace: ClassVar[str | None] = "mem_copy_impl"
 
     mem_dwidth: HwParam[int] = 64
+    #: **In-band framing** (plans/memcopy_inband_integration.md).  When True the composite is the
+    #: linear framed chain Sequencer -> reader -> writer over TWO framed edges (the writer takes its
+    #: command in-band on its data stream, so it cannot pair a descriptor with the wrong data).
+    #: Default False keeps the three-edge two-stream design (byte-identical, the XSI-gated kernel).
+    inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
         w = int(self.mem_dwidth)
+        ib = bool(self.inband)
 
         # --- sub-components (add_comp; insertion order == codegen task order) ---
-        self.seq = Sequencer(name=f"{self.name}_seq", sim=self.sim, mem_dwidth=w, clk=self.clk)
-        self.rstream = MemRStream(name=f"{self.name}_r", sim=self.sim, mem_dwidth=w, clk=self.clk)
+        self.seq = Sequencer(name=f"{self.name}_seq", sim=self.sim, mem_dwidth=w, inband=ib,
+                             clk=self.clk)
+        self.rstream = MemRStream(name=f"{self.name}_r", sim=self.sim, mem_dwidth=w, inband=ib,
+                                  clk=self.clk)
         self.wstream = MemWStream(
-            name=f"{self.name}_w", sim=self.sim, mem_dwidth=w, emit_done=True, clk=self.clk)
+            name=f"{self.name}_w", sim=self.sim, mem_dwidth=w, emit_done=True, inband=ib,
+            clk=self.clk)
         for c in (self.seq, self.rstream, self.wstream):
             self.add_comp(c)
 
         # --- internal interfaces (add_if + bind): each an on-chip FIFO in codegen ---
-        self._mr_if = StreamIF(
-            name=f"{self.name}_mr_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        self._mr_if.bind("master", self.seq.mr_cmd)
-        self._mr_if.bind("slave", self.rstream.s_cmd)
-        self._mw_if = StreamIF(
-            name=f"{self.name}_mw_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        self._mw_if.bind("master", self.seq.mw_cmd)
-        self._mw_if.bind("slave", self.wstream.s_cmd)
-        self._data_if = StreamIF(
-            name=f"{self.name}_copy_data_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        self._data_if.bind("master", self.rstream.m_out)
-        self._data_if.bind("slave", self.wstream.s_in)
-        for i in (self._mr_if, self._mw_if, self._data_if):
-            self.add_if(i)
+        if ib:
+            # Two FRAMED edges: Sequencer -> reader (the framed command stream) and reader -> writer
+            # (the framed [WrCmd | payload | data]).  framed=True -> a framed_word FIFO in codegen.
+            self._cmd_if = StreamIF(
+                name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w, framed=True)
+            self._cmd_if.bind("master", self.seq.cmd_out)
+            self._cmd_if.bind("slave", self.rstream.s_cmd)
+            self._data_if = StreamIF(
+                name=f"{self.name}_copy_data_if", sim=self.sim, clk=self.clk, bitwidth=w, framed=True)
+            self._data_if.bind("master", self.rstream.m_out)
+            self._data_if.bind("slave", self.wstream.s_in)
+            for i in (self._cmd_if, self._data_if):
+                self.add_if(i)
+        else:
+            self._mr_if = StreamIF(
+                name=f"{self.name}_mr_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
+            self._mr_if.bind("master", self.seq.mr_cmd)
+            self._mr_if.bind("slave", self.rstream.s_cmd)
+            self._mw_if = StreamIF(
+                name=f"{self.name}_mw_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
+            self._mw_if.bind("master", self.seq.mw_cmd)
+            self._mw_if.bind("slave", self.wstream.s_cmd)
+            self._data_if = StreamIF(
+                name=f"{self.name}_copy_data_if", sim=self.sim, clk=self.clk, bitwidth=w)
+            self._data_if.bind("master", self.rstream.m_out)
+            self._data_if.bind("slave", self.wstream.s_in)
+            for i in (self._mr_if, self._mw_if, self._data_if):
+                self.add_if(i)
 
         # --- graph descriptors the composite generator walks -------------------------------------
         # The internal edges ARE the add_if calls above (each -> one hls_thread_local hls::stream),
