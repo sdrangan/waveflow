@@ -1,7 +1,55 @@
 # mem_copy timing calibration (VCD of internal streams)
 
-**Status: not started.** Seed plan for a fresh session. Everything else about `mem_copy` is done and
-gated (design, pysim, codegen, csynth, XSI gate 2908, docs) — this is the one open item.
+**Status: probe DONE (step 1 gate met); attribution (step 2) is next.** Everything else about
+`mem_copy` is done and gated (design, pysim, codegen, csynth, XSI gate 2908, docs).
+
+## Probe outcome — the de-risk below is settled
+
+The trace *is* producible, and more cheaply than the plan assumed. Answers to the three questions:
+
+- **`$dumpvars` works under `xelab -dll`/XSI.** A second elaborated top (`vcd_dumper.v`, added to
+  `xvlog` and passed as `xelab work.<top> work.vcd_dumper`) writes a real VCD. A pass-through wrapper
+  is *not* needed, so the XSI top — and every BFM port number — is untouched. Both gates re-run green
+  (2908 / 3469) with the dumper elaborated.
+- **No `wdb → vcd` conversion needed**, and no BFM-side sampling.
+- **`-debug typical` was already in `run.bat`**, so no elaboration change was required.
+
+Two findings that changed the shape of the work:
+
+1. **The internal FIFO nets live in the TOP scope.** Vitis lifts inter-task dataflow channel wires up
+   beside the task instances, so `$dumpvars(1, <top>)` — level **1**, this scope only, no descent —
+   captures `cmd_dout` / `cmd_empty_n` / `cmd_full_n`, `<producer>_cmd_din` / `_cmd_write`,
+   `<consumer>_cmd_read`, *and* every task's `ap_done`. **No hierarchical path resolution is needed**
+   for inter-task channels. Cost is bounded: 258 signals for mem_copy, 363 for interleaver_canon —
+   not the thousands a level-0 dump would give.
+2. **`extract_clock_times` sampled on the rising edge**, which reads the POST-edge value of anything
+   the edge changed. This is not a clean one-cycle shift — it invents and destroys handshake
+   coincidences. It read `gmem1 AW` as **16** accepted addresses instead of 128, and `W` as 2032
+   instead of 2048. Fixed (`clock_sample_times`, mid clock-low); beats are still *labelled* by the
+   true edge time. Any previously recorded cosim-derived number may move, and the new value is the
+   correct one.
+
+Also added for this arc: `extract_fifo_bursts` (the `write`/`full_n`, `read`/`empty_n` vocabulary),
+`split_framed_word` (the `last` bit above the payload — there is no TLAST on an internal FIFO), and
+`tlast` made genuinely optional (mem_copy's `s_cmd` boundary port has no TLAST wire at all).
+
+### Measured, corrected, against the 16-job scenario
+
+| channel                | packets | beats | per job                          |
+| ---------------------- | ------- | ----- | -------------------------------- |
+| `s_cmd` (boundary in)  | —       | 32    | 2 words                          |
+| `cmd` (seq → r)        | 48      | 80    | 3 packets, 5 words               |
+| `copy_data` (r → w)    | 48      | 2096  | 3 packets, **131** = 128 + 3     |
+| `gmem0` AR / R         | 128     | 2048  | 8 bursts of 16, 128 words        |
+| `gmem1` AW / W         | 128     | 2048  | 8 bursts of 16, 128 words        |
+| `s_done` (boundary out)| —       | 16    | 1 `CopyResp`                     |
+
+`s_done` cadence is a clean **183** cycles (178, 361, 544, …), matching the plan's steady-state
+figure. The in-band descriptor beats of item 2 below are now *counted*: exactly 3 words/job on
+`copy_data` ride ahead of each 128-word payload.
+
+Reproduce: `examples/mem_copy/xsi/run_trace.bat mem_copy mem_copy_bfm_tb` (same for
+`interleaver_canon`). The VCDs are gitignored — they are ~1–2 MB and regenerate per run.
 
 ## The gap being closed
 
@@ -27,7 +75,9 @@ should be a **platform constant reusable by every other accelerator**, not a mem
 If the fit turns out to need per-design tuning, that is itself a finding worth recording — it would
 contradict the two-level premise.
 
-## First de-risk (do this before anything else)
+## First de-risk — SETTLED, see "Probe outcome" above
+
+*(Kept for the reasoning; the questions are answered.)*
 
 **XSI currently writes a `.wdb`, not a VCD.** `waveflow/build/xsi/xsi_bfm.h`'s `XsiSim` takes a
 `wdbFileName`. So step one is getting per-signal traces out of an XSI run at all:
@@ -72,8 +122,8 @@ pipeline is wrong", and the standalone 176 gives a direct, already-gated target 
 
 ## Suggested order
 
-1. Probe: produce a VCD (or equivalent per-signal trace) from an XSI run. Gate: a parseable trace with
-   the FIFO + m_axi signals present.
+1. ~~Probe: produce a VCD (or equivalent per-signal trace) from an XSI run. Gate: a parseable trace
+   with the FIFO + m_axi signals present.~~ **DONE** — see "Probe outcome".
 2. Attribute: per-job timeline for one steady-state job — where do the 183 cycles go?
 3. Compare: the same decomposition from the pysim timing model; find which term is under-counted.
 4. Fit: adjust the bus-transfer parameters ([[reference-calib-statedict-artifacts]] — CalibModel's
