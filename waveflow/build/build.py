@@ -64,14 +64,45 @@ class BuildConfig:
         Vitis HLS version in ``"YYYY.M"`` format (e.g. ``"2025.1"``).
         Controls which compatibility files are emitted.  ``None`` means
         conservative / legacy behaviour.
+    platform : str | None
+        Name of the calibration platform (a directory under ``platforms_root``).  When set, it is
+        resolved at construction into :attr:`platform_info` — created (seeded with ``part`` /
+        ``clk_freq``) if absent, or **confirmed** against the stored manifest if present.  This is the
+        single source both the synthesis TCL and the calibration load/store read, so the synthesised
+        part cannot drift from the calibrated one.  ``None`` = no platform (uncalibrated: components
+        degrade to the plain per-word timing).
+    part : str | None
+        FPGA part (the ``set_part`` string, e.g. ``"xc7z020clg484-1"``) this build targets.
+    clk_freq : float | None
+        Synthesis clock frequency in Hz (its period drives HLS scheduling → the cycle counts).
+    platforms_root : Path | str | None
+        Where platform directories live.  Defaults to ``calib/platforms`` (the tracked library).
+    allow_platform_mismatch : bool
+        When the selected platform's stored part/clock differ from this build's, warn instead of
+        raising (default ``False`` = raise).
     """
 
     root_dir: Path | str | None = None
     vitis_version: str | None = None
     params: dict = field(default_factory=dict)
+    platform: str | None = None
+    part: str | None = None
+    clk_freq: float | None = None
+    platforms_root: Path | str | None = None
+    allow_platform_mismatch: bool = False
 
     def __post_init__(self) -> None:
         self.root_dir = Path.cwd() if self.root_dir is None else Path(self.root_dir)
+        self.platforms_root = (
+            Path("calib/platforms") if self.platforms_root is None else Path(self.platforms_root))
+        #: The resolved :class:`~waveflow.calib.platform.Platform` (created-or-confirmed), or ``None``
+        #: when no ``platform`` was selected.
+        self.platform_info = None
+        if self.platform is not None:
+            from waveflow.calib.platform import Platform
+            self.platform_info = Platform.resolve(
+                self.platforms_root, self.platform, part=self.part, clk_freq=self.clk_freq,
+                allow_mismatch=self.allow_platform_mismatch)
 
     def vitis_version_tuple(self) -> tuple[int, int] | None:
         """Parse ``vitis_version`` into a ``(major, minor)`` integer tuple.

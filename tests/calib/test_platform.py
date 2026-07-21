@@ -6,10 +6,20 @@ checks the layout resolves as documented and that the bus accessor roots at the 
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
+
 from waveflow.calib.bus_model import BUS_MODEL_FILE, BusCalib
-from waveflow.calib.platform import COMPONENTS_SUBDIR, PlatformCalib
+from waveflow.calib.platform import (
+    COMPONENTS_SUBDIR,
+    PLATFORM_MANIFEST,
+    Platform,
+    PlatformCalib,
+    PlatformMismatchError,
+    PlatformMismatchWarning,
+)
 
 
 class TestComponentDir:
@@ -45,3 +55,37 @@ class TestBusAccessor:
 
         assert (tmp_path / BUS_MODEL_FILE).exists()
         assert (tmp_path / COMPONENTS_SUBDIR / "mem_w_stream_framed_done_task" / "params.json").exists()
+
+
+class TestResolve:
+    def test_absent_platform_is_created_and_seeded(self, tmp_path):
+        p = Platform.resolve(tmp_path, "zynq7020_bfm_100mhz",
+                             part="xc7z020clg484-1", clk_freq=100e6)
+        assert p.dir == tmp_path / "zynq7020_bfm_100mhz"
+        assert p.part == "xc7z020clg484-1" and p.clk_freq == 100e6
+        data = json.loads((p.dir / PLATFORM_MANIFEST).read_text())
+        assert data == {"part": "xc7z020clg484-1", "clk_freq_hz": 100e6}
+        assert p.synth_period_ns == 10.0                       # 100 MHz -> 10 ns HLS target
+
+    def test_present_platform_confirms_and_adopts_stored_values(self, tmp_path):
+        Platform.resolve(tmp_path, "plat", part="xc7z020clg484-1", clk_freq=100e6)
+        # a second build selecting the same platform WITHOUT restating part/clk adopts the stored ones.
+        p = Platform.resolve(tmp_path, "plat")
+        assert p.part == "xc7z020clg484-1" and p.clk_freq == 100e6
+
+    def test_part_mismatch_raises(self, tmp_path):
+        Platform.resolve(tmp_path, "plat", part="xc7z020clg484-1", clk_freq=100e6)
+        with pytest.raises(PlatformMismatchError, match="part"):
+            Platform.resolve(tmp_path, "plat", part="xczu28dr-ffvg1517-2-e", clk_freq=100e6)
+
+    def test_clock_mismatch_raises(self, tmp_path):
+        Platform.resolve(tmp_path, "plat", part="xc7z020clg484-1", clk_freq=100e6)
+        with pytest.raises(PlatformMismatchError, match="clk_freq"):
+            Platform.resolve(tmp_path, "plat", part="xc7z020clg484-1", clk_freq=300e6)
+
+    def test_allow_mismatch_warns_instead(self, tmp_path):
+        Platform.resolve(tmp_path, "plat", part="xc7z020clg484-1", clk_freq=100e6)
+        with pytest.warns(PlatformMismatchWarning, match="different target"):
+            p = Platform.resolve(tmp_path, "plat", part="other", clk_freq=100e6,
+                                 allow_mismatch=True)
+        assert p.part == "xc7z020clg484-1"                     # stored value still wins
