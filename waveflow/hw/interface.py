@@ -99,6 +99,11 @@ def port_write(fn):
 _PORT_DIR_READ_HINTS = ('read', 'get', 'peek', 'poll')
 _PORT_DIR_WRITE_HINTS = ('write', 'put')
 
+#: Default FIFO depth of a :class:`StreamIF` channel — the HLS default (``#pragma HLS STREAM`` uses
+#: 2 when unspecified).  Both backends read it, so pysim backpressures at the same depth the RTL
+#: FIFO has.  See :attr:`StreamIF.depth`.
+DEFAULT_STREAM_DEPTH = 2
+
 
 def _classify_port_dir(name, attr):
     """Classify endpoint attribute *name* as ``'R'`` / ``'W'`` / ``None``.
@@ -563,6 +568,19 @@ class StreamIF(QueuedTransferIF):
     (Vitis HLS 214-208), hence the ``framed_word`` struct.  Implies packet framing, so a framed stream
     is also ``has_tlast`` in pysim (burst boundaries)."""
 
+    depth: int | None = DEFAULT_STREAM_DEPTH
+    """The channel's FIFO **depth** — a *physical* property, single-source for both backends.
+
+    A FIFO has a depth; an unbounded queue is not synthesizable.  So this one number feeds pysim (the
+    slave's ``queue_size``, applied at :meth:`bind` when the endpoint did not set its own) and codegen
+    (``#pragma HLS STREAM depth=N``).  The default is :data:`DEFAULT_STREAM_DEPTH` — the HLS default —
+    so pysim is *faithful by default* (it backpressures at the real depth, catching deadlocks that an
+    unbounded queue would hide) and the RTL is unchanged (the default depth is what HLS already used).
+
+    ``None`` is **explicit unbounded** — a legitimate exploration mode in pysim, but
+    :func:`~waveflow.build.composite_gen.derive_internal_edges` rejects it for a synthesizable edge:
+    a FIFO going to hardware must have a depth."""
+
     type_name = 'stream_if'
 
     def __init_subclass__(cls, **kwargs):
@@ -610,6 +628,14 @@ class StreamIF(QueuedTransferIF):
                 f"interface has_tlast={self.has_tlast}"
             )
         self._validate_and_set_bitwidth(endpoint)
+        # Apply the channel's physical depth to the slave's RX queue, unless the endpoint declared
+        # its own (a testbench sink that wants deep buffering keeps it; an internal-edge slave, made
+        # without a queue_size, gets the channel depth).  The queue container is built at
+        # construction, but nothing has transferred yet at bind, so rebuilding it at level 0 is safe.
+        if (ep_name == "slave" and self.depth is not None
+                and getattr(endpoint, "queue_size", None) is None):
+            endpoint.queue_size = self.depth
+            endpoint.nrx = simpy.Container(endpoint.env, init=0, capacity=self.depth)
         super().bind(ep_name, endpoint)
 
 
