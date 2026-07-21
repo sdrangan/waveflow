@@ -107,7 +107,8 @@ same structure appears as a two-level split in the table itself: subtract the bu
 
 Same bus law, different per-component constants. The burst term is a *platform* property of the
 `m_axi` adapter — it belongs on a [`BusTiming`](../../guide/timing/aximm.md) model shared by every
-accelerator; the constant is the component's own control cost.
+accelerator (now fit and stored by [`BusCalib`](../../guide/calib/bus_model.md)); the constant is the
+component's own control cost.
 
 ## Why this is a model, not a fit
 
@@ -117,12 +118,20 @@ the SimPy model, give the internal channels their real depth of 2, and the 30 cy
 versus 27% for a single-point fit. That is the payoff of getting the measurement window right: a
 component model calibrated in isolation that still predicts the contended system.
 
-Implementing that split in the framework — `BusTiming` on the memory slave, the fixed latency on the
-component, channel depth from the same declaration codegen uses — and automating the fit, is the next
-arc. See [`plans/memcpy_timing_calibration.md`](https://github.com/sdrangan/waveflow/tree/main/plans/memcpy_timing_calibration.md).
+## This split is now the calibration system
+
+Everything on this page — the platform bus term, the per-component control constant, the
+uncontended-only measurement window, the fit — is now framework machinery, not a one-off analysis. The
+burst term is fit and shared by [`BusCalib`](../../guide/calib/bus_model.md); the component constant is a
+[`StreamTimingModel`](../../guide/calib/component_residual.md) residual; both are stored in a
+[platform library](../../guide/calib/platform.md) keyed by FPGA part + clock and promoted from an
+untracked work dir by [`publish_calib`](../../guide/calib/workflow.md). In fact the writer residual in
+the reference `zynq7020_bfm_100mhz` platform is fit from exactly these mem_copy numbers. See the
+[Calibration guide](../../guide/calib/) for the whole system.
 
 ## See also
 
+- [Calibration](../../guide/calib/) — the two-level split, generalized and automated
 - [Tracing a kernel run](../../guide/timing/trace_steps.md) — the four steps, in general
 - [Trace pitfalls](../../guide/timing/trace_pitfalls.md) — the three traps this relied on avoiding
 - [RTL simulation](./rtlsim.md) — the run this instruments

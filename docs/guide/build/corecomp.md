@@ -10,7 +10,7 @@ This page is the reference for everything the build framework exports from [wave
 
 | Class / function | Purpose |
 |---|---|
-| `BuildConfig` | Per-build settings: root directory, Vitis version, free-form `params` dict |
+| `BuildConfig` | Per-build settings: root directory, Vitis version, calibration platform, free-form `params` dict |
 | `BuildArtifact` (ABC) | Base for `FileArtifact` and `ObjectArtifact` |
 | `FileArtifact` | A file on disk; freshness via mtime |
 | `ObjectArtifact` | An in-memory Python object; freshness via creation timestamp |
@@ -34,13 +34,28 @@ from pathlib import Path
 config = BuildConfig(
     root_dir="path/to/project",      # all relative paths are resolved against this
     vitis_version="2025.1",          # affects which compatibility files codegen emits
-    params={"clk_freq": 100e6, "nsamp": 100},   # free-form, consumed by steps via params
+    platform="zynq7020_bfm_100mhz",  # the calibration platform (part + clock identity)
+    part="xc7z020clg484-1",          # this build's FPGA part — confirmed against the platform
+    clk_freq=100e6,                  # synthesis clock (Hz); its period drives HLS scheduling
+    params={"nsamp": 100},           # free-form, consumed by steps via params
 )
 ```
 
 - `root_dir` defaults to `Path.cwd()`. Absolute paths in step `produces` declarations are used as-is; relative paths are joined with `root_dir`.
 - `vitis_version` is parsed into `(major, minor)` via `config.vitis_version_tuple()`. `None` means "be conservative" — `config.needs_legacy_streamutils_cpp()` returns `True` in that case so `StreamUtilsStep` also writes `streamutils.cpp`.
 - `params` is a free-form dict. Steps that declare a key in their `params` class attribute can read its value out of `config.params` at run time (see [BuildStep.params](#params) below).
+
+### Platform selection
+
+`platform` names a [calibration platform](../calib/platform.md) — the FPGA part + synthesis clock the build targets and calibrates for. When set, it is resolved at construction into `config.platform_info` (a `Platform`): an absent platform is created and **seeded** with `part` / `clk_freq`; an existing one is **confirmed** against them.
+
+- `platform` — the platform name (a directory under `platforms_root`). `None` (default) = no platform: components degrade to the plain per-word timing.
+- `part` — the `set_part` string, e.g. `"xc7z020clg484-1"`.
+- `clk_freq` — synthesis clock in Hz. Its *period* drives HLS scheduling, so it (with the part) determines the cycle counts — this is why a platform is keyed by both.
+- `platforms_root` — where platform directories live; defaults to `calib/platforms` (the tracked library).
+- `allow_platform_mismatch` — when the selected platform's stored part/clock differ from this build's, warn instead of raising `PlatformMismatchError` (default `False` = raise).
+
+`config.platform_info` is the single source both the calibration steps and codegen read — codegen's `set_part` / `create_clock` come from it (via `tcl_target`), so the synthesised part cannot drift from the calibrated one. See [Platforms](../calib/platform.md).
 
 ---
 
