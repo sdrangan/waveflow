@@ -500,17 +500,24 @@ def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW, jobs=None
     return path
 
 
-def generate_dut(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
+def generate_dut(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW,
+                 config: "BuildConfig | None" = None) -> dict[str, Path]:
     """Generate the **DUT**: headers + the MemCopy composite top .cpp + its csynth .tcl + the port map.
 
     This is the ``FreeRunComp`` graph lowered to an ``ap_ctrl_none`` ``hls::task`` top
     (plans/memcopy_inband_integration.md): the framed schema set, the copied framed task bodies (every
     body is a self-contained fixed header — no ``TaskBodyStep``, no hook stubs), and a top with two
     ``framed_word`` FIFOs.  ``xsi/<top>_ports.h`` is the DUT's port map, which the testbench harness
-    (see :func:`generate_tb`) includes."""
+    (see :func:`generate_tb`) includes.
+
+    *config* carries the selected :class:`~waveflow.calib.platform.Platform` (if any); its part/clock
+    pin the csynth TCL via :func:`~waveflow.build.composite_gen.tcl_target`.  Omitted → the default
+    target (byte-identical to the historical TCL)."""
+    from waveflow.build.composite_gen import tcl_target
     from waveflow.build.elaborate import elaborate
 
-    config = BuildConfig(root_dir=out_dir, params={})
+    if config is None:
+        config = BuildConfig(root_dir=out_dir, params={})
     gen_headers(config)
 
     comp = elaborate(MemCopy, {"mem_dwidth": width}, name="mem_copy")
@@ -521,8 +528,9 @@ def generate_dut(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str,
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
     tcl = out_dir / f"{spec.top_name}.tcl"
+    part, period_ns = tcl_target(config)
     # Every task body is a self-contained fixed header (no cross-TU hook calls), so no extra sources.
-    tcl.write_text(render_tcl(spec.top_name), encoding="utf-8")
+    tcl.write_text(render_tcl(spec.top_name, part=part, period_ns=period_ns), encoding="utf-8")
     ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
     ports_h.parent.mkdir(parents=True, exist_ok=True)
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")

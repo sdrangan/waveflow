@@ -128,3 +128,55 @@ def _leaf_with(calib_dir):
     comp = _Leaf(name="c", sim=Simulation())
     comp.add_timing_model(StreamTimingModel(component="c", calib_dir=calib_dir))
     return comp
+
+
+class TestCalibBusStep:
+    """Calibrates the platform bus model from a traced run's m_axi ports.  The trace layer is
+    monkeypatched (no VCD needed) so this tests the step's wiring: measure each maxi bundle, add the
+    run to the platform corpus, refit.  `CalibBusStep.run` imports load_trace / measure_bus_span from
+    their source modules, so patching the sources is what the fresh import picks up."""
+
+    def _patch(self, monkeypatch, spans):
+        import waveflow.calib.bus_model as bm
+        import waveflow.utils.trace as tr
+
+        manifest = {"boundary": [
+            {"id": "gmem0", "kind": "maxi", "directions": ["read"]},
+            {"id": "gmem1", "kind": "maxi", "directions": ["write"]},
+        ]}
+        monkeypatch.setattr(tr, "load_trace",
+                            lambda *a, **k: type("BT", (), {"manifest": manifest})())
+        monkeypatch.setattr(bm, "measure_bus_span",
+                            lambda bt, bundle, direction: spans.get((bundle, direction)))
+
+    def test_measures_both_bundles_and_fits(self, tmp_path, monkeypatch):
+        from waveflow.build.calib_steps import CalibBusStep
+        from waveflow.calib.bus_model import BusCalib
+
+        self._patch(monkeypatch, {
+            ("gmem0", "read"): {"num_trans": 8, "nwords": 128, "span": 135},
+            ("gmem1", "write"): {"num_trans": 8, "nwords": 128, "span": 142},
+        })
+        platform = tmp_path / "platform"
+        out = CalibBusStep(name="bus", platform_dir=str(platform), run_id="n128").run(
+            BuildConfig(root_dir=str(tmp_path)), trace_manifest="m", trace_vcd="v")
+
+        assert (platform / "points" / "n128.json").exists()
+        bt = BusCalib(platform_dir=platform).bus_timing()
+        assert bt.read_span_secs(8, 128) is not None and bt.write_span_secs(8, 128) is not None
+        report = json.loads(out["bus_calibrated"].read_text())
+        assert set(report["fitted_directions"]) == {"read", "write"}
+
+    def test_a_bundle_with_no_beats_is_skipped(self, tmp_path, monkeypatch):
+        """measure_bus_span returns None for an idle direction -> no point, no crash."""
+        from waveflow.build.calib_steps import CalibBusStep
+
+        self._patch(monkeypatch, {("gmem1", "write"): {"num_trans": 8, "nwords": 128, "span": 142}})
+        out = CalibBusStep(name="bus", platform_dir=str(tmp_path / "p"), run_id="n128").run(
+            BuildConfig(root_dir=str(tmp_path)), trace_manifest="m", trace_vcd="v")
+        assert json.loads(out["bus_calibrated"].read_text())["fitted_directions"] == ["write"]
+
+    def test_consumes_manifest_and_vcd(self):
+        from waveflow.build.calib_steps import CalibBusStep
+        step = CalibBusStep(name="bus", platform_dir="p", run_id="x")
+        assert set(step.consumes) == {"trace_manifest", "trace_vcd"}

@@ -61,3 +61,34 @@ class TestLoadOrDefault:
         reused = BusCalib(platform_dir=tmp_path).bus_timing()
         assert reused.write_span_secs(num_trans=32, nwords=512) == pytest.approx(
             (512 + 62) / 100e6, rel=1e-6)
+
+
+class TestCorpusAccumulation:
+    def test_add_run_then_fit_from_corpus(self, tmp_path):
+        """A sweep: add_run per size (distinct point files), then a single fit() from the corpus."""
+        bc = BusCalib(platform_dir=tmp_path, clk_freq=100e6)
+        bc.add_run("n128", write={"num_trans": 8, "nwords": 128, "span": 142})
+        bc.add_run("n512", write={"num_trans": 32, "nwords": 512, "span": 574})
+        assert (tmp_path / "points" / "n128.json").exists()
+
+        bc.fit()                                     # no args -> read the corpus
+        bt = BusCalib(platform_dir=tmp_path, clk_freq=100e6).bus_timing()
+        assert bt.write_span_secs(8, 128) == pytest.approx(142 / 100e6, rel=1e-6)
+        assert bt.write_span_secs(32, 512) == pytest.approx(574 / 100e6, rel=1e-6)
+
+    def test_rerunning_a_size_overwrites_its_point(self, tmp_path):
+        bc = BusCalib(platform_dir=tmp_path)
+        bc.add_run("n128", write={"num_trans": 8, "nwords": 128, "span": 999})
+        bc.add_run("n128", write={"num_trans": 8, "nwords": 128, "span": 142})   # same run_id
+        r, w = bc._corpus()
+        assert len(w) == 1 and w[0]["span"] == 142
+
+    def test_the_committed_corpus_is_distilled_points_not_traces(self, tmp_path):
+        """What gets checked in: the small distilled point (KB), which re-fits without a toolchain.
+
+        The raw VCD is gitignored; the corpus is these {num_trans, nwords, span} rows."""
+        import json
+        bc = BusCalib(platform_dir=tmp_path)
+        bc.add_run("n128", read={"num_trans": 8, "nwords": 128, "span": 135})
+        rec = json.loads((tmp_path / "points" / "n128.json").read_text())
+        assert set(rec["read"]) == {"num_trans", "nwords", "span"}

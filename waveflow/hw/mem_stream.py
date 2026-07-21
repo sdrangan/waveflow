@@ -226,6 +226,24 @@ def _word_type(mem_dwidth: int) -> type[IntField]:
     return IntField.specialize(bitwidth=int(mem_dwidth), signed=False)
 
 
+def _resolve_calib_dir(calib_dir, platform_dir, component: str) -> "Path | None":
+    """Where a mem-stream's :class:`~waveflow.calib.timing_model.StreamTimingModel` corpus + params
+    live, or ``None`` (uncalibrated).  Two ways to point it, checked in precedence:
+
+    * an explicit ``calib_dir`` — the low-level override (a project-local one-off directory), or
+    * a ``platform_dir`` — the shared platform library, where the residual is stored **keyed by the
+      component identity** (:meth:`~waveflow.calib.platform.PlatformCalib.component_dir`) so it reloads
+      in any project composing this same infra component on the same platform, no recalibration.
+
+    Neither set → ``None`` → no model attached, pysim timing exactly as before."""
+    if calib_dir is not None:
+        return Path(calib_dir)
+    if platform_dir is not None:
+        from waveflow.calib.platform import PlatformCalib
+        return PlatformCalib(platform_dir).component_dir(component)
+    return None
+
+
 @dataclass
 class MemRStream(FreeRunComp):
     """The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst.
@@ -252,6 +270,13 @@ class MemRStream(FreeRunComp):
     #: serves any consumer.  Default ``False`` keeps the legacy :class:`MRCmd` protocol.
     inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Timing calibration, mirroring :class:`MemWStream` — this reader is infra too, so its control
+    #: residual is a ``(component, platform)`` property.  ``calib_dir`` is the project-local override;
+    #: :attr:`platform_dir` is the shared platform library (stored under
+    #: ``<platform_dir>/components/<task-body>/``).  Both ``None`` (default) → uncalibrated: no model,
+    #: no delay, pysim timing exactly as before.  See :func:`_resolve_calib_dir`.
+    calib_dir: "str | Path | None" = None
+    platform_dir: "str | Path | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -288,6 +313,12 @@ class MemRStream(FreeRunComp):
         #: Per-command modeled transfer span (seconds) — read-start → write-complete.  Overlapped,
         #: so ~ (n_words + fill)·period, not ~2·n_words·period (observability / the timing test).
         self.transfer_spans: list[float] = []
+        comp_id = self.kernel_task().task_fn
+        resolved = _resolve_calib_dir(self.calib_dir, self.platform_dir, comp_id)
+        if resolved is not None:
+            from waveflow.calib.timing_model import StreamTimingModel
+            self.add_timing_model(StreamTimingModel(
+                component=comp_id, calib_dir=resolved, clk=self.clk))
 
     def bind_base(self, base: int = 0) -> None:
         """Set the bound buffer's physical base (the ``offset=slave`` register, host domain).
@@ -346,6 +377,15 @@ class MemRStream(FreeRunComp):
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
             yield from self.s_done.write(complete)
+        yield from self._timed_tail(nw)
+
+    def _timed_tail(self, nw: int) -> ProcessGen[None]:
+        """The reader's trailing calibration delay — its own control residual, mirroring the writer's
+        posted-write drain.  A no-op (records nothing, waits nothing) when uncalibrated; the current
+        firing's predicted delay once a model is attached (see :meth:`FreeRunComp.timed_delay`)."""
+        dly = self.timed_delay({"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST)})
+        if dly:
+            yield self.timeout(dly)
 
     def _run_iter_inband(self) -> ProcessGen[None]:
         """One framed transfer: relay the opaque prefix, then burst the data (``inband=True``).
@@ -369,6 +409,7 @@ class MemRStream(FreeRunComp):
             w0, w0 + nw, num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
         self.transfer_spans.append(self.now - t_start)
+        yield from self._timed_tail(nw)
 
 
 @dataclass
@@ -411,8 +452,15 @@ class MemWStream(FreeRunComp):
     #: and inject its predicted (trailing) delay per firing — the posted-write drain the RTL law
     #: captures.  ``None`` (default) leaves the component uncalibrated: no model, no delay, and the
     #: pysim timing is exactly as before.  A model with an unfitted / zero-seed predicts 0, so
-    #: attaching one only records firings (for collection) until ``params.json`` exists.
+    #: attaching one only records firings (for collection) until ``params.json`` exists.  A project-local
+    #: override of :attr:`platform_dir` — set at most one; ``calib_dir`` wins if both are.
     calib_dir: "str | Path | None" = None
+    #: **Shared** calibration home: this reusable writer's residual is a property of ``(component,
+    #: platform)``, so pointing ``platform_dir`` at the platform library stores/loads it under
+    #: ``<platform_dir>/components/<task-body>/`` — reused by any accelerator on the same platform
+    #: without recalibrating (:class:`~waveflow.calib.platform.PlatformCalib`).  Prefer this over
+    #: ``calib_dir`` for the framework components; ``calib_dir`` remains the one-off/local override.
+    platform_dir: "str | Path | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -444,12 +492,14 @@ class MemWStream(FreeRunComp):
         #: :meth:`MemRStream.bind_base`.  Default 0: the flat single-arena mode (sim & BFM).
         self._base = 0
         self.transfer_spans: list[float] = []
-        if self.calib_dir is not None:
+        # `component` must match the id this stream's firings carry in the RTL timing table — the
+        # task-body name, which kernel_task() already knows — and it keys the shared platform library.
+        comp_id = self.kernel_task().task_fn
+        resolved = _resolve_calib_dir(self.calib_dir, self.platform_dir, comp_id)
+        if resolved is not None:
             from waveflow.calib.timing_model import StreamTimingModel
-            # `component` must match the id this stream's firings carry in the RTL timing table — the
-            # task-body name, which kernel_task() already knows.
             self.add_timing_model(StreamTimingModel(
-                component=self.kernel_task().task_fn, calib_dir=self.calib_dir, clk=self.clk))
+                component=comp_id, calib_dir=resolved, clk=self.clk))
 
     def bind_base(self, base: int = 0) -> None:
         """Set the bound buffer's physical base (the ``offset=slave`` register, host domain) — the

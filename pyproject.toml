@@ -38,6 +38,7 @@ waveflow_mcp_setup = "waveflow.scripts.waveflow_mcp_setup:main"
 waveflow_mcp_server = "waveflow.mcp.server:main"
 build_corpus = "waveflow.mcp.build_corpus:main"
 clean_examples = "waveflow.scripts.clean_examples:main"
+publish_calib = "waveflow.calib.publish:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]
