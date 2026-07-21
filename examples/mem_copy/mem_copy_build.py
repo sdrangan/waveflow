@@ -31,15 +31,28 @@ from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli
-from waveflow.build.trace_steps import AddVcdTopStep, TraceManifestStep
+from waveflow.build.trace_steps import (
+    AddVcdTopStep,
+    ExtractBurstsStep,
+    RtlSimStep,
+    TraceManifestStep,
+)
 from waveflow.toolchain import toolchain
 
 try:
-    from examples.mem_copy.mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate_dut, generate_tb
+    from examples.mem_copy.mem_copy import (DEFAULT_MEM_DW, XSI_JOBS, generate_dut, generate_tb,
+                                            write_mem_copy_xsi_bundles)
     from examples.mem_copy.mem_copy_sim import MemCopySim
 except ModuleNotFoundError:  # run as a script from the example directory
-    from mem_copy import DEFAULT_MEM_DW, XSI_JOBS, generate_dut, generate_tb  # type: ignore[no-redef]
+    from mem_copy import (DEFAULT_MEM_DW, XSI_JOBS, generate_dut,  # type: ignore[no-redef]
+                          generate_tb, write_mem_copy_xsi_bundles)
     from mem_copy_sim import MemCopySim  # type: ignore[no-redef]
+
+try:
+    from examples.mem_copy.mem_copy_figures import SyncDocsFiguresStep, TimingFiguresStep
+except ModuleNotFoundError:  # run as a script from the example directory
+    from mem_copy_figures import (SyncDocsFiguresStep,  # type: ignore[no-redef]
+                                  TimingFiguresStep)
 
 HERE = Path(__file__).resolve().parent
 
@@ -189,6 +202,18 @@ def build_mem_copy_dag() -> BuildDag:
                               source_artifact="mem_copy_source",
                               output_path="results/mem_copy_trace.json"))
     dag.add(CSynthStep(name="csynth"))
+    # The timing rung.  `rtlsim` runs but never asserts -- the exact cycle count stays with the
+    # `-m xsi` gate; this one exists to produce a waveform.  `extract_bursts` then turns the
+    # waveform plus the manifest into a per-firing timing table.
+    dag.add(RtlSimStep(name="rtlsim", top="mem_copy", tb="mem_copy_bfm_tb", xsi_dir="xsi",
+                       prepare=write_mem_copy_xsi_bundles))
+    dag.add(ExtractBurstsStep(name="extract_bursts",
+                              output_path="results/mem_copy_timing.json"))
+    # Figures are on-demand: `--through timing_figures` renders into results/ (gitignored), and
+    # `--through sync_docs_figures` promotes them into docs/ as committed assets, so a docs figure
+    # only changes when you mean it to and the change is a reviewable diff.
+    dag.add(TimingFiguresStep(name="timing_figures"))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
     return dag
 
 

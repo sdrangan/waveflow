@@ -144,6 +144,11 @@ examples/vmac/topgen/
 examples/vmac/tput/
 examples/vmac/results/
 
+# mem_copy build outputs: the trace manifest + timing table + the rendered figures.  The figures
+# are promoted into docs/examples/memcpy/images/ by SyncDocsFiguresStep and committed THERE, so a
+# docs asset only changes when you mean it to and the change is a reviewable diff.
+examples/mem_copy/results/
+
 examples/_archive/conv2d/include/
 examples/_archive/conv2d/waveflow_conv2d_proj/
 examples/_archive/conv2d/logs/
