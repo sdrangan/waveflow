@@ -63,6 +63,9 @@ class MemCopyTB(FreeRunComp):
     #: tail is a testbench constant, not the design's latency -- see the cycles note in the checker).
     n_cycles: int = 3400
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Forwarded to the DUT's writer: when set, the pysim run records per-firing timing (and applies
+    #: any fitted delay).  ``None`` (default) is the plain, uncalibrated run.
+    calib_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -86,7 +89,8 @@ class MemCopyTB(FreeRunComp):
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 
-        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
+        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
+                           calib_dir=self.calib_dir)
         # The testbench owns the schema: it serializes each command into raw stream words.  Those words
         # are the ONE source -- write_scenario materializes them to <root>/vectors/s_cmd, the driver
         # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the
@@ -142,8 +146,9 @@ class MemCopySim:
     """
 
     def __init__(self, jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
-                 mem_dwidth: int = 64, name: str = "tb") -> None:
-        self.tb = MemCopyTB(name=name, sim=Simulation(), jobs=tuple(jobs), mem_dwidth=mem_dwidth)
+                 mem_dwidth: int = 64, name: str = "tb", calib_dir: "str | None" = None) -> None:
+        self.tb = MemCopyTB(name=name, sim=Simulation(), jobs=tuple(jobs), mem_dwidth=mem_dwidth,
+                            calib_dir=calib_dir)
         #: The per-job source patterns, filled by :meth:`write_scenario` and read back by :meth:`check`.
         self.expected: list[np.ndarray] = []
 

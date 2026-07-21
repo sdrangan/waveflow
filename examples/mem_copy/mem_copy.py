@@ -206,6 +206,9 @@ class MemCopy(FreeRunComp):
 
     mem_dwidth: HwParam[int] = 64
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: When set, the writer sub-component attaches a timing model at this directory (the writer is
+    #: the bottleneck the calibration targets).  ``None`` (default) leaves the composite uncalibrated.
+    calib_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -219,7 +222,7 @@ class MemCopy(FreeRunComp):
                                   clk=self.clk)
         self.wstream = MemWStream(
             name=f"{self.name}_w", sim=self.sim, mem_dwidth=w, emit_done=True, inband=True,
-            clk=self.clk)
+            clk=self.clk, calib_dir=self.calib_dir)
         for c in (self.seq, self.rstream, self.wstream):
             self.add_comp(c)
 
