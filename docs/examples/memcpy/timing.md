@@ -36,7 +36,9 @@ close to all the work.
 
 ## The per-firing table
 
-[`ExtractBurstsStep`](../../guide/timing/trace_steps.md) writes one row per **firing** of each
+Recall that free-running components (`FreeRunComp`) repeatedly call a `run_iter` function. Each
+iteration begins when its input data is available, then terminates and waits for the next. The
+[`ExtractBurstsStep`](../../guide/timing/trace_steps.md) writes one row per such **firing** of each
 component:
 
 ```json
