@@ -63,13 +63,47 @@ class BusCalib:
         return LinCalibModel(basis=list(self.basis), target="span", fit_intercept=True,
                              coeff_names=list(self.basis))
 
+    # -- corpus (accumulate one measured transfer per sweep run) -----------
+    @property
+    def points_dir(self) -> Path:
+        return Path(self.platform_dir) / "points"
+
+    def add_run(self, run_id: str, *, read: dict | None = None,
+                write: dict | None = None) -> Path:
+        """Persist one run's measured ``{num_trans, nwords, span}`` datapoints (read and/or write)
+        to ``points/<run_id>.json`` — the platform corpus a sweep accumulates.
+
+        Per-run files (not a shared csv) so a re-run overwrites its point and the corpus is
+        concurrency-safe, mirroring :class:`~waveflow.calib.timing_model.TimingModel`.  A bus law
+        needs ≥2 *distinct* sizes to fit (the slope), so a sweep calls this per point."""
+        self.points_dir.mkdir(parents=True, exist_ok=True)
+        out = self.points_dir / f"{run_id}.json"
+        out.write_text(json.dumps({"read": read, "write": write}), encoding="utf-8")
+        return out
+
+    def _corpus(self) -> tuple[list[dict], list[dict]]:
+        """Collect the accumulated per-run points into ``(read_points, write_points)``."""
+        read, write = [], []
+        for p in sorted(self.points_dir.glob("*.json")):
+            rec = json.loads(p.read_text(encoding="utf-8"))
+            if rec.get("read"):
+                read.append(rec["read"])
+            if rec.get("write"):
+                write.append(rec["write"])
+        return read, write
+
     # -- fit / persist -----------------------------------------------------
-    def fit(self, read_points: list[dict] | None, write_points: list[dict] | None) -> dict:
+    def fit(self, read_points: list[dict] | None = None,
+            write_points: list[dict] | None = None) -> dict:
         """Fit read and/or write from ``{num_trans, nwords, span}`` datapoints (span in cycles),
         write ``mm_bus.json``, and return the stored ``{direction: state_dict}``.
 
-        A direction with no points is simply absent — a write-only accelerator calibrates only the
-        write channel."""
+        Points may be passed directly (the one-shot case) or, when both are ``None``, collected from
+        the accumulated per-run corpus (:meth:`add_run`) — so a sweep is ``add_run`` per point then a
+        single ``fit()``.  A direction with no points is simply absent (a write-only accelerator
+        calibrates only the write channel)."""
+        if read_points is None and write_points is None:
+            read_points, write_points = self._corpus()
         stored: dict[str, dict] = {}
         for direction, pts in (("read", read_points), ("write", write_points)):
             if pts:

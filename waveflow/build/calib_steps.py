@@ -1,12 +1,18 @@
-"""calib_steps.py — the DAG steps that drive timing calibration.
+"""calib_steps.py — the DAG steps that drive timing calibration (both levels).
 
-Extends the timing rung (``ExtractBurstsStep`` → this) with the collect-and-fit half from
+Extends the timing rung (``ExtractBurstsStep`` → these) with the collect-and-fit halves from
 ``plans/timing_model.md``:
 
-    ExtractBurstsStep -> CollectTimingStep -> FitTimingStep
-                         (per registered TM:   (per registered TM:
-                          collect_rtl +         gen_data_frame join,
-                          collect_pysim)        fit, save params.json)
+    ExtractBurstsStep -> CollectTimingStep -> FitTimingStep   (per-COMPONENT control residual)
+                      -> CalibBusStep                         (per-PLATFORM bus-transfer model)
+
+:class:`CalibBusStep` calibrates the *platform* half — the shared ``m_axi`` bus law read off the
+memory ports; :class:`CollectTimingStep`/:class:`FitTimingStep` fit each *component*'s control
+residual.  The two are calibrated from different signals (the ports vs the firings), which is what
+lets the platform model be reused across accelerators.
+
+    (CollectTimingStep / FitTimingStep are per registered TimingModel:
+     collect_rtl + collect_pysim, then gen_data_frame join + fit + save params.json)
 
 Both are driven by a **design factory** — a callable returning the built (and, for collect,
 pysim-run) component tree.  The step is generic: it walks
@@ -139,3 +145,76 @@ class FitTimingStep(BuildStep):
         out.write_text(json.dumps({"fitted": fitted, "skipped": skipped}, indent=2) + "\n",
                        encoding="utf-8")
         return {"timing_fit": out}
+
+
+@dataclass(kw_only=True)
+class CalibBusStep(BuildStep):
+    """Calibrate the **platform** bus-transfer model from a traced run's ``m_axi`` ports.
+
+    The platform half of the two-level split: measures each ``m_axi`` bundle's per-transfer span
+    (:func:`~waveflow.calib.bus_model.measure_bus_span` — component-independent, read off the port)
+    and accumulates it into the platform corpus at ``<platform_dir>``.  Across a sweep (this step per
+    size) the corpus grows; with ``refit`` it re-fits ``mm_bus.json`` after each add, so the model is
+    ready to load once ≥2 distinct sizes are present.
+
+    Unlike :class:`CollectTimingStep` this needs no design factory — the bus law is in the trace, not
+    a pysim run.  A bundle contributes to the direction(s) it carries (a read bundle → the read
+    model, a write bundle → the write model).
+
+    Construction parameters
+    -----------------------
+    platform_dir : str
+        The shared platform calibration directory (``<dir>/points/`` + ``<dir>/mm_bus.json``).
+    run_id : str
+        Scenario key for this run's point (e.g. ``"n128"``); a re-run overwrites it.
+    clk_freq : float
+        Clock the platform model is expressed against.
+    refit : bool
+        Re-fit ``mm_bus.json`` from the whole corpus after adding this run (default ``True``).
+    """
+
+    description: str = "Calibrate the platform m_axi bus model from a traced run's ports."
+    params: ClassVar[dict] = {}
+
+    platform_dir: str
+    run_id: str
+    manifest_artifact: str = "trace_manifest"
+    vcd_artifact: str = "trace_vcd"
+    clk_freq: float = 100e6
+    refit: bool = True
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.manifest_artifact, self.vcd_artifact]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        # A per-run sentinel; the real outputs are the platform corpus + mm_bus.json (side effects,
+        # since platform_dir is shared and typically outside this design's tree).
+        return {"bus_calibrated": Path("results") / f"bus_{self.run_id}.json"}
+
+    def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
+        from waveflow.calib.bus_model import BusCalib, measure_bus_span
+        from waveflow.utils.trace import load_trace
+
+        bt = load_trace(artifacts[self.manifest_artifact], artifacts[self.vcd_artifact])
+        point = {"read": None, "write": None}
+        for p in bt.manifest["boundary"]:
+            if p["kind"] != "maxi":
+                continue
+            for direction in p.get("directions", []):
+                measured = measure_bus_span(bt, p["id"], direction)
+                if measured is not None:
+                    point[direction] = measured
+
+        bc = BusCalib(platform_dir=self.platform_dir, clk_freq=self.clk_freq)
+        bc.add_run(self.run_id, read=point["read"], write=point["write"])
+        fitted = bc.fit() if self.refit else {}
+
+        root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
+        out = root / "results" / f"bus_{self.run_id}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"run_id": self.run_id, "point": point,
+                                   "fitted_directions": sorted(fitted)}, indent=2) + "\n",
+                       encoding="utf-8")
+        return {"bus_calibrated": out}
