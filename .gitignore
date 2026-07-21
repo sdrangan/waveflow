@@ -82,6 +82,11 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Calibration work dir: sweeps / tests / DAG calib steps write here freely (it churns). Only the
+# tracked library calib/platforms/<name>/ is committed, and ONLY `publish_calib` writes to it. See
+# waveflow/calib/publish.py. Anchored so it matches the repo-root work dir, not any nested `work/`.
+/calib/work/
+
 # Distribution artifacts
 *.egg-info/
 dist/
