@@ -1230,17 +1230,42 @@ def render_rtl_f(top_name: str, root) -> str:
     return "".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
 
 
-def render_tcl(top_name: str, extra_sources: tuple[str, ...] = ()) -> str:
+#: The default csynth target when no platform is selected — the historical hardcoded values, kept so an
+#: example built without a ``platform`` emits byte-identical TCL (and therefore identical RTL).
+DEFAULT_PART = "xc7z020clg484-1"
+DEFAULT_PERIOD_NS = 10
+
+
+def tcl_target(config) -> tuple[str, float]:
+    """The ``(part, period_ns)`` a csynth TCL should pin, taken from *config*'s resolved platform.
+
+    This is the single-source link: a build that selected a :class:`~waveflow.calib.platform.Platform`
+    synthesises for *its* part/clock (so the RTL the calibration measures is the RTL the platform's fit
+    is valid for); a build with no platform falls back to the historical default."""
+    info = getattr(config, "platform_info", None) if config is not None else None
+    if info is None:
+        return DEFAULT_PART, DEFAULT_PERIOD_NS
+    part = info.part or DEFAULT_PART
+    period = info.synth_period_ns or DEFAULT_PERIOD_NS
+    return part, period
+
+
+def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
+               part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
 
     *extra_sources* are additional ``.cpp`` paths (relative to the example root) to add to the
     project.  A self-contained hand-written task body needs none; a **generated** body whose
     ``@synthesizable`` hooks live in their own translation units needs each hook impl added here, or
-    csynth cannot resolve them."""
+    csynth cannot resolve them.
+
+    *part* / *period_ns* pin the synthesis target — pass :func:`tcl_target` of the build's config to
+    drive them from the selected platform; the defaults reproduce the historical TCL byte-for-byte."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
+    period = int(period_ns) if float(period_ns).is_integer() else period_ns
     return f"""\
-set part {{xc7z020clg484-1}}
+set part {{{part}}}
 set cf "-I{INCLUDE_DIR}"
 puts "WAVEFLOW_INFO: {top_name}"
 open_project -reset {top_name}_proj
@@ -1248,7 +1273,7 @@ set_top {top_name}
 add_files {GEN_DIR}/{top_name}.cpp -cflags $cf
 {extra}open_solution -reset "solution1"
 set_part $part
-create_clock -period 10
+create_clock -period {period}
 if {{[catch {{csynth_design}} res]}} {{ puts "WAVEFLOW_ERROR: csynth"; puts $res; exit 1 }}
 puts "WAVEFLOW_CSYNTH_OK"
 exit 0
