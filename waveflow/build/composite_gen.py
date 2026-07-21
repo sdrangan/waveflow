@@ -24,6 +24,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from waveflow.build.hwcodegen import SynthesisError
+from waveflow.hw.interface import DEFAULT_STREAM_DEPTH
+
 #: Output-directory convention shared by the generated tops and their csynth .tcl.
 INCLUDE_DIR = "include"
 GEN_DIR = "gen"
@@ -373,7 +376,9 @@ class StreamEdge:
 
     def decl(self, width: int) -> str:
         line = f"hls_thread_local hls::stream<ap_uint<{width}> > {self.name};"
-        if self.depth is not None:
+        if self.depth is not None and self.depth != DEFAULT_STREAM_DEPTH:
+            # The HLS default IS DEFAULT_STREAM_DEPTH, so emitting a pragma for it would only churn
+            # the generated C++ (and force a re-csynth) for identical RTL.  Emit only a non-default.
             line += f"\n    #pragma HLS STREAM variable={self.name} depth={self.depth}"
         return line
 
@@ -398,7 +403,9 @@ class FramedEdge:
     def decl(self, width: int) -> str:
         line = (f"hls_thread_local hls::stream<streamutils::framed_word<{width}> > "
                 f"{self.name};")
-        if self.depth is not None:
+        if self.depth is not None and self.depth != DEFAULT_STREAM_DEPTH:
+            # See StreamEdge.decl: the default depth is HLS's own, so no pragma for it (keeps the
+            # generated C++ and its RTL byte-identical).
             line += f"\n    #pragma HLS STREAM variable={self.name} depth={self.depth}"
         return line
 
@@ -505,10 +512,20 @@ def derive_internal_edges(comp) -> list:
         elif isinstance(iface, StreamIF):
             # A framed StreamIF lowers to a FramedEdge (framed_word FIFO, carries the packet
             # boundary); a plain one to a StreamEdge (ap_uint FIFO).  See plans/memstream_inband.md.
+            # The channel's `depth` is single-source (pysim queue_size + this pragma).  `None` is
+            # explicit-unbounded -- fine for pysim exploration, but a FIFO going to hardware must
+            # have a depth, so reject it at the synthesis boundary rather than emit an unsized FIFO.
+            depth = getattr(iface, "depth", DEFAULT_STREAM_DEPTH)
+            if depth is None:
+                raise SynthesisError(
+                    f"derive_internal_edges: internal channel {name!r} on {type(comp).__name__} has "
+                    f"depth=None (explicit unbounded). An unbounded FIFO is not synthesizable — give "
+                    f"the StreamIF a depth (default {DEFAULT_STREAM_DEPTH}), or keep it unbounded only "
+                    f"for pysim exploration, not for codegen.")
             if getattr(iface, "framed", False):
-                edges.append(FramedEdge(name, master, slave))
+                edges.append(FramedEdge(name, master, slave, depth=depth))
             else:
-                edges.append(StreamEdge(name, master, slave))
+                edges.append(StreamEdge(name, master, slave, depth=depth))
         else:
             raise ValueError(
                 f"derive_internal_edges: no edge lowering for interface type "

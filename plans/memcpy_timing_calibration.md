@@ -1,13 +1,27 @@
 # mem_copy timing calibration (VCD of internal streams)
 
-**Status: steps 1-4 DONE by hand; the model is derived and validated. What remains is implementing
-it in the framework and automating the fit (step 4's second half).** Everything else about
-`mem_copy` is done and gated (design, pysim, codegen, csynth, XSI gate 2908, docs).
+**Status: LOOP CLOSED.** The whole arc is built into the framework and validated end to end on real
+data: trace → measure → fit the writer's residual on uncontended firings → re-run pysim with the
+bounded `copy_data` channel → the calibrated pysim period reproduces the RTL period **to 0.0%** at
+both n_words=128 (183) and n_words=512 (615). The ~30 cycles/job of backpressure *emerge* from the
+depth-2 FIFO; they are never fitted.
 
-**The result in one line:** the 43-cycle/job gap is `20 + 2 × ceil(n_words/16)` — a fixed control
-cost plus **two cycles per AXI burst** — and once that and the real FIFO depth are in the model, the
-~30 cycles/job of backpressure *emerge* rather than being fitted, reproducing the RTL across a 16×
-range of job sizes to **1.1%**. See "The model".
+Shipped: measurement (#111/#112), the `TimingModel` engine (#113), the wiring
+(FreeRunComp/MemWStream/DAG, #114), the sweep parameterization (#115), and the FIFO-depth
+single-source change (this arc) — the last piece, because without a bounded `copy_data` the writer's
+fitted delay is absorbed into idle-wait and the period does not move. Committed proof:
+`tests/examples/test_mem_copy_calibration.py` (toolchain-free, using the measured RTL spans); the
+full real-data sweep (`scratchpad/close_loop.py`) gave 0.0% at both points.
+
+**The result in one line:** the 43-cycle/job gap is a fixed control cost + a per-AXI-burst term; with
+it and the real FIFO depth in the model, backpressure *emerges* rather than being fitted, reproducing
+the RTL across a 16× range of job sizes. See "The model".
+
+**One caveat on the decomposition:** two collinear features (`nwords`, `num_trans = nwords/16`) fit
+from two points are underdetermined — the automated fit landed on `~20 + 0.12·nwords`, the hand
+analysis on `20 + 2·num_trans`; both reproduce the sweep points exactly but attribute the slope
+differently. A third size (or fixing the burst coefficient from the measured AXI gap) would
+disambiguate bus-term vs control-term. Prediction at the swept sizes is exact regardless.
 
 ## Probe outcome — the de-risk below is settled
 
