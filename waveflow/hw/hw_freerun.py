@@ -161,6 +161,41 @@ class FreeRunComp(HwComponent):
     def internal_edges(self, value) -> None:
         self.__dict__['_internal_edges'] = value
 
+    # -- timing calibration (opt-in) -----------------------------------------------------------------
+    #
+    # A leaf that wants its pysim timing calibrated against RTL attaches a TimingModel with
+    # :meth:`add_timing_model`.  Its presence turns on per-firing recording: the base loop times each
+    # firing (first input -> end of run_iter) and, when the body called :meth:`timed_delay`, keeps a
+    # row of {features, current_dly, span} on :attr:`firing_records`.  A component with no model pays
+    # nothing (the attributes do not exist and the loop takes the plain path).  See
+    # ``plans/timing_model.md``; the DAG's CollectTimingStep reads firing_records after a pysim run.
+
+    def add_timing_model(self, tm) -> None:
+        """Attach a :class:`~waveflow.calib.timing_model.TimingModel`, enabling per-firing recording.
+        The model itself is built by the component (it knows its ``clk`` and calib dir)."""
+        self._timing_model = tm
+        self.firing_records: list[dict] = []
+
+    @property
+    def timing_model(self):
+        """The attached model, or ``None`` — the signal the collection steps discover on."""
+        return getattr(self, "_timing_model", None)
+
+    def timed_delay(self, features: dict) -> float:
+        """Predict this firing's additional delay from the attached model AND record the firing for
+        later calibration.  Returns 0.0 (recording nothing) when no model is attached, so the body
+        can call it unconditionally — ``yield self.timeout(self.timed_delay({...}))`` is a no-op on
+        an uncalibrated component and the current firing's delay on a calibrated one.
+
+        The delay is in the model's output unit — time when the model carries a ``clk`` (the usual
+        case), so it goes straight to :meth:`timeout`."""
+        tm = self.timing_model
+        if tm is None:
+            return 0.0
+        dly = tm.predict(features)[0]
+        self._pending_firing = {**features, "current_dly": dly}
+        return dly
+
     # -- simulation ----------------------------------------------------------------------------------
 
     def run_proc(self) -> ProcessGen[None] | None:
@@ -173,8 +208,16 @@ class FreeRunComp(HwComponent):
         return self._run_iter_forever() if self._kind() == 'standalone' else None
 
     def _run_iter_forever(self) -> ProcessGen[None]:
+        if self.timing_model is None:
+            while True:                                 # plain path: no recording overhead
+                yield from self.run_iter()
         while True:
+            t0 = self.now
+            self._pending_firing = None                 # timed_delay sets this if the body predicts
             yield from self.run_iter()
+            if self._pending_firing is not None:
+                self._pending_firing["span"] = self.now - t0
+                self.firing_records.append(self._pending_firing)
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing of the free-running loop — the ``hls::task`` body.  **Override this for a leaf.**
@@ -185,3 +228,24 @@ class FreeRunComp(HwComponent):
             f"run_iter; a composite must not call it (it has no body — its children do the work)."
         )
         yield  # unreachable: marks this a generator function so an accidental call yields cleanly
+
+
+def discover_timing_models(root) -> list[tuple["FreeRunComp", object]]:
+    """Walk *root* and its ``sub_comps`` for every attached ``TimingModel``.
+
+    Returns ``[(component, model), ...]``.  Mirrors ``discover_dyn_params`` (per-object) lifted to a
+    tree walk — the DAG's collect/fit steps use it to find which components to collect for, and a
+    component with no model is simply absent from the list."""
+    out: list[tuple[FreeRunComp, object]] = []
+    seen: set[int] = set()
+    stack = [root]
+    while stack:
+        c = stack.pop()
+        if id(c) in seen:
+            continue
+        seen.add(id(c))
+        tm = getattr(c, "timing_model", None)
+        if tm is not None:
+            out.append((c, tm))
+        stack.extend(getattr(c, "sub_comps", {}).values())
+    return out
