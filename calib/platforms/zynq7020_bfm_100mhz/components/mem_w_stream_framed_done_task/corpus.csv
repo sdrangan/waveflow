@@ -1,0 +1,3 @@
+nwords,num_trans,span_rtl,span_pysim,current_dly,residual
+128.0,8.0,183.0,160.0000000000001,0.0,22.999999999999886
+512.0,32.0,615.0,615.0,0.0,0.0

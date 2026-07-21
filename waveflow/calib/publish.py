@@ -13,9 +13,10 @@ parameters — the tracked dir has exactly one writer.  Second, because a re-fit
 deterministic, a byte-identical result publishes as a **no-op**: unchanged files are never rewritten,
 so a re-run produces *no* git diff.
 
-Only the **stable** artifacts are promoted (params + the distilled corpus), never the churny raw
-per-run firing trees::
+Only the **stable** artifacts are promoted (identity + params + the distilled corpus), never the churny
+raw per-run firing trees::
 
+    platform.json                  # the platform identity — {part, clk_freq_hz}
     mm_bus.json                    # the bus-transfer law (BusCalib)
     points/*.json                  # bus corpus — distilled {num_trans, nwords, span}
     components/<c>/params.json      # a component's residual params (StreamTimingModel)
@@ -83,6 +84,8 @@ class PublishPlan:
 def _publishable(work_dir: Path) -> list[str]:
     """The relative paths of the stable artifacts present in *work_dir*, in a stable order."""
     rels: list[str] = []
+    if (work_dir / "platform.json").is_file():      # the platform identity (part + clock) — tracked
+        rels.append("platform.json")
     if (work_dir / "mm_bus.json").is_file():
         rels.append("mm_bus.json")
     for p in sorted((work_dir / "points").glob("*.json")):
