@@ -113,70 +113,83 @@ affect throughput. Default to one placement now; carry it as a field so it is no
 assumption. (With `num_targets > 1` the placements are implicit in the `timeout`/`proc` interleave,
 which is the more general form.)
 
-## Storage: per-run folders, not one shared csv
+## Storage: independent rtl / pysim trees, joined on features
 
-A single append-only `rtl.csv` means a read-modify-write on every run, and it throws away per-run
-detail — exactly what you want back when a fit is bad and you need to inspect one point (the full
-burst sequence, the raw firing rows). So make **each run its own folder the source of truth**, and
-let `fit()` glob them:
+RTL and pysim are collected at **different cadence** — RTL is Vitis-expensive (a sweep of a handful
+of sizes), pysim is every-edit-cheap (run it 50×). So they are *not* 1:1 and must not be coupled in
+one run folder. The merge key is the **feature point** (`nwords`, `num_trans`), not the run id: an
+RTL run at n=128 and a pysim run at n=128 correspond even collected months apart.
 
 ```
 calib_dir/
-  params.json                 # fitted state_dict(s) — the ONLY deploy artifact (DAG-tracked)
-  runs/
-    <run_id>/                 # one folder per (design, scenario) run — append-only at folder level
-      rtl_firings.csv         # this component's firings from the VCD table (incl. blocked)
-      pysim_firings.csv       # this component's firings incl. current_dly
-      bursts.json (optional)  # full per-beat detail, for when a fit looks wrong — debug only
+  rtl/<run_id>/firings.csv     # collected whenever an RTL trace runs (spans in cycles)
+  pysim/<run_id>/firings.csv   # collected whenever pysim runs — any cadence (spans + current_dly)
+  params.json                  # fitted state_dict — the ONLY deploy artifact (DAG-tracked)
+  corpus.csv                   # derived: the merged residual frame (a cache, inspectable)
 ```
 
-Why this beats a shared csv:
+- **Independent collection.** `collect_rtl` / `collect_pysim` drop into their own trees; no 1:1
+  assumption. Each `<run_id>` folder is the source of truth (re-running a scenario overwrites it —
+  no shared-csv read-modify-write, concurrency-safe), and holds the full per-firing rows as the
+  debug trail when a fit looks wrong.
+- **Join on features, report the gaps.** `gen_data_frame` aggregates each side per feature point and
+  inner-joins on `features`. A point on only one side cannot yield a residual and is recorded on
+  `.coverage` (`{matched, rtl_only, pysim_only}`), so a thin fit is a *visible* coverage gap, not a
+  silent one.
 
-- **No RMW, concurrency-safe.** Each run writes a fresh folder; nothing edits a shared file, so
-  parallel/repeated runs cannot corrupt the corpus.
-- **The debug trail is free.** `bursts.json` (or whatever a subclass drops) lives beside the summary
-  rows, so a bad fit is inspectable without re-running.
-- **`fit()` is a glob + concat + join**, reading `runs/*/`. The two per-source frames become a
-  *derived cache*, not stored state.
+The three-layer read is:
 
-This layout, the discovery, and the glob/concat are **common** (base `TimingModel`) — the row schema
-is the shared `ExtractBurstsStep` shape. Only the *optional extra* artifact a run drops (`bursts.json`)
-might vary per subclass, and it is not on the fit path. So it is less machinery than a
-concurrency-safe shared-csv RMW, not more — no per-subclass storage code needed.
+```
+is_record_valid(firing, run_dir) -> bool     # per firing, RTL side only; default blocked==0; overridable
+        ⊂
+get_params(run_dir) -> dict | None           # per run: filter (rtl) → aggregate → one point row
+        ⊂
+gen_data_frame() -> DataFrame                # all runs both sides: inner-join on features → residual
+```
 
-`run_id` should be derived from the scenario (e.g. `n_words`, job count) so a re-run of the same
-point overwrites rather than duplicates — deterministic, DAG-friendly.
+`get_params` is the per-model "how to read a run" hook; `is_record_valid` the per-model validity
+test (a subclass can scan the run's AXI trace for stalls the FIFO counters miss). Both have sensible
+defaults, so a plain `StreamTimingModel` needs neither.
+
+## Units: cycles internal, convert at the boundary
+
+Everything stored and fitted is in **cycles**, so `params.json` is clock-independent — the same
+fitted law drives a re-synth at a different clock, only the boundary conversion changes. The two
+sides differ: **RTL is natively cycles** (VCD cycle indices), **pysim is time**. So `collect_pysim`
+divides its spans by `clk.period` on the way in, and `predict` multiplies back on the way out. With
+`clk=None` the data is assumed already in cycles (tests, pure analysis). The component does no
+arithmetic — `predict` returns a time it hands straight to `timeout`, and it records raw times that
+`collect_pysim` converts. The rare genuinely-time-valued term (a DRAM latency in ns) is the override:
+carry `clk.period` as a *feature* via the `LinCalibModel.transform`.
 
 ## Shape
 
 ```
 TimingModel  (per FreeRunComp — orchestration; COMPOSES CalibModel)
-  calib_dir/                             # per-run folders (see above); params.json the deploy artifact
-  models: list[CalibModel]               # length num_targets (default 1); each per-target
-  features: list[str]                    # e.g. ["nwords", "num_trans"]
+  component, calib_dir, features
   num_targets: int = 1                   # predict() returns a list this long; >1 raises for now
-  placement: "leading" | "trailing"      # where run_iter injects the delay (single-target case)
+  placement: "leading" | "trailing"      # advisory: where run_iter injects the delay
+  seed: dict | None                      # state_dict used before any fit (0 delay by default)
+  clk: Any = None                        # .period; converts pysim time<->cycles. None = already cycles
+  coverage: dict                         # set by gen_data_frame: matched / rtl_only / pysim_only
 
-  # collection (the genuinely new glue)
-  collect_rtl(events, run_id)            # this component's blocked==0 firings -> runs/<id>/rtl_firings.csv
-  collect_pysim(component, run_id)       # this component's spans + current_dly -> runs/<id>/pysim_firings.csv
-  # fit
-  fit()                                  # glob runs/*/, join rtl+pysim on `features`;
-                                         #   target = rtl_span - pysim_span + current_dly;
-                                         #   per-target CalibModel.fit; save params.json
-  # deploy
-  predict(row) -> list[float]            # additional delay(s) in CYCLES; * clk.period at the call site
-                                         #   load_or_default so an unfitted model returns the seed
+  # collection (independent trees)
+  collect_rtl(events, run_id)            # this component's firings -> rtl/<id>/firings.csv
+  collect_pysim(firings, run_id)         # spans + current_dly (time -> cycles) -> pysim/<id>/firings.csv
+  # read (three layers)
+  is_record_valid(firing, run_dir)       # per-firing validity (RTL side); default blocked==0
+  get_params(run_dir) -> dict | None     # one run -> its aggregated point
+  gen_data_frame() -> DataFrame          # join on features -> features…|span_rtl|span_pysim|current_dly|residual
+  # fit / deploy
+  fit()                                  # gen_data_frame -> LinCalibModel.fit(target=residual) -> params.json
+  predict(row) -> list[float]            # additional delay(s); TIME if clk set, else cycles; seed if unfitted
   # lifecycle
-  reset(runs=True, params=False)         # wipe the corpus (runs/) and/or the fitted params, to
-                                         #   recalibrate from scratch; back to the seed
+  reset(corpus=True, params=False)       # wipe rtl/+pysim/+corpus.csv and/or params.json
 ```
 
-`reset` exists because the corpus is append-only across runs, so a stale or bad-scenario datapoint
-otherwise lingers forever. `reset(runs=True)` clears `runs/` (start collecting fresh);
-`reset(params=True)` deletes `params.json` (fall back to the seed on next `predict`). Default clears
-runs only — the common "re-sweep from scratch" — and leaves a fitted model deployable until the next
-fit replaces it.
+`reset(corpus=True)` (default) clears the `rtl/`+`pysim/` trees and `corpus.csv` — the common
+"re-sweep from scratch" — and leaves a fitted model deployable. `reset(params=True)` deletes
+`params.json` so the next `predict` falls back to the seed.
 
 ### Component side (the user's sketch, refined)
 
@@ -215,14 +228,15 @@ Extends the timing rung already on `main`:
 ```
 ... -> ExtractBurstsStep -> CollectTimingStep -> FitTimingStep
                             (per registered TM:   (per registered TM:
-                             write runs/<id>/      glob runs/*, join,
-                             rtl+pysim firings)    fit, save params.json)
+                             collect_rtl +         gen_data_frame join,
+                             collect_pysim)        fit, save params.json)
 ```
 
 - **`CollectTimingStep`** consumes `timing_events` (RTL) + the pysim run's spans; for each registered
-  `TimingModel` on the design, writes a `runs/<run_id>/` folder (per above). One folder per scenario,
-  so a sweep across `n_words` (once the TB's baked `h.run(3400)` + 24640-word arena are parameterized
-  — the prerequisite from the calibration plan) grows the corpus without touching prior runs.
+  `TimingModel` on the design, calls `collect_rtl` / `collect_pysim` (independent trees, keyed by a
+  scenario-derived `run_id`). A sweep across `n_words` (once the TB's baked `h.run(3400)` +
+  24640-word arena are parameterized — the prerequisite from the calibration plan) grows the corpus
+  without touching prior runs.
 - **`FitTimingStep`** calls `tm.fit()` for each; writes `params.json`. DAG-tracked artifact, so a
   changed corpus re-fits and a design that consumes the params re-runs.
 
