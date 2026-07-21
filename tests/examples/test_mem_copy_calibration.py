@@ -79,3 +79,48 @@ def test_without_calibration_the_period_is_short(tmp_path):
     cadence is well under the RTL 183), so the fix is real, not a no-op."""
     dut = MemCopySim(jobs=xsi_jobs(128, 16), calib_dir=str(tmp_path / "c")).run()  # unfitted seed=0
     assert _pysim_period(dut) < RTL_SPAN[128] - 20   # ~147 measured, comfortably short of 183
+
+
+def _writer_span(dut):
+    period = 1.0 / dut.wstream.clk.freq
+    return float(np.median([r["span"] for r in dut.wstream.firing_records]) * dut.wstream.clk.freq)
+
+
+def test_platform_bus_model_takes_the_burst_term_off_the_component(tmp_path):
+    """The two-level split, realized: a PLATFORM bus model charges the m_axi burst cost, so the
+    component's residual shrinks to its own control cost.
+
+    Bus law = nwords + 2·(num_trans-1) cycles (the measured burst gaps).  Configuring it on the
+    memory grows the writer's pysim span by exactly the burst term (2 cyc × 7 gaps = 14 at n=128),
+    so the RTL-vs-pysim residual the *component* must carry drops by that 14 — from ~36 (bus+control
+    lumped) to ~22 (control only).  The bus term now lives on the shared platform model, calibrated
+    once and reused by every accelerator; only the 22 is per-accelerator."""
+    from waveflow.calib.bus_model import BusCalib
+
+    platform = tmp_path / "platform"
+    BusCalib(platform_dir=platform, clk_freq=100e6).fit(
+        None, [{"num_trans": nt, "nwords": nw, "span": nw + 2 * (nt - 1)}
+               for nw, nt in [(128, 8), (512, 32)]])
+
+    no_bus = _writer_span(MemCopySim(jobs=xsi_jobs(128, 16),
+                                     calib_dir=str(tmp_path / "a")).run())
+    with_bus = _writer_span(MemCopySim(jobs=xsi_jobs(128, 16), calib_dir=str(tmp_path / "b"),
+                                       platform_dir=str(platform)).run())
+
+    burst_term = 2 * (8 - 1)                       # 7 gaps × 2 cycles
+    assert with_bus - no_bus == pytest.approx(burst_term, abs=1.0)
+    # the component residual shrinks by exactly the burst term the platform now owns
+    assert (RTL_SPAN[128] - no_bus) - (RTL_SPAN[128] - with_bus) == pytest.approx(burst_term, abs=1.0)
+
+
+def test_platform_bus_model_preserves_correctness(tmp_path):
+    """Charging the calibrated bus span must not corrupt the data (it regressed once: the spanned
+    write path defaulted word_bw=32 and truncated 64-bit words)."""
+    from waveflow.calib.bus_model import BusCalib
+
+    platform = tmp_path / "platform"
+    BusCalib(platform_dir=platform, clk_freq=100e6).fit(
+        None, [{"num_trans": 8, "nwords": 128, "span": 142}])
+    # MemCopySim.run() asserts every copy is bit-exact; a truncation would raise here.
+    MemCopySim(jobs=xsi_jobs(128, 4), calib_dir=str(tmp_path / "c"),
+               platform_dir=str(platform)).run()

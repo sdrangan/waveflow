@@ -337,7 +337,8 @@ class MemRStream(FreeRunComp):
         # Region (base = the bound physical base) by [addr, addr+len).  Region owns byte↔word
         # (byte_of()/word_bw), so no hand-rolled byte_addr_to_word_index / align.
         region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
-        words, t0 = yield from region.read_slice_pipelined(w0, w0 + nw)
+        words, t0 = yield from region.read_slice_pipelined(
+            w0, w0 + nw, num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         # early-anchor the output at the first-word-available time + pipeline fill: the read and
         # write OVERLAP (write_pipelined shortens its wait when the anchor is already past).
         yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
@@ -364,7 +365,8 @@ class MemRStream(FreeRunComp):
             yield from self.m_out.write(np.asarray(burst))
         w0, nw = int(cmd.addr), int(cmd.len)
         region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
-        words, t0 = yield from region.read_slice_pipelined(w0, w0 + nw)
+        words, t0 = yield from region.read_slice_pipelined(
+            w0, w0 + nw, num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
         self.transfer_spans.append(self.now - t_start)
 
@@ -497,7 +499,8 @@ class MemWStream(FreeRunComp):
         # bound physical base) at [addr, ...).  Region owns byte↔word (no hand conversion).
         region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
         yield from region.write_slice_pipelined(
-            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
+            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
+            num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
@@ -532,7 +535,8 @@ class MemWStream(FreeRunComp):
         words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
         region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
         yield from region.write_slice_pipelined(
-            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t)
+            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
+            num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
         if self.emit_done:
             for burst in fwd:
