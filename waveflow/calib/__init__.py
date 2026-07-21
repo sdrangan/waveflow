@@ -21,10 +21,13 @@ from .calib import (
     InterpCalibModel,
     LinCalibModel,
 )
+from .timing_model import StreamTimingModel, TimingModel
 
 __all__ = [
     "CalibDataFrame",
     "CalibModel",
     "InterpCalibModel",
     "LinCalibModel",
+    "StreamTimingModel",
+    "TimingModel",
 ]
