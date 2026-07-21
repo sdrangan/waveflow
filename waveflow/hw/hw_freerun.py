@@ -216,7 +216,11 @@ class FreeRunComp(HwComponent):
             self._pending_firing = None                 # timed_delay sets this if the body predicts
             yield from self.run_iter()
             if self._pending_firing is not None:
+                # `end` (absolute sim time of firing completion) mirrors the RTL table's ap_done
+                # column, so the pysim firing cadence -- the period -- is diff(ends), the same way
+                # the RTL period is measured.  `span` is the firing's own duration.
                 self._pending_firing["span"] = self.now - t0
+                self._pending_firing["end"] = self.now
                 self.firing_records.append(self._pending_firing)
 
     def run_iter(self) -> ProcessGen[None]:
