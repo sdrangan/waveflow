@@ -43,7 +43,9 @@ struct share one source.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -210,6 +212,12 @@ WORD_BW_SUPPORTED = [32, 64]
 #: Pipeline-fill latency (cycles) between the a2s/s2a read and its overlapped write — the small
 #: ramp before the first word is forwarded.  Loosely-timed; the burst then costs ~n_words + fill.
 FILL_CYCLES = 8
+
+#: HLS ``max_read_burst_length`` / ``max_write_burst_length`` — a contiguous transfer of ``n`` words
+#: is issued as ``ceil(n / MEM_AXI_MAX_BURST)`` bursts.  This is ``num_trans``, the timing feature the
+#: RTL law moves on (see ``plans/memcpy_timing_calibration.md``); it must match
+#: ``ExtractBurstsStep.max_burst_len``.
+MEM_AXI_MAX_BURST = 16
 
 
 def _word_type(mem_dwidth: int) -> type[IntField]:
@@ -397,6 +405,12 @@ class MemWStream(FreeRunComp):
     #: Default ``False`` keeps the legacy protocol.
     inband: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: When set, attach a :class:`~waveflow.calib.timing_model.StreamTimingModel` at this directory
+    #: and inject its predicted (trailing) delay per firing — the posted-write drain the RTL law
+    #: captures.  ``None`` (default) leaves the component uncalibrated: no model, no delay, and the
+    #: pysim timing is exactly as before.  A model with an unfitted / zero-seed predicts 0, so
+    #: attaching one only records firings (for collection) until ``params.json`` exists.
+    calib_dir: "str | Path | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -428,6 +442,12 @@ class MemWStream(FreeRunComp):
         #: :meth:`MemRStream.bind_base`.  Default 0: the flat single-arena mode (sim & BFM).
         self._base = 0
         self.transfer_spans: list[float] = []
+        if self.calib_dir is not None:
+            from waveflow.calib.timing_model import StreamTimingModel
+            # `component` must match the id this stream's firings carry in the RTL timing table — the
+            # task-body name, which kernel_task() already knows.
+            self.add_timing_model(StreamTimingModel(
+                component=self.kernel_task().task_fn, calib_dir=self.calib_dir, clk=self.clk))
 
     def bind_base(self, base: int = 0) -> None:
         """Set the bound buffer's physical base (the ``offset=slave`` register, host domain) — the
@@ -517,3 +537,9 @@ class MemWStream(FreeRunComp):
         if self.emit_done:
             for burst in fwd:
                 yield from self.s_done.write(burst)
+        # Trailing calibration delay: the posted-write drain the RTL keeps running after s_done, so
+        # the firing is not really done -- and the next cannot start -- until it completes.  A no-op
+        # (0, but still records the firing) when uncalibrated; see FreeRunComp.timed_delay.
+        dly = self.timed_delay({"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST)})
+        if dly:
+            yield self.timeout(dly)
