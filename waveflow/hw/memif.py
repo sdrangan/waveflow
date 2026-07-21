@@ -899,7 +899,7 @@ class Region:
                 elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
         else:
             t0, t1 = yield from self.master.write_spanned(
-                elements, et, self.byte_of(i0),
+                elements, et, self.byte_of(i0), word_bw=self.word_bw,
                 t_out_start=t_out_start, num_trans=num_trans, min_span=min_span)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)

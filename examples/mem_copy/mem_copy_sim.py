@@ -66,6 +66,11 @@ class MemCopyTB(FreeRunComp):
     #: Forwarded to the DUT's writer: when set, the pysim run records per-firing timing (and applies
     #: any fitted delay).  ``None`` (default) is the plain, uncalibrated run.
     calib_dir: "str | None" = None
+    #: The PLATFORM's bus-transfer calibration directory.  When set, the memory's slave loads a
+    #: :class:`~waveflow.hw.memif.BusTiming` from it, so pysim charges the real m_axi burst cost —
+    #: the platform half of the two-level split, shared across accelerators.  ``None`` = the plain
+    #: word_bw fallback.
+    platform_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -79,6 +84,12 @@ class MemCopyTB(FreeRunComp):
                                for job in self._jobs) + 16
         self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
+        # Platform bus model: the memory's slave charges the calibrated m_axi transfer cost, so the
+        # component's residual is just its own control cost.  Shared across accelerators (fit once).
+        if self.platform_dir is not None:
+            from waveflow.calib.bus_model import BusCalib
+            self.mem.s_mm.bus_timing = BusCalib(self.platform_dir,
+                                                clk_freq=self.clk.freq).bus_timing()
         # Allocate the full capacity so the memory is the same size as the RTL FlatMemory and the whole
         # vectors/mem_in image loads directly in pre_sim (no clip).  The DUT still addresses only
         # [0, arena_words) -- the extra is headroom for the image.
@@ -146,9 +157,10 @@ class MemCopySim:
     """
 
     def __init__(self, jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
-                 mem_dwidth: int = 64, name: str = "tb", calib_dir: "str | None" = None) -> None:
+                 mem_dwidth: int = 64, name: str = "tb", calib_dir: "str | None" = None,
+                 platform_dir: "str | None" = None) -> None:
         self.tb = MemCopyTB(name=name, sim=Simulation(), jobs=tuple(jobs), mem_dwidth=mem_dwidth,
-                            calib_dir=calib_dir)
+                            calib_dir=calib_dir, platform_dir=platform_dir)
         #: The per-job source patterns, filled by :meth:`write_scenario` and read back by :meth:`check`.
         self.expected: list[np.ndarray] = []
 
