@@ -304,16 +304,41 @@ def gen_headers(config: BuildConfig) -> None:
 #: overlap, which is the ~1.9x the gate measures.
 XSI_N        = 128
 XSI_NUM_CMDS = 16
-XSI_SRC_W = [64 + 128 * j for j in range(XSI_NUM_CMDS)]
-XSI_DST_W = [4096 + 128 * j for j in range(XSI_NUM_CMDS)]
-
-#: The same scenario as ``MemCopyTB``'s own ``jobs`` parameter.  This is what "one statement, two
-#: backends" actually means: **one class, two instantiations** — pysim builds a ``MemCopyTB`` with
-#: its jobs, the XSI generator builds one with these.  Nothing about the scenario is stated twice.
-XSI_JOBS = tuple(CopyJob(s, d, XSI_N) for s, d in zip(XSI_SRC_W, XSI_DST_W))
 
 
-def make_xsi_tb(width: int = DEFAULT_MEM_DW):
+def xsi_jobs(n_words: int = XSI_N, num_cmds: int = XSI_NUM_CMDS) -> tuple:
+    """The XSI scenario as ``num_cmds`` back-to-back copies of ``n_words`` words, at non-overlapping
+    src/dst regions.  Parameterized so a **timing sweep** can vary the job size — the RTL is
+    scenario-independent (``len`` is a runtime command field), so only the vectors change.
+
+    The defaults reproduce the committed gate scenario exactly (``16 × 128``, src base 64, dst base
+    4096); ``dst_base`` only grows past 4096 when ``num_cmds × n_words`` would otherwise reach into
+    the destination, so a larger sweep point stays non-overlapping."""
+    src = [64 + n_words * j for j in range(num_cmds)]
+    dst_base = max(4096, 64 + num_cmds * n_words + 64)
+    dst = [dst_base + n_words * j for j in range(num_cmds)]
+    return tuple(CopyJob(s, d, n_words) for s, d in zip(src, dst))
+
+
+def xsi_run_cycles(n_words: int = XSI_N, num_cmds: int = XSI_NUM_CMDS) -> int:
+    """A generous ``h.run(N)`` bound covering the scenario's time-to-last-completion.
+
+    From the measured law (``~41 + n + 2·ceil(n/16)`` per job, plus pipeline fill and drain), with
+    margin.  The harness runs *exactly* this many cycles, so it must clear completion; overshoot is
+    only wasted sim cycles.  The default (``16 × 128``) lands ~3600, comfortably past the 2908 gate —
+    but the gate keeps its own committed 3400 (this is for sweep points that need more)."""
+    period = 60 + n_words + 3 * ((n_words + 15) // 16)
+    return 300 + num_cmds * period
+
+
+#: The committed gate scenario — the default of :func:`xsi_jobs`.  "One statement, two backends":
+#: pysim builds a ``MemCopyTB`` with its jobs, the XSI generator builds one with these.
+XSI_JOBS = xsi_jobs()
+XSI_SRC_W = [j.src_off for j in XSI_JOBS]
+XSI_DST_W = [j.dst_off for j in XSI_JOBS]
+
+
+def make_xsi_tb(width: int = DEFAULT_MEM_DW, jobs=None, n_cycles: int | None = None):
     """The :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` instance the XSI testbench is
     generated from.
 
@@ -323,7 +348,9 @@ def make_xsi_tb(width: int = DEFAULT_MEM_DW):
     from waveflow.simulation.simulation import Simulation
     from examples.mem_copy.mem_copy_sim import MemCopyTB
 
-    return MemCopyTB(name="xsi_tb", sim=Simulation(), mem_dwidth=width, jobs=XSI_JOBS)
+    kw = {} if n_cycles is None else {"n_cycles": int(n_cycles)}
+    return MemCopyTB(name="xsi_tb", sim=Simulation(), mem_dwidth=width,
+                     jobs=XSI_JOBS if jobs is None else tuple(jobs), **kw)
 
 
 def _done_words(width: int) -> int:
@@ -332,7 +359,7 @@ def _done_words(width: int) -> int:
     return CopyResp.nwords_per_inst(width)
 
 
-def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
+def render_xsi_vectors(width: int = DEFAULT_MEM_DW, jobs=None) -> str:
     """Render ``mem_copy_vectors.h``'s contents **from the testbench graph**.
 
     Everything here is read off a real :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` — the same
@@ -347,7 +374,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
     """
     from waveflow.build.composite_gen import render_vectors_h
 
-    tb = make_xsi_tb(width)
+    tb = make_xsi_tb(width, jobs=jobs)
     jobs = [CopyJob.coerce(j) for j in tb.jobs]
 
     return render_vectors_h(
@@ -374,7 +401,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW) -> str:
     )
 
 
-def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> None:
+def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW, jobs=None) -> None:
     """Write mem_copy's XSI input + golden **bundles** into ``<xsi_dir>/vectors/``.
 
     - ``vectors/s_cmd``  — the command stream (the StreamDriver's own bursts, schema-packed); the
@@ -392,10 +419,12 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW) -> No
     """
     from examples.mem_copy.mem_copy_sim import MemCopySim
 
-    MemCopySim(jobs=XSI_JOBS, mem_dwidth=width).write_scenario(Path(xsi_dir))
+    MemCopySim(jobs=XSI_JOBS if jobs is None else tuple(jobs),
+               mem_dwidth=width).write_scenario(Path(xsi_dir))
 
 
-def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW) -> None:
+def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW,
+                               jobs=None) -> None:
     """Check mem_copy's XSI run from the dumped output bundles — the golden, in Python.
 
     The generated C++ main only runs and dumps; every check lives here.  Reads what the run wrote:
@@ -414,7 +443,7 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
     from waveflow.utils.burst_io import read_burst_bundle
 
     vdir = Path(xsi_dir) / "vectors"
-    tb = make_xsi_tb(width)
+    tb = make_xsi_tb(width, jobs=jobs)
     jobs = [CopyJob.coerce(j) for j in tb.jobs]
     done_words = _done_words(width)
 
@@ -446,7 +475,7 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
         f"change (regression, or an improvement worth re-recording).")
 
 
-def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
+def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW, jobs=None) -> Path:
     """Emit ``xsi/mem_copy_vectors.h`` — the XSI testbench's scenario + its command words.
 
     The command words come from :meth:`CopyCmd.serialize`, the same call the pysim golden packs with.
@@ -464,7 +493,7 @@ def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> Path:
     drifted *pattern* still tests a copy, whereas a drifted *packing rule* sends malformed commands
     and makes the test meaningless.  The latter is what this function removes.
     """
-    h = render_xsi_vectors(width)
+    h = render_xsi_vectors(width, jobs=jobs)
     path = out_dir / "xsi" / "mem_copy_vectors.h"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(h, encoding="utf-8")
@@ -501,8 +530,14 @@ def generate_dut(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str,
     return {spec.top_name: cpp}
 
 
-def generate_tb(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, Path]:
+def generate_tb(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW, jobs=None,
+                n_cycles: int | None = None) -> dict[str, Path]:
     """Generate the XSI **testbench**: the scenario constants + the BFM harness + the two-line main.
+
+    ``jobs`` / ``n_cycles`` default to the committed gate scenario (:data:`XSI_JOBS`, 3400).  A timing
+    sweep overrides them per point (:func:`xsi_jobs`, :func:`xsi_run_cycles`) — the harness arena and
+    the ``h.run(N)`` bound then size to that scenario, while the DUT RTL (``len`` is runtime) is
+    unchanged and need not be re-synthesized.
 
     All three are derived from the :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` **graph**
     (:func:`~waveflow.build.composite_gen.tb_top_spec`): the harness instantiates the BFM models on the
@@ -510,8 +545,8 @@ def generate_tb(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW) -> dict[str, 
     just construct-run-close (participants load/dump bundles).  The only hand-written half is Python:
     the scenario (:func:`write_mem_copy_xsi_bundles`) and the golden checker."""
     top = "mem_copy"
-    vec_h = gen_xsi_vectors(out_dir, width=width)
-    tb = make_xsi_tb(width)
+    vec_h = gen_xsi_vectors(out_dir, width=width, jobs=jobs)
+    tb = make_xsi_tb(width, jobs=jobs, n_cycles=n_cycles)
     tb_spec = tb_top_spec(tb)
     harness_h = out_dir / "xsi" / f"{top}_tb_harness.h"
     harness_h.write_text(render_tb_harness(tb_spec), encoding="utf-8")
