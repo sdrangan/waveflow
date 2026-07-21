@@ -1,7 +1,7 @@
 ---
 title: Models
 parent: Calibration
-nav_order: 2
+nav_order: 7
 audience: python
 api: [CalibModel, LinCalibModel, InterpCalibModel]
 summary: "The per-target calibration models. CalibModel is the fit / predict / score / holdout interface over column-name basis and target. LinCalibModel is an sklearn LinearRegression with coeffs, plot, and a through-origin knob. InterpCalibModel is a calibrated 1-D lookup (a measured table, not a curve fit) for smooth, saturating physical curves."

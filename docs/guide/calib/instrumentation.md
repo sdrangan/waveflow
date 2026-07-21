@@ -1,7 +1,7 @@
 ---
 title: Instrumenting a calibration
 parent: Calibration
-nav_order: 4
+nav_order: 9
 audience: python
 api: [CalibDataFrame, InterpCalibModel, LinCalibModel]
 summary: "The calibration playbook: how to actually collect the data and close the loop so the LT simulation reproduces the RTL timeline. Instrument the sim with begin/end events at the top level, fit each block's primitive in isolation, let the sim compose the end-to-end timing, extract the datapoints from a cosim sweep, and feed the fitted model back into the component. Worked against the FIR example."

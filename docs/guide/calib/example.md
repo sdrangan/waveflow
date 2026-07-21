@@ -1,7 +1,7 @@
 ---
 title: A worked example
 parent: Calibration
-nav_order: 3
+nav_order: 8
 audience: python
 api: [CalibDataFrame, LinCalibModel, InterpCalibModel]
 summary: "A minimal end-to-end calibration: build a CalibDataFrame from a few (size, cycles) measurements, fit a LinCalibModel, read its coefficients, score it, hold a point out, and plot it; then calibrate a saturating curve with InterpCalibModel."

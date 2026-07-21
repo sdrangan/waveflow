@@ -1,7 +1,7 @@
 ---
 title: The corpus — CalibDataFrame
 parent: Calibration
-nav_order: 1
+nav_order: 6
 audience: python
 api: [CalibDataFrame]
 summary: "CalibDataFrame is the calibration corpus: a thin wrapper composing a pandas.DataFrame, one row per synth/cosim measurement. It adds only what a raw frame lacks — a per-row measured_at timestamp and a save/load storage path — and otherwise exposes the underlying frame as .df for native pandas filter/select."
