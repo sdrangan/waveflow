@@ -368,3 +368,295 @@ class TimingDiagram(object):
             **kwargs)
 
         self.ax.add_patch(rect)
+
+
+class ActivityDiagram(object):
+    """Labeled horizontal lanes on a common cycle axis, showing *activity* rather than values.
+
+    A sibling of :class:`TimingDiagram`, not an extension of it.  Both draw labeled rows against a
+    shared time axis, but they answer different questions and their draw loops share nothing.
+    ``TimingDiagram`` is a *waveform* renderer: one row per signal, a value-labeled box per
+    transition, and its ``text_mode`` / ``text_scale_factor`` logic exists solely to decide whether
+    a box is wide enough to hold its text -- a model that only reads at ~10-50 cycle zoom.
+    ``ActivityDiagram`` deliberately *discards* per-transition values and shows when each lane was
+    busy, which is the one thing that stays legible across thousands of cycles.
+
+    A lane is a ``(label, event_cycles, colour)`` triple: ``event_cycles`` is the (sorted) integer
+    cycles at which that lane saw an event -- a handshake, a beat, a fire.  Two render modes decide
+    what those events look like:
+
+    * ``"band"`` -- collapse contiguous events into filled bars (:meth:`runs` +
+      ``broken_barh``).  The whole-run view: at 2900 cycles a per-beat figure is thousands of
+      sub-pixel hairlines that antialias to a grey smear, so the bands carry the same information
+      (when each stage was busy) at a fraction of the paths.
+    * ``"beat"`` -- one hairline per event (``vlines``).  The zoomed, per-firing view, where the
+      individual beats are the point.
+
+    An optional occupancy sub-panel (:meth:`set_occupancy`) draws a level-vs-capacity step line
+    beneath the lanes, shaded where the level sits *at* capacity -- a FIFO whose producer is
+    blocked.  A write-enable metric shows nothing there (HLS gates the enable), so the counter is
+    the only place that congestion is visible.
+
+    Parameters
+    ----------
+    lanes : list of (str, array-like of int, str)
+        ``(label, event_cycles, colour)`` per lane, drawn top to bottom in the order given.
+    time_unit : str, optional
+        Axis unit label stem; the x-axis is labeled ``"clock {time_unit}"`` by default.
+    """
+
+    def __init__(self, lanes, time_unit="cycle"):
+        # Normalise event arrays to numpy once, so both draw modes and the run-collapse can index
+        # and mask them without re-wrapping.
+        self.lanes = [(label, np.asarray(ev), colour) for label, ev, colour in lanes]
+        self.time_unit = time_unit
+        #: Occupancy sub-panel config, or None.  Set by set_occupancy().
+        self._occupancy = None
+        # Populated by plot().
+        self.ax = None
+        self.ax_occupancy = None
+
+    # -- construction from a trace ---------------------------------------------------------------
+    @classmethod
+    def from_trace(cls, bt, spec, time_unit="cycle"):
+        """Build lanes by walking a :class:`~waveflow.utils.trace.BoundTrace`.
+
+        The reusable half of what used to be ``mem_copy``'s bespoke ``_observations``: the mechanism
+        that turns a manifest's channels and ports into event lanes.  *Which* channels and ports a
+        given design cares about (and in what order, and what colour) stays with that design -- it is
+        the design's topology, not something to generalise -- and arrives here as *spec*.
+
+        Parameters
+        ----------
+        bt : BoundTrace
+            A manifest bound to a waveform.
+        spec : list of (str, source, str)
+            ``(label, source, colour)`` per lane.  *source* names where the lane's events come from:
+
+            * ``("port", port_id, valid, ready)`` -- cycles where an AXI-Stream / m_axi boundary
+              port's ``valid`` and ``ready`` both fire (e.g. ``("port", "gmem0", "ARVALID",
+              "ARREADY")``).
+            * ``("chan", channel_id, side)`` -- cycles where one end of an internal FIFO channel
+              hands over a word.  ``side="write"`` reads the producer end (``write`` & ``full_n``),
+              ``side="read"`` the consumer end (``empty_n`` & ``read``).
+        time_unit : str, optional
+            Passed through to the constructor.
+
+        Returns
+        -------
+        ActivityDiagram
+        """
+        ch = {c["id"]: c for c in bt.manifest["channels"]}
+        hs = bt._handshakes
+        lanes = []
+        for label, source, colour in spec:
+            kind = source[0]
+            if kind == "port":
+                _, pid, valid, ready = source
+                sig = bt.port(pid)["signals"]
+                ev = hs(sig[valid], sig[ready])
+            elif kind == "chan":
+                _, cid, side = source
+                c = ch[cid]
+                if side == "write":
+                    ev = hs(c["write"]["write"], c["write"]["full_n"])
+                elif side == "read":
+                    ev = hs(c["read"]["empty_n"], c["read"]["read"])
+                else:
+                    raise ValueError(
+                        f"lane {label!r}: channel side must be 'write' or 'read', got {side!r}")
+            else:
+                raise ValueError(
+                    f"lane {label!r}: source kind must be 'port' or 'chan', got {kind!r}")
+            lanes.append((label, ev, colour))
+        return cls(lanes, time_unit=time_unit)
+
+    @staticmethod
+    def occupancy_from_trace(bt, channel):
+        """``(level, capacity)`` series for a channel's FIFO, or ``(None, 0)`` if not exposed.
+
+        The extraction half of the occupancy sub-panel: reads a channel's own level / capacity
+        counters off the waveform.  ``level`` is the depth series sampled on the clock grid;
+        ``capacity`` is the (constant) FIFO depth.  Feed the pair to :meth:`set_occupancy`.
+        """
+        d = bt.channel(channel).get("depth", {})
+        lvl, cap = d.get("level"), d.get("cap")
+        if not lvl or not cap or lvl not in bt.resolved or cap not in bt.resolved:
+            return None, 0
+        from waveflow.utils.vcd import resample_signal
+
+        def _s(bare):
+            n = bt.resolved[bare]
+            bt.parser.sig_info[n].get_values()
+            return np.asarray(resample_signal(bt.parser.sig_info[n], bt._grid()))
+
+        level = _s(lvl)
+        return level, int(_s(cap).max())
+
+    def set_occupancy(self, level, cap, colour, ylabel="occupancy", note=None):
+        """Attach an occupancy sub-panel drawn beneath the lanes by :meth:`plot`.
+
+        Parameters
+        ----------
+        level : array-like of int or None
+            Per-cycle occupancy of the channel, indexed by cycle.  ``None`` still draws the (empty)
+            panel -- a design that exposes no counters keeps the axis rather than silently dropping
+            it, so the figure's shape does not depend on the run.
+        cap : int
+            FIFO capacity; the dashed reference line, and the level at which the panel shades.
+        colour : str
+            Colour of the step line and the at-capacity shading (usually the producing stage's).
+        ylabel : str, optional
+            Y-axis label for the panel.
+        note : str or None, optional
+            In-panel annotation.  ``None`` uses ``"shaded = at capacity ({cap}) -> producer
+            blocked"``.
+        """
+        self._occupancy = {
+            "level": level,
+            "cap": cap,
+            "colour": colour,
+            "ylabel": ylabel,
+            "note": note,
+        }
+        return self
+
+    @staticmethod
+    def runs(events, gap=3):
+        """Collapse event cycles into contiguous activity runs ``(start, width)``.
+
+        Events within *gap* cycles of each other belong to the same run.  Used by the ``"band"``
+        render mode; a 1-cycle run comes back with width 1 (never 0) so it still draws.
+        """
+        ev = np.asarray(events)
+        if not len(ev):
+            return []
+        breaks = np.nonzero(np.diff(ev) > gap)[0]
+        starts = np.concatenate(([ev[0]], ev[breaks + 1]))
+        ends = np.concatenate((ev[breaks], [ev[-1]]))
+        return [(int(s), max(int(e - s), 1)) for s, e in zip(starts, ends)]
+
+    # -- rendering -------------------------------------------------------------------------------
+    def plot(
+            self,
+            mode="band",
+            trange=None,
+            gap=3,
+            title=None,
+            fig_width=11,
+            fig_height=4.2,
+            label_fontsize=8,
+            title_fontsize=10,
+            band_height=0.68,
+            beat_half=0.38,
+            occupancy_ratio=(3, 1)):
+        """Render the lanes (and the occupancy sub-panel, if set) to a fresh figure.
+
+        Parameters
+        ----------
+        mode : {'band', 'beat'}, optional
+            ``'band'`` collapses events into filled bars; ``'beat'`` draws one hairline per event.
+        trange : (int, int) or None, optional
+            ``(lo, hi)`` cycle window.  Required for ``'beat'`` (it masks events to the window);
+            for ``'band'`` it sets the x-limits (default ``(0, max_event + 40)``).
+        gap : int, optional
+            Run-merge gap for ``'band'`` mode (see :meth:`runs`).
+        title : str or None, optional
+            Axis title.
+        fig_width, fig_height : float, optional
+            Figure size in inches.
+        label_fontsize, title_fontsize : int, optional
+            Font sizes for the lane labels and the title.
+        band_height : float, optional
+            Total height of a band bar (``'band'`` mode).
+        beat_half : float, optional
+            Half-height of a beat hairline (``'beat'`` mode).
+        occupancy_ratio : (int, int), optional
+            Height ratio of the lane panel to the occupancy panel, when an occupancy panel is set.
+
+        Returns
+        -------
+        (fig, ax, ax_occupancy)
+            The figure, the lane axis, and the occupancy axis (``None`` if none was set).
+        """
+        n = len(self.lanes)
+        xlabel = f"clock {self.time_unit}"
+
+        # The x-axis (limits + label) belongs to the bottom-most panel: the occupancy panel when
+        # there is one, else the lane panel itself.
+        if self._occupancy is not None:
+            fig, (ax, ax2) = plt.subplots(
+                2, 1, figsize=(fig_width, fig_height), sharex=True,
+                gridspec_kw={"height_ratios": list(occupancy_ratio)})
+        else:
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            ax2 = None
+
+        if mode == "band":
+            hi = trange[1] if trange is not None else (
+                int(max((e[-1] for _, e, _ in self.lanes if len(e)), default=1)) + 40)
+            lo = trange[0] if trange is not None else 0
+            for row, (label, ev, colour) in enumerate(self.lanes):
+                y = n - 1 - row
+                bars = self.runs(ev, gap=gap)
+                if bars:
+                    # edgecolor == facecolor with a real linewidth: a 1-cycle run is well under a
+                    # pixel across a multi-thousand-cycle axis, and with no stroke it antialiases to
+                    # a grey smear instead of the lane's colour.
+                    ax.broken_barh(bars, (y - band_height / 2, band_height), facecolors=colour,
+                                   edgecolors=colour, linewidth=0.5)
+        elif mode == "beat":
+            if trange is None:
+                raise ValueError("mode='beat' needs a trange=(lo, hi) window to draw into.")
+            lo, hi = trange
+            for row, (label, ev, colour) in enumerate(self.lanes):
+                y = n - 1 - row
+                e = ev[(ev >= lo) & (ev <= hi)]
+                if len(e):
+                    ax.vlines(e, y - beat_half, y + beat_half, color=colour, linewidth=1.1)
+        else:
+            raise ValueError(f"mode must be 'band' or 'beat', got {mode!r}")
+
+        ax.set_yticks(range(n))
+        ax.set_yticklabels([label for label, _, _ in self.lanes][::-1], fontsize=label_fontsize)
+        if ax2 is None:
+            ax.set_xlim(lo, hi)
+            ax.set_xlabel(xlabel)
+        if title is not None:
+            ax.set_title(title, fontsize=title_fontsize)
+        ax.set_axisbelow(True)          # else the grid draws over the bars and reads as extra events
+        ax.grid(axis="x", alpha=0.25, linewidth=0.4)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+
+        if ax2 is not None:
+            self._draw_occupancy(ax2, lo, hi, xlabel)
+
+        self.ax = ax
+        self.ax_occupancy = ax2
+        return fig, ax, ax2
+
+    def _draw_occupancy(self, ax2, lo, hi, xlabel):
+        """Draw the occupancy sub-panel into *ax2* over ``[lo, hi]``."""
+        occ = self._occupancy
+        level, cap = occ["level"], occ["cap"]
+        colour = occ["colour"]
+        if level is not None and cap:
+            x = np.arange(lo, hi + 1)
+            window = np.asarray(level)[lo:hi + 1]
+            ax2.step(x, window, where="post", color=colour, linewidth=1.0)
+            ax2.axhline(cap, color="0.4", linestyle="--", linewidth=0.8)
+            blocked = window >= cap
+            ax2.fill_between(x, 0, cap, where=blocked, color=colour, alpha=0.25, step="post")
+            ax2.set_ylim(0, cap + 0.5)
+            ax2.set_ylabel(occ["ylabel"], fontsize=8)
+            note = occ["note"]
+            if note is None:
+                note = f"shaded = at capacity ({cap}) → producer blocked"
+            ax2.text(0.005, 0.86, note, transform=ax2.transAxes, fontsize=7.5, color="0.25")
+        ax2.set_xlim(lo, hi)
+        ax2.set_xlabel(xlabel)
+        ax2.set_axisbelow(True)
+        ax2.grid(axis="x", alpha=0.25, linewidth=0.4)
+        for s in ("top", "right"):
+            ax2.spines[s].set_visible(False)

@@ -43,6 +43,7 @@ matplotlib.rcParams["svg.hashsalt"] = "mem_copy_figures"
 import matplotlib.pyplot as plt  # noqa: E402
 
 from waveflow.build.build import BuildConfig, BuildStep  # noqa: E402
+from waveflow.utils.timing import ActivityDiagram  # noqa: E402
 
 FIGURE_MANIFEST = [
     {"name": "timeline_full", "source": "results/timeline_full.svg",
@@ -74,96 +75,44 @@ def _sha256(path: Path) -> str:
 # Reading the trace
 # ---------------------------------------------------------------------------
 
-def _observations(bt):
+def _observation_spec():
     """The lanes both timeline figures draw, top to bottom: commands in, through the two internal
-    framed FIFOs and both memory ports, to the response out.
+    framed FIFOs and both memory ports, to the response out.  Ordered so the figure reads as
+    dataflow -- a beat entering at the top exits at the bottom.
 
-    Ordered so the figure reads as dataflow -- a beat entering at the top exits at the bottom."""
-    ch = {c["id"]: c for c in bt.manifest["channels"]}
-    hs = bt._handshakes
-
-    def chan(cid, side):
-        c = ch[cid]
-        return (hs(c[side]["write"], c[side]["full_n"]) if side == "write"
-                else hs(c[side]["empty_n"], c[side]["read"]))
-
-    def port(pid, v, r):
-        return hs(bt.port(pid)["signals"][v], bt.port(pid)["signals"][r])
-
+    A spec for :meth:`ActivityDiagram.from_trace`: ``(label, source, colour)`` per lane, each
+    *source* naming a boundary port or one end of an internal channel.  The topology is mem_copy's;
+    the walking of it into event lanes is the renderer's."""
     return [
-        ("s_cmd in",      port("s_cmd", "tvalid", "tready"),        C_SEQ),
-        ("cmd write",     chan("cmd", "write"),                     C_SEQ),
-        ("cmd read",      chan("cmd", "read"),                      C_SEQ),
-        ("gmem0 AR",      port("gmem0", "ARVALID", "ARREADY"),      C_READ),
-        ("gmem0 R",       port("gmem0", "RVALID", "RREADY"),        C_READ),
-        ("copy_data wr",  chan("copy_data", "write"),               C_COPY),
-        ("copy_data rd",  chan("copy_data", "read"),                C_COPY),
-        ("gmem1 AW",      port("gmem1", "AWVALID", "AWREADY"),      C_WRITE),
-        ("gmem1 W",       port("gmem1", "WVALID", "WREADY"),        C_WRITE),
-        ("s_done out",    port("s_done", "tvalid", "tready"),       C_DONE),
+        ("s_cmd in",      ("port", "s_cmd", "tvalid", "tready"),      C_SEQ),
+        ("cmd write",     ("chan", "cmd", "write"),                   C_SEQ),
+        ("cmd read",      ("chan", "cmd", "read"),                    C_SEQ),
+        ("gmem0 AR",      ("port", "gmem0", "ARVALID", "ARREADY"),    C_READ),
+        ("gmem0 R",       ("port", "gmem0", "RVALID", "RREADY"),      C_READ),
+        ("copy_data wr",  ("chan", "copy_data", "write"),             C_COPY),
+        ("copy_data rd",  ("chan", "copy_data", "read"),              C_COPY),
+        ("gmem1 AW",      ("port", "gmem1", "AWVALID", "AWREADY"),    C_WRITE),
+        ("gmem1 W",       ("port", "gmem1", "WVALID", "WREADY"),      C_WRITE),
+        ("s_done out",    ("port", "s_done", "tvalid", "tready"),     C_DONE),
     ]
-
-
-def _occupancy(bt, channel="copy_data"):
-    """(level, capacity) series for a channel's FIFO, or (None, 0) if not exposed."""
-    d = bt.channel(channel).get("depth", {})
-    lvl, cap = d.get("level"), d.get("cap")
-    if not lvl or not cap or lvl not in bt.resolved or cap not in bt.resolved:
-        return None, 0
-    from waveflow.utils.vcd import resample_signal
-
-    def _s(bare):
-        n = bt.resolved[bare]
-        bt.parser.sig_info[n].get_values()
-        return np.asarray(resample_signal(bt.parser.sig_info[n], bt._grid()))
-
-    level = _s(lvl)
-    return level, int(_s(cap).max())
 
 
 # ---------------------------------------------------------------------------
 # Figures
 # ---------------------------------------------------------------------------
 
-def _runs(ev: np.ndarray, gap: int = 3) -> list[tuple[int, int]]:
-    """Collapse handshake cycles into contiguous activity runs ``(start, width)``.
-
-    At full-run scale a per-beat figure is 2000+ SVG paths (a 1.4 MB asset) of hairlines nobody can
-    resolve anyway.  Runs carry the same information at that zoom -- when each stage was busy -- for
-    a fraction of the size.  The per-beat view is the job figure's job."""
-    if not len(ev):
-        return []
-    ev = np.asarray(ev)
-    breaks = np.nonzero(np.diff(ev) > gap)[0]
-    starts = np.concatenate(([ev[0]], ev[breaks + 1]))
-    ends = np.concatenate((ev[breaks], [ev[-1]]))
-    return [(int(s), max(int(e - s), 1)) for s, e in zip(starts, ends)]
-
-
 def render_timeline_full(bt, out: Path, n_cycles: int | None = None) -> None:
-    """Every stage's activity across the run, one lane per observation point."""
-    lanes = _observations(bt)
-    hi = n_cycles or int(max((e[-1] for _, e, _ in lanes if len(e)), default=1)) + 40
+    """Every stage's activity across the run, one lane per observation point.
 
-    fig, ax = plt.subplots(figsize=(11, 4.2))
-    for row, (label, ev, colour) in enumerate(lanes):
-        y = len(lanes) - 1 - row
-        runs = _runs(ev)
-        if runs:
-            # edgecolor == facecolor with a real linewidth: a 1-cycle run is well under a pixel
-            # across a 2900-cycle axis, and with no stroke it antialiases to a grey smear instead of
-            # the lane's colour.
-            ax.broken_barh(runs, (y - 0.34, 0.68), facecolors=colour,
-                           edgecolors=colour, linewidth=0.5)
-    ax.set_yticks(range(len(lanes)))
-    ax.set_yticklabels([lbl for lbl, _, _ in lanes][::-1], fontsize=8)
-    ax.set_xlim(0, hi)
-    ax.set_xlabel("clock cycle")
-    ax.set_title("mem_copy — stage activity across 16 jobs (bar = busy)", fontsize=10)
-    ax.set_axisbelow(True)          # else the grid draws over the bars and reads as extra events
-    ax.grid(axis="x", alpha=0.25, linewidth=0.4)
-    for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
+    The whole run at band resolution: :class:`ActivityDiagram` collapses each lane's handshake
+    cycles into contiguous busy bars, which carry the same information (when each stage was busy) as
+    a per-beat plot at a fraction of the SVG paths.  The per-beat view is the job figure's job.
+    """
+    ad = ActivityDiagram.from_trace(bt, _observation_spec())
+    hi = n_cycles or int(max((e[-1] for _, e, _ in ad.lanes if len(e)), default=1)) + 40
+    fig, _, _ = ad.plot(
+        mode="band", trange=(0, hi), fig_height=4.2,
+        title="mem_copy — stage activity across 16 jobs (bar = busy)")
     _save_svg(fig, out)
 
 
@@ -179,42 +128,13 @@ def render_timeline_job(bt, out: Path, job: int = 8) -> None:
     f = firings[min(job, len(firings) - 1)]
     lo, hi = f.start - 6, f.end + 40
 
-    lanes = _observations(bt)
-    level, cap = _occupancy(bt)
-
-    fig, (ax, ax2) = plt.subplots(
-        2, 1, figsize=(11, 5.2), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
-
-    for row, (label, ev, colour) in enumerate(lanes):
-        y = len(lanes) - 1 - row
-        e = ev[(ev >= lo) & (ev <= hi)]
-        if len(e):
-            ax.vlines(e, y - 0.38, y + 0.38, color=colour, linewidth=1.1)
-    ax.set_yticks(range(len(lanes)))
-    ax.set_yticklabels([lbl for lbl, _, _ in lanes][::-1], fontsize=8)
-    ax.set_title(f"one steady-state job (reader firing {f.index}: "
-                 f"cycles {f.start}–{f.end}, span {f.span})", fontsize=10)
-    ax.set_axisbelow(True)          # else the grid draws over the bars and reads as extra events
-    ax.grid(axis="x", alpha=0.25, linewidth=0.4)
-    for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
-
-    if level is not None and cap:
-        x = np.arange(lo, hi + 1)
-        ax2.step(x, level[lo:hi + 1], where="post", color=C_COPY, linewidth=1.0)
-        ax2.axhline(cap, color="0.4", linestyle="--", linewidth=0.8)
-        blocked = np.asarray(level[lo:hi + 1]) >= cap
-        ax2.fill_between(x, 0, cap, where=blocked, color=C_COPY, alpha=0.25, step="post")
-        ax2.set_ylim(0, cap + 0.5)
-        ax2.set_ylabel("copy_data\noccupancy", fontsize=8)
-        ax2.text(0.005, 0.86, f"shaded = at capacity ({cap}) → producer blocked",
-                 transform=ax2.transAxes, fontsize=7.5, color="0.25")
-    ax2.set_xlim(lo, hi)
-    ax2.set_xlabel("clock cycle")
-    ax2.set_axisbelow(True)
-    ax2.grid(axis="x", alpha=0.25, linewidth=0.4)
-    for s in ("top", "right"):
-        ax2.spines[s].set_visible(False)
+    ad = ActivityDiagram.from_trace(bt, _observation_spec())
+    level, cap = ActivityDiagram.occupancy_from_trace(bt, "copy_data")
+    ad.set_occupancy(level, cap, colour=C_COPY, ylabel="copy_data\noccupancy")
+    fig, _, _ = ad.plot(
+        mode="beat", trange=(lo, hi), fig_height=5.2,
+        title=f"one steady-state job (reader firing {f.index}: "
+              f"cycles {f.start}–{f.end}, span {f.span})")
     _save_svg(fig, out)
 
 
