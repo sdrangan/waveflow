@@ -68,7 +68,7 @@ So for `mem_copy` the rule is simply: *the top generates, the bodies are copied.
 
 > **Task-body *generation* still exists.** A *stream-only* leaf whose `run_iter` is just `get` →
 > `@synthesizable` hook → `write` can have its body **generated** from `run_iter` by `TaskBodyStep` —
-> the FIR pipeline is built that way. `mem_copy` simply has no such leaf.
+> a generated stream-only compute pipeline is built that way. `mem_copy` simply has no such leaf.
 
 ## Building it
 

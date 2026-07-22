@@ -86,5 +86,7 @@ So use each for what it is good at:
 
 *Why* the two differ, and what to do about it, is the next page: [Timing
 instrumentation](./timing.md) traces the internal channels and both `m_axi` bundles out of an RTL
-run and attributes every cycle of the period to a named signal. Until that feeds back into the
-model, treat a pysim cycle count as a lower bound with the right shape, not a prediction.
+run and attributes every cycle of the period to a named signal. Those measurements feed back into the
+model through the [timing-model fitting](../../guide/calib/) system — so a *calibrated* pysim
+reproduces the RTL period, while an **uncalibrated** one (the default) is a lower bound with the right
+shape, not a prediction.
