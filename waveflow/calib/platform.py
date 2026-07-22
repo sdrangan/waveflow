@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,65 @@ from waveflow.calib.bus_model import BusCalib
 
 #: Subdirectory under a platform dir holding the per-component residual libraries.
 COMPONENTS_SUBDIR = "components"
+
+#: Environment variable naming extra platform roots to search first, ``os.pathsep``-separated.  The
+#: escape hatch for pointing a build at a platform library outside the standard locations (CI, a
+#: shared network dir, a checkout).
+PLATFORM_PATH_ENV = "WAVEFLOW_PLATFORM_PATH"
+
+
+def user_platforms_dir() -> Path:
+    """The per-user, writable platform library — where :mod:`waveflow.calib.retime` lands a platform
+    a user calibrates that did not ship with the package.
+
+    A ``pip``-installed user cannot write into ``site-packages``, so a recalibration for a new board
+    needs a writable home outside the wheel.  This is the OS-conventional user-data location
+    (``~/.local/share/waveflow/platforms`` on Linux, the equivalent elsewhere)."""
+    import platformdirs
+
+    # appauthor=False drops the vendor segment Windows would otherwise insert (…/waveflow/waveflow).
+    return Path(platformdirs.user_data_dir("waveflow", appauthor=False)) / "platforms"
+
+
+def packaged_platforms_dir() -> Path | None:
+    """The read-only reference platforms shipped inside the ``waveflow`` package, or ``None`` if they
+    are not resolvable as a real directory (e.g. a zip-imported install).
+
+    These are the calibrations Waveflow ships (``zynq7020_bfm_100mhz`` today): available to every
+    installed user with no checkout, and the last-resort fallback of :func:`platform_fallback_path`."""
+    try:
+        from importlib.resources import files
+        trav = files("waveflow.calib").joinpath("platforms")
+    except (ModuleNotFoundError, AttributeError):     # pragma: no cover - defensive
+        return None
+    p = Path(str(trav))
+    return p if p.is_dir() else None
+
+
+def platform_fallback_path() -> list[Path]:
+    """The read-only roots to search *after* a build's own ``platforms_root``, most-preferred first.
+
+    Order: any :data:`PLATFORM_PATH_ENV` entries, then the per-user library
+    (:func:`user_platforms_dir`), then the packaged reference (:func:`packaged_platforms_dir`).  A
+    platform a user calibrated locally therefore shadows the packaged one of the same name, and the
+    shipped reference is always resolvable as the final fallback.  Duplicate roots are dropped,
+    preserving order."""
+    roots: list[Path] = []
+    env = os.environ.get(PLATFORM_PATH_ENV)
+    if env:
+        roots += [Path(p) for p in env.split(os.pathsep) if p]
+    roots.append(user_platforms_dir())
+    pkg = packaged_platforms_dir()
+    if pkg is not None:
+        roots.append(pkg)
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for r in roots:
+        key = Path(os.path.normcase(os.path.abspath(r)))
+        if key not in seen:
+            seen.add(key)
+            ordered.append(r)
+    return ordered
 
 #: The per-platform identity manifest — the FPGA part + clock the calibration was fit against.  This
 #: is the ONE source both the synthesis TCL (``set_part`` / ``create_clock``) and the calibration
@@ -86,18 +146,32 @@ class Platform:
 
     @classmethod
     def resolve(cls, platforms_root: str | Path, name: str, *, part: str | None = None,
-                clk_freq: float | None = None, allow_mismatch: bool = False) -> "Platform":
-        """Find platform *name* under *platforms_root*, or create it.
+                clk_freq: float | None = None, allow_mismatch: bool = False,
+                fallbacks: "list[str | Path] | None" = None) -> "Platform":
+        """Find platform *name* under *platforms_root* (then the *fallbacks*), or create it.
 
-        * **Absent** (no ``platform.json``): create the directory and seed the manifest with the build's
-          ``part`` / ``clk_freq`` — the platform now exists, ready to be populated by a sweep + publish.
-        * **Present**: load the stored manifest and **confirm** the build's part/clock match it.  A
-          mismatch raises :class:`PlatformMismatchError` unless *allow_mismatch*, which downgrades it to
-          a :class:`PlatformMismatchWarning`.  The stored values (what the fit is valid for) win.
+        Resolution searches ``[platforms_root, *fallbacks]`` in order for an existing platform:
+
+        * **Found** (a ``platform.json``): load the stored manifest and **confirm** the build's
+          part/clock match it.  A mismatch raises :class:`PlatformMismatchError` unless *allow_mismatch*,
+          which downgrades it to a :class:`PlatformMismatchWarning`.  The stored values (what the fit is
+          valid for) win.  A platform in an earlier root shadows a same-named one later — so a user's
+          locally calibrated platform takes precedence over the packaged reference.
+        * **Absent everywhere**: create it in ``platforms_root`` (the primary, always the write target)
+          and seed the manifest with the build's ``part`` / ``clk_freq`` — ready to be populated by a
+          sweep + publish.
+
+        *fallbacks* are **read-only** search roots (typically :func:`platform_fallback_path`: the
+        ``WAVEFLOW_PLATFORM_PATH`` env, the per-user library, and the packaged reference).  ``None``
+        preserves the single-root behaviour — resolution and creation both act on ``platforms_root``
+        alone.
         """
-        pdir = Path(platforms_root) / name
-        manifest = pdir / PLATFORM_MANIFEST
-        if manifest.is_file():
+        roots = [Path(platforms_root)] + [Path(f) for f in (fallbacks or [])]
+        for root in roots:
+            pdir = root / name
+            manifest = pdir / PLATFORM_MANIFEST
+            if not manifest.is_file():
+                continue
             data = json.loads(manifest.read_text(encoding="utf-8"))
             stored_part = data.get("part")
             stored_freq = data.get("clk_freq_hz")
@@ -116,8 +190,10 @@ class Platform:
                 warnings.warn(msg, PlatformMismatchWarning, stacklevel=2)
             return cls(name=name, dir=pdir, part=stored_part, clk_freq=stored_freq)
 
+        # Not found in any root — create it in the primary (never a read-only fallback).
+        pdir = Path(platforms_root) / name
         pdir.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(
+        (pdir / PLATFORM_MANIFEST).write_text(
             json.dumps({"part": part, "clk_freq_hz": clk_freq}, indent=2) + "\n", encoding="utf-8")
         return cls(name=name, dir=pdir, part=part, clk_freq=clk_freq)
 

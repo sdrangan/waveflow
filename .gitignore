@@ -29,6 +29,10 @@ hls/
 *.jou
 *.xml
 *.json
+# The shipped reference calibration library is tracked package data — `publish_calib` writes the
+# distilled corpus (mostly *.json) here, and its diff must be reviewable, so keep it visible despite
+# the blanket *.json ignore above.
+!waveflow/calib/platforms/**
 *.o
 *.obj
 *.exe

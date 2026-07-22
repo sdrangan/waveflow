@@ -5,7 +5,8 @@ platform identity, the bus-transfer law, and the writer component's control resi
 directory (untracked ``calib/work/<name>/``).  Promote it to the tracked library with::
 
     python -m examples.mem_copy.calibrate_platform          # -> calib/work/zynq7020_bfm_100mhz
-    publish_calib calib/work/zynq7020_bfm_100mhz calib/platforms/zynq7020_bfm_100mhz --apply
+    publish_calib calib/work/zynq7020_bfm_100mhz \
+        waveflow/calib/platforms/zynq7020_bfm_100mhz --apply   # the shipped, in-package library
 
 Provenance of the numbers (all from the closed mem_copy calibration loop, gated for real by ``-m xsi``
 — see ``plans/memcpy_timing_calibration.md`` and ``tests/examples/test_mem_copy_calibration.py``):
@@ -93,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"calibrated platform work dir: {work}")
     print(f"  bus law     -> {work / 'mm_bus.json'}")
     print(f"  writer resid-> {work / 'components' / COMPONENT / 'params.json'}")
-    print(f"publish it:  publish_calib {work} calib/platforms/{args.name} --apply")
+    print(f"publish it:  publish_calib {work} waveflow/calib/platforms/{args.name} --apply")
     return 0
 
 

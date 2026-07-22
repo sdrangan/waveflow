@@ -76,7 +76,12 @@ class BuildConfig:
     clk_freq : float | None
         Synthesis clock frequency in Hz (its period drives HLS scheduling → the cycle counts).
     platforms_root : Path | str | None
-        Where platform directories live.  Defaults to ``calib/platforms`` (the tracked library).
+        The build's **primary** platform library — the write target, and the first root searched.
+        Defaults to ``calib/platforms`` (a project-local library).  When a selected platform is not
+        found there, resolution falls back (read-only) through
+        :func:`~waveflow.calib.platform.platform_fallback_path` — the ``WAVEFLOW_PLATFORM_PATH`` env,
+        the per-user library, and the reference platforms shipped inside the package — so a
+        ``pip``-installed build resolves ``zynq7020_bfm_100mhz`` with no checkout.
     allow_platform_mismatch : bool
         When the selected platform's stored part/clock differ from this build's, warn instead of
         raising (default ``False`` = raise).
@@ -99,10 +104,10 @@ class BuildConfig:
         #: when no ``platform`` was selected.
         self.platform_info = None
         if self.platform is not None:
-            from waveflow.calib.platform import Platform
+            from waveflow.calib.platform import Platform, platform_fallback_path
             self.platform_info = Platform.resolve(
                 self.platforms_root, self.platform, part=self.part, clk_freq=self.clk_freq,
-                allow_mismatch=self.allow_platform_mismatch)
+                allow_mismatch=self.allow_platform_mismatch, fallbacks=platform_fallback_path())
 
     def vitis_version_tuple(self) -> tuple[int, int] | None:
         """Parse ``vitis_version`` into a ``(major, minor)`` integer tuple.

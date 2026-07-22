@@ -1,14 +1,12 @@
-"""tests/examples/test_default_platform.py — the committed reference platform reproduces RTL.
+"""tests/examples/test_default_platform.py — the shipped reference platform reproduces RTL.
 
-`calib/platforms/zynq7020_bfm_100mhz/` is a tracked calibration library (built by
-examples/mem_copy/calibrate_platform.py from the measured mem_copy numbers).  This guards it: loading
-it — the bus law + the writer's control residual — must reproduce the measured writer RTL period at
-both swept sizes.  A drift in the committed params (or a regression in the load/predict path) fails
-here, toolchain-free.
+`waveflow/calib/platforms/zynq7020_bfm_100mhz/` is the in-package calibration library (built by
+examples/mem_copy/calibrate_platform.py from the measured mem_copy numbers, shipped as package data).
+This guards it: loading it — the bus law + the writer's control residual — must reproduce the measured
+writer RTL period at both swept sizes.  A drift in the committed params (or a regression in the
+load/predict path) fails here, toolchain-free.
 """
 from __future__ import annotations
-
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,10 +14,10 @@ import pytest
 from examples.mem_copy.calibrate_platform import COMPONENT, RTL_SPAN, SWEEP
 from examples.mem_copy.mem_copy import xsi_jobs
 from examples.mem_copy.mem_copy_sim import MemCopySim
-from waveflow.calib.platform import Platform
+from waveflow.calib.platform import Platform, packaged_platforms_dir
 
-#: Repo-root tracked library (tests/examples/ -> parents[2] == repo root).
-PLATFORMS_ROOT = Path(__file__).resolve().parents[2] / "calib" / "platforms"
+#: The shipped, in-package reference library (resolved wherever the package is installed).
+PLATFORMS_ROOT = packaged_platforms_dir()
 NAME = "zynq7020_bfm_100mhz"
 
 
@@ -29,7 +27,7 @@ def _period(dut) -> float:
     return float(np.median(d[len(d) // 2:]))
 
 
-@pytest.mark.skipif(not (PLATFORMS_ROOT / NAME / "platform.json").exists(),
+@pytest.mark.skipif(PLATFORMS_ROOT is None or not (PLATFORMS_ROOT / NAME / "platform.json").exists(),
                     reason="reference platform not present")
 class TestReferencePlatform:
     def test_manifest_records_the_part_and_clock(self):
