@@ -34,8 +34,8 @@ so command flow and data flow share one interconnect.
 ## What mmqueue adds
 
 It introduces the **AXI-MM command queue** — control moved off the stream and into a
-shared-memory ring (where [rowwise FIR](../rowwise_fir/) and `shared_mem` keep control on a
-stream) — and it is distinctive on two counts:
+shared-memory ring (where `shared_mem` keeps control on a stream) — and it is distinctive on two
+counts:
 
 - It is **also a timing study** — it does not just ask
   "are the numbers right" but "does the loosely-timed simulation predict the right

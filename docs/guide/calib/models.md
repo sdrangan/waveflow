@@ -85,8 +85,8 @@ forcing a basis function the data doesn't obey, you *carry the measurement*.
 - The target is **affine in its features** (a latency + a per-iteration cost) → `LinCalibModel`.
 - The target is a **smooth, saturating 1-D curve** you'd rather measure than fit → `InterpCalibModel`.
 - The target is **deterministic** (one transfer beat per word) → you don't need a model at all; carry
-  the constant. (The matrix-LT FIR uses all three stances: deterministic occupancy, an exact-II=1
-  compute, and *one* `InterpCalibModel` for the per-row depth.)
+  the constant. (A real kernel often uses all three stances at once: deterministic occupancy, an
+  exact `II=1` compute, and *one* `InterpCalibModel` for a saturating term.)
 
 ## See also
 

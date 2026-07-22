@@ -25,3 +25,17 @@ so the current code is not the right starting point — it is archived rather th
 
 > The separate `waveflow/mcp/corpus/**` conv2d (the AI example corpus) is deferred and reworked
 > independently; it is unrelated to this snapshot.
+
+## rowwise_fir
+
+`rowwise_fir/` is the matrix-LT / per-row FIR built on the **`#pragma HLS DATAFLOW`** architecture — a
+single kernel owning a load → compute → store pipeline over a partitioned-BRAM ping-pong and an
+`hls::stream` FIFO (`fir_dataflow.tpp`, `fir_build.py`, the cosim calibration in `fir_calibrate.py`).
+That dataflow architecture is being retired: double-buffering is now modeled by composing
+`Load` / `Compute` / `Store` as concurrent sub-components over a **stream of blocks**, and the compute
+sub-component is timed like a plain block process. So this example — and its docs and the
+`custom_hooks/dataflow.md` guide — no longer describe the canonical path.
+
+It is archived rather than migrated: the premise (a per-row resident window realized as one DATAFLOW
+kernel) is superseded, so the current code is not the right starting point. A future FIR will return as
+an SOB-composed `HwComponent`.

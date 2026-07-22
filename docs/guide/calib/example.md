@@ -96,12 +96,12 @@ print(g.predict({"n_col": 4096}))   # 268.0    (clamped past the last sample —
 print(g.samples)                    # {'feature': 'n_col', 'x': [...], 'y': [...]}
 ```
 
-That is exactly how the matrix-LT FIR carries its one fitted term (`row_depth(n_col)`) — see the
-[double-buffered worked example](../concurrency/python/sob.md).
+That is the stance for a smooth, saturating physical curve — a per-row pipeline depth, a fill
+latency — that a straight line would distort: **measure** it rather than force a wrong fit.
 
 ## See also
 
 - [The corpus — `CalibDataFrame`](./dataframe.md) — building and persisting the measurement table.
 - [Models](./models.md) — the full method reference for `CalibModel` / `LinCalibModel` / `InterpCalibModel`.
-- [Calibration](./index.md) — the overall workflow.
-- [`examples/rowwise_fir/fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py) — a real cosim-sweep calibration.
+- [Timing model fitting](./index.md) — the overall workflow.
+- [Fitting a timing model](./fit.md) — the direct sweep-based fit this example's mechanics support.

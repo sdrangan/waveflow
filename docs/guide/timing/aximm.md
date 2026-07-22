@@ -218,11 +218,9 @@ reached by a `Region` slice *through the interconnect* (which decodes the addres
 A read and a write on one AXI bundle never contend (full-duplex is the default); a single-port BRAM or a
 DDR model that shares R/W bandwidth *declares* itself `half_duplex=True` to re-couple the channels.
 
-This is precisely the measurement that underpins the matrix-LT FIR calibration: occupancy is read off
-the `transfer` beat count (deterministic), and the per-row stall is attributed to compute. See the
-beat-counting helper in [`fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py), the
-[double-buffered worked example](../concurrency/python/sob.md),
-and the [Calibration](../calib/) package.
+This is precisely the kind of measurement that underpins a compute calibration: bus occupancy is read
+off the `transfer` beat count (deterministic), and the remaining per-firing stall is attributed to
+compute. See [Timing model fitting](../calib/) for turning such measurements into a model.
 
 ## Queueing and Outstanding Reads
 
