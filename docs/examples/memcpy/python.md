@@ -120,8 +120,8 @@ vocabulary. Keeping the Python golden and its C++ in agreement is your job; only
 
 > **The other kind of leaf.** A *stream-only* leaf whose `run_iter` is just `get` → `@synthesizable`
 > hook → `write` can instead have its body **generated** from `run_iter` (`TaskBodyStep`). `MemCopy`
-> has none — all three leaves here are hand-written — but the pattern is how the FIR pipeline is built;
-> see [DUT codegen](./codegen_dut.md).
+> has none — all three leaves here are hand-written — but that generated-leaf pattern is described in
+> [DUT codegen](./codegen_dut.md).
 
 ## The mem-stream leaves
 

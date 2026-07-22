@@ -40,3 +40,6 @@ it, test it in Python, generate the kernel, generate the testbench, then run the
    becomes the BFM harness.
 6. [RTL simulation](./rtlsim.md) — running the RTL through XSI, inspecting the results, and comparing
    the timing to pysim.
+7. [Timing instrumentation](./timing.md) — tracing the internal channels out of an RTL run and
+   attributing every cycle of the period, the measurement that feeds the
+   [timing-model fitting](../../guide/calib/) system (the reference platform is fit from these numbers).

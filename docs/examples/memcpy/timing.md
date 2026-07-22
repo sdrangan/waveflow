@@ -126,12 +126,12 @@ burst term is fit and shared by [`BusCalib`](../../guide/calib/bus_model.md); th
 [`StreamTimingModel`](../../guide/calib/component_residual.md) residual; both are stored in a
 [platform library](../../guide/calib/platform.md) keyed by FPGA part + clock and promoted from an
 untracked work dir by [`publish_calib`](../../guide/calib/workflow.md). In fact the writer residual in
-the reference `zynq7020_bfm_100mhz` platform is fit from exactly these mem_copy numbers. See the
-[Calibration guide](../../guide/calib/) for the whole system.
+the reference `zynq7020_bfm_100mhz` platform is fit from exactly these mem_copy numbers. See
+[Timing model fitting](../../guide/calib/) for the whole system.
 
 ## See also
 
-- [Calibration](../../guide/calib/) — the two-level split, generalized and automated
+- [Timing model fitting](../../guide/calib/) — the two-level split, generalized and automated
 - [Tracing a kernel run](../../guide/timing/trace_steps.md) — the four steps, in general
 - [Trace pitfalls](../../guide/timing/trace_pitfalls.md) — the three traps this relied on avoiding
 - [RTL simulation](./rtlsim.md) — the run this instruments
