@@ -642,8 +642,11 @@ class ActivityDiagram(object):
         level, cap = occ["level"], occ["cap"]
         colour = occ["colour"]
         if level is not None and cap:
-            x = np.arange(lo, hi + 1)
+            # x is clipped to whatever the level series actually covers: a trace grid runs past hi
+            # (so this is a no-op there), but a hand-authored level may stop exactly at the window
+            # end, and step() needs x and y the same length.
             window = np.asarray(level)[lo:hi + 1]
+            x = np.arange(lo, lo + len(window))
             ax2.step(x, window, where="post", color=colour, linewidth=1.0)
             ax2.axhline(cap, color="0.4", linestyle="--", linewidth=0.8)
             blocked = window >= cap

@@ -19,15 +19,13 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_example_module():
-    """Dynamically import examples/timing/basic_timing_diagram.py."""
+def _load_example_module(name="basic_timing_diagram"):
+    """Dynamically import an examples/timing/<name>.py module."""
     example_path = (
         Path(__file__).parent.parent.parent
-        / "examples" / "timing" / "basic_timing_diagram.py"
+        / "examples" / "timing" / f"{name}.py"
     )
-    spec = importlib.util.spec_from_file_location(
-        "basic_timing_diagram", example_path
-    )
+    spec = importlib.util.spec_from_file_location(name, example_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -290,6 +288,19 @@ def test_save_timing_figures_creates_png(tmp_path):
     """Import save_timing_figures from the example script and verify output."""
     mod = _load_example_module()
     saved = mod.save_timing_figures(tmp_path)
+
+    assert len(saved) >= 1, "Expected at least one output file"
+    for p in saved:
+        p = Path(p)
+        assert p.exists(), f"Expected output file not found: {p}"
+        assert p.stat().st_size > 0, f"Output file is empty: {p}"
+        assert p.suffix == ".png", f"Expected PNG, got: {p.suffix}"
+
+
+def test_save_activity_figures_creates_png(tmp_path):
+    """Import save_activity_figures from the ActivityDiagram example and verify output."""
+    mod = _load_example_module("basic_activity_diagram")
+    saved = mod.save_activity_figures(tmp_path)
 
     assert len(saved) >= 1, "Expected at least one output file"
     for p in saved:

@@ -14,6 +14,11 @@ Waveflow provides some basic package for python processing of timing diagrams re
 - Extracting information from timing diagrams
 - Python-based analysis for AXI protocols including AXI-Lite, AXI-Streaming, and AXI memory-mapped
 
+The `waveflow.utils.timing` module renders two complementary views, each of which can be built by
+hand or from a trace: [Timing Diagrams](./timing.md) (waveforms — value boxes per transition, for a
+~10–50 cycle zoom) and [Activity Diagrams](./activity.md) (activity bands + an optional occupancy
+panel, for the whole-run and stage-overlap view).
+
 For a free-running (`ap_ctrl_none`) `hls::task` kernel, [Tracing a kernel run](./trace_steps.md)
 covers the four build steps that dump a VCD of its internal channels and bind the signals by exact
 name; [Trace pitfalls](./trace_pitfalls.md) collects the three subtle ways such a measurement goes
