@@ -1,7 +1,7 @@
 ---
 title: AXI4-Stream Timing Analysis
 parent: Timing Analysis Tools
-nav_order: 4
+nav_order: 5
 has_children: false
 ---
 

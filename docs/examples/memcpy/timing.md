@@ -29,10 +29,14 @@ That produces `mem_copy_trace.vcd` (the waveform), `mem_copy_trace.json` (the ne
 `mem_copy_timing.json` (a per-firing timing table). A fifth step, `timing_figures`, renders the pictures
 below.
 
-> **These figures are hand-made — for now.** The plots on this page are drawn by an example-specific
-> `timing_figures` step, not a general facility. A reusable renderer (an *activity diagram* — stage
-> occupancy bands + a per-signal timeline, a sibling of the `TimingDiagram`) is planned so any design
-> can produce these views from its trace; until then, treat the code behind them as bespoke.
+> **How these are drawn.** The two timeline figures below come from a reusable renderer,
+> [`ActivityDiagram`](../../../waveflow/utils/timing.py) — a
+> sibling of the `TimingDiagram` that swaps per-transition value boxes for activity *bands* and an
+> optional occupancy sub-panel, so it stays legible across thousands of cycles. Any design can build
+> the same views from its trace: `ActivityDiagram.from_trace(bt, spec)` walks a manifest's channels
+> and ports into lanes; the example's `timing_figures` step supplies only mem_copy's own lane spec.
+> The third figure (per-firing spans) is a bar chart off the timing table, not a lane-on-time-axis
+> plot, so it stays example-specific.
 
 ## The run at a glance
 

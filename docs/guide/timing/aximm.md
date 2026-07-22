@@ -1,7 +1,7 @@
 ---
 title: AXI4 Memory-Mapped Timing Analysis
 parent: Timing Analysis Tools
-nav_order: 5
+nav_order: 6
 has_children: false
 ---
 
