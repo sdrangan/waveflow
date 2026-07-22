@@ -1,7 +1,7 @@
 ---
 title: Models
-parent: Calibration
-nav_order: 7
+parent: Timing model fitting
+nav_order: 2
 audience: python
 api: [CalibModel, LinCalibModel, InterpCalibModel]
 summary: "The per-target calibration models. CalibModel is the fit / predict / score / holdout interface over column-name basis and target. LinCalibModel is an sklearn LinearRegression with coeffs, plot, and a through-origin knob. InterpCalibModel is a calibrated 1-D lookup (a measured table, not a curve fit) for smooth, saturating physical curves."
@@ -91,5 +91,5 @@ forcing a basis function the data doesn't obey, you *carry the measurement*.
 ## See also
 
 - [A worked example](./example.md) — `LinCalibModel` and `InterpCalibModel` end-to-end.
-- [Fitting a timing model](../timing_model/fit.md) — the latency/`ii` line `LinCalibModel` recovers.
+- [Fitting a timing model](./fit.md) — the latency/`ii` line `LinCalibModel` recovers.
 - [`waveflow/calib/calib.py`](../../../waveflow/calib/calib.py) — the source (≈300 lines).

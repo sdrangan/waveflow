@@ -1,7 +1,7 @@
 ---
 title: The calibration workflow
-parent: Calibration
-nav_order: 5
+parent: Timing model fitting
+nav_order: 8
 audience: python
 api: [BusCalib, StreamTimingModel, Platform, CalibBusStep, CollectTimingStep, FitTimingStep]
 summary: "Calibration storage is two-tier: sweeps write a churny untracked calib/work/<name>/; the publish_calib command promotes the stable artifacts (platform.json, mm_bus.json, points/, component params + corpus -- never the raw firing trees) into the tracked calib/platforms/<name>/. publish is dry-run by default, a byte-compare no-op on unchanged files, and refuses a coverage regression (a thinner re-fit) unless forced. The reference zynq7020_bfm_100mhz platform is built end-to-end by examples/mem_copy/calibrate_platform.py and reproduces the writer RTL period to 0.0%."

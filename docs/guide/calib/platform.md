@@ -1,7 +1,7 @@
 ---
 title: Platforms
-parent: Calibration
-nav_order: 2
+parent: Timing model fitting
+nav_order: 6
 audience: python
 api: [Platform, PlatformCalib, BuildConfig]
 summary: "A calibration platform is a named directory with an identity manifest (platform.json = FPGA part + synthesis clock) plus the fitted models valid for that target. Platform.resolve is the create-or-confirm gate: a new platform is seeded from the build's part/clock, an existing one is confirmed against them (PlatformMismatchError, or a warning under allow_platform_mismatch). BuildConfig.platform selects one; the same identity drives the csynth set_part / create_clock, so the synthesised part cannot drift from the calibrated part."

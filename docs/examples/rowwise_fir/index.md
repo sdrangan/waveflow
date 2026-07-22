@@ -39,7 +39,7 @@ A host sends `FIRCmd`s over the control stream (filter taps `h`, the address of 
 `n_cols`); the accelerator reads each row of `X`, computes the FIR, writes `Y` back over a single
 full-duplex `m_axi` bundle, and returns a response on `m_out`. Internally it is three concurrent
 stages — **load**, **compute**, **store** — overlapping across rows, the
-[double-buffered timing model](../../guide/timing_model/double_buffered.md) made concrete.
+[double-buffered timing model](../../guide/concurrency/python/sob.md) made concrete.
 
 ## What it adds
 

@@ -22,7 +22,7 @@ row n+1:        load
 
 Once the pipeline fills, the three stages run at once on different rows, so the time per row is set by
 the **slowest** stage, not the sum — `t_row ≈ max(load, compute, store)`. This is the
-[double-buffered timing model](../../guide/timing_model/double_buffered.md); rowwise FIR is its worked,
+[double-buffered timing model](../../guide/concurrency/python/sob.md); rowwise FIR is its worked,
 shipped example.
 
 ## Two channels, by access pattern

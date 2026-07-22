@@ -1,135 +1,97 @@
 ---
-title: Calibration
+title: Timing model fitting
 parent: Guide
-nav_order: 12
+nav_order: 13
 has_children: true
 audience: python
-api: [CalibDataFrame, CalibModel, LinCalibModel, InterpCalibModel, BusCalib, StreamTimingModel, Platform, PlatformCalib]
-summary: "The waveflow.calib package: fit physically-reasonable timing models from synth/cosim measurement so the fast loosely-timed sim tracks the slow RTL. A CalibModel / CalibDataFrame layer holds the corpus and fits one target; on top of it a two-level split calibrates the m_axi bus law once per PLATFORM (BusCalib) and each reusable component's control residual per (component, platform) (StreamTimingModel), stored in a git-tracked platform library keyed by an FPGA-part identity (Platform / platform.json) and promoted from an untracked work dir by publish_calib."
+api: [CalibDataFrame, CalibModel, LinCalibModel, InterpCalibModel, StreamTimingModel, BusCalib, Platform]
+summary: "Fit a timing model's parameters from measurement so the fast loosely-timed sim tracks the slow RTL. Two methods: DIRECT — fit the whole cycle count from a (size, cycles) sweep (a LinCalibModel recovers a loop's latency/ii); and RESIDUAL — fit only the gap between RTL and a pysim that already times its transfers (a component's control cost). Same CalibModel / CalibDataFrame machinery underneath. Fits live either in a project-local dir (custom components) or a git-tracked platform library keyed by FPGA part + clock (shared infra), where the m_axi bus law is also fit once and reused."
 ---
 
-# Calibration
+# Timing model fitting
 
-A Waveflow component's timing model is **loosely-timed** (see [Timing Models](../timing_model/)): it
-predicts a timeline from a few numbers — a latency, an initiation interval, a per-transfer cost. Those
-numbers are properties of the *synthesized* hardware. **Calibration** is the discipline of *fitting
-them from measurement* — running the kernel through synthesis or RTL cosim at a range of sizes,
-recording the resulting cycle counts, and fitting a model so the fast LT simulation reproduces the slow
-RTL without you transcribing report numbers by hand.
+A [timing model](../timing_model/) predicts a component's timeline from a few numbers — a `latency`, an
+initiation interval, a per-transfer cost. Those numbers are properties of the *synthesized* hardware.
+**Fitting** recovers them from measurement: run the kernel through synthesis / RTL cosim, record the
+cycles, and fit a model, so the fast LT simulation reproduces the slow RTL without you transcribing
+report numbers by hand.
 
-## Two levels: what is a platform property, what is a component property
+## Two methods: direct and residual
 
-The cost of a run splits into two parts that live at two different scopes:
+There are two ways to fit, and this section is organized around them:
+
+- **Direct** — fit the model's parameters straight from a sweep of `(size, cycles)` measurements. A
+  [loop model](../timing_model/loops.md)'s `latency` / `ii` are the two coefficients of a line, which a
+  `LinCalibModel` recovers. This is the simple case: [Fitting a timing model](./fit.md).
+- **Residual** — when a component's loosely-timed sim *already* charges most of its time (its transfers
+  are timed by the interfaces), fit only the **gap** between the RTL and the pysim — the small control
+  cost pysim misses. This is [Component residuals](./component_residual.md).
+
+Both are the same machinery underneath — a [`CalibModel`](./models.md) over a
+[`CalibDataFrame`](./dataframe.md) corpus — differing only in *what* they fit: the whole cycle count, or
+the residual.
+
+## The two-level split: bus vs component
+
+For a component that moves data over `m_axi`, the residual method leans on a split. The run's cost is:
 
 ```
-        RTL cycles  =  bus transfer  +  component control
-                        └─ PLATFORM ─┘   └── COMPONENT ──┘
-                        (the m_axi law,   (this kernel's own
-                         shared by every   overhead, per
-                         accelerator)       component + platform)
+    RTL cycles  =  bus transfer  +  component control
+                    └─ PLATFORM ─┘   └── COMPONENT ──┘
 ```
 
-- The **bus transfer** — how long the `m_axi` interconnect takes to move `n` words in `k` bursts — is
-  a property of the **platform** (the memory system + AXI adapter), not of any one accelerator. Fit it
-  **once per platform** and every accelerator on that platform reuses it. This is [`BusCalib`](./bus_model.md).
-- The **component control** cost — the kernel's own per-firing overhead once the bus term is charged —
-  is a property of the **`(component, platform)`** pair. This is the residual a
-  [`StreamTimingModel`](./component_residual.md) fits, stored *with* the platform so the next project
-  reusing the component inherits it.
+The **bus transfer** — how long the interconnect takes to move `n` words in `k` bursts — is a property
+of the **platform** (memory system + AXI adapter), so it is fit **once per platform** and reused by
+every accelerator ([`BusCalib`](./bus_model.md)). With that charged in pysim, the **component control**
+residual shrinks to the kernel's own overhead, fit per `(component, platform)`
+([`StreamTimingModel`](./component_residual.md)).
 
-Splitting them means a new accelerator loads the platform's bus law for free and fits only its own
-small residual — instead of re-measuring the interconnect every time.
+## Where the fit lives: custom vs shared infra
 
-## Two kinds of component: shared infra vs custom
+A fit is stored in one of two places, chosen by one knob:
 
-The component-control residual is fit the *same way* for two kinds of component — they differ only in
-**where the fitted data lives**:
-
-- **Shared-infra components** — the reusable framework kernels (`MemRStream` / `MemWStream`, and more
-  to come). Their residual is a `(component, platform)` property, so it is stored in the **committed
-  platform library** and shipped with the repo: reuse the component on a calibrated platform and you
-  inherit its timing with **no re-calibration**.
-- **Custom components** — your accelerator's own kernels. Their residual is specific to your design,
-  not shared infra, so it is stored in a **project-local directory you choose** (typically beside the
-  component).
-
-The package serves both through one knob: a component takes a `platform_dir` (resolve into the shared
-library, keyed by the component id) *or* an explicit `calib_dir` (your project-local path, which wins
-if both are given). [The bus law](./bus_model.md) sits above this split — it is always platform-scoped,
-because it is the shared interconnect, owned by no single component.
-
-## One calibration layer
-
-`BusCalib` and `StreamTimingModel` are the **same underlying fit** — a [`CalibModel`](./models.md) over
-a corpus — wrapped with the collection, storage, and scoping each level needs. They differ only in what
-they attach to (the shared `m_axi` interface vs. a `FreeRunComp`) and at what scope they are stored
-(platform vs. component). A single timing model attachable to *any* `SimObj`, with `FreeRunComp`
-specialization, is a natural future unification; today the two entry points cover the cases that exist,
-and the platform-vs-component scoping is intrinsic — the bus is a shared resource — not an accident of
-having two classes.
+- **Custom components** — your accelerator's own kernels. The fit is specific to your design, so it goes
+  in a **project-local directory you pick** (`calib_dir`).
+- **Shared-infra components** — reusable framework kernels (`MemRStream` / `MemWStream`, …). Their fit
+  is a `(component, platform)` property, so it goes in a **git-tracked platform library** (`platform_dir`)
+  and ships with the repo — reuse the component on a calibrated platform and inherit its timing with
+  **no re-calibration**. The library is keyed by an FPGA-part identity (see [Platforms](./platform.md))
+  and populated through a [two-tier work → publish flow](./workflow.md).
 
 ## Everything is in cycles
 
-The fitted numbers are stored in **cycles**, not seconds, so `params.json` is clock-independent — a
-re-deploy at a different simulation frequency needs no refit. The sim `Clock` is only a cycles ↔
-seconds converter at the boundary. The one clock that *does* change the numbers is the **synthesis**
-clock (`create_clock -period`): HLS schedules to meet it, so a different target period can change the
-cycle counts. That is why a platform is keyed by part **and** clock — see [Platforms](./platform.md).
-
-## The platform library
-
-A calibrated platform is a directory keyed by an FPGA-part identity, holding both levels:
-
-```
-calib/platforms/<name>/
-    platform.json                     # identity: {part, clk_freq_hz}   (Platform)
-    mm_bus.json  +  points/            # the bus-transfer law            (BusCalib)
-    components/<task-body>/            # a component's control residual  (StreamTimingModel)
-        params.json  +  corpus.csv
-```
-
-Calibration data is **two-tier**: sweeps write a churny, untracked `calib/work/<name>/`; only the
-`publish_calib` command promotes the stable artifacts into the tracked `calib/platforms/<name>/`. So a
-stray run can never clobber shared parameters, and a deterministic re-fit produces no git diff. See
-[The calibration workflow](./workflow.md).
-
-## The pieces
-
-The corpus and the single-target models are the primitive layer the two levels compose over: the
-corpus is a [`CalibDataFrame`](./dataframe.md) — a thin `pandas.DataFrame` wrapper, one row per
-measurement — and the [models](./models.md) fit one target (e.g. `cycles`) from a basis of its columns.
-The [bus model](./bus_model.md) and [component residuals](./component_residual.md) build on them with
-the collection, storage, and scoping that turn a raw sweep into a reusable, checked-in library.
+Fitted numbers are stored in **cycles**, not seconds, so the artifact is clock-independent — a re-deploy
+at a different *simulation* frequency needs no refit. The one clock that *does* change the numbers is the
+**synthesis** clock (`create_clock -period`): HLS schedules to meet it, so a different target period can
+change the cycle counts. That is why a platform is keyed by part **and** clock — see
+[Platforms](./platform.md).
 
 ## In this section
 
-The platform-calibration system, then the primitive layer it composes over:
+The direct method and its primitives first, then the residual method and the platform infrastructure:
 
-- [Adding a timing model to a component](./insertion.md) — usage-first: where a `TimingModel` plugs
-  into a `FreeRunComp`, how `timed_delay` charges the delay, and why read-stalls emerge from the sim
-  rather than the model.
-- [Platforms](./platform.md) — the platform identity (`platform.json`, `Platform`), why a platform is
-  keyed by FPGA part **and** synthesis clock, and how `BuildConfig` selects and confirms one.
-- [The bus-transfer model](./bus_model.md) — `BusCalib`: the `m_axi` span law fit once per platform
-  (`mm_bus.json`), measured component-independently off the ports (`measure_bus_span`).
-- [Component residuals](./component_residual.md) — `StreamTimingModel`: fitting the model you attached,
-  per `(component, platform)`, with the bus term already charged.
-- [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms`
-  flow, the DAG steps that populate it, and the reference `zynq7020_bfm_100mhz` platform end to end.
-- [The corpus — `CalibDataFrame`](./dataframe.md) — the primitive corpus: one timestamped row per
-  measurement, a `pandas.DataFrame` under `.df`, with `save` / `load`.
-- [Models](./models.md) — the primitive per-target fit / predict / score interface (`CalibModel`), the
-  linear model (`LinCalibModel`), and the calibrated lookup (`InterpCalibModel`).
-- [A worked example](./example.md) — the primitive layer alone: fit a `LinCalibModel` to
-  `(size, cycles)`, score it, hold a point out; then a saturating curve with `InterpCalibModel`.
-- [Instrumenting a calibration](./instrumentation.md) — the playbook for collecting *real* data and
-  closing the LT-vs-RTL loop (worked against the FIR example).
+- [Fitting a timing model](./fit.md) — the direct method: recover a loop model's `latency` / `ii` from a
+  `(size, cycles)` sweep, and validate on a held-out point.
+- [Models](./models.md) — the per-target fit / predict / score interface (`CalibModel`), the linear
+  model (`LinCalibModel`), and the calibrated lookup (`InterpCalibModel`).
+- [The corpus — `CalibDataFrame`](./dataframe.md) — one timestamped row per measurement, a
+  `pandas.DataFrame` under `.df`, with `save` / `load`.
+- [A worked example](./example.md) — the primitive fit mechanics: fit a `LinCalibModel`, score it, hold
+  a point out; then a saturating curve with `InterpCalibModel`.
+- [Component residuals](./component_residual.md) — the residual method: `StreamTimingModel`, fit per
+  `(component, platform)` with the bus term already charged.
+- [Platforms](./platform.md) — the platform identity (`platform.json`), why it is keyed by FPGA part
+  **and** synthesis clock, and how `BuildConfig` selects and confirms one.
+- [The bus-transfer model](./bus_model.md) — `BusCalib`: the `m_axi` span law fit once per platform,
+  measured component-independently off the ports.
+- [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms` flow,
+  the DAG steps, and the reference `zynq7020_bfm_100mhz` platform end to end.
 
 ## See also
 
+- [Timing Models](../timing_model/) — the forward models whose parameters this section fits, and where a
+  model is [attached to a component](../timing_model/insertion.md).
 - [Timing Analysis Tools](../timing/) — the *measurement* side: extracting cycle counts and bus spans
   from a VCD / cosim run (where the datapoints come from).
-- [Fitting a timing model](../timing_model/fit.md) — the conceptual fit (recovering `latency` / `ii`
-  from a line) that `LinCalibModel` performs.
 - [`BuildConfig`](../build/corecomp.md) — the `platform` / `part` / `clk_freq` selector that names the
   platform a build synthesizes and calibrates for.

@@ -221,7 +221,7 @@ DDR model that shares R/W bandwidth *declares* itself `half_duplex=True` to re-c
 This is precisely the measurement that underpins the matrix-LT FIR calibration: occupancy is read off
 the `transfer` beat count (deterministic), and the per-row stall is attributed to compute. See the
 beat-counting helper in [`fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py), the
-[double-buffered worked example](../timing_model/double_buffered.md#worked-example-the-matrix-lt-fir),
+[double-buffered worked example](../concurrency/python/sob.md),
 and the [Calibration](../calib/) package.
 
 ## Queueing and Outstanding Reads
