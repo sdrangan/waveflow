@@ -594,6 +594,10 @@ class MemWStream(FreeRunComp):
         # Trailing calibration delay: the posted-write drain the RTL keeps running after s_done, so
         # the firing is not really done -- and the next cannot start -- until it completes.  A no-op
         # (0, but still records the firing) when uncalibrated; see FreeRunComp.timed_delay.
-        dly = self.timed_delay({"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST)})
+        # `n_fwd` (the forwarded/echoed bursts) is a feature too: buffering and echoing them costs
+        # cycles that scale with the count.  A model whose basis omits n_fwd ignores the key; one that
+        # includes it (a fixture that swept it) charges the per-message cost.
+        dly = self.timed_delay(
+            {"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST), "n_fwd": n_fwd})
         if dly:
             yield self.timeout(dly)

@@ -21,13 +21,16 @@ from .calib import (
     InterpCalibModel,
     LinCalibModel,
 )
+from .fixture import ComponentFixture, SweepPoint
 from .timing_model import StreamTimingModel, TimingModel
 
 __all__ = [
     "CalibDataFrame",
     "CalibModel",
+    "ComponentFixture",
     "InterpCalibModel",
     "LinCalibModel",
     "StreamTimingModel",
+    "SweepPoint",
     "TimingModel",
 ]
