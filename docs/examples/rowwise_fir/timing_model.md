@@ -68,6 +68,6 @@ both timelines are anchored at `cmd_arrive` and compared offset-by-offset — th
 
 ## See also
 
-- [Double-buffered processing](../../guide/timing_model/double_buffered.md) — the general model this realizes.
+- [Double-buffered processing](../../guide/concurrency/python/sob.md) — the general model this realizes.
 - [Calibration](../../guide/calib/) — `CalibDataFrame` + the models (`row_depth` is an `InterpCalibModel`).
 - [Extracting timing from cosim](./cosim_timing.md) / [Fitting the model](./fit.md) — measuring and fitting these terms.

@@ -1,92 +1,83 @@
 ---
 title: Block processing
 parent: Timing Models
-nav_order: 2
+nav_order: 4
 audience: python
-api: [MMIFMaster.read_array, MMIFMaster.write_array, SimObj.timeout, Clock.period]
-summary: "The block-processing timing model: load a whole array, compute, store. A single serial coroutine — no overlap — so it is the simplest to model. The compute wait is the closed form latency + II·(m − 1), with the (m − 1) convention spelled out."
+api: [SobIFSlave.acquire_read, StreamIFMaster.write, LinCalibModel, SimObj.timeout, Clock.period]
+summary: "Inserting a timing model in a block process: the compute cannot start until the whole block has loaded, so the predicted compute delay goes AFTER the load and BEFORE the store. Whatever model the custom hook uses (typically the loop model), it is charged there. Shown on a stream-of-blocks Compute sub-component (acquire_read the block, compute, timeout, write). The load and store are already timed by the block/stream yields, so the model adds only the compute, and load/store stalls grow the firing on their own."
 ---
 
 # Block processing
 
-**Block processing** is the serial barrier: load the whole input array into a buffer, compute on
-it, then store the whole output array. Nothing overlaps — load, compute, and store happen strictly
-one after another. It is the simplest flow to model, and the right starting point.
+**Block processing** is the case where the compute needs the **whole block before it can start** — no
+overlap with the load. It is the simplest place to insert a timing model, and the right starting point.
 
-A block-processing component's `run_proc` looks like this (the timing fields `self.latency`,
-`self.proc_ii`, and `self.unroll_factor` are the component's own synthesis parameters — see
-[Fitting a timing model](./fit.md)):
+## Where the prediction goes: after the load, before the store
+
+The rule is simple and general: **whatever model you choose for the custom hook, charge its predicted
+delay after the load and before the store.** In a block process the compute reads a resident block,
+runs, and writes a result — so the delay sits between the read and the write, exactly the shape of the
+general pattern in [Adding a timing model](./insertion.md).
+
+Here it is on a [stream-of-blocks](../concurrency/python/sob.md) `Compute` sub-component — the canonical
+block process, since double-buffering is now built by composing `Load` / `Compute` / `Store` over SOB
+channels:
 
 ```python
-import math
+class Compute(FreeRunComp):
+    def __post_init__(self):
+        super().__post_init__()
+        self.blk = SobIFSlave(name=f"{self.name}_blk", sim=self.sim, bitwidth=WORD_BW, block_n=NWORDS)
+        self.z   = StreamIFMaster(name=f"{self.name}_z", sim=self.sim, bitwidth=WORD_BW)
+        self.tm  = ...                     # a loop timing model — see loops.md
+        self.add_timing_model(self.tm)
+        for ep in (self.blk, self.z):
+            self.add_endpoint(ep)
 
-x = yield from mem.read_array(Float32, n, xaddr, word_bw=word_bw)
-y = compute(x)
+    def run_iter(self):
+        blk = yield from self.blk.acquire_read()          # blocks until the WHOLE block is resident
+        x   = read_array(blk, elem_type=Float32, word_bw=WORD_BW, shape=N)
+        y   = compute(x)                                  # the value — computed instantly in pysim
 
-# Wait the time to process `x`
-m = math.ceil(n / self.unroll_factor)        # effective trip count
-cycles = self.latency + self.proc_ii * (m - 1)
-yield self.timeout(cycles * self.clk.period)
+        # the block is loaded; charge the compute time BEFORE writing the result
+        cycles = self.tm.predict({"n": N})
+        yield self.timeout(cycles * self.clk.period)
 
-yield from mem.write_array(y, Float32, yaddr, word_bw=word_bw)
+        yield from self.z.write(array(Float32, y))        # the store
+        yield from self.blk.release_read()
 ```
 
-> A timeline figure for this page (deferred) would show three non-overlapping bars in sequence —
-> **load**, then **compute**, then **store** — making the serial barrier visually obvious.
+`acquire_read` returns only after `Load` has committed a *full* block, so "the compute starts after the
+load" is enforced by the channel, not by hand. The predicted `cycles` come from whatever model the hook
+uses — for a loop, the `latency + ii·(m − 1)` model of [Timing models for loops](./loops.md). (A plain
+component that `read_array`s a whole array, computes, and `write_array`s has the identical shape — read,
+predict, write.)
 
-## Why there is no explicit load/store time
+## The delay is *additional*, not end-to-end
 
-Notice the model charges time *only* for compute. The load and store time is already handled by
-the `yield from` on [`read_array`](../interface/aximm.md) / `write_array`: those calls block the
-coroutine for however long the transfer actually takes. We deliberately do **not** add a fixed
-time for loading, because the load time is not the processor's to decide — it varies with
-interconnect occupancy (other masters contending for the bus, see [polling
-overhead](../interface/poll.md)) or with a source outside the processor entirely. Letting the
-interface charge it keeps the load/store cost honest and composable; the component models only the
-part it owns, the compute.
+The model charges time only for the **compute** — not the load or store. That is deliberate, and it is
+what keeps the model composable:
 
-## `ii` and `latency`
+- **The load and store times are already accounted for.** `acquire_read` blocks until the block is
+  resident (the SOB fill is timed), and `write` charges the output transfer — both by their `yield`s.
+- So the modeled delay is the **compute, plus any overhead not already charged** by those transfers —
+  the part of the firing that is genuinely *this component's* to model.
+- And if the load or store **stalls** — a downstream FIFO is full, or the producer is behind — those
+  `yield`s simply take longer, so the firing's end-to-end time **grows on its own**. The stall is the
+  *simulation* modeling congestion, not something the timing model has to predict.
 
-Two numbers describe a pipelined compute:
+We deliberately do **not** add a fixed load/store time: it is not the component's to decide — it varies
+with interconnect occupancy or a source outside the component. Letting the channels charge it keeps the
+cost honest, and lets a model calibrated in isolation still predict the contended system.
 
-- **`ii`** — the **initiation interval**: the number of cycles between successive iterations
-  entering the pipeline. An `II = 1` pipeline accepts a new iteration every cycle; `II = 2` every
-  other cycle. It sets the *throughput*.
-- **`latency`** — the **pipeline depth**: the number of cycles from an input entering the pipeline
-  to its corresponding output coming out. It sets the *delay* of any single result.
-
-`unroll_factor` is the third knob: unrolling the loop by *U* processes *U* elements per iteration,
-so the **effective trip count** — the number of iterations actually issued — is
-`m = ceil(n / U)`, not `n`.
-
-## The closed form `latency + II·(m − 1)`
-
-For a pipeline that issues `m` iterations, the total compute time is:
-
-```
-cycles = latency + II · (m − 1)
-```
-
-The `(m − 1)` is deliberate, and worth stating explicitly. Reason it out from the two endpoints:
-
-- The **first** output lands `latency` cycles after compute starts (it has to traverse the whole
-  pipeline).
-- After that first output, the pipeline emits **one more output every `II` cycles**. There are
-  `m − 1` *remaining* outputs after the first, so they take `II · (m − 1)` additional cycles.
-
-Add them: `latency + II · (m − 1)`. A common off-by-one is to write `latency + II · m`, which
-over-counts by one `II` — it charges an initiation interval for the first output, which has already
-been paid for inside `latency`. With `m = 1` (a single iteration), the formula correctly collapses
-to just `latency`.
-
-## Fitting the numbers
-
-`latency`, `ii`, and `unroll_factor` are properties of the synthesized hardware. You can set them
-by hand from an HLS report, or **fit** them from a few measured data points so the LT model tracks
-real cycle counts — that is covered in [Fitting a timing model](./fit.md).
+> A timeline figure for this page (deferred) would show three non-overlapping bars — **load**, then
+> **compute**, then **store** — making the serial barrier visually obvious.
 
 ## See also
 
-- [Streaming processing](./streaming.md) — the next step on the continuum: let compute overlap the load instead of waiting for the whole array.
-- [MM Interfaces](../interface/aximm.md) — the `read_array` / `write_array` calls and their transfer-latency model.
-- [Simulation timing model](../sim/timing.md) — `self.timeout` and the `Clock` that converts cycles to seconds.
+- [Timing models for loops](./loops.md) — the `latency + ii·(m − 1)` model the `tm` above usually is.
+- [Adding a timing model to a component](./insertion.md) — the general read → predict → write pattern
+  this specializes.
+- [Streaming processing](./streaming.md) — the overlapped case: compute *while* the data loads.
+- [Stream of Blocks](../concurrency/python/sob.md) — the `acquire_read` / block channel used here, and
+  how `Load` / `Compute` / `Store` compose into a double-buffered pipeline.

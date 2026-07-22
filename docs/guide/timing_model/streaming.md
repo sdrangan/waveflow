@@ -1,7 +1,7 @@
 ---
 title: Streaming processing
 parent: Timing Models
-nav_order: 3
+nav_order: 5
 audience: python
 api: [StreamIFSlave.get_pipelined, StreamIFMaster.write_pipelined, SimObj.timeout, Clock.period]
 summary: "The streaming timing model: compute overlaps the load, so the first output appears `latency` cycles after the first input and later outputs are gated by whichever is slower — input arrival or compute rate. The per-element max() collapses to a first/last form; only first and last arrival times are known."
@@ -17,6 +17,13 @@ barrier — load and compute overlap element by element.
 That overlap is exactly what makes streaming harder to model. In block processing the compute
 window is a single `timeout` after the load finishes. In streaming, each output's time depends on
 two competing pressures, and we have to take the later of them.
+
+The two parameters are the same ones as the [loop model](./loops.md) — `latency` (pipeline depth) and
+`ii` (initiation interval). The difference is only *how they are used*: a block process lumps them into
+a single `latency + ii·(m − 1)` delay, while streaming needs them **separately** — `latency` sets when
+the first output appears, `ii` the gap between the rest. In a fitted design both come from the model's
+coefficients (`self.tm.coeffs["latency"]`, `["ii"]`); below they are written `self.latency` /
+`self.proc_ii` for brevity.
 
 ## The per-element model
 
@@ -112,5 +119,9 @@ This model is loosely timed, and it makes two deliberate approximations:
 ## See also
 
 - [Block processing](./block.md) — the no-overlap baseline this is the streaming limit of.
-- [Double-buffered processing](./double_buffered.md) — overlap at *block* granularity rather than per element, when the source delivers whole blocks.
+- [Timing models for loops](./loops.md) — the `latency` / `ii` parameters this uses (separately here).
+- [Adding a timing model to a component](./insertion.md) — the general pattern; streaming is the
+  overlapped variant.
 - [Stream Interfaces](../interface/stream.md) — `get_pipelined` / `write_pipelined` and the first-word-time mechanism.
+- Double-buffering (block-granularity overlap) is built by composing sub-components over a
+  [stream of blocks](../concurrency/python/sob.md), not a separate timing model.

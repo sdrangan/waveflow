@@ -16,7 +16,7 @@ the [timing model](./timing_model.md). The headline is how *little* is fit.
 ## Fit the primitives, not the whole-kernel
 
 The discipline is to fit each physical primitive, never the emergent whole-kernel directly (that would
-manufacture a fudge term — see [the playbook](../../guide/calib/instrumentation.md)). For FIR three of
+manufacture a fudge term — see [the playbook](../../guide/calib/)). For FIR three of
 the four terms need **no fit at all**:
 
 - **Channel occupancy** — read off the [transfer-beat counts](./cosim_timing.md): exactly `nwords`,
@@ -82,4 +82,4 @@ PYTHONPATH=. ../pysilicon-venv/Scripts/python.exe examples/rowwise_fir/fir_figur
 
 - [The timing model](./timing_model.md) — the decomposition these terms fill in.
 - [Calibration](../../guide/calib/) — the corpus and models (`row_depth` is an `InterpCalibModel`).
-- [Fitting a timing model](../../guide/timing_model/fit.md) — the general fit this specializes.
+- [Fitting a timing model](../../guide/calib/fit.md) — the general fit this specializes.

@@ -1,7 +1,7 @@
 ---
 title: Component residuals
-parent: Calibration
-nav_order: 4
+parent: Timing model fitting
+nav_order: 5
 audience: python
 api: [TimingModel, StreamTimingModel, CollectTimingStep, FitTimingStep]
 summary: "A component's control residual is the delay pysim is MISSING once the bus term is charged: residual = rtl_span - pysim_span + current_dly, fit per (component, platform). TimingModel collects RTL firings (from a trace) and pysim firings (from a run) into independent trees, joins them on the feature point (nwords, num_trans), and fits a CalibModel; predict() returns the delay a FreeRunComp injects via timed_delay. Stored shared (platform_dir -> the committed library) or custom (calib_dir -> a project dir). CollectTimingStep / FitTimingStep automate it."
@@ -77,11 +77,29 @@ tm.fit()                                                    # -> corpus.csv + pa
   `num_targets`, default 1), clamped at 0. `reset(corpus=…, params=…)` wipes the trees / the fit to
   recalibrate from scratch.
 
-> **The `run_iter` side** — attaching the model and charging its delay with `timed_delay` — is covered
-> in [Adding a timing model to a component](./insertion.md); the `firing_records` that page's
-> `timed_delay` accumulates are exactly the pysim corpus `collect_pysim` reads. `MemRStream` /
-> `MemWStream` both carry that hook (the writer's is the posted-write drain, the reader's its own
-> control cost), inert until a model is fit.
+## Recording the pysim firings: `timed_delay`
+
+Where does the `writer.firing_records` list `collect_pysim` reads come from? A calibrated `FreeRunComp`
+does not call `predict` directly — it calls **`timed_delay`** in its `run_iter`, which both **predicts**
+the delay *and* **records** the firing (its features + the delay it just predicted) onto
+`self.firing_records`:
+
+```python
+dly = self.timed_delay({"nwords": nw, "num_trans": math.ceil(nw / 16)})  # predict + record
+if dly:
+    yield self.timeout(dly)
+```
+
+That record is exactly one row of the pysim corpus. The loop is: attach the model, run the sim so
+`timed_delay` populates `firing_records`, then `collect_pysim(comp.firing_records, run_id)` writes them
+into the `pysim/` tree. Crucially the run needs **no fitted model** to collect — an unfitted model
+predicts `0.0` and records nothing extra, so the firing is captured with `current_dly = 0`; that is the
+`+ current_dly` self-correction above, letting *any* run be a datapoint.
+
+`MemRStream` / `MemWStream` both carry this `timed_delay` hook (the writer's models the posted-write
+drain, the reader's its own control cost), inert until a model is fit. It is the recording counterpart
+of the plain `predict` shown in [Adding a timing model](../timing_model/insertion.md): same prediction,
+plus the firing record the residual fit needs.
 
 ## Two kinds of component: where the residual lives
 
@@ -117,8 +135,8 @@ does not yet join (a sweep in progress has partial coverage — forcing a fit th
 
 ## See also
 
-- [Adding a timing model to a component](./insertion.md) — the usage side: attaching the model and
-  charging its delay, which this page fits.
+- [Adding a timing model to a component](../timing_model/insertion.md) — the usage side: attaching the
+  model and charging its delay, which this page fits.
 - [The bus-transfer model](./bus_model.md) — the level this one assumes is already charged.
 - [Platforms](./platform.md) — where a shared component's residual is keyed and stored.
 - [The calibration workflow](./workflow.md) — collecting a sweep and publishing the result.

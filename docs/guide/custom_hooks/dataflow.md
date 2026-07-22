@@ -26,7 +26,7 @@ Reach for it when the computation **cannot be a pure stream**: a sliding window 
 *resident and randomly addressable*, so you can't process beats as they arrive ([stream](./stream.md))
 and you don't want one serial load-then-compute-then-store ([block](./block.md)). You want the load
 of the next block overlapping the compute of the current one — the hardware realization of the
-[double-buffered timing model](../timing_model/double_buffered.md).
+[double-buffered timing model](../concurrency/python/sob.md).
 
 The worked example is [`examples/rowwise_fir`](../../../examples/rowwise_fir/fir.py) — a real-valued
 FIR per matrix row, `Y[i,j] = Σ_t h[t]·X[i, j−t]`. The sliding `j−t` window is exactly what forces a
@@ -66,7 +66,7 @@ Three things make this a *pipeline* rather than three serial calls:
 2. **The buffers are double-buffered (ping-pong).** `xbuf` is declared *inside* the row loop, so HLS
    gives the DATAFLOW region a depth-2 PIPO (`N_PINGPONG = 2`): load writes one copy while compute
    reads the other. This is the synthesizable counterpart of the depth-2 `simpy.Store` in the
-   [double-buffered timing model](../timing_model/double_buffered.md).
+   [double-buffered timing model](../concurrency/python/sob.md).
 3. **Two channel kinds, by access pattern.** Load→compute is a **partitioned BRAM** because the FIR
    window needs *random* access (`xbuf[j + (T−1) − t]`); compute→store is an **`hls::stream` FIFO**
    because the outputs are produced and consumed strictly in order.
@@ -134,12 +134,12 @@ arrives.
 
 This page is the **synthesizable** half. The matching **simulation** timing model — three concurrent
 SimPy processes (loader / compute / storer) producing the `max(load, compute, store)` timeline, and
-how that model is cosim-calibrated — is [Double-buffered processing](../timing_model/double_buffered.md).
+how that model is cosim-calibrated — is [Double-buffered processing](../concurrency/python/sob.md).
 The two are the two faces of the same load-compute-store accelerator.
 
 ## See also
 
-- [Double-buffered processing](../timing_model/double_buffered.md) — the sim-side timing model this hook realizes, with the matrix-LT FIR worked example and its calibration.
+- [Double-buffered processing](../concurrency/python/sob.md) — the sim-side timing model this hook realizes, with the matrix-LT FIR worked example and its calibration.
 - [Block — load, compute, store](./block.md) — the simpler pattern (codegen moves the data; the hook is pure compute).
 - [Stream — process as you read](./stream.md) — when the math can run as data arrives, no resident buffer.
 - [Kernel transfer reference](./reference.md) — the in-kernel transfer calls and the element-coordinate convention.

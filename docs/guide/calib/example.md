@@ -1,7 +1,7 @@
 ---
 title: A worked example
-parent: Calibration
-nav_order: 8
+parent: Timing model fitting
+nav_order: 4
 audience: python
 api: [CalibDataFrame, LinCalibModel, InterpCalibModel]
 summary: "A minimal end-to-end calibration: build a CalibDataFrame from a few (size, cycles) measurements, fit a LinCalibModel, read its coefficients, score it, hold a point out, and plot it; then calibrate a saturating curve with InterpCalibModel."
@@ -33,7 +33,8 @@ print(db.df)            # a pandas DataFrame (with a measured_at column)
 > **These `(m, cycles)` numbers are synthetic** — chosen to make the fit easy to follow. In a real
 > calibration you don't type the cycle counts; you **capture them from cosim**: instrument the design,
 > run an RTL co-simulation at each size, and read the cycle count off the VCD. That end-to-end loop —
-> where the datapoints come from — is [Instrumenting a calibration](./instrumentation.md).
+> where the datapoints come from — is the [cosim sweep](./fit.md#where-the-data-comes-from), extracted
+> with the [Timing Analysis Tools](../timing/cosim_timing.md).
 
 ## 2. Fit, inspect, predict, score
 
@@ -46,7 +47,7 @@ print(model.score(db))          # 1.0  (R² — exact line here)
 ```
 
 `coeffs` recovers the physical numbers: the slope is the initiation interval `ii`, the intercept is
-the `latency` (see [Fitting a timing model](../timing_model/fit.md)).
+the `latency` (see [Fitting a timing model](./fit.md)).
 
 ## 3. Hold a point out (does it generalize?)
 
@@ -96,7 +97,7 @@ print(g.samples)                    # {'feature': 'n_col', 'x': [...], 'y': [...
 ```
 
 That is exactly how the matrix-LT FIR carries its one fitted term (`row_depth(n_col)`) — see the
-[double-buffered worked example](../timing_model/double_buffered.md#worked-example-the-matrix-lt-fir).
+[double-buffered worked example](../concurrency/python/sob.md).
 
 ## See also
 

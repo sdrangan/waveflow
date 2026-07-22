@@ -11,7 +11,7 @@ summary: "Measuring the FIR timing from the RTL co-simulation VCD: extract the X
 # Extracting timing from cosim
 
 The co-simulation produces a VCD; calibration turns it into **datapoints**. This is the FIR-specific
-instance of the general [calibration playbook](../../guide/calib/instrumentation.md) and the
+instance of the general [calibration playbook](../../guide/calib/) and the
 [AXI-MM burst extraction](../../guide/timing/aximm.md) tools — driven by
 [`fir_calibrate.py`](../../../examples/rowwise_fir/fir_calibrate.py) (`measure_cosim`).
 
