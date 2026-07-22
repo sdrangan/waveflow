@@ -12,6 +12,11 @@ host-launched function, `mem_copy` is a **composite of free-running `hls::task`s
 words from one memory region to another — and it is verified not by Vitis co-simulation (which cannot
 drive a free-running kernel) but by driving the real RTL cycle-by-cycle through an **XSI BFM**.
 
+Beyond demonstrating composite free-running kernels, `mem_copy` doubles as a **calibration vehicle** for
+core infrastructure: it composes the reusable `MemRStream` / `MemWStream` adaptors and the `m_axi` bus,
+so the sweep that fits *its* timing produces the shared bus and mem-stream models that **every**
+accelerator on the platform reuses. The final three pages are that arc.
+
 ## Learning Objectives
 
 In going through this example, you will learn to:
@@ -23,6 +28,12 @@ In going through this example, you will learn to:
 - Synthesize the concurrent Vitis C++ kernel into RTL with **Vitis HLS C-synthesis** (the generated `mem_copy.tcl`)
 - Map each testbench component to an **XSI BFM model** (hand-written framework classes) and **generate the XSI harness** that wires those models to the RTL and drives the clock
 - Run the XSI simulation to extract timing and functionally validate the generated RTL
+- Visualize the concurrent timing of the components on an [**activity diagram**](./timing.md) — the
+  pipeline overlap and where every cycle of the period goes
+- Insert [**timing models**](./timing_model.md) for the platform's shared infra components — the
+  `m_axi` bus and the memory-stream adaptors — so the loosely-timed pysim reproduces the RTL
+- Fit those models with a [**parameter sweep**](./timing_fitting.md) and store the fitted parameters in
+  the platform library, so other accelerators on the same platform reuse them without re-calibrating
 
 ## In this example
 
@@ -40,6 +51,9 @@ it, test it in Python, generate the kernel, generate the testbench, then run the
    becomes the BFM harness.
 6. [RTL simulation](./rtlsim.md) — running the RTL through XSI, inspecting the results, and comparing
    the timing to pysim.
-7. [Timing instrumentation](./timing.md) — tracing the internal channels out of an RTL run and
-   attributing every cycle of the period, the measurement that feeds the
-   [timing-model fitting](../../guide/calib/) system (the reference platform is fit from these numbers).
+7. [Visualizing timing](./timing.md) — tracing an RTL run and rendering it: the pipeline overlap, the
+   bottleneck, and where every cycle of the period goes.
+8. [Timing models](./timing_model.md) — the two models (bus + mem-stream) behind those numbers, and how
+   they plug into the components.
+9. [Fitting the models](./timing_fitting.md) — the sweep, the fit results, and the platform library that
+   stores them so other accelerators reuse them.
