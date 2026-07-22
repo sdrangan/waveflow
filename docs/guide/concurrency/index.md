@@ -23,6 +23,5 @@ has two halves:
 
 ## See also
 
-- [Custom Hooks: Dataflow](../custom_hooks/dataflow.md) — the single-kernel `#pragma HLS DATAFLOW` realization of load-compute-store (the contrast with the task-network path here).
 - [Component structure](../comp_codegen/structure.md) — free-running vs. launched kernel modes.
 - [Hardware Components](../flows/components.md) and [Interfaces](../interface/) — the Python-side declarations composites are built from.

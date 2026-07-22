@@ -13,12 +13,10 @@ per sub-component — wired by internal streams and stream-of-blocks channels.
 
 ## Two realizations of load-compute-store
 
-Waveflow can realize a load-compute-store accelerator two ways:
-
-1. **Single-kernel DATAFLOW** — one hand-written kernel owning the whole pipeline via
-   `#pragma HLS DATAFLOW` ([Custom Hooks: Dataflow](../../custom_hooks/dataflow.md)).
-2. **Multi-component task network** — a generated `hls::task` network from a hierarchical composite (the
-   interleaver path documented here).
+Waveflow realizes a load-compute-store accelerator as a **multi-component task network** — a generated
+`hls::task` network from a hierarchical composite (the interleaver path documented here). Each stage
+(load / compute / store) is its own component, wired by streams and stream-of-blocks channels. (An
+earlier single-kernel `#pragma HLS DATAFLOW` path has been retired in favor of this composition.)
 
 The task-network realization is the **canonical direction going forward**; the single-kernel DATAFLOW
 page remains valid and is kept for existing single-accelerator flows.

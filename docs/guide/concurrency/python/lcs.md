@@ -171,4 +171,3 @@ predicts this is [Timing contract](./timing.md).
 
 - [`examples/interleaver/interleaver.py`](../../../../examples/interleaver/interleaver.py) — the full six-tile source.
 - [Memory wrappers](./mem_wrap.md) and [SOB pattern](./sob.md) — the two pieces this page composes.
-- [Custom Hooks: Dataflow](../../custom_hooks/dataflow.md) — the single-kernel `#pragma HLS DATAFLOW` realization of LCS.

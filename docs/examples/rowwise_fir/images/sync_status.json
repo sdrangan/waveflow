@@ -1,9 +1,0 @@
-{
-  "figure": "sim_vs_cosim.svg",
-  "regenerable_without_vitis": true,
-  "sources": {
-    "cosim_sweep.json": "f129dab5113ae25d8097061a093e9559804a16c6b46b9ff96a214a1788fe9485",
-    "fir_calibration.json": "3e6102e3389bba1a7c4bf3b876028477fb850dab4e1dd3a599d9ffe0d8cc5fb3"
-  },
-  "svg_sha256": "7733f641ad87ed44dbbac1c012b5c00eb33bc7186d03e285a11729576a91ec0c"
-}
