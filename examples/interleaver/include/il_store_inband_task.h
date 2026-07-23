@@ -10,9 +10,7 @@
 // (variable length); the block is sized NW.  No m_axi.  Single-firing.  Its pysim twin is
 // IlStoreInband.run_iter (interleaver_inband.py).
 //
-// !! UNVERIFIED — pending a csynth/XSI run.  Modeled on il_store_task.h (SOB read_lock) +
-// !! mem_seq_framed_task.h (write_framed_stream descriptors) + mem_r_stream_framed_task.h
-// !! (write_boundary_word framed data).
+// csynth-verified.  XSI next.
 #include "hls_stream.h"
 #include "hls_streamofblocks.h"
 #include <ap_int.h>

@@ -7,8 +7,7 @@
 // is RUNTIME (variable length); the block is sized NW (the max).  No m_axi.  Single-firing.  Its pysim
 // twin is IlLoadInband.run_iter (interleaver_inband.py).
 //
-// !! UNVERIFIED — pending a csynth/XSI run.  Modeled on il_load_task.h (SOB write_lock fill) +
-// !! mem_w_stream_framed_done_task.h (read_framed_stream descriptor + read_boundary_word data).
+// csynth-verified.  XSI next.
 #include "hls_stream.h"
 #include "hls_streamofblocks.h"
 #include <ap_int.h>

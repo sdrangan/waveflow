@@ -10,9 +10,7 @@
 // RTL is scenario-independent.  Only cmd_rx and il_store are schema-aware; the mem-streams relay
 // opaquely.  Single-firing.  Its pysim twin is CmdRxInband.run_iter (interleaver_inband.py).
 //
-// !! UNVERIFIED — pending a csynth/XSI run.  Modeled on the verified mem_seq_framed_task.h.  Codegen
-// !! wiring must supply: InterleaverCmd (plain, il_cmd.h), IlDesc (framed, il_desc.h), MemRCmd (framed,
-// !! mem_r_cmd.h).
+// csynth-verified (ap_ctrl_none free-running top, Fmax ~111 MHz).  XSI next.
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "streamutils_hls.h"

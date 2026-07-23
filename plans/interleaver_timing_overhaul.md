@@ -60,8 +60,13 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
     top wiring the framework mem-streams around the custom stages (5 framed_word edges + 3 SOB).
   - **`generate_inband()`** — full gen driver; verified to a temp dir (12 headers consistent, il_desc.h
     framed, top+tcl). `test_inband_codegen_shape` pins it, toolchain-free.
-  **REMAINING:** run **csynth** (Vitis 2025.1 present — in progress) + XSI-verify no deadlock; then make
-  `InterleaverInband` THE design (retire `InterleaverCanon`), mem stages inherit the shipped residual.
+  - **csynth PASSED** (Vitis 2025.1, first try, WAVEFLOW_CSYNTH_OK): ap_ctrl_none free-running top, all 6
+    tasks synth, 2 m_axi bundles, 5 framed FIFOs + 2 PIPO block RAMs, **Fmax ~111 MHz** at 100 MHz target.
+    `!! UNVERIFIED` banners on the 4 bodies replaced with `csynth-verified`.
+  **REMAINING:** XSI-verify no deadlock (the free-run failure mode; needs an XSI BFM harness like the
+  canon's — `xsi/interleaver_inband_bfm_tb.cpp` + run.bat), then make `InterleaverInband` THE design
+  (retire `InterleaverCanon` + its gen/xsi), mem stages inherit the shipped mem-stream residual, update
+  docs (Source is already interleaver_inband.py).
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.

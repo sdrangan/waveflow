@@ -7,8 +7,7 @@
 // 32-bit results into one y_blk word (Y[i] = X[P[i]]).  nw = ceil(n/LW) is RUNTIME (variable length);
 // the block is sized NW.  Its pysim twin is IlComputeInband.run_iter (interleaver_inband.py).
 //
-// !! UNVERIFIED — pending a csynth/XSI run.  Identical gather to the verified il_compute_task.h, but the
-// !! descriptor is the framed IlDesc (not the plain token) and the loop bound is runtime nw.
+// csynth-verified.  XSI next.
 #include "hls_stream.h"
 #include "hls_streamofblocks.h"
 #include <ap_int.h>
