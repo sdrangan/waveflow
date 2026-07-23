@@ -254,14 +254,37 @@ class IlLoad(FreeRunComp):
         yield from self.x_blk.commit_write(xblock)
 
 
+#: The compute task-body id — the key its firings carry and its subdir in the platform library (a
+#: calibrated compute residual is stored under ``components/il_compute_task/``).
+IL_COMPUTE_COMPONENT = "il_compute_task"
+
+#: Seed loop-model parameters for the gather compute, ``cycles = latency + ii·(nw − 1)`` — the pipelined
+#: word loop's fixed latency and its per-word initiation interval.  Placeholders until a cosim sweep
+#: fits them (see the calibration guide); with them the loosely-timed pysim already charges a plausible
+#: compute cost instead of zero.
+IL_COMPUTE_LATENCY_SEED = 32.0
+IL_COMPUTE_II_SEED = 2.0
+
+
 @dataclass
 class IlCompute(FreeRunComp):
-    """Stage 4 (pure SOB->SOB): token + read-lock p_blk/x_blk -> gather into y_blk -> forward token."""
+    """Stage 4 (pure SOB->SOB): token + read-lock p_blk/x_blk -> gather into y_blk -> forward token.
+
+    Unlike the framework mem-stream stages, this is a **custom compute** kernel — the interleaver's own
+    gather — so its timing is not shipped: it carries its own loop model (``cycles = latency + ii·(nw −
+    1)``) and charges that delay in ``run_iter``.  The model is seeded (:data:`IL_COMPUTE_LATENCY_SEED` /
+    :data:`IL_COMPUTE_II_SEED`); point ``calib_dir`` at a fitted ``params.json`` to load a cosim-measured
+    one instead.  This is the "fit your own component" half of the calibration story mem_copy has none
+    of.
+    """
 
     cpp_kernel_name: ClassVar[str | None] = "il_compute"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
     n: HwParam[int] = DEFAULT_N
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Optional directory holding a fitted ``params.json`` for the loop model (``nw`` + ``intercept``).
+    #: ``None`` uses the seed.
+    calib_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -278,7 +301,25 @@ class IlCompute(FreeRunComp):
         self.y_blk = SobIFMaster(name=f"{self.name}_y_blk", sim=self.sim, element_type=word_block)
         for ep in (self.cmd_in, self.p_blk, self.x_blk, self.cmd_out, self.y_blk):
             self.add_endpoint(ep)
+        self.timing = self._build_timing_model()
+        # The completion timeline (kept for back-compat) plus the per-firing start/span the activity
+        # diagram and the calibration collector read.
+        self.job_start_cyc: list[float] = []
         self.job_end_cyc: list[float] = []
+        self.job_span_cyc: list[float] = []
+
+    def _build_timing_model(self):
+        """A `latency + ii·(nw − 1)` loop model as a linear model in ``nw``: ``cycles = ii·nw +
+        (latency − ii)``.  Loads a fitted ``params.json`` from ``calib_dir`` if present, else seeds."""
+        from waveflow.calib.calib import LinCalibModel
+
+        seed = {"nw": IL_COMPUTE_II_SEED,
+                "intercept": IL_COMPUTE_LATENCY_SEED - IL_COMPUTE_II_SEED}
+        path = None if self.calib_dir is None else Path(self.calib_dir) / "params.json"
+        model = LinCalibModel(basis=["nw"], target="cycles", fit_intercept=True,
+                              coeff_names=["nw"], seed=seed, path=path)
+        model.load_or_default()      # load the fitted params if present, else the seed → ready to predict
+        return model
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_compute_task", "il_compute_task.h",
@@ -292,6 +333,7 @@ class IlCompute(FreeRunComp):
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
         yblock = yield from self.y_blk.acquire_write()
+        t0 = self.now
         for w in range(nw):
             pword = int(pblock[w])
             yword = 0
@@ -301,10 +343,17 @@ class IlCompute(FreeRunComp):
                 xv = (xword >> (32 * (idx % lw))) & 0xFFFFFFFF
                 yword |= xv << (32 * lane)
             yblock[w] = yword
+        # The gather is instantaneous in pysim; charge the cycles the pipelined word loop would take in
+        # hardware, holding the read locks for its duration (the block RAMs are busy). See
+        # docs/guide/timing_model/insertion.md.
+        cycles = float(self.timing.predict({"nw": nw}))
+        yield self.timeout(max(0.0, cycles) * self.clk.period)
         yield from self.p_blk.release_read()
         yield from self.x_blk.release_read()
         yield from self.y_blk.commit_write(yblock)
+        self.job_start_cyc.append(t0 / self.clk.period)
         self.job_end_cyc.append(self.now / self.clk.period)
+        self.job_span_cyc.append((self.now - t0) / self.clk.period)
 
 
 @dataclass
@@ -398,6 +447,9 @@ class InterleaverCanon(FreeRunComp):
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
     n: HwParam[int] = DEFAULT_N
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Optional directory with the custom compute stage's fitted loop model (``params.json``); ``None``
+    #: leaves ``IlCompute`` on its seed. The framework mem stages take their timing from the platform.
+    compute_calib_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -410,7 +462,7 @@ class InterleaverCanon(FreeRunComp):
         self.memr = IlMemR(name=f"{self.name}_memr", sim=self.sim, mem_dwidth=w, n=n, clk=self.clk)
         self.load = IlLoad(name=f"{self.name}_load", sim=self.sim, mem_dwidth=w, n=n, clk=self.clk)
         self.compute = IlCompute(name=f"{self.name}_compute", sim=self.sim, mem_dwidth=w, n=n,
-                                 clk=self.clk)
+                                 clk=self.clk, calib_dir=self.compute_calib_dir)
         self.store = IlStore(name=f"{self.name}_store", sim=self.sim, mem_dwidth=w, n=n, clk=self.clk)
         self.memw = IlMemW(name=f"{self.name}_memw", sim=self.sim, mem_dwidth=w, n=n, clk=self.clk)
         stages = [self.rx, self.memr, self.load, self.compute, self.store, self.memw]

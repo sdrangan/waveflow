@@ -35,10 +35,16 @@ def _pack(vals: np.ndarray, lw: int) -> np.ndarray:
     return words
 
 
-def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=InterleaverCanon):
+def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=InterleaverCanon,
+                    platform_dir: "str | None" = None, compute_calib_dir: "str | None" = None):
     """Run the *comp_class* interleaver composite (the canonical :class:`InterleaverCanon`) over *nj*
     back-to-back jobs (all size *n*) and check Y[j][i]=X[j][P[i]] bit-exact.  Returns the composite
-    (gather.job_end_cyc = the completion timeline)."""
+    (gather.job_end_cyc = the completion timeline).
+
+    ``platform_dir`` loads the platform's shipped **bus law** onto the memory, so the m_axi read/write
+    transfers are charged their calibrated cost (the two-level infra half — see the calibration guide).
+    ``compute_calib_dir`` points the custom gather's loop model at a fitted ``params.json`` (the custom
+    half).  Both ``None`` (default) keeps the plain, uncalibrated timing — the fast functional path."""
     sim = Simulation()
     clk = Clock(freq=100e6)
     lw = mem_dwidth // 32
@@ -49,6 +55,12 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
     mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=mem_dwidth, addr_size=32, nwords_tot=arena * 4)
     mem.alloc(arena)
+    # Platform bus model on the memory slave: every m_axi burst the read/write masters issue is charged
+    # the calibrated transfer cost, so the sim's timeline reflects the real interconnect. Shared across
+    # accelerators — the interleaver reuses the same bus law mem_copy fit.
+    if platform_dir is not None:
+        from waveflow.calib.bus_model import BusCalib
+        mem.s_mm.bus_timing = BusCalib(platform_dir, clk_freq=clk.freq).bus_timing()
 
     P = ((np.arange(n) * 13 + 5) % n).astype(np.uint32)          # permutation (j-independent)
     cmds, expected = [], []
@@ -61,7 +73,8 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
         cmds.append(InterleaverCmd(p_off=pw, x_off=xw, y_off=yj, n=n))
         expected.append((yj, _pack(Xj[P].astype(np.uint32), lw)))   # golden Y[i]=X[P[i]]
 
-    il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n)
+    il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n,
+                    compute_calib_dir=compute_calib_dir)
     # Schema-blind, file-driven driver: serialize each command to words, write a burst bundle, point
     # the driver at it.  The driver loads it in pre_sim, so the temp dir must live across run_sim.
     words = [np.asarray(c.serialize(word_bw=mem_dwidth), dtype=np.uint64) for c in cmds]
