@@ -59,11 +59,14 @@ The packing rule (LSB-first, elements packed into each word from bit 0 up) is in
 
 ## Streaming a whole array — the lane loop
 
-There is no single "read N elements off a stream" call; you loop the **lane** routine, `pf` elements per
-iteration, which is the same [lane loop](./raw.md#the-lane-loop) as over memory but with a stream source.
-The lane routines live in the generated `<stem>_array_utils` namespace — alias it and qualify the calls
-(`au::`), the same convention as [raw arrays](./raw.md#the-lane-loop) (a bare `read_*_lane` would not
-resolve):
+For a straight drain, the **bulk** call reads the whole array in one line —
+`au::read_axi4_stream<WORD_BW>(s, dst, tl, len)` (and `read_stream` / `read_framed_stream` for the other
+framings) reads `len` elements, looping the lane internally. Reach for the **explicit lane loop** below
+when you want to **vectorize the compute** — a partitioned lane buffer processed with `UNROLL`, `pf`
+elements per beat — rather than materialize the whole array first; it is the same
+[lane loop](./raw.md#the-lane-loop) as over memory but with a stream source. Either way the routines live
+in the generated `<stem>_array_utils` namespace — alias it and qualify the calls (`au::`), the same
+convention as [raw arrays](./raw.md#the-lane-loop) (a bare `read_*_lane` would not resolve):
 
 ```cpp
 #include "float32_array_utils.h"
