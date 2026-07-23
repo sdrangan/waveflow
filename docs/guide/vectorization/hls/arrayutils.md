@@ -60,24 +60,30 @@ The packing rule (LSB-first, elements packed into each word from bit 0 up) is in
 ## Streaming a whole array — the lane loop
 
 There is no single "read N elements off a stream" call; you loop the **lane** routine, `pf` elements per
-iteration, which is the same [lane loop](./raw.md#the-lane-loop) as over memory but with a stream source:
+iteration, which is the same [lane loop](./raw.md#the-lane-loop) as over memory but with a stream source.
+The lane routines live in the generated `<stem>_array_utils` namespace — alias it and qualify the calls
+(`au::`), the same convention as [raw arrays](./raw.md#the-lane-loop) (a bare `read_*_lane` would not
+resolve):
 
 ```cpp
-#include "il_elem_array_utils.h"
-using il_elem_array_utils::value_type;          // ap_uint<32>
-using il_elem_array_utils::lane_capacity;       // pf = W/32
+#include "float32_array_utils.h"
+namespace au = float32_array_utils;                   // the generated namespace
+static const int LW = au::lane_capacity<WORD_BW>();   // = max(1, pf): elements per beat and per buffer
 
-value_type buf[N];
+au::value_type buf[N];                                // == float buf[N]
 streamutils::tlast_status tl;
-for (int i = 0; i < N; i += lane_capacity<W>()) {   // pf elements per beat
+for (int i = 0; i < N; i += LW) {
 #pragma HLS PIPELINE II=1
-    read_axi4_stream_lane<W>(s, &buf[i], lane_capacity<W>(), tl);   // framed source
+    const int n = (N - i < LW) ? (N - i) : LW;        // tail: last (partial) beat
+    au::read_axi4_stream_lane<WORD_BW>(s, &buf[i], n, tl);   // AXI4-Stream source
 }
-// buf[] is now a typed element array — index it directly, no .range()
+// buf[] is now a typed float array — index it directly, no .range().  Unlike the memory lane
+// loop in raw.md there is no WPU word-pointer to advance — a stream self-sequences.
 ```
 
-Write the same way with `write_axi4_stream_lane` (pass `tlast` on the final beat). For a plain FIFO use
-`read_stream_lane` / `write_stream_lane`.
+Write the same way with `au::write_axi4_stream_lane` (pass `tlast` on the final beat). **Swap the lane
+call for the channel:** `au::read_stream_lane` (plain FIFO) or `au::read_framed_stream_lane` (internal
+`framed_word` edge) — the loop shape is identical.
 
 ## The three framings — all three now covered
 
