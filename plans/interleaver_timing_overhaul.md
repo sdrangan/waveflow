@@ -36,13 +36,19 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
 - [x] **#5 calibration** — `calibrate_compute.py`: direct loop-model fit into the platform library
   (`components/il_compute_task/`); roundtrip tested. Cycle counts are placeholders pending cosim.
   Commit 4279b41.
-- [ ] **#1 inband memstream** — DEFERRED (toolchain + redesign). **Analysis:** the read side loads P
-  *and* X (two regions), but `MemRStream` reads one region per command and forwards, so it is not a
-  swap: the sequencer would frame two read descriptors (or the design splits), the reader forwards the
-  inband descriptor through compute to `MemWStream`, and the whole composite graph +
-  `composite_gen` codegen + XSI harness change. Do this with the toolchain available so the generated
-  RTL can be XSI-verified — do NOT do it blind. Once done, the mem stages inherit the shipped
-  mem-stream residual (the bus is already wired in #2).
+- [x] **#1 inband memstream (pysim)** — `interleaver_inband.py` (commit 7a93a4d). Composes the stock
+  `MemRStream`/`MemWStream(inband)` — **no framework change needed**: the reader already relays forwards
+  at the *header* (mem_stream.py:390), which is the two-read framing the gather wants. `cmd_rx` frames
+  `[MemRCmd(x_off,nw,fwd=1) | InterleaverCmd | MemRCmd(p_off,nw,fwd=0)]` → reader `m_out = [desc|X|P]`;
+  `il_load` fills the SOBs + forwards the descriptor; `IlCompute` reused verbatim; `il_store` frames
+  `[MemWCmd | InterleaverCmd | Y]`; `MemWStream` echoes on `s_done`. Custom token dissolves into the
+  in-band descriptor + two middle edges. Golden bit-exact (nj∈{1,3,8}, n∈{128,256,512}); ~288 vs 527
+  cyc/job (better overlap). Graph = 3 FramedEdge + 2 StreamEdge + 3 SobEdge.
+  **REMAINING (toolchain):** codegen the in-band top (needs hand-written `il_cmd_rx_framed_task` /
+  `il_load_inband_task` / `il_store_inband_task` bodies + composite_top_spec) + XSI-verify; then make
+  `InterleaverInband` THE design (replace `InterleaverCanon`), and the mem stages inherit the shipped
+  mem-stream residual (bus already wired in #2). Update the activity figures (fire_log on the new
+  stages) + the docs to the in-band shape.
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.
