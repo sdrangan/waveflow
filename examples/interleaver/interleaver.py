@@ -17,6 +17,13 @@ Six sub-components wired by five Cmd ``StreamEdge``s (the forwarded token) + thr
 is ``ap_uint<MEM_DW>[n/LW]`` and ``il_compute`` does LW random ``elem_read<MEM_DW>`` reads/cycle.  The
 split count NW = n/LW is a compile-time constant baked into every tile from the one generate() param.
 
+**Timing.**  ``414`` is the XSI-measured RTL steady state.  The loosely-timed pysim reproduces that
+shape by charging two models: the platform's shipped **bus law** on the memory (the ``m_axi`` transfer
+cost, reused from mem_copy — pass ``platform_dir`` to :func:`interleaver_sim.run_interleaver`), and the
+custom gather's **loop model** on :class:`IlCompute` (``cycles = latency + ii·(nw − 1)``, seeded until a
+cosim sweep fits it — see ``calibrate_compute.py``).  Rendering the per-stage ``fire_log`` on an
+:class:`~waveflow.utils.timing.ActivityDiagram` (``interleaver_figures.py``) shows the pipeline overlap.
+
 Run (project venv, from repo root)::
 
     PYTHONPATH=. pysilicon-venv/Scripts/python.exe examples/interleaver/interleaver.py
