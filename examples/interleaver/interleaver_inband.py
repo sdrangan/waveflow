@@ -83,10 +83,9 @@ def _nw_of(n: int, lw: int) -> int:
 @dataclass
 class CmdRxInband(FreeRunComp):
     """Framer (mem_copy's ``Sequencer`` role): read one ``InterleaverCmd`` and frame the reader's
-    command stream as ONE read of the contiguous ``[P | X]`` region (``2*nw`` words), with the
-    descriptor relayed as a header.  A single reader firing — two firings (one per region) wedge the
-    free-running pipeline (the framework MemRStream is an hls::task and won't issue a 2nd m_axi read
-    while ``il_load`` holds a stream_of_blocks write-lock across both). See :meth:`run_iter`."""
+    command stream as **two reads** to the transactional ``MemRStream`` (the arbiter model — a consumer
+    issues N reads per job): P (descriptor relayed as a header, ``fwd=1``) then X (``fwd=0``). The
+    ``fwd=0`` read needs the reader's ``nfwd>0`` relay guard. See :meth:`run_iter`."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_cmd_rx"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -117,16 +116,16 @@ class CmdRxInband(FreeRunComp):
         n = int(cmd.n)
         nw = _nw_of(n, self.lw)                     # runtime word count
         desc = IlDesc(n=n, y_off=int(cmd.y_off))
-        # ONE read of the CONTIGUOUS [P | X] region (2*nw words; X sits right after P), with the
-        # descriptor relayed as a header.  A SINGLE reader firing on purpose: the framework MemRStream
-        # is an hls::task reading one region per firing, and a SECOND firing (for X) WEDGES the
-        # free-running pipeline — the reader never issues its 2nd m_axi read while the load holds a
-        # stream_of_blocks write-lock across both firings (traced via XSI). Reading P and X as one
-        # contiguous burst is the fix: one firing, no re-fire, like the canon reads both in one go.
-        assert int(cmd.x_off) == int(cmd.p_off) + nw, "in-band gather requires X contiguous after P"
-        memr = MemRCmd(addr=int(cmd.p_off), len=2 * nw, fwd_bursts=1)
-        yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
+        # TWO reads to the transactional MemRStream (arbiter model): P (relaying the descriptor as a
+        # header, fwd=1) then X (relay nothing, fwd=0).  P first so il_load fills p_blk before x_blk
+        # (il_compute read-locks p_blk first).  The fwd=0 second read needs the reader's `nfwd>0` relay
+        # guard — without it the RTL reader mis-relays a phantom word and deadlocks (the pysim for-loop
+        # relay was always correct, which is why this pysim passed while the RTL wedged).
+        memr_p = MemRCmd(addr=int(cmd.p_off), len=nw, fwd_bursts=1)
+        memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=0)
+        yield from self.cmd_out.write(np.asarray(memr_p.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
+        yield from self.cmd_out.write(np.asarray(memr_x.serialize(word_bw=w), dtype=np.uint64))
         self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
@@ -168,16 +167,14 @@ class IlLoadInband(FreeRunComp):
         t0 = self.now
         nw = _nw_of(int(desc.n), self.lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
-        # ONE contiguous burst [P | X] (2*nw words) — split by count: first nw → p_blk, next nw → x_blk.
-        # Matches the RTL's word-granular LP/LX reads across the single burst (the framework MemRStream
-        # read the contiguous region in a single firing).  p_blk filled FIRST so it is released before
-        # x_blk, matching il_compute's read-lock order.
-        px = yield from self.s_in.get(nwords_max=2 * nw)
-        pw, xw = px[:nw], px[nw:2 * nw]
+        # Two bursts on rdata (the reader's two firings): P then X, nw words each.  p_blk filled FIRST so
+        # it is released before x_blk, matching il_compute's read-lock order.
         pblock = yield from self.p_blk.acquire_write()
+        pw = yield from self.s_in.get(nwords_max=nw)
         pblock[:pw.shape[0]] = pw.astype(self._dtype)
         yield from self.p_blk.commit_write(pblock)
         xblock = yield from self.x_blk.acquire_write()
+        xw = yield from self.s_in.get(nwords_max=nw)
         xblock[:xw.shape[0]] = xw.astype(self._dtype)
         yield from self.x_blk.commit_write(xblock)
         self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))

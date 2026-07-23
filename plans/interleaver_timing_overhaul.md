@@ -71,16 +71,17 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
     0x00000073000000ca vs golden 0x1fe6beab171590ae — a FUNCTIONAL bug in the hand-written C++ bodies (the
     got lanes 0xca=202 / 0x73=115 look like P-index values, not gathered X data). The bodies pass csynth
     and the pysim run_iter is correct, so the bug is C++-body-specific.
-  - **XSI GOLDEN GREEN** — root-caused via VCD trace and FIXED. It was a **free-running deadlock**, not a
-    data bug: the framework `MemRStream` is an `hls::task` reading ONE region per firing, so `cmd_rx`'s
-    TWO reads (P then X) made the reader fire twice — and the reader **never issued its 2nd m_axi read**
-    while `il_load` held a stream-of-blocks write-lock across both firings (`gmem0`=1 read, load fills
-    p_blk but write-lock never releases, compute never starts). Ruled out (all still deadlocked):
-    p_blk-first block order, fixed-`NW` vs runtime-`nw` loops, deep `rdata` FIFO. **Fix:** read the
-    contiguous `[P|X]` region in ONE `MemRCmd` (`len=2·nw`, `x_off==p_off+nw`); `il_load` splits by count
-    (first nw→p_blk, next nw→x_blk) — one firing, like the canon. pysim caveat: `get()` is burst-atomic,
-    so the pysim load does one `get(2·nw)` + slice, not two `get(nw)`. **XSI GOLDEN: PASS** at n=16 (1
-    job) and n=256 (4 jobs), `Y=X[P]` bit-exact through real RTL. See [[reference-memrstream-one-region-
+  - **XSI GOLDEN GREEN** — root-caused via VCD trace and FIXED. NOT a data bug and NOT a fundamental
+    SOB/hls::task limit (my first diagnosis of "two-firing deadlock" was WRONG). The real cause: the RTL
+    reader `mem_r_stream_framed_task` relayed forwards with a **bare `do-while`** (`do{read s_cmd}while
+    (seen<nfwd)`), which runs ONCE even at `nfwd==0` — so `cmd_rx`'s 2nd read (`fwd_bursts=0`) made the
+    reader read a **phantom word**: blocks (1 job) or steals the next job's word (4-job garbage). The
+    writer already had the `if(nfwd>0)` guard; the reader didn't. pysim relay is `for _ in
+    range(fwd_bursts)` (correct at 0) → pysim passed while RTL wedged. **Fix:** wrap the reader relay in
+    `if(nfwd>0)`. The interleaver keeps the **two-command** read (P `fwd=1` + X `fwd=0`) — the
+    transactional-arbiter model (N reads/job) is validated. **XSI GOLDEN: PASS** at n=16 (1 job) and
+    n=256 (4 jobs), `Y=X[P]` bit-exact through real RTL. (Contiguous single `[P|X]` read also works —
+    fewer m_axi transactions, an optimization not a requirement.) See [[reference-memrstream-one-region-
     per-firing]]. Reproduce: scratchpad/xsi_inband.py, scratchpad/xsi_small.py.
   **REMAINING:** retire `InterleaverCanon` + its gen/xsi (make InterleaverInband THE design); mem stages
   inherit the shipped mem-stream residual; timing calibration (compute cosim sweep for real II/latency).
