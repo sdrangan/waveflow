@@ -149,6 +149,7 @@ class CmdRx(FreeRunComp):
                                       has_tlast=False)
         for ep in (self.s_cmd, self.cmd_out):
             self.add_endpoint(ep)
+        self.fire_log: list[tuple[float, float]] = []   # per-firing (start, end) cycles
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("cmd_rx_task", "cmd_rx_task.h", ("s_cmd", "cmd_out"),
@@ -156,7 +157,9 @@ class CmdRx(FreeRunComp):
 
     def run_iter(self) -> ProcessGen[None]:
         cmd = yield from self.s_cmd.get(_TOKEN)
+        t0 = self.now
         yield from self.cmd_out.write(cmd)
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
@@ -187,6 +190,7 @@ class IlMemR(FreeRunComp):
         for ep in (self.cmd_in, self.m_mem, self.cmd_out, self.pwords, self.xwords):
             self.add_endpoint(ep)
         self._wt, self._bw = _word_t(w), w
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_mem_r_task", "il_mem_r_task.h",
@@ -196,6 +200,7 @@ class IlMemR(FreeRunComp):
     def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
         cmd = yield from self.cmd_in.get(_TOKEN)
+        t0 = self.now
         yield from self.cmd_out.write(cmd)
         region = self.m_mem.region(0, self._wt, word_bw=self._bw)
         pw = int(cmd.p_off)
@@ -204,6 +209,7 @@ class IlMemR(FreeRunComp):
         xw = int(cmd.x_off)
         xdata, _ = yield from region.read_slice_pipelined(xw, xw + nw)
         yield from self.xwords.write(np.asarray(xdata))
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
@@ -234,6 +240,7 @@ class IlLoad(FreeRunComp):
         for ep in (self.cmd_in, self.pwords, self.xwords, self.cmd_out, self.p_blk, self.x_blk):
             self.add_endpoint(ep)
         self._dtype = np.uint32 if w <= 32 else np.uint64
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_load_task", "il_load_task.h",
@@ -243,6 +250,7 @@ class IlLoad(FreeRunComp):
     def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
         cmd = yield from self.cmd_in.get(_TOKEN)
+        t0 = self.now
         yield from self.cmd_out.write(cmd)
         pblock = yield from self.p_blk.acquire_write()
         pw = yield from self.pwords.get(nwords_max=nw)
@@ -252,6 +260,7 @@ class IlLoad(FreeRunComp):
         xw = yield from self.xwords.get(nwords_max=nw)
         xblock[:xw.shape[0]] = xw.astype(self._dtype)
         yield from self.x_blk.commit_write(xblock)
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 #: The compute task-body id — the key its firings carry and its subdir in the platform library (a
@@ -307,6 +316,7 @@ class IlCompute(FreeRunComp):
         self.job_start_cyc: list[float] = []
         self.job_end_cyc: list[float] = []
         self.job_span_cyc: list[float] = []
+        self.fire_log: list[tuple[float, float]] = []   # (start, end) cycles — uniform with the other stages
 
     def _build_timing_model(self):
         """A `latency + ii·(nw − 1)` loop model as a linear model in ``nw``: ``cycles = ii·nw +
@@ -354,6 +364,7 @@ class IlCompute(FreeRunComp):
         self.job_start_cyc.append(t0 / self.clk.period)
         self.job_end_cyc.append(self.now / self.clk.period)
         self.job_span_cyc.append((self.now - t0) / self.clk.period)
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
@@ -380,6 +391,7 @@ class IlStore(FreeRunComp):
                                      has_tlast=False)
         for ep in (self.cmd_in, self.y_blk, self.cmd_out, self.ywords):
             self.add_endpoint(ep)
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_store_task", "il_store_task.h",
@@ -388,10 +400,12 @@ class IlStore(FreeRunComp):
 
     def run_iter(self) -> ProcessGen[None]:
         cmd = yield from self.cmd_in.get(_TOKEN)
+        t0 = self.now
         yield from self.cmd_out.write(cmd)
         yblock = yield from self.y_blk.acquire_read()
         yield from self.ywords.write(np.asarray(yblock))
         yield from self.y_blk.release_read()
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
@@ -420,6 +434,7 @@ class IlMemW(FreeRunComp):
         for ep in (self.cmd_in, self.ywords, self.m_mem, self.s_done):
             self.add_endpoint(ep)
         self._wt, self._bw = _word_t(w), w
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_mem_w_task", "il_mem_w_task.h",
@@ -429,12 +444,14 @@ class IlMemW(FreeRunComp):
     def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
         cmd = yield from self.cmd_in.get(_TOKEN)
+        t0 = self.now
         yw = int(cmd.y_off)
         words = yield from self.ywords.get(nwords_max=nw)
         region = self.m_mem.region(0, self._wt, word_bw=self._bw)
         yield from region.write_slice_pipelined(
             yw, np.asarray(words), t_out_start=self.now, element_type=self._wt)
         yield from self.s_done.write(cmd)        # commit-timed completion token
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
