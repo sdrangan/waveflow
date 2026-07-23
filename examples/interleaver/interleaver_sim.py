@@ -115,6 +115,66 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
     return il
 
 
+def run_interleaver_sizes(sizes, mem_dwidth: int = 64, comp_class=InterleaverCanon):
+    """Run one composite over jobs of **different** sizes (variable length): *sizes* is a per-job
+    element count. Lays each job's P/X/Y regions in a flat arena and checks Y[i]=X[P[i]] for each.
+    Requires the design to thread the runtime ``n`` — the whole point of the in-band descriptor."""
+    sim = Simulation()
+    clk = Clock(freq=100e6)
+    lw = mem_dwidth // 32
+    bpw = mem_dwidth // 8
+
+    cur, layout = 0, []
+    for n in sizes:
+        nw = (n + lw - 1) // lw
+        layout.append((n, nw, cur, cur + nw, cur + 2 * nw))     # (n, nw, p_off, x_off, y_off)
+        cur += 3 * nw
+    arena = cur + 16
+    n_max = max(sizes)
+    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
+                       word_size=mem_dwidth, addr_size=32, nwords_tot=arena * 4)
+    mem.alloc(arena)
+
+    cmds, expected = [], []
+    for j, (n, nw, p, x, y) in enumerate(layout):
+        P = ((np.arange(n) * 13 + 5) % n).astype(np.uint32)
+        Xj = ((np.arange(n, dtype=np.uint64) * 2654435761 + 12345 + j * 7919) & 0xFFFFFFFF)
+        mem._mem.write(p * bpw, _pack(P, lw))
+        mem._mem.write(x * bpw, _pack(Xj.astype(np.uint32), lw))
+        cmds.append(InterleaverCmd(p_off=p, x_off=x, y_off=y, n=n))
+        expected.append((y, nw, _pack(Xj[P].astype(np.uint32), lw)))
+
+    il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n_max)   # blocks sized for the max
+    words = [np.asarray(c.serialize(word_bw=mem_dwidth), dtype=np.uint64) for c in cmds]
+    _vd = tempfile.TemporaryDirectory()
+    write_burst_bundle(words, Path(_vd.name) / "cmd")
+    driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
+    done_sink = StreamSink(sim=sim, bitwidth=mem_dwidth,
+                           has_tlast=bool(getattr(il.s_done, "has_tlast", False)))
+
+    cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
+    cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
+    cmd_if.bind(ep_name="slave", endpoint=il.s_cmd)
+    done_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
+    done_if.bind(ep_name="master", endpoint=il.s_done)
+    done_if.bind(ep_name="slave", endpoint=done_sink.stream_ep)
+    xbar = AXIMMCrossBarIF(sim=sim, clk=clk, nports_master=2, nports_slave=1, bitwidth=mem_dwidth)
+    xbar.bind("master_0", il.m_in)
+    xbar.bind("master_1", il.m_out)
+    xbar.bind("slave_0", mem.s_mm)
+    assign_address_ranges([mem.s_mm], [(0, arena * bpw)])
+    sim.run_sim()
+
+    ok = True
+    for j, (y, nw, exp) in enumerate(expected):
+        got = mem._mem.read(y * bpw, nw).astype(np.uint64)
+        ok = ok and np.array_equal(got, exp)
+    print(f"[{comp_class.__name__}] variable sizes={list(sizes)} ok={ok} done={len(done_sink.words)}")
+    assert ok, f"{comp_class.__name__} variable-length mismatch (Y != X[P])"
+    assert len(done_sink.words) >= len(sizes)
+    return il
+
+
 def run_and_check() -> bool:
     run_interleaver(nj=1)                     # single job
     run_interleaver(nj=3)                     # back-to-back

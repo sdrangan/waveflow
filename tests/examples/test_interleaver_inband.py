@@ -18,6 +18,15 @@ def test_inband_pysim_golden():
         assert len(il.gather.job_end_cyc) == nj
 
 
+def test_inband_variable_length():
+    """The runtime n threads through: jobs of DIFFERENT sizes in one composite all gather correctly —
+    the point of the framed IlDesc carrying the length (scenario-independent RTL)."""
+    from examples.interleaver.interleaver_inband import InterleaverInband
+    from examples.interleaver.interleaver_sim import run_interleaver_sizes
+
+    run_interleaver_sizes([256, 128, 64, 192], comp_class=InterleaverInband)
+
+
 def test_inband_uses_framework_mem_streams():
     """The read/write adaptors are the framework MemRStream/MemWStream, not custom stages."""
     from waveflow.hw.mem_stream import MemRStream, MemWStream
@@ -34,9 +43,9 @@ def test_inband_uses_framework_mem_streams():
 
 
 def test_inband_graph_shape():
-    """Six sub-components wired by three FRAMED mem-stream edges (the reader command in, the reader
-    data, the writer command out), two plain descriptor-token edges through the middle, and three
-    stream-of-blocks edges (p/x/y_blk) — the in-band shape, mirroring mem_copy's framed FIFOs."""
+    """Six sub-components; EVERY inter-component stream is framed (the mem-stream edges and the two
+    descriptor edges through the middle — the convention), plus three stream-of-blocks edges. Only the
+    host boundary (s_cmd / s_done) is plain."""
     from waveflow.build.composite_gen import FramedEdge, SobEdge, StreamEdge
     from waveflow.simulation.simulation import Simulation
     from examples.interleaver.interleaver_inband import InterleaverInband
@@ -44,9 +53,9 @@ def test_inband_graph_shape():
     il = InterleaverInband(name="il", sim=Simulation(), mem_dwidth=64, n=256)
     assert len(il.sub_comps) == 6
     framed = {e.name for e in il.internal_edges if isinstance(e, FramedEdge)}
-    stream = {e.name for e in il.internal_edges if isinstance(e, StreamEdge)}
     sob = {e.name for e in il.internal_edges if isinstance(e, SobEdge)}
-    assert framed == {"cmd_rd", "rdata", "wdata"}     # framer→reader, reader→load, store→writer
-    assert stream == {"cmd_lc", "cmd_cs"}             # the descriptor forwarded through the middle
+    assert framed == {"cmd_rd", "rdata", "desc_lc", "desc_cs", "wdata"}   # all internal streams framed
     assert sob == {"p_blk", "x_blk", "y_blk"}
-    assert all(isinstance(e, (FramedEdge, StreamEdge, SobEdge)) for e in il.internal_edges)
+    assert not [e for e in il.internal_edges if isinstance(e, StreamEdge)
+                and not isinstance(e, FramedEdge)]                        # no plain internal streams
+    assert all(isinstance(e, (FramedEdge, SobEdge)) for e in il.internal_edges)
