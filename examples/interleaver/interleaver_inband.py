@@ -80,6 +80,7 @@ class CmdRxInband(FreeRunComp):
                                       has_tlast=True)   # framed → MemRStream
         for ep in (self.s_cmd, self.cmd_out):
             self.add_endpoint(ep)
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_cmd_rx_framed_task", "il_cmd_rx_framed_task.h", ("s_cmd", "cmd_out"),
@@ -89,6 +90,7 @@ class CmdRxInband(FreeRunComp):
         w = int(self.mem_dwidth)
         nw = self.nw
         cmd = yield from self.s_cmd.get(InterleaverCmd)
+        t0 = self.now
         # Read X with the descriptor relayed as a header (fwd=1); then read P (fwd=0). The reader
         # bursts nw words per read, so len is in WORDS (nw), not elements (n).
         memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=1)
@@ -96,6 +98,7 @@ class CmdRxInband(FreeRunComp):
         yield from self.cmd_out.write(np.asarray(memr_x.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(cmd.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(memr_p.serialize(word_bw=w), dtype=np.uint64))
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
@@ -123,6 +126,7 @@ class IlLoadInband(FreeRunComp):
         for ep in (self.s_in, self.cmd_out, self.p_blk, self.x_blk):
             self.add_endpoint(ep)
         self._dtype = np.uint32 if w <= 32 else np.uint64
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_load_inband_task", "il_load_inband_task.h",
@@ -132,6 +136,7 @@ class IlLoadInband(FreeRunComp):
     def run_iter(self) -> ProcessGen[None]:
         nw = self.nw
         cmd = yield from self.s_in.get(InterleaverCmd)    # descriptor (header)
+        t0 = self.now
         yield from self.cmd_out.write(cmd)                # forward to compute
         # X data (the reader's first firing appended it after the descriptor).
         xblock = yield from self.x_blk.acquire_write()
@@ -143,6 +148,7 @@ class IlLoadInband(FreeRunComp):
         pw = yield from self.s_in.get(nwords_max=nw)
         pblock[:pw.shape[0]] = pw.astype(self._dtype)
         yield from self.p_blk.commit_write(pblock)
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
@@ -167,6 +173,7 @@ class IlStoreInband(FreeRunComp):
                                       has_tlast=True)   # framed → MemWStream
         for ep in (self.cmd_in, self.y_blk, self.cmd_out):
             self.add_endpoint(ep)
+        self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_store_inband_task", "il_store_inband_task.h",
@@ -177,6 +184,7 @@ class IlStoreInband(FreeRunComp):
         w = int(self.mem_dwidth)
         nw = self.nw
         cmd = yield from self.cmd_in.get(InterleaverCmd)
+        t0 = self.now
         yblock = yield from self.y_blk.acquire_read()
         # Frame the writer's stream: write descriptor (addr=y_off, nw words), echo the InterleaverCmd
         # as the fwd/response (emitted on s_done after the store), then the Y data.
@@ -185,6 +193,7 @@ class IlStoreInband(FreeRunComp):
         yield from self.cmd_out.write(np.asarray(cmd.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(yblock))
         yield from self.y_blk.release_read()
+        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass

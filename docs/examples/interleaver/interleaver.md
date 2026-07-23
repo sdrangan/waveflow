@@ -29,26 +29,31 @@ custom compute kernel, on-chip random access, and **fitting that kernel's timing
 
 ## The six-stage structure
 
-The design (`examples/interleaver/`) is a six-stage pipeline. Each stage is a **leaf `FreeRunComp`** — it
-implements `run_iter` (one firing per job) and lowers to one `ap_ctrl_none` `hls::task`:
+The design (`examples/interleaver/`) reuses the **framework** memory adaptors `mem_copy` composes — the
+`MemRStream` / `MemWStream` in-band mem-streams — and adds only the stages a gather actually needs. Each
+stage is a **leaf `FreeRunComp`** (one firing per job, one `ap_ctrl_none` `hls::task`):
 
-- **`cmd_rx`** — reads one `InterleaverCmd` off the boundary stream `s_cmd` and emits it as the per-job
-  **token** (below). Owns no memory.
-- **`il_mem_r`** — the `m_axi` **read** owner (`m_in`, bundle `gmem0`). Bursts `P` from `p_off` onto the
-  `pwords` stream and `X` from `x_off` onto `xwords`. (It reads *two* regions per job — the seam that
-  keeps it the interleaver's own adapter rather than a stock one-region reader; see *Building blocks*.)
-- **`il_load`** — a stream→block bridge. Drains `pwords`/`xwords` and fills two on-chip blocks `p_blk`
-  and `x_blk`, exposed as a [stream of blocks](../../guide/concurrency/python/sob.md).
-- **`il_compute`** — the **gather** itself, and the design's only *custom compute* stage. Holds read
-  locks on `p_blk` and `x_blk` and, for each output word, reads the packed index, does an
-  index-driven **random** read of `x_blk`, and assembles the output word into `y_blk`. Block RAM makes
-  the `X[P[i]]` reads single-cycle — the whole point of loading `X` into a block first.
-- **`il_store`** — a block→stream bridge: reads `y_blk` and streams it out on `ywords`.
-- **`il_mem_w`** — the `m_axi` **write** owner (`m_out`, bundle `gmem1`). Drains `ywords` and bursts `Y`
-  to `y_off`, then emits the token on `s_done` **after** the write burst — a commit-timed completion.
+- **`cmd_rx`** — the schema-aware **framer** (`mem_copy`'s `Sequencer` role). It reads one
+  `InterleaverCmd` off the boundary stream `s_cmd` and frames the reader's command stream as **two
+  reads**: `[MemRCmd(x_off, nw, fwd=1) | InterleaverCmd | MemRCmd(p_off, nw, fwd=0)]`.
+- **`MemRStream`** (framework, in-band) — the `m_axi` **read** owner (bundle `gmem0`). It fires twice:
+  the first read relays the `InterleaverCmd` as a header, then bursts `X`; the second bursts `P`. Its
+  output is `[InterleaverCmd | X | P]`.
+- **`il_load`** — a stream→block bridge. Reads the descriptor (→ `nw`), lands `X` and `P` in two on-chip
+  blocks `x_blk` / `p_blk` exposed as a [stream of blocks](../../guide/concurrency/python/sob.md), and
+  forwards the descriptor.
+- **`il_compute`** — the **gather** itself, the design's only *custom compute* stage. Holds read locks
+  on `p_blk` / `x_blk` and, for each output word, reads the packed index and does an index-driven
+  **random** read of `x_blk`, assembling the result into `y_blk`. Block RAM makes the `X[P[i]]` reads
+  single-cycle — the whole reason for loading `X` into a block first.
+- **`il_store`** — the second schema-aware stage. Reads `y_blk` and frames the writer's stream
+  `[MemWCmd(y_off, nw, fwd=1) | InterleaverCmd | Y]`.
+- **`MemWStream`** (framework, in-band) — the `m_axi` **write** owner (bundle `gmem1`). Drains the data,
+  bursts `Y` to `y_off`, and echoes the `InterleaverCmd` on `s_done` **after** the write commits — the
+  commit-timed completion.
 
-The split of `n` into `NW = n / LW` words is a compile-time constant baked into every stage from one
-`generate` parameter, so every block, burst, and loop bound is fixed at synthesis.
+`NW = n / LW` is a compile-time constant baked into every stage from one `generate` parameter, so every
+block, burst, and loop bound is fixed at synthesis.
 
 ## Why a stream of blocks
 
@@ -60,59 +65,56 @@ next job's block while `il_compute` still reads this job's — overlap without a
 the same block mechanism so the stages share one uniform structure. (`mem_copy` needs none of this: a
 copy touches every word once, in order, so it is pure streaming end to end.)
 
-## Message forwarding: the per-job token
+## Message forwarding: the in-band descriptor
 
-Every stage needs to know the job's coordinates, and the stages must stay in lock-step. Both fall out of
-**forwarding one token**: `cmd_rx` emits the `InterleaverCmd`, and each stage **reads the token, then
-writes it on to the next** before doing its work (five `cmd` hops in all). Three things ride on that:
+The interleaver forwards its command exactly the way `mem_copy` does — **in-band**, so the *same*
+framework mem-streams serve it with no change. `cmd_rx` and `il_store` are the only schema-aware stages;
+`MemRStream` and `MemWStream` relay opaquely. Three properties ride on the descriptor flow:
 
-- **Pacing.** A stage cannot start a job until the token reaches it, and it forwards the token as soon as
-  it has read it. That holds exactly **one job in flight per stage** — which is what keeps a free-running
-  (`ap_ctrl_none`) network of six tasks from filling to the depth at which such a pipeline deadlocks. It
-  trades a little load/compute overlap for robustness at any job count (verified bit-exact at 8 and 16
-  jobs).
-- **Coordinates.** The token *is* the `InterleaverCmd`, so each stage simply reads the field it needs —
-  `il_mem_r` uses `p_off`/`x_off`, `il_mem_w` uses `y_off`.
-- **Completion.** `il_mem_w` emits the token on `s_done` after the store commits, so one done beat per job
-  reports back to the host.
-
-Note the contrast with `mem_copy`'s [in-band descriptor forwarding](../memcpy/memcpy.md#the-forwarding-chain):
-there each stage *strips* the one descriptor addressed to it and relays the rest, an onion of typed
-sub-commands. The interleaver forwards a **single token, whole**, through every stage — simpler, because
-its stages are wired by dedicated data and block edges rather than one framed stream.
+- **The reader loads P *and* X with two reads.** `MemRStream` moves one region per firing, so `cmd_rx`
+  frames **two** `MemRCmd`s. The trick is the header: `MemRCmd(x_off, fwd_bursts=1)` tells the reader to
+  relay the following burst — the `InterleaverCmd` — *before* it appends the X data, so the descriptor
+  arrives welded to the front of the data (`[descriptor | X | P]`). The reader already forwards at the
+  header; nothing in the framework changed.
+- **Pacing, for free.** A free-running (`ap_ctrl_none`) pipeline deadlocks if nothing throttles it; the
+  in-band descriptor is that throttle — each stage waits for its descriptor, one job in flight — exactly
+  as in `mem_copy`. There is **no separate token**: the `InterleaverCmd` rides the reader's stream to
+  `il_load`, then a short edge through `il_compute` to `il_store`, which reframes it for the writer.
+- **Completion.** `MemWStream` buffers the echoed `InterleaverCmd` across the store and emits it on
+  `s_done` afterward — one commit-timed done per job.
 
 ```mermaid
 flowchart LR
   cmd([InterleaverCmd]) --> RX[cmd_rx]
-  RX -->|token| MR[il_mem_r]
-  MR -->|token| LD[il_load]
-  LD -->|token| CP[il_compute]
-  CP -->|token| ST[il_store]
-  ST -->|token| MW[il_mem_w]
-  MW --> done([done token])
-  MR -.->|"pwords · xwords"| LD
+  RX -->|"MemRCmd · desc · MemRCmd"| MR[MemRStream]
+  MR -->|"desc · X · P"| LD[il_load]
+  LD -->|desc| CP[il_compute]
+  CP -->|desc| ST[il_store]
+  ST -->|"MemWCmd · desc · Y"| MW[MemWStream]
+  MW --> done([done])
   LD -.->|"p_blk · x_blk (SOB)"| CP
   CP -.->|"y_blk (SOB)"| ST
-  ST -.->|ywords| MW
-  gmem0[("m_in · gmem0")] -. read .-> MR
-  MW -. write .-> gmem1[("m_out · gmem1")]
+  gmem0[("m_in · gmem0")] -. read P,X .-> MR
+  MW -. write Y .-> gmem1[("m_out · gmem1")]
 ```
 
-In all, eleven internal edges wire the six stages — **five** `cmd` token hops, **three** data streams
-(`pwords`, `xwords`, `ywords`), and **three** stream-of-blocks (`p_blk`, `x_blk`, `y_blk`) — over **two**
-`m_axi` bundles (`gmem0` read, `gmem1` write) and **two** boundary ports (`s_cmd` in, `s_done` out).
+So the internal edges are: three **framed** mem-stream edges (framer→reader, reader→load, store→writer),
+two plain descriptor edges through the middle (load→compute→store), and three **stream-of-blocks**
+(`p_blk`, `x_blk`, `y_blk`) — over **two** `m_axi` bundles and **two** boundary ports (`s_cmd`, `s_done`),
+the same framed-FIFO shape `mem_copy` generates.
 
 ## Building blocks
 
 The stage that matters for the rest of this section is **`il_compute`** — the gather is the interleaver's
-**own** kernel, so unlike the framework mem-streams its timing does **not** ship: the design fits it. That
-is the half of the [calibration story](../../guide/calib/) `mem_copy` has none of, and the through-line of
-the later pages.
+**own** kernel, so unlike the framework mem-streams its timing does **not** ship: the design fits it.
+That is the half of the [calibration story](../../guide/calib/) `mem_copy` has none of, and the
+through-line of the later pages.
 
-The two `m_axi` adapters, `il_mem_r` and `il_mem_w`, are at present the interleaver's **own** stream↔m_axi
-owners rather than the framework [`MemRStream` / `MemWStream`](../../guide/calib/component_residual.md) that
-`mem_copy` composes — because `il_mem_r` reads *two* regions (`P` and `X`) per job, where the stock reader
-moves one. Adopting the framework mem-streams (so the interleaver inherits their shipped timing the way it
-already reuses the platform bus law) is a planned refinement, noted where it lands.
+Everything else is reuse. The `m_axi` adaptors are the framework
+[`MemRStream` / `MemWStream`](../../guide/calib/component_residual.md) — so the interleaver inherits
+their shipped, calibrated timing exactly as it already reuses the platform bus law, and *only* the
+compute needs fitting. `cmd_rx` and `il_store` are thin schema-aware framers (`mem_copy`'s `Sequencer`
+pattern); `il_load` is the one stream↔block bridge the gather's random access requires.
 
-**Source:** [`examples/interleaver/`](../../../examples/interleaver/).
+**Source:** [`examples/interleaver/`](../../../examples/interleaver/) — the in-band design is
+`interleaver_inband.py`.

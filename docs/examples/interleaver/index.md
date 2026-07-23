@@ -29,13 +29,15 @@ In going through this example, you will learn to:
   `FreeRunComp` stages — load, a custom **compute**, and store
 - Use a [**stream of blocks**](../../guide/concurrency/python/sob.md) to give the compute stage
   **random access** to a buffer (`X[P[i]]`), and overlap the next job's load with this job's compute
-- Pace a free-running network by **forwarding a per-job token** through every stage — one job in flight,
-  no deadlock, and a commit-timed done
+- **Reuse the framework `MemRStream` / `MemWStream`** as the read/write stages — framing two reads (P and
+  X) with an **in-band descriptor**, which also paces the free-running pipeline (one job in flight, no
+  deadlock) and returns a commit-timed done, with no custom mem adaptors and no separate token
 - **Visualize** the six-stage pipeline overlap on an [activity diagram](../../guide/timing/activity.md),
   straight from the loosely-timed simulation
-- Reuse the platform's shipped **bus timing** for the `m_axi` transfers (the infra half), then **fit the
-  custom compute stage's own loop model** from a size sweep (the [direct method](../../guide/calib/fit.md))
-  and store it in the platform library so a build loads it with no re-fit
+- Reuse the platform's shipped **infra timing** — the mem-stream adaptors *and* the `m_axi` bus law —
+  then **fit the custom compute stage's own loop model** from a size sweep (the
+  [direct method](../../guide/calib/fit.md)) and store it in the platform library so a build loads it
+  with no re-fit
 
 ## In this example
 
