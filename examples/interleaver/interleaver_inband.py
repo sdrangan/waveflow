@@ -358,3 +358,71 @@ class InterleaverInband(FreeRunComp):
         self.m_in = self.rstream.m_mem
         self.m_out = self.wstream.m_mem
         self.s_done = self.wstream.s_done
+
+
+# ---------------------------------------------------------------------------
+# Codegen driver — the in-band DUT (headers + composite top + csynth tcl)
+# ---------------------------------------------------------------------------
+
+from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
+from waveflow.build.composite_gen import (  # noqa: E402
+    GEN_DIR,
+    INCLUDE_DIR,
+    composite_top_spec,
+    render_ports_h,
+    render_tcl,
+    render_top,
+)
+from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep  # noqa: E402
+from waveflow.hw.arrayutils import gen_array_utils  # noqa: E402
+from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
+from waveflow.hw.mem_stream import WORD_BW_SUPPORTED  # noqa: E402
+
+from examples.interleaver.interleaver import IlElem  # noqa: E402
+
+_HERE = Path(__file__).resolve().parent
+
+#: The command structs the generated top #includes.  InterleaverCmd is the PLAIN boundary command;
+#: IlDesc / MemRCmd / MemWCmd ride the framed edges (so they emit framed_word read/write methods).
+SCHEMA_CLASSES = [InterleaverCmd, IlDesc, MemRCmd, MemWCmd]
+FRAMED_SCHEMAS = frozenset({IlDesc, MemRCmd, MemWCmd})
+
+
+def gen_headers(config: BuildConfig, mem_dwidth: int = DEFAULT_MEM_DW) -> None:
+    """Generate the command headers + memmgr + streamutils + the fixed framed task bodies + the block
+    element type's array-utils header (elem_read<MEM_DW>) into ``include/``."""
+    inner = BuildDag()
+    inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
+    inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
+    inner.add(MemStreamStep(output_dir=INCLUDE_DIR))
+    for cls in SCHEMA_CLASSES:
+        inner.add(DataSchemaStep(cls, word_bw_supported=WORD_BW_SUPPORTED, include_dir=INCLUDE_DIR,
+                                 framed=(cls in FRAMED_SCHEMAS)))
+    results = inner.run(config, force=True)
+    failed = [n for n, r in results.items() if not r.success]
+    if failed:
+        raise RuntimeError(f"gen-include failed: {failed}")
+    gen_array_utils(IlElem, [int(mem_dwidth)], cfg=config, streamutils_dir=INCLUDE_DIR)
+
+
+def generate_inband(out_dir: Path = _HERE, mem_dwidth: int = DEFAULT_MEM_DW,
+                    n: int = DEFAULT_N) -> Path:
+    """Generate the in-band interleaver DUT: headers + the composite top .cpp + its csynth .tcl + the
+    port map.  Runnable without the toolchain up to the csynth call."""
+    from waveflow.build.elaborate import elaborate
+
+    out_dir = Path(out_dir)
+    config = BuildConfig(root_dir=out_dir, params={})
+    gen_headers(config, mem_dwidth=mem_dwidth)
+    comp = elaborate(InterleaverInband, {"mem_dwidth": mem_dwidth, "n": n}, name="interleaver_inband")
+    spec = composite_top_spec(comp, width=mem_dwidth)
+    gen = out_dir / GEN_DIR
+    gen.mkdir(parents=True, exist_ok=True)
+    cpp = gen / f"{spec.top_name}.cpp"
+    cpp.write_text(render_top(spec), encoding="utf-8")
+    (out_dir / f"{spec.top_name}.tcl").write_text(render_tcl(spec.top_name), encoding="utf-8")
+    ports_h = out_dir / "xsi" / f"{spec.top_name}_ports.h"
+    ports_h.parent.mkdir(parents=True, exist_ok=True)
+    ports_h.write_text(render_ports_h(spec), encoding="utf-8")
+    print(f"generated {cpp.relative_to(out_dir)} + {spec.top_name}.tcl")
+    return cpp

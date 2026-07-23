@@ -42,6 +42,34 @@ def test_inband_uses_framework_mem_streams():
     assert il.s_done is il.wstream.s_done
 
 
+def test_inband_codegen_shape(tmp_path):
+    """The graph-derived codegen emits a free-running six-task top wiring the framework mem-streams
+    around the custom stages, over framed edges + SOBs — and a consistent header set (incl. the framed
+    il_desc.h). No composite_gen change was needed. Toolchain-free (stops before csynth)."""
+    from examples.interleaver.interleaver_inband import generate_inband
+
+    cpp = generate_inband(out_dir=tmp_path, mem_dwidth=64, n=256)
+    src = cpp.read_text()
+    assert "#pragma HLS INTERFACE ap_ctrl_none port=return" in src
+    assert "#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0" in src
+    assert "#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1" in src
+    # framework mem-streams wired around the custom stages
+    for body in ("il_cmd_rx_framed_task<64>", "mem_r_stream_framed_task<64>",
+                 "il_load_inband_task<64, 128>", "il_compute_inband_task<64, 128>",
+                 "il_store_inband_task<64, 128>", "mem_w_stream_framed_done_task<64, 8>"):
+        assert body in src, body
+    # every internal edge is a framed_word stream; three stream_of_blocks
+    assert src.count("streamutils::framed_word<64> >") == 5
+    assert src.count("stream_of_blocks<ap_uint<64>[128], 2>") == 3
+
+    inc = tmp_path / "include"
+    for h in ("il_cmd.h", "il_desc.h", "mem_r_cmd.h", "mem_w_cmd.h", "il_elem_array_utils.h",
+              "il_cmd_rx_framed_task.h", "il_load_inband_task.h", "il_compute_inband_task.h",
+              "il_store_inband_task.h"):
+        assert (inc / h).exists(), h
+    assert "read_framed_stream" in (inc / "il_desc.h").read_text()   # IlDesc emitted framed
+
+
 def test_inband_graph_shape():
     """Six sub-components; EVERY inter-component stream is framed (the mem-stream edges and the two
     descriptor edges through the middle — the convention), plus three stream-of-blocks edges. Only the

@@ -170,6 +170,12 @@ class MemStreamStep(Buildable):
             "il_compute_task": self._output_dir / "il_compute_task.h",
             "il_store_task": self._output_dir / "il_store_task.h",
             "il_mem_w_task": self._output_dir / "il_mem_w_task.h",
+            # In-band interleaver tiles: the framers + gather that compose the framework mem-streams
+            # (the descriptor forwards in-band instead of a custom token).  Hand-written framed bodies.
+            "il_cmd_rx_framed_task": self._output_dir / "il_cmd_rx_framed_task.h",
+            "il_load_inband_task": self._output_dir / "il_load_inband_task.h",
+            "il_compute_inband_task": self._output_dir / "il_compute_inband_task.h",
+            "il_store_inband_task": self._output_dir / "il_store_inband_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -186,6 +192,10 @@ class MemStreamStep(Buildable):
             "il_compute_task": "il_compute_task.h",
             "il_store_task": "il_store_task.h",
             "il_mem_w_task": "il_mem_w_task.h",
+            "il_cmd_rx_framed_task": "il_cmd_rx_framed_task.h",
+            "il_load_inband_task": "il_load_inband_task.h",
+            "il_compute_inband_task": "il_compute_inband_task.h",
+            "il_store_inband_task": "il_store_inband_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")
