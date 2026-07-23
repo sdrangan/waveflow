@@ -71,12 +71,19 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
     0x00000073000000ca vs golden 0x1fe6beab171590ae — a FUNCTIONAL bug in the hand-written C++ bodies (the
     got lanes 0xca=202 / 0x73=115 look like P-index values, not gathered X data). The bodies pass csynth
     and the pysim run_iter is correct, so the bug is C++-body-specific.
-  **REMAINING — debug the data bug:** trace a VCD (`run.bat interleaver_inband ..._bfm_tb trace`) and
-  compare the framed [IlDesc|X|P] the reader emits + the load's block fills against the pysim; the canon
-  il_compute_task (same elem_read gather) is the verified reference. Suspect the load/framing or an
-  elem_read/addressing detail. Then retire `InterleaverCanon`, mem stages inherit the shipped residual.
-  Reproduce the run: scratchpad/xsi_inband.py (generate_inband + generate_tb + XsiHarnessStep + csynth +
-  render_rtl_f + write_xsi_bundles + run.bat).
+  - **XSI GOLDEN GREEN** — root-caused via VCD trace and FIXED. It was a **free-running deadlock**, not a
+    data bug: the framework `MemRStream` is an `hls::task` reading ONE region per firing, so `cmd_rx`'s
+    TWO reads (P then X) made the reader fire twice — and the reader **never issued its 2nd m_axi read**
+    while `il_load` held a stream-of-blocks write-lock across both firings (`gmem0`=1 read, load fills
+    p_blk but write-lock never releases, compute never starts). Ruled out (all still deadlocked):
+    p_blk-first block order, fixed-`NW` vs runtime-`nw` loops, deep `rdata` FIFO. **Fix:** read the
+    contiguous `[P|X]` region in ONE `MemRCmd` (`len=2·nw`, `x_off==p_off+nw`); `il_load` splits by count
+    (first nw→p_blk, next nw→x_blk) — one firing, like the canon. pysim caveat: `get()` is burst-atomic,
+    so the pysim load does one `get(2·nw)` + slice, not two `get(nw)`. **XSI GOLDEN: PASS** at n=16 (1
+    job) and n=256 (4 jobs), `Y=X[P]` bit-exact through real RTL. See [[reference-memrstream-one-region-
+    per-firing]]. Reproduce: scratchpad/xsi_inband.py, scratchpad/xsi_small.py.
+  **REMAINING:** retire `InterleaverCanon` + its gen/xsi (make InterleaverInband THE design); mem stages
+  inherit the shipped mem-stream residual; timing calibration (compute cosim sweep for real II/latency).
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.

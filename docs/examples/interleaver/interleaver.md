@@ -34,11 +34,12 @@ The design (`examples/interleaver/`) reuses the **framework** memory adaptors `m
 stage is a **leaf `FreeRunComp`** (one firing per job, one `ap_ctrl_none` `hls::task`):
 
 - **`cmd_rx`** — the schema-aware **framer** (`mem_copy`'s `Sequencer` role). It reads one
-  `InterleaverCmd` off the boundary stream `s_cmd` and frames the reader's command stream as **two
-  reads**: `[MemRCmd(x_off, nw, fwd=1) | InterleaverCmd | MemRCmd(p_off, nw, fwd=0)]`.
-- **`MemRStream`** (framework, in-band) — the `m_axi` **read** owner (bundle `gmem0`). It fires twice:
-  the first read relays the `InterleaverCmd` as a header, then bursts `X`; the second bursts `P`. Its
-  output is `[InterleaverCmd | X | P]`.
+  `InterleaverCmd` off the boundary stream `s_cmd` and frames the reader's command as **one read of the
+  contiguous `[P | X]` region**: `[MemRCmd(p_off, 2·nw, fwd=1) | InterleaverCmd]` (`X` sits right after
+  `P`, so `x_off = p_off + nw`).
+- **`MemRStream`** (framework, in-band) — the `m_axi` **read** owner (bundle `gmem0`). It fires **once**:
+  it relays the `InterleaverCmd` as a header, then bursts the contiguous `[P | X]`. Its output is
+  `[InterleaverCmd | P | X]`. (One firing is deliberate — see [Message forwarding](#message-forwarding-the-in-band-descriptor).)
 - **`il_load`** — a stream→block bridge. Reads the descriptor (→ `nw`), lands `X` and `P` in two on-chip
   blocks `x_blk` / `p_blk` exposed as a [stream of blocks](../../guide/concurrency/python/sob.md), and
   forwards the descriptor.
@@ -71,11 +72,16 @@ The interleaver forwards its command exactly the way `mem_copy` does — **in-ba
 framework mem-streams serve it with no change. `cmd_rx` and `il_store` are the only schema-aware stages;
 `MemRStream` and `MemWStream` relay opaquely. Three properties ride on the descriptor flow:
 
-- **The reader loads P *and* X with two reads.** `MemRStream` moves one region per firing, so `cmd_rx`
-  frames **two** `MemRCmd`s. The trick is the header: `MemRCmd(x_off, fwd_bursts=1)` tells the reader to
-  relay the following burst — the `InterleaverCmd` — *before* it appends the X data, so the descriptor
-  arrives welded to the front of the data (`[descriptor | X | P]`). The reader already forwards at the
-  header; nothing in the framework changed.
+- **The reader loads P *and* X in one read.** `MemRStream` moves one region per firing, so `cmd_rx`
+  frames a **single** `MemRCmd` spanning the contiguous `[P | X]` region (`2·nw` words). The header trick
+  still applies: `fwd_bursts=1` tells the reader to relay the following burst — the `InterleaverCmd` —
+  *before* it appends the data, so the descriptor arrives welded to the front (`[descriptor | P | X]`),
+  and `il_load` splits the data by count (first `nw` → `p_blk`, next `nw` → `x_blk`). **Why one read and
+  not two:** `MemRStream` is a free-running `hls::task`, which reads one region *per firing*. Two firings
+  for one job deadlock the pipeline — the reader never issues its second `m_axi` read while `il_load`
+  holds a stream-of-blocks write-lock across both firings (confirmed by XSI; block-order and
+  FIFO-depth changes did not help). Reading the contiguous region in a single burst sidesteps it — the
+  same way the standalone canonical reader loads both regions in one go. Nothing in the framework changed.
 - **Pacing, for free.** A free-running (`ap_ctrl_none`) pipeline deadlocks if nothing throttles it; the
   in-band descriptor is that throttle — each stage waits for its descriptor, one job in flight — exactly
   as in `mem_copy`. There is **no separate token**: the `InterleaverCmd` rides the reader's stream to
@@ -86,8 +92,8 @@ framework mem-streams serve it with no change. `cmd_rx` and `il_store` are the o
 ```mermaid
 flowchart LR
   cmd([InterleaverCmd]) --> RX[cmd_rx]
-  RX -->|"MemRCmd · desc · MemRCmd"| MR[MemRStream]
-  MR -->|"desc · X · P"| LD[il_load]
+  RX -->|"MemRCmd · desc"| MR[MemRStream]
+  MR -->|"desc · P · X"| LD[il_load]
   LD -->|desc| CP[il_compute]
   CP -->|desc| ST[il_store]
   ST -->|"MemWCmd · desc · Y"| MW[MemWStream]

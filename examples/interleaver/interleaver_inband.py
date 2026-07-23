@@ -83,7 +83,10 @@ def _nw_of(n: int, lw: int) -> int:
 @dataclass
 class CmdRxInband(FreeRunComp):
     """Framer (mem_copy's ``Sequencer`` role): read one ``InterleaverCmd`` and frame the reader's
-    command stream as two reads — X (with the descriptor relayed as a header) then P."""
+    command stream as ONE read of the contiguous ``[P | X]`` region (``2*nw`` words), with the
+    descriptor relayed as a header.  A single reader firing — two firings (one per region) wedge the
+    free-running pipeline (the framework MemRStream is an hls::task and won't issue a 2nd m_axi read
+    while ``il_load`` holds a stream_of_blocks write-lock across both). See :meth:`run_iter`."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_cmd_rx"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -114,19 +117,23 @@ class CmdRxInband(FreeRunComp):
         n = int(cmd.n)
         nw = _nw_of(n, self.lw)                     # runtime word count
         desc = IlDesc(n=n, y_off=int(cmd.y_off))
-        # Read X with the descriptor relayed as a header (fwd=1); then read P (fwd=0). len is in WORDS.
-        memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=1)
-        memr_p = MemRCmd(addr=int(cmd.p_off), len=nw, fwd_bursts=0)
-        yield from self.cmd_out.write(np.asarray(memr_x.serialize(word_bw=w), dtype=np.uint64))
+        # ONE read of the CONTIGUOUS [P | X] region (2*nw words; X sits right after P), with the
+        # descriptor relayed as a header.  A SINGLE reader firing on purpose: the framework MemRStream
+        # is an hls::task reading one region per firing, and a SECOND firing (for X) WEDGES the
+        # free-running pipeline — the reader never issues its 2nd m_axi read while the load holds a
+        # stream_of_blocks write-lock across both firings (traced via XSI). Reading P and X as one
+        # contiguous burst is the fix: one firing, no re-fire, like the canon reads both in one go.
+        assert int(cmd.x_off) == int(cmd.p_off) + nw, "in-band gather requires X contiguous after P"
+        memr = MemRCmd(addr=int(cmd.p_off), len=2 * nw, fwd_bursts=1)
+        yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
-        yield from self.cmd_out.write(np.asarray(memr_p.serialize(word_bw=w), dtype=np.uint64))
         self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
 @dataclass
 class IlLoadInband(FreeRunComp):
-    """Reads the framed ``[IlDesc | X | P]`` off the reader, fills ``x_blk`` / ``p_blk`` (SOB), and
-    forwards the descriptor to the compute."""
+    """Reads the framed ``[IlDesc | P | X]`` off the reader, fills ``p_blk`` / ``x_blk`` (SOB, p_blk
+    FIRST — see :class:`CmdRxInband`), and forwards the descriptor to the compute."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_load"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -161,16 +168,18 @@ class IlLoadInband(FreeRunComp):
         t0 = self.now
         nw = _nw_of(int(desc.n), self.lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
-        # X data (the reader's first firing appended it after the descriptor).
-        xblock = yield from self.x_blk.acquire_write()
-        xw = yield from self.s_in.get(nwords_max=nw)
-        xblock[:xw.shape[0]] = xw.astype(self._dtype)
-        yield from self.x_blk.commit_write(xblock)
-        # P data (the reader's second firing).
+        # ONE contiguous burst [P | X] (2*nw words) — split by count: first nw → p_blk, next nw → x_blk.
+        # Matches the RTL's word-granular LP/LX reads across the single burst (the framework MemRStream
+        # read the contiguous region in a single firing).  p_blk filled FIRST so it is released before
+        # x_blk, matching il_compute's read-lock order.
+        px = yield from self.s_in.get(nwords_max=2 * nw)
+        pw, xw = px[:nw], px[nw:2 * nw]
         pblock = yield from self.p_blk.acquire_write()
-        pw = yield from self.s_in.get(nwords_max=nw)
         pblock[:pw.shape[0]] = pw.astype(self._dtype)
         yield from self.p_blk.commit_write(pblock)
+        xblock = yield from self.x_blk.acquire_write()
+        xblock[:xw.shape[0]] = xw.astype(self._dtype)
+        yield from self.x_blk.commit_write(xblock)
         self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
 
@@ -329,9 +338,9 @@ class InterleaverInband(FreeRunComp):
             self.add_comp(c)
         self.gather = self.compute          # the completion-timeline probe (job_end_cyc)
 
-        def _sif(name, master, slave):
+        def _sif(name, master, slave, depth=None):
             iface = StreamIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk, bitwidth=w,
-                             framed=True)
+                             framed=True, **({} if depth is None else {"depth": depth}))
             iface.bind("master", master)
             iface.bind("slave", slave)
             self.add_if(iface)
@@ -345,7 +354,7 @@ class InterleaverInband(FreeRunComp):
             self.add_if(iface)
 
         _sif("cmd_rd", self.rx.cmd_out, self.rstream.s_cmd)     # [MemRCmd|IlDesc|MemRCmd]
-        _sif("rdata", self.rstream.m_out, self.load.s_in)       # [IlDesc|X|P]
+        _sif("rdata", self.rstream.m_out, self.load.s_in)       # [IlDesc | P | X]
         _sif("desc_lc", self.load.desc_out, self.compute.desc_in)   # IlDesc
         _sif("desc_cs", self.compute.desc_out, self.store.desc_in)  # IlDesc
         _sif("wdata", self.store.cmd_out, self.wstream.s_in)    # [MemWCmd|IlDesc|Y]
