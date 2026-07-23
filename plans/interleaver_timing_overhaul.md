@@ -83,6 +83,14 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
     n=256 (4 jobs), `Y=X[P]` bit-exact through real RTL. (Contiguous single `[P|X]` read also works —
     fewer m_axi transactions, an optimization not a requirement.) See [[reference-memrstream-one-region-
     per-firing]]. Reproduce: scratchpad/xsi_inband.py, scratchpad/xsi_small.py.
+  - **TYPED-SOB refactor DONE** (element blocks): SOBs are now `ap_uint<32>[N]` (32-bit ELEMENT blocks)
+    not `ap_uint<MEM_DW>[NW]` word blocks. `il_load`/`il_store` (de)serialize at the boundary via the
+    generated `read_framed_stream_lane` / `write_framed_stream_lane` (needed [[reference-array-serialization-api]]
+    framed_word support first), so `il_compute` is the bare gather `yb[i] = xb[pb[i]]` — no elem_read, no
+    `.range()`. **XSI GOLDEN PASS** (n=16 + n=256 4-job); csynth fits (timing closes, 3× 4 BRAM_18K = same
+    bits as word blocks); **cycles = 302/job, IDENTICAL to the word version** (measured same-method:
+    reader-bound, so the element-granular compute is hidden). Zero regression. pysim (de)ser via numpy
+    twins `_words_to_elems`/`_elems_to_words`.
   **REMAINING:** retire `InterleaverCanon` + its gen/xsi (make InterleaverInband THE design); mem stages
   inherit the shipped mem-stream residual; timing calibration (compute cosim sweep for real II/latency).
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at

@@ -16,13 +16,15 @@ descriptors), so every inter-component stream is **framed** and only the host bo
 Flow (all internal edges framed):
 
 * **`cmd_rx`** reads one `InterleaverCmd` and frames the reader's command stream as **two reads**:
-  `[MemRCmd(x_off, nw, fwd=1) | IlDesc | MemRCmd(p_off, nw, fwd=0)]`, `nw = ceil(n/LW)`. The `fwd=1`
-  relays the `IlDesc` as a header ahead of the X data.
-* **`MemRStream(inband)`** fires twice → `m_out = [IlDesc | X | P]`.
-* **`il_load`** reads the descriptor (→ `nw`), lands X → `x_blk` and P → `p_blk` (a stream of blocks so
-  the compute can random-access X), and forwards `IlDesc`.
-* **`il_compute`** — the custom gather (`nw` runtime), carrying its own loop timing model.
-* **`il_store`** frames the writer's stream `[MemWCmd(y_off, nw, fwd=1) | IlDesc | Y]`.
+  `[MemRCmd(p_off, nw, fwd=1) | IlDesc | MemRCmd(x_off, nw, fwd=0)]`, `nw = ceil(n/LW)`. The `fwd=1`
+  relays the `IlDesc` as a header ahead of the P data.
+* **`MemRStream(inband)`** fires twice → `m_out = [IlDesc | P | X]`.
+* **`il_load`** reads the descriptor, then **deserializes** P → `p_blk` and X → `x_blk` — 32-bit
+  **element** blocks (stream-of-blocks) via `read_framed_stream_lane` — and forwards `IlDesc`.
+* **`il_compute`** — the custom gather, laid bare on the typed blocks: `y_blk[i] = x_blk[p_blk[i]]`
+  (no lane math), carrying its own loop timing model.
+* **`il_store`** **serializes** `y_blk` back to words (`write_framed_stream_lane`) and frames the writer's
+  stream `[MemWCmd(y_off, nw, fwd=1) | IlDesc | Y]`.
 * **`MemWStream(inband, emit_done)`** writes Y and echoes `IlDesc` on `s_done` — the commit-timed done.
 
 `cmd_rx` and `il_store` are the only schema-aware framers; the mem-streams relay opaquely. pysim-verified
@@ -38,7 +40,7 @@ from typing import ClassVar
 import numpy as np
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.dataschema import DataList, IntField
+from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_component import HwParam
 from waveflow.hw.hw_freerun import FreeRunComp
 from waveflow.hw.interface import (
@@ -58,7 +60,6 @@ from examples.interleaver.interleaver import (
     IL_COMPUTE_II_SEED,
     IL_COMPUTE_LATENCY_SEED,
     InterleaverCmd,
-    _make_word_block,
     _nwords,
 )
 
@@ -78,6 +79,32 @@ class IlDesc(DataList):
 
 def _nw_of(n: int, lw: int) -> int:
     return (n + lw - 1) // lw
+
+
+def _make_elem_block(n: int) -> type:
+    """A typed **element** block: ``DataArray`` of 32-bit elements (up to ``n``) → a 32-bit-wide block RAM
+    the gather indexes DIRECTLY (``y[i] = x[p[i]]``).  Replaces the packed WORD block (``ap_uint<MEM_DW>``)
+    the compute used to unpack/pack by hand — the (de)serialization now lives in ``il_load`` / ``il_store``
+    via the generated ``read_framed_stream_lane`` / ``write_framed_stream_lane`` (see
+    guide/vectorization/hls/arrayutils.md).  Same total bits as ``_make_word_block`` (``n``·32 = ``nw``·MEM_DW)."""
+    return DataArray.specialize(element_type=Word32, max_shape=(int(n),), member_name="elems")
+
+
+def _words_to_elems(words, mem_dwidth: int):
+    """Deserialize MEM_DW words → 32-bit elements (LSB-first) — the pysim twin of the RTL's
+    ``read_framed_stream_lane`` filling an element block."""
+    word_dt = np.dtype(f"<u{int(mem_dwidth) // 8}")
+    return np.asarray(words, dtype=word_dt).view(np.uint32)
+
+
+def _elems_to_words(elems, mem_dwidth: int):
+    """Serialize 32-bit elements → MEM_DW words (LSB-first) — the pysim twin of ``write_framed_stream_lane``.
+    Pads the final word if the element count isn't a multiple of LW."""
+    lw = int(mem_dwidth) // 32
+    e = np.asarray(elems, dtype=np.uint32)
+    if e.size % lw:
+        e = np.concatenate([e, np.zeros(lw - e.size % lw, dtype=np.uint32)])
+    return e.view(np.dtype(f"<u{int(mem_dwidth) // 8}"))
 
 
 @dataclass
@@ -148,34 +175,35 @@ class IlLoadInband(FreeRunComp):
                                   has_tlast=True)   # framed ← MemRStream
         self.desc_out = StreamIFMaster(name=f"{self.name}_desc_out", sim=self.sim, bitwidth=w,
                                        has_tlast=True)   # framed → compute
-        word_block = _make_word_block(w, self.nw)
-        self.p_blk = SobIFMaster(name=f"{self.name}_p_blk", sim=self.sim, element_type=word_block)
-        self.x_blk = SobIFMaster(name=f"{self.name}_x_blk", sim=self.sim, element_type=word_block)
+        elem_block = _make_elem_block(int(self.n))
+        self.p_blk = SobIFMaster(name=f"{self.name}_p_blk", sim=self.sim, element_type=elem_block)
+        self.x_blk = SobIFMaster(name=f"{self.name}_x_blk", sim=self.sim, element_type=elem_block)
         for ep in (self.s_in, self.desc_out, self.p_blk, self.x_blk):
             self.add_endpoint(ep)
-        self._dtype = np.uint32 if w <= 32 else np.uint64
         self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_load_inband_task", "il_load_inband_task.h",
                           ("s_in", "desc_out", "p_blk", "x_blk"),
-                          template_args=(int(self.mem_dwidth), self.nw))
+                          template_args=(int(self.mem_dwidth), int(self.n)))
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
         desc = yield from self.s_in.get(IlDesc)          # descriptor (header)
         t0 = self.now
-        nw = _nw_of(int(desc.n), self.lw)
+        n = int(desc.n)
+        nw = _nw_of(n, self.lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
-        # Two bursts on rdata (the reader's two firings): P then X, nw words each.  p_blk filled FIRST so
-        # it is released before x_blk, matching il_compute's read-lock order.
+        # Two bursts on rdata (the reader's two firings): P then X, nw words each.  DESERIALIZE each burst
+        # into n 32-bit elements (read_framed_stream_lane's job) and fill the element blocks.  p_blk first
+        # so it is released before x_blk, matching il_compute's read-lock order.
         pblock = yield from self.p_blk.acquire_write()
         pw = yield from self.s_in.get(nwords_max=nw)
-        pblock[:pw.shape[0]] = pw.astype(self._dtype)
+        pblock[:n] = _words_to_elems(pw, w)[:n]
         yield from self.p_blk.commit_write(pblock)
         xblock = yield from self.x_blk.acquire_write()
         xw = yield from self.s_in.get(nwords_max=nw)
-        xblock[:xw.shape[0]] = xw.astype(self._dtype)
+        xblock[:n] = _words_to_elems(xw, w)[:n]
         yield from self.x_blk.commit_write(xblock)
         self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
@@ -198,12 +226,12 @@ class IlComputeInband(FreeRunComp):
         self.nw = _nwords(int(self.n), self.lw)
         self.desc_in = StreamIFSlave(name=f"{self.name}_desc_in", sim=self.sim, bitwidth=w,
                                      has_tlast=True)
-        word_block = _make_word_block(w, self.nw)
-        self.p_blk = SobIFSlave(name=f"{self.name}_p_blk", sim=self.sim, element_type=word_block)
-        self.x_blk = SobIFSlave(name=f"{self.name}_x_blk", sim=self.sim, element_type=word_block)
+        elem_block = _make_elem_block(int(self.n))
+        self.p_blk = SobIFSlave(name=f"{self.name}_p_blk", sim=self.sim, element_type=elem_block)
+        self.x_blk = SobIFSlave(name=f"{self.name}_x_blk", sim=self.sim, element_type=elem_block)
         self.desc_out = StreamIFMaster(name=f"{self.name}_desc_out", sim=self.sim, bitwidth=w,
                                        has_tlast=True)
-        self.y_blk = SobIFMaster(name=f"{self.name}_y_blk", sim=self.sim, element_type=word_block)
+        self.y_blk = SobIFMaster(name=f"{self.name}_y_blk", sim=self.sim, element_type=elem_block)
         for ep in (self.desc_in, self.p_blk, self.x_blk, self.desc_out, self.y_blk):
             self.add_endpoint(ep)
         self.timing = self._build_timing_model()
@@ -225,26 +253,20 @@ class IlComputeInband(FreeRunComp):
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_compute_inband_task", "il_compute_inband_task.h",
                           ("desc_in", "p_blk", "x_blk", "desc_out", "y_blk"),
-                          template_args=(int(self.mem_dwidth), self.nw))
+                          template_args=(int(self.mem_dwidth), int(self.n)))
 
     def run_iter(self) -> ProcessGen[None]:
         w, lw = int(self.mem_dwidth), self.lw
         desc = yield from self.desc_in.get(IlDesc)
-        nw = _nw_of(int(desc.n), lw)
+        n = int(desc.n)
+        nw = _nw_of(n, lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
         yblock = yield from self.y_blk.acquire_write()
         t0 = self.now
-        for wi in range(nw):
-            pword = int(pblock[wi])
-            yword = 0
-            for lane in range(lw):
-                idx = (pword >> (32 * lane)) & 0xFFFFFFFF
-                xword = int(xblock[idx // lw])
-                xv = (xword >> (32 * (idx % lw))) & 0xFFFFFFFF
-                yword |= xv << (32 * lane)
-            yblock[wi] = yword
+        for i in range(n):
+            yblock[i] = int(xblock[int(pblock[i])])     # the gather, laid bare: Y[i] = X[P[i]]
         cycles = float(self.timing.predict({"nw": nw}))
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         yield from self.p_blk.release_read()
@@ -272,8 +294,8 @@ class IlStoreInband(FreeRunComp):
         self.nw = _nwords(int(self.n), self.lw)
         self.desc_in = StreamIFSlave(name=f"{self.name}_desc_in", sim=self.sim, bitwidth=w,
                                      has_tlast=True)
-        word_block = _make_word_block(w, self.nw)
-        self.y_blk = SobIFSlave(name=f"{self.name}_y_blk", sim=self.sim, element_type=word_block)
+        elem_block = _make_elem_block(int(self.n))
+        self.y_blk = SobIFSlave(name=f"{self.name}_y_blk", sim=self.sim, element_type=elem_block)
         self.cmd_out = StreamIFMaster(name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w,
                                       has_tlast=True)   # framed → MemWStream
         for ep in (self.desc_in, self.y_blk, self.cmd_out):
@@ -283,20 +305,22 @@ class IlStoreInband(FreeRunComp):
     def kernel_task(self) -> KernelTask:
         return KernelTask("il_store_inband_task", "il_store_inband_task.h",
                           ("desc_in", "y_blk", "cmd_out"),
-                          template_args=(int(self.mem_dwidth), self.nw))
+                          template_args=(int(self.mem_dwidth), int(self.n)))
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
         desc = yield from self.desc_in.get(IlDesc)
         t0 = self.now
-        nw = _nw_of(int(desc.n), self.lw)
+        n = int(desc.n)
+        nw = _nw_of(n, self.lw)
         yblock = yield from self.y_blk.acquire_read()
         # Frame the writer's stream: descriptor (addr=y_off, nw words), echo the IlDesc (emitted on
-        # s_done after the store), then the Y data.
+        # s_done after the store), then the Y data — SERIALIZED from the n gathered elements to nw words
+        # (write_framed_stream_lane's job).
         memw = MemWCmd(addr=int(desc.y_off), len=nw, fwd_bursts=1)
         yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
-        yield from self.cmd_out.write(np.asarray(yblock[:nw]))
+        yield from self.cmd_out.write(np.asarray(_elems_to_words(yblock[:n], w), dtype=np.uint64))
         yield from self.y_blk.release_read()
         self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
 
@@ -343,9 +367,9 @@ class InterleaverInband(FreeRunComp):
             self.add_if(iface)
 
         def _sobif(name, master, slave):
-            word_block = _make_word_block(w, self.nw)
+            elem_block = _make_elem_block(int(self.n))
             iface = StreamOfBlocksIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk,
-                                     element_type=word_block)
+                                     element_type=elem_block)
             iface.bind("master", master)
             iface.bind("slave", slave)
             self.add_if(iface)
