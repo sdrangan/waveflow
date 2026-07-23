@@ -42,6 +42,36 @@ def test_inband_uses_framework_mem_streams():
     assert il.s_done is il.wstream.s_done
 
 
+def test_inband_tb_pysim_golden():
+    """The XSI testbench GRAPH runs the same Y=X[P] golden (fixed + variable length) — one statement,
+    two backends."""
+    from examples.interleaver.interleaver_inband_sim import InterleaverInbandSim
+
+    InterleaverInbandSim(sizes=(256,)).run()
+    InterleaverInbandSim(sizes=(256, 128, 64)).run()
+
+
+def test_inband_tb_codegen(tmp_path):
+    """The BFM harness is derived from the testbench graph (like memcpy): ports + vectors + harness +
+    the two-line main + the scenario bundles all generate. Toolchain-free (stops before xsim)."""
+    from examples.interleaver.interleaver_inband import (
+        generate_inband,
+        generate_tb,
+        write_xsi_bundles,
+    )
+
+    generate_inband(out_dir=tmp_path, mem_dwidth=64, n=256)
+    generate_tb(out_dir=tmp_path, width=64, sizes=(256, 256), n_cycles=4000)
+    write_xsi_bundles(tmp_path / "xsi", width=64, sizes=(256, 256))
+    xsi = tmp_path / "xsi"
+    for f in ("interleaver_inband_ports.h", "interleaver_inband_vectors.h",
+              "interleaver_inband_tb_harness.h", "interleaver_inband_bfm_tb.cpp"):
+        assert (xsi / f).exists(), f
+    main = (xsi / "interleaver_inband_bfm_tb.cpp").read_text()
+    assert "interleaver_inband_tb::Harness h" in main and "h.run(4000)" in main
+    assert (xsi / "vectors" / "s_cmd").exists() and (xsi / "vectors" / "mem_in").exists()
+
+
 def test_inband_codegen_shape(tmp_path):
     """The graph-derived codegen emits a free-running six-task top wiring the framework mem-streams
     around the custom stages, over framed edges + SOBs — and a consistent header set (incl. the framed

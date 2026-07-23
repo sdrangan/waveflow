@@ -426,3 +426,104 @@ def generate_inband(out_dir: Path = _HERE, mem_dwidth: int = DEFAULT_MEM_DW,
     ports_h.write_text(render_ports_h(spec), encoding="utf-8")
     print(f"generated {cpp.relative_to(out_dir)} + {spec.top_name}.tcl")
     return cpp
+
+
+# ---------------------------------------------------------------------------
+# XSI testbench codegen — the BFM harness derived from the InterleaverInbandTB graph
+# ---------------------------------------------------------------------------
+
+from waveflow.build.composite_gen import (  # noqa: E402
+    render_tb_harness,
+    render_tb_main,
+    render_vectors_h,
+    tb_top_spec,
+)
+
+_TOP = "interleaver_inband"
+
+
+def _done_words(width: int) -> int:
+    """Words per ``s_done`` completion — one echoed :class:`IlDesc`.  At w=64 this is 1."""
+    return IlDesc.nwords_per_inst(width)
+
+
+def make_xsi_tb(width: int = DEFAULT_MEM_DW, sizes=(256,), n_cycles: "int | None" = None):
+    """The :class:`~examples.interleaver.interleaver_inband_sim.InterleaverInbandTB` the XSI testbench
+    is generated from (lazy import — the sim module imports this one)."""
+    from waveflow.simulation.simulation import Simulation
+    from examples.interleaver.interleaver_inband_sim import InterleaverInbandTB
+
+    kw = {} if n_cycles is None else {"n_cycles": int(n_cycles)}
+    return InterleaverInbandTB(name="xsi_tb", sim=Simulation(), sizes=tuple(sizes),
+                               mem_dwidth=width, **kw)
+
+
+def render_xsi_vectors(width: int = DEFAULT_MEM_DW, sizes=(256,)) -> str:
+    """Render ``interleaver_inband_vectors.h`` from the testbench graph — the arena size + command
+    count the harness needs.  The per-job offsets ride the ``vectors/s_cmd`` bundle."""
+    tb = make_xsi_tb(width, sizes)
+    return render_vectors_h(
+        f"{_TOP}_vectors",
+        scalars={
+            "MEM_DW": width,
+            "MEM_NW": int(tb.mem.nwords_tot),
+            "NUM_CMDS": len(tb._sizes),
+            "DONE_WORDS": _done_words(width),
+        },
+        note=("Derived from the InterleaverInbandTB graph (examples/interleaver/interleaver_inband_sim.py)\n"
+              "-- the same class the pysim golden runs.  The command words + P/X arena + golden ride the\n"
+              "burst bundles under xsi/vectors/, written by write_xsi_bundles."),
+    )
+
+
+def gen_xsi_vectors(out_dir: Path = _HERE, width: int = DEFAULT_MEM_DW, sizes=(256,)) -> Path:
+    path = Path(out_dir) / "xsi" / f"{_TOP}_vectors.h"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_xsi_vectors(width, sizes), encoding="utf-8")
+    return path
+
+
+def write_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW, sizes=(256,)) -> None:
+    """Write the XSI input + golden bundles into ``<xsi_dir>/vectors/`` (s_cmd, mem_in, golden) — the
+    single scenario writer both backends share."""
+    from examples.interleaver.interleaver_inband_sim import InterleaverInbandSim
+
+    InterleaverInbandSim(sizes=tuple(sizes), mem_dwidth=width).write_scenario(Path(xsi_dir))
+
+
+def check_xsi_outputs(xsi_dir: Path, width: int = DEFAULT_MEM_DW, sizes=(256,)) -> None:
+    """Check the XSI run from the dumped bundles: every Y region equals the golden, one done per job."""
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    vdir = Path(xsi_dir) / "vectors"
+    lw = width // 32
+    out = read_burst_bundle(vdir / "out")[0]
+    golden = read_burst_bundle(vdir / "golden")[0]
+    cur = 0
+    for j, n in enumerate(sizes):
+        nw = (n + lw - 1) // lw
+        y = cur + 2 * nw
+        cur += 3 * nw
+        if not np.array_equal(out[y:y + nw], golden[y:y + nw]):
+            bad = int(np.argmax(out[y:y + nw] != golden[y:y + nw]))
+            raise AssertionError(f"interleaver_inband job {j} word {bad}: "
+                                 f"0x{int(out[y + bad]):016x} != golden 0x{int(golden[y + bad]):016x}")
+    s_done = read_burst_bundle(vdir / "s_done")[0]
+    dw = _done_words(width)
+    assert len(s_done) == len(sizes) * dw, (
+        f"interleaver_inband: s_done has {len(s_done)} words, expected {len(sizes)}*{dw}")
+
+
+def generate_tb(out_dir: Path = _HERE, width: int = DEFAULT_MEM_DW, sizes=(256,),
+                n_cycles: "int | None" = None) -> dict:
+    """Generate the XSI testbench: the scenario constants + the BFM harness + the two-line main, all
+    derived from the InterleaverInbandTB graph (the harness #includes the DUT's ports.h)."""
+    vec_h = gen_xsi_vectors(out_dir, width=width, sizes=sizes)
+    tb = make_xsi_tb(width, sizes=sizes, n_cycles=n_cycles)
+    tb_spec = tb_top_spec(tb)
+    harness_h = Path(out_dir) / "xsi" / f"{_TOP}_tb_harness.h"
+    harness_h.write_text(render_tb_harness(tb_spec), encoding="utf-8")
+    main_cpp = Path(out_dir) / "xsi" / f"{_TOP}_bfm_tb.cpp"
+    main_cpp.write_text(render_tb_main(tb_spec, tb.n_cycles), encoding="utf-8")
+    print(f"generated TB xsi/{vec_h.name} + xsi/{harness_h.name} + xsi/{main_cpp.name}")
+    return {"tb_harness": harness_h, "tb_main": main_cpp}
