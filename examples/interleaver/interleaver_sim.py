@@ -81,7 +81,10 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
     _vd = tempfile.TemporaryDirectory()
     write_burst_bundle(words, Path(_vd.name) / "cmd")
     driver = StreamDriver(sim=sim, bitwidth=mem_dwidth, in_bundle="cmd", root=Path(_vd.name))
-    done_sink = StreamSink(sim=sim, bitwidth=mem_dwidth)
+    # The done stream is framed (has_tlast) when the composite's writer is an in-band MemWStream, plain
+    # otherwise — match the sink to whatever the composite exposes.
+    done_sink = StreamSink(sim=sim, bitwidth=mem_dwidth,
+                           has_tlast=bool(getattr(il.s_done, "has_tlast", False)))
 
     cmd_if = StreamIF(sim=sim, clk=clk, bitwidth=mem_dwidth)
     cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
