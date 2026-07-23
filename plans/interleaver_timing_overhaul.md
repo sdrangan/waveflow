@@ -63,10 +63,20 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
   - **csynth PASSED** (Vitis 2025.1, first try, WAVEFLOW_CSYNTH_OK): ap_ctrl_none free-running top, all 6
     tasks synth, 2 m_axi bundles, 5 framed FIFOs + 2 PIPO block RAMs, **Fmax ~111 MHz** at 100 MHz target.
     `!! UNVERIFIED` banners on the 4 bodies replaced with `csynth-verified`.
-  **REMAINING:** XSI-verify no deadlock (the free-run failure mode; needs an XSI BFM harness like the
-  canon's — `xsi/interleaver_inband_bfm_tb.cpp` + run.bat), then make `InterleaverInband` THE design
-  (retire `InterleaverCanon` + its gen/xsi), mem stages inherit the shipped mem-stream residual, update
-  docs (Source is already interleaver_inband.py).
+  - **XSI HARNESS BUILT + RUN** (commit 52bf62f): `interleaver_inband_sim.py` (InterleaverInbandTB graph
+    + InterleaverInbandSim procedure) + `generate_tb`/`write_xsi_bundles`/`check_xsi_outputs`, the memcpy
+    generated-TB pattern. Full flow ran end to end (csynth → xvlog → xelab → g++ BFM → xsim):
+    **xelab errorlevel=0, g++ errorlevel=0, XSI_EXITCODE=0 — the free-running RTL runs to completion, NO
+    DEADLOCK** (the critical result only XSI can give). BUT the golden **FAILS**: Y[0] got
+    0x00000073000000ca vs golden 0x1fe6beab171590ae — a FUNCTIONAL bug in the hand-written C++ bodies (the
+    got lanes 0xca=202 / 0x73=115 look like P-index values, not gathered X data). The bodies pass csynth
+    and the pysim run_iter is correct, so the bug is C++-body-specific.
+  **REMAINING — debug the data bug:** trace a VCD (`run.bat interleaver_inband ..._bfm_tb trace`) and
+  compare the framed [IlDesc|X|P] the reader emits + the load's block fills against the pysim; the canon
+  il_compute_task (same elem_read gather) is the verified reference. Suspect the load/framing or an
+  elem_read/addressing detail. Then retire `InterleaverCanon`, mem stages inherit the shipped residual.
+  Reproduce the run: scratchpad/xsi_inband.py (generate_inband + generate_tb + XsiHarnessStep + csynth +
+  render_rtl_f + write_xsi_bundles + run.bat).
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.
