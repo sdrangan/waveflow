@@ -15,5 +15,8 @@ These pages cover the three modes — [raw](./raw.md) (a flat C array, explicit 
 [struct](./struct.md) (a generated wrapper type), and [complex](./complex.md) (complex elements) —
 each over a *local* array.
 
-Moving an array over a real **stream or `m_axi` port** — the stream/`TLAST` variants and the
-pipelined loop patterns over a port — is detailed in [Interfaces](../../interface/).
+Moving a whole array to and from **words** — over a memory buffer, a FIFO, or an AXI4-Stream — is
+enumerated in [Array serialization](./arrayutils.md) (the array analog of single-value
+[Serialization](../../schema/hls/serialization.md)): the routine for each channel, where it is generated,
+and the `framed_word` gap. The pipelined loop patterns over a real **port** are in
+[Interfaces](../../interface/).
