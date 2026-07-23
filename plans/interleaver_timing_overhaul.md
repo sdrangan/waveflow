@@ -48,11 +48,23 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
   `MemRStream`/`MemWStream` + the in-band stages record `fire_log`; `interleaver_figures.py variant=`
   renders the in-band six-stage pipeline (reader shows 2 firings/job, ~2100 cyc for 6 jobs vs canon
   ~3700). Compute calib (#5) already threads through via `compute_calib_dir`.
-  **REMAINING (toolchain only):** codegen the in-band top — hand-write `il_cmd_rx_framed_task` /
-  `il_load_inband_task` / `il_store_inband_task` C++ bodies + wire `composite_top_spec` — then
-  **XSI-verify the RTL doesn't deadlock** (the whole reason not to write the bodies blind). Once green,
-  make `InterleaverInband` THE design (retire `InterleaverCanon` + its gen/xsi), and the mem stages
-  inherit the shipped mem-stream residual (bus already wired in #2).
+  **HLS TASK BODIES DRAFTED** (`examples/interleaver/include/il_cmd_rx_framed_task.h`,
+  `il_load_inband_task.h`, `il_store_inband_task.h`) — modeled on the verified framework/interleaver
+  bodies (mem_seq_framed / mem_r_stream_framed / mem_w_stream_framed_done / il_load / il_store), each
+  marked `!! UNVERIFIED`. IDE clang flags HLS-header + framed-method gaps — all expected.
+  **REMAINING (toolchain only):**
+  1. **Schema emission** — `il_cmd.h` (InterleaverCmd) must emit BOTH plain (`read_stream`/`write_stream`)
+     AND framed (`read/write_framed_stream`) methods (it is the boundary cmd *and* a relayed descriptor);
+     add framework `mem_r_cmd.h`/`mem_w_cmd.h`. So `SCHEMA_CLASSES = [InterleaverCmd, MemRCmd, MemWCmd]`,
+     `FRAMED_SCHEMAS = {InterleaverCmd, MemRCmd, MemWCmd}` in a new `gen_headers` for the in-band top.
+  2. **MemStreamStep** copies the three new bodies (or point it at the example include).
+  3. **`composite_top_spec`** on `InterleaverInband` — it already handles framed edges (memcpy), so this
+     should derive the 6-task top; add a `generate_inband()` (cf. `mem_copy.generate_dut`).
+  4. **csynth + XSI-verify the RTL doesn't deadlock** (the reason not to write the bodies blind).
+  Once green, make `InterleaverInband` THE design (retire `InterleaverCanon` + its gen/xsi), and the mem
+  stages inherit the shipped mem-stream residual (bus already wired in #2). Open design choice: `len=NW`
+  (compile-time, baked like the canon) vs runtime `c.n/LW` (scenario-independent RTL, like memcpy) — the
+  bodies currently use `NW`.
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.

@@ -83,8 +83,9 @@ class CmdRxInband(FreeRunComp):
         self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
+        # The framed body reads NW words per read, so it is templated <MEM_DW, NW>.
         return KernelTask("il_cmd_rx_framed_task", "il_cmd_rx_framed_task.h", ("s_cmd", "cmd_out"),
-                          template_args=(int(self.mem_dwidth),))
+                          template_args=(int(self.mem_dwidth), self.nw))
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
