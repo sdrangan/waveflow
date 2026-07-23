@@ -48,23 +48,20 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
   `MemRStream`/`MemWStream` + the in-band stages record `fire_log`; `interleaver_figures.py variant=`
   renders the in-band six-stage pipeline (reader shows 2 firings/job, ~2100 cyc for 6 jobs vs canon
   ~3700). Compute calib (#5) already threads through via `compute_calib_dir`.
-  **HLS TASK BODIES DRAFTED** (`examples/interleaver/include/il_cmd_rx_framed_task.h`,
-  `il_load_inband_task.h`, `il_store_inband_task.h`) — modeled on the verified framework/interleaver
-  bodies (mem_seq_framed / mem_r_stream_framed / mem_w_stream_framed_done / il_load / il_store), each
-  marked `!! UNVERIFIED`. IDE clang flags HLS-header + framed-method gaps — all expected.
-  **REMAINING (toolchain only):**
-  1. **Schema emission** — `il_cmd.h` (InterleaverCmd) must emit BOTH plain (`read_stream`/`write_stream`)
-     AND framed (`read/write_framed_stream`) methods (it is the boundary cmd *and* a relayed descriptor);
-     add framework `mem_r_cmd.h`/`mem_w_cmd.h`. So `SCHEMA_CLASSES = [InterleaverCmd, MemRCmd, MemWCmd]`,
-     `FRAMED_SCHEMAS = {InterleaverCmd, MemRCmd, MemWCmd}` in a new `gen_headers` for the in-band top.
-  2. **MemStreamStep** copies the three new bodies (or point it at the example include).
-  3. **`composite_top_spec`** on `InterleaverInband` — it already handles framed edges (memcpy), so this
-     should derive the 6-task top; add a `generate_inband()` (cf. `mem_copy.generate_dut`).
-  4. **csynth + XSI-verify the RTL doesn't deadlock** (the reason not to write the bodies blind).
-  Once green, make `InterleaverInband` THE design (retire `InterleaverCanon` + its gen/xsi), and the mem
-  stages inherit the shipped mem-stream residual (bus already wired in #2). Open design choice: `len=NW`
-  (compile-time, baked like the canon) vs runtime `c.n/LW` (scenario-independent RTL, like memcpy) — the
-  bodies currently use `NW`.
+  **DESIGN REWORKED + CODEGEN DRIVER DONE** (commits b304e5f, 5f62fd8):
+  - **Descriptor split** — `InterleaverCmd` (plain boundary) vs framed `IlDesc{n, y_off}` (internal), so
+    every inter-component stream is framed and NO type needs both method sets (the "both" was a
+    conflation). **Variable length** — `IlDesc` carries `n`, every stage computes `nw=ceil(n/LW)` at
+    runtime (scenario-independent RTL). Verified: mixed sizes {256,128,64,192} in one composite, all
+    bit-exact (`run_interleaver_sizes`).
+  - **Four HLS bodies** (`il_cmd_rx_framed_task`, `il_load_inband_task`, `il_compute_inband_task`,
+    `il_store_inband_task`) in `waveflow/build/` + `MemStreamStep`, IlDesc + runtime nw + LOOP_TRIPCOUNT.
+  - **`composite_top_spec` works with NO composite_gen change** — derives the correct 6-task ap_ctrl_none
+    top wiring the framework mem-streams around the custom stages (5 framed_word edges + 3 SOB).
+  - **`generate_inband()`** — full gen driver; verified to a temp dir (12 headers consistent, il_desc.h
+    framed, top+tcl). `test_inband_codegen_shape` pins it, toolchain-free.
+  **REMAINING:** run **csynth** (Vitis 2025.1 present — in progress) + XSI-verify no deadlock; then make
+  `InterleaverInband` THE design (retire `InterleaverCanon`), mem stages inherit the shipped residual.
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.
