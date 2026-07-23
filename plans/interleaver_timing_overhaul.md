@@ -44,11 +44,15 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
   `[MemWCmd | InterleaverCmd | Y]`; `MemWStream` echoes on `s_done`. Custom token dissolves into the
   in-band descriptor + two middle edges. Golden bit-exact (nj∈{1,3,8}, n∈{128,256,512}); ~288 vs 527
   cyc/job (better overlap). Graph = 3 FramedEdge + 2 StreamEdge + 3 SobEdge.
-  **REMAINING (toolchain):** codegen the in-band top (needs hand-written `il_cmd_rx_framed_task` /
-  `il_load_inband_task` / `il_store_inband_task` bodies + composite_top_spec) + XSI-verify; then make
-  `InterleaverInband` THE design (replace `InterleaverCanon`), and the mem stages inherit the shipped
-  mem-stream residual (bus already wired in #2). Update the activity figures (fire_log on the new
-  stages) + the docs to the in-band shape.
+  **DOCS + FIGURES DONE** (commit a283939): interleaver.md + index.md rewritten to the in-band design;
+  `MemRStream`/`MemWStream` + the in-band stages record `fire_log`; `interleaver_figures.py variant=`
+  renders the in-band six-stage pipeline (reader shows 2 firings/job, ~2100 cyc for 6 jobs vs canon
+  ~3700). Compute calib (#5) already threads through via `compute_calib_dir`.
+  **REMAINING (toolchain only):** codegen the in-band top — hand-write `il_cmd_rx_framed_task` /
+  `il_load_inband_task` / `il_store_inband_task` C++ bodies + wire `composite_top_spec` — then
+  **XSI-verify the RTL doesn't deadlock** (the whole reason not to write the bodies blind). Once green,
+  make `InterleaverInband` THE design (retire `InterleaverCanon` + its gen/xsi), and the mem stages
+  inherit the shipped mem-stream residual (bus already wired in #2).
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.
