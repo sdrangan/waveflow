@@ -17,6 +17,11 @@ recursive-include waveflow *.md
 recursive-include waveflow/templates *
 recursive-include waveflow/assets *
 
+# Shipped calibration corpus + fixtures (reference platforms, sweep harnesses) — every file type,
+# including the distilled corpus.csv the *.json recursion above does not cover.
+recursive-include waveflow/calib/platforms *
+recursive-include waveflow/calib/fixtures *
+
 # Exclude Python cache and build artifacts
 global-exclude __pycache__/
 global-exclude *.pyc

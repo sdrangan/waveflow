@@ -10,7 +10,8 @@ The [pysim](./testbench.md) and [RTL](./rtlsim.md) rungs **agree** on the steady
 **183 cycles per job**. They agree because `mem_copy` composes two *calibrated* framework components —
 `MemRStream` / `MemWStream` and the bus model — and Waveflow **ships their timing parameters for this
 platform** (`zynq7020_bfm_100mhz`), so the loosely-timed pysim reproduces the RTL number with no manual
-tuning. (Where those parameters come from is the [next page](./timing_model.md).)
+tuning. (How those infra models are built and fit — a general, design-independent facility — is the
+[calibration guide](../../guide/calib/); `mem_copy` itself calibrates nothing.)
 
 This page is about *seeing* that timing — how the stages overlap, which one is the bottleneck, and
 where every cycle of the period goes. That means tracing the RTL run and rendering it.
@@ -86,18 +87,30 @@ not finished draining the *previous* job. The reader's `gmem0 AR` bursts (top pa
 that band clears. Look at the far right: `s_done out` fires, and `gmem1 W` **keeps going for another
 ~24 cycles** — the posted-write drain, the reason a firing ends at `ap_done`, not at `s_done`.
 
-## And the pysim matches
+## And the pysim matches — for free
 
 Everything above is the **RTL**. Run the *pysim* with the same shipped calibration and it reproduces
-the 183-cycle period to **0.0%** — the fast, toolchain-free model predicts the slow RTL, because the
-two calibrated components carry the right timing. That accuracy is not free: it comes from **two timing
-models** (a bus model and a mem-stream model), which the [next page](./timing_model.md) describes — and
-whose parameters, for a new platform, you [fit from a sweep](./timing_fitting.md).
+the 183-cycle period to **0.0%** — the fast, toolchain-free model predicts the slow RTL.
+
+And `mem_copy` calibrates **nothing** to get this. It composes only *reusable infra* — the `MemRStream`
+/ `MemWStream` adaptors and the `m_axi` bus — whose timing models are a `(component, platform)` property
+that **ships with Waveflow** for supported platforms. `mem_copy` loads them and inherits the right
+timing; there is no sweep, no fit, no per-example calibration step. That is the payoff of the two-level
+design: the shared bus and mem-stream models are fit **once** (they happen to have been measured *on*
+`mem_copy`, behind the scenes in
+[`calibrate_platform.py`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/calibrate_platform.py)),
+and every accelerator on the platform reuses them.
+
+Where those models come from, and how you'd fit one for a **custom** component of your own, is a
+general facility documented in the [calibration guide](../../guide/calib/) — and worked end-to-end,
+for a design that *does* add a custom component, in the interleaver example.
 
 ## See also
 
-- [Timing models](./timing_model.md) — the two models behind the numbers above, and how they plug into
-  the components.
+- [Timing model fitting](../../guide/calib/) — the two-level calibration system behind the shipped bus
+  and mem-stream models, and how to fit one for a custom component.
+- [Timing models](../../guide/timing_model/) — the forward models those parameters feed, and how one is
+  attached to a component.
 - [Tracing a kernel run](../../guide/timing/trace_steps.md) — the trace steps, in general.
 - [Trace pitfalls](../../guide/timing/trace_pitfalls.md) — the traps this relied on avoiding (the
   ap_done window, occupancy-not-write-enable).

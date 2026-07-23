@@ -52,7 +52,7 @@ config = BuildConfig(
 - `platform` — the platform name (a directory under `platforms_root`). `None` (default) = no platform: components degrade to the plain per-word timing.
 - `part` — the `set_part` string, e.g. `"xc7z020clg484-1"`.
 - `clk_freq` — synthesis clock in Hz. Its *period* drives HLS scheduling, so it (with the part) determines the cycle counts — this is why a platform is keyed by both.
-- `platforms_root` — where platform directories live; defaults to `calib/platforms` (the tracked library).
+- `platforms_root` — the build's primary platform root (write target, searched first); defaults to `calib/platforms` (project-local). Resolution falls back through the `WAVEFLOW_PLATFORM_PATH` env, a per-user library, and the reference platforms shipped in `waveflow/calib/platforms/` — so a `pip`-installed build resolves `zynq7020_bfm_100mhz` with no checkout.
 - `allow_platform_mismatch` — when the selected platform's stored part/clock differ from this build's, warn instead of raising `PlatformMismatchError` (default `False` = raise).
 
 `config.platform_info` is the single source both the calibration steps and codegen read — codegen's `set_part` / `create_clock` come from it (via `tcl_target`), so the synthesised part cannot drift from the calibrated one. See [Platforms](../calib/platform.md).

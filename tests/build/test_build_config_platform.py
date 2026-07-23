@@ -21,13 +21,26 @@ class TestPlatformResolution:
         assert cfg.platform_info is None
 
     def test_absent_platform_created_and_seeded(self, tmp_path):
-        cfg = BuildConfig(root_dir=tmp_path, platform="zynq7020_bfm_100mhz",
+        # A name that does NOT ship: absent everywhere, so it is created in the primary root.
+        cfg = BuildConfig(root_dir=tmp_path, platform="test_board_100mhz",
                           part="xc7z020clg484-1", clk_freq=100e6,
                           platforms_root=tmp_path / "platforms")
         assert cfg.platform_info is not None
-        assert cfg.platform_info.dir == tmp_path / "platforms" / "zynq7020_bfm_100mhz"
+        assert cfg.platform_info.dir == tmp_path / "platforms" / "test_board_100mhz"
         data = json.loads((cfg.platform_info.dir / PLATFORM_MANIFEST).read_text())
         assert data == {"part": "xc7z020clg484-1", "clk_freq_hz": 100e6}
+
+    def test_shipped_platform_resolves_from_package(self, tmp_path):
+        # The whole point of the fallback: a build selecting the shipped reference resolves it from
+        # the package even with an empty primary root — and creates nothing in the primary.
+        from waveflow.calib.platform import packaged_platforms_dir
+        pkg = packaged_platforms_dir()
+        assert pkg is not None and (pkg / "zynq7020_bfm_100mhz").is_dir()
+        cfg = BuildConfig(root_dir=tmp_path, platform="zynq7020_bfm_100mhz",
+                          part="xc7z020clg484-1", clk_freq=100e6,
+                          platforms_root=tmp_path / "platforms")
+        assert cfg.platform_info.dir == pkg / "zynq7020_bfm_100mhz"
+        assert not (tmp_path / "platforms" / "zynq7020_bfm_100mhz").exists()
 
     def test_matching_platform_confirms(self, tmp_path):
         root = tmp_path / "platforms"
