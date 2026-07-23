@@ -89,7 +89,8 @@ config = BuildConfig(
     platform="zynq7020_bfm_100mhz",   # the platform name
     part="xc7z020clg484-1",           # this build's target — confirmed against the manifest
     clk_freq=100e6,
-    platforms_root="calib/platforms", # default; the tracked library
+    platforms_root="calib/platforms", # the project-local primary + write target; resolution falls
+                                      # back to the shipped in-package library and a per-user overlay
     allow_platform_mismatch=False,    # raise (default) vs warn on a part/clock mismatch
 )
 ```
@@ -101,10 +102,13 @@ platform's fit is valid for.
 
 ## The reference platform
 
-`calib/platforms/zynq7020_bfm_100mhz/` is the first tracked platform: part `xc7z020clg484-1`, 100 MHz,
-idealized XSI BFM memory (hence `bfm` in the name). It is the *default* a project can reuse without
-recalibrating — accepting that if its own part differs, the cycle counts may not reproduce (the
-mismatch guard makes that a deliberate, visible choice). See
+`waveflow/calib/platforms/zynq7020_bfm_100mhz/` is the first tracked platform: part `xc7z020clg484-1`,
+100 MHz, idealized XSI BFM memory (hence `bfm` in the name). It ships **as package data inside
+`waveflow`**, so a `pip`-installed build resolves it with no checkout — `Platform.resolve` searches the
+build's `platforms_root` first, then falls back to the `WAVEFLOW_PLATFORM_PATH` env, a per-user library,
+and finally this packaged reference. It is the *default* a project can reuse without recalibrating —
+accepting that if its own part differs, the cycle counts may not reproduce (the mismatch guard makes
+that a deliberate, visible choice). See
 [the workflow](./workflow.md#the-reference-platform-end-to-end) for how it was built.
 
 ## See also

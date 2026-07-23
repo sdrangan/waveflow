@@ -81,7 +81,7 @@ The calibration side fits and persists; the *runtime* side is a `BusTiming` the 
 during pysim. `bus_timing()` bridges them — `load_or_default`:
 
 ```python
-bt = BusCalib(platform_dir="calib/platforms/zynq7020_bfm_100mhz").bus_timing()
+bt = BusCalib(platform_dir="waveflow/calib/platforms/zynq7020_bfm_100mhz").bus_timing()
 ```
 
 - On a **calibrated** platform it returns a `BusTiming` configured from `mm_bus.json`, so pysim charges

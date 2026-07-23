@@ -4,7 +4,7 @@ parent: Timing model fitting
 nav_order: 8
 audience: python
 api: [BusCalib, StreamTimingModel, Platform, CalibBusStep, CollectTimingStep, FitTimingStep]
-summary: "Calibration storage is two-tier: sweeps write a churny untracked calib/work/<name>/; the publish_calib command promotes the stable artifacts (platform.json, mm_bus.json, points/, component params + corpus -- never the raw firing trees) into the tracked calib/platforms/<name>/. publish is dry-run by default, a byte-compare no-op on unchanged files, and refuses a coverage regression (a thinner re-fit) unless forced. The reference zynq7020_bfm_100mhz platform is built end-to-end by examples/mem_copy/calibrate_platform.py and reproduces the writer RTL period to 0.0%."
+summary: "Calibration storage is two-tier: sweeps write a churny untracked calib/work/<name>/; the publish_calib command promotes the stable artifacts (platform.json, mm_bus.json, points/, component params + corpus -- never the raw firing trees) into the shipped, in-package library waveflow/calib/platforms/<name>/. publish is dry-run by default, a byte-compare no-op on unchanged files, and refuses a coverage regression (a thinner re-fit) unless forced. The reference zynq7020_bfm_100mhz platform is built end-to-end by examples/mem_copy/calibrate_platform.py and reproduces the writer RTL period to 0.0%."
 ---
 
 # The calibration workflow
@@ -16,23 +16,26 @@ re-run that produces the *same* fit must not churn git. Both fall out of a **two
 ## Two tiers: work vs. tracked
 
 ```
-calib/work/<name>/        untracked (gitignored).  Sweeps, tests, and the DAG calib steps write here
-                          freely — it churns.
+calib/work/<name>/                  untracked (gitignored).  Sweeps, tests, and the DAG calib steps
+                                    write here freely — it churns.
         │  publish_calib
         ▼
-calib/platforms/<name>/   tracked (committed).  The shared parameters. EXACTLY ONE writer: publish.
+waveflow/calib/platforms/<name>/    tracked (committed), and shipped as package data so a
+                                    pip-installed user resolves it. EXACTLY ONE writer: publish.
 ```
 
 A sweep points the [`BusCalib`](./bus_model.md) / [`StreamTimingModel`](./component_residual.md) fits at
-the **work** dir. When you are satisfied, one command promotes the result into the **tracked** library.
-Because the tracked dir has a single writer, a test can't reach it; because a re-fit on the same corpus
-is deterministic, an unchanged promotion writes nothing.
+the **work** dir. When you are satisfied, one command promotes the result into the **tracked** library —
+`waveflow/calib/platforms/` for the shipped reference platforms, or a user/project overlay for a
+platform you calibrate locally (see [Platforms](./platform.md)). Because the tracked dir has a single
+writer, a test can't reach it; because a re-fit on the same corpus is deterministic, an unchanged
+promotion writes nothing.
 
 ## `publish_calib`
 
 ```bash
-publish_calib calib/work/<name> calib/platforms/<name>            # dry-run: print the plan, write nothing
-publish_calib calib/work/<name> calib/platforms/<name> --apply    # write only the changed files
+publish_calib calib/work/<name> waveflow/calib/platforms/<name>            # dry-run: print the plan, write nothing
+publish_calib calib/work/<name> waveflow/calib/platforms/<name> --apply    # write only the changed files
 ```
 
 - **Dry-run by default.** It prints a plan — `+ created`, `~ updated`, `= unchanged` — and writes
@@ -63,17 +66,17 @@ populate the **work** dir; `publish_calib` is the manual gate to the tracked one
 
 ## The `.gitignore` rules
 
-Two rules encode the split — `/calib/work/` is ignored, and the tracked library is re-included past the
+Two rules encode the split — `/calib/work/` is ignored, and the shipped library is re-included past the
 global `*.json` ignore:
 
 ```gitignore
-/calib/work/                    # the churny work tier — never committed
-!/calib/platforms/**/*.json     # ...but the tracked library IS committed (params + identity)
+/calib/work/                       # the churny work tier — never committed
+!waveflow/calib/platforms/**       # ...but the shipped library IS committed (params + identity + corpus)
 ```
 
 ## The reference platform, end to end
 
-`calib/platforms/zynq7020_bfm_100mhz/` is built reproducibly by
+`waveflow/calib/platforms/zynq7020_bfm_100mhz/` is built reproducibly by
 [`examples/mem_copy/calibrate_platform.py`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/calibrate_platform.py):
 
 1. **Seed the identity** — `Platform.resolve` writes `platform.json` (`xc7z020clg484-1`, 100 MHz).
@@ -82,8 +85,8 @@ global `*.json` ignore:
 3. **Fit the writer residual** — `collect_rtl` the measured RTL spans (183 cyc at n=128, 615 at n=512)
    and `collect_pysim` a run **with the bus law active**, so the residual is control-only (~22 cyc),
    then `fit()` → `components/mem_w_stream_framed_done_task/`.
-4. **Publish** — `publish_calib calib/work/zynq7020_bfm_100mhz calib/platforms/zynq7020_bfm_100mhz
-   --apply`.
+4. **Publish** — `publish_calib calib/work/zynq7020_bfm_100mhz
+   waveflow/calib/platforms/zynq7020_bfm_100mhz --apply`.
 
 The pysim runs live (no toolchain); only the RTL spans are measured constants (gated for real by the
 `-m xsi` run that produced 0.0% error). Loading the committed platform reproduces the writer RTL period
@@ -94,8 +97,12 @@ to **0.0%** at both sizes — a test pins it, so the committed params can't sile
 The reference platform was swept at two sizes whose `num_trans` and `nwords` are proportional
 (`num_trans = nwords / 16`), so the two features are collinear: the fit **reproduces the measured
 points exactly** but its split between a per-word and a per-burst slope is underdetermined (the writer's
-residual reads as 23 at n=128, 0 at n=512). A third, non-collinear sweep size is the follow-up before
-trusting the model to *extrapolate* beyond the swept range.
+residual reads as 23 at n=128, 0 at n=512). More sizes do **not** fix this if they are all multiples of
+16 — `num_trans` stays `nwords / 16` and the collinearity persists. What breaks it is a size where
+`ceil(nwords / 16)` *departs* from `nwords / 16` — a **small or non-multiple-of-16 transfer** (e.g.
+`nwords = 17` → 2 bursts, `nwords = 16` → 1) that changes the burst-to-word ratio. Adding those to the
+grid identifies the per-word (1) and per-burst (2 write / 1 read) costs cleanly; it is the follow-up
+before trusting the model to *extrapolate* beyond the swept range.
 
 ## See also
 

@@ -12,10 +12,12 @@ host-launched function, `mem_copy` is a **composite of free-running `hls::task`s
 words from one memory region to another — and it is verified not by Vitis co-simulation (which cannot
 drive a free-running kernel) but by driving the real RTL cycle-by-cycle through an **XSI BFM**.
 
-Beyond demonstrating composite free-running kernels, `mem_copy` doubles as a **calibration vehicle** for
-core infrastructure: it composes the reusable `MemRStream` / `MemWStream` adaptors and the `m_axi` bus,
-so the sweep that fits *its* timing produces the shared bus and mem-stream models that **every**
-accelerator on the platform reuses. The final three pages are that arc.
+Beyond demonstrating composite free-running kernels, `mem_copy` **reuses core infrastructure** — the
+reusable `MemRStream` / `MemWStream` adaptors and the `m_axi` bus — whose timing models Waveflow **ships
+pre-fit** for supported platforms, so the loosely-timed pysim reproduces the RTL with **no calibration of
+its own**. (Those shared models were in fact measured *on* `mem_copy` behind the scenes; that machinery
+is the general [calibration guide](../../guide/calib/), not a step in this example — fitting a *custom*
+component's timing is taken up in the interleaver example.) The final page visualizes that timing.
 
 ## Learning Objectives
 
@@ -30,10 +32,10 @@ In going through this example, you will learn to:
 - Run the XSI simulation to extract timing and functionally validate the generated RTL
 - Visualize the concurrent timing of the components on an [**activity diagram**](./timing.md) — the
   pipeline overlap and where every cycle of the period goes
-- Insert [**timing models**](./timing_model.md) for the platform's shared infra components — the
-  `m_axi` bus and the memory-stream adaptors — so the loosely-timed pysim reproduces the RTL
-- Fit those models with a [**parameter sweep**](./timing_fitting.md) and store the fitted parameters in
-  the platform library, so other accelerators on the same platform reuse them without re-calibrating
+- See why the loosely-timed pysim reproduces the RTL to 0.0% — `mem_copy` **reuses** the platform's
+  pre-fit infra timing models (the `m_axi` bus and the memory-stream adaptors), which ship with Waveflow,
+  and calibrates nothing itself (fitting a *custom* component's timing is the general
+  [calibration guide](../../guide/calib/), worked end-to-end in the interleaver example)
 
 ## In this example
 
@@ -52,8 +54,5 @@ it, test it in Python, generate the kernel, generate the testbench, then run the
 6. [RTL simulation](./rtlsim.md) — running the RTL through XSI, inspecting the results, and comparing
    the timing to pysim.
 7. [Visualizing timing](./timing.md) — tracing an RTL run and rendering it: the pipeline overlap, the
-   bottleneck, and where every cycle of the period goes.
-8. [Timing models](./timing_model.md) — the two models (bus + mem-stream) behind those numbers, and how
-   they plug into the components.
-9. [Fitting the models](./timing_fitting.md) — the sweep, the fit results, and the platform library that
-   stores them so other accelerators reuse them.
+   bottleneck, where every cycle of the period goes, and why the loosely-timed pysim reproduces it using
+   the platform's shipped infra models (no per-example calibration).

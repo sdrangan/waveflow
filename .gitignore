@@ -87,12 +87,10 @@ __pycache__/
 *.pyd
 
 # Calibration work dir: sweeps / tests / DAG calib steps write here freely (it churns). Only the
-# tracked library calib/platforms/<name>/ is committed, and ONLY `publish_calib` writes to it. See
-# waveflow/calib/publish.py. Anchored so it matches the repo-root work dir, not any nested `work/`.
+# tracked library waveflow/calib/platforms/<name>/ is committed, and ONLY `publish_calib` writes to it.
+# See waveflow/calib/publish.py. Anchored so it matches the repo-root work dir, not any nested `work/`.
+# (The shipped library's re-include past the *.json ignore is at the top of this file.)
 /calib/work/
-# ...but the tracked platform library IS committed — re-include its params despite the global `*.json`
-# ignore above (platform.json / mm_bus.json / points / component params). Negation comes after *.json.
-!/calib/platforms/**/*.json
 
 # Distribution artifacts
 *.egg-info/

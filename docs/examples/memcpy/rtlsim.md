@@ -84,9 +84,10 @@ So use each for what it is good at:
   every edit.
 - **RTL** — the number you would quote. The `-m xsi` gate asserts **2908** exactly.
 
-*Why* the two agree once calibrated, and how to *see* it, is the next arc: [Visualizing
-timing](./timing.md) traces the internal channels and both `m_axi` bundles out of an RTL run and
-attributes every cycle of the period; [Timing models](./timing_model.md) and [Fitting the
-models](./timing_fitting.md) then cover the two models behind the numbers and how they are fit. A
-*calibrated* pysim reproduces the RTL period; an **uncalibrated** one (no platform) is a lower bound
-with the right shape, not a prediction.
+*Why* the two agree once calibrated, and how to *see* it, is the next page: [Visualizing
+timing](./timing.md) traces the internal channels and both `m_axi` bundles out of an RTL run,
+attributes every cycle of the period, and shows why the pysim reproduces it — `mem_copy` reuses the
+platform's **shipped** bus and mem-stream timing models (the general
+[calibration guide](../../guide/calib/) covers how those are built). A *calibrated* pysim reproduces the
+RTL period; an **uncalibrated** one (no platform) is a lower bound with the right shape, not a
+prediction.
