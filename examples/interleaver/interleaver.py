@@ -64,9 +64,11 @@ def _nwords(n: int, lw: int) -> int:
 #: calibrated compute residual is stored under ``components/il_compute_task/``).
 IL_COMPUTE_COMPONENT = "il_compute_task"
 
-#: Seed loop-model parameters for the gather compute, ``cycles = latency + ii·(nw − 1)`` — the pipelined
-#: word loop's fixed latency and its per-word initiation interval.  Placeholders until a cosim sweep
-#: fits them (see the calibration guide); with them the loosely-timed pysim already charges a plausible
-#: compute cost instead of zero.
-IL_COMPUTE_LATENCY_SEED = 32.0
-IL_COMPUTE_II_SEED = 2.0
+#: Loop-model parameters for the gather compute, ``cycles = latency + ii·(n − 1)`` — the pipelined ELEMENT
+#: loop's fixed latency and its per-element initiation interval.  The typed-SOB gather (``y[i] = x[p[i]]``)
+#: trips once per ELEMENT at II=1, so the basis is ``n`` (elements), not ``nw`` (words).  These are the
+#: **measured** law (``measure_compute_spans.py``: the ``y_blk`` write-burst is a clean contiguous ``n``
+#: cycles at every size ⇒ ii=1, latency=1); they seed the no-calib fallback so pysim charges the real
+#: compute cost even before a fit is loaded.  ``calibrate_compute.py`` ships the same law as a platform fit.
+IL_COMPUTE_LATENCY_SEED = 1.0
+IL_COMPUTE_II_SEED = 1.0

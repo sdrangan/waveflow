@@ -243,10 +243,10 @@ class IlComputeInband(FreeRunComp):
     def _build_timing_model(self):
         from waveflow.calib.calib import LinCalibModel
 
-        seed = {"nw": IL_COMPUTE_II_SEED, "intercept": IL_COMPUTE_LATENCY_SEED - IL_COMPUTE_II_SEED}
+        seed = {"n": IL_COMPUTE_II_SEED, "intercept": IL_COMPUTE_LATENCY_SEED - IL_COMPUTE_II_SEED}
         path = None if self.calib_dir is None else Path(self.calib_dir) / "params.json"
-        model = LinCalibModel(basis=["nw"], target="cycles", fit_intercept=True,
-                              coeff_names=["nw"], seed=seed, path=path)
+        model = LinCalibModel(basis=["n"], target="cycles", fit_intercept=True,
+                              coeff_names=["n"], seed=seed, path=path)
         model.load_or_default()
         return model
 
@@ -256,10 +256,9 @@ class IlComputeInband(FreeRunComp):
                           template_args=(int(self.mem_dwidth), int(self.n)))
 
     def run_iter(self) -> ProcessGen[None]:
-        w, lw = int(self.mem_dwidth), self.lw
+        w = int(self.mem_dwidth)
         desc = yield from self.desc_in.get(IlDesc)
         n = int(desc.n)
-        nw = _nw_of(n, lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
@@ -267,7 +266,7 @@ class IlComputeInband(FreeRunComp):
         t0 = self.now
         for i in range(n):
             yblock[i] = int(xblock[int(pblock[i])])     # the gather, laid bare: Y[i] = X[P[i]]
-        cycles = float(self.timing.predict({"nw": nw}))
+        cycles = float(self.timing.predict({"n": n}))
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         yield from self.p_blk.release_read()
         yield from self.x_blk.release_read()
