@@ -69,19 +69,21 @@ job's commands until `MemRStream` has taken this one. The long bar is *throttlin
 own two bands, by contrast, are close to solid work: it is the bottleneck, so nothing downstream throttles
 it. (The thin seam between consecutive bands is only a legibility device, so you can count the jobs.)
 
-> **How to regenerate it.** The figure is an `InterleaverFiguresStep`, run through the standard build DAG
-> CLI:
+> **How to regenerate it.** The figure has a two-rung build DAG, run through the standard CLI:
 >
 > ```bash
-> python examples/interleaver/interleaver_figures.py            # --through figures (the default)
-> python examples/interleaver/interleaver_figures.py --force    # re-render even if up-to-date
+> python examples/interleaver/interleaver_figures.py               # pysim -> timeline -> figure
+> python examples/interleaver/interleaver_figures.py --list-steps  # interleaver_source, pysim, figures
 > ```
 >
-> Unlike [`mem_copy`'s figures](../memcpy/timing.md) — which consume an RTL *trace* the DAG produced
-> upstream — this one renders straight from the pysim timeline, so it is a **leaf** step (no toolchain, no
-> upstream artifact). The SVG is deterministic, so a re-run is a no-op unless the timeline moved and the git
-> diff is the review signal. Inside, each stage's `fire_log` (its per-firing `(start, end)` windows) becomes
-> one [`ActivityDiagram`](../../guide/timing/activity.md) lane:
+> `InterleaverPySimStep` runs the fully-calibrated pysim, checks the gather golden, and writes the per-stage
+> timeline to `results/interleaver_pysim.json`; `InterleaverFiguresStep` **consumes** that artifact and
+> renders the SVG — it does not re-run the sim. The same [`ActivityDiagram`](../../guide/timing/activity.md)
+> could instead be fed an RTL trace's `component_firings` (the ground-truth view [`mem_copy`](../memcpy/timing.md)
+> uses), but the committed figure is drawn from the **pysim** timeline because that is deterministic and
+> toolchain-free — it regenerates in CI, where Vitis and `xsim` are not available, and the design already
+> reproduces the RTL to <1%. The SVG is deterministic, so a re-run is a no-op unless the timeline moved.
+> Each stage's `fire_log` (its per-firing `(start, end)` windows) becomes one `ActivityDiagram` lane:
 >
 > ```python
 > lanes = []
