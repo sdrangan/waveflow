@@ -264,8 +264,7 @@ class IlComputeInband(FreeRunComp):
         xblock = yield from self.x_blk.acquire_read()
         yblock = yield from self.y_blk.acquire_write()
         t0 = self.now
-        for i in range(n):
-            yblock[i] = int(xblock[int(pblock[i])])     # the gather, laid bare: Y[i] = X[P[i]]
+        yblock.val[:n] = xblock.val[pblock.val[:n]]     # the gather, vectorized: Y[i] = X[P[i]]
         cycles = float(self.timing.predict({"n": n}))
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         yield from self.p_blk.release_read()
