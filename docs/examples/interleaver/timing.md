@@ -6,7 +6,7 @@ nav_order: 9
 # Visualizing timing
 
 The loosely-timed [pysim](./timing_model.md) and the RTL **agree** on the steady-state period — about
-**300 cycles per job** in pysim against **302** measured on the RTL, ~0.7%. That agreement rests on every
+**300 cycles per job** in pysim against **302** measured on the RTL, ≈0.7%. That agreement rests on every
 stage's timing being a *loaded model*: the platform's [bus law](../../guide/calib/bus_model.md) and
 [mem-stream residuals](../../guide/calib/memstream.md) (shared infra the interleaver inherits), **plus the
 interleaver's own fitted compute model** (the half it calibrates itself). This page is about *seeing* that
@@ -38,7 +38,7 @@ FIFOs between stages:
 
 - the **bus law** — each `m_axi` transfer's cost, `nwords + (num_trans − 1)` cycles per read
   ([`BusCalib`](../../guide/calib/bus_model.md));
-- the **mem-stream residuals** — the reader's ~15-cycle and writer's ~22-cycle own control cost, on top of
+- the **mem-stream residuals** — the reader's ≈15-cycle and writer's ≈22-cycle own control cost, on top of
   the bus term ([the mem-stream residual](../../guide/calib/memstream.md));
 - the **compute loop model** — the gather's `cycles = n` ([the timing model](./timing_model.md)).
 
@@ -49,25 +49,54 @@ model — and it lands at **300 cyc/job**.
 
 ![The six-stage pipeline activity across six jobs](./images/pipeline_activity.svg)
 
-Every stage on one cycle axis, six jobs, rendered straight from the pysim `fire_log`s by the reusable
-[`ActivityDiagram`](../../guide/timing/activity.md) — no trace needed. Three things are visible before any
-analysis:
+Every stage on one cycle axis, six jobs, rendered straight from the pysim `fire_log`s. Reading it top to
+bottom is reading the dataflow — one job descends the stack:
 
-- the **~300-cycle cadence** — count the bands;
-- the reader (`MemRStream`) shows **two bands per job** — the two reads that make it the bottleneck, busy
-  almost continuously;
-- the **compute** band has slack (256 < 300) — it is the one stage this design calibrates itself, and it is
-  *not* on the critical path.
+- **`cmd_rx`** receives the `InterleaverCmd` and frames **two** reads (P then X) for the reader.
+- **`MemRStream` (gmem0)** — the **two bands per job** are those two reads; it is busy almost continuously,
+  and it is the **bottleneck** (moving `P` and `X` over one bus).
+- **`il_load`** lands `P` and `X` into the on-chip stream-of-blocks.
+- **`il_compute`** runs the gather `Y[i] = X[P[i]]` — its band has visible **slack** (256 of the ≈300-cycle
+  job), the one stage this design calibrates itself, *not* on the critical path.
+- **`il_store`** frames the writer's stream `[MemWCmd | Y]`.
+- **`MemWStream` (gmem1)** bursts `Y` to memory and echoes the done.
 
-(The thin seam between consecutive bands is a legibility device, not real idle — it just lets you count the
-jobs.)
+**The bands are occupancy, not work.** A band is a stage's firing window — from when it starts a firing to
+when it commits — so for a free-running stage it includes time spent **stalled on backpressure**, not just
+its own compute. `cmd_rx` is the clearest case: it does about **5 cycles** of real work (build two
+commands), but its steady-state band fills the whole ≈300-cycle job — because it cannot dispatch the next
+job's commands until `MemRStream` has taken this one. The long bar is *throttling*, not effort. The reader's
+own two bands, by contrast, are close to solid work: it is the bottleneck, so nothing downstream throttles
+it. (The thin seam between consecutive bands is only a legibility device, so you can count the jobs.)
+
+> **How to regenerate it.** There is **no BuildStep** — unlike [`mem_copy`'s figures](../memcpy/timing.md),
+> which read an RTL *trace* and run through the DAG's sync step, this one renders straight from the pysim
+> timeline, so it is a plain script:
+>
+> ```bash
+> python examples/interleaver/interleaver_figures.py   # -> docs/examples/interleaver/images/pipeline_activity.svg
+> ```
+>
+> Each stage's `fire_log` (its per-firing `(start, end)` windows) becomes one
+> [`ActivityDiagram`](../../guide/timing/activity.md) lane, rendered as a deterministic SVG:
+>
+> ```python
+> lanes = []
+> for stage, label, colour in stages:
+>     # each firing window -> a run of active cycles (a small seam trimmed off the end, for legibility)
+>     runs = [np.arange(round(s), round(e) - seam) for s, e in stage.fire_log]
+>     lanes.append((label, np.concatenate(runs), colour))
+>
+> ad = ActivityDiagram(lanes, time_unit="cycle")
+> fig, _ax, _ = ad.plot(mode="band", ...)              # activity bands, not per-transition value boxes
+> ```
 
 ## The agreement — and what it took
 
-RTL 302 vs pysim 300, ~0.7%. It holds because every stage's cost is now a loaded model. But getting there
+RTL 302 vs pysim 300, ≈0.7%. It holds because every stage's cost is now a loaded model. But getting there
 took calibrating the **reader** — and that is the interesting part. `mem_copy` is *writer*-bound, so it
 only ever needed the writer's residual; the reader's was never fit. The interleaver is the first
-**reader-bound** design, and it ran **~10% under** the RTL until a reader residual was fit
+**reader-bound** design, and it ran **≈10% under** the RTL until a reader residual was fit
 ([the mem-stream residual](../../guide/calib/memstream.md) — the fixture the interleaver forced into
 existence). The lesson: **you calibrate the stage a design actually bottlenecks on**; an un-fit residual
 only shows where it lands on the critical path.
