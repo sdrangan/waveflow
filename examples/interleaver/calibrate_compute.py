@@ -15,7 +15,7 @@ those in as ``NW_TO_CYCLES`` (they need the toolchain — the placeholders below
 marked, so the machinery runs end-to-end until real numbers replace them).
 
 The fit lands in the platform library under ``components/il_compute_task/params.json``, keyed like any
-component — so a build that selects the platform loads it (``InterleaverCanon(compute_calib_dir=...)``)
+component — so a build that selects the platform loads it (``InterleaverInband(compute_calib_dir=...)``)
 with no re-fit.
 """
 from __future__ import annotations

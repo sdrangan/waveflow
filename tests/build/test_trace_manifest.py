@@ -26,9 +26,9 @@ def memcopy():
 
 @pytest.fixture
 def interleaver():
-    from examples.interleaver.interleaver import InterleaverCanon
+    from examples.interleaver.interleaver_inband import InterleaverInband
     return composite_top_spec(
-        InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256), width=64)
+        InterleaverInband(name="c", sim=Simulation(), mem_dwidth=64, n=256), width=64)
 
 
 class TestInstanceName:
@@ -81,12 +81,6 @@ class TestChannelNets:
         for c in sob:
             assert "write" not in c and "read" not in c
             assert c["producer"] and c["consumer"], "endpoints are still known"
-
-    def test_plain_stream_channel_is_not_framed(self, interleaver):
-        cmd0 = next(c for c in interleaver.trace_manifest()["channels"] if c["id"] == "cmd0")
-        assert cmd0["kind"] == "stream"
-        assert cmd0["write"]["din"] == "cmd_rx_task_64_U0_cmd0_din"
-
 
 class TestBoundaryNets:
     def test_axis_port_keeps_its_own_name(self, memcopy):

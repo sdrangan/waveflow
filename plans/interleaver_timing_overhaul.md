@@ -91,8 +91,17 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
     bits as word blocks); **cycles = 302/job, IDENTICAL to the word version** (measured same-method:
     reader-bound, so the element-granular compute is hidden). Zero regression. pysim (de)ser via numpy
     twins `_words_to_elems`/`_elems_to_words`.
-  **REMAINING:** retire `InterleaverCanon` + its gen/xsi (make InterleaverInband THE design); mem stages
-  inherit the shipped mem-stream residual; timing calibration (compute cosim sweep for real II/latency).
+  - **CANON RETIRED** (2026-07): `InterleaverCanon` + its 6 word-packed tiles (`cmd_rx`/`il_mem_r`/
+    `il_load`/`il_compute`/`il_store`/`il_mem_w`), `generate_canon`, the committed gen/tcl/xsi/RTL, and
+    `test_interleaver_canon.py` all deleted; the `-m xsi` gate drops the `interleaver_canon` entry (user
+    chose drop-not-replace); `MemStreamStep` canon keys removed. `interleaver.py` is now just the SHARED
+    schema (InterleaverCmd/IlElem/constants). Every fixture that used the canon (test_elaborate/
+    int_channel/trace_manifest/trace_steps/trace/toy/freerun_kind/compute_calib) migrated to
+    InterleaverInband/IlComputeInband; the plain-stream + no-hook-default assertions (canon-only legacy
+    paths) were dropped. sim/figures/calibrate default to InterleaverInband. **InterleaverInband is the
+    one and only interleaver.**
+  **REMAINING:** mem stages inherit the shipped mem-stream residual; timing calibration (compute cosim
+  sweep for real II/latency).
 - [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
   guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
   docs page exists.

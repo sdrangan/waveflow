@@ -23,7 +23,6 @@ from pathlib import Path
 import pytest
 
 from examples.interleaver.mem_stream_gen import (
-    write_interleaver_canon_xsi_bundles,
     write_mem_r_xsi_bundles,
     write_mem_w_xsi_bundles,
 )
@@ -39,7 +38,6 @@ _XSI_SETUP = {
     "mem_r_stream": lambda xsi: write_mem_r_xsi_bundles(xsi),
     "mem_w_stream": lambda xsi: write_mem_w_xsi_bundles(xsi),
     "mem_copy": lambda xsi: write_mem_copy_xsi_bundles(xsi),
-    "interleaver_canon": lambda xsi: write_interleaver_canon_xsi_bundles(xsi),
 }
 
 #: Tops whose generated C++ main just runs + dumps: correctness is checked HERE, in Python, from the
@@ -57,7 +55,6 @@ ROOT_OF = {
     "mem_r_stream": EXAMPLES / "interleaver",
     "mem_w_stream": EXAMPLES / "interleaver",
     "mem_copy": EXAMPLES / "mem_copy",
-    "interleaver_canon": EXAMPLES / "interleaver",
 }
 
 #: (top, tb basename, expected cycles, a substring proving the golden actually ran).
@@ -79,7 +76,9 @@ GATES = [
     ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
     ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
     ("mem_copy", "mem_copy_bfm_tb", 2908, "done=16 w_count=2048"),
-    ("interleaver_canon", "interleaver_canon_bfm_tb", 3469, "done=8/8"),
+    # interleaver retired from the gate with InterleaverCanon (2026-07); the in-band interleaver's RTL
+    # is checked via its own Y=X[P] XSI harness (examples/interleaver/interleaver_inband_sim.py), not
+    # an exact-cycle gate here.
 ]
 
 

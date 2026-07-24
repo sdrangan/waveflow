@@ -117,14 +117,12 @@ class TestAddVcdTop:
     @pytest.mark.parametrize("comp_path,xsi_dir,top", [
         ("examples.mem_copy.mem_copy:MemCopy",
          "examples/mem_copy/xsi", "mem_copy"),
-        ("examples.interleaver.interleaver:InterleaverCanon",
-         "examples/interleaver/xsi", "interleaver_canon"),
     ])
     def test_committed_dumper_is_what_the_step_generates(self, comp_path, xsi_dir, top, tmp_path):
         """The checked-in .v must be regenerable, not a parallel hand-written copy that drifts.
 
-        These two files are the ones the XSI gates actually elaborate, so if the generator and the
-        committed artifact disagree, one of them is untested."""
+        This is the file the XSI gate actually elaborates, so if the generator and the committed
+        artifact disagree, one of them is untested."""
         import importlib
 
         mod_name, cls_name = comp_path.split(":")

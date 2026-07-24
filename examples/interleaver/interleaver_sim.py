@@ -1,5 +1,5 @@
-"""interleaver_sim.py — pysim golden harness for the canonical
-:class:`~examples.interleaver.interleaver.InterleaverCanon` composite.
+"""interleaver_sim.py — pysim golden harness for the :class:`InterleaverInband` composite (the in-band
+interleaver on the framework MemRStream / MemWStream).
 
 Wires the composite's boundary to a command driver (``s_cmd``), a done sink (``s_done``), and one shared
 flat memory reached by both the read (gmem0) and write (gmem1) masters through a 2-master AXI-MM
@@ -20,7 +20,8 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemComponent
 from waveflow.simulation.simulation import Simulation
 
-from examples.interleaver.interleaver import InterleaverCanon, InterleaverCmd
+from examples.interleaver.interleaver import InterleaverCmd
+from examples.interleaver.interleaver_inband import InterleaverInband
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.utils.burst_io import write_burst_bundle
 
@@ -35,9 +36,9 @@ def _pack(vals: np.ndarray, lw: int) -> np.ndarray:
     return words
 
 
-def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=InterleaverCanon,
+def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=InterleaverInband,
                     platform_dir: "str | None" = None, compute_calib_dir: "str | None" = None):
-    """Run the *comp_class* interleaver composite (the canonical :class:`InterleaverCanon`) over *nj*
+    """Run the *comp_class* interleaver composite (default :class:`InterleaverInband`) over *nj*
     back-to-back jobs (all size *n*) and check Y[j][i]=X[j][P[i]] bit-exact.  Returns the composite
     (gather.job_end_cyc = the completion timeline).
 
@@ -115,7 +116,7 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
     return il
 
 
-def run_interleaver_sizes(sizes, mem_dwidth: int = 64, comp_class=InterleaverCanon):
+def run_interleaver_sizes(sizes, mem_dwidth: int = 64, comp_class=InterleaverInband):
     """Run one composite over jobs of **different** sizes (variable length): *sizes* is a per-job
     element count. Lays each job's P/X/Y regions in a flat arena and checks Y[i]=X[P[i]] for each.
     Requires the design to thread the runtime ``n`` — the whole point of the in-band descriptor."""
@@ -178,7 +179,7 @@ def run_interleaver_sizes(sizes, mem_dwidth: int = 64, comp_class=InterleaverCan
 def run_and_check() -> bool:
     run_interleaver(nj=1)                     # single job
     run_interleaver(nj=3)                     # back-to-back
-    print("interleaver_canon pysim golden: PASSED")
+    print("interleaver_inband pysim golden: PASSED")
     return True
 
 

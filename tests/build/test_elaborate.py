@@ -97,14 +97,14 @@ class TestStructureSignature:
 
 # Canonical Phase-1 components (leaf + composite) that must be param-pure.
 def _pure_cases():
-    from examples.interleaver.interleaver import InterleaverCanon
+    from examples.interleaver.interleaver_inband import InterleaverInband
     from examples.mem_copy.mem_copy import MemCopy
     return [
         (MemRStream, None),
         (MemWStream, None),
         (MemWStream, {"emit_done": True}),
         (MemCopy, {"mem_dwidth": 64}),
-        (InterleaverCanon, {"mem_dwidth": 64, "n": 256}),
+        (InterleaverInband, {"mem_dwidth": 64, "n": 256}),
     ]
 
 
