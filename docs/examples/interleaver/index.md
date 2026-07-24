@@ -45,6 +45,15 @@ The pages build the design up from Python, parallel to [`mem_copy`](../memcpy/):
 
 - [Module overview](./interleaver.md) — the gather, the six stages, the stream-of-blocks for random
   access, and the per-job token forwarding.
+- [Python](./python.md) — building the design in Python: the descriptor split, the two-reads forwarding
+  chain, the stream-of-blocks, the hand-written leaves, and the composite.
+- [Testbench (Python)](./testbench.md) — the graph that surrounds the design and drives it in pysim, and
+  the `Y = X[P]` golden check.
+- [DUT codegen](./codegen_dut.md) — how the graph becomes the `ap_ctrl_none` `hls::task` top, and why every
+  task body is hand-written.
+- [Testbench codegen](./codegen_tb.md) — the generated C++ BFM harness that drives the RTL through XSI.
+- [RTL simulation](./rtlsim.md) — running the harness in `xsim`: no deadlock, and bit-exact through real
+  RTL.
 - [The timing model](./timing_model.md) — declaring `il_compute`'s own loop model: where it plugs into the
   stage, the `latency + ii·(n − 1)` formula, and what the parameters mean.
 - [Timing in the pysim](./pytiming.md) — what the loosely-timed pysim measures and the six-stage pipeline
@@ -55,7 +64,3 @@ The pages build the design up from Python, parallel to [`mem_copy`](../memcpy/):
 - [Fitting the timing model](./timing_fit.md) — the capstone: measure `il_compute`'s per-firing cost from a
   full-pipeline XSI run (the span, gated on no stall), fit the two parameters, and ship the fit to the
   platform library — a recipe for fitting a custom stage of your own.
-
-_The build-up pages before these — the Python model, the testbench, the DUT and testbench codegen, the RTL
-run, and the activity-diagram visualization — parallel [`mem_copy`](../memcpy/) and grow into this section
-as they land._
