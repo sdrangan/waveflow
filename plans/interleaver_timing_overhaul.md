@@ -34,8 +34,17 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
   rendering the six-stage pipeline overlap via `ActivityDiagram`, straight from the pysim (no trace).
   Commit 084a302.
 - [x] **#5 calibration** — `calibrate_compute.py`: direct loop-model fit into the platform library
-  (`components/il_compute_task/`); roundtrip tested. Cycle counts are placeholders pending cosim.
-  Commit 4279b41.
+  (`components/il_compute_task/`); roundtrip tested. Commit 4279b41.
+  **MEASURED + SHIPPED** (commit ce06c1d): re-keyed the model `nw`→`n` (typed-SOB gather trips once per
+  ELEMENT at II=1), then measured the real cost from RTL. `measure_compute_spans.py` runs the whole
+  interleaver in XSI with a VCD trace over a size sweep and reads `il_compute`'s gather span off the
+  waveform — the contiguous `y_blk` write-enable window, gated on a SINGLE contiguous region (a dip =
+  output backpressure → firing dropped). This is the "full-pipeline fire-span, gated on no-stall" method
+  (no separate fixture). Measured `{128:128, 256:256, 512:512}` — every size span == `n`, single burst,
+  so the gather is a clean II=1 element loop: **cycles = n** (ii=1, latency=1). `n=512` exercised the
+  runtime-n RTL at a size it had never run. `N_TO_CYCLES` + seeds become the measured law (latency 8→1);
+  fit shipped to `components/il_compute_task/params.json`. Verified: fitted + seed models predict `n`;
+  full pysim charges gather `job_span_cyc = n` per firing, landing on the RTL write-burst.
 - [x] **#1 inband memstream (pysim)** — `interleaver_inband.py` (commit 7a93a4d). Composes the stock
   `MemRStream`/`MemWStream(inband)` — **no framework change needed**: the reader already relays forwards
   at the *header* (mem_stream.py:390), which is the two-read framing the gather wants. `cmd_rx` frames
@@ -108,12 +117,14 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
 
 ## What's shippable vs seeded
 
-Landed + pysim-verified: the compute loop-model plumbing, the bus-law wiring, the activity diagram, the
-direct-fit machinery. **Seeded, not measured:** `IL_COMPUTE_LATENCY_SEED`/`II_SEED` and
-`calibrate_compute.NW_TO_CYCLES` — real numbers need an `il_compute` cosim sweep. Until then the pysim
-period (~527) is an estimate, not calibrated to the RTL 414.
+Landed + verified: the compute loop-model plumbing, the bus-law wiring, the activity diagram, the
+direct-fit machinery — **and now the measured compute law itself.** `IL_COMPUTE_LATENCY_SEED`/`II_SEED`
+and `calibrate_compute.N_TO_CYCLES` are the RTL-measured `cycles = n` (XSI fire-span, `measure_compute_
+spans.py`), shipped to the platform library. The custom-component half of the calibration story is
+closed; what remains is the docs arc (below).
 
-## Constraints this session
+## Constraints
 
-No toolchain (Vitis/XSI). Everything landed must be pysim-verifiable. `#1` and any RTL-cosim fit
-(real `latency`/`ii`) are scaffolded + seeded, not measured. Cold calib import ≈ 50s per fresh python.
+Vitis HLS 2025.1 + Vivado xsim ARE available here (`-m xsi` / `-m vitis` really run — source
+`C:\Xilinx\2025.1\Vitis\settings64.bat`). `#1` (inband memstream) is done and the compute fit is
+measured; both went through real csynth + XSI. Cold calib import ≈ 50s per fresh python.
