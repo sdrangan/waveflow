@@ -43,9 +43,14 @@ In going through this example, you will learn to:
 
 The pages build the design up from Python, parallel to [`mem_copy`](../memcpy/):
 
-1. [Module overview](./interleaver.md) — the gather, the six stages, the stream-of-blocks for random
-   access, and the per-job token forwarding.
+- [Module overview](./interleaver.md) — the gather, the six stages, the stream-of-blocks for random
+  access, and the per-job token forwarding.
+- [The timing model](./timing_model.md) — declaring `il_compute`'s own loop model: where it plugs into the
+  stage, the `latency + ii·(n − 1)` formula, and what the parameters mean.
+- [Fitting the timing model](./timing_fit.md) — the capstone: measure `il_compute`'s per-firing cost from a
+  full-pipeline XSI run (the span, gated on no stall), fit the two parameters, and ship the fit to the
+  platform library — a recipe for fitting a custom stage of your own.
 
-_The remaining pages — the Python model, the testbench, the DUT and testbench codegen, the RTL run, the
-activity-diagram visualization, and fitting the custom compute stage — are being written alongside the
-calibration work; this section grows as they land._
+_The build-up pages before these — the Python model, the testbench, the DUT and testbench codegen, the RTL
+run, and the activity-diagram visualization — parallel [`mem_copy`](../memcpy/) and grow into this section
+as they land._
