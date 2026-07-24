@@ -334,6 +334,10 @@ class InterleaverInband(FreeRunComp):
     n: HwParam[int] = DEFAULT_N
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     compute_calib_dir: "str | None" = None
+    #: The calibration platform (bus law + the mem-stream control residuals). Passed to the framework
+    #: MemRStream / MemWStream so each loads its shipped ``(component, platform)`` residual — the reader
+    #: (``mem_r_stream_framed_task``) matters here because the interleaver is READER-bound.
+    platform_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -344,7 +348,7 @@ class InterleaverInband(FreeRunComp):
 
         self.rx = CmdRxInband(name=f"{self.name}_rx", sim=self.sim, mem_dwidth=w, n=n, clk=self.clk)
         self.rstream = MemRStream(name=f"{self.name}_memr", sim=self.sim, mem_dwidth=w, inband=True,
-                                  clk=self.clk)
+                                  clk=self.clk, platform_dir=self.platform_dir)
         self.load = IlLoadInband(name=f"{self.name}_load", sim=self.sim, mem_dwidth=w, n=n,
                                  clk=self.clk)
         self.compute = IlComputeInband(name=f"{self.name}_compute", sim=self.sim, mem_dwidth=w, n=n,
@@ -352,7 +356,7 @@ class InterleaverInband(FreeRunComp):
         self.store = IlStoreInband(name=f"{self.name}_store", sim=self.sim, mem_dwidth=w, n=n,
                                    clk=self.clk)
         self.wstream = MemWStream(name=f"{self.name}_memw", sim=self.sim, mem_dwidth=w, inband=True,
-                                  emit_done=True, clk=self.clk)
+                                  emit_done=True, clk=self.clk, platform_dir=self.platform_dir)
         for c in (self.rx, self.rstream, self.load, self.compute, self.store, self.wstream):
             self.add_comp(c)
         self.gather = self.compute          # the completion-timeline probe (job_end_cyc)

@@ -7,6 +7,7 @@ importing it below.
 """
 from __future__ import annotations
 
+from waveflow.calib.fixtures import mem_r_stream  # noqa: F401  (import for its register() side effect)
 from waveflow.calib.fixtures import mem_w_stream  # noqa: F401  (import for its register() side effect)
 
-__all__ = ["mem_w_stream"]
+__all__ = ["mem_r_stream", "mem_w_stream"]

@@ -75,7 +75,7 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
         expected.append((yj, _pack(Xj[P].astype(np.uint32), lw)))   # golden Y[i]=X[P[i]]
 
     il = comp_class(name="il", sim=sim, mem_dwidth=mem_dwidth, n=n,
-                    compute_calib_dir=compute_calib_dir)
+                    compute_calib_dir=compute_calib_dir, platform_dir=platform_dir)
     # Schema-blind, file-driven driver: serialize each command to words, write a burst bundle, point
     # the driver at it.  The driver loads it in pre_sim, so the temp dir must live across run_sim.
     words = [np.asarray(c.serialize(word_bw=mem_dwidth), dtype=np.uint64) for c in cmds]

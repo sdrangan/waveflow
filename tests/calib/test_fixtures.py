@@ -1,5 +1,5 @@
 """tests/calib/test_fixtures.py — the component-calibration fixture contract, registry, and the
-in-band writer fixture.
+in-band writer and reader fixtures.
 
 Toolchain-free: the fixture's RTL side is stubbed with a synthetic span law (a real one needs cosim),
 but the pysim vehicle, the registry, and the fit are exercised for real.
@@ -128,6 +128,67 @@ def test_writer_vehicle_runs_and_records_n_fwd():
                 assert r["n_fwd"] == pt.features["n_fwd"]
                 assert r["nwords"] == 64
                 assert {"span", "current_dly"} <= set(r)
+
+
+# ---------------------------------------------------------------------------
+# The shipped reader fixture
+# ---------------------------------------------------------------------------
+
+def test_reader_fixture_is_registered_on_import():
+    import waveflow.calib.fixtures  # noqa: F401 — registers on import
+    fx = get("mem_r_stream_framed_task")
+    # The reader's timing feature set is just (nwords, num_trans): it relays the in-band descriptor but
+    # does not model a per-forwarded-burst cost, so — unlike the writer — there is no n_fwd basis axis.
+    assert fx.basis == ["nwords", "num_trans"]
+
+
+def test_reader_component_id_matches_a_real_reader():
+    from waveflow.hw.mem_stream import MemRStream
+    from waveflow.simulation.simulation import Simulation
+    rd = MemRStream(name="rd", sim=Simulation(), mem_dwidth=64, inband=True)
+    assert rd.kernel_task().task_fn == "mem_r_stream_framed_task"
+
+
+def test_reader_sweep_is_one_point_per_size():
+    from waveflow.calib.fixtures.mem_r_stream import MemRStreamFixture
+    fx = MemRStreamFixture(nwords_grid=(64, 128, 256))
+    pts = fx.sweep()
+    assert len(pts) == 3
+    assert {p.features["nwords"] for p in pts} == {64, 128, 256}
+    assert all(p.features["num_trans"] == (p.features["nwords"] + 15) // 16 for p in pts)
+    assert all("n_fwd" not in p.features for p in pts)
+
+
+def test_reader_rtl_is_measured_for_known_sizes():
+    from waveflow.calib.fixtures.mem_r_stream import MemRStreamFixture
+    fx = MemRStreamFixture(nwords_grid=(128, 999))
+    got = {p.features["nwords"]: fx.rtl_firings(p) for p in fx.sweep()}
+    assert got[128] is not None
+    assert got[999] is None                       # no measured span — reported, not invented
+
+
+def test_reader_vehicle_runs_and_records():
+    from waveflow.calib.fixtures.mem_r_stream import MemRStreamFixture
+    fx = MemRStreamFixture(nwords_grid=(64,), jobs=3)
+    clk = Clock(freq=100e6)
+    with tempfile.TemporaryDirectory() as d:
+        comp = Path(d) / "comp"
+        for pt in fx.sweep():
+            recs = fx.run_pysim(pt, comp_dir=comp, platform_dir=None, clk=clk)
+            assert len(recs) == 3                 # one firing per job
+            for r in recs:
+                assert r["nwords"] == 64
+                assert {"span", "current_dly"} <= set(r)
+
+
+def test_reader_fixture_fits_from_measured_spans():
+    from waveflow.calib.fixtures.mem_r_stream import MemRStreamFixture
+    clk = Clock(freq=100e6)
+    with tempfile.TemporaryDirectory() as d:
+        plat = Platform.resolve(Path(d) / "p", "p", part="xc7z020clg484-1", clk_freq=100e6)
+        report = MemRStreamFixture(jobs=4).calibrate(plat, clk=clk)
+    assert report["fitted"] and report["missing_rtl"] == []
+    assert report["component"] == "mem_r_stream_framed_task"
 
 
 class _SynthWriter:
