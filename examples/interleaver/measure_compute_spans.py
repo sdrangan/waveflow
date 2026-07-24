@@ -103,16 +103,17 @@ def n_to_cycles(vcd_path: "str | Path", sizes: "tuple[int, ...]") -> "dict[int, 
     return {n: float(min(vals)) for n, vals in sorted(spans.items()) if vals}
 
 
-def run_and_measure(
-    sizes: "tuple[int, ...]" = (128, 128, 256, 256, 512, 512),
+def build_rtl_trace(
+    *,
+    sizes: "tuple[int, ...]",
     n_max: int = 512,
     width: int = 64,
     n_cycles: int = 12000,
     work_root: "str | Path | None" = None,
-) -> "dict[int, float]":
-    """Build the interleaver RTL (template capacity ``n_max``), run the ``sizes`` sweep in XSI with a trace,
-    and return the measured ``{n: cycles}``.  Needs Vitis HLS + Vivado xsim.  ``sizes`` must all be ≤
-    ``n_max`` (the block capacity the RTL is synthesized for)."""
+) -> Path:
+    """Build the interleaver RTL (template capacity ``n_max``), run the ``sizes`` sweep in XSI **with a
+    trace**, and return the trace VCD path.  Needs Vitis HLS + Vivado xsim; ``sizes`` must all be ≤
+    ``n_max``.  Shared by the compute-span measurement and the RTL timing step."""
     import shutil
     import subprocess
     import tempfile
@@ -132,7 +133,7 @@ def run_and_measure(
     if any(n > n_max for n in sizes):
         raise ValueError(f"every job size must be <= n_max={n_max}; got {sizes}")
 
-    d = Path(tempfile.mkdtemp(prefix="il_span_", dir=work_root))
+    d = Path(tempfile.mkdtemp(prefix="il_trace_", dir=work_root))
     print(f"workdir: {d}", flush=True)
     generate_inband(out_dir=d, mem_dwidth=width, n=n_max)
     generate_tb(out_dir=d, width=width, sizes=sizes, n_cycles=n_cycles)
@@ -165,7 +166,18 @@ def run_and_measure(
     if not vcd.exists():
         print((r.stdout or "")[-3000:], flush=True)
         raise RuntimeError(f"no trace VCD at {vcd}")
+    return vcd
 
+
+def run_and_measure(
+    sizes: "tuple[int, ...]" = (128, 128, 256, 256, 512, 512),
+    n_max: int = 512,
+    width: int = 64,
+    n_cycles: int = 12000,
+    work_root: "str | Path | None" = None,
+) -> "dict[int, float]":
+    """Build + trace the ``sizes`` sweep and return the measured ``{n: cycles}`` gather spans."""
+    vcd = build_rtl_trace(sizes=sizes, n_max=n_max, width=width, n_cycles=n_cycles, work_root=work_root)
     spans = measure_compute_spans(vcd, sizes)
     print("\nclean gather spans per size (cycles):", flush=True)
     for n in sorted(spans):

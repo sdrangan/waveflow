@@ -1,7 +1,7 @@
 ---
 title: Fitting the timing model
 parent: Interleaver (gather)
-nav_order: 10
+nav_order: 11
 ---
 # Fitting the timing model
 

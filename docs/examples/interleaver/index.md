@@ -47,9 +47,11 @@ The pages build the design up from Python, parallel to [`mem_copy`](../memcpy/):
   access, and the per-job token forwarding.
 - [The timing model](./timing_model.md) — declaring `il_compute`'s own loop model: where it plugs into the
   stage, the `latency + ii·(n − 1)` formula, and what the parameters mean.
-- [Visualizing timing](./timing.md) — what the RTL and the pysim each measure, the six-stage pipeline
-  activity plot, and the ~0.7% agreement once every stage's model is loaded (including the reader residual
-  the interleaver forced into existence).
+- [Timing in the pysim](./pytiming.md) — what the loosely-timed pysim measures and the six-stage pipeline
+  activity plot it produces (from the pysim → figure build DAG).
+- [RTL timing and the comparison](./rtltiming.md) — the RTL cadence measured from a trace, the generated
+  RTL-vs-pysim table, and the ≈0.7% agreement (including the reader residual the interleaver forced into
+  existence).
 - [Fitting the timing model](./timing_fit.md) — the capstone: measure `il_compute`'s per-firing cost from a
   full-pipeline XSI run (the span, gated on no stall), fit the two parameters, and ship the fit to the
   platform library — a recipe for fitting a custom stage of your own.
