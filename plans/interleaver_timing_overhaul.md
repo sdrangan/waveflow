@@ -111,9 +111,18 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
     one and only interleaver.**
   **REMAINING:** mem stages inherit the shipped mem-stream residual; timing calibration (compute cosim
   sweep for real II/latency).
-- [ ] **docs** — the interleaver docs arc (the custom-component fitting story), pointing back at
-  guide/calib. `interleaver_figures.py` renders PNG to `results/`; switch to committed SVG when the
-  docs page exists.
+- [x] **docs — timing arc** (commits 40b6e12 / fd1010d / 35fe23b / a34b2d0). `timing_model.md` (declare the
+  loop model on il_compute), `timing.md` (Visualizing timing — RTL vs pysim, committed activity SVG, ~0.7%
+  agreement), `timing_fit.md` (measure→fit→ship recipe). Plus the infra that surfaced: `guide/calib/
+  memstream.md` (the mem-stream residual + the fixture layer) and `guide/timing/sob.md`
+  (`add_sob_signals`/`extract_sob_span`). `interleaver_figures.py` now emits a deterministic committed SVG
+  from the fully-calibrated pysim.
+  - **Reader fixture landed** (40b6e12): `waveflow/calib/fixtures/mem_r_stream.py` — the mem_r_stream
+    residual was never fit (mem_copy is writer-bound); the reader-bound interleaver forced it. Closes the
+    pysim↔RTL gap ~10%→~0.7% (273→300 vs RTL 302). Shipped to the tracked platform.
+  - **Still open (build-up pages):** the Python / testbench / codegen / rtlsim pages (nav 2–7) that parallel
+    mem_copy — the timing arc (model→viz→fit) is complete; the earlier construction pages are not yet
+    written.
 
 ## What's shippable vs seeded
 
