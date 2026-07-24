@@ -69,16 +69,19 @@ job's commands until `MemRStream` has taken this one. The long bar is *throttlin
 own two bands, by contrast, are close to solid work: it is the bottleneck, so nothing downstream throttles
 it. (The thin seam between consecutive bands is only a legibility device, so you can count the jobs.)
 
-> **How to regenerate it.** There is **no BuildStep** — unlike [`mem_copy`'s figures](../memcpy/timing.md),
-> which read an RTL *trace* and run through the DAG's sync step, this one renders straight from the pysim
-> timeline, so it is a plain script:
+> **How to regenerate it.** The figure is an `InterleaverFiguresStep`, run through the standard build DAG
+> CLI:
 >
 > ```bash
-> python examples/interleaver/interleaver_figures.py   # -> docs/examples/interleaver/images/pipeline_activity.svg
+> python examples/interleaver/interleaver_figures.py            # --through figures (the default)
+> python examples/interleaver/interleaver_figures.py --force    # re-render even if up-to-date
 > ```
 >
-> Each stage's `fire_log` (its per-firing `(start, end)` windows) becomes one
-> [`ActivityDiagram`](../../guide/timing/activity.md) lane, rendered as a deterministic SVG:
+> Unlike [`mem_copy`'s figures](../memcpy/timing.md) — which consume an RTL *trace* the DAG produced
+> upstream — this one renders straight from the pysim timeline, so it is a **leaf** step (no toolchain, no
+> upstream artifact). The SVG is deterministic, so a re-run is a no-op unless the timeline moved and the git
+> diff is the review signal. Inside, each stage's `fire_log` (its per-firing `(start, end)` windows) becomes
+> one [`ActivityDiagram`](../../guide/timing/activity.md) lane:
 >
 > ```python
 > lanes = []

@@ -14,13 +14,15 @@ Run it::
 """
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, ClassVar
+
+from waveflow.build.build import BuildConfig, BuildStep
 
 #: Committed docs figure — a deterministic SVG straight from the calibrated pysim (no toolchain), so the
 #: docs page tracks the design and re-rendering is a no-op unless the timeline actually moved.
 _DOCS_IMAGES = Path(__file__).resolve().parents[2] / "docs" / "examples" / "interleaver" / "images"
-_DEFAULT_OUTPUT_DIR = _DOCS_IMAGES
 
 # One colour per stage, grouped by role: token/framer (purple), the read side (blues), the custom
 # compute (orange — it stands out because it is the one stage you calibrate yourself), the store side
@@ -115,10 +117,52 @@ def save_figures(output_dir: str | Path, n_jobs: int = 6, n: int = 256) -> list[
     return [out]
 
 
+@dataclass(kw_only=True)
+class InterleaverFiguresStep(BuildStep):
+    """Render the six-stage pipeline-activity figure from the **calibrated pysim** into the committed docs
+    images (``docs/examples/interleaver/images/``).
+
+    Unlike ``mem_copy``'s ``TimingFiguresStep`` (which consumes an RTL *trace* the DAG produced upstream),
+    this renders straight from the pysim timeline — so it takes no toolchain and no upstream artifact: a
+    **leaf** step (``consumes`` is empty).  The SVG is deterministic, so re-running is a no-op unless the
+    timeline actually moved, and the git diff is the review signal.
+    """
+
+    description: str = "Render the interleaver pipeline-activity figure (pysim -> committed docs SVG)."
+    params: ClassVar[dict] = {}
+    n_jobs: int = 6
+    n: int = 256
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return []
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {"pipeline_activity_svg": _DOCS_IMAGES / "pipeline_activity.svg"}
+
+    def run(self, config: BuildConfig, **_) -> dict[str, Any]:
+        saved = save_figures(_DOCS_IMAGES, n_jobs=self.n_jobs, n=self.n)
+        return {"pipeline_activity_svg": saved[0]}
+
+
+def build_interleaver_figures_dag():
+    """A one-step DAG for the figure, driven through the standard :func:`run_dag_cli`.  When the interleaver
+    grows a full ``interleaver_build.py`` (with the codegen / rtlsim rungs the build-up doc pages need),
+    this step slots into it beside them — for now it stands alone."""
+    from waveflow.build.build import BuildDag
+
+    dag = BuildDag()
+    dag.add(InterleaverFiguresStep(name="figures"))
+    return dag
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Render the interleaver activity-diagram figure(s).")
-    parser.add_argument("--output", default=str(_DEFAULT_OUTPUT_DIR),
-                        help=f"output directory (default: {_DEFAULT_OUTPUT_DIR})")
-    args = parser.parse_args()
-    for p in save_figures(args.output):
-        print(f"Saved: {p}")
+    from waveflow.build.cli import run_dag_cli
+
+    run_dag_cli(
+        build_interleaver_figures_dag,
+        description="Render the interleaver activity-diagram figure(s) from the calibrated pysim.",
+        default_through="figures",
+        root_dir=Path(__file__).resolve().parent,
+    )
