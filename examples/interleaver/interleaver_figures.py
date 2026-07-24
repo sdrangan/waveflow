@@ -10,14 +10,17 @@ six-stage **pipeline activity** band diagram.
 
 Run it::
 
-    python examples/interleaver/interleaver_figures.py            # -> results/pipeline_activity.png
+    python examples/interleaver/interleaver_figures.py   # -> docs/examples/interleaver/images/*.svg
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-_DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "results"
+#: Committed docs figure — a deterministic SVG straight from the calibrated pysim (no toolchain), so the
+#: docs page tracks the design and re-rendering is a no-op unless the timeline actually moved.
+_DOCS_IMAGES = Path(__file__).resolve().parents[2] / "docs" / "examples" / "interleaver" / "images"
+_DEFAULT_OUTPUT_DIR = _DOCS_IMAGES
 
 # One colour per stage, grouped by role: token/framer (purple), the read side (blues), the custom
 # compute (orange — it stands out because it is the one stage you calibrate yourself), the store side
@@ -74,15 +77,19 @@ def render_pipeline_activity(il, out: Path, n_jobs: int, stages, title: str) -> 
     ad = ActivityDiagram(lanes, time_unit="cycle")
     fig, _ax, _ = ad.plot(
         mode="band", trange=(0, hi), gap=1, fig_width=11, fig_height=3.4, title=title)
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    # Deterministic SVG (no embedded date, fixed id salt) so a committed figure only changes when the
+    # timeline does — the mem_copy_figures convention.
+    fig.savefig(out, format="svg", bbox_inches="tight", metadata={"Date": None})
     plt.close(fig)
 
 
 def save_figures(output_dir: str | Path, n_jobs: int = 6, n: int = 256) -> list[Path]:
-    """Run the interleaver pysim (with the shipped platform bus law + the seeded compute model) and
-    render the six-stage pipeline-activity figure into *output_dir*."""
+    """Run the interleaver pysim with the platform's **full** calibration — bus law, the mem-stream
+    reader/writer residuals, and the interleaver's own fitted compute model — and render the six-stage
+    pipeline-activity figure (deterministic SVG) into *output_dir*."""
     import matplotlib
-    matplotlib.use("Agg")
+    matplotlib.use("svg")
+    matplotlib.rcParams["svg.hashsalt"] = "interleaver_figures"
 
     from examples.interleaver.interleaver_sim import run_interleaver
     from waveflow.calib.platform import packaged_platforms_dir
@@ -90,14 +97,17 @@ def save_figures(output_dir: str | Path, n_jobs: int = 6, n: int = 256) -> list[
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use the shipped reference platform's bus law when it resolves, so the timeline is the calibrated
-    # one; fall back to the plain per-word timing if it is absent.
+    # The shipped reference platform gives the calibrated timeline: platform_dir loads the bus law + the
+    # mem-stream residuals onto the mem stages, compute_calib_dir the fitted gather model.  Fall back to
+    # plain per-word timing if the platform is absent.
     pkg = packaged_platforms_dir()
-    plat_dir = str(pkg / "zynq7020_bfm_100mhz") if pkg and (pkg / "zynq7020_bfm_100mhz").is_dir() else None
+    plat = pkg / "zynq7020_bfm_100mhz" if pkg else None
+    plat_dir = str(plat) if plat and plat.is_dir() else None
+    comp_dir = str(plat / "components" / "il_compute_task") if plat_dir else None
 
-    il = run_interleaver(nj=n_jobs, n=n, platform_dir=plat_dir)   # default InterleaverInband
+    il = run_interleaver(nj=n_jobs, n=n, platform_dir=plat_dir, compute_calib_dir=comp_dir)
 
-    out = output_dir / "pipeline_activity.png"
+    out = output_dir / "pipeline_activity.svg"
     render_pipeline_activity(
         il, out, n_jobs=n_jobs, stages=_STAGES,
         title=f"interleaver in-band (framework mem-streams) — six-stage pipeline over {n_jobs} jobs "
