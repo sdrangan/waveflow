@@ -84,6 +84,8 @@ The direct method and its primitives first, then the residual method and the pla
   **and** synthesis clock, and how `BuildConfig` selects and confirms one.
 - [The bus-transfer model](./bus_model.md) — `BusCalib`: the `m_axi` span law fit once per platform,
   measured component-independently off the ports.
+- [The mem-stream residual](./memstream.md) — the reusable `MemRStream` / `MemWStream` control residual,
+  and the per-component **fixture** (`waveflow/calib/fixtures/`) that fits it.
 - [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms` flow,
   the DAG steps, and the reference `zynq7020_bfm_100mhz` platform end to end.
 

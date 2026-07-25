@@ -28,15 +28,21 @@ static void mem_r_stream_framed_task(hls::stream<streamutils::framed_word<MEM_DW
     const int nfwd = (int)c.fwd_bursts;
     // Relay nfwd opaque bursts verbatim -- count last markers, never look at the data.  A single
     // pipelined loop with a data-dependent exit (proven synthesizable: experiment/hls_task relay probe).
-    int seen = 0;
-RELAY: do {
+    // The `if (nfwd > 0)` guard is REQUIRED: a bare do-while runs once even when nfwd==0, reading a
+    // phantom word off s_cmd that was never meant to be relayed -- which blocks (empty s_cmd) or steals
+    // the next command's first word.  A command with fwd_bursts=0 (e.g. the 2nd of two reads per job)
+    // is legal and must relay nothing.  Mirrors the guard in mem_w_stream_framed_done_task.
+    if (nfwd > 0) {
+        int seen = 0;
+    RELAY: do {
 #pragma HLS PIPELINE II=1
-        bool last;
-        ap_uint<MEM_DW> d =
-            streamutils::read_boundary_word<streamutils::framed_word<MEM_DW>, MEM_DW>(s_cmd, last);
-        streamutils::write_boundary_word<streamutils::framed_word<MEM_DW>, MEM_DW>(m_out, d, last);
-        if (last) ++seen;
-    } while (seen < nfwd);
+            bool last;
+            ap_uint<MEM_DW> d =
+                streamutils::read_boundary_word<streamutils::framed_word<MEM_DW>, MEM_DW>(s_cmd, last);
+            streamutils::write_boundary_word<streamutils::framed_word<MEM_DW>, MEM_DW>(m_out, d, last);
+            if (last) ++seen;
+        } while (seen < nfwd);
+    }
     // Fetch nw src words, emit as one framed burst (last on the final data word).
 A2S: for (int w = 0; w < nw; ++w) {
 #pragma HLS PIPELINE II=1

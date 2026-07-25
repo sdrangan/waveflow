@@ -142,9 +142,9 @@ class TestLookupErrors:
             bt.channel("nope")
 
     def test_sob_channel_refuses_a_burst_view(self, tmp_path):
-        from examples.interleaver.interleaver import InterleaverCanon
+        from examples.interleaver.interleaver_inband import InterleaverInband
         man = composite_top_spec(
-            InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256),
+            InterleaverInband(name="c", sim=Simulation(), mem_dwidth=64, n=256),
             width=64).trace_manifest()
         bt = load_trace(man, _write_vcd(tmp_path / "t.vcd", man))
         with pytest.raises(ValueError, match="stream_of_blocks"):
@@ -207,18 +207,18 @@ class TestComponentView:
         assert set(out["in"]) == {"cmd"} and set(out["out"]) == {"copy_data"}
 
     def test_sob_channels_are_listed_but_have_no_burst_view(self, tmp_path):
-        from examples.interleaver.interleaver import InterleaverCanon
+        from examples.interleaver.interleaver_inband import InterleaverInband
         man = composite_top_spec(
-            InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256),
+            InterleaverInband(name="c", sim=Simulation(), mem_dwidth=64, n=256),
             width=64).trace_manifest()
         bt = load_trace(man, _write_vcd(tmp_path / "t.vcd", man))
 
-        v = bt.component("il_compute_task")
+        v = bt.component("il_compute_inband_task")
         assert "x_blk" in v.inputs and "y_blk" in v.outputs, "the view still reports them"
 
-        b = bt.component_bursts("il_compute_task")
+        b = bt.component_bursts("il_compute_inband_task")
         assert "x_blk" not in b["in"] and "y_blk" not in b["out"], "but they are skipped here"
-        assert "cmd2" in b["in"] and "cmd3" in b["out"]
+        assert "desc_lc" in b["in"] and "desc_cs" in b["out"]
 
 
 # ---------------------------------------------------------------------------

@@ -35,9 +35,9 @@ def memcopy_spec():
 
 @pytest.fixture
 def interleaver_spec():
-    from examples.interleaver.interleaver import InterleaverCanon
+    from examples.interleaver.interleaver_inband import InterleaverInband
     return composite_top_spec(
-        InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256), width=64)
+        InterleaverInband(name="c", sim=Simulation(), mem_dwidth=64, n=256), width=64)
 
 
 class TestChannelsAreAnswerable:
@@ -49,15 +49,17 @@ class TestChannelsAreAnswerable:
             assert c.width == 64, "the PAYLOAD width; the RTL net is 65 bits with `last` on top"
 
     def test_channel_kind_comes_from_the_edge_type(self, interleaver_spec):
+        # The kind is read off the edge TYPE: a framed StreamIF -> framed_word FIFO, a SobIF ->
+        # stream_of_blocks.  (Every in-band internal edge is framed; plain ap_uint FIFOs are legacy.)
         kinds = {c.name: c.kind for c in interleaver_spec.channels}
-        assert kinds["cmd0"] == "stream", "a plain StreamIF stays an ap_uint FIFO -- not framed"
-        assert kinds["p_blk"] == "sob"
+        assert kinds["desc_lc"] == "framed", "a framed StreamIF lowers to a framed_word FIFO"
+        assert kinds["p_blk"] == "sob", "a SobIF lowers to a stream_of_blocks"
 
     def test_sob_channel_carries_its_element_width_not_the_bus_width(self):
         """A stream_of_blocks is templated on the ELEMENT type, so its width is the edge's own."""
-        from examples.interleaver.interleaver import InterleaverCanon
+        from examples.interleaver.interleaver_inband import InterleaverInband
 
-        comp = InterleaverCanon(name="c", sim=Simulation(), mem_dwidth=64, n=256)
+        comp = InterleaverInband(name="c", sim=Simulation(), mem_dwidth=64, n=256)
         spec = composite_top_spec(comp, width=64)
         elem_bw = {e.name: e.elem_bw for e in comp.internal_edges if isinstance(e, SobEdge)}
 
@@ -79,18 +81,19 @@ class TestChannelsKnowTheirEndpoints:
         assert fn(by_name["copy_data"].slave_task) == "mem_w_stream_framed_done_task"
 
     def test_interleaver_control_chain_is_recoverable(self, interleaver_spec):
-        """The 6-stage pipeline, derived from Python -- it matches the order observed in the VCD."""
+        """The 6-stage pipeline, derived from Python -- it matches the order observed in the VCD.
+        Every internal edge is framed (the in-band descriptor rides them)."""
         by_name = {c.name: c for c in interleaver_spec.channels}
         fn = lambda i: interleaver_spec.tasks[i].task_fn       # noqa: E731
 
-        chain = [(fn(by_name[f"cmd{k}"].master_task), fn(by_name[f"cmd{k}"].slave_task))
-                 for k in range(5)]
+        chain = [(fn(by_name[e].master_task), fn(by_name[e].slave_task))
+                 for e in ("cmd_rd", "rdata", "desc_lc", "desc_cs", "wdata")]
         assert chain == [
-            ("cmd_rx_task", "il_mem_r_task"),
-            ("il_mem_r_task", "il_load_task"),
-            ("il_load_task", "il_compute_task"),
-            ("il_compute_task", "il_store_task"),
-            ("il_store_task", "il_mem_w_task"),
+            ("il_cmd_rx_framed_task", "mem_r_stream_framed_task"),
+            ("mem_r_stream_framed_task", "il_load_inband_task"),
+            ("il_load_inband_task", "il_compute_inband_task"),
+            ("il_compute_inband_task", "il_store_inband_task"),
+            ("il_store_inband_task", "mem_w_stream_framed_done_task"),
         ]
 
     def test_every_channel_has_both_endpoints_resolved(self, interleaver_spec):

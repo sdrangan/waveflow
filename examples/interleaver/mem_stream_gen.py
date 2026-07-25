@@ -29,10 +29,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
     composite_top_spec,
     GEN_DIR,
     INCLUDE_DIR,
-    TaskInst,
     TopSpec,
-    _axis_port,
-    _maxi_port,
     render_ports_h,
     render_tcl,
     render_top,
@@ -168,56 +165,6 @@ def write_mem_w_xsi_bundles(xsi_dir: Path, n: int = 128, base_w: int = 64,
     write_burst_bundle([data], vdir / "golden")
     return data
 
-
-def write_interleaver_canon_xsi_bundles(xsi_dir: Path, n: int = 256, nj: int = 8,
-                                        mem_dw: int = 64) -> None:
-    """Write interleaver_canon's XSI input + golden **bundles** into ``<xsi_dir>/vectors/``.
-
-    Per job ``j`` (base ``j*3*nw``): a P region (permutation indices), an X region (float32 values),
-    and a Y region (output = ``X[P]``).  Elements are lane-packed, ``lw = mem_dw/32`` per word:
-
-    - ``vectors/mem_in`` — the whole input arena (P + X packed), loaded at word 0;
-    - ``vectors/cmd``    — the ``InterleaverCmd`` stream (2 words per job);
-    - ``vectors/golden`` — the expected arena with the Y regions filled (``Y[i] = X[P[i]]``); the TB
-      compares the written Y regions against it.
-
-    Structural constants (``n``, ``nj``) must match ``interleaver_canon_bfm_tb.cpp``.
-    """
-    from examples.interleaver.interleaver import InterleaverCmd
-    from waveflow.utils.burst_io import write_burst_bundle
-
-    lw = mem_dw // 32
-    nw = (n + lw - 1) // lw
-    mem_nw = 8192
-
-    def pack_lanes(elems) -> "np.ndarray":
-        e = np.asarray(elems, dtype=np.uint64)
-        w = np.zeros((len(e) + lw - 1) // lw, dtype=np.uint64)
-        for lane in range(lw):
-            s = e[lane::lw]
-            w[: len(s)] |= s << np.uint64(lane * 32)
-        return w
-
-    perm = ((np.arange(n) * 13 + 5) % n).astype(np.uint32)
-    arena = np.zeros(mem_nw, dtype=np.uint64)
-    golden = np.zeros(mem_nw, dtype=np.uint64)
-    cmd: list[int] = []
-    for j in range(nj):
-        base = j * 3 * nw
-        pw, xw, yj = base, base + nw, base + 2 * nw
-        xbits = (np.arange(n, dtype=np.float32) * np.float32(0.5) - np.float32(3.0)
-                 + np.float32(j)).view(np.uint32)
-        arena[pw:pw + nw] = pack_lanes(perm)
-        arena[xw:xw + nw] = pack_lanes(xbits)
-        golden[yj:yj + nw] = pack_lanes(xbits[perm])
-        cmd.extend(int(w) for w in np.asarray(
-            InterleaverCmd(p_off=pw, x_off=xw, y_off=yj, n=n).serialize(word_bw=mem_dw),
-            dtype=np.uint64))
-
-    vdir = Path(xsi_dir) / "vectors"
-    write_burst_bundle([arena], vdir / "mem_in")
-    write_burst_bundle([np.asarray(cmd, dtype=np.uint64)], vdir / "cmd")
-    write_burst_bundle([golden], vdir / "golden")
 
 
 if __name__ == "__main__":

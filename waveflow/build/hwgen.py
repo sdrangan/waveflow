@@ -1127,8 +1127,8 @@ def resolved_namespace(comp_class) -> str | None:
     It survived because it had never met one: every hook-emitting component hand-writes
     ``<kernel>_impl`` (``simp_fun_impl``, ``poly_impl``, ``hist_impl``,
     ``block_scale_impl``, ``mem_r_stream_impl``, ``mem_w_stream_impl``, ``mem_copy_impl``,
-    ``fir_impl``), and the seven that *do* take the default (``CmdRx``, ``IlMemR``,
-    ``IlLoad``, ``IlCompute``, ``IlStore``, ``IlMemW``, ``InterleaverCanon``) emit no
+    ``fir_impl``), and the components that *do* take the default (e.g. the now-retired
+    interleaver-canon tiles) emit no
     hooks, so no ``namespace`` block is ever written for them and nothing collides.  The
     default was safe only by accident.  ``examples/toy``'s ``Square`` was the first
     component to take it *with* a hook, which is how this surfaced.
@@ -2234,9 +2234,9 @@ def task_files_to_str(comp_class, task_name: str | None = None) -> dict[str, str
         f"#define {guard}",
         f"// {header} -- GENERATED from {comp_class.__name__}.run_iter by waveflow "
         f"(build/hwgen.py::task_files_to_str).  DO NOT EDIT: regenerate instead.",
-        f"// A single firing = one hls::task invocation; the runtime re-fires it, so there is no",
-        f"// command loop here and no INTERFACE pragma (the composite top owns the interface).",
-        f"// The @synthesizable hook bodies are HAND-WRITTEN and are not lowered from the Python.",
+        "// A single firing = one hls::task invocation; the runtime re-fires it, so there is no",
+        "// command loop here and no INTERFACE pragma (the composite top owns the interface).",
+        "// The @synthesizable hook bodies are HAND-WRITTEN and are not lowered from the Python.",
         '#include "hls_stream.h"',
         "#include <ap_int.h>",
     ]

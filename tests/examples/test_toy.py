@@ -11,9 +11,7 @@ for a real end-to-end (build DAG + Vitis) example.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -270,10 +268,10 @@ def test_namespace_default_is_kernel_impl():
     """
     from waveflow.build.hwgen import cpp_kernel_name, resolved_namespace
 
-    from examples.interleaver.interleaver import CmdRx
+    from examples.interleaver.interleaver_inband import CmdRxInband
 
     # The default derives from, but never equals, the kernel name.
-    for cls in (Square, Double, CmdRx):
+    for cls in (Square, Double, CmdRxInband):
         kern = cpp_kernel_name(cls)
         ns = resolved_namespace(cls)
         assert ns == f"{kern}_impl", cls.__name__
@@ -285,29 +283,12 @@ def test_namespace_default_is_kernel_impl():
     assert resolved_namespace(SimpFunComponent) == "simp_fun_impl"
 
 
-def test_components_taking_the_default_emit_no_hooks_so_nothing_regressed():
-    """Why fixing the default changed no existing output — the guard on that claim.
-
-    Recorded because the prose version of this was already wrong once: an earlier draft
-    asserted a "100% opt-out rate" (that every component hand-sets `cpp_namespace`).  Not
-    so — seven interleaver components take the default.  They are unaffected only because
-    they emit no hooks, hence no `namespace` block.  If one grows a hook, its emitted
-    namespace changes, and this test says so.
-    """
-    from waveflow.build.hwgen import kernel_files_to_str
-
-    from examples.interleaver.interleaver import CmdRx
-
-    files = kernel_files_to_str(CmdRx)
-    assert not any("impl" in name for name in files), "CmdRx grew a hook — re-check the default"
-    assert not any("namespace " in text for text in files.values())
-
 
 def test_scaled_square_declares_no_codegen_descriptors():
     """Characterization test: the composite toy is the pysim *shape*, not a generated top.
 
     `composite_top_spec` builds the top from the `ordered_subcomps` / `internal_edges` / `boundary`
-    descriptors that the real composites (`MemCopy`, `InterleaverCanon`) carry by hand alongside their
+    descriptors that the real composites (`MemCopy`, `InterleaverInband`) carry by hand alongside their
     `add_comp`/`add_if` graph.  The toy declares none of them — backing the claim in
     docs/guide/components/composite.md.  Adding them is out of scope (plans/toy_examples.md).
 

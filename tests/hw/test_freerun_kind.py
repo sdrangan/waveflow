@@ -93,7 +93,7 @@ def test_body_xor_children_both_fails_loudly():
 
 
 def test_retrofit_composites_are_freeruncomps():
-    from examples.interleaver.interleaver import InterleaverCanon
+    from examples.interleaver.interleaver_inband import InterleaverInband
     from examples.mem_copy.mem_copy import MemCopy
     assert issubclass(MemCopy, FreeRunComp)
-    assert issubclass(InterleaverCanon, FreeRunComp)
+    assert issubclass(InterleaverInband, FreeRunComp)

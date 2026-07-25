@@ -591,7 +591,86 @@ class VcdParser(object):
                         bitwidths[sig] = bitwidth
         return axi_sigs, bitwidths
 
-   
+    def add_sob_signals(
+            self,
+            component : str,
+            blk_name : str,
+            side : Literal['write', 'read', 'auto'] = 'auto',
+            short_name_prefix : str | None = None,
+            confirm_exists : bool = True) -> dict[str, str]:
+        """
+        Adds the block-RAM port nets of a **stream-of-blocks (SOB)** buffer to the tracked signals.
+
+        A SOB buffer lowers to a Vitis block-RAM port, and Vitis lifts its nets into the top scope, so
+        a level-1 ``$dumpvars`` sees them (no hierarchical path to resolve).  For a buffer
+        ``<blk_name>`` inside component instance ``<component>`` the port nets follow the Vitis
+        convention:
+
+        ==========  ============================  ==========================================
+        role        net suffix                    meaning
+        ==========  ============================  ==========================================
+        ``we``      ``<blk>_we0``                 write-enable (present on a WRITE block)
+        ``ce``      ``<blk>_ce0``                 chip-enable (asserted on each access)
+        ``addr``    ``<blk>_address0``            access address
+        ``data``    ``<blk>_d0`` / ``<blk>_q0``   write data (write) / read data (read)
+        ``lock``    ``<blk>_write`` / ``_read``   the SOB ping-pong lock handshake
+        ==========  ============================  ==========================================
+
+        A net matches when it contains ``component`` **and** its core (the name without a trailing
+        ``[MSB:LSB]``) ends in ``<blk_name>_<suffix>`` — so ``component`` need only be a substring of
+        the mangled instance name (``"il_compute"`` finds ``il_compute_inband_task_64_256_U0_...``).
+        Each match is added with the short name ``<blk_name>_<role>`` so it renders in a timing
+        diagram (:meth:`get_td_signals`).  The **write-enable** is the net :meth:`extract_sob_span`
+        reads for the per-firing active span.
+
+        Parameters
+        ----------
+        component : str
+            Substring of the owning component's instance name.
+        blk_name : str
+            The buffer's base name (e.g. ``"y_blk"``, ``"p_blk"``).
+        side : {'write', 'read', 'auto'}
+            Which port-role set to expect.  ``'auto'`` (default) picks WRITE if a ``we0`` net exists
+            for the buffer, else READ.
+        short_name_prefix : str | None
+            Prefix for the short names (default ``"<blk_name>_"``).
+        confirm_exists : bool
+            Raise if no nets for this buffer are found (default True).
+
+        Returns
+        -------
+        sob_sigs : dict[str, str]
+            ``{role: full_net_name}`` for the roles found, among
+            ``we`` / ``ce`` / ``addr`` / ``data`` / ``lock``.
+        """
+        write_roles = {'we': 'we0', 'ce': 'ce0', 'addr': 'address0', 'data': 'd0', 'lock': 'write'}
+        read_roles = {'ce': 'ce0', 'addr': 'address0', 'data': 'q0', 'lock': 'read'}
+
+        def _core(s : str) -> str:                      # net name without a trailing [MSB:LSB]
+            return s.split('[')[0]
+
+        if side == 'auto':
+            has_we = any(component in s and _core(s).endswith(f"{blk_name}_we0")
+                         for s in self.vcd.signals)
+            side = 'write' if has_we else 'read'
+        roles = write_roles if side == 'write' else read_roles
+
+        sn_prefix = short_name_prefix if short_name_prefix is not None else f"{blk_name}_"
+        sob_sigs : dict[str, str] = {}
+        for role, suffix in roles.items():
+            for s in self.vcd.signals:
+                if component in s and _core(s).endswith(f"{blk_name}_{suffix}"):
+                    numeric_type = 'uint' if role in ('addr', 'data') else 'int'
+                    self.add_signal(s, numeric_type=numeric_type)
+                    self.sig_info[s].short_name = f"{sn_prefix}{role}"
+                    sob_sigs[role] = s
+                    break
+
+        if confirm_exists and not sob_sigs:
+            raise ValueError(f"No SOB nets found for component~'{component}', blk '{blk_name}' "
+                             f"(side={side}).")
+        return sob_sigs
+
     def full_name(
             self, 
             short_name : str) -> str:
@@ -799,6 +878,63 @@ class VcdParser(object):
         clk_period = np.median(np.diff(clk_times))
 
         return bursts, clk_period
+
+    def extract_sob_span(
+            self,
+            clk_name : str,
+            sob_sigs : dict[str, str]) -> tuple[list[dict], float]:
+        """
+        Extract the per-firing **active windows** of a stream-of-blocks buffer.
+
+        Samples the block's write-enable (``sob_sigs['we']``; falls back to the chip-enable
+        ``'ce'`` for a read block) once per clock and returns every CONTIGUOUS high run as one
+        window — the cycles the block was actually being written.  A fully-pipelined write loop
+        (II=1) produces one window per firing whose length is the element count; a gap in the
+        write-enable is a stall, so a firing splitting into more than one window is the no-stall
+        tell.  The window is the loop's **own** time: it excludes the wait before the first write
+        (input backpressure only delays *when* the run starts, not its length).
+
+        Parameters
+        ----------
+        clk_name : str
+            Name of the clock signal (see :meth:`add_clock_signal`).
+        sob_sigs : dict[str, str]
+            As returned by :meth:`add_sob_signals`; must carry ``'we'`` (write block) or ``'ce'``.
+
+        Returns
+        -------
+        windows : list of dict
+            Each ``{'start': int, 'end': int, 'span': int}`` in cycles, ``span = end - start`` (the
+            number of active cycles = elements written that firing).
+        clk_period : float
+            Estimated clock period in ns (``np.median`` of the rising-edge spacing).
+        """
+        act_name = sob_sigs.get('we') or sob_sigs.get('ce')
+        if act_name is None:
+            raise ValueError("extract_sob_span needs a 'we' (or 'ce') net in sob_sigs; "
+                             f"present: {sorted(sob_sigs)}")
+        for s in (clk_name, act_name):
+            if s in self.sig_info:
+                self.sig_info[s].get_values()
+
+        clk_times = extract_clock_times(self.sig_info[clk_name])
+        sample_times = clock_sample_times(clk_times)
+        act = np.asarray(resample_signal(self.sig_info[act_name], sample_times))
+        high = (act.reshape(len(sample_times), -1)[:, 0] != 0)
+
+        windows : list[dict] = []
+        start : int | None = None
+        for i, h in enumerate(high):
+            if h and start is None:
+                start = i
+            elif (not h) and start is not None:
+                windows.append({'start': start, 'end': i, 'span': i - start})
+                start = None
+        if start is not None:                           # still high at end of trace
+            windows.append({'start': start, 'end': len(high), 'span': len(high) - start})
+
+        clk_period = float(np.median(np.diff(clk_times))) if len(clk_times) > 1 else 0.0
+        return windows, clk_period
 
     def extract_aximm_bursts(
             self,

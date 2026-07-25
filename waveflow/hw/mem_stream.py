@@ -313,6 +313,8 @@ class MemRStream(FreeRunComp):
         #: Per-command modeled transfer span (seconds) — read-start → write-complete.  Overlapped,
         #: so ~ (n_words + fill)·period, not ~2·n_words·period (observability / the timing test).
         self.transfer_spans: list[float] = []
+        #: Per-firing ``(start, end)`` cycle windows — the activity-diagram / instrumentation view.
+        self.fire_log: list[tuple[float, float]] = []
         comp_id = self.kernel_task().task_fn
         resolved = _resolve_calib_dir(self.calib_dir, self.platform_dir, comp_id)
         if resolved is not None:
@@ -374,6 +376,7 @@ class MemRStream(FreeRunComp):
         # write OVERLAP (write_pipelined shortens its wait when the anchor is already past).
         yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
         self.transfer_spans.append(self.now - t_start)
+        self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
             yield from self.s_done.write(complete)
@@ -409,6 +412,7 @@ class MemRStream(FreeRunComp):
             w0, w0 + nw, num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         yield from self.m_out.write_pipelined(words, t_out_start=t0 + self._fill)
         self.transfer_spans.append(self.now - t_start)
+        self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         yield from self._timed_tail(nw)
 
 
@@ -492,6 +496,8 @@ class MemWStream(FreeRunComp):
         #: :meth:`MemRStream.bind_base`.  Default 0: the flat single-arena mode (sim & BFM).
         self._base = 0
         self.transfer_spans: list[float] = []
+        #: Per-firing ``(start, end)`` cycle windows — the activity-diagram / instrumentation view.
+        self.fire_log: list[tuple[float, float]] = []
         # `component` must match the id this stream's firings carry in the RTL timing table — the
         # task-body name, which kernel_task() already knows — and it keys the shared platform library.
         comp_id = self.kernel_task().task_fn
@@ -552,6 +558,7 @@ class MemWStream(FreeRunComp):
             w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
             num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
+        self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
             yield from self.s_done.write(complete)
@@ -588,6 +595,7 @@ class MemWStream(FreeRunComp):
             w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
             num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
+        self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
             for burst in fwd:
                 yield from self.s_done.write(burst)

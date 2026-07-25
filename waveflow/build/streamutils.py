@@ -163,13 +163,12 @@ class MemStreamStep(Buildable):
             "mem_seq_framed_task": self._output_dir / "mem_seq_framed_task.h",
             "mem_r_stream_framed_task": self._output_dir / "mem_r_stream_framed_task.h",
             "mem_w_stream_framed_done_task": self._output_dir / "mem_w_stream_framed_done_task.h",
-            # Canonical six-stage interleaver tiles: a forwarded per-job token through every tile.
-            "cmd_rx_task": self._output_dir / "cmd_rx_task.h",
-            "il_mem_r_task": self._output_dir / "il_mem_r_task.h",
-            "il_load_task": self._output_dir / "il_load_task.h",
-            "il_compute_task": self._output_dir / "il_compute_task.h",
-            "il_store_task": self._output_dir / "il_store_task.h",
-            "il_mem_w_task": self._output_dir / "il_mem_w_task.h",
+            # In-band interleaver tiles: the framers + gather that compose the framework mem-streams
+            # (the descriptor forwards in-band instead of a custom token).  Hand-written framed bodies.
+            "il_cmd_rx_framed_task": self._output_dir / "il_cmd_rx_framed_task.h",
+            "il_load_inband_task": self._output_dir / "il_load_inband_task.h",
+            "il_compute_inband_task": self._output_dir / "il_compute_inband_task.h",
+            "il_store_inband_task": self._output_dir / "il_store_inband_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -180,12 +179,10 @@ class MemStreamStep(Buildable):
             "mem_seq_framed_task": "mem_seq_framed_task.h",
             "mem_r_stream_framed_task": "mem_r_stream_framed_task.h",
             "mem_w_stream_framed_done_task": "mem_w_stream_framed_done_task.h",
-            "cmd_rx_task": "cmd_rx_task.h",
-            "il_mem_r_task": "il_mem_r_task.h",
-            "il_load_task": "il_load_task.h",
-            "il_compute_task": "il_compute_task.h",
-            "il_store_task": "il_store_task.h",
-            "il_mem_w_task": "il_mem_w_task.h",
+            "il_cmd_rx_framed_task": "il_cmd_rx_framed_task.h",
+            "il_load_inband_task": "il_load_inband_task.h",
+            "il_compute_inband_task": "il_compute_inband_task.h",
+            "il_store_inband_task": "il_store_inband_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown MemStreamStep output key: {key!r}")
