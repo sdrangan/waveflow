@@ -60,15 +60,27 @@ def _nwords(n: int, lw: int) -> int:
     return (n + lw - 1) // lw
 
 
-#: The compute task-body id — the key its firings carry and its subdir in the platform library (a
-#: calibrated compute residual is stored under ``components/il_compute_task/``).
+#: The compute task-body id — the key its firings carry and the subdir its fit is stored under.
 IL_COMPUTE_COMPONENT = "il_compute_task"
+
+#: Root for THIS example's **own** fitted timing.  ``il_compute`` is the interleaver's custom kernel, not
+#: reusable infra, so its fit lives with the example — NOT in the shared platform library (which holds only
+#: platform properties: the bus law and the mem-stream residuals).  The standard location for an example's
+#: custom-component timing is ``examples/<example>/calib/<platform>/<component>/params.json`` — keyed by
+#: platform because the cycle counts are platform-dependent.
+CALIB_ROOT = HERE / "calib"
+
+
+def compute_calib_dir(platform_name: str = "zynq7020_bfm_100mhz") -> "Path":
+    """The example-local dir holding the fitted ``il_compute`` loop model for *platform_name*."""
+    return CALIB_ROOT / platform_name / IL_COMPUTE_COMPONENT
 
 #: Loop-model parameters for the gather compute, ``cycles = latency + ii·(n − 1)`` — the pipelined ELEMENT
 #: loop's fixed latency and its per-element initiation interval.  The typed-SOB gather (``y[i] = x[p[i]]``)
 #: trips once per ELEMENT at II=1, so the basis is ``n`` (elements), not ``nw`` (words).  These are the
 #: **measured** law (``measure_compute_spans.py``: the ``y_blk`` write-burst is a clean contiguous ``n``
 #: cycles at every size ⇒ ii=1, latency=1); they seed the no-calib fallback so pysim charges the real
-#: compute cost even before a fit is loaded.  ``calibrate_compute.py`` ships the same law as a platform fit.
+#: compute cost even before a fit is loaded.  ``calibrate_compute.py`` fits the same law into the example
+#: calib dir (see :func:`compute_calib_dir`).
 IL_COMPUTE_LATENCY_SEED = 1.0
 IL_COMPUTE_II_SEED = 1.0

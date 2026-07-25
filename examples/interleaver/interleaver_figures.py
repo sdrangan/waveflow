@@ -76,16 +76,18 @@ def run_timeline(n_jobs: int = 6, n: int = 256) -> dict:
     """
     import numpy as np
 
+    from examples.interleaver.interleaver import compute_calib_dir
     from examples.interleaver.interleaver_sim import run_interleaver
     from waveflow.calib.platform import packaged_platforms_dir
 
-    # The shipped reference platform gives the calibrated timeline: platform_dir loads the bus law + the
-    # mem-stream residuals onto the mem stages, compute_calib_dir the fitted gather model.  Fall back to
-    # plain per-word timing if the platform is absent.
+    # The calibrated timeline draws on both halves of the split: platform_dir loads the SHARED bus law +
+    # mem-stream residuals from the platform library, and compute_calib_dir loads the interleaver's OWN
+    # fitted gather model from the example's calib dir.  Either falls back to plain timing if absent.
     pkg = packaged_platforms_dir()
     plat = pkg / "zynq7020_bfm_100mhz" if pkg else None
     plat_dir = str(plat) if plat and plat.is_dir() else None
-    comp_dir = str(plat / "components" / "il_compute_task") if plat_dir else None
+    cdir = compute_calib_dir("zynq7020_bfm_100mhz")
+    comp_dir = str(cdir) if (cdir / "params.json").exists() else None
 
     il = run_interleaver(nj=n_jobs, n=n, platform_dir=plat_dir, compute_calib_dir=comp_dir)
 

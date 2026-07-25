@@ -138,20 +138,23 @@ def fit_compute_model(n_to_cycles, out_dir):
 Two points suffice in principle (two unknowns); the three here confirm the line. The coefficient on `n` is
 `ii`, the intercept is `latency − ii` — recovered here as `ii = 1`, `latency = 1`.
 
-## Step 4 — ship it to the platform
+## Step 4 — store it with the example
 
-Store the fit where a build finds it. [`calibrate`](../../../examples/interleaver/calibrate_compute.py)
-writes it into the [platform library](../../guide/calib/platform.md) under
-`components/il_compute_task/params.json`, keyed like any component:
+Where the fit lands is the point of the [two-level split](../../guide/calib/index.md). The bus law and the
+mem-stream residuals are *platform* properties and ship in the [platform library](../../guide/calib/platform.md)
+— but `il_compute` is the interleaver's **own** kernel, not reusable infra, so its fit lives **with the
+example**. [`calibrate`](../../../examples/interleaver/calibrate_compute.py) writes it to the example's calib
+dir, keyed by platform (the cycle counts are platform-dependent):
 
 ```python
 from calibrate_compute import calibrate
-calibrate("waveflow/calib/platforms", "zynq7020_bfm_100mhz")   # → components/il_compute_task/params.json
+calibrate("zynq7020_bfm_100mhz")   # → examples/interleaver/calib/zynq7020_bfm_100mhz/il_compute_task/params.json
 ```
 
-A build selecting the platform then loads it with no re-fit (`InterleaverInband(compute_calib_dir=…)`).
-Unlike the shipped bus and mem-stream models, this fit is the design's *own* — same place, but the
-interleaver's contribution, not reusable infra.
+A build loads it with no re-fit via `InterleaverInband(compute_calib_dir=…)` pointed at that dir, while the
+mem stages load their residuals from the platform library. **That is the standard place for an example's
+custom-component timing** — `examples/<example>/calib/<platform>/<component>/`: the shared library stays
+reusable infra only, and each example owns its own fits.
 
 ## Running it
 
@@ -161,11 +164,9 @@ The measured points are already wired into `calibrate_compute.N_TO_CYCLES`, so t
 # (re)measure from RTL — needs Vitis HLS + Vivado xsim; prints N_TO_CYCLES to paste back
 python examples/interleaver/measure_compute_spans.py
 
-# fit the measured points and ship into the platform library
-python examples/interleaver/calibrate_compute.py --work-root waveflow/calib/platforms
+# fit the measured points into the example's calib dir (keyed by platform)
+python examples/interleaver/calibrate_compute.py --platform zynq7020_bfm_100mhz
 ```
-
-(The default `--work-root calib/work` writes a local, untracked fit for development instead.)
 
 ## Does it work?
 
@@ -186,8 +187,8 @@ il.gather.job_span_cyc        # [256.0, 256.0, 256.0] — the contiguous burst X
 3. **Sweep** several sizes in one build with the build-once/run-many `run_and_measure` pattern. *(reuses
    built-in build steps; your factory supplies the `generate_*` calls.)*
 4. **Fit** with `LinCalibModel.fit`. *(built-in.)*
-5. **Ship** with a `calibrate()` into the platform library. *(a few lines around the built-in
-   `Platform.resolve`.)*
+5. **Store** the fit *with the example* — `examples/<example>/calib/<platform>/<component>/` — not the
+   shared platform library (which stays reusable infra only). *(a `calibrate()` wrapper of `LinCalibModel`.)*
 
 ## See also
 
