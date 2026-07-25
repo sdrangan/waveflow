@@ -31,6 +31,23 @@ This is the **teaching** counterpart to the rigorous all-modes/all-widths sweep 
 rules) live in the [vectorization guide](../../guide/vectorization/); this walkthrough shows
 them end-to-end on one example.
 
+## Learning Objectives
+
+In going through this example, you will learn to:
+
+- Represent numbers as typed, **vectorized** `DataSchema` arrays (numpy-backed, no
+  per-element Python loop) across the three numeric kinds — integer, float, and
+  fixed-point.
+- Apply the type-preserving operators (`a*b + c`) and let the **result type follow the
+  growth rules**, so the Python golden is bit-exact by construction.
+- Hand-write the three matching minimal Vitis kernels and understand *why* each is
+  bit-exact — integer exactness plus growth, float built `-ffp-contract=off` (no fused
+  FMA), fixed-point quantize-on-assign.
+- Drive a **gen→csim→compare-bits** conformance DAG (`BuildDag` + `run_dag_cli`) and
+  assert the Vitis output equals the Python operator output **bit-for-bit**.
+- See how this front-door relates to the exhaustive all-modes/all-widths sweep in
+  `schemas/fixedpoint`, which shares the same conformance machinery.
+
 ## The walkthrough
 
 1. **[The Python model](./python.md)** — the vectorized golden: declare the arrays, apply

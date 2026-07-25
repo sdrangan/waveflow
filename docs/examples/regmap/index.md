@@ -10,6 +10,8 @@ This is the first end-to-end example in the interface guide. It walks through th
 synthesis, and RTL co-simulation of a **standalone control-driven Vitis kernel**. The kernel uses the
 simplest of the AXI-* interfaces — an **AXI-Lite register map**.
 
+## Learning Objectives
+
 In going through this example, you will learn to:
 
 - Declare a `VitisRegMap` of typed registers and wire it into a `HostActivated` kernel.
@@ -47,12 +49,12 @@ following sequence to exercise it:
 The same kernel is exercised **two** different ways, and the difference between them is the thread that
 runs through this whole example:
 
-| | **System simulation** | **Sequential execution** |
-|---|---|---|
-| What runs | a host `SimObj` running **concurrently** with the kernel, exchanging real AXI-Lite transactions | **one** sequential program (a `SeqTB`) that invokes the kernel |
-| What you see | the **protocol** — `ap_start` → poll → `ap_done` — plus a per-step event trace | the functional result and the total transaction latency |
-| Where it runs | **Python only** | **Python, C-simulation, and RTL co-simulation** |
-| Page | [System simulation](./pysim.md) | [Sequential execution](./seqtb.md) |
+|               | **System simulation**                                                                            | **Sequential execution**                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| What runs     | a host`SimObj` running **concurrently** with the kernel, exchanging real AXI-Lite transactions | **one** sequential program (a `SeqTB`) that invokes the kernel |
+| What you see  | the**protocol** — `ap_start` → poll → `ap_done` — plus a per-step event trace            | the functional result and the total transaction latency                |
+| Where it runs | **Python only**                                                                                  | **Python, C-simulation, and RTL co-simulation**                  |
+| Page          | [System simulation](./pysim.md)                                                                         | [Sequential execution](./seqtb.md)                                      |
 
 That "Python only" is not an omission — it is **fundamental**. A system simulation is *concurrent*: the
 host and the kernel are two independent processes talking over a link. A Vitis C++ testbench is a single

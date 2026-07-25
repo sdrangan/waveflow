@@ -46,6 +46,24 @@ counts:
   checked against. The [Python model](./pymodel.md) page is the reference other tiles
   copy.
 
+## Learning Objectives
+
+In going through this example, you will learn to:
+
+- Move **control itself off the stream and into shared memory** — a command queue (ring
+  buffer with `head` / `tail` pointers) that a free-running accelerator dequeues from
+  over a single `m_axi` master.
+- Model a **complex fixed-point vector-MAC** with three element-wise operations
+  (`scalar_mult`, `inner_prod`, `sum`) plus an optional per-column row reduce.
+- Derive **dependent command formats** (`VmacFormats`) from a `VmacCmd`, and track
+  fixed-point **precision growth** through the datapath down to a single requantize.
+- Write **one author-written golden** (`execute`) that both the SimPy model and the
+  synthesizable kernel are checked against — the one-golden accelerator anatomy.
+- Generate the **`m_axi`-only** synthesizable top that dequeues from the ring and runs
+  `vmac_compute`, with the complex datapath in a hand-written hook.
+- Run the Vitis csim / cosim **conformance matrix**, and study the loosely-timed timing
+  model against a cosim **calibration** (naive → calibrated → RTL).
+
 ## Walkthrough
 
 1. [What we're building](./vmac.md) — the host-driven complex correlation the example
