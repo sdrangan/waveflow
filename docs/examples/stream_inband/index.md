@@ -1,10 +1,9 @@
 ---
 title: Stream In-Band Control (polynomial)
 parent: Examples
-nav_order: 4
+nav_order: 3
 has_children: true
 ---
-
 # Stream In-Band Control (polynomial)
 
 End-to-end Waveflow tutorial for a small polynomial accelerator —
@@ -12,6 +11,22 @@ covering every stage from the Python golden model through RTL cosim
 timing verification.  Every stage downstream of the Python source is
 *derived* and *verified against* the Python golden, which is the
 philosophy this example is meant to teach.
+
+## Learning Objectives
+
+In going through this example, you will learn to:
+
+- **Packetize** a variable-length data stream over **AXI4-Stream**, using `TLAST` to
+  mark transaction boundaries.
+- Carry **control in-band** on the stream — a `PolyCmdHdr` (`DATA` / `END`) header
+  ahead of the samples — instead of in a register map.
+- Model a **persistent-loop** accelerator that processes back-to-back transactions,
+  halts cleanly on an `END` command, and reports errors through the regmap.
+- Build the polynomial golden from schemas + a SimPy protocol simulation, then generate
+  the Vitis kernel **and** testbench from that same Python source.
+- Verify functional parity in Vitis C-sim, estimate resources / II in C-synth, and
+  compare measured RTL cosim cycles against the pysim estimate (±20-cycle tolerance).
+- Analyze **AXI4-Stream handshake timing** from a cosim VCD.
 
 ## The five-group narrative arc
 
@@ -64,12 +79,12 @@ once cosim has run with tracing enabled.
 
 ## Files
 
-| File | What it holds |
-|------|---------------|
-| [`examples/stream_inband/poly.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly.py) | Schemas, `PolyAccelComponent`, `PolyTB` (SimPy), `PolyTBHls` (codegen-source) |
-| [`examples/stream_inband/poly_build.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_build.py) | Build DAG — the five groups above plus step definitions |
-| [`examples/stream_inband/poly_evaluate_impl.tpp`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_evaluate_impl.tpp) | Hand-written Horner evaluation hook (sticky impl) |
-| [`examples/stream_inband/run.tcl`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/run.tcl) | Vitis HLS TCL driver consumed by `CSimStep` / `CSynthStep` |
+| File                                                                                                                                             | What it holds                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| [`examples/stream_inband/poly.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly.py)                               | Schemas,`PolyAccelComponent`, `PolyTB` (SimPy), `PolyTBHls` (codegen-source) |
+| [`examples/stream_inband/poly_build.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_build.py)                   | Build DAG — the five groups above plus step definitions                           |
+| [`examples/stream_inband/poly_evaluate_impl.tpp`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_evaluate_impl.tpp) | Hand-written Horner evaluation hook (sticky impl)                                  |
+| [`examples/stream_inband/run.tcl`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/run.tcl)                               | Vitis HLS TCL driver consumed by`CSimStep` / `CSynthStep`                      |
 
 `gen/` (kernel + TB C++) and `include/` (schema + utility headers) are
 generated artifacts — they are `.gitignored` and rebuilt by the DAG.

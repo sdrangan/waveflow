@@ -1,7 +1,7 @@
 ---
 title: Memory Copy 
 parent: Examples
-nav_order: 3
+nav_order: 5
 has_children: true
 ---
 # Memory Copy — a free-running composite kernel

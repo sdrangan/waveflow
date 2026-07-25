@@ -1,7 +1,7 @@
 ---
 title: Shared Memory (histogram)
 parent: Examples
-nav_order: 5
+nav_order: 4
 has_children: true
 ---
 
@@ -32,6 +32,24 @@ Like the other full examples it walks all five stages — Python model → SimPy
 simulation → code generation → C and RTL simulation → timing extraction — with
 the kernel and testbench generated from the Python `HistAccel` component. It is
 the reference design for AXI-MM (`m_axi`) codegen.
+
+## Learning Objectives
+
+In going through this example, you will learn to:
+
+- Move **bulk data off the control plane and into shared DRAM** over an AXI4
+  memory-mapped (`m_axi`) master, addressed by pointers carried in the command — while
+  control / status stays on a dedicated AXI4-Stream.
+- Drive **multiple distinct buffers** at independent addresses (`data_addr`,
+  `bin_edges_addr`, `cnt_addr`) and **mixed element types** (`Float32` in, `Uint32`
+  out) over **one** `m_axi` bundle.
+- **Validate** command bounds and select an error status into the response *before* any
+  memory access.
+- Use the `MMIFMaster` (`read_array` / `write_array`) interface and the SimPy
+  `MemComponent` harness to reach parity with the numpy golden.
+- Generate the **multi-buffer `m_axi`** kernel + testbench, run the four-case C-sim,
+  C-synth, and RTL cosim, and extract **multi-buffer burst** timing — the reference
+  pattern other `m_axi` designs copy.
 
 ## Walkthrough
 
