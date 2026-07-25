@@ -120,9 +120,13 @@ Bring the interleaver example up to everything learned from memcpy. Interleaver'
   - **Reader fixture landed** (40b6e12): `waveflow/calib/fixtures/mem_r_stream.py` — the mem_r_stream
     residual was never fit (mem_copy is writer-bound); the reader-bound interleaver forced it. Closes the
     pysim↔RTL gap ~10%→~0.7% (273→300 vs RTL 302). Shipped to the tracked platform.
-  - **Still open (build-up pages):** the Python / testbench / codegen / rtlsim pages (nav 2–7) that parallel
-    mem_copy — the timing arc (model→viz→fit) is complete; the earlier construction pages are not yet
-    written.
+  - **Build-up pages DONE** (commit fb99eb5, PR #126): `python` / `testbench` / `codegen_dut` /
+    `codegen_tb` / `rtlsim` (nav 2–6) parallel mem_copy. The interleaver section is complete end to end:
+    `interleaver → python → testbench → codegen_dut → codegen_tb → rtlsim → timing_model → pytiming →
+    rtltiming → timing_fit`. Also added a gated `InterleaverRtlTimingStep` (the RTL-vs-pysim cadence table)
+    + `guide/calib/memstream.md` + `guide/timing/sob.md`.
+
+**MERGED to main — PR #126 (2026-07-25), commit d54cb3b.** Whole overhaul landed.
 
 ## What's shippable vs seeded
 
