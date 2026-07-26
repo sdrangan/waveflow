@@ -8,7 +8,7 @@ from typing import ClassVar
 import pytest
 
 from waveflow.build.hwgen import CodegenCtx, to_cpp
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.hwstmt import (
     CaseStmt,
     ContinueStmt,
@@ -48,7 +48,7 @@ class DemoError(IntEnum):
 
 
 def _ctx() -> CodegenCtx:
-    comp = HwComponent(name='c', sim=Simulation())
+    comp = HwModule(name='c', sim=Simulation())
     return CodegenCtx(comp=comp)
 
 
@@ -160,8 +160,8 @@ class _FakeBoundMethod:
 
 
 def _comp_with_endpoints(**endpoints):
-    """Create a HwComponent and stash endpoints as attributes for vars() lookup."""
-    comp = HwComponent(name='c', sim=Simulation())
+    """Create a HwModule and stash endpoints as attributes for vars() lookup."""
+    comp = HwModule(name='c', sim=Simulation())
     for name, ep in endpoints.items():
         setattr(comp, name, ep)
     return comp
@@ -215,7 +215,7 @@ def test_stream_drain_emits_flush():
 class _FakeParamEndpoint:
     """Stand-in endpoint whose bitwidth is a HwParamValue."""
     def __init__(self, param_name: str, value: int = 32) -> None:
-        from waveflow.hw.hw_component import HwParamValue
+        from waveflow.hw.hw_module import HwParamValue
         self.bitwidth = HwParamValue(value, param_name)
 
 
@@ -359,10 +359,10 @@ def test_function_stmt_with_typed_output():
         inputs=[HwVar(name='cmd', typ=None)],
         outputs=[HwVar(name='err', typ=DemoError)],
     )
-    # _ctx() uses bare HwComponent → cpp_kernel_name "hw" -> namespace "hw_impl".
+    # _ctx() uses bare HwModule → cpp_kernel_name "hw_module" -> namespace "hw_module_impl".
     # IntEnum return types render as ap_uint<8> to match what the hook
     # forward decl actually returns (cpp_type maps IntEnum → ap_uint<8>).
-    assert to_cpp(stmt, _ctx()) == "    ap_uint<8> err = hw_impl::process(cmd);"
+    assert to_cpp(stmt, _ctx()) == "    ap_uint<8> err = hw_module_impl::process(cmd);"
 
 
 def test_function_stmt_no_outputs():
@@ -372,7 +372,7 @@ def test_function_stmt_no_outputs():
         inputs=[HwVar(name='cmd', typ=None)],
         outputs=[],
     )
-    assert to_cpp(stmt, _ctx()) == "    hw_impl::process(cmd);"
+    assert to_cpp(stmt, _ctx()) == "    hw_module_impl::process(cmd);"
 
 
 def test_function_stmt_with_endpoint_arg():
@@ -381,7 +381,7 @@ def test_function_stmt_with_endpoint_arg():
     sim = Simulation()
     s_in = StreamIFSlave(name='s_in_ep', sim=sim, bitwidth=32)
     m_out = StreamIFMaster(name='m_out_ep', sim=sim, bitwidth=32)
-    comp = HwComponent(name='c', sim=sim)
+    comp = HwModule(name='c', sim=sim)
     comp.s_in = s_in
     comp.m_out = m_out
     ctx = CodegenCtx(comp=comp)
@@ -390,13 +390,13 @@ def test_function_stmt_with_endpoint_arg():
         inputs=[HwVar(name='cmd', typ=None), s_in, m_out],
         outputs=[],
     )
-    assert to_cpp(stmt, ctx) == "    hw_impl::process(cmd, s_in, m_out);"
+    assert to_cpp(stmt, ctx) == "    hw_module_impl::process(cmd, s_in, m_out);"
 
 
 def test_function_stmt_opt_out_no_qualifier():
     from waveflow.hw.hwstmt import FunctionStmt
 
-    class _NoNs(HwComponent):
+    class _NoNs(HwModule):
         cpp_namespace: ClassVar[str | None] = ""
 
     sim = Simulation()
@@ -413,7 +413,7 @@ def test_function_stmt_opt_out_no_qualifier():
 def test_function_stmt_custom_namespace():
     from waveflow.hw.hwstmt import FunctionStmt
 
-    class _CustomNs(HwComponent):
+    class _CustomNs(HwModule):
         cpp_namespace: ClassVar[str | None] = "custom"
 
     sim = Simulation()
@@ -515,26 +515,26 @@ def test_snake_case_helper():
 
 def test_cpp_kernel_name_demo():
     from waveflow.build.hwgen import cpp_kernel_name
-    from tests.hw.test_resolve import DemoComponent
-    assert cpp_kernel_name(DemoComponent) == "demo"
+    from tests.hw.test_resolve import Demo
+    assert cpp_kernel_name(Demo) == "demo"
 
 
 def test_cpp_kernel_name_poly_accel_uses_override():
-    """``PolyAccelComponent`` overrides ``cpp_kernel_name`` to ``"poly"``."""
+    """``PolyAccel`` overrides ``cpp_kernel_name`` to ``"poly"``."""
     from waveflow.build.hwgen import cpp_kernel_name
     import sys
     from pathlib import Path
     POLY_DIR = Path(__file__).resolve().parents[2] / "examples" / "stream_inband"
     if str(POLY_DIR) not in sys.path:
         sys.path.insert(0, str(POLY_DIR))
-    from poly import PolyAccelComponent
-    assert cpp_kernel_name(PolyAccelComponent) == "poly"
+    from poly import PolyAccel
+    assert cpp_kernel_name(PolyAccel) == "poly"
 
 
 def test_cpp_kernel_name_override():
     from waveflow.build.hwgen import cpp_kernel_name
 
-    class _Overridden(HwComponent):
+    class _Overridden(HwModule):
         cpp_kernel_name: ClassVar[str | None] = "my_custom_name"
 
     assert cpp_kernel_name(_Overridden) == "my_custom_name"
@@ -555,15 +555,15 @@ def test_resolved_namespace_default_is_kernel_name_plus_impl():
     been used with a hook.
     """
     from waveflow.build.hwgen import cpp_kernel_name, resolved_namespace
-    from tests.hw.test_resolve import DemoComponent
-    assert resolved_namespace(DemoComponent) == "demo_impl"
-    assert resolved_namespace(DemoComponent) != cpp_kernel_name(DemoComponent)
+    from tests.hw.test_resolve import Demo
+    assert resolved_namespace(Demo) == "demo_impl"
+    assert resolved_namespace(Demo) != cpp_kernel_name(Demo)
 
 
 def test_resolved_namespace_explicit_string():
     from waveflow.build.hwgen import resolved_namespace
 
-    class _NsCustom(HwComponent):
+    class _NsCustom(HwModule):
         cpp_namespace: ClassVar[str | None] = "custom"
 
     assert resolved_namespace(_NsCustom) == "custom"
@@ -572,7 +572,7 @@ def test_resolved_namespace_explicit_string():
 def test_resolved_namespace_empty_opts_out():
     from waveflow.build.hwgen import resolved_namespace
 
-    class _NsOptOut(HwComponent):
+    class _NsOptOut(HwModule):
         cpp_namespace: ClassVar[str | None] = ""
 
     assert resolved_namespace(_NsOptOut) is None
@@ -581,10 +581,10 @@ def test_resolved_namespace_empty_opts_out():
 def test_resolved_namespace_explicit_none_is_auto():
     from waveflow.build.hwgen import resolved_namespace
 
-    class _NsAuto(HwComponent):
+    class _NsAuto(HwModule):
         cpp_namespace: ClassVar[str | None] = None
 
-    # Auto-derives from cpp_kernel_name (default of HwComponent name is "hw"), with
+    # Auto-derives from cpp_kernel_name (default of HwModule name is "hw"), with
     # `_impl` appended so the namespace cannot collide with the kernel function itself.
     assert resolved_namespace(_NsAuto) == f"{cpp_kernel_name_for(_NsAuto)}_impl"
 
@@ -597,7 +597,7 @@ def cpp_kernel_name_for(cls):
 def test_resolved_namespace_independent_from_kernel_name_override():
     from waveflow.build.hwgen import cpp_kernel_name, resolved_namespace
 
-    class _Both(HwComponent):
+    class _Both(HwModule):
         cpp_namespace: ClassVar[str | None] = "alpha"
         cpp_kernel_name: ClassVar[str | None] = "beta"
 
@@ -628,7 +628,7 @@ def _hook_with_stream(
 
 
 @_dataclass
-class _TmplComp(HwComponent):
+class _TmplComp(HwModule):
     """Component whose synthesizable hook takes a stream arg (triggers templating)."""
 
     cpp_kernel_name: ClassVar[str | None] = "tcomp"
@@ -726,9 +726,9 @@ def test_kernel_signature_demo_component():
     """Concrete top-level kernel: no ``template <...>`` block, literal
     bitwidths in the stream type expressions."""
     from waveflow.build.hwgen import kernel_signature
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     sig = kernel_signature(comp)
     expected_substrings = [
         "void demo(",
@@ -767,7 +767,7 @@ def test_kernel_signature_raises_on_name_collision():
     )
 
     @dataclass
-    class _CollidingComp(HwComponent):
+    class _CollidingComp(HwModule):
         # 'halted' clashes with the regmap field name below.
         halted: HwParam[int] = 32
 
@@ -797,9 +797,9 @@ def test_kernel_signature_raises_on_name_collision():
 
 def test_header_to_cpp_demo_component_substrings():
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     hpp = header_to_cpp(type(comp))
 
     for sub in [
@@ -823,9 +823,9 @@ def test_header_to_cpp_demo_component_substrings():
 
 def test_header_to_cpp_forward_decl_has_no_pragmas():
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     hpp = header_to_cpp(type(comp))
     # The .hpp must NOT include any HLS pragmas — those live in the .cpp.
     assert "#pragma HLS" not in hpp
@@ -837,9 +837,9 @@ def test_header_to_cpp_forward_decl_has_no_pragmas():
 
 def test_kernel_to_cpp_substrings():
     from waveflow.build.hwgen import kernel_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     cpp = kernel_to_cpp(type(comp))
 
     for sub in [
@@ -861,10 +861,10 @@ def test_kernel_to_cpp_emits_one_kernel_per_variant():
     from typing import Any, ClassVar
 
     from waveflow.build.hwgen import kernel_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
     @dataclass
-    class _VariantDemo(DemoComponent):
+    class _VariantDemo(Demo):
         cpp_kernel_name: ClassVar[str | None] = "vdemo"
         param_supports: ClassVar[dict[str, dict[str, Any]] | None] = {
             "bw64": {"in_bw": 64, "out_bw": 64},
@@ -886,10 +886,10 @@ def test_header_to_cpp_emits_one_forward_decl_per_variant():
     from typing import Any, ClassVar
 
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
     @dataclass
-    class _VariantDemoH(DemoComponent):
+    class _VariantDemoH(Demo):
         cpp_kernel_name: ClassVar[str | None] = "vh"
         param_supports: ClassVar[dict[str, dict[str, Any]] | None] = {
             "bw64": {"in_bw": 64, "out_bw": 64},
@@ -905,9 +905,9 @@ def test_header_to_cpp_emits_one_forward_decl_per_variant():
 def test_impl_stub_to_cpp_substrings():
     from waveflow.build.hwcodegen import extract_kernel
     from waveflow.build.hwgen import _collect_hooks, impl_stub_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     tree = extract_kernel(comp)
     hooks = _collect_hooks(tree)
     assert len(hooks) == 1
@@ -929,10 +929,10 @@ def test_header_to_cpp_opt_out_emits_no_namespace_block():
     from typing import ClassVar
     from dataclasses import dataclass
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
     @dataclass
-    class _OptOutDemo(DemoComponent):
+    class _OptOutDemo(Demo):
         cpp_namespace: ClassVar[str | None] = ""
 
     comp = _OptOutDemo(name="optout", sim=Simulation())
@@ -947,10 +947,10 @@ def test_impl_stub_to_cpp_opt_out_emits_no_namespace_block():
     from dataclasses import dataclass
     from waveflow.build.hwcodegen import extract_kernel
     from waveflow.build.hwgen import _collect_hooks, impl_stub_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
     @dataclass
-    class _OptOutDemo(DemoComponent):
+    class _OptOutDemo(Demo):
         cpp_namespace: ClassVar[str | None] = ""
 
     comp = _OptOutDemo(name="optout", sim=Simulation())
@@ -965,10 +965,10 @@ def test_header_to_cpp_custom_namespace():
     from typing import ClassVar
     from dataclasses import dataclass
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
     @dataclass
-    class _CustomNsDemo(DemoComponent):
+    class _CustomNsDemo(Demo):
         cpp_namespace: ClassVar[str | None] = "custom"
 
     comp = _CustomNsDemo(name="cn", sim=Simulation())
@@ -981,10 +981,10 @@ def test_impl_stub_to_cpp_custom_namespace():
     from dataclasses import dataclass
     from waveflow.build.hwcodegen import extract_kernel
     from waveflow.build.hwgen import _collect_hooks, impl_stub_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
     @dataclass
-    class _CustomNsDemo(DemoComponent):
+    class _CustomNsDemo(Demo):
         cpp_namespace: ClassVar[str | None] = "custom"
 
     comp = _CustomNsDemo(name="cn", sim=Simulation())
@@ -996,9 +996,9 @@ def test_impl_stub_to_cpp_custom_namespace():
 
 def test_kernel_files_to_str_keys():
     from waveflow.build.hwgen import kernel_files_to_str
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     files = kernel_files_to_str(type(comp))
     assert set(files.keys()) == {
         "demo.hpp",
@@ -1009,10 +1009,10 @@ def test_kernel_files_to_str_keys():
 
 def test_kernel_body_to_cpp_demo_component_contains_expected_substrings():
     from waveflow.build.hwgen import kernel_body_to_cpp
-    # Reuse the DemoComponent fixture from tests/hw/test_resolve.py.
-    from tests.hw.test_resolve import DemoComponent
+    # Reuse the Demo fixture from tests/hw/test_resolve.py.
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     body = kernel_body_to_cpp(comp)
 
     expected = [
@@ -1082,7 +1082,7 @@ def test_hook_template_params_hwvar_only_inputs():
 
 def test_hook_template_params_single_param_endpoint():
     from waveflow.build.hwgen import hook_template_params
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt
     ep = _stream_endpoint("s_in_ep", HwParamValue(32, "in_bw"))
     stmt = FunctionStmt(
@@ -1095,7 +1095,7 @@ def test_hook_template_params_single_param_endpoint():
 
 def test_hook_template_params_two_endpoints_same_param_dedupes():
     from waveflow.build.hwgen import hook_template_params
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt
     bw = HwParamValue(32, "in_bw")
     e1 = _stream_endpoint("a", bw)
@@ -1106,7 +1106,7 @@ def test_hook_template_params_two_endpoints_same_param_dedupes():
 
 def test_hook_template_params_two_endpoints_different_params():
     from waveflow.build.hwgen import hook_template_params
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt
     e1 = _stream_endpoint("a", HwParamValue(32, "in_bw"))
     e2 = _stream_endpoint("b", HwParamValue(64, "out_bw"), slave=False)
@@ -1116,7 +1116,7 @@ def test_hook_template_params_two_endpoints_different_params():
 
 def test_hook_template_params_raw_int_endpoint_skipped():
     from waveflow.build.hwgen import hook_template_params
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt
     raw = _stream_endpoint("raw", 32)
     param = _stream_endpoint("p", HwParamValue(32, "in_bw"))
@@ -1126,7 +1126,7 @@ def test_hook_template_params_raw_int_endpoint_skipped():
 
 def test_validate_single_call_site_single_site_ok():
     from waveflow.build.hwgen import _validate_single_call_site
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt, SeqStmt
     method = _FakeMethod("h")
     ep = _stream_endpoint("a", HwParamValue(32, "in_bw"))
@@ -1138,7 +1138,7 @@ def test_validate_single_call_site_single_site_ok():
 
 def test_validate_single_call_site_consistent_ok():
     from waveflow.build.hwgen import _validate_single_call_site
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt, SeqStmt
     method = _FakeMethod("h")
     ep = _stream_endpoint("a", HwParamValue(32, "in_bw"))
@@ -1185,7 +1185,7 @@ def test_hook_signature_str_with_two_template_params():
 def test_validate_single_call_site_inconsistent_raises():
     from waveflow.build.hwcodegen import SynthesisError
     from waveflow.build.hwgen import _validate_single_call_site
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.hwstmt import FunctionStmt, SeqStmt
     method = _FakeMethod("h")
     e1 = _stream_endpoint("a", HwParamValue(32, "in_bw"))
@@ -1203,11 +1203,11 @@ def test_validate_single_call_site_inconsistent_raises():
 # ---------------------------------------------------------------------------
 
 def test_header_to_cpp_non_templated_hook_no_tpp_include():
-    """DemoComponent's process hook (no stream args) keeps the existing shape."""
+    """Demo's process hook (no stream args) keeps the existing shape."""
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     hpp = header_to_cpp(type(comp))
     assert "ap_uint<8> process(DemoCmdHdr cmd);" in hpp
     # No tpp include for a non-templated hook.
@@ -1290,11 +1290,11 @@ def test_kernel_files_to_str_uses_tpp_for_templated_hook():
 
 
 def test_kernel_files_to_str_uses_cpp_for_non_templated_hook():
-    """DemoComponent's process hook has no stream args, so still .cpp."""
+    """Demo's process hook has no stream args, so still .cpp."""
     from waveflow.build.hwgen import kernel_files_to_str
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     files = kernel_files_to_str(type(comp))
     assert "demo_process_impl.cpp" in files
     assert "demo_process_impl.tpp" not in files
@@ -1328,7 +1328,7 @@ def test_kernel_signature_raw_array_regmap_field():
     """A regmap field with cpp_storage='raw' emits '<elem> <name>[<count>]' in signature."""
     from waveflow.build.hwgen import kernel_signature
     from waveflow.hw.dataschema import DataArray, FloatField
-    from waveflow.hw.hw_component import HwComponent
+    from waveflow.hw.hw_module import HwModule
     from waveflow.hw.regmap import Bit, RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
     from waveflow.simulation.simulation import Simulation
 
@@ -1337,7 +1337,7 @@ def test_kernel_signature_raw_array_regmap_field():
         element_type=Float32, max_shape=(4,), static=True, cpp_storage="raw"
     )
 
-    class _RawArrayComp(HwComponent):
+    class _RawArrayComp(HwModule):
         def __post_init__(self):
             super().__post_init__()
             self.regmap = VitisRegMap({
@@ -1407,7 +1407,7 @@ def _seq_with_hook(method):
 
 
 def _bare_comp():
-    return HwComponent(name="c", sim=Simulation())
+    return HwModule(name="c", sim=Simulation())
 
 
 def test_collect_schemas_picks_up_hook_arg_schema():
@@ -1443,11 +1443,11 @@ def test_collect_schemas_mixed_hook_args():
 
 def test_header_no_array_schemas_emits_no_utility_includes():
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     hpp = header_to_cpp(type(comp))
-    # DemoComponent has no DataArray fields → no array_utils include line.
+    # Demo has no DataArray fields → no array_utils include line.
     assert "_array_utils.h" not in hpp
 
 
@@ -1470,7 +1470,7 @@ def test_header_data_array_field_emits_utility_include():
         max_shape = (4,)
 
     @dataclass
-    class _ArrComp(HwComponent):
+    class _ArrComp(HwModule):
         cpp_kernel_name: ClassVar[str | None] = "arrk"
         in_bw: HwParam[int] = 32
 
@@ -1530,7 +1530,7 @@ def test_header_omits_streamutils_for_regmap_only_component():
     Int32 = _IntField.specialize(bitwidth=32, signed=True)
 
     @_dataclass
-    class _RegMapOnly(HwComponent):
+    class _RegMapOnly(HwModule):
         cpp_kernel_name: ClassVar[str | None] = "rmonly"
 
         def __post_init__(self) -> None:
@@ -1561,9 +1561,9 @@ def test_header_includes_streamutils_for_stream_using_component():
     streamutils_hls.h include — guards against regressing the fix.
     """
     from waveflow.build.hwgen import header_to_cpp
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
 
-    comp = DemoComponent(name="demo", sim=Simulation())
+    comp = Demo(name="demo", sim=Simulation())
     hpp = header_to_cpp(type(comp))
     assert '#include "include/streamutils_hls.h"' in hpp
 
@@ -1578,7 +1578,7 @@ _S32_PH3 = _IntField.specialize(bitwidth=32, signed=True)
 
 
 @_dataclass
-class _InlineGetComp(HwComponent):
+class _InlineGetComp(HwModule):
     """``on_start`` reads regmap fields inline as a call argument, and
     assigns the compute result into a local whose name matches the
     output regmap field. Both patterns must lower cleanly to C++.

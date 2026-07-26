@@ -5,10 +5,10 @@ A ``HostActivated`` is the **invocation** execution model: it carries a
 :meth:`on_start` — one run per trigger (``ap_ctrl_hs``: the ``ap_start``/``ap_done`` handshake). The
 kernel reads its inputs from the register map, computes, writes results, and returns. This is the
 model ``poly`` / ``simp_fun`` use; ``HostActivated`` makes it an explicit, **class-dispatched** kind
-instead of a plain :class:`~waveflow.hw.hw_component.HwComponent` reaching ``on_start`` only through a
+instead of a plain :class:`~waveflow.hw.hw_module.HwModule` reaching ``on_start`` only through a
 regmap fallback.
 
-It is a :class:`~waveflow.hw.hw_component.HwComponent` that declares ``_kernel_method = 'on_start'``.
+It is a :class:`~waveflow.hw.hw_module.HwModule` that declares ``_kernel_method = 'on_start'``.
 Codegen dispatch is by class (:func:`~waveflow.build.codegen_dispatch.codegen_path`): a
 ``HostActivated`` lowers ``on_start`` as its kernel body. See ``plans/exec_model_classes.md`` and
 ``docs/guide/components/taxonomy.md``.
@@ -19,24 +19,24 @@ from abc import abstractmethod
 from typing import Any, ClassVar
 
 from waveflow.hw.codegen_targets import CONTROL_DRIVEN_KERNEL
-from waveflow.hw.hw_component import ControlMode, HwComponent
+from waveflow.hw.hw_module import ControlMode, HwModule
 from waveflow.simulation.simobj import ProcessGen
 
 
-class HostActivated(HwComponent):
+class HostActivated(HwModule):
     """A host-activated (regmap-launched) synthesizable leaf: implement :meth:`on_start`.
 
     Contract:
 
     - Carries a :class:`~waveflow.hw.regmap.VitisRegMapMMIFSlave` (the ``ap_start``/``ap_done`` +
       register file). This is the *defining* property; because a component's endpoints are populated
-      by the subclass ``__post_init__`` **after** the ``HwComponent`` super-chain runs (the same
-      construction-ordering limit a composite :class:`~waveflow.hw.hw_freerun.FreeRunComp` hits with
+      by the subclass ``__post_init__`` **after** the ``HwModule`` super-chain runs (the same
+      construction-ordering limit a composite :class:`~waveflow.hw.hw_freerun.FreeRunMod` hits with
       its children), it is not construction-checked here — it is enforced by the codegen path (a kernel
       with no regmap emits no ``s_axilite`` control interface).
     - Implements :meth:`on_start` — the entry the codegen path lowers as the kernel body.
     - Must **not** define ``run_iter`` — that is a *free-running* leaf's entry
-      (:class:`~waveflow.hw.hw_freerun.FreeRunComp`); a host-activated leaf runs once per trigger, not
+      (:class:`~waveflow.hw.hw_freerun.FreeRunMod`); a host-activated leaf runs once per trigger, not
       continuously. Enforced at class-definition time (:meth:`__init_subclass__`).
     """
 
@@ -65,12 +65,12 @@ class HostActivated(HwComponent):
         super().__init_subclass__(**kwargs)
         # Class-level contract: a host-activated leaf runs once per trigger, so it must not carry a
         # free-running `run_iter`. HostActivated itself has no run_iter, so a truthy lookup means a
-        # subclass added one. (Mirrors the FreeRunComp body-XOR-children check.)
+        # subclass added one. (Mirrors the FreeRunMod body-XOR-children check.)
         if getattr(cls, 'run_iter', None) is not None:
             raise TypeError(
                 f"{cls.__name__} is a HostActivated but defines run_iter(); a host-activated leaf "
                 f"runs once per trigger (on_start), not continuously. Implement on_start(), or derive "
-                f"from FreeRunComp instead."
+                f"from FreeRunMod instead."
             )
 
     @abstractmethod

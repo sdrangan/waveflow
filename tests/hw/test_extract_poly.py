@@ -1,10 +1,10 @@
-"""End-to-end extractor tests targeting the PolyAccelComponent kernel."""
+"""End-to-end extractor tests targeting the PolyAccel kernel."""
 from __future__ import annotations
 
 import pytest
 
 from waveflow.build.hwcodegen import HwStmtExtractor, SynthesisError
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.hwstmt import (
     CaseStmt,
     FunctionStmt,
@@ -43,7 +43,7 @@ def _make_comp(comp_cls):
 # Phase 1: ReturnStmt
 # ---------------------------------------------------------------------------
 
-class _ReturnInIfComp(HwComponent):
+class _ReturnInIfComp(HwModule):
     def run_proc(self):
         while True:
             x = yield from self.ep.get()
@@ -62,7 +62,7 @@ def test_return_inside_if_body():
     assert first_in_branch.value is None
 
 
-class _ReturnAtTopComp(HwComponent):
+class _ReturnAtTopComp(HwModule):
     def run_proc(self):
         while True:
             yield from self.ep.get()
@@ -81,7 +81,7 @@ def test_return_at_top_of_while():
 # Phase 2: != in CaseStmt
 # ---------------------------------------------------------------------------
 
-class _NotEqIfComp(HwComponent):
+class _NotEqIfComp(HwModule):
     def run_proc(self):
         while True:
             x = yield from self.ep.get()
@@ -97,7 +97,7 @@ def test_case_stmt_not_eq_op():
     assert case_stmt.op == '!='
 
 
-class _EqIfComp(HwComponent):
+class _EqIfComp(HwModule):
     def run_proc(self):
         while True:
             x = yield from self.ep.get()
@@ -128,7 +128,7 @@ def test_extract_kernel_no_regmap_uses_run_proc():
 # Phase 4: No-implicit-capture rule
 # ---------------------------------------------------------------------------
 
-class _CaptureProcLatencyComp(HwComponent):
+class _CaptureProcLatencyComp(HwModule):
     proc_latency: int = 10
 
     def run_proc(self):
@@ -150,7 +150,7 @@ class _SimOnlyLoggerStub:
         pass
 
 
-class _SimOnlyCallComp(HwComponent):
+class _SimOnlyCallComp(HwModule):
     def run_proc(self):
         while True:
             self.logger.log(event='proc_begin')
@@ -169,7 +169,7 @@ def test_sim_only_chain_does_not_raise():
     assert len(tree.body.stmts) == 2
 
 
-class _SynthEndpointCallComp(HwComponent):
+class _SynthEndpointCallComp(HwModule):
     def run_proc(self):
         while True:
             x = yield from self.ep.get()
@@ -192,7 +192,7 @@ def test_regmap_set_produces_regmap_set_stmt():
         RegAccess, RegField, RegMapSetStmt, VitisRegMap,
     )
 
-    class _RegMapWriteComp(HwComponent):
+    class _RegMapWriteComp(HwModule):
         def __post_init__(self):
             super().__post_init__()
             self.regmap = VitisRegMap({
@@ -227,7 +227,7 @@ def test_regmap_get_produces_regmap_get_stmt():
         RegAccess, RegField, RegMapGetStmt, VitisRegMap,
     )
 
-    class _RegMapReadComp(HwComponent):
+    class _RegMapReadComp(HwModule):
         def __post_init__(self):
             super().__post_init__()
             self.regmap = VitisRegMap({
@@ -256,7 +256,7 @@ def test_regmap_get_produces_regmap_get_stmt():
 # Phase 6: FunctionStmt for user-written @synthesizable methods
 # ---------------------------------------------------------------------------
 
-class _UserMethodComp(HwComponent):
+class _UserMethodComp(HwModule):
     @synthesizable
     def evaluate(self, x):
         yield None
@@ -278,7 +278,7 @@ def test_user_method_produces_function_stmt():
     assert eval_stmt.impl_file is None
 
 
-class _UserMethodImplFileComp(HwComponent):
+class _UserMethodImplFileComp(HwModule):
     @synthesizable(impl_file="custom.cpp")
     def evaluate(self, x):
         yield None
@@ -302,7 +302,7 @@ def test_user_method_impl_file_propagates():
 def test_user_method_inputs_resolve_endpoint_reference():
     from waveflow.hw.interface import StreamIFSlave
 
-    class _UserMethodWithEndpointComp(HwComponent):
+    class _UserMethodWithEndpointComp(HwModule):
         def __post_init__(self):
             super().__post_init__()
             self.s_in = StreamIFSlave(
@@ -340,7 +340,7 @@ def test_extract_kernel_with_regmap_uses_on_start():
         Bit, RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave,
     )
 
-    class _RegMapComp(HwComponent):
+    class _RegMapComp(HwModule):
         def __post_init__(self):
             super().__post_init__()
             self.s_in = StreamIFSlave(
@@ -375,7 +375,7 @@ def test_extract_kernel_with_regmap_uses_on_start():
 
 
 # ---------------------------------------------------------------------------
-# Phase 7: End-to-end extraction of PolyAccelComponent.on_start
+# Phase 7: End-to-end extraction of PolyAccel.on_start
 # ---------------------------------------------------------------------------
 
 def _ensure_poly_on_path():
@@ -388,12 +388,12 @@ def _ensure_poly_on_path():
 
 def test_extract_poly_accel_on_start():
     _ensure_poly_on_path()
-    from poly import PolyAccelComponent
+    from poly import PolyAccel
     from waveflow.build.hwcodegen import extract_kernel
     from waveflow.hw.interface import StreamGetStmt
     from waveflow.hw.regmap import RegMapGetStmt, RegMapSetStmt
 
-    comp = PolyAccelComponent(name='p', sim=Simulation())
+    comp = PolyAccel(name='p', sim=Simulation())
     tree = extract_kernel(comp)
 
     # Top level: WhileStmt with a SeqStmt body
@@ -425,15 +425,15 @@ def test_extract_poly_accel_on_start():
 
 
 def test_extract_poly_accel_no_implicit_capture_violation():
-    """Cloning PolyAccelComponent and adding a self.proc_latency read in
+    """Cloning PolyAccel and adding a self.proc_latency read in
     on_start must raise SynthesisError mentioning proc_latency."""
     _ensure_poly_on_path()
     from poly import (
-        PolyAccelComponent, PolyCmdHdr, PolyCmdType, PolyError,
+        PolyAccel, PolyCmdHdr, PolyCmdType, PolyError,
     )
     from waveflow.build.hwcodegen import extract_kernel
 
-    class _BadPolyAccel(PolyAccelComponent):
+    class _BadPolyAccel(PolyAccel):
         def on_start(self):
             while True:
                 cmd_hdr = yield from self.s_in.get(PolyCmdHdr)

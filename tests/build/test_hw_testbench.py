@@ -1,6 +1,6 @@
 """Tests for the ``HwTestbench`` class and testbench-mode extractor.
 
-Phase 14 of the HwComponent codegen project introduces a separate codegen
+Phase 14 of the HwModule codegen project introduces a separate codegen
 source for testbench C++.  Phase 1 (this file) covers the wiring: the new
 ``HwTestbench`` class, its ``main()`` placeholder, and the
 ``extract_kernel`` routing that dispatches testbench subclasses through
@@ -30,21 +30,21 @@ pytestmark = pytest.mark.phase1
 
 def test_seqtb_is_a_named_object_not_a_hwcomponent():
     """``SeqTB`` is a sim-less :class:`NamedObject` — a program that drives a kernel, **not** a
-    ``HwComponent``/``SimObj`` hardware object.  ``HwTestbench`` is a deprecated alias of ``SeqTB``."""
-    from waveflow.hw.hw_component import HwComponent
+    ``HwModule``/``SimObj`` hardware object.  ``HwTestbench`` is a deprecated alias of ``SeqTB``."""
+    from waveflow.hw.hw_module import HwModule
     from waveflow.named import NamedObject
     assert issubclass(SeqTB, NamedObject)
-    assert not issubclass(SeqTB, HwComponent)
+    assert not issubclass(SeqTB, HwModule)
     assert HwTestbench is SeqTB
 
 
 def test_hw_testbench_marker_is_set():
     """The codegen routing dispatches on the ``_is_testbench`` class
-    marker.  Subclasses inherit ``True``; ``HwComponent`` proper does not
+    marker.  Subclasses inherit ``True``; ``HwModule`` proper does not
     have the marker set."""
-    from waveflow.hw.hw_component import HwComponent
+    from waveflow.hw.hw_module import HwModule
     assert getattr(HwTestbench, '_is_testbench', False) is True
-    assert getattr(HwComponent, '_is_testbench', False) is False
+    assert getattr(HwModule, '_is_testbench', False) is False
 
 
 def test_base_main_raises_not_implemented():
@@ -124,9 +124,9 @@ def test_hls_codegen_step_auto_detects_testbench_mode():
     )
     assert step._is_testbench is True
     # Kernel-mode component stays in kernel mode.
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
     kernel_step = HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="demo_src",
         output_dir="gen",
     )
@@ -137,9 +137,9 @@ def test_hls_codegen_step_auto_detects_testbench_mode():
 def test_hls_codegen_step_explicit_is_testbench_override():
     """``is_testbench=True`` forces TB mode even on a non-marker class."""
     from waveflow.build.hwcodegen_steps import HlsCodegenStep
-    from tests.hw.test_resolve import DemoComponent
+    from tests.hw.test_resolve import Demo
     step = HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="x",
         output_dir="gen",
         is_testbench=True,
@@ -192,12 +192,12 @@ def test_tb_files_to_str_returns_single_file():
 # Phase 3 — DUT binding + dut.run() lowering
 # ---------------------------------------------------------------------------
 
-from examples.stream_inband.poly import PolyAccelComponent
+from examples.stream_inband.poly import PolyAccel
 
 
 @dataclass
 class _PolyTBPhase3(HwTestbench):
-    """Minimal Phase-3 fixture: bind a PolyAccelComponent DUT and call run().
+    """Minimal Phase-3 fixture: bind a PolyAccel DUT and call run().
 
     Exercises the two IR nodes added in Phase 3 — ``DutBindStmt`` and
     ``KernelCallStmt`` — and the corresponding emitter logic in
@@ -208,13 +208,13 @@ class _PolyTBPhase3(HwTestbench):
     cpp_kernel_name: ClassVar[str | None] = "poly"
 
     def main(self) -> None:
-        dut = PolyAccelComponent()
+        dut = PolyAccel()
         dut.run()
 
 
 @pytest.mark.phase3
 def test_phase3_extractor_produces_dut_bind_and_kernel_call():
-    """The TB-mode extractor turns ``dut = PolyAccelComponent()`` + ``dut.run()``
+    """The TB-mode extractor turns ``dut = PolyAccel()`` + ``dut.run()``
     into a SeqStmt of [DutBindStmt, KernelCallStmt]."""
     from waveflow.build.hwcodegen import extract_testbench
     from waveflow.hw.hwstmt import DutBindStmt, KernelCallStmt
@@ -225,7 +225,7 @@ def test_phase3_extractor_produces_dut_bind_and_kernel_call():
     bind, call = tree.stmts
     assert isinstance(bind, DutBindStmt)
     assert bind.local_name == 'dut'
-    assert bind.comp_class is PolyAccelComponent
+    assert bind.comp_class is PolyAccel
     assert bind.kwargs == {}
     assert isinstance(call, KernelCallStmt)
     assert call.local_name == 'dut'
@@ -263,7 +263,7 @@ def test_phase3_rejects_positional_dut_args():
         cpp_kernel_name: ClassVar[str | None] = "poly"
 
         def main(self) -> None:
-            dut = PolyAccelComponent("bad")  # noqa: F841
+            dut = PolyAccel("bad")  # noqa: F841
             dut.run()
 
     tb = _BadPositionalTB(name='tb')
@@ -274,7 +274,7 @@ def test_phase3_rejects_positional_dut_args():
 @pytest.mark.phase3
 def test_phase3_dut_run_with_args_is_rejected():
     """``dut.run(...)`` with positional args is rejected.  (The only accepted
-    keyword is ``mem=<MemComponent local>`` for m_axi kernels — see the AXI-MM
+    keyword is ``mem=<MemModel local>`` for m_axi kernels — see the AXI-MM
     codegen plan decision 9.)"""
     from waveflow.build.hwcodegen import SynthesisError, extract_testbench
 
@@ -283,7 +283,7 @@ def test_phase3_dut_run_with_args_is_rejected():
         cpp_kernel_name: ClassVar[str | None] = "poly"
 
         def main(self) -> None:
-            dut = PolyAccelComponent()
+            dut = PolyAccel()
             dut.run(42)
 
     tb = _BadRunArgsTB(name='tb')
@@ -315,7 +315,7 @@ class _PolyTBPhase4(HwTestbench):
     cpp_kernel_name: ClassVar[str | None] = "poly"
 
     def main(self) -> None:
-        dut = PolyAccelComponent()
+        dut = PolyAccel()
 
         dut.regmap.read_uint32_file_array(
             "coeffs", self.data_dir + "/coeffs.bin", count=4)
@@ -430,7 +430,7 @@ def test_phase4_extractor_unknown_method_raises():
         cpp_kernel_name: ClassVar[str | None] = "poly"
 
         def main(self) -> None:
-            dut = PolyAccelComponent()
+            dut = PolyAccel()
             data_hdr = PolyCmdHdr()
             data_hdr.bogus_method("foo")
             dut.run()
@@ -450,7 +450,7 @@ def test_phase4_count_kwarg_required_for_array_ops():
         cpp_kernel_name: ClassVar[str | None] = "poly"
 
         def main(self) -> None:
-            dut = PolyAccelComponent()
+            dut = PolyAccel()
             samp_in = SampArray()
             samp_in.read_uint32_file_array(self.data_dir + "/x.bin")
             dut.run()
@@ -484,7 +484,7 @@ from dataclasses import dataclass as _dc
 from typing import ClassVar as _CV
 
 from waveflow.hw.dataschema import IntField as _IntField
-from waveflow.hw.hw_component import HwComponent as _HwComp
+from waveflow.hw.hw_module import HwModule as _HwComp
 from waveflow.hw.regmap import (
     RegAccess as _RA,
     RegField as _RF,
@@ -602,9 +602,9 @@ def test_write_status_json_filter_emits_debug_log():
 # twin byte-for-byte.
 # ---------------------------------------------------------------------------
 
-from examples.regmap.simp_fun import SimpFunComponent, SimpFunTBHls  # noqa: E402
+from examples.regmap.simp_fun import SimpFun, SimpFunTBHls  # noqa: E402
 from examples.stream_inband.poly import (  # noqa: E402
-    PolyAccelComponent as _PolyAccel,
+    PolyAccel as _PolyAccel,
     PolyCmdHdr as _PolyCmdHdr,
     PolyRespHdr as _PolyRespHdr,
     PolyTBHls as _PolyTBHls,
@@ -622,7 +622,7 @@ class _SimpFunTBProc(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self):  # type: ignore[override]
-        dut = SimpFunComponent()
+        dut = SimpFun()
         dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
         dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
         dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
@@ -744,7 +744,7 @@ class _SimpFunTBRoundTrip(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self):  # type: ignore[override]
-        dut = SimpFunComponent()
+        dut = SimpFun()
         dut.regmap.read_uint32_file("x", self.data_dir + "/x.bin")
         dut.regmap.read_uint32_file("a", self.data_dir + "/a.bin")
         dut.regmap.read_uint32_file("b", self.data_dir + "/b.bin")
@@ -785,7 +785,7 @@ def test_file_read_local_must_name_an_input_field():
         cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
         def main(self):  # type: ignore[override]
-            dut = SimpFunComponent()
+            dut = SimpFun()
             z = _Int32().read_uint32_file(self.data_dir + "/z.bin")
             yield from dut.run_once_sim(z, z, z)
 
@@ -802,7 +802,7 @@ def test_file_read_local_cannot_name_an_output_field():
         cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
         def main(self):  # type: ignore[override]
-            dut = SimpFunComponent()
+            dut = SimpFun()
             y = _Int32().read_uint32_file(self.data_dir + "/y.bin")
             yield from dut.run_once_sim(y, y, y)
 
@@ -820,7 +820,7 @@ def test_file_read_schema_must_match_the_field():
         cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
         def main(self):  # type: ignore[override]
-            dut = SimpFunComponent()
+            dut = SimpFun()
             x = _Uint8().read_uint32_file(self.data_dir + "/x.bin")
             yield from dut.run_once_sim(x, x, x)
 

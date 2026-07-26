@@ -8,7 +8,7 @@ import pytest
 
 from examples.stream_inband.poly import (
     Float32,
-    PolyAccelComponent,
+    PolyAccel,
     PolyCmdHdr,
     PolyCmdType,
     PolyError,
@@ -95,7 +95,7 @@ def test_poly_timing_bandwidth_and_unroll(tmp_path: Path) -> None:
       Expected duration ≈ (nsamp/uf + proc_latency) cycles ≈ half of case 1.
     """
     nsamp = 100
-    proc_latency = 40  # matches PolyAccelComponent default (cosim-calibrated)
+    proc_latency = 40  # matches PolyAccel default (cosim-calibrated)
     period = 1.0 / _CLK_FREQ
 
     configs = [
@@ -158,7 +158,7 @@ def test_poly_timing_bandwidth_and_unroll(tmp_path: Path) -> None:
     )
 
 
-class _FailingPolyAccelComponent(PolyAccelComponent):
+class _FailingPolyAccel(PolyAccel):
     """Accelerator variant whose `evaluate()` always returns WRONG_NSAMP.
 
     Drives the halt-on-error path through `on_start` end-to-end: the regmap
@@ -196,7 +196,7 @@ def test_poly_halts_on_error(tmp_path: Path) -> None:
 
     sim = Simulation()
     clk = Clock(freq=_CLK_FREQ)
-    accel = _FailingPolyAccelComponent(name="poly_accel", sim=sim, clk=clk)
+    accel = _FailingPolyAccel(name="poly_accel", sim=sim, clk=clk)
     tb = PolyTB(name="poly_tb", sim=sim,
                 cmd_hdr=cmd_hdr, samp_in=samp_in, coeffs=coeffs)
     connect(sim, tb, accel, clk)

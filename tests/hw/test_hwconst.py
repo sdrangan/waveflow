@@ -1,7 +1,7 @@
 """Tests for the ``HwConst`` marker and ``discover_hw_const`` helper."""
 from __future__ import annotations
 
-from waveflow.hw.hw_component import HwConst, HwParam, discover_hw_const
+from waveflow.hw.hw_module import HwConst, HwParam, discover_hw_const
 
 
 class _OneConst:

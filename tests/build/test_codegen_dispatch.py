@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from waveflow.build.codegen_dispatch import CodegenPath, codegen_path
 from waveflow.build.elaborate import elaborate
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.simulation.simobj import ProcessGen
@@ -28,8 +28,8 @@ def _add_regmap(self) -> None:
 
 
 def test_hostactivated_dispatches_to_on_start():
-    from examples.stream_inband.poly import PolyAccelComponent
-    assert codegen_path(elaborate(PolyAccelComponent)) == CodegenPath("leaf", "on_start")
+    from examples.stream_inband.poly import PolyAccel
+    assert codegen_path(elaborate(PolyAccel)) == CodegenPath("leaf", "on_start")
 
 
 def test_freeruncomp_dispatches_to_run_iter():
@@ -48,9 +48,9 @@ def test_testbench_dispatches_to_main():
 
 
 def test_plain_hwcomponent_with_regmap_dispatches_to_on_start():
-    """The interim fallback: a plain (un-migrated) HwComponent carrying a regmap is host-activated."""
+    """The interim fallback: a plain (un-migrated) HwModule carrying a regmap is host-activated."""
     @dataclass
-    class _PlainRegmap(HwComponent):
+    class _PlainRegmap(HwModule):
         def __post_init__(self):
             super().__post_init__()
             _add_regmap(self)
@@ -63,7 +63,7 @@ def test_plain_hwcomponent_with_regmap_dispatches_to_on_start():
 
 def test_plain_free_running_hwcomponent_dispatches_to_run_proc():
     @dataclass
-    class _Plain(HwComponent):
+    class _Plain(HwModule):
         def run_proc(self) -> ProcessGen[None]:
             while True:
                 yield
@@ -72,10 +72,10 @@ def test_plain_free_running_hwcomponent_dispatches_to_run_proc():
 
 
 def test_regmap_hwcomponent_dispatches_to_on_start_by_class():
-    """A bare regmap-bearing HwComponent (not FreeRunComp/HostActivated) is dispatched by the interim
+    """A bare regmap-bearing HwModule (not FreeRunMod/HostActivated) is dispatched by the interim
     regmap fallback -> on_start; the class, not a _kernel_method string, decides."""
     @dataclass
-    class _RegmapPlain(HwComponent):
+    class _RegmapPlain(HwModule):
         def __post_init__(self):
             super().__post_init__()
             _add_regmap(self)

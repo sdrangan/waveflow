@@ -13,7 +13,7 @@ place that knows the schema, does the ``[c.serialize(bw) for c in cmds]`` conver
 resulting word arrays here.
 
 They are :class:`~waveflow.simulation.simobj.SimObj`\\ s, not
-:class:`~waveflow.hw.component.Component`\\ s: a testbench participant needs a ``run_proc`` and an
+:class:`~waveflow.hw.hw_module.HwModule`\\ s: a testbench participant needs a ``run_proc`` and an
 endpoint, not a synthesizable body, an endpoint registry, or a codegen target.  (Whether that stays
 true is an open question — see ``plans/xsi_tb_codegen.md``, "what kind is a TB participant".)
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from waveflow.hw.hw_component import DynParam
+from waveflow.hw.hw_module import DynParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave, Words
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.utils.burst_io import read_burst_bundle

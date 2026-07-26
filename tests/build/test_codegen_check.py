@@ -38,7 +38,7 @@ from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 
 from examples.block_scale.block_scale import BlockScaleTBHls
-from examples.regmap.simp_fun import SimpFunComponent, SimpFunTBHls
+from examples.regmap.simp_fun import SimpFun, SimpFunTBHls
 from examples.shared_mem.hist import HistAccel, HistTBHls
 from examples.stream_inband.poly import PolyTBHls
 from examples.toy.toy import ScaledSquare, Square
@@ -105,7 +105,7 @@ def test_the_local_baseline_fixture_really_passes():
 
 @pytest.mark.parametrize(
     "source",
-    [SimpFunComponent, HistAccel, SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls],
+    [SimpFun, HistAccel, SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls],
     ids=lambda c: c.__name__,
 )
 def test_real_sources_pass(source):
@@ -120,7 +120,7 @@ def test_real_sources_pass(source):
 @pytest.mark.parametrize(
     "source, target",
     [
-        (SimpFunComponent, CONTROL_DRIVEN_KERNEL),
+        (SimpFun, CONTROL_DRIVEN_KERNEL),
         (HistAccel, CONTROL_DRIVEN_KERNEL),
         (SimpFunTBHls, SEQUENTIAL_VITIS_TB),
         (PolyTBHls, SEQUENTIAL_VITIS_TB),
@@ -136,19 +136,19 @@ def test_naming_the_target_explicitly_agrees_with_the_default(source, target):
 
 
 def test_source_may_be_a_class_or_an_instance():
-    """`check(SimpFunComponent)` and `check(<a SimpFunComponent>)` ask the same question.
+    """`check(SimpFun)` and `check(<a SimpFun>)` ask the same question.
 
     A class is elaborated internally; an instance is used as-is (it is already elaborated).
     """
-    assert check(SimpFunComponent) == (True, None)
-    assert check(elaborate(SimpFunComponent)) == (True, None)
+    assert check(SimpFun) == (True, None)
+    assert check(elaborate(SimpFun)) == (True, None)
     assert check(SimpFunTBHls) == (True, None)
     assert check(elaborate(SimpFunTBHls)) == (True, None)
 
 
 def test_potential_targets_reads_the_classvar_for_class_and_instance():
-    assert potential_targets(SimpFunComponent) == frozenset({CONTROL_DRIVEN_KERNEL})
-    assert potential_targets(elaborate(SimpFunComponent)) == frozenset({CONTROL_DRIVEN_KERNEL})
+    assert potential_targets(SimpFun) == frozenset({CONTROL_DRIVEN_KERNEL})
+    assert potential_targets(elaborate(SimpFun)) == frozenset({CONTROL_DRIVEN_KERNEL})
     assert potential_targets(SimpFunTBHls) == frozenset({SEQUENTIAL_VITIS_TB})
     # A leaf and a composite now share one target name — the merge collapsed free_running_kernel into
     # composite_kernel (a leaf is the 1-task case). See plans/one_component_two_flows.md.
@@ -161,7 +161,7 @@ def test_potential_targets_reads_the_classvar_for_class_and_instance():
 # ==============================================================================================
 
 def test_gate1_unknown_target_is_rejected_and_lists_the_known_names():
-    ok, msg = check(SimpFunComponent, "vitis_kernel")   # a plausible-but-wrong name
+    ok, msg = check(SimpFun, "vitis_kernel")   # a plausible-but-wrong name
     assert ok is False
     assert "Unknown codegen target 'vitis_kernel'" in msg
     for name in ALL_TARGETS:
@@ -184,11 +184,11 @@ def test_gate1_fires_before_the_kind_check():
 
 def test_gate2_target_not_potential_for_this_kind():
     # A host-activated DUT cannot lower to the XSI-TB target — a real name, wrong kind.
-    ok, msg = check(SimpFunComponent, SEQUENTIAL_XSI_TB)
+    ok, msg = check(SimpFun, SEQUENTIAL_XSI_TB)
     assert ok is False
     assert "not a potential target" in msg
     assert SEQUENTIAL_XSI_TB in msg
-    assert "SimpFunComponent" in msg
+    assert "SimpFun" in msg
     assert CONTROL_DRIVEN_KERNEL in msg, "the message should name what IS potential"
 
 
@@ -197,7 +197,7 @@ def test_gate2_a_dut_target_is_not_a_tb_target():
     ok, msg = check(SimpFunTBHls, CONTROL_DRIVEN_KERNEL)
     assert ok is False and "not a potential target" in msg
 
-    ok, msg = check(SimpFunComponent, SEQUENTIAL_VITIS_TB)
+    ok, msg = check(SimpFun, SEQUENTIAL_VITIS_TB)
     assert ok is False and "not a potential target" in msg
 
 
@@ -311,14 +311,14 @@ def test_target_none_needs_exactly_one_potential_target():
 def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle():
     """The real un-migrated kernel: check() cannot answer, and must say why *usefully*.
 
-    BlockScaleComponent is a plain HwComponent with a run_proc body — the "interim un-migrated
+    BlockScale is a plain HwModule with a run_proc body — the "interim un-migrated
     leaf" that codegen_dispatch explicitly still handles.  So `kernel_files_to_str` WORKS for it
     while `check` cannot answer: one of the four real kernels.
 
     (HistAccel used to be the other one.  It is now a HostActivated — see
-    `test_hist_is_migrated_and_checkable` below — which is why this covers BlockScaleComponent
+    `test_hist_is_migrated_and_checkable` below — which is why this covers BlockScale
     alone.  When block_scale migrates too, this test has no source left and should be deleted
-    along with `_no_targets_message`'s HwComponent branch; `_NoDeclaredTargets` above already
+    along with `_no_targets_message`'s HwModule branch; `_NoDeclaredTargets` above already
     covers the message shape synthetically.)
 
     The trap this pins: with an empty potential_targets, *no* target name can pass gate 2, so a
@@ -326,10 +326,10 @@ def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle(
     learns nothing.  The message must instead name the migration, and must not claim the component
     won't generate (the caller can watch it generate).
     """
-    from examples.block_scale.block_scale import BlockScaleComponent
+    from examples.block_scale.block_scale import BlockScale
 
     for target in (None, CONTROL_DRIVEN_KERNEL, COMPOSITE_KERNEL):
-        ok, msg = check(BlockScaleComponent, target)
+        ok, msg = check(BlockScale, target)
         assert ok is False
         assert "not been migrated to an execution-model class" in msg
         assert "name one explicitly" not in msg, "dead-end advice: no name can pass gate 2"
@@ -339,8 +339,8 @@ def test_unmigrated_plain_hwcomponent_says_so_and_does_not_send_you_in_a_circle(
     # The disagreement is real, not hypothetical: generate succeeds where check abstains.
     from waveflow.build.hwgen import kernel_files_to_str
 
-    assert kernel_files_to_str(BlockScaleComponent), \
-        "BlockScaleComponent migrated? then update this test and the message"
+    assert kernel_files_to_str(BlockScale), \
+        "BlockScale migrated? then update this test and the message"
 
 
 def test_hist_is_migrated_and_checkable():
@@ -494,7 +494,7 @@ class _SequentialTB(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self):
-        dut = SimpFunComponent()
+        dut = SimpFun()
         x = Int32().read_uint32_file(self.data_dir + "/x.bin")
         a = Int32().read_uint32_file(self.data_dir + "/a.bin")
         b = Int32().read_uint32_file(self.data_dir + "/b.bin")
@@ -511,7 +511,7 @@ class _ConcurrentTB(_SequentialTB):
     """
 
     def main(self):
-        dut = SimpFunComponent()
+        dut = SimpFun()
         x = Int32().read_uint32_file(self.data_dir + "/x.bin")
         a = Int32().read_uint32_file(self.data_dir + "/a.bin")
         b = Int32().read_uint32_file(self.data_dir + "/b.bin")
@@ -628,15 +628,15 @@ def test_no_real_kernel_or_tb_trips_the_sequential_gate():
     """Stage 3's stated gate: the new rule fires on NOTHING that exists today.
 
     Driven through the real extractor rather than `check`, because one of the four kernels
-    (BlockScaleComponent) is still an un-migrated plain HwComponent that `check` abstains on at
+    (BlockScale) is still an un-migrated plain HwModule that `check` abstains on at
     gate 2 — it would never reach gate 4, so a `check`-level assertion would prove nothing about
     it.  `extract_*` is what `generate` runs, so this covers all four for real.
     """
-    from examples.block_scale.block_scale import BlockScaleComponent
-    from examples.stream_inband.poly import PolyAccelComponent
+    from examples.block_scale.block_scale import BlockScale
+    from examples.stream_inband.poly import PolyAccel
     from waveflow.build.hwcodegen import extract_kernel, extract_testbench
 
-    for cls in (SimpFunComponent, PolyAccelComponent, HistAccel, BlockScaleComponent):
+    for cls in (SimpFun, PolyAccel, HistAccel, BlockScale):
         extract_kernel(elaborate(cls))          # must not raise
     for cls in (SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls):
         extract_testbench(elaborate(cls))       # must not raise
@@ -652,7 +652,7 @@ def test_implemented_targets_is_a_subset_of_all_targets():
 
 def test_every_declared_potential_target_is_a_known_name():
     """A kind cannot declare a target the vocabulary does not know."""
-    for kind in (SimpFunComponent, Square, ScaledSquare, SimpFunTBHls):
+    for kind in (SimpFun, Square, ScaledSquare, SimpFunTBHls):
         assert potential_targets(kind) <= ALL_TARGETS, kind.__name__
 
 
@@ -665,7 +665,7 @@ def test_every_declared_potential_target_is_a_known_name():
 # ==============================================================================================
 
 @dataclass
-class _HostWithAChild(SimpFunComponent):
+class _HostWithAChild(SimpFun):
     """A HostActivated that also owns a sub-component — structurally not a leaf."""
 
     cpp_kernel_name: ClassVar[str | None] = "host_with_a_child"
@@ -723,7 +723,7 @@ def test_check_relays_the_structural_rule_verbatim():
 
 def test_the_real_leaves_are_flat_so_the_contract_holds_for_them():
     """(a) holds for every real leaf — the rule is a guard, not a burden."""
-    for cls in (SimpFunComponent, HistAccel, Square):
+    for cls in (SimpFun, HistAccel, Square):
         comp = elaborate(cls)
         assert not comp.sub_comps, cls.__name__
         assert not comp.interfaces, cls.__name__

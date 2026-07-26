@@ -28,7 +28,7 @@ This module exposes two classes:
 ``AXIMMQueue``
     The proxy a master uses to ``write``/``get`` the ring.  Storage-agnostic —
     it only issues ``MMIFMaster`` transactions — so it works over any MM slave;
-    :class:`~waveflow.hw.memory.MemComponent` is the canonical backing store.
+    :class:`~waveflow.hw.memory.MemModel` is the canonical backing store.
 """
 from __future__ import annotations
 

@@ -41,8 +41,8 @@ import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
-from waveflow.hw.hw_component import HwParam
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import (
     SobIFMaster,
     SobIFSlave,
@@ -108,7 +108,7 @@ def _elems_to_words(elems, mem_dwidth: int):
 
 
 @dataclass
-class CmdRxInband(FreeRunComp):
+class CmdRxInband(FreeRunMod):
     """Framer (mem_copy's ``Sequencer`` role): read one ``InterleaverCmd`` and frame the reader's
     command stream as **two reads** to the transactional ``MemRStream`` (the arbiter model — a consumer
     issues N reads per job): P (descriptor relayed as a header, ``fwd=1``) then X (``fwd=0``). The
@@ -157,7 +157,7 @@ class CmdRxInband(FreeRunComp):
 
 
 @dataclass
-class IlLoadInband(FreeRunComp):
+class IlLoadInband(FreeRunMod):
     """Reads the framed ``[IlDesc | P | X]`` off the reader, fills ``p_blk`` / ``x_blk`` (SOB, p_blk
     FIRST — see :class:`CmdRxInband`), and forwards the descriptor to the compute."""
 
@@ -209,7 +209,7 @@ class IlLoadInband(FreeRunComp):
 
 
 @dataclass
-class IlComputeInband(FreeRunComp):
+class IlComputeInband(FreeRunMod):
     """The custom gather (SOB→SOB), variable length: read ``IlDesc`` → ``nw``, gather ``nw`` words, and
     forward the descriptor. Carries its own loop timing model (the thing the design fits)."""
 
@@ -277,7 +277,7 @@ class IlComputeInband(FreeRunComp):
 
 
 @dataclass
-class IlStoreInband(FreeRunComp):
+class IlStoreInband(FreeRunMod):
     """Reads ``y_blk`` and frames the writer's stream ``[MemWCmd | IlDesc | Y]``."""
 
     cpp_kernel_name: ClassVar[str | None] = "il_store"
@@ -324,7 +324,7 @@ class IlStoreInband(FreeRunComp):
 
 
 @dataclass
-class InterleaverInband(FreeRunComp):
+class InterleaverInband(FreeRunMod):
     """The interleaver composed on the framework in-band mem-streams: ``cmd_rx → MemRStream →
     il_load → il_compute → il_store → MemWStream``.  Every internal edge is framed (the mem-stream
     edges and the descriptor edges); the read/write adaptors are framework."""

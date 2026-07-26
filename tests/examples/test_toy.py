@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.component import Component
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
@@ -31,10 +31,10 @@ XS = [
 
 
 @dataclass
-class VecDriver(Component):
+class VecDriver(HwModule):
     """Test harness: pushes each Vec in ``vecs`` at the DUT, collects what comes back.
 
-    Being finite is what terminates the sim: a ``FreeRunComp`` loops forever, but once the driver
+    Being finite is what terminates the sim: a ``FreeRunMod`` loops forever, but once the driver
     returns and every stage is parked on an empty input stream, SimPy's event queue drains and
     ``run_sim()`` returns.  So the received-count assertion below is load-bearing — a deadlock and a
     clean finish look identical to ``run_sim()``.
@@ -278,9 +278,9 @@ def test_namespace_default_is_kernel_impl():
         assert ns != kern, f"{cls.__name__}: namespace collides with the kernel function"
 
     # An explicit setting still wins verbatim, and "" still opts out entirely.
-    from examples.regmap.simp_fun import SimpFunComponent
+    from examples.regmap.simp_fun import SimpFun
 
-    assert resolved_namespace(SimpFunComponent) == "simp_fun_impl"
+    assert resolved_namespace(SimpFun) == "simp_fun_impl"
 
 
 
@@ -292,7 +292,7 @@ def test_scaled_square_declares_no_codegen_descriptors():
     `add_comp`/`add_if` graph.  The toy declares none of them — backing the claim in
     docs/guide/components/composite.md.  Adding them is out of scope (plans/toy_examples.md).
 
-    After the FreeRunComp merge (plans/one_component_two_flows.md) these are *derived* properties, so
+    After the FreeRunMod merge (plans/one_component_two_flows.md) these are *derived* properties, so
     they always resolve — "declares none" now means the toy never OVERRIDES them (the override lives
     under the private `_boundary` / `_internal_edges` / `_ordered_subcomps` keys), leaving the derived
     leaf-defaults, which are not a valid composite top.  `composite_top_spec` still refuses it — now

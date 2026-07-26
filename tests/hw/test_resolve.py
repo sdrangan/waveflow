@@ -9,7 +9,7 @@ import pytest
 
 from waveflow.build.hwcodegen import HwStmtExtractor
 from waveflow.hw.dataschema import DataList, EnumField, IntField
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.hwstmt import (
     CaseStmt,
     FieldRef,
@@ -62,7 +62,7 @@ class DemoCmdHdr(DataList):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class DemoComponent(HwComponent):
+class Demo(HwModule):
     in_bw:  HwParam[int] = 32
     out_bw: HwParam[int] = 32
 
@@ -105,8 +105,8 @@ class DemoComponent(HwComponent):
         return DemoError.OK
 
 
-def _make_demo() -> DemoComponent:
-    return DemoComponent(name="demo", sim=Simulation())
+def _make_demo() -> Demo:
+    return Demo(name="demo", sim=Simulation())
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ def test_field_case_stmt_has_field_name():
 # Phase 2: Input resolution
 # ---------------------------------------------------------------------------
 
-def _extract_and_resolve(comp: HwComponent, method_name: str = 'on_start'):
+def _extract_and_resolve(comp: HwModule, method_name: str = 'on_start'):
     from waveflow.build.hwresolve import resolve_kernel
     tree = HwStmtExtractor(comp, method_name=method_name).extract()
     return resolve_kernel(tree, comp)
@@ -205,7 +205,7 @@ def test_resolve_unresolved_name_raises():
     from waveflow.build.hwresolve import ResolutionError, resolve_kernel
 
     @dataclass
-    class _BadDemo(HwComponent):
+    class _BadDemo(HwModule):
         def __post_init__(self) -> None:
             super().__post_init__()
             self.s_in = StreamIFSlave(
@@ -250,7 +250,7 @@ def test_regmap_get_output_typ_is_field_schema():
     Float32 = FloatField.specialize(bitwidth=32)
 
     @dataclass
-    class _RegMapReadDemo(HwComponent):
+    class _RegMapReadDemo(HwModule):
         def __post_init__(self) -> None:
             super().__post_init__()
             self.s_in = StreamIFSlave(

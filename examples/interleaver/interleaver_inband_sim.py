@@ -21,11 +21,11 @@ import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
-from waveflow.hw.hw_component import HwParam
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemComponent, MemSeg
+from waveflow.hw.memory import MemModel, MemSeg
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.utils.burst_io import write_burst_bundle
@@ -45,10 +45,10 @@ def _pack(vals: np.ndarray, lw: int) -> np.ndarray:
 
 
 @dataclass
-class InterleaverInbandTB(FreeRunComp):
+class InterleaverInbandTB(FreeRunMod):
     """The testbench as a component **graph** — a driver on ``s_cmd``, a sink on ``s_done``, one shared
     arena behind both ``m_axi`` bundles, and the :class:`InterleaverInband` DUT — wired by interfaces.
-    A composite ``FreeRunComp`` so the graph is *walkable*: the XSI harness and the pysim golden are one
+    A composite ``FreeRunMod`` so the graph is *walkable*: the XSI harness and the pysim golden are one
     structure, two backends.  The scenario + check live in :class:`InterleaverInbandSim`."""
 
     #: A testbench lowers to the XSI harness (Flow 2's TB target), not to a synthesizable kernel.
@@ -78,7 +78,7 @@ class InterleaverInbandTB(FreeRunComp):
             cur += 3 * nw
         self.arena_words = cur + 16
 
-        self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+        self.mem = MemModel(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         if self.platform_dir is not None:
             from waveflow.calib.bus_model import BusCalib

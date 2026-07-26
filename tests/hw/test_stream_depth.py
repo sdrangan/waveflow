@@ -57,10 +57,10 @@ class TestSynthesisRejectsUnbounded:
     def _comp_with_edge(self, depth):
         """A tiny composite: two leaves wired by one StreamIF at *depth*."""
         from dataclasses import dataclass
-        from waveflow.hw.hw_freerun import FreeRunComp
+        from waveflow.hw.hw_freerun import FreeRunMod
 
         @dataclass
-        class Prod(FreeRunComp):
+        class Prod(FreeRunMod):
             def __post_init__(self):
                 super().__post_init__()
                 self.out = StreamIFMaster(name=f"{self.name}_out", sim=self.sim, bitwidth=64,
@@ -71,7 +71,7 @@ class TestSynthesisRejectsUnbounded:
                 yield self.timeout(1)
 
         @dataclass
-        class Cons(FreeRunComp):
+        class Cons(FreeRunMod):
             def __post_init__(self):
                 super().__post_init__()
                 self.inp = StreamIFSlave(name=f"{self.name}_in", sim=self.sim, bitwidth=64,
@@ -82,7 +82,7 @@ class TestSynthesisRejectsUnbounded:
                 yield self.timeout(1)
 
         @dataclass
-        class Top(FreeRunComp):
+        class Top(FreeRunMod):
             def __post_init__(self):
                 super().__post_init__()
                 self.p = Prod(name=f"{self.name}_p", sim=self.sim)

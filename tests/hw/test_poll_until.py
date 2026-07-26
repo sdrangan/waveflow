@@ -24,12 +24,12 @@ from waveflow.hw.memif import (
     PollCond,
     assign_address_ranges,
 )
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.simulation import Simulation
 
 
 # ---------------------------------------------------------------------------
-# Harness: one or two masters on a crossbar over a MemComponent
+# Harness: one or two masters on a crossbar over a MemModel
 # ---------------------------------------------------------------------------
 
 def _setup(
@@ -46,7 +46,7 @@ def _setup(
 ):
     sim = Simulation()
     clk = Clock(freq=freq)
-    mem = MemComponent(
+    mem = MemModel(
         sim=sim, word_size=mem_bw, inline=False, clk=clk,
         latency_init=mem_latency_init, latency_per_word=mem_latency_per_word,
     )
@@ -197,8 +197,8 @@ class TestDerating:
         """A poller on one slave must not stretch transfers to another slave."""
         sim = Simulation()
         clk = Clock(freq=1.0)
-        mem0 = MemComponent(sim=sim, word_size=32, inline=False, clk=clk)
-        mem1 = MemComponent(sim=sim, word_size=32, inline=False, clk=clk)
+        mem0 = MemModel(sim=sim, word_size=32, inline=False, clk=clk)
+        mem1 = MemModel(sim=sim, word_size=32, inline=False, clk=clk)
         mem0.alloc(16)
         mem1.alloc(16)
         xbar = AXIMMCrossBarIF(

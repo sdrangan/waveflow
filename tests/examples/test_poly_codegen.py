@@ -5,10 +5,10 @@ from pathlib import Path
 
 
 def test_poly_cpp_kernel_name_is_poly():
-    """PolyAccelComponent overrides cpp_kernel_name to 'poly' (not 'poly_accel')."""
-    from examples.stream_inband.poly import PolyAccelComponent
+    """PolyAccel overrides cpp_kernel_name to 'poly' (not 'poly_accel')."""
+    from examples.stream_inband.poly import PolyAccel
     from waveflow.build.hwgen import cpp_kernel_name
-    assert cpp_kernel_name(PolyAccelComponent) == "poly"
+    assert cpp_kernel_name(PolyAccel) == "poly"
 
 
 def test_poly_codegen_step_extracts_and_writes(tmp_path: Path):
@@ -29,11 +29,11 @@ def test_poly_codegen_step_extracts_and_writes(tmp_path: Path):
 
 def test_poly_kernel_signature_has_raw_coeffs_array():
     """CoeffArray uses cpp_storage='raw': signature has 'float coeffs[4]', not 'CoeffArray& coeffs'."""
-    from examples.stream_inband.poly import PolyAccelComponent
+    from examples.stream_inband.poly import PolyAccel
     from waveflow.build.hwgen import kernel_signature
     from waveflow.simulation.simulation import Simulation
 
-    comp = PolyAccelComponent(name="poly", sim=Simulation())
+    comp = PolyAccel(name="poly", sim=Simulation())
     sig = kernel_signature(comp)
     assert "float coeffs[4]" in sig
     assert "CoeffArray& coeffs" not in sig

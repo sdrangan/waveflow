@@ -14,7 +14,7 @@ from waveflow.build.hwgen import (
     kernel_files_to_str,
     task_files_to_str,
 )
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 
 
 @dataclass(kw_only=True)
@@ -40,11 +40,11 @@ class HlsCodegenStep(BuildStep):
     """
 
     description: str = (
-        "Generate HLS kernel files (.hpp, .cpp, impl stubs) from an HwComponent."
+        "Generate HLS kernel files (.hpp, .cpp, impl stubs) from an HwModule."
     )
     params: ClassVar[dict] = {}
 
-    comp_class: type[HwComponent]
+    comp_class: type[HwModule]
     source_artifact: str
     output_dir: str = "."
     impl_dir: str | None = None  # None = use output_dir
@@ -199,11 +199,11 @@ class TaskBodyStep(BuildStep):
     """
 
     description: str = (
-        "Generate an hls::task body header (+ sticky hook impl stubs) from a FreeRunComp."
+        "Generate an hls::task body header (+ sticky hook impl stubs) from a FreeRunMod."
     )
     params: ClassVar[dict] = {}
 
-    comp_class: type[HwComponent]
+    comp_class: type[HwModule]
     source_artifact: str
     output_dir: str = "."
     impl_dir: str | None = None  # None = use output_dir

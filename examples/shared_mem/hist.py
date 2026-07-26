@@ -1,5 +1,5 @@
 """
-hist.py — histogram accelerator as a synthesizable ``HwComponent`` (the codegen
+hist.py — histogram accelerator as a synthesizable ``HwModule`` (the codegen
 source for the ``shared_mem`` example).
 
 It is the reference design for AXI-MM (``m_axi``) codegen, exercising the full
@@ -37,12 +37,12 @@ import numpy.typing as npt
 from waveflow.hw.arrayutils import get_nwords, read_array, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField, MemAddr
-from waveflow.hw.hw_component import HwParam
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
-from waveflow.hw.memory import AddrUnit, MemComponent, Memory
+from waveflow.hw.memory import AddrUnit, MemModel, Memory
 from waveflow.hw.regmap import VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen, SimObj
@@ -457,7 +457,7 @@ class HistController(SimObj):
     ``s_in`` — only control moved.
     """
 
-    mem: MemComponent
+    mem: MemModel
     data: npt.NDArray[np.float32]
     bin_edges: npt.NDArray[np.float32]
     nbins: int
@@ -529,7 +529,7 @@ class HistController(SimObj):
 
 
 def connect(sim: Simulation, ctrl: HistController, accel: HistAccel,
-            mem: MemComponent, clk: Clock) -> None:
+            mem: MemModel, clk: Clock) -> None:
     """Wire controller ↔ accelerator (two StreamIFs + AXI-Lite) and accelerator → memory."""
     in_stream  = StreamIF(sim=sim, clk=clk)
     out_stream = StreamIF(sim=sim, clk=clk)
@@ -569,7 +569,7 @@ class HistTBHls(SeqTB):
 
     def main(self) -> None:
         dut = HistAccel()
-        mem = MemComponent(name="mem", sim=None, inline=False,
+        mem = MemModel(name="mem", sim=None, inline=False,
                            nwords_tot=MAX_MEM_WORDS)
 
         cmd = HistCmd()
@@ -630,7 +630,7 @@ def run_sim(
     """Run the SimPy histogram sim and return observed vs golden counts."""
     sim = Simulation()
     clk = Clock(freq=clk_freq)
-    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk)
+    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk)
     accel = HistAccel(name="hist_accel", sim=sim, clk=clk)
     ctrl = HistController(name="hist_ctrl", sim=sim, mem=mem,
                           data=data, bin_edges=bin_edges, nbins=nbins, tx_id=tx_id,

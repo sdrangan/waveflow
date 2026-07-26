@@ -1,12 +1,12 @@
-"""toy.py — the minimal ``FreeRunComp`` components the guide quotes (a standalone and a composite).
+"""toy.py — the minimal ``FreeRunMod`` components the guide quotes (a standalone and a composite).
 
-These are **toys**: the smallest components that exercise each kind — a *standalone* ``FreeRunComp``
-(a ``run_iter`` body) and a *composite* ``FreeRunComp`` (sub-components, no body) — kept small enough
+These are **toys**: the smallest components that exercise each kind — a *standalone* ``FreeRunMod``
+(a ``run_iter`` body) and a *composite* ``FreeRunMod`` (sub-components, no body) — kept small enough
 to read in one screen and to quote verbatim in ``docs/guide/components/``.  They are backed by
 ``tests/examples/test_toy.py``, so the code on those pages is executed by CI and cannot silently rot.
 
 What they claim: *this is real code, it runs, and the docs match it* — a tested pysim model written
-in synthesizable form.  What they do **not** claim: *this synthesizes*.  No ``FreeRunComp`` is
+in synthesizable form.  What they do **not** claim: *this synthesizes*.  No ``FreeRunMod`` is
 auto-extracted today (``MemRStream``/``MemWStream`` hand off fixed hand-written ``hls::task`` bodies
 via ``kernel_task()``; their ``run_iter`` is pysim-golden only).  See ``plans/toy_examples.md``.
 
@@ -22,7 +22,7 @@ from typing import ClassVar
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, FloatField
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
@@ -39,7 +39,7 @@ class Vec(DataArray):
 
 
 @dataclass
-class Square(FreeRunComp):
+class Square(FreeRunMod):
     """y = x*x, element-wise over one Vec per firing."""
 
     cpp_kernel_name: ClassVar[str | None] = "square"
@@ -64,7 +64,7 @@ class Square(FreeRunComp):
 
 
 @dataclass
-class Double(FreeRunComp):
+class Double(FreeRunMod):
     """z = x + x, element-wise over one Vec per firing."""
 
     # NOTE: not "double" — that is a C++ keyword, so it could never be a kernel function name.
@@ -89,7 +89,7 @@ class Double(FreeRunComp):
 
 
 @dataclass
-class ScaledSquare(FreeRunComp):
+class ScaledSquare(FreeRunMod):
     """Composite: y = (2·x)², computed by two concurrent free-running sub-components."""
 
     cpp_kernel_name: ClassVar[str | None] = "scaled_square"

@@ -37,8 +37,8 @@ from waveflow.build.streamutils import (  # noqa: E402
 )
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.dataschema import DataList, DataSchemaStep, IntField  # noqa: E402
-from waveflow.hw.hw_component import HwParam  # noqa: E402
-from waveflow.hw.hw_freerun import FreeRunComp  # noqa: E402
+from waveflow.hw.hw_module import HwParam  # noqa: E402
+from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.mem_stream import (  # noqa: E402
     KernelTask,
@@ -126,7 +126,7 @@ FRAMED_SCHEMAS = frozenset({MemRCmd, MemWCmd, CopyResp})
 
 
 @dataclass
-class Sequencer(FreeRunComp):
+class Sequencer(FreeRunMod):
     """Framed command sequencer (plans/memcopy_inband_integration.md): dequeue one :class:`CopyCmd`
     and emit ONE in-band framed command stream to the chain — ``[MemRCmd | MemWCmd | CopyResp]`` per
     job.  Each descriptor travels welded to (ahead of) its data, so a command can never be paired with
@@ -190,7 +190,7 @@ class Sequencer(FreeRunComp):
 
 
 @dataclass
-class MemCopy(FreeRunComp):
+class MemCopy(FreeRunMod):
     """Hierarchical memcpy composite: ``Sequencer -> MemRStream -> MemWStream`` over internal FIFOs.
 
     Top-level endpoints (the composite boundary): ``s_cmd`` (:class:`CopyCmd` in), ``m_in``
@@ -365,7 +365,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW, jobs=None) -> str:
     Everything here is read off a real :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` — the same
     class the pysim golden runs — rather than restated: the words are the very ones its
     ``StreamDriver`` will send (the schema-packed command bursts); the offsets are its ``jobs``; the
-    arena is the one its ``MemComponent`` declares.  So the XSI testbench and the pysim harness
+    arena is the one its ``MemModel`` declares.  So the XSI testbench and the pysim harness
     cannot describe different tests.
 
     Split from :func:`gen_xsi_vectors` so a test can compare the committed header against what the
@@ -381,7 +381,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW, jobs=None) -> str:
         "mem_copy_vectors",
         scalars={
             "MEM_DW": width,
-            # The arena the graph's MemComponent declares -- not a second, hand-picked number.
+            # The arena the graph's MemModel declares -- not a second, hand-picked number.
             "MEM_NW": int(tb.mem.nwords_tot),
             "N": int(jobs[0].n_words),
             "NUM_CMDS": len(jobs),
@@ -504,7 +504,7 @@ def generate_dut(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW,
                  config: "BuildConfig | None" = None) -> dict[str, Path]:
     """Generate the **DUT**: headers + the MemCopy composite top .cpp + its csynth .tcl + the port map.
 
-    This is the ``FreeRunComp`` graph lowered to an ``ap_ctrl_none`` ``hls::task`` top
+    This is the ``FreeRunMod`` graph lowered to an ``ap_ctrl_none`` ``hls::task`` top
     (plans/memcopy_inband_integration.md): the framed schema set, the copied framed task bodies (every
     body is a self-contained fixed header — no ``TaskBodyStep``, no hook stubs), and a top with two
     ``framed_word`` FIFOs.  ``xsi/<top>_ports.h`` is the DUT's port map, which the testbench harness

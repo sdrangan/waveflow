@@ -17,7 +17,7 @@ import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.simulation import Simulation
 
 from examples.interleaver.interleaver import InterleaverCmd
@@ -53,7 +53,7 @@ def run_interleaver(nj: int = 1, n: int = 256, mem_dwidth: int = 64, comp_class=
     bpw = mem_dwidth // 8
 
     arena = nj * 3 * nw + 16
-    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=mem_dwidth, addr_size=32, nwords_tot=arena * 4)
     mem.alloc(arena)
     # Platform bus model on the memory slave: every m_axi burst the read/write masters issue is charged
@@ -132,7 +132,7 @@ def run_interleaver_sizes(sizes, mem_dwidth: int = 64, comp_class=InterleaverInb
         cur += 3 * nw
     arena = cur + 16
     n_max = max(sizes)
-    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=mem_dwidth, addr_size=32, nwords_tot=arena * 4)
     mem.alloc(arena)
 

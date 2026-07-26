@@ -15,7 +15,7 @@ from waveflow.build.hwcodegen import HwStmtExtractor, SynthesisError
 from waveflow.build.hwgen import CodegenCtx, to_cpp
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.hwstmt import CaseStmt, HwVar, ReturnStmt, SeqStmt, WhileStmt
 from waveflow.hw.memif import MMIFMaster
 from waveflow.simulation.simulation import Simulation
@@ -34,7 +34,7 @@ def _queue(comp) -> AXIMMQueue:
     return AXIMMQueue(master=comp.m_mem, layout=layout)
 
 
-class _VarRhsConsumer(HwComponent):
+class _VarRhsConsumer(HwModule):
     """Branches on two runtime-read values: ``if a != b``."""
 
     def __post_init__(self) -> None:
@@ -54,7 +54,7 @@ class _VarRhsConsumer(HwComponent):
             return b
 
 
-class _ConstRhsConsumer(HwComponent):
+class _ConstRhsConsumer(HwModule):
     """The unchanged constant path: ``if a == 5``."""
 
     def __post_init__(self) -> None:
@@ -101,7 +101,7 @@ def test_const_rhs_unregressed():
 
 
 def test_non_eq_op_still_rejected():
-    class _Bad(HwComponent):
+    class _Bad(HwModule):
         def __post_init__(self) -> None:
             super().__post_init__()
             self.cmd_queue = _queue(self)
@@ -127,7 +127,7 @@ def test_non_eq_op_still_rejected():
 # ---------------------------------------------------------------------------
 
 def _ctx():
-    return CodegenCtx(comp=HwComponent(name="c", sim=Simulation()))
+    return CodegenCtx(comp=HwModule(name="c", sim=Simulation()))
 
 
 def test_var_rhs_emits_variable_name():

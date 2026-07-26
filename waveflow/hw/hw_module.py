@@ -3,12 +3,15 @@ from __future__ import annotations
 import re
 import sys
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 import typing
 
-from waveflow.hw.component import Component
+from waveflow.simulation.simobj import SimObj
+
+if TYPE_CHECKING:
+    from waveflow.hw.interface import Interface, InterfaceEndpoint
 
 T = TypeVar('T')
 
@@ -220,7 +223,7 @@ class ControlMode(Enum):
 class SynthContext:
     """Parameter context passed to every ``synth_fn`` during codegen."""
 
-    component: HwComponent
+    component: HwModule
     params: dict[str, str]  # Python name → C++ template param name
 
     def cpp_param(self, py_name: str) -> str:
@@ -234,16 +237,16 @@ class SynthContext:
         return repr(getattr(self.component, py_name))
 
     @classmethod
-    def from_component(cls, comp: HwComponent) -> SynthContext:
+    def from_component(cls, comp: HwModule) -> SynthContext:
         import sys
         params: dict[str, str] = {}
         comp_type = type(comp)
-        # Walk only the HwComponent subclass layers — stop before HwComponent
-        # itself to avoid evaluating SimObj/Component TYPE_CHECKING annotations.
+        # Walk only the HwModule subclass layers — stop before HwModule
+        # itself to avoid evaluating SimObj TYPE_CHECKING annotations.
         for klass in comp_type.__mro__:
-            if klass is HwComponent:
+            if klass is HwModule:
                 break
-            if not issubclass(klass, HwComponent):
+            if not issubclass(klass, HwModule):
                 break
             raw_ann = vars(klass).get('__annotations__', {})
             mod = sys.modules.get(klass.__module__)
@@ -264,7 +267,7 @@ class SynthContext:
 class HwParamValue(int):
     """Int subclass that remembers which ``HwParam`` field it was bound to.
 
-    Created automatically by :meth:`HwComponent.__post_init__` when wrapping
+    Created automatically by :meth:`HwModule.__post_init__` when wrapping
     raw values for ``HwParam``-annotated fields. Behaves as a plain ``int``
     for arithmetic, comparison, and protocol checks. Codegen inspects the
     ``.param_name`` attribute to decide between emitting a template name vs
@@ -294,16 +297,36 @@ class HwParamValue(int):
         return format(int(self), spec)
 
 
-class HwComponent(Component):
+@dataclass
+class HwModule(SimObj):
     """Base class for synthesizable hardware components.
 
     Subclasses annotate synthesis template parameters with ``HwParam[T]``
     and mark compute methods with ``@synthesizable``.
 
     Carrying ``@synthesizable`` compute (and being pointed at codegen) is a *usage* axis, not a class
-    fact: a plain ``HwComponent`` with no ``@synthesizable`` methods is a **behavioral**,
+    fact: a plain ``HwModule`` with no ``@synthesizable`` methods is a **behavioral**,
     simulation-only model (a data converter, a memory, a channel) that never generates C++.
+
+    Structurally it is a :class:`~waveflow.simulation.simobj.SimObj` with **connectable
+    structure**: typed **endpoints** (the ports it talks to the outside world through) and
+    optional **sub-components** wired together by internal **interfaces**.  It is the
+    *connectable node* in the design graph (``add_endpoint`` / ``add_comp`` / ``add_if``).
     """
+
+    endpoints: dict[str, InterfaceEndpoint] = field(default_factory=dict)
+    """Endpoints of the module, indexed by name."""
+
+    sub_comps: dict[str, "HwModule"] = field(default_factory=dict)
+    """Sub-components of this module, indexed by name (a hierarchical
+    ``HwModule``).  Populated by :meth:`add_comp`; insertion order is the
+    codegen order (task-instantiation order in a composite top)."""
+
+    interfaces: dict[str, "Interface"] = field(default_factory=dict)
+    """**Internal** interfaces wiring sub-components together, indexed by name.
+    Populated by :meth:`add_if`.  This is not for external endpoints (those use
+    :meth:`add_endpoint`) — it is the internal graph edges a composite kernel
+    lowers to ``hls_thread_local`` FIFOs / BRAM."""
 
     control_mode: ClassVar[ControlMode] = ControlMode.AUTO
     cpp_kernel_name: ClassVar[str | None] = None
@@ -332,6 +355,32 @@ class HwComponent(Component):
     ``None`` (default) = no additional variants; only the default kernel is
     emitted.
     """
+
+    def add_endpoint(self, endpoint: InterfaceEndpoint) -> None:
+        endpoint.comp = self
+        self.endpoints[endpoint.name] = endpoint
+
+    def add_comp(self, comp: "HwModule") -> None:
+        """Register *comp* as a sub-component (insertion order preserved).
+
+        Analogous to :meth:`add_endpoint` for endpoints: it records the child in
+        ``self.sub_comps`` so the hierarchy is introspectable off the parent (the
+        composite codegen walks this to instantiate one ``hls::task`` per active
+        child).  Sub-component names are not globally unique — the same child
+        type in two parents shares a name — which is fine here (they are keyed
+        per parent, and every SimObj is separately registered with the
+        ``Simulation`` for pysim)."""
+        comp.parent = self
+        self.sub_comps[comp.name] = comp
+
+    def add_if(self, interface: "Interface") -> None:
+        """Register *interface* as an internal edge between two sub-components.
+
+        Not for external interface endpoints — those are :meth:`add_endpoint`.
+        This records the master↔slave connection so the composite codegen can
+        lower it (an on-chip FIFO/BRAM inside a kernel; AXI between IPs in a
+        system build), keeping a single introspectable graph on the parent."""
+        self.interfaces[interface.name] = interface
 
     def __post_init__(self) -> None:
         # Wrap HwParam field values BEFORE super().__post_init__ so any
@@ -369,9 +418,9 @@ class HwComponent(Component):
     def _wrap_hw_params(self) -> None:
         """Replace each ``HwParam[T]`` field value with a ``HwParamValue`` wrapper."""
         for klass in type(self).__mro__:
-            if klass is HwComponent:
+            if klass is HwModule:
                 break
-            if not issubclass(klass, HwComponent):
+            if not issubclass(klass, HwModule):
                 break
             raw_ann = vars(klass).get('__annotations__', {})
             mod = sys.modules.get(klass.__module__)

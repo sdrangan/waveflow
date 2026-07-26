@@ -46,10 +46,10 @@ def potential_targets(source) -> frozenset[str]:
 
     Reads the ``potential_targets`` ClassVar declared by each kind
     (:class:`~waveflow.hw.hw_hostactivated.HostActivated`,
-    :class:`~waveflow.hw.hw_freerun.FreeRunComp` — standalone or composite,
+    :class:`~waveflow.hw.hw_freerun.FreeRunMod` — standalone or composite,
     :class:`~waveflow.hw.hw_testbench.SeqTB`) via ``getattr`` — house style, the same way ``build/``
     reads ``cpp_kernel_name`` / ``control_mode`` / ``_is_testbench``.  A source that declares none
-    (e.g. a plain :class:`~waveflow.hw.hw_component.HwComponent` not yet on an execution-model class)
+    (e.g. a plain :class:`~waveflow.hw.hw_module.HwModule` not yet on an execution-model class)
     has an empty set: no target is claimed to exist for it.
 
     *Potential*, not *supported*: this states the paths that exist for the **kind**.  Whether this
@@ -65,16 +65,16 @@ def _no_targets_message(cls: type) -> str:
 
     Naming a target explicitly cannot help here (gate 2 rejects every name against an empty set), so
     this must not say "name one explicitly".  For the case that actually occurs — a plain
-    ``HwComponent`` that predates the execution-model classes — the honest answer names the migration
+    ``HwModule`` that predates the execution-model classes — the honest answer names the migration
     *and* admits that codegen still emits for it, so a caller who has watched ``generate`` succeed is
     not told something they can see is false.
     """
-    from waveflow.hw.hw_component import HwComponent
+    from waveflow.hw.hw_module import HwModule
 
-    if isinstance(cls, type) and issubclass(cls, HwComponent):
+    if isinstance(cls, type) and issubclass(cls, HwModule):
         return (
-            f"{cls.__name__} is a plain HwComponent: it has not been migrated to an execution-model "
-            f"class (HostActivated / FreeRunComp), so no codegen target is declared "
+            f"{cls.__name__} is a plain HwModule: it has not been migrated to an execution-model "
+            f"class (HostActivated / FreeRunMod), so no codegen target is declared "
             f"for its kind and check() cannot answer for it. Note this is NOT a claim that it will "
             f"not generate — codegen still emits for un-migrated leaves through the interim fallback "
             f"in codegen_dispatch (extracting on_start when a regmap is present, else run_proc). "
@@ -82,7 +82,7 @@ def _no_targets_message(cls: type) -> str:
         )
     return (
         f"{cls.__name__} is not a codegen source: it declares no potential targets and is not a "
-        f"HwComponent or SeqTB. Known targets: {_sorted(ALL_TARGETS)}."
+        f"HwModule or SeqTB. Known targets: {_sorted(ALL_TARGETS)}."
     )
 
 
@@ -113,7 +113,7 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
     *source* is a component/testbench **class or instance** — not a bare function.  Resolving
     ``self.X`` against the allow-list needs an *elaborated* component (only the syntactic subset is
     checkable from a function alone), so a class is elaborated internally and the call site still
-    reads ``check(SimpFunComponent)``.
+    reads ``check(SimpFun)``.
 
     *target* names the lowering (see :mod:`waveflow.hw.codegen_targets`).  ``None`` means *the
     source's only potential target*, and is an error when there is not exactly one.

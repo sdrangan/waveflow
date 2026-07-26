@@ -59,7 +59,7 @@ def default_cases() -> list[SimpFunCase]:
 
 
 @dataclass
-class SimpFunComponent(HostActivated):
+class SimpFun(HostActivated):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
     cpp_namespace: ClassVar[str | None] = "simp_fun_impl"
 
@@ -189,7 +189,7 @@ class SimpFunTBHls(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:
-        dut = SimpFunComponent()
+        dut = SimpFun()
         # Read each input straight into a local via the standard schema file-IO spelling
         # (Stage 2b).  This is the same `Schema().read_uint32_file(path)` a build script uses,
         # so it needs no special runtime: a run of `main()` gets real `Int32`s back and passes
@@ -216,7 +216,7 @@ class SimpFunTBHls(SeqTB):
         )
 
 
-def connect(sim: Simulation, host: SimpFunHost, accel: SimpFunComponent, clk: Clock) -> None:
+def connect(sim: Simulation, host: SimpFunHost, accel: SimpFun, clk: Clock) -> None:
     lite_link = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)
     lite_link.bind("master", host.master)
     lite_link.bind("slave", accel.s_lite)
@@ -237,7 +237,7 @@ def simulate_case(
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         logger = Logger(name="simp_fun_log", sim=sim, file_path=log_path, fields=["event", "value"])
-    accel = SimpFunComponent(name="simp_fun", sim=sim, clk=clk,
+    accel = SimpFun(name="simp_fun", sim=sim, clk=clk,
                              latency_cycles=latency_cycles, logger=logger)
     host = SimpFunHost(
         name="host",

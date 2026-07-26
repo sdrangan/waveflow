@@ -1,17 +1,17 @@
 """
 mem_demo.py — read-modify-write over AXI-MM to a memory SimObj.
 
-This is the smallest end-to-end proof that :class:`MemComponent` is a real
+This is the smallest end-to-end proof that :class:`MemModel` is a real
 SimPy participant: a driver issues AXI-MM transactions across a ``DirectMMIF``
 to the memory's ``s_mm`` slave, and the memory's modeled *access* latency
 composes with the interconnect's *bus* latency.
 
 Topology
 --------
-  MemDriver (master) ── DirectMMIF ── MemComponent.s_mm   (latency-modeling)
+  MemDriver (master) ── DirectMMIF ── MemModel.s_mm   (latency-modeling)
 
                          bus latency  +  access latency
-                         (DirectMMIF)    (MemComponent)
+                         (DirectMMIF)    (MemModel)
 
 Scenario
 --------
@@ -42,7 +42,7 @@ from waveflow.hw.memif import (
     MMIFMaster,
     assign_address_ranges,
 )
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 
@@ -104,14 +104,14 @@ class MemDriver(SimObj):
 # ---------------------------------------------------------------------------
 
 class MemDemo:
-    """Wires one MemDriver to one MemComponent over a DirectMMIF."""
+    """Wires one MemDriver to one MemModel over a DirectMMIF."""
 
     def __init__(self) -> None:
         self.sim = Simulation()
         self.clk = Clock(freq=100.0)   # 100 Hz → 1 cycle = 0.01 s
 
         # Latency-modeling memory: fixed 4-cycle access + 1 cycle/word.
-        self.mem = MemComponent(
+        self.mem = MemModel(
             name="mem", sim=self.sim, inline=False, clk=self.clk,
             latency_init=4.0, latency_per_word=1.0,
         )
@@ -149,7 +149,7 @@ class MemDemo:
 # ---------------------------------------------------------------------------
 
 class MemCrossbarDemo:
-    """Two MemDrivers share one MemComponent through an AXIMMCrossBarIF."""
+    """Two MemDrivers share one MemModel through an AXIMMCrossBarIF."""
 
     MEM_BASE = 0x0000
     MEM_SIZE = 0x1000
@@ -158,7 +158,7 @@ class MemCrossbarDemo:
         self.sim = Simulation()
         self.clk = Clock(freq=100.0)
 
-        self.mem = MemComponent(
+        self.mem = MemModel(
             name="mem", sim=self.sim, inline=False, clk=self.clk,
             latency_init=4.0, latency_per_word=1.0,
         )

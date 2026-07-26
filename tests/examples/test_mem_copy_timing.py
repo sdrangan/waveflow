@@ -1,6 +1,6 @@
 """tests/examples/test_mem_copy_timing.py — the writer records per-firing timing in a real pysim run.
 
-The FreeRunComp mechanism and the TimingModel engine are unit-tested elsewhere; this is the
+The FreeRunMod mechanism and the TimingModel engine are unit-tested elsewhere; this is the
 integration: MemCopy(calib_dir=...) attaches a StreamTimingModel to its writer, and a full
 MemCopySim run populates firing_records with one row per job, shaped for collect_pysim.  With no
 fitted params the delay is 0, so correctness and timing are unchanged — attaching a model only

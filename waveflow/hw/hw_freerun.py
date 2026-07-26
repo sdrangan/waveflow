@@ -1,10 +1,10 @@
-"""hw_freerun.py — :class:`FreeRunComp`, the free-running (``ap_ctrl_none``) synthesizable component.
+"""hw_freerun.py — :class:`FreeRunMod`, the free-running (``ap_ctrl_none``) synthesizable component.
 
-**One class, two shapes.**  A ``FreeRunComp`` is either
+**One class, two shapes.**  A ``FreeRunMod`` is either
 
 * **standalone** — you implement :meth:`run_iter` (one firing) and the base loops it forever; it
   lowers to a single free-running ``ap_ctrl_none`` ``hls::task`` whose body is that ``run_iter``; or
-* a **composite** — you ``add_comp`` sub-components (themselves ``FreeRunComp``\\ s) wired by
+* a **composite** — you ``add_comp`` sub-components (themselves ``FreeRunMod``\\ s) wired by
   ``add_if`` interfaces, and name the ``boundary`` ports the generator walks (``ordered_subcomps`` /
   ``internal_edges`` are derived); it lowers to one ``hls::task`` per child plus one channel per
   internal edge.
@@ -13,7 +13,7 @@ A standalone component is literally the **1-task degenerate case** of a composit
 (itself) and no internal edges (see the derived :attr:`boundary` / :attr:`ordered_subcomps` /
 :attr:`internal_edges` below), so :func:`~waveflow.build.composite_gen.composite_top_spec` walks both
 through the *same* generator.  **There is no separate composite class** — the top level of a design or
-a testbench is a ``FreeRunComp`` too, and a composite is just one that has sub-components instead of a
+a testbench is a ``FreeRunMod`` too, and a composite is just one that has sub-components instead of a
 body.  The kind is decided by content, not type: :meth:`_kind` returns ``'standalone'`` or
 ``'composite'`` by inspecting whether the component overrode ``run_iter`` or added children.  See
 ``plans/one_component_two_flows.md``.
@@ -40,11 +40,11 @@ from __future__ import annotations
 from typing import ClassVar
 
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
-from waveflow.hw.hw_component import ControlMode, HwComponent
+from waveflow.hw.hw_module import ControlMode, HwModule
 from waveflow.simulation.simobj import ProcessGen
 
 
-class FreeRunComp(HwComponent):
+class FreeRunMod(HwModule):
     """A free-running synthesizable component — a leaf (implements :meth:`run_iter`) **or** a composite
     (has sub-components). Lowers to a free-running ``ap_ctrl_none`` ``hls::task`` top."""
 
@@ -65,12 +65,12 @@ class FreeRunComp(HwComponent):
         """``'standalone'`` (overrides :meth:`run_iter`) or ``'composite'`` (has sub-components) — never
         both, never neither.  The **body-XOR-children** invariant, enforced post-construction (children
         are populated in the subclass ``__post_init__``, so this cannot run at base-construction time)."""
-        has_body = type(self).run_iter is not FreeRunComp.run_iter
+        has_body = type(self).run_iter is not FreeRunMod.run_iter
         has_children = bool(self.sub_comps)
         if has_body and has_children:
             raise TypeError(
                 f"{type(self).__name__} defines both a run_iter body and sub-components; a "
-                f"FreeRunComp is one or the other (body XOR children). Move the body into a "
+                f"FreeRunMod is one or the other (body XOR children). Move the body into a "
                 f"sub-component, or drop the sub-components."
             )
         if has_body:
@@ -228,19 +228,19 @@ class FreeRunComp(HwComponent):
         The default is the not-overridden sentinel: a composite leaves it be (its children do the
         work), and :meth:`_kind` detects the override by identity against this base method."""
         raise NotImplementedError(
-            f"{type(self).__name__}.run_iter is not implemented. A leaf FreeRunComp must override "
+            f"{type(self).__name__}.run_iter is not implemented. A leaf FreeRunMod must override "
             f"run_iter; a composite must not call it (it has no body — its children do the work)."
         )
         yield  # unreachable: marks this a generator function so an accidental call yields cleanly
 
 
-def discover_timing_models(root) -> list[tuple["FreeRunComp", object]]:
+def discover_timing_models(root) -> list[tuple["FreeRunMod", object]]:
     """Walk *root* and its ``sub_comps`` for every attached ``TimingModel``.
 
     Returns ``[(component, model), ...]``.  Mirrors ``discover_dyn_params`` (per-object) lifted to a
     tree walk — the DAG's collect/fit steps use it to find which components to collect for, and a
     component with no model is simply absent from the list."""
-    out: list[tuple[FreeRunComp, object]] = []
+    out: list[tuple[FreeRunMod, object]] = []
     seen: set[int] = set()
     stack = [root]
     while stack:

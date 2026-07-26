@@ -1,6 +1,6 @@
 """tests/build/test_calib_steps.py — the collect + fit DAG steps.
 
-The TimingModel engine and the FreeRunComp instrumentation are unit-tested elsewhere; this checks the
+The TimingModel engine and the FreeRunMod instrumentation are unit-tested elsewhere; this checks the
 two build steps wire them: CollectTimingStep walks the design's attached models and appends a run's
 rtl+pysim firings; FitTimingStep fits each from the accumulated corpus (skipping, not failing, the
 ones that do not yet join).  A synthetic single-leaf design stands in for a real example.
@@ -17,12 +17,12 @@ import pytest
 from waveflow.build.build import BuildConfig
 from waveflow.build.calib_steps import CollectTimingStep, FitTimingStep
 from waveflow.calib.timing_model import StreamTimingModel
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.simulation.simulation import Simulation
 
 
 @dataclass
-class _Leaf(FreeRunComp):
+class _Leaf(FreeRunMod):
     """A leaf whose one firing takes `base + nwords` time, so its pysim span tracks the feature."""
     nwords: int = 128
     base: float = 1000.0

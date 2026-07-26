@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from waveflow.build.hwcodegen import HwStmtExtractor, SynthesisError
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.hwstmt import (
     ContinueStmt,
     FunctionStmt,
@@ -47,7 +47,7 @@ def _make_comp(comp_cls):
 # Basic while-True + get + write
 # ---------------------------------------------------------------------------
 
-class _EchoComp(HwComponent):
+class _EchoComp(HwModule):
     def run_proc(self):
         while True:
             x = yield from self.ep.get()
@@ -110,7 +110,7 @@ def test_extract_output_hwvar_producer_is_stmt():
 # Hook (no synth_fn) method
 # ---------------------------------------------------------------------------
 
-class _HookComp(HwComponent):
+class _HookComp(HwModule):
     @synthesizable
     def compute(self, x):
         return x
@@ -142,7 +142,7 @@ def test_extract_hook_input_is_hwvar():
 # ContinueStmt inside while True
 # ---------------------------------------------------------------------------
 
-class _ContinueComp(HwComponent):
+class _ContinueComp(HwModule):
     def run_proc(self):
         while True:
             x = yield from self.ep.get()
@@ -162,7 +162,7 @@ def test_extract_continue_stmt():
 # Bare for-loop raises SynthesisError
 # ---------------------------------------------------------------------------
 
-class _ForLoopComp(HwComponent):
+class _ForLoopComp(HwModule):
     def run_proc(self):
         for i in range(10):
             pass
@@ -179,7 +179,7 @@ def test_for_loop_raises_synthesis_error():
 # Non-synthesizable method call raises SynthesisError
 # ---------------------------------------------------------------------------
 
-class _NonSynthComp(HwComponent):
+class _NonSynthComp(HwModule):
     def plain_method(self):
         pass
 
@@ -199,7 +199,7 @@ def test_non_synthesizable_call_raises():
 # Non-True while condition raises SynthesisError
 # ---------------------------------------------------------------------------
 
-class _WhileCondComp(HwComponent):
+class _WhileCondComp(HwModule):
     def run_proc(self):
         while False:
             pass
@@ -216,7 +216,7 @@ def test_while_non_true_raises():
 # Top-level SeqStmt when run_proc has no while
 # ---------------------------------------------------------------------------
 
-class _SeqComp(HwComponent):
+class _SeqComp(HwModule):
     def run_proc(self):
         x = yield from self.ep.get()
         yield from self.ep.write(x)

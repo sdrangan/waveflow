@@ -1,7 +1,7 @@
 """mem_stream.py — the two reusable memory-endpoint components: ``MemRStream`` / ``MemWStream``.
 
 The Waveflow realization of the "stream-wrapped memory" pattern (``plans/component.md``): two
-pre-written, reusable :class:`~waveflow.hw.hw_component.HwComponent`s whose **kernel body is FIXED**
+pre-written, reusable :class:`~waveflow.hw.hw_module.HwModule`s whose **kernel body is FIXED**
 (= the hand-validated sandbox ``a2s`` / ``s2a`` in ``interleaver_task_sob3.cpp``), parameterized
 only by ``MEM_DW``.  They are framework code (they depend only on ``waveflow.hw`` /
 ``waveflow.simulation``) so any accelerator can compose them; the ``examples/interleaver`` package
@@ -52,8 +52,8 @@ import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField, ParamSchema
-from waveflow.hw.hw_component import HwParam
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFWriteMaster
 from waveflow.hw.param import Param
@@ -245,7 +245,7 @@ def _resolve_calib_dir(calib_dir, platform_dir, component: str) -> "Path | None"
 
 
 @dataclass
-class MemRStream(FreeRunComp):
+class MemRStream(FreeRunMod):
     """The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst.
 
     Endpoints (added in :meth:`__post_init__`): ``m_mem`` (:class:`MMIFMaster`, bound **read**),
@@ -385,7 +385,7 @@ class MemRStream(FreeRunComp):
     def _timed_tail(self, nw: int) -> ProcessGen[None]:
         """The reader's trailing calibration delay — its own control residual, mirroring the writer's
         posted-write drain.  A no-op (records nothing, waits nothing) when uncalibrated; the current
-        firing's predicted delay once a model is attached (see :meth:`FreeRunComp.timed_delay`)."""
+        firing's predicted delay once a model is attached (see :meth:`FreeRunMod.timed_delay`)."""
         dly = self.timed_delay({"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST)})
         if dly:
             yield self.timeout(dly)
@@ -417,7 +417,7 @@ class MemRStream(FreeRunComp):
 
 
 @dataclass
-class MemWStream(FreeRunComp):
+class MemWStream(FreeRunMod):
     """The mirror of :class:`MemRStream`: the sole ``m_axi`` **write** owner.  An :class:`MWCmd`
     queue + an ``s_in`` word stream -> a pure-write, word-aligned burst into ``m_mem``.
 
@@ -601,7 +601,7 @@ class MemWStream(FreeRunComp):
                 yield from self.s_done.write(burst)
         # Trailing calibration delay: the posted-write drain the RTL keeps running after s_done, so
         # the firing is not really done -- and the next cannot start -- until it completes.  A no-op
-        # (0, but still records the firing) when uncalibrated; see FreeRunComp.timed_delay.
+        # (0, but still records the firing) when uncalibrated; see FreeRunMod.timed_delay.
         # `n_fwd` (the forwarded/echoed bursts) is a feature too: buffering and echoing them costs
         # cycles that scale with the count.  A model whose basis omits n_fwd ignores the key; one that
         # includes it (a fixture that swept it) charges the per-message cost.

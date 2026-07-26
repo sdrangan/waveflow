@@ -20,7 +20,7 @@ from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIF
 from waveflow.hw.hwstmt import KernelCallStmt
 from waveflow.simulation.simobj import ProcessGen
 
-from examples.regmap.simp_fun import SimpFunComponent, SimpFunTBHls
+from examples.regmap.simp_fun import SimpFun, SimpFunTBHls
 
 _Int32 = IntField.specialize(bitwidth=32, signed=True)
 
@@ -90,7 +90,7 @@ class _BadCountTB(HwTestbench):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:
-        dut = SimpFunComponent()
+        dut = SimpFun()
         dut.run_once(dut.regmap.get("x"))   # 1 arg, but there are 3 inputs
 
 
@@ -99,7 +99,7 @@ class _WrongFieldTB(HwTestbench):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:
-        dut = SimpFunComponent()
+        dut = SimpFun()
         # arg 1 references 'b', but the input field in that position is 'a'
         dut.run_once(dut.regmap.get("x"), dut.regmap.get("b"), dut.regmap.get("a"))
 
@@ -109,7 +109,7 @@ class _LiteralArgTB(HwTestbench):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:
-        dut = SimpFunComponent()
+        dut = SimpFun()
         dut.run_once(5, 3, 2)   # literal args are a follow-on, not a field reference
 
 

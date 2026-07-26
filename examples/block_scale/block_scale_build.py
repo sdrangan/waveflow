@@ -1,7 +1,7 @@
 """BuildDag for the block_scale example — Python golden vs Vitis, bit-exact.
 
 The smallest *block* (load–compute–store) custom-hook flow: generate the m_axi
-kernel + testbench from :class:`BlockScaleComponent` / :class:`BlockScaleTBHls`,
+kernel + testbench from :class:`BlockScale` / :class:`BlockScaleTBHls`,
 run the SimPy golden parity check, then Vitis C-sim and RTL co-simulation, each
 checked bit-for-bit against the numpy golden ``block_affine``.
 
@@ -33,12 +33,12 @@ from waveflow.toolchain import toolchain
 
 try:
     from examples.block_scale.block_scale import (
-        A, B, DEFAULT_N, INCLUDE_DIR, BlockCmd, BlockScaleComponent, BlockScaleTBHls,
+        A, B, DEFAULT_N, INCLUDE_DIR, BlockCmd, BlockScale, BlockScaleTBHls,
         Int32, SCHEMA_CLASSES, block_affine, run_sim,
     )
 except ModuleNotFoundError:  # direct execution from the example dir
     from block_scale import (  # type: ignore[no-redef]
-        A, B, DEFAULT_N, INCLUDE_DIR, BlockCmd, BlockScaleComponent, BlockScaleTBHls,
+        A, B, DEFAULT_N, INCLUDE_DIR, BlockCmd, BlockScale, BlockScaleTBHls,
         Int32, SCHEMA_CLASSES, block_affine, run_sim,
     )
 
@@ -64,8 +64,8 @@ def generate_vitis_sources(work_dir: Path) -> Path:
     dag.run(cfg)
     gen = work_dir / "gen"
     gen.mkdir(parents=True, exist_ok=True)
-    (gen / "block_scale.cpp").write_text(kernel_to_cpp(BlockScaleComponent), encoding="utf-8")
-    (gen / "block_scale.hpp").write_text(header_to_cpp(BlockScaleComponent), encoding="utf-8")
+    (gen / "block_scale.cpp").write_text(kernel_to_cpp(BlockScale), encoding="utf-8")
+    (gen / "block_scale.hpp").write_text(header_to_cpp(BlockScale), encoding="utf-8")
     for fname, content in tb_files_to_str(BlockScaleTBHls).items():
         (gen / fname).write_text(content, encoding="utf-8")
     return gen

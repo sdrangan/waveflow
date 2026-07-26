@@ -18,7 +18,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.mem_stream import MemRCmd, MemRStream, MemWCmd, MemWStream
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 
@@ -46,7 +46,7 @@ def _run(jobs, responses, tmp_path, arena_words=4096):
     sim = Simulation()
     clk = Clock(freq=100e6)
 
-    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=MEM_DW, addr_size=32, nwords_tot=arena_words)
     mem.alloc(arena_words)
     expected = []

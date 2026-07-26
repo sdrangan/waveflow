@@ -10,12 +10,12 @@ import pytest
 from waveflow.build.build import BuildConfig
 from waveflow.build.hwcodegen_steps import HlsCodegenStep
 from waveflow.build.hwgen import kernel_files_to_str
-from tests.hw.test_resolve import DemoComponent
+from tests.hw.test_resolve import Demo
 
 
 @dataclass
-class _MultiVariantDemo(DemoComponent):
-    """A DemoComponent subclass with a second param_supports variant.
+class _MultiVariantDemo(Demo):
+    """A Demo subclass with a second param_supports variant.
 
     Defined at module scope so dataclass can resolve the ``ClassVar``
     annotation under ``from __future__ import annotations`` — function-local
@@ -32,7 +32,7 @@ class _MultiVariantDemo(DemoComponent):
 # ---------------------------------------------------------------------------
 
 def test_produces_default_output_dir():
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     produces = step.produces
     assert set(produces.keys()) == {"demo_hpp", "demo_cpp", "demo_process_impl"}
     assert produces["demo_hpp"] == Path("demo.hpp")
@@ -42,7 +42,7 @@ def test_produces_default_output_dir():
 
 def test_produces_with_output_dir():
     step = HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="demo_src",
         output_dir="gen",
     )
@@ -53,12 +53,12 @@ def test_produces_with_output_dir():
 
 
 def test_consumes_is_source_artifact():
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     assert step.consumes == ["demo_src"]
 
 
 def test_run_writes_hpp_and_cpp(tmp_path: Path):
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     config = BuildConfig(root_dir=tmp_path)
     artifacts = step.run(config)
 
@@ -67,7 +67,7 @@ def test_run_writes_hpp_and_cpp(tmp_path: Path):
     assert hpp.exists()
     assert cpp.exists()
 
-    expected = kernel_files_to_str(DemoComponent)
+    expected = kernel_files_to_str(Demo)
     assert hpp.read_text(encoding="utf-8") == expected["demo.hpp"]
     assert cpp.read_text(encoding="utf-8") == expected["demo.cpp"]
 
@@ -79,7 +79,7 @@ def test_run_writes_hpp_and_cpp(tmp_path: Path):
 def test_second_run_rewrites_hpp_and_cpp(tmp_path: Path):
     """Running twice must update the hpp/cpp mtimes (always-overwrite rule)."""
     import os
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     config = BuildConfig(root_dir=tmp_path)
     step.run(config)
     hpp = tmp_path / "demo.hpp"
@@ -97,7 +97,7 @@ def test_second_run_rewrites_hpp_and_cpp(tmp_path: Path):
 
 def test_run_creates_output_dir(tmp_path: Path):
     step = HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="demo_src",
         output_dir="nested/gen",
     )
@@ -112,7 +112,7 @@ def test_run_creates_output_dir(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_first_run_creates_impl_stub(tmp_path: Path):
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     step.run(BuildConfig(root_dir=tmp_path))
     impl = tmp_path / "demo_process_impl.cpp"
     assert impl.exists()
@@ -121,7 +121,7 @@ def test_first_run_creates_impl_stub(tmp_path: Path):
 
 
 def test_rerun_preserves_user_edited_impl(tmp_path: Path):
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     config = BuildConfig(root_dir=tmp_path)
     step.run(config)
 
@@ -136,7 +136,7 @@ def test_rerun_preserves_user_edited_impl(tmp_path: Path):
 def test_rerun_does_not_touch_existing_impl_mtime(tmp_path: Path):
     """A second run must not even rewrite identical contents (mtime is preserved)."""
     import os
-    step = HlsCodegenStep(comp_class=DemoComponent, source_artifact="demo_src")
+    step = HlsCodegenStep(comp_class=Demo, source_artifact="demo_src")
     config = BuildConfig(root_dir=tmp_path)
     step.run(config)
 
@@ -162,7 +162,7 @@ def _make_dag_with_source(tmp_path: Path):
     dag = BuildDag()
     dag.add(SourceStep(artifact="demo_src", path="demo_source.py"))
     dag.add(HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="demo_src",
         output_dir="gen",
     ))
@@ -298,7 +298,7 @@ def test_run_stale_cpp_when_hook_now_templated_raises(tmp_path: Path):
 def test_run_stale_tpp_when_hook_now_non_templated_raises(tmp_path: Path):
     """And the reverse — a leftover .tpp must trigger an error for a .cpp hook."""
     step = HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="demo_src",
         output_dir="gen",
     )
@@ -423,7 +423,7 @@ def test_kernel_files_to_str_emits_relative_include():
 def test_single_variant_demo_writes_one_concrete_kernel(tmp_path: Path):
     """Single-variant case (no param_supports): one concrete void demo(...)."""
     step = HlsCodegenStep(
-        comp_class=DemoComponent,
+        comp_class=Demo,
         source_artifact="demo_src",
         output_dir="gen",
     )

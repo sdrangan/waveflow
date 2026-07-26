@@ -41,7 +41,7 @@ from waveflow.hw.memif import PollUntilStmt
 from waveflow.hw.regmap import RegMapGetStmt, RegMapSetStmt
 
 if TYPE_CHECKING:
-    from waveflow.hw.hw_component import HwComponent
+    from waveflow.hw.hw_module import HwModule
 
 
 #: How stream endpoints are typed and accessed in emitted C++.  The two conventions are not
@@ -60,7 +60,7 @@ STREAM_FLAVORS = ('axi4s', 'word')
 
 @dataclass
 class CodegenCtx:
-    comp: HwComponent
+    comp: HwModule
     params: dict[str, str] = field(default_factory=dict)
     endpoint_names: dict[int, str] = field(default_factory=dict)
     indent: int = 1
@@ -160,7 +160,7 @@ def _emit_case(stmt: CaseStmt, ctx: CodegenCtx) -> str:
 
 
 def _emit_expr(expr, ctx: CodegenCtx) -> str:
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     if isinstance(expr, HwVar):
         return expr.name
     if isinstance(expr, Ref):
@@ -423,7 +423,7 @@ def _kernel_hwparam_constants(tree: HwStmt) -> dict[str, int]:
     the ``max_count`` bounds), emitted as ``static const int`` in the header so
     the generated buffers / pragmas reference named constants, not inlined ints.
     """
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     consts: dict[str, int] = {}
     for s in _collect_mm_stmts(tree):
         mx = s.max_expr
@@ -658,7 +658,7 @@ def _validate_no_name_collisions(comp) -> None:
     import sys
     import typing
     from waveflow.build.hwcodegen import SynthesisError
-    from waveflow.hw.hw_component import HwParam
+    from waveflow.hw.hw_module import HwParam
 
     hw_param_names: set[str] = set()
     for klass in type(comp).__mro__:
@@ -707,7 +707,7 @@ def _stream_template_arg(ep, ctx: CodegenCtx | None = None) -> str:
     bitwidth still emits the literal, which is correct: there is no parameter to be templated on.
     """
     if ctx is not None and ctx.stream_flavor == 'word':
-        from waveflow.hw.hw_component import HwParamValue
+        from waveflow.hw.hw_module import HwParamValue
         bw = ep.bitwidth
         if isinstance(bw, HwParamValue) and bw.param_name in ctx.params:
             return ctx.params[bw.param_name]
@@ -857,7 +857,7 @@ def task_template_params(comp, ctx: CodegenCtx) -> list[str]:
     One entry per distinct ``HwParam`` driving a stream endpoint's bitwidth (``mem_dwidth`` ->
     ``MEM_DWIDTH``).  Endpoints with hard-coded widths contribute nothing — they need no parameter.
     """
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
 
     params: list[str] = []
     for _attr, ep in _discover_stream_endpoints(comp):
@@ -1029,7 +1029,7 @@ def hook_template_params(stmt: FunctionStmt) -> list[str]:
     list means the hook is NOT templated and should be emitted in a ``.cpp``
     file. A non-empty list means the hook is templated and goes in a ``.tpp``.
     """
-    from waveflow.hw.hw_component import HwParamValue
+    from waveflow.hw.hw_module import HwParamValue
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 
     params: list[str] = []
@@ -1095,9 +1095,11 @@ def _snake_case(name: str) -> str:
 def cpp_kernel_name(comp_class) -> str:
     """Default kernel function name.
 
-    ``CamelCase`` → ``snake_case`` with a trailing ``_component`` stripped:
-    ``DemoComponent → demo``, ``PolyAccelComponent → poly_accel``. Override
+    ``CamelCase`` → ``snake_case``: ``Demo → demo``, ``PolyAccel → poly_accel``. Override
     per class by setting ``cpp_kernel_name: ClassVar[str | None] = "..."``.
+
+    The trailing ``removesuffix('_component')`` is a legacy no-op kept as a backstop —
+    module classes no longer carry a ``Component`` suffix (they end in ``Mod`` or nothing).
     """
     override = getattr(comp_class, 'cpp_kernel_name', None)
     if override:
@@ -1338,7 +1340,7 @@ def _iter_variants(comp_class):
     applied via the normal ``__init__`` path — no immutability bypass.
     """
     from waveflow.build.elaborate import elaborate
-    from waveflow.hw.hw_component import validate_param_supports
+    from waveflow.hw.hw_module import validate_param_supports
 
     validate_param_supports(comp_class)
     yield "", elaborate(comp_class)
@@ -1467,7 +1469,7 @@ def header_to_cpp(
     return "\n".join(lines) + "\n"
 
 
-def kernel_body_to_cpp(comp: HwComponent) -> str:
+def kernel_body_to_cpp(comp: HwModule) -> str:
     """Top-level driver: extract + resolve + codegen.
 
     Returns the body of the kernel function (opened with ``{``, closed with
@@ -1475,7 +1477,7 @@ def kernel_body_to_cpp(comp: HwComponent) -> str:
     separately in the next phase.
     """
     from waveflow.build.hwcodegen import extract_kernel
-    from waveflow.hw.hw_component import SynthContext
+    from waveflow.hw.hw_module import SynthContext
 
     tree = extract_kernel(comp)
     synth_ctx = SynthContext.from_component(comp)
@@ -1615,7 +1617,7 @@ class TbCodegenCtx:
 
     Mirrors :class:`CodegenCtx` but with side tables for bound TB locals:
 
-    - ``duts``: ``local_name -> instantiated HwComponent`` produced by
+    - ``duts``: ``local_name -> instantiated HwModule`` produced by
       :class:`DutBindStmt`.
     - ``schemas``: ``local_name -> DataSchema subclass`` produced by
       :class:`SchemaBindStmt`.
@@ -1702,7 +1704,7 @@ def _emit_dut_bind(stmt: DutBindStmt, ctx: TbCodegenCtx) -> str:
 
 
 def _emit_mem_bind(stmt: MemBindStmt, ctx: TbCodegenCtx) -> str:
-    """Emit the flat backing array + MemMgr for a ``MemComponent`` local."""
+    """Emit the flat backing array + MemMgr for a ``MemModel`` local."""
     ctx.mems[stmt.local_name] = (stmt.word_size, stmt.nwords_tot)
     pad = ctx.pad()
     bw = stmt.word_size
@@ -2142,7 +2144,7 @@ def _testbench_cpp(tb_class) -> str:
         '#include "include/streamutils_tb.h"',
     ]
     # m_axi support headers: MemMgr (alloc) + byte_addr_to_word_index, when the
-    # TB declares a MemComponent backing array.
+    # TB declares a MemModel backing array.
     if _tb_has_mem(tree):
         include_lines.append('#include "include/memmgr_tb.hpp"')
         include_lines.append('#include "include/memmgr.hpp"')
@@ -2172,7 +2174,7 @@ def _testbench_cpp(tb_class) -> str:
 
 
 def _tb_has_mem(tree: HwStmt) -> bool:
-    """True if the TB tree declares any ``MemComponent`` backing array."""
+    """True if the TB tree declares any ``MemModel`` backing array."""
     found = False
 
     def visit(node):
@@ -2211,7 +2213,7 @@ def task_files_to_str(comp_class, task_name: str | None = None) -> dict[str, str
     nothing checks them against the Python — see ``docs/guide/memory/memstream.md``.
     """
     from waveflow.build.hwcodegen import extract_kernel
-    from waveflow.hw.hw_component import SynthContext
+    from waveflow.hw.hw_module import SynthContext
 
     kn = cpp_kernel_name(comp_class)
     task = task_name or f"{kn}_task"

@@ -22,7 +22,7 @@ added, or removed there, change it here in the same commit (and vice versa).
 **Two flows collapsed into one.**  ``free_running_kernel`` and ``composite_kernel``
 were two names for one product — a free-running ``ap_ctrl_none`` ``hls::task`` top —
 because a leaf and a composite looked like different kinds.  Since the
-``FreeRunComp`` merge (``plans/one_component_two_flows.md``) they are one class: a
+``FreeRunMod`` merge (``plans/one_component_two_flows.md``) they are one class: a
 leaf is the 1-task degenerate case of a composite, walked by the *same*
 :func:`~waveflow.build.composite_gen.composite_top_spec`.  So there is one DUT
 target, ``composite_kernel``.  ``concurrent_systemc_tb`` is gone too — the old
