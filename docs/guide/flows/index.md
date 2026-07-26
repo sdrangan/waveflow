@@ -1,15 +1,20 @@
 ---
-title: Realization Flows
+title: Hardware modules and Flows
 parent: Guide
-nav_order: 9.5
+nav_order: 5.5
 has_children: true
 audience: python
-summary: "The two end-to-end recipes for taking a HwComponent from Python to a verified realization. They split on the DUT: a control-driven (ap_ctrl_hs) kernel the host launches and Vitis can co-simulate, driven by a sequential Vitis testbench; or a free-running (ap_ctrl_none) kernel or composite Vitis cannot co-simulate, driven at RTL by a concurrent XSI BFM. A one-paragraph map here; one sub-section per flow, each walked end to end on a single toy example."
+summary: "What a hardware module (HwModule) is — a SimObj with typed ports and a behavior, the single source of truth for a hardware block — and the two end-to-end recipes for taking one from Python to a verified realization. The flows split on the DUT: a control-driven (ap_ctrl_hs) kernel the host launches and Vitis can co-simulate, driven by a sequential Vitis testbench; or a free-running (ap_ctrl_none) kernel or composite Vitis cannot co-simulate, driven at RTL by a concurrent XSI BFM. The lead page defines the module and its kinds; one sub-section per flow, each walked end to end on a single toy example."
 ---
 
-# Realization Flows
+# Hardware modules and Flows
 
-A **flow** is the end-to-end recipe for taking a component from its Python specification to a
+Every Waveflow design starts from a **hardware module** — a [`HwModule`](./modules.md): a `SimObj` with
+typed ports and a behavior, the single source of truth for a hardware block. The **[Hardware
+modules](./modules.md)** page is the foundation — what a module is, the three things that define it, and
+the taxonomy of kinds. This index then covers the **flows**.
+
+A **flow** is the end-to-end recipe for taking a module from its Python specification to a
 *verified* hardware realization — which build steps run, in what order, producing which artifacts, and
 how the result is checked. There are two, and they split on **one axis: the DUT**.
 
@@ -34,5 +39,5 @@ software drives it) — is future work; it is not one of the two simulation flow
 
 ## See also
 
-- [Hardware components](./components.md) — the component kinds these flows take as input.
+- [Hardware modules](./modules.md) — the module kinds these flows take as input.
 - [Build System](../build/) — the `BuildDag` machinery these recipes invoke.

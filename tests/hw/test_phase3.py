@@ -1,6 +1,6 @@
 """Phase 3 integration tests.
 
-- HwParam detection on PolyAccelComponent.
+- HwParam detection on PolyAccel.
 - End-to-end poly simulation still produces correct results post-VitisRegMap
   migration (kernel runs from ``on_start`` rather than ``run_proc``; halt
   status now lives in the regmap rather than a streamed response footer).
@@ -19,22 +19,22 @@ if str(POLY_DIR) not in sys.path:
     sys.path.insert(0, str(POLY_DIR))
 
 from poly import (
-    Float32, PolyAccelComponent, PolyCmdHdr, PolyCmdType, PolyError, PolyTB, connect,
+    Float32, PolyAccel, PolyCmdHdr, PolyCmdType, PolyError, PolyTB, connect,
 )
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_component import HwComponent, HwParam, SynthContext
+from waveflow.hw.hw_module import HwModule, HwParam, SynthContext
 from waveflow.hw.interface import StreamDrainStmt
 from waveflow.simulation.simulation import Simulation
 
 
 # ---------------------------------------------------------------------------
-# HwParam detection on PolyAccelComponent
+# HwParam detection on PolyAccel
 # ---------------------------------------------------------------------------
 
 def test_poly_accel_hwparam_fields():
     sim = Simulation()
-    comp = PolyAccelComponent(name='p', sim=sim)
+    comp = PolyAccel(name='p', sim=sim)
     ctx = SynthContext.from_component(comp)
     assert 'in_bw' in ctx.params
     assert 'out_bw' in ctx.params
@@ -59,7 +59,7 @@ def _run_sim(nsamp: int = 100):
     sim = Simulation()
     clk = Clock(freq=1e9)
 
-    accel = PolyAccelComponent(name='poly_accel', sim=sim)
+    accel = PolyAccel(name='poly_accel', sim=sim)
     tb    = PolyTB(name='poly_tb', sim=sim,
                    cmd_hdr=cmd_hdr, samp_in=samp_in, coeffs=coeffs)
 
@@ -129,17 +129,17 @@ def test_stream_drain_stmt_is_synth_call_stmt():
 
 def test_stream_get_is_synthesizable():
     sim = Simulation()
-    ep = PolyAccelComponent(name='x', sim=sim).s_in
+    ep = PolyAccel(name='x', sim=sim).s_in
     assert getattr(ep.get, '_is_synthesizable', False) is True
 
 
 def test_stream_write_is_synthesizable():
     sim = Simulation()
-    ep = PolyAccelComponent(name='y', sim=sim).m_out
+    ep = PolyAccel(name='y', sim=sim).m_out
     assert getattr(ep.write, '_is_synthesizable', False) is True
 
 
 def test_stream_drain_is_synthesizable():
     sim = Simulation()
-    ep = PolyAccelComponent(name='z', sim=sim).s_in
+    ep = PolyAccel(name='z', sim=sim).s_in
     assert getattr(ep.drain, '_is_synthesizable', False) is True

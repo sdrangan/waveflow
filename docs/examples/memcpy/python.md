@@ -5,7 +5,7 @@ nav_order: 2
 ---
 # Python Model
 
-This page builds the design in Python — the three [`FreeRunComp`](../../guide/flows/concurrent.md)
+This page builds the design in Python — the three [`FreeRunMod`](../../guide/flows/concurrent.md)
 leaves and the composite that wires them — and shows *how to write each kind of block*. The whole design
 is `examples/mem_copy/mem_copy.py`.
 
@@ -81,12 +81,12 @@ the tag comes from the command, the `Sequencer` holds **no cross-firing state**.
 
 ## Writing a leaf: the `Sequencer`
 
-A leaf is a `FreeRunComp`. You declare its endpoints in `__post_init__` and implement `run_iter` (one
+A leaf is a `FreeRunMod`. You declare its endpoints in `__post_init__` and implement `run_iter` (one
 firing; the runtime re-fires it per job, so there is no command loop). The `Sequencer` has one input and
 one **framed** output:
 
 ```python
-class Sequencer(FreeRunComp):
+class Sequencer(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "mem_seq"
     mem_dwidth: HwParam[int] = 64
 
@@ -125,7 +125,7 @@ vocabulary. Keeping the Python golden and its C++ in agreement is your job; only
 
 ## The mem-stream leaves
 
-`MemRStream` and `MemWStream` are also `FreeRunComp` leaves, but you do **not** write them — they are
+`MemRStream` and `MemWStream` are also `FreeRunMod` leaves, but you do **not** write them — they are
 framework components. Each owns an `m_axi` port (`m_mem`) and a data stream, and its body is a
 hand-written, width-templated `hls::task` copied in by the build (a body that owns a memory port is
 never lowered from `run_iter` — the dividing line is `m_axi`). Here both are constructed `inband=True`:
@@ -135,14 +135,14 @@ story is [Streaming Memory Kernels](../../guide/memory/memstream.md).
 
 ## Writing the composite: `MemCopy`
 
-The composite is a `FreeRunComp` with sub-components instead of a `run_iter` body — that is what
+The composite is a `FreeRunMod` with sub-components instead of a `run_iter` body — that is what
 "composite" means here. It has **no `run_iter`**; its children do the work, and it only declares
 structure. Three things, all in `__post_init__`.
 
 **1. Add the sub-components** (insertion order is the generated `hls::task` order):
 
 ```python
-class MemCopy(FreeRunComp):
+class MemCopy(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "mem_copy"
 
     def __post_init__(self) -> None:

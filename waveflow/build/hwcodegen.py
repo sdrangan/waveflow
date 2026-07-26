@@ -1,7 +1,7 @@
 """HwStmtExtractor — build-time AST → HwStmt IR converter.
 
 ``HwStmtExtractor`` is an ``ast.NodeVisitor`` that parses the ``run_proc``
-source of an ``HwComponent``, recognises the synthesizable subset, and
+source of an ``HwModule``, recognises the synthesizable subset, and
 returns a rooted ``HwStmt`` tree.  Everything outside the subset raises
 ``SynthesisError`` at build time.
 """
@@ -78,7 +78,7 @@ def _is_env_ref(node: ast.expr) -> bool:
 
 
 class HwStmtExtractor:
-    """Parse ``run_proc`` of an ``HwComponent`` into an ``HwStmt`` tree.
+    """Parse ``run_proc`` of an ``HwModule`` into an ``HwStmt`` tree.
 
     Usage::
 
@@ -104,9 +104,9 @@ class HwStmtExtractor:
         self._globals: dict = {}
         # Testbench-mode side tables — empty in kernel mode, populated by
         # the extractor as it walks the body in Phase 3/4.
-        self._duts: dict[str, object] = {}      # local_name -> HwComponent instance
+        self._duts: dict[str, object] = {}      # local_name -> HwModule instance
         self._tb_locals: dict[str, object] = {} # local_name -> object (binding)
-        self._mems: dict[str, object] = {}      # local_name -> MemComponent class
+        self._mems: dict[str, object] = {}      # local_name -> MemModel class
         # TB locals that alias a bound DUT's *input* regmap field local (Stage 2b):
         # local_name -> (dut_local, field_name).  Populated by
         # ``x = <Schema>().read_uint32_file(path)``; consumed by ``run_once``/
@@ -175,7 +175,7 @@ class HwStmtExtractor:
         """
         from waveflow.hw.aximm_queue import AXIMMQueue
         from waveflow.hw.dataschema import DataSchema
-        from waveflow.hw.hw_component import HwParamValue
+        from waveflow.hw.hw_module import HwParamValue
         from waveflow.hw.interface import InterfaceEndpoint
         from waveflow.hw.regmap import RegMap
 
@@ -347,7 +347,7 @@ class HwStmtExtractor:
             if result is not None:
                 return result
 
-        # `name = <ClassRef>(**kwargs)` — DUT / schema / MemComponent binding,
+        # `name = <ClassRef>(**kwargs)` — DUT / schema / MemModel binding,
         # or `name = <mem>.read_array(...)` — m_axi read-back.
         if (
             isinstance(stmt, ast.Assign)
@@ -420,12 +420,12 @@ class HwStmtExtractor:
                     if kw.value.id not in self._mems:
                         raise SynthesisError(
                             f"dut.run(mem={kw.value.id}) — '{kw.value.id}' is not a "
-                            f"bound MemComponent local (line {parent.lineno})"
+                            f"bound MemModel local (line {parent.lineno})"
                         )
                     mem_local = kw.value.id
                 else:
                     raise SynthesisError(
-                        f"dut.run() only accepts mem=<MemComponent local> "
+                        f"dut.run() only accepts mem=<MemModel local> "
                         f"(line {parent.lineno})"
                     )
             return KernelCallStmt(local_name=receiver_chain.id, mem_local=mem_local)
@@ -691,24 +691,24 @@ class HwStmtExtractor:
         call_node: ast.Call,
         parent_stmt: ast.stmt,
     ) -> "HwStmt | None":
-        """If ``call_node`` constructs a ``MemComponent``, return a
+        """If ``call_node`` constructs a ``MemModel``, return a
         ``MemBindStmt`` (flat array + MemMgr).  ``None`` otherwise."""
         from waveflow.hw.hwstmt import MemBindStmt
-        from waveflow.hw.memory import MemComponent
+        from waveflow.hw.memory import MemModel
 
         cls = self._resolve_tb_class(call_node.func)
-        if not (isinstance(cls, type) and issubclass(cls, MemComponent)):
+        if not (isinstance(cls, type) and issubclass(cls, MemModel)):
             return None
         if call_node.args:
             raise SynthesisError(
-                f"MemComponent construction must use keyword arguments only "
+                f"MemModel construction must use keyword arguments only "
                 f"(line {parent_stmt.lineno})"
             )
         kwargs: dict[str, object] = {}
         for kw in call_node.keywords:
             if kw.arg is None:
                 raise SynthesisError(
-                    f"MemComponent construction does not accept **kwargs "
+                    f"MemModel construction does not accept **kwargs "
                     f"(line {parent_stmt.lineno})"
                 )
             kwargs[kw.arg] = self._eval_tb_literal(kw.value, parent_stmt)
@@ -716,7 +716,7 @@ class HwStmtExtractor:
         nwords_tot = kwargs.get('nwords_tot')
         if nwords_tot is None:
             raise SynthesisError(
-                f"MemComponent in a testbench must declare nwords_tot "
+                f"MemModel in a testbench must declare nwords_tot "
                 f"(the static array size) (line {parent_stmt.lineno})"
             )
         self._mems[local_name] = (word_size, int(nwords_tot))
@@ -827,7 +827,7 @@ class HwStmtExtractor:
             if node.id in globs:
                 return globs[node.id]
         raise SynthesisError(
-            f"MemComponent kwarg must be a literal or module global "
+            f"MemModel kwarg must be a literal or module global "
             f"(line {getattr(parent, 'lineno', '?')})"
         )
 
@@ -1304,14 +1304,14 @@ class HwStmtExtractor:
         call_node: ast.Call,
         parent_stmt: ast.stmt,
     ) -> DutBindStmt | None:
-        """If ``call_node`` constructs a ``HwComponent`` subclass, return a
+        """If ``call_node`` constructs a ``HwModule`` subclass, return a
         matching ``DutBindStmt``; otherwise ``None`` so the dispatcher can
         try other patterns.
         """
-        from waveflow.hw.hw_component import HwComponent
+        from waveflow.hw.hw_module import HwModule
 
         cls = self._resolve_tb_class(call_node.func)
-        if not (isinstance(cls, type) and issubclass(cls, HwComponent)):
+        if not (isinstance(cls, type) and issubclass(cls, HwModule)):
             return None
         if call_node.args:
             raise SynthesisError(
@@ -1339,8 +1339,8 @@ class HwStmtExtractor:
     def _resolve_tb_class(self, func_node: ast.expr) -> object | None:
         """Resolve a class reference in the testbench's ``main`` globals.
 
-        Supports bare names (``PolyAccelComponent``) and attribute chains
-        rooted in a global (``mod.PolyAccelComponent``).
+        Supports bare names (``PolyAccel``) and attribute chains
+        rooted in a global (``mod.PolyAccel``).
         """
         method = getattr(self._comp, self._method_name)
         globs = getattr(method, '__globals__', {})
@@ -1842,7 +1842,7 @@ def _validate_leaf_is_flat(comp) -> None:
         f"{type(comp).__name__} lowers to a single kernel function, but it owns "
         f"{' and '.join(owned)}. A single function has nowhere to put them, so emitting "
         f"one would silently drop them. Either inline that behaviour into this "
-        f"component's own body, or make it a composite — a FreeRunComp with sub-components "
+        f"component's own body, or make it a composite — a FreeRunMod with sub-components "
         f"instead of a run_iter body, whose codegen IS the sub-component graph (one task per "
         f"child, one channel per internal edge). See docs/guide/flows/."
     )
@@ -1854,7 +1854,7 @@ def extract_kernel(comp) -> HwStmt:
     The path is chosen by :func:`~waveflow.build.codegen_dispatch.codegen_path`
     (typed dispatch on the component's class): a ``testbench`` routes to
     :func:`extract_testbench` (``main``); a ``leaf`` extracts its entry method
-    (``HostActivated`` → ``on_start``, ``FreeRunComp`` → ``run_iter``, else the
+    (``HostActivated`` → ``on_start``, ``FreeRunMod`` → ``run_iter``, else the
     regmap fallback ``on_start``/``run_proc``).  The returned tree has every
     ``ast.*`` node replaced with the real Python value and every output
     ``HwVar`` typed where possible.

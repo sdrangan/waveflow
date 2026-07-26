@@ -57,7 +57,7 @@ import numpy as np
 from waveflow.calib import LinCalibModel
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, EnumField, FloatField, IntField, MemAddr
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import MMIFMaster
 from waveflow.hw.synth import synthesizable
@@ -199,7 +199,7 @@ def load_compute_models() -> tuple[LinCalibModel, LinCalibModel]:
 
 
 @dataclass
-class FIRAccel(HwComponent):
+class FIRAccel(HwModule):
     """Free-running streaming FIR accelerator: ``ap_ctrl_hs`` + ``axis`` ``s_in``/``m_out`` +
     ``m_axi`` ``m_mem``, wrapping the ``pipeline`` DATAFLOW hook (load/compute/store +
     shift-register FIR + per-job status), reproducing the validated sandbox."""

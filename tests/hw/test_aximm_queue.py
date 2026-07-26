@@ -6,7 +6,7 @@ Coverage
 AXIMMQueueLayout  — address math across mem_bw and elem_words, validation
 AXIMMQueue        — try_write/try_get core, blocking write/get, concurrent SPSC
 
-The ring is backed by a real ``MemComponent`` (decision 9): ``inline=False`` plus
+The ring is backed by a real ``MemModel`` (decision 9): ``inline=False`` plus
 a single ``alloc`` puts the backing segment at byte 0, which is exactly where
 both the DirectMMIF (pass-through, base_addr=0) and crossbar (global − base)
 paths deliver their local addresses.
@@ -33,7 +33,7 @@ from waveflow.hw.memif import (
     MMIFMaster,
     assign_address_ranges,
 )
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.simulation import Simulation
 
 
@@ -54,20 +54,20 @@ class Pair(DataList):
 # ---------------------------------------------------------------------------
 
 def _make_mem(sim, layout, clk):
-    """A ``MemComponent`` backing *layout*'s ring region.
+    """A ``MemModel`` backing *layout*'s ring region.
 
     ``inline=False`` + one ``alloc`` of the region's word count places the
     segment at byte 0; the slave then accepts the local addresses ``[0,
     total_bytes)`` that both interconnects deliver.
     """
     total_words = layout.total_bytes // layout.word_bytes
-    mem = MemComponent(sim=sim, word_size=layout.mem_bw, inline=False, clk=clk)
+    mem = MemModel(sim=sim, word_size=layout.mem_bw, inline=False, clk=clk)
     mem.alloc(total_words)
     return mem
 
 
 def _make_queue_direct(capacity, *, elem_words=1, mem_bw=32, base_addr=0x0):
-    """One AXIMMQueue over a DirectMMIF + MemComponent; returns (sim, queue)."""
+    """One AXIMMQueue over a DirectMMIF + MemModel; returns (sim, queue)."""
     sim = Simulation()
     clk = Clock(freq=1.0)
     layout = AXIMMQueueLayout(
@@ -82,7 +82,7 @@ def _make_queue_direct(capacity, *, elem_words=1, mem_bw=32, base_addr=0x0):
 
 
 def _make_spsc_crossbar(sim, layout, clk, *, latency_init=0.0, latency_read_return=0.0):
-    """Producer/consumer AXIMMQueues over a 2-master crossbar + MemComponent.
+    """Producer/consumer AXIMMQueues over a 2-master crossbar + MemModel.
 
     Returns ``(producer_queue, consumer_queue)`` sharing one ring region.
     """

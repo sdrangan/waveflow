@@ -1,4 +1,4 @@
-"""tests/hw/test_freerun_timing.py — FreeRunComp's opt-in per-firing timing record.
+"""tests/hw/test_freerun_timing.py — FreeRunMod's opt-in per-firing timing record.
 
 Attaching a TimingModel turns on recording: the base loop times each firing and keeps a row of
 {features, current_dly, span} whenever the body called `timed_delay`.  A component with no model
@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 import pytest
 
 from waveflow.calib.timing_model import StreamTimingModel
-from waveflow.hw.hw_freerun import FreeRunComp, discover_timing_models
+from waveflow.hw.hw_freerun import FreeRunMod, discover_timing_models
 from waveflow.simulation.simulation import Simulation
 
 
 @dataclass
-class _Leaf(FreeRunComp):
+class _Leaf(FreeRunMod):
     """A minimal leaf: each firing does `base` units of work, then a model-predicted delay."""
     n_firings: int = 3
     base: float = 10.0
@@ -86,12 +86,12 @@ class TestNoModel:
 class TestDiscovery:
     def test_finds_models_across_the_tree(self):
         @dataclass
-        class Child(FreeRunComp):
+        class Child(FreeRunMod):
             def run_iter(self):
                 yield self.timeout(1)
 
         @dataclass
-        class Parent(FreeRunComp):
+        class Parent(FreeRunMod):
             def __post_init__(self):
                 super().__post_init__()
                 self.add_comp(Child(name=f"{self.name}_kid", sim=self.sim))
@@ -111,7 +111,7 @@ class TestDiscovery:
 
     def test_empty_when_none_attached(self):
         @dataclass
-        class Leaf(FreeRunComp):
+        class Leaf(FreeRunMod):
             def run_iter(self):
                 yield self.timeout(1)
 

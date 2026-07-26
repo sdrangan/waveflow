@@ -8,7 +8,7 @@ the validated Phase 1 sandbox kernel is reused as the hand-written DATAFLOW hook
 
 ```
 fir_golden.py       the ONE shared bit-exact FIR golden (sandbox gen_data imports it)
-fir.py              FIRAccel HwComponent: AXI-stream control (s_in/m_out) + 3-process block timing model
+fir.py              FIRAccel HwModule: AXI-stream control (s_in/m_out) + 3-process block timing model
 fir_dataflow.tpp    the @synthesizable hook core = the Phase 1 sandbox fir_accel kernel
 fir_top.cpp         static m_axi + AXI-stream-control top (copied into gen/fir.cpp); + fir.hpp / fir_tb.cpp / run.tcl
 fir_respond_impl.tpp hand-written response hook (m_out), like shared_mem's hist_respond_impl

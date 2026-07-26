@@ -19,9 +19,9 @@ from waveflow.build.elaborate import (
     elaborate,
     structure_signature,
 )
-from waveflow.hw.hw_component import HwParam
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIFMaster
-from waveflow.hw.mem_stream import FreeRunComp, MemRStream, MemWStream
+from waveflow.hw.mem_stream import FreeRunMod, MemRStream, MemWStream
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ def test_impurity_is_caught():
     ctr = itertools.count()
 
     @dataclass
-    class _Impure(FreeRunComp):
+    class _Impure(FreeRunMod):
         cpp_kernel_name: ClassVar[str] = "_impure"
         width: HwParam[int] = 32
 

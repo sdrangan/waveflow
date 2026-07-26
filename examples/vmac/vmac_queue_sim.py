@@ -2,11 +2,11 @@
 
 Stage 1 of ``plans/vmac_mm_queue_timing.md``: wire a non-synthesized :class:`VmacHost` and the
 timed :class:`VmacAccel` SimPy model as two masters on an :class:`AXIMMCrossBarIF`, sharing one
-:class:`MemComponent` that holds the command ring (an :class:`AXIMMQueueLayout`) plus the A / B /
+:class:`MemModel` that holds the command ring (an :class:`AXIMMQueueLayout`) plus the A / B /
 Y data regions (non-overlapping).  Topology mirrors ``examples/interface/aximm_queue_demo.py``::
 
     Host (master_0)  ──┐
-                       ├── AXIMMCrossBarIF ──── MemComponent (s_mm): ring + A/B/Y
+                       ├── AXIMMCrossBarIF ──── MemModel (s_mm): ring + A/B/Y
     VMAC (master_1) ──┘
 
 The host correlates two complex matrices per column: ``anorm = Σ_i |A[i,j]|²`` and
@@ -30,7 +30,7 @@ from examples.vmac.vmac_host import VmacHost
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
 from waveflow.hw.clock import Clock
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.logger import Logger
 from waveflow.simulation.simulation import Simulation
 from waveflow.utils import complexutils as cx
@@ -137,7 +137,7 @@ class VmacQueueSim:
         # DDR port, so its reads and writes contend for one R/W bandwidth — the
         # declared-half-duplex slave (the plan's DDR caveat).  Without it the full-duplex
         # default would let the consumer's reads overlap the producer's ring writes.
-        self.mem = MemComponent(
+        self.mem = MemModel(
             sim=self.sim, word_size=self.mem_bw, inline=False, clk=self.clk,
             latency_init=2.0, latency_per_word=1.0, half_duplex=True,
         )

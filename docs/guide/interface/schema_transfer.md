@@ -29,7 +29,7 @@ Physical layer:    StreamIFMaster               StreamIFSlave
 
 Two raw [`SimObj`](../sim/simobj.md)s sending a schema object master→slave. Each transfer endpoint
 owns an internal `StreamIFMaster` / `StreamIFSlave` (`stream_ep`); you complete the physical link by
-binding those two `stream_ep`s over a `StreamIF`. No `HwComponent`. (The `yield from` / `run_proc`
+binding those two `stream_ep`s over a `StreamIF`. No `HwModule`. (The `yield from` / `run_proc`
 mechanics are in [Process generators](../sim/procgen.md).)
 
 ```python

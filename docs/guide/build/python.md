@@ -54,7 +54,7 @@ class PySimStep(BuildStep):
         log_path.parent.mkdir(parents=True, exist_ok=True)
         logger = Logger(name="poly_log", sim=sim, file_path=log_path,
                         fields=["event", "job"])
-        accel = PolyAccelComponent(
+        accel = PolyAccel(
             name="poly_accel", sim=sim,
             in_bw=in_bw, out_bw=out_bw, unroll_factor=unroll_factor,
             clk=clk, logger=logger,

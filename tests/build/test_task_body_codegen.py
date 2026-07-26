@@ -22,8 +22,8 @@ import pytest
 from waveflow.build.hwgen import kernel_files_to_str, task_files_to_str
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
-from waveflow.hw.hw_component import HwParam
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
@@ -41,7 +41,7 @@ class _Cmd(DataList):
 
 
 @dataclass
-class _HookSeq(FreeRunComp):
+class _HookSeq(FreeRunMod):
     """Minimal extractable task-body fixture: ``get`` -> hook -> ``write`` -> hook -> ``write``.
 
     Each hook constructs a :class:`_Cmd`, which is **not** in the extractor's vocabulary (constructing

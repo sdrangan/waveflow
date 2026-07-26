@@ -38,11 +38,11 @@ import numpy.typing as npt
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField, MemAddr
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
@@ -106,7 +106,7 @@ SCHEMA_CLASSES = [BlockCmd]
 # Accelerator (SimPy model + codegen source)
 # ---------------------------------------------------------------------------
 @dataclass
-class BlockScaleComponent(HwComponent):
+class BlockScale(HwModule):
     """Synthesizable block-scale kernel — the codegen source for ``gen/block_scale.cpp``.
 
     ``run_proc`` is the kernel body (stream-controlled, so the codegen root is
@@ -161,7 +161,7 @@ class BlockController(SimObj):
     """Allocates the operand + result regions, writes the operand, issues the
     command; the result is read back after the run completes."""
 
-    mem: MemComponent
+    mem: MemModel
     x: npt.NDArray[np.int32]
     word_bw: int = MEM_BW
 
@@ -182,8 +182,8 @@ class BlockController(SimObj):
         yield from self.m_cmd.write(BlockCmd(n=n, x_addr=x_addr, y_addr=self.y_addr))
 
 
-def connect(sim: Simulation, ctrl: BlockController, accel: BlockScaleComponent,
-            mem: MemComponent, clk: Clock) -> None:
+def connect(sim: Simulation, ctrl: BlockController, accel: BlockScale,
+            mem: MemModel, clk: Clock) -> None:
     in_stream = StreamIF(sim=sim, clk=clk)
     mem_link  = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)
     in_stream.bind("master", ctrl.m_cmd)
@@ -196,8 +196,8 @@ def run_sim(x: np.ndarray, *, clk_freq: float = 1e9) -> np.ndarray:
     """Run the SimPy model and return the kernel-produced ``y``."""
     sim = Simulation()
     clk = Clock(freq=clk_freq)
-    mem = MemComponent(name="mem", sim=sim, inline=False, clk=clk)
-    accel = BlockScaleComponent(name="block_scale", sim=sim, clk=clk)
+    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk)
+    accel = BlockScale(name="block_scale", sim=sim, clk=clk)
     ctrl = BlockController(name="ctrl", sim=sim, mem=mem, x=np.asarray(x, dtype=np.int32))
     connect(sim, ctrl, accel, mem, clk)
     sim.run_sim()
@@ -222,8 +222,8 @@ class BlockScaleTBHls(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "block_scale"
 
     def main(self) -> None:
-        dut = BlockScaleComponent()
-        mem = MemComponent(name="mem", sim=None, inline=False, nwords_tot=MAX_MEM_WORDS)
+        dut = BlockScale()
+        mem = MemModel(name="mem", sim=None, inline=False, nwords_tot=MAX_MEM_WORDS)
 
         cmd = BlockCmd()
         cmd.read_uint32_file(self.data_dir + "/cmd.bin")

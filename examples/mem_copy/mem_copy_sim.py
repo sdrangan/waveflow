@@ -17,11 +17,11 @@ import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
-from waveflow.hw.hw_component import HwParam
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemComponent, MemSeg
+from waveflow.hw.memory import MemModel, MemSeg
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
@@ -30,12 +30,12 @@ from waveflow.utils.burst_io import write_burst_bundle
 
 
 @dataclass
-class MemCopyTB(FreeRunComp):
+class MemCopyTB(FreeRunMod):
     """The testbench as a component **graph** — PURE structure: three participants + the DUT, wired by
     interfaces (a driver on ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi``
     bundles, and the :class:`MemCopy` DUT).
 
-    Declaring it as a composite :class:`FreeRunComp` (sub-components, not a ``run_iter`` body) is what
+    Declaring it as a composite :class:`FreeRunMod` (sub-components, not a ``run_iter`` body) is what
     makes it *walkable*: **a function body is code; a component graph is data** — only data can be
     introspected.  ``composite_top_spec`` / ``tb_top_spec`` cannot read statements that have already
     executed, so a generator learns the participants and their wiring from this graph.  The same graph
@@ -51,7 +51,7 @@ class MemCopyTB(FreeRunComp):
     """
 
     #: A testbench is not a synthesizable kernel — it lowers to the XSI harness (Flow 2's TB target),
-    #: not to ``composite_kernel`` (which it would otherwise inherit as a composite ``FreeRunComp``).
+    #: not to ``composite_kernel`` (which it would otherwise inherit as a composite ``FreeRunMod``).
     #: This is what makes ``check(MemCopyTB, "sequential_xsi_tb")`` reach gate 4 (tb_top_spec).
     potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
 
@@ -82,7 +82,7 @@ class MemCopyTB(FreeRunComp):
         # One flat arena covering every source and destination region (byte-addressed, base 0).
         self.arena_words = max(max(job.src_off, job.dst_off) + job.n_words
                                for job in self._jobs) + 16
-        self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+        self.mem = MemModel(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         # Platform bus model: the memory's slave charges the calibrated m_axi transfer cost, so the
         # component's residual is just its own control cost.  Shared across accelerators (fit once).
@@ -96,7 +96,7 @@ class MemCopyTB(FreeRunComp):
         self.mem.alloc(int(self.mem.nwords_tot))
         # Both backends seed the memory from vectors/mem_in in pre_sim (load_segs) and the RTL memory
         # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
-        # MemComponent.pre_sim loads the same bundle (root set in write_scenario).
+        # MemModel.pre_sim loads the same bundle (root set in write_scenario).
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 

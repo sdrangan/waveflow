@@ -31,7 +31,7 @@ custom compute kernel, on-chip random access, and **fitting that kernel's timing
 
 The design (`examples/interleaver/`) reuses the **framework** memory adaptors `mem_copy` composes — the
 `MemRStream` / `MemWStream` in-band mem-streams — and adds only the stages a gather actually needs. Each
-stage is a **leaf `FreeRunComp`** (one firing per job, one `ap_ctrl_none` `hls::task`):
+stage is a **leaf `FreeRunMod`** (one firing per job, one `ap_ctrl_none` `hls::task`):
 
 - **`cmd_rx`** — the schema-aware **framer** (`mem_copy`'s `Sequencer` role). It reads one
   `InterleaverCmd` off the boundary stream `s_cmd` and frames the reader's command stream as **two

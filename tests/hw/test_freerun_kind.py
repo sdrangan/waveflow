@@ -1,6 +1,6 @@
-"""Tests for :class:`FreeRunComp`'s **standalone vs composite** kind.
+"""Tests for :class:`FreeRunMod`'s **standalone vs composite** kind.
 
-A composite is not a separate class; it is a ``FreeRunComp`` that has sub-components instead of a
+A composite is not a separate class; it is a ``FreeRunMod`` that has sub-components instead of a
 ``run_iter`` body (a standalone component being the 1-task degenerate case of the same walk). The kind
 is decided by CONTENT, post-construction, and both shapes lower to ``composite_kernel`` through one
 generator. See ``plans/one_component_two_flows.md``.
@@ -12,31 +12,31 @@ from dataclasses import dataclass
 import pytest
 
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
-from waveflow.hw.hw_component import HwComponent
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwModule
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.simulation.simulation import Simulation
 
 
 def test_freeruncomp_is_a_hwcomponent():
-    assert issubclass(FreeRunComp, HwComponent)
+    assert issubclass(FreeRunMod, HwModule)
 
 
 def test_standalone_and_composite_share_one_target():
     """Both lower to composite_kernel — a standalone component is the 1-task degenerate case, one
     product, one name.  There is no separate composite class or target to route to."""
-    assert FreeRunComp.potential_targets == frozenset({COMPOSITE_KERNEL})
+    assert FreeRunMod.potential_targets == frozenset({COMPOSITE_KERNEL})
 
 
 def test_a_composite_with_children_is_passive():
     """A composite (has sub-components, no body) returns None from run_proc — its children own the
     concurrent processes. The kind is decided by CONTENT, so the composite must actually have a child."""
     @dataclass
-    class Standalone(FreeRunComp):
+    class Standalone(FreeRunMod):
         def run_iter(self):  # noqa: ANN201
             yield self.timeout(1)
 
     @dataclass
-    class Parent(FreeRunComp):
+    class Parent(FreeRunMod):
         def __post_init__(self):
             super().__post_init__()
             self.add_comp(Standalone(name=f"{self.name}_child", sim=self.sim))
@@ -49,7 +49,7 @@ def test_a_composite_with_children_is_passive():
 def test_a_standalone_with_a_body_runs():
     """A standalone component (overrides run_iter, no children) reports its kind and drives a loop."""
     @dataclass
-    class Standalone(FreeRunComp):
+    class Standalone(FreeRunMod):
         def run_iter(self):  # noqa: ANN201
             yield self.timeout(1)
 
@@ -62,7 +62,7 @@ def test_body_xor_children_neither_fails_loudly():
     """A component with no body and no children is a user error, and now says so — where the old
     two-class world silently accepted it as a passive no-op."""
     @dataclass
-    class Empty(FreeRunComp):
+    class Empty(FreeRunMod):
         pass
 
     comp = Empty(name="c", sim=Simulation())
@@ -74,12 +74,12 @@ def test_body_xor_children_both_fails_loudly():
     """A component that declares BOTH a body and children is ambiguous — refuse it. (This runs
     post-construction, because children only exist after __post_init__.)"""
     @dataclass
-    class GrandStandalone(FreeRunComp):
+    class GrandStandalone(FreeRunMod):
         def run_iter(self):  # noqa: ANN201
             yield self.timeout(1)
 
     @dataclass
-    class Both(FreeRunComp):
+    class Both(FreeRunMod):
         def __post_init__(self):
             super().__post_init__()
             self.add_comp(GrandStandalone(name=f"{self.name}_child", sim=self.sim))
@@ -95,5 +95,5 @@ def test_body_xor_children_both_fails_loudly():
 def test_retrofit_composites_are_freeruncomps():
     from examples.interleaver.interleaver_inband import InterleaverInband
     from examples.mem_copy.mem_copy import MemCopy
-    assert issubclass(MemCopy, FreeRunComp)
-    assert issubclass(InterleaverInband, FreeRunComp)
+    assert issubclass(MemCopy, FreeRunMod)
+    assert issubclass(InterleaverInband, FreeRunMod)

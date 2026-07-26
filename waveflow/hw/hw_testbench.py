@@ -39,7 +39,7 @@ class SeqTB(NamedObject):
 
     Subclasses override :meth:`main` with a **sequential** body that:
 
-    - constructs a single DUT (e.g. ``dut = PolyAccelComponent(...)``),
+    - constructs a single DUT (e.g. ``dut = PolyAccel(...)``),
     - reads input vectors from disk via the standard schema file-IO methods,
     - pushes stream data into the DUT's endpoints (``dut.s_in.push(...)``),
     - configures regmap fields (``dut.regmap.set(...)``),
@@ -119,7 +119,7 @@ class SeqTB(NamedObject):
         """Drive ``main()`` as **one** SimPy process to completion.
 
         Creates a fresh :class:`~waveflow.simulation.simulation.Simulation`, makes it the
-        *ambient* sim (so a bare ``dut = SimpFunComponent()`` inside ``main()`` binds to it —
+        *ambient* sim (so a bare ``dut = SimpFun()`` inside ``main()`` binds to it —
         identical to the codegen no-sim form), spawns ``main()`` as a single process, and runs
         the environment to quiescence.  ``main()`` must be a generator (it ``yield``s to model
         timing, e.g. ``yield from dut.run_once_sim(...)``); the yields advance a real clock, so

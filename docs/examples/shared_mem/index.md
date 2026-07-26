@@ -46,7 +46,7 @@ In going through this example, you will learn to:
 - **Validate** command bounds and select an error status into the response *before* any
   memory access.
 - Use the `MMIFMaster` (`read_array` / `write_array`) interface and the SimPy
-  `MemComponent` harness to reach parity with the numpy golden.
+  `MemModel` harness to reach parity with the numpy golden.
 - Generate the **multi-buffer `m_axi`** kernel + testbench, run the four-case C-sim,
   C-synth, and RTL cosim, and extract **multi-buffer burst** timing — the reference
   pattern other `m_axi` designs copy.
@@ -60,7 +60,7 @@ In going through this example, you will learn to:
    `HistResp` / `HistError` schemas, and the `MMIFMaster` (`read_array` /
    `write_array`) interface.
 3. [Python simulation](pysim.md) — the SimPy harness (`HistController` +
-   `MemComponent`) and parity against the numpy golden.
+   `MemModel`) and parity against the numpy golden.
 4. [Code generation](codegen.md) — lowering `HistAccel` / `HistTBHls` to the
    multi-buffer m_axi Vitis HLS kernel and testbench.
 5. [C and RTL simulation](rtlsim.md) — the four-case C-sim coverage, C-synthesis,

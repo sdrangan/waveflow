@@ -50,7 +50,7 @@ from .memif import (
 from .memory import (
     AddrUnit,
     Memory,
-    MemComponent,
+    MemModel,
 )
 from .regmap import (
     Bit,
@@ -108,7 +108,7 @@ __all__ = [
     "assign_address_ranges",
     "AddrUnit",
     "Memory",
-    "MemComponent",
+    "MemModel",
     "Bit",
     "RegAccess",
     "RegField",

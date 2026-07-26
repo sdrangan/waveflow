@@ -5,7 +5,7 @@ nav_order: 2
 ---
 # Python Model
 
-This page builds the design in Python — the four hand-written [`FreeRunComp`](../../guide/flows/concurrent.md)
+This page builds the design in Python — the four hand-written [`FreeRunMod`](../../guide/flows/concurrent.md)
 leaves, the two framework mem-streams they compose with, and the composite that wires all six — and shows
 *how to write each kind of block* for a gather `Y[i] = X[P[i]]`. The whole design is
 `examples/interleaver/interleaver_inband.py`.
@@ -107,12 +107,12 @@ def _make_elem_block(n: int) -> type:
 
 ## Writing a leaf: `il_compute`
 
-A leaf is a `FreeRunComp`. You declare its endpoints in `__post_init__` and implement `run_iter` (one firing;
+A leaf is a `FreeRunMod`. You declare its endpoints in `__post_init__` and implement `run_iter` (one firing;
 the runtime re-fires it per job, so there is no command loop). `il_compute` reads `IlDesc`, holds read locks
 on `p_blk` / `x_blk` and a write lock on `y_blk`, and does the gather in one vectorized fancy-index:
 
 ```python
-class IlComputeInband(FreeRunComp):
+class IlComputeInband(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "il_compute"
 
     def run_iter(self) -> ProcessGen[None]:
@@ -140,7 +140,7 @@ II=1` — the pysim gather laid bare.)
 
 ## The mem-stream leaves
 
-`MemRStream` and `MemWStream` are also `FreeRunComp` leaves, but you do **not** write them — they are
+`MemRStream` and `MemWStream` are also `FreeRunMod` leaves, but you do **not** write them — they are
 framework components. Each owns an `m_axi` port (`m_mem`) and a data stream, and its body is a hand-written,
 width-templated `hls::task` copied in by the build (a body that owns a memory port is never lowered from
 `run_iter` — the dividing line is `m_axi`). Both are constructed `inband=True`: the reader takes its
@@ -151,7 +151,7 @@ emits it on `s_done` after the write commits — the commit-timed completion. Th
 
 ## Writing the composite: `InterleaverInband`
 
-The composite is a `FreeRunComp` with sub-components instead of a `run_iter` body — that is what "composite"
+The composite is a `FreeRunMod` with sub-components instead of a `run_iter` body — that is what "composite"
 means here. It has **no `run_iter`**; its children do the work, and it only declares structure. Three things,
 all in `__post_init__`.
 

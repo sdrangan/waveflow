@@ -53,7 +53,7 @@ from waveflow.hw.synth import synthesizable
 from waveflow.hw.hwstmt import SynthCallStmt
 
 if TYPE_CHECKING:
-    from waveflow.hw.component import Component
+    from waveflow.hw.hw_module import HwModule
 
 
 def _not_implemented_synth(ctx, inputs, outputs):
@@ -176,7 +176,7 @@ class InterfaceEndpoint(SimObj):
     Base class for a concrete endpoint owned by a component.
     """
 
-    comp : Component | None = field(init=False)
+    comp : HwModule | None = field(init=False)
     """The component that owns this endpoint.
     Set when the endpoint is added to a component.
     """
@@ -658,7 +658,7 @@ class StreamIFSlave(QueuedTransferIFSlave):
     def get(self, schema_type=None, count=None, *, nwords_max=None):
         """Pull the next burst from the buffer, optionally deserializing it.
 
-        Old (raw-word) calling convention — unchanged, used by non-HwComponent
+        Old (raw-word) calling convention — unchanged, used by non-HwModule
         callers such as PolyTB::
 
             words = yield from self.s_in.get()
@@ -776,7 +776,7 @@ class StreamIFMaster(QueuedTransferIFMaster):
 
         * **Raw words** (``numpy.ndarray`` of uint32/uint64) — unchanged
           behaviour, forwarded directly to the interface.  Used by non-
-          HwComponent callers such as PolyTB.
+          HwModule callers such as PolyTB.
         * **DataSchema instance** — serialized via
           ``instance.serialize(word_bw=self.bitwidth)`` before writing.
           :class:`~waveflow.hw.dataschema.DataArray` instances are handled

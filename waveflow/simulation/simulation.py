@@ -10,7 +10,7 @@ import simpy
 #: The ambient (current) :class:`Simulation`.  A ``SimObj`` constructed with no explicit
 #: ``sim=`` picks this up (see :meth:`Simulation.as_current` and ``SimObj.__post_init__``),
 #: so code that builds a component inside a running sim — e.g. a single-process ``SeqTB.main()``
-#: doing ``dut = SimpFunComponent()`` — need not thread ``sim=`` through.  ``None`` when no
+#: doing ``dut = SimpFun()`` — need not thread ``sim=`` through.  ``None`` when no
 #: simulation has entered :meth:`Simulation.as_current`, in which case a sim-less construction
 #: still raises (behaviour is unchanged for explicit-``sim=`` callers and outside ``as_current``).
 _current_simulation: contextvars.ContextVar["Simulation | None"] = contextvars.ContextVar(
@@ -44,11 +44,11 @@ class Simulation:
     def as_current(self) -> Iterator["Simulation"]:
         """Make this the ambient :class:`Simulation` for the duration of the ``with`` block.
 
-        Inside the block, a ``SimObj`` (e.g. a :class:`~waveflow.hw.component.Component`)
+        Inside the block, a ``SimObj`` (e.g. a :class:`~waveflow.hw.hw_module.HwModule`)
         constructed with no explicit ``sim=`` binds to *this* simulation instead of raising.
         Outside the block — and for any construction that still passes ``sim=`` — behaviour is
         unchanged.  Used by the runnable single-process ``SeqTB`` harness so ``main()`` can do a
-        bare ``dut = SimpFunComponent()`` that is identical to the codegen (no-sim) form::
+        bare ``dut = SimpFun()`` that is identical to the codegen (no-sim) form::
 
             with sim.as_current():
                 env.process(tb.main())

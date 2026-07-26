@@ -1,6 +1,6 @@
 ---
 title: Control-driven kernel
-parent: Realization Flows
+parent: Hardware modules and Flows
 nav_order: 1
 nav_exclude: true   # SUPERSEDED by flows/sequential/ — kept for content mining; remove when harvested
 audience: python
@@ -11,15 +11,15 @@ summary: "Flow 1 — a control_driven_kernel verified by a sequential_vitis_tb t
 # Flow 1 — Control-driven kernel
 
 **DUT:** a [`control_driven_kernel`](../comp_codegen/index.md) — a
-[`HostActivated`](components.md) component realized as one `ap_ctrl_hs` HLS IP.
-**Testbench:** a [`sequential_vitis_tb`](../comp_codegen/testbench.md) — a [`SeqTB`](components.md)
+[`HostActivated`](modules.md) component realized as one `ap_ctrl_hs` HLS IP.
+**Testbench:** a [`sequential_vitis_tb`](../comp_codegen/testbench.md) — a [`SeqTB`](modules.md)
 whose `main()` *calls* the kernel, run under Vitis **C-simulation** (the C++ directly) and
 **co-simulation** (the generated RTL behind the same call).
 
 **Status: built.** Every kernel in the repo takes this path today — `simp_fun`, `poly`, `hist`,
 `block_scale` — though not all with the same rigor (see [the gates](#the-three-gates)).
 
-> `block_scale` is the one that does not *declare* the target: it is still a plain `HwComponent` rather
+> `block_scale` is the one that does not *declare* the target: it is still a plain `HwModule` rather
 > than a `HostActivated`, so it is `ap_ctrl_hs` on **raw pins** instead of behind an `s_axilite`
 > adapter, and [`check`](../comp_codegen/index.md) abstains on it. It takes this flow all the same —
 > which is the point of the [contract](../comp_codegen/structure.md) being about *shape*, not

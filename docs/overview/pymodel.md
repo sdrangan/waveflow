@@ -34,7 +34,7 @@ class CoeffArray(DataArray):                # the polynomial coefficients
     max_shape = (4,)
 
 @dataclass
-class PolyAccelComponent(HwComponent):
+class PolyAccel(HwModule):
     # 3. PARAMETERS — the knobs that size the hardware
     in_bw:  HwParam[int] = 32
     out_bw: HwParam[int] = 32

@@ -1,10 +1,10 @@
 ---
 title: Flow steps
 parent: Concurrent (free-running)
-grand_parent: Realization Flows
+grand_parent: Hardware modules and Flows
 nav_order: 1
 audience: python
-summary: "The concurrent flow end to end as a step diagram: a FreeRunComp graph and a composite FreeRunComp testbench graph, each walked to generated C++ (an ap_ctrl_none top with one hls::task per child, and an XSI harness), then csynth and cycle-exact XSI verification. The full worked instance is the mem_copy example."
+summary: "The concurrent flow end to end as a step diagram: a FreeRunMod graph and a composite FreeRunMod testbench graph, each walked to generated C++ (an ap_ctrl_none top with one hls::task per child, and an XSI harness), then csynth and cycle-exact XSI verification. The full worked instance is the mem_copy example."
 ---
 
 # Flow steps
@@ -18,7 +18,7 @@ generates both the kernel and its harness. Every step below is walked with its r
 flowchart LR
   subgraph py["Python (source of truth)"]
     direction TB
-    DUT["FreeRunComp graph<br/>(MemCopy: Sequencer→R→W)"]
+    DUT["FreeRunMod graph<br/>(MemCopy: Sequencer→R→W)"]
     TB["composite testbench<br/>(MemCopyTB: DUT + BFM models)"]
   end
 
@@ -33,10 +33,10 @@ flowchart LR
 
 ## The steps
 
-**1 · The component graph.** Describe the design as a [`FreeRunComp`](./components.md) graph: standalone
+**1 · The component graph.** Describe the design as a [`FreeRunMod`](./modules.md) graph: standalone
 components that implement `run_iter`, and a composite that `add_comp`s them, wires internal channels,
 and names its boundary. For `mem_copy` that is a `Sequencer` feeding a `MemRStream` → `MemWStream` over
-internal FIFOs. The **testbench** is *also* a graph — a composite `FreeRunComp` wiring the DUT to BFM
+internal FIFOs. The **testbench** is *also* a graph — a composite `FreeRunMod` wiring the DUT to BFM
 participants (a driver, a sink, a shared memory) — and the same graph runs the pysim golden.
 
 **2 · Generate the kernel (`composite_kernel`).** `composite_top_spec` walks the graph and `render_top`

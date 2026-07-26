@@ -1,7 +1,7 @@
 ---
 title: Flow steps
 parent: Sequential (host-activated)
-grand_parent: Realization Flows
+grand_parent: Hardware modules and Flows
 nav_order: 1
 audience: python
 summary: "The sequential flow end to end as a step diagram: describe the module as a HostActivated component, simulate it in Python (PySim), write a SeqTB testbench, lower both to C++ with HlsCodegenStep, then verify by Vitis C-simulation and, after csynth, C/RTL co-simulation. The full worked instance is the regmap example."
@@ -18,7 +18,7 @@ code in the [register-map example](../../examples/regmap/).
 flowchart LR
   subgraph py["Python (source of truth)"]
     direction TB
-    HA["HostActivated<br/>SimpFunComponent"]
+    HA["HostActivated<br/>SimpFun"]
     TB["SeqTB<br/>SimpFunTBHls"]
   end
 
@@ -41,7 +41,7 @@ flowchart LR
 ## The steps
 
 **1 · Module source.** First, describe the hardware you want as a
-[`HostActivated`](./components.md) component — for the example, `SimpFunComponent`. This Python class
+[`HostActivated`](./modules.md) component — for the example, `SimpFun`. This Python class
 *is* the design: its `on_start` is the behavior and its register map is the boundary. Everything
 downstream is derived from it. ([regmap example: Python model](../../examples/regmap/python.md).)
 
@@ -66,7 +66,7 @@ Vitis executes. ([regmap example: Sequential execution](../../examples/regmap/se
 
 | Input | Step | Output |
 |---|---|---|
-| `SimpFunComponent` | `HlsCodegenStep` | `simp_fun.hpp` + `simp_fun.cpp` (the kernel), plus a hand-written hook stub `simp_fun_compute_impl.cpp` |
+| `SimpFun` | `HlsCodegenStep` | `simp_fun.hpp` + `simp_fun.cpp` (the kernel), plus a hand-written hook stub `simp_fun_compute_impl.cpp` |
 | `SimpFunTBHls` | `HlsCodegenStep(is_testbench=True)` | `simp_fun_tb.cpp` — a single `int main()`, no header |
 
 The example's `BuildDag` names these two instances `gen_kernel` and `gen_tb`. The kernel C++ is what

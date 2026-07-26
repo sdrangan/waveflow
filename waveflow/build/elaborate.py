@@ -14,7 +14,7 @@ generated C++ by construction.
 
 Precedent — :class:`~waveflow.hw.dataschema.DataSchema` gets this *for free*
 (its structure *is* class attributes + classmethods, read with no
-instantiation).  :class:`~waveflow.hw.hw_component.HwComponent` builds structure
+instantiation).  :class:`~waveflow.hw.hw_module.HwModule` builds structure
 *imperatively* in ``__post_init__``, so this module **enforces by contract**
 (:func:`assert_param_pure`) what DataSchema gets by construction.
 
@@ -82,7 +82,7 @@ def _build(comp_class: type, overrides: dict[str, Any], name: str) -> Any:
     and :func:`assert_param_pure` (the latter must build without recursing
     back into the purity gate).
 
-    A ``SimObj``-derived component (``HwComponent``) takes ``sim=``; a sim-less
+    A ``SimObj``-derived component (``HwModule``) takes ``sim=``; a sim-less
     :class:`~waveflow.hw.hw_testbench.SeqTB` testbench (a plain ``NamedObject``) does not, so the
     ``sim=`` kwarg is passed only when the class actually accepts it.
     """

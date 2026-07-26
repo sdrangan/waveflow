@@ -49,7 +49,7 @@ all objects at once.
 ## See also
 
 - [Interfaces](../interface/) — the transactional connections components are wired through.
-- [Hardware Components](../flows/components.md) — declaring the components (ports, `HwParam`) that a simulation runs.
+- [Hardware Modules](../flows/modules.md) — declaring the components (ports, `HwParam`) that a simulation runs.
 - [Timing Analysis Tools](../timing/) — *analyzing* the timeline a simulation produces (this section is the model that produces it).
 - [Build System](../build/python.md) — running a simulation as a step in a `BuildDag`.
 

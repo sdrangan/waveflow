@@ -42,7 +42,7 @@ class CollectTimingStep(BuildStep):
     ``model.collect_pysim(component.firing_records, run_id)``.  The RTL side is the
     :class:`~waveflow.build.trace_steps.ExtractBurstsStep` table; the pysim side is the
     ``firing_records`` a calibrated pysim run populated (see
-    :meth:`~waveflow.hw.hw_freerun.FreeRunComp.timed_delay`).
+    :meth:`~waveflow.hw.hw_freerun.FreeRunMod.timed_delay`).
 
     Construction parameters
     -----------------------

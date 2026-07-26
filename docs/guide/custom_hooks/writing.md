@@ -50,7 +50,7 @@ The hook lives in the component's `cpp_namespace`, so the generated call site is
 // simp_fun_compute_impl.cpp
 #include <ap_int.h>
 
-namespace simp_fun_impl {            // == SimpFunComponent.cpp_namespace
+namespace simp_fun_impl {            // == SimpFun.cpp_namespace
 
 ap_int<32> compute(ap_int<32> x, ap_int<32> a, ap_int<32> b) {
 #pragma HLS INLINE

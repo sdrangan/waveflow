@@ -57,7 +57,7 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
 
     This used to be a hand-written table keyed on the class (``if comp_class is MemRStream:``) that
     restated the component's own ports, their directions, and its task signature.  It is now the same
-    graph walk a composite gets: a leaf declares its ports (``FreeRunComp.boundary``, ordered by
+    graph walk a composite gets: a leaf declares its ports (``FreeRunMod.boundary``, ordered by
     ``kernel_task().signature``), their direction is their endpoint's type, and its one task is
     itself.  A standalone kernel really is *the 1-task degenerate case* — it just could not say so
     while its ports lived here.  See ``plans/endpoint_types_not_tags.md``.

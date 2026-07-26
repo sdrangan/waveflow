@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 # conv2d is archived (examples/_archive/) pending a systolic-array rewrite as a proper
-# HwComponent; it uses the retired serialization API + pre-component HLS style and is not
+# HwModule; it uses the retired serialization API + pre-component HLS style and is not
 # in CI. This whole module is skipped, and pytest is configured (norecursedirs +
 # --ignore-glob in pyproject.toml) not to collect anything under examples/_archive.
 pytestmark = pytest.mark.skip(reason="conv2d archived pending systolic-array rework")

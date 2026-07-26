@@ -174,8 +174,8 @@ The `gather_toy` kernel demonstrates type-safe block processing with gather sema
 ```python
 from waveflow.hw.dataschema import DataArray, IntField
 from waveflow.hw.interface import SobIFSlave, SobIFMaster, StreamOfBlocksIF, StreamIFMaster, StreamIFSlave
-from waveflow.hw.hw_component import HwComponent
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwModule
+from waveflow.hw.hw_freerun import FreeRunMod
 
 # Define a block type: 8 × uint64 words
 WordBlock = DataArray.specialize(
@@ -184,7 +184,7 @@ WordBlock = DataArray.specialize(
     member_name="words"
 )
 
-class Fill(HwComponent):
+class Fill(HwModule):
     """Producer: read words from StreamIF, gather 8 at a time into blocks via SOBIF."""
     def __post_init__(self):
         super().__post_init__()
@@ -202,7 +202,7 @@ class Fill(HwComponent):
                 block[i] = word  # Direct typed element access
             yield from self.m_out.commit_write(block)
 
-class Gather(HwComponent):
+class Gather(HwModule):
     """Consumer: read blocks from SOBIF, emit words in order (identity gather)."""
     def __post_init__(self):
         super().__post_init__()
@@ -219,7 +219,7 @@ class Gather(HwComponent):
                 yield from self.m_out.write(int(block[i]))  # Direct access, no unpacking
             yield from self.s_in.release_read()
 
-class GatherToy(FreeRunComp):
+class GatherToy(FreeRunMod):
     """Composite: Fill → SOBIF → Gather (proof-of-concept, no serialization overhead)."""
     def __post_init__(self):
         super().__post_init__()
@@ -259,4 +259,4 @@ in Python.
 - [Stream Interfaces](./stream.md) — the one-channel FIFO this contrasts with.
 - [Concurrency → SOB](../concurrency/python/sob.md) — the modeling pattern, with the reverse-add worked example.
 - [Concurrency (HLS) → SOB](../concurrency/hls/sob.md) — `stream_of_blocks` synthesis and the gather/scatter throughput asymmetry.
-- [Defining a component](../flows/components.md) — where SOB endpoints are declared on components.
+- [Defining a component](../flows/modules.md) — where SOB endpoints are declared on components.

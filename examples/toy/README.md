@@ -9,8 +9,8 @@ docs pages of its own. It exists so the guide's component pages quote code that 
 
 | kind | component | quoted by |
 |---|---|---|
-| `FreeRunComp` | `Square` — `y = x²` over a 4-vector, one firing | [`freerun.md`](../../docs/guide/components/freerun.md) |
-| `FreeRunComp` | `Double` — `z = x + x` | [`composite.md`](../../docs/guide/components/composite.md) |
+| `FreeRunMod` | `Square` — `y = x²` over a 4-vector, one firing | [`freerun.md`](../../docs/guide/components/freerun.md) |
+| `FreeRunMod` | `Double` — `z = x + x` | [`composite.md`](../../docs/guide/components/composite.md) |
 | `CompositeComp` | `ScaledSquare` — `x → double → z → square → y` | [`composite.md`](../../docs/guide/components/composite.md) |
 
 Backed by [`tests/examples/test_toy.py`](../../tests/examples/test_toy.py).
@@ -19,7 +19,7 @@ Backed by [`tests/examples/test_toy.py`](../../tests/examples/test_toy.py).
 
 **That it runs, and that the docs match it** — a tested pysim model written in synthesizable form.
 
-**Not that it synthesizes.** No `FreeRunComp` is auto-extracted today. `kernel_files_to_str(Square)`
+**Not that it synthesizes.** No `FreeRunMod` is auto-extracted today. `kernel_files_to_str(Square)`
 does return files, but they are not what `freerun.md` describes: the `@synthesizable square` body is
 *not* extracted (`@synthesizable` marks a hand-written **hook** boundary, so codegen emits a
 `// TODO: implement square` stub — the same arrangement as the checked-in

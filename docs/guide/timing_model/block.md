@@ -24,7 +24,7 @@ block process, since double-buffering is now built by composing `Load` / `Comput
 channels:
 
 ```python
-class Compute(FreeRunComp):
+class Compute(FreeRunMod):
     def __post_init__(self):
         super().__post_init__()
         self.blk = SobIFSlave(name=f"{self.name}_blk", sim=self.sim, bitwidth=WORD_BW, block_n=NWORDS)

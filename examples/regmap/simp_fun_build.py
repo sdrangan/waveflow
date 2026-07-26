@@ -19,7 +19,7 @@ try:
         DEFAULT_VECTOR,
         Int32,
         SimpFunCase,
-        SimpFunComponent,
+        SimpFun,
         SimpFunTBHls,
         simulate_case,
         write_sim_summary,
@@ -30,7 +30,7 @@ except ModuleNotFoundError:
         DEFAULT_VECTOR,
         Int32,
         SimpFunCase,
-        SimpFunComponent,
+        SimpFun,
         SimpFunTBHls,
         simulate_case,
         write_sim_summary,
@@ -330,7 +330,7 @@ def build_simp_fun_dag() -> BuildDag:
 
     dag.add(HlsCodegenStep(
         name="gen_kernel",
-        comp_class=SimpFunComponent,
+        comp_class=SimpFun,
         source_artifact="simp_fun_source",
         output_dir="gen",
         impl_dir=".",

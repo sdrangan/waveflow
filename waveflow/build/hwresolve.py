@@ -35,14 +35,14 @@ from waveflow.hw.hwstmt import (
 )
 
 if TYPE_CHECKING:
-    from waveflow.hw.hw_component import HwComponent
+    from waveflow.hw.hw_module import HwModule
 
 
 class ResolutionError(Exception):
     """Raised when an AST node in the IR cannot be resolved to a value."""
 
 
-def resolve_kernel(tree: HwStmt, comp: HwComponent) -> HwStmt:
+def resolve_kernel(tree: HwStmt, comp: HwModule) -> HwStmt:
     """Walk *tree* and replace AST nodes in inputs/values with real values.
 
     Mutates *tree* in place. Also returns it for chaining.

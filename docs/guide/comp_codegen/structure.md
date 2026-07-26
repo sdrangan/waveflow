@@ -5,15 +5,15 @@ title: Component structure
 parent: Component Code Generation
 nav_order: 1
 audience: hls
-applies_to: [HwComponent]
+applies_to: [HwModule]
 api: [kernel_files_to_str, cpp_kernel_name, extract_kernel, synthesizable, check]
-summary: "How an HwComponent becomes a kernel: a standalone component generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, standalone FreeRunComp -> run_iter, composite FreeRunComp -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
+summary: "How an HwModule becomes a kernel: a standalone component generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, standalone FreeRunMod -> run_iter, composite FreeRunMod -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
 ---
 # Component structure
 
 ## Concept
 
-Every `HwComponent` that generates code generates **one kernel** — a single Vitis HLS **top-level
+Every `HwModule` that generates code generates **one kernel** — a single Vitis HLS **top-level
 function**, the unit Vitis synthesizes into an IP block. That is what "kernel" means throughout this
 guide.
 
@@ -21,7 +21,7 @@ Its arguments correspond one-to-one to the component's declared **endpoints**; h
 becomes a port (`hls::stream` / `m_axi` / `s_axilite`) is [Endpoint interfaces](./interface.md).
 
 The function name defaults to the class name in `snake_case` with a trailing `_component` stripped
-(`PolyAccelComponent → poly_accel`), overridable with `cpp_kernel_name: ClassVar[str] = "..."`.
+(`PolyAccel → poly_accel`), overridable with `cpp_kernel_name: ClassVar[str] = "..."`.
 
 ## Who starts the kernel: `ap_ctrl_hs` vs `ap_ctrl_none`
 
@@ -49,7 +49,7 @@ The consequence runs through everything else:
 | Which [flow](../flows/) | [Control-driven kernel](../flows/control_kernel.md) | [Free-running, sequentially](../flows/freerun_seq.md) or [concurrently driven](../flows/freerun_conc.md) |
 
 > **Everything Waveflow generates today is `ap_ctrl_hs`.** `ap_ctrl_none` is the
-> [`free_running_kernel`](./index.md) target, which is not built — so a `FreeRunComp` currently emits an
+> [`free_running_kernel`](./index.md) target, which is not built — so a `FreeRunMod` currently emits an
 > `ap_ctrl_hs` top despite declaring `control_mode = FREE_RUNNING`. That is a real gap, not a subtlety.
 >
 > And note a component whose entry is `run_proc` rather than `on_start` is **not** thereby
@@ -61,22 +61,22 @@ The entry follows from the component's **kind**. You never name it; the class st
 
 | Kind                                               | Entry extracted                                    | Why                                                                   |
 | -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
-| [`HostActivated`](../flows/components.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
-| [`FreeRunComp`](../flows/components.md) (standalone) | `run_iter`                                 | *one firing*; the `while True` belongs to the base, not your code |
-| [`FreeRunComp`](../flows/components.md) (composite)  | — (see below)                              | its body comes from the graph, not a method                           |
-| plain`HwComponent`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                    |
+| [`HostActivated`](../flows/modules.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
+| [`FreeRunMod`](../flows/modules.md) (standalone) | `run_iter`                                 | *one firing*; the `while True` belongs to the base, not your code |
+| [`FreeRunMod`](../flows/modules.md) (composite)  | — (see below)                              | its body comes from the graph, not a method                           |
+| plain`HwModule`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                    |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
 routes to `main()` instead ([Testbench](./testbench.md)).
 
 **A composite still generates a kernel** — the same single top-level function as any other component.
 What differs is only where its *contents* come from: a composite (a
-[`FreeRunComp`](../flows/components.md) with sub-components) declares no body, so instead of extracting
+[`FreeRunMod`](../flows/modules.md) with sub-components) declares no body, so instead of extracting
 a method, codegen builds the function from the
 **sub-component graph** — one `hls::task` per child, one channel declaration per internal edge, and the
 boundary endpoints as its ports. Same output shape, different source.
 
-> **The plain-`HwComponent` row is not scaffolding.** It is a real shape: a kernel with no regmap, whose
+> **The plain-`HwModule` row is not scaffolding.** It is a real shape: a kernel with no regmap, whose
 > arguments arrive as ports rather than registers, and whose body is `run_proc`. `block_scale` is one.
 > Such a component is `ap_ctrl_hs` on **raw pins** — it is *not* free-running; the two are easy to
 > conflate because both extract a non-`on_start` method. Free-running means `ap_ctrl_none`, which is a
@@ -148,7 +148,7 @@ The same shape holds for the other kinds, with the composite inverted: it *must*
 
 ```python
 >>> from waveflow.build.codegen_check import check
->>> check(SimpFunComponent)
+>>> check(SimpFun)
 (True, None)
 ```
 
@@ -163,7 +163,7 @@ The same shape holds for the other kinds, with the composite inverted: it *must*
 
 ## Quick reference
 
-- One leaf `HwComponent` → one top-level kernel function; its args are its endpoints. A composite → a graph.
+- One leaf `HwModule` → one top-level kernel function; its args are its endpoints. A composite → a graph.
 - The entry method follows from the **kind**, not from an argument: `on_start` / `run_iter` / `run_proc`.
 - The **entry is extracted**; a **`@synthesizable` hook is not** — you write its C++, and `impl_file=` only moves the stub.
 - `pre_sim` / `post_sim` are never synthesized; `@sim_only` calls are stripped from the kernel.

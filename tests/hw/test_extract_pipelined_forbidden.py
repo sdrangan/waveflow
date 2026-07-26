@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from waveflow.build.hwcodegen import HwStmtExtractor, SynthesisError, extract_kernel
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simulation import Simulation
@@ -21,7 +21,7 @@ def _make_stream_comp(run_proc_body_cls):
 # Helper base: component with s_in slave + m_out master
 # ---------------------------------------------------------------------------
 
-class _BaseStreamComp(HwComponent):
+class _BaseStreamComp(HwModule):
     def __post_init__(self):
         super().__post_init__()
         self.s_in = StreamIFSlave(

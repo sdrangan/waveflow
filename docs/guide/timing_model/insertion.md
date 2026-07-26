@@ -3,7 +3,7 @@ title: Adding a timing model to a component
 parent: Timing Models
 nav_order: 2
 audience: python
-api: [LinCalibModel, TimingModel, FreeRunComp.add_timing_model]
+api: [LinCalibModel, TimingModel, FreeRunMod.add_timing_model]
 summary: "How a component sources its compute delay from a timing-model object: attach a model and, in the run loop, charge self.timeout(tm.predict(...) * clk.period). tm.predict returns the cycles the compute will take as a function of the firing size (e.g. n); internally it evaluates a formula in a few parameters (e.g. latency + proc_ii*(ceil(n/U)-1)), which the following pages make concrete and the fitting section recovers by comparison to RTL. The model adds only this component's compute plus unaccounted overhead — read/write times are charged by the transfer yields, and stalls grow the firing on their own."
 ---
 
@@ -19,7 +19,7 @@ and, in its run loop, waiting the delay the model predicts.
 Attach the model in `__post_init__`; predict the delay and charge it with `self.timeout`:
 
 ```python
-class MyCompute(FreeRunComp):
+class MyCompute(FreeRunMod):
     def __post_init__(self):
         super().__post_init__()
         # ... declare ports: s_cmd, m_mem, m_out ...

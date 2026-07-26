@@ -12,7 +12,7 @@ import numpy.typing as npt
 from waveflow.hw.arrayutils import array, read_array, read_uint32_file, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField
-from waveflow.hw.hw_component import HwConst, HwParam
+from waveflow.hw.hw_module import HwConst, HwParam
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
@@ -151,7 +151,7 @@ class PolySimResult:
 
 
 @dataclass
-class PolyAccelComponent(HostActivated):
+class PolyAccel(HostActivated):
     """SimPy model of the polynomial accelerator kernel.
 
     Control/status is exposed via an AXI-Lite VitisRegMap; the host writes
@@ -351,7 +351,7 @@ class PolyTBHls(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "poly"
 
     def main(self) -> None:
-        dut = PolyAccelComponent()
+        dut = PolyAccel()
 
         dut.regmap.read_uint32_file_array(
             "coeffs", self.data_dir + "/coeffs.bin", count=4)
@@ -387,7 +387,7 @@ class PolyTBHls(SeqTB):
             fields=["halted", "error", "tx_id"])
 
 
-def connect(sim: Simulation, tb: PolyTB, accel: PolyAccelComponent, clk: Clock) -> None:
+def connect(sim: Simulation, tb: PolyTB, accel: PolyAccel, clk: Clock) -> None:
     """Wire a testbench's master/slave ports to the accelerator via two StreamIFs and a DirectMMIF."""
     in_stream  = StreamIF(sim=sim, clk=clk)
     out_stream = StreamIF(sim=sim, clk=clk)

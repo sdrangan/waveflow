@@ -39,7 +39,7 @@ and synthesized from your hand-written file.
 ```python
 from waveflow.hw.synth import synthesizable
 
-class SimpFunComponent(HwComponent):
+class SimpFun(HwModule):
     @synthesizable
     def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
         return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))   # == the golden
@@ -77,5 +77,5 @@ with no data movement), then jump to the pattern that matches your operand.
 ## See also
 
 - [Component Code Generation](../comp_codegen/) — the auto-generated structure your hook plugs into.
-- [Hardware Components](../flows/components.md) — declaring the component (ports, `HwParam`) the hook belongs to.
+- [Hardware Modules](../flows/modules.md) — declaring the component (ports, `HwParam`) the hook belongs to.
 - [Serialization](../schema/hls/serialization.md) / [raw arrays](../vectorization/hls/raw.md) — the generated packing methods a hook calls.

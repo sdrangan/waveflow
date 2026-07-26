@@ -12,7 +12,7 @@ from waveflow.build.hwcodegen import HwStmtExtractor, SynthesisError
 from waveflow.build.hwgen import CodegenCtx, to_cpp
 from waveflow.hw.aximm_queue import AXIMMQueue, AXIMMQueueLayout
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.hwstmt import HwVar
 from waveflow.hw.memif import Eq, LoweredPollCond, MMIFMaster, Ne, PollUntilStmt
 from waveflow.simulation.simulation import Simulation
@@ -26,7 +26,7 @@ _DemoCmd = IntField.specialize(bitwidth=32, signed=False)
 # Extraction
 # ---------------------------------------------------------------------------
 
-class _PollConstConsumer(HwComponent):
+class _PollConstConsumer(HwModule):
     """Polls a flag word until it equals a constant (rhs is a literal)."""
 
     poll_addr: HwParam[int] = 0x40
@@ -43,7 +43,7 @@ class _PollConstConsumer(HwComponent):
             return v
 
 
-class _PollNeConsumer(HwComponent):
+class _PollNeConsumer(HwModule):
     """Reads ``head`` then polls ``tail != head`` (rhs is a runtime HwVar)."""
 
     def __post_init__(self) -> None:
@@ -91,7 +91,7 @@ def test_poll_until_extracts_runtime_var_rhs():
 
 
 def test_poll_until_rejects_multi_arg_cond():
-    class _Bad(HwComponent):
+    class _Bad(HwModule):
         def __post_init__(self) -> None:
             super().__post_init__()
             self.m_mem = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=64)
@@ -121,7 +121,7 @@ class _FakeBound:
 
 def _poll_stmt(cond, *, out="tail", addr=0x40):
     master = _FakeMaster()
-    comp = HwComponent(name="c", sim=Simulation())
+    comp = HwModule(name="c", sim=Simulation())
     comp.gmem = master  # discoverable by _endpoint_name
     stmt = PollUntilStmt(
         method=_FakeBound(master),
@@ -160,7 +160,7 @@ def test_poll_interval_is_not_emitted():
 # Full extract -> resolve -> codegen (header + body), no Vitis
 # ---------------------------------------------------------------------------
 
-class _PollKernel(HwComponent):
+class _PollKernel(HwModule):
     """A minimal synthesizable kernel that polls a flag word, for end-to-end codegen."""
 
     cpp_kernel_name = "poll_kernel"

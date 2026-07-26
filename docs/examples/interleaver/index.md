@@ -26,7 +26,7 @@ compute model on top.
 In going through this example, you will learn to:
 
 - Model a **gather / permutation** accelerator (`Y[i] = X[P[i]]`) as a composite of free-running
-  `FreeRunComp` stages — load, a custom **compute**, and store
+  `FreeRunMod` stages — load, a custom **compute**, and store
 - Use a [**stream of blocks**](../../guide/concurrency/python/sob.md) to give the compute stage
   **random access** to a buffer (`X[P[i]]`), and overlap the next job's load with this job's compute
 - **Reuse the framework `MemRStream` / `MemWStream`** as the read/write stages — framing two reads (P and

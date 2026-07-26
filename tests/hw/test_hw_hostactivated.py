@@ -8,7 +8,7 @@ import pytest
 from waveflow.build.codegen_dispatch import CodegenPath, codegen_path
 from waveflow.build.elaborate import elaborate
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import ControlMode, HwComponent
+from waveflow.hw.hw_module import ControlMode, HwModule
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.simulation.simobj import ProcessGen
@@ -31,7 +31,7 @@ class _HA(HostActivated):
 
 
 def test_hostactivated_is_a_hwcomponent():
-    assert issubclass(HostActivated, HwComponent)
+    assert issubclass(HostActivated, HwModule)
 
 
 def test_hostactivated_declares_on_start_entry():
@@ -56,10 +56,10 @@ def test_hostactivated_rejects_run_iter():
 
 
 def test_migrated_examples_are_hostactivated():
-    from examples.regmap.simp_fun import SimpFunComponent
-    from examples.stream_inband.poly import PolyAccelComponent
-    assert issubclass(SimpFunComponent, HostActivated)
-    assert issubclass(PolyAccelComponent, HostActivated)
+    from examples.regmap.simp_fun import SimpFun
+    from examples.stream_inband.poly import PolyAccel
+    assert issubclass(SimpFun, HostActivated)
+    assert issubclass(PolyAccel, HostActivated)
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +73,9 @@ def test_migrated_examples_are_hostactivated():
 # ---------------------------------------------------------------------------
 
 def test_run_once_computes_relu_affine():
-    from examples.regmap.simp_fun import SimpFunComponent
-    assert int(_run_once_sim(SimpFunComponent, 5, 3, 2).val) == 17   # relu(3*5+2)
-    assert int(_run_once_sim(SimpFunComponent, 2, -5, 3).val) == 0   # relu(-10+3) -> 0
+    from examples.regmap.simp_fun import SimpFun
+    assert int(_run_once_sim(SimpFun, 5, 3, 2).val) == 17   # relu(3*5+2)
+    assert int(_run_once_sim(SimpFun, 2, -5, 3).val) == 0   # relu(-10+3) -> 0
 
 
 def test_run_once_synchronous_on_start():
@@ -92,23 +92,23 @@ def test_run_once_call_alias():
 
 def test_run_once_raises_on_yielding_on_start():
     """A yielding on_start needs the sim-driven path; synchronous run_once says so."""
-    from examples.regmap.simp_fun import SimpFunComponent
-    dut = elaborate(SimpFunComponent)
+    from examples.regmap.simp_fun import SimpFun
+    dut = elaborate(SimpFun)
     with pytest.raises(NotImplementedError, match="run_once_sim"):
         dut.run_once(5, 3, 2)
 
 
 def test_run_once_wrong_arg_count_raises():
-    from examples.regmap.simp_fun import SimpFunComponent
-    dut = elaborate(SimpFunComponent)
+    from examples.regmap.simp_fun import SimpFun
+    dut = elaborate(SimpFun)
     with pytest.raises(TypeError, match=r"takes 3 input"):
         dut.run_once(1, 2)
 
 
 def test_run_once_stream_bearing_is_follow_on():
     """Phase 5a is regmap-scalar only; a stream-bearing kernel (poly) raises a clear follow-on error."""
-    from examples.stream_inband.poly import PolyAccelComponent
-    dut = elaborate(PolyAccelComponent)
+    from examples.stream_inband.poly import PolyAccel
+    dut = elaborate(PolyAccel)
     with pytest.raises(NotImplementedError, match="stream-bearing"):
         dut.run_once(1)
 
@@ -194,9 +194,9 @@ class _HAYield(HostActivated):
 
 def test_run_once_sim_matches_golden_for_yielding_on_start():
     """run_once_sim drives simp_fun's yielding on_start and returns the relu-affine golden."""
-    from examples.regmap.simp_fun import SimpFunComponent, relu_affine
+    from examples.regmap.simp_fun import SimpFun, relu_affine
     for x, a, b in [(5, 3, 2), (0, 7, 1), (2, -5, 3), (-4, -2, 0)]:
-        result = _run_once_sim(SimpFunComponent, x, a, b)
+        result = _run_once_sim(SimpFun, x, a, b)
         assert int(result.val) == relu_affine(x, a, b), (x, a, b)
 
 
@@ -220,9 +220,9 @@ def test_run_once_sim_advances_clock_for_yielding_on_start():
 
 
 def test_run_once_sim_wrong_arg_count_raises():
-    from examples.regmap.simp_fun import SimpFunComponent
+    from examples.regmap.simp_fun import SimpFun
     sim = Simulation()
-    dut = SimpFunComponent(name="dut", sim=sim)
+    dut = SimpFun(name="dut", sim=sim)
     with pytest.raises(TypeError, match=r"takes 3 input"):
         # A generator only runs on first advance; drive it to trip the check.
         list(dut.run_once_sim(1, 2))

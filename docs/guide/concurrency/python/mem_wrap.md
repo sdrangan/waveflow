@@ -68,7 +68,7 @@ finished" signal for a sequencer or host.
 The wrappers turn "touch memory" into "read a stream / write a stream," so a memory-to-memory operation
 is just a pipeline between them. Here is a copy that **squares each sample** on the way through — read
 `src`, square, write `dst`. `Sequencer` and `Square` are free-running leaves, so — like `MemRStream` /
-`MemWStream` themselves — they subclass [`FreeRunComp`](../../flows/components.md) and implement
+`MemWStream` themselves — they subclass [`FreeRunMod`](../../flows/modules.md) and implement
 **`run_iter`** (one firing); see [Sub-components](./subcomponent.md) for why.
 
 ```python
@@ -86,7 +86,7 @@ class CopyCmd(DataList):
 
 
 @dataclass
-class Sequencer(FreeRunComp):
+class Sequencer(FreeRunMod):
     """Turn one CopyCmd into an MRCmd (read src) and an MWCmd (write dst)."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -106,7 +106,7 @@ class Sequencer(FreeRunComp):
 
 
 @dataclass
-class Square(FreeRunComp):
+class Square(FreeRunMod):
     """Element-wise y = x**2 over a Float32 word stream (WORD_BW = 32 ⇒ one sample per word)."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -127,7 +127,7 @@ edges — and exposes the memory ports as its boundary:
 
 ```python
 @dataclass
-class MemSquare(HwComponent):
+class MemSquare(HwModule):
     """Read src → square each sample → write dst."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 

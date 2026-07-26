@@ -4,7 +4,7 @@ parent: Simulation
 nav_order: 1
 audience: python
 api: [SimObj, Simulation]
-summary: "The SimObj base: everything in a simulation is a SimObj that registers with the owning Simulation, borrows its single simpy.Environment, and uses the wrapped primitives (self.timeout, self.process, self.event). A runnable toy two-SimObj producer/consumer shows a bare simulation before any interface or HwComponent."
+summary: "The SimObj base: everything in a simulation is a SimObj that registers with the owning Simulation, borrows its single simpy.Environment, and uses the wrapped primitives (self.timeout, self.process, self.event). A runnable toy two-SimObj producer/consumer shows a bare simulation before any interface or HwModule."
 ---
 
 # SimObj
@@ -22,7 +22,7 @@ you never touch SimPy directly:
 - `self.event()` — create a bare event to wait on / fire.
 - `self.now` — the current simulation time.
 
-[Hardware components](../flows/components.md), [interfaces](../interface/), [loggers](./logging.md), and
+[Hardware modules](../flows/modules.md), [interfaces](../interface/), [loggers](./logging.md), and
 channels are all `SimObj`s — so the simplest possible simulation is just a couple of `SimObj`s with no
 hardware at all.
 
@@ -42,12 +42,12 @@ A *hardware* `SimObj` adds two synthesis-facing specifics: a regmap-launched com
 free-running `run_proc`, and `@sim_only` marks helpers that exist only for simulation and are excluded
 from synthesis extraction. Both are covered where the kernel is generated:
 [Component structure](../comp_codegen/structure.md),
-[Defining a component: Execution models](../flows/components.md), and the
+[Defining a component: Execution models](../flows/modules.md), and the
 [Extractor](../comp_codegen/extractor.md).
 
 ## Toy: two `SimObj`s interacting
 
-A bare producer/consumer — no interfaces, no `HwComponent`. The `Producer`'s `run_proc` emits a few
+A bare producer/consumer — no interfaces, no `HwModule`. The `Producer`'s `run_proc` emits a few
 items onto a shared SimPy store; the `Consumer`'s `run_proc` pulls them off as they arrive. Both
 register with one `Simulation` and run via `run_sim()`:
 
@@ -113,8 +113,8 @@ consumer received: [0, 1, 2, 3, 4]
 ```
 
 The point: a complete, running simulation built from nothing but two `SimObj`s — *before* any
-interface or `HwComponent` enters the picture. Wiring `SimObj`s together with real transports is
-[Interfaces](../interface/); a hardware `SimObj` is a [Hardware Component](../flows/components.md).
+interface or `HwModule` enters the picture. Wiring `SimObj`s together with real transports is
+[Interfaces](../interface/); a hardware `SimObj` is a [Hardware Module](../flows/modules.md).
 
 ## Quick reference
 

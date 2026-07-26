@@ -7,7 +7,7 @@ has_children: false
 
 # Python model
 
-This page builds the histogram accelerator as a Waveflow `HwComponent`. The
+This page builds the histogram accelerator as a Waveflow `HwModule`. The
 [concept page](aximm.md) covered *why* the data lives in memory and the control
 on a stream; here we write the Python that says *how* — the command/response
 schemas, the kernel's three data ports, and the `on_start` body that validates,
@@ -75,7 +75,7 @@ carries pointers to it.
 
 ## The accelerator component
 
-`HistAccel` is the `HwComponent`. Its `cpp_kernel_name` / `cpp_namespace` name the
+`HistAccel` is the `HwModule`. Its `cpp_kernel_name` / `cpp_namespace` name the
 generated kernel function and the hand-written-hook namespace; its **HwParams**
 are the compile-time configuration (interface widths and the buffer maxima); and
 its three **ports** are the two control streams and the one memory master.
@@ -129,7 +129,7 @@ And the AXI-Lite slave is not new. `m_axi ... offset=slave` **already forced one
 carry `m_mem`'s base address at `0x10` — and that slave declared `0x00 : reserved` with no `ap_start`
 logic at all. So the kernel needed **two masters**: a CPU to write the base address over AXI-Lite, and
 something else entirely to pulse an `ap_start` wire. Deriving from
-[`HostActivated`](../../guide/flows/components.md) fills the reserved slot in the slave that was
+[`HostActivated`](../../guide/flows/modules.md) fills the reserved slot in the slave that was
 already there — one master, one address space — and makes the component's kind explicit, so
 [`check(HistAccel)`](../../guide/comp_codegen/index.md) can answer for it.
 
@@ -259,5 +259,5 @@ page shows the generated kernel calling into them.
 ## Next
 
 - [SimPy simulation](pysim.md) — running the model end-to-end against the numpy
-  golden, with a `MemComponent` standing in for shared DRAM.
+  golden, with a `MemModel` standing in for shared DRAM.
 - [Code generation](codegen.md) — lowering `HistAccel` to the Vitis HLS kernel.

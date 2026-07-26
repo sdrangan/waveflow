@@ -175,7 +175,7 @@ def test_a_leaf_walks_exactly_like_a_composite():
     """A standalone kernel IS the 1-task degenerate case -- it just could not say so before.
 
     `top_spec_for` used to be a table keyed on the class that restated the component's own ports,
-    their directions and its task signature. Now a leaf declares (FreeRunComp.boundary, ordered by
+    their directions and its task signature. Now a leaf declares (FreeRunMod.boundary, ordered by
     kernel_task().signature), its direction is its endpoint's type, and its one task is itself -- so
     composite_top_spec walks it. This pins that the walk still equals what the table produced;
     if it ever diverges, the generated kernels move.

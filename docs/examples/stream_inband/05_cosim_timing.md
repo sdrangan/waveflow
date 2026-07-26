@@ -24,7 +24,7 @@ Both timing-side steps deliberately emit *structured* JSON with
 named cycle counts — not pass/fail bits.  This shape is what the
 future model-training workflow (per
 [`project-cycle-model-training`](#whats-next)) will consume to fit
-`HwComponent` timing parameters from a corpus of cosim runs.
+`HwModule` timing parameters from a corpus of cosim runs.
 
 `results/py_timing.json` (from Group 1):
 
@@ -83,7 +83,7 @@ The first cosim run reported 144 cycles for `nsamp=100`,
 `unroll_factor=1`, `in_bw=32`.  The Python sim with the default
 `proc_latency=10` reported 110 — delta=34, over tolerance.
 
-The fix was to bump `PolyAccelComponent.proc_latency` from 10 to 40
+The fix was to bump `PolyAccel.proc_latency` from 10 to 40
 to absorb the RTL pipeline fill/drain and stream handshake overhead
 that the simpler "compute-latency" model didn't capture.  With that
 calibration:
@@ -98,7 +98,7 @@ This is the manual v1 of the model-training workflow described next.
 
 The structured timing artifacts emitted here are the input format
 for a future parameter-fitting step that will fit
-`HwComponent.proc_latency` / `proc_ii` / similar from a corpus of
+`HwModule.proc_latency` / `proc_ii` / similar from a corpus of
 cosim runs across `param_supports` variants.  Once that lands,
 calibration stops being a manual one-line edit and starts being a
 build-DAG step in its own right.

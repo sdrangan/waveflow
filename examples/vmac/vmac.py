@@ -1,4 +1,4 @@
-"""``VmacAccel`` — the VMAC accelerator as a synthesizable ``HwComponent`` + the bit-exact
+"""``VmacAccel`` — the VMAC accelerator as a synthesizable ``HwModule`` + the bit-exact
 Python golden, modeled on :mod:`examples.shared_mem.hist` (the histogram).
 
 VMAC is **complex-only** — every element is an interleaved ``re`` / ``im`` pair.  A VMAC
@@ -47,7 +47,7 @@ the datatypes module so this class carries the datapath *behaviour*, not the typ
 
 Constructed without a ``sim``, ``VmacAccel`` is a lightweight params + golden object (no
 ``Simulation`` needed) — the form the golden / numeric tests use.  With a ``sim`` it is the
-full ``HwComponent`` with a single ``m_axi`` (``MMIFMaster``) port that serves **both** the
+full ``HwModule`` with a single ``m_axi`` (``MMIFMaster``) port that serves **both** the
 AXI-MM command queue and the A/B/Y data (Stage 1 of ``plans/vmac_mm_queue_timing.md``):
 :meth:`run_proc` is the loosely-timed SimPy execution model — a free-running queue consumer
 that issues timed ``m_mem`` transactions around the bit-exact golden.  (The synthesizable C++
@@ -66,7 +66,7 @@ from examples.vmac.vmac_datatypes import OpCode, VmacCmd, VmacFormats
 from waveflow.hw.clock import Clock
 from waveflow.hw.complexfield import cadd, cmult, conj, csum
 from waveflow.hw.dataschema import DataArray
-from waveflow.hw.hw_component import HwComponent, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.aximm_queue import AXIMMQueue
 from waveflow.hw.memif import MMIFMaster
 from waveflow.named import NamedObject
@@ -110,7 +110,7 @@ class VmacTiming:
 
 
 @dataclass
-class VmacAccel(HwComponent):
+class VmacAccel(HwModule):
     """A VMAC accelerator: structural ``HwParam`` widths + the Python golden + the
     ``vmac_compute`` synthesizable hook (the codegen source for ``gen/vmac.cpp``)."""
 

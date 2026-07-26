@@ -25,7 +25,7 @@ be verified by Vitis C/RTL cosim, and is instead run through [XSI](./rtlsim.md).
 
 ## The generated top
 
-`InterleaverInband` is a hierarchical `FreeRunComp`: its `__post_init__` calls `add_comp` for six
+`InterleaverInband` is a hierarchical `FreeRunMod`: its `__post_init__` calls `add_comp` for six
 children and `add_if` for eight edges, and names four `boundary` ports. `composite_top_spec`
 ([`waveflow/build/composite_gen.py`](../../../waveflow/build/composite_gen.py)) reads exactly those
 three things off the built parent and derives the top — **no per-node special-casing**. Each child's

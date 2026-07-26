@@ -5,7 +5,7 @@ VMAC is **complex-only** and the numeric format is **structural** (on ``VmacAcce
 It is a plain ``DataList`` (an ``EnumField`` op, a ``BooleanField`` reduce, nested ``Region`` /
 ``Alpha`` sub-lists), so it must serialize / deserialize back to an identical value across word
 widths — the wire-format contract for the HLS kernel.  The structural widths live on
-``VmacAccel`` (an ``HwComponent`` with ``HwParam`` fields); its computed ``Cmd`` specializes the
+``VmacAccel`` (an ``HwModule`` with ``HwParam`` fields); its computed ``Cmd`` specializes the
 command schema so a command's field widths track the silicon (``addr`` = ``mem_awidth`` bits; the
 immediate complex ``imm`` = ``data_bw`` bits per component); same params → same schema object.
 """
@@ -111,9 +111,9 @@ def test_accel_cmd_shared_and_distinct():
 
 
 def test_accel_is_hwcomponent_with_hwparams():
-    from waveflow.hw.hw_component import HwComponent, _hw_param_names
+    from waveflow.hw.hw_module import HwModule, _hw_param_names
 
-    assert issubclass(VmacAccel, HwComponent)
+    assert issubclass(VmacAccel, HwModule)
     # the extractor sees every structural width — incl. the format moved off the command —
     # as a HwParam template param
     assert _hw_param_names(VmacAccel) >= {

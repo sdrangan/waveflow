@@ -23,14 +23,14 @@ from waveflow.toolchain import toolchain
 
 try:
     from examples.stream_inband.poly import (
-        Float32, PolyAccelComponent, PolyCmdHdr, PolyCmdType,
+        Float32, PolyAccel, PolyCmdHdr, PolyCmdType,
         PolyError, PolyRespHdr, PolyTB, PolyTBHls,
         SCHEMA_CLASSES, WORD_BW_SUPPORTED, CoeffArray,
         connect,
     )
 except ModuleNotFoundError:
     from poly import (  # type: ignore[no-redef]  # direct execution
-        Float32, PolyAccelComponent, PolyCmdHdr, PolyCmdType,
+        Float32, PolyAccel, PolyCmdHdr, PolyCmdType,
         PolyError, PolyRespHdr, PolyTB, PolyTBHls,
         SCHEMA_CLASSES, WORD_BW_SUPPORTED, CoeffArray,
         connect,
@@ -141,7 +141,7 @@ class PySimStep(BuildStep):
         log_path.parent.mkdir(parents=True, exist_ok=True)
         logger = Logger(name="poly_log", sim=sim, file_path=log_path,
                         fields=["event", "job"])
-        accel = PolyAccelComponent(
+        accel = PolyAccel(
             name="poly_accel", sim=sim,
             in_bw=in_bw, out_bw=out_bw, unroll_factor=unroll_factor,
             clk=clk, logger=logger,
@@ -386,7 +386,7 @@ def build_poly_dag() -> BuildDag:
     # The hand-written .tpp body is committed; gen/ is .gitignored.
     dag.add(HlsCodegenStep(
         name="gen_kernel",
-        comp_class=PolyAccelComponent,
+        comp_class=PolyAccel,
         source_artifact="poly_source",
         output_dir="gen",
         impl_dir=".",

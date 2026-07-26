@@ -3,7 +3,7 @@ aximm_queue_demo.py — SPSC ring buffer over an AXI-MM crossbar.
 
 A producer and a consumer, each its own master on a crossbar, share a single
 memory-backed FIFO (:class:`~waveflow.hw.aximm_queue.AXIMMQueue`).  The ring's
-storage and its head/tail pointers all live in one ``MemComponent`` region; the
+storage and its head/tail pointers all live in one ``MemModel`` region; the
 two sides coordinate purely through memory (decision 1), with no shared Python
 object.  The queue capacity is deliberately small, so the producer blocks on a
 full ring and the consumer's draining is what lets it make progress — the
@@ -13,7 +13,7 @@ Topology
 --------
   Producer (master_0) ──┐
                         ├── AXIMMCrossBarIF ──── ring region (slave_0, FULL)
-  Consumer (master_1) ──┘                        in one MemComponent (s_mm)
+  Consumer (master_1) ──┘                        in one MemModel (s_mm)
 
       ring region (AXIMMQueueLayout @ base, capacity slots):
         word 0 : head      (consumer-owned)
@@ -47,7 +47,7 @@ from waveflow.hw.memif import (
     MMIFMaster,
     assign_address_ranges,
 )
-from waveflow.hw.memory import MemComponent
+from waveflow.hw.memory import MemModel
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 
@@ -127,7 +127,7 @@ class AXIMMQueueDemo:
         # External shared memory (decision 9): inline=False + one alloc places the
         # ring at byte 0, where the crossbar (global − base) delivers it.
         total_words = self.layout.total_bytes // self.layout.word_bytes
-        self.mem = MemComponent(
+        self.mem = MemModel(
             sim=self.sim, word_size=self.MEM_BW, inline=False, clk=self.clk,
             latency_init=2.0, latency_per_word=1.0,
         )

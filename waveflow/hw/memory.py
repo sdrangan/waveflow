@@ -7,7 +7,7 @@ import numpy as np
 from enum import Enum
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_component import DynParam
+from waveflow.hw.hw_module import DynParam
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
 
@@ -305,7 +305,7 @@ class Memory(object):
 class _DirectBackedMMIFMaster:
     """
     MMIFMaster-compatible endpoint that reads/writes a Memory directly,
-    bypassing any AXI interface.  Used internally by MemComponent.
+    bypassing any AXI interface.  Used internally by MemModel.
 
     read() and write() are generator functions that yield no SimPy events
     (zero simulation time).  as_words(), as_array(), as_schema() provide
@@ -373,7 +373,7 @@ class _DirectBackedMMIFMaster:
         """Return a direct numpy view of the pre-allocated inline block."""
         if self._mem is None or self._base_addr is None:
             raise RuntimeError(
-                "as_words() requires an inline MemComponent with a pre-allocated block"
+                "as_words() requires an inline MemModel with a pre-allocated block"
             )
         return self._mem.segments[self._base_addr]
 
@@ -393,7 +393,7 @@ class _DirectBackedMMIFMaster:
 
 
 # ---------------------------------------------------------------------------
-# MemComponent — Component wrapping a Memory with MM interface endpoints
+# MemModel — a SimObj wrapping a Memory with MM interface endpoints
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -415,7 +415,7 @@ class MemSeg:
 
 
 @dataclass
-class MemComponent(SimObj):
+class MemModel(SimObj):
     """
     A latency-modeling :class:`~waveflow.simulation.simobj.SimObj` that wraps a
     :class:`Memory` and exposes MM interface endpoints.

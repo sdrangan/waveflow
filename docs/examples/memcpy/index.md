@@ -23,7 +23,7 @@ component's timing is taken up in the interleaver example.) The final page visua
 
 In going through this example, you will learn to:
 
-- Model hardware as [**free-running component** classes](../../guide/flows/concurrent.md) (the `FreeRunComp` class in Waveflow), and interconnect them into **composite free-running components** to describe a target hardware object
+- Model hardware as [**free-running component** classes](../../guide/flows/concurrent.md) (the `FreeRunMod` class in Waveflow), and interconnect them into **composite free-running components** to describe a target hardware object
 - Develop a **concurrent testbench** as a composite graph that wires the DUT to stimulus and capture, using Waveflow's built-in stream source/sink models (`StreamDriver`, `StreamSink`)
 - Run a Python **concurrent simulation** of the composite target hardware in conjunction with the testbench components
 - Generate a **concurrent Vitis C++ kernel** from the Python descriptions, where each sub-component becomes an **HLS task**
@@ -44,7 +44,7 @@ it, test it in Python, generate the kernel, generate the testbench, then run the
 
 1. [Module overview](./memcpy.md) — the three-stage design, the in-band forwarding protocol, and how
    it is wired.
-2. [Python model](./python.md) — the schemas and the three `FreeRunComp` leaves + the composite.
+2. [Python model](./python.md) — the schemas and the three `FreeRunMod` leaves + the composite.
 3. [Testbench (Python)](./testbench.md) — the `MemCopyTB` graph, the `MemCopySim` procedure, and
    running the pysim step.
 4. [DUT codegen](./codegen_dut.md) — what an `hls::task` is, and how the design graph becomes the

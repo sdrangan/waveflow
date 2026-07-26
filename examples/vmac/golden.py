@@ -1,5 +1,5 @@
 """Backwards-compatible shim — ``VmacAccel`` now lives in :mod:`examples.vmac.vmac` as a
-synthesizable ``HwComponent`` (the golden is the Python body of its ``vmac_compute`` hook).
+synthesizable ``HwModule`` (the golden is the Python body of its ``vmac_compute`` hook).
 
 This module is retired in the VMAC-kernel-consolidation Phase 3; until then it re-exports
 ``VmacAccel`` so the existing golden / numeric / conformance imports keep working unchanged.

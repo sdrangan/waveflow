@@ -15,7 +15,7 @@ from waveflow.hw.aximm_queue import (
     AXIMMQueueLayout,
 )
 from waveflow.hw.dataschema import IntField
-from waveflow.hw.hw_component import HwComponent
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.hwstmt import HwVar, ReturnStmt, WhileStmt
 from waveflow.hw.memif import MMIFMaster
 from waveflow.simulation.simulation import Simulation
@@ -29,7 +29,7 @@ _DemoCmd = IntField.specialize(bitwidth=32, signed=False)
 # Extraction: self.cmd_queue.get(self.Cmd) -> AXIMMQueueGetStmt
 # ---------------------------------------------------------------------------
 
-class _QueueConsumer(HwComponent):
+class _QueueConsumer(HwModule):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.m_mem = MMIFMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=64)
@@ -118,7 +118,7 @@ class _FakeBoundMethod:
 
 def test_aximm_queue_get_emits_hook_call():
     gmem = _FakeEndpoint()
-    comp = HwComponent(name="c", sim=Simulation())
+    comp = HwModule(name="c", sim=Simulation())
     comp.gmem = gmem  # discoverable by _endpoint_name via vars(comp)
     layout = AXIMMQueueLayout(base_addr=0, capacity=8, elem_words=2, mem_bw=64)
     queue = _FakeQueue(layout=layout, master=gmem)
@@ -137,7 +137,7 @@ def test_aximm_queue_get_emits_hook_call():
 def test_aximm_queue_get_emits_layout_geometry():
     # The hook template params come straight from the (non-zero) ring layout.
     gmem = _FakeEndpoint()
-    comp = HwComponent(name="c", sim=Simulation())
+    comp = HwModule(name="c", sim=Simulation())
     comp.gmem = gmem
     layout = AXIMMQueueLayout(base_addr=4096, capacity=16, elem_words=3, mem_bw=64)
     stmt = AXIMMQueueGetStmt(
