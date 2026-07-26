@@ -41,7 +41,7 @@ Physical layer:    StreamIFMaster                    StreamIFSlave
 
 Two raw [`SimObj`](../sim/simobj.md)s sending one variable-length array master→slave. Each transfer
 endpoint owns an internal `stream_ep`; bind those over a `StreamIF` to wire the physical link. No
-`HwComponent`. (The `yield from` / `run_proc` mechanics are in
+`HwModule`. (The `yield from` / `run_proc` mechanics are in
 [Process generators](../sim/procgen.md).)
 
 ```python

@@ -81,7 +81,7 @@ sink that drains the output:
 StreamDriver → s_cmd → [ MemRStream ] → m_out → StreamSink        # the reader vehicle
                           │  m_mem
                           ▼
-                    MemComponent  (bus law loaded → residual is control-only)
+                    MemModel  (bus law loaded → residual is control-only)
 ```
 
 Only the package is needed — no example — which is what lets the same fit serve every accelerator on the

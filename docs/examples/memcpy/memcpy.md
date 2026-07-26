@@ -23,7 +23,7 @@ version of that pattern — which is why it is also a natural first free-running
 ## The three-stage structure
 
 The design (`examples/mem_copy/`) is a three-stage pipeline, driven by a command stream and reporting on
-a done stream. Each stage is a **leaf `FreeRunComp`** — it implements `run_iter` (one firing per job)
+a done stream. Each stage is a **leaf `FreeRunMod`** — it implements `run_iter` (one firing per job)
 and lowers to one `ap_ctrl_none` `hls::task`:
 
 - **`Sequencer`** — a pure-stream stage that owns no memory. It reads one `CopyCmd` from the boundary

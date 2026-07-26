@@ -4,13 +4,13 @@ parent: Guide
 nav_order: 12
 has_children: true
 audience: python
-api: [FreeRunComp.add_timing_model, LinCalibModel, SimObj.timeout, MMIFMaster.read_array, StreamIFSlave.get_pipelined]
+api: [FreeRunMod.add_timing_model, LinCalibModel, SimObj.timeout, MMIFMaster.read_array, StreamIFSlave.get_pipelined]
 summary: "How a component says how long its work takes. Most Waveflow operations already carry a built-in timing model — a read/write advances the clock by an estimate of the transfer — so a user typically only builds a timing model for a custom hook's compute. A timing model expresses the elapsed cycles as a function of the input size (e.g. the number of samples). This section: how to add one to a component, the typical loop model (latency + ii·(m−1) as a LinCalibModel), and how to insert it in a block process (compute after the whole block loads) vs. a streaming process (compute overlaps load/store)."
 ---
 
 # Timing Models
 
-Every `HwComponent` carries two models. The **functional** model says *what* it computes; the
+Every `HwModule` carries two models. The **functional** model says *what* it computes; the
 **timing** model says *how long* that takes — when, in simulated time, the work finishes.
 
 Most of the time you don't write one. **Most Waveflow operations already carry a built-in timing

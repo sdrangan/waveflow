@@ -13,7 +13,7 @@ Python definitions the golden model uses.
 | Step | Produces | What it does |
 |------|----------|--------------|
 | `gen_include` | `include_dir` | Generates `include/*.h` — one header per `DataSchema` class plus the `streamutils` and `<elem>_array_utils` helpers |
-| `gen_kernel`  | `poly_hpp`, `poly_cpp`, `poly_evaluate_impl` | `HlsCodegenStep(comp_class=PolyAccelComponent)`: emits `gen/poly.hpp` + `gen/poly.cpp` from `PolyAccelComponent.on_start`; touches the sticky `poly_evaluate_impl.tpp` impl only if absent |
+| `gen_kernel`  | `poly_hpp`, `poly_cpp`, `poly_evaluate_impl` | `HlsCodegenStep(comp_class=PolyAccel)`: emits `gen/poly.hpp` + `gen/poly.cpp` from `PolyAccel.on_start`; touches the sticky `poly_evaluate_impl.tpp` impl only if absent |
 | `gen_tb`      | `poly_tb` | `HlsCodegenStep(comp_class=PolyTBHls, is_testbench=True)`: emits `gen/poly_tb.cpp` from `PolyTBHls.main` |
 
 ## Symmetry: kernel and testbench are the same step
@@ -25,7 +25,7 @@ just with `is_testbench=True` on the testbench instance:
 ```python
 dag.add(HlsCodegenStep(
     name="gen_kernel",
-    comp_class=PolyAccelComponent,
+    comp_class=PolyAccel,
     source_artifact="poly_source",
     output_dir="gen",
     impl_dir=".",
@@ -40,7 +40,7 @@ dag.add(HlsCodegenStep(
 ))
 ```
 
-The kernel-side codegen reads `PolyAccelComponent.on_start` (a SimPy
+The kernel-side codegen reads `PolyAccel.on_start` (a SimPy
 coroutine) and emits a Vitis HLS C++ free function with the matching
 signature and AXI-Lite + AXI-Stream interface pragmas.  Hooks marked
 `@synthesizable` (like `evaluate`) get a forward declaration in the
@@ -73,7 +73,7 @@ include/
 
 ## The hand-written hook
 
-`PolyAccelComponent.evaluate` is marked `@synthesizable` — the
+`PolyAccel.evaluate` is marked `@synthesizable` — the
 codegen emits a forward declaration in `poly.hpp` and a stub at
 `poly_evaluate_impl.tpp`.  This is where the actual Horner-method
 polynomial body lives:
@@ -92,7 +92,7 @@ PolyError evaluate(PolyCmdHdr cmd_hdr,
 
 The file is `.gitignored`-aware: re-runs of `gen_kernel` will not
 overwrite it once it exists, so future codegen-driven refactors of
-`PolyAccelComponent.on_start` do not stomp the hand-tuned compute
+`PolyAccel.on_start` do not stomp the hand-tuned compute
 body.
 
 ## Run just this group

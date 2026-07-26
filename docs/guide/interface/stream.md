@@ -142,7 +142,7 @@ sim.run_sim()
 
 The `Consumer.run_proc()` must delegate to `ep.run_proc()` so the slave's receive loop is active during simulation. `Simulation.run_sim()` calls each `SimObj.run_proc()` automatically, so this pattern wires together correctly.
 
-This is a complete, runnable two-[`SimObj`](../sim/simobj.md) simulation — a `Producer` (master) and a `Consumer` (slave) bound over one `StreamIF`, no `HwComponent` — and it is the same shape as the toys on the other interface pages. The `yield` / `run_proc` / `ProcessGen` mechanics it relies on are explained in [Process generators](../sim/procgen.md). A `CrossBarIF` variant is the same idea with port-indexed endpoints (`in_0` / `out_0`) — see below.
+This is a complete, runnable two-[`SimObj`](../sim/simobj.md) simulation — a `Producer` (master) and a `Consumer` (slave) bound over one `StreamIF`, no `HwModule` — and it is the same shape as the toys on the other interface pages. The `yield` / `run_proc` / `ProcessGen` mechanics it relies on are explained in [Process generators](../sim/procgen.md). A `CrossBarIF` variant is the same idea with port-indexed endpoints (`in_0` / `out_0`) — see below.
 
 ---
 

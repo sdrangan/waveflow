@@ -4,7 +4,7 @@ parent: Concurrency
 nav_order: 2
 has_children: true
 audience: hls
-summary: "The HLS side of composite systems: how a hierarchical HwComponent lowers to a free-running hls::task network, the two realizations of load-compute-store (single-kernel DATAFLOW vs. multi-component task network), stream-of-blocks synthesis, and the composite codegen."
+summary: "The HLS side of composite systems: how a hierarchical HwModule lowers to a free-running hls::task network, the two realizations of load-compute-store (single-kernel DATAFLOW vs. multi-component task network), stream-of-blocks synthesis, and the composite codegen."
 ---
 # Concurrency — the HLS realization
 

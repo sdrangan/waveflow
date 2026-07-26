@@ -22,9 +22,9 @@ The contrast is `ap_ctrl_hs` (the [sequential flow](../../guide/flows/sequential
 host launches once and waits on. A free-running task cannot be driven that way — which is also why it
 cannot be verified by Vitis C/RTL cosim, and is instead run through [XSI](./rtlsim.md).
 
-## How a `FreeRunComp` lowers to a task top
+## How a `FreeRunMod` lowers to a task top
 
-Each leaf `FreeRunComp` becomes one `hls::task`; each `add_if` edge becomes one `hls_thread_local`
+Each leaf `FreeRunMod` becomes one `hls::task`; each `add_if` edge becomes one `hls_thread_local`
 FIFO; the `boundary` list becomes the interface pragmas. `composite_top_spec` reads the
 sub-components' `kernel_task()` signatures and the edges, resolves each task argument to a boundary port
 or an internal FIFO, and `render_top` emits it. Nothing about the top is hand-written — it *is* the

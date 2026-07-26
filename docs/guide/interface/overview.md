@@ -94,7 +94,7 @@ data = proc.value   # numpy array of shape (4,)
 
 Two raw [`SimObj`](../sim/simobj.md)s connecting over a `StreamIF` — a `Producer` holding the master
 endpoint and a `Consumer` holding the slave endpoint, bound and run in one `Simulation`. No
-`HwComponent` involved. (The `yield` / `run_proc` / `ProcessGen` mechanics are explained in
+`HwModule` involved. (The `yield` / `run_proc` / `ProcessGen` mechanics are explained in
 [Process generators](../sim/procgen.md).)
 
 ```python

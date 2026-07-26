@@ -4,11 +4,11 @@ parent: Concurrency
 nav_order: 1
 has_children: true
 audience: python
-summary: "The Python side of composite systems: building a hierarchical HwComponent from concurrent sub-components wired by internal interfaces, the load-compute-store task-network pattern, stream-of-blocks (ping-pong) channels, multi-input stages, and where per-stage timing lives."
+summary: "The Python side of composite systems: building a hierarchical HwModule from concurrent sub-components wired by internal interfaces, the load-compute-store task-network pattern, stream-of-blocks (ping-pong) channels, multi-input stages, and where per-stage timing lives."
 ---
 # Concurrency — the Python model
 
-A **composite** is a hierarchical [`HwComponent`](../../flows/components.md): it declares sub-components and
+A **composite** is a hierarchical [`HwModule`](../../flows/modules.md): it declares sub-components and
 wires their endpoints together with internal [interfaces](../../interface/), and each sub-component's
 `run_proc` runs as a concurrent process in the simulation. This half of the section is how you build one
 in Python.

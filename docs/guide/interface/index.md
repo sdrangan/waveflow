@@ -27,5 +27,5 @@ This section is the **Python transactional model**: the interface classes, their
 
 ## See also
 
-- [Hardware Components](../flows/components.md) — declaring the ports (these endpoints) on a component.
+- [Hardware Modules](../flows/modules.md) — declaring the ports (these endpoints) on a component.
 - [Custom Hooks](../custom_hooks/) — the synthesizable side: using an interface inside a kernel body (the `#pragma HLS INTERFACE` ports and the `read_stream` / `m_axi` calls on it).

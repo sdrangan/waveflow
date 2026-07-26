@@ -59,7 +59,7 @@ dag.add(BuildInputsStep(name="build_inputs"))                    # writes data/*
 dag.add(PySimStep(name="py_sim"))                                # writes results/sim/*
 dag.add(ExtractPyTimingStep(name="extract_py_timing"))           # writes results/py_timing.json
 dag.add(HlsGenIncludeStep(name="gen_include"))                   # writes include/*.h
-dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccelComponent, ...))
+dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))
 dag.add(HlsCodegenStep(name="gen_tb",     comp_class=PolyTBHls, is_testbench=True, ...))
 dag.add(CSimStep(name="csim"))                                   # invokes Vitis C-sim
 dag.add(FunctionalVerifyStep(name="validate_csim", ...))         # py vs Vitis outputs

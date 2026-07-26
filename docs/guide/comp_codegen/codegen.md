@@ -35,7 +35,7 @@ From [`examples/regmap/simp_fun_build.py`](../../../examples/regmap/simp_fun_bui
 ```python
 dag.add(HlsCodegenStep(
     name="gen_kernel",
-    comp_class=SimpFunComponent,
+    comp_class=SimpFun,
     source_artifact="simp_fun_source",
     output_dir="gen",     # framework-owned, .gitignored
     impl_dir=".",         # your sticky hook files, committed

@@ -46,11 +46,11 @@ The full set of `RegAccess` modes and the access matrix they imply is documented
 
 ## Creating the Kernel with the Register Map
 
-The kernel is a `HostActivated` component (the [host-activated](../../guide/flows/components.md) kind — it carries a regmap and the host launches it). It owns the regmap and binds it to a `VitisRegMapMMIFSlave` endpoint. The slave receives a host-side reference to the component's `on_start` method — the SimPy generator the framework invokes when the host writes `ap_start`.
+The kernel is a `HostActivated` component (the [host-activated](../../guide/flows/modules.md) kind — it carries a regmap and the host launches it). It owns the regmap and binds it to a `VitisRegMapMMIFSlave` endpoint. The slave receives a host-side reference to the component's `on_start` method — the SimPy generator the framework invokes when the host writes `ap_start`.
 
 ```python
 @dataclass
-class SimpFunComponent(HostActivated):
+class SimpFun(HostActivated):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
     cpp_namespace:   ClassVar[str | None] = "simp_fun_impl"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
@@ -142,7 +142,7 @@ def connect(sim, host, accel, clk):
 def simulate_case(case: SimpFunCase, *, clk_freq=100e6, latency_cycles=4):
     sim = Simulation()
     clk = Clock(freq=clk_freq)
-    accel = SimpFunComponent(name="simp_fun", sim=sim, clk=clk, latency_cycles=latency_cycles)
+    accel = SimpFun(name="simp_fun", sim=sim, clk=clk, latency_cycles=latency_cycles)
     host  = SimpFunHost(name="host", sim=sim, case=case, clk=clk, latency_cycles=latency_cycles)
     connect(sim, host, accel, clk)
     sim.run_sim()

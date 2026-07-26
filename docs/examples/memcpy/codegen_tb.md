@@ -31,7 +31,7 @@ that drives real handshakes through XSI. The mapping is the participant's own de
 |---|---|---|
 | `StreamDriver` | `AxisMaster` | the `s_cmd` AXI-Stream |
 | `StreamSink` | `AxisSlave` | the `s_done` AXI-Stream |
-| `MemComponent` | `FlatMemory` + `AxiMmReadSlave` / `AxiMmWriteSlave` | the two `m_axi` bundles |
+| `MemModel` | `FlatMemory` + `AxiMmReadSlave` / `AxiMmWriteSlave` | the two `m_axi` bundles |
 
 Note the memory expands to **three** C++ objects: one arena plus a slave model per bundle. In pysim a
 crossbar is one interface; at RTL there is no crossbar, so each bundle needs its own slave and both

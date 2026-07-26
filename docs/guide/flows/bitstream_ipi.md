@@ -1,6 +1,6 @@
 ---
 title: Full system, on hardware
-parent: Realization Flows
+parent: Hardware modules and Flows
 nav_order: 4
 nav_exclude: true   # Future flow (not one of the two built sim flows) — hidden until built; kept for the record
 audience: python

@@ -1,6 +1,6 @@
 ---
 title: Free-running, sequentially driven
-parent: Realization Flows
+parent: Hardware modules and Flows
 nav_order: 2
 nav_exclude: true   # SUPERSEDED by flows/concurrent/ — kept for content mining; remove when harvested
 audience: python
@@ -13,13 +13,13 @@ summary: "Flow 2 — a free-running DUT (a composite kernel: one hls::task for a
 > the *concurrent SystemC* flow (old Flow 3) was refuted — the XSI BFM already drives every port
 > cycle-by-cycle, so it is the concurrent harness (see [freerun_conc.md](./freerun_conc.md)); and the
 > leaf-vs-composite target split (`free_running_kernel` / `composite_kernel`) collapsed to one target,
-> `composite_kernel`, with the `FreeRunComp` merge (`plans/one_component_two_flows.md`). The BFM was
+> `composite_kernel`, with the `FreeRunMod` merge (`plans/one_component_two_flows.md`). The BFM was
 > hand-written when this page was first drafted; it is now **generated** (`tb_top_spec` +
 > `render_tb_harness`) and bit-exact under the XSI gates.
 
 **DUT output:** a **composite kernel** — one or more `ap_ctrl_none`
-[tasks](components.md) (`hls::task t(foo, …)`), either a single task compiled as its own top
-(the 1-task case) or a [composite](components.md) network of them.
+[tasks](modules.md) (`hls::task t(foo, …)`), either a single task compiled as its own top
+(the 1-task case) or a [composite](modules.md) network of them.
 **Testbench:** an **XSI BFM** — a cycle-based harness that pumps the clock and models each
 AXI-Stream / AXI-MM port, driving the elaborated RTL in `xsim` through **XSI**.
 

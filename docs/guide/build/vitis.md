@@ -223,7 +223,7 @@ def build_poly_dag() -> BuildDag:
     dag.add(PySimStep(name="py_sim"))                              # SimPy → results/sim/*
     dag.add(ExtractPyTimingStep(name="extract_py_timing"))         # py_timing.json
     dag.add(HlsGenIncludeStep(name="gen_include"))                 # codegen sub-DAG → include/*.h
-    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccelComponent, ...))
+    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))
     dag.add(HlsCodegenStep(name="gen_tb",     comp_class=PolyTBHls, is_testbench=True, ...))
     dag.add(CSimStep(name="csim"))                                 # Vitis C-sim
     dag.add(FunctionalVerifyStep(name="validate_csim", ...))       # generic comparator

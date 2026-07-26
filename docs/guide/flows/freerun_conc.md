@@ -1,6 +1,6 @@
 ---
 title: Free-running, concurrently driven
-parent: Realization Flows
+parent: Hardware modules and Flows
 nav_order: 3
 nav_exclude: true   # SUPERSEDED (Flow 3 refuted, merged into flows/concurrent/) — kept for the record
 audience: python
@@ -19,8 +19,8 @@ summary: "Flow 3 — the same free-running DUT as Flow 2 (a free-running kernel 
 > generates a SystemC harness.
 
 **DUT output:** the *same* **free-running kernel** or **composite kernel** as the
-[sequentially driven](./freerun_seq.md) flow — one `ap_ctrl_none` [task](components.md) or a
-[composite](components.md) network of them.
+[sequentially driven](./freerun_seq.md) flow — one `ap_ctrl_none` [task](modules.md) or a
+[composite](modules.md) network of them.
 **Testbench:** a **concurrent SystemC TB** — a harness where each stimulus/capture agent is its own
 `SC_THREAD`, driving the elaborated RTL in `xsim` through **XSI**.
 

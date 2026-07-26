@@ -73,14 +73,14 @@ PEs, and several run *concurrently*.
 Waveflow is the single executable model for exactly this kind of system — each piece of SALSA maps
 onto a Waveflow abstraction, and the whole thing simulates, verifies, and generates from one source:
 
-- **Tiles and their PEs are `HwComponent`s.** A distributed tile — and each processing element inside
-  it (FIR, FFT, systolic, vector) — is a `HwComponent` with typed interfaces (the **Serial I/F** and
+- **Tiles and their PEs are `HwModule`s.** A distributed tile — and each processing element inside
+  it (FIR, FFT, systolic, vector) — is a `HwModule` with typed interfaces (the **Serial I/F** and
   **Bus/memory I/F** of the figure above) and a compute hook: modeled in Python, simulated at NumPy
   speed, verified bit-exact against its golden, and lowered to HLS. The reconfigurable **vector-MAC
   engine (VMAC)** is the first PE through that flow — already bit-exact on real Vitis and
   throughput-characterized — a concrete SALSA building block, not a sketch.
 - **The tasklet vocabulary maps straight onto Waveflow.** A *tasklet* is a compute hook on a PE
-  `HwComponent`; a *flow* is a sequence of tasklets wired through the typed interfaces; and a PE's
+  `HwModule`; a *flow* is a sequence of tasklets wired through the typed interfaces; and a PE's
   *job queue + micro-scheduler* is an **AXI-MM command-queue interface** feeding the hook. So the one
   model that simulates a tasklet bit-exact also describes the queue that schedules it — one source for
   the compute *and* its dispatch.

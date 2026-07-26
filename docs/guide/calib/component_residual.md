@@ -4,14 +4,14 @@ parent: Timing model fitting
 nav_order: 5
 audience: python
 api: [TimingModel, StreamTimingModel, CollectTimingStep, FitTimingStep]
-summary: "A component's control residual is the delay pysim is MISSING once the bus term is charged: residual = rtl_span - pysim_span + current_dly, fit per (component, platform). TimingModel collects RTL firings (from a trace) and pysim firings (from a run) into independent trees, joins them on the feature point (nwords, num_trans), and fits a CalibModel; predict() returns the delay a FreeRunComp injects via timed_delay. Stored shared (platform_dir -> the committed library) or custom (calib_dir -> a project dir). CollectTimingStep / FitTimingStep automate it."
+summary: "A component's control residual is the delay pysim is MISSING once the bus term is charged: residual = rtl_span - pysim_span + current_dly, fit per (component, platform). TimingModel collects RTL firings (from a trace) and pysim firings (from a run) into independent trees, joins them on the feature point (nwords, num_trans), and fits a CalibModel; predict() returns the delay a FreeRunMod injects via timed_delay. Stored shared (platform_dir -> the committed library) or custom (calib_dir -> a project dir). CollectTimingStep / FitTimingStep automate it."
 ---
 # Component residuals
 
 The second level of the [split](./index.md#two-levels-what-is-a-platform-property-what-is-a-component-property):
 once the [bus term](./bus_model.md) is charged, what remains is the component's own **control cost** —
 the per-firing overhead the loosely-timed pysim does not already account for. A `TimingModel` fits that
-remainder and a `FreeRunComp` injects it.
+remainder and a `FreeRunMod` injects it.
 
 ## The residual is what pysim *misses*
 
@@ -79,7 +79,7 @@ tm.fit()                                                    # -> corpus.csv + pa
 
 ## Recording the pysim firings: `timed_delay`
 
-Where does the `writer.firing_records` list `collect_pysim` reads come from? A calibrated `FreeRunComp`
+Where does the `writer.firing_records` list `collect_pysim` reads come from? A calibrated `FreeRunMod`
 does not call `predict` directly — it calls **`timed_delay`** in its `run_iter`, which both **predicts**
 the delay *and* **records** the firing (its features + the delay it just predicted) onto
 `self.firing_records`:

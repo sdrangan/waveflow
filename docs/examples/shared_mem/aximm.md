@@ -106,7 +106,7 @@ generated kernel does exactly this with a helper,
 [code generation](codegen.md) page shows the lowered C++.
 
 Who decides the addresses? On the simulation and testbench side, a small
-**allocator** (`MemMgr` / the SimPy `MemComponent`) hands out non-overlapping
+**allocator** (`MemMgr` / the SimPy `MemModel`) hands out non-overlapping
 regions in declaration order. The histogram needs three: `data`, then
 `bin_edges`, then `counts`. The allocator places them back-to-back and reports
 each region's base byte address, which the host stamps into the command. The

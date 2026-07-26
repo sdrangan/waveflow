@@ -124,7 +124,7 @@ over a hand-rolled byte-address helper whenever a component addresses a memory r
 
 Two raw [`SimObj`](../sim/simobj.md)s over a point-to-point [`DirectMMIF`](#directmmif): a `Cpu` holding
 the `MMIFMaster` writes a burst and reads it back, and a `MemBank` holding the `MMIFSlave` is a tiny
-word-addressed memory model. No `HwComponent`. (The `yield from` / `run_proc` / `ProcessGen` mechanics
+word-addressed memory model. No `HwModule`. (The `yield from` / `run_proc` / `ProcessGen` mechanics
 are explained in [Process generators](../sim/procgen.md).)
 
 ```python

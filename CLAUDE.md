@@ -45,9 +45,9 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 
 **`DataSchema`** (`waveflow/hw/dataschema.py`) — The type system. A class-based schema where structure lives on the class and runtime values on the instance. Field subclasses: `IntField`, `FloatField`, `EnumField`, `DataList`, `DataArray`, `MemAddr`. This is the largest module (~3900 lines) and the foundation for code generation, firmware, and documentation.
 
-**`Component`** (`waveflow/hw/component.py`) — Base class for hardware objects (HwObj). Declares typed ports with direction (master/slave) using protocol types: FIFO, AXI-Stream, AXI-Lite, AXI-MM. Functional behavior is implemented as Python methods on slave ports or as a PyTorch `forward()` method.
+**`HwModule`** (`waveflow/hw/hw_module.py`) — Base class for hardware objects (a `SimObj` with structure). Declares typed ports with direction (master/slave) using protocol types: FIFO, AXI-Stream, AXI-Lite, AXI-MM, and can contain sub-modules wired by internal interfaces. Following SystemC, one `HwModule` serves as either a leaf or a hierarchical top. Functional behavior is implemented as Python methods on slave ports or as a PyTorch `forward()` method. Subclasses `HostActivated` (host-launched) and `FreeRunMod` (free-running) map to the two realization flows.
 
-**`Interface`** (`waveflow/hw/interface.py`) — Transactional connection between two hardware objects. Explicitly connects a master port on one Component to a slave port on another. Manages transactional semantics during simulation.
+**`Interface`** (`waveflow/hw/interface.py`) — Transactional connection between two hardware objects. Explicitly connects a master port on one `HwModule` to a slave port on another. Manages transactional semantics during simulation.
 
 **`SimObj`** (`waveflow/simulation/simobj.py`) — Base class for anything participating in a simulation: hardware components, software processes, sensors, channels. Implements a three-phase lifecycle: `pre_sim()` → `run_proc()` → `post_sim()`.
 

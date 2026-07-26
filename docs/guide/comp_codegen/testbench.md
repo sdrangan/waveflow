@@ -10,12 +10,12 @@ summary: "The sequential_vitis_tb target: a SeqTB's main() lowers to a C++ int m
 
 # Testbench
 
-A [`SeqTB`](../flows/components.md) is the **source for the `sequential_vitis_tb`** [target](./index.md): its
+A [`SeqTB`](../flows/modules.md) is the **source for the `sequential_vitis_tb`** [target](./index.md): its
 `main()` lowers to a C++ `int main()`, emitted as a single `<kernel>_tb.cpp`. That program is what
 Vitis C-simulation and co-simulation run against the generated kernel — so the same Python that drives
 your DUT in the sim also drives it in Vitis.
 
-A `SeqTB` is **not** an `HwComponent` and not a `SimObj`: it has no endpoints and no `run_proc`, only
+A `SeqTB` is **not** an `HwModule` and not a `SimObj`: it has no endpoints and no `run_proc`, only
 `main()` and a `data_dir`. It is a codegen source that happens to be runnable.
 
 ## The same extractor, a different rule profile
@@ -26,7 +26,7 @@ allowed:
 
 | Operation | In a testbench | In a kernel body |
 |---|---|---|
-| build a DUT — `dut = SimpFunComponent()` | ✅ | ✗ |
+| build a DUT — `dut = SimpFun()` | ✅ | ✗ |
 | file I/O — `Int32().read_uint32_file(path)` | ✅ | ✗ |
 | `ep.push(v)` / `ep.pop(v)` (+ `_array` forms) | ✅ | ✗ |
 | invoke — `dut.run()` / `dut.run_once(...)` / `yield from dut.run_once_sim(...)` | ✅ | ✗ |
@@ -58,7 +58,7 @@ class SimpFunTBHls(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:
-        dut = SimpFunComponent()
+        dut = SimpFun()
         x = Int32().read_uint32_file(self.data_dir + "/x.bin")
         a = Int32().read_uint32_file(self.data_dir + "/a.bin")
         b = Int32().read_uint32_file(self.data_dir + "/b.bin")

@@ -1,6 +1,6 @@
 ---
 title: Concurrent (free-running)
-parent: Realization Flows
+parent: Hardware modules and Flows
 nav_order: 3
 has_children: true
 audience: python
@@ -12,7 +12,7 @@ summary: "Flow 2 — a free-running (ap_ctrl_none) kernel or composite Vitis can
 The concurrent flow is for a DUT that **runs on its own**. The kernel is `ap_ctrl_none`: no start/done
 handshake — one `hls::task` for a leaf, one per child for a composite, wired by internal channels. It
 never waits to be launched and never returns; a leaf simply *re-fires* on each new job. In Python it is
-a [`FreeRunComp`](./components.md) — a leaf implements `run_iter`, a composite has sub-components.
+a [`FreeRunMod`](./modules.md) — a leaf implements `run_iter`, a composite has sub-components.
 
 Because it never returns, there is nothing for a sequential program to *call* — which changes both what
 it can do and how it must be verified.

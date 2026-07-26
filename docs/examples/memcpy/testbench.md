@@ -32,7 +32,7 @@ a sink for completions, and memory behind the two `m_axi` bundles.
 graph LR
     DRV["StreamDriver<br/>(commands)"] -->|s_cmd| DUT["MemCopy (DUT)<br/>free-running composite"]
     DUT -->|s_done| SNK["StreamSink<br/>(completions)"]
-    DUT <-->|"m_in / m_out — AXI-MM"| MEM["MemComponent<br/>(one shared arena)"]
+    DUT <-->|"m_in / m_out — AXI-MM"| MEM["MemModel<br/>(one shared arena)"]
 ```
 
 All three participants are **framework** classes — you do not write them (see
@@ -42,7 +42,7 @@ All three participants are **framework** classes — you do not write them (see
 |---|---|
 | [`StreamDriver`](../../guide/sim/stream_tb.md) | plays a burst bundle of commands onto `s_cmd` |
 | [`StreamSink`](../../guide/sim/stream_tb.md) | collects the `CopyResp` records off `s_done` |
-| `MemComponent` | the arena **both** `m_axi` bundles read and write |
+| `MemModel` | the arena **both** `m_axi` bundles read and write |
 
 The memory being *one* component behind *two* bundles matters: `m_in` reads and `m_out` writes the same
 words, which is what makes this a copy rather than two unrelated transfers.
@@ -52,7 +52,7 @@ data** in memory; it declares that the memory will load `vectors/mem_in` in `pre
 entry), exactly like the RTL memory:
 
 ```python
-        self.mem = MemComponent(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+        self.mem = MemModel(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         self.mem.alloc(int(self.mem.nwords_tot))         # full capacity: mem_in loads directly, no clip
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]

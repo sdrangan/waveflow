@@ -107,7 +107,7 @@ self.slave_ep = MMIFSlave(
 )
 ```
 
-[`MemComponent`](../flows/components.md) populates `peek_read` automatically. A slave without one cannot be polled (`poll_until` raises). The blocked poller does not spin: it waits on a per-slave write-notify the interconnect fires after every write, then re-peeks — so there is no lost wakeup and no per-cycle stepping.
+[`MemModel`](../flows/modules.md) populates `peek_read` automatically. A slave without one cannot be polled (`poll_until` raises). The blocked poller does not spin: it waits on a per-slave write-notify the interconnect fires after every write, then re-peeks — so there is no lost wakeup and no per-cycle stepping.
 
 ---
 

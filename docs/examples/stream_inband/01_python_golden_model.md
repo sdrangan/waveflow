@@ -14,7 +14,7 @@ produces.
 | Step | Produces | What it does |
 |------|----------|--------------|
 | `build_inputs` | `coeffs`, `data_cmd_hdr`, `samp_in`, `end_cmd_hdr`, `data_dir` | Writes the four binary test-vector files into `data/` |
-| `py_sim`      | `sim_dir`, `log` | Runs `PolyAccelComponent` + `PolyTB` in SimPy; writes `results/sim/resp_hdr.bin`, `samp_out.bin`, `regmap_status.json` and a structured event log to `results/sim_log.csv` |
+| `py_sim`      | `sim_dir`, `log` | Runs `PolyAccel` + `PolyTB` in SimPy; writes `results/sim/resp_hdr.bin`, `samp_out.bin`, `regmap_status.json` and a structured event log to `results/sim_log.csv` |
 | `extract_py_timing` | `py_timing`, `durations` | Parses the event log into `results/py_timing.json` (structured `transaction_cycles` + raw event timestamps) |
 
 ## Schemas: the single source of truth
@@ -44,7 +44,7 @@ both the Python sim and the C++ testbench (Group 2) read.
 
 ## The Python simulation
 
-`PolyAccelComponent` is a SimPy model of the kernel — it owns two
+`PolyAccel` is a SimPy model of the kernel — it owns two
 stream endpoints, an AXI-Lite `VitisRegMap`, and an `on_start` body
 that runs as a `while True` coroutine.  `PolyTB` (the *SimPy* TB,
 distinct from the codegen-source `PolyTBHls` in Group 2) writes

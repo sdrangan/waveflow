@@ -93,7 +93,7 @@ with `elem_read`; the golden does not need to — that is a synthesis concern, s
 [Concurrency (HLS) — SOB](../hls/sob.md).)
 
 `Load` and `Compute` are free-running leaves, so they subclass
-[`FreeRunComp`](../../flows/components.md) and implement **`run_iter`** (one firing) rather than a
+[`FreeRunMod`](../../flows/modules.md) and implement **`run_iter`** (one firing) rather than a
 hand-rolled `run_proc` loop — see [Sub-components](./subcomponent.md) for why.
 
 ```python
@@ -104,8 +104,8 @@ import numpy as np
 from waveflow.hw.arrayutils import array, read_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, FloatField
-from waveflow.hw.hw_component import HwComponent
-from waveflow.hw.hw_freerun import FreeRunComp
+from waveflow.hw.hw_module import HwModule
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import (SobIFMaster, SobIFSlave, StreamIFMaster,
                                    StreamIFSlave, StreamOfBlocksIF)
 from waveflow.simulation.simobj import ProcessGen
@@ -126,7 +126,7 @@ NWORDS = HalfVec.nwords_per_inst(WORD_BW)   # packed words per half-block
 
 
 @dataclass
-class Load(FreeRunComp):
+class Load(FreeRunMod):
     """Move the word stream x into two resident half-blocks — no unpacking, just words."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -148,7 +148,7 @@ class Load(FreeRunComp):
 
 
 @dataclass
-class Compute(FreeRunComp):
+class Compute(FreeRunMod):
     """z[i] = x[i] + x[2N-1-i] = (xtop + flip(xbot))[i]."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -176,7 +176,7 @@ slave/consumer) and exposes `x` / `z` as its boundary:
 
 ```python
 @dataclass
-class RevAvg(HwComponent):
+class RevAvg(HwModule):
     """Composite: z[i] = x[i] + x[2N-1-i], via a Load → SOB → Compute pipeline."""
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 

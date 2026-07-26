@@ -29,7 +29,7 @@ The register map matches the model that Vitis HLS generates from `s_axilite` sca
 Two raw [`SimObj`](../sim/simobj.md)s exercising the launch-then-poll lifecycle over a
 [`DirectMMIF`](./aximm.md#directmmif): a `Kernel` holding a `VitisRegMapMMIFSlave` runs its `on_start`
 when launched, and a `Host` holding an `MMIFMaster` writes the inputs, asserts `ap_start`, polls
-`ap_done`, and reads the result back. No `HwComponent`. (`on_start` is the regmap-launched entry — see
+`ap_done`, and reads the result back. No `HwModule`. (`on_start` is the regmap-launched entry — see
 the [SimObj lifecycle](../sim/simobj.md#its-lifecycle); the `yield from` mechanics are in
 [Process generators](../sim/procgen.md).)
 
@@ -545,7 +545,7 @@ The component declares its endpoints and an `on_start` method. There is **no** `
 from waveflow.hw.regmap import VitisRegMap, VitisRegMapMMIFSlave, RegField, RegAccess
 
 @dataclass
-class PolyAccelComponent(HwComponent):
+class PolyAccel(HwModule):
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -30,7 +30,7 @@ C-simulation and co-simulation.
 def simulate_case(case, *, clk_freq=100e6, latency_cycles=4, log_file=None):
     sim = Simulation()
     clk = Clock(freq=clk_freq)
-    accel = SimpFunComponent(name="simp_fun", sim=sim, clk=clk, latency_cycles=latency_cycles, ...)
+    accel = SimpFun(name="simp_fun", sim=sim, clk=clk, latency_cycles=latency_cycles, ...)
     host  = SimpFunHost(name="host", sim=sim, case=case, clk=clk, ...)
     connect(sim, host, accel, clk)
     sim.run_sim()
@@ -155,7 +155,7 @@ told it.
 The events come from `@sim_only` log calls on both sides of the link:
 
 ```python
-# host (SimpFunHost.run_proc)          # kernel (SimpFunComponent.on_start)
+# host (SimpFunHost.run_proc)          # kernel (SimpFun.on_start)
 self._log("ap_start_host", 1)          self._log("kernel_busy", 1)
 self._log("host_done", int(self.ap_done))   self._log("kernel_done", 1)
 ```

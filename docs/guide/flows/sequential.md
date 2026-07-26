@@ -1,6 +1,6 @@
 ---
 title: Sequential (host-activated)
-parent: Realization Flows
+parent: Hardware modules and Flows
 nav_order: 2
 has_children: true
 audience: python
@@ -12,7 +12,7 @@ summary: "Flow 1 — a control-driven (ap_ctrl_hs + s_axilite) kernel the host l
 The sequential flow is the one to reach for first, and the one most kernels in the repo take today. The
 DUT is a **control-driven kernel**: a component the host *launches* — it writes the inputs, pulses a
 start bit, and waits for the kernel to signal done. In hardware that handshake is `ap_ctrl_hs` over an
-`s_axilite` register map; in Python it is a [`HostActivated`](./components.md) component whose
+`s_axilite` register map; in Python it is a [`HostActivated`](./modules.md) component whose
 `on_start` runs once per launch.
 
 Because the kernel starts and finishes, it behaves like a **function** — and that one fact is what

@@ -24,7 +24,7 @@ class SimpFunTBHls(SeqTB):
     cpp_kernel_name: ClassVar[str | None] = "simp_fun"
 
     def main(self) -> None:
-        dut = SimpFunComponent()
+        dut = SimpFun()
         x = Int32().read_uint32_file(self.data_dir + "/x.bin")
         a = Int32().read_uint32_file(self.data_dir + "/a.bin")
         b = Int32().read_uint32_file(self.data_dir + "/b.bin")
@@ -42,7 +42,7 @@ That is the point — a C++ testbench does not bit-bang AXI-Lite either; it call
 
 A few pieces are worth pulling apart.
 
-**`dut = SimpFunComponent()`** — no `sim=`. In code generation this is just the DUT declaration. When
+**`dut = SimpFun()`** — no `sim=`. In code generation this is just the DUT declaration. When
 the testbench *runs*, the harness makes a `Simulation` **ambient**, and the component binds to it
 automatically. One spelling, both modes.
 
@@ -172,7 +172,7 @@ transaction_cycles  = int(round(transaction_seconds * clk_freq))
 ```
 
 `SeqTB.run()` is the harness: it creates a fresh `Simulation`, makes it ambient (so the bare
-`SimpFunComponent()` inside `main()` binds to it), spawns `main()` as a **single** process, and runs to
+`SimpFun()` inside `main()` binds to it), spawns `main()` as a **single** process, and runs to
 completion. Cycles come from seconds via the configured `clk_freq` — the same frequency Vitis uses for
 co-simulation, so the two cycle counts are directly comparable.
 

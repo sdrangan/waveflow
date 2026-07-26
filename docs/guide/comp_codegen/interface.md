@@ -3,9 +3,9 @@ title: Endpoint interfaces
 parent: Component Code Generation
 nav_order: 2
 audience: hls
-applies_to: [HwComponent]
+applies_to: [HwModule]
 api: [kernel_signature, StreamIF, MMIFMaster, VitisRegMapMMIFSlave]
-summary: "How each declared endpoint on an HwComponent is realized as a Vitis HLS port: stream endpoints become hls::stream<axi4s_word<bw>>& with #pragma HLS INTERFACE axis; m_axi masters become ap_uint<bw>* with m_axi offset=slave bundle=gmem; a VitisRegMapMMIFSlave becomes s_axilite register-field ports plus the ap_start/ap_done control protocol. Also how a slave endpoint's handler binds to the kernel body."
+summary: "How each declared endpoint on an HwModule is realized as a Vitis HLS port: stream endpoints become hls::stream<axi4s_word<bw>>& with #pragma HLS INTERFACE axis; m_axi masters become ap_uint<bw>* with m_axi offset=slave bundle=gmem; a VitisRegMapMMIFSlave becomes s_axilite register-field ports plus the ap_start/ap_done control protocol. Also how a slave endpoint's handler binds to the kernel body."
 ---
 
 # Endpoint interfaces
@@ -107,7 +107,7 @@ spaces (`s_axi_control` **and** an auto-named `s_axi_control_r`) — one block, 
 > the offset to join, so Vitis auto-creates one *and* `ap_start` stays on raw pins — meaning the block
 > needs two different masters: one to write the base address over AXI-Lite, another to pulse a wire.
 > `block_scale` is in this state today. `hist` was, until it gained a regmap and became
-> [`HostActivated`](../flows/components.md). This is a good reason to give a memory-mapped
+> [`HostActivated`](../flows/modules.md). This is a good reason to give a memory-mapped
 > kernel a regmap even when it has no scalar arguments to put in one.
 
 ## The control protocol on `return`
@@ -129,7 +129,7 @@ exists exactly when a regmap does.
 
 Neither row is "better": a host-launched accelerator (XRT) *needs* the AXI-Lite control registers,
 while a block launched by another block inside an IPI system wants the raw pins. See
-[Realization Flows](../flows/).
+[Hardware modules and Flows](../flows/).
 
 > `ap_ctrl_none` — free-running, no handshake at all — is a third protocol that nothing generates yet
 > (the `free_running_kernel` [target](./index.md)). Note a component whose entry is `run_proc` rather

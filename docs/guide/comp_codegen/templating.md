@@ -16,7 +16,7 @@ Here we cover how each lowers into generated code.
 
 ## How `HwParam` lowers
 
-A `HwParam` value reaches codegen as an [`HwParamValue`](../../../waveflow/hw/hw_component.py) — an
+A `HwParam` value reaches codegen as an [`HwParamValue`](../../../waveflow/hw/hw_module.py) — an
 `int` that also carries its `.param_name`. That dual nature lets the generator emit either a **literal
 value** or a **template-parameter name**, depending on where it lands:
 
@@ -40,7 +40,7 @@ template-parameter name for a `HwParam` field, or `repr(value)` for a plain lite
 
 ## How `HwConst` lowers
 
-A [`HwConst`](../../../waveflow/hw/hw_component.py) is a class-level structural constant intended to
+A [`HwConst`](../../../waveflow/hw/hw_module.py) is a class-level structural constant intended to
 emit as a C++ `static constexpr T name = value;`. **This emission is currently deferred** (a follow-up
 phase): `discover_hw_const(cls)` already surfaces the fields, but the generator does not yet write the
 `static constexpr` lines. In the meantime a `HwConst` shapes generated structure indirectly through the
@@ -48,13 +48,13 @@ Python values it feeds (e.g. a static array extent that sizes a buffer).
 
 ## `param_supports` — emitting variant kernels
 
-[`param_supports`](../../../waveflow/hw/hw_component.py) turns one component class into **multiple
+[`param_supports`](../../../waveflow/hw/hw_module.py) turns one component class into **multiple
 concrete kernel tops**. Each variant key maps to a dict of `HwParam` overrides; codegen emits
 `<cpp_kernel_name>_<key>` for each, alongside the default `<cpp_kernel_name>`.
 
 ```python
 @dataclass
-class VarKernel(FreeRunComp):
+class VarKernel(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "var_kernel"
     param_supports: ClassVar[dict] = {"bw64": {"in_bw": 64}, "bw128": {"in_bw": 128}}
 
@@ -73,7 +73,7 @@ literal widths of 32, 64 and 128, with no `template <...>` block on any of them.
 > sweep when the configurations differ by more than `HwParam` values.
 
 The mechanism: `_iter_variants(comp_class)` first validates with
-[`validate_param_supports`](../../../waveflow/hw/hw_component.py), then yields the default variant
+[`validate_param_supports`](../../../waveflow/hw/hw_module.py), then yields the default variant
 (suffix `""`) followed by one instance per `param_supports` entry — each built through the **normal
 `__init__`** with the overrides applied (no immutability bypass). For each, `kernel_signature(comp,
 variant_suffix=key)` names the top `<base>_<key>` and fills its ports with that instance's concrete
@@ -82,9 +82,9 @@ signatures** rather than a single templated top.
 
 ## API
 
-- [`HwParamValue`](../../../waveflow/hw/hw_component.py) — int + `.param_name`; drives template-name-vs-literal.
+- [`HwParamValue`](../../../waveflow/hw/hw_module.py) — int + `.param_name`; drives template-name-vs-literal.
 - [`kernel_signature(comp, variant_suffix="")`](../../../waveflow/build/hwgen.py) — the concrete top signature; appends `_<suffix>` for variants.
-- [`param_supports`](../../../waveflow/hw/hw_component.py) / [`validate_param_supports`](../../../waveflow/hw/hw_component.py) — the variant map and its validation.
+- [`param_supports`](../../../waveflow/hw/hw_module.py) / [`validate_param_supports`](../../../waveflow/hw/hw_module.py) — the variant map and its validation.
 - [`HlsCodegenStep`](../../../waveflow/build/hwcodegen_steps.py) — selects `.cpp` vs `.tpp` per hook.
 
 ## Quick reference

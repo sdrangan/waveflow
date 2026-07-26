@@ -94,7 +94,7 @@ degenerate case of it.)
 The tiles are **free-running** (`ap_ctrl_none`) — none is "started"; they all loop forever. Left
 unbounded, they race ahead of one another and the pipeline fills until it deadlocks (the `nj=8` class,
 `done == #tasks + 1`). The fix is a **forwarded token**: `cmd_rx` emits one token per job, and *every*
-stage — each a [`FreeRunComp`](../../flows/components.md) — reads it on `cmd_in` and passes it on
+stage — each a [`FreeRunMod`](../../flows/modules.md) — reads it on `cmd_in` and passes it on
 `cmd_out` **before** doing its own work. That work is one firing of `run_iter`; the base loops it:
 
 ```python
@@ -115,7 +115,7 @@ output block, gathers, then releases — the [SOB](./sob.md) acquire / commit / 
 
 ```python
 @dataclass
-class IlCompute(FreeRunComp):
+class IlCompute(FreeRunMod):
     def run_iter(self):
         cmd = yield from self.cmd_in.get(InterleaverCmd)
         yield from self.cmd_out.write(cmd)             # forward the token
@@ -140,7 +140,7 @@ boundary. It is the same `add_comp` / `add_if` pattern from [Sub-components](./s
 scale:
 
 ```python
-class InterleaverCanon(HwComponent):
+class InterleaverCanon(HwModule):
     def __post_init__(self):
         super().__post_init__()
         # 1. the six tiles

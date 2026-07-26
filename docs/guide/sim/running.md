@@ -127,7 +127,7 @@ returns, as the producer/consumer does here).
 ## Worked example: the poly accelerator
 
 [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py) wires a testbench
-(`PolyTB`) to an accelerator (`PolyAccelComponent`) over two `StreamIF`s and one `DirectMMIF` (the
+(`PolyTB`) to an accelerator (`PolyAccel`) over two `StreamIF`s and one `DirectMMIF` (the
 AXI-Lite control link) — exactly the `bind` pattern above, collected into an example-local
 `connect(sim, tb, accel, clk)` helper (it is a convenience in that file, *not* a framework API). The
 run itself lives in [`poly_build.py`](../../../examples/stream_inband/poly_build.py)'s `PySimStep`:

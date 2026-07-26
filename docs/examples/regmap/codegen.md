@@ -23,7 +23,7 @@ Both stages are added to the build DAG in [`simp_fun_build.py`](../../../example
 # examples/regmap/simp_fun_build.py
 dag.add(HlsCodegenStep(
     name="gen_kernel",
-    comp_class=SimpFunComponent,
+    comp_class=SimpFun,
     source_artifact="simp_fun_source",
     output_dir="gen",
     impl_dir=".",
@@ -39,7 +39,7 @@ dag.add(HlsCodegenStep(
 
 The constructor arguments each carry weight:
 
-- **`comp_class`** — the Python class to lower. `SimpFunComponent` is the `HostActivated` kernel with the `VitisRegMap`; `SimpFunTBHls` is the `SeqTB` with the `main()` host-side sequence. Same step type, two different inputs.
+- **`comp_class`** — the Python class to lower. `SimpFun` is the `HostActivated` kernel with the `VitisRegMap`; `SimpFunTBHls` is the `SeqTB` with the `main()` host-side sequence. Same step type, two different inputs.
 - **`source_artifact="simp_fun_source"`** — the input this step depends on (see [Named artifacts](#named-artifacts) below).
 - **`output_dir="gen"`** — where the auto-generated, framework-owned files land. The `gen/` directory is `.gitignored` and treated as a build product — every run rewrites it from scratch.
 - **`impl_dir="."`** — where the **sticky** hand-written hook files land. "Sticky" means: the framework writes a stub once if the file does not exist, then leaves it alone forever. Edits to the impl file survive every subsequent rebuild. This is the seam through which the user owns the compute body without owning the wrapper.
@@ -161,7 +161,7 @@ ap_int<32> compute(ap_int<32> x, ap_int<32> a, ap_int<32> b) {
 ```
 
 The contract this file fulfills is defined by the Python class: the
-`@synthesizable compute(self, x, a, b) -> Int32` method on `SimpFunComponent` (see
+`@synthesizable compute(self, x, a, b) -> Int32` method on `SimpFun` (see
 [Python model](./python.md)) names the function, its three arguments, and its return type. The framework
 generates the matching declaration in `gen/simp_fun.hpp` and the call in `gen/simp_fun.cpp`; the user
 provides the body. So there are **two implementations of the same math that must agree** — the Python
@@ -173,7 +173,7 @@ the write — from a fixed vocabulary; it does not lower arbitrary scalar math. 
 behind a hook keeps the boundary clean: the generated code owns the interface and the control flow, the
 hook owns the arithmetic. Three details worth flagging:
 
-- **The `simp_fun_impl` namespace** matches `SimpFunComponent.cpp_namespace`. It could be dropped: the default is `<kernel>_impl`. The namespace must not simply be the kernel name — a namespace and a function cannot share a name in one scope — which is why the default appends `_impl`. See [Codegen](../../guide/comp_codegen/codegen.md).
+- **The `simp_fun_impl` namespace** matches `SimpFun.cpp_namespace`. It could be dropped: the default is `<kernel>_impl`. The namespace must not simply be the kernel name — a namespace and a function cannot share a name in one scope — which is why the default appends `_impl`. See [Codegen](../../guide/comp_codegen/codegen.md).
 - **`#pragma HLS INLINE`** asks Vitis to inline the compute into its caller. For a function this small that is almost always right; for a heavier body you would drop the inline and let Vitis schedule it as its own pipelined region.
 - **`ap_int<32>`** is the Vitis fixed-width type that maps to the Python `Int32` (`IntField(bitwidth=32, signed=True)`). The framework picks the C++ type from the schema; the user just uses what the generated header declares.
 

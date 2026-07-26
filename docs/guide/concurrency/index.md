@@ -9,11 +9,11 @@ summary: "Waveflow's concurrency model: hierarchical composite components whose 
 # Concurrency
 
 *Concurrency* is fundamental to hardware: modules run in parallel, and that parallelism is where
-hardware's throughput comes from. Waveflow models it directly — each `HwComponent` defines a `run_proc`
+hardware's throughput comes from. Waveflow models it directly — each `HwModule` defines a `run_proc`
 that spawns a process running in parallel in the simulation.
 
 A component built from **sub-components** wired together is a **composite**: a hierarchical
-`HwComponent` whose children run concurrently (like `InterleaverCanon` and its six tiles). This section
+`HwModule` whose children run concurrently (like `InterleaverCanon` and its six tiles). This section
 has two halves:
 
 - **[Python model](./python/)** — how to describe composite systems hierarchically in Python, including
@@ -24,4 +24,4 @@ has two halves:
 ## See also
 
 - [Component structure](../comp_codegen/structure.md) — free-running vs. launched kernel modes.
-- [Hardware Components](../flows/components.md) and [Interfaces](../interface/) — the Python-side declarations composites are built from.
+- [Hardware Modules](../flows/modules.md) and [Interfaces](../interface/) — the Python-side declarations composites are built from.
