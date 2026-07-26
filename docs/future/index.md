@@ -14,6 +14,5 @@ corresponding plan file under [plans/](https://github.com/sdrangan/waveflow/tree
 
 - [AI-Assisted Hook Completion](./ai_hook_completion.md)
 - [AI-Assisted Planning](./ai_planning.md)
-- [Cycle Model Training](./cycle_model_training.md)
 - [Design Analysis Automation](./design_analysis.md)
 - [Vivado IPI Backend](./vivado_backend.md)
