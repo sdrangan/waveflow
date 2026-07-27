@@ -1,12 +1,13 @@
 # Plan: `add_state` — declared cross-firing state in a `HwModule`
 
-> **Status (2026-07-27): Stages 1, 2, and 3 are BUILT and gated.** Stage 1's gate passed on both
-> halves — the retrofit's hook signature is byte-identical to the regmap version, and the emitted
-> kernel csynths under Vitis 2025.1 with `coeffs` absent from the RTL port list. 31 unit tests in
-> `tests/hw/test_add_state.py`, 2 Vitis tests in `tests/hw/test_add_state_vitis.py`; the suite is
-> back to its 6-failure baseline. **Not yet done:** Stage 2's *XSI* gate (RTL persistence across
-> firings), Stage 4 (templated extents, deliberately deferred), and `examples/fir_block`.
-> See [What shipped](#what-shipped) at the end.
+> **Status (2026-07-27): Stages 1, 2, and 3 are BUILT and fully gated — including XSI.**
+> Stage 1's gate passed on both halves (hook signature byte-identical to the regmap version; the
+> emitted kernel csynths with `coeffs` absent from the RTL port list). **Stage 2's XSI gate passed:
+> a `static` in a free-running `hls::task` body demonstrably persists across re-firings in real
+> RTL** — five all-ones vectors through `examples/state_toy` give 1,2,3,4,5 per lane, closing the
+> reset-semantics trap empirically. 31 unit tests + 3 Vitis tests + the XSI gate; suite at its
+> 6-failure baseline. **Not yet done:** Stage 4 (templated extents, deliberately deferred) and
+> `examples/fir_block`. See [What shipped](#what-shipped).
 
 ## Motivation
 
@@ -373,11 +374,17 @@ differently-specialized array looks like. What is declared is "*this attribute* 
 `discover_state` now re-resolves each entry against the live attribute; rebinding `self.taps` after the
 declaration follows the attribute instead of silently emitting the stale object's type.
 
-**Verified against the trap list.** The reset-semantics trap is partly answered: the emitted
-declaration carries no explicit initializer (statics are zero-initialized, matching a freshly
-constructed `DataArray`), which keeps it out of the `config_rtl -reset` initialized-static category —
-and it csynths. What that does **not** yet prove is persistence across firings in RTL; that is the XSI
-gate, still open.
+**The reset-semantics trap: answered.** The emitted declaration carries no explicit initializer
+(statics are zero-initialized, matching a freshly constructed `DataArray`), which keeps it out of the
+`config_rtl -reset` initialized-static category. csynth accepts it; and the XSI gate then showed the
+value actually survives re-firings in RTL — `examples/state_toy` emits 1,2,3,4,5 per lane across five
+firings where a reset-swept static would emit 1,1,1,1,1. Verified, not assumed.
+
+**A third unpredicted finding.** `render_top` emitted `task_fn<>` for a `KernelTask` with no template
+args — a compile error on a non-template function. Unreachable before now: every task body in the tree
+was hand-written and width-templated. A *generated* body bakes its width when the endpoints were built
+from an already-`int()`-ed `HwParam`, so nothing stays symbolic to template on, and the empty-bracket
+case became reachable. Fixed in `composite_gen.py::render_top`.
 
 **Gate hygiene note.** The first version of the "not a top-level port" assertion parsed the wrong XML
 element, found zero ports, and passed vacuously. It now asserts the port list is non-empty and that the

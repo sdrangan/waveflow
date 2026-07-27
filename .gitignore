@@ -193,3 +193,10 @@ examples/*/xsi/*.wdb
 
 # Generated XSI test-vector bundles (written at gate time; data is *.bin, ignored above).
 examples/*/xsi/vectors/
+
+# state_toy (the add_state XSI gate): csynth project + generated top/headers.  The Python source,
+# the hand-written hook, and the generated XSI harness/ports stay tracked.
+examples/state_toy/state_accum_proj/
+examples/state_toy/gen/
+examples/state_toy/include/
+examples/state_toy/xsi/vectors/
