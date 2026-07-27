@@ -1551,7 +1551,7 @@ def state_decls_to_cpp(comp: HwModule, indent: int = 1) -> str:
     ]
     for entry in entries.values():
         cpp_t, suffix = state_decl_type(entry)
-        lines.append(f"{pad}static {cpp_t} {entry.name}{suffix};   // access={entry.access}")
+        lines.append(f"{pad}static {cpp_t} {entry.name}{suffix};")
         lines.extend(state_pragmas(entry, pad))
     return "\n".join(lines)
 

@@ -35,7 +35,7 @@ def test_state_emits_a_static_in_the_task_body():
     # ...and the pragma follows the declaration it names, which is the reason the specs live on
     # the HwState rather than on the schema.
     lines = [ln.strip() for ln in src.splitlines()]
-    i = lines.index("static ap_uint<32> total[2];   // access=RW")
+    i = lines.index("static ap_uint<32> total[2];")
     assert lines[i + 1] == "#pragma HLS ARRAY_PARTITION variable=total complete dim=1"
 
 

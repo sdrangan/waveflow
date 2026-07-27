@@ -419,7 +419,7 @@ class HwModule(SimObj):
         from a *register someone must write* — and guessing is wrong either way.  ``add_state``
         does not relax the rule; it makes the author say which::
 
-            self.taps = HwState(TapArray(), access="R")
+            self.taps = HwState(TapArray())
             self.add_state(self.taps)          # ...this one is a register file
 
         Codegen then emits persistent storage (a ``static`` array in the kernel top or the
@@ -442,7 +442,7 @@ class HwModule(SimObj):
             raise TypeError(
                 f"{type(self).__name__}.add_state expects an HwState, got "
                 f"{type(state).__name__}. Wrap the storage: "
-                f"self.taps = HwState(TapArray(), access='R'); self.add_state(self.taps)."
+                f"self.taps = HwState(TapArray()); self.add_state(self.taps)."
             )
         name = None
         for attr, val in vars(self).items():

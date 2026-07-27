@@ -58,7 +58,7 @@ class Accum(FreeRunMod):
         self.y_out = StreamIFMaster(name=f"{self.name}_y_out", sim=self.sim, bitwidth=32)
         self.add_endpoint(self.x_in)
         self.add_endpoint(self.y_out)
-        self.total = HwState(AccArray(), access="RW")
+        self.total = HwState(AccArray())
         self.add_state(self.total)
 
     def run_iter(self) -> ProcessGen[None]:
@@ -84,7 +84,6 @@ def test_add_state_records_the_attribute_name():
     state = discover_state(comp)
     assert list(state) == ["total"]
     assert state["total"] is comp.total
-    assert state["total"].access == "RW"
 
 
 def test_state_entry_for_is_identity_not_equality():
@@ -99,11 +98,6 @@ def test_add_state_rejects_an_unbound_object():
     comp = Accum(name="a", sim=Simulation())
     with pytest.raises(ValueError, match="not bound to an attribute"):
         comp.add_state(HwState(AccArray()))
-
-
-def test_hwstate_rejects_a_bad_access_mode():
-    with pytest.raises(ValueError, match="access="):
-        HwState(AccArray(), access="RWX")
 
 
 def test_add_state_rejects_a_bare_schema():
@@ -203,9 +197,13 @@ def test_call_site_passes_the_bare_identifier():
     assert "accumulate(x, total)" in src
 
 
-def test_access_mode_is_recorded_in_the_source():
+def test_no_access_mode_is_emitted():
+    """Read/write permission is a hook's property, not the storage's — nothing claims it here.
+
+    A comment asserting an access mode that nothing checks would read as a guarantee.
+    """
     src = task_files_to_str(Accum)["accum_task.h"]
-    assert "access=RW" in src
+    assert "access=" not in src
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +221,7 @@ class SweptAccum(Accum):
         super().__post_init__()
         self.total = HwState(DataArray.specialize(
             FixedField.specialize(W=18, I=2), max_shape=(8,), cpp_storage="raw",
-        )(), access="RW")
+        )())
         self.add_state(self.total)
 
 
@@ -375,7 +373,7 @@ class PartAccum(Accum):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.total = HwState(AccArray(), access="RW",
+        self.total = HwState(AccArray(),
                              partition={"type": "complete"},
                              bind_storage={"type": "RAM_2P", "impl": "BRAM"})
         self.add_state(self.total)
@@ -384,7 +382,7 @@ class PartAccum(Accum):
 def test_partition_pragma_follows_the_declaration():
     decls = state_decls_to_cpp(PartAccum(name="p", sim=Simulation()))
     lines = [ln.strip() for ln in decls.splitlines()]
-    i = lines.index("static float total[4];   // access=RW")
+    i = lines.index("static float total[4];")
     assert lines[i + 1] == "#pragma HLS ARRAY_PARTITION variable=total complete dim=1"
     assert lines[i + 2] == "#pragma HLS BIND_STORAGE variable=total type=RAM_2P impl=BRAM"
 

@@ -43,20 +43,15 @@ One more thing is worth naming so you do not reach for the wrong one: a **regmap
 *host* writes over AXI-Lite. Neither `HwState` nor `MemoryMod` is host-visible; a regmap is the
 control-plane story, not the storage story.
 
-## Why the split is worth an extra class
+## One rule worth knowing up front
 
-Two of these were once one. `Memory` owned the bytes *and* the allocation policy, and address
-conversion lived as private methods on it — so there was no way to talk about a placement policy, or
-reuse one, without dragging a backing store along. Pulling `MemMgr` out gives address conversion
-exactly one implementation and makes the policy a thing you can name and test on its own.
+`MemMgr` is *handed* the occupied ranges rather than tracking them. The byte store stays the single
+source of truth about what is occupied, so the manager and the storage can never disagree — a
+parallel allocation table would be a drift bug waiting to happen. The visible consequence is that
+freeing a region reopens its gap to the very next allocation.
 
-`MemMgr` is *handed* the occupied ranges rather than tracking them. That is deliberate: the byte
-store stays the single source of truth about what is occupied, so the manager and the storage can
-never disagree. A parallel allocation table would be a drift bug waiting to happen.
-
-The name is not new to the codebase — the C++ testbench side has used `MemMgr<word_dwidth>`
-(`memmgr_tb.hpp`) and the `waveflow::memmgr` namespace all along. The Python class is the same idea
-on the same side of the same fence.
+The name is shared with the C++ side on purpose: the generated testbench uses `MemMgr<word_dwidth>`
+(`memmgr_tb.hpp`) and kernels use the `waveflow::memmgr` namespace for the same conversions.
 
 ## Pages
 

@@ -103,7 +103,7 @@ class StateAccum(FreeRunMod):
         self.add_endpoint(self.m_out)
 
         # THE point of this example: storage that outlives a firing, declared rather than captured.
-        self.total = HwState(AccArray(), access="RW")
+        self.total = HwState(AccArray())
         self.add_state(self.total)
 
     def kernel_task(self) -> KernelTask:

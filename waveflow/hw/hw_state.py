@@ -17,14 +17,13 @@ of storage plus the hardware facts a generator needs about it.
 
 Why a class rather than a bare schema instance
 ----------------------------------------------
-Partitioning, storage binding, and access mode are properties of **this storage**, not of its data
-*type*.  Hanging them on the ``DataArray`` would mean two state arrays of the same schema could never
+Partitioning and storage binding are properties of **this storage**, not of its data *type*.  Hanging them on the ``DataArray`` would mean two state arrays of the same schema could never
 be partitioned differently — and a schema is shared, cached, and specialization-keyed, so putting an
 instance's physical layout there is a category error.  ``HwState`` is where those facts live.
 
 Usage::
 
-    self.taps = HwState(TapArray(), access="R", partition={"type": "complete"})
+    self.taps = HwState(TapArray(), partition={"type": "complete"})
     self.add_state(self.taps)
 
 ``.val`` delegates to the wrapped schema instance, so a hook body reads and writes the storage
@@ -33,9 +32,6 @@ exactly as it would a bare ``DataArray`` — the wrapper is invisible to the ari
 from __future__ import annotations
 
 from typing import Any
-
-#: The access modes a hook may declare against a state object.
-STATE_ACCESS = ("R", "W", "RW")
 
 #: Partition kinds Vitis accepts.  ``complete`` takes no factor.
 PARTITION_TYPES = ("complete", "cyclic", "block")
@@ -104,15 +100,16 @@ class HwState:
     ``DataArray`` with ``cpp_storage="raw"``, which lowers to a bare ``elem name[N]``.  The schema
     is the *template*; ``HwState`` adds the facts that belong to this particular storage:
 
-    ``access``
-        ``"R"`` / ``"W"`` / ``"RW"`` — what the kernel does with it.  Declared, not inferred: an
-        array argument decays to a pointer, so C++ cannot distinguish a read-only table from a
-        mutated accumulator, and two hooks touching one static create a dependency Vitis honors in
-        the II.
     ``partition`` / ``bind_storage``
         The physical layout, as structured specs rather than pragma strings, so a generator can
         *reason* about them (does the declared factor match the consuming loop's unroll?) instead
         of only echoing them.  ``None`` emits no pragma and leaves the choice to Vitis.
+
+    **There is deliberately no access mode here.**  Read/write permission is a property of a
+    *hook*, not of the storage: ``load_taps`` writes the taps and ``filter_block`` reads them, and no
+    single module-level mode can say both.  It also has nowhere to go in the generated C++ at this
+    level, whereas on a hook argument it is a ``const`` qualifier — expressible, and enforced by the
+    compiler for free.  That is where it belongs when it lands; see ``docs/guide/memory/hwstate.md``.
 
     ``name`` is filled in by :meth:`~waveflow.hw.hw_module.HwModule.add_state` from the attribute
     the object is bound to — the attribute name *is* the C++ identifier, so the declaration, the
@@ -122,18 +119,12 @@ class HwState:
     def __init__(
         self,
         value: Any,
-        access: str = "RW",
         partition: dict | None = None,
         bind_storage: dict | None = None,
     ) -> None:
-        if access not in STATE_ACCESS:
-            raise ValueError(
-                f"HwState: access={access!r} is invalid; must be one of {list(STATE_ACCESS)}."
-            )
         validate_partition(partition)
         validate_bind_storage(bind_storage)
         self.value = value
-        self.access = access
         self.partition = partition
         self.bind_storage = bind_storage
         #: Set by ``add_state``; ``None`` until the object is registered on a module.
@@ -156,5 +147,4 @@ class HwState:
         return type(self.value)
 
     def __repr__(self) -> str:
-        return (f"HwState(name={self.name!r}, schema={self.schema.__name__}, "
-                f"access={self.access!r})")
+        return f"HwState(name={self.name!r}, schema={self.schema.__name__})"

@@ -57,8 +57,7 @@ class RunningTotal(FreeRunMod):
 
         # The declaration.  Without it, reading self.total from run_iter is an implicit capture
         # and the extractor refuses — it cannot tell a baked constant from a register.
-        self.total = HwState(TotalArray(), access="RW",
-                             partition={"type": "complete"})
+        self.total = HwState(TotalArray(), partition={"type": "complete"})
         self.add_state(self.total)
 
     def run_iter(self) -> ProcessGen[None]:

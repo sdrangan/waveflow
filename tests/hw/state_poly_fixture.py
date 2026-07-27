@@ -70,7 +70,13 @@ class PolyStateAccel(HostActivated):
         for ep in (self.s_in, self.m_out, self.s_lite):
             self.add_endpoint(ep)
 
-        self.coeffs = HwState(CoeffArray(), access="R")
+        # NOTE: nothing writes coeffs here, so this is a CODEGEN-EQUIVALENCE fixture, not a
+        # working design — the retrofitted kernel would evaluate with all-zero coefficients.  That
+        # is fine for what the gate checks (identical hook signature, identical call site, csynth,
+        # coeffs absent from the RTL ports).  The regmap version got its values from the host;
+        # state has no such path, which is why a read-only state needs a ROM initializer to be
+        # useful at all (see docs/guide/memory/hwstate.md).
+        self.coeffs = HwState(CoeffArray())
         self.add_state(self.coeffs)
 
     def on_start(self) -> ProcessGen[None]:
