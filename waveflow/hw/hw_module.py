@@ -11,6 +11,7 @@ import typing
 from waveflow.simulation.simobj import SimObj
 
 if TYPE_CHECKING:
+    from waveflow.hw.hw_state import HwState
     from waveflow.hw.interface import Interface, InterfaceEndpoint
 
 T = TypeVar('T')
@@ -410,7 +411,7 @@ class HwModule(SimObj):
         self.sub_comps[comp.name] = comp
 
     def add_state(self, state: "HwState") -> None:
-        """Declare *obj* as **cross-firing state** — storage that persists between firings.
+        """Declare *state* as **cross-firing state** — storage that persists between firings.
 
         The third ``add_*`` registry beside :meth:`add_endpoint` and :meth:`add_comp`, and the
         counterpart to the extractor's implicit-capture rule.  That rule forbids reading mutable

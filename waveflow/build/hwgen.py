@@ -1825,7 +1825,7 @@ def _emit_dut_bind(stmt: DutBindStmt, ctx: TbCodegenCtx) -> str:
 
 
 def _emit_mem_bind(stmt: MemBindStmt, ctx: TbCodegenCtx) -> str:
-    """Emit the flat backing array + MemMgr for a ``MemModel`` local."""
+    """Emit the flat backing array + MemMgr for a ``MemoryMod`` local."""
     ctx.mems[stmt.local_name] = (stmt.word_size, stmt.nwords_tot)
     pad = ctx.pad()
     bw = stmt.word_size
@@ -2265,7 +2265,7 @@ def _testbench_cpp(tb_class) -> str:
         '#include "include/streamutils_tb.h"',
     ]
     # m_axi support headers: MemMgr (alloc) + byte_addr_to_word_index, when the
-    # TB declares a MemModel backing array.
+    # TB declares a MemoryMod backing array.
     if _tb_has_mem(tree):
         include_lines.append('#include "include/memmgr_tb.hpp"')
         include_lines.append('#include "include/memmgr.hpp"')
@@ -2295,7 +2295,7 @@ def _testbench_cpp(tb_class) -> str:
 
 
 def _tb_has_mem(tree: HwStmt) -> bool:
-    """True if the TB tree declares any ``MemModel`` backing array."""
+    """True if the TB tree declares any ``MemoryMod`` backing array."""
     found = False
 
     def visit(node):

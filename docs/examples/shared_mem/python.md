@@ -259,5 +259,5 @@ page shows the generated kernel calling into them.
 ## Next
 
 - [SimPy simulation](pysim.md) — running the model end-to-end against the numpy
-  golden, with a `MemModel` standing in for shared DRAM.
+  golden, with a `MemoryMod` standing in for shared DRAM.
 - [Code generation](codegen.md) — lowering `HistAccel` to the Vitis HLS kernel.

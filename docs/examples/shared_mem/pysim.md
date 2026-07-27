@@ -9,7 +9,7 @@ has_children: false
 
 Python simulation is fast and easy to debug, so we run the histogram in SimPy
 before ever invoking Vitis. This page shows the simulation harness — the host
-controller that drives one transaction, the `MemModel` that stands in for
+controller that drives one transaction, the `MemoryMod` that stands in for
 shared DRAM, and how the kernel-produced counts are checked against the numpy
 golden. The harness is `run_sim()` in
 [`examples/shared_mem/hist.py`](../../../examples/shared_mem/hist.py).
@@ -27,7 +27,7 @@ all three and wires them together:
 def run_sim(data, bin_edges, nbins, *, clk_freq=1e9, tx_id=7, addr_misalign=0):
     sim = Simulation()
     clk = Clock(freq=clk_freq)
-    mem   = MemModel(name="mem", sim=sim, inline=False, clk=clk)
+    mem   = MemoryMod(name="mem", sim=sim, inline=False, clk=clk)
     accel = HistAccel(name="hist_accel", sim=sim, clk=clk)
     ctrl  = HistController(name="hist_ctrl", sim=sim, mem=mem,
                            data=data, bin_edges=bin_edges, nbins=nbins, tx_id=tx_id,
@@ -41,7 +41,7 @@ def run_sim(data, bin_edges, nbins, *, clk_freq=1e9, tx_id=7, addr_misalign=0):
 
 Three SimObjs share one `Simulation` and one `Clock`:
 
-- **`MemModel`** is the shared memory — a SimPy model of a byte-addressed
+- **`MemoryMod`** is the shared memory — a SimPy model of a byte-addressed
   word memory behind an AXI-MM **slave** endpoint. It is where the `data`,
   `bin_edges`, and `counts` buffers live; both the controller (to stage inputs
   and read results) and the accelerator (to do the work) reach it over `m_axi`.
@@ -100,7 +100,7 @@ The details that matter:
 
 1. **Allocation order is the contract.** The controller allocs `data`, then
    `edges`, then `counts` — the same order the [testbench](codegen.md) will, so
-   the three regions land at the same byte addresses on both sides. `MemModel`
+   the three regions land at the same byte addresses on both sides. `MemoryMod`
    hands out non-overlapping regions; the controller stamps the returned addresses
    into the command.
 2. **The edges alloc is clamped to `max(nedges, 1)`.** When `nbins == 1` there are

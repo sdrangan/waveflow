@@ -1,6 +1,6 @@
 """mem_stream_sim.py — pysim golden harnesses for :class:`MemRStream` / :class:`MemWStream`.
 
-The Rung-0 (pysim) leg of Gate 1: wire each component to a behavioral :class:`MemModel` over a
+The Rung-0 (pysim) leg of Gate 1: wire each component to a behavioral :class:`MemoryMod` over a
 ``DirectMMIF`` plus a command driver and a data source/sink, run the SimPy model, and check the
 functional golden — a ``MemRStream`` bursts a memory region onto a stream; a ``MemWStream`` drains a
 stream into a region.  The same functional truth the generated RTL is checked against under XSI.
@@ -16,7 +16,7 @@ import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave, Words
 from waveflow.hw.memif import DirectMMIF
-from waveflow.hw.memory import AddrUnit, MemModel
+from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
@@ -47,7 +47,7 @@ def run_read(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
     clk = Clock(freq=100e6)
 
     addr_unit = AddrUnit.byte if byte_addressable else AddrUnit.word
-    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=mem_dwidth, addr_size=32, addr_unit=addr_unit)
     # Reserve a prefix, then the burst region; both live in one flat arena at base 0 (bind_base
     # default).  The burst begins at word offset `base_words` — the command's element coordinate.
@@ -102,7 +102,7 @@ def run_write(n_words: int = 128, base_words: int = 16, mem_dwidth: int = 64,
     clk = Clock(freq=100e6)
 
     addr_unit = AddrUnit.byte if byte_addressable else AddrUnit.word
-    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk,
                        word_size=mem_dwidth, addr_size=32, addr_unit=addr_unit)
     mem.alloc(base_words)
     base_addr = mem.alloc(n_words)               # native-unit address of the burst region

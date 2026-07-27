@@ -21,7 +21,7 @@ from waveflow.hw.hw_module import HwParam
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemModel, MemSeg
+from waveflow.hw.memory import MemoryMod, MemSeg
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
@@ -82,7 +82,7 @@ class MemCopyTB(FreeRunMod):
         # One flat arena covering every source and destination region (byte-addressed, base 0).
         self.arena_words = max(max(job.src_off, job.dst_off) + job.n_words
                                for job in self._jobs) + 16
-        self.mem = MemModel(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+        self.mem = MemoryMod(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         # Platform bus model: the memory's slave charges the calibrated m_axi transfer cost, so the
         # component's residual is just its own control cost.  Shared across accelerators (fit once).
@@ -96,7 +96,7 @@ class MemCopyTB(FreeRunMod):
         self.mem.alloc(int(self.mem.nwords_tot))
         # Both backends seed the memory from vectors/mem_in in pre_sim (load_segs) and the RTL memory
         # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
-        # MemModel.pre_sim loads the same bundle (root set in write_scenario).
+        # MemoryMod.pre_sim loads the same bundle (root set in write_scenario).
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 

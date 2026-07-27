@@ -1,6 +1,6 @@
 """Phase 1: HistAccel HwModule SimPy parity with the numpy golden.
 
-Runs the synthesizable HistAccel over a SimPy DirectMMIF + MemModel and
+Runs the synthesizable HistAccel over a SimPy DirectMMIF + MemoryMod and
 asserts it reproduces HistogramAccel's histogram counts, plus the three
 validation → status paths.
 """

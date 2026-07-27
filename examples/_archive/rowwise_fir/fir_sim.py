@@ -1,7 +1,7 @@
 """fir_sim.py — host-driven simulation of the free-running streaming FIR (Stage A).
 
 Wires a small host + the :class:`FIRAccel` model with AXI-stream control (command on ``s_in``,
-per-job response on ``m_out``) and the data on one :class:`MemModel` reached by the host and
+per-job response on ``m_out``) and the data on one :class:`MemoryMod` reached by the host and
 the accelerator as two masters on an :class:`AXIMMCrossBarIF`.  The host writes the operands,
 streams a **batch** of ``FIRCmd``\\ s + an ``END`` sentinel, and drains the per-job responses
 (reading each ``status`` — errors ride the stream, no regmap); the driver reads ``Y`` back and
@@ -29,7 +29,7 @@ from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.memif import (  # noqa: E402
     AXIMMCrossBarIF, BusTiming, MMIFMaster, assign_address_ranges)
-from waveflow.hw.memory import MemModel  # noqa: E402
+from waveflow.hw.memory import MemoryMod  # noqa: E402
 from waveflow.simulation.simobj import ProcessGen, SimObj  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 
@@ -164,7 +164,7 @@ class FIRSim:
         word_bytes = 32 // 8
         total_bytes = data_elems * word_bytes
 
-        self.mem = MemModel(sim=self.sim, word_size=32, inline=False, clk=self.clk,
+        self.mem = MemoryMod(sim=self.sim, word_size=32, inline=False, clk=self.clk,
                                 latency_init=0.0, latency_per_word=0.0)
         self.mem.alloc(total_bytes // word_bytes)
         self.accel.data_base = data_base

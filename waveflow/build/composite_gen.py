@@ -857,7 +857,7 @@ def tb_top_spec(tb) -> TbSpec:
     declared class (`AxisMaster`/`AxisSlave`); an ``m_axi`` port takes the class its *kind* implies,
     because the kernel is the master and the TB must supply the slave.
 
-    Participants declaring ``shared`` (a `MemModel` -> one `FlatMemory` behind both bundles) are
+    Participants declaring ``shared`` (a `MemoryMod` -> one `FlatMemory` behind both bundles) are
     constructed once and passed by name.
     """
     from waveflow.hw.hw_module import discover_dyn_params

@@ -25,7 +25,7 @@ two `m_axi` bundles.
 graph LR
     DRV["StreamDriver<br/>(commands)"] -->|s_cmd| DUT["InterleaverInband (DUT)<br/>free-running composite"]
     DUT -->|s_done| SNK["StreamSink<br/>(completions)"]
-    DUT <-->|"m_in / m_out — AXI-MM"| MEM["MemModel<br/>(one shared arena)"]
+    DUT <-->|"m_in / m_out — AXI-MM"| MEM["MemoryMod<br/>(one shared arena)"]
 ```
 
 All three participants are **framework** classes — you do not write them (see
@@ -35,7 +35,7 @@ All three participants are **framework** classes — you do not write them (see
 |---|---|
 | [`StreamDriver`](../../guide/sim/stream_tb.md) | plays a burst bundle of `InterleaverCmd` words onto `s_cmd` |
 | [`StreamSink`](../../guide/sim/stream_tb.md) | drains the echoed `IlDesc` completions off `s_done` |
-| `MemModel` | the one arena **both** `m_axi` bundles reach — `m_in` reads `P` and `X`, `m_out` writes `Y` |
+| `MemoryMod` | the one arena **both** `m_axi` bundles reach — `m_in` reads `P` and `X`, `m_out` writes `Y` |
 
 The memory being *one* component behind *two* bundles is what makes the read master (`m_in` → gmem0)
 and the write master (`m_out` → gmem1) touch the same words. The two masters are joined onto the single
@@ -54,7 +54,7 @@ address resolves to a word in the arena.
 
 ### The arena layout
 
-The memory is a flat `MemModel`; the harness carves it into per-job `P` / `X` / `Y` buffers by
+The memory is a flat `MemoryMod`; the harness carves it into per-job `P` / `X` / `Y` buffers by
 word offset. Each job gets three `nw`-word regions laid back to back — `nw = ceil(n / LW)`, `LW = 2` at
 `MEM_DW = 64` — so job `j` starts at `base = j * 3 * nw`:
 

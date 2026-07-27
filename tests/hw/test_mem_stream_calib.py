@@ -70,7 +70,7 @@ class TestReaderIsCalibratable:
         from waveflow.hw.interface import StreamIF
         from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
         from waveflow.hw.mem_stream import MemRCmd
-        from waveflow.hw.memory import MemModel
+        from waveflow.hw.memory import MemoryMod
         from waveflow.simulation.stream_tb import StreamDriver, StreamSink
         from waveflow.utils.burst_io import write_burst_bundle
 
@@ -78,7 +78,7 @@ class TestReaderIsCalibratable:
         clk = Clock(freq=100e6)
         arena = 4096
         bpw = MEM_DW // 8
-        mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
+        mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk,
                            word_size=MEM_DW, addr_size=32, nwords_tot=arena)
         mem.alloc(arena)
         n = 64

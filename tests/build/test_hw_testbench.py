@@ -274,7 +274,7 @@ def test_phase3_rejects_positional_dut_args():
 @pytest.mark.phase3
 def test_phase3_dut_run_with_args_is_rejected():
     """``dut.run(...)`` with positional args is rejected.  (The only accepted
-    keyword is ``mem=<MemModel local>`` for m_axi kernels — see the AXI-MM
+    keyword is ``mem=<MemoryMod local>`` for m_axi kernels — see the AXI-MM
     codegen plan decision 9.)"""
     from waveflow.build.hwcodegen import SynthesisError, extract_testbench
 

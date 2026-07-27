@@ -43,7 +43,7 @@ participant itself (`bfm_model()`), not by a table. For the interleaver that is:
 | pysim participant | XSI model | drives |
 |---|---|---|
 | `StreamDriver` | `AxisMaster` | the `s_cmd` AXI-Stream — offers each `InterleaverCmd` word |
-| `MemModel` | `FlatMemory` + `AxiMmReadSlave` / `AxiMmWriteSlave` | the two `m_axi` bundles |
+| `MemoryMod` | `FlatMemory` + `AxiMmReadSlave` / `AxiMmWriteSlave` | the two `m_axi` bundles |
 | `StreamSink` | `AxisSlave` | the `s_done` AXI-Stream — always ready, keeps the echoed descriptors |
 
 The `AxisMaster` is a cycle-level AXI-Stream *master* feeding `s_cmd` the command words. Behind the two
