@@ -130,3 +130,92 @@ def test_state_array_becomes_a_memory_not_a_port(tmp_path):
         f"'coeffs' surfaced as top-level port(s) {offenders!r} — declared state must be "
         f"internal storage, not an interface"
     )
+
+
+_TASK_TCL = """\
+open_project -reset waveflow_accum_proj
+set_top accum_top
+add_files accum_top.cpp -cflags "-I."
+open_solution -reset "solution1"
+set_part {xc7z020clg484-1}
+create_clock -period 10
+if {[catch {csynth_design} res]} {
+    puts "WAVEFLOW_ERROR: C-synthesis failed."
+    puts $res
+    exit 1
+}
+puts "WAVEFLOW_SUCCESS: accum csynth passed."
+"""
+
+#: A free-running ap_ctrl_none top instantiating the generated stateful task, plus the hook body
+#: the generator leaves as a TODO stub.  This is the Stage-2 shape: the static lives in the TASK.
+_TASK_TOP = """\
+#include "hls_task.h"
+#include "accum_task.h"
+
+namespace accum_impl {
+Vec accumulate(Vec x, float total[4]) {
+#pragma HLS INLINE
+    Vec y;
+    for (int i = 0; i < 4; ++i) {
+#pragma HLS UNROLL
+        total[i] = total[i] + x.data[i];
+        y.data[i] = total[i];
+    }
+    return y;
+}
+}
+
+void accum_top(hls::stream<ap_uint<32> >& x_in, hls::stream<ap_uint<32> >& y_out) {
+#pragma HLS INTERFACE axis port=x_in
+#pragma HLS INTERFACE axis port=y_out
+#pragma HLS INTERFACE ap_ctrl_none port=return
+    hls_thread_local hls::task t0(accum_task, x_in, y_out);
+}
+"""
+
+
+@pytest.mark.vitis
+def test_task_body_static_csynthesizes(tmp_path):
+    """Stage 2's csynth half: a ``static`` inside a free-running ``hls::task`` body synthesizes.
+
+    Distinct from the ap_ctrl_chain case above — a task has no "before the loop", so this is the
+    shape where the static IS the persistent storage the runtime's re-firings carry forward.
+    (What csynth still cannot answer is whether it persists in RTL; that is the XSI gate.)
+    """
+    if not toolchain.find_vitis_path():
+        pytest.skip("Vitis not found.")
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.hwgen import task_files_to_str
+    from waveflow.build.streamutils import StreamUtilsStep
+    from waveflow.hw.dataschema import DataSchemaStep
+
+    from tests.hw.test_add_state import Vec
+
+    for name, content in task_files_to_str(
+        __import__("tests.hw.test_add_state", fromlist=["Accum"]).Accum,
+    ).items():
+        if name.endswith("_impl.cpp"):
+            continue                      # the TODO stub; the real body is in _TASK_TOP
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    (tmp_path / "accum_top.cpp").write_text(_TASK_TOP, encoding="utf-8")
+    (tmp_path / "run.tcl").write_text(_TASK_TCL, encoding="utf-8")
+
+    cfg = BuildConfig(root_dir=tmp_path)
+    dag = BuildDag()
+    dag.add(StreamUtilsStep(output_dir="."))
+    dag.add(DataSchemaStep(Vec, word_bw_supported=[32], include_dir="."))
+    results = dag.run(cfg)
+    assert all(r.success for r in results.values()), f"header generation failed: {results}"
+
+    try:
+        toolchain.run_vitis_hls(tmp_path / "run.tcl", work_dir=tmp_path)
+    except RuntimeError as exc:
+        pytest.skip(f"Vitis execution unavailable: {exc}")
+    except subprocess.CalledProcessError as exc:
+        pytest.fail(
+            f"csynth of the stateful task body failed\nrc={exc.returncode}\n"
+            f"stdout:\n{exc.stdout}\nstderr:\n{exc.stderr}"
+        )
+    rpt = tmp_path / "waveflow_accum_proj" / "solution1" / "syn" / "report" / "csynth.xml"
+    assert rpt.exists(), "csynth reported success but produced no report"

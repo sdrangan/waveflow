@@ -1199,6 +1199,12 @@ def _collect_schemas(tree: HwStmt, comp) -> list[type]:
         # includes — its array-utils come from the m_axi op that fills it.
         if getattr(typ, 'cpp_typing_only', False):
             return False
+        # ``can_gen_include=False`` means "no header exists for this class" — the unspecialized
+        # ``DataArray`` base is the case that matters, reachable as a hook annotation now that a
+        # state arg can be typed with the base while its concrete class comes from the instance.
+        # Emitting an include for it names a file nobody generates.
+        if not getattr(typ, 'can_gen_include', True):
+            return False
         return True
 
     schemas: dict[str, type] = {}
