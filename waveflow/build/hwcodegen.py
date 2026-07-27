@@ -175,7 +175,7 @@ class HwStmtExtractor:
         """
         from waveflow.hw.aximm_queue import AXIMMQueue
         from waveflow.hw.dataschema import DataSchema
-        from waveflow.hw.hw_module import HwParamValue
+        from waveflow.hw.hw_module import HwParamValue, state_entry_for
         from waveflow.hw.interface import InterfaceEndpoint
         from waveflow.hw.regmap import RegMap
 
@@ -216,6 +216,11 @@ class HwStmtExtractor:
                     or isinstance(obj, (InterfaceEndpoint, RegMap, AXIMMQueue,
                                         HwParamValue))
                     or (isinstance(obj, type) and issubclass(obj, DataSchema))
+                    # A DECLARED state reference (self.taps after add_state) — persistent
+                    # storage the author named on purpose, not an implicit capture.  This is
+                    # the whole point of add_state: the rule still rejects an undeclared
+                    # self.X, it just now has a way to be told.
+                    or state_entry_for(extractor._comp, obj) is not None
                 ):
                     return
                 lineno = getattr(node, 'lineno', '?')
@@ -223,7 +228,9 @@ class HwStmtExtractor:
                     f"Implicit capture of 'self.{node.attr}' at line {lineno}. "
                     f"Reads of self.X inside a synthesizable method are forbidden "
                     f"unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the "
-                    f"value @sim_only or pass it explicitly."
+                    f"value @sim_only, pass it explicitly, or — if it is storage that "
+                    f"must persist across firings — declare it with "
+                    f"self.add_state(self.{node.attr})."
                 )
 
         _Validator().visit(func_def)

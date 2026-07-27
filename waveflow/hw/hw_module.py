@@ -219,6 +219,65 @@ class ControlMode(Enum):
     PER_INVOCATION = auto() # ap_ctrl_chain (SeqStmt at root)
 
 
+STATE_ACCESS = ("R", "W", "RW")
+
+
+@dataclass
+class StateEntry:
+    """One object declared as **cross-firing state** by :meth:`HwModule.add_state`.
+
+    ``name`` is the attribute the object is bound to on the component (``taps`` for
+    ``self.taps``) — it becomes the C++ identifier verbatim, so the declaration, the call-site
+    argument, and the Python attribute are one name that cannot drift.
+
+    ``access`` records what the kernel *does* with it (``"R"`` / ``"W"`` / ``"RW"``).  It is a
+    declaration, not an inference: an array hook argument decays to a pointer, so C++ cannot tell
+    a read-only table from a mutated accumulator, and two hooks touching one static create a
+    dependency Vitis honors in the II.  Saying which is what lets the generator reason about it
+    (and, later, drive ``bind_storage`` / port counts).
+    """
+
+    name: str
+    obj: Any
+    access: str = "RW"
+
+
+def discover_state(obj: Any) -> dict[str, StateEntry]:
+    """Return ``{name: StateEntry}`` for every object *obj* registered via
+    :meth:`HwModule.add_state`, in declaration order.
+
+    Mirrors :func:`discover_dyn_params` (per-object introspection the generator walks).  A
+    component that declared no state returns ``{}`` and costs nothing.
+
+    Entries are **re-resolved against the live attribute**: what ``add_state`` declares is "this
+    attribute is state", so if the attribute was rebound after the declaration (a subclass
+    swapping in a differently-specialized array), the current object wins.  Without this, codegen
+    would emit the type of a stale object while pysim used the new one — a silent divergence
+    rather than an error.
+    """
+    registered = getattr(obj, "_state", None) or {}
+    out: dict[str, StateEntry] = {}
+    for name, entry in registered.items():
+        live = getattr(obj, name, None)
+        if live is not None and live is not entry.obj:
+            entry = StateEntry(name=name, obj=live, access=entry.access)
+        out[name] = entry
+    return out
+
+
+def state_entry_for(comp: Any, obj: Any) -> StateEntry | None:
+    """Return the :class:`StateEntry` whose object **is** *obj* (identity), or ``None``.
+
+    Identity, not equality: two state arrays can hold equal contents and still be different
+    storage.  This is the predicate the extractor's capture rule and the call-site emitter both
+    ask — "is this attribute read a declared state reference?"
+    """
+    for entry in discover_state(comp).values():
+        if entry.obj is obj:
+            return entry
+    return None
+
+
 @dataclass
 class SynthContext:
     """Parameter context passed to every ``synth_fn`` during codegen."""
@@ -372,6 +431,57 @@ class HwModule(SimObj):
         ``Simulation`` for pysim)."""
         comp.parent = self
         self.sub_comps[comp.name] = comp
+
+    def add_state(self, obj: Any, access: str = "RW") -> None:
+        """Declare *obj* as **cross-firing state** — storage that persists between firings.
+
+        The third ``add_*`` registry beside :meth:`add_endpoint` and :meth:`add_comp`, and the
+        counterpart to the extractor's implicit-capture rule.  That rule forbids reading mutable
+        ``self.X`` from a kernel body because it cannot tell a *constant baked into the design*
+        from a *register someone must write* — and guessing is wrong either way.  ``add_state``
+        does not relax the rule; it makes the author say which::
+
+            self.taps = TapArray()
+            self.add_state(self.taps)          # ...this one is a register file
+
+        Codegen then emits persistent storage (a ``static`` array in the kernel top or the
+        generated ``hls::task`` body) rather than an elaboration-time literal, and a read of
+        ``self.taps`` at a hook call site lowers to the bare identifier ``taps``.
+
+        *obj* must already be bound to an attribute of ``self`` — the attribute name **is** the
+        C++ identifier, so it is discovered by identity rather than passed separately (one name,
+        no drift).  ``access`` is ``"R"``, ``"W"``, or ``"RW"``; see :class:`StateEntry`.
+
+        Not to be confused with its neighbours: a ``DynParam`` binds once at pre-sim and is
+        constant for the run, while state changes every firing; a regmap field is what the *host*
+        writes; and ``MemRStream`` / ``MemWStream`` are what spans a *bus*.  ``add_state`` is
+        storage **inside** the kernel.
+        """
+        if access not in STATE_ACCESS:
+            raise ValueError(
+                f"{type(self).__name__}.add_state: access={access!r} is invalid; must be one of "
+                f"{list(STATE_ACCESS)}."
+            )
+        name = None
+        for attr, val in vars(self).items():
+            if val is obj:
+                name = attr
+                break
+        if name is None:
+            raise ValueError(
+                f"{type(self).__name__}.add_state: the object is not bound to an attribute of "
+                f"self, so it has no name to emit. Assign it first "
+                f"(self.taps = TapArray(); self.add_state(self.taps))."
+            )
+        state = getattr(self, "_state", None)
+        if state is None:
+            state = {}
+            self._state = state
+        # Re-registering a name REPLACES its entry.  What is declared is "this attribute is
+        # state", so a subclass that rebinds self.total (a different element format, say) and
+        # re-declares it is not an error — the registry follows the attribute.  Insertion order
+        # is preserved for a name that already exists, so declaration order is stable.
+        state[name] = StateEntry(name=name, obj=obj, access=access)
 
     def add_if(self, interface: "Interface") -> None:
         """Register *interface* as an internal edge between two sub-components.
