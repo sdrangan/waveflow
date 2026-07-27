@@ -123,17 +123,41 @@ mapping onto one IR node with no inference.
 
 Four rules are about *meaning* rather than statement shape. These are the ones worth internalising:
 
-**No reads of mutable `self.X`.** A kernel body may read its arguments, its endpoints, its reg-map, its
-`HwParam` values, and `DataSchema` types. It may **not** read mutable instance state:
+**No reads of *undeclared* mutable `self.X`.** A kernel body may read its arguments, its endpoints, its
+reg-map, its `HwParam` values, `DataSchema` types, and anything declared with `add_state`. It may **not**
+read other mutable instance state:
 
 > `Implicit capture of 'self.gain' at line 2. Reads of self.X inside a synthesizable method are
-> forbidden unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the value @sim_only or pass it
-> explicitly.`
+> forbidden unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the value @sim_only, pass it
+> explicitly, or — if it is storage that must persist across firings — declare it with
+> self.add_state(self.gain).`
 
 The reason is that `self.gain` is a Python value at *elaboration* time; in hardware it is either a
 constant baked into the design or a register someone must write. Silently choosing one would be
-guessing, so the extractor makes you say which. (This is also why cross-firing state is a
-[work in progress](../flows/modules.md).)
+guessing, so the extractor makes you say which.
+
+**Declaring state.** `add_state` is how you say "this one is a register file":
+
+```python
+self.taps = TapArray()          # a DataArray with cpp_storage="raw"
+self.add_state(self.taps, access="R")
+```
+
+The rule is not relaxed — an undeclared `self.X` is still rejected. What changes is that there is now a
+way to answer it. A declared object may be read at a hook call site, where it lowers to its bare
+attribute name, and codegen emits persistent storage for it: a `static` at the top of the kernel
+function for a [control-driven kernel](../flows/control_driven.md), and at the top of the generated
+`hls::task` body for a [free-running](../flows/freerun_seq.md) leaf — where it is the only place
+persistent storage *can* live, since a task has no "before the loop".
+
+Two details worth knowing. The C++ type comes from the **registered instance**, not from the hook's
+annotation, so state whose element format was built per instance (a `FixedField` specialized off a
+`HwParam`) emits the format it actually has. And `access` (`"R"` / `"W"` / `"RW"`) is declared rather
+than inferred, because an array argument decays to a pointer and C++ cannot tell a read-only table from
+a mutated accumulator.
+
+See [`plans/add_state.md`](https://github.com/sdrangan/pysilicon/blob/main/plans/add_state.md) for the
+storage-site reasoning and the remaining stages.
 
 **Only `@synthesizable` calls.** A call to a plain method is rejected — mark it `@synthesizable` to make
 it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (that is how
