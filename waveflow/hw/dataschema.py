@@ -2978,106 +2978,16 @@ class DataArray(DataSchema):
     cpp_storage: ClassVar[str] = "struct"
     can_gen_include: ClassVar[bool] = False
 
-    hls_partition: ClassVar[dict[str, Any] | None] = None
-    """How this array is partitioned in hardware, as ``{"type", "factor", "dim"}``.
-
-    A **physical property of the storage**, declared the same way ``StreamIF.depth`` is — not a
-    codegen hint pasted through.  ``type`` is ``"complete"``, ``"cyclic"``, or ``"block"``;
-    ``factor`` is required for cyclic/block and forbidden for complete; ``dim`` defaults to 1.
-    Structured rather than a raw pragma string so the generator can *reason* about it (a later
-    check can ask whether the declared factor matches the consuming loop's unroll) instead of
-    only echoing it.
-
-    ``None`` (default) emits no pragma — a single-port array, whatever Vitis infers.
-    """
-
-    hls_bind_storage: ClassVar[dict[str, Any] | None] = None
-    """The storage resource to bind, as ``{"type", "impl"}`` (e.g. ``RAM_2P`` / ``BRAM``).
-
-    Same rationale as :attr:`hls_partition`: which memory primitive holds a resident array is a
-    property of the design, not of the emitter.  ``None`` (default) leaves the choice to Vitis.
-    """
-
     allowed_specialize_kwargs: ClassVar[set[str]] = DataSchema.allowed_specialize_kwargs | {
         "member_name",
         "cpp_storage",
-        "hls_partition",
-        "hls_bind_storage",
     }
     _specializations: ClassVar[dict[tuple[Any, ...], type[DataArray]]] = {}
-
-    #: The partition types Vitis accepts; ``complete`` takes no factor.
-    _PARTITION_TYPES: ClassVar[tuple[str, ...]] = ("complete", "cyclic", "block")
-
-    @classmethod
-    def _validate_hls_partition(cls, spec: Any) -> None:
-        """Reject a malformed ``hls_partition`` at class-definition time, not at csynth."""
-        if spec is None:
-            return
-        if not isinstance(spec, dict):
-            raise ValueError(
-                f"{cls.__name__}.hls_partition must be a dict "
-                f'(e.g. {{"type": "cyclic", "factor": 4}}), got {spec!r}.'
-            )
-        unknown = set(spec) - {"type", "factor", "dim"}
-        if unknown:
-            raise ValueError(
-                f"{cls.__name__}.hls_partition has unknown key(s) {sorted(unknown)}; "
-                f"allowed keys are 'type', 'factor', 'dim'."
-            )
-        ptype = spec.get("type")
-        if ptype not in cls._PARTITION_TYPES:
-            raise ValueError(
-                f"{cls.__name__}.hls_partition['type']={ptype!r} is invalid; must be one of "
-                f"{list(cls._PARTITION_TYPES)}."
-            )
-        factor = spec.get("factor")
-        if ptype == "complete":
-            if factor is not None:
-                raise ValueError(
-                    f"{cls.__name__}.hls_partition: 'complete' partitions every element, so it "
-                    f"takes no factor (got factor={factor!r})."
-                )
-        else:
-            if not isinstance(factor, int) or factor < 2:
-                raise ValueError(
-                    f"{cls.__name__}.hls_partition: type={ptype!r} requires an integer "
-                    f"factor >= 2 (got {factor!r})."
-                )
-        dim = spec.get("dim", 1)
-        if not isinstance(dim, int) or dim < 1:
-            raise ValueError(
-                f"{cls.__name__}.hls_partition['dim']={dim!r} is invalid; must be an integer >= 1."
-            )
-
-    @classmethod
-    def _validate_hls_bind_storage(cls, spec: Any) -> None:
-        if spec is None:
-            return
-        if not isinstance(spec, dict):
-            raise ValueError(
-                f"{cls.__name__}.hls_bind_storage must be a dict "
-                f'(e.g. {{"type": "RAM_2P", "impl": "BRAM"}}), got {spec!r}.'
-            )
-        unknown = set(spec) - {"type", "impl"}
-        if unknown:
-            raise ValueError(
-                f"{cls.__name__}.hls_bind_storage has unknown key(s) {sorted(unknown)}; "
-                f"allowed keys are 'type', 'impl'."
-            )
-        if not spec.get("type"):
-            raise ValueError(
-                f"{cls.__name__}.hls_bind_storage requires a 'type' (e.g. 'RAM_2P')."
-            )
 
     def __init_subclass__(cls, **kwargs: Any):
         super().__init_subclass__(**kwargs)
         if cls is not DataArray and "can_gen_include" not in cls.__dict__:
             cls.can_gen_include = True
-        if "hls_partition" in cls.__dict__:
-            cls._validate_hls_partition(cls.__dict__["hls_partition"])
-        if "hls_bind_storage" in cls.__dict__:
-            cls._validate_hls_bind_storage(cls.__dict__["hls_bind_storage"])
         # Validate cpp_storage whenever a subclass sets it.
         if "cpp_storage" in cls.__dict__:
             val = cls.__dict__["cpp_storage"]
@@ -3234,9 +3144,9 @@ class DataArray(DataSchema):
                 )
 
         overrides = cls.validate_specialize_kwargs({**kwargs, "member_name": member_name})
-        # Structured overrides (hls_partition / hls_bind_storage) are dicts, which are unhashable
-        # and so cannot go into the specialization-cache key as-is.  Freeze them; two calls with
-        # equal partition specs must still hit one cached class.
+        # An override may be a structured value (a dict/list), which is unhashable and so cannot
+        # go into the specialization-cache key as-is.  Freeze it; two calls passing equal structures
+        # must still hit one cached class rather than building two identical types.
         override_items = tuple(
             (k, _freeze_for_key(v)) for k, v in sorted(overrides.items())
         )

@@ -970,7 +970,7 @@ def hook_signature(
     for name in param_names:
         annot = hints.get(name)
         if name in _state:
-            annot = type(_state[name].obj)
+            annot = _state[name].schema
         if annot is None:
             raise RuntimeError(
                 f"Hook '{method.__name__}' parameter '{name}' has no type annotation"
@@ -1187,6 +1187,7 @@ def _collect_schemas(tree: HwStmt, comp) -> list[type]:
     import collections.abc
     import typing as _typing
 
+    from waveflow.hw.hw_module import discover_state
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 
     def _has_header(typ) -> bool:
@@ -1218,7 +1219,15 @@ def _collect_schemas(tree: HwStmt, comp) -> list[type]:
             hints = _typing.get_type_hints(method)
         except Exception:
             return
+        # A state argument is annotated ``HwState`` — a wrapper that carries no schema and so no
+        # header.  Resolve it to the WRAPPED class, the same instance-resolution hook_signature
+        # uses for the type itself; otherwise the headers the hook body needs (reached transitively
+        # through the array's own header) silently stop being included and csynth fails on symbols
+        # that used to be in scope.
+        state = discover_state(getattr(method, '__self__', None))
         for name, hint in hints.items():
+            if name in state:
+                hint = state[name].schema
             if name == 'return':
                 # ProcessGen[T] = Generator[Event, Any, T]; unwrap to T.
                 if _typing.get_origin(hint) is collections.abc.Generator:
@@ -1500,19 +1509,19 @@ def header_to_cpp(
 
 
 def state_decl_type(entry) -> tuple[str, str]:
-    """Return ``(cpp_type, suffix)`` for one declared state object's C++ declaration.
+    """Return ``(cpp_type, suffix)`` for one :class:`~waveflow.hw.hw_state.HwState`'s declaration.
 
     ``suffix`` is the array extent (``"[32]"``) or ``""`` for a scalar, so the caller writes
     ``static {cpp_type} {name}{suffix};``.
 
-    **The type comes from the bound instance, not from any annotation.**  ``add_state`` registers
-    the object, so ``type(entry.obj)`` *is* the concrete class — including a per-instance
-    ``DataArray.specialize(...)`` whose element format was derived from a ``HwParam`` (the
-    instance->type bridge).  A static annotation could only name the unspecialized base, which
-    would emit the wrong element type; the same reasoning already makes ``hook_signature`` size an
-    ``MMIFMaster`` pointer off the bound ``self`` rather than off the hint.
+    **The type comes from the wrapped instance, not from any annotation.**  ``HwState.schema`` *is*
+    the concrete class — including a per-instance ``DataArray.specialize(...)`` whose element format
+    was derived from a ``HwParam`` (the instance->type bridge).  A static annotation could only name
+    the unspecialized base, which would emit the wrong element type; the same reasoning already
+    makes ``hook_signature`` size an ``MMIFMaster`` pointer off the bound ``self`` rather than off
+    the hint.
     """
-    cls = type(entry.obj)
+    cls = entry.schema
     if issubclass(cls, DataArray) and getattr(cls, 'cpp_storage', 'struct') == 'raw':
         return cpp_type(cls.element_type), f"[{cls._declared_count()}]"
     return cpp_type(cls), ""
@@ -1543,30 +1552,35 @@ def state_decls_to_cpp(comp: HwModule, indent: int = 1) -> str:
     for entry in entries.values():
         cpp_t, suffix = state_decl_type(entry)
         lines.append(f"{pad}static {cpp_t} {entry.name}{suffix};   // access={entry.access}")
-        lines.extend(array_pragmas(type(entry.obj), entry.name, pad))
+        lines.extend(state_pragmas(entry, pad))
     return "\n".join(lines)
 
 
-def array_pragmas(cls, name: str, pad: str = "") -> list[str]:
-    """The HLS pragma lines a ``DataArray`` class declares for storage *name*.
+def state_pragmas(entry, pad: str = "") -> list[str]:
+    """The HLS pragma lines one :class:`~waveflow.hw.hw_state.HwState` declares.
 
-    Emitted immediately after the declaration so the pragma and the variable it names cannot
-    drift apart.  Returns ``[]`` when the class declares neither ``hls_partition`` nor
-    ``hls_bind_storage`` — the common case, which stays pragma-free rather than emitting a
-    "default" that would silently override Vitis's own inference.
+    Emitted immediately after the declaration so the pragma and the variable it names cannot drift
+    apart.  Returns ``[]`` when the state declares neither ``partition`` nor ``bind_storage`` — the
+    common case, which stays pragma-free rather than emitting a "default" that would silently
+    override Vitis's own inference.
+
+    The specs live on the ``HwState``, not on its schema, because partitioning is a property of
+    *this storage*: two state arrays of the same schema can legitimately want different layouts,
+    and a schema is shared and specialization-cached.
 
     The classic (positional) ARRAY_PARTITION spelling is used deliberately: it is what the
     hand-written, XSI-verified task headers in this tree already emit, so generated and
     hand-written bodies read the same.
     """
     out: list[str] = []
-    part = getattr(cls, "hls_partition", None)
+    name = entry.name
+    part = entry.partition
     if part:
         ptype = part["type"]
         dim = part.get("dim", 1)
         factor = "" if ptype == "complete" else f" factor={part['factor']}"
         out.append(f"{pad}#pragma HLS ARRAY_PARTITION variable={name} {ptype}{factor} dim={dim}")
-    bind = getattr(cls, "hls_bind_storage", None)
+    bind = entry.bind_storage
     if bind:
         impl = f" impl={bind['impl']}" if bind.get("impl") else ""
         out.append(f"{pad}#pragma HLS BIND_STORAGE variable={name} type={bind['type']}{impl}")

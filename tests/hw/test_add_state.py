@@ -13,7 +13,7 @@ import pytest
 
 from waveflow.build.hwcodegen import SynthesisError
 from waveflow.build.hwgen import (
-    array_pragmas,
+    state_pragmas,
     hook_signature_str,
     kernel_body_to_cpp,
     state_decls_to_cpp,
@@ -24,6 +24,7 @@ from waveflow.hw.dataschema import DataArray, FloatField, IntField
 from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import discover_state, state_entry_for
+from waveflow.hw.hw_state import HwState
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
@@ -57,8 +58,8 @@ class Accum(FreeRunMod):
         self.y_out = StreamIFMaster(name=f"{self.name}_y_out", sim=self.sim, bitwidth=32)
         self.add_endpoint(self.x_in)
         self.add_endpoint(self.y_out)
-        self.total = AccArray()
-        self.add_state(self.total, access="RW")
+        self.total = HwState(AccArray(), access="RW")
+        self.add_state(self.total)
 
     def run_iter(self) -> ProcessGen[None]:
         x = yield from self.x_in.get(Vec)
@@ -66,7 +67,7 @@ class Accum(FreeRunMod):
         yield from self.y_out.write(y)
 
     @synthesizable
-    def accumulate(self, x: Vec, total: DataArray) -> Vec:
+    def accumulate(self, x: Vec, total: HwState) -> Vec:
         """Add ``x`` into the running total and return the new total."""
         total.val[:] = total.val + x.val
         return Vec(total.val.copy())
@@ -82,7 +83,7 @@ def test_add_state_records_the_attribute_name():
     comp = Accum(name="a", sim=Simulation())
     state = discover_state(comp)
     assert list(state) == ["total"]
-    assert state["total"].obj is comp.total
+    assert state["total"] is comp.total
     assert state["total"].access == "RW"
 
 
@@ -90,20 +91,26 @@ def test_state_entry_for_is_identity_not_equality():
     """Two equal-valued arrays are different storage; only the registered object matches."""
     comp = Accum(name="a", sim=Simulation())
     assert state_entry_for(comp, comp.total) is not None
-    assert state_entry_for(comp, AccArray()) is None
+    assert state_entry_for(comp, HwState(AccArray())) is None
 
 
 def test_add_state_rejects_an_unbound_object():
     """An object with no attribute has no name to emit — that is an error, not a guess."""
     comp = Accum(name="a", sim=Simulation())
     with pytest.raises(ValueError, match="not bound to an attribute"):
-        comp.add_state(AccArray())
+        comp.add_state(HwState(AccArray()))
 
 
-def test_add_state_rejects_a_bad_access_mode():
-    comp = Accum(name="a", sim=Simulation())
+def test_hwstate_rejects_a_bad_access_mode():
     with pytest.raises(ValueError, match="access="):
-        comp.add_state(comp.total, access="RWX")
+        HwState(AccArray(), access="RWX")
+
+
+def test_add_state_rejects_a_bare_schema():
+    """The hardware facts live on HwState, so the registry only accepts one."""
+    comp = Accum(name="a", sim=Simulation())
+    with pytest.raises(TypeError, match="expects an HwState"):
+        comp.add_state(AccArray())
 
 
 def test_a_component_with_no_state_costs_nothing():
@@ -214,10 +221,10 @@ class SweptAccum(Accum):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.total = DataArray.specialize(
+        self.total = HwState(DataArray.specialize(
             FixedField.specialize(W=18, I=2), max_shape=(8,), cpp_storage="raw",
-        )()
-        self.add_state(self.total, access="RW")
+        )(), access="RW")
+        self.add_state(self.total)
 
 
 def test_state_type_resolves_from_the_instance_not_the_annotation():
@@ -358,15 +365,8 @@ def test_pysim_state_persists_across_firings():
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 — pragma metadata on DataArray
+# Pragma metadata — declared on the HwState, not on its schema
 # ---------------------------------------------------------------------------
-
-
-PartArray = DataArray.specialize(
-    Float32, max_shape=(4,), cpp_storage="raw",
-    hls_partition={"type": "complete"},
-    hls_bind_storage={"type": "RAM_2P", "impl": "BRAM"},
-)
 
 
 @dataclass
@@ -375,8 +375,10 @@ class PartAccum(Accum):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.total = PartArray()
-        self.add_state(self.total, access="RW")
+        self.total = HwState(AccArray(), access="RW",
+                             partition={"type": "complete"},
+                             bind_storage={"type": "RAM_2P", "impl": "BRAM"})
+        self.add_state(self.total)
 
 
 def test_partition_pragma_follows_the_declaration():
@@ -387,70 +389,58 @@ def test_partition_pragma_follows_the_declaration():
     assert lines[i + 2] == "#pragma HLS BIND_STORAGE variable=total type=RAM_2P impl=BRAM"
 
 
-def test_cyclic_partition_emits_its_factor():
-    cls = DataArray.specialize(
-        Float32, max_shape=(8,), cpp_storage="raw",
-        hls_partition={"type": "cyclic", "factor": 4, "dim": 1},
-    )
-    assert array_pragmas(cls, "taps") == [
-        "#pragma HLS ARRAY_PARTITION variable=taps cyclic factor=4 dim=1",
-    ]
+def test_two_states_of_one_schema_can_partition_differently():
+    """THE reason the specs live on HwState: partitioning is a property of the storage, not of
+    the data type.  On the schema this would be impossible — a schema is shared and cached."""
+    a = HwState(AccArray(), partition={"type": "complete"})
+    b = HwState(AccArray(), partition={"type": "cyclic", "factor": 2})
+    a.name, b.name = "a", "b"
+    assert a.schema is b.schema
+    assert state_pragmas(a) == ["#pragma HLS ARRAY_PARTITION variable=a complete dim=1"]
+    assert state_pragmas(b) == ["#pragma HLS ARRAY_PARTITION variable=b cyclic factor=2 dim=1"]
 
 
 def test_no_pragma_declared_means_no_pragma_emitted():
-    """A plain array stays pragma-free rather than getting a 'default' that overrides Vitis."""
-    assert array_pragmas(AccArray, "total") == []
+    """Plain storage stays pragma-free rather than getting a 'default' that overrides Vitis."""
+    s = HwState(AccArray())
+    s.name = "total"
+    assert state_pragmas(s) == []
 
 
 def test_complete_partition_rejects_a_factor():
     with pytest.raises(ValueError, match="takes no factor"):
-        DataArray.specialize(
-            Float32, max_shape=(4,), cpp_storage="raw",
-            hls_partition={"type": "complete", "factor": 2},
-        )
+        HwState(AccArray(), partition={"type": "complete", "factor": 2})
 
 
 def test_cyclic_partition_requires_a_factor():
     with pytest.raises(ValueError, match="requires an integer factor"):
-        DataArray.specialize(
-            Float32, max_shape=(4,), cpp_storage="raw",
-            hls_partition={"type": "cyclic"},
-        )
+        HwState(AccArray(), partition={"type": "cyclic"})
 
 
 def test_unknown_partition_type_is_rejected():
     with pytest.raises(ValueError, match="is invalid; must be one of"):
-        DataArray.specialize(
-            Float32, max_shape=(4,), cpp_storage="raw",
-            hls_partition={"type": "diagonal"},
-        )
+        HwState(AccArray(), partition={"type": "diagonal"})
 
 
 def test_unknown_partition_key_is_rejected():
     with pytest.raises(ValueError, match="unknown key"):
-        DataArray.specialize(
-            Float32, max_shape=(4,), cpp_storage="raw",
-            hls_partition={"type": "complete", "factr": 2},
-        )
+        HwState(AccArray(), partition={"type": "complete", "factr": 2})
 
 
-def test_equal_partition_specs_share_one_cached_class():
-    """A dict override must not defeat the specialization cache (it is frozen for the key)."""
-    a = DataArray.specialize(Float32, max_shape=(4,), cpp_storage="raw",
-                             hls_partition={"type": "cyclic", "factor": 2})
-    b = DataArray.specialize(Float32, max_shape=(4,), cpp_storage="raw",
-                             hls_partition={"type": "cyclic", "factor": 2})
-    assert a is b
-
-
-def test_different_partition_specs_are_different_classes():
-    a = DataArray.specialize(Float32, max_shape=(4,), cpp_storage="raw",
-                             hls_partition={"type": "cyclic", "factor": 2})
-    b = DataArray.specialize(Float32, max_shape=(4,), cpp_storage="raw",
-                             hls_partition={"type": "cyclic", "factor": 4})
-    assert a is not b
+def test_bind_storage_requires_a_type():
+    with pytest.raises(ValueError, match="requires a 'type'"):
+        HwState(AccArray(), bind_storage={"impl": "BRAM"})
 
 
 def test_pragmas_reach_the_generated_task_body():
     src = task_files_to_str(PartAccum)["part_accum_task.h"]
     assert "#pragma HLS ARRAY_PARTITION variable=total complete dim=1" in src
+
+
+def test_hwstate_val_delegates_to_the_wrapped_instance():
+    """The wrapper is invisible to hook arithmetic — that is what keeps hook bodies unchanged."""
+    import numpy as np
+
+    s = HwState(AccArray())
+    s.val[:] = np.arange(4)
+    np.testing.assert_array_equal(np.asarray(s.value.val), np.arange(4))

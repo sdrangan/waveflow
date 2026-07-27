@@ -17,6 +17,7 @@ import numpy as np
 from waveflow.hw.clock import Clock
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_state import HwState
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.regmap import (
     Bit,
@@ -69,8 +70,8 @@ class PolyStateAccel(HostActivated):
         for ep in (self.s_in, self.m_out, self.s_lite):
             self.add_endpoint(ep)
 
-        self.coeffs = CoeffArray()
-        self.add_state(self.coeffs, access="R")
+        self.coeffs = HwState(CoeffArray(), access="R")
+        self.add_state(self.coeffs)
 
     def on_start(self) -> ProcessGen[None]:
         while True:
@@ -90,7 +91,7 @@ class PolyStateAccel(HostActivated):
         cmd_hdr: PolyCmdHdr,
         s_in: StreamIFSlave,
         m_out: StreamIFMaster,
-        coeffs: CoeffArray,
+        coeffs: HwState,
     ) -> ProcessGen[PolyError]:
         """Byte-for-byte the regmap version's hook — only where ``coeffs`` came from changed."""
         resp_hdr = PolyRespHdr()

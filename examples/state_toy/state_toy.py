@@ -47,6 +47,7 @@ from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.dataschema import DataArray, DataSchemaStep, IntField  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
 from waveflow.hw.hw_module import HwParam  # noqa: E402
+from waveflow.hw.hw_state import HwState  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.mem_stream import KernelTask  # noqa: E402
 from waveflow.hw.synth import synthesizable  # noqa: E402
@@ -72,7 +73,7 @@ class Vec4(DataArray):
 #: ``ap_uint<32> total[4]`` rather than a struct — the form a ``static`` declaration wants.
 AccArray = DataArray.specialize(Word32, max_shape=(NLANE,), cpp_storage="raw")
 
-SCHEMA_CLASSES = [Vec4]
+SCHEMA_CLASSES = [Vec4, AccArray]
 
 #: The hand-written hook body (sticky at the example root; never regenerated over).
 HOOK_IMPL = "state_accum_accumulate_impl.cpp"
@@ -102,8 +103,8 @@ class StateAccum(FreeRunMod):
         self.add_endpoint(self.m_out)
 
         # THE point of this example: storage that outlives a firing, declared rather than captured.
-        self.total = AccArray()
-        self.add_state(self.total, access="RW")
+        self.total = HwState(AccArray(), access="RW")
+        self.add_state(self.total)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask(
@@ -120,7 +121,7 @@ class StateAccum(FreeRunMod):
         yield from self.m_out.write(y)
 
     @synthesizable
-    def accumulate(self, x: Vec4, total: DataArray) -> Vec4:
+    def accumulate(self, x: Vec4, total: HwState) -> Vec4:
         """Add ``x`` into the running total and emit it.  The pysim twin of the hand-written hook."""
         total.val[:] = (np.asarray(total.val, dtype=np.uint64)
                         + np.asarray(x.val, dtype=np.uint64)) & 0xFFFFFFFF

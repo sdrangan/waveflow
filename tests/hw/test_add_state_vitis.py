@@ -190,7 +190,7 @@ def test_task_body_static_csynthesizes(tmp_path):
     from waveflow.build.streamutils import StreamUtilsStep
     from waveflow.hw.dataschema import DataSchemaStep
 
-    from tests.hw.test_add_state import Vec
+    from tests.hw.test_add_state import AccArray, Vec
 
     for name, content in task_files_to_str(
         __import__("tests.hw.test_add_state", fromlist=["Accum"]).Accum,
@@ -204,7 +204,10 @@ def test_task_body_static_csynthesizes(tmp_path):
     cfg = BuildConfig(root_dir=tmp_path)
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir="."))
-    dag.add(DataSchemaStep(Vec, word_bw_supported=[32], include_dir="."))
+    # Both the payload AND the state array need headers: the state arg is annotated HwState, so
+    # _collect_schemas resolves it to the wrapped class and includes that class's header.
+    for cls in (Vec, AccArray):
+        dag.add(DataSchemaStep(cls, word_bw_supported=[32], include_dir="."))
     results = dag.run(cfg)
     assert all(r.success for r in results.values()), f"header generation failed: {results}"
 
