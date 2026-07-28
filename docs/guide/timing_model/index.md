@@ -37,7 +37,7 @@ number of samples, the vector length — the parameter the work scales with.
   overlaps the load and/or store, element by element.
 
 Double-buffering (ping-pong overlap) is no longer a separate timing model: it is built by composing
-**load / compute / store as concurrent sub-components over a [stream of blocks](../concurrency/python/sob.md)**,
+**load / compute / store as concurrent sub-components over a [stream of blocks](../interface/sob.md)**,
 and the compute sub-component is timed exactly like a [block](./block.md) process.
 
 ## See also

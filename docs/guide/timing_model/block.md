@@ -19,7 +19,7 @@ delay after the load and before the store.** In a block process the compute read
 runs, and writes a result — so the delay sits between the read and the write, exactly the shape of the
 general pattern in [Adding a timing model](./insertion.md).
 
-Here it is on a [stream-of-blocks](../concurrency/python/sob.md) `Compute` sub-component — the canonical
+Here it is on a [stream-of-blocks](../interface/sob.md) `Compute` sub-component — the canonical
 block process, since double-buffering is now built by composing `Load` / `Compute` / `Store` over SOB
 channels:
 
@@ -79,5 +79,5 @@ cost honest, and lets a model calibrated in isolation still predict the contende
 - [Adding a timing model to a component](./insertion.md) — the general read → predict → write pattern
   this specializes.
 - [Streaming processing](./streaming.md) — the overlapped case: compute *while* the data loads.
-- [Stream of Blocks](../concurrency/python/sob.md) — the `acquire_read` / block channel used here, and
+- [Stream of Blocks](../interface/sob.md) — the `acquire_read` / block channel used here, and
   how `Load` / `Compute` / `Store` compose into a double-buffered pipeline.

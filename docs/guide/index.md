@@ -17,5 +17,4 @@ Welcome to Waveflow.  This folder will have guides to use the Waveflow functiona
 - [Hardware Interfaces](./interface/overview.md)
 - [Hardware Modules and Flows](./flows/)
 - [Build System](./build/)
-- [Concurrency](./concurrency/)
 - [AI Tooling](./ai_tooling/)

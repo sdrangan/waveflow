@@ -49,7 +49,7 @@ after its final beat.
 ### Why the gather takes a different route
 
 The gather's cost is **not** its firing span. `component_firings()` measures first-input → `ap_done`, and
-`il_compute`'s inputs are its [stream-of-blocks](../../guide/concurrency/python/sob.md); in this
+`il_compute`'s inputs are its [stream-of-blocks](../../guide/interface/sob.md); in this
 reader-bound pipeline the stage spends most of each firing *waiting* for `il_load` to hand it those blocks,
 so the firing span is dominated by that wait, not the gather. The window that is the gather's **own** time
 is where the loop is actually writing output — its output block's **write-enable**.

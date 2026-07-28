@@ -124,4 +124,4 @@ This model is loosely timed, and it makes two deliberate approximations:
   overlapped variant.
 - [Stream Interfaces](../interface/stream.md) — `get_pipelined` / `write_pipelined` and the first-word-time mechanism.
 - Double-buffering (block-granularity overlap) is built by composing sub-components over a
-  [stream of blocks](../concurrency/python/sob.md), not a separate timing model.
+  [stream of blocks](../interface/sob.md), not a separate timing model.

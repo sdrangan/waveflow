@@ -114,6 +114,25 @@ Alongside the body, `task_files_to_str` writes a `// TODO` stub for each
 Python** — the generator produces the body's *structure*, and nothing checks a hook against the Python
 it mirrors.
 
+## Ownership: what a task should own
+
+The tasks in a network are not interchangeable, and the split is **structural, not stylistic**. A task
+that owns an `m_axi` master should touch streams and tokens only, and should not also hold
+stream-of-blocks locks; the block work belongs in its own task. The interleaver follows exactly this
+split — `il_mem_r` / `il_mem_w` own the `m_axi`, while `il_load` / `il_compute` / `il_store` own the
+lock-scoped block work.
+
+Internal block channels lower to `hls::stream_of_blocks<T[N], depth>` (`SobEdge`), with
+`hls::write_lock` / `hls::read_lock` **scopes inside the task bodies** — construction acquires, scope
+exit commits. There are no lock *methods*; the braces are the handshake, and the producer's scope must
+close before the consumer can acquire. Two throughput notes worth carrying into a design: a gather
+(random reads) has the faster access path, while a scatter (random writes) serializes on write
+hazards, so the two are not symmetric.
+
+**Multi-master arbitration is deliberately not implemented.** The composite generator uses fixed
+ownership boundaries (one read owner, one write owner) and explicit stage wiring rather than an
+arbitration policy. A design needing two masters on one resource has to say so structurally.
+
 ## What is out of scope
 
 A body that owns an `m_axi` master is **refused** by task-body emission (`_reject_m_axi_task`). That is
