@@ -231,6 +231,11 @@ class BuildResult:
         Mapping of output name → artifact value (raw Python objects or Paths).
     timestamp : float
         Wall-clock time when this result was created.
+    elapsed_seconds : float
+        How long the step took to run, in wall-clock seconds.  ``0.0`` for a skipped step (it did no
+        work).  Recorded on every step because it is the raw material for answering "what would
+        recalibrating here cost?" — a question better answered from a history of real runs than from
+        an estimate, and unanswerable after the fact if it was never measured.
     """
 
     success: bool
@@ -238,6 +243,7 @@ class BuildResult:
     artifacts: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     skipped: bool = False
+    elapsed_seconds: float = 0.0
 
     def object(self, name: str) -> Any:
         """Return the artifact value for *name*."""
@@ -608,11 +614,20 @@ class BuildDag:
                     success=True, skipped=True, artifacts=skip_artifacts
                 )
             else:
+                # Wall-clock is recorded for every step, success or failure.  It is the raw fact
+                # behind "what does a calibration point cost?" — an answer better derived from a
+                # history of actual runs than from any estimate, and one nothing can reconstruct
+                # after the fact if it was never measured.
+                started = time.perf_counter()
                 try:
                     produced = self._call_run(step, config, artifact_store)
-                    results[step.name] = BuildResult(success=True, artifacts=produced)
+                    results[step.name] = BuildResult(
+                        success=True, artifacts=produced,
+                        elapsed_seconds=time.perf_counter() - started)
                 except Exception as exc:
-                    results[step.name] = BuildResult(success=False, message=str(exc))
+                    results[step.name] = BuildResult(
+                        success=False, message=str(exc),
+                        elapsed_seconds=time.perf_counter() - started)
                     failed.add(step.name)
 
             if on_step_end is not None:

@@ -21,16 +21,58 @@ from .calib import (
     InterpCalibModel,
     LinCalibModel,
 )
+from .confidence import (
+    Confidence,
+    ConfidenceError,
+    ConfidenceLevel,
+    Estimate,
+    FitSummary,
+)
 from .fixture import ComponentFixture, SweepPoint
+from .module_key import (
+    ModuleIdentity,
+    UnboundModuleError,
+    UnstableSignatureError,
+    identify,
+    identify_instance,
+    module_key,
+    walk_modules,
+)
+from .record_store import (
+    KeyCollisionError,
+    ModuleStore,
+    Provenance,
+    Record,
+    StaleRecordError,
+    resource_record,
+)
 from .timing_model import StreamTimingModel, TimingModel
 
 __all__ = [
     "CalibDataFrame",
     "CalibModel",
     "ComponentFixture",
+    "Confidence",
+    "ConfidenceError",
+    "ConfidenceLevel",
+    "Estimate",
+    "FitSummary",
     "InterpCalibModel",
+    "KeyCollisionError",
     "LinCalibModel",
+    "ModuleIdentity",
+    "ModuleStore",
+    "Provenance",
+    "Record",
+    "StaleRecordError",
     "StreamTimingModel",
     "SweepPoint",
     "TimingModel",
+    "UnboundModuleError",
+    "UnstableSignatureError",
+    "identify",
+    "identify_instance",
+    "module_key",
+    "resource_record",
+    "walk_modules",
 ]

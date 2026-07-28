@@ -29,6 +29,8 @@ from typing import Callable, Iterable, Sequence
 import numpy as np
 import pandas as pd
 
+from waveflow.calib.confidence import Confidence, ConfidenceLevel, Estimate, FitSummary
+
 #: Metadata column stamped on every row by :meth:`CalibDataFrame.add_datapoint`.
 #: It is *never* a feature/target — models select explicit basis/target columns, so it
 #: cannot leak into a fit.
@@ -132,6 +134,8 @@ class CalibModel:
         self.basis = [str(b) for b in self.basis]
         self.target = str(self.target)
         self._fitted = False
+        self._fit_summary = None       # FitSummary — set by _record_fit_summary at the end of fit()
+        self._from_seed = False        # True when the params came from `seed`, not from data
 
     # -- data access --------------------------------------------------------
     @staticmethod
@@ -182,6 +186,137 @@ class CalibModel:
         errs = self.rel_errors(data)
         return max(errs) if errs else 0.0
 
+    # -- confidence ---------------------------------------------------------
+    def n_free_params(self) -> int:
+        """How many parameters this model form is free to choose.
+
+        Used only to keep an exactness claim honest: zero residual over no more points than free
+        parameters is guaranteed by construction and says nothing.  The default assumes one
+        coefficient per basis feature plus an intercept; subclasses whose form differs override it.
+        """
+        return len(self.basis) + 1
+
+    def _record_fit_summary(self, data) -> "FitSummary":
+        """Capture the little a *deployed* model needs to report confidence, and return it.
+
+        Called at the end of :meth:`fit`.  A fitted model discards its training data — that is what
+        lets a published artifact predict with no sklearn and no corpus — so the support region and
+        the worst residual have to be retained explicitly or confidence becomes unanswerable in
+        exactly the place it matters most: a platform library reused by a project that never ran the
+        sweep.
+
+        Ranges are recorded over the frame's **raw numeric columns** rather than :attr:`basis`,
+        because queries arrive in raw form (``{"nwords": 128}``) even when the model's basis is a
+        derived transform of them.
+        """
+        df = self._frame(data)
+        ranges: dict = {}
+        for col in df.columns:
+            if col == self.target:
+                continue
+            series = pd.to_numeric(df[col], errors="coerce").dropna()
+            if len(series):
+                ranges[str(col)] = [float(series.min()), float(series.max())]
+
+        abs_err, rel_err = 0.0, 0.0
+        for row in df.to_dict("records"):
+            actual = float(row[self.target])
+            resid = abs(self.predict(row) - actual)
+            abs_err = max(abs_err, resid)
+            if actual:
+                rel_err = max(rel_err, resid / abs(actual))
+
+        self._fit_summary = FitSummary(
+            features=list(self.basis), ranges=ranges, n_points=int(len(df)),
+            max_abs_residual=abs_err, max_rel_residual=rel_err,
+            n_free_params=int(self.n_free_params()))
+        self._from_seed = False
+        return self._fit_summary
+
+    def confidence(self, row) -> Confidence:
+        """How much :meth:`predict` should be believed for *row*.
+
+        The level is **derived** from the retained fit summary rather than asserted, so a model cannot
+        claim ``EXACT`` while carrying an out-of-range query or an under-determined fit.  Facts are
+        free-form and model-specific; subclasses extend them via :meth:`_confidence_facts`.
+        """
+        if not self._fitted:
+            return Confidence.uncalibrated(f"{type(self).__name__}({self.target!r}) is not fitted")
+        summary = self._fit_summary
+        if self._from_seed:
+            return Confidence(level=ConfidenceLevel.UNCALIBRATED, facts={
+                "summary": f"{self.target!r} came from seed defaults, not from measured data",
+                "from_seed": True, **self._confidence_facts(row)})
+        if summary is None:
+            # Distinct from the seed case: there *are* measured coefficients here, but the artifact
+            # predates fit summaries (or was hand-written), so the support region is unrecoverable.
+            # The level is still UNCALIBRATED because the right action is the same — recalibrate,
+            # which refreshes the fit and records the summary — but the facts keep the two apart.
+            return Confidence(level=ConfidenceLevel.UNCALIBRATED, facts={
+                "summary": f"{self.target!r} has fitted parameters but no retained fit summary, "
+                           f"so its support region is unknown",
+                "has_fitted_params": True, "from_seed": False,
+                **self._confidence_facts(row)})
+
+        facts: dict = {"target": self.target, "n_points": summary.n_points,
+                       "fitted_ranges": dict(summary.ranges),
+                       "max_abs_residual": summary.max_abs_residual,
+                       "max_rel_residual": summary.max_rel_residual}
+        outside = summary.outside(row)
+
+        if outside:
+            # Leaving the sampled region outranks a confirmed form, and deliberately so.  An affine
+            # law verified at every calibration point can still stop holding outside it — that is what
+            # a regime boundary does (a burst-splitting limit in timing; a DSP-vs-LUT inference
+            # threshold or a BRAM-vs-LUTRAM partitioning threshold in resources).  Zero residual is
+            # evidence about the region that was measured, not a licence beyond it.
+            #
+            # But extrapolating a form that held at every point is a far better position than
+            # extrapolating a noisy one, so that distinction rides in the facts where an agent can
+            # weigh it, rather than being flattened away by the level.
+            detail = ", ".join(f"{k}={v[0]:g} outside [{v[1]:g}, {v[2]:g}]"
+                               for k, v in sorted(outside.items()))
+            level = ConfidenceLevel.EXTRAPOLATED
+            facts["outside"] = outside
+            facts["form_exact"] = bool(summary.is_exact)
+            facts["summary"] = f"{self.target}: {detail}"
+            if summary.is_exact:
+                facts["summary"] += (f"; the form did reproduce all {summary.n_points} fitted points "
+                                     f"exactly, so the risk here is a regime change, not fit error")
+        elif summary.is_exact:
+            level = ConfidenceLevel.EXACT
+            facts["summary"] = (f"{self.target}: form reproduces all {summary.n_points} calibration "
+                                f"points exactly ({summary.n_free_params} free params)")
+        else:
+            level = ConfidenceLevel.INTERPOLATED
+            facts["summary"] = (f"{self.target}: inside the calibrated region; worst residual on the "
+                                f"corpus was {summary.max_rel_residual:.1%}")
+            if summary.degenerate:
+                facts["degenerate_fit"] = True
+                facts["summary"] += (f" (fit had {summary.n_points} points for "
+                                     f"{summary.n_free_params} free params — not over-determined)")
+
+        facts.update(self._confidence_facts(row))
+        return Confidence(level=level, facts=facts)
+
+    def _confidence_facts(self, row) -> dict:
+        """Extra model-specific facts merged into the confidence dict.  Override in a subclass.
+
+        Free-form and JSON-able: the consumer is an agent reading the dict, so there is no shared
+        vocabulary to conform to — say whatever this model form actually knows.
+        """
+        return {}
+
+    def estimate(self, row, *, source: str = "") -> Estimate:
+        """:meth:`predict` plus :meth:`confidence` — the reporting-time entry point.
+
+        Deliberately separate from :meth:`predict`, which sits on the simulation hot path (called per
+        firing, feeding straight into arithmetic) and must stay a bare float.  An estimate is built
+        once per module when a report is assembled.
+        """
+        return Estimate(value=float(self.predict(row)), source=source,
+                        confidence=self.confidence(row))
+
     def holdout_report(self, train, test) -> dict:
         """Fit on *train*, report R² and held-out residuals on *test* (frames/CalibDataFrames).
 
@@ -211,14 +346,27 @@ class CalibModel:
         from *params*.  Subclass-specific."""
         raise NotImplementedError
 
+    #: Reserved key under which the fit summary rides alongside a model's own ``to_params`` payload.
+    #: Written and stripped generically here, so no subclass has to know about it.
+    FIT_SUMMARY_KEY = "_fit_summary"
+
     def save_model(self, path=None) -> Path:
-        """Write :meth:`to_params` as JSON to *path* (or :attr:`path`); returns the path."""
+        """Write :meth:`to_params` as JSON to *path* (or :attr:`path`); returns the path.
+
+        The :class:`~waveflow.calib.confidence.FitSummary` rides along under
+        :attr:`FIT_SUMMARY_KEY` when one exists — that is what lets a *deployed* model (loaded in a
+        project that never ran the sweep) still answer "you are extrapolating" rather than falling
+        silent.  It is additive: an artifact written before this existed loads unchanged.
+        """
         p = path if path is not None else self.path
         if p is None:
             raise ValueError(f"{type(self).__name__}({self.target!r}) has no path to save to")
         p = Path(p)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self.to_params(), indent=2), encoding="utf-8")
+        payload = dict(self.to_params())
+        if self._fit_summary is not None:
+            payload[self.FIT_SUMMARY_KEY] = self._fit_summary.to_json()
+        p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return p
 
     def load_model(self, path=None) -> "CalibModel | None":
@@ -227,14 +375,26 @@ class CalibModel:
         p = path if path is not None else self.path
         if p is None or not Path(p).exists():
             return None
-        return self.load_params(json.loads(Path(p).read_text(encoding="utf-8")))
+        data = json.loads(Path(p).read_text(encoding="utf-8"))
+        summary = FitSummary.from_json(data.pop(self.FIT_SUMMARY_KEY, None)) if isinstance(data, dict) else None
+        model = self.load_params(data)
+        self._fit_summary = summary
+        self._from_seed = False
+        return model
 
     def default_model(self) -> "CalibModel":
         """Load the :attr:`seed` params (the default when there is no artifact / too little data)
-        into this model; returns ``self``."""
+        into this model; returns ``self``.
+
+        Marks the model as seed-backed, so :meth:`confidence` reports ``UNCALIBRATED`` rather than
+        letting a default masquerade as a measurement — today this fallback is entirely silent.
+        """
         if self.seed is None:
             raise RuntimeError(f"{type(self).__name__}({self.target!r}) has no seed")
-        return self.load_params(self.seed)
+        model = self.load_params(self.seed)
+        self._from_seed = True
+        self._fit_summary = None
+        return model
 
     def load_or_default(self, path=None) -> "CalibModel":
         """:meth:`load_model` if the artifact exists, else :meth:`default_model` (the seed)."""
@@ -312,7 +472,13 @@ class LinCalibModel(CalibModel):
         self._coef = np.asarray(reg.coef_, dtype=float)
         self._intercept = float(reg.intercept_) if self.fit_intercept else 0.0
         self._fitted = True
+        self._record_fit_summary(df)
         return self
+
+    def n_free_params(self) -> int:
+        """One coefficient per design column, plus the intercept when fitted."""
+        n = len(self._coef) if self._fitted else len(self.basis)
+        return int(n) + (1 if self.fit_intercept else 0)
 
     def _predict_one(self, row) -> float:
         return self._intercept + float(np.asarray(self._coef, dtype=float) @ self._features(row))
@@ -419,7 +585,39 @@ class InterpCalibModel(CalibModel):
         self._xs = np.array(keys, dtype=float)
         self._ys = np.array([float(np.mean(xy[k])) for k in keys], dtype=float)
         self._fitted = True
+        self._record_fit_summary(df)
         return self
+
+    def n_free_params(self) -> int:
+        """One free value per table knot.
+
+        So a lookup never claims ``EXACT``: it reproduces its knots because it *is* its knots, which is
+        the degenerate case an exactness claim must exclude.  Only a fit with repeated measurements at
+        a knot (which averaging must then reconcile) is over-determined at all.
+        """
+        return int(len(self._xs)) if self._fitted and self._xs is not None else len(self.basis)
+
+    def _confidence_facts(self, row) -> dict:
+        """Note the deliberate clamp, so an out-of-range query is not read as a plain failure.
+
+        Flat extrapolation past the sampled range *is* this model's physical claim (a saturating
+        quantity), not an accident — but it is still a claim about unmeasured territory, so the level
+        stays ``EXTRAPOLATED`` and this explains what the number actually is.
+        """
+        if not self._fitted or self._xs is None or len(self._xs) == 0:
+            return {}
+        f = self.basis[0]
+        if f not in row:
+            return {}
+        try:
+            x = float(row[f])
+        except (TypeError, ValueError):
+            return {}
+        lo, hi = float(self._xs[0]), float(self._xs[-1])
+        if x < lo or x > hi:
+            return {"clamped": True, "clamped_to": lo if x < lo else hi,
+                    "model_form": "piecewise-linear lookup, flat (saturating) beyond the sampled range"}
+        return {"model_form": "piecewise-linear lookup", "knots": int(len(self._xs))}
 
     def _predict_one(self, row) -> float:
         # np.interp clamps to the endpoint values outside [xs[0], xs[-1]] — the saturation.

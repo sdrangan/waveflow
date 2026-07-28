@@ -250,6 +250,29 @@ class TimingModel:
             self._model.load_or_default()
         return [self._to_time(max(0.0, self._model.predict(row)))]
 
+    def confidence(self, row: dict):
+        """How much :meth:`predict` should be believed for *row*
+        (:class:`~waveflow.calib.confidence.Confidence`).
+
+        The passthrough a per-module report needs: without it nothing outside this class can reach the
+        underlying model's confidence, and a report would have to choose between showing a number with
+        no provenance or showing nothing.  Loads lazily on the same terms as :meth:`predict`, so
+        asking about confidence never changes what a prediction would return.
+        """
+        self._guard_single()
+        if not self._model._fitted:
+            self._model.load_or_default()
+        conf = self._model.confidence(row)
+        conf.facts.setdefault("component", self.component)
+        return conf
+
+    def estimate(self, row: dict, *, source: str = "pysim"):
+        """:meth:`predict` paired with :meth:`confidence` — one entry for assembling a report."""
+        from waveflow.calib.confidence import Estimate
+
+        return Estimate(value=float(self.predict(row)[0]), source=source,
+                        confidence=self.confidence(row))
+
     # -- lifecycle ---------------------------------------------------------
     def reset(self, corpus: bool = True, params: bool = False) -> None:
         """Wipe the corpus and/or the fitted params, to recalibrate from scratch.
