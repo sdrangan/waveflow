@@ -3,16 +3,17 @@
 Two kinds of artifact end up in ``include/``, and the split is the point of this file:
 
 * **Generated** — the schema headers, the framework stream/mem-stream bodies, and (the interesting one)
-  ``fir_compute_state.inc`` + ``fir_compute_types.h``, which come from the *same* ``add_state``
+  ``fir_compute_state.inc`` + ``fir_types.h``, which come from the *same* ``add_state``
   registrations and ``FixedField`` formats the pysim twin uses.  Storage declarations, extents, the
   ``ARRAY_PARTITION`` pragma, and the derived accumulator format are all single-sourced from Python.
-* **Hand-written and sticky** — ``fir_cmd_rx_task.h`` and ``fir_compute_task.h``, which live at the
-  example root under version control and are *copied* into ``include/`` (never regenerated over).  They
-  are hand-written for the same reason every other in-band framer in this tree is: constructing
-  descriptors and driving a ``framed_word`` channel is not in the extractor's vocabulary.
+* **Hand-written and sticky** — ``fir_cmd_rx_task.h`` and the two ``fir_compute_*_task.h`` bodies,
+  which live at the example root under version control and are *copied* into ``include/`` (never
+  regenerated over).  They are hand-written for the same reason every other in-band framer in this
+  tree is: constructing descriptors and driving a ``framed_word`` channel is not in the extractor's
+  vocabulary.
 
-So the arithmetic is hand-written but the **state is not**: ``fir_compute_task.h`` declares no storage
-of its own, it ``#include``s what :func:`~waveflow.build.hwgen.state_decls_to_cpp` emits.  That is what
+So the arithmetic is hand-written but the **state is not**: neither compute body declares storage of
+its own, each ``#include``s what :func:`~waveflow.build.hwgen.state_decls_to_cpp` emits.  That is what
 keeps the RTL's ``static`` from drifting from the ``HwState`` the Python model mutates.
 
 The steps are a :class:`BuildDag` driven by :func:`run_dag_cli`, like the other examples'

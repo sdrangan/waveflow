@@ -1,0 +1,195 @@
+---
+title: DUT codegen
+parent: Block FIR (state + fixed point)
+nav_order: 7
+---
+# DUT codegen — the graph becomes an `hls::task` top
+
+The [Python model](./python.md) is a graph: four sub-components, three framed edges, four boundary
+ports. Generating the DUT is walking that graph and lowering it to a free-running Vitis HLS top.
+
+```bash
+python -m examples.fir_block.fir_block_build --through codegen_dut
+```
+
+The mechanism is the same one [`mem_copy`](../memcpy/codegen_dut.md) and
+[`interleaver`](../interleaver/codegen_dut.md) use, and those pages cover it. What is specific here is
+**what feeds the hand-written bodies** — the storage and the types — and how one parameter picks
+between two of them.
+
+## The top
+
+`composite_top_spec` walks `sub_comps` and the internal interfaces, resolves each child's
+`kernel_task()` signature against the boundary ports, and emits:
+
+```cpp
+#include "fir_cmd_rx_task.h"
+#include "mem_r_stream_framed_task.h"
+#include "fir_compute_serial_task.h"
+#include "mem_w_stream_framed_done_task.h"
+
+void fir_block(
+    hls::stream<ap_uint<32> >& s_cmd,
+    const ap_uint<32>* m_in,
+    ap_uint<32>* m_out,
+    hls::stream<ap_uint<32> >& s_done
+) {
+#pragma HLS INTERFACE axis port=s_cmd
+#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0 depth=8192
+#pragma HLS stable variable=m_in
+#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE axis port=s_done
+#pragma HLS INTERFACE ap_ctrl_none port=return
+    hls_thread_local hls::stream<streamutils::framed_word<32> > cmd_rd;
+    hls_thread_local hls::stream<streamutils::framed_word<32> > rdata;
+    hls_thread_local hls::stream<streamutils::framed_word<32> > wdata;
+    hls_thread_local hls::task t0(fir_cmd_rx_task<32>, s_cmd, cmd_rd);
+    hls_thread_local hls::task t1(mem_r_stream_framed_task<32>, cmd_rd, m_in, rdata);
+    hls_thread_local hls::task t2(fir_compute_serial_task<32>, rdata, wdata);
+    hls_thread_local hls::task t3(mem_w_stream_framed_done_task<32, 8>, wdata, m_out, s_done);
+}
+```
+
+The body is nothing but channel declarations and task instantiations — the three internal edges became
+`hls_thread_local` FIFOs, the four boundary ports became top-level ports, and each `add_comp` child
+became one task. Note `ap_ctrl_none`: there is no start/done handshake, which is what "free-running"
+means and why [XSI](./rtlsim.md) rather than Vitis cosim is the verification path.
+
+`m_in` is `const` and `m_out` is not, because the read and write endpoints are different *types* — the
+direction is a property of the endpoint, and the `gmem0` / `gmem1` bundle split follows from there.
+
+## `unroll_lane` selects the body
+
+Line `t2` is the only thing the realization parameter changes. `kernel_task()` returns a different
+function and header name:
+
+```python
+@property
+def variant(self) -> str:
+    return "unroll" if bool(self.unroll_lane) else "serial"
+
+def kernel_task(self) -> KernelTask:
+    return KernelTask(f"fir_compute_{self.variant}_task",
+                      f"fir_compute_{self.variant}_task.h", ("s_in", "cmd_out"),
+                      template_args=(int(self.mem_dwidth),))
+```
+
+so `--unroll-lane` emits an otherwise byte-identical top with
+
+```cpp
+#include "fir_compute_unroll_task.h"
+...
+    hls_thread_local hls::task t2(fir_compute_unroll_task<32>, rdata, wdata);
+```
+
+Everything else — ports, pragmas, channel widths, the other three tasks — is unchanged, because the
+two bodies have the same signature. That is what makes the two builds comparable: any difference in
+the csynth report is attributable to the kernel and nothing else.
+
+## Two kinds of artifact in `include/`
+
+This is the part worth understanding, because the split is not obvious from the directory listing:
+
+| artifact | kind | comes from |
+|---|---|---|
+| `fir_cmd.h`, `fir_desc.h`, `fir_op.h`, `mem_*_cmd.h` | generated | `DataSchemaStep` per schema class |
+| `fixed16_2_array_utils.h` | generated | `gen_array_utils(Samp)` — the lane routines |
+| `fir_types.h` | generated | the derived `acc_t`, `NTAP`, and the `fir_au` namespace alias |
+| `fir_compute_state.inc` | generated | `state_decls_to_cpp` — the `add_state` storage |
+| `streamutils_hls.h`, `mem_*_stream_*_task.h`, `memmgr.hpp` | framework | copied by the stream/mem-stream steps |
+| `fir_cmd_rx_task.h`, `fir_compute_serial_task.h`, `fir_compute_unroll_task.h` | **hand-written, sticky** | copied from the example root; never generated over |
+
+The hand-written bodies live at the example root under version control and are *copied* in. The
+`include/` directory is entirely disposable — delete it and `--through codegen_dut` rebuilds it.
+
+## The storage is generated, the arithmetic is not
+
+The kernels are hand-written ([why](./kernels.md#why-hand-written-at-all)), but they **declare no
+storage**. `state_decls_to_cpp` emits it from the `add_state` registrations:
+
+```cpp
+// GENERATED by waveflow (build/hwgen.py::state_decls_to_cpp) from FirCompute.add_state.
+// DO NOT EDIT: regenerate instead.
+    // Cross-firing state (HwModule.add_state) -- persists across firings.
+    static ap_fixed<16, 2, AP_TRN, AP_WRAP> taps[32];
+    #pragma HLS ARRAY_PARTITION variable=taps complete dim=1
+    static ap_fixed<16, 2, AP_TRN, AP_WRAP> carry[31];
+```
+
+and each body pulls it in at function scope:
+
+```cpp
+template <int MEM_DW>
+static void fir_compute_serial_task(...) {
+    ...
+#include "fir_compute_state.inc"     // <- the statics land here
+    FirDesc d;
+```
+
+An `#include` inside a function body is unusual C++, and deliberate: for a free-running task that
+**is** the emission site — the top only instantiates tasks, so there is no other scope, and a `static`
+there is what survives re-firing. See [Cross-firing state](./state.md#what-gets-emitted-and-where).
+
+The payoff is that element type, extents, and the partition pragma cannot drift from the Python model
+the [golden](./testbench.md) runs against, even though a human wrote the arithmetic around them.
+Change `--samp-w` or `--ntap` and the declarations move on their own.
+
+## `fir_types.h` — the derived numbers
+
+The other generated header carries what the bodies cannot compute for themselves:
+
+```cpp
+#include <ap_fixed.h>
+#include "fixed16_2_array_utils.h"
+
+//: The generated (de)serialization routines for this sample format, under a name the
+//: hand-written task bodies can rely on across width changes.
+namespace fir_au = fixed16_2_array_utils;
+
+namespace fir_types {
+    typedef ap_fixed<37, 9, AP_TRN, AP_WRAP> acc_t;    // full precision: no rounding until quantize
+    static const int NTAP   = 32;
+    static const int SAMP_W = 16;
+}
+```
+
+Two jobs. `acc_t` is the accumulator format, obtained by *running* the format algebra at build time —
+see [Fixed point](./fixedpoint.md#getting-the-derived-format-into-the-c). And `fir_au` aliases the
+array-utils namespace, which is named after the *specialized element* (`Fixed16_2` →
+`fixed16_2_array_utils`) and therefore moves whenever the width does. Aliasing it to a stable name is
+what lets the hand-written bodies call `fir_au::read_framed_stream_lane` without being regenerated per
+configuration.
+
+{: .note }
+> The element type carries `include_dir=INCLUDE_DIR` in its `specialize(...)`. Without it the
+> generated array-utils header lands at the example root and csynth cannot find it — the TCL puts only
+> `-Iinclude` on the command line.
+
+## The TCL, and what csynth needs
+
+`render_tcl` emits `fir_block.tcl` with the concrete width baked in, so the cflags carry only the
+include path:
+
+```tcl
+set cf "-Iinclude"
+open_project -reset fir_block_proj
+set_top fir_block
+add_files gen/fir_block.cpp -cflags $cf
+```
+
+There are no `extra_sources`: both hand-written bodies are self-contained headers, so the single
+translation unit `gen/fir_block.cpp` pulls in everything. (A *generated* body whose `@synthesizable`
+hooks live in their own `.cpp` would need each added here.)
+
+```bash
+python -m examples.fir_block.fir_block_build --through csynth
+```
+
+That step also re-emits `xsi/rtl_fir_block.f` from the RTL that was just built, so the file list can
+never name a stale design — the failure mode being a `.f` that no longer matches plus a cached
+`xsimk.dll`, which makes an XSI run go green while proving nothing.
+
+## Where to next
+
+- [RTL simulation](./rtlsim.md) — driving this top through `xsim` and checking it against the golden.
+- [Parameter sweep](./sweep.md) — rebuilding it across widths and both realizations.

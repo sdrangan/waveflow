@@ -10,7 +10,7 @@
 // ONE read for BOTH opcodes, deliberately: LOAD_TAPS fetches n coefficients and FILTER fetches an
 // n-sample block, so the framing is opcode-independent and the no-output opcode needs no special path.
 // That uniformity is what keeps the LOAD_TAPS job from being the odd one out in the token flow -- see
-// fir_compute_task.h, where the write side stays uniform too.
+// the fir_compute bodies, where the write side stays uniform too.
 //
 // Single-firing (the hls::task runtime re-fires per command); touches only streams.  Its pysim twin is
 // FirCmdRx.run_iter (examples/fir_block/fir_block.py).
