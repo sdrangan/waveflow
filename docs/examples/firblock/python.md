@@ -31,7 +31,7 @@ The rest of the flow, in order:
 | `codegen_tb` | the XSI BFM harness, its main, and the scenario bundles | — |
 | `csynth` | Vitis HLS C-synthesis; also re-emits `rtl_fir_block.f` | Vitis |
 
-The parameters are CLI flags, which is also how the [sweep](./sweep.md) drives it:
+The parameters are CLI flags, which is also the handle a parameter sweep drives:
 
 ```bash
 python -m examples.fir_block.fir_block_build --through csynth --samp-w 8 --ntap 32

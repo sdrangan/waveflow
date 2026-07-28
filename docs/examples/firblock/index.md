@@ -50,7 +50,7 @@ In going through this example, you will learn to:
 
 - Give a hardware module **memory between firings** with
   [`add_state`](../../guide/memory/hwstate.md) — both *load-once, held* state and *per-firing carry*
-  state, add add **declared reset path** 
+  state, and add a **declared reset path**
 - Perform a common **DSP calculation in fixed point** with one declared format, leveraging the
   [format algebra](../../guide/schema/python/fixpoint.md) to *derive* the full-precision accumulators, adding lossy steps where necessary.
 - **Hand-write kernel task bodies with different unrolling structures** — one output per iteration
@@ -84,4 +84,6 @@ The pages build the design up from Python, parallel to [`interleaver`](../interl
   storage declarations generated straight from `add_state`.
 - [RTL simulation](./rtlsim.md) — the generated BFM harness, the run, and bit-exactness for *both*
   realizations against one golden.
-- [Parameter sweep](./sweep.md) — resources and throughput against sample width, for both kernels.
+- **Parameter sweep** *(forthcoming)* — resources and throughput against sample width, for
+  both kernels. The measurements exist (see [The two kernels](./kernels.md)); the sweep
+  *driver* and its page are being built separately.

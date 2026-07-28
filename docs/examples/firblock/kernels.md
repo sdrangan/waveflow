@@ -189,7 +189,7 @@ changes.
 
 ## What each one costs
 
-Measured at `T = 32`, `MEM_DW = 32`, xc7z020 — the full story is in [Parameter sweep](./sweep.md):
+Measured at `T = 32`, `MEM_DW = 32`, xc7z020:
 
 | `W` | LW | serial DSP | unroll DSP | serial loop | unroll loop |
 |---|---|---|---|---|---|
@@ -202,4 +202,4 @@ At `LW = 1` the two converge to the same design, which is a useful sanity check 
 ## Where to next
 
 - [DUT codegen](./codegen_dut.md) — how `unroll_lane` selects a body, and where the storage comes from.
-- [Parameter sweep](./sweep.md) — the full resource and throughput curves.
+- **Parameter sweep** *(forthcoming)* — the full resource and throughput curves.
