@@ -88,6 +88,8 @@ python simp_fun_build.py --through validate_timing   # or --through py_sim with 
 
 ## How to read this flow
 
+- **[Writing it in Python](./sequential_python.md)** — how to describe the module: the register
+  map, `on_start`, and the `@synthesizable` hook, on the scalar `simp_fun`.
 - The **[flow steps](./sequential_flowsteps.md)** page is the recipe at a glance — the build steps
   from Python to a verified measurement, with a diagram.
 - The **[register-map example](../../examples/regmap/)** is the full worked walkthrough on `simp_fun`

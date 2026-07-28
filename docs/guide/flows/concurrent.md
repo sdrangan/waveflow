@@ -46,6 +46,8 @@ stages should run concurrently — anything that benefits from pipelining rather
 
 ## How to read this flow
 
+- **[Writing it in Python](./concurrent_python.md)** — how to describe the module: a leaf's
+  `run_iter` (one firing) versus a composite's graph, and carrying state across firings.
 - The **[flow steps](./concurrent_flowsteps.md)** page is the recipe — from the component graph to a
   generated top, generated XSI harness, and an exact cycle-count check.
 - The **[mem_copy example](../../examples/memcpy/)** is the full worked walkthrough: the composite
