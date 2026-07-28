@@ -7,7 +7,7 @@ summary: "MemoryMod is a SimObj that wraps a Memory and exposes AXI-MM endpoints
 
 # `MemoryMod` — storage across a bus
 
-`MemoryMod` is the far side of the kernel boundary. It wraps a [`Memory`](./python.md), makes it a
+`MemoryMod` is the far side of the kernel boundary. It wraps a `Memory` (see below), makes it a
 `SimObj`, and gives it AXI-MM endpoints — so storage the kernel *reaches out to* becomes a real
 participant in the discrete-event simulation, with latency, contention, and transactions.
 
@@ -77,6 +77,29 @@ mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
 mem.dump_segs = [MemSeg(0, nwords_tot, "vectors/out")]
 ```
 
+## The store underneath
+
+`MemoryMod` wraps a `Memory`: a **sparse** word store where only the regions you allocate exist,
+each backed by a NumPy array. Its surface is small, and word-typed rather than byte-typed —
+addresses follow the `addr_unit` convention ([`MemMgr`](./memmgr.md)), but counts are always words.
+
+```python
+addr = mem.alloc(nwords)              # first-fit; returns an address in addr_unit terms
+mem.free(addr)                        # whole segments only — the start address, not an offset
+words = mem._mem.read(nwords, addr)   # the raw word view
+```
+
+`read` and `write` raise if the range runs past the end of the allocated segment, so a wrong count
+fails at the call rather than silently reading a neighbouring region. Use `get_nwords` to compute
+the count for a typed array rather than deriving it by hand.
+
+For moving *typed arrays* rather than raw words — packing a `float32` array into `ap_uint<W>` words
+and back — use the array serialization helpers, which are the same routines the HLS side generates.
+See [Array serialization & deserialization](../vectorization/hls/arrayutils.md).
+
+`Memory` is usable on its own when you want a store and no simulation; `MemoryMod` is what adds the
+ports, the latency, and the lifecycle.
+
 ## Contention is modelled where it belongs
 
 Two masters on one memory serialize, and that is the interconnect's job, not the memory's — an
@@ -91,5 +114,5 @@ is not a prediction of the other.
   [`HwState`](./hwstate.md).
 - **Not the allocator.** Its `alloc` / `free` forward to the wrapped `Memory`, which delegates
   placement to a [`MemMgr`](./memmgr.md). One policy, one implementation.
-- **Not the bytes.** That is [`Memory`](./python.md), which a `MemoryMod` wraps and which is
-  perfectly usable on its own when you only need a store and no simulation.
+- **Not the bytes.** That is `Memory`, which a `MemoryMod` wraps and which is perfectly usable on
+  its own when you only need a store and no simulation.

@@ -1,7 +1,7 @@
 ---
 title: Streaming Memory Kernels
 parent: Memory Modeling
-nav_order: 6
+nav_order: 4
 has_children: false
 ---
 
@@ -52,7 +52,7 @@ class MRCmd(ParamSchema):
 relative to a buffer base set once with `bind_base()` (mirroring the `offset=slave` AXI register). Every
 command afterward is base-relative and unit-agnostic, and because `m_mem` is already a word pointer in
 the generated C++, no byte↔word conversion happens in the kernel — unlike a byte-addressed `m_axi` port
-(see the [Vitis page](./vitis.md)).
+(see [Endpoint interfaces](../comp_codegen/interface.md)).
 
 **Example.**
 

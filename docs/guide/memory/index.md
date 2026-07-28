@@ -17,7 +17,7 @@ any piece of memory in a design: *where does it live, and who is responsible for
 | [`MemMgr`](./memmgr.md) | allocation + address arithmetic, **no bytes** | no | n/a — it is policy | n/a |
 | [`MemoryMod`](./memorymod.md) | storage **across a bus** | yes — access latency | no; the *interface to it* is | transactional (AXI-MM) |
 
-Underneath the last two sits [`Memory`](./python.md), the sparse byte container. It is a plain Python
+Underneath the last two sits `Memory`, the sparse byte container. It is a plain Python
 object, not a `SimObj` — the same category as `DataSchema` or `Region`. That is deliberate rather
 than an oversight: in Waveflow *`SimObj` means "participates in the discrete-event simulation"*, and
 a bag of bytes does not. `MemoryMod` is what makes a `Memory` a participant.
@@ -57,10 +57,14 @@ The name is shared with the C++ side on purpose: the generated testbench uses `M
 
 - [`HwState`](./hwstate.md) — storage inside a module: declaring it, what it emits, partitioning.
 - [`MemMgr`](./memmgr.md) — allocation and addressing, including the byte-vs-word convention.
-- [`MemoryMod`](./memorymod.md) — the transactional, timed memory and its latency model.
-- [Using `Memory` in Python](./python.md) — the byte store itself: `alloc`, `read`, `write`.
-- [Memory Interfaces in Vitis HLS](./vitis.md) — how a memory maps to `m_axi` and local arrays.
+- [`MemoryMod`](./memorymod.md) — the transactional, timed memory, its latency model, and the
+  `Memory` store underneath it.
 - [Streaming Memory Kernels](./memstream.md) — `MemRStream` / `MemWStream` / `MemCopy`.
+
+Two neighbouring topics live outside this section on purpose, because they are not about storage:
+how an endpoint becomes an HLS port (`m_axi`, `axis`, `s_axilite`) is
+[Endpoint interfaces](../comp_codegen/interface.md), and packing typed arrays into words is
+[Array serialization](../vectorization/hls/arrayutils.md).
 
 Runnable toys for the three objects live in
 [`examples/memory/`](https://github.com/sdrangan/pysilicon/tree/main/examples/memory) and are

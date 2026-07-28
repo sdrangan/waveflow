@@ -95,12 +95,13 @@ The name is shared on purpose. The generated Vitis testbench uses `MemMgr<word_d
 `memmgr_tb.hpp`, and kernels use `memmgr::byte_addr_to_word_index<mem_dwidth>` for the same byte→word
 conversion. Because both sides implement the same first-fit rule, addresses computed in Python are
 valid in the C++ testbench — which is what lets a Python model and an HLS kernel agree on a layout
-without either restating it. See the [Vitis page](./vitis.md).
+without either restating it. How an `m_axi` port itself is emitted is
+[Endpoint interfaces](../comp_codegen/interface.md).
 
 ## What it is not
 
 - **Not storage.** It has no `segments`, no arrays, no bytes. If you want to hold data, you want
-  [`Memory`](./python.md) or [`MemoryMod`](./memorymod.md).
+  [`MemoryMod`](./memorymod.md) (or the `Memory` it wraps).
 - **Not timed.** Allocation is elaboration-time bookkeeping, not a simulated transaction.
 - **Not a hardware object.** Nothing is emitted for it. It is the model of whoever decided the
   layout, which in a real system is software.
