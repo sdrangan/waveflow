@@ -1,7 +1,7 @@
 ---
 title: Free-running kernel in HLS
 parent: Module Code Generation
-nav_order: 3
+nav_order: 4
 audience: hls
 api: [composite_top_spec, render_top, task_files_to_str, KernelTask]
 summary: "How a FreeRunMod is realized as an ap_ctrl_none hls::task top: composite_top_spec walks the module/interface graph into a TopSpec, render_top emits the top (interface pragmas, hls_thread_local channels, one hls::task per child), and task_files_to_str lowers a leaf's run_iter into a templated task body carrying its HwState statics. One target, composite_kernel, covers a leaf and a composite alike — a leaf is the 1-task degenerate case."

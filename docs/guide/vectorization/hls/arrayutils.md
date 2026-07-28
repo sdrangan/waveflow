@@ -90,7 +90,7 @@ call for the channel:** `au::read_stream_lane` (plain FIFO) or `au::read_framed_
 
 ## The three framings — all three now covered
 
-Waveflow has **three** stream framings (see [streamutils](../../comp_codegen/composite.md)); the array-utils
+Waveflow has **three** stream framings (see [streamutils](../../comp_codegen/freerunning.md)); the array-utils
 generate a lane routine for each:
 
 | Framing | Type | Array routine |

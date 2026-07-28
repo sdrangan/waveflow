@@ -1,7 +1,7 @@
 ---
 title: Templating
 parent: Module Code Generation
-nav_order: 8
+nav_order: 10
 audience: hls
 applies_to: [HwParam, HwConst]
 api: [HwParamValue, kernel_signature, param_supports, validate_param_supports, HlsCodegenStep]
