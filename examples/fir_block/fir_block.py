@@ -64,7 +64,7 @@ from waveflow.hw.hw_module import HwParam
 from waveflow.hw.hw_state import HwState
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemRStream, MemWCmd, MemWStream
-from waveflow.hw.synth import synthesizable
+from waveflow.hw.synth import sim_only, synthesizable
 from waveflow.simulation.simobj import ProcessGen
 
 HERE = Path(__file__).resolve().parent
@@ -127,7 +127,10 @@ class FirDesc(DataList):
 
 #: Schema classes the gen-include step emits C++ headers for.  ``FirCmd`` is the PLAIN boundary
 #: command; the rest ride framed edges, so their headers also need the ``framed_word`` accessors.
-SCHEMA_CLASSES = [FirCmd, FirDesc, MemRCmd, MemWCmd]
+#: ``FirOpField`` is listed in its own right (poly's ``PolyCmdTypeField`` precedent): the opcode has to
+#: reach C++ as a real ``enum``, which is what lets the task body dispatch on ``FirOp::LOAD_TAPS``
+#: rather than on a bare integer that nothing checks.
+SCHEMA_CLASSES = [FirOpField, FirCmd, FirDesc, MemRCmd, MemWCmd]
 FRAMED_SCHEMAS = frozenset({FirDesc, MemRCmd, MemWCmd})
 
 
@@ -203,19 +206,32 @@ class FirCmdRx(FreeRunMod):
         self.fire_log: list[tuple[float, float]] = []
 
     def kernel_task(self) -> KernelTask:
+        """Overridden because this body is **hand-written** (``fir_cmd_rx_task.h``), like every other
+        in-band framer in the tree: constructing descriptors and driving a ``framed_word`` channel is
+        not in the extractor's vocabulary, so nothing can derive the name or the parameter order.
+        ``run_iter`` below stays as the pysim golden.  See ``guide/comp_codegen/freerunning_override``."""
         return KernelTask("fir_cmd_rx_task", "fir_cmd_rx_task.h", ("s_cmd", "cmd_out"),
                           template_args=(int(self.mem_dwidth),))
+
+    @sim_only
+    def _mark_start(self) -> None:
+        """Instrumentation only — a firing's start cycle, for the activity timeline."""
+        self._t0 = self.now
+
+    @sim_only
+    def _log_firing(self) -> None:
+        self.fire_log.append((self._t0 / self.clk.period, self.now / self.clk.period))
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
         cmd = yield from self.s_cmd.get(FirCmd)
-        t0 = self.now
+        self._mark_start()
         desc = FirDesc(op=int(cmd.op), n=int(cmd.n), dst_off=int(cmd.dst_off),
                        zero_state=int(cmd.zero_state), tx_id=int(cmd.tx_id))
         memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n), fwd_bursts=1)
         yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
-        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
+        self._log_firing()
 
 
 # --- the stateful compute ---------------------------------------------------------------------
@@ -288,15 +304,37 @@ class FirCompute(FreeRunMod):
         return model
 
     def kernel_task(self) -> KernelTask:
+        """Hand-written body (``fir_compute_task.h``) — see :meth:`FirCmdRx.kernel_task`.
+
+        Note what is *not* hand-written: the ``static`` storage itself.  The body ``#include``s
+        ``fir_compute_state.inc``, which :func:`~waveflow.build.hwgen.state_decls_to_cpp` emits from
+        the very ``add_state`` registrations above — declarations, extents, element type, and the
+        ``ARRAY_PARTITION`` pragma all single-sourced from Python.  So the storage cannot drift from
+        the pysim twin even though the arithmetic around it is written by hand."""
         return KernelTask("fir_compute_task", "fir_compute_task.h", ("s_in", "cmd_out"),
-                          template_args=(int(self.mem_dwidth), int(self.ntap)))
+                          template_args=(int(self.mem_dwidth),))
+
+    @sim_only
+    def _mark_start(self) -> None:
+        self._t0 = self.now
+
+    @sim_only
+    def _compute_delay(self, n: int) -> float:
+        """The fitted loop model's cost for an ``n``-sample block — a pysim latency model with no
+        hardware meaning (the RTL's cost is whatever the emitted loop schedules to)."""
+        return max(0.0, float(self.timing.predict({"n": int(n)}))) * self.clk.period
+
+    @sim_only
+    def _log_firing(self) -> None:
+        self.job_span_cyc.append((self.now - self._t0) / self.clk.period)
+        self.fire_log.append((self._t0 / self.clk.period, self.now / self.clk.period))
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
         desc = yield from self.s_in.get(FirDesc)
         n = int(desc.n)
         data = yield from self.s_in.get(nwords_max=n)
-        t0 = self.now
+        self._mark_start()
 
         if int(desc.op) == FirOp.LOAD_TAPS:
             self.load_taps(np.asarray(data), self.taps)
@@ -307,15 +345,13 @@ class FirCompute(FreeRunMod):
             yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         else:
             y = self.filter_block(np.asarray(data), self.taps, self.carry, int(desc.zero_state))
-            cycles = float(self.timing.predict({"n": n}))
-            yield self.timeout(max(0.0, cycles) * self.clk.period)
+            yield self.timeout(self._compute_delay(n))
             memw = MemWCmd(addr=int(desc.dst_off), len=n, fwd_bursts=1)
             yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
             yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
             yield from self.cmd_out.write(np.asarray(y, dtype=np.uint64))
 
-        self.job_span_cyc.append((self.now - t0) / self.clk.period)
-        self.fire_log.append((t0 / self.clk.period, self.now / self.clk.period))
+        self._log_firing()
 
     # --- the synthesizable bodies -------------------------------------------------------------
 
