@@ -102,11 +102,13 @@ or that it is correct at all. That is what the example's C-simulation and co-sim
 
 ## In this section
 
-The section is organized by **what is realized**: a host-activated module
-([Module structure](./structure.md)), a free-running one
-([Free-running kernel in HLS](./composite.md)), and the two testbench targets
-([Testbench](./testbench.md), [XSI testbench](./xsi_tb.md)). How to *describe* either module in
-Python is the previous section, [Hardware modules and Flows](../flows/).
+The section is **one page per target, then the shared mechanism**.
+[Module structure](./structure.md) is the frame all four share; then
+[host-activated](./hostactivated.md), [free-running](./freerunning.md) (and its [composite](./freerunning_composite.md) form),
+[sequential testbench](./testbench.md), and [XSI testbench](./xsi_tb.md) are how each is realized.
+The pages after those — interfaces, extractor, generated files, templating — are the machinery they
+have in common. How to *describe* a module in Python is the previous section,
+[Hardware modules and Flows](../flows/).
 
 **Start with [Automatic vs. manual](./automatic.md)** — where the generator stops and you begin — then
 [Module structure](./structure.md) for how a module becomes a kernel, and
@@ -115,13 +117,16 @@ module. The rest is reference: reach for it when you look inside the generated C
 means when you write a [hook](../custom_hooks/).
 
 - [Automatic vs. manual](./automatic.md) — what codegen writes and what you write: everything structural is generated; the compute inside a `@synthesizable` hook is yours.
-- [Module structure](./structure.md) — how an `HwModule` becomes a Vitis HLS top-level function: the kernel entry, the execution model, where hooks come from, and the **contract** for when a module lowers at all.
+- [Module structure](./structure.md) — the frame all four targets share: one top-level function per module, which method is extracted for which kind, entry-is-extracted vs hook-is-not, and the **contract** for when a module lowers at all.
+- [Host-activated kernel in HLS](./hostactivated.md) — the `control_driven_kernel`: `ap_ctrl_hs`, the `s_axilite` register block, and `on_start` as the body.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
-- [Free-running kernel in HLS](./composite.md) — how a `FreeRunMod` becomes an `ap_ctrl_none` `hls::task` top plus a generated task body: the graph-derived top, `KernelTask`, and where `HwState` statics land.
+- [Free-running kernel in HLS](./freerunning.md) — the `composite_kernel`, 1-task case: the task body that is one firing, the `ap_ctrl_none` top, and `KernelTask`.
+- [Overriding the generated task](./freerunning_override.md) — handing over a hand-written task body with `KernelTask`, for an `m_axi` owner or anything outside the extractor's vocabulary.
+- [Free-running composite in HLS](./freerunning_composite.md) — the same target with several tasks: internal channels from `add_if`, tasks from `add_comp`, and the boundary derived from what was left unbound.
 - [Extractor](./extractor.md) — the synthesizable subset: what the rules are, why each exists, and `check` as their callable form.
-- [Codegen](./codegen.md) — how `kernel_files_to_str` emits the deterministic kernel file set and resolves naming.
+- [Generated files](./codegen.md) — the two file lifecycles (framework-owned `gen/` vs sticky hook impls), `.cpp` vs `.tpp` routing, and naming.
 - [Templating](./templating.md) — the C++ realization of [parameterization](../flows/parametrization.md): how `HwParam` lowers (concrete widths / `.tpp` template params), `HwConst` (deferred), and how `param_supports` emits variant kernels.
-- [Testbench](./testbench.md) — how a [`SeqTB`](../flows/modules.md)'s `main()` lowers to a `sequential_vitis_tb`.
+- [Sequential testbench](./testbench.md) — how a [`SeqTB`](../flows/modules.md)'s `main()` lowers to a `sequential_vitis_tb`.
 - [XSI testbench in HLS](./xsi_tb.md) — how a testbench *graph* lowers to a `sequential_xsi_tb`: participants map to pre-written BFM models, and the scenario lives in burst bundles rather than in the C++.
 
 ## See also

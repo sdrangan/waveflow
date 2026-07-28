@@ -103,6 +103,11 @@ def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     children do), so both the DUT and the participants answer False. The discriminator is
     `boundary` (RTL ports) vs `bfm_model()` (a TB model)."""
     tb = _tb()
-    assert not hasattr(tb.dut, "kernel_task"), "if this ever gains one, re-check _find_dut"
+    # Every FreeRunMod now HAS a kernel_task (the base derives one for a leaf), so presence cannot
+    # be the discriminator — the canary that used to assert its absence has fired and been checked.
+    # What still holds, and is what _find_dut actually keys on:
+    with pytest.raises(TypeError, match="composite"):
+        tb.dut.kernel_task()            # a composite has no task of its own
+    assert hasattr(tb.dut, "boundary")  # ...but it does have RTL ports
     assert hasattr(tb.dut, "boundary") and not hasattr(tb.dut, "bfm_model")
     assert hasattr(tb.driver, "bfm_model") and not hasattr(tb.driver, "boundary")

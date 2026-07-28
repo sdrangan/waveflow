@@ -113,6 +113,6 @@ that is waiting. If an opcode produces no output, forward something anyway.
 ## Next
 
 - [Flow steps](./concurrent_flowsteps.md) — from the graph to a generated top and an RTL check.
-- [How it is realized in HLS](../comp_codegen/composite.md) — the `ap_ctrl_none` top and the task
+- [How it is realized in HLS](../comp_codegen/freerunning.md) — the `ap_ctrl_none` top and the task
   body — and [the XSI testbench](../comp_codegen/xsi_tb.md) that drives it.
 - [mem_copy example](../../examples/memcpy/) — a full composite, worked end to end.

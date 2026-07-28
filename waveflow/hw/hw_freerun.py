@@ -223,6 +223,30 @@ class FreeRunMod(HwModule):
                 self._pending_firing["end"] = self.now
                 self.firing_records.append(self._pending_firing)
 
+    def kernel_task(self):
+        """The ``hls::task`` body descriptor: its C++ name, header, argument order, and template args.
+
+        **Derived by default.**  For a leaf whose body the framework generates, every field follows
+        from the module itself, and the default computes them with the same helpers that emit the
+        body — so the two cannot drift.  A generated leaf therefore declares nothing.
+
+        **Override it to hand over a body you wrote.**  Nothing can derive the function name, the
+        header, or above all the *parameter order* that someone else chose for a hand-written task —
+        ``mem_r_stream_framed_task`` takes ``(stream, m_axi, stream)``, an order that is a fact about
+        the C++ and not about the Python.  A module in that position overrides this and leaves
+        ``run_iter`` as its pysim golden.  See ``docs/guide/comp_codegen/freerunning_override.md``.
+
+        Overriding is detected by identity against this base method, the same way :meth:`_kind`
+        detects a ``run_iter`` override.
+        """
+        if self._kind() == 'composite':
+            raise TypeError(
+                f"{type(self).__name__} is a composite; it has no task of its own — its children "
+                f"each have one. A composite's codegen is the sub-component graph."
+            )
+        from waveflow.build.hwgen import derive_kernel_task
+        return derive_kernel_task(self)
+
     def run_iter(self) -> ProcessGen[None]:
         """One firing of the free-running loop — the ``hls::task`` body.  **Override this for a leaf.**
         The default is the not-overridden sentinel: a composite leaves it be (its children do the

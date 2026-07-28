@@ -257,5 +257,5 @@ in Python.
 ## See also
 
 - [Stream Interfaces](./stream.md) — the one-channel FIFO this contrasts with.
-- [Free-running kernel in HLS](../comp_codegen/composite.md) — how a SOB edge lowers, the lock scopes, and the gather/scatter throughput asymmetry.
+- [Free-running kernel in HLS](../comp_codegen/freerunning.md) — how a SOB edge lowers, the lock scopes, and the gather/scatter throughput asymmetry.
 - [Defining a component](../flows/modules.md) — where SOB endpoints are declared on components.

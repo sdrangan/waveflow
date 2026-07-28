@@ -96,7 +96,7 @@ python simp_fun_build.py --through validate_timing   # or --through py_sim with 
   (`y = relu(a·x + b)`): the Python model, the register map, the Python simulation, the generated HLS
   kernel and testbench, and C-sim / RTL co-simulation — every step with its real code.
 - **[Parameterization](./parametrization.md)** — how `HwParam` fields become C++ template parameters.
-- **[How it is realized in HLS](../comp_codegen/structure.md)** — the generated kernel: the top-level
-  function, the `ap_ctrl_hs` handshake, and the `s_axilite` register map.
+- **[How it is realized in HLS](../comp_codegen/hostactivated.md)** — the generated kernel: the
+  top-level function, the `ap_ctrl_hs` handshake, and the `s_axilite` register map.
 
 **Targets:** `control_driven_kernel` (the DUT) + `sequential_vitis_tb` (the testbench) — both built.

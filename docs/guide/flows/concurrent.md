@@ -55,7 +55,7 @@ stages should run concurrently — anything that benefits from pipelining rather
   testbench, and the RTL/XSI verification.
 - The framework memory streamers it is built from are the
   [Streaming Memory Kernels](../memory/memstream.md) page.
-- **[How it is realized in HLS](../comp_codegen/composite.md)** — the generated `ap_ctrl_none` top,
+- **[How it is realized in HLS](../comp_codegen/freerunning.md)** — the generated `ap_ctrl_none` top,
   the task bodies, and [the XSI testbench](../comp_codegen/xsi_tb.md).
 
 The XSI gates are **exact cycle counts**, not bounds: a count that moves is either a real regression

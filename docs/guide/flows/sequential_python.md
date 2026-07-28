@@ -97,6 +97,6 @@ bit-exactly.
 ## Next
 
 - [Flow steps](./sequential_flowsteps.md) — the build recipe from here to a verified measurement.
-- [How it is realized in HLS](../comp_codegen/structure.md) — the generated top, `ap_ctrl_hs`, and
-  the `s_axilite` register ports.
+- [How it is realized in HLS](../comp_codegen/hostactivated.md) — the generated top, `ap_ctrl_hs`,
+  and the `s_axilite` register ports.
 - [Register Map example](../../examples/regmap/) — this module, one page per step, against real code.

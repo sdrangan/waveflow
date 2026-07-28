@@ -1,7 +1,7 @@
 ---
 title: Endpoint interfaces
 parent: Module Code Generation
-nav_order: 2
+nav_order: 9
 audience: hls
 applies_to: [HwModule]
 api: [kernel_signature, StreamIF, MMIFMaster, VitisRegMapMMIFSlave]
@@ -69,7 +69,7 @@ void simp_fun(
 The `ap_start` / `ap_done` control bits are not emitted as data ports; they are the
 **control protocol**. When a regmap drives the component, the kernel's `return` port also binds
 `s_axilite ... bundle=control`, giving the host the `ap_start`/`ap_done` handshake that launches the
-[regmap-launched](./structure.md) `on_start` body.
+[regmap-launched](./hostactivated.md) `on_start` body.
 
 ## m_axi master → `m_axi` pointer
 

@@ -2316,6 +2316,36 @@ def _array_utils_stem(elem_type) -> str:
     return _stem(elem_type)
 
 
+def derive_kernel_task(comp):
+    """Derive a :class:`KernelTask` for a leaf whose body this module GENERATES.
+
+    Every field is something the generator already knows, and it is computed here from the *same*
+    helpers :func:`task_files_to_str` uses to emit the body — so the descriptor and the body cannot
+    disagree about the function's name, its header, or its argument order.  That is the point: when a
+    module states them by hand, nothing cross-checks the two, and a typo surfaces as a csynth error
+    about a missing function.
+
+    A module that hands over a **hand-written** body overrides
+    :meth:`~waveflow.hw.hw_freerun.FreeRunMod.kernel_task` instead; nothing here can know the name or
+    parameter order someone else chose.
+    """
+    from waveflow.hw.mem_stream import KernelTask
+    from waveflow.hw.hw_module import SynthContext
+
+    kn = cpp_kernel_name(type(comp))
+    task = f"{kn}_task"
+    # Same walk, same order, as the emitted signature's parameter list.
+    signature = tuple(attr for attr, _ep in _discover_stream_endpoints(comp))
+    synth_ctx = SynthContext.from_component(comp)
+    ctx = CodegenCtx(comp=comp, params=synth_ctx.params, indent=1, stream_flavor='word')
+    py_of_cpp = {cpp: py for py, cpp in ctx.params.items()}
+    template_args = tuple(
+        int(getattr(comp, py_of_cpp[c])) for c in task_template_params(comp, ctx)
+        if c in py_of_cpp
+    )
+    return KernelTask(task, f"{task}.h", signature, template_args=template_args)
+
+
 def task_files_to_str(comp_class, task_name: str | None = None) -> dict[str, str]:
     """Emit a composite **task body** for *comp_class* — the ``mem_seq_task.h`` product.
 

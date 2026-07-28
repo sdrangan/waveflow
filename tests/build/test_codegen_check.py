@@ -36,6 +36,7 @@ from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
+from waveflow.simulation.simulation import Simulation
 
 from examples.block_scale.block_scale import BlockScaleTBHls
 from examples.regmap.simp_fun import SimpFun, SimpFunTBHls
@@ -250,25 +251,46 @@ def test_flow2_targets_are_now_implemented():
     assert check(MemCopyTB, SEQUENTIAL_XSI_TB) == (True, None)       # its XSI testbench
 
 
-def test_check_runs_the_real_generator_and_an_unwired_toy_still_cannot_lower():
-    """`kernel_files_to_str(Square)` SUCCEEDS, but `check(Square, "composite_kernel")` does NOT pass —
-    the point of the check family, updated for the collapse.
+def test_a_leaf_needs_no_kernel_task_to_lower():
+    """A leaf that declares `composite_kernel` and writes only `run_iter` now lowers.
 
-    `generate` does not answer check's question: handed the `Square` toy it silently emits an
-    `ap_ctrl_hs` top with an unextracted hook body — *a different target than the one declared* — with
-    no exception (pinned in detail by test_toy.py::test_square_codegen_is_not_yet_a_free_running_task).
+    This used to be the "unwired leaf" case: `kernel_task()` was required, so a leaf without one
+    raised `AttributeError` out of the graph walk.  It is derived now — from the same helpers that
+    emit the body, so the descriptor and the body cannot disagree — and the whole failure class is
+    gone.  Overriding it is for handing over a body the framework did not write."""
+    from dataclasses import dataclass
 
-    Now that `composite_kernel` is implemented, gate 4 runs the REAL generator (`composite_top_spec`)
-    for it. `Square` declares the target but never wired the leaf machinery (no `kernel_task`), so the
-    walk fails. INTERIM: the graph walk has no verdict exception yet, so this surfaces as a raised
-    `AttributeError` rather than a clean `(False, msg)` — the exception-taxonomy follow-up in
-    plans/one_component_two_flows.md is what turns it into a verdict. When it lands, this assertion
-    changes from `pytest.raises` to `(False, ...)`, and both tests move together."""
+    from waveflow.hw.hw_freerun import FreeRunMod
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+
+    @dataclass
+    class PlainLeaf(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "plain_leaf"
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.x_in = StreamIFSlave(name=f"{self.name}_x", sim=self.sim, bitwidth=32)
+            self.y_out = StreamIFMaster(name=f"{self.name}_y", sim=self.sim, bitwidth=32)
+            self.add_endpoint(self.x_in)
+            self.add_endpoint(self.y_out)
+
+        def run_iter(self):
+            words = yield from self.x_in.get()
+            yield from self.y_out.write(words)
+
+    kt = PlainLeaf(name="p", sim=Simulation()).kernel_task()
+    assert (kt.task_fn, kt.header) == ("plain_leaf_task", "plain_leaf_task.h")
+    assert kt.signature == ("x_in", "y_out")     # declaration order == task argument order
+
+
+def test_generate_does_not_answer_checks_question():
+    """`kernel_files_to_str` succeeds on a leaf whose declared target it is not emitting — silently.
+
+    That asymmetry is the reason the check family exists: generate produces *something* for the
+    wrong target without complaint, so "did it raise?" is not a substitute for asking."""
     from waveflow.build.hwgen import kernel_files_to_str
 
-    assert kernel_files_to_str(Square)                       # generate: fine (wrong target, silently)
-    with pytest.raises(AttributeError, match="kernel_task"):  # check: runs the real generator, fails
-        check(Square, COMPOSITE_KERNEL)
+    assert kernel_files_to_str(Square)
 
 
 # ==============================================================================================

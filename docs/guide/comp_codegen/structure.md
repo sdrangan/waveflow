@@ -1,14 +1,13 @@
- 
-
 ---
 title: Module structure
 parent: Module Code Generation
-nav_order: 1
+nav_order: 2
 audience: hls
 applies_to: [HwModule]
 api: [kernel_files_to_str, cpp_kernel_name, extract_kernel, synthesizable, check]
-summary: "How an HwModule becomes a kernel: a standalone component generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, standalone FreeRunMod -> run_iter, composite FreeRunMod -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
+summary: "The frame shared by all four targets: every generating HwModule produces ONE top-level function whose arguments are its endpoints, which method is extracted follows from the module's kind, the entry IS extracted while @synthesizable hooks are NOT, and a module lowers iff it is structurally flat and its body passes the extractor. The per-target realizations are the four pages that follow."
 ---
+
 # Module structure
 
 ## Concept
@@ -23,51 +22,40 @@ becomes a port (`hls::stream` / `m_axi` / `s_axilite`) is [Endpoint interfaces](
 The function name defaults to the class name in `snake_case` with a trailing `_component` stripped
 (`PolyAccel → poly_accel`), overridable with `cpp_kernel_name: ClassVar[str] = "..."`.
 
-## Who starts the kernel: `ap_ctrl_hs` vs `ap_ctrl_none`
+## The four targets
 
-A kernel needs an answer to one question — **who starts it?** Vitis calls the answer the kernel's
-*block-level control protocol*, and it is set on the `return` port. Two answers matter here, and the
-terms appear throughout this guide:
+Each *kind* of module declares which code outputs exist for it. All four are built; the per-target
+mechanics are the four pages after this one.
 
-**`ap_ctrl_hs`** — "handshake". Somebody starts it, once per run. The block carries four control
-signals: **`ap_start`** ("go"), **`ap_done`** ("finished"), plus `ap_idle` and `ap_ready`. The caller
-raises `ap_start`, the kernel runs to completion, raises `ap_done`, and stops. **This makes the kernel a
-function**: arguments in, one run, a return. Who raises `ap_start` is a *separate* question —
-[a host over AXI-Lite, or another block on a wire](./interface.md).
+| Target | Kind | Protocol | Page |
+|---|---|---|---|
+| `control_driven_kernel` | `HostActivated` | `ap_ctrl_hs` — the host starts it and waits | [Host-activated kernel](./hostactivated.md) |
+| `composite_kernel` | `FreeRunMod` (leaf *or* composite) | `ap_ctrl_none` — never started, never returns | [Free-running kernel](./freerunning.md) · [composite](./freerunning_composite.md) |
+| `sequential_vitis_tb` | `SeqTB` | an `int main()` Vitis runs | [Sequential testbench](./testbench.md) |
+| `sequential_xsi_tb` | a testbench `FreeRunMod` graph | a cycle-based XSI BFM | [XSI testbench](./xsi_tb.md) |
 
-**`ap_ctrl_none`** — no handshake at all. There is no `ap_start` and no `ap_done`, because the block is
-never started and never finishes: it runs **forever**, consuming its input streams as data arrives and
-stalling when they are empty. Its pace comes from back-pressure, not from a caller.
+The protocol column is the fork everything else follows from. **`ap_ctrl_hs` makes the kernel a
+function** — arguments in, one run, a return — so a testbench can call it and Vitis builds the RTL
+harness. **`ap_ctrl_none` has no handshake at all**: the block runs forever, paced by back-pressure
+rather than by a caller, which is why it cannot be co-simulated and is verified at RTL instead.
 
-The consequence runs through everything else:
-
-|                                        | `ap_ctrl_hs`                                | `ap_ctrl_none`                                                         |
-| -------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
-| Is it a function you can call?         | **yes** — that is what a handshake is  | **no** — it never returns                                         |
-| Can a testbench just call it?          | yes, and Vitis builds the RTL harness for you | no — the RTL must be driven directly ([concurrent (free-running)](../flows/concurrent.md)) |
-| May it carry`m_axi` / `s_axilite`? | yes                                           | **no** — a free-running interface is stream-only                  |
-| Which [flow](../flows/) | [Sequential (host-activated)](../flows/sequential.md) | [Concurrent (free-running)](../flows/concurrent.md) |
-
-> **Everything Waveflow generates today is `ap_ctrl_hs`.** `ap_ctrl_none` is the
-> [`free_running_kernel`](./index.md) target, which is not built — so a `FreeRunMod` currently emits an
-> `ap_ctrl_hs` top despite declaring `control_mode = FREE_RUNNING`. That is a real gap, not a subtlety.
->
-> And note a component whose entry is `run_proc` rather than `on_start` is **not** thereby
-> free-running — it is `ap_ctrl_hs` with its control on raw pins. The two are easy to conflate.
+> A module whose entry is `run_proc` rather than `on_start` is **not** thereby free-running. It is
+> `ap_ctrl_hs` with its control on raw pins (`block_scale` is one). The two are easy to conflate
+> because both extract a non-`on_start` method; the difference is the protocol.
 
 ## Which method becomes the kernel body
 
 The entry follows from the component's **kind**. You never name it; the class states it.
 
-| Kind                                               | Entry extracted                                    | Why                                                                   |
-| -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
-| [`HostActivated`](../flows/modules.md) | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
-| [`FreeRunMod`](../flows/modules.md) (standalone) | `run_iter`                                 | *one firing*; the `while True` belongs to the base, not your code |
-| [`FreeRunMod`](../flows/modules.md) (composite)  | — (see below)                              | its body comes from the graph, not a method                           |
-| plain`HwModule`                               | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                    |
+| Kind                                              | Entry extracted                                    | Why                                                                   |
+| ------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
+| [`HostActivated`](../flows/modules.md)           | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
+| [`FreeRunMod`](../flows/modules.md) (standalone) | `run_iter`                                       | *one firing*; the `while True` belongs to the base, not your code |
+| [`FreeRunMod`](../flows/modules.md) (composite)  | — (see below)                                     | its body comes from the graph, not a method                           |
+| plain`HwModule`                                 | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                     |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
-routes to `main()` instead ([Testbench](./testbench.md)).
+routes to `main()` instead ([Sequential testbench](./testbench.md)).
 
 **A composite still generates a kernel** — the same single top-level function as any other component.
 What differs is only where its *contents* come from: a composite (a
@@ -77,10 +65,8 @@ a method, codegen builds the function from the
 boundary endpoints as its ports. Same output shape, different source.
 
 > **The plain-`HwModule` row is not scaffolding.** It is a real shape: a kernel with no regmap, whose
-> arguments arrive as ports rather than registers, and whose body is `run_proc`. `block_scale` is one.
-> Such a component is `ap_ctrl_hs` on **raw pins** — it is *not* free-running; the two are easy to
-> conflate because both extract a non-`on_start` method. Free-running means `ap_ctrl_none`, which is a
-> [target](./index.md) nothing generates yet.
+> arguments arrive as ports rather than registers, and whose body is `run_proc` — `ap_ctrl_hs` on raw
+> pins, as noted above.
 
 ## Where the kernel body comes from
 

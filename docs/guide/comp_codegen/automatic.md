@@ -1,7 +1,7 @@
 ---
 title: Automatic vs. manual
 parent: Module Code Generation
-nav_order: 0
+nav_order: 1
 audience: hls
 api: [synthesizable]
 summary: "Where the generator stops. Everything structural is automatic — the kernel signature, every interface pragma, the regmap struct, the type lowering, the entry body's shape, the testbench harness. What you write by hand is the compute inside a @synthesizable hook, and nothing else. For simp_fun that is 95 generated lines against six you write. A kernel with no hand-tuned datapath (CmdRx) needs nothing manual at all. Over time more of the compute becomes automatic, including via AI agents."

@@ -1,14 +1,14 @@
 ---
-title: Testbench
+title: Sequential testbench
 parent: Module Code Generation
-nav_order: 6
+nav_order: 7
 audience: hls
 applies_to: [SeqTB]
 api: [SeqTB, HlsCodegenStep, tb_files_to_str]
 summary: "The sequential_vitis_tb target: a SeqTB's main() lowers to a C++ int main() emitted as <kernel>_tb.cpp. Same extractor as a kernel, different rule profile — a testbench may build a DUT, read files, push/pop streams and call dut.run(), which a kernel body may not. The body must be straight-line: spawning a SimPy process is rejected, not future work."
 ---
 
-# Testbench
+# Sequential testbench
 
 A [`SeqTB`](../flows/modules.md) is the **source for the `sequential_vitis_tb`** [target](./index.md): its
 `main()` lowers to a C++ `int main()`, emitted as a single `<kernel>_tb.cpp`. That program is what
