@@ -53,6 +53,7 @@ from waveflow.build.composite_gen import (
 )
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwgen import state_decls_to_cpp
+from waveflow.build.resource_steps import InspectSynthStep
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep, XsiHarnessStep
 from waveflow.hw.arrayutils import _array_utils_namespace, gen_array_utils
 from waveflow.hw.dataschema import DataSchemaStep
@@ -434,13 +435,18 @@ class CSynthStep(BuildStep):
 
     description = "Run Vitis HLS C-synthesis of the generated composite top."
     consumes = ["fir_block_cpp", "run_tcl"]
-    produces = {"report_dir": Path("fir_block_proj/solution1")}
+    produces = {"report_dir": Path("fir_block_proj/solution1"),
+                "synth_seconds": None}
     params = {"live_output": False}
 
     def run(self, config: BuildConfig, live_output, **_) -> dict:
+        import time as _time
+
+        started = _time.perf_counter()
         result = toolchain.run_vitis_hls(config.root_dir / f"{TOP}.tcl",
                                          work_dir=config.root_dir,
                                          capture_output=not live_output)
+        elapsed = _time.perf_counter() - started
         if result.stdout:
             print(result.stdout)
         if result.stderr:
@@ -448,7 +454,12 @@ class CSynthStep(BuildStep):
         xsi = config.root_dir / "xsi"
         xsi.mkdir(parents=True, exist_ok=True)
         (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, config.root_dir), encoding="utf-8")
-        return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
+        # Published as an artifact, not just left in the BuildResult: the *next* step is what records
+        # it, and a resource record's cost_seconds is what later makes "K syntheses sufficed for N
+        # design points" auditable from the library.  It is unrecoverable if not captured when spent.
+        print(f"  csynth took {elapsed:.1f}s")
+        return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1",
+                "synth_seconds": elapsed}
 
 
 def build_fir_block_dag() -> BuildDag:
@@ -458,6 +469,11 @@ def build_fir_block_dag() -> BuildDag:
     dag.add(CodegenDutStep(name="codegen_dut"))
     dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
+    dag.add(InspectSynthStep(
+        name="resources", comp_class=FirBlock, top_name=TOP,
+        elaborate_params=("mem_dwidth", "ntap", "samp_w", "samp_i", "unroll_lane"),
+        params={"mem_dwidth": MEM_DW, "ntap": DEFAULT_NTAP, "samp_w": DEFAULT_SAMP_W,
+                "samp_i": DEFAULT_SAMP_I, "unroll_lane": False}))
     return dag
 
 

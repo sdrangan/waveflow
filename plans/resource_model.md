@@ -1,12 +1,17 @@
 # Plan: the resource model — per-module FPGA resource prediction for DSE
 
-> **Status (2026-07-28): Phase A COMPLETE and gated; B1 next.**
+> **Status (2026-07-28): Phase A COMPLETE and B1 BUILT, all gated; B2 (the sweep) next — needs Vitis.**
 >
 > * A1 — `waveflow/calib/module_key.py` + `tests/calib/test_module_key.py` (18 tests).
 > * A2 — `waveflow/calib/record_store.py` + `tests/calib/test_record_store.py` (25 tests), plus the
 >   `modules/` tier wired into `publish.py` with its own coverage guard (4 tests).
 > * A3 — `waveflow/calib/confidence.py` + `tests/calib/test_confidence.py` (26 tests), the
 >   `CalibModel`/`StreamTimingModel` hooks, and `BuildResult.elapsed_seconds`.
+> * B1 — `waveflow/calib/synth_report.py` + `waveflow/build/resource_steps.py` +
+>   `tests/calib/test_synth_report.py` (18 tests). Attribution gated against the **real** committed
+>   `fir_block` report, so the arithmetic asserted is the arithmetic that actually held. See
+>   [the first measurement](#the-first-measurement-and-what-it-already-says) — DSP is already
+>   perfectly additive.
 >
 > Suite at its 6-failure baseline; no regressions. The key works on the pilot: `FirBlock` decomposes
 > into 5 keyed modules, and the two mem-streams key **independently of `ntap` and `samp_w`** — so the
@@ -279,13 +284,39 @@ with support recorded — worth doing when the toolchain is next in use, not urg
 
 ## Phase B — first real data (existing toolchain path)
 
-### B1 — `InspectSynthStep`
-A `BuildStep` that reads the csynth report after `CSynthStep` and lands **two** things: the whole-top
-resource record, and the per-RTL-module breakdown mapped onto Waveflow module keys.
+### B1 — `InspectSynthStep` ✅
+`waveflow/calib/synth_report.py` (attribution) + `waveflow/build/resource_steps.py` (the step) +
+`tests/calib/test_synth_report.py` (18 tests), wired into the `fir_block` DAG as step `resources`.
+`CSynthStep` now publishes `synth_seconds` as an artifact so the record's `cost_seconds` is captured
+at the moment it is spent.
 
-**Gate:** running the existing `fir_block` csynth at two param points lands two well-formed records
-with correct keys; per-module rows sum to within a reported delta of the total (the delta *is* the
-integration term, measured for the first time).
+**The trap was worse than "mangled names".** The report is **hierarchical**:
+`fir_compute_serial_task_32_s` reports DSP=32/LUT=3728 and its child `..._Pipeline_FIR` reports
+DSP=32/LUT=2554 — the parent figure *already contains* the child. Summing every row double-counts
+enormously. Only task rows are summed; `_Pipeline_*` descendants are kept as breakdown. The naming
+join itself turned out fully derivable from each module's own `KernelTask`
+(`task_fn` + `template_args` → `mem_w_stream_framed_done_task_32_8`), so nothing is tabulated by hand.
+
+**Gate (passed), against the real committed report** (ntap=32, samp_w=16, serial, xc7z020):
+
+| | LUT | FF | DSP | BRAM |
+|---|---|---|---|---|
+| Σ modules | 6690 | 9398 | 32 | 0 |
+| integration | 1984 | 1949 | **0** | **2** |
+| top (design) | 8674 | 11347 | 32 | 2 |
+
+### The first measurement, and what it already says
+
+* **DSP is perfectly additive.** All 32 DSPs are in `FirCompute` — one per tap — and the integration
+  term is *exactly zero*. That is the strongest form of the additive premise, confirmed on the first
+  measurement rather than assumed.
+* **BRAM is entirely integration.** No module reports any; the design's 2 blocks are inter-task
+  FIFOs. The tap storage went to LUT/FF via `ARRAY_PARTITION` — the storage-mapping discontinuity
+  predicted in the priors discussion, showing up immediately. A per-module BRAM prior would predict 0
+  here and be right; the BRAM belongs to the **interface** term (E1's second term), not the module one.
+* **Integration is ~23% of LUT and ~17% of FF.** Not negligible: Σ-modules alone would underestimate
+  the design by a quarter, which settles the question of whether the third term is needed.
+* `entry_proc` (the DATAFLOW entry process) is correctly unclaimed — real cost, no module's.
 
 ### B2 — the 32-point sweep
 `ntap ∈ {8,16,32,64}` × `samp_w ∈ {8,12,16,24}` × `unroll_lane ∈ {F,T}`, `mem_dwidth` and `samp_i`
@@ -365,9 +396,13 @@ lead with DSP/BRAM, be explicit that LUT/FF is coarser.
   across designs *and* parameter points, that failure mode goes from occasional to constant. Every
   cached artifact stores the hash of the inputs it came from, and the loader compares before use.
   Content-addressing here is a safety property, not an optimization.
-* **HLS module names are mangled.** The per-module report rows are RTL entity names, not Waveflow
-  module names. The mapping must be explicit and must fail loudly on an unmatched row — silently
-  dropping a module makes the per-module sum look better than it is.
+* **The csynth report is hierarchical — this is the big one.** A task row's figure already contains
+  its `_Pipeline_*` children. Summing every row double-counts (measured: it nearly doubles
+  `FirCompute`). Sum task rows only; keep sub-blocks as breakdown.
+* **HLS module names are mangled**, but derivably: `<task_fn>_<template args>` plus a tool suffix, both
+  halves available from the module's `KernelTask`. An unmatched module must fail loudly — silently
+  dropping one shrinks Σ-modules and *inflates* the integration term, which reads as "modules are well
+  modelled, glue is expensive" when the truth is "we lost a module".
 * **`~0` in the report.** `csynthparse` already keeps non-numeric resource cells as strings. The store
   must normalize (`~0` → 0) at the boundary or the arithmetic breaks downstream.
 * **Standalone ≠ in-composite.** HLS shares and inlines across task boundaries. A standalone module

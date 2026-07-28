@@ -63,6 +63,16 @@ FIDELITY.update({s: i for i, s in enumerate(TIMING_SOURCES)})
 #: The resource counters we store.  Anything else the report carries is kept in the payload untouched.
 RESOURCE_FIELDS = ("lut", "ff", "dsp", "bram", "uram", "srl")
 
+#: Vitis spells some counters by their primitive ("BRAM_18K"), which would otherwise land as a distinct
+#: key from every other tool's ``bram`` and quietly break a cross-source comparison.  Canonicalized at
+#: the boundary so a record's counter names do not depend on which report produced it.
+RESOURCE_ALIASES = {"bram_18k": "bram", "bram18k": "bram", "bram_36k": "bram",
+                    "dsp48e": "dsp", "dsp48": "dsp", "lut_as_logic": "lut"}
+
+#: Report columns that describe the *device*, not this design's usage.  Dropped: summing an
+#: ``avail_lut`` across modules produces a number that looks like a resource count and is nonsense.
+_CONTEXT_PREFIXES = ("avail_", "util_", "available_", "utilization")
+
 
 class KeyCollisionError(RuntimeError):
     """Two structurally different modules resolved to the same short key.
@@ -84,28 +94,40 @@ class StaleRecordError(RuntimeError):
 
 
 def normalize_resources(raw: dict) -> dict[str, int]:
-    """Coerce a parsed csynth resource dict into plain ints.
+    """Coerce a parsed csynth resource dict into plain ints under canonical counter names.
 
-    Vitis writes ``~0`` for "negligible but nonzero", which :mod:`waveflow.utils.csynthparse`
-    faithfully preserves as a string.  Left alone it breaks every downstream sum, so it is normalized
-    to ``0`` exactly here, at the boundary, rather than defensively at each arithmetic site.
+    Three normalizations, all at this one boundary rather than defensively at each arithmetic site:
+
+    * ``~0`` -> ``0``.  Vitis writes it for "negligible but nonzero" and
+      :mod:`waveflow.utils.csynthparse` faithfully preserves the string; left alone it breaks every
+      downstream sum.
+    * ``BRAM_18K`` -> ``bram`` (:data:`RESOURCE_ALIASES`), so counter names do not depend on which
+      report produced them.
+    * ``AVAIL_*`` / ``UTIL_*`` dropped — they describe the *device*, and summing an ``avail_lut``
+      across modules yields a number that looks like a resource count and is nonsense.
     """
     out: dict[str, int] = {}
     for name, value in raw.items():
         key = str(name).lower()
+        if key.startswith(_CONTEXT_PREFIXES):
+            continue
+        key = RESOURCE_ALIASES.get(key, key)
         if isinstance(value, bool):
-            out[key] = int(value)
+            parsed = int(value)
         elif isinstance(value, int):
-            out[key] = value
+            parsed = value
         else:
             text = str(value).strip()
             if text in ("~0", "~0.0", "-", ""):
-                out[key] = 0
+                parsed = 0
             else:
                 try:
-                    out[key] = int(float(text))
+                    parsed = int(float(text))
                 except ValueError:
                     continue        # a non-numeric annotation column; not a counter
+        # An alias can collapse two spellings onto one name (BRAM_18K + BRAM_36K); sum rather than
+        # letting whichever came last win.
+        out[key] = out.get(key, 0) + parsed
     return out
 
 

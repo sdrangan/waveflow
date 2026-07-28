@@ -186,7 +186,24 @@ def test_unknown_source_has_no_fidelity():
 def test_tilde_zero_normalizes_to_zero():
     """Vitis writes ``~0`` for negligible-but-nonzero; left as a string it breaks every sum."""
     out = normalize_resources({"LUT": 120, "DSP": "~0", "BRAM_18K": "0", "URAM": ""})
-    assert out == {"lut": 120, "dsp": 0, "bram_18k": 0, "uram": 0}
+    assert out == {"lut": 120, "dsp": 0, "bram": 0, "uram": 0}
+
+
+def test_counter_names_are_canonicalized():
+    """``BRAM_18K`` is a Vitis spelling; a record must not depend on which tool produced it."""
+    assert normalize_resources({"BRAM_18K": 4})["bram"] == 4
+    assert "bram_18k" not in normalize_resources({"BRAM_18K": 4})
+
+
+def test_aliases_that_collapse_are_summed_not_overwritten():
+    """18K and 36K blocks both canonicalize to ``bram``; the last one must not win silently."""
+    assert normalize_resources({"BRAM_18K": 4, "BRAM_36K": 3})["bram"] == 7
+
+
+def test_device_context_columns_are_dropped():
+    """``AVAIL_LUT`` summed across modules looks like a resource count and is nonsense."""
+    out = normalize_resources({"LUT": 120, "AVAIL_LUT": 53200, "UTIL_LUT": "~0"})
+    assert out == {"lut": 120}
 
 
 def test_normalization_drops_non_numeric_annotations():
