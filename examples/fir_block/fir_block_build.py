@@ -15,18 +15,32 @@ So the arithmetic is hand-written but the **state is not**: ``fir_compute_task.h
 of its own, it ``#include``s what :func:`~waveflow.build.hwgen.state_decls_to_cpp` emits.  That is what
 keeps the RTL's ``static`` from drifting from the ``HwState`` the Python model mutates.
 
-Run (project venv, from repo root)::
+The steps are a :class:`BuildDag` driven by :func:`run_dag_cli`, like the other examples'
+``*_build.py`` — so this runs through the standard CLI with ``--through`` / ``--list-steps`` /
+``--status`` rather than a bespoke ``__main__``::
 
-    ../pysilicon-venv/Scripts/python.exe -m examples.fir_block.fir_block_build
+    python -m examples.fir_block.fir_block_build --through pysim       # default; no toolchain
+    python -m examples.fir_block.fir_block_build --list-steps
+    python -m examples.fir_block.fir_block_build --through codegen_tb  # DUT + XSI harness
+    python -m examples.fir_block.fir_block_build --through csynth      # needs Vitis
+    python -m examples.fir_block.fir_block_build --through csynth --unroll-lane --samp-w 8
+
+The RTL rung (drive the synthesized top through XSI and check bit-exactness) is the ``-m xsi`` gate in
+``tests/examples/test_fir_block_xsi.py``: it needs Vivado xsim plus a prior ``csynth``, and is
+orchestrated there rather than duplicated here.
 """
 from __future__ import annotations
 
+import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from waveflow.build.build import BuildConfig, BuildDag
+from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
+from waveflow.build.cli import run_dag_cli
+from waveflow.toolchain import toolchain
 from waveflow.build.composite_gen import (
     GEN_DIR,
     INCLUDE_DIR,
@@ -316,10 +330,160 @@ def generate_tb(out_dir: Path = HERE, program=None, blk: int | None = None, ntap
     return {"harness": xsi / f"{TOP}_tb_harness.h", "main": xsi / f"{TOP}_bfm_tb.cpp"}
 
 
-def generate(out_dir: Path = HERE) -> None:
-    generate_dut(out_dir)
-    generate_tb(out_dir)
+def generate(out_dir: Path = HERE, **kw) -> None:
+    """Both codegen halves in order — the DUT first, since the TB harness includes its port map."""
+    generate_dut(out_dir, **kw)
+    generate_tb(out_dir, **{k: v for k, v in kw.items() if k != "unroll_lane"})
+
+
+# ---------------------------------------------------------------------------
+# The build DAG — the steps, in the order the flow teaches them
+# ---------------------------------------------------------------------------
+
+
+@dataclass(kw_only=True)
+class PySimStep(BuildStep):
+    """Run the FirBlockTB graph in SimPy and check every output block against the stateless golden.
+
+    The **first checkpoint**: no toolchain, seconds not minutes, and where any state bug that is not
+    schedule-dependent shows up.  Runs the ``LOAD -> FILTER x2 -> LOAD -> FILTER`` program, so the
+    carry is exercised past the first block and the held taps are proved replaceable mid-stream.
+    Raises on any mismatch, so "it ran" is never mistaken for "it is correct".
+    """
+
+    description = "Run the FirBlockTB pysim golden (block-wise output == global convolution)."
+    consumes = ["fir_block_source"]
+    produces = {"pysim_results": Path("results/pysim.json")}
+    params = {"ntap": DEFAULT_NTAP, "samp_w": DEFAULT_SAMP_W, "samp_i": DEFAULT_SAMP_I,
+              "unroll_lane": False}
+
+    def run(self, config: BuildConfig, ntap, samp_w, samp_i, unroll_lane, **_) -> dict:
+        from examples.fir_block.fir_block_sim import DEFAULT_PROGRAM, FirBlockSim
+
+        sim = FirBlockSim(program=DEFAULT_PROGRAM, ntap=int(ntap), samp_w=int(samp_w),
+                          samp_i=int(samp_i), unroll_lane=bool(unroll_lane))
+        dut = sim.run()                   # raises on any block mismatch or completion miscount
+        out = config.root_dir / "results" / "pysim.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "program": list(sim.tb._program),
+            "blk": int(sim.tb.blk), "ntap": int(ntap),
+            "samp_w": int(samp_w), "samp_i": int(samp_i),
+            "lane_width": int(sim.tb.lw),
+            "realization": dut.compute.variant,
+            "blocks_checked": len(sim.expected),
+            "completions": len(sim.tb.done_sink.words),
+        }, indent=2), encoding="utf-8")
+        return {"pysim_results": out}
+
+
+@dataclass(kw_only=True)
+class CodegenDutStep(BuildStep):
+    """Lower the ``FirBlock`` graph to the ``ap_ctrl_none`` composite top, plus its headers.
+
+    Emits the schema headers, the sample element's array-utils, ``fir_types.h`` (the derived
+    accumulator and the array-utils namespace alias) and ``fir_compute_state.inc`` (the ``add_state``
+    storage), then copies the sticky hand-written task bodies into ``include/``.
+    """
+
+    description = "Lower the FirBlock graph to the composite top (+ tcl, ports, headers, state)."
+    consumes = ["fir_block_source"]
+    produces = {"fir_block_cpp": Path("gen/fir_block.cpp"), "run_tcl": Path("fir_block.tcl"),
+                "dut_ports": Path("xsi/fir_block_ports.h")}
+    params = {"mem_dwidth": MEM_DW, "ntap": DEFAULT_NTAP, "samp_w": DEFAULT_SAMP_W,
+              "samp_i": DEFAULT_SAMP_I, "unroll_lane": False}
+
+    def run(self, config: BuildConfig, mem_dwidth, ntap, samp_w, samp_i, unroll_lane, **_) -> dict:
+        generate_dut(config.root_dir, mem_dwidth=int(mem_dwidth), ntap=int(ntap),
+                     samp_w=int(samp_w), samp_i=int(samp_i), unroll_lane=bool(unroll_lane))
+        return {"fir_block_cpp": config.root_dir / GEN_DIR / f"{TOP}.cpp",
+                "run_tcl": config.root_dir / f"{TOP}.tcl",
+                "dut_ports": config.root_dir / "xsi" / f"{TOP}_ports.h"}
+
+
+@dataclass(kw_only=True)
+class CodegenTbStep(BuildStep):
+    """Lower the ``FirBlockTB`` graph to the XSI BFM harness, main, scenario constants, and bundles.
+
+    Runs after the DUT step because the harness ``#include``s the DUT's port map.
+    """
+
+    description = "Lower the FirBlockTB graph to the XSI harness + main + scenario bundles."
+    consumes = ["fir_block_source", "dut_ports"]
+    produces = {"tb_harness": Path("xsi/fir_block_tb_harness.h"),
+                "tb_main": Path("xsi/fir_block_bfm_tb.cpp")}
+    params = {"mem_dwidth": MEM_DW, "ntap": DEFAULT_NTAP, "samp_w": DEFAULT_SAMP_W,
+              "samp_i": DEFAULT_SAMP_I}
+
+    def run(self, config: BuildConfig, mem_dwidth, ntap, samp_w, samp_i, **_) -> dict:
+        generate_tb(config.root_dir, ntap=int(ntap), samp_w=int(samp_w), samp_i=int(samp_i),
+                    mem_dwidth=int(mem_dwidth))
+        return {"tb_harness": config.root_dir / "xsi" / f"{TOP}_tb_harness.h",
+                "tb_main": config.root_dir / "xsi" / f"{TOP}_bfm_tb.cpp"}
+
+
+@dataclass(kw_only=True)
+class CSynthStep(BuildStep):
+    """Vitis HLS C-synthesis of the generated top — produces the RTL the ``-m xsi`` gate drives.
+
+    Toolchain-gated (needs Vitis).  Re-emits ``rtl_fir_block.f`` afterwards so the file list always
+    names the RTL that was just built: a stale ``.f`` plus a cached ``xsimk.dll`` is how an XSI run
+    goes green while proving nothing.
+    """
+
+    description = "Run Vitis HLS C-synthesis of the generated composite top."
+    consumes = ["fir_block_cpp", "run_tcl"]
+    produces = {"report_dir": Path("fir_block_proj/solution1")}
+    params = {"live_output": False}
+
+    def run(self, config: BuildConfig, live_output, **_) -> dict:
+        result = toolchain.run_vitis_hls(config.root_dir / f"{TOP}.tcl",
+                                         work_dir=config.root_dir,
+                                         capture_output=not live_output)
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
+        xsi = config.root_dir / "xsi"
+        xsi.mkdir(parents=True, exist_ok=True)
+        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, config.root_dir), encoding="utf-8")
+        return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
+
+
+def build_fir_block_dag() -> BuildDag:
+    dag = BuildDag()
+    dag.add(SourceStep(artifact="fir_block_source", path=HERE / "fir_block.py"))
+    dag.add(PySimStep(name="pysim"))
+    dag.add(CodegenDutStep(name="codegen_dut"))
+    dag.add(CodegenTbStep(name="codegen_tb"))
+    dag.add(CSynthStep(name="csynth"))
+    return dag
+
+
+def main() -> None:
+    run_dag_cli(
+        build_fir_block_dag,
+        description="Build and check the fir_block example.",
+        default_through="pysim",
+        root_dir=HERE,
+        extra_args=[
+            (("--samp-w",), {"type": int, "default": DEFAULT_SAMP_W,
+                             "help": "Sample/coefficient width in bits (default 16)."}),
+            (("--samp-i",), {"type": int, "default": DEFAULT_SAMP_I,
+                             "help": "Integer bits of the sample format (default 2)."}),
+            (("--ntap",), {"type": int, "default": DEFAULT_NTAP,
+                           "help": "Number of filter taps (default 32)."}),
+            (("--unroll-lane",), {"action": "store_true",
+                                  "help": "Emit the LW-outputs-per-iteration kernel instead of "
+                                          "the one-output-per-iteration one."}),
+            (("--live-output",), {"action": "store_true",
+                                  "help": "Stream Vitis output live (csynth)."}),
+        ],
+        params_from_args=lambda a: {"mem_dwidth": MEM_DW, "ntap": a.ntap, "samp_w": a.samp_w,
+                                    "samp_i": a.samp_i, "unroll_lane": a.unroll_lane,
+                                    "live_output": a.live_output},
+    )
 
 
 if __name__ == "__main__":
-    generate()
+    main()
