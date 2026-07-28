@@ -1,5 +1,11 @@
 # Plan: `add_state` — declared cross-firing state in a `HwModule`
 
+> **Status (2026-07-28): Stages 1–3 BUILT and fully gated; `examples/fir_block` is BUILT in pysim.**
+> The FIR composite (`cmd_rx → MemRStream → fir_compute → MemWStream`) runs the plan's firing
+> sequence green against a stateless golden, with both flavours of state falsification-tested. **Not
+> yet done:** the FIR's codegen + csynth + XSI, Stage 4, and the width sweep. See
+> [`examples/fir_block`](#examplesfir_block--built-in-pysim).
+>
 > **Status (2026-07-27): Stages 1, 2, and 3 are BUILT and fully gated — including XSI.**
 > Stage 1's gate passed on both halves (hook signature byte-identical to the regmap version; the
 > emitted kernel csynths with `coeffs` absent from the RTL port list). **Stage 2's XSI gate passed:
@@ -390,6 +396,47 @@ case became reachable. Fixed in `composite_gen.py::render_top`.
 element, found zero ports, and passed vacuously. It now asserts the port list is non-empty and that the
 `s_axi_control` ports are present before checking `coeffs` is absent. A gate that cannot fail is not a
 gate.
+
+## `examples/fir_block` — built in pysim
+
+The composite is exactly decision 2's picture, minus the SOB blocks the interleaver needs (a FIR is a
+streaming kernel — there is no random access to buffer for):
+
+    s_cmd -> [ fir_cmd_rx ] -> [ MemRStream ] -> [ fir_compute ] -> [ MemWStream ] -> s_done
+                                                        ^ taps + carry, add_state
+
+`FirCmdRx` frames `[MemRCmd | FirDesc]` — **one** read per job for both opcodes, which is what keeps
+the no-output opcode off a special path. `FirCompute` dispatches on `FirDesc.op`.
+
+**The no-output firing, answered.** `LOAD_TAPS` frames `MemWCmd(len=0, fwd_bursts=1)`. The writer's
+`S2A` loop then trips zero times — no AXI transaction at all — while `ECHO` still emits the descriptor,
+so the job completes like any other and the token path is uniform. The alternative shapes (a separate
+done path, or writing the taps back to scratch) both add a stage the design does not otherwise need.
+
+**A finding the plan did not predict: pysim and RTL disagreed at `len=0`.** `MemWStream`'s pysim twin
+drained its data words unconditionally, and `get(nwords_max=0)` does *not* mean "read nothing" — it
+pulls a whole burst off the buffer and truncates the returned array to zero words. So a zero-length
+write silently ate the *next* command's burst in pysim while the RTL body stayed correctly in step.
+Fixed at the source (`mem_stream.py`, both the in-band and plain paths); the guard is what the emitted
+C++ already did. Latent since the in-band writer landed — `len=0` simply had no caller until now.
+
+**The golden is stateless on purpose.** It convolves the whole signal with globally-indexed history
+(`x[i-k]`, zero before the start), switching coefficient sets at each reload. It never mentions a
+carry, so "block-wise output == global convolution" *is* the statement that the carry is right, and it
+cannot pass by sharing a bug with the implementation. `tests/examples/test_fir_block.py` then breaks
+each flavour of state in turn (ignore the carry; honour only the first `LOAD_TAPS`) and requires the
+golden to reject both — plus guards on the scenario itself, so weakening the program or the tap sets
+cannot quietly silence the gate.
+
+**Transport is one sample per 32-bit word**, whatever `W` is. Not an oversight: it keeps the width
+sweep clean (only the arithmetic width moves — bus width and word counts stay put), and dense sub-word
+packing is not expressible at the interesting widths anyway, since the lane readers need an integer
+`MEM_DW/elem_bw` and `W = 18` is not one. Packing is the vectorization example's subject.
+
+**Still to do here:** the generated task body + hook (`fir_compute` is written as two `@synthesizable`
+hooks, but the opcode branch and the variable-length framing have not been put through the extractor),
+csynth, the XSI gate on the same firing sequence, and then the `W` sweep — which wants Stage 4, since
+`ntap` as a build-time knob is exactly the templated-extent case.
 
 ## Related
 
