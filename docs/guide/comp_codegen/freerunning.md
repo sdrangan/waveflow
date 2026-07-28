@@ -156,22 +156,69 @@ parameter list and the task's call arguments are literally the same list and can
 Direction comes from each endpoint's *type* — a `StreamIFSlave` is an input, a `StreamIFMaster` an
 output — so nothing is stated twice.
 
-## `KernelTask`, and the hand-off
+## `kernel_task()` — what it is, and why it exists
 
 ```python
-KernelTask("square_task", "square_task.h", ("x_in", "y_out"), template_args=())
+def kernel_task(self) -> KernelTask:
+    return KernelTask("square_task", "square_task.h", ("x_in", "y_out"), template_args=())
 ```
 
-`signature` is the **endpoint attribute names in task-argument order** — the seam that makes the top
-graph-derived rather than hand-written. `template_args` are baked-concrete template arguments; an
-empty tuple emits the name bare, which is what a generated body wants once it has baked its own width.
+**Is it required?** For a leaf, yes — any leaf that needs a top. The top's port list is derived from
+`kernel_task().signature`, so without it the graph walk cannot produce a boundary at all. A composite
+does *not* define one (it has no body of its own); its children each do.
 
-It is also the hand-off point for a body the extractor cannot produce. A leaf owning an `m_axi`
-master is **refused** by task-body emission — a scope boundary, not a law of HLS, since the
-framework's own `mem_r_stream_task.h` carries `m_axi` quite happily. The emitter has simply not
-answered what an `m_axi` body needs (bundle naming, depth, who owns the `offset=slave` register), so
-it refuses rather than emit something unreviewed. Such a module names its pre-written body through
-`kernel_task()` and leaves `run_iter` as the pysim golden.
+**Why does it exist, when all of this looks derivable?** Because of the case the page has not shown
+yet: **a body the generator did not write.**
+
+`MemRStream` hands over a pre-written `mem_r_stream_task.h`. For that body nothing is derivable —
+someone else chose the function's name, which header it lives in, and, most importantly, **the order
+of its parameters**:
+
+```cpp
+mem_r_stream_framed_task<64>(cmd, m_in, copy_data)   // stream, m_axi, stream
+```
+
+That order is a fact about the C++, not about the Python. The module's endpoints could be declared in
+any order, and an `m_axi` sits in the middle of two streams here. `signature` is what maps one to the
+other: **the endpoint attribute names in task-argument order**. The generator resolves each name to
+either a boundary port or an internal channel and emits the call. That is the seam that lets the top
+be graph-derived rather than hand-written, and it is the reason the type exists.
+
+### The arguments
+
+| | is | derivable for a generated body? |
+|---|---|---|
+| `task_fn` | the C++ function name | **yes** — `task_files_to_str` already defaults to `<kernel>_task` |
+| `header` | the header to `#include` | **yes** — likewise `<task_fn>.h` |
+| `signature` | endpoint attribute names, **in task-argument order** | yes, but only because the generator chose the order |
+| `template_args` | baked-concrete template arguments, in order | yes — they are the module's own `HwParam` values |
+
+`template_args=()` emits the name bare (`square_task`, not `square_task<>`), which is what a generated
+body wants once it has baked its width into the signature.
+
+### The wart
+
+Read that table again: for a **generated** body, every field is something the generator already knows.
+`task_files_to_str` derives the function name and header itself and never consults `kernel_task()`;
+`composite_gen` consults `kernel_task()` and never consults the generated body. **Nothing cross-checks
+the two.** Write `KernelTask("squared_task", ...)` by mistake and the top will call a function that
+does not exist — a csynth error, not a Waveflow one.
+
+So `kernel_task()` is load-bearing for a hand-written body and restated boilerplate for a generated
+one. The honest reading is that a generated leaf should not have to write it at all; it does today
+because the boundary derivation goes through it. (`task_fn` has quietly acquired a third job as well:
+[calibration](../calib/) uses it as the component's identity key.)
+
+## The hand-off
+
+That underivable case is also the escape hatch. A leaf owning an `m_axi` master is **refused** by
+task-body emission — a scope boundary, not a law of HLS, since `mem_r_stream_task.h` carries `m_axi`
+quite happily. The emitter has not answered what an `m_axi` body needs (bundle naming, depth, who
+owns the `offset=slave` register), so it refuses rather than emit something unreviewed.
+
+Such a module names its pre-written body through `kernel_task()` and leaves `run_iter` as the **pysim
+golden** — the model that says what the hand-written C++ is supposed to do. Nothing checks the two
+against each other except a test.
 
 ## See also
 
