@@ -151,12 +151,29 @@ A design needing two masters on one resource has to say so structurally.
 
 ## The trap worth knowing before you build one
 
-In a free-running pipeline **every stage needs a token per job**. A stage that consumes input and
-emits nothing on some jobs will stall a downstream stage waiting on it, and the failure looks like a
-hang rather than a wrong answer. If an opcode produces no output, forward something anyway.
+A stage that consumes a job and emits nothing does **not**, on its own, deadlock anything. The stage
+downstream simply blocks on an empty stream and idles, which is back-pressure working as intended. A
+design where some jobs legitimately produce no output is fine.
 
-This framework has hit it twice — once as an un-paced pipeline deadlocking at `done = N+1`, once as a
-relay that read when it had been given zero bursts to forward.
+It becomes a deadlock when something in the system does **per-job accounting**:
+
+- **a completion token** the testbench counts — N jobs in, N−1 done tokens out, and the run hangs at
+  the end waiting for one that is never coming;
+- **anything flowing backwards** — a returned buffer index, a free-slot credit, a recycled block. A
+  skipped job never returns its credit, and after `depth` skips the *upstream* stage blocks. This one
+  is a true deadlock rather than an idle;
+- **a second input that must stay in lockstep** — consume the descriptor but not the block on a skip,
+  and every later job pairs the wrong two.
+
+The insidious version is when the imbalance is **data-dependent**: conditionally *acquiring* a
+stream-of-blocks lock, rather than conditionally forwarding after one. Produce and consume counts then
+depend on the data, so it passes C-simulation on one vector and hangs in RTL on another.
+
+The fix, when you need one, is to emit *something* every job — the payload when it passes, a
+one-word "skipped" marker when it does not. The count becomes invariant and every accounting scheme
+downstream keeps working. This framework has needed it twice: an un-paced pipeline deadlocking at
+`done = N+1`, and a relay that read when it had been handed zero bursts to forward (fixed with an
+`if (nfwd > 0)` guard).
 
 ## See also
 
