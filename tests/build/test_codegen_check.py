@@ -250,25 +250,52 @@ def test_flow2_targets_are_now_implemented():
     assert check(MemCopyTB, SEQUENTIAL_XSI_TB) == (True, None)       # its XSI testbench
 
 
-def test_check_runs_the_real_generator_and_an_unwired_toy_still_cannot_lower():
-    """`kernel_files_to_str(Square)` SUCCEEDS, but `check(Square, "composite_kernel")` does NOT pass —
-    the point of the check family, updated for the collapse.
+def test_check_runs_the_real_generator_and_an_unwired_leaf_still_cannot_lower():
+    """Gate 4 runs the REAL generator, so a leaf that declares `composite_kernel` without wiring the
+    leaf machinery (no `kernel_task`) fails the walk rather than being waved through.
 
-    `generate` does not answer check's question: handed the `Square` toy it silently emits an
-    `ap_ctrl_hs` top with an unextracted hook body — *a different target than the one declared* — with
-    no exception (pinned in detail by test_toy.py::test_square_codegen_is_not_yet_a_free_running_task).
+    The subject is defined HERE rather than borrowed from examples/toy: the property under test is
+    "a module that declares the target but is not wired", which is a property of the fixture, not of
+    any shipped example.  Pinning it to `Square` made this test hostage to the toy staying unwired —
+    and the toy has since been wired, precisely so it can generate a top for the docs.
 
-    Now that `composite_kernel` is implemented, gate 4 runs the REAL generator (`composite_top_spec`)
-    for it. `Square` declares the target but never wired the leaf machinery (no `kernel_task`), so the
-    walk fails. INTERIM: the graph walk has no verdict exception yet, so this surfaces as a raised
+    INTERIM: the graph walk has no verdict exception yet, so this surfaces as a raised
     `AttributeError` rather than a clean `(False, msg)` — the exception-taxonomy follow-up in
-    plans/one_component_two_flows.md is what turns it into a verdict. When it lands, this assertion
-    changes from `pytest.raises` to `(False, ...)`, and both tests move together."""
+    plans/one_component_two_flows.md is what turns it into a verdict.  When it lands, this assertion
+    changes from `pytest.raises` to `(False, ...)`."""
+    from dataclasses import dataclass
+
+    from waveflow.hw.hw_freerun import FreeRunMod
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.simulation.simobj import ProcessGen
+
+    @dataclass
+    class UnwiredLeaf(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "unwired_leaf"
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.x_in = StreamIFSlave(name=f"{self.name}_x", sim=self.sim, bitwidth=32)
+            self.y_out = StreamIFMaster(name=f"{self.name}_y", sim=self.sim, bitwidth=32)
+            self.add_endpoint(self.x_in)
+            self.add_endpoint(self.y_out)
+
+        def run_iter(self) -> ProcessGen[None]:          # a body, but no kernel_task()
+            words = yield from self.x_in.get()
+            yield from self.y_out.write(words)
+
+    with pytest.raises(AttributeError, match="kernel_task"):
+        check(UnwiredLeaf, COMPOSITE_KERNEL)
+
+
+def test_generate_does_not_answer_checks_question():
+    """`kernel_files_to_str` succeeds on a leaf whose declared target it is not emitting — silently.
+
+    That asymmetry is the reason the check family exists: generate produces *something* for the
+    wrong target without complaint, so "did it raise?" is not a substitute for asking."""
     from waveflow.build.hwgen import kernel_files_to_str
 
-    assert kernel_files_to_str(Square)                       # generate: fine (wrong target, silently)
-    with pytest.raises(AttributeError, match="kernel_task"):  # check: runs the real generator, fails
-        check(Square, COMPOSITE_KERNEL)
+    assert kernel_files_to_str(Square)
 
 
 # ==============================================================================================
