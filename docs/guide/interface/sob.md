@@ -11,7 +11,7 @@ summary: "What Stream-of-Blocks (SOB) is in isolation: a block-granular handoff 
 
 `StreamOfBlocksIF` is the block counterpart to [`StreamIF`](./stream.md): instead of transferring one
 word at a time, it transfers **ownership of a whole block**. Its modeling pattern (with a worked
-example) is [Concurrency → SOB](../concurrency/python/sob.md); this page is the interface in isolation.
+example) is the [interleaver](../../examples/interleaver/); this page is the interface in isolation.
 
 ## What it carries
 
@@ -150,7 +150,7 @@ The hardware realization is the **same two token channels** around `depth` share
 difference worth knowing: in pysim the ready queue carries the **block payload** (convenient for a
 discrete-event model), but in hardware the ready channel carries only a **token / valid** — the payload
 stays in the shared buffer RAM. That is the whole point of a ping-pong: you hand over *ownership*, not a
-copy, which is why the hand-off costs ~nothing in the [timing model](../concurrency/python/timing.md).
+copy, which is why the hand-off costs ~nothing in the [timing model](../timing/sob.md).
 Vitis's `hls::stream_of_blocks` generates this handshake for you; whether the exact RTL uses FIFO
 primitives or equivalent counters/handshake logic is an implementation detail — the behavior is this
 two-way token exchange.
@@ -257,6 +257,5 @@ in Python.
 ## See also
 
 - [Stream Interfaces](./stream.md) — the one-channel FIFO this contrasts with.
-- [Concurrency → SOB](../concurrency/python/sob.md) — the modeling pattern, with the reverse-add worked example.
-- [Concurrency (HLS) → SOB](../concurrency/hls/sob.md) — `stream_of_blocks` synthesis and the gather/scatter throughput asymmetry.
+- [Free-running kernel in HLS](../comp_codegen/composite.md) — how a SOB edge lowers, the lock scopes, and the gather/scatter throughput asymmetry.
 - [Defining a component](../flows/modules.md) — where SOB endpoints are declared on components.

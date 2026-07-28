@@ -41,7 +41,7 @@ stage is a **leaf `FreeRunMod`** (one firing per job, one `ap_ctrl_none` `hls::t
   output is `[InterleaverCmd | P | X]`. (Issuing N reads per job through the one read owner is the
   **transactional-arbiter** model — see [Message forwarding](#message-forwarding-the-in-band-descriptor).)
 - **`il_load`** — a stream→block bridge. Reads the descriptor (→ `nw`), lands `X` and `P` in two on-chip
-  blocks `x_blk` / `p_blk` exposed as a [stream of blocks](../../guide/concurrency/python/sob.md), and
+  blocks `x_blk` / `p_blk` exposed as a [stream of blocks](../../guide/interface/sob.md), and
   forwards the descriptor.
 - **`il_compute`** — the **gather** itself, the design's only *custom compute* stage. Holds read locks
   on `p_blk` / `x_blk` and, for each output word, reads the packed index and does an index-driven

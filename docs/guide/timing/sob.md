@@ -7,7 +7,7 @@ has_children: false
 
 # Stream-of-Blocks Analysis
 
-A [stream of blocks](../concurrency/python/sob.md) (SOB) is how a free-running component gets **random
+A [stream of blocks](./sob.md) (SOB) is how a free-running component gets **random
 access** to a buffer: instead of consuming a stream in order, it acquires a whole block, reads or writes it
 at arbitrary indices, and releases it — a ping-pong pair of block RAMs behind a lock handshake. Because an
 SOB lowers to a **block-RAM port** rather than an AXI stream, its activity lives on a different set of nets
@@ -125,7 +125,7 @@ the `lock` envelope spanning the whole firing around them — the "held" vs "wor
 
 ## See also
 
-- [Stream of blocks](../concurrency/python/sob.md) — the SOB mechanism itself (ping-pong, lock handshake).
+- [Stream of blocks](./sob.md) — the SOB mechanism itself (ping-pong, lock handshake).
 - [Extracting VCD Files](./vcd.md) / [Parsing VCD Files](./parsing.md) — the `VcdParser` basics and finding
   net names.
 - [AXI4-Stream](./axistream.md) / [AXI4-MM](./aximm.md) — the sibling interface extractors.

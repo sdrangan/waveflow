@@ -45,7 +45,7 @@ the LT model against it (see [Fitting a timing model](../calib/fit.md)).
 The flows in this section — [block](./block.md) and [streaming](./streaming.md) — are LT models. They
 differ only in how much load/compute/store overlap their timeline exposes, not in whether they step
 every cycle (neither does). Double-buffering is the same idea one level up, built by composing these
-over a [stream of blocks](../concurrency/python/sob.md).
+over a [stream of blocks](../interface/sob.md).
 
 ## Not a new idea
 

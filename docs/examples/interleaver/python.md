@@ -94,7 +94,7 @@ passed while the hardware wedged. (Full story on the [Module Overview](./interle
 
 This is the structural difference from `mem_copy`. A stream is consumed in order, but the gather's defining
 move is `X[P[i]]` — an **arbitrary** index — so `X` cannot stay a stream. `il_load` lands both `P` and `X`
-into on-chip block RAMs exposed as a [stream of blocks](../../guide/concurrency/python/sob.md) (a ping-pong
+into on-chip block RAMs exposed as a [stream of blocks](../../guide/interface/sob.md) (a ping-pong
 pair with a lock handshake, so `il_load` can fill the next job's block while `il_compute` still reads this
 one). The blocks are **typed element blocks** — `DataArray` of 32-bit `Word32`, i.e. `ap_uint<32>[N]` in
 C++ — so `il_compute` is the bare gather with no lane math, and the word↔element (de)serialization lives in
