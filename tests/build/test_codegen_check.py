@@ -36,6 +36,7 @@ from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
+from waveflow.simulation.simulation import Simulation
 
 from examples.block_scale.block_scale import BlockScaleTBHls
 from examples.regmap.simp_fun import SimpFun, SimpFunTBHls
@@ -250,27 +251,21 @@ def test_flow2_targets_are_now_implemented():
     assert check(MemCopyTB, SEQUENTIAL_XSI_TB) == (True, None)       # its XSI testbench
 
 
-def test_check_runs_the_real_generator_and_an_unwired_leaf_still_cannot_lower():
-    """Gate 4 runs the REAL generator, so a leaf that declares `composite_kernel` without wiring the
-    leaf machinery (no `kernel_task`) fails the walk rather than being waved through.
+def test_a_leaf_needs_no_kernel_task_to_lower():
+    """A leaf that declares `composite_kernel` and writes only `run_iter` now lowers.
 
-    The subject is defined HERE rather than borrowed from examples/toy: the property under test is
-    "a module that declares the target but is not wired", which is a property of the fixture, not of
-    any shipped example.  Pinning it to `Square` made this test hostage to the toy staying unwired —
-    and the toy has since been wired, precisely so it can generate a top for the docs.
-
-    INTERIM: the graph walk has no verdict exception yet, so this surfaces as a raised
-    `AttributeError` rather than a clean `(False, msg)` — the exception-taxonomy follow-up in
-    plans/one_component_two_flows.md is what turns it into a verdict.  When it lands, this assertion
-    changes from `pytest.raises` to `(False, ...)`."""
+    This used to be the "unwired leaf" case: `kernel_task()` was required, so a leaf without one
+    raised `AttributeError` out of the graph walk.  It is derived now — from the same helpers that
+    emit the body, so the descriptor and the body cannot disagree — and the whole failure class is
+    gone.  Overriding it is for handing over a body the framework did not write."""
     from dataclasses import dataclass
 
     from waveflow.hw.hw_freerun import FreeRunMod
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 
     @dataclass
-    class UnwiredLeaf(FreeRunMod):
-        cpp_kernel_name: ClassVar[str | None] = "unwired_leaf"
+    class PlainLeaf(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "plain_leaf"
 
         def __post_init__(self) -> None:
             super().__post_init__()
@@ -279,12 +274,13 @@ def test_check_runs_the_real_generator_and_an_unwired_leaf_still_cannot_lower():
             self.add_endpoint(self.x_in)
             self.add_endpoint(self.y_out)
 
-        def run_iter(self):                              # a body, but no kernel_task()
+        def run_iter(self):
             words = yield from self.x_in.get()
             yield from self.y_out.write(words)
 
-    with pytest.raises(AttributeError, match="kernel_task"):
-        check(UnwiredLeaf, COMPOSITE_KERNEL)
+    kt = PlainLeaf(name="p", sim=Simulation()).kernel_task()
+    assert (kt.task_fn, kt.header) == ("plain_leaf_task", "plain_leaf_task.h")
+    assert kt.signature == ("x_in", "y_out")     # declaration order == task argument order
 
 
 def test_generate_does_not_answer_checks_question():

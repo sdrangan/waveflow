@@ -1,7 +1,7 @@
 ---
 title: Generated files
 parent: Module Code Generation
-nav_order: 10
+nav_order: 11
 audience: hls
 api: [kernel_files_to_str, tb_files_to_str, HlsCodegenStep, cpp_kernel_name, resolved_namespace]
 summary: "Emitting the resolved HwStmt tree as files. Two lifecycles: gen/ files are framework-owned and rewritten every run; hook impl files are sticky — written once if absent, then yours forever. Kernel tops are global functions; hooks live in a <kernel>_impl namespace. The .tpp extension marks a templated hook, and a stale extension is an error."

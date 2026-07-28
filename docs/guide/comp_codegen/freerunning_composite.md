@@ -1,7 +1,7 @@
 ---
 title: Free-running composite in HLS
 parent: Module Code Generation
-nav_order: 5
+nav_order: 6
 audience: hls
 applies_to: [FreeRunMod]
 api: [composite_top_spec, render_top, derive_boundary, derive_internal_edges, StreamEdge, SobEdge]
@@ -86,9 +86,9 @@ pysim exploration, refused at the synthesis boundary, because an unbounded FIFO 
 
 ## 2. `add_comp` became the tasks
 
-One `hls::task` per child, in `add_comp` insertion order. Each child named its body with a
-[`KernelTask`](./freerunning.md#kernel_task--what-it-is-and-why-it-exists), and the generator resolved that
-signature's endpoint names to concrete call arguments — each one either a boundary port or one of the
+One `hls::task` per child, in `add_comp` insertion order. Each child's `KernelTask` — derived, or [overridden](./freerunning_override.md) when the body is
+hand-written — gave the generator an argument order, and it resolved those endpoint names to concrete
+call arguments — each one either a boundary port or one of the
 channels above.
 
 That resolution is the whole trick. `mem_r_stream_framed_task<64>` is called with `cmd, m_in,

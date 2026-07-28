@@ -4,7 +4,7 @@ parent: Module Code Generation
 nav_order: 4
 audience: hls
 applies_to: [FreeRunMod]
-api: [task_files_to_str, composite_top_spec, render_top, KernelTask]
+api: [task_files_to_str, composite_top_spec, render_top]
 summary: "A FreeRunMod lowers to a composite_kernel: an ap_ctrl_none top whose body is nothing but hls::task instantiations, plus one task body per leaf. Walks the vector-square toy (y = x*x over a 4-float Vec) from Python to generated C++ — the task body that is ONE FIRING rather than a loop, the top that instantiates it, and why the two are separate artifacts."
 ---
 
@@ -40,9 +40,6 @@ class Square(FreeRunMod):
         self.y_out = StreamIFMaster(name=f"{self.name}_y_out", sim=self.sim, bitwidth=32)
         self.add_endpoint(self.x_in)
         self.add_endpoint(self.y_out)
-
-    def kernel_task(self) -> KernelTask:
-        return KernelTask("square_task", "square_task.h", ("x_in", "y_out"), template_args=())
 
     def run_iter(self) -> ProcessGen[None]:
         x = yield from self.x_in.get(Vec)      # one n-vector
@@ -156,72 +153,21 @@ parameter list and the task's call arguments are literally the same list and can
 Direction comes from each endpoint's *type* — a `StreamIFSlave` is an input, a `StreamIFMaster` an
 output — so nothing is stated twice.
 
-## `kernel_task()` — what it is, and why it exists
+## Nothing else to declare
 
-```python
-def kernel_task(self) -> KernelTask:
-    return KernelTask("square_task", "square_task.h", ("x_in", "y_out"), template_args=())
-```
+A leaf declares no boundary and no task descriptor. The port list, the task's C++ name, its header,
+and its template arguments are all derived from the module — by the same helpers that emit the body,
+so the two cannot disagree about any of them.
 
-**Is it required?** For a leaf, yes — any leaf that needs a top. The top's port list is derived from
-`kernel_task().signature`, so without it the graph walk cannot produce a boundary at all. A composite
-does *not* define one (it has no body of its own); its children each do.
-
-**Why does it exist, when all of this looks derivable?** Because of the case the page has not shown
-yet: **a body the generator did not write.**
-
-`MemRStream` hands over a pre-written `mem_r_stream_task.h`. For that body nothing is derivable —
-someone else chose the function's name, which header it lives in, and, most importantly, **the order
-of its parameters**:
-
-```cpp
-mem_r_stream_framed_task<64>(cmd, m_in, copy_data)   // stream, m_axi, stream
-```
-
-That order is a fact about the C++, not about the Python. The module's endpoints could be declared in
-any order, and an `m_axi` sits in the middle of two streams here. `signature` is what maps one to the
-other: **the endpoint attribute names in task-argument order**. The generator resolves each name to
-either a boundary port or an internal channel and emits the call. That is the seam that lets the top
-be graph-derived rather than hand-written, and it is the reason the type exists.
-
-### The arguments
-
-| | is | derivable for a generated body? |
-|---|---|---|
-| `task_fn` | the C++ function name | **yes** — `task_files_to_str` already defaults to `<kernel>_task` |
-| `header` | the header to `#include` | **yes** — likewise `<task_fn>.h` |
-| `signature` | endpoint attribute names, **in task-argument order** | yes, but only because the generator chose the order |
-| `template_args` | baked-concrete template arguments, in order | yes — they are the module's own `HwParam` values |
-
-`template_args=()` emits the name bare (`square_task`, not `square_task<>`), which is what a generated
-body wants once it has baked its width into the signature.
-
-### The wart
-
-Read that table again: for a **generated** body, every field is something the generator already knows.
-`task_files_to_str` derives the function name and header itself and never consults `kernel_task()`;
-`composite_gen` consults `kernel_task()` and never consults the generated body. **Nothing cross-checks
-the two.** Write `KernelTask("squared_task", ...)` by mistake and the top will call a function that
-does not exist — a csynth error, not a Waveflow one.
-
-So `kernel_task()` is load-bearing for a hand-written body and restated boilerplate for a generated
-one. The honest reading is that a generated leaf should not have to write it at all; it does today
-because the boundary derivation goes through it. (`task_fn` has quietly acquired a third job as well:
-[calibration](../calib/) uses it as the component's identity key.)
-
-## The hand-off
-
-That underivable case is also the escape hatch. A leaf owning an `m_axi` master is **refused** by
-task-body emission — a scope boundary, not a law of HLS, since `mem_r_stream_task.h` carries `m_axi`
-quite happily. The emitter has not answered what an `m_axi` body needs (bundle naming, depth, who
-owns the `offset=slave` register), so it refuses rather than emit something unreviewed.
-
-Such a module names its pre-written body through `kernel_task()` and leaves `run_iter` as the **pysim
-golden** — the model that says what the hand-written C++ is supposed to do. Nothing checks the two
-against each other except a test.
+The one thing that is *not* derivable is a body the framework did not write: nobody can guess the
+function name, the header, or the parameter order someone else chose. That is
+[Overriding the generated task](./freerunning_override.md), and it is also how a leaf that owns an
+`m_axi` master gets a body at all — task-body emission refuses those, a scope boundary rather than a
+law of HLS.
 
 ## See also
 
+- [Overriding the generated task](./freerunning_override.md) — handing over a body you wrote.
 - [Free-running composite in HLS](./freerunning_composite.md) — the same generator with several tasks
   and internal channels.
 - [Concurrent (free-running)](../flows/concurrent.md) — the flow and when to choose it.
