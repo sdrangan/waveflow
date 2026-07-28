@@ -21,6 +21,8 @@ raw per-run firing trees::
     points/*.json                  # bus corpus — distilled {num_trans, nwords, span}
     components/<c>/params.json      # a component's residual params (StreamTimingModel)
     components/<c>/corpus.csv       # a component's distilled corpus — re-fittable offline
+    modules/<key>/module.json       # a keyed module's identity (waveflow.calib.record_store)
+    modules/<key>/<target>/records.jsonl   # its timing / resource measurements
 
   excluded: ``components/<c>/rtl/`` and ``components/<c>/pysim/`` (the raw per-run firings — large,
   reproducible from a re-sweep, and the source of the churn this split removes).
@@ -35,6 +37,8 @@ import argparse
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from waveflow.calib.record_store import MODULES_SUBDIR
 
 
 class RegressionError(RuntimeError):
@@ -95,6 +99,17 @@ def _publishable(work_dir: Path) -> list[str]:
         for fname in ("params.json", "corpus.csv"):
             if (comp / fname).is_file():
                 rels.append((comp / fname).relative_to(work_dir).as_posix())
+    # The per-module record store (waveflow.calib.record_store).  Both halves are stable and small —
+    # the identity is what makes a later read verifiable, and the records are the measurements
+    # themselves (a synthesis is expensive enough that losing one to a work-dir wipe is real cost).
+    # Nothing under modules/ is a raw trace, so there is no churny tier to exclude here.
+    for mod in sorted(d for d in (work_dir / MODULES_SUBDIR).glob("*") if d.is_dir()):
+        if (mod / "module.json").is_file():
+            rels.append((mod / "module.json").relative_to(work_dir).as_posix())
+        for target in sorted(t for t in mod.glob("*") if t.is_dir()):
+            recs = target / "records.jsonl"
+            if recs.is_file():
+                rels.append(recs.relative_to(work_dir).as_posix())
     return rels
 
 
@@ -112,6 +127,18 @@ def _csv_rows(p: Path) -> int:
 
 def _bus_points(platform_dir: Path) -> int:
     return len(list((platform_dir / "points").glob("*.json")))
+
+
+def _record_rows(mod_dir: Path) -> int:
+    """Measurements behind a module's records, across every target. 0 if absent.
+
+    The module tier's analogue of ``corpus.csv`` rows: what the coverage guard compares so a thin
+    re-sweep cannot clobber a library that cost more syntheses to build.
+    """
+    total = 0
+    for recs in sorted(mod_dir.glob("*/records.jsonl")):
+        total += sum(1 for line in recs.read_text(encoding="utf-8").splitlines() if line.strip())
+    return total
 
 
 # -- plan --------------------------------------------------------------------------------------------
@@ -142,6 +169,11 @@ def build_plan(work_dir: str | Path, tracked_dir: str | Path) -> PublishPlan:
             unit=f"components/{name}",
             tracked=_csv_rows(tracked_dir / "components" / name / "corpus.csv"),
             incoming=_csv_rows(comp / "corpus.csv")))
+    for mod in sorted(d for d in (work_dir / MODULES_SUBDIR).glob("*") if d.is_dir()):
+        plan.guards.append(Guard(
+            unit=f"{MODULES_SUBDIR}/{mod.name}",
+            tracked=_record_rows(tracked_dir / MODULES_SUBDIR / mod.name),
+            incoming=_record_rows(mod)))
     return plan
 
 

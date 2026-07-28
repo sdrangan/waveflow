@@ -130,3 +130,54 @@ class TestCLI:
         rc = main([str(thin), str(tracked), "--apply"])
         assert rc == 1
         assert "REFUSED" in capsys.readouterr().out
+
+
+class TestModuleTier:
+    """The per-module record store (waveflow/calib/record_store.py) rides the same two-tier split.
+
+    It is published rather than left in the work dir because a record *is* the expensive artifact: a
+    synthesis costs minutes, so losing one to a work-dir wipe is real cost, and unlike a firing tree
+    there is no churny raw layer under `modules/` to leave behind.
+    """
+
+    @staticmethod
+    def _add_module(root, key="fir_compute-a1b2c3d4", *, records=2, signature="a" * 64):
+        mod = root / "modules" / key
+        (mod / "resource").mkdir(parents=True, exist_ok=True)
+        (mod / "module.json").write_text(json.dumps({
+            "key": key, "cls_name": "FirCompute", "cls_module": "examples.fir_block.fir_block",
+            "params": {"ntap": 32}, "signature": signature}))
+        (mod / "resource" / "records.jsonl").write_text("".join(
+            json.dumps({"key": key, "target": "resource", "source": "hls_estimate",
+                        "cost_seconds": 30.0, "payload": {"lut": 100 + i},
+                        "provenance": {"signature": signature}}) + "\n"
+            for i in range(records)))
+        return root
+
+    def test_module_identity_and_records_are_published(self, tmp_path):
+        work = self._add_module(_make_work(tmp_path / "work"))
+        tracked = tmp_path / "tracked"
+        apply_plan(build_plan(work, tracked))
+
+        mod = tracked / "modules" / "fir_compute-a1b2c3d4"
+        assert (mod / "module.json").is_file()
+        assert (mod / "resource" / "records.jsonl").is_file()
+
+    def test_republish_of_an_unchanged_module_is_a_noop(self, tmp_path):
+        work = self._add_module(_make_work(tmp_path / "work"))
+        tracked = tmp_path / "tracked"
+        apply_plan(build_plan(work, tracked))
+        assert apply_plan(build_plan(work, tracked)) == []
+
+    def test_thinner_module_records_are_refused(self, tmp_path):
+        """The guard that keeps a short re-sweep from clobbering a library that cost more syntheses."""
+        tracked = self._add_module(_make_work(tmp_path / "tracked"), records=5)
+        work = self._add_module(_make_work(tmp_path / "work"), records=2)
+        with pytest.raises(RegressionError, match="modules/fir_compute-a1b2c3d4"):
+            apply_plan(build_plan(work, tracked))
+
+    def test_richer_module_records_publish_cleanly(self, tmp_path):
+        tracked = self._add_module(_make_work(tmp_path / "tracked"), records=2)
+        work = self._add_module(_make_work(tmp_path / "work"), records=5)
+        written = apply_plan(build_plan(work, tracked))
+        assert "modules/fir_compute-a1b2c3d4/resource/records.jsonl" in written
