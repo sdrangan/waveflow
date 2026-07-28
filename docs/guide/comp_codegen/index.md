@@ -84,8 +84,8 @@ actual problem and the fix — not just *"cannot synthesize"*.
 >>> from waveflow.build.codegen_check import check
 >>> check(SimpFun)
 (True, None)
->>> check(SimpFun, "concurrent_systemc_tb")
-(False, "'concurrent_systemc_tb' is not a potential target for SimpFun; ...")
+>>> check(SimpFun, "bitstream")
+(False, "'bitstream' is not a potential target for SimpFun; its potential targets are {'control_driven_kernel'}")
 ```
 
 **`check` knows no rules of its own.** It runs the *real* validation, throws the result away, and
@@ -102,6 +102,12 @@ or that it is correct at all. That is what the example's C-simulation and co-sim
 
 ## In this section
 
+The section is organized by **what is realized**: a host-activated module
+([Module structure](./structure.md)), a free-running one
+([Free-running kernel in HLS](./composite.md)), and the two testbench targets
+([Testbench](./testbench.md), [XSI testbench](./xsi_tb.md)). How to *describe* either module in
+Python is the previous section, [Hardware modules and Flows](../flows/).
+
 **Start with [Automatic vs. manual](./automatic.md)** — where the generator stops and you begin — then
 [Module structure](./structure.md) for how a module becomes a kernel, and
 [Extractor](./extractor.md) for what your body may contain. Those three are what you need to *write* a
@@ -111,10 +117,12 @@ means when you write a [hook](../custom_hooks/).
 - [Automatic vs. manual](./automatic.md) — what codegen writes and what you write: everything structural is generated; the compute inside a `@synthesizable` hook is yours.
 - [Module structure](./structure.md) — how an `HwModule` becomes a Vitis HLS top-level function: the kernel entry, the execution model, where hooks come from, and the **contract** for when a module lowers at all.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
+- [Free-running kernel in HLS](./composite.md) — how a `FreeRunMod` becomes an `ap_ctrl_none` `hls::task` top plus a generated task body: the graph-derived top, `KernelTask`, and where `HwState` statics land.
 - [Extractor](./extractor.md) — the synthesizable subset: what the rules are, why each exists, and `check` as their callable form.
 - [Codegen](./codegen.md) — how `kernel_files_to_str` emits the deterministic kernel file set and resolves naming.
 - [Templating](./templating.md) — the C++ realization of [parameterization](../flows/parametrization.md): how `HwParam` lowers (concrete widths / `.tpp` template params), `HwConst` (deferred), and how `param_supports` emits variant kernels.
 - [Testbench](./testbench.md) — how a [`SeqTB`](../flows/modules.md)'s `main()` lowers to a `sequential_vitis_tb`.
+- [XSI testbench in HLS](./xsi_tb.md) — how a testbench *graph* lowers to a `sequential_xsi_tb`: participants map to pre-written BFM models, and the scenario lives in burst bundles rather than in the C++.
 
 ## See also
 

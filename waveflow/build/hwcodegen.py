@@ -275,8 +275,9 @@ class HwStmtExtractor:
                 f"{method_name}(). This body is concurrent: it spawns a coroutine that runs "
                 f"alongside the rest of the body, so it has no straight-line lowering — neither "
                 f"a sequential Vitis 'int main()' testbench nor a straight-line kernel body can "
-                f"express the fork. It needs the SystemC path (Flow 3, free-running and "
-                f"concurrently driven), not C-simulation; see docs/guide/flows/. If the body is "
+                f"express the fork. A concurrently-driven DUT is verified by the free-running "
+                f"flow's XSI BFM, which drives every port each cycle; see docs/guide/flows/. If "
+                f"the body is "
                 f"in fact sequential, run the coroutine inline ('yield from <call>') rather than "
                 f"spawning it."
             )

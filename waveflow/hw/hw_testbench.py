@@ -50,7 +50,7 @@ class SeqTB(NamedObject):
     Concurrent stimulus/capture coroutines (``env.process(...)``) are not supported — the body
     must be straight-line.  This is **enforced**, not merely documented: the extractor's
     sequential gate (``HwStmtExtractor._validate_no_concurrency``) rejects a spawn and names the
-    SystemC path (Flow 3) as the fix, so ``check(MyTB, "sequential_vitis_tb")`` reports it too.
+    free-running flow's XSI BFM as the fix, so ``check(MyTB, "sequential_vitis_tb")`` reports it too.
 
     That gate is a **gate, not a proof**.  It rejects the syntactic construct that certainly
     implies concurrency; it does not certify that a body which passes is sequential (semantic
@@ -67,7 +67,7 @@ class SeqTB(NamedObject):
 
     #: The codegen targets that **exist for this kind**.  Unlike the DUT kinds (~1:1 with the class),
     #: the TB targets are a *real* choice — one ``main()``, three lowerings (Vitis C-sim ``int main()``,
-    #: an XSI BFM, a SystemC harness).  ``SeqTB`` declares only the sequential Vitis lowering: the
+    #: an XSI BFM).  ``SeqTB`` declares only the sequential Vitis lowering: the
     #: other two drive a *free-running* DUT and are Flow 2/3 future work, so they belong to whatever
     #: kind grows them, not here.  See :class:`~waveflow.hw.hw_hostactivated.HostActivated` for why
     #: this is ``potential_`` and not ``supported_``.

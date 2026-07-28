@@ -1,7 +1,7 @@
 ---
 title: Extractor
 parent: Module Code Generation
-nav_order: 3
+nav_order: 4
 audience: hls
 api: [HwStmtExtractor, extract_kernel, extract_testbench, SynthesisError, check]
 summary: "Extraction reads a component's entry method as source (it never runs it), parses it, and translates it into HwStmt — a small hardware IR of ~25 statement types that sits between the Python and the C++. Only a limited set of Python statements and a fixed vocabulary of endpoint operations can be extracted today; anything else raises SynthesisError rather than emitting doubtful C++. check(source, target) is the same rules as a predicate."
@@ -146,8 +146,8 @@ self.add_state(self.taps)
 The rule is not relaxed — an undeclared `self.X` is still rejected. What changes is that there is now a
 way to answer it. A declared object may be read at a hook call site, where it lowers to its bare
 attribute name, and codegen emits persistent storage for it: a `static` at the top of the kernel
-function for a [control-driven kernel](../flows/control_kernel.md), and at the top of the generated
-`hls::task` body for a [free-running](../flows/freerun_seq.md) leaf — where it is the only place
+function for a [control-driven kernel](../flows/sequential.md), and at the top of the generated
+`hls::task` body for a [free-running](../flows/concurrent.md) leaf — where it is the only place
 persistent storage *can* live, since a task has no "before the loop".
 
 One detail worth knowing: the C++ type comes from the **registered instance**, not from the hook's
@@ -164,7 +164,8 @@ it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (t
 
 **No concurrency.** Spawning a SimPy process (`env.process(...)`) is rejected, because every target this
 extractor feeds is sequential — there is no straight-line lowering for a fork. The message points at the
-SystemC path ([free-running, concurrently driven](../flows/freerun_conc.md)). Honest limit: this is a **gate, not a proof**. It rejects the
+[concurrent (free-running)](../flows/concurrent.md) flow, whose XSI BFM drives every port each cycle.
+Honest limit: this is a **gate, not a proof**. It rejects the
 syntax that certainly implies concurrency; it cannot certify that a body is sequential.
 
 **A leaf must be structurally flat.** A component that lowers to one kernel function may not own

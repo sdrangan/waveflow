@@ -44,9 +44,9 @@ The consequence runs through everything else:
 |                                        | `ap_ctrl_hs`                                | `ap_ctrl_none`                                                         |
 | -------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
 | Is it a function you can call?         | **yes** — that is what a handshake is  | **no** — it never returns                                         |
-| Can a testbench just call it?          | yes, and Vitis builds the RTL harness for you | no — the RTL must be driven directly ([free-running, sequentially driven](../flows/freerun_seq.md)) |
+| Can a testbench just call it?          | yes, and Vitis builds the RTL harness for you | no — the RTL must be driven directly ([concurrent (free-running)](../flows/concurrent.md)) |
 | May it carry`m_axi` / `s_axilite`? | yes                                           | **no** — a free-running interface is stream-only                  |
-| Which [flow](../flows/) | [Control-driven kernel](../flows/control_kernel.md) | [Free-running, sequentially](../flows/freerun_seq.md) or [concurrently driven](../flows/freerun_conc.md) |
+| Which [flow](../flows/) | [Sequential (host-activated)](../flows/sequential.md) | [Concurrent (free-running)](../flows/concurrent.md) |
 
 > **Everything Waveflow generates today is `ap_ctrl_hs`.** `ap_ctrl_none` is the
 > [`free_running_kernel`](./index.md) target, which is not built — so a `FreeRunMod` currently emits an
