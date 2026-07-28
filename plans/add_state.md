@@ -515,10 +515,33 @@ MAC-time invariant. Both bodies' index algebra was verified element-by-element i
 unaligned block lengths and the tail-offset carry — *before* synthesis, which is the cheap way to
 catch this class rather than paying a csynth+XSI round trip per hypothesis.
 
-**Still to do here:** the `W` sweep as a *driver* — the parameterization is done (the C++ takes
-`acc_t`/`NTAP`/the array-utils namespace from generated headers, so `generate_dut(ntap=…, samp_w=…,
-unroll_lane=…)` re-emits and re-synthesizes at any point), but nothing yet collects an artifact per
-point and plots it. Stage 4 (templated extents) is still open and is what a `ntap` sweep would want.
+### Docs, and the build interface
+
+`docs/examples/firblock/` is written — nine pages, `nav_order: 8`, parallel to the interleaver's
+structure: index, module overview, cross-firing state, fixed point, Python, testbench, the two kernels,
+DUT codegen, RTL simulation. Two conventions were settled while writing them and are worth keeping:
+
+- **`firing` vs `iteration` are not synonyms.** A *firing* is one execution of a task body; an
+  *iteration* is one trip of a loop inside it. The tree already used them this way (docs: 146 vs 22,
+  and every one of the 22 is about loop structure), and `fir_block` is the first example needing both
+  at once — `add_state` changes what survives a firing, `unroll_lane` changes the iteration structure.
+- **Learning objectives take testable verbs.** No "understand"; "identify … and avoid by …" instead.
+
+Writing the pages also forced `fir_block_build.py` onto `run_dag_cli`, like every other example's
+`*_build.py` — the bespoke `__main__` would have meant documenting a fir_block-only interface. Steps
+are `pysim → codegen_dut → codegen_tb → csynth` with `--samp-w / --samp-i / --ntap / --unroll-lane`,
+and `csynth` re-emits `rtl_fir_block.f` itself (which removed the generate→csynth→regenerate dance).
+The pages also surfaced prose drift — two files still named the pre-split `fir_compute_task.h`, and
+stale copies of it were sitting in the generated `include/`.
+
+**Still to do here:** the `W` sweep as a *driver*. The parameterization is done (the C++ takes
+`acc_t` / `NTAP` / the array-utils namespace from generated headers, so
+`generate_dut(ntap=…, samp_w=…, unroll_lane=…)` re-emits and re-synthesizes at any point) and the
+measurements exist, but nothing yet collects an artifact per point. **Deliberately deferred to its own
+branch**: how sweeps are expressed has long-term consequences for agentic DSE, so it is a design
+question rather than a scripting one, and `docs/examples/firblock/sweep.md` waits on that decision.
+Stage 4 (templated extents) is still open and is what an `ntap` sweep would want. A **resource model**
+(the sibling of the timing model, fit from the sweep's csynth reports) is the natural page after it.
 
 ## Related
 
