@@ -55,4 +55,4 @@ all objects at once.
 
 > The simulation models a design in Python. Turning that design into synthesizable C++ — the
 > generated kernel structure and the hand-written kernel bodies — is the codegen arc:
-> [Component Code Generation](../comp_codegen/) and [Custom Hooks](../custom_hooks/).
+> [Module Code Generation](../comp_codegen/) and [Custom Hooks](../custom_hooks/).

@@ -101,7 +101,7 @@ This **declares** that the build should emit `my_kernel` (defaults), `my_kernel_
 `my_kernel_bw128`. [`validate_param_supports`](../../../waveflow/hw/hw_module.py) checks the keys
 (valid C identifiers) and that every override names a real `HwParam` field. *How* those variants are
 generated — concrete top functions per key — is the realization page:
-[Component Code Generation: Templating](../comp_codegen/templating.md).
+[Module Code Generation: Templating](../comp_codegen/templating.md).
 
 > Forward pointer: a third parameter binding-site, `XSIParam`, is planned for the concurrent flow's
 > testbench participants (a value that becomes a constructor argument of a generated XSI model, and
@@ -109,9 +109,9 @@ generated — concrete top functions per key — is the realization page:
 
 ## See also
 
-- [Component Code Generation: Templating](../comp_codegen/templating.md) — the C++ realization: how `HwParam` lowers into kernel signatures, `HwConst` into `static constexpr`, and `param_supports` into variant kernels.
+- [Module Code Generation: Templating](../comp_codegen/templating.md) — the C++ realization: how `HwParam` lowers into kernel signatures, `HwConst` into `static constexpr`, and `param_supports` into variant kernels.
 - [Hardware modules](./modules.md) — where these fields are declared on the class.
-- [Component structure](../comp_codegen/structure.md) — the generated kernel these parameters shape.
+- [Module structure](../comp_codegen/structure.md) — the generated kernel these parameters shape.
 
 ## Quick reference
 

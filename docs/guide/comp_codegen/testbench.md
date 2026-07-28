@@ -1,6 +1,6 @@
 ---
 title: Testbench
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 6
 audience: hls
 applies_to: [SeqTB]

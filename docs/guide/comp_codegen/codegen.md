@@ -1,6 +1,6 @@
 ---
 title: Codegen
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 4
 audience: hls
 api: [kernel_files_to_str, tb_files_to_str, HlsCodegenStep, cpp_kernel_name, resolved_namespace]

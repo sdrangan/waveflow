@@ -1,15 +1,15 @@
  
 
 ---
-title: Component structure
-parent: Component Code Generation
+title: Module structure
+parent: Module Code Generation
 nav_order: 1
 audience: hls
 applies_to: [HwModule]
 api: [kernel_files_to_str, cpp_kernel_name, extract_kernel, synthesizable, check]
 summary: "How an HwModule becomes a kernel: a standalone component generates one top-level function whose arguments are its endpoints; which method is extracted as the body follows from the component's kind (HostActivated -> on_start, standalone FreeRunMod -> run_iter, composite FreeRunMod -> the graph). The entry method IS extracted; @synthesizable hooks are NOT — they are boundaries whose C++ you write. A component lowers iff it is structurally flat and its body passes the extractor, which check() answers."
 ---
-# Component structure
+# Module structure
 
 ## Concept
 

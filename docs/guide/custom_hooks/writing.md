@@ -96,5 +96,5 @@ a `.cpp`.
 
 - [Block](./block.md) / [Stream](./stream.md) / [Complex](./complex.md) — the three data-movement patterns the hook plugs into.
 - [Kernel transfer reference](./reference.md) — the in-kernel port read/write calls a hook uses.
-- [Component Code Generation: Templating](../comp_codegen/templating.md) — why a templated hook is a `.tpp` and how `HwParam` reaches it.
+- [Module Code Generation: Templating](../comp_codegen/templating.md) — why a templated hook is a `.tpp` and how `HwParam` reaches it.
 - [`@synthesizable`](../../../waveflow/hw/synth.py) — the decorator and its `impl_file` / `synth_fn` options.

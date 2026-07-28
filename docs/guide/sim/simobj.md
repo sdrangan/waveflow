@@ -41,7 +41,7 @@ A *hardware* `SimObj` adds two synthesis-facing specifics: a regmap-launched com
 `on_start` — the invocation-style kernel entry the host triggers via `ap_start` — instead of a
 free-running `run_proc`, and `@sim_only` marks helpers that exist only for simulation and are excluded
 from synthesis extraction. Both are covered where the kernel is generated:
-[Component structure](../comp_codegen/structure.md),
+[Module structure](../comp_codegen/structure.md),
 [Defining a component: Execution models](../flows/modules.md), and the
 [Extractor](../comp_codegen/extractor.md).
 

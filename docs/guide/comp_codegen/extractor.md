@@ -1,6 +1,6 @@
 ---
 title: Extractor
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 3
 audience: hls
 api: [HwStmtExtractor, extract_kernel, extract_testbench, SynthesisError, check]
@@ -139,25 +139,24 @@ guessing, so the extractor makes you say which.
 **Declaring state.** `add_state` is how you say "this one is a register file":
 
 ```python
-self.taps = TapArray()          # a DataArray with cpp_storage="raw"
-self.add_state(self.taps, access="R")
+self.taps = HwState(TapArray())       # TapArray: a DataArray with cpp_storage="raw"
+self.add_state(self.taps)
 ```
 
 The rule is not relaxed — an undeclared `self.X` is still rejected. What changes is that there is now a
 way to answer it. A declared object may be read at a hook call site, where it lowers to its bare
 attribute name, and codegen emits persistent storage for it: a `static` at the top of the kernel
-function for a [control-driven kernel](../flows/control_driven.md), and at the top of the generated
+function for a [control-driven kernel](../flows/control_kernel.md), and at the top of the generated
 `hls::task` body for a [free-running](../flows/freerun_seq.md) leaf — where it is the only place
 persistent storage *can* live, since a task has no "before the loop".
 
-Two details worth knowing. The C++ type comes from the **registered instance**, not from the hook's
+One detail worth knowing: the C++ type comes from the **registered instance**, not from the hook's
 annotation, so state whose element format was built per instance (a `FixedField` specialized off a
-`HwParam`) emits the format it actually has. And `access` (`"R"` / `"W"` / `"RW"`) is declared rather
-than inferred, because an array argument decays to a pointer and C++ cannot tell a read-only table from
-a mutated accumulator.
+`HwParam`) emits the format it actually has. That is why a hook argument can simply be annotated
+`HwState`.
 
-See [`plans/add_state.md`](https://github.com/sdrangan/pysilicon/blob/main/plans/add_state.md) for the
-storage-site reasoning and the remaining stages.
+[`HwState`](../memory/hwstate.md) is the full story — what it emits at each site, partitioning, and
+why read/write permission is *not* declared on the storage.
 
 **Only `@synthesizable` calls.** A call to a plain method is rejected — mark it `@synthesizable` to make
 it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (that is how
@@ -189,6 +188,6 @@ reported by `check` for free.**
 
 ## See also
 
-- [Component structure](./structure.md) — the contract for when a component lowers at all.
+- [Module structure](./structure.md) — the contract for when a component lowers at all.
 - [Custom Hooks](../custom_hooks/) — writing the bodies the extractor deliberately does not translate.
 - [Codegen](./codegen.md) — what the emitter does with the resolved `HwStmt` tree.

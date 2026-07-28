@@ -131,7 +131,7 @@ same flow, one page per step, against real code:
 
 ## See also
 
-- [Component structure](../comp_codegen/structure.md) — the contract for when a component lowers at all.
+- [Module structure](../comp_codegen/structure.md) — the contract for when a component lowers at all.
 - [Testbench](../comp_codegen/testbench.md) — how a `SeqTB`'s `main()` becomes the `int main()` this flow runs.
 - [Build System](../build/) — the `BuildDag` machinery behind the table above.
 - [Free-running, sequentially driven](./freerun_seq.md) — the same sequential testbench, against a DUT Vitis cannot wrap.

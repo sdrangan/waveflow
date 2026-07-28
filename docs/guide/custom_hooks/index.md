@@ -10,7 +10,7 @@ summary: "The hand-written codegen path: when the HwStmt extractor can't lower a
 
 # Custom Hooks
 
-Most of a component lowers to C++ automatically — [Component Code Generation](../comp_codegen/)
+Most of a component lowers to C++ automatically — [Module Code Generation](../comp_codegen/)
 walks the synthesizable subset of your Python and emits the kernel structure. But some datapaths are
 beyond what the extractor can lower: a tight complex MAC, a custom pipeline, anything where you want
 hand-tuned HLS pragmas and exact `ap_fixed` intermediates. For those you write the kernel body
@@ -20,7 +20,7 @@ code.
 ## Auto-generated vs. hand-written
 
 This is the **hand-written** side of hardware generation; the **auto-generated** side is
-[Component Code Generation](../comp_codegen/). The boundary is one decorator:
+[Module Code Generation](../comp_codegen/). The boundary is one decorator:
 
 | | Auto-generated | Hand-written (here) |
 |---|---|---|
@@ -76,6 +76,6 @@ with no data movement), then jump to the pattern that matches your operand.
 
 ## See also
 
-- [Component Code Generation](../comp_codegen/) — the auto-generated structure your hook plugs into.
+- [Module Code Generation](../comp_codegen/) — the auto-generated structure your hook plugs into.
 - [Hardware Modules](../flows/modules.md) — declaring the component (ports, `HwParam`) the hook belongs to.
 - [Serialization](../schema/hls/serialization.md) / [raw arrays](../vectorization/hls/raw.md) — the generated packing methods a hook calls.

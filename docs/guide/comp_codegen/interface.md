@@ -1,6 +1,6 @@
 ---
 title: Endpoint interfaces
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 2
 audience: hls
 applies_to: [HwModule]

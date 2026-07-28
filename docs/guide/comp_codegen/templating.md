@@ -1,6 +1,6 @@
 ---
 title: Templating
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 5
 audience: hls
 applies_to: [HwParam, HwConst]

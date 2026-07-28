@@ -64,7 +64,7 @@ The generated top is the *glue*; the datapath is hand-written:
 
 - The **structure** (the kernel signature, the `m_axi` port, the dequeue/compute
   loop) is auto-generated — the general mechanism is
-  [Component Code Generation](../../guide/comp_codegen/).
+  [Module Code Generation](../../guide/comp_codegen/).
 - The **dequeue** is the [`queue_get` hook](../../guide/custom_hooks/queue.md), called
   where `run_proc` had `cmd_queue.get`.
 - The **compute** is the [`vmac_compute_impl.tpp` hook](./hook.md), called where

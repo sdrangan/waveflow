@@ -23,5 +23,5 @@ has two halves:
 
 ## See also
 
-- [Component structure](../comp_codegen/structure.md) — free-running vs. launched kernel modes.
+- [Module structure](../comp_codegen/structure.md) — free-running vs. launched kernel modes.
 - [Hardware Modules](../flows/modules.md) and [Interfaces](../interface/) — the Python-side declarations composites are built from.
