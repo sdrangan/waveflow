@@ -40,12 +40,25 @@ full-precision and *derived*, not hand-sized: :func:`~waveflow.hw.fixpoint.mult`
 ``+ceil(log2 T)`` — so the window reduction is ``fixed_sum``, never repeated ``add``.
 :func:`~waveflow.hw.fixpoint.quantize` back to the sample format is the single declared lossy step.
 
-**Transport is one sample per 32-bit word**, whatever ``samp_w`` is: the stored two's-complement value
-sits in the low ``W`` bits.  That is a deliberate choice, not an oversight.  It keeps the width sweep
-*clean* — only the arithmetic width moves, the bus and the word counts do not — and dense sub-word
-packing is not expressible anyway at the interesting widths (the lane readers need an integer
-``MEM_DW/elem_bw``, and ``W=18`` is not one).  Packing is the vectorization example's subject; see
-``docs/guide/vectorization/hls/arrayutils.md``.
+**Transport is packed**, ``LW = max(1, MEM_DW // W)`` samples per word, and neither side hand-rolls it:
+the C++ uses the generated ``<stem>_array_utils`` lane routines and the Python twin uses
+``DataArray.serialize`` — one packing contract, so a numpy golden and a Vitis kernel agree bit-for-bit
+at any ``LW``.  See ``docs/guide/vectorization/hls/arrayutils.md``; if a kernel here ever grows a
+``.range()`` to pull elements out of a word, that is the bug, not the idiom.
+
+The packing factor is integer division, so an awkward width is not a problem: ``W=18`` gives ``LW=1``
+(one sample per word, 14 bits unused), ``W=16`` gives 2, ``W=8`` gives 4.  A ``n``-sample block is
+therefore ``ceil(n/LW)`` words — the commands and descriptors carry **samples**, the mem-streams carry
+**words**, and :func:`nwords` is the single conversion between them.
+
+Two realizations, one golden
+----------------------------
+``unroll_lane`` (an :class:`HwParam`) picks between two hand-written task bodies that compute
+*bit-identical* results and differ only in physics — see :attr:`FirCompute.unroll_lane` for the
+measured table.  ``False`` (``fir_compute_serial_task.h``) holds throughput at one sample per cycle and
+lets the multiplier count fall with precision; ``True`` (``fir_compute_unroll_task.h``) consumes a
+whole lane per beat, buying throughput at a fixed ``LW*NTAP`` multipliers.  That pairing is what makes
+this example a monomorphized-QoR probe rather than one design with a knob.
 """
 from __future__ import annotations
 
@@ -56,6 +69,7 @@ from typing import ClassVar
 
 import numpy as np
 
+from waveflow.build.composite_gen import INCLUDE_DIR
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, IntField
 from waveflow.hw.fixpoint import FixedField, fixed_sum, mult, quantize
@@ -142,8 +156,12 @@ def samp_type(samp_w: int = DEFAULT_SAMP_W, samp_i: int = DEFAULT_SAMP_I) -> typ
 
     Built per-instance (the width is an :class:`HwParam`), which is why the hook's state arguments
     resolve their concrete type from the *registered instance* rather than from an annotation
-    (``plans/add_state.md`` decision 5)."""
-    return FixedField.specialize(W=int(samp_w), I=int(samp_i), signed=True)
+    (``plans/add_state.md`` decision 5).
+
+    ``include_dir`` is what puts the element's generated ``<stem>_array_utils.h`` next to the other
+    headers instead of at the example root — the same thing the interleaver's ``IlElem`` declares."""
+    return FixedField.specialize(W=int(samp_w), I=int(samp_i), signed=True,
+                                 include_dir=INCLUDE_DIR)
 
 
 def tap_array_type(ntap: int, samp_cls: type[FixedField]) -> type:
@@ -157,18 +175,39 @@ def carry_array_type(ntap: int, samp_cls: type[FixedField]) -> type:
     return DataArray.specialize(samp_cls, max_shape=(max(int(ntap) - 1, 1),), cpp_storage="raw")
 
 
-def words_to_stored(words, samp_w: int) -> np.ndarray:
-    """Transport words -> stored two's-complement sample values (the low ``W`` bits, sign-extended)."""
-    w = int(samp_w)
-    v = np.asarray(words, dtype=np.uint64) & np.uint64((1 << w) - 1)
-    neg = (v >> np.uint64(w - 1)) & np.uint64(1)
-    return v.astype(np.int64) - (neg.astype(np.int64) << np.int64(w))
+def lane_width(mem_dwidth: int, samp_w: int) -> int:
+    """``LW`` — samples per transport word, the Python twin of the generated
+    ``<stem>_array_utils::lane_capacity<MEM_DW>()``: ``max(1, MEM_DW // W)``.
+
+    This is *derived*, not chosen.  An earlier cut of this example asserted one sample per 32-bit word
+    on the grounds that packing "is not expressible" at an awkward width like ``W=18`` — which is
+    wrong: the packing factor is integer division, so ``W=18`` simply gives ``pf=1`` and lands on the
+    one-per-word case anyway, while ``W=16`` packs two and ``W=8`` packs four."""
+    return max(1, int(mem_dwidth) // int(samp_w))
 
 
-def stored_to_words(stored, samp_w: int) -> np.ndarray:
-    """Stored sample values -> transport words (the inverse of :func:`words_to_stored`)."""
-    w = int(samp_w)
-    return (np.asarray(stored, dtype=np.int64) & ((1 << w) - 1)).astype(np.uint64)
+def nwords(n: int, lw: int) -> int:
+    """Transport words for ``n`` samples at ``LW`` samples per word."""
+    return (int(n) + int(lw) - 1) // int(lw)
+
+
+def pack_samples(stored, samp_cls: type[FixedField], word_bw: int) -> np.ndarray:
+    """Stored sample values -> transport words, through the **framework** serializer.
+
+    ``DataArray.serialize`` is the single source of the packing contract (LSB-first, ``pf`` elements
+    per word) and the generated ``<stem>_array_utils`` C++ reads exactly that layout — so this is the
+    twin of ``write_framed_stream_lane``, not a re-implementation of it.  Hand-rolling the shift and
+    mask here is what makes a Python golden and a Vitis kernel disagree the moment ``LW > 1``."""
+    arr = np.asarray(stored, dtype=np.int64).reshape(-1)
+    cls = DataArray.specialize(samp_cls, max_shape=(max(len(arr), 1),))
+    return np.asarray(cls(arr).serialize(word_bw=int(word_bw)), dtype=np.uint64)
+
+
+def unpack_samples(words, n: int, samp_cls: type[FixedField], word_bw: int) -> np.ndarray:
+    """Transport words -> ``n`` stored sample values; the inverse of :func:`pack_samples`."""
+    cls = DataArray.specialize(samp_cls, max_shape=(max(int(n), 1),))
+    got = cls().deserialize(np.asarray(words, dtype=np.uint64), word_bw=int(word_bw))
+    return np.asarray(got, dtype=np.int64).reshape(-1)[:int(n)]
 
 
 def _as_fixed(stored, samp_cls: type[FixedField]) -> DataArray:
@@ -192,11 +231,13 @@ class FirCmdRx(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "fir_cmd_rx"
 
     mem_dwidth: HwParam[int] = MEM_DW
+    samp_w: HwParam[int] = DEFAULT_SAMP_W
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
         w = int(self.mem_dwidth)
+        self.lw = lane_width(w, self.samp_w)
         self.s_cmd = StreamIFSlave(name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=w,
                                    has_tlast=False)          # plain host boundary
         self.cmd_out = StreamIFMaster(name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w,
@@ -228,7 +269,10 @@ class FirCmdRx(FreeRunMod):
         self._mark_start()
         desc = FirDesc(op=int(cmd.op), n=int(cmd.n), dst_off=int(cmd.dst_off),
                        zero_state=int(cmd.zero_state), tx_id=int(cmd.tx_id))
-        memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n), fwd_bursts=1)
+        # `n` is a SAMPLE count on the command; the reader speaks WORDS.  At LW samples per word that
+        # is ceil(n/LW) -- the same conversion il_cmd_rx makes, and the reason the descriptor carries
+        # `n` onward: only the schema-aware ends know the packing, the mem-streams relay opaquely.
+        memr = MemRCmd(addr=int(cmd.src_off), len=nwords(int(cmd.n), self.lw), fwd_bursts=1)
         yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         self._log_firing()
@@ -259,6 +303,25 @@ class FirCompute(FreeRunMod):
     ntap: HwParam[int] = DEFAULT_NTAP
     samp_w: HwParam[int] = DEFAULT_SAMP_W
     samp_i: HwParam[int] = DEFAULT_SAMP_I
+    #: Which of the two realizations to emit.  ``False`` consumes ONE sample per iteration, carrying a
+    #: lane index across iterations; ``True`` consumes a whole lane (``LW`` samples) per iteration with
+    #: the taps unrolled ``LW`` ways.  The arithmetic is identical either way -- same ``acc_t``, same
+    #: golden -- so this parameter changes only the *physics*, which is exactly what makes the pair a
+    #: monomorphized-QoR probe rather than two designs.  Measured at ``T=32, MEM_DW=32``:
+    #:
+    #:   ============ ==== ===== ======== =========================
+    #:   ``samp_w``   LW   II    DSP      throughput
+    #:   ============ ==== ===== ======== =========================
+    #:   24 (LW=1)    1    1     64       1 sample/cycle (identical)
+    #:   16           2    1     32 / 64  1 / 2 samples per cycle
+    #:   8            4    1     17 / 128 1 / 4 samples per cycle
+    #:   ============ ==== ===== ======== =========================
+    #:
+    #: So ``False`` holds throughput constant and shrinks with precision (the DSP-packing story: two
+    #: DSP48E1s per tap at W=24, one at W=16, two taps *sharing* a DSP at W=8), while ``True`` holds
+    #: the multiplier count and buys throughput.  Both pipeline at II=1 -- the lane index costs 3
+    #: cycles of latency, not initiation interval.
+    unroll_lane: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     calib_dir: "str | None" = None
 
@@ -267,6 +330,7 @@ class FirCompute(FreeRunMod):
         w = int(self.mem_dwidth)
         t = int(self.ntap)
         self.samp_cls = samp_type(self.samp_w, self.samp_i)
+        self.lw = lane_width(w, self.samp_w)
 
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=w,
                                   has_tlast=True)             # framed <- MemRStream
@@ -303,15 +367,28 @@ class FirCompute(FreeRunMod):
         model.load_or_default()
         return model
 
-    def kernel_task(self) -> KernelTask:
-        """Hand-written body (``fir_compute_task.h``) — see :meth:`FirCmdRx.kernel_task`.
+    @property
+    def variant(self) -> str:
+        """``"unroll"`` or ``"serial"`` — the realization :attr:`unroll_lane` selects."""
+        return "unroll" if bool(self.unroll_lane) else "serial"
 
-        Note what is *not* hand-written: the ``static`` storage itself.  The body ``#include``s
+    def kernel_task(self) -> KernelTask:
+        """Hand-written body — see :meth:`FirCmdRx.kernel_task` for *why* hand-written.
+
+        **The parameter picks the body by name.** ``unroll_lane`` selects between two separately-named
+        task functions rather than one function with a compile-time branch inside.  Two reasons, and
+        neither is Vitis's patchy appetite for ``if constexpr``: the variants need *different state
+        shapes* (a ``dline[NTAP]`` shift register versus a ``dl[NTAP+LW-1]`` shared history), and one
+        function would collapse into a single csynth report — throwing away the side-by-side QoR
+        comparison that is the whole point of having both.
+
+        Note what is *not* hand-written: the ``static`` storage.  Both bodies ``#include``
         ``fir_compute_state.inc``, which :func:`~waveflow.build.hwgen.state_decls_to_cpp` emits from
-        the very ``add_state`` registrations above — declarations, extents, element type, and the
+        the ``add_state`` registrations above — declarations, extents, element type, and the
         ``ARRAY_PARTITION`` pragma all single-sourced from Python.  So the storage cannot drift from
         the pysim twin even though the arithmetic around it is written by hand."""
-        return KernelTask("fir_compute_task", "fir_compute_task.h", ("s_in", "cmd_out"),
+        return KernelTask(f"fir_compute_{self.variant}_task",
+                          f"fir_compute_{self.variant}_task.h", ("s_in", "cmd_out"),
                           template_args=(int(self.mem_dwidth),))
 
     @sim_only
@@ -321,8 +398,13 @@ class FirCompute(FreeRunMod):
     @sim_only
     def _compute_delay(self, n: int) -> float:
         """The fitted loop model's cost for an ``n``-sample block — a pysim latency model with no
-        hardware meaning (the RTL's cost is whatever the emitted loop schedules to)."""
-        return max(0.0, float(self.timing.predict({"n": int(n)}))) * self.clk.period
+        hardware meaning of its own (the RTL's cost is whatever the emitted loop schedules to).
+
+        The **basis** is the loop's trip count, which is where the two realizations part company: the
+        serial body trips once per sample and the unrolled body once per lane (``ceil(n/LW)`` beats).
+        Both measured at II=1, so this is the throughput difference the parameter buys."""
+        beats = nwords(n, self.lw) if bool(self.unroll_lane) else int(n)
+        return max(0.0, float(self.timing.predict({"n": beats}))) * self.clk.period
 
     @sim_only
     def _log_firing(self) -> None:
@@ -333,20 +415,21 @@ class FirCompute(FreeRunMod):
         w = int(self.mem_dwidth)
         desc = yield from self.s_in.get(FirDesc)
         n = int(desc.n)
-        data = yield from self.s_in.get(nwords_max=n)
+        nw = nwords(n, self.lw)          # the stream speaks WORDS; the descriptor carries SAMPLES
+        data = yield from self.s_in.get(nwords_max=nw)
         self._mark_start()
 
         if int(desc.op) == FirOp.LOAD_TAPS:
-            self.load_taps(np.asarray(data), self.taps)
+            self.load_taps(np.asarray(data), n, self.taps)
             # No data written back -- but the job still completes.  len=0 makes the writer's S2A loop
             # trip zero times (no AXI transaction), while fwd_bursts=1 keeps the s_done echo.
             memw = MemWCmd(addr=int(desc.dst_off), len=0, fwd_bursts=1)
             yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
             yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         else:
-            y = self.filter_block(np.asarray(data), self.taps, self.carry, int(desc.zero_state))
+            y = self.filter_block(np.asarray(data), n, self.taps, self.carry, int(desc.zero_state))
             yield self.timeout(self._compute_delay(n))
-            memw = MemWCmd(addr=int(desc.dst_off), len=n, fwd_bursts=1)
+            memw = MemWCmd(addr=int(desc.dst_off), len=nw, fwd_bursts=1)
             yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
             yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
             yield from self.cmd_out.write(np.asarray(y, dtype=np.uint64))
@@ -356,21 +439,25 @@ class FirCompute(FreeRunMod):
     # --- the synthesizable bodies -------------------------------------------------------------
 
     @synthesizable
-    def load_taps(self, x, taps: HwState) -> None:
+    def load_taps(self, x, n: int, taps: HwState) -> None:
         """Latch ``n`` coefficients into the held store.  The *load-once* flavour of state."""
-        stored = words_to_stored(x, self.samp_w)
+        stored = unpack_samples(x, n, self.samp_cls, self.mem_dwidth)
         taps.val[:len(stored)] = stored
 
     @synthesizable
-    def filter_block(self, x, taps: HwState, carry: HwState, zero_state: int):
+    def filter_block(self, x, n: int, taps: HwState, carry: HwState, zero_state: int):
         """One block through the filter: ``y[i] = sum_k h[k]·x[i-k]``, tail carried out.
+
+        **This is the twin of both realizations.** ``unroll_lane`` changes how many samples the RTL
+        consumes per iteration, not what it computes: same ``acc_t``, same rounding, same output. So
+        there is one golden here and the parameter is a pure QoR knob.
 
         The accumulator format is **derived, not declared**: ``mult`` gives ``<2W, 2I>`` and
         ``fixed_sum`` over the ``T``-sample window adds ``ceil(log2 T)`` integer bits, so nothing here
         can silently overflow.  ``quantize`` back to the sample format is the one lossy step, and it is
         written down."""
         t = int(self.ntap)
-        xs = words_to_stored(x, self.samp_w)
+        xs = unpack_samples(x, n, self.samp_cls, self.mem_dwidth)
         prev = np.zeros(t - 1, dtype=np.int64) if zero_state else np.asarray(carry.val, dtype=np.int64)
 
         # The window: buf[i : i+T] reversed is [x[i], x[i-1], ..., x[i-T+1]], aligned with h[0..T-1].
@@ -383,7 +470,7 @@ class FirCompute(FreeRunMod):
         y = quantize(acc, self.samp_cls)
 
         carry.val[:] = buf[len(buf) - (t - 1):]       # the next block's initial condition
-        return stored_to_words(np.asarray(y).reshape(-1), self.samp_w)
+        return pack_samples(np.asarray(y).reshape(-1), self.samp_cls, self.mem_dwidth)
 
 
 #: Seeded loop model for the sample loop — one output per cycle once the pipeline is full.  Replaced
@@ -409,6 +496,8 @@ class FirBlock(FreeRunMod):
     ntap: HwParam[int] = DEFAULT_NTAP
     samp_w: HwParam[int] = DEFAULT_SAMP_W
     samp_i: HwParam[int] = DEFAULT_SAMP_I
+    #: Threaded through to :class:`FirCompute` — the realization knob.  See its docstring.
+    unroll_lane: HwParam[bool] = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     compute_calib_dir: "str | None" = None
     #: The calibration platform (the bus law + the mem-stream control residuals), passed to the
@@ -419,13 +508,14 @@ class FirBlock(FreeRunMod):
         super().__post_init__()
         w = int(self.mem_dwidth)
 
-        self.rx = FirCmdRx(name=f"{self.name}_rx", sim=self.sim, mem_dwidth=w, clk=self.clk)
+        self.rx = FirCmdRx(name=f"{self.name}_rx", sim=self.sim, mem_dwidth=w,
+                           samp_w=int(self.samp_w), clk=self.clk)
         self.rstream = MemRStream(name=f"{self.name}_memr", sim=self.sim, mem_dwidth=w, inband=True,
                                   clk=self.clk, platform_dir=self.platform_dir)
         self.compute = FirCompute(name=f"{self.name}_compute", sim=self.sim, mem_dwidth=w,
                                   ntap=int(self.ntap), samp_w=int(self.samp_w),
-                                  samp_i=int(self.samp_i), clk=self.clk,
-                                  calib_dir=self.compute_calib_dir)
+                                  samp_i=int(self.samp_i), unroll_lane=bool(self.unroll_lane),
+                                  clk=self.clk, calib_dir=self.compute_calib_dir)
         self.wstream = MemWStream(name=f"{self.name}_memw", sim=self.sim, mem_dwidth=w, inband=True,
                                   emit_done=True, clk=self.clk, platform_dir=self.platform_dir)
         for c in (self.rx, self.rstream, self.compute, self.wstream):

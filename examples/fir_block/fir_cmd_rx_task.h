@@ -12,10 +12,6 @@
 // That uniformity is what keeps the LOAD_TAPS job from being the odd one out in the token flow -- see
 // fir_compute_task.h, where the write side stays uniform too.
 //
-// len == n because transport is ONE SAMPLE PER 32-BIT WORD whatever the sample width is (see
-// examples/fir_block/fir_block.py).  There is no ceil(n/LW) here precisely because there is no packing;
-// contrast il_cmd_rx_framed_task.h, which packs LW elements per word and must convert.
-//
 // Single-firing (the hls::task runtime re-fires per command); touches only streams.  Its pysim twin is
 // FirCmdRx.run_iter (examples/fir_block/fir_block.py).
 #include "hls_stream.h"
@@ -24,16 +20,21 @@
 #include "fir_cmd.h"
 #include "fir_desc.h"
 #include "mem_r_cmd.h"
+#include "fir_types.h"
 
 template <int MEM_DW>
 static void fir_cmd_rx_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
                             hls::stream<streamutils::framed_word<MEM_DW> >& cmd_out) {
     FirCmd c;
     c.read_stream<MEM_DW>(s_cmd);
-    // The read: n words at src_off, relaying the descriptor as a header (fwd_bursts=1).
+    // The read, relaying the descriptor as a header (fwd_bursts=1).  `n` on the command is a SAMPLE
+    // count; the reader speaks WORDS, and at LW = lane_capacity samples per word that is ceil(n/LW).
+    // Only the schema-aware ends know the packing -- the mem-streams relay opaquely -- which is why
+    // the descriptor carries `n` onward for fir_compute to use.
+    const int LW = fir_au::lane_capacity<MEM_DW>();
     MemRCmd memr;
     memr.addr = c.src_off;
-    memr.len = c.n;
+    memr.len = ((int)c.n + LW - 1) / LW;
     memr.fwd_bursts = 1;
     memr.write_framed_stream<MEM_DW>(cmd_out);
     // The descriptor, welded ahead of the data so a command can never pair with the wrong burst.

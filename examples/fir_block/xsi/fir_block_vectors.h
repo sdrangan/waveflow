@@ -12,7 +12,7 @@
 namespace fir_block_vectors {
 
 static const int MEM_DW = 32;
-static const int MEM_NW = 464;
+static const int MEM_NW = 240;
 static const int NUM_CMDS = 5;
 static const int DONE_WORDS = 5;
 

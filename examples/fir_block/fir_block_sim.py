@@ -52,8 +52,10 @@ from examples.fir_block.fir_block import (
     FirDesc,
     FirOp,
     _as_fixed,
+    lane_width,
+    nwords,
+    pack_samples,
     samp_type,
-    stored_to_words,
 )
 
 #: The Stage-2 gate program: a load, two blocks (so the carry matters), a mid-stream reload, one more.
@@ -97,6 +99,8 @@ class FirBlockTB(FreeRunMod):
     ntap: HwParam[int] = DEFAULT_NTAP
     samp_w: HwParam[int] = DEFAULT_SAMP_W
     samp_i: HwParam[int] = DEFAULT_SAMP_I
+    #: Which realization the DUT emits -- see FirCompute.unroll_lane.  Same golden either way.
+    unroll_lane: HwParam[bool] = False
     mem_dwidth: HwParam[int] = MEM_DW
     #: Fixed run bound for the generated XSI main — comfortably past the last completion.
     n_cycles: int = 8000
@@ -111,25 +115,31 @@ class FirBlockTB(FreeRunMod):
         self.samp_cls = samp_type(self.samp_w, self.samp_i)
         self._program = tuple(self.program)
 
-        # --- lay the arena out: each step gets its source region, each FILTER also a destination ---
+        # --- lay the arena out ------------------------------------------------------------------
+        # Offsets and region sizes are WORD coordinates; `n` on a command is a SAMPLE count.  At
+        # LW = MEM_DW//W samples per word those differ, and conflating them is how the arena and the
+        # DUT's ceil(n/LW) read length drift apart.  `nwords` is the one conversion.
+        self.lw = lane_width(self.mem_dwidth, self.samp_w)
         cur = 0
         self._steps: list[dict] = []
         n_load = 0
         n_filter = 0
         for step in self._program:
             if step == "load":
-                self._steps.append({"op": FirOp.LOAD_TAPS, "n": t, "src": cur, "dst": 0,
+                nw = nwords(t, self.lw)
+                self._steps.append({"op": FirOp.LOAD_TAPS, "n": t, "nw": nw, "src": cur, "dst": 0,
                                     "zero_state": 0, "tap_set": n_load, "blk_idx": None})
-                cur += t
+                cur += nw
                 n_load += 1
             elif step == "filter":
                 n = int(self.blk)
+                nw = nwords(n, self.lw)
                 src = cur
-                cur += n
+                cur += nw
                 dst = cur
-                cur += n
+                cur += nw
                 # Only the FIRST block starts from zeros; every later block must inherit the carry.
-                self._steps.append({"op": FirOp.FILTER, "n": n, "src": src, "dst": dst,
+                self._steps.append({"op": FirOp.FILTER, "n": n, "nw": nw, "src": src, "dst": dst,
                                     "zero_state": 1 if n_filter == 0 else 0,
                                     "tap_set": None, "blk_idx": n_filter})
                 n_filter += 1
@@ -151,6 +161,7 @@ class FirBlockTB(FreeRunMod):
 
         self.dut = FirBlock(name=f"{self.name}_fir", sim=self.sim, mem_dwidth=w, ntap=t,
                             samp_w=int(self.samp_w), samp_i=int(self.samp_i),
+                            unroll_lane=bool(self.unroll_lane),
                             compute_calib_dir=self.compute_calib_dir,
                             platform_dir=self.platform_dir)
         self.cmds = [FirCmd(op=int(s["op"]), src_off=s["src"], n=s["n"], dst_off=s["dst"],
@@ -191,12 +202,13 @@ class FirBlockSim:
 
     def __init__(self, program=DEFAULT_PROGRAM, blk: int = DEFAULT_BLK, ntap: int = DEFAULT_NTAP,
                  samp_w: int = DEFAULT_SAMP_W, samp_i: int = DEFAULT_SAMP_I,
-                 mem_dwidth: int = MEM_DW, name: str = "tb", n_cycles: int = 8000,
-                 compute_calib_dir: "str | None" = None,
+                 unroll_lane: bool = False, mem_dwidth: int = MEM_DW, name: str = "tb",
+                 n_cycles: int = 8000, compute_calib_dir: "str | None" = None,
                  platform_dir: "str | None" = None) -> None:
         self.tb = FirBlockTB(name=name, sim=Simulation(), program=tuple(program), blk=int(blk),
                              ntap=int(ntap), samp_w=int(samp_w), samp_i=int(samp_i),
-                             mem_dwidth=int(mem_dwidth), n_cycles=int(n_cycles),
+                             unroll_lane=bool(unroll_lane), mem_dwidth=int(mem_dwidth),
+                             n_cycles=int(n_cycles),
                              compute_calib_dir=compute_calib_dir, platform_dir=platform_dir)
         self.expected: list[tuple[int, np.ndarray]] = []
 
@@ -244,29 +256,32 @@ class FirBlockSim:
         root = Path(root)
         vdir = root / "vectors"
         t = int(tb.ntap)
-        samp_w = int(tb.samp_w)
+        w = int(tb.mem_dwidth)
 
         mem_in = np.zeros(tb._nwords_tot, dtype=np.uint64)
         golden = np.zeros(tb._nwords_tot, dtype=np.uint64)
 
+        # Every arena region goes through the FRAMEWORK packer, the same one the DUT's hook uses and
+        # the twin of the generated read/write_framed_stream_lane.  Hand-rolling the packing here is
+        # what would make the golden and the RTL disagree the moment LW > 1.
         taps_by_set: list[np.ndarray] = []
         blocks: list[np.ndarray] = []
         for step in tb._steps:
             if step["op"] == FirOp.LOAD_TAPS:
                 h = _tap_set(step["tap_set"], t, tb.samp_cls)
                 taps_by_set.append(h)
-                mem_in[step["src"]:step["src"] + t] = stored_to_words(h, samp_w)
+                mem_in[step["src"]:step["src"] + step["nw"]] = pack_samples(h, tb.samp_cls, w)
             else:
                 x = _stimulus(step["n"], step["blk_idx"], tb.samp_cls)
                 blocks.append(x)
-                mem_in[step["src"]:step["src"] + step["n"]] = stored_to_words(x, samp_w)
+                mem_in[step["src"]:step["src"] + step["nw"]] = pack_samples(x, tb.samp_cls, w)
 
         self.expected = []
         ys = self._golden(taps_by_set, blocks)
         filt_steps = [s for s in tb._steps if s["op"] == FirOp.FILTER]
         for s, y in zip(filt_steps, ys):
-            words = stored_to_words(y, samp_w)
-            golden[s["dst"]:s["dst"] + s["n"]] = words
+            words = pack_samples(y, tb.samp_cls, w)
+            golden[s["dst"]:s["dst"] + s["nw"]] = words
             self.expected.append((s["dst"], words))
 
         write_burst_bundle(tb.cmd_words, vdir / "s_cmd")

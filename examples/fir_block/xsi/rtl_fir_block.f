@@ -5,12 +5,13 @@
 ../fir_block_proj/solution1/syn/verilog/fir_block_fifo_w64_d3_S.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_fifo_w64_d5_S.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_fir_cmd_rx_task_32_s.v
-../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_task_32_Pipeline_FIR.v
-../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_task_32_Pipeline_LOAD.v
-../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_task_32_s.v
+../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_serial_task_32_Pipeline_FIR.v
+../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_serial_task_32_Pipeline_LOAD.v
+../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_serial_task_32_s.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_flow_control_loop_pipe_sequential_init.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_gmem0_m_axi.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_gmem1_m_axi.v
+../fir_block_proj/solution1/syn/verilog/fir_block_mac_muladd_16s_16s_30ns_30_4_1.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_mac_muladd_16s_16s_30s_30_4_1.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_mem_r_stream_framed_task_32_Pipeline_A2S.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_mem_r_stream_framed_task_32_Pipeline_RELAY.v
