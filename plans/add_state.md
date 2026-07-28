@@ -1,5 +1,12 @@
 # Plan: `add_state` — declared cross-firing state in a `HwModule`
 
+> **Status (2026-07-28): Stages 1–3 BUILT and fully gated; `examples/fir_block` is BUILT and
+> XSI-verified end to end.** The FIR composite (`cmd_rx → MemRStream → fir_compute → MemWStream`)
+> runs the plan's firing sequence green in pysim *and* through real RTL: csynth clean on xc7z020
+> (FIR loop II=1, 32 DSPs at T=32/W=16 — one per tap), and every output block bit-exact against the
+> stateless golden under XSI. **Not yet done:** Stage 4 and the width sweep. See
+> [`examples/fir_block`](#examplesfir_block--built-and-xsi-verified).
+>
 > **Status (2026-07-27): Stages 1, 2, and 3 are BUILT and fully gated — including XSI.**
 > Stage 1's gate passed on both halves (hook signature byte-identical to the regmap version; the
 > emitted kernel csynths with `coeffs` absent from the RTL port list). **Stage 2's XSI gate passed:
@@ -390,6 +397,151 @@ case became reachable. Fixed in `composite_gen.py::render_top`.
 element, found zero ports, and passed vacuously. It now asserts the port list is non-empty and that the
 `s_axi_control` ports are present before checking `coeffs` is absent. A gate that cannot fail is not a
 gate.
+
+## `examples/fir_block` — built and XSI-verified
+
+The composite is exactly decision 2's picture, minus the SOB blocks the interleaver needs (a FIR is a
+streaming kernel — there is no random access to buffer for):
+
+    s_cmd -> [ fir_cmd_rx ] -> [ MemRStream ] -> [ fir_compute ] -> [ MemWStream ] -> s_done
+                                                        ^ taps + carry, add_state
+
+`FirCmdRx` frames `[MemRCmd | FirDesc]` — **one** read per job for both opcodes, which is what keeps
+the no-output opcode off a special path. `FirCompute` dispatches on `FirDesc.op`.
+
+**The no-output firing, answered.** `LOAD_TAPS` frames `MemWCmd(len=0, fwd_bursts=1)`. The writer's
+`S2A` loop then trips zero times — no AXI transaction at all — while `ECHO` still emits the descriptor,
+so the job completes like any other and the token path is uniform. The alternative shapes (a separate
+done path, or writing the taps back to scratch) both add a stage the design does not otherwise need.
+
+**A finding the plan did not predict: pysim and RTL disagreed at `len=0`.** `MemWStream`'s pysim twin
+drained its data words unconditionally, and `get(nwords_max=0)` does *not* mean "read nothing" — it
+pulls a whole burst off the buffer and truncates the returned array to zero words. So a zero-length
+write silently ate the *next* command's burst in pysim while the RTL body stayed correctly in step.
+Fixed at the source (`mem_stream.py`, both the in-band and plain paths); the guard is what the emitted
+C++ already did. Latent since the in-band writer landed — `len=0` simply had no caller until now.
+
+**The golden is stateless on purpose.** It convolves the whole signal with globally-indexed history
+(`x[i-k]`, zero before the start), switching coefficient sets at each reload. It never mentions a
+carry, so "block-wise output == global convolution" *is* the statement that the carry is right, and it
+cannot pass by sharing a bug with the implementation. `tests/examples/test_fir_block.py` then breaks
+each flavour of state in turn (ignore the carry; honour only the first `LOAD_TAPS`) and requires the
+golden to reject both — plus guards on the scenario itself, so weakening the program or the tap sets
+cannot quietly silence the gate.
+
+**Transport is packed**, `LW = max(1, MEM_DW // W)` samples per word, through the generated
+`<stem>_array_utils` lane routines in C++ and `DataArray.serialize` in Python — one contract, so the
+golden and the RTL agree at any `LW`.
+
+*An earlier cut of this example asserted one sample per word* on the grounds that packing "is not
+expressible" at an awkward width like `W = 18`, because the lane readers need an integer
+`MEM_DW/elem_bw`. **That was wrong**: the packing factor is integer division, so `W = 18` gives
+`pf = 1` and lands on the one-per-word case anyway, while `W = 16` packs two and `W = 8` packs four.
+The same cut hand-rolled the bit extraction in both kernels — `.range()` and a hand-looped
+`read_boundary_word` — which
+[`arrayutils.md`](../docs/guide/vectorization/hls/arrayutils.md) names as the anti-pattern verbatim.
+Worth recording because the mistake is self-concealing: hand-rolled packing at `LW = 1` is *correct*,
+so nothing fails until someone changes a width.
+
+Consequence for the addressing convention: `n` on a command and a descriptor is a **sample** count,
+the mem-streams carry **words**, and `nwords(n, LW)` is the single conversion. Conflating them is what
+produced a wrong XSI check (comparing `n` words of a `ceil(n/LW)`-word region) even after the RTL was
+right.
+
+### Codegen: where the extractor's vocabulary actually ends
+
+All four `check(source, target)` gates pass, but real extraction of `run_iter` stops at
+`int(self.mem_dwidth)` — and past that lies descriptor construction and `framed_word` traffic, neither
+of which the extractor lowers. That is not specific to the FIR: **every in-band framer in this tree is
+hand-written for the same reason** (`mem_copy`'s `Sequencer`, all four `il_*` tasks). The generated-body
+vocabulary today is essentially `state_toy`'s shape — `get → hook → write`. So both FIR leaves get
+hand-written bodies and, correspondingly, `kernel_task` overrides; `run_iter` stays the pysim golden,
+with its instrumentation moved behind `@sim_only` so it stays extractable if the vocabulary grows.
+
+**The storage is still generated, and that is the part that matters.** `fir_compute_task.h` declares no
+state of its own — it `#include`s `fir_compute_state.inc`, emitted by `state_decls_to_cpp` from the
+`add_state` registrations, at function scope (the site Flow 2 emits declared state at). Element type,
+extents, and the `ARRAY_PARTITION` pragma are single-sourced from the same Python objects the model
+mutates. The accumulator format is likewise *derived* by running `mult`/`fixed_sum` at build time
+rather than typed as `2*W + 5` into a header.
+
+### What csynth and XSI each proved — and what only XSI could
+
+csynth: clean on xc7z020, FIR loop **II=1**, **32 DSPs** at `T=32, W=16` — one DSP per tap, which is
+the packing story the width sweep is meant to probe. (Timing slack is negative on the framework
+mem-streams at `MEM_DW=32`, around −1.7 ns; the compute itself is +0.64. Worth a look, but it is a
+property of the shipped adaptors at this width, not of the FIR.)
+
+**Then the RTL was still wrong, and this is the argument for the gate.** The delay line was seeded with
+the *MAC-time* invariant (`dline[k] = x[-k]`) rather than the *top-of-iteration* one. Each iteration
+shifts before it accumulates, so the first `SHIFT` slid the seed one slot — discarding the newest carry
+sample and pushing a zero into `dline[1]`. csynth passed. Block 1 passed, because `zero_state` starts it
+from zeros and it never reads the carry. Only block 2's first samples were wrong. Diagnosed by solving
+for the carry the RTL had actually used (a shift-by-one matched 64/64) and confirmed on a
+hand-checkable `T=4, blk=8` build. Fixed at the seed; `carry[j] = dline[NTAP-2-j]` after the loop was
+correct all along, and taking the tail off the delay line rather than capturing words as they stream
+past also keeps a block *shorter than the carry* correct for free.
+
+### Two realizations, one golden — the monomorphized-QoR pair
+
+`unroll_lane` (an `HwParam[bool]`) selects between two hand-written bodies computing **bit-identical**
+results — same `acc_t`, same rounding, one pysim golden — so the parameter is a pure QoR knob rather
+than a second design. `kernel_task()` dispatches on it by *name*
+(`fir_compute_serial_task` / `fir_compute_unroll_task`) instead of a compile-time branch inside one
+function: the two need different state shapes, and one function would collapse into a single csynth
+report, discarding the comparison that is the point.
+
+Measured at `T = 32`, `MEM_DW = 32`, xc7z020:
+
+| `samp_w` | LW | serial DSP | unroll DSP | serial loop | unroll loop |
+|---|---|---|---|---|---|
+| 24 | 1 | 64 | 64 | identical | identical |
+| 16 | 2 | **32** | 64 | 4097 cyc | **2049 cyc** |
+| 8 | 4 | **17** | 128 | 4097 cyc | **~1025 cyc** |
+
+So `serial` holds throughput at one sample/cycle and lets the multiplier count fall with precision —
+two DSP48E1s per tap at `W=24`, one at `W=16`, two taps *sharing* a DSP at `W=8` — while `unroll`
+holds the multipliers and buys throughput. **Both pipeline at II=1**, which was not obvious: the
+serial body has a conditional dequeue *and* a conditional enqueue gated by a loop-carried lane index,
+and that costs 3 cycles of iteration latency, not initiation interval.
+
+The unrolled body keeps **one shared history** `dl[NTAP+LW-1]`, not `dl[LW][NTAP]`: consecutive
+outputs read the same samples at a one-sample offset, so staggering the window start (`dl[LW-1-j+k]`)
+costs `LW-1` extra registers instead of `(LW-1)·NTAP`, and only the multipliers replicate.
+
+**The seeding rule, now stated twice in the tree because it has bitten twice.** Each iteration shifts
+*before* it accumulates, so what is seeded is the state at the **top** of the first iteration, not the
+MAC-time invariant. Both bodies' index algebra was verified element-by-element in Python — including
+unaligned block lengths and the tail-offset carry — *before* synthesis, which is the cheap way to
+catch this class rather than paying a csynth+XSI round trip per hypothesis.
+
+### Docs, and the build interface
+
+`docs/examples/firblock/` is written — nine pages, `nav_order: 8`, parallel to the interleaver's
+structure: index, module overview, cross-firing state, fixed point, Python, testbench, the two kernels,
+DUT codegen, RTL simulation. Two conventions were settled while writing them and are worth keeping:
+
+- **`firing` vs `iteration` are not synonyms.** A *firing* is one execution of a task body; an
+  *iteration* is one trip of a loop inside it. The tree already used them this way (docs: 146 vs 22,
+  and every one of the 22 is about loop structure), and `fir_block` is the first example needing both
+  at once — `add_state` changes what survives a firing, `unroll_lane` changes the iteration structure.
+- **Learning objectives take testable verbs.** No "understand"; "identify … and avoid by …" instead.
+
+Writing the pages also forced `fir_block_build.py` onto `run_dag_cli`, like every other example's
+`*_build.py` — the bespoke `__main__` would have meant documenting a fir_block-only interface. Steps
+are `pysim → codegen_dut → codegen_tb → csynth` with `--samp-w / --samp-i / --ntap / --unroll-lane`,
+and `csynth` re-emits `rtl_fir_block.f` itself (which removed the generate→csynth→regenerate dance).
+The pages also surfaced prose drift — two files still named the pre-split `fir_compute_task.h`, and
+stale copies of it were sitting in the generated `include/`.
+
+**Still to do here:** the `W` sweep as a *driver*. The parameterization is done (the C++ takes
+`acc_t` / `NTAP` / the array-utils namespace from generated headers, so
+`generate_dut(ntap=…, samp_w=…, unroll_lane=…)` re-emits and re-synthesizes at any point) and the
+measurements exist, but nothing yet collects an artifact per point. **Deliberately deferred to its own
+branch**: how sweeps are expressed has long-term consequences for agentic DSE, so it is a design
+question rather than a scripting one, and `docs/examples/firblock/sweep.md` waits on that decision.
+Stage 4 (templated extents) is still open and is what an `ntap` sweep would want. A **resource model**
+(the sibling of the timing model, fit from the sweep's csynth reports) is the natural page after it.
 
 ## Related
 

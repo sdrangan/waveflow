@@ -550,13 +550,16 @@ class MemWStream(FreeRunMod):
         w0 = int(cmd.addr)
         nw = int(cmd.len)
         t_start = self.now
-        words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
-        # Element coordinate relative to the buffer base: index the word-typed Region (base = the
-        # bound physical base) at [addr, ...).  Region owns byte↔word (no hand conversion).
-        region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
-        yield from region.write_slice_pipelined(
-            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
-            num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
+        # nw == 0 writes nothing and must not touch s_in at all -- see the note in
+        # :meth:`_run_iter_inband` (get(nwords_max=0) still dequeues a whole burst).
+        if nw > 0:
+            words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
+            # Element coordinate relative to the buffer base: index the word-typed Region (base = the
+            # bound physical base) at [addr, ...).  Region owns byte↔word (no hand conversion).
+            region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+            yield from region.write_slice_pipelined(
+                w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
+                num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
@@ -589,11 +592,18 @@ class MemWStream(FreeRunMod):
                     f"{int(self.max_fwd_words)} — raise max_fwd_words or shorten the response.")
             fwd.append(np.asarray(burst))
         w0, nw = int(cmd.addr), int(cmd.len)
-        words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
-        region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
-        yield from region.write_slice_pipelined(
-            w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
-            num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
+        # A len=0 command writes NOTHING and must touch the data stream not at all -- the RTL body's
+        # `S2A: for (w = 0; w < nw; ++w)` simply trips zero times.  Guard it, because `get(nwords_max=0)`
+        # does NOT: it pulls a whole burst off the buffer and then truncates the RESULT to zero words,
+        # so an unguarded drain silently eats the next command's burst here while the RTL stays in step.
+        # A zero-length write is a real command (the no-output opcode -- see examples/fir_block, where a
+        # LOAD_TAPS job still echoes its descriptor on s_done), not a degenerate case to reject.
+        if nw > 0:
+            words, t0 = yield from self.s_in.get_pipelined(self._word_t, count=nw)
+            region = self.m_mem.region(self._base, self._word_t, word_bw=self._mem_bw)
+            yield from region.write_slice_pipelined(
+                w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
+                num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:

@@ -200,3 +200,12 @@ examples/state_toy/state_accum_proj/
 examples/state_toy/gen/
 examples/state_toy/include/
 examples/state_toy/xsi/vectors/
+
+# fir_block (the block FIR -- add_state's motivating design): csynth project + generated
+# top/headers.  The Python source, the two HAND-WRITTEN task bodies (fir_cmd_rx_task.h,
+# fir_compute_task.h -- sticky at the example root, copied into include/ by the build), and the
+# generated XSI harness/ports stay tracked.
+examples/fir_block/fir_block_proj/
+examples/fir_block/gen/
+examples/fir_block/include/
+examples/fir_block/xsi/vectors/
