@@ -223,7 +223,7 @@ class MMIFSlave(InterfaceEndpoint):
     """Optional *untimed*, synchronous read ``(nwords, local_addr) -> Words`` of
     the backing store — the snapshot :meth:`MMIFMaster.poll_until` peeks while
     waiting (its bus cost is modeled aggregately, so the peek itself is free).
-    :class:`~waveflow.hw.memory.MemModel` populates it; a slave without one
+    :class:`~waveflow.hw.memory.MemoryMod` populates it; a slave without one
     cannot be polled."""
 
     half_duplex: bool = False

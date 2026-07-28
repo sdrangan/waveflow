@@ -15,7 +15,7 @@ import numpy.testing as npt
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.memif import AXIMMCrossBarIF, BusTiming, MMIFMaster, assign_address_ranges
-from waveflow.hw.memory import MemModel
+from waveflow.hw.memory import MemoryMod
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
 
@@ -33,10 +33,10 @@ class _Driver(SimObj):
 
 
 def _harness(latency_init=0.0):
-    """One master + crossbar (1x1) + MemModel, freq=1 Hz so 1 cycle = 1 s."""
+    """One master + crossbar (1x1) + MemoryMod, freq=1 Hz so 1 cycle = 1 s."""
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(sim=sim, word_size=32, inline=False, clk=clk,
+    mem = MemoryMod(sim=sim, word_size=32, inline=False, clk=clk,
                        latency_init=0.0, latency_per_word=0.0)
     mem.alloc(1024)
     master = MMIFMaster(name="m", sim=sim, bitwidth=32)

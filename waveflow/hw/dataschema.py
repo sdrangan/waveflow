@@ -2954,6 +2954,20 @@ class ParamSchema(DataList):
         return specialized
 
 
+def _freeze_for_key(value: Any) -> Any:
+    """Return a hashable stand-in for *value*, for use in a specialization-cache key.
+
+    Dicts become sorted key/value tuples (recursively), lists become tuples; everything else is
+    returned unchanged.  Equal specs must freeze equal, so two ``specialize`` calls passing the
+    same partition dict share one cached class rather than building two identical types.
+    """
+    if isinstance(value, dict):
+        return tuple(sorted((k, _freeze_for_key(v)) for k, v in value.items()))
+    if isinstance(value, list):
+        return tuple(_freeze_for_key(v) for v in value)
+    return value
+
+
 class DataArray(DataSchema):
     """Class-driven array schema with fixed maximum shape and optional dynamic extent."""
 
@@ -2963,6 +2977,7 @@ class DataArray(DataSchema):
     member_name: ClassVar[str] = "data"
     cpp_storage: ClassVar[str] = "struct"
     can_gen_include: ClassVar[bool] = False
+
     allowed_specialize_kwargs: ClassVar[set[str]] = DataSchema.allowed_specialize_kwargs | {
         "member_name",
         "cpp_storage",
@@ -3129,7 +3144,12 @@ class DataArray(DataSchema):
                 )
 
         overrides = cls.validate_specialize_kwargs({**kwargs, "member_name": member_name})
-        override_items = tuple(sorted(overrides.items()))
+        # An override may be a structured value (a dict/list), which is unhashable and so cannot
+        # go into the specialization-cache key as-is.  Freeze it; two calls passing equal structures
+        # must still hit one cached class rather than building two identical types.
+        override_items = tuple(
+            (k, _freeze_for_key(v)) for k, v in sorted(overrides.items())
+        )
         key = (cls, element_type, shape, bool(static), cpp_storage, override_items)
         cached = cls._specializations.get(key)
         if cached is not None:

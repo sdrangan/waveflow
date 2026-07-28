@@ -531,12 +531,17 @@ def test_gate4_concurrent_tb_is_rejected_and_named_as_concurrent():
     assert "main()" in msg
 
 
-def test_gate4_concurrent_tb_message_points_at_the_systemc_path():
-    """The message must name the real fix — a different flow, not a missing marker."""
+def test_gate4_concurrent_tb_message_points_at_the_free_running_flow():
+    """The message must name the real fix — a different flow, not a missing marker.
+
+    It used to point at a SystemC path (old Flow 3).  That flow was refuted: the XSI BFM already
+    drives every port cycle-by-cycle, so it IS the concurrent harness, and `concurrent_systemc_tb`
+    is not a target any more.  An error that names a non-existent flow sends the reader nowhere.
+    """
     _, msg = check(_ConcurrentTB, SEQUENTIAL_VITIS_TB)
-    assert "SystemC" in msg
-    assert "Flow 3" in msg
-    assert "docs/guide/flows" in msg, "point at the flow that will support it"
+    assert "SystemC" not in msg, "the SystemC flow was refuted; do not send readers to it"
+    assert "XSI" in msg
+    assert "docs/guide/flows" in msg, "point at the flow that does support it"
     assert "straight-line" in msg
 
 

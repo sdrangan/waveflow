@@ -138,7 +138,7 @@ Annotate the return as `ProcessGen[T]`, where `T` is what the generator `return`
 
 These hints are not just documentation: for a `@synthesizable` method, the code generator reads the
 annotation and **unwraps `ProcessGen[T]` to `T`** for the generated C++ return type — see
-[Component Code Generation](../comp_codegen/).
+[Module Code Generation](../comp_codegen/).
 
 ## Quick reference
 

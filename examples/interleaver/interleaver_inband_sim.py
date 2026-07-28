@@ -25,7 +25,7 @@ from waveflow.hw.hw_module import HwParam
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.memory import MemModel, MemSeg
+from waveflow.hw.memory import MemoryMod, MemSeg
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.utils.burst_io import write_burst_bundle
@@ -78,7 +78,7 @@ class InterleaverInbandTB(FreeRunMod):
             cur += 3 * nw
         self.arena_words = cur + 16
 
-        self.mem = MemModel(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
+        self.mem = MemoryMod(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
                                 word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
         if self.platform_dir is not None:
             from waveflow.calib.bus_model import BusCalib

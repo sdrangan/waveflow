@@ -1,6 +1,6 @@
 ---
 title: Automatic vs. manual
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 0
 audience: hls
 api: [synthesizable]
@@ -75,6 +75,6 @@ a small fraction of the C++ that ends up in the build.
 
 ## Next
 
-- [Component structure](./structure.md) — how a component becomes a kernel, and when it lowers at all.
+- [Module structure](./structure.md) — how a component becomes a kernel, and when it lowers at all.
 - [Extractor](./extractor.md) — what your entry method may contain.
 - [Custom Hooks](../custom_hooks/) — writing the part that is yours.

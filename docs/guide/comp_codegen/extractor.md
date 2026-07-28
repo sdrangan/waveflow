@@ -1,7 +1,7 @@
 ---
 title: Extractor
-parent: Component Code Generation
-nav_order: 3
+parent: Module Code Generation
+nav_order: 4
 audience: hls
 api: [HwStmtExtractor, extract_kernel, extract_testbench, SynthesisError, check]
 summary: "Extraction reads a component's entry method as source (it never runs it), parses it, and translates it into HwStmt — a small hardware IR of ~25 statement types that sits between the Python and the C++. Only a limited set of Python statements and a fixed vocabulary of endpoint operations can be extracted today; anything else raises SynthesisError rather than emitting doubtful C++. check(source, target) is the same rules as a predicate."
@@ -123,17 +123,40 @@ mapping onto one IR node with no inference.
 
 Four rules are about *meaning* rather than statement shape. These are the ones worth internalising:
 
-**No reads of mutable `self.X`.** A kernel body may read its arguments, its endpoints, its reg-map, its
-`HwParam` values, and `DataSchema` types. It may **not** read mutable instance state:
+**No reads of *undeclared* mutable `self.X`.** A kernel body may read its arguments, its endpoints, its
+reg-map, its `HwParam` values, `DataSchema` types, and anything declared with `add_state`. It may **not**
+read other mutable instance state:
 
 > `Implicit capture of 'self.gain' at line 2. Reads of self.X inside a synthesizable method are
-> forbidden unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the value @sim_only or pass it
-> explicitly.`
+> forbidden unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the value @sim_only, pass it
+> explicitly, or — if it is storage that must persist across firings — declare it with
+> self.add_state(self.gain).`
 
 The reason is that `self.gain` is a Python value at *elaboration* time; in hardware it is either a
 constant baked into the design or a register someone must write. Silently choosing one would be
-guessing, so the extractor makes you say which. (This is also why cross-firing state is a
-[work in progress](../flows/modules.md).)
+guessing, so the extractor makes you say which.
+
+**Declaring state.** `add_state` is how you say "this one is a register file":
+
+```python
+self.taps = HwState(TapArray())       # TapArray: a DataArray with cpp_storage="raw"
+self.add_state(self.taps)
+```
+
+The rule is not relaxed — an undeclared `self.X` is still rejected. What changes is that there is now a
+way to answer it. A declared object may be read at a hook call site, where it lowers to its bare
+attribute name, and codegen emits persistent storage for it: a `static` at the top of the kernel
+function for a [control-driven kernel](../flows/sequential.md), and at the top of the generated
+`hls::task` body for a [free-running](../flows/concurrent.md) leaf — where it is the only place
+persistent storage *can* live, since a task has no "before the loop".
+
+One detail worth knowing: the C++ type comes from the **registered instance**, not from the hook's
+annotation, so state whose element format was built per instance (a `FixedField` specialized off a
+`HwParam`) emits the format it actually has. That is why a hook argument can simply be annotated
+`HwState`.
+
+[`HwState`](../memory/hwstate.md) is the full story — what it emits at each site, partitioning, and
+why read/write permission is *not* declared on the storage.
 
 **Only `@synthesizable` calls.** A call to a plain method is rejected — mark it `@synthesizable` to make
 it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (that is how
@@ -141,7 +164,8 @@ it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (t
 
 **No concurrency.** Spawning a SimPy process (`env.process(...)`) is rejected, because every target this
 extractor feeds is sequential — there is no straight-line lowering for a fork. The message points at the
-SystemC path ([free-running, concurrently driven](../flows/freerun_conc.md)). Honest limit: this is a **gate, not a proof**. It rejects the
+[concurrent (free-running)](../flows/concurrent.md) flow, whose XSI BFM drives every port each cycle.
+Honest limit: this is a **gate, not a proof**. It rejects the
 syntax that certainly implies concurrency; it cannot certify that a body is sequential.
 
 **A leaf must be structurally flat.** A component that lowers to one kernel function may not own
@@ -165,6 +189,6 @@ reported by `check` for free.**
 
 ## See also
 
-- [Component structure](./structure.md) — the contract for when a component lowers at all.
+- [Module structure](./structure.md) — the contract for when a component lowers at all.
 - [Custom Hooks](../custom_hooks/) — writing the bodies the extractor deliberately does not translate.
 - [Codegen](./codegen.md) — what the emitter does with the resolved `HwStmt` tree.

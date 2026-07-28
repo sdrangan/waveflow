@@ -1,5 +1,5 @@
 """
-Tests for MemModel as a latency-modeling SimObj (waveflow/hw/memory.py).
+Tests for MemoryMod as a latency-modeling SimObj (waveflow/hw/memory.py).
 
 These are the first tests that drive a ``Memory`` through a real
 ``Simulation`` (``run_sim()``) over an actual interconnect, rather than calling
@@ -21,7 +21,7 @@ import numpy as np
 import numpy.testing as npt
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.memory import MemModel
+from waveflow.hw.memory import MemoryMod
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
@@ -68,7 +68,7 @@ def _wire(sim, mem, *, clk, latency_write=0.0, latency_read=0.0,
 def test_round_trip_through_slave():
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk)
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk)
 
     data = np.arange(6, dtype=np.uint32) + 100
 
@@ -103,7 +103,7 @@ def test_access_latency_composes_with_bus_latency():
     def make(mem_latency: bool):
         sim = Simulation()
         clk = Clock(freq=1.0)
-        mem = MemModel(
+        mem = MemoryMod(
             name="mem", sim=sim, inline=False, clk=clk,
             latency_init=L0 if mem_latency else 0.0,
             latency_per_word=Lw if mem_latency else 0.0,
@@ -141,7 +141,7 @@ def test_write_latency_is_bus_plus_access():
     LW = 3.0   # DirectMMIF latency_write
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(
+    mem = MemoryMod(
         name="mem", sim=sim, inline=False, clk=clk,
         latency_init=L0, latency_per_word=Lw,
     )
@@ -176,7 +176,7 @@ def test_zero_latency_default():
     N = 3
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk)  # defaults: 0,0
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk)  # defaults: 0,0
     data = np.array([7, 8, 9], dtype=np.uint32)
     times: dict[str, float] = {}
 
@@ -207,7 +207,7 @@ def test_write_array_read_array_round_trip():
 
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk,
                        latency_init=1.0, latency_per_word=1.0)
     values = np.array([1.0, 2.5, -3.25, 4.0], dtype=np.float32)
 
@@ -237,7 +237,7 @@ def test_write_array_read_array_complex_round_trip():
     CF = ComplexField.specialize(IntField.specialize(8, signed=True))
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(name="mem", sim=sim, inline=False, clk=clk,
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=clk,
                        latency_init=1.0, latency_per_word=1.0)
     n = 4
     values = cx.make_complex([1, -2, 3, -4], [5, 6, -7, 8], Format(8, 4, True))
@@ -265,7 +265,7 @@ def test_write_array_read_array_complex_round_trip():
 def test_inline_direct_master_zero_latency():
     sim = Simulation()
     clk = Clock(freq=1.0)
-    mem = MemModel(name="mem", sim=sim, inline=True, nwords_tot=8, clk=clk,
+    mem = MemoryMod(name="mem", sim=sim, inline=True, nwords_tot=8, clk=clk,
                        latency_init=99.0, latency_per_word=99.0)
     times: dict[str, float] = {}
 

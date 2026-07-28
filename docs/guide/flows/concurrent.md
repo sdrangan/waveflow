@@ -27,8 +27,12 @@ one call at a time.
 The cost is verification. Vitis C/RTL co-simulation drives a kernel through its `ap_start`/`ap_done`
 handshake — and a free-running kernel has none, so **co-sim refuses it**. Verification instead drives
 the elaborated RTL directly, cycle by cycle, through an **XSI BFM** (a cycle-based bus-functional
-model). The BFM drives every port each cycle, so it *is* a concurrent harness — which is why this flow
-needs no separate SystemC path.
+model). The BFM drives every port each cycle, so it *is* a concurrent harness — which is why there is
+no separate SystemC flow. An earlier draft had one; it was refuted, because the XSI BFM already does
+what a SystemC testbench would have been for.
+
+The specific blocker is worth naming: an `ap_ctrl_none` block that also carries `m_axi` cannot be
+Vitis co-simulated at all. The moment a DUT is free-running, verification drops a level to XSI.
 
 ## When to use it, and what it costs
 
@@ -42,6 +46,8 @@ stages should run concurrently — anything that benefits from pipelining rather
 
 ## How to read this flow
 
+- **[Writing it in Python](./concurrent_python.md)** — how to describe the module: a leaf's
+  `run_iter` (one firing) versus a composite's graph, and carrying state across firings.
 - The **[flow steps](./concurrent_flowsteps.md)** page is the recipe — from the component graph to a
   generated top, generated XSI harness, and an exact cycle-count check.
 - The **[mem_copy example](../../examples/memcpy/)** is the full worked walkthrough: the composite
@@ -49,6 +55,11 @@ stages should run concurrently — anything that benefits from pipelining rather
   testbench, and the RTL/XSI verification.
 - The framework memory streamers it is built from are the
   [Streaming Memory Kernels](../memory/memstream.md) page.
+- **[How it is realized in HLS](../comp_codegen/composite.md)** — the generated `ap_ctrl_none` top,
+  the task bodies, and [the XSI testbench](../comp_codegen/xsi_tb.md).
+
+The XSI gates are **exact cycle counts**, not bounds: a count that moves is either a real regression
+or a real improvement, and both deserve a human look.
 
 **Targets:** `composite_kernel` (the DUT — one target for a leaf and a composite alike, a leaf being
 the 1-task case) + `sequential_xsi_tb` (the XSI testbench) — both built.

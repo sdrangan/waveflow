@@ -763,9 +763,14 @@ def render_top(spec: TopSpec) -> str:
         lines.append(f"    {s}")
     for i, t in enumerate(spec.tasks):
         call_args = ", ".join(t.args)
+        # A body with no template args is a plain function: `f<>` is a compile error on a
+        # non-template, so the brackets appear only when there is something to put in them.
+        # (Reachable since a GENERATED task body bakes its width when the endpoints were built
+        # from an already-int()'d HwParam — nothing stays symbolic to template on.)
         targs = ", ".join(str(a) for a in t.template_args)
+        fn = f"{t.task_fn}<{targs}>" if t.template_args else t.task_fn
         lines.append(
-            f"    hls_thread_local hls::task t{i}({t.task_fn}<{targs}>, {call_args});")
+            f"    hls_thread_local hls::task t{i}({fn}, {call_args});")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -852,7 +857,7 @@ def tb_top_spec(tb) -> TbSpec:
     declared class (`AxisMaster`/`AxisSlave`); an ``m_axi`` port takes the class its *kind* implies,
     because the kernel is the master and the TB must supply the slave.
 
-    Participants declaring ``shared`` (a `MemModel` -> one `FlatMemory` behind both bundles) are
+    Participants declaring ``shared`` (a `MemoryMod` -> one `FlatMemory` behind both bundles) are
     constructed once and passed by name.
     """
     from waveflow.hw.hw_module import discover_dyn_params

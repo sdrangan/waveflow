@@ -16,6 +16,94 @@ class AddrUnit(Enum):
     word = 1
 
 
+class MemMgr:
+    """Allocation policy and address arithmetic — **the manager, not the memory**.
+
+    The second of the three memory objects (see ``docs/guide/memory/``).  It owns **no bytes**: it
+    answers *where* something goes and *how* an address maps to a word index, which is what an OS
+    allocator, a linker script, or a hand-rolled arena does.  Separating it from :class:`Memory`
+    means the placement policy can be reasoned about, replaced, or reused without dragging a
+    backing store along — and it collapses the duplication that came from two classes each growing
+    their own ``alloc``/``free``.
+
+    Two responsibilities, both pure:
+
+    **Addressing.** :meth:`addr_to_index` / :meth:`index_to_addr` convert between the caller's
+    address space and word indices, per :class:`AddrUnit`.  Byte addressing (the AXI/DDR
+    convention) divides by the word's byte width and enforces alignment; word addressing is the
+    identity.  This is the *only* place the convention is implemented.
+
+    **Placement.** :meth:`place` runs a first-fit search over the occupied index ranges it is
+    handed and returns the starting index for ``nwords``.  It is given the ranges rather than
+    tracking them, so it can never disagree with whoever owns the storage — the byte store stays
+    the single source of truth about what is occupied.
+    """
+
+    def __init__(
+        self,
+        word_size: int = 32,
+        addr_size: int = 32,
+        nwords_tot: int | None = None,
+        addr_unit: AddrUnit = AddrUnit.byte,
+    ) -> None:
+        self.word_size = word_size
+        self.addr_size = addr_size
+        self.nwords_tot = nwords_tot
+        self.addr_unit = addr_unit
+
+    # -- addressing -------------------------------------------------------------------------
+
+    @property
+    def word_nbytes(self) -> int:
+        """Bytes per word.  Raises when the word is not a whole number of bytes."""
+        if self.word_size % 8 != 0:
+            raise ValueError("Byte addressing requires word_size to be a multiple of 8 bits.")
+        return self.word_size // 8
+
+    def addr_to_index(self, addr: int) -> int:
+        """Convert a caller-space address to a word index (the inverse of :meth:`index_to_addr`)."""
+        if self.addr_unit == AddrUnit.byte:
+            nb = self.word_nbytes
+            if addr % nb != 0:
+                raise ValueError(
+                    f"Address {addr} is not aligned to the word size of {nb} bytes."
+                )
+            return addr // nb
+        if self.addr_unit == AddrUnit.word:
+            return addr
+        raise ValueError(f"Unsupported address unit: {self.addr_unit}")
+
+    def index_to_addr(self, index: int) -> int:
+        """Convert a word index to a caller-space address."""
+        if self.addr_unit == AddrUnit.byte:
+            return index * self.word_nbytes
+        if self.addr_unit == AddrUnit.word:
+            return index
+        raise ValueError(f"Unsupported address unit: {self.addr_unit}")
+
+    # -- placement --------------------------------------------------------------------------
+
+    def place(self, nwords: int, occupied: list[tuple[int, int]]) -> int:
+        """First-fit: return the starting **word index** for ``nwords`` given the *occupied* ranges.
+
+        *occupied* is a list of ``(start_index, end_index)`` half-open ranges, sorted.  Raises
+        ``MemoryError`` when no gap is large enough within ``nwords_tot``, and ``ValueError`` when
+        ``nwords`` is not positive.
+        """
+        if nwords <= 0:
+            raise ValueError("nwords must be a positive integer.")
+        next_free = 0
+        for start_index, end_index in occupied:
+            if next_free + nwords <= start_index:
+                break
+            next_free = max(next_free, end_index)
+        if self.nwords_tot is not None and next_free + nwords > self.nwords_tot:
+            raise MemoryError(
+                f"Unable to allocate {nwords} contiguous words in memory of size {self.nwords_tot}."
+            )
+        return next_free
+
+
 class Memory(object):
     """
     Sparse memory model for Waveflow.
@@ -69,30 +157,18 @@ class Memory(object):
         self.addr_unit = addr_unit
         self.nwords_tot = nwords_tot
         self.segments = {}
+        #: The allocator/addressing policy.  Memory keeps the bytes; the manager decides where
+        #: they go and how an address maps to a word index (one implementation, not two).
+        self.mgr = MemMgr(word_size=word_size, addr_size=addr_size,
+                          nwords_tot=nwords_tot, addr_unit=addr_unit)
 
+    # Addressing is the MemMgr's job — Memory holds bytes and asks the manager where they go.
+    # These stay as (private) methods so the ~dozen internal call sites read unchanged.
     def _addr_to_index(self, addr : int) -> int:
-        if self.addr_unit == AddrUnit.byte:
-            word_nbytes = self.word_size // 8
-            if self.word_size % 8 != 0:
-                raise ValueError("Byte addressing requires word_size to be a multiple of 8 bits.")
-            if addr % word_nbytes != 0:
-                raise ValueError(
-                    f"Address {addr} is not aligned to the word size of {word_nbytes} bytes."
-                )
-            return addr // word_nbytes
-        elif self.addr_unit == AddrUnit.word:
-            return addr
-        else:
-            raise ValueError(f"Unsupported address unit: {self.addr_unit}")
+        return self.mgr.addr_to_index(addr)
 
     def _index_to_addr(self, index: int) -> int:
-        if self.addr_unit == AddrUnit.byte:
-            if self.word_size % 8 != 0:
-                raise ValueError("Byte addressing requires word_size to be a multiple of 8 bits.")
-            return index * (self.word_size // 8)
-        if self.addr_unit == AddrUnit.word:
-            return index
-        raise ValueError(f"Unsupported address unit: {self.addr_unit}")
+        return self.mgr.index_to_addr(index)
 
     def _segment_shape(self, nwords: int) -> tuple[int, ...]:
         if self.word_size <= 32:
@@ -157,20 +233,10 @@ class Memory(object):
         The newly allocated segment is zero-initialized and stored in
         ``self.segments`` under its starting address.
         """
-        if nwords <= 0:
-            raise ValueError("nwords must be a positive integer.")
-
-        next_free = 0
-        for start_index, end_index in self._segment_bounds():
-            if next_free + nwords <= start_index:
-                break
-            next_free = max(next_free, end_index)
-
-        if self.nwords_tot is not None and next_free + nwords > self.nwords_tot:
-            raise MemoryError(
-                f"Unable to allocate {nwords} contiguous words in memory of size {self.nwords_tot}."
-            )
-
+        # Placement is policy (the manager); creating the segment is storage (here).  The manager
+        # is HANDED the occupied ranges rather than tracking them, so the byte store stays the one
+        # source of truth about what is occupied and the two can never disagree.
+        next_free = self.mgr.place(nwords, self._segment_bounds())
         addr = self._index_to_addr(next_free)
         self.segments[addr] = np.zeros(
             self._segment_shape(nwords),
@@ -305,7 +371,7 @@ class Memory(object):
 class _DirectBackedMMIFMaster:
     """
     MMIFMaster-compatible endpoint that reads/writes a Memory directly,
-    bypassing any AXI interface.  Used internally by MemModel.
+    bypassing any AXI interface.  Used internally by MemoryMod.
 
     read() and write() are generator functions that yield no SimPy events
     (zero simulation time).  as_words(), as_array(), as_schema() provide
@@ -373,7 +439,7 @@ class _DirectBackedMMIFMaster:
         """Return a direct numpy view of the pre-allocated inline block."""
         if self._mem is None or self._base_addr is None:
             raise RuntimeError(
-                "as_words() requires an inline MemModel with a pre-allocated block"
+                "as_words() requires an inline MemoryMod with a pre-allocated block"
             )
         return self._mem.segments[self._base_addr]
 
@@ -393,7 +459,7 @@ class _DirectBackedMMIFMaster:
 
 
 # ---------------------------------------------------------------------------
-# MemModel — a SimObj wrapping a Memory with MM interface endpoints
+# MemoryMod — a SimObj wrapping a Memory with MM interface endpoints
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -415,7 +481,7 @@ class MemSeg:
 
 
 @dataclass
-class MemModel(SimObj):
+class MemoryMod(SimObj):
     """
     A latency-modeling :class:`~waveflow.simulation.simobj.SimObj` that wraps a
     :class:`Memory` and exposes MM interface endpoints.

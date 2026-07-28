@@ -230,15 +230,15 @@ class KernelCallStmt(HwStmt):
     (streams, regmap, m_axi) so the call matches ``kernel_signature``.
     """
     local_name: str                 # Python-side DUT local (e.g. "dut")
-    mem_local: str | None = None    # MemModel backing-array local (m_axi arg)
+    mem_local: str | None = None    # MemoryMod backing-array local (m_axi arg)
 
 
 @dataclass
 class MemBindStmt(HwStmt):
-    """A ``mem = MemModel(**kwargs)`` binding inside a TB ``main()``.
+    """A ``mem = MemoryMod(**kwargs)`` binding inside a TB ``main()``.
 
     Lowers to a flat backing array + a ``MemMgr`` (decision 9): the
-    ``MemModel`` + ``Memory`` of the Python sim collapse to
+    ``MemoryMod`` + ``Memory`` of the Python sim collapse to
     ``static mem_word_t mem[MEM_SIZE]`` + ``MemMgr<bw> mem_mgr(mem, MEM_SIZE)``.
     """
     local_name: str

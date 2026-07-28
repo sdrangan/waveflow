@@ -365,7 +365,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW, jobs=None) -> str:
     Everything here is read off a real :class:`~examples.mem_copy.mem_copy_sim.MemCopyTB` — the same
     class the pysim golden runs — rather than restated: the words are the very ones its
     ``StreamDriver`` will send (the schema-packed command bursts); the offsets are its ``jobs``; the
-    arena is the one its ``MemModel`` declares.  So the XSI testbench and the pysim harness
+    arena is the one its ``MemoryMod`` declares.  So the XSI testbench and the pysim harness
     cannot describe different tests.
 
     Split from :func:`gen_xsi_vectors` so a test can compare the committed header against what the
@@ -381,7 +381,7 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW, jobs=None) -> str:
         "mem_copy_vectors",
         scalars={
             "MEM_DW": width,
-            # The arena the graph's MemModel declares -- not a second, hand-picked number.
+            # The arena the graph's MemoryMod declares -- not a second, hand-picked number.
             "MEM_NW": int(tb.mem.nwords_tot),
             "N": int(jobs[0].n_words),
             "NUM_CMDS": len(jobs),

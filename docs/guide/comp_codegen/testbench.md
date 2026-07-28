@@ -1,6 +1,6 @@
 ---
 title: Testbench
-parent: Component Code Generation
+parent: Module Code Generation
 nav_order: 6
 audience: hls
 applies_to: [SeqTB]
@@ -82,11 +82,12 @@ Spawning a SimPy process is **rejected** — not deferred:
 
 > Concurrent process spawn '`self.sim.env.process`(...)'. This body is concurrent: it spawns a
 > coroutine that runs alongside the rest of the body, so it has no straight-line lowering … It needs
-> the SystemC path (Flow 3), not C-simulation.
+> A concurrently-driven DUT is verified by the free-running flow's XSI BFM, which drives every
+> port each cycle.
 
-A `sequential_vitis_tb` *is* a `int main()`; there is nowhere for a fork to go. A concurrently-driven
-testbench is a different [target](./index.md) — `concurrent_systemc_tb`, the
-[free-running, concurrently driven](../flows/freerun_conc.md) flow — and is not built yet.
+A `sequential_vitis_tb` *is* an `int main()`; there is nowhere for a fork to go. A concurrently-driven
+testbench is a different [target](./index.md) — `sequential_xsi_tb`, the
+[concurrent (free-running)](../flows/concurrent.md) flow — and it **is** built.
 Honest limit: this is a **gate, not a proof** — it rejects the syntax that certainly forks, but cannot
 certify that a body is sequential.
 
@@ -120,7 +121,7 @@ Note `cpp_kernel_name` on the TB names the **DUT**, not the testbench — that i
 
 - A `SeqTB` is the source for `sequential_vitis_tb`; `main()` → `<kernel>_tb.cpp`.
 - Keep `main()` straight-line — `env.process(...)` is rejected, with a message pointing at the
-  [concurrently driven](../flows/freerun_conc.md) flow.
+  [concurrently driven](../flows/concurrent.md) flow.
 - Invoke once with `dut.run()` / `dut.run_once(...)` / `yield from dut.run_once_sim(...)` — all one kernel call.
 - Streams use `push`/`pop` (+ `_array`) here, never the `get`/`write` process forms.
 - `@sim_only` calls (e.g. the timers) are stripped and emit nothing.

@@ -28,4 +28,4 @@ This ownership split is structural, not stylistic.
 ## See also
 
 - [`examples/interleaver/gen/interleaver_canon.cpp`](../../../../examples/interleaver/gen/interleaver_canon.cpp)
-- [Component structure](../../comp_codegen/structure.md)
+- [Module structure](../../comp_codegen/structure.md)

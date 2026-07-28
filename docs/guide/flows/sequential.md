@@ -44,13 +44,59 @@ covers most accelerators with a clear request/response boundary.
 
 If you need jobs to overlap, that is the [concurrent, free-running flow](./concurrent.md).
 
+## The three gates
+
+The flow's value is not that it produces C++. It is that it **refuses to agree** when something is
+wrong. Three gates sit in the build, and each example wires the ones it needs — `regmap` and
+`stream_inband` wire all three and are the reference shape.
+
+**Gate 1 — functional.** C-simulation outputs are compared **bit-exactly** against the Python golden:
+values deserialized from `.bin`, plus the named `regmap_status.json` fields. Same Python source, same
+answers. A mismatch stops the pipeline before synthesis — there is no point measuring the timing of a
+kernel that computes the wrong answer, which is why `csynth` consumes the C-sim outputs.
+
+**Gate 2 — design intent.** Every reported loop must hit **pipeline II ≤ 1**. If Vitis backed off to a
+slower schedule, the timing below would describe a different design than the one you meant, so the
+step fails rather than measure the wrong thing.
+
+**Gate 3 — cycle-approximate Python.** `abs(py_cycles − cosim_cycles)` must fall inside a per-kernel
+tolerance. This is the gate that makes the framework's central claim *checkable* — that the Python
+model predicts real hardware:
+
+```json
+{ "pass": true, "py_cycles": 4, "cosim_cycles": 5, "delta": 1, "tolerance": 4 }
+```
+
+Both numbers are kept, not just the pass bit, so a future cycle-model-training step can fit the
+model's parameters from a corpus of these verdicts.
+
+## Four levels of one design
+
+What makes the flow readable is that one module is exercised four ways, each closer to hardware:
+
+1. **system sim** — Python only: a host `SimObj` driving the DUT. No Vitis.
+2. **py sim** — the `SeqTB` alone, in SimPy. Produces the golden **and** the cycle prediction.
+3. **C-sim** — the generated C++, compiled and run. Untimed; checks the maths.
+4. **co-sim** — the synthesized RTL, driven by Vitis's harness. Timed; checks the cycles.
+
+Levels 1–2 need no toolchain, which is why most of the test suite runs with no Vitis installed.
+
+```bash
+cd examples/regmap
+python simp_fun_build.py --through validate_timing   # or --through py_sim with no Vitis
+```
+
 ## How to read this flow
 
+- **[Writing it in Python](./sequential_python.md)** — how to describe the module: the register
+  map, `on_start`, and the `@synthesizable` hook, on the scalar `simp_fun`.
 - The **[flow steps](./sequential_flowsteps.md)** page is the recipe at a glance — the build steps
   from Python to a verified measurement, with a diagram.
 - The **[register-map example](../../examples/regmap/)** is the full worked walkthrough on `simp_fun`
   (`y = relu(a·x + b)`): the Python model, the register map, the Python simulation, the generated HLS
   kernel and testbench, and C-sim / RTL co-simulation — every step with its real code.
 - **[Parameterization](./parametrization.md)** — how `HwParam` fields become C++ template parameters.
+- **[How it is realized in HLS](../comp_codegen/structure.md)** — the generated kernel: the top-level
+  function, the `ap_ctrl_hs` handshake, and the `s_axilite` register map.
 
 **Targets:** `control_driven_kernel` (the DUT) + `sequential_vitis_tb` (the testbench) — both built.

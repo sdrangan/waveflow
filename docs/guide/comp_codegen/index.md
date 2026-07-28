@@ -1,17 +1,17 @@
 ---
-title: Component Code Generation
+title: Module Code Generation
 parent: Guide
 nav_order: 7
 has_children: true
 audience: hls
 api: [check, generate, potential_targets]
-summary: "Waveflow generates HLS and related C++ from certain HwComponents — automatically for the mechanical parts (top function, AXI pragmas, regmap struct, testbench harness), semi-automatically where you supply the compute body as a hook. Each distinct code output is a target; this section covers the two that are built (control_driven_kernel, sequential_vitis_tb) and names the five that are not. check(source, target) answers whether a given component would lower, running the same rules generate does."
+summary: "Waveflow generates HLS and related C++ from certain HwModules — automatically for the mechanical parts (top function, AXI pragmas, regmap struct, testbench harness), semi-automatically where you supply the compute body as a hook. Each distinct code output is a target; four are built (control_driven_kernel and sequential_vitis_tb for Flow 1, composite_kernel and sequential_xsi_tb for Flow 2) and only bitstream is not. check(source, target) answers whether a given module would lower, running the same rules generate does."
 ---
 
-# Component Code Generation
+# Module Code Generation
 
 A key feature of Waveflow is that it generates HLS and related code from **certain**
-[`HwModule`s](../flows/modules.md) — you write the component once in Python (its ports, its parameters,
+[`HwModule`s](../flows/modules.md) — you write the module once in Python (its ports, its parameters,
 its behavior) and the generator emits build-ready C++ from that single source.
 
 It is **automatic** for everything mechanical: the top-level function and its signature, the
@@ -29,24 +29,29 @@ Each distinct code output is a **target**. The vocabulary is shared verbatim wit
 ([`waveflow/hw/codegen_targets.py`](../../../waveflow/hw/codegen_targets.py)), so the two cannot drift
 apart.
 
-Each *kind* of component declares the targets that exist for it, as `potential_targets`:
+Each *kind* of module declares the targets that exist for it, as `potential_targets`:
 
-| Target | Declared by | Status |
-|---|---|---|
-| `control_driven_kernel` | [`HostActivated`](../flows/modules.md) | **Built** |
-| `sequential_vitis_tb` | [`SeqTB`](../flows/modules.md) | **Built** |
-| `free_running_kernel` | [`FreeRunMod`](../flows/modules.md) (standalone) | Named, not implemented |
-| `composite_kernel` | [`FreeRunMod`](../flows/modules.md) (composite) | Named, not implemented |
-| `sequential_xsi_tb` | — | Named, not implemented |
-| `concurrent_systemc_tb` | — | Named, not implemented |
-| `bitstream` | — | Named, not implemented |
+| Target | Declared by | Flow | Status |
+|---|---|---|---|
+| `control_driven_kernel` | [`HostActivated`](../flows/modules.md) | 1 | **Built** |
+| `sequential_vitis_tb` | [`SeqTB`](../flows/modules.md) | 1 | **Built** |
+| `composite_kernel` | [`FreeRunMod`](../flows/modules.md) — leaf *or* composite | 2 | **Built** |
+| `sequential_xsi_tb` | a testbench `FreeRunMod` graph | 2 | **Built** |
+| `bitstream` | — | 3 | Named, not implemented |
 
-**This section describes the two that are built.** The other five are *named* rather than silent, which
-is what lets `check()` answer precisely — see below. They are the future work of
-the [free-running and bitstream flows](../flows/); nothing generates them today.
+One name, `composite_kernel`, covers a free-running leaf *and* a composite: a leaf is the 1-task
+degenerate case, and `composite_top_spec` walks both. There is no separate `free_running_kernel`.
+
+**Four of the five are built** — Flows 1 and 2 end to end. `bitstream` is *named* rather than
+silent, which is what lets `check()` answer precisely rather than failing obscurely; it is the future
+work of the [bitstream flow](../flows/bitstream_ipi.md).
+
+The single source for this list is
+[`waveflow/hw/codegen_targets.py`](../../../waveflow/hw/codegen_targets.py), which also records which
+are implemented — so this table and the code cannot drift silently.
 
 > **`potential_`, not `supported_`.** A class declares the paths that exist **for its kind** — not a
-> promise about any particular component. Whether *this* component actually makes it down one is
+> promise about any particular module. Whether *this* module actually makes it down one is
 > `check()`'s answer, not the class's. Synthesizability is a codegen axis, not a class fact
 > ([taxonomy](../flows/modules.md)).
 
@@ -54,7 +59,7 @@ the [free-running and bitstream flows](../flows/); nothing generates them today.
 
 Generating a target takes one input — a **source**. A source is a Python class: the `HwModule`
 you want realized (`SimpFun`), or the [`SeqTB`](../flows/modules.md) that drives it
-(`SimpFunTBHls`). You never name a method; the entry follows from the component's *kind*
+(`SimpFunTBHls`). You never name a method; the entry follows from the module's *kind*
 (`HostActivated` → `on_start`, a standalone `FreeRunMod` → `run_iter`, `SeqTB` → `main`, and a
 composite `FreeRunMod` has no body at all — its codegen is the sub-component graph).
 
@@ -79,8 +84,8 @@ actual problem and the fix — not just *"cannot synthesize"*.
 >>> from waveflow.build.codegen_check import check
 >>> check(SimpFun)
 (True, None)
->>> check(SimpFun, "concurrent_systemc_tb")
-(False, "'concurrent_systemc_tb' is not a potential target for SimpFun; ...")
+>>> check(SimpFun, "bitstream")
+(False, "'bitstream' is not a potential target for SimpFun; its potential targets are {'control_driven_kernel'}")
 ```
 
 **`check` knows no rules of its own.** It runs the *real* validation, throws the result away, and
@@ -97,23 +102,31 @@ or that it is correct at all. That is what the example's C-simulation and co-sim
 
 ## In this section
 
+The section is organized by **what is realized**: a host-activated module
+([Module structure](./structure.md)), a free-running one
+([Free-running kernel in HLS](./composite.md)), and the two testbench targets
+([Testbench](./testbench.md), [XSI testbench](./xsi_tb.md)). How to *describe* either module in
+Python is the previous section, [Hardware modules and Flows](../flows/).
+
 **Start with [Automatic vs. manual](./automatic.md)** — where the generator stops and you begin — then
-[Component structure](./structure.md) for how a component becomes a kernel, and
+[Module structure](./structure.md) for how a module becomes a kernel, and
 [Extractor](./extractor.md) for what your body may contain. Those three are what you need to *write* a
-component. The rest is reference: reach for it when you look inside the generated C++, which mostly
+module. The rest is reference: reach for it when you look inside the generated C++, which mostly
 means when you write a [hook](../custom_hooks/).
 
 - [Automatic vs. manual](./automatic.md) — what codegen writes and what you write: everything structural is generated; the compute inside a `@synthesizable` hook is yours.
-- [Component structure](./structure.md) — how an `HwModule` becomes a Vitis HLS top-level function: the kernel entry, the execution model, where hooks come from, and the **contract** for when a component lowers at all.
+- [Module structure](./structure.md) — how an `HwModule` becomes a Vitis HLS top-level function: the kernel entry, the execution model, where hooks come from, and the **contract** for when a module lowers at all.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
+- [Free-running kernel in HLS](./composite.md) — how a `FreeRunMod` becomes an `ap_ctrl_none` `hls::task` top plus a generated task body: the graph-derived top, `KernelTask`, and where `HwState` statics land.
 - [Extractor](./extractor.md) — the synthesizable subset: what the rules are, why each exists, and `check` as their callable form.
 - [Codegen](./codegen.md) — how `kernel_files_to_str` emits the deterministic kernel file set and resolves naming.
 - [Templating](./templating.md) — the C++ realization of [parameterization](../flows/parametrization.md): how `HwParam` lowers (concrete widths / `.tpp` template params), `HwConst` (deferred), and how `param_supports` emits variant kernels.
 - [Testbench](./testbench.md) — how a [`SeqTB`](../flows/modules.md)'s `main()` lowers to a `sequential_vitis_tb`.
+- [XSI testbench in HLS](./xsi_tb.md) — how a testbench *graph* lowers to a `sequential_xsi_tb`: participants map to pre-written BFM models, and the scenario lives in burst bundles rather than in the C++.
 
 ## See also
 
 - [Hardware modules and Flows](../flows/) — the end-to-end *recipe* per target: which build steps run, in what order, and how the result is verified. This section is the per-target mechanics; that section is the story.
 - [Hardware Modules](../flows/modules.md) — the Python `HwModule` this section generates C++ for.
-- [Custom Hooks](../custom_hooks/) — the hand-written synthesizable kernel bodies that plug into a generated component.
+- [Custom Hooks](../custom_hooks/) — the hand-written synthesizable kernel bodies that plug into a generated module.
 - [Build System](../build/) — the `BuildDag` that drives these codegen steps end to end.

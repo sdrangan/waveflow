@@ -579,7 +579,7 @@ def _cpp_type_for(typ) -> str:
 
 
 def _emit_call_arg(arg, ctx: CodegenCtx) -> str:
-    """Emit one argument: HwVar -> name, endpoint -> attr name, literal -> literal."""
+    """Emit one argument: HwVar -> name, endpoint -> attr name, state -> attr name, literal."""
     if isinstance(arg, HwVar):
         return arg.name
     if isinstance(arg, FieldRef):
@@ -587,6 +587,12 @@ def _emit_call_arg(arg, ctx: CodegenCtx) -> str:
     from waveflow.hw.interface import InterfaceEndpoint
     if isinstance(arg, InterfaceEndpoint):
         return _endpoint_name(arg, ctx)
+    # A declared state object (add_state) passes by its attribute name — the same identifier
+    # the enclosing scope declared it under, so the call site and the declaration cannot drift.
+    from waveflow.hw.hw_module import state_entry_for
+    entry = state_entry_for(ctx.comp, arg)
+    if entry is not None:
+        return entry.name
     return _emit_literal(arg)
 
 
@@ -620,6 +626,13 @@ def cpp_type(typ) -> str:
     if typ is None:
         raise RuntimeError("cpp_type called with None — unresolved HwVar leaked")
     if isinstance(typ, type) and issubclass(typ, DataSchema):
+        # FixedField BEFORE IntField: it subclasses IntField (an ap_fixed is a scaled integer,
+        # so it reuses the W-bit word serialization), but its C++ type is the ap_fixed the
+        # format declares.  Falling through to ap_int<W> would be the right WIDTH and the wrong
+        # SEMANTICS — arithmetic in a hook would silently lose the binary point.
+        from waveflow.hw.fixpoint import FixedField
+        if issubclass(typ, FixedField):
+            return typ.cpp_type
         if issubclass(typ, IntField):
             bw = typ.get_bitwidth()
             signed = getattr(typ, 'signed', False)
@@ -944,9 +957,20 @@ def hook_signature(
     # several stream args sharing one width (e.g. a free-running kernel whose s_in and m_out are
     # both ``mem_dwidth``).  Consume sequentially, but when the queue exhausts fall back to the
     # last consumed param (the shared width) rather than the symbolic ``WORD_BW`` (undefined).
+    # A hook parameter whose name matches a declared state object takes its type from the
+    # REGISTERED INSTANCE, not from the annotation.  With a swept format the array class is
+    # built in __post_init__ (DataArray.specialize over a HwParam-derived FixedField), so the
+    # annotation can only name the unspecialized base and would emit the wrong element type.
+    # Same instance-resolution the MMIFMaster pointer width uses just below.
+    _state: dict = {}
+    if _self is not None:
+        from waveflow.hw.hw_module import discover_state
+        _state = discover_state(_self)
     _last_tmpl: str | None = None
     for name in param_names:
         annot = hints.get(name)
+        if name in _state:
+            annot = _state[name].schema
         if annot is None:
             raise RuntimeError(
                 f"Hook '{method.__name__}' parameter '{name}' has no type annotation"
@@ -1163,6 +1187,7 @@ def _collect_schemas(tree: HwStmt, comp) -> list[type]:
     import collections.abc
     import typing as _typing
 
+    from waveflow.hw.hw_module import discover_state
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 
     def _has_header(typ) -> bool:
@@ -1174,6 +1199,12 @@ def _collect_schemas(tree: HwStmt, comp) -> list[type]:
         # param/return as ``elem[n]``) has no schema header and contributes no
         # includes — its array-utils come from the m_axi op that fills it.
         if getattr(typ, 'cpp_typing_only', False):
+            return False
+        # ``can_gen_include=False`` means "no header exists for this class" — the unspecialized
+        # ``DataArray`` base is the case that matters, reachable as a hook annotation now that a
+        # state arg can be typed with the base while its concrete class comes from the instance.
+        # Emitting an include for it names a file nobody generates.
+        if not getattr(typ, 'can_gen_include', True):
             return False
         return True
 
@@ -1188,7 +1219,15 @@ def _collect_schemas(tree: HwStmt, comp) -> list[type]:
             hints = _typing.get_type_hints(method)
         except Exception:
             return
+        # A state argument is annotated ``HwState`` — a wrapper that carries no schema and so no
+        # header.  Resolve it to the WRAPPED class, the same instance-resolution hook_signature
+        # uses for the type itself; otherwise the headers the hook body needs (reached transitively
+        # through the array's own header) silently stop being included and csynth fails on symbols
+        # that used to be in scope.
+        state = discover_state(getattr(method, '__self__', None))
         for name, hint in hints.items():
+            if name in state:
+                hint = state[name].schema
             if name == 'return':
                 # ProcessGen[T] = Generator[Event, Any, T]; unwrap to T.
                 if _typing.get_origin(hint) is collections.abc.Generator:
@@ -1469,6 +1508,85 @@ def header_to_cpp(
     return "\n".join(lines) + "\n"
 
 
+def state_decl_type(entry) -> tuple[str, str]:
+    """Return ``(cpp_type, suffix)`` for one :class:`~waveflow.hw.hw_state.HwState`'s declaration.
+
+    ``suffix`` is the array extent (``"[32]"``) or ``""`` for a scalar, so the caller writes
+    ``static {cpp_type} {name}{suffix};``.
+
+    **The type comes from the wrapped instance, not from any annotation.**  ``HwState.schema`` *is*
+    the concrete class — including a per-instance ``DataArray.specialize(...)`` whose element format
+    was derived from a ``HwParam`` (the instance->type bridge).  A static annotation could only name
+    the unspecialized base, which would emit the wrong element type; the same reasoning already
+    makes ``hook_signature`` size an ``MMIFMaster`` pointer off the bound ``self`` rather than off
+    the hint.
+    """
+    cls = entry.schema
+    if issubclass(cls, DataArray) and getattr(cls, 'cpp_storage', 'struct') == 'raw':
+        return cpp_type(cls.element_type), f"[{cls._declared_count()}]"
+    return cpp_type(cls), ""
+
+
+def state_decls_to_cpp(comp: HwModule, indent: int = 1) -> str:
+    """Emit the ``static`` declarations for every object *comp* registered with ``add_state``.
+
+    Returns ``""`` when the component declared no state, so both call sites can splice
+    unconditionally.
+
+    ``static`` is what makes the storage persist across firings — between kernel invocations for
+    an ``ap_ctrl_chain`` top, and across the runtime's re-firings of an ``hls::task`` body (there
+    is no "before the loop" in a task, so this declaration *is* the initialization site).  No
+    explicit initializer is emitted: statics are zero-initialized, which matches a freshly
+    constructed ``DataArray`` on the pysim side, and it keeps the declaration out of the
+    ``config_rtl -reset`` initialized-static category.
+    """
+    from waveflow.hw.hw_module import discover_state
+
+    entries = discover_state(comp)
+    if not entries:
+        return ""
+    pad = "    " * indent
+    lines = [
+        f"{pad}// Cross-firing state (HwModule.add_state) -- persists across firings.",
+    ]
+    for entry in entries.values():
+        cpp_t, suffix = state_decl_type(entry)
+        lines.append(f"{pad}static {cpp_t} {entry.name}{suffix};")
+        lines.extend(state_pragmas(entry, pad))
+    return "\n".join(lines)
+
+
+def state_pragmas(entry, pad: str = "") -> list[str]:
+    """The HLS pragma lines one :class:`~waveflow.hw.hw_state.HwState` declares.
+
+    Emitted immediately after the declaration so the pragma and the variable it names cannot drift
+    apart.  Returns ``[]`` when the state declares neither ``partition`` nor ``bind_storage`` — the
+    common case, which stays pragma-free rather than emitting a "default" that would silently
+    override Vitis's own inference.
+
+    The specs live on the ``HwState``, not on its schema, because partitioning is a property of
+    *this storage*: two state arrays of the same schema can legitimately want different layouts,
+    and a schema is shared and specialization-cached.
+
+    The classic (positional) ARRAY_PARTITION spelling is used deliberately: it is what the
+    hand-written, XSI-verified task headers in this tree already emit, so generated and
+    hand-written bodies read the same.
+    """
+    out: list[str] = []
+    name = entry.name
+    part = entry.partition
+    if part:
+        ptype = part["type"]
+        dim = part.get("dim", 1)
+        factor = "" if ptype == "complete" else f" factor={part['factor']}"
+        out.append(f"{pad}#pragma HLS ARRAY_PARTITION variable={name} {ptype}{factor} dim={dim}")
+    bind = entry.bind_storage
+    if bind:
+        impl = f" impl={bind['impl']}" if bind.get("impl") else ""
+        out.append(f"{pad}#pragma HLS BIND_STORAGE variable={name} type={bind['type']}{impl}")
+    return out
+
+
 def kernel_body_to_cpp(comp: HwModule) -> str:
     """Top-level driver: extract + resolve + codegen.
 
@@ -1483,6 +1601,9 @@ def kernel_body_to_cpp(comp: HwModule) -> str:
     synth_ctx = SynthContext.from_component(comp)
     ctx = CodegenCtx(comp=comp, params=synth_ctx.params, indent=1)
     body = to_cpp(tree, ctx)
+    decls = state_decls_to_cpp(comp, indent=1)
+    if decls:
+        body = f"{decls}\n{body}"
     return f"{{\n{body}\n}}"
 
 
@@ -1704,7 +1825,7 @@ def _emit_dut_bind(stmt: DutBindStmt, ctx: TbCodegenCtx) -> str:
 
 
 def _emit_mem_bind(stmt: MemBindStmt, ctx: TbCodegenCtx) -> str:
-    """Emit the flat backing array + MemMgr for a ``MemModel`` local."""
+    """Emit the flat backing array + MemMgr for a ``MemoryMod`` local."""
     ctx.mems[stmt.local_name] = (stmt.word_size, stmt.nwords_tot)
     pad = ctx.pad()
     bw = stmt.word_size
@@ -2144,7 +2265,7 @@ def _testbench_cpp(tb_class) -> str:
         '#include "include/streamutils_tb.h"',
     ]
     # m_axi support headers: MemMgr (alloc) + byte_addr_to_word_index, when the
-    # TB declares a MemModel backing array.
+    # TB declares a MemoryMod backing array.
     if _tb_has_mem(tree):
         include_lines.append('#include "include/memmgr_tb.hpp"')
         include_lines.append('#include "include/memmgr.hpp"')
@@ -2174,7 +2295,7 @@ def _testbench_cpp(tb_class) -> str:
 
 
 def _tb_has_mem(tree: HwStmt) -> bool:
-    """True if the TB tree declares any ``MemModel`` backing array."""
+    """True if the TB tree declares any ``MemoryMod`` backing array."""
     found = False
 
     def visit(node):
@@ -2262,6 +2383,11 @@ def task_files_to_str(comp_class, task_name: str | None = None) -> dict[str, str
 
     lines.append('')
     lines.append(task_signature(default_comp, ctx, task))
+    # State declarations lead the body: an hls::task has no "before the loop", so the statics
+    # ARE the persistent storage the runtime's re-firings carry forward.
+    state_decls = state_decls_to_cpp(default_comp, indent=1)
+    if state_decls:
+        lines.append(state_decls)
     lines.append(to_cpp(tree, ctx))
     lines.append('}')
 

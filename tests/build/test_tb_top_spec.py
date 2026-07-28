@@ -57,7 +57,7 @@ def test_one_crossbar_becomes_two_slaves_sharing_one_arena():
     assert len(spec.shared) == 1
     cls, name, args, _dyn = spec.shared[0]
     assert cls == "FlatMemory" and name == "mem"
-    assert args == ("2624", "8"), "arena size/bpw come from the MemModel's own fields"
+    assert args == ("2624", "8"), "arena size/bpw come from the MemoryMod's own fields"
 
     slaves = [m for m in spec.models if m.cls.startswith("AxiMm")]
     assert len(slaves) == 2
@@ -70,7 +70,7 @@ def test_read_vs_write_slave_comes_from_the_boundary_not_the_memory():
     """A memory does not know how it will be driven.
 
     The kernel is the m_axi MASTER, so the TB must supply the slave — and which KIND is a property of
-    the DUT's boundary port (`maxi_read`/`maxi_write`), not of the MemModel. Both bundles resolve
+    the DUT's boundary port (`maxi_read`/`maxi_write`), not of the MemoryMod. Both bundles resolve
     to the same participant; only the boundary kind distinguishes them.
     """
     spec = tb_top_spec(_tb())

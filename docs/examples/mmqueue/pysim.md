@@ -19,12 +19,12 @@ Two masters, one memory, one interconnect:
 
 ```
    VmacHost ─┐                          ┌─ ring (head/tail + command slots)
- (SimObj)    ├─ AXIMMCrossBarIF ─ MemModel ─ A region
+ (SimObj)    ├─ AXIMMCrossBarIF ─ MemoryMod ─ A region
    VmacAccel ┘                          └─ B | Y regions
 ```
 
 The [`VmacHost`](../../../examples/vmac/vmac_host.py) and the `VmacAccel` are both
-masters on an `AXIMMCrossBarIF`; a single `MemModel` is the slave holding the
+masters on an `AXIMMCrossBarIF`; a single `MemoryMod` is the slave holding the
 command **ring** (its `head`/`tail` pointers and slots) alongside the `A`, `B`, and
 `Y` data regions. Both sides reach the ring through an
 [`AXIMMQueue`](../../guide/interface/mmqueue.md) bound to that memory — the host as

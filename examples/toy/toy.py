@@ -10,8 +10,10 @@ in synthesizable form.  What they do **not** claim: *this synthesizes*.  No ``Fr
 auto-extracted today (``MemRStream``/``MemWStream`` hand off fixed hand-written ``hls::task`` bodies
 via ``kernel_task()``; their ``run_iter`` is pysim-golden only).  See ``plans/toy_examples.md``.
 
-Both components are deliberately **stateless** — cross-iteration mutable state is not supported (the
-extractor forbids reading mutable ``self.X`` from a kernel body).  Do not add an accumulator.
+Both components are deliberately **stateless**, and should stay that way — they exist to be the
+smallest readable example of each kind.  Cross-firing state *is* supported now, but it is a separate
+idea with its own declaration (``HwModule.add_state``; see ``plans/add_state.md`` and
+``tests/hw/test_add_state.py`` for the accumulator version).  Do not add an accumulator here.
 
 For a real end-to-end example (build DAG, Vitis C-sim/co-sim, docs), see ``examples/regmap``.
 """

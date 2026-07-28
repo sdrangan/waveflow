@@ -106,7 +106,7 @@ class HwStmtExtractor:
         # the extractor as it walks the body in Phase 3/4.
         self._duts: dict[str, object] = {}      # local_name -> HwModule instance
         self._tb_locals: dict[str, object] = {} # local_name -> object (binding)
-        self._mems: dict[str, object] = {}      # local_name -> MemModel class
+        self._mems: dict[str, object] = {}      # local_name -> MemoryMod class
         # TB locals that alias a bound DUT's *input* regmap field local (Stage 2b):
         # local_name -> (dut_local, field_name).  Populated by
         # ``x = <Schema>().read_uint32_file(path)``; consumed by ``run_once``/
@@ -175,7 +175,7 @@ class HwStmtExtractor:
         """
         from waveflow.hw.aximm_queue import AXIMMQueue
         from waveflow.hw.dataschema import DataSchema
-        from waveflow.hw.hw_module import HwParamValue
+        from waveflow.hw.hw_module import HwParamValue, state_entry_for
         from waveflow.hw.interface import InterfaceEndpoint
         from waveflow.hw.regmap import RegMap
 
@@ -216,6 +216,11 @@ class HwStmtExtractor:
                     or isinstance(obj, (InterfaceEndpoint, RegMap, AXIMMQueue,
                                         HwParamValue))
                     or (isinstance(obj, type) and issubclass(obj, DataSchema))
+                    # A DECLARED state reference (self.taps after add_state) — persistent
+                    # storage the author named on purpose, not an implicit capture.  This is
+                    # the whole point of add_state: the rule still rejects an undeclared
+                    # self.X, it just now has a way to be told.
+                    or state_entry_for(extractor._comp, obj) is not None
                 ):
                     return
                 lineno = getattr(node, 'lineno', '?')
@@ -223,7 +228,9 @@ class HwStmtExtractor:
                     f"Implicit capture of 'self.{node.attr}' at line {lineno}. "
                     f"Reads of self.X inside a synthesizable method are forbidden "
                     f"unless 'X' is @sim_only, an endpoint, or a RegMap. Mark the "
-                    f"value @sim_only or pass it explicitly."
+                    f"value @sim_only, pass it explicitly, or — if it is storage that "
+                    f"must persist across firings — declare it with "
+                    f"self.add_state(self.{node.attr})."
                 )
 
         _Validator().visit(func_def)
@@ -268,8 +275,9 @@ class HwStmtExtractor:
                 f"{method_name}(). This body is concurrent: it spawns a coroutine that runs "
                 f"alongside the rest of the body, so it has no straight-line lowering — neither "
                 f"a sequential Vitis 'int main()' testbench nor a straight-line kernel body can "
-                f"express the fork. It needs the SystemC path (Flow 3, free-running and "
-                f"concurrently driven), not C-simulation; see docs/guide/flows/. If the body is "
+                f"express the fork. A concurrently-driven DUT is verified by the free-running "
+                f"flow's XSI BFM, which drives every port each cycle; see docs/guide/flows/. If "
+                f"the body is "
                 f"in fact sequential, run the coroutine inline ('yield from <call>') rather than "
                 f"spawning it."
             )
@@ -347,7 +355,7 @@ class HwStmtExtractor:
             if result is not None:
                 return result
 
-        # `name = <ClassRef>(**kwargs)` — DUT / schema / MemModel binding,
+        # `name = <ClassRef>(**kwargs)` — DUT / schema / MemoryMod binding,
         # or `name = <mem>.read_array(...)` — m_axi read-back.
         if (
             isinstance(stmt, ast.Assign)
@@ -420,12 +428,12 @@ class HwStmtExtractor:
                     if kw.value.id not in self._mems:
                         raise SynthesisError(
                             f"dut.run(mem={kw.value.id}) — '{kw.value.id}' is not a "
-                            f"bound MemModel local (line {parent.lineno})"
+                            f"bound MemoryMod local (line {parent.lineno})"
                         )
                     mem_local = kw.value.id
                 else:
                     raise SynthesisError(
-                        f"dut.run() only accepts mem=<MemModel local> "
+                        f"dut.run() only accepts mem=<MemoryMod local> "
                         f"(line {parent.lineno})"
                     )
             return KernelCallStmt(local_name=receiver_chain.id, mem_local=mem_local)
@@ -691,24 +699,24 @@ class HwStmtExtractor:
         call_node: ast.Call,
         parent_stmt: ast.stmt,
     ) -> "HwStmt | None":
-        """If ``call_node`` constructs a ``MemModel``, return a
+        """If ``call_node`` constructs a ``MemoryMod``, return a
         ``MemBindStmt`` (flat array + MemMgr).  ``None`` otherwise."""
         from waveflow.hw.hwstmt import MemBindStmt
-        from waveflow.hw.memory import MemModel
+        from waveflow.hw.memory import MemoryMod
 
         cls = self._resolve_tb_class(call_node.func)
-        if not (isinstance(cls, type) and issubclass(cls, MemModel)):
+        if not (isinstance(cls, type) and issubclass(cls, MemoryMod)):
             return None
         if call_node.args:
             raise SynthesisError(
-                f"MemModel construction must use keyword arguments only "
+                f"MemoryMod construction must use keyword arguments only "
                 f"(line {parent_stmt.lineno})"
             )
         kwargs: dict[str, object] = {}
         for kw in call_node.keywords:
             if kw.arg is None:
                 raise SynthesisError(
-                    f"MemModel construction does not accept **kwargs "
+                    f"MemoryMod construction does not accept **kwargs "
                     f"(line {parent_stmt.lineno})"
                 )
             kwargs[kw.arg] = self._eval_tb_literal(kw.value, parent_stmt)
@@ -716,7 +724,7 @@ class HwStmtExtractor:
         nwords_tot = kwargs.get('nwords_tot')
         if nwords_tot is None:
             raise SynthesisError(
-                f"MemModel in a testbench must declare nwords_tot "
+                f"MemoryMod in a testbench must declare nwords_tot "
                 f"(the static array size) (line {parent_stmt.lineno})"
             )
         self._mems[local_name] = (word_size, int(nwords_tot))
@@ -827,7 +835,7 @@ class HwStmtExtractor:
             if node.id in globs:
                 return globs[node.id]
         raise SynthesisError(
-            f"MemModel kwarg must be a literal or module global "
+            f"MemoryMod kwarg must be a literal or module global "
             f"(line {getattr(parent, 'lineno', '?')})"
         )
 

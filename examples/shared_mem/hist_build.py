@@ -649,7 +649,7 @@ class BuildInputsStep(BuildStep):
 class PySimStep(BuildStep):
     """Run the SimPy model for the reference case and record golden parity.
 
-    Drives ``run_sim`` (HistAccel + HistController + MemModel) against the
+    Drives ``run_sim`` (HistAccel + HistController + MemoryMod) against the
     numpy golden and writes a summary — the functional reference the C-sim and
     cosim stages are checked against."""
 
