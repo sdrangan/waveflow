@@ -1,10 +1,11 @@
 # Plan: `add_state` — declared cross-firing state in a `HwModule`
 
-> **Status (2026-07-28): Stages 1–3 BUILT and fully gated; `examples/fir_block` is BUILT in pysim.**
-> The FIR composite (`cmd_rx → MemRStream → fir_compute → MemWStream`) runs the plan's firing
-> sequence green against a stateless golden, with both flavours of state falsification-tested. **Not
-> yet done:** the FIR's codegen + csynth + XSI, Stage 4, and the width sweep. See
-> [`examples/fir_block`](#examplesfir_block--built-in-pysim).
+> **Status (2026-07-28): Stages 1–3 BUILT and fully gated; `examples/fir_block` is BUILT and
+> XSI-verified end to end.** The FIR composite (`cmd_rx → MemRStream → fir_compute → MemWStream`)
+> runs the plan's firing sequence green in pysim *and* through real RTL: csynth clean on xc7z020
+> (FIR loop II=1, 32 DSPs at T=32/W=16 — one per tap), and every output block bit-exact against the
+> stateless golden under XSI. **Not yet done:** Stage 4 and the width sweep. See
+> [`examples/fir_block`](#examplesfir_block--built-and-xsi-verified).
 >
 > **Status (2026-07-27): Stages 1, 2, and 3 are BUILT and fully gated — including XSI.**
 > Stage 1's gate passed on both halves (hook signature byte-identical to the regmap version; the
@@ -397,7 +398,7 @@ element, found zero ports, and passed vacuously. It now asserts the port list is
 `s_axi_control` ports are present before checking `coeffs` is absent. A gate that cannot fail is not a
 gate.
 
-## `examples/fir_block` — built in pysim
+## `examples/fir_block` — built and XSI-verified
 
 The composite is exactly decision 2's picture, minus the SOB blocks the interleaver needs (a FIR is a
 streaming kernel — there is no random access to buffer for):
@@ -433,10 +434,45 @@ sweep clean (only the arithmetic width moves — bus width and word counts stay 
 packing is not expressible at the interesting widths anyway, since the lane readers need an integer
 `MEM_DW/elem_bw` and `W = 18` is not one. Packing is the vectorization example's subject.
 
-**Still to do here:** the generated task body + hook (`fir_compute` is written as two `@synthesizable`
-hooks, but the opcode branch and the variable-length framing have not been put through the extractor),
-csynth, the XSI gate on the same firing sequence, and then the `W` sweep — which wants Stage 4, since
-`ntap` as a build-time knob is exactly the templated-extent case.
+### Codegen: where the extractor's vocabulary actually ends
+
+All four `check(source, target)` gates pass, but real extraction of `run_iter` stops at
+`int(self.mem_dwidth)` — and past that lies descriptor construction and `framed_word` traffic, neither
+of which the extractor lowers. That is not specific to the FIR: **every in-band framer in this tree is
+hand-written for the same reason** (`mem_copy`'s `Sequencer`, all four `il_*` tasks). The generated-body
+vocabulary today is essentially `state_toy`'s shape — `get → hook → write`. So both FIR leaves get
+hand-written bodies and, correspondingly, `kernel_task` overrides; `run_iter` stays the pysim golden,
+with its instrumentation moved behind `@sim_only` so it stays extractable if the vocabulary grows.
+
+**The storage is still generated, and that is the part that matters.** `fir_compute_task.h` declares no
+state of its own — it `#include`s `fir_compute_state.inc`, emitted by `state_decls_to_cpp` from the
+`add_state` registrations, at function scope (the site Flow 2 emits declared state at). Element type,
+extents, and the `ARRAY_PARTITION` pragma are single-sourced from the same Python objects the model
+mutates. The accumulator format is likewise *derived* by running `mult`/`fixed_sum` at build time
+rather than typed as `2*W + 5` into a header.
+
+### What csynth and XSI each proved — and what only XSI could
+
+csynth: clean on xc7z020, FIR loop **II=1**, **32 DSPs** at `T=32, W=16` — one DSP per tap, which is
+the packing story the width sweep is meant to probe. (Timing slack is negative on the framework
+mem-streams at `MEM_DW=32`, around −1.7 ns; the compute itself is +0.64. Worth a look, but it is a
+property of the shipped adaptors at this width, not of the FIR.)
+
+**Then the RTL was still wrong, and this is the argument for the gate.** The delay line was seeded with
+the *MAC-time* invariant (`dline[k] = x[-k]`) rather than the *top-of-iteration* one. Each iteration
+shifts before it accumulates, so the first `SHIFT` slid the seed one slot — discarding the newest carry
+sample and pushing a zero into `dline[1]`. csynth passed. Block 1 passed, because `zero_state` starts it
+from zeros and it never reads the carry. Only block 2's first samples were wrong. Diagnosed by solving
+for the carry the RTL had actually used (a shift-by-one matched 64/64) and confirmed on a
+hand-checkable `T=4, blk=8` build. Fixed at the seed; `carry[j] = dline[NTAP-2-j]` after the loop was
+correct all along, and taking the tail off the delay line rather than capturing words as they stream
+past also keeps a block *shorter than the carry* correct for free.
+
+**Still to do here:** the `W` sweep — which wants Stage 4, since `ntap` as a build-time knob is exactly
+the templated-extent case. (The sample width is already swept end to end without it: the C++ takes
+`samp_t`/`acc_t`/`NTAP` from the generated types header, so `generate_dut(ntap=…, samp_w=…)` re-emits
+and re-synthesizes at any point. What is missing is the sweep *driver* and the artifact-per-width
+collection, not the parameterization.)
 
 ## Related
 
