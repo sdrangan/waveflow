@@ -1,0 +1,393 @@
+# Plan: the resource model — per-module FPGA resource prediction for DSE
+
+> **Status (2026-07-28): Phase A COMPLETE and gated; B1 next.**
+>
+> * A1 — `waveflow/calib/module_key.py` + `tests/calib/test_module_key.py` (18 tests).
+> * A2 — `waveflow/calib/record_store.py` + `tests/calib/test_record_store.py` (25 tests), plus the
+>   `modules/` tier wired into `publish.py` with its own coverage guard (4 tests).
+> * A3 — `waveflow/calib/confidence.py` + `tests/calib/test_confidence.py` (26 tests), the
+>   `CalibModel`/`StreamTimingModel` hooks, and `BuildResult.elapsed_seconds`.
+>
+> Suite at its 6-failure baseline; no regressions. The key works on the pilot: `FirBlock` decomposes
+> into 5 keyed modules, and the two mem-streams key **independently of `ntap` and `samp_w`** — so the
+> planned 4×4 sweep costs 16 `fir_compute` syntheses and *one* `mem_r_stream`. That is the cache-reuse
+> claim demonstrated rather than asserted, and it is now a test
+> (`test_mem_streams_are_shared_across_a_width_sweep`).
+>
+> A1 also surfaced a **C1 blocker** not in the original plan: see
+> [Open decision: boundary-port depth](#open-decision--boundary-port-depth-a-c1-blocker).
+>
+> The pilot is [`examples/fir_block`](../examples/fir_block), which is green through pysim → csynth →
+> XSI and carries exactly the knobs the methodology needs to be tested against.
+
+## Motivation
+
+[`paper_cg_dse_vision.md`](paper_cg_dse_vision.md) commits to a **cycle- and resource-approximate**
+model calibrated from a handful of Vitis runs, so that DSE over a large parameter cross-product runs
+in Python. The cycle half has a spine already (`ComponentFixture` → `StreamTimingModel` → the platform
+library, closed to 0.0% on `mem_copy`). **The resource half does not exist**, and it is the piece the
+paper's headline claim rests on.
+
+This plan builds it. The target consumer is not `fir_block` — it is the CG matrix inverse, where `N`
+modules are instantiated from a subset of `P` system parameters and the DSE agent must choose `p`
+under a resource constraint. Everything here is therefore shaped by one question: **what must be true
+of the store now so that an agent can later ask "what does this design cost, and do you actually
+know?"**
+
+### The framing that makes this tractable
+
+Three commitments, taken from the vision notes and sharpened in discussion:
+
+1. **Per-module models turn a combinatorial space into an additive one.** Model each module from *its
+   own* few parameters, synthesize modules independently, and predict the cross-product as a sum. You
+   synthesize O(Σ per-module ranges), never the product.
+2. **Don't learn known physics.** DSP ≈ multiplier count × DSP-packing(width) and BRAM ≈
+   `ceil(depth·width / block)` are *known step functions*. Encode them; learn the smooth residual on
+   top. This also fixes a real failure mode — smooth regressors predict block-granularity jumps badly.
+3. **A point estimate is not an answer.** Every prediction carries whether it was interpolated inside
+   the calibrated hull or extrapolated outside it. An agent optimizing against a bare float walks out
+   of the calibrated region and confidently reports a design that does not exist.
+
+## What already exists
+
+| Piece | Where | State |
+|---|---|---|
+| Structural identity of a `(class, params)` | [`elaborate.structure_signature`](../waveflow/build/elaborate.py) | **built** — name/identity-agnostic canonical signature |
+| Per-platform calibration library layout | [`calib/platform.py`](../waveflow/calib/platform.py) | **built** — `platform.json` pins `(part, clk)`; `components/<id>/` holds fits |
+| Per-component harness contract | [`calib/fixture.py`](../waveflow/calib/fixture.py) | **built, timing-only** — `sweep()` / `run_pysim()` / `rtl_firings()` + a registry |
+| Model fit/predict/artifact | [`calib/calib.py`](../waveflow/calib/calib.py) | **built** — `state_dict` params + JSON artifact; `predict -> float` |
+| csynth report parsing | [`utils/csynthparse.py`](../waveflow/utils/csynthparse.py) | **built** — totals, **per-RTL-module breakdown**, loop/II info |
+| Two-tier calib storage | `calib/work/` (untracked) vs `calib/platforms/` (tracked) | **built** — `publish_calib` promotes |
+| The pilot design | [`examples/fir_block`](../examples/fir_block) | **built** — pysim + csynth + XSI green, 5 knobs |
+| Resource **store** and **model** | — | **new; this plan** |
+
+The genuinely new engineering is the store, the standalone-module synthesis path, and the priors. The
+rest composes.
+
+## Why `fir_block` is the pilot
+
+Not arbitrary — its knobs exercise every claim above, at a size that fits in one overnight run.
+
+* **DSP is a coupled step function, not a trivial one.** `unroll_lane=False` → one multiplier;
+  `unroll_lane=True` → `LW` multipliers, where `LW = mem_dwidth / samp_w` **moves with the width knob
+  itself**. The prior is `LW(samp_w) × dsp_per_mult(samp_w)` — two step functions in composition. A
+  prior that survives that is a real result. (The `add_state` plan already observed the DSP48E1 25×18
+  packing cliff; this is where it gets measured.)
+* **BRAM has a discontinuity we ourselves emit.** The tap/history storage carries an
+  `ARRAY_PARTITION` pragma from `add_state`, and partitioning *converts BRAM into LUT/FF* past a
+  threshold. The exact "smooth models miss the jump" failure mode, in the smallest example we have.
+* **`unroll_lane` is a structural knob, not a feature.** It is a different circuit, so it must select
+  a *different model* rather than become a regression column. Signature keying does this by
+  construction — and that is the cheapest available proof that the keying decision is right.
+* **It is affordable.** 4 `ntap` × 4 `samp_w` × 2 realizations = 32 whole-top csynths. Unattended
+  overnight, and it yields a genuine held-out validation set.
+
+## Design decisions
+
+### 1. The key is the structure signature, not a param tuple
+
+`module_key(cls, params)` = a short human prefix plus a hash of
+[`structure_signature`](../waveflow/build/elaborate.py) — `fir_compute-a3f19c`. The prefix is for
+grep-ability; the hash is for correctness.
+
+This is what makes "each module is instantiated by some subset of the P system parameters"
+**mechanical rather than hand-declared**: elaborate the system top, walk `sub_comps`, and each leaf's
+resolved signature *is* its cache key. Two different system-level `p` that induce the same module
+config hit the same cached synthesis — which is most of the DSE saving, for free.
+
+Corollary: keep **compile-time params** (what selects the model) distinct from **workload features**
+(what the model is evaluated at). Resources depend only on the former. Timing depends on both, which
+is why the existing `basis` (`nwords`, `num_trans`) lives on the timing side only.
+
+### 2. One record envelope for both axes
+
+```
+{key, target, source, cost_seconds, payload}
+```
+
+* timing → `source: pysim | cosim | xsi`, payload `{features{...}, cycles}`
+* resource → `source: hls_estimate | vivado_synth | vivado_impl`, payload
+  `{lut, ff, dsp, bram, uram, srl, achieved_period_ns}`
+
+`source` and `cost_seconds` are not bookkeeping. `source` is what lets HLS estimates be upgraded to
+post-implementation numbers later as a *data addition* rather than a schema migration.
+`cost_seconds` is what the agent budgets against, and what makes the paper's "K ≪ N syntheses" claim
+auditable from the library itself instead of from a lab notebook.
+
+### 3. Resources live under the platform, keyed by `(part, period)`
+
+LUT/DSP/BRAM counts are meaningless without the part family, and HLS schedules to the target period,
+so both belong in the key. They already are: `platform.json` pins them and `Platform.resolve` is the
+create-or-confirm gate. Reuse it rather than inventing a parallel notion of target.
+
+### 4. Prior and residual are stored separately
+
+The artifact is `{prior_spec, residual_params}`, never collapsed into a single fitted number. A prior
+that needs no fitting must be *visible* as such — "DSP predicted exactly, zero fitted parameters" is a
+result worth being able to state, and it is unstatable if the prior is baked into a regression
+intercept.
+
+### 5. Three additive terms, not one
+
+Whole-design estimate = Σ per-module + Σ per-interface + fixed shell. Sub-modules of a free-running
+composite are separate C++ tasks and roughly additive, but the `m_axi` adapters and interconnect are
+**shared** and scale with port count and width. Since endpoint direction is a first-class type now,
+the interface term is computable from the boundary structure rather than fit blindly.
+
+The handful of whole-top syntheses is **not optional** — it is what turns additivity from an
+assumption into a measured claim.
+
+### 6. Confidence is a level plus free-form facts — **not** an interval
+
+The obvious move, attaching `lo`/`hi`, is wrong here *in principle*. Synthesis is deterministic — run
+csynth twice at a point and the LUT count is identical — so there is no noise process for a prediction
+interval to estimate. The error that actually occurs is **model misspecification**, which is not
+measurable from inside the model, and which is systematic exactly where it hurts: near a partitioning
+threshold a smooth model's residual is consistently wrong in one direction, and a Gaussian interval
+would understate it.
+
+Cross-validated spread is wrong for a second reason: an affine span law fit at n=128 and n=256
+predicts every other n *exactly*. LOO-CV would manufacture a ±3% band where the true error is zero.
+Only the model knows its own epistemic situation, so the model speaks.
+
+So: **`Confidence(level, facts)`**, where `level` is a **closed, sortable** four-value enum
+(`EXACT` → `INTERPOLATED` → `EXTRAPOLATED` → `UNCALIBRATED`) and `facts` is a free-form JSON-able dict
+in whatever vocabulary that model uses. The enum stays closed because its only job is triage across N
+modules; the moment it grows, the ordering becomes ambiguous and triage — its whole purpose — breaks.
+The test for a new level is whether a consumer would take a *different action*, and there are only
+three actions: trust it, spend a calibration, avoid the region. Everything finer is explanation.
+
+Two guards keep the freedom from becoming a junk drawer: facts are checked JSON-serializable at
+construction (so a stray `numpy.float64` fails at the model, not at report-dump time), and an `EXACT`
+claim must be **backed by zero residual on the model's own corpus**.
+
+**`predict` stays a bare float.** It sits on the simulation hot path — `hw_freerun`, `memif`, and the
+example kernels call it per firing and do arithmetic on the result. `estimate(row) -> Estimate(value,
+source, confidence)` is the reporting-time entry, built once per module.
+
+### 6b. Two rules that fell out of building it
+
+* **An exactness claim needs more points than free parameters.** An affine form has two; fitting it at
+  exactly two points gives zero residual *by construction*, which is evidence of nothing. Only an
+  over-determined fit says something about the form — that the law kept holding at points it was not
+  free to match. `FitSummary.degenerate` marks the other case.
+* **Leaving the sampled region outranks a confirmed form.** A verified law is verified only *where it
+  was measured*; what breaks it outside is a regime change (a burst-splitting limit; a DSP-vs-LUT
+  inference threshold), not fit error. So the level drops to `EXTRAPOLATED` — but `form_exact` rides
+  in the facts, because extrapolating a law that held at every point is a far better position than
+  extrapolating a noisy one, and flattening that away would lose the distinction that matters.
+
+### 6c. Cost is recorded, never modelled
+
+`BuildResult.elapsed_seconds` is measured for every step, success or failure. That raw history is what
+later answers "what would recalibrating here cost?" — better than any estimate, and unrecoverable if
+never measured. The query surface (median per module key, local history preferred, since **cost is
+machine-local while the measurement is not**) is deferred until there is history worth querying.
+
+### 7. Per-module numbers come from the report *before* they come from a standalone synthesis
+
+`CsynthParser.get_module_resources()` already returns a **per-RTL-module breakdown from the whole-top
+report**. That is a nearly-free first cut at per-module attribution, and it de-risks the expensive
+part of this plan: we learn whether per-module numbers sum sensibly *before* building the standalone
+synthesis harness. The catch is name resolution — HLS RTL module names are mangled and must be mapped
+back to Waveflow modules, which is a real (small) piece of work and a documented trap below.
+
+Standalone synthesis still gets built (Phase C), because the report breakdown cannot tell you what a
+module costs *outside* this composite — which is the whole point of a reusable library.
+
+## Open decision — boundary-port depth (a C1 blocker)
+
+Found while building A1, and it decides whether Phase C's data can join Phase B's at all.
+
+A stream endpoint's `queue_size` is `None` until `Interface.bind` supplies the channel depth. Since
+**FIFO depth is physical** — it costs resources and shapes backpressure — depth belongs in the key,
+and an *unbound internal* port means the structure is simply not determined yet. A1 enforces that
+(`UnboundModuleError`), which also aligns the key with two invariants that already exist: codegen
+refuses `depth=None`, and an unbound endpoint simulates with unbounded capacity (the condition under
+which backpressure silently disappears).
+
+But a **boundary** port faces outside the design, so its depth is the *enclosing context's* to set.
+A1 exempts those from the boundness check, using the derived `boundary` list. That leaves a question
+the digest still answers implicitly:
+
+> The same module keys differently standalone vs. inside a composite, because in one case its ports
+> carry the harness's depths and in the other the composite's.
+
+Two consequences, one wanted and one not:
+
+* **Wanted** — if the C1 harness binds at *different* depths than the composite uses, that genuinely
+  is different hardware and the records genuinely should not join. The key surfacing this is a
+  feature. C1's harness must therefore bind at the composite's depths, deliberately.
+* **Unwanted** — a *boundary* port's depth is not the module's property in either setting, yet it
+  still lands in the digest. So a module whose boundary depth differs between harness and composite
+  gets two keys for one circuit.
+
+**The decision C1 must make:** either mask boundary-port depth out of the digest (a signature variant
+that nulls exempted endpoints before canonicalizing), or require harnesses to reproduce boundary
+depths exactly. Masking is more principled; requiring is simpler and needs no new machinery. Do not
+resolve this speculatively — resolve it against the first real standalone synthesis, where the
+resource delta between the two bindings is measurable rather than argued.
+
+## Phase A — foundation (no toolchain)
+
+### A1 — the module key ✅
+`waveflow/calib/module_key.py`: `module_key(cls, params) -> str` and a `module.json` identity record
+(class, resolved params, signature hash, source rev).
+
+**Gate (passed):** two system-level param sets inducing the same `FirCompute` produce the same key;
+flipping `unroll_lane` produces a different one; the key is stable across a subprocess with a
+different `PYTHONHASHSEED`; an address leak and an unbound internal port each raise rather than
+yielding an unhittable key.
+
+### A2 — the record store ✅
+`waveflow/calib/record_store.py`: the `{key, target, source, cost_seconds, payload, provenance}`
+envelope, `modules/<key>/{timing,resource}/records.jsonl` under the existing platform layout, and the
+`modules/` tier added to `publish.py` so it rides the established two-tier promotion (with a
+record-count regression guard rather than a second policy).
+
+`provenance` turned out to be the load-bearing field rather than a bookkeeping one: it pins the full
+structure digest, part, period, and tool, so `read()` **verifies** a record against the module being
+asked about instead of trusting the directory name. JSONL rather than CSV because payloads are nested
+dicts that differ by axis and appends must never rewrite existing rows.
+
+**Gate (passed):** records round-trip and append; a record whose provenance digest does not match the
+identity raises `StaleRecordError`; two identities under one key raise `KeyCollisionError` rather than
+merging; `~0` normalizes to `0` at the boundary; `best()` prefers the strongest fidelity tier; the
+`fir_block` walk files one record per keyed module and the mem-streams are shared across a width
+sweep.
+
+### A3 — `Confidence` ✅
+`waveflow/calib/confidence.py`: `ConfidenceLevel`, `Confidence`, `Estimate`, `FitSummary`.
+`CalibModel` gains `confidence()` / `estimate()` with the level **derived** from the retained fit
+summary, plus a `_confidence_facts()` hook per subclass; `StreamTimingModel` gets the passthrough a
+report needs. `BuildResult.elapsed_seconds` is now recorded for every step.
+
+`FitSummary` is what makes this work for a *deployed* model: a fitted model discards its training data
+(that is what lets a published artifact predict with no sklearn and no corpus), so the support region
+and worst residual are retained explicitly and ride in the artifact under a reserved key — additive,
+so older artifacts load unchanged.
+
+**Gate (passed):** suite at its 6-failure baseline, `mem_copy` calibration included. An
+under-determined fit is refused `EXACT`; an out-of-range query cannot report `EXACT`; a seed fallback
+and a summary-less artifact both report `UNCALIBRATED` and are distinguishable in the facts;
+non-serializable facts raise at construction; `predict` is still a bare float.
+
+**Found while building:** the two packaged `zynq7020_bfm_100mhz` component artifacts predate fit
+summaries, so they predict real fitted values (13.50 / 23.00 cycles) but correctly report
+`UNCALIBRATED` with `has_fitted_params: True`. A re-run of the platform sweep would regenerate them
+with support recorded — worth doing when the toolchain is next in use, not urgent.
+
+## Phase B — first real data (existing toolchain path)
+
+### B1 — `InspectSynthStep`
+A `BuildStep` that reads the csynth report after `CSynthStep` and lands **two** things: the whole-top
+resource record, and the per-RTL-module breakdown mapped onto Waveflow module keys.
+
+**Gate:** running the existing `fir_block` csynth at two param points lands two well-formed records
+with correct keys; per-module rows sum to within a reported delta of the total (the delta *is* the
+integration term, measured for the first time).
+
+### B2 — the 32-point sweep
+`ntap ∈ {8,16,32,64}` × `samp_w ∈ {8,12,16,24}` × `unroll_lane ∈ {F,T}`, `mem_dwidth` and `samp_i`
+held fixed.
+
+**Gate:** 32 records in the store; DSP counts visibly track `LW(samp_w)` on the unrolled variant. Any
+csynth failure is recorded as a failure, not silently dropped.
+
+## Phase C — the standalone module harness
+
+### C1 — `ComponentFixture.synth_top()`
+Generalize the fixture from timing-only to also render a **self-contained HLS project with the single
+module as top**, reusing `composite_top_spec` on a one-module graph. Keep the project — it is the
+IP-export unit if the Vivado IPI path is ever taken.
+
+Pilot on `FirCompute` **specifically because it is stream-in/stream-out**, which sidesteps a known
+constraint: `hls::task`/`ap_ctrl_none` cannot carry `m_axi`, so a standalone top for a *memory* module
+needs a DATAFLOW top instead. That is to be **verified, not assumed**, when `MemRStream` gets a
+fixture — not now.
+
+C1 also **resolves the boundary-port depth question** above, against measured numbers rather than
+argument.
+
+**Gate:** `FirCompute` synthesizes standalone at 4 param points; records land under its own key; the
+standalone-vs-in-composite delta is reported (not required to be zero — it is data about term 3).
+
+## Phase D — the model
+
+### D1 — analytical priors, zero fitting
+`dsp_prior(samp_w, unroll_lane)` and `bram_prior(ntap, samp_w, partition)` as explicit step
+functions, stored as `prior_spec`.
+
+**Gate:** DSP and BRAM predicted within a tight bound across all 32 B2 points **with no fitted
+parameters**. If the prior alone nails DSP, that is a headline result and gets recorded as one.
+
+### D2 — learned LUT/FF residual
+Ridge (or a small GP where uncertainty is wanted) on top of the priors, with `in_hull` actually
+populated from the fitted corpus.
+
+**Gate:** held-out points inside the hull meet tolerance; points outside are **reported as outside**
+rather than silently guessed.
+
+## Phase E — composition
+
+### E1 — the three-term sum
+Σ modules + Σ interfaces + shell, with the interface term computed from boundary structure and the
+integration term fit against B2's whole-top measurements.
+
+### E2 — held-out validation
+Predict whole-top resources at points never used in any fit. Per-resource error reported separately —
+lead with DSP/BRAM, be explicit that LUT/FF is coarser.
+
+**Gate:** this is the number the paper lives on. It gets a committed artifact and its own test.
+
+## Explicitly not now
+
+* **No agent tools / MCP surface.** Drive everything from a plain Python script over the store. The
+  action set is a thin adapter once the API is right; designing the actions first would bake
+  LLM-shaped assumptions into the store.
+* **No Vivado synthesis yet** — but `source` exists from A2, so it is a data addition. After E2, add
+  one *measurement* stage: sample the HLS-estimate-vs-Vivado gap at ~6 `fir_block` points. If it is a
+  stable ratio, model it; if it is not, that is a finding and it escalates. Do not assume either way.
+  (HLS LUT/FF estimates are commonly ~2× off; DSP/BRAM are close.)
+* **No IPI / OOC / netlist reuse.** The whole system is one HLS project today —
+  `composite_top_spec` emits a single `.cpp` and one TCL builds the top, so there is no module-level
+  unit to reuse at the C-synth level. Genuine netlist reuse requires each module to become its own
+  HLS IP with integration in Vivado IPI (the deferred SALSA path). **DSE does not need it**: the
+  additive model is precisely how it is avoided. C1 keeps the option open at zero extra cost.
+* **No uncertainty-driven active sampling loop.** That is DSE-time behavior. A3 makes it possible, D2
+  makes it meaningful, and it gets built when CG needs it.
+
+## Traps
+
+* **A stale cache entry that reports success is worse than no cache.** We have been bitten already: a
+  stale `rtl_fir_block.f` beside a cached `xsimk.dll` makes an XSI run go green while proving nothing,
+  which is why `fir_block_build.py` regenerates the file list after every csynth. Under a cache shared
+  across designs *and* parameter points, that failure mode goes from occasional to constant. Every
+  cached artifact stores the hash of the inputs it came from, and the loader compares before use.
+  Content-addressing here is a safety property, not an optimization.
+* **HLS module names are mangled.** The per-module report rows are RTL entity names, not Waveflow
+  module names. The mapping must be explicit and must fail loudly on an unmatched row — silently
+  dropping a module makes the per-module sum look better than it is.
+* **`~0` in the report.** `csynthparse` already keeps non-numeric resource cells as strings. The store
+  must normalize (`~0` → 0) at the boundary or the arithmetic breaks downstream.
+* **Standalone ≠ in-composite.** HLS shares and inlines across task boundaries. A standalone module
+  number is not that module's contribution to the composite. Never report the sum of standalone
+  numbers as a whole-design prediction without the integration term.
+* **Global parameters destroy cache reuse.** `mem_dwidth` and the clock touch every module, so every
+  change invalidates every key. Keep them in a coarse outer loop, not the inner search. B2 holds
+  `mem_dwidth` fixed for exactly this reason.
+* **FIFO depth is part of the key, and that is deliberate.** A harness that binds a module's streams
+  at a different depth than the composite does is building *different hardware*, and its records
+  legitimately will not join. C1's harness must reproduce the composite's depths on purpose, not by
+  luck. See [the open decision](#open-decision--boundary-port-depth-a-c1-blocker).
+* **Collinear sweeps.** Same trap the timing fixtures document: vary features independently (a grid,
+  not a diagonal), or the coefficients cannot be separated. `LW = mem_dwidth/samp_w` means `samp_w`
+  moves two things at once — the prior must express that, and the residual must not try to re-fit it.
+
+## Related
+
+* [`paper_cg_dse_vision.md`](paper_cg_dse_vision.md) — the north-star paper; this is its resource half.
+* [`add_state.md`](add_state.md) — the `fir_block` pilot's origin, including the "resource-vs-bitwidth
+  probe" intent and the DSP packing cliff.
+* [`interleaver_timing_overhaul.md`](interleaver_timing_overhaul.md) — the timing half's most recent
+  shape; the fixture/measured-fit precedent this mirrors.
