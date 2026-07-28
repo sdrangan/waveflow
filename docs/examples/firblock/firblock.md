@@ -104,27 +104,55 @@ analysis (including why a conditionally-acquired lock passes C-sim and hangs in 
 
 ## The firing that writes nothing
 
-`LOAD_TAPS` consumes a block of coefficients and produces no output data. That sounds harmless and is
-the single most dangerous shape in this design: a stage that reads without emitting has deadlocked this
-codebase twice — once via the free-running pacing law, once via a relay that read a phantom word.
+`LOAD_TAPS` consumes a block of coefficients and produces no output data. That sounds harmless. It is
+the single most dangerous shape in this design, and it is worth being precise about why.
 
-The resolution here is that the firing is **not silent**. It still frames a write command, with
-`len = 0` and `fwd_bursts = 1`:
+### The invariant
 
-- the writer's store loop runs `for (w = 0; w < 0; …)` — it trips zero times, so no AXI transaction is
-  issued at all;
+A free-running composite has **no scheduler**. Each stage is an independent process looping forever —
+read inputs, compute, write outputs — and nothing anywhere tracks "jobs". The only thing holding the
+pipeline together is stream backpressure: a stage blocks when an input FIFO is empty or an output FIFO
+is full. So the whole design rests on one invariant:
+
+> **Every firing must move exactly one token through every stage.**
+
+A no-output opcode is the natural way to break it. Had `fir_compute` simply emitted nothing for
+`LOAD_TAPS`, the token counts would stop matching, and that fails in one of two ways:
+
+- **A lost job.** `MemWStream` waits for a command that never comes. When the *next* job's `MemWCmd`
+  arrives it serves that one instead — two commands, one completion. Nothing hangs in RTL; the *host*
+  hangs, waiting on a completion that will never exist.
+- **A true deadlock.** Where a stage's control flow assumes one burst per firing and reads
+  unconditionally, it consumes the next job's data as this job's, and the misalignment cascades until
+  some stage blocks on a burst that will never arrive.
+
+The recurring shape underneath both is **a zero-count quantity handled as though it were non-zero**.
+This codebase has been bitten three times:
+
+| where | the bug | the fix |
+|---|---|---|
+| free-running pipelines generally | an un-paced N-stage pipe deadlocks at `done = N+1` | a per-job token at every stage |
+| `mem_r_stream_framed_task` | a relay read a word when `fwd_bursts == 0` | an `if (nfwd > 0)` guard |
+| `MemWStream`'s pysim model | `get(nwords_max=0)` dequeues a whole burst and truncates the *result* — a zero-length write silently ate the next command | skip the drain when `len == 0` |
+
+The third was found *by this example*, and it is the sharpest of the three: the RTL was correct all
+along (`for (w = 0; w < 0; …)` trips zero times), so it was **pysim and RTL disagreeing** about a
+command the protocol allows.
+
+### The resolution
+
+Not a special case for the load — the opposite. The write side stays **uniform across both opcodes**,
+so `LOAD_TAPS` still frames a write command, with `len = 0` and `fwd_bursts = 1`:
+
+- the writer's store loop trips zero times, so no AXI transaction is issued at all;
 - its echo loop still forwards the descriptor, so the job lands its completion on `s_done`.
 
-Every job produces exactly one completion, and **the write side is uniform across both opcodes** —
-there is no special path for the no-output case, which is precisely what makes it safe. The check in
-the testbench asserts the completion *count and order*, not merely that the run finished, because a
-deadlock here would look exactly like success.
+There is no branch anywhere that might or might not emit, which is precisely what makes it safe. The
+general rule to carry away: **give every firing the same token path, and make a zero-length quantity
+trip its loop zero times rather than once.**
 
-{: .note }
-> A zero-length write is a real command in this protocol, not a degenerate case. Making pysim agree
-> with the RTL about it required a framework fix: the model drained its data stream unconditionally,
-> and `get(nwords_max=0)` does **not** mean "read nothing" — it dequeues a whole burst and truncates
-> the *result*, silently eating the next command.
+The testbench then asserts the completion *count and order* — never merely that the run finished —
+because a wedged pipeline looks exactly like success from the outside.
 
 ## Samples, words, and packing
 

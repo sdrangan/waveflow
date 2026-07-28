@@ -50,18 +50,17 @@ In going through this example, you will learn to:
 
 - Give a hardware module **memory between firings** with
   [`add_state`](../../guide/memory/hwstate.md) — both *load-once, held* state and *per-firing carry*
-  state — and understand why the extractor refuses undeclared `self.X`, where the storage lands for a
-  free-running task, and how to give it a **declared reset path** instead of trusting `ap_rst`
-- Perform a common **DSP calculation in fixed point** with one declared format, letting the
-  [format algebra](../../guide/schema/python/fixpoint.md) *derive* the full-precision accumulator instead of
-  hand-sizing it — and know where the single lossy step is
+  state, add add **declared reset path** 
+- Perform a common **DSP calculation in fixed point** with one declared format, leveraging the
+  [format algebra](../../guide/schema/python/fixpoint.md) to *derive* the full-precision accumulators, adding lossy steps where necessary.
 - **Hand-write kernel task bodies with different unrolling structures** — one output per iteration
-  versus a whole lane per iteration — and see why they are two separately-named functions rather than
-  one body with a compile-time branch
+  versus a whole lane per iteration — and create a compile-time parameter to select between the options
 - **Verify stateful hardware**, using a golden that is deliberately *stateless* so that agreeing with it
   *is* the proof the state is right, plus falsification tests that break each flavour of state in turn
-- Keep a firing that **produces no output** from wedging the pipeline — the `LOAD_TAPS` job consumes a
-  block and emits nothing, which is the shape that has deadlocked this codebase twice
+- **Identify** the firing patterns that can wedge a free-running pipeline — a stage that consumes
+  without emitting, or a zero-length transfer handled as if it were non-zero — and **avoid** them by
+  keeping every stage's token count uniform across opcodes, so that even a no-output command issues a
+  (zero-length) transfer and lands its completion
 - **Sweep the bitwidth parameters** and measure the resource and throughput consequences of each
   realization — the DSP packing cliff, and the trade between area and rate
 
