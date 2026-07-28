@@ -267,7 +267,6 @@ def test_check_runs_the_real_generator_and_an_unwired_leaf_still_cannot_lower():
 
     from waveflow.hw.hw_freerun import FreeRunMod
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
-    from waveflow.simulation.simobj import ProcessGen
 
     @dataclass
     class UnwiredLeaf(FreeRunMod):
@@ -280,7 +279,7 @@ def test_check_runs_the_real_generator_and_an_unwired_leaf_still_cannot_lower():
             self.add_endpoint(self.x_in)
             self.add_endpoint(self.y_out)
 
-        def run_iter(self) -> ProcessGen[None]:          # a body, but no kernel_task()
+        def run_iter(self):                              # a body, but no kernel_task()
             words = yield from self.x_in.get()
             yield from self.y_out.write(words)
 
