@@ -429,10 +429,24 @@ each flavour of state in turn (ignore the carry; honour only the first `LOAD_TAP
 golden to reject both — plus guards on the scenario itself, so weakening the program or the tap sets
 cannot quietly silence the gate.
 
-**Transport is one sample per 32-bit word**, whatever `W` is. Not an oversight: it keeps the width
-sweep clean (only the arithmetic width moves — bus width and word counts stay put), and dense sub-word
-packing is not expressible at the interesting widths anyway, since the lane readers need an integer
-`MEM_DW/elem_bw` and `W = 18` is not one. Packing is the vectorization example's subject.
+**Transport is packed**, `LW = max(1, MEM_DW // W)` samples per word, through the generated
+`<stem>_array_utils` lane routines in C++ and `DataArray.serialize` in Python — one contract, so the
+golden and the RTL agree at any `LW`.
+
+*An earlier cut of this example asserted one sample per word* on the grounds that packing "is not
+expressible" at an awkward width like `W = 18`, because the lane readers need an integer
+`MEM_DW/elem_bw`. **That was wrong**: the packing factor is integer division, so `W = 18` gives
+`pf = 1` and lands on the one-per-word case anyway, while `W = 16` packs two and `W = 8` packs four.
+The same cut hand-rolled the bit extraction in both kernels — `.range()` and a hand-looped
+`read_boundary_word` — which
+[`arrayutils.md`](../docs/guide/vectorization/hls/arrayutils.md) names as the anti-pattern verbatim.
+Worth recording because the mistake is self-concealing: hand-rolled packing at `LW = 1` is *correct*,
+so nothing fails until someone changes a width.
+
+Consequence for the addressing convention: `n` on a command and a descriptor is a **sample** count,
+the mem-streams carry **words**, and `nwords(n, LW)` is the single conversion. Conflating them is what
+produced a wrong XSI check (comparing `n` words of a `ceil(n/LW)`-word region) even after the RTL was
+right.
 
 ### Codegen: where the extractor's vocabulary actually ends
 
@@ -468,11 +482,43 @@ hand-checkable `T=4, blk=8` build. Fixed at the seed; `carry[j] = dline[NTAP-2-j
 correct all along, and taking the tail off the delay line rather than capturing words as they stream
 past also keeps a block *shorter than the carry* correct for free.
 
-**Still to do here:** the `W` sweep — which wants Stage 4, since `ntap` as a build-time knob is exactly
-the templated-extent case. (The sample width is already swept end to end without it: the C++ takes
-`samp_t`/`acc_t`/`NTAP` from the generated types header, so `generate_dut(ntap=…, samp_w=…)` re-emits
-and re-synthesizes at any point. What is missing is the sweep *driver* and the artifact-per-width
-collection, not the parameterization.)
+### Two realizations, one golden — the monomorphized-QoR pair
+
+`unroll_lane` (an `HwParam[bool]`) selects between two hand-written bodies computing **bit-identical**
+results — same `acc_t`, same rounding, one pysim golden — so the parameter is a pure QoR knob rather
+than a second design. `kernel_task()` dispatches on it by *name*
+(`fir_compute_serial_task` / `fir_compute_unroll_task`) instead of a compile-time branch inside one
+function: the two need different state shapes, and one function would collapse into a single csynth
+report, discarding the comparison that is the point.
+
+Measured at `T = 32`, `MEM_DW = 32`, xc7z020:
+
+| `samp_w` | LW | serial DSP | unroll DSP | serial loop | unroll loop |
+|---|---|---|---|---|---|
+| 24 | 1 | 64 | 64 | identical | identical |
+| 16 | 2 | **32** | 64 | 4097 cyc | **2049 cyc** |
+| 8 | 4 | **17** | 128 | 4097 cyc | **~1025 cyc** |
+
+So `serial` holds throughput at one sample/cycle and lets the multiplier count fall with precision —
+two DSP48E1s per tap at `W=24`, one at `W=16`, two taps *sharing* a DSP at `W=8` — while `unroll`
+holds the multipliers and buys throughput. **Both pipeline at II=1**, which was not obvious: the
+serial body has a conditional dequeue *and* a conditional enqueue gated by a loop-carried lane index,
+and that costs 3 cycles of iteration latency, not initiation interval.
+
+The unrolled body keeps **one shared history** `dl[NTAP+LW-1]`, not `dl[LW][NTAP]`: consecutive
+outputs read the same samples at a one-sample offset, so staggering the window start (`dl[LW-1-j+k]`)
+costs `LW-1` extra registers instead of `(LW-1)·NTAP`, and only the multipliers replicate.
+
+**The seeding rule, now stated twice in the tree because it has bitten twice.** Each iteration shifts
+*before* it accumulates, so what is seeded is the state at the **top** of the first iteration, not the
+MAC-time invariant. Both bodies' index algebra was verified element-by-element in Python — including
+unaligned block lengths and the tail-offset carry — *before* synthesis, which is the cheap way to
+catch this class rather than paying a csynth+XSI round trip per hypothesis.
+
+**Still to do here:** the `W` sweep as a *driver* — the parameterization is done (the C++ takes
+`acc_t`/`NTAP`/the array-utils namespace from generated headers, so `generate_dut(ntap=…, samp_w=…,
+unroll_lane=…)` re-emits and re-synthesizes at any point), but nothing yet collects an artifact per
+point and plots it. Stage 4 (templated extents) is still open and is what a `ntap` sweep would want.
 
 ## Related
 
