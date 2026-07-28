@@ -22,13 +22,23 @@ the **top** is derived from structure.
 
 `mem_copy` — copy a run of words from one buffer to another. Three children:
 
-```
-s_cmd ──▶ Sequencer ──cmd──▶ MemRStream ──copy_data──▶ MemWStream ──▶ s_done
-                                  │                         │
-                                m_in                      m_out      (m_axi)
+```mermaid
+flowchart LR
+  s_cmd([s_cmd]) --> SEQ[Sequencer]
+  SEQ -->|cmd| MR[MemRStream]
+  MR -->|copy_data| MW[MemWStream]
+  MW --> s_done([s_done])
+  m_in[("m_in · gmem0")] -. read .-> MR
+  MW -. write .-> m_out[("m_out · gmem1")]
 ```
 
-The Python declares only the graph ([`examples/mem_copy/mem_copy.py`](../../../examples/mem_copy/mem_copy.py)):
+The two labelled arrows in the middle are the **internal** edges — `cmd` and `copy_data`, both
+declared with `add_if`. Everything touching the outside (the rounded stream ports, the two cylinders
+that are the `m_axi` masters) is a **boundary** port, and the difference between the two categories
+is nothing more than whether an endpoint was bound to an internal interface.
+
+That distinction is the whole of what the top generator needs, and the Python declares only the graph
+([`examples/mem_copy/mem_copy.py`](../../../examples/mem_copy/mem_copy.py)):
 
 ```python
 self.seq     = Sequencer(name=..., mem_dwidth=w, clk=self.clk)
