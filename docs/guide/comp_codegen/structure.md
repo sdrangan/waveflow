@@ -30,7 +30,7 @@ mechanics are the four pages after this one.
 | Target | Kind | Protocol | Page |
 |---|---|---|---|
 | `control_driven_kernel` | `HostActivated` | `ap_ctrl_hs` — the host starts it and waits | [Host-activated kernel](./hostactivated.md) |
-| `composite_kernel` | `FreeRunMod` (leaf *or* composite) | `ap_ctrl_none` — never started, never returns | [Free-running kernel](./freerunning.md) |
+| `composite_kernel` | `FreeRunMod` (leaf *or* composite) | `ap_ctrl_none` — never started, never returns | [Free-running kernel](./freerunning.md) · [composite](./freerunning_composite.md) |
 | `sequential_vitis_tb` | `SeqTB` | an `int main()` Vitis runs | [Sequential testbench](./testbench.md) |
 | `sequential_xsi_tb` | a testbench `FreeRunMod` graph | a cycle-based XSI BFM | [XSI testbench](./xsi_tb.md) |
 

@@ -104,7 +104,7 @@ or that it is correct at all. That is what the example's C-simulation and co-sim
 
 The section is **one page per target, then the shared mechanism**.
 [Module structure](./structure.md) is the frame all four share; then
-[host-activated](./hostactivated.md), [free-running](./freerunning.md),
+[host-activated](./hostactivated.md), [free-running](./freerunning.md) (and its [composite](./freerunning_composite.md) form),
 [sequential testbench](./testbench.md), and [XSI testbench](./xsi_tb.md) are how each is realized.
 The pages after those — interfaces, extractor, generated files, templating — are the machinery they
 have in common. How to *describe* a module in Python is the previous section,
@@ -120,7 +120,8 @@ means when you write a [hook](../custom_hooks/).
 - [Module structure](./structure.md) — the frame all four targets share: one top-level function per module, which method is extracted for which kind, entry-is-extracted vs hook-is-not, and the **contract** for when a module lowers at all.
 - [Host-activated kernel in HLS](./hostactivated.md) — the `control_driven_kernel`: `ap_ctrl_hs`, the `s_axilite` register block, and `on_start` as the body.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
-- [Free-running kernel in HLS](./freerunning.md) — the `composite_kernel`: the graph-derived `ap_ctrl_none` top, `KernelTask`, the generated task body, and where `HwState` statics land.
+- [Free-running kernel in HLS](./freerunning.md) — the `composite_kernel`, 1-task case: the task body that is one firing, the `ap_ctrl_none` top, and `KernelTask`.
+- [Free-running composite in HLS](./freerunning_composite.md) — the same target with several tasks: internal channels from `add_if`, tasks from `add_comp`, and the boundary derived from what was left unbound.
 - [Extractor](./extractor.md) — the synthesizable subset: what the rules are, why each exists, and `check` as their callable form.
 - [Generated files](./codegen.md) — the two file lifecycles (framework-owned `gen/` vs sticky hook impls), `.cpp` vs `.tpp` routing, and naming.
 - [Templating](./templating.md) — the C++ realization of [parameterization](../flows/parametrization.md): how `HwParam` lowers (concrete widths / `.tpp` template params), `HwConst` (deferred), and how `param_supports` emits variant kernels.

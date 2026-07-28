@@ -1,7 +1,7 @@
 ---
 title: Endpoint interfaces
 parent: Module Code Generation
-nav_order: 7
+nav_order: 8
 audience: hls
 applies_to: [HwModule]
 api: [kernel_signature, StreamIF, MMIFMaster, VitisRegMapMMIFSlave]

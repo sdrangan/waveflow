@@ -26,6 +26,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, FloatField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 
@@ -54,6 +55,12 @@ class Square(FreeRunMod):
         self.y_out = StreamIFMaster(name=f"{self.name}_y_out", sim=self.sim, bitwidth=32)
         self.add_endpoint(self.x_in)
         self.add_endpoint(self.y_out)
+
+    def kernel_task(self) -> KernelTask:
+        """Names the generated body so the ``ap_ctrl_none`` top can be derived from the graph.
+        ``signature`` is the endpoint attribute names in task-argument order — the seam that makes
+        the top's port list and the task's call args literally the same list."""
+        return KernelTask("square_task", "square_task.h", ("x_in", "y_out"), template_args=())
 
     def run_iter(self) -> ProcessGen[None]:
         x = yield from self.x_in.get(Vec)      # one n-vector

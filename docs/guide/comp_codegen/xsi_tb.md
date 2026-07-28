@@ -1,7 +1,7 @@
 ---
 title: XSI testbench in HLS
 parent: Module Code Generation
-nav_order: 6
+nav_order: 7
 audience: hls
 api: [tb_top_spec, render_tb_harness, render_tb_main, render_ports_h, render_rtl_f, bfm_model]
 summary: "How a testbench FreeRunMod graph is realized as a cycle-based XSI BFM: tb_top_spec walks the graph, each participant maps to a pre-written C++ BFM model via bfm_model(), and render_tb_harness plus render_tb_main emit a harness that drives the elaborated RTL in xsim. The target is sequential_xsi_tb, and it exists because Vitis cannot co-simulate an ap_ctrl_none DUT."

@@ -1,7 +1,7 @@
 ---
 title: Extractor
 parent: Module Code Generation
-nav_order: 8
+nav_order: 9
 audience: hls
 api: [HwStmtExtractor, extract_kernel, extract_testbench, SynthesisError, check]
 summary: "Extraction reads a component's entry method as source (it never runs it), parses it, and translates it into HwStmt — a small hardware IR of ~25 statement types that sits between the Python and the C++. Only a limited set of Python statements and a fixed vocabulary of endpoint operations can be extracted today; anything else raises SynthesisError rather than emitting doubtful C++. check(source, target) is the same rules as a predicate."
