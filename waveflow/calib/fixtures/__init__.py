@@ -1,9 +1,11 @@
 """waveflow.calib.fixtures — the per-component calibration fixtures, self-registering on import.
 
-Importing this package registers every shipped fixture (:func:`waveflow.calib.fixture.register`), so
-:mod:`waveflow.calib.retime` can enumerate them via
-:func:`~waveflow.calib.fixture.all_fixtures`.  Add a component's fixture by dropping a module here and
-importing it below.
+Importing this package registers every shipped fixture (:func:`waveflow.calib.fixture.register`), so a
+caller can enumerate them via :func:`~waveflow.calib.fixture.all_fixtures` without a hardcoded list.
+Add a component's fixture by dropping a module here and importing it below.
+
+A whole-platform ``retime`` command — sweep every registered fixture and refit the library end to end
+— is **planned, not built**.  The registry exists for it; the driving is per-example today.
 """
 from __future__ import annotations
 

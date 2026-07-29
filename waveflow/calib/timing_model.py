@@ -75,6 +75,11 @@ class TimingModel:
     placement: str = "trailing"
     seed: dict | None = None
     clk: Any = None
+    #: Whether this residual is keyed to the component's **configuration** (its template arguments) or
+    #: only to its function name.  A library written before that distinction existed holds bare-named
+    #: directories, and a residual fit at one memory width would otherwise be served silently to a
+    #: design at another; ``False`` surfaces that in :meth:`confidence` instead of implying a match.
+    config_specific: bool = True
     _model: LinCalibModel = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -264,6 +269,15 @@ class TimingModel:
             self._model.load_or_default()
         conf = self._model.confidence(row)
         conf.facts.setdefault("component", self.component)
+        conf.facts.setdefault("config_specific", bool(self.config_specific))
+        if not self.config_specific:
+            # Found only under the bare function name, so it is not known to describe *this*
+            # configuration — a residual fit at one memory width would otherwise be reported with the
+            # same confidence as one fit at this width.
+            conf.facts["summary"] = (
+                f"{conf.facts.get('summary', '')}; residual is keyed by function name only "
+                f"({self.component}), not by configuration, so it may have been fit at a different "
+                f"width").lstrip("; ")
         return conf
 
     def estimate(self, row: dict, *, source: str = "pysim"):

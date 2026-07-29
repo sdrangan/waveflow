@@ -29,10 +29,17 @@ hls/
 *.jou
 *.xml
 *.json
-# The shipped reference calibration library is tracked package data — `publish_calib` writes the
-# distilled corpus (mostly *.json) here, and its diff must be reviewable, so keep it visible despite
-# the blanket *.json ignore above.
+# Calibration libraries are tracked — `publish_calib` writes the distilled corpus (mostly *.json)
+# into them and its diff must be reviewable, so they stay visible despite the blanket *.json ignore
+# above.  BOTH homes are re-included:
+#   waveflow/calib/platforms/  the reference library shipped as package data
+#   calib/platforms/           a PROJECT's own library — the default `platforms_root`, so this is
+#                              where a user following the documented workflow publishes.  Without
+#                              this line their library is silently ignored, which defeats the point
+#                              of publishing at all.  (The untracked work tier is /calib/work/,
+#                              ignored separately below.)
 !waveflow/calib/platforms/**
+!calib/platforms/**
 *.o
 *.obj
 *.exe

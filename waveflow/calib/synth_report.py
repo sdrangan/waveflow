@@ -115,8 +115,8 @@ def rtl_prefix(kernel_task: Any) -> str:
     The Vitis suffix (``_s``, or a numbered variant) is deliberately **not** predicted — it is a tool
     convention we do not control, so matching is by prefix and the suffix is whatever it is.
     """
-    args = "".join(f"_{int(a)}" for a in (kernel_task.template_args or ()))
-    return f"{kernel_task.task_fn}{args}"
+    from waveflow.calib.module_key import config_id
+    return config_id(kernel_task)
 
 
 def _classify(prefix: str, rows: dict) -> "tuple[str | None, dict]":

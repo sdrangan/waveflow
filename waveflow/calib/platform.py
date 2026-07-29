@@ -44,8 +44,8 @@ PLATFORM_PATH_ENV = "WAVEFLOW_PLATFORM_PATH"
 
 
 def user_platforms_dir() -> Path:
-    """The per-user, writable platform library — where :mod:`waveflow.calib.retime` lands a platform
-    a user calibrates that did not ship with the package.
+    """The per-user, writable platform library — where a user calibrating a platform that did not
+    ship with the package can land it.
 
     A ``pip``-installed user cannot write into ``site-packages``, so a recalibration for a new board
     needs a writable home outside the wheel.  This is the OS-conventional user-data location
