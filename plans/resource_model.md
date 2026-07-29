@@ -1,6 +1,6 @@
 # Plan: the resource model — per-module FPGA resource prediction for DSE
 
-> **Status (2026-07-28): Phase A COMPLETE and B1 BUILT, all gated; B2 (the sweep) next — needs Vitis.**
+> **Status (2026-07-28): Phase A + B COMPLETE and gated. D1 (priors) next — the data is in hand.**
 >
 > * A1 — `waveflow/calib/module_key.py` + `tests/calib/test_module_key.py` (18 tests).
 > * A2 — `waveflow/calib/record_store.py` + `tests/calib/test_record_store.py` (25 tests), plus the
@@ -12,6 +12,14 @@
 >   `fir_block` report, so the arithmetic asserted is the arithmetic that actually held. See
 >   [the first measurement](#the-first-measurement-and-what-it-already-says) — DSP is already
 >   perfectly additive.
+> * B2 — the 24-point sweep, **24/24 in 20.5 min**. Three results worth reading before D1:
+>   the [integration term is exactly constant](#the-integration-term-is-exactly-constant), the
+>   [DSP prior is a two-sided step function](#dsp-is-a-two-sided-step-function), and the
+>   [reuse claim is now measured](#the-reuse-claim-measured) (the mem-streams were characterized once
+>   and served all 24 points).
+>
+> Docs: `guide/calib` retitled **Model calibration** and extended with `modules.md` + `resources.md`;
+> the section now covers both quantities, since only the *source* of a number differs.
 >
 > Suite at its 6-failure baseline; no regressions. The key works on the pilot: `FirBlock` decomposes
 > into 5 keyed modules, and the two mem-streams key **independently of `ntap` and `samp_w`** — so the
@@ -318,12 +326,69 @@ join itself turned out fully derivable from each module's own `KernelTask`
   the design by a quarter, which settles the question of whether the third term is needed.
 * `entry_proc` (the DATAFLOW entry process) is correctly unclaimed — real cost, no module's.
 
-### B2 — the 32-point sweep
-`ntap ∈ {8,16,32,64}` × `samp_w ∈ {8,12,16,24}` × `unroll_lane ∈ {F,T}`, `mem_dwidth` and `samp_i`
-held fixed.
+### B2 — the sweep ✅
+`ntap ∈ {8,16,32}` × `samp_w ∈ {8,12,16,24}` × `unroll_lane ∈ {F,T}` = 24 points, `mem_dwidth=32` and
+`samp_i=2` held fixed. Driver: `examples/fir_block/fir_block_sweep.py` (work-tier platform
+`calib/work/zynq7020_fir_sweep`, incremental + `--resume`, `--dry-run` pre-flight).
 
-**Gate:** 32 records in the store; DSP counts visibly track `LW(samp_w)` on the unrolled variant. Any
-csynth failure is recorded as a failure, not silently dropped.
+**Gate (passed): 24/24, zero failures, 20.5 minutes** (~51 s/point). 100 records over **30 distinct
+module configurations**.
+
+#### The reuse claim, measured
+
+| module | distinct keys over the grid |
+|---|---|
+| `FirCompute` | 24 — moves with every knob |
+| `FirCmdRx` | 4 — sees only `samp_w` |
+| `MemRStream` | **1** — sees neither `ntap` nor `samp_w` |
+| `MemWStream` | **1** |
+
+24 whole-top syntheses produced 96 module measurements over only 30 distinct configurations. The two
+memory modules were characterized **once** and reused across all 24 design points. This is the
+projection property from A1 paying off in measured syntheses rather than in argument.
+
+#### The integration term is *exactly* constant
+
+Every one of the 24 points returned the **identical** third term:
+
+```
+integration = {lut: 1984, ff: 1949, dsp: 0, bram: 2}
+```
+
+Not approximately — one unique value across every `ntap`, every `samp_w`, and both realizations. The
+glue does not depend on the compute it wraps.
+
+Stated carefully, because the sweep held `mem_dwidth` fixed and the boundary is defined by *that*, not
+by `samp_w`: what this shows is that the term depends on the **boundary structure and not on the
+modules inside**. That is the substantive claim E1 needs, and it suggests the third term may be a
+*lookup keyed on boundary structure* requiring no fit at all. Confirming it requires varying
+`mem_dwidth` — worth one small extra sweep before E1 commits to that.
+
+#### DSP is a two-sided step function
+
+The measured DSP counts, and the reason this example was the right pilot:
+
+| serial | w=8 | w=12 | w=16 | w=24 |     | unroll | w=8 | w=12 | w=16 | w=24 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ntap=8 | 5 | 8 | 8 | 16 | | ntap=8 | 16 | 16 | 16 | 16 |
+| ntap=16 | 9 | 16 | 16 | 32 | | ntap=16 | 32 | 32 | 32 | 32 |
+| ntap=32 | 17 | 32 | 32 | 64 | | ntap=32 | 64 | 64 | 64 | 64 |
+
+* **serial** — `w=12,16` → `ntap`; `w=24` → `2·ntap` (24 bits exceeds the DSP48E1's 25×18, so a
+  multiply takes two); `w=8` → `ntap/2 + 1`, because HLS **packs two 8-bit multiplies into one DSP**.
+* **unroll** — `2·ntap` flat, independent of width.
+
+So the prior is a step function that moves in *both* directions with width — a packing win below,
+a splitting cliff above — which is stronger evidence for the encode-the-physics approach than a clean
+monotone fit would have been. The `+1` at `w=8` is unexplained and should be absorbed as a residual,
+not rationalized.
+
+#### A design finding, for free
+
+At `samp_w=8` the serial kernel uses **5 DSPs against the unrolled kernel's 16** — a 3.2× difference
+for the same function. At `samp_w=24` both use `2·ntap` and unrolling costs no DSPs at all. So the
+right realization choice *inverts* with sample width. That is exactly the kind of non-obvious result
+the DSE paper needs, and it fell out of the first sweep.
 
 ## Phase C — the standalone module harness
 
