@@ -78,9 +78,32 @@ class ResourceModel:
 
     #: Human label for reports.  Defaults to the class name.
     name: str = ""
+    #: The platform this model is expressed against.  Supplies the counter vocabulary
+    #: (:attr:`~waveflow.calib.platform.Platform.res_types`) — a counter set is technology-specific, so
+    #: it belongs to the platform rather than to a module-level constant.  ``None`` skips validation,
+    #: for a model built outside any platform (a test, an inspection).
+    platform: Any = None
 
     def __post_init__(self) -> None:
         self.name = self.name or type(self).__name__
+        self.check_counters(self.declared_counters())
+
+    def declared_counters(self) -> tuple:
+        """The counters this model claims to predict.  Subclasses that name counters override it."""
+        return ()
+
+    def check_counters(self, names) -> None:
+        """Refuse a counter the platform does not measure in.
+
+        Without this the vocabulary is advisory: a mistyped counter predicts fine in isolation and is
+        dropped when counters are summed, so the module contributes **zero** and nothing complains.
+        """
+        if self.platform is not None and names:
+            self.platform.check_counters(names)
+
+    def counters(self) -> tuple:
+        """The platform's counter vocabulary, or the built-in FPGA default."""
+        return tuple(self.platform.res_types) if self.platform is not None else COUNTERS
 
     # -- interface ---------------------------------------------------------
     def features(self, comp: Any) -> dict:
@@ -136,6 +159,9 @@ class LookupResourceModel(ResourceModel):
     #: model carried around without a platform).
     table: dict = field(default_factory=dict)
 
+    def declared_counters(self) -> tuple:
+        return ()          # a lookup returns whatever was measured; it claims no counters up front
+
     def _record(self, comp: Any):
         ident = identify_instance(comp, require_bound=False)
         if ident.key in self.table:
@@ -149,8 +175,8 @@ class LookupResourceModel(ResourceModel):
     def predict_own(self, comp: Any) -> dict:
         _, payload, _ = self._record(comp)
         if payload is None:
-            return zero_counters()
-        return {c: int(payload[c]) for c in COUNTERS if c in payload}
+            return {c: 0 for c in self.counters()}
+        return {c: int(payload[c]) for c in self.counters() if c in payload}
 
     def confidence_own(self, comp: Any) -> Confidence:
         ident, payload, source = self._record(comp)
@@ -182,11 +208,19 @@ class PriorResourceModel(ResourceModel):
 
     #: ``{counter: callable(features) -> int}``.  Counters absent here are simply not predicted.
     formulas: dict = field(default_factory=dict)
-    feature_fn: Any = None                 #: callable(comp) -> dict; defaults to resolved params
+    transform: Any = None                  #: callable(comp) -> basis dict; raw params by default
+
+    def declared_counters(self) -> tuple:
+        return tuple(self.formulas)
 
     def features(self, comp: Any) -> dict:
-        if self.feature_fn is not None:
-            return dict(self.feature_fn(comp))
+        """Raw features are the resolved ``HwParam`` values; a *transform* derives basis terms.
+
+        The split matters: raw features are never hand-written (elaboration resolved them), and the
+        transform is owned by the model so the raw -> basis map cannot differ between fit and predict.
+        """
+        if self.transform is not None:
+            return dict(self.transform(comp))
         return dict(identify_instance(comp, require_bound=False).params)
 
     def predict_own(self, comp: Any) -> dict:
@@ -223,16 +257,20 @@ class FittedResourceModel(ResourceModel):
     reported as extrapolation here exactly as it is for a timing fit.
     """
 
-    counters: tuple = ("lut", "ff")
-    basis: dict = field(default_factory=dict)      #: {counter: [feature names]}
-    feature_fn: Any = None                         #: callable(comp) -> dict of features
+    targets: tuple = ("lut", "ff")                 #: the counters this model fits
+    basis: dict = field(default_factory=dict)      #: {counter: [basis-term names]}
+    transform: Any = None                          #: callable(comp) -> basis dict
     prior: ResourceModel = None                    #: optional model whose counters are added on top
     models: dict = field(default_factory=dict)     #: {counter: LinCalibModel}, built by fit/load
 
+    def declared_counters(self) -> tuple:
+        return tuple(self.targets)
+
     def features(self, comp: Any) -> dict:
-        if self.feature_fn is None:
+        """See :meth:`PriorResourceModel.features` — raw params by default, transform when given."""
+        if self.transform is None:
             return dict(identify_instance(comp, require_bound=False).params)
-        return dict(self.feature_fn(comp))
+        return dict(self.transform(comp))
 
     @property
     def has_free_params(self) -> bool:
@@ -251,14 +289,14 @@ class FittedResourceModel(ResourceModel):
         rows = []
         for comp, measured in samples:
             row = dict(self.features(comp))
-            row.update({c: int(measured[c]) for c in self.counters if c in measured})
+            row.update({c: int(measured[c]) for c in self.targets if c in measured})
             rows.append(row)
         df = pd.DataFrame(rows)
 
-        for c in self.counters:
+        for c in self.targets:
             if c not in df.columns:
                 continue
-            basis = list(self.basis.get(c) or [k for k in df.columns if k not in self.counters])
+            basis = list(self.basis.get(c) or [k for k in df.columns if k not in self.targets])
             self.models[c] = LinCalibModel(basis=basis, target=c).fit(df)
         return self
 
@@ -341,6 +379,9 @@ class InterfaceResourceModel(ResourceModel):
 
     table: dict = field(default_factory=dict)      #: {boundary_signature: counters}
 
+    def declared_counters(self) -> tuple:
+        return ()
+
     def features(self, comp: Any) -> dict:
         ports, channels = boundary_signature(comp)
         return {"n_ports": len(ports), "n_channels": len(channels),
@@ -394,16 +435,26 @@ class ResourceEstimate:
                                 "confidence": c.to_json()} for p, n, r, c in self.per_module]}
 
 
-def compose(top: Any, model_for) -> ResourceEstimate:
+def compose(top: Any, model_for=None) -> ResourceEstimate:
     """Predict *top*'s total area by walking its graph: own model + Σ children, recursively.
 
-    *model_for* maps a component to its :class:`ResourceModel` (or ``None`` — a module with no model
-    contributes nothing and is reported ``UNCALIBRATED``, rather than being silently skipped).
+    By default each module supplies its **own** model — whatever
+    :meth:`~waveflow.hw.hw_module.HwModule.add_rm` installed. Call ``top.add_rm(platform)`` once and
+    the whole hierarchy is modelled; there is no registry to keep in step with the design.
+
+    *model_for* overrides that with a callable mapping component to model, for a case the attached
+    models do not cover (a what-if, a test). Either way a module with no model contributes nothing and
+    is reported ``UNCALIBRATED`` rather than silently skipped — a missing contribution makes a design
+    read as *cheaper* than it is.
 
     Nothing is passed down: each model reads its own features off the instance it is attached to,
     because elaboration already resolved every child's parameters.
     """
     from waveflow.calib.module_key import walk_modules
+
+    if model_for is None:
+        def model_for(comp):
+            return getattr(comp, "resource_model", None)
 
     per_module, total = [], zero_counters()
     own: dict = {}

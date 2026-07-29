@@ -129,8 +129,13 @@ def fir_compute_prior() -> PriorResourceModel:
 # D2 — the learned part: LUT and FF
 # ---------------------------------------------------------------------------
 
-def compute_features(comp) -> dict:
-    """Physically-motivated features for a ``FirCompute`` instance.
+def fir_compute_basis(comp) -> dict:
+    """The **transform**: raw ``HwParam`` values -> physically-motivated basis terms.
+
+    Raw features are the resolved parameters and are never hand-written; this is the basis map
+    on top of them, and it belongs to the *model* rather than the module for the same reason
+    :attr:`~waveflow.calib.calib.LinCalibModel.transform` does — it must be identical at fit time
+    and at predict time, so it lives in exactly one place.
 
     Chosen for *meaning* rather than convenience, so the fit extrapolates on structure rather than on
     coincidence between parameters:
@@ -177,9 +182,71 @@ FITTED_BASIS = {"ff": ["store_bits", "n_mult"],
                 "lut": ["n_mult", "store_bits", "mac_bits"]}
 
 
-def fir_compute_fitted() -> "FittedResourceModel":
-    """The LUT/FF model for ``FirCompute``.  Must be :meth:`fit` before it predicts."""
+def fir_compute_fitted(platform=None) -> "FittedResourceModel":
+    """`FirCompute`'s complete model: the exact prior for DSP/BRAM plus the fit for LUT/FF.
+
+    The prior rides *inside* the fitted model (``prior=``) rather than being combined by a wrapper —
+    one object predicts all four counters, with each counter coming from whichever is honest for it.
+    Must be :meth:`~waveflow.calib.resource_model.FittedResourceModel.fit` before it predicts LUT/FF.
+    """
     from waveflow.calib.resource_model import FittedResourceModel
 
-    return FittedResourceModel(name="fir_compute_lutff", counters=("lut", "ff"),
-                               basis=dict(FITTED_BASIS), feature_fn=compute_features)
+    return FittedResourceModel(name="fir_compute", targets=("lut", "ff"),
+                               basis=dict(FITTED_BASIS), transform=fir_compute_basis,
+                               prior=fir_compute_prior(), platform=platform)
+
+
+# ---------------------------------------------------------------------------
+# F — installing the models: the whole author-facing surface for this design
+# ---------------------------------------------------------------------------
+
+def install_resource_models() -> None:
+    """Give ``FirCompute`` and ``FirBlock`` their ``add_rm_self`` overrides.
+
+    Only two modules need one.  ``FirCmdRx``, ``MemRStream`` and ``MemWStream`` keep the inherited
+    default — a lookup against the platform store — because they were measured once and their area is
+    a fact to recall rather than a function to fit.  That is the ratio to expect: the fitting work
+    concentrates in the few modules that actually move with the parameters being explored.
+
+    Attached here rather than declared in ``fir_block.py`` so the design module stays free of
+    calibration imports; a design that wanted them inline would simply define ``add_rm_self`` on the
+    class.
+    """
+    from examples.fir_block.fir_block import FirBlock, FirCompute
+
+    def compute_add_rm_self(self, platform):
+        """Prior for the binding decisions, fit for the estimated counters — one model, four counters.
+
+        Loads its fitted coefficients from the committed corpus.  In a design whose corpus lived in the
+        platform library this would load from there instead; the corpus is local here because it is
+        also the example's test fixture.
+        """
+        from examples.fir_block.fir_block_corpus import points
+        from waveflow.build.elaborate import elaborate
+
+        model = fir_compute_fitted(platform=platform)
+        samples = [(elaborate(FirCompute, {"mem_dwidth": 32, "ntap": n, "samp_w": w,
+                                           "samp_i": 2, "unroll_lane": u}, name="fit"), m)
+                   for n, w, u, m in points()]
+        self._resource_model = model.fit(samples)
+
+    def block_add_rm_self(self, platform):
+        """The composite's OWN cost: adapters, channel FIFOs, control block, DATAFLOW shell.
+
+        Keyed on boundary structure, because that is what it depends on — measured invariant across 24
+        compute configurations and moving only when the memory word width did.
+        """
+        from waveflow.calib.resource_model import InterfaceResourceModel, boundary_signature
+        from examples.fir_block.fir_block_corpus import INTERFACE_BY_MEM_DWIDTH
+        from waveflow.build.elaborate import elaborate
+
+        table = {}
+        for dw, counters in INTERFACE_BY_MEM_DWIDTH.items():
+            probe = elaborate(FirBlock, {"mem_dwidth": dw, "ntap": 32, "samp_w": 16,
+                                         "samp_i": 2, "unroll_lane": False}, name="probe")
+            table[boundary_signature(probe)] = dict(counters)
+        self._resource_model = InterfaceResourceModel(
+            name="fir_block_interface", table=table, platform=platform)
+
+    FirCompute.add_rm_self = compute_add_rm_self
+    FirBlock.add_rm_self = block_add_rm_self

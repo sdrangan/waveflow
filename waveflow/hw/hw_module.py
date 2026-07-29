@@ -410,6 +410,52 @@ class HwModule(SimObj):
         comp.parent = self
         self.sub_comps[comp.name] = comp
 
+    # -- resource models ---------------------------------------------------
+    def add_rm(self, platform) -> None:
+        """Install a resource model on this module and, recursively, on every sub-module.
+
+        Called once on the **top**; the recursion is the point.  The hierarchy is already in
+        :attr:`sub_comps` and the parameters are already the ``HwParam`` values, so neither has to be
+        restated — an external registry mapping components to models would only be a second copy of
+        information the design already carries, and one that rots when a module is renamed.
+
+        *platform* is passed down rather than stored globally because a model is a statement about a
+        *technology*: the same module has a different model on a different part (a DSP48E1 is 25x18, a
+        DSP48E2 is 27x18), and the platform carries both the calibration library and the
+        :attr:`~waveflow.calib.platform.Platform.res_types` vocabulary the model is expressed in.
+
+        Post-order — children first — so an override on a composite can read what its children
+        installed.
+        """
+        for child in self.sub_comps.values():
+            child.add_rm(platform)
+        self.add_rm_self(platform)
+
+    def add_rm_self(self, platform) -> None:
+        """Install *this* module's own model.  Override to supply a prior, a fit, or an interface model.
+
+        The default is a **lookup against the platform's measurement store**, which is the right answer
+        far more often than it sounds: a module that does not vary with the parameters being explored
+        was measured once, and its area is a fact to be recalled rather than a function to be fitted.
+        Measured across the reference sweep, that was three of four modules.
+
+        A key the store has not seen yields zeros **and** reports ``UNCALIBRATED`` — never a silent
+        zero.  A module contributing nothing unnoticed would make a design read as *cheaper* than it
+        is, which is the one direction an area estimate must not err: it turns "does not fit" into
+        "fits".
+        """
+        from waveflow.calib.record_store import ModuleStore
+        from waveflow.calib.resource_model import LookupResourceModel
+
+        self._resource_model = LookupResourceModel(
+            name=f"{type(self).__name__}:measured",
+            store=ModuleStore(platform.dir), platform=platform)
+
+    @property
+    def resource_model(self):
+        """The installed model, or ``None`` if :meth:`add_rm` was never called."""
+        return getattr(self, "_resource_model", None)
+
     def add_state(self, state: "HwState") -> None:
         """Declare *state* as **cross-firing state** — storage that persists between firings.
 

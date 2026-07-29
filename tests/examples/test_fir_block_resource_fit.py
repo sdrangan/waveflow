@@ -19,7 +19,7 @@ from examples.fir_block.fir_block import FirCompute
 from examples.fir_block.fir_block_corpus import GRID, points
 from examples.fir_block.fir_block_resource import (
     FITTED_BASIS,
-    compute_features,
+    fir_compute_basis,
     fir_compute_fitted,
 )
 
@@ -92,9 +92,11 @@ def test_ff_beats_lut_which_is_the_expected_ordering(loo):
 # ---------------------------------------------------------------------------
 
 def test_predicts_every_counter_it_claims(fitted):
+    """The prior rides inside the fitted model, so one object answers for all four counters."""
     out = fitted.predict_own(_comp(32, 16, False))
-    assert set(out) == {"lut", "ff"}
+    assert set(out) == {"lut", "ff", "dsp", "bram"}
     assert out["lut"] > 0 and out["ff"] > 0
+    assert out["dsp"] == 32 and out["bram"] == 0        # from the prior, exact
 
 
 def test_in_sample_predictions_are_close(fitted):
@@ -140,7 +142,7 @@ def test_inside_the_grid_is_not_flagged_as_extrapolation(fitted):
 # ---------------------------------------------------------------------------
 
 def test_features_are_structural_not_raw_parameters():
-    f = compute_features(_comp(32, 16, True))
+    f = fir_compute_basis(_comp(32, 16, True))
     assert f["lw"] == 2                       # 32 // 16
     assert f["n_mult"] == 32 * 2              # unrolled: NTAP * LW
     assert f["acc_bits"] == 2 * 16 + 5        # 2W + ceil(log2 32)
@@ -149,8 +151,8 @@ def test_features_are_structural_not_raw_parameters():
 
 def test_serial_and_unrolled_differ_in_the_features_not_in_the_model():
     """Pooling across realizations only works because the features carry the difference."""
-    ser = compute_features(_comp(32, 16, False))
-    unr = compute_features(_comp(32, 16, True))
+    ser = fir_compute_basis(_comp(32, 16, False))
+    unr = fir_compute_basis(_comp(32, 16, True))
     assert ser["n_mult"] != unr["n_mult"]
     assert ser["store_bits"] != unr["store_bits"]
 

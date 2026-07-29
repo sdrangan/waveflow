@@ -151,10 +151,10 @@ def test_prior_reads_resolved_params_by_default():
     assert m.features(_comp(24))["width"] == 24
 
 
-def test_prior_accepts_a_custom_feature_extractor():
-    """A composite's own model needs *structure*, not parameters, so features are not fixed to params."""
+def test_prior_accepts_a_transform():
+    """A transform may read *structure*, not just parameters — both are param-determined."""
     m = PriorResourceModel(formulas={"lut": lambda f: 10 * f["ports"]},
-                           feature_fn=lambda c: {"ports": len(getattr(c, "endpoints", {}) or {})})
+                           transform=lambda c: {"ports": len(getattr(c, "endpoints", {}) or {})})
     assert m.predict_own(_comp(16)) == {"lut": 0}      # this toy declares no endpoints
 
 

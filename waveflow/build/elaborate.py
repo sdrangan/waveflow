@@ -197,6 +197,12 @@ _CONTEXT_ATTRS = frozenset({
     "name", "sim", "parent", "comp", "interface", "_hw_construction_complete",
     "processes", "_process_factories", "action_history", "action_overlaps",
     "track_action_overlaps",
+    # Calibration models attached to an instance (``add_rm`` / ``add_timing_model``).  A model is a
+    # statement about how this hardware was MEASURED, not about what it is, and attaching one must not
+    # change the structure.  This is load-bearing rather than tidy-minded: a module's calibration key
+    # is a digest of this signature, so without the exclusion, attaching a model moves the key and
+    # every store lookup misses — and ``add_rm`` needs the key to choose the model it is attaching.
+    "_resource_model", "_timing_model", "firing_records",
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value
