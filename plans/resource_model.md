@@ -21,14 +21,18 @@
 > Docs: `guide/calib` retitled **Model calibration** and extended with `modules.md` + `resources.md`;
 > the section now covers both quantities, since only the *source* of a number differs.
 >
-> Suite at its 6-failure baseline; no regressions. The key works on the pilot: `FirBlock` decomposes
-> into 5 keyed modules, and the two mem-streams key **independently of `ntap` and `samp_w`** — so the
-> planned 4×4 sweep costs 16 `fir_compute` syntheses and *one* `mem_r_stream`. That is the cache-reuse
-> claim demonstrated rather than asserted, and it is now a test
-> (`test_mem_streams_are_shared_across_a_width_sweep`).
+> * D1 — `examples/fir_block/fir_block_resource.py` + `waveflow/calib/resource_model.py` (49 tests).
+>   **24/24 exact on DSP and BRAM with zero fitted parameters**, and the `mem_dwidth` test confirms
+>   E1's third term is [boundary-only](#the-mem_dwidth-test--the-interface-term-is-boundary-only).
 >
-> A1 also surfaced a **C1 blocker** not in the original plan: see
-> [Open decision: boundary-port depth](#open-decision--boundary-port-depth-a-c1-blocker).
+> Suite at its 6-failure baseline throughout; no regressions.
+>
+> **Open items.** C1 is deprioritized — B2 showed in-composite attribution already yields per-module
+> numbers, so a standalone harness is now only needed to characterize a module *before* any composite
+> exists and to test the additivity assumption. It still carries an unresolved design question: see
+> [Open decision: boundary-port depth](#open-decision--boundary-port-depth-a-c1-blocker). The 30
+> measured module configurations sit in the untracked work tier and have **not** been published to the
+> shared platform library.
 >
 > The pilot is [`examples/fir_block`](../examples/fir_block), which is green through pysim → csynth →
 > XSI and carries exactly the knobs the methodology needs to be tested against.
@@ -81,19 +85,21 @@ rest composes.
 
 Not arbitrary — its knobs exercise every claim above, at a size that fits in one overnight run.
 
-* **DSP is a coupled step function, not a trivial one.** `unroll_lane=False` → one multiplier;
-  `unroll_lane=True` → `LW` multipliers, where `LW = mem_dwidth / samp_w` **moves with the width knob
-  itself**. The prior is `LW(samp_w) × dsp_per_mult(samp_w)` — two step functions in composition. A
-  prior that survives that is a real result. (The `add_state` plan already observed the DSP48E1 25×18
-  packing cliff; this is where it gets measured.)
+* **DSP is a coupled step function, not a trivial one.** `unroll_lane=False` → `NTAP` multipliers;
+  `unroll_lane=True` → `NTAP × LW`, where `LW = mem_dwidth // samp_w` **moves with the width knob
+  itself**. So the prior composes two step functions, `LW(samp_w) × dsp_per_mult(samp_w)` — and
+  [they cancel](#the-unrolled-plateau-is-two-effects-cancelling), which is exactly the kind of result
+  a prior earns and a fit would only mimic. (The `add_state` plan already anticipated the DSP48E1
+  25×18 packing cliff; this is where it got measured.)
 * **BRAM has a discontinuity we ourselves emit.** The tap/history storage carries an
   `ARRAY_PARTITION` pragma from `add_state`, and partitioning *converts BRAM into LUT/FF* past a
   threshold. The exact "smooth models miss the jump" failure mode, in the smallest example we have.
 * **`unroll_lane` is a structural knob, not a feature.** It is a different circuit, so it must select
   a *different model* rather than become a regression column. Signature keying does this by
   construction — and that is the cheapest available proof that the keying decision is right.
-* **It is affordable.** 4 `ntap` × 4 `samp_w` × 2 realizations = 32 whole-top csynths. Unattended
-  overnight, and it yields a genuine held-out validation set.
+* **It is affordable.** 3 `ntap` × 4 `samp_w` × 2 realizations = **24 whole-top csynths in 20.5
+  minutes** — far cheaper than the overnight run this section originally budgeted for, which is what
+  made a second `mem_dwidth` probe a casual decision rather than a commitment.
 
 ## Design decisions
 
