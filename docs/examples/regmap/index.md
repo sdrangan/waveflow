@@ -51,8 +51,8 @@ runs through this whole example:
 
 |               | **System simulation**                                                                            | **Sequential execution**                                         |
 | ------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| What runs     | a host`SimObj` running **concurrently** with the kernel, exchanging real AXI-Lite transactions | **one** sequential program (a `SeqTB`) that invokes the kernel |
-| What you see  | the**protocol** — `ap_start` → poll → `ap_done` — plus a per-step event trace            | the functional result and the total transaction latency                |
+| What runs     | a host `SimObj` running **concurrently** with the kernel, exchanging real AXI-Lite transactions | **one** sequential program (a `SeqTB`) that invokes the kernel |
+| What you see  | the **protocol** — `ap_start` → poll → `ap_done` — plus a per-step event trace            | the functional result and the total transaction latency                |
 | Where it runs | **Python only**                                                                                  | **Python, C-simulation, and RTL co-simulation**                  |
 | Page          | [System simulation](./pysim.md)                                                                         | [Sequential execution](./seqtb.md)                                      |
 

@@ -52,7 +52,7 @@ The entry follows from the component's **kind**. You never name it; the class st
 | [`HostActivated`](../flows/modules.md)           | `on_start`                                       | it runs once per launch —`on_start` is the regmap slave's callback |
 | [`FreeRunMod`](../flows/modules.md) (standalone) | `run_iter`                                       | *one firing*; the `while True` belongs to the base, not your code |
 | [`FreeRunMod`](../flows/modules.md) (composite)  | — (see below)                                     | its body comes from the graph, not a method                           |
-| plain`HwModule`                                 | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                     |
+| plain `HwModule`                                 | `on_start` if it has a regmap, else `run_proc` | the un-migrated standalone component — see below                     |
 
 The dispatch is [`codegen_path(comp)`](../../../waveflow/build/codegen_dispatch.py), and a testbench
 routes to `main()` instead ([Sequential testbench](./testbench.md)).

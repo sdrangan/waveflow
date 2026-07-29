@@ -180,12 +180,12 @@ how two descriptions drift apart:
 
 | what the generator needs                           | where it comes from                                                                                                        |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| which children become`hls::task`s, in what order | `add_comp` order                                                                                                         |
-| the internal FIFOs and their C++ names             | the`add_if` interfaces — each one *is* an edge, named after itself                                                    |
-| how each edge lowers                               | the interface's**type/flags** (`StreamIF` → `hls::stream`; `StreamIF(framed=True)` → a `framed_word` FIFO) |
+| which children become `hls::task`s, in what order | `add_comp` order                                                                                                         |
+| the internal FIFOs and their C++ names             | the `add_if` interfaces — each one *is* an edge, named after itself                                                    |
+| how each edge lowers                               | the interface's **type/flags** (`StreamIF` → `hls::stream`; `StreamIF(framed=True)` → a `framed_word` FIFO) |
 | which endpoints are boundary ports, in what order  | any child endpoint*not* bound to an internal interface, in `add_comp` × `add_endpoint` order                        |
-| each port's direction                              | the endpoint's**type** (`StreamIFSlave` → input, `MMIFWriteMaster` → written `m_axi`)                        |
-| the`gmem` bundle assignment                      | policy, applied in boundary order —`m_in` → gmem0, `m_out` → gmem1                                                  |
+| each port's direction                              | the endpoint's **type** (`StreamIFSlave` → input, `MMIFWriteMaster` → written `m_axi`)                        |
+| the `gmem` bundle assignment                      | policy, applied in boundary order —`m_in` → gmem0, `m_out` → gmem1                                                  |
 
 Only the *names* are yours to say, and only because they cannot be derived: both `MemRStream` and
 `MemWStream` call their AXI port `m_mem`, so the top's `m_in` / `m_out` have to be stated.

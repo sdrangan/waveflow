@@ -109,8 +109,8 @@ The fit is identical; only the storage scope differs (the
 |                        | Shared-infra component                   | Custom component                      |
 | ---------------------- | ---------------------------------------- | ------------------------------------- |
 | e.g.                   | `MemRStream`, `MemWStream`           | your accelerator's kernel             |
-| stored in              | the committed**platform library**  | a**project-local dir you pick** |
-| selected by            | `platform_dir` (keyed by task-body id) | an explicit`calib_dir`              |
+| stored in              | the committed **platform library**  | a **project-local dir you pick** |
+| selected by            | `platform_dir` (keyed by task-body id) | an explicit `calib_dir`              |
 | reused across projects | yes — no recalibration                  | no — specific to your design         |
 
 Both mem-streams take both knobs; `_resolve_calib_dir` gives `calib_dir` precedence (the project-local
