@@ -427,8 +427,44 @@ rather than silently guessed.
 ## Phase E — composition
 
 ### E1 — the three-term sum
-Σ modules + Σ interfaces + shell, with the interface term computed from boundary structure and the
-integration term fit against B2's whole-top measurements.
+
+Σ modules + Σ interfaces + shell. **B2 changed how this should be built**: the third term is not a
+residue to be fit, it is a nameable set of RTL in one-to-one correspondence with the elaborated
+interface graph.
+
+`ModuleInformation` reports only what HLS derives from *C functions* — the task modules, their
+`_Pipeline_*` loop sub-modules, `entry_proc`, and the top. Everything generated from *interface
+pragmas and dataflow channels* gets no row, and that is exactly the integration term:
+
+| unreported RTL | derived from | on `fir_block` |
+|---|---|---|
+| `gmem<n>_m_axi` | one per `m_axi` boundary port | 2 |
+| `fifo_w<W>_d<D>_S` | one per **internal** task-to-task channel | 3 |
+| `control_s_axi` | the ap_ctrl / AXI-Lite block | 1 |
+| `entry_proc`, `regslice_both`, `sparsemux_*`, flow control | the DATAFLOW shell | fixed |
+
+Note the FIFOs are *internal* — the term is a function of the whole interface graph, not just the
+external port list. So:
+
+```
+interface term = Σ adapter_cost(kind, width)   over external ports
+               + Σ fifo_cost(width, depth)     over internal channels
+               + fixed shell
+```
+
+Characterize `adapter_cost` / `fifo_cost` **once per platform** — the same move `BusCalib` makes for
+the bus law — and a new design's glue becomes a lookup over its own elaborated graph with no
+per-design fit. Waveflow already has the graph at elaboration time.
+
+**The falsifiable prediction, and the run to make first.** The term was constant across all 24 B2
+points because `mem_dwidth` was held fixed, so no adapter or FIFO ever changed width. Varying
+`mem_dwidth` **must** move it. That is a cheap, decisive test and it should run before E1 commits to
+this structure.
+
+**Two report quirks to carry forward.** Vitis's own two totals disagree slightly — the `fir_block`
+row reads 2 LUT above `AreaEstimates` (FF/DSP/BRAM match exactly); `AreaEstimates` is used as the
+design total. And HLS adds FIFO slack beyond the declared depth: three channels declared `depth=2`
+emitted depths 2, 3, and 5, so `fifo_cost` must key on the *emitted* depth, not the Python one.
 
 ### E2 — held-out validation
 Predict whole-top resources at points never used in any fit. Per-resource error reported separately —
