@@ -1,6 +1,7 @@
 # Plan: the resource model — per-module FPGA resource prediction for DSE
 
-> **Status (2026-07-28): Phase A + B COMPLETE, D1 COMPLETE, all gated. D2 (LUT/FF residual) next.**
+> **Status (2026-07-28): Phases A–E COMPLETE and gated. The arc is closed; docs for D/E are the
+> remaining work.**
 >
 > * A1 — `waveflow/calib/module_key.py` + `tests/calib/test_module_key.py` (18 tests).
 > * A2 — `waveflow/calib/record_store.py` + `tests/calib/test_record_store.py` (25 tests), plus the
@@ -21,9 +22,14 @@
 > Docs: `guide/calib` retitled **Model calibration** and extended with `modules.md` + `resources.md`;
 > the section now covers both quantities, since only the *source* of a number differs.
 >
-> * D1 — `examples/fir_block/fir_block_resource.py` + `waveflow/calib/resource_model.py` (49 tests).
+> * D1 — `examples/fir_block/fir_block_resource.py` + `waveflow/calib/resource_model.py`.
 >   **24/24 exact on DSP and BRAM with zero fitted parameters**, and the `mem_dwidth` test confirms
 >   E1's third term is [boundary-only](#the-mem_dwidth-test--the-interface-term-is-boundary-only).
+> * D2 — `FittedResourceModel` for LUT/FF, held out at 7.1%/9.8% mean, plus
+>   `examples/fir_block/fir_block_corpus.py`, the 24 measured points as committed source.
+> * E1/E2 — `InterfaceResourceModel` + `compose()`, validated against design totals that fit nothing:
+>   **DSP and BRAM exact at 24/24**, LUT 3.2% / FF 2.8% mean, rank correlation 0.95–1.00. See
+>   [the honesty notes](#e2--held-out-validation-) before quoting those figures.
 >
 > Suite at its 6-failure baseline throughout; no regressions.
 >
@@ -523,11 +529,31 @@ row reads 2 LUT above `AreaEstimates` (FF/DSP/BRAM match exactly); `AreaEstimate
 design total. And HLS adds FIFO slack beyond the declared depth: three channels declared `depth=2`
 emitted depths 2, 3, and 5, so `fifo_cost` must key on the *emitted* depth, not the Python one.
 
-### E2 — held-out validation
-Predict whole-top resources at points never used in any fit. Per-resource error reported separately —
-lead with DSP/BRAM, be explicit that LUT/FF is coarser.
+### E2 — held-out validation ✅
 
-**Gate:** this is the number the paper lives on. It gets a committed artifact and its own test.
+`tests/examples/test_fir_block_compose.py` (12 tests). Only per-module figures train anything; the
+**design totals are held out by construction**.
+
+| counter | whole-design error | rank correlation vs synthesis |
+|---|---|---|
+| DSP | **24/24 exact** | 1.000 |
+| BRAM | **24/24 exact** | — |
+| LUT | 3.2% mean, 8.6% worst | 0.950 |
+| FF | 2.8% mean, 8.7% worst | 0.990 |
+
+Plus the decision an exploration actually makes: the DSP-minimal design is identified correctly.
+
+**Two honesty notes, written into the test rather than left implicit.**
+
+The whole-design errors are markedly *better* than the compute module's own held-out error (9.8% /
+24.8%), and not because the model is good — because the interface term and the three static modules
+are **exact** and dilute the one fitted module. Most of this design is known rather than predicted,
+so the total flatters the model. Quoting 3.2% as "the model's accuracy" would be wrong.
+
+The suite leads with **decision fidelity** — rank correlation, and correctly picking the extremum —
+because that is the claim the numbers support and the one exploration needs. A model with 10% LUT
+error still makes every correct choice when candidates are well separated, and that is a more
+defensible claim at review than a regression table.
 
 ## Explicitly not now
 
