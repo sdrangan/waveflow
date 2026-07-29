@@ -10,16 +10,20 @@ summary: "A platform is the target a design is built and measured against: an FP
 
 # Platforms
 
-A **platform** is the target a design is built and measured against:
+A **platform** is the target a design is built and measured against. It has two halves:
 
-```text
-identity        an FPGA part, a synthesis clock, and the resource counters it is measured in
-library         everything fit or measured for that target — bus law, timing residuals, area records
-```
+- **identity** — an FPGA part, a synthesis clock, and the resource counters that technology is
+  measured in.
+- **library** — everything fit or measured for that target: the bus-transfer law, timing residuals,
+  and area records.
 
-Both halves matter, and it is the pairing that makes the whole thing work: a cycle count or a LUT
-count is only meaningful *for a particular part at a particular clock*, so the numbers and the
-identity they were taken under are stored together and confirmed on use.
+It is the *pairing* that makes it work. A cycle count or a LUT count is only meaningful for a
+particular part at a particular clock, so the numbers and the identity they were taken under are
+stored together and confirmed on use.
+
+Waveflow ships one reference platform, so an installed user inherits working measurements for the
+framework's own modules with no toolchain run at all; a project then
+[creates its own](./create.md) seeded from it.
 
 ## It is not just a calibration concept
 
@@ -45,32 +49,6 @@ The payoff is a property worth stating plainly:
 > object, so they cannot drift. `Platform.resolve` is a create-or-confirm gate: a new platform is
 > seeded from the build's part/clock, an existing one is *checked* against them, and a mismatch is an
 > error rather than a silently reused number.
-
-## What lives in one
-
-```text
-<platform>/
-    platform.json                       identity: part, clk_freq_hz, [res_types]
-    mm_bus.json  points/                the m_axi bus-transfer law and its corpus
-    components/<task-config>/           TIMING residuals, keyed by task configuration
-    modules/<module-key>/               RESOURCE records, keyed by module structure
-```
-
-Two different keys, because the two axes ask different questions — see
-[Directory layout](./layout.md), which also covers the tracked/untracked split and which directories
-are yours versus the package's.
-
-## Getting one
-
-```bash
-waveflow_calib new  calib/platforms/myboard --part xc7z020clg484-1 --clk 100e6
-waveflow_calib show calib/platforms/myboard
-```
-
-Waveflow ships one reference platform (`zynq7020_bfm_100mhz`) so an installed user inherits a working
-bus law, two component residuals, and measured area for the framework's own modules — with no toolchain
-run at all.  A project then [seeds its own library](./create.md) from it and measures its own modules
-into that.
 
 ## In this section
 

@@ -62,12 +62,17 @@ identity**, so `--part` / `--clk` become optional, and it refuses a non-empty ta
 
 ### What comes across, and what that buys
 
-The framework's own reusable modules — `MemRStream` / `MemWStream` — arrive already measured, so a
-design composing them gets area and timing with no toolchain run. That is the whole point of the shared
-library: measurements for parts of the design **you did not write**.
+Waveflow ships one reference platform, **`zynq7020_bfm_100mhz`** (xc7z020 at 100 MHz), holding a fitted
+bus-transfer law, two component timing residuals, and measured area for the framework's own reusable
+modules. Seeding from it means `MemRStream` / `MemWStream` arrive already measured, so a design
+composing them gets area and timing with **no toolchain run**.
 
-Your own modules are then measured into the same directory as you calibrate, sitting beside the
-inherited ones.
+That is the whole point of a shared library: measurements for the parts of a design **you did not
+write**. Your own modules are then measured into the same directory as you calibrate, sitting beside
+the inherited ones.
+
+If your target is a different part or clock, the shipped platform is not valid for it — see
+[Platform identity](./identity.md) — and you calibrate from scratch rather than seeding.
 
 {: .note }
 > Seeding **copies**; it does not link. You duplicate the upstream data, and an upstream improvement
