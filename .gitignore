@@ -36,7 +36,7 @@ hls/
 #   calib/platforms/           a PROJECT's own library — the default `platforms_root`, so this is
 #                              where a user following the documented workflow publishes.  Without
 #                              this line their library is silently ignored, which defeats the point
-#                              of publishing at all.  (The untracked work tier is /calib/work/,
+#                              of publishing at all.  (The untracked work tier is **/calib/work/,
 #                              ignored separately below.)
 !waveflow/calib/platforms/**
 !calib/platforms/**
@@ -93,11 +93,16 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Calibration work dir: sweeps / tests / DAG calib steps write here freely (it churns). Only the
-# tracked library waveflow/calib/platforms/<name>/ is committed, and ONLY `publish_calib` writes to it.
-# See waveflow/calib/publish.py. Anchored so it matches the repo-root work dir, not any nested `work/`.
-# (The shipped library's re-include past the *.json ignore is at the top of this file.)
-/calib/work/
+# Calibration work dir: sweeps / tests / DAG calib steps write here freely (it churns). Only a tracked
+# library (waveflow/calib/platforms/ or a project's calib/platforms/) is committed, and ONLY
+# `publish_calib` writes to one. See waveflow/calib/publish.py.
+#
+# `**/` because a pattern with a mid-string separator is anchored to this file's directory, and a
+# project's work tier sits at ITS root — an example under examples/<name>/ is a project, so
+# examples/fir_block/calib/work/ has to match too. The `calib/` prefix keeps it specific enough that it
+# cannot swallow an unrelated directory called `work/`.
+# (The libraries' re-include past the *.json ignore is at the top of this file.)
+**/calib/work/
 
 # Distribution artifacts
 *.egg-info/

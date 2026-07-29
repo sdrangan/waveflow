@@ -36,12 +36,14 @@ from examples.fir_block.fir_block_resource import install_resource_models
 
 MEM_DW = 32
 
-#: The **project's** library, not the packaged one.  ``fir_block``'s own modules are its design, not
-#: framework infrastructure, so their measurements live beside the example rather than shipping to
-#: every installed user.  The library is seeded from the packaged platform, so the framework's
-#: mem-stream records come across too — see ``docs/guide/platform/create.md``.
-_REPO = pathlib.Path(__file__).resolve().parents[2]
-PLATFORM = Platform.resolve(_REPO / "calib" / "platforms", "zynq7020_bfm_100mhz",
+#: **This example's own** library, not the packaged one.  ``fir_block``'s modules are its design, not
+#: framework infrastructure, so their measurements live with the example rather than shipping to every
+#: installed user.  The path mirrors what a user project has at its root (``calib/platforms/`` is the
+#: default ``platforms_root``), because an example *is* a project — copy the directory and the layout
+#: is already right.  Seeded from the packaged platform, so the framework's mem-stream records come
+#: across too; see ``docs/guide/platform/create.md``.
+_EXAMPLE = pathlib.Path(__file__).resolve().parents[2] / "examples" / "fir_block"
+PLATFORM = Platform.resolve(_EXAMPLE / "calib" / "platforms", "zynq7020_bfm_100mhz",
                             fallbacks=platform_fallback_path())
 
 install_resource_models()          # give FirCompute / FirBlock their add_rm_self overrides

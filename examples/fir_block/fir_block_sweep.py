@@ -60,7 +60,7 @@ MEM_DWS = (32,)
 #: module measurements belong: they are its design, not framework infrastructure, so they live beside
 #: the example rather than shipping to every installed user.
 PLATFORM = "zynq7020_fir_sweep"
-PLATFORMS_ROOT = "calib/work"
+PLATFORMS_ROOT = HERE / "calib" / "work"
 PART = "xc7z020clg484-1"
 CLK_FREQ = 100e6                      # the 10 ns period the generated TCL creates
 

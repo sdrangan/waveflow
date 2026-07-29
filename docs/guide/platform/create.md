@@ -143,11 +143,16 @@ module whose `cls_module` falls outside `waveflow.*`.
 not write. The arrangement is exactly the one above:
 
 ```text
-waveflow/calib/platforms/zynq7020_bfm_100mhz/    4 configs — MemRStream, MemWStream  (framework)
-calib/platforms/zynq7020_bfm_100mhz/            35 configs — the 4 above, seeded, plus
-                                                             FirCompute x26, FirCmdRx x5  (the example's)
-calib/work/zynq7020_fir_sweep/                  untracked — where the sweep actually writes
+waveflow/calib/platforms/zynq7020_bfm_100mhz/               4 configs — MemRStream, MemWStream
+examples/fir_block/calib/platforms/zynq7020_bfm_100mhz/    35 configs — those 4, seeded, plus the
+                                                                        example's FirCompute x26,
+                                                                        FirCmdRx x5
+examples/fir_block/calib/work/zynq7020_fir_sweep/          untracked — where the sweep writes
 ```
+
+**Each example carries its own library**, at the same `calib/platforms/` path a user project uses — so
+an example directory *is* a project: copy it and the layout is already right. They deliberately do not
+share one, because sharing a calibration library across projects is not something a user does.
 
 The sweep writes the **work tier** under its own name, and a deliberate publish promotes the result
 into the project library:
@@ -161,9 +166,10 @@ Note the project library carries the framework's 4 configurations too — that i
 it is why the example can compose `MemRStream` and get measured area without reaching back into the
 package.
 
-Examples in this repository share **one** project library rather than each carrying its own seeded
-copy; duplicating the inherited infra per example would be churn for no benefit. In your own project,
-one library at `calib/platforms/` is likewise the right granularity.
+The contrast with `examples/mem_copy` is the point. That example calibrates `MemRStream` /
+`MemWStream` — **framework** modules — so it correctly publishes *upstream* into the shipped library.
+`fir_block` calibrates its own, so it behaves like a user project. Which library an example publishes
+into follows from whose modules it measured, not from where the example happens to live.
 
 ## Next
 
