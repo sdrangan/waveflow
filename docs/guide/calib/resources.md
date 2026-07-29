@@ -135,8 +135,35 @@ and folding would assume the answer. Rows that belong to no module (`entry_proc`
 
 Two things are already visible in the numbers above. **DSP is perfectly additive** — all 32 sit in
 `FirCompute`, one per tap, with an integration term of exactly zero. And **BRAM is entirely
-integration** — no module reports any, because the tap storage went to LUT/FF via `ARRAY_PARTITION`
-while the design's two blocks are inter-task FIFOs.
+integration** — no module row reports any; the design's two blocks appear only on the top row.
+
+### What is actually in the term
+
+The report does not break the top row down further, but the generated RTL names its contents. For
+`fir_block`, everything that is not a task module is:
+
+```text
+fir_block.v                       top-level wiring
+fir_block_control_s_axi.v         the AXI-Lite control interface
+fir_block_entry_proc.v            the DATAFLOW entry process
+fir_block_gmem0_m_axi.v           the m_axi adapters — one per bundle, and
+fir_block_gmem1_m_axi.v             typically the bulk of the term
+fir_block_fifo_w33_d2_S.v         the inter-task channels, one per hls::stream
+fir_block_fifo_w64_d3_S.v
+fir_block_fifo_w64_d5_S.v
+fir_block_regslice_both.v         register slices, flow control, shared muxes …
+```
+
+Every one of those is a function of the **boundary** — how many `m_axi` bundles, how wide, how many
+internal streams — and none of them is a function of what the modules compute. That is why the term is
+invariant under `ntap`, `samp_w`, and the realization knob, and why it is modelled as an *interface +
+shell* term keyed on boundary structure rather than fit against the compute parameters.
+
+{: .note }
+> Which of those holds the 2 BRAM is **not** established by the report — `FIFOInformation` is empty
+> and no sub-module row carries it. The `m_axi` adapters' internal buffers are the likely home (the
+> term is identical in the serial variant, which has no state RAM at all), but that is inference, not
+> measurement.
 
 ## The build step
 
