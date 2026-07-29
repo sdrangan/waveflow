@@ -1,6 +1,6 @@
 ---
 title: Platforms
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 6
 audience: python
 api: [Platform, PlatformCalib, BuildConfig]

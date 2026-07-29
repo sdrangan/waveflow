@@ -1,6 +1,6 @@
 ---
 title: Models
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 2
 audience: python
 api: [CalibModel, LinCalibModel, InterpCalibModel]

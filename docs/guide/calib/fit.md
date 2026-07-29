@@ -1,6 +1,6 @@
 ---
 title: Fitting a timing model
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 1
 audience: python
 api: [CalibDataFrame, LinCalibModel]

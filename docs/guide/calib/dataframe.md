@@ -1,6 +1,6 @@
 ---
 title: The corpus — CalibDataFrame
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 3
 audience: python
 api: [CalibDataFrame]

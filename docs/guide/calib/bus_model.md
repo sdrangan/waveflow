@@ -1,6 +1,6 @@
 ---
 title: The bus-transfer model
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 7
 audience: python
 api: [BusCalib, BusTiming, CalibBusStep]

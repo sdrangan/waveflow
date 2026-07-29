@@ -1,6 +1,6 @@
 ---
 title: The calibration workflow
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 8
 audience: python
 api: [BusCalib, StreamTimingModel, Platform, CalibBusStep, CollectTimingStep, FitTimingStep]

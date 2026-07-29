@@ -1,6 +1,6 @@
 ---
 title: Component residuals
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 5
 audience: python
 api: [TimingModel, StreamTimingModel, CollectTimingStep, FitTimingStep]

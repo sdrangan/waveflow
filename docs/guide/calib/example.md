@@ -1,6 +1,6 @@
 ---
 title: A worked example
-parent: Timing model fitting
+parent: Model calibration
 nav_order: 4
 audience: python
 api: [CalibDataFrame, LinCalibModel, InterpCalibModel]

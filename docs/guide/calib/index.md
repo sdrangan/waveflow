@@ -1,20 +1,38 @@
 ---
-title: Timing model fitting
+title: Model calibration
 parent: Guide
 nav_order: 13
 has_children: true
 audience: python
-api: [CalibDataFrame, CalibModel, LinCalibModel, InterpCalibModel, StreamTimingModel, BusCalib, Platform]
-summary: "Fit a timing model's parameters from measurement so the fast loosely-timed sim tracks the slow RTL. Two methods: DIRECT — fit the whole cycle count from a (size, cycles) sweep (a LinCalibModel recovers a loop's latency/ii); and RESIDUAL — fit only the gap between RTL and a pysim that already times its transfers (a component's control cost). Same CalibModel / CalibDataFrame machinery underneath. Fits live either in a project-local dir (custom components) or a git-tracked platform library keyed by FPGA part + clock (shared infra), where the m_axi bus law is also fit once and reused."
+api: [CalibDataFrame, CalibModel, LinCalibModel, InterpCalibModel, StreamTimingModel, BusCalib, Platform, ModuleStore, Confidence]
+summary: "Fit a model's parameters from measurement so a fast Python estimate tracks real hardware. Timing is fit two ways: DIRECT — the whole cycle count from a (size, cycles) sweep (a LinCalibModel recovers a loop's latency/ii); and RESIDUAL — only the gap between RTL and a pysim that already times its transfers. Resources are measured instead, attributed from the csynth report to the modules that caused them. Same CalibModel / CalibDataFrame machinery, same platform identity keyed by FPGA part + clock, same two-tier work → publish flow; only the source of a number differs."
 ---
 
-# Timing model fitting
+# Model calibration
 
 A [timing model](../timing_model/) predicts a component's timeline from a few numbers — a `latency`, an
 initiation interval, a per-transfer cost. Those numbers are properties of the *synthesized* hardware.
 **Fitting** recovers them from measurement: run the kernel through synthesis / RTL cosim, record the
 cycles, and fit a model, so the fast LT simulation reproduces the slow RTL without you transcribing
 report numbers by hand.
+
+## Two quantities, one set of machinery
+
+This section covers **timing** and **resources**, and they share more than they differ:
+
+|  | timing | resources |
+|---|---|---|
+| where a number comes from | a *run* — cosim or an [XSI](../build/xsi.md) trace | a *report* — `csynth.xml` |
+| what is recovered | a fit (`latency`, `ii`, a residual) | a measurement, attributed per module |
+| keyed by | [platform](./platform.md) = FPGA part + synthesis clock | the same |
+| stored in | the same [record store](./modules.md) | the same |
+| published by | the same [work → publish flow](./workflow.md) | the same |
+
+The asymmetry worth remembering is in the middle row. A timing number is *fit* — a model form with
+coefficients recovered from a sweep. A resource number is *measured* — the report says 32 DSPs and
+that is what it is. Predicting resources at an **unmeasured** point is a separate problem, and one the
+[module keys](./modules.md) are designed to make cheap: two designs that induce the same module reuse
+one measurement rather than paying for a second synthesis.
 
 ## Two methods: direct and residual
 
@@ -88,6 +106,13 @@ The direct method and its primitives first, then the residual method and the pla
   and the per-component **fixture** (`waveflow/calib/fixtures/`) that fits it.
 - [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms` flow,
   the DAG steps, and the reference `zynq7020_bfm_100mhz` platform end to end.
+
+Then the per-module layer, shared by both quantities:
+
+- [Module keys and the record store](./modules.md) — addressing a measurement by the module's
+  *structure* rather than its parameter dict, and the one record envelope both quantities use.
+- [Resource measurements](./resources.md) — attributing a `csynth` report to the modules that caused
+  it, the two traps that otherwise corrupt the numbers, and the `InspectSynthStep` build rung.
 
 ## See also
 
