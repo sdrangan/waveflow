@@ -1,0 +1,10 @@
+{
+  "key": "fir_cmd_rx-3607188b",
+  "cls_name": "FirCmdRx",
+  "cls_module": "examples.fir_block.fir_block",
+  "params": {
+    "mem_dwidth": 64,
+    "samp_w": 16
+  },
+  "signature": "3607188b90626527a81c37a4e275d0174061b4733eec8b995b1375cf2ebd04eb"
+}

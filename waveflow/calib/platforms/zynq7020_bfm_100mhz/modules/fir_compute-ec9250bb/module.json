@@ -1,0 +1,13 @@
+{
+  "key": "fir_compute-ec9250bb",
+  "cls_name": "FirCompute",
+  "cls_module": "examples.fir_block.fir_block",
+  "params": {
+    "mem_dwidth": 32,
+    "ntap": 16,
+    "samp_i": 2,
+    "samp_w": 8,
+    "unroll_lane": 0
+  },
+  "signature": "ec9250bbc03e2667299e1bd5bad424fb1f501dad68824050fcf80e73502935f9"
+}

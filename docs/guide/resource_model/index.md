@@ -77,6 +77,11 @@ refusal is the design, not a gap in it.
   interface term, and weakest-link confidence.
 - [Validating a model](./validation.md) — held-out testing against design totals, why decision
   fidelity is the claim worth making, and how a headline number can flatter a model.
+- [Modelling your own design](./workflow.md) — the end-to-end order: capture every synthesis, sweep,
+  see what actually moved, choose a kind per module, validate, publish.
+
+A fully worked instance of all of it, with real numbers, is the
+[block FIR's resource modelling](../../examples/firblock/resources.md).
 
 ## See also
 
