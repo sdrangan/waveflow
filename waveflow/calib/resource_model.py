@@ -200,3 +200,91 @@ class PriorResourceModel(ResourceModel):
                        f"prior with no fitted parameters",
             "module_key": ident.key, "model": "prior", "counters": sorted(self.formulas),
             "features": self.features(comp)})
+
+
+# ---------------------------------------------------------------------------
+# Fitted — the genuinely learned part
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FittedResourceModel(ResourceModel):
+    """Counters regressed from physically-motivated features — for LUT and FF.
+
+    The counters a prior cannot reach.  DSP and BRAM are binding decisions HLS reports; LUT and FF are
+    the *estimate*, absorbing partitioned storage, pipeline registers, the accumulator tree, address
+    and mux logic, and whatever multiply residue the DSPs did not take.  There is no closed form for
+    that, so it is fit — but from features chosen for physical meaning (storage bits, multiplier count,
+    accumulator width), not from raw parameters, so the fit extrapolates on structure rather than on
+    coincidence.
+
+    One :class:`~waveflow.calib.calib.LinCalibModel` per counter, because the counters have different
+    forms and a single multi-target fit would be wrong.  Confidence comes straight from the underlying
+    model's retained :class:`~waveflow.calib.confidence.FitSummary`, so an out-of-range query is
+    reported as extrapolation here exactly as it is for a timing fit.
+    """
+
+    counters: tuple = ("lut", "ff")
+    basis: dict = field(default_factory=dict)      #: {counter: [feature names]}
+    feature_fn: Any = None                         #: callable(comp) -> dict of features
+    prior: ResourceModel = None                    #: optional model whose counters are added on top
+    models: dict = field(default_factory=dict)     #: {counter: LinCalibModel}, built by fit/load
+
+    def features(self, comp: Any) -> dict:
+        if self.feature_fn is None:
+            return dict(identify_instance(comp, require_bound=False).params)
+        return dict(self.feature_fn(comp))
+
+    @property
+    def has_free_params(self) -> bool:
+        return True
+
+    def fit(self, samples) -> "FittedResourceModel":
+        """Fit from ``[(comp, measured_counters), ...]``.
+
+        Features are recomputed from each component rather than taken from the caller, so the fit
+        cannot be trained on a different feature definition than :meth:`predict_own` will evaluate.
+        """
+        import pandas as pd
+
+        from waveflow.calib.calib import LinCalibModel
+
+        rows = []
+        for comp, measured in samples:
+            row = dict(self.features(comp))
+            row.update({c: int(measured[c]) for c in self.counters if c in measured})
+            rows.append(row)
+        df = pd.DataFrame(rows)
+
+        for c in self.counters:
+            if c not in df.columns:
+                continue
+            basis = list(self.basis.get(c) or [k for k in df.columns if k not in self.counters])
+            self.models[c] = LinCalibModel(basis=basis, target=c).fit(df)
+        return self
+
+    def predict_own(self, comp: Any) -> dict:
+        row = self.features(comp)
+        out = {c: int(round(m.predict(row))) for c, m in self.models.items()}
+        if self.prior is not None:
+            out = add_counters(out, self.prior.predict_own(comp))
+        return out
+
+    def confidence_own(self, comp: Any) -> Confidence:
+        ident = identify_instance(comp, require_bound=False)
+        row = self.features(comp)
+        if not self.models:
+            return Confidence.uncalibrated(
+                f"{ident.cls_name}: {self.name} has not been fitted")
+
+        per = {c: m.confidence(row) for c, m in self.models.items()}
+        worst = min(cf.level for cf in per.values())
+        detail = "; ".join(f"{c}: {cf.facts.get('summary', cf.level.value)}"
+                           for c, cf in sorted(per.items()))
+        facts = {
+            "summary": f"{ident.cls_name}: {detail}",
+            "module_key": ident.key, "model": "fitted", "features": row,
+            "per_counter": {c: cf.to_json() for c, cf in per.items()},
+        }
+        if self.prior is not None:
+            facts["prior"] = self.prior.name
+        return Confidence(level=worst, facts=facts)

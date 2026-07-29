@@ -1,7 +1,14 @@
-"""fir_block_resource.py — the analytical DSP / BRAM priors for the block FIR.
+"""fir_block_resource.py — the resource models for the block FIR.
 
-Phase D1 of ``plans/resource_model.md``: encode the *known physics* and learn only what is left over.
-Nothing here is fitted.
+Phases D1 and D2 of ``plans/resource_model.md``, and the split between them is the point: **encode the
+known physics, learn only what is left over.**
+
+* **D1 — DSP and BRAM: a prior, nothing fitted.** These are *binding decisions* HLS makes and reports,
+  so they follow geometry rather than statistics, and the prior reproduces all 24 measured points
+  exactly with zero free parameters.
+* **D2 — LUT and FF: fitted.** No closed form reaches partitioned storage, pipeline registers, the
+  accumulate tree and the address/mux logic, so those are regressed — but from *physically motivated*
+  features (:func:`compute_features`), so the fit extrapolates on structure rather than on coincidence.
 
 The physics is the DSP48E1's geometry — a 25x18 signed multiplier — which decides how many DSPs one
 multiply costs:
@@ -112,3 +119,63 @@ def fir_compute_prior() -> PriorResourceModel:
     """The zero-parameter DSP + BRAM prior for :class:`~examples.fir_block.fir_block.FirCompute`."""
     return PriorResourceModel(name="fir_compute_prior",
                               formulas={"dsp": dsp_prior, "bram": bram_prior})
+
+
+# ---------------------------------------------------------------------------
+# D2 — the learned part: LUT and FF
+# ---------------------------------------------------------------------------
+
+def compute_features(comp) -> dict:
+    """Physically-motivated features for a ``FirCompute`` instance.
+
+    Chosen for *meaning* rather than convenience, so the fit extrapolates on structure rather than on
+    coincidence between parameters:
+
+    * ``n_mult`` — multipliers instantiated (``NTAP``, or ``NTAP*LW`` unrolled).  Drives the
+      accumulate tree and whatever multiply logic the DSPs do not absorb.
+    * ``store_bits`` — the tap array plus the delay line, in bits.  These arrays are
+      ``ARRAY_PARTITION``-ed, so they land in registers, and across the reference grid storage alone
+      correlates 0.985 with FF.  The delay line's length is **realization-dependent**: the serial body
+      keeps ``NTAP`` entries, the unrolled one keeps ``NTAP + LW - 1`` (it shifts a whole lane per
+      beat — ``SH: for (m = NTAP + LW - 2; m >= LW; --m)``), so this feature is one of the two that
+      distinguish the kernels.
+    * ``acc_bits`` — the accumulator width the format algebra derives (``2W + ceil(log2 NTAP)``),
+      which sets how wide every pipeline register in the MAC has to be.
+    * ``mac_bits`` — ``n_mult * acc_bits``, the pipeline's register area to first order.
+    """
+    p = {k: int(getattr(comp, k)) for k in ("ntap", "samp_w", "mem_dwidth")}
+    unroll = bool(getattr(comp, "unroll_lane", False))
+    lw = lane_width(p["mem_dwidth"], p["samp_w"])
+    n_mult = n_multipliers(p["ntap"], p["samp_w"], p["mem_dwidth"], unroll)
+    acc_bits = 2 * p["samp_w"] + math.ceil(math.log2(max(2, p["ntap"])))
+    # The unrolled body shifts a whole lane per beat, so its history is LW-1 entries longer.
+    delay_entries = p["ntap"] + (lw - 1 if unroll else 0)
+    return {
+        "ntap": p["ntap"], "samp_w": p["samp_w"], "lw": lw, "n_mult": n_mult,
+        "acc_bits": acc_bits,
+        "store_bits": p["samp_w"] * (p["ntap"] + delay_entries),
+        "mac_bits": n_mult * acc_bits,
+    }
+
+
+#: The fitted bases, chosen by held-out (leave-one-out) error over the 24-point reference grid rather
+#: than by in-sample R².  Two findings shaped them:
+#:
+#: * FF tracks **storage** — partitioned arrays become registers — with a multiplier-count term for the
+#:   MAC pipeline.  LOO: ~6% mean, ~17% worst.
+#: * LUT is genuinely the harder counter: ~10% mean, ~25% worst.  That is reported rather than tuned
+#:   away, and it is why validation leads with *decision fidelity* instead of relative error.
+#:
+#: Both are **pooled across realizations**.  Forking them (serial vs unrolled) was tried and made LUT
+#: *worse* — 12 points against 4 free parameters overfits — so the realization forks the module *key*
+#: and the lookup, but not the regression, which carries the difference in ``n_mult`` and ``lw``.
+FITTED_BASIS = {"ff": ["store_bits", "n_mult"],
+                "lut": ["n_mult", "store_bits", "mac_bits"]}
+
+
+def fir_compute_fitted() -> "FittedResourceModel":
+    """The LUT/FF model for ``FirCompute``.  Must be :meth:`fit` before it predicts."""
+    from waveflow.calib.resource_model import FittedResourceModel
+
+    return FittedResourceModel(name="fir_compute_lutff", counters=("lut", "ff"),
+                               basis=dict(FITTED_BASIS), feature_fn=compute_features)
