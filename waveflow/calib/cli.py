@@ -26,12 +26,33 @@ def _fmt_counters(d: dict) -> str:
 
 
 def cmd_new(args) -> int:
-    """Create a platform directory and seed its manifest."""
-    from waveflow.calib.platform import Platform
+    """Create a platform directory, optionally seeded from an existing one."""
+    from waveflow.calib.platform import Platform, platform_fallback_path
 
     root, name = Path(args.path).parent, Path(args.path).name
+
+    if not args.from_platform and not (args.part and args.clk):
+        # A platform without an identity cannot gate anything: every stored number is only valid for
+        # a particular part at a particular clock, and the mismatch check has nothing to compare.
+        print("error: --part and --clk are required unless seeding with --from "
+              "(which inherits the identity being copied)")
+        return 2
+
+    if args.from_platform:
+        # Seed BEFORE resolve, so resolve then confirms against the inherited manifest rather than
+        # seeding a fresh one and immediately overwriting it.
+        from waveflow.calib.publish import seed_platform
+
+        upstream = Platform.resolve(root, args.from_platform, fallbacks=platform_fallback_path())
+        if upstream.dir.resolve() == (root / name).resolve():
+            print(f"error: --from {args.from_platform!r} resolved to the platform being created")
+            return 1
+        written = seed_platform(upstream.dir, root / name, force=args.force)
+        print(f"seeded from {upstream.dir}  ({len(written)} file(s))")
+
     res_types = tuple(args.res_types) if args.res_types else None
-    p = Platform.resolve(root, name, part=args.part, clk_freq=args.clk, res_types=res_types)
+    p = Platform.resolve(root, name, part=args.part, clk_freq=args.clk, res_types=res_types,
+                         allow_mismatch=bool(args.from_platform))
 
     print(f"platform {p.name!r} at {p.dir}")
     print(f"  part      : {p.part}")
@@ -132,8 +153,13 @@ def main(argv: "list[str] | None" = None) -> int:
 
     n = sub.add_parser("new", help="create a platform directory and seed its manifest")
     n.add_argument("path", help="the platform directory to create, e.g. calib/platforms/myboard")
-    n.add_argument("--part", required=True, help="FPGA part / technology id the calibration is valid for")
-    n.add_argument("--clk", type=float, required=True, help="synthesis clock in Hz, e.g. 100e6")
+    n.add_argument("--part", help="FPGA part / technology id the calibration is valid for")
+    n.add_argument("--clk", type=float, help="synthesis clock in Hz, e.g. 100e6")
+    n.add_argument("--from", dest="from_platform", metavar="PLATFORM",
+                   help="seed from an existing platform (resolved through the usual search path), so "
+                        "the new library inherits its bus law, residuals and module records")
+    n.add_argument("--force", action="store_true",
+                   help="allow seeding into a directory that is not empty")
     n.add_argument("--res-types", nargs="+", default=None,
                    help="resource counters this technology is measured in (default: the FPGA set)")
     n.set_defaults(func=cmd_new)

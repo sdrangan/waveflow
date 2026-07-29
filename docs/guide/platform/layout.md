@@ -68,11 +68,41 @@ Three homes, searched in this order:
 4. the package          waveflow/calib/platforms/                          (shipped, read-only)
 ```
 
-First match wins, so **a platform you calibrate locally shadows a shipped one of the same name** — and
-the shipped reference is always resolvable as the last fallback, which is what lets an installed user
-with no checkout still get a working bus law.
-
 Creation always targets `platforms_root`, never a read-only fallback.
+
+{: .warning }
+> **First match wins on the *whole directory*. There is no merging across roots.**
+>
+> This is the single most surprising thing about platform resolution, and it decides how a project
+> should set one up. A platform name resolves to exactly **one** directory — the first root that has
+> it — so:
+>
+> ```text
+> before your project has one :  resolves to PACKAGED,  35 module records visible
+> after your project publishes:  resolves to PROJECT,    0 module records visible
+>                                shipped bus law reachable: False
+> ```
+>
+> The moment your project owns a platform of a given name, the packaged one of that name stops being
+> consulted **at all** — you do not inherit its bus law, its residuals, or its records. And giving your
+> platform a *different* name does not help either: that is simply a new, empty platform.
+
+## So a project seeds, rather than inheriting
+
+Because there is no merge, a project that publishes its own calibration should **copy** the upstream
+platform as its starting point:
+
+```bash
+waveflow_calib new calib/platforms/myboard --from zynq7020_bfm_100mhz
+```
+
+You then own a complete library — inherited bus law and infra residuals, with your own module records
+landing beside them as you calibrate. See [Managing a platform](./workflow.md#seeding-from-an-existing-platform).
+
+The trade is deliberate. You duplicate the upstream data (~156 KB), and an upstream improvement does
+not reach you until you re-seed. In exchange, what you inherited is a **reviewable commit** and is
+**frozen**: calibration is measurement, and an upstream change cannot move your numbers without you
+seeing it. Pinning measurement to a commit is worth more here than resolving it dynamically.
 
 ## The tracked / untracked split
 

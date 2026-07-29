@@ -26,7 +26,7 @@ baked run-bound + arena parameterized first (the prerequisite in ``plans/memcpy_
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar
 
@@ -218,3 +218,64 @@ class CalibBusStep(BuildStep):
                                    "fitted_directions": sorted(fitted)}, indent=2) + "\n",
                        encoding="utf-8")
         return {"bus_calibrated": out}
+
+
+@dataclass(kw_only=True)
+class SeedPlatformStep(BuildStep):
+    """Make sure this build's platform exists, seeding it from an upstream one the first time.
+
+    A project that publishes its own calibration needs its *own* platform directory, because platform
+    resolution is first-match-wins on the whole directory: the moment a project owns a platform of a
+    given name, the upstream one of that name stops being consulted at all.  Without seeding, a project
+    that publishes one module record silently loses the bus law and infra residuals it was relying on.
+
+    So this is create-if-absent, and it **inherits** rather than starting empty.  Idempotent: once the
+    platform is there the step is a no-op, so it costs nothing to leave in a DAG.
+
+    Why this *is* a DAG step when ``publish`` deliberately is not: the direction differs.  Publishing
+    writes **upstream**, into shared infra, and is a considered "I am satisfied" act.  Seeding writes
+    **downstream**, into this project's own library — ordinary setup, in the same direction as every
+    other calibration step, and it touches nothing anyone else depends on.
+
+    Parameters
+    ----------
+    seed_from :
+        The upstream platform *name*, resolved through the usual search path (project, env, user,
+        packaged).  ``None`` creates an empty platform, which is what you want only if this project is
+        calibrating a genuinely new target from scratch.
+    """
+
+    description = "Create this build's platform if absent, seeding it from an upstream one."
+    consumes: list = field(default_factory=list)
+    produces: dict = field(default_factory=dict)
+
+    seed_from: "str | None" = None
+    params: dict = field(default_factory=dict)
+
+    def run(self, config, **_) -> dict:
+        from waveflow.calib.platform import PLATFORM_MANIFEST, Platform, platform_fallback_path
+        from waveflow.calib.publish import seed_platform
+
+        info = getattr(config, "platform_info", None)
+        if info is None:
+            print("  (no platform selected — nothing to seed)")
+            return {}
+
+        target = Path(info.dir)
+        if (target / PLATFORM_MANIFEST).is_file() and any(
+                p for p in target.iterdir() if p.name != PLATFORM_MANIFEST):
+            print(f"  platform {info.name!r} already present at {target}")
+            return {}
+
+        if not self.seed_from:
+            print(f"  platform {info.name!r} created empty at {target} (no seed_from given)")
+            return {}
+
+        upstream = Platform.resolve(config.platforms_root, self.seed_from,
+                                    fallbacks=platform_fallback_path())
+        if Path(upstream.dir).resolve() == target.resolve():
+            print(f"  seed_from {self.seed_from!r} resolved to the target itself — nothing to do")
+            return {}
+        written = seed_platform(upstream.dir, target, force=True)
+        print(f"  seeded {info.name!r} from {upstream.dir} ({len(written)} file(s))")
+        return {}

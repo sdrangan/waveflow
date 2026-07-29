@@ -36,6 +36,45 @@ That is the seam a non-FPGA technology enters through — see
 [`res_types`](./identity.md).  Omit it and the platform is measured in the FPGA counters, which is not
 written to the manifest at all, so an ordinary Vitis platform's manifest stays exactly as it was.
 
+### Seeding from an existing platform
+
+Usually you do **not** want an empty platform. Because resolution is
+[first-match-wins on the whole directory](./layout.md), a project that publishes its own calibration
+stops seeing the packaged library entirely — so it should start from a copy of it:
+
+```bash
+waveflow_calib new calib/platforms/myboard --from zynq7020_bfm_100mhz
+```
+
+```text
+seeded from …/waveflow/calib/platforms/zynq7020_bfm_100mhz  (78 file(s))
+platform 'myboard' at calib/platforms/myboard
+  part      : xc7z020clg484-1
+  clock     : 100.0 MHz
+```
+
+`--from` resolves through the usual search path, copies exactly the artifacts `publish` promotes (never
+the raw firing trees), and **inherits the identity**, so `--part` / `--clk` become optional. Seeding
+into a non-empty directory is refused unless `--force`, so it cannot quietly overwrite a library
+someone has already calibrated into.
+
+### As a build step
+
+For a project whose DAG should just work on a fresh checkout, `SeedPlatformStep` does the same thing,
+create-if-absent:
+
+```python
+dag.add(SeedPlatformStep(name="platform", seed_from="zynq7020_bfm_100mhz"))
+```
+
+Idempotent — once the platform is there it is a no-op — so it costs nothing to leave in.
+
+{: .note }
+> **Why this is a DAG step when [`publish` deliberately is not](#why-publish-is-not-a-dag-step):** the
+> direction differs. Publishing writes **upstream**, into shared infra, and is a considered "I am
+> satisfied" act. Seeding writes **downstream**, into this project's own library — ordinary setup, in
+> the same direction as every other calibration step, touching nothing anyone else depends on.
+
 ## Looking inside one
 
 ```bash
