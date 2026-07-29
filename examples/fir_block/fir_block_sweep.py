@@ -44,6 +44,12 @@ NTAPS = (8, 16, 32)
 SAMP_WS = (8, 12, 16, 24)
 REALIZATIONS = (False, True)
 
+#: Memory-word widths.  Held at one value by default: ``mem_dwidth`` is the one knob that changes the
+#: *boundary* (adapter and FIFO widths) as well as the modules, so sweeping it invalidates every module
+#: key at once.  It belongs in a coarse outer loop, not the inner grid — but varying it deliberately is
+#: how the interface term's model is tested, hence the CLI override.
+MEM_DWS = (32,)
+
 #: The work-tier platform this sweep accumulates into.  Deliberately NOT the shipped
 #: ``zynq7020_bfm_100mhz`` name — see the module docstring.
 PLATFORM = "zynq7020_fir_sweep"
@@ -54,15 +60,19 @@ CLK_FREQ = 100e6                      # the 10 ns period the generated TCL creat
 SUMMARY = HERE / "results" / "sweep.json"
 
 
-def points() -> list[dict]:
+def points(ntaps=NTAPS, samp_ws=SAMP_WS, realizations=REALIZATIONS,
+           mem_dws=MEM_DWS) -> list[dict]:
     """The grid as a list of parameter dicts, in a stable order."""
     return [{"ntap": n, "samp_w": w, "samp_i": DEFAULT_SAMP_I,
-             "mem_dwidth": MEM_DW, "unroll_lane": u}
-            for n, w, u in product(NTAPS, SAMP_WS, REALIZATIONS)]
+             "mem_dwidth": d, "unroll_lane": u}
+            for n, w, u, d in product(ntaps, samp_ws, realizations, mem_dws)]
 
 
 def label(p: dict) -> str:
-    return f"ntap{p['ntap']}_w{p['samp_w']}_{'unroll' if p['unroll_lane'] else 'serial'}"
+    base = f"ntap{p['ntap']}_w{p['samp_w']}_{'unroll' if p['unroll_lane'] else 'serial'}"
+    # Only tagged when it is actually varied, so the default grid's labels are unchanged and a
+    # --resume against an earlier run still matches.
+    return base if int(p["mem_dwidth"]) == MEM_DW else f"{base}_dw{p['mem_dwidth']}"
 
 
 def load_summary() -> dict:
@@ -96,7 +106,10 @@ def run_point(p: dict, *, through: str, use_platform: bool) -> dict:
            "steps": per_step, **p}
     if failed:
         out["error"] = "; ".join(f"{n}: {m}" for n, m in failed.items())
-    else:
+    elif through == "resources":
+        # Only when the resources step actually ran.  A --dry-run stops at codegen and never rewrites
+        # results/resources.json, so reading it would report the PREVIOUS run's numbers as this
+        # point's — a stale artifact presented as a fresh measurement.
         res = HERE / "results" / "resources.json"
         if res.is_file():
             blob = json.loads(res.read_text(encoding="utf-8"))
@@ -113,14 +126,27 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="stop at codegen_dut (no Vitis) — a cheap pre-flight over the whole grid")
     ap.add_argument("--resume", action="store_true", help="skip points already recorded as ok")
+    ap.add_argument("--ntap", type=int, nargs="+", default=list(NTAPS))
+    ap.add_argument("--samp-w", type=int, nargs="+", default=list(SAMP_WS))
+    ap.add_argument("--mem-dwidth", type=int, nargs="+", default=list(MEM_DWS),
+                    help="memory word widths; varying this is how the interface term is tested")
+    ap.add_argument("--realization", choices=("serial", "unroll", "both"), default="both")
+    ap.add_argument("--out", default=None,
+                    help="summary path (default results/sweep.json) — give a focused run its own file")
     args = ap.parse_args(argv)
 
+    global SUMMARY
+    if args.out:
+        SUMMARY = Path(args.out) if Path(args.out).is_absolute() else HERE / args.out
+    reals = {"serial": (False,), "unroll": (True,), "both": REALIZATIONS}[args.realization]
+
     through = "codegen_dut" if args.dry_run else "resources"
-    grid = points()
+    grid = points(ntaps=tuple(args.ntap), samp_ws=tuple(args.samp_w),
+                  realizations=reals, mem_dws=tuple(args.mem_dwidth))
     summary = load_summary() if args.resume else {"points": {}}
     summary.setdefault("points", {})
-    summary["grid"] = {"ntap": list(NTAPS), "samp_w": list(SAMP_WS),
-                       "unroll_lane": list(REALIZATIONS)}
+    summary["grid"] = {"ntap": list(args.ntap), "samp_w": list(args.samp_w),
+                       "unroll_lane": list(reals), "mem_dwidth": list(args.mem_dwidth)}
     summary["platform"] = None if args.dry_run else PLATFORM
 
     todo = [p for p in grid

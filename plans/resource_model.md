@@ -1,6 +1,6 @@
 # Plan: the resource model — per-module FPGA resource prediction for DSE
 
-> **Status (2026-07-28): Phase A + B COMPLETE and gated. D1 (priors) next — the data is in hand.**
+> **Status (2026-07-28): Phase A + B COMPLETE, D1 COMPLETE, all gated. D2 (LUT/FF residual) next.**
 >
 > * A1 — `waveflow/calib/module_key.py` + `tests/calib/test_module_key.py` (18 tests).
 > * A2 — `waveflow/calib/record_store.py` + `tests/calib/test_record_store.py` (25 tests), plus the
@@ -410,12 +410,63 @@ standalone-vs-in-composite delta is reported (not required to be zero — it is 
 
 ## Phase D — the model
 
-### D1 — analytical priors, zero fitting
-`dsp_prior(samp_w, unroll_lane)` and `bram_prior(ntap, samp_w, partition)` as explicit step
-functions, stored as `prior_spec`.
+### D1 — analytical priors, zero fitting ✅
 
-**Gate:** DSP and BRAM predicted within a tight bound across all 32 B2 points **with no fitted
-parameters**. If the prior alone nails DSP, that is a headline result and gets recorded as one.
+`examples/fir_block/fir_block_resource.py` + `tests/examples/test_fir_block_resource_prior.py`
+(32 tests), plus the `ResourceModel` base and its `Lookup` / `Prior` kinds in
+`waveflow/calib/resource_model.py` (17 tests).
+
+**Gate (passed): 24/24 exact on DSP and BRAM, with zero fitted parameters.** Not "within a tight
+bound" — exact at every measured point.
+
+The formula is `DSP = n_mult × dsp_per_mult(samp_w)`, from two facts and nothing else:
+
+* **DSP48E1 geometry** (25×18 signed): `samp_w ≤ 8` → 0.5 (two multiplies share a DSP);
+  `≤ 18` → 1; `≤ 25` → 2 (one operand exceeds the 18-bit port, so the product splits).
+* **the kernel's multiplier count**: serial holds one window → `NTAP`; the unrolled body declares
+  *"LW independent windows -> LW*NTAP multipliers"* → `NTAP × LW`, with `LW = mem_dwidth // samp_w`.
+
+#### The unrolled plateau is two effects cancelling
+
+The raw measurements show the unrolled kernel at `2·NTAP` DSPs at *every* sample width, which looks
+like an arbitrary plateau and would have been tempting to hard-code. It is not arbitrary — lane count
+falls as width rises while DSP-per-multiply rises, and over this device's step boundaries they cancel
+exactly:
+
+| `samp_w` | `LW = 32//w` | DSP/mult | product |
+|---|---|---|---|
+| 8 | 4 | 0.5 | 2·NTAP |
+| 12 | 2 | 1 | 2·NTAP |
+| 16 | 2 | 1 | 2·NTAP |
+| 24 | 1 | 2 | 2·NTAP |
+
+Hard-coding the plateau would be indistinguishable on this grid and **wrong the moment `mem_dwidth`
+changes** — at `mem_dwidth=64, samp_w=16` the product is 4, not 2. That is a test.
+
+#### The one unexplained thing
+
+A constant `+1` in the serial packed case (`samp_w ≤ 8`): the prior gives `NTAP/2`, the measurement is
+`NTAP/2 + 1`, at every `NTAP ∈ {8,16,32}`. Constant, so it is one multiply that failed to pair rather
+than a wrong law. It is kept as a **named constant** (`SERIAL_PACK_CORRECTION`) rather than folded
+into the formula, so it stays visibly unexplained instead of being dressed up as physics.
+
+BRAM's prior is `0` — asserted, not defaulted: the arrays carry `ARRAY_PARTITION` from their
+`add_state` declaration, so a future configuration that *does* spill into block RAM shows up as a
+prior failure rather than passing unnoticed.
+
+### The `mem_dwidth` test — the interface term is boundary-only ✅
+
+Four runs (`ntap=32, samp_w=16`, both realizations, `mem_dwidth ∈ {32, 64}`):
+
+| | serial | unroll |
+|---|---|---|
+| `mem_dwidth=32` | 1984 / 1949 / 2 | **1984 / 1949 / 2** |
+| `mem_dwidth=64` | 2356 / 2057 / 4 | **2356 / 2057 / 4** |
+
+*(LUT / FF / BRAM.)* Identical across realizations; different across boundary width, with BRAM
+doubling as the adapter buffers widen. Both halves of the prediction hold, so E1's third term is
+confirmed as a **function of boundary structure** and can be characterized per platform rather than
+fit per design.
 
 ### D2 — learned LUT/FF residual
 Ridge (or a small GP where uncertainty is wanted) on top of the priors, with `in_hull` actually
