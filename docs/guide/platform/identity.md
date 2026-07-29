@@ -4,7 +4,7 @@ parent: Platforms
 nav_order: 1
 audience: python
 api: [Platform, PlatformCalib, BuildConfig]
-summary: "What a platform IS, and what identifies one. A platform holds the timing and resource models valid for a single target, and is identified by an FPGA part, a synthesis clock, and the resource counters that technology is measured in. Explains why all three matter — the part fixes primitive latencies, the clock fixes the HLS schedule, the memory system fixes the bus law, and the counters differ by technology — and how Platform.resolve confirms a build against a stored identity so the part a design is synthesized for cannot drift from the part its models were fit for."
+summary: "What a platform IS, and what identifies one. A platform holds the timing and resource models valid for a single target, and is identified by an FPGA part, a synthesis clock, the memory system, and the resource counters that technology is measured in. Explains why each matters: the part fixes primitive latencies, the synthesis clock fixes the HLS schedule (and is not the sim clock), the memory system fixes the bus law and is not in the part number, and the counters are themselves properties of the device. The mechanics of creating one and confirming a build against it are in Creating a platform."
 ---
 
 # Platform identity
@@ -79,9 +79,9 @@ A platform may also declare which resource counters it is measured in:
 { "part": "tsmc45", "clk_freq_hz": 1e9, "res_types": ["cell_area", "macros", "regs"] }
 ```
 
-Omitted — as it is for every FPGA platform — it means the Vitis/FPGA set
-(`lut ff dsp bram uram srl`), so an existing manifest is unchanged and an ordinary platform's file stays
-exactly as it was.
+**The default is the Vitis/FPGA set** — `lut`, `ff`, `dsp`, `bram`, `uram`, `srl`. A platform that omits
+`res_types` is measured in those, which is every FPGA platform including the shipped one, so the key is
+absent from an ordinary manifest rather than spelled out in it.
 
 It belongs in the identity because a counter set is exactly as technology-specific as the part: an ASIC
 flow counts cell area and macro instances, in a *float* rather than a count. This is the seam a
@@ -89,66 +89,12 @@ non-FPGA technology enters through — declare a platform, rather than reworking
 is what lets a model's counter names be **validated** rather than merely conventional: naming a counter
 the platform does not measure in raises instead of being silently dropped when counters are summed.
 
-## `Platform.resolve` — create or confirm
-
-```python
-from waveflow.calib.platform import Platform
-
-plat = Platform.resolve("calib/platforms", "zynq7020_bfm_100mhz",
-                        part="xc7z020clg484-1", clk_freq=100e6)
-```
-
-`resolve` is the gate:
-
-- **Absent** (no `platform.json`): create the directory and **seed** the manifest from the build's
-  part/clock. The platform now exists, ready to be populated by a sweep + publish.
-- **Present**: load the stored manifest and **confirm** the build's part/clock against it. A mismatch
-  raises `PlatformMismatchError`; under `allow_mismatch=True` it downgrades to a
-  `PlatformMismatchWarning`. The **stored** values — what the fit is valid for — win either way.
-
-The returned `Platform` exposes `part`, `clk_freq`, `synth_period_ns`, `dir`, and
-`component_dir(<task-body>)` — where a [component residual](../calib/component_residual.md) is stored, keyed by
-the component's task-body id.
-
-## Selecting a platform on a build
-
-A build names its platform through [`BuildConfig`](../build/corecomp.md), which resolves it at
-construction into `config.platform_info`:
-
-```python
-config = BuildConfig(
-    root_dir="…",
-    platform="zynq7020_bfm_100mhz",   # the platform name
-    part="xc7z020clg484-1",           # this build's target — confirmed against the manifest
-    clk_freq=100e6,
-    platforms_root="calib/platforms", # the project-local primary + write target; resolution falls
-                                      # back to the shipped in-package library and a per-user overlay
-    allow_platform_mismatch=False,    # raise (default) vs warn on a part/clock mismatch
-)
-```
-
-Every step then reads `config.platform_info.dir`; nothing restates the part per-step. The same identity
-flows into codegen — `render_tcl` takes its `set_part` / `create_clock` from `config.platform_info`
-(via `tcl_target`) — so the RTL a calibration measures is synthesised for exactly the part+clock the
-platform's fit is valid for.
-
-## The reference platform
-
-`waveflow/calib/platforms/zynq7020_bfm_100mhz/` is the first tracked platform: part `xc7z020clg484-1`,
-100 MHz, idealized XSI BFM memory (hence `bfm` in the name). It ships **as package data inside
-`waveflow`**, so a `pip`-installed build resolves it with no checkout (the search order is in
-[Directory layout](./layout.md#where-platform-directories-live)).
-
-It is the default a project [seeds from](./create.md) rather than recalibrating — accepting that if its
-own part differs, the numbers may not reproduce, which the mismatch guard makes a deliberate and visible
-choice rather than a silent one. See [Managing a platform](./workflow.md#the-reference-platform-end-to-end)
-for how it was built.
-
 ## See also
 
+- [Creating a platform](./create.md) — making one, and how `Platform.resolve` confirms a build against a
+  stored identity.
+- [Directory layout](./layout.md) — the library half: what is stored under an identity, and how it is keyed.
 - [The bus-transfer model](../calib/bus_model.md) — the platform-scoped `m_axi` law that lives beside the
   manifest.
 - [Component residuals](../calib/component_residual.md) — the per-`(component, platform)` fits under
   `components/`.
-- [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms` flow.
-- [`BuildConfig`](../build/corecomp.md) — the `platform` / `part` / `clk_freq` selector in full.

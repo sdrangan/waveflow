@@ -5,7 +5,7 @@ nav_order: 2
 has_children: false
 audience: python
 api: [waveflow_calib, SeedPlatformStep, Platform, seed_platform]
-summary: "One platform per project, not per module. Covers where the directory goes (<project>/calib/platforms/<name>, one subdirectory per target), why you seed it from an upstream platform rather than recalibrating the framework components your design composes, the commands and the build step that do it, and the .gitignore lines — without the re-include, a project publishing exactly as documented writes into a directory git silently drops."
+summary: "One platform per project, not per module. Where the directory goes (<project>/calib/platforms/<name>, one subdirectory per target); why you seed it from an upstream platform rather than recalibrating the framework components your design composes; how a build selects one and how Platform.resolve creates-or-confirms it against a stored identity; and the .gitignore lines — without the re-include, a project publishing exactly as documented writes into a directory git silently drops."
 ---
 
 # Creating a platform
@@ -99,9 +99,12 @@ memory), holding a fitted bus-transfer law, two component timing residuals, and 
 framework's reusable modules. Seeding from it means `MemRStream` / `MemWStream` arrive already measured,
 so a design composing them gets area and timing with **no toolchain run**.
 
+It ships **as package data inside `waveflow`**, so a `pip`-installed build resolves it with no checkout
+at all. [Managing a platform](./workflow.md#the-reference-platform-end-to-end) covers how it was built.
+
 If your target is a different part or clock the shipped platform is not valid for it
 ([why](./identity.md#why-part-and-clock-and-memory)) — you calibrate from scratch rather than seeding,
-and the mismatch guard makes that a visible choice rather than a silent one.
+and the mismatch guard below makes that a visible choice rather than a silent one.
 
 {: .warning }
 > Seeding is not optional bookkeeping. Platform resolution is
@@ -116,21 +119,53 @@ and the mismatch guard makes that a visible choice rather than a silent one.
 > *frozen*, so an upstream change cannot move your numbers without you seeing it. Calibration is
 > measurement, and measurement should be pinned rather than resolved dynamically.
 
-## Seeding from the build
+## Selecting it on a build
 
-For a project whose DAG should work on a fresh checkout, do the same thing as a build step:
+A build names its platform through [`BuildConfig`](../build/corecomp.md), which resolves it at
+construction into `config.platform_info`:
+
+```python
+config = BuildConfig(
+    root_dir=HERE,
+    platform="myboard",                # the platform name
+    part="xc7z020clg484-1",            # this build's target — confirmed against the manifest
+    clk_freq=100e6,
+    platforms_root="calib/platforms",  # the write target, and the first root searched
+    allow_platform_mismatch=False,     # raise (default) vs warn on a part/clock mismatch
+)
+```
+
+Every step then reads `config.platform_info.dir`; nothing restates the part per step. The same identity
+flows into codegen — `set_part` / `create_clock` come from `config.platform_info` via `tcl_target` — so
+the RTL a calibration measures is synthesized for exactly the target its fit is valid for.
+
+### `Platform.resolve` — create or confirm
+
+Underneath, that is one call, and it is a gate rather than a getter:
+
+```python
+from waveflow.calib.platform import Platform
+
+plat = Platform.resolve("calib/platforms", "myboard",
+                        part="xc7z020clg484-1", clk_freq=100e6)
+```
+
+- **Absent** (no `platform.json`): create the directory and **seed the manifest** from the build's
+  part/clock. The platform now exists, ready to be populated.
+- **Present**: load the stored manifest and **confirm** the build's part/clock against it. A mismatch
+  raises `PlatformMismatchError`; under `allow_mismatch=True` it downgrades to a
+  `PlatformMismatchWarning`. Either way the **stored** values win — they are what the fit is valid for.
+
+That confirm step is the whole reason a stored number cannot be quietly used off-target.
+
+### Seeding from the build
+
+For a project whose DAG should work on a fresh checkout, seed as a build step rather than by hand:
 
 ```python
 from waveflow.build.calib_steps import SeedPlatformStep
 
 dag.add(SeedPlatformStep(name="platform", seed_from="zynq7020_bfm_100mhz"))
-```
-
-with the build selecting the platform:
-
-```python
-BuildConfig(root_dir=HERE, platform="myboard",
-            part="xc7z020clg484-1", clk_freq=100e6)     # platforms_root defaults to calib/platforms
 ```
 
 Create-if-absent and **idempotent** — once the platform is there the step is a no-op, so it costs nothing
