@@ -29,7 +29,7 @@ command is what you want when setting up deliberately, because it is the one pla
 non-default counter vocabulary:
 
 ```bash
-waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9                    --res-types cell_area macros regs
+waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9 \n                   --res-types cell_area macros regs
 ```
 
 That is the seam a non-FPGA technology enters through — see
@@ -82,7 +82,7 @@ waveflow_calib show waveflow/calib/platforms/zynq7020_bfm_100mhz
 ```
 
 ```text
-platform 'zynq7020_bfm_100mhz'
+platform 'zynq7020_bfm_100mhz'   waveflow/calib/platforms/zynq7020_bfm_100mhz
   part xc7z020clg484-1   clock 100.0 MHz
   measured in: lut ff dsp bram uram srl
 
@@ -92,17 +92,18 @@ timing residuals (2):
   mem_r_stream_framed_task                   fitted      3 corpus row(s)
   mem_w_stream_framed_done_task              fitted      2 corpus row(s)
 
-module records (35 configuration(s)):
-  FirCmdRx                 5 config(s)   hls_estimate=29 record(s)
-  FirCompute              26 config(s)   hls_estimate=29 record(s)
+module records (4 configuration(s)):
   MemRStream               2 config(s)   hls_estimate=29 record(s)
   MemWStream               2 config(s)   hls_estimate=29 record(s)
 
-synthesis time these records represent: 25.8 min
+synthesis time these records represent: 12.9 min
 ```
 
 Worth reading that last line: it is the cost the library saves you, recorded from the runs that
 actually happened rather than estimated.  ``-v`` lists every module configuration and its counters.
+
+Note what is *not* there: this is the **shipped** library, so it carries only the framework's own
+modules.  A project's own modules live in its own library — see [Creating a platform](./create.md).
 
 {: .note }
 > The two timing residuals above are keyed by **function name alone** — they predate the
@@ -137,9 +138,13 @@ promotion writes nothing.
 ### The command
 
 ```bash
-publish_calib calib/work/<name> waveflow/calib/platforms/<name>            # dry-run: print the plan, write nothing
-publish_calib calib/work/<name> waveflow/calib/platforms/<name> --apply    # write only the changed files
+publish_calib calib/work/<name> calib/platforms/<name>            # dry-run: print the plan, write nothing
+publish_calib calib/work/<name> calib/platforms/<name> --apply    # write only the changed files
 ```
+
+The target is *a* tracked library — usually your project's (`calib/platforms/`).  Promoting into the
+**shipped** one (`waveflow/calib/platforms/`) is for framework modules only; see
+[what belongs where](./create.md#what-belongs-where).
 
 - **Dry-run by default.** It prints a plan — `+ created`, `~ updated`, `= unchanged` — and writes
   nothing. `--apply` performs it.

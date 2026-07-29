@@ -68,11 +68,14 @@ waveflow_calib show calib/platforms/myboard
 ```
 
 Waveflow ships one reference platform (`zynq7020_bfm_100mhz`) so an installed user inherits a working
-bus law, two component residuals, and 35 measured module configurations with no toolchain run at all.
-See [Managing a platform](./workflow.md).
+bus law, two component residuals, and measured area for the framework's own modules — with no toolchain
+run at all.  A project then [seeds its own library](./create.md) from it and measures its own modules
+into that.
 
 ## In this section
 
+- [Creating a platform](./create.md) — setting one up for a project: create, seed from upstream, wire
+  into the build, and the `.gitignore` line that is easy to omit.
 - [Directory layout](./layout.md) — what is in a platform, which tier it lives in, what is tracked.
 - [Platform identity](./identity.md) — the manifest, the mismatch gate, and why cycle counts are only
   valid for the part they were fit against.

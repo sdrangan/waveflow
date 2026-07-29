@@ -21,19 +21,28 @@ right design when candidates are well separated, and picking right is the job.
 """
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 
 from waveflow.build.elaborate import elaborate
 from waveflow.calib.confidence import ConfidenceLevel
-from waveflow.calib.platform import Platform, packaged_platforms_dir
+from waveflow.calib.platform import Platform, platform_fallback_path
 from waveflow.calib.resource_model import boundary_signature, compose
 from examples.fir_block.fir_block import FirBlock, FirCompute
 from examples.fir_block.fir_block_corpus import GRID, INTERFACE_BY_MEM_DWIDTH
 from examples.fir_block.fir_block_resource import install_resource_models
 
 MEM_DW = 32
-PLATFORM = Platform.resolve(packaged_platforms_dir(), "zynq7020_bfm_100mhz")
+
+#: The **project's** library, not the packaged one.  ``fir_block``'s own modules are its design, not
+#: framework infrastructure, so their measurements live beside the example rather than shipping to
+#: every installed user.  The library is seeded from the packaged platform, so the framework's
+#: mem-stream records come across too — see ``docs/guide/platform/create.md``.
+_REPO = pathlib.Path(__file__).resolve().parents[2]
+PLATFORM = Platform.resolve(_REPO / "calib" / "platforms", "zynq7020_bfm_100mhz",
+                            fallbacks=platform_fallback_path())
 
 install_resource_models()          # give FirCompute / FirBlock their add_rm_self overrides
 

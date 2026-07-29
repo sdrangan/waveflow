@@ -1,7 +1,7 @@
 ---
 title: Directory layout
 parent: Platforms
-nav_order: 1
+nav_order: 2
 has_children: false
 audience: python
 api: [PlatformCalib, ModuleStore, platform_fallback_path]
@@ -78,8 +78,8 @@ Creation always targets `platforms_root`, never a read-only fallback.
 > it — so:
 >
 > ```text
-> before your project has one :  resolves to PACKAGED,  35 module records visible
-> after your project publishes:  resolves to PROJECT,    0 module records visible
+> before your project has one :  resolves to PACKAGED,  4 module records visible
+> after your project publishes:  resolves to PROJECT,   0 module records visible
 >                                shipped bus law reachable: False
 > ```
 >
@@ -99,7 +99,7 @@ waveflow_calib new calib/platforms/myboard --from zynq7020_bfm_100mhz
 You then own a complete library — inherited bus law and infra residuals, with your own module records
 landing beside them as you calibrate. See [Managing a platform](./workflow.md#seeding-from-an-existing-platform).
 
-The trade is deliberate. You duplicate the upstream data (~156 KB), and an upstream improvement does
+The trade is deliberate. You duplicate the upstream data (~26 KB here), and an upstream improvement does
 not reach you until you re-seed. In exchange, what you inherited is a **reviewable commit** and is
 **frozen**: calibration is measurement, and an upstream change cannot move your numbers without you
 seeing it. Pinning measurement to a commit is worth more here than resolving it dynamically.
@@ -124,10 +124,11 @@ deterministic fit produces no diff at all.
 
 ## What is worth committing
 
-Everything a platform publishes is small and text: the reference library is **156 KB** and holds a bus
-law, two timing residuals, and 35 measured module configurations representing about 26 minutes of
-Vitis C-synthesis. The point of committing it is that the next project — or the next checkout — gets
-those numbers as a *cache hit* rather than a toolchain run.
+Everything a platform publishes is small and text. The shipped reference holds a bus law, two timing
+residuals, and the framework modules' measured configurations; the `fir_block` project library adds 31
+more, together representing about 26 minutes of Vitis C-synthesis in well under 100 KB. The point of
+committing either is that the next checkout gets those numbers as a *cache hit* rather than a toolchain
+run.
 
 What is deliberately not committed is the raw material: firing trees, solution directories, generated
 RTL. All of it is reproducible from a re-sweep, and all of it is large.

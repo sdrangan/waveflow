@@ -246,7 +246,10 @@ class TestSeeding:
 
         assert (dst / "mm_bus.json").is_file()
         assert len(list((dst / "components").glob("*"))) == 2
-        assert len(ModuleStore(dst).keys()) == len(ModuleStore(src).keys()) > 30
+        # Compare against the source rather than a hardcoded count: what the shipped library holds is
+        # a policy question (framework modules only), and this test is about the *copy* being faithful.
+        assert ModuleStore(dst).keys() == ModuleStore(src).keys()
+        assert ModuleStore(dst).keys(), "the shipped library has no module records to inherit"
 
 
 class TestSeedPlatformStep:
@@ -268,9 +271,12 @@ class TestSeedPlatformStep:
         dag = BuildDag()
         dag.add(SeedPlatformStep(name="seed", seed_from="zynq7020_bfm_100mhz"))
 
+        from waveflow.calib.platform import packaged_platforms_dir
+        upstream = ModuleStore(packaged_platforms_dir() / "zynq7020_bfm_100mhz")
+
         assert dag.run(cfg, force=True)["seed"].success
         n = len(ModuleStore(cfg.platform_info.dir).keys())
-        assert n > 30
+        assert n == len(upstream.keys()) > 0
 
         # Idempotent — leaving it in a DAG costs nothing, and it must not re-copy over local work.
         assert dag.run(cfg, force=True)["seed"].success
