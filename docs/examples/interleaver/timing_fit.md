@@ -141,7 +141,7 @@ Two points suffice in principle (two unknowns); the three here confirm the line.
 ## Step 4 — store it with the example
 
 Where the fit lands is the point of the [two-level split](../../guide/calib/index.md). The bus law and the
-mem-stream residuals are *platform* properties and ship in the [platform library](../../guide/calib/platform.md)
+mem-stream residuals are *platform* properties and ship in the [platform library](../../guide/platform/identity.md)
 — but `il_compute` is the interleaver's **own** kernel, not reusable infra, so its fit lives **with the
 example**. [`calibrate`](../../../examples/interleaver/calibrate_compute.py) writes it to the example's calib
 dir, keyed by platform (the cycle counts are platform-dependent):
@@ -194,7 +194,7 @@ il.gather.job_span_cyc        # [256.0, 256.0, 256.0] — the contiguous burst X
 
 - [Fitting a timing model](../../guide/calib/fit.md) — the direct method, in general.
 - [The timing model](./timing_model.md) — what `latency` and `ii` mean (the previous page).
-- [Platforms](../../guide/calib/platform.md) — the library the fit ships into.
+- [Platforms](../../guide/platform/identity.md) — the library the fit ships into.
 - [Component residuals](../../guide/calib/component_residual.md) — the *other*, DAG-driven method, for the
   reusable mem-streams the interleaver inherits.
 - [Trace pitfalls](../../guide/timing/trace_pitfalls.md) — the span-measurement cautions Step 1 respects.

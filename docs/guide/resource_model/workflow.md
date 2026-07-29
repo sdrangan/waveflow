@@ -31,7 +31,7 @@ dag.add(InspectSynthStep(
 Do this **before** you think you need a model. The step is nearly free — everything expensive already
 happened — and a synthesis whose numbers were not captured is one you will have to run again.
 
-Records land only when the build selects a [platform](../calib/platform.md); without one you still get
+Records land only when the build selects a [platform](../platform/identity.md); without one you still get
 `results/resources.json`.
 
 ## 2. Sweep a grid
@@ -131,4 +131,4 @@ synthesis as 156 KB of records, and a design composing those modules at those co
 
 - [Validating a model](./validation.md) — the traps in more detail.
 - [Resource analysis](../resource/) — the measurement side this consumes.
-- [The calibration workflow](../calib/workflow.md) — the same work → publish flow for *timing*.
+- [The calibration workflow](../platform/workflow.md) — the same work → publish flow for *timing*.

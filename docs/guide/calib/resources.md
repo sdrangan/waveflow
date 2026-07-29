@@ -42,7 +42,7 @@ dag.add(InspectSynthStep(
 Everything expensive already happened: the synthesis is the cost, and this is reading its output. That
 is why it is worth running on **every** csynth rather than only when someone remembers to calibrate.
 The corollary is that it must never fail a build that synthesized correctly — a report it cannot
-attribute is a real error and raises, but a build with no [platform](./platform.md) selected simply
+attribute is a real error and raises, but a build with no [platform](../platform/identity.md) selected simply
 writes `results/resources.json` and says so.
 
 ## Recording what it cost
@@ -91,7 +91,7 @@ Three habits worth copying into any sweep of your own:
 > A sweep writes the **work tier** (`calib/work/<name>`), never the tracked library. Give it its own
 > platform name: reusing a shipped platform's name makes `Platform.resolve` find the *packaged*
 > directory through its fallbacks and write there, and only `publish_calib` may do that. See
-> [the calibration workflow](./workflow.md).
+> [the calibration workflow](../platform/workflow.md).
 
 ## What a sweep buys
 
@@ -113,4 +113,4 @@ mechanism by which a large design space costs far fewer runs than it has points.
 
 - [Module keys and the record store](./modules.md) — how a measurement is addressed, verified, filed.
 - [Resource analysis](../resource/) — reading the report and decomposing a composite.
-- [Platforms](./platform.md) — resource counts are part- and clock-specific, and keyed accordingly.
+- [Platforms](../platform/identity.md) — resource counts are part- and clock-specific, and keyed accordingly.

@@ -138,7 +138,7 @@ does not yet join (a sweep in progress has partial coverage — forcing a fit th
 - [Adding a timing model to a component](../timing_model/insertion.md) — the usage side: attaching the
   model and charging its delay, which this page fits.
 - [The bus-transfer model](./bus_model.md) — the level this one assumes is already charged.
-- [Platforms](./platform.md) — where a shared component's residual is keyed and stored.
-- [The calibration workflow](./workflow.md) — collecting a sweep and publishing the result.
+- [Platforms](../platform/identity.md) — where a shared component's residual is keyed and stored.
+- [The calibration workflow](../platform/workflow.md) — collecting a sweep and publishing the result.
 - [Tracing a kernel run](../timing/trace_steps.md) — the `ExtractBurstsStep` firing table `collect_rtl`
   reads, including the `blocked` column and the ap_done window.

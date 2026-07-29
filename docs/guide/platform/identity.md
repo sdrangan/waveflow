@@ -1,7 +1,7 @@
 ---
-title: Platforms
-parent: Model calibration
-nav_order: 6
+title: Platform identity
+parent: Platforms
+nav_order: 2
 audience: python
 api: [Platform, PlatformCalib, BuildConfig]
 summary: "A calibration platform is a named directory with an identity manifest (platform.json = FPGA part + synthesis clock) plus the fitted models valid for that target. Platform.resolve is the create-or-confirm gate: a new platform is seeded from the build's part/clock, an existing one is confirmed against them (PlatformMismatchError, or a warning under allow_platform_mismatch). BuildConfig.platform selects one; the same identity drives the csynth set_part / create_clock, so the synthesised part cannot drift from the calibrated part."
@@ -25,7 +25,7 @@ The fitted numbers are cycle counts, and three things move them:
 - **The synthesis clock.** HLS schedules to meet `create_clock -period`. Tighten the period and it
   inserts pipeline stages — so the *same* C at a different target period can synthesize to a *different*
   cycle count on the *same* part. The clock is a first-class determinant, not a footnote.
-- **The memory system.** The `m_axi` [bus law](./bus_model.md) depends on the interconnect + memory
+- **The memory system.** The `m_axi` [bus law](../calib/bus_model.md) depends on the interconnect + memory
   controller (an idealized BFM vs. a real DDR controller), which the part number does not capture at
   all. This is why a platform name usually tags the memory (`..._bfm_...`).
 
@@ -75,7 +75,7 @@ plat = Platform.resolve("calib/platforms", "zynq7020_bfm_100mhz",
   `PlatformMismatchWarning`. The **stored** values — what the fit is valid for — win either way.
 
 The returned `Platform` exposes `part`, `clk_freq`, `synth_period_ns`, `dir`, and
-`component_dir(<task-body>)` — where a [component residual](./component_residual.md) is stored, keyed by
+`component_dir(<task-body>)` — where a [component residual](../calib/component_residual.md) is stored, keyed by
 the component's task-body id.
 
 ## Selecting a platform on a build
@@ -113,9 +113,9 @@ that a deliberate, visible choice). See
 
 ## See also
 
-- [The bus-transfer model](./bus_model.md) — the platform-scoped `m_axi` law that lives beside the
+- [The bus-transfer model](../calib/bus_model.md) — the platform-scoped `m_axi` law that lives beside the
   manifest.
-- [Component residuals](./component_residual.md) — the per-`(component, platform)` fits under
+- [Component residuals](../calib/component_residual.md) — the per-`(component, platform)` fits under
   `components/`.
 - [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms` flow.
 - [`BuildConfig`](../build/corecomp.md) — the `platform` / `part` / `clk_freq` selector in full.

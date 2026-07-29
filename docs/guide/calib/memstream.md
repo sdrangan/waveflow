@@ -113,6 +113,6 @@ design actually bottlenecks on**; an un-fit residual only hurts where it is on t
 - [The bus-transfer model](./bus_model.md) — level 1, the transfer law this residual sits on top of.
 - [Component residuals](./component_residual.md) — the general residual method (`StreamTimingModel`,
   `collect_rtl` / `collect_pysim` / `fit`) the fixture drives.
-- [Platforms](./platform.md) — where `components/<id>/params.json` lives and how the slot is keyed.
+- [Platforms](../platform/identity.md) — where `components/<id>/params.json` lives and how the slot is keyed.
 - [Fitting the timing model](../../examples/interleaver/timing_fit.md) — a design fitting its *own* custom
   stage on top of these shipped infra residuals.

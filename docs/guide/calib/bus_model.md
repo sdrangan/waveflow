@@ -73,7 +73,7 @@ bus.fit()                                                                  # no 
 
 A bus law needs **≥2 distinct sizes** to fit the slope, so a sweep is the natural unit. (With only two
 *proportional* sizes `num_trans` and `nwords` are collinear — see the
-[workflow&#39;s note](./workflow.md#a-known-limitation-collinear-sizes).)
+[workflow&#39;s note](../platform/workflow.md#a-known-limitation-collinear-sizes).)
 
 ## Deploying: `bus_timing()`
 
@@ -108,7 +108,7 @@ Across a sweep (one step per size) the corpus grows until the model fits.
 
 ## See also
 
-- [Platforms](./platform.md) — where `mm_bus.json` lives and how the platform is keyed.
+- [Platforms](../platform/identity.md) — where `mm_bus.json` lives and how the platform is keyed.
 - [Component residuals](./component_residual.md) — the second level, which assumes the bus term is
   already charged.
 - [`BusTiming` / AXI-MM timing](../timing/aximm.md) — the runtime model the slave applies.

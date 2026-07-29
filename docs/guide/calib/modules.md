@@ -119,7 +119,7 @@ Measurements are filed as a single envelope, the same one for every quantity:
                 "period_ns": 10.0, "tool": "vitis_hls 2025.1"}}
 ```
 
-They live beside the existing per-component fits, under the same [platform](./platform.md), so the
+They live beside the existing per-component fits, under the same [platform](../platform/identity.md), so the
 platform's part/clock identity and its mismatch gate cover them without a second notion of target:
 
 ```text
@@ -176,7 +176,7 @@ Pass `verify=False` only to inspect a store you already know is stale.
 
 ## Publishing
 
-The store rides the same two-tier [work → publish flow](./workflow.md) as every other fit: sweeps
+The store rides the same two-tier [work → publish flow](../platform/workflow.md) as every other fit: sweeps
 write an untracked work directory freely, and `publish_calib` promotes into the tracked library with a
 coverage-regression guard — for modules, a count of records, so a thin re-sweep cannot clobber a
 library that cost more syntheses to build.
@@ -188,5 +188,5 @@ wipe is real cost. Unlike a firing tree there is no churny raw tier here to leav
 ## See also
 
 - [Resource measurements](./resources.md) — where resource records come from.
-- [Platforms](./platform.md) — the part/clock identity these records are keyed under.
-- [The calibration workflow](./workflow.md) — the work → publish split.
+- [Platforms](../platform/identity.md) — the part/clock identity these records are keyed under.
+- [The calibration workflow](../platform/workflow.md) — the work → publish split.

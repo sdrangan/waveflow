@@ -1,13 +1,77 @@
 ---
-title: The calibration workflow
-parent: Model calibration
-nav_order: 8
+title: Managing a platform
+parent: Platforms
+nav_order: 4
 audience: python
 api: [BusCalib, StreamTimingModel, Platform, CalibBusStep, CollectTimingStep, FitTimingStep]
 summary: "Calibration storage is two-tier: sweeps write a churny untracked calib/work/<name>/; the publish_calib command promotes the stable artifacts (platform.json, mm_bus.json, points/, component params + corpus -- never the raw firing trees) into the shipped, in-package library waveflow/calib/platforms/<name>/. publish is dry-run by default, a byte-compare no-op on unchanged files, and refuses a coverage regression (a thinner re-fit) unless forced. The reference zynq7020_bfm_100mhz platform is built end-to-end by examples/mem_copy/calibrate_platform.py and reproduces the writer RTL period to 0.0%."
 ---
 
-# The calibration workflow
+# Managing a platform
+
+Three things you do to a platform: **create** one, **look inside** one, and **publish** into one.
+
+```bash
+waveflow_calib new     calib/platforms/myboard --part xc7z020clg484-1 --clk 100e6
+waveflow_calib show    calib/platforms/myboard
+waveflow_calib publish calib/work/myboard calib/platforms/myboard --apply
+```
+
+## Creating one
+
+```bash
+waveflow_calib new calib/platforms/myboard --part xc7z020clg484-1 --clk 100e6
+```
+
+seeds the directory and its [identity manifest](./identity.md).  A platform is also created
+*implicitly* the first time a build selects a name that does not resolve — convenient, but the explicit
+command is what you want when setting up deliberately, because it is the one place to declare a
+non-default counter vocabulary:
+
+```bash
+waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9                    --res-types cell_area macros regs
+```
+
+That is the seam a non-FPGA technology enters through — see
+[`res_types`](./identity.md).  Omit it and the platform is measured in the FPGA counters, which is not
+written to the manifest at all, so an ordinary Vitis platform's manifest stays exactly as it was.
+
+## Looking inside one
+
+```bash
+waveflow_calib show waveflow/calib/platforms/zynq7020_bfm_100mhz
+```
+
+```text
+platform 'zynq7020_bfm_100mhz'
+  part xc7z020clg484-1   clock 100.0 MHz
+  measured in: lut ff dsp bram uram srl
+
+bus law      : fitted   (2 corpus points)
+
+timing residuals (2):
+  mem_r_stream_framed_task                   fitted      3 corpus row(s)
+  mem_w_stream_framed_done_task              fitted      2 corpus row(s)
+
+module records (35 configuration(s)):
+  FirCmdRx                 5 config(s)   hls_estimate=29 record(s)
+  FirCompute              26 config(s)   hls_estimate=29 record(s)
+  MemRStream               2 config(s)   hls_estimate=29 record(s)
+  MemWStream               2 config(s)   hls_estimate=29 record(s)
+
+synthesis time these records represent: 25.8 min
+```
+
+Worth reading that last line: it is the cost the library saves you, recorded from the runs that
+actually happened rather than estimated.  ``-v`` lists every module configuration and its counters.
+
+{: .note }
+> The two timing residuals above are keyed by **function name alone** — they predate the
+> configuration-qualified key, so they are not known to describe any particular memory width.  A model
+> that loads one reports that in its confidence rather than implying a match.  See
+> [Directory layout](./layout.md).
+
+## Publishing into one
 
 Calibration parameters are **infra-wide**: once a shared component is calibrated, every project reuses
 it. That makes two things matter — a stray run must never clobber shared parameters, and a
@@ -24,14 +88,14 @@ waveflow/calib/platforms/<name>/    tracked (committed), and shipped as package 
                                     pip-installed user resolves it. EXACTLY ONE writer: publish.
 ```
 
-A sweep points the [`BusCalib`](./bus_model.md) / [`StreamTimingModel`](./component_residual.md) fits at
+A sweep points the [`BusCalib`](../calib/bus_model.md) / [`StreamTimingModel`](../calib/component_residual.md) fits at
 the **work** dir. When you are satisfied, one command promotes the result into the **tracked** library —
 `waveflow/calib/platforms/` for the shipped reference platforms, or a user/project overlay for a
-platform you calibrate locally (see [Platforms](./platform.md)). Because the tracked dir has a single
+platform you calibrate locally (see [Platforms](./identity.md)). Because the tracked dir has a single
 writer, a test can't reach it; because a re-fit on the same corpus is deterministic, an unchanged
 promotion writes nothing.
 
-## `publish_calib`
+### The command
 
 ```bash
 publish_calib calib/work/<name> waveflow/calib/platforms/<name>            # dry-run: print the plan, write nothing
@@ -60,19 +124,26 @@ force=…)` writes the changed files; the CLI is a thin wrapper.
 ### Why publish is not a DAG step
 
 Promotion to shared infra is a deliberate "I'm satisfied" act, not a build side effect. The DAG steps
-([`CalibBusStep`](./bus_model.md#automating-it-calibbusstep),
-[`CollectTimingStep` / `FitTimingStep`](./component_residual.md#automating-it-collecttimingstep--fittimingstep))
+([`CalibBusStep`](../calib/bus_model.md#automating-it-calibbusstep),
+[`CollectTimingStep` / `FitTimingStep`](../calib/component_residual.md#automating-it-collecttimingstep--fittimingstep))
 populate the **work** dir; `publish_calib` is the manual gate to the tracked one.
 
 ## The `.gitignore` rules
 
-Two rules encode the split — `/calib/work/` is ignored, and the shipped library is re-included past the
-global `*.json` ignore:
+Three rules encode the split. A blanket `*.json` ignore covers build artifacts, so **both** tracked
+libraries have to be re-included past it, and the work tier is ignored on its own:
 
 ```gitignore
 /calib/work/                       # the churny work tier — never committed
-!waveflow/calib/platforms/**       # ...but the shipped library IS committed (params + identity + corpus)
+!waveflow/calib/platforms/**       # the shipped reference library IS committed
+!calib/platforms/**                # ...and so is a PROJECT's own library
 ```
+
+{: .warning }
+> That last line is easy to omit and expensive to miss. `platforms_root` defaults to
+> `calib/platforms/`, so without it a project publishing exactly as documented would write into a
+> directory git silently drops — the publish appears to succeed and nothing is committed. If you set
+> up a library in a new repository, check `git status` sees it.
 
 ## The reference platform, end to end
 
@@ -106,7 +177,7 @@ before trusting the model to *extrapolate* beyond the swept range.
 
 ## See also
 
-- [Platforms](./platform.md) — the identity the workflow seeds and confirms.
-- [The bus-transfer model](./bus_model.md) / [Component residuals](./component_residual.md) — the two
+- [Platforms](./identity.md) — the identity the workflow seeds and confirms.
+- [The bus-transfer model](../calib/bus_model.md) / [Component residuals](../calib/component_residual.md) — the two
   fits the sweep produces.
 - [Build system](../build/) — the DAG the calibration steps plug into.

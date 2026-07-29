@@ -24,9 +24,9 @@ This section covers **timing** and **resources**, and they share more than they 
 |---|---|---|
 | where a number comes from | a *run* — cosim or an [XSI](../build/xsi.md) trace | a *report* — `csynth.xml` |
 | what is recovered | a fit (`latency`, `ii`, a residual) | a measurement, attributed per module |
-| keyed by | [platform](./platform.md) = FPGA part + synthesis clock | the same |
+| keyed by | [platform](../platform/identity.md) = FPGA part + synthesis clock | the same |
 | stored in | the same [record store](./modules.md) | the same |
-| published by | the same [work → publish flow](./workflow.md) | the same |
+| published by | the same [work → publish flow](../platform/workflow.md) | the same |
 
 The asymmetry worth remembering is in the middle row. A timing number is *fit* — a model form with
 coefficients recovered from a sweep. A resource number is *measured* — the report says 32 DSPs and
@@ -73,8 +73,8 @@ A fit is stored in one of two places, chosen by one knob:
 - **Shared-infra components** — reusable framework kernels (`MemRStream` / `MemWStream`, …). Their fit
   is a `(component, platform)` property, so it goes in a **git-tracked platform library** (`platform_dir`)
   and ships with the repo — reuse the component on a calibrated platform and inherit its timing with
-  **no re-calibration**. The library is keyed by an FPGA-part identity (see [Platforms](./platform.md))
-  and populated through a [two-tier work → publish flow](./workflow.md).
+  **no re-calibration**. The library is keyed by an FPGA-part identity (see [Platforms](../platform/identity.md))
+  and populated through a [two-tier work → publish flow](../platform/workflow.md).
 
 ## Everything is in cycles
 
@@ -82,7 +82,7 @@ Fitted numbers are stored in **cycles**, not seconds, so the artifact is clock-i
 at a different *simulation* frequency needs no refit. The one clock that *does* change the numbers is the
 **synthesis** clock (`create_clock -period`): HLS schedules to meet it, so a different target period can
 change the cycle counts. That is why a platform is keyed by part **and** clock — see
-[Platforms](./platform.md).
+[Platforms](../platform/identity.md).
 
 ## In this section
 
@@ -98,14 +98,10 @@ The direct method and its primitives first, then the residual method and the pla
   a point out; then a saturating curve with `InterpCalibModel`.
 - [Component residuals](./component_residual.md) — the residual method: `StreamTimingModel`, fit per
   `(component, platform)` with the bus term already charged.
-- [Platforms](./platform.md) — the platform identity (`platform.json`), why it is keyed by FPGA part
-  **and** synthesis clock, and how `BuildConfig` selects and confirms one.
 - [The bus-transfer model](./bus_model.md) — `BusCalib`: the `m_axi` span law fit once per platform,
   measured component-independently off the ports.
 - [The mem-stream residual](./memstream.md) — the reusable `MemRStream` / `MemWStream` control residual,
   and the per-component **fixture** (`waveflow/calib/fixtures/`) that fits it.
-- [The calibration workflow](./workflow.md) — the two-tier `work` → `publish_calib` → `platforms` flow,
-  the DAG steps, and the reference `zynq7020_bfm_100mhz` platform end to end.
 
 Then the per-module layer, shared by both quantities:
 
@@ -114,8 +110,12 @@ Then the per-module layer, shared by both quantities:
 - [Resource measurements](./resources.md) — attributing a `csynth` report to the modules that caused
   it, the two traps that otherwise corrupt the numbers, and the `InspectSynthStep` build rung.
 
+Everything here is *stored on a platform* — the identity it is keyed by, the directory layout, and the
+commands that create and publish one are in [Platforms](../platform/).
+
 ## See also
 
+- [Platforms](../platform/) — the target these fits are valid for, and where they live.
 - [Timing Models](../timing_model/) — the forward models whose parameters this section fits, and where a
   model is [attached to a component](../timing_model/insertion.md).
 - [Timing Analysis Tools](../timing/) — the *measurement* side: extracting cycle counts and bus spans
