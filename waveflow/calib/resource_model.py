@@ -288,3 +288,136 @@ class FittedResourceModel(ResourceModel):
         if self.prior is not None:
             facts["prior"] = self.prior.name
         return Confidence(level=worst, facts=facts)
+
+
+# ---------------------------------------------------------------------------
+# Interface — a composite's own cost, from structure
+# ---------------------------------------------------------------------------
+
+def boundary_signature(comp: Any) -> tuple:
+    """A canonical descriptor of *comp*'s interface graph: its external ports and internal channels.
+
+    This is what a composite's own cost is a function of.  Measured on ``examples/fir_block``, the
+    term was **identical** across a 24-point sweep of the compute parameters and **changed** when the
+    memory word width changed — because the first moves nothing here and the second re-widens every
+    adapter and FIFO.
+
+    Deliberately coarse: port *kinds* and widths, and channel widths, sorted.  Names and order are
+    context, not structure, so two designs with the same shape of boundary share a signature.
+    """
+    ports = []
+    for entry in (getattr(comp, "boundary", ()) or ()):
+        try:
+            ep = entry[1]                  # the port NAME is context, not structure
+        except (TypeError, IndexError):
+            continue
+        kind = type(ep).__name__
+        width = getattr(ep, "bitwidth", None) or getattr(ep, "mem_dwidth", None) or 0
+        ports.append((kind, int(width)))
+
+    channels = []
+    for iface in (getattr(comp, "interfaces", {}) or {}).values():
+        width = getattr(iface, "bitwidth", None) or getattr(iface, "mem_dwidth", None) or 0
+        channels.append((int(width), int(getattr(iface, "depth", 0) or 0)))
+
+    return (tuple(sorted(ports)), tuple(sorted(channels)))
+
+
+@dataclass
+class InterfaceResourceModel(ResourceModel):
+    """A composite's **own** cost — the adapters, channel FIFOs, control block and DATAFLOW shell.
+
+    Keyed on :func:`boundary_signature` rather than on the composite's parameters, because that is
+    what the term actually depends on.  The evidence is two-sided: across 24 points varying
+    ``ntap``/``samp_w``/realization the term never moved, and it *did* move when ``mem_dwidth``
+    changed — identically for both realizations at each width.
+
+    It is a **lookup**, not a fit, and that is a statement about the evidence rather than a
+    limitation of ambition.  A per-port / per-channel decomposition (``Σ adapter_cost(kind, width) +
+    Σ fifo_cost(width, depth) + shell``) is the natural next form and is what the signature is shaped
+    to support — but separating those coefficients needs more boundary configurations than the two
+    measured so far, and fitting them from two points would be inventing structure, not finding it.
+    """
+
+    table: dict = field(default_factory=dict)      #: {boundary_signature: counters}
+
+    def features(self, comp: Any) -> dict:
+        ports, channels = boundary_signature(comp)
+        return {"n_ports": len(ports), "n_channels": len(channels),
+                "ports": [list(p) for p in ports], "channels": [list(c) for c in channels]}
+
+    def predict_own(self, comp: Any) -> dict:
+        got = self.table.get(boundary_signature(comp))
+        return dict(got) if got else zero_counters()
+
+    def confidence_own(self, comp: Any) -> Confidence:
+        sig = boundary_signature(comp)
+        f = self.features(comp)
+        if sig not in self.table:
+            return Confidence(level=ConfidenceLevel.UNCALIBRATED, facts={
+                "summary": f"no interface measurement for this boundary "
+                           f"({f['n_ports']} port(s), {f['n_channels']} channel(s)); the term is a "
+                           f"lookup over measured boundaries and cannot interpolate",
+                "model": "interface", **f})
+        return Confidence(level=ConfidenceLevel.EXACT, facts={
+            "summary": f"interface measured directly for this boundary "
+                       f"({f['n_ports']} port(s), {f['n_channels']} channel(s))",
+            "model": "interface", **f})
+
+
+# ---------------------------------------------------------------------------
+# Composition
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ResourceEstimate:
+    """A composed prediction, with the breakdown and the weakest confidence that fed it."""
+
+    total: dict
+    per_module: list = field(default_factory=list)   #: [(path, cls_name, counters, Confidence)]
+    own: dict = field(default_factory=dict)          #: the top's own (interface) term
+
+    @property
+    def level(self) -> ConfidenceLevel:
+        """The **weakest** link — a composed estimate is only as good as its worst part."""
+        levels = [c.level for _, _, _, c in self.per_module]
+        return min(levels) if levels else ConfidenceLevel.UNCALIBRATED
+
+    def weakest(self) -> list:
+        """The modules at the weakest level — what an agent would recalibrate first."""
+        worst = self.level
+        return [(p, n, c) for p, n, _, c in self.per_module if c.level is worst]
+
+    def to_json(self) -> dict:
+        return {"total": dict(self.total), "own": dict(self.own), "level": self.level.value,
+                "per_module": [{"path": p, "cls_name": n, "resources": dict(r),
+                                "confidence": c.to_json()} for p, n, r, c in self.per_module]}
+
+
+def compose(top: Any, model_for) -> ResourceEstimate:
+    """Predict *top*'s total area by walking its graph: own model + Σ children, recursively.
+
+    *model_for* maps a component to its :class:`ResourceModel` (or ``None`` — a module with no model
+    contributes nothing and is reported ``UNCALIBRATED``, rather than being silently skipped).
+
+    Nothing is passed down: each model reads its own features off the instance it is attached to,
+    because elaboration already resolved every child's parameters.
+    """
+    from waveflow.calib.module_key import walk_modules
+
+    per_module, total = [], zero_counters()
+    own: dict = {}
+    for path, comp, ident in walk_modules(top, include_top=True):
+        model = model_for(comp)
+        if model is None:
+            per_module.append((path, ident.cls_name, zero_counters(),
+                               Confidence.uncalibrated(
+                                   f"{ident.cls_name} has no resource model; its cost is missing "
+                                   f"from this estimate, not zero")))
+            continue
+        res = model.predict_own(comp)
+        per_module.append((path, ident.cls_name, res, model.confidence_own(comp)))
+        total = add_counters(total, res)
+        if comp is top:
+            own = dict(res)
+    return ResourceEstimate(total=total, per_module=per_module, own=own)

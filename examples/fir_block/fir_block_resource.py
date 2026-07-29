@@ -50,8 +50,12 @@ recorded as a residual rather than rationalized — see :data:`SERIAL_PACK_CORRE
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 from waveflow.calib.resource_model import PriorResourceModel
+
+if TYPE_CHECKING:                      # imported lazily at use to keep this module import-light
+    from waveflow.calib.resource_model import FittedResourceModel
 
 #: DSP48E1 port geometry: the multiplier is 25x18 signed.
 DSP_NARROW_BITS = 8       # at or below this, two multiplies are packed into one DSP
