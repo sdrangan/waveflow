@@ -1,7 +1,7 @@
 ---
 title: Directory layout
 parent: Platforms
-nav_order: 2
+nav_order: 3
 has_children: false
 audience: python
 api: [PlatformCalib, ModuleStore, platform_fallback_path]
@@ -97,7 +97,7 @@ waveflow_calib new calib/platforms/myboard --from zynq7020_bfm_100mhz
 ```
 
 You then own a complete library — inherited bus law and infra residuals, with your own module records
-landing beside them as you calibrate. See [Managing a platform](./workflow.md#seeding-from-an-existing-platform).
+landing beside them as you calibrate. See [Creating a platform](./create.md#seeding-do-not-recalibrate-the-framework).
 
 The trade is deliberate. You duplicate the upstream data (~26 KB here), and an upstream improvement does
 not reach you until you re-seed. In exchange, what you inherited is a **reviewable commit** and is

@@ -1,22 +1,30 @@
 ---
 title: Platform identity
 parent: Platforms
-nav_order: 3
+nav_order: 1
 audience: python
 api: [Platform, PlatformCalib, BuildConfig]
-summary: "A calibration platform is a named directory with an identity manifest (platform.json = FPGA part + synthesis clock) plus the fitted models valid for that target. Platform.resolve is the create-or-confirm gate: a new platform is seeded from the build's part/clock, an existing one is confirmed against them (PlatformMismatchError, or a warning under allow_platform_mismatch). BuildConfig.platform selects one; the same identity drives the csynth set_part / create_clock, so the synthesised part cannot drift from the calibrated part."
+summary: "What a platform IS, and what identifies one. A platform holds the timing and resource models valid for a single target, and is identified by an FPGA part, a synthesis clock, and the resource counters that technology is measured in. Explains why all three matter — the part fixes primitive latencies, the clock fixes the HLS schedule, the memory system fixes the bus law, and the counters differ by technology — and how Platform.resolve confirms a build against a stored identity so the part a design is synthesized for cannot drift from the part its models were fit for."
 ---
 
-# Platforms
+# Platform identity
 
-A calibrated timing model is only valid for the hardware it was measured on. **What counts as "the
-hardware"** — the thing you fix, calibrate against, and then reuse — is a *platform*: an FPGA **part**,
-a **synthesis clock**, and a **memory system**. A `Platform` bundles that identity with the fitted
-models valid for it.
+A measurement is only valid for the hardware it was taken on. A **platform** is that hardware, named:
+it holds every timing and resource model valid for one target, and it carries the identity of that
+target so nothing can use the models against a different one.
+
+Abstractly, a platform is two things bound together:
+
+- the **identity** — which hardware these numbers describe;
+- the **library** — the [timing residuals and area records](./layout.md) measured for it.
+
+This page is about the first. A platform is identified by an FPGA **part**, a **synthesis clock**, and
+the **resource counters** that technology is measured in — plus, in practice, its **memory system**,
+which the part number does not capture.
 
 ## Why part *and* clock (and memory)
 
-The fitted numbers are cycle counts, and three things move them:
+Timing fits are cycle counts, and three things move them:
 
 - **The part.** Different device *families* (7-series → UltraScale+ → Versal) have different primitive
   latencies (DSP, BRAM/URAM cascades), so op latencies — and cycle counts — can shift. Within a family
@@ -29,9 +37,15 @@ The fitted numbers are cycle counts, and three things move them:
   controller (an idealized BFM vs. a real DDR controller), which the part number does not capture at
   all. This is why a platform name usually tags the memory (`..._bfm_...`).
 
-Because two of these (part, clock) fix the kernel cycles and one (memory) fixes the bus law, a platform
-is **human-named** with a manifest, not a bare part-number directory — a raw part string collides
-across clock targets and can't express the memory system.
+Area is part-specific for a different reason: the counters themselves are properties of the device.
+A 7-series LUT is a 6-input table and its DSP48E1 is a 25x18 multiplier, so the *same* C synthesizes to
+different counts on a different family — and an ASIC flow does not have LUTs or BRAMs at all. Which is
+why the counter vocabulary is part of the identity too (see [`res_types`](#the-counter-vocabulary)).
+
+Because two of these (part, clock) fix the kernel cycles, one (memory) fixes the bus law, and the
+technology fixes what is even being counted, a platform is **human-named** with a manifest, not a bare
+part-number directory — a raw part string collides across clock targets and cannot express the memory
+system.
 
 ### The two clocks
 
@@ -56,6 +70,24 @@ Each platform directory opens with `platform.json`:
 This is the **one** source both synthesis and calibration read, so the synthesised part can never drift
 from the calibrated part. (Before this manifest existed, the two disagreed — codegen baked `clg484`
 while a CLI default said `clg400`.)
+
+### The counter vocabulary
+
+A platform may also declare which resource counters it is measured in:
+
+```json
+{ "part": "tsmc45", "clk_freq_hz": 1e9, "res_types": ["cell_area", "macros", "regs"] }
+```
+
+Omitted — as it is for every FPGA platform — it means the Vitis/FPGA set
+(`lut ff dsp bram uram srl`), so an existing manifest is unchanged and an ordinary platform's file stays
+exactly as it was.
+
+It belongs in the identity because a counter set is exactly as technology-specific as the part: an ASIC
+flow counts cell area and macro instances, in a *float* rather than a count. This is the seam a
+non-FPGA technology enters through — declare a platform, rather than reworking the model layer — and it
+is what lets a model's counter names be **validated** rather than merely conventional: naming a counter
+the platform does not measure in raises instead of being silently dropped when counters are summed.
 
 ## `Platform.resolve` — create or confirm
 
@@ -104,12 +136,13 @@ platform's fit is valid for.
 
 `waveflow/calib/platforms/zynq7020_bfm_100mhz/` is the first tracked platform: part `xc7z020clg484-1`,
 100 MHz, idealized XSI BFM memory (hence `bfm` in the name). It ships **as package data inside
-`waveflow`**, so a `pip`-installed build resolves it with no checkout — `Platform.resolve` searches the
-build's `platforms_root` first, then falls back to the `WAVEFLOW_PLATFORM_PATH` env, a per-user library,
-and finally this packaged reference. It is the *default* a project can reuse without recalibrating —
-accepting that if its own part differs, the cycle counts may not reproduce (the mismatch guard makes
-that a deliberate, visible choice). See
-[the workflow](./workflow.md#the-reference-platform-end-to-end) for how it was built.
+`waveflow`**, so a `pip`-installed build resolves it with no checkout (the search order is in
+[Directory layout](./layout.md#where-platform-directories-live)).
+
+It is the default a project [seeds from](./create.md) rather than recalibrating — accepting that if its
+own part differs, the numbers may not reproduce, which the mismatch guard makes a deliberate and visible
+choice rather than a silent one. See [Managing a platform](./workflow.md#the-reference-platform-end-to-end)
+for how it was built.
 
 ## See also
 

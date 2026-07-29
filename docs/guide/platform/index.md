@@ -52,13 +52,14 @@ The payoff is a property worth stating plainly:
 
 ## In this section
 
-- [Creating a platform](./create.md) — setting one up for a project: create, seed from upstream, wire
-  into the build, and the `.gitignore` line that is easy to omit.
-- [Directory layout](./layout.md) — what is in a platform, which tier it lives in, what is tracked.
-- [Platform identity](./identity.md) — the manifest, the mismatch gate, and why cycle counts are only
-  valid for the part they were fit against.
-- [Managing a platform](./workflow.md) — the `waveflow_calib` commands, and the two-tier
-  work → publish flow that is the only writer of a tracked library.
+- [Platform identity](./identity.md) — what identifies one: part, synthesis clock, memory system, and
+  the counter vocabulary; plus the mismatch gate that keeps a fit from being used off-target.
+- [Creating a platform](./create.md) — one per *project*: where the directory goes, why you seed it from
+  an upstream platform rather than recalibrating the framework, and what to `.gitignore`.
+- [Directory layout](./layout.md) — what ends up inside, the two content trees and their keys, and the
+  search order across roots.
+- [Managing a platform](./workflow.md) — inspecting one, and the two-tier work → publish flow that is
+  the only writer of a tracked library.
 
 ## See also
 

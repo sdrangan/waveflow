@@ -9,71 +9,13 @@ summary: "Calibration storage is two-tier: sweeps write a churny untracked calib
 
 # Managing a platform
 
-Three things you do to a platform: **create** one, **look inside** one, and **publish** into one.
+Two things you do to an existing platform: **look inside** one, and **publish** into one.  Creating and
+seeding one is [Creating a platform](./create.md).
 
 ```bash
-waveflow_calib new     calib/platforms/myboard --part xc7z020clg484-1 --clk 100e6
 waveflow_calib show    calib/platforms/myboard
 waveflow_calib publish calib/work/myboard calib/platforms/myboard --apply
 ```
-
-## Creating one
-
-```bash
-waveflow_calib new calib/platforms/myboard --part xc7z020clg484-1 --clk 100e6
-```
-
-seeds the directory and its [identity manifest](./identity.md).  A platform is also created
-*implicitly* the first time a build selects a name that does not resolve — convenient, but the explicit
-command is what you want when setting up deliberately, because it is the one place to declare a
-non-default counter vocabulary:
-
-```bash
-waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9 \n                   --res-types cell_area macros regs
-```
-
-That is the seam a non-FPGA technology enters through — see
-[`res_types`](./identity.md).  Omit it and the platform is measured in the FPGA counters, which is not
-written to the manifest at all, so an ordinary Vitis platform's manifest stays exactly as it was.
-
-### Seeding from an existing platform
-
-Usually you do **not** want an empty platform. Because resolution is
-[first-match-wins on the whole directory](./layout.md), a project that publishes its own calibration
-stops seeing the packaged library entirely — so it should start from a copy of it:
-
-```bash
-waveflow_calib new calib/platforms/myboard --from zynq7020_bfm_100mhz
-```
-
-```text
-seeded from …/waveflow/calib/platforms/zynq7020_bfm_100mhz  (78 file(s))
-platform 'myboard' at calib/platforms/myboard
-  part      : xc7z020clg484-1
-  clock     : 100.0 MHz
-```
-
-`--from` resolves through the usual search path, copies exactly the artifacts `publish` promotes (never
-the raw firing trees), and **inherits the identity**, so `--part` / `--clk` become optional. Seeding
-into a non-empty directory is refused unless `--force`, so it cannot quietly overwrite a library
-someone has already calibrated into.
-
-### As a build step
-
-For a project whose DAG should just work on a fresh checkout, `SeedPlatformStep` does the same thing,
-create-if-absent:
-
-```python
-dag.add(SeedPlatformStep(name="platform", seed_from="zynq7020_bfm_100mhz"))
-```
-
-Idempotent — once the platform is there it is a no-op — so it costs nothing to leave in.
-
-{: .note }
-> **Why this is a DAG step when [`publish` deliberately is not](#why-publish-is-not-a-dag-step):** the
-> direction differs. Publishing writes **upstream**, into shared infra, and is a considered "I am
-> satisfied" act. Seeding writes **downstream**, into this project's own library — ordinary setup, in
-> the same direction as every other calibration step, touching nothing anyone else depends on.
 
 ## Looking inside one
 
@@ -117,7 +59,7 @@ Calibration parameters are **infra-wide**: once a shared component is calibrated
 it. That makes two things matter — a stray run must never clobber shared parameters, and a
 re-run that produces the *same* fit must not churn git. Both fall out of a **two-tier** storage split.
 
-## Two tiers: work vs. tracked
+### Two tiers: work vs. tracked
 
 ```
 calib/work/<name>/                  untracked (gitignored).  Sweeps, tests, and the DAG calib steps
@@ -144,7 +86,7 @@ publish_calib calib/work/<name> calib/platforms/<name> --apply    # write only t
 
 The target is *a* tracked library — usually your project's (`calib/platforms/`).  Promoting into the
 **shipped** one (`waveflow/calib/platforms/`) is for framework modules only; see
-[what belongs where](./create.md#what-belongs-where).
+[what belongs where](./create.md#what-belongs-in-your-library-versus-the-shipped-one).
 
 - **Dry-run by default.** It prints a plan — `+ created`, `~ updated`, `= unchanged` — and writes
   nothing. `--apply` performs it.
@@ -172,22 +114,12 @@ Promotion to shared infra is a deliberate "I'm satisfied" act, not a build side 
 [`CollectTimingStep` / `FitTimingStep`](../calib/component_residual.md#automating-it-collecttimingstep--fittimingstep))
 populate the **work** dir; `publish_calib` is the manual gate to the tracked one.
 
-## The `.gitignore` rules
+## What is committed, and what is not
 
-Three rules encode the split. A blanket `*.json` ignore covers build artifacts, so **both** tracked
-libraries have to be re-included past it, and the work tier is ignored on its own:
-
-```gitignore
-/calib/work/                       # the churny work tier — never committed
-!waveflow/calib/platforms/**       # the shipped reference library IS committed
-!calib/platforms/**                # ...and so is a PROJECT's own library
-```
-
-{: .warning }
-> That last line is easy to omit and expensive to miss. `platforms_root` defaults to
-> `calib/platforms/`, so without it a project publishing exactly as documented would write into a
-> directory git silently drops — the publish appears to succeed and nothing is committed. If you set
-> up a library in a new repository, check `git status` sees it.
+The work tier is ignored; a tracked library is not. Getting those rules right is part of setting a
+project up, so they live with the setup — see
+[what to `.gitignore`](./create.md#what-to-gitignore), including the anchoring subtlety that decides
+whether a *nested* project's work tier is actually ignored.
 
 ## The reference platform, end to end
 
