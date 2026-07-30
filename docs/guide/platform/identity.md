@@ -71,26 +71,28 @@ of a platform's identity rather than a global constant.
 
 ### The default: the FPGA set
 
-A platform that says nothing is measured in the Vitis/FPGA counters:
+In Waveflow, the current default resource types are based on the [Xilinx/AMD FPGA resources](../resource/xilinx.md), namely:
 
-```text
-lut   ff   dsp   bram   uram   srl
+```python
+res_types = ['lut', 'ff', 'dsp', 'bram', 'uram', 'srl']
 ```
 
-That is every FPGA platform, including the shipped one. [FPGA resources](../resource/xilinx.md)
+The [FPGA resources page](../resource/xilinx.md)
 explains what each counter actually is, how far to trust an HLS estimate of it, and the two report
 conventions (`~0`, and the `AVAIL_`/`UTIL_` columns) that bite if you sum them naively.
 
 ### Declaring a different set
 
-A platform on another technology declares its own when it is
+In the future, Waveflow may target other FPGA families or even ASICs.  In this case, other resources will likely be needed, such as area.
+In order to support this future capability, a platform on another technology can declare its own when it is
 [created](./create.md#creating-the-directory):
 
 ```bash
-waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9                    --res-types cell_area macros regs
+waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9 \
+                   --res-types cell_area macros regs
 ```
 
-An ASIC flow counts cell area and macro instances, in a *float* rather than a count — nothing like a
+For example, an ASIC flow can count cell area and macro instances, in a *float* rather than a count — nothing like a
 LUT. This is the seam such a flow enters through: declare a platform, rather than reworking the model
 layer.
 
