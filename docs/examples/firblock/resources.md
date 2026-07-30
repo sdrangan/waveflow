@@ -4,7 +4,7 @@ parent: Block FIR (state + fixed point)
 nav_order: 9
 has_children: false
 audience: python
-api: [dsp_prior, compute_features, fir_compute_fitted, compose]
+api: [dsp_prior, fir_compute_basis, fir_compute_fitted, compose, add_rm]
 summary: "The worked resource-model narrative on this design: a 24-point sweep in 20 minutes, an analytical DSP prior exact at every point with zero fitted parameters, a LUT/FF fit over structural features, and a composed whole-design estimate validated against totals that fit nothing. Includes the two results that only showed up because the design has coupled step functions in it — the DSP packing win at 8 bits, and the unrolled plateau that turns out to be two effects cancelling."
 ---
 
