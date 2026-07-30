@@ -140,7 +140,7 @@ It ships **as package data inside `waveflow`**, so a `pip`-installed build resol
 at all. [Managing a platform](./workflow.md#the-reference-platform-end-to-end) covers how it was built.
 
 If your target is a different part or clock the shipped platform is not valid for it
-([why](./identity.md#why-part-and-clock-and-memory)) — you calibrate from scratch rather than seeding,
+([why](./identity.md#the-target-part-clock-and-memory)) — you calibrate from scratch rather than seeding,
 and the mismatch guard below makes that a visible choice rather than a silent one.
 
 {: .warning }

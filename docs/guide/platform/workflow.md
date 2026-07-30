@@ -126,7 +126,7 @@ whether a *nested* project's work tier is actually ignored.
 `waveflow/calib/platforms/zynq7020_bfm_100mhz/` is built reproducibly by
 [`examples/mem_copy/calibrate_platform.py`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/calibrate_platform.py):
 
-1. **Seed the identity** — `Platform.resolve` writes `platform.json` (`xc7z020clg484-1`, 100 MHz).
+1. **Seed the identity** — creating the platform writes `platform.json` (`xc7z020clg484-1`, 100 MHz).
 2. **Fit the bus law** — `add_run` the measured burst laws (write `nwords + 2·(num_trans−1)`, read
    `nwords + (num_trans−1)`) at two sizes, then `fit()` → `mm_bus.json`.
 3. **Fit the writer residual** — `collect_rtl` the measured RTL spans (183 cyc at n=128, 615 at n=512)

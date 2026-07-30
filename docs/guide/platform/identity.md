@@ -3,26 +3,27 @@ title: Platform identity
 parent: Platforms
 nav_order: 1
 audience: python
-api: [Platform, PlatformCalib, BuildConfig]
-summary: "What a platform IS, and what identifies one. A platform holds the timing and resource models valid for a single target, and is identified by an FPGA part, a synthesis clock, the memory system, and the resource counters that technology is measured in. Explains why each matters: the part fixes primitive latencies, the synthesis clock fixes the HLS schedule (and is not the sim clock), the memory system fixes the bus law and is not in the part number, and the counters are themselves properties of the device. The mechanics of creating one and confirming a build against it are in Creating a platform."
+api: [Platform, VITIS_RES_TYPES]
+summary: "What identifies a platform, in two parts. THE TARGET — an FPGA part, a synthesis clock and the memory system — decides what a cycle count means: the part fixes primitive latencies, the synthesis clock fixes the HLS schedule (and is not the sim clock), and the memory system fixes the bus law without appearing in the part number. THE RESOURCE TYPES decide what an area number even is; they default to the FPGA counters and are declared per platform, which is the seam a non-FPGA technology enters through and what makes counter names validated rather than conventional."
 ---
 
 # Platform identity
 
 A measurement is only valid for the hardware it was taken on. A **platform** is that hardware, named:
-it holds every timing and resource model valid for one target, and it carries the identity of that
-target so nothing can use the models against a different one.
+it holds every timing and resource model valid for one target, and carries the identity of that target
+so nothing can use those models against a different one.
 
-Abstractly, a platform is two things bound together:
+Two things make up that identity:
 
-- the **identity** — which hardware these numbers describe;
-- the **library** — the [timing residuals and area records](./layout.md) measured for it.
+- **the target** — an FPGA **part**, a **synthesis clock**, and in practice the **memory system**, which
+  the part number does not capture. These decide what a *cycle count* means.
+- **the resource types** — the counters this technology is measured in. These decide what an *area
+  number* even is.
 
-This page is about the first. A platform is identified by an FPGA **part**, a **synthesis clock**, and
-the **resource counters** that technology is measured in — plus, in practice, its **memory system**,
-which the part number does not capture.
+Both are stored in the platform, and both are checked when a build uses it. What is *stored under* that
+identity — the fitted residuals and measured records — is [Directory layout](./layout.md).
 
-## Why part *and* clock (and memory)
+## The target: part, clock, and memory
 
 Timing fits are cycle counts, and three things move them:
 
@@ -59,41 +60,54 @@ There are two clocks, and only one of them changes the numbers:
 So the platform key needs the **synthesis** clock. `Platform.synth_period_ns` is exactly the
 `create_clock -period` the TCL emits (`1e9 / clk_freq`).
 
-## The identity manifest
+## The resource types
 
-Each platform directory opens with `platform.json`:
+A resource type is one **counter** an area measurement is expressed in — how many LUTs, how many DSPs,
+how much cell area. A design fits only if *every* counter fits, which is why area is never a single
+number: running out of DSPs is as fatal as running out of LUTs.
 
-```json
-{ "part": "xc7z020clg484-1", "clk_freq_hz": 100000000.0 }
+Which counters exist is a property of the **technology**, not of the design. That is why they are part
+of a platform's identity rather than a global constant.
+
+### The default: the FPGA set
+
+A platform that says nothing is measured in the Vitis/FPGA counters:
+
+```text
+lut   ff   dsp   bram   uram   srl
 ```
 
-This is the **one** source both synthesis and calibration read, so the synthesised part can never drift
-from the calibrated part. (Before this manifest existed, the two disagreed — codegen baked `clg484`
-while a CLI default said `clg400`.)
+That is every FPGA platform, including the shipped one. [FPGA resources](../resource/xilinx.md)
+explains what each counter actually is, how far to trust an HLS estimate of it, and the two report
+conventions (`~0`, and the `AVAIL_`/`UTIL_` columns) that bite if you sum them naively.
 
-### The counter vocabulary
+### Declaring a different set
 
-A platform may also declare which resource counters it is measured in:
+A platform on another technology declares its own when it is
+[created](./create.md#creating-the-directory):
 
-```json
-{ "part": "tsmc45", "clk_freq_hz": 1e9, "res_types": ["cell_area", "macros", "regs"] }
+```bash
+waveflow_calib new calib/platforms/asic45 --part tsmc45 --clk 1e9                    --res-types cell_area macros regs
 ```
 
-**The default is the Vitis/FPGA set** — `lut`, `ff`, `dsp`, `bram`, `uram`, `srl`. A platform that omits
-`res_types` is measured in those, which is every FPGA platform including the shipped one, so the key is
-absent from an ordinary manifest rather than spelled out in it.
+An ASIC flow counts cell area and macro instances, in a *float* rather than a count — nothing like a
+LUT. This is the seam such a flow enters through: declare a platform, rather than reworking the model
+layer.
 
-It belongs in the identity because a counter set is exactly as technology-specific as the part: an ASIC
-flow counts cell area and macro instances, in a *float* rather than a count. This is the seam a
-non-FPGA technology enters through — declare a platform, rather than reworking the model layer — and it
-is what lets a model's counter names be **validated** rather than merely conventional: naming a counter
-the platform does not measure in raises instead of being silently dropped when counters are summed.
+{: .note }
+> Declaring the vocabulary is what makes counter names **validated** rather than merely conventional. A
+> model naming a counter the platform does not measure in raises immediately — where previously a typo
+> predicted fine on its own and was silently dropped when counters were summed, so the module
+> contributed **zero** and the design read as cheaper than it is.
 
 ## See also
 
 - [Creating a platform](./create.md) — making one for a project, and how naming one on a build confirms
   it against this stored identity.
-- [Directory layout](./layout.md) — the library half: what is stored under an identity, and how it is keyed.
+- [Directory layout](./layout.md) — the manifest this identity is written to, and everything stored
+  under it.
+- [FPGA resources](../resource/xilinx.md) — what the default counters are and how far an HLS estimate of
+  them can be trusted.
 - [The bus-transfer model](../calib/bus_model.md) — the platform-scoped `m_axi` law that lives beside the
   manifest.
 - [Component residuals](../calib/component_residual.md) — the per-`(component, platform)` fits under

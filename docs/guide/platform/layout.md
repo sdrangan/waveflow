@@ -32,6 +32,26 @@ summary: "What is inside a platform directory and where platform directories liv
 One identity, two content trees. The split is not historical — the two axes key on different things,
 because they answer different questions.
 
+### The identity manifest
+
+Every platform directory opens with `platform.json`, which is the [identity](./identity.md) written
+down:
+
+```json
+{ "part": "xc7z020clg484-1", "clk_freq_hz": 100000000.0 }
+```
+
+This is the **one** source both synthesis and calibration read, so the part a design is synthesized for
+cannot drift from the part its numbers were measured on. (Before this manifest existed, the two
+disagreed — codegen baked `clg484` while a CLI default said `clg400`.)
+
+A platform on a non-FPGA technology also records its counters; an FPGA one omits the key and takes the
+default, so an ordinary manifest is exactly the two lines above:
+
+```json
+{ "part": "tsmc45", "clk_freq_hz": 1e9, "res_types": ["cell_area", "macros", "regs"] }
+```
+
 ## Two keys, and why
 
 | | `components/` (timing) | `modules/` (resource) |
