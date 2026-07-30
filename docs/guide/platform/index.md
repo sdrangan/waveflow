@@ -46,7 +46,7 @@ The payoff is a property worth stating plainly:
 
 {: .note }
 > The part a design is **synthesized** for and the part its models were **fit** for come from the same
-> object, so they cannot drift. `Platform.resolve` is a create-or-confirm gate: a new platform is
+> object, so they cannot drift. Naming a platform on a build is a create-or-confirm gate: a new one is
 > seeded from the build's part/clock, an existing one is *checked* against them, and a mismatch is an
 > error rather than a silently reused number.
 

@@ -118,9 +118,9 @@ keeps a re-publish churn-free: unchanged files are byte-compared and not rewritt
 deterministic fit produces no diff at all.
 
 {: .warning }
-> **Give a sweep its own platform name.** Reusing a shipped platform's name makes `Platform.resolve`
-> find the *packaged* directory through its fallbacks and write there — bypassing `publish_calib`,
-> which is meant to be the single writer of a tracked library.
+> **Give a sweep its own platform name.** Reusing a shipped platform's name makes resolution find the
+> *packaged* directory through its fallbacks and write there — bypassing `publish_calib`, which is
+> meant to be the single writer of a tracked library.
 
 ## What is worth committing
 

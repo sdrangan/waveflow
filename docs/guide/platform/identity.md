@@ -91,8 +91,8 @@ the platform does not measure in raises instead of being silently dropped when c
 
 ## See also
 
-- [Creating a platform](./create.md) — making one, and how `Platform.resolve` confirms a build against a
-  stored identity.
+- [Creating a platform](./create.md) — making one for a project, and how naming one on a build confirms
+  it against this stored identity.
 - [Directory layout](./layout.md) — the library half: what is stored under an identity, and how it is keyed.
 - [The bus-transfer model](../calib/bus_model.md) — the platform-scoped `m_axi` law that lives beside the
   manifest.

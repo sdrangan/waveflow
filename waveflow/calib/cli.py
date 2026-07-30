@@ -3,12 +3,14 @@
 A platform accumulated four kinds of thing without ever acquiring a way to *look at* one, and could
 only be created as a side effect of running a build.  This is the missing front door::
 
-    waveflow_calib new    calib/platforms/myboard --part xc7z020clg484-1 --clk 100e6
-    waveflow_calib show   calib/platforms/myboard
+    waveflow_calib list                       # what platforms can I see, and for which target?
+    waveflow_calib new     calib/platforms/myboard --from zynq7020_bfm_100mhz
+    waveflow_calib show    calib/platforms/myboard
     waveflow_calib publish calib/work/myboard calib/platforms/myboard --apply
 
-``publish`` delegates to :mod:`waveflow.calib.publish` (still available as ``publish_calib``); the
-other two are new.
+``publish`` delegates to :mod:`waveflow.calib.publish` (still available as ``publish_calib``); the rest
+are new.  ``list`` exists because the question you ask *before* creating one — is there already a
+calibrated platform for my target? — had no answer short of knowing where the package installed itself.
 
 **Not built: ``retime``** — sweeping every registered fixture to refit a whole platform end to end.
 The registry it needs exists (:func:`~waveflow.calib.fixture.all_fixtures`); the driving is
@@ -134,6 +136,49 @@ def cmd_show(args) -> int:
     return 0
 
 
+def cmd_list(args) -> int:
+    """Every platform visible from here, in resolution order, with where each one comes from.
+
+    The question this answers is the one you ask before seeding: *is there already a calibrated
+    platform for my target?*  So it prints the identity of each — a name alone does not tell you
+    whether its numbers are valid for the part you are building.
+    """
+    from waveflow.calib.platform import PLATFORM_MANIFEST, Platform, platform_fallback_path
+
+    roots = [Path(args.platforms_root)] + [
+        Path(r) for r in platform_fallback_path()]
+
+    seen: dict = {}
+    rows = []
+    for root in roots:
+        if not Path(root).is_dir():
+            continue
+        for d in sorted(p for p in Path(root).iterdir() if p.is_dir()):
+            if not (d / PLATFORM_MANIFEST).is_file():
+                continue
+            shadowed = d.name in seen
+            try:
+                plat = Platform.resolve(root, d.name)
+            except Exception:
+                continue
+            rows.append((d.name, plat, root, shadowed))
+            seen.setdefault(d.name, d)
+
+    if not rows:
+        print(f"no platforms found under {args.platforms_root} or the fallback path")
+        return 1
+
+    print(f"{'name':28s} {'part':22s} {'clock':>9}   source")
+    for name, plat, root, shadowed in rows:
+        clk = f"{plat.clk_freq/1e6:.0f} MHz" if plat.clk_freq else "?"
+        mark = "  (shadowed)" if shadowed else ""
+        print(f"{name:28s} {str(plat.part):22s} {clk:>9}   {root}{mark}")
+    print("\nSeed from one with:  waveflow_calib new <dir> --from <name>")
+    if any(sh for _, _, _, sh in rows):
+        print("A shadowed entry is never resolved — an earlier root already owns that name.")
+    return 0
+
+
 def cmd_publish(args) -> int:
     from waveflow.calib.publish import main as publish_main
 
@@ -163,6 +208,11 @@ def main(argv: "list[str] | None" = None) -> int:
     n.add_argument("--res-types", nargs="+", default=None,
                    help="resource counters this technology is measured in (default: the FPGA set)")
     n.set_defaults(func=cmd_new)
+
+    ls = sub.add_parser("list", help="list every platform visible from here, with its identity")
+    ls.add_argument("--platforms-root", default="calib/platforms",
+                    help="this project's library (searched first; default calib/platforms)")
+    ls.set_defaults(func=cmd_list)
 
     s = sub.add_parser("show", help="inventory a platform's calibration data")
     s.add_argument("path", help="the platform directory")
