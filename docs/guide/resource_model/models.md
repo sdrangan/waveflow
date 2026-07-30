@@ -85,11 +85,17 @@ For LUT and FF: partitioned storage, pipeline registers, the accumulate tree, ad
 No closed form reaches them.
 
 ```python
-FittedResourceModel(counters=("lut", "ff"),
+FittedResourceModel(targets=("lut", "ff"),
+                    transform=fir_compute_basis,          # comp -> {feature name: value}
                     basis={"ff": ["store_bits", "n_mult"],
                            "lut": ["n_mult", "store_bits", "mac_bits"]},
-                    feature_fn=compute_features)
+                    prior=fir_compute_prior())            # DSP/BRAM ride inside
 ```
+
+`transform` turns a module into named features and `basis` picks, per counter, which of them that
+counter is regressed on. They are separate because one transform usually feeds several counters with
+different forms. The `prior=` is not a wrapper: one object predicts all four counters, each from
+whichever of the two is honest for it.
 
 One [`LinCalibModel`](../calib/models.md) per counter, because the counters have different forms and a
 single multi-target fit would be wrong. Confidence comes from the underlying model's retained
@@ -131,6 +137,29 @@ what the evidence for it is.
 
 Note the first row covers most modules in a real design, and the last is one per design. The fitting
 work concentrates on the few modules that actually move.
+
+## Attaching a model
+
+A model reaches a design by being **attached to the module**, not by being passed in beside it:
+
+```python
+class FirCompute(FreeRunMod):
+    def add_rm_self(self, platform):
+        self._resource_model = fir_compute_fitted(platform).fit(points())
+
+top.add_rm(platform)         # recurses children-first; every module ends up with a model
+top.resource_model           # what got attached
+```
+
+`add_rm` walks the elaborated graph and calls `add_rm_self` on each module. Overriding it is the whole
+author-facing surface — a module that does not override one inherits the default, a
+[lookup](#lookup) against the platform store, which is correct for anything measured once.
+
+Attachment rather than a `comp -> model` map is what lets a caller who did not write the design still
+estimate it: [`compose`](./composition.md) needs no argument beyond the graph, and an agent exploring an
+unfamiliar design finds the models already there. It is also why `_resource_model` is carried through
+elaboration as context — without that, attaching a model *changed the module's structure digest*, and
+the design silently stopped matching its own measurements.
 
 ## See also
 

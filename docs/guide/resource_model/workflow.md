@@ -84,13 +84,23 @@ in your own source determines.
 **Then fit only the remainder**, and choose features for *meaning*:
 
 ```python
-FittedResourceModel(counters=("lut", "ff"),
+FittedResourceModel(targets=("lut", "ff"), transform=my_features,
                     basis={"ff": ["store_bits", "n_mult"], "lut": [...]},
-                    feature_fn=my_features)
+                    prior=my_prior())
 ```
 
 A feature like "bits of partitioned storage" extrapolates because it is what the hardware costs. A raw
 parameter that happens to correlate does not.
+
+Then **attach** it, so the design carries its own models rather than requiring the caller to know them:
+
+```python
+def add_rm_self(self, platform):
+    self._resource_model = my_model(platform).fit(points())
+```
+
+`top.add_rm(platform)` recurses the elaborated graph and calls that on every module; anything without
+an override inherits the default, a lookup against the platform store.
 
 ## 5. Validate against something the fit never saw
 

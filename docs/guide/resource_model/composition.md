@@ -13,7 +13,9 @@ summary: "compose() walks the elaborated graph applying own-plus-children. Cover
 ```python
 from waveflow.calib.resource_model import compose
 
-est = compose(top, model_for)      # top = elaborate(FirBlock, params)
+top = elaborate(FirBlock, params)
+top.add_rm(platform)               # attach a model to every module, children first
+est = compose(top)
 
 est.total          # {'lut': 9424, 'ff': 11398, 'dsp': 32, 'bram': 2}   <- predicted
                    # measured for this point:  8674 / 11347 / 32 / 2
@@ -26,8 +28,16 @@ The measured figures are shown beside the prediction deliberately: DSP and BRAM 
 out by 8.6% — which happens to be this model's *worst* point across the grid. A documentation example
 that only showed the number the model produced would read as agreement.
 
-`model_for` maps a component to its [model](./models.md). `compose` walks the elaborated graph, applies
-`own + Σ children`, and accumulates both the counters and the confidences.
+Two steps, because attaching and evaluating are separate concerns.
+[`add_rm`](./models.md#attaching-a-model) recurses the elaborated graph and leaves a model on each
+module; `compose` then walks that same graph applying `own + Σ children`, accumulating both the
+counters and the confidences. A module reached by `add_rm` keeps its model, so re-composing after a
+parameter sweep costs nothing.
+
+{: .note }
+> `compose(top, model_for)` still accepts an explicit `comp -> model` callable, which overrides what is
+> attached. It is an escape hatch for trying a model out without installing it — the attached form is
+> what a design ships, because that is the one an agent walking an unfamiliar design will find.
 
 ## The interface term
 
@@ -59,7 +69,7 @@ the adapter buffers widened. The glue depends on the boundary and not on what th
 ## A missing model is reported, not skipped
 
 ```python
-est = compose(top, lambda c: None)
+est = compose(top, lambda c: None)         # nothing attached, nothing found
 est.level                                  # UNCALIBRATED
 [c.summary for _, _, _, c in est.per_module]
 # ['FirCompute has no resource model; its cost is missing from this estimate, not zero', ...]
@@ -74,7 +84,7 @@ A composed estimate is only as good as its worst part, so `est.level` is the min
 that fed it, and `est.weakest()` names them:
 
 ```python
-est = compose(_top(ntap=256, samp_w=16, unroll=False), model_for)
+est = compose(_top(ntap=256, samp_w=16, unroll=False))
 est.level                                   # EXTRAPOLATED -- ntap far outside the fitted 8..32
 [n for _, n, _ in est.weakest()]            # ['FirCompute']
 ```
@@ -94,19 +104,24 @@ it.
 
 ## A worked model set
 
-The reference design's five models, showing the expected shape — one fit, three lookups, one interface:
+The reference design has five modules and needs to *write* only two models. `FirCompute` moves with the
+parameters, so it is fitted; `FirBlock` carries the interface term. The other three —
+`FirCmdRx`, `MemRStream`, `MemWStream` — keep the inherited `add_rm_self`, a lookup against the platform
+store, because they were measured once and their area is a fact to recall rather than a function to fit:
 
 ```python
-def model_for(comp):
-    cls = type(comp).__name__
-    if cls == "FirCompute":   return prior_plus_fitted      # the only module that moves
-    if cls == "FirBlock":     return interface_model        # the composite's own term
-    if cls in STATIC:         return LookupResourceModel(...)
-    return None                                             # reported, not skipped
+def compute_add_rm_self(self, platform):    # FirCompute: prior for DSP/BRAM, fit for LUT/FF
+    self._resource_model = fir_compute_fitted(platform).fit(points())
+
+def block_add_rm_self(self, platform):      # FirBlock: the composite's own boundary term
+    self._resource_model = InterfaceResourceModel(table=INTERFACE_BY_MEM_DWIDTH, platform=platform)
 ```
+
+That ratio — two written, three inherited — is the one to expect: the fitting work concentrates in the
+few modules whose area actually moves.
 
 ## See also
 
-- [The model kinds](./models.md) — what goes in `model_for`.
+- [The model kinds](./models.md) — what `add_rm_self` attaches.
 - [Validating a model](./validation.md) — checking the composed total against a real synthesis.
 - [Composite kernels](../resource/composite.md) — the measurement this composition mirrors.

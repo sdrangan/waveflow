@@ -136,14 +136,24 @@ registers. LUT is the honest limit of the approach.
 
 ## Composing, and validating
 
-Five models: a prior + fit for `FirCompute`, lookups for the three static modules, and an interface
-model for the composite's own cost.
+Five models, of which only two are written: a prior + fit for `FirCompute` and an interface model for
+the composite's own cost. The three static modules inherit the default `add_rm_self`, a lookup against
+the platform store.
 
 ```python
-est = compose(elaborate(FirBlock, params), model_for)
+install_resource_models()            # gives FirCompute and FirBlock their add_rm_self
+
+top = elaborate(FirBlock, params)
+top.add_rm(platform)                 # recurses; every module ends up with a model
+est = compose(top)
+
 est.total     # {'lut': 9424, 'ff': 11398, 'dsp': 32, 'bram': 2}   predicted
               # measured:    8674 / 11347 /  32 /  2
 ```
+
+`install_resource_models` lives in `fir_block_resource.py` rather than in `fir_block.py` so the design
+module stays free of calibration imports — a design that wanted them inline would just define
+`add_rm_self` on the class.
 
 Validated against **design totals that fit nothing** — only per-module figures train the models:
 
