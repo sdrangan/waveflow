@@ -12,6 +12,8 @@ summary: "What is inside a platform directory and where platform directories liv
 
 ## Inside a platform
 
+Each platform is stored in a directory with structure:
+
 ```text
 <platform>/
     platform.json                          identity — part, clk_freq_hz, [res_types]
@@ -29,24 +31,25 @@ summary: "What is inside a platform directory and where platform directories liv
         timing/records.jsonl                   (same envelope; unused so far)
 ```
 
-One identity, two content trees. The split is not historical — the two axes key on different things,
-because they answer different questions.
+One identity and two separate content trees for **components** and **modules** described below.
 
 ### The identity manifest
 
-Every platform directory opens with `platform.json`, which is the [identity](./identity.md) written
-down:
+The identity file `platform.json` stores the [identity](./identity.md) in a JSON format.
 
 ```json
 { "part": "xc7z020clg484-1", "clk_freq_hz": 100000000.0 }
 ```
 
 This is the **one** source both synthesis and calibration read, so the part a design is synthesized for
-cannot drift from the part its numbers were measured on. (Before this manifest existed, the two
-disagreed — codegen baked `clg484` while a CLI default said `clg400`.)
+cannot drift from the part its numbers were measured on.   The `platform.json` can optionally also describe the *resource types*
+with a `"res_types"` field.  As described in [platform identity page](./identity.md), the default uses the Xilinx/AMD resources:
 
-A platform on a non-FPGA technology also records its counters; an FPGA one omits the key and takes the
-default, so an ordinary manifest is exactly the two lines above:
+```json
+{ "res_types": ["lut", "ff", "dsp", "bram", "uram", "srl"] }
+```
+
+However, future ASIC flows could define other resource types.  For example, we could theoretically add a field such as:
 
 ```json
 { "part": "tsmc45", "clk_freq_hz": 1e9, "res_types": ["cell_area", "macros", "regs"] }
@@ -54,28 +57,32 @@ default, so an ordinary manifest is exactly the two lines above:
 
 ## Two keys, and why
 
-| | `components/` (timing) | `modules/` (resource) |
-|---|---|---|
-| keyed by | the task **configuration** — function name + template args, e.g. `mem_r_stream_framed_task_32` | the module's **structure digest**, e.g. `mem_r_stream-04919c18` |
-| granularity | one entry per synthesized task variant | one entry per structurally distinct module |
-| readable? | yes — it is the RTL entity prefix | prefix only; the digest is for correctness |
+Timing and resource data are stored in two separate trees:
 
-Both are *configuration-precise*: neither will hand a design at `mem_dwidth=64` a number measured at
-32. They differ in how far they go — a structure digest distinguishes anything elaboration
-distinguishes, including parameters that never reach a C++ template argument, whereas a task
-configuration id stops at what Vitis bakes into the entity name.
+- **`components/`** — the *timing* residuals, one entry per task **configuration** (a task's function
+  name plus its template arguments).
+- **`modules/`** — the *resource* records, one entry per structurally distinct **module**.
+
+They key differently because they are answering different questions:
+
+|             | `components/` (timing)                                                                               | `modules/` (resource)                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| keyed by    | the task **configuration** — function name + template args, e.g. `mem_r_stream_framed_task_32` | the module's **structure digest**, e.g. `mem_r_stream-04919c18` |
+| granularity | one entry per synthesized task variant                                                                 | one entry per structurally distinct module                             |
+| readable?   | yes — it is the RTL entity prefix                                                                     | prefix only; the digest is for correctness                             |
+
+What they share is that both are *configuration-precise*: neither will hand a design at
+`mem_dwidth=64` a number measured at 32. A single function, `config_id()` in
+`waveflow/calib/module_key.py`, is what both the timing resolver and the
+[resource attributor](../resource/composite.md) read, so the two cannot drift on what "the same
+configuration" means.
 
 {: .note }
-> The timing key was **not** always configuration-precise. It used the bare function name, so one
-> `mem_r_stream_framed_task` directory served every memory width. Libraries written before the change
-> still load — the resolver falls back to the bare name — but a residual found that way is reported
-> with `config_specific=False` and says so in its confidence, rather than being presented as a match
-> for the width actually being built. The two shipped residuals are currently in exactly that state.
-
-The task-configuration id comes from a single function, `config_id()` in
-`waveflow/calib/module_key.py`, used by *both* the timing resolver and the
-[resource attributor](../resource/composite.md) — so the two cannot drift on what "the same
-configuration" means.
+> The timing key was **not** always configuration-precise: it used the bare function name, so one
+> `mem_r_stream_framed_task` directory served every memory width. Older libraries still load — the
+> resolver falls back to the bare name — but a residual found that way reports `config_specific=False`
+> in its confidence rather than claiming to match the width being built. The two shipped residuals are
+> in exactly that state.
 
 ## Where platform directories live
 
@@ -107,22 +114,8 @@ Creation always targets `platforms_root`, never a read-only fallback.
 > consulted **at all** — you do not inherit its bus law, its residuals, or its records. And giving your
 > platform a *different* name does not help either: that is simply a new, empty platform.
 
-## So a project seeds, rather than inheriting
-
-Because there is no merge, a project that publishes its own calibration should **copy** the upstream
-platform as its starting point:
-
-```bash
-waveflow_calib new calib/platforms/myboard --from zynq7020_bfm_100mhz
-```
-
-You then own a complete library — inherited bus law and infra residuals, with your own module records
-landing beside them as you calibrate. See [Creating a platform](./create.md#seeding-do-not-recalibrate-the-framework).
-
-The trade is deliberate. You duplicate the upstream data (~26 KB here), and an upstream improvement does
-not reach you until you re-seed. In exchange, what you inherited is a **reviewable commit** and is
-**frozen**: calibration is measurement, and an upstream change cannot move your numbers without you
-seeing it. Pinning measurement to a commit is worth more here than resolving it dynamically.
+That is the reason a project **seeds** its library from an upstream platform rather than inheriting
+from one — see [Seeding](./create.md#seeding-do-not-recalibrate-the-framework).
 
 ## The tracked / untracked split
 

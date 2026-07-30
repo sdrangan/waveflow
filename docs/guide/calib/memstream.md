@@ -10,7 +10,7 @@ summary: "The reusable m_axi mem-streams (MemRStream / MemWStream) are timed by 
 
 The framework `MemRStream` / `MemWStream` are the reusable `m_axi` read/write owners an accelerator
 composes ([the mem-stream pattern](../../examples/memcpy/memcpy.md)). Their timing is the
-[two-level split](./index.md#two-levels-what-is-a-platform-property-what-is-a-component-property) in
+[two-level split](./index.md#the-two-level-split-bus-vs-component) in
 miniature: the [bus law](./bus_model.md) charges the *transfer*, and a per-firing **control residual**
 charges everything else the firing does around it. This page is that residual for the mem-streams — and,
 the part documented nowhere else, **how it is calibrated: a per-component fixture.**

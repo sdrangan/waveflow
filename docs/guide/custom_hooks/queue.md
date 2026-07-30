@@ -90,7 +90,7 @@ The hook is the single-producer / single-consumer dequeue, in five steps:
 
 The command never crosses an `s_axilite` boundary — it is read straight from memory
 and deserialized into a struct of scalars inside the kernel. That is what lets the
-[generated top be `m_axi`-only](../../examples/mmqueue/codegen.md#why-the-top-has-only-maxi--apctrl)
+[generated top be `m_axi`-only](../../examples/mmqueue/codegen.md#why-the-top-has-only-m_axi--ap_ctrl)
 and sidestep the nested-struct csynth pitfall.
 
 ## See also

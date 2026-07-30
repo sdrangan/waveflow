@@ -130,3 +130,65 @@ def test_the_pluralisation_idiom_is_not_flagged():
     # ...and it must still catch the real thing.
     assert _eaten_spaces("| which children become`hls::task`s |")
     assert _eaten_spaces("| stored in | the committed**platform library** |")
+
+
+# ---------------------------------------------------------------------------
+# Anchors — a link into a heading that no longer exists
+# ---------------------------------------------------------------------------
+
+#: kramdown lets a heading name its own anchor: ``## Float {#float}``.  That id wins outright, and
+#: slugging the literal braces instead is how this check first produced a false positive.
+_EXPLICIT_ID = re.compile(r"\{#([A-Za-z0-9_-]+)\}\s*$")
+
+
+def _slug(heading: str) -> str:
+    """The GitHub/kramdown slug for one heading's text.
+
+    Lowercase, drop everything outside ``[a-z0-9 _-]``, spaces to hyphens.  Underscores *survive* —
+    emulating that wrongly turned every ``m_axi`` heading into a phantom break.  The trailing hyphen a
+    dropped emoji leaves behind is normalised away on both sides, so a heading marked ``… ✅`` still
+    matches a link written without it.
+    """
+    return re.sub(r"[^a-z0-9 _-]", "", heading.lower().replace("`", "")).replace(" ", "-").strip("-")
+
+
+def _heading_anchors(text: str) -> set[str]:
+    """Every anchor a page's headings define."""
+    out = set()
+    for h in re.findall(r"^#{1,6}\s+(.*?)\s*$", text, re.M):
+        explicit = _EXPLICIT_ID.search(h)
+        if explicit:
+            out.add(explicit.group(1).lower())
+            h = h[:explicit.start()]
+        slug = _slug(h)
+        if slug:
+            out.add(slug)
+    return out
+
+
+def test_anchors_point_at_headings_that_exist(md_files):
+    """A renamed heading silently orphans every link into it — the page still renders.
+
+    Both directions are checked, because the *same-page* form was a blind spot: a cross-file check
+    passed while `[res_types](#the-counter-vocabulary)` sat dead in the same file it pointed at,
+    orphaned by a rename two commits earlier.
+    """
+    anchors = {p: _heading_anchors(p.read_text(encoding="utf-8")) for p in md_files}
+    by_path = {p.resolve(): p for p in md_files}
+
+    broken = []
+    for p in md_files:
+        text = p.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            # same-page: [text](#anchor)
+            for anc in re.findall(r"\]\(#([A-Za-z0-9_-]+)\)", line):
+                if anc.lower().strip("-") not in anchors[p]:
+                    broken.append(f"{_rel(p)}:{i} -> #{anc}  (no such heading on this page)")
+            # cross-file: [text](./other.md#anchor)
+            for rel, anc in re.findall(r"\]\((\.\.?/[^)#]+\.md)#([A-Za-z0-9_-]+)\)", line):
+                tgt = (p.parent / rel).resolve()
+                if tgt not in by_path:
+                    continue                     # the file link itself is covered elsewhere
+                if anc.lower().strip("-") not in anchors[by_path[tgt]]:
+                    broken.append(f"{_rel(p)}:{i} -> {rel}#{anc}  (no such heading there)")
+    assert not broken, "links point at headings that do not exist:\n  " + "\n  ".join(broken)

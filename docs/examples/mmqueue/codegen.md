@@ -52,7 +52,7 @@ This is deliberate (decision D6) and it **sidesteps a csynth pitfall**. Passing 
 nested `VmacCmd` struct in over `s_axilite` (or by value into the synthesizable path)
 mis-decomposes through HLS's struct/array optimization at C-synthesis — loop bounds
 can fold to zero and the kernel gets dead-code-eliminated. That is exactly the
-gotcha the [Custom Hooks: Complex guide](../../guide/custom_hooks/complex.md#pass-scalars-to-a-core-function--not-a-struct-by-value)
+gotcha the [Custom Hooks: Complex guide](../../guide/custom_hooks/complex.md#1-pass-scalars-to-a-_core-function--not-a-struct-by-value)
 documents, and it is why the **old hand-rolled top had to unpack the command into
 scalar registers** by hand. Reading the command from memory removes the boundary
 entirely: the deserialized fields are already plain scalars by the time they reach

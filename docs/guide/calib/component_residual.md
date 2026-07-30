@@ -8,7 +8,7 @@ summary: "A component's control residual is the delay pysim is MISSING once the 
 ---
 # Component residuals
 
-The second level of the [split](./index.md#two-levels-what-is-a-platform-property-what-is-a-component-property):
+The second level of the [split](./index.md#the-two-level-split-bus-vs-component):
 once the [bus term](./bus_model.md) is charged, what remains is the component's own **control cost** —
 the per-firing overhead the loosely-timed pysim does not already account for. A `TimingModel` fits that
 remainder and a `FreeRunMod` injects it.
@@ -104,7 +104,7 @@ plus the firing record the residual fit needs.
 ## Two kinds of component: where the residual lives
 
 The fit is identical; only the storage scope differs (the
-[two kinds](./index.md#two-kinds-of-component-shared-infra-vs-custom)):
+[two kinds](./index.md#where-the-fit-lives-custom-vs-shared-infra)):
 
 |                        | Shared-infra component                   | Custom component                      |
 | ---------------------- | ---------------------------------------- | ------------------------------------- |

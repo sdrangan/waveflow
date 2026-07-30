@@ -8,7 +8,7 @@ summary: "BusCalib fits the platform's m_axi transfer law — span(num_trans, nw
 ---
 # The bus-transfer model
 
-The first level of the [two-level split](./index.md#two-levels-what-is-a-platform-property-what-is-a-component-property):
+The first level of the [two-level split](./index.md#the-two-level-split-bus-vs-component):
 how long the `m_axi` interconnect takes to move `n` words in `k` bursts. This is a property of the
 **platform** — the memory system and AXI adapter — so it is fit **once** and every accelerator on that
 platform reuses it. `BusCalib` is that fit; `mm_bus.json` is where it lands.

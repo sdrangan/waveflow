@@ -41,7 +41,7 @@ Timing fits are cycle counts, and three things move them:
 Area is part-specific for a different reason: the counters themselves are properties of the device.
 A 7-series LUT is a 6-input table and its DSP48E1 is a 25x18 multiplier, so the *same* C synthesizes to
 different counts on a different family — and an ASIC flow does not have LUTs or BRAMs at all. Which is
-why the counter vocabulary is part of the identity too (see [`res_types`](#the-counter-vocabulary)).
+why the counter vocabulary is part of the identity too (see [the resource types](#the-resource-types)).
 
 Because two of these (part, clock) fix the kernel cycles, one (memory) fixes the bus law, and the
 technology fixes what is even being counted, a platform is **human-named** with a manifest, not a bare
@@ -52,10 +52,10 @@ system.
 
 There are two clocks, and only one of them changes the numbers:
 
-| Clock | Role | Effect on cycles |
-|---|---|---|
-| sim `Clock(freq=…)` | cycles ↔ seconds converter at the sim boundary | none — residuals are stored in **cycles**, so a re-deploy at a new sim frequency needs no refit |
-| synthesis `create_clock -period` | the target HLS schedules to | **changes the schedule → changes the cycles** |
+| Clock                             | Role                                            | Effect on cycles                                                                                      |
+| --------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| sim `Clock(freq=…)`             | cycles ↔ seconds converter at the sim boundary | none — residuals are stored in **cycles**, so a re-deploy at a new sim frequency needs no refit |
+| synthesis `create_clock -period` | the target HLS schedules to                     | **changes the schedule → changes the cycles**                                                  |
 
 So the platform key needs the **synthesis** clock. `Platform.synth_period_ns` is exactly the
 `create_clock -period` the TCL emits (`1e9 / clk_freq`).
@@ -73,8 +73,8 @@ of a platform's identity rather than a global constant.
 
 In Waveflow, the current default resource types are based on the [Xilinx/AMD FPGA resources](../resource/xilinx.md), namely:
 
-```python
-res_types = ['lut', 'ff', 'dsp', 'bram', 'uram', 'srl']
+```text
+lut   ff   dsp   bram   uram   srl
 ```
 
 The [FPGA resources page](../resource/xilinx.md)
