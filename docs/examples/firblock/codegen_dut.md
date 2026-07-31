@@ -192,5 +192,5 @@ never name a stale design — the failure mode being a `.f` that no longer match
 ## Where to next
 
 - [RTL simulation](./rtlsim.md) — driving this top through `xsim` and checking it against the golden.
-- [Resource modelling](./resources.md) — rebuilding across widths and both realizations, and what the
+- [The sweep and its results](./resource_fit.md) — rebuilding across widths and both realizations, and what the
   24 reports say the generated top costs.

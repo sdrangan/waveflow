@@ -1,19 +1,23 @@
 ---
-title: Resource modelling
+title: The sweep and its results
 parent: Block FIR (state + fixed point)
-nav_order: 9
+nav_order: 10
 has_children: false
 audience: python
-api: [dsp_prior, fir_compute_basis, fir_compute_fitted, compose, add_rm]
-summary: "The worked resource-model narrative on this design: a 24-point sweep in 20 minutes, an analytical DSP prior exact at every point with zero fitted parameters, a LUT/FF fit over structural features, and a composed whole-design estimate validated against totals that fit nothing. Includes the two results that only showed up because the design has coupled step functions in it — the DSP packing win at 8 bits, and the unrolled plateau that turns out to be two effects cancelling."
+api: [fir_block_sweep, points, compose]
+summary: "What 24 syntheses in 20 minutes actually showed. The DSP prior lands exactly at every point with zero fitted parameters; the LUT/FF fit is 9.8%/7.1% mean under leave-one-out; the composed whole-design estimate is validated against totals that trained none of it, with the warning that the 3.2% design-level figure flatters the model because most of the design is known rather than predicted. Includes the two results that only appear because the design has coupled step functions in it -- the DSP packing win at 8 bits, and the unrolled plateau that is two effects cancelling -- and a design finding: the right realization inverts with sample width."
 ---
 
-# Resource modelling
+# The sweep and its results
 
-This design is the worked example behind [Resource Models](../../guide/resource_model/). It is a good
-one for that job precisely because its knobs are awkward: sample width moves the DSP cost of a multiply
-*and* the number of samples per memory word, in opposite directions, so a naive fit and a physical
-model disagree in ways you can see.
+The models are [Resource models](./resource_model.md). This page is the evidence: what a sweep cost,
+what it bought, and where each model held or did not.
+
+This design is the worked example behind [Resource Models](../../guide/resource_model/) precisely
+because its knobs are awkward. Sample width moves the DSP cost of a multiply *and* the number of
+samples per memory word, in **opposite directions** — so a naive fit and a physical model agree on
+everything measured here and disagree off the grid, which is exactly the case worth having a worked
+example of.
 
 ## The measurement
 
@@ -28,7 +32,7 @@ python -m examples.fir_block.fir_block_sweep             # 24 points
 
 The numbers are committed twice over, so nothing here needs re-running:
 `examples/fir_block/fir_block_corpus.py` holds the grid as source, and the records themselves are
-published into the shipped platform library.
+published into the example's platform library.
 
 ### What the sweep bought
 
@@ -44,25 +48,10 @@ published into the shipped platform library.
 The two memory modules were characterized **once** and served all 24 points — the
 [structural keying](../../guide/calib/modules.md) paying off in syntheses rather than in argument.
 
-## DSP: a prior, exact, with nothing fitted
+## DSP: the prior holds exactly
 
-DSP is a *binding decision*, so it follows the device rather than statistics. Two facts suffice:
-
-**The DSP48E1 is a 25×18 signed multiplier**, so one `samp_w × samp_w` multiply costs
-
-| `samp_w` | ≤ 8 | ≤ 18 | ≤ 25 |
-|---|---|---|---|
-| DSPs | **0.5** — two multiplies share one | 1 | **2** — one operand exceeds 18 bits, so the product splits |
-
-**The kernel says how many multiplies it has** — `NTAP` serial; `NTAP × LW` unrolled, where
-`LW = mem_dwidth // samp_w` (the unrolled body's own comment: *"LW independent windows → LW*NTAP
-multipliers"*).
-
-```python
-DSP = ceil(n_mult × dsp_per_mult(samp_w))
-```
-
-**Result: exact at all 24 points, zero fitted parameters.**
+[The geometry](./resource_model.md#dsp-geometry-not-statistics) predicts **all 24 points exactly, with
+zero fitted parameters.**
 
 | serial | w=8 | w=12 | w=16 | w=24 | | unrolled | w=8 | w=12 | w=16 | w=24 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -73,8 +62,8 @@ DSP = ceil(n_mult × dsp_per_mult(samp_w))
 ### Two things in that table worth pausing on
 
 **At 8 bits the serial kernel uses *fewer* DSPs than it has taps** — `NTAP/2 + 1`. HLS packs two 8-bit
-multiplies into a single DSP48. That is a step function going the *helpful* direction, and it is the
-opposite of the packing cliff one expects at the wide end.
+multiplies into a single DSP48. That is a step function going the *helpful* direction, and the opposite
+of the packing cliff one expects at the wide end.
 
 **The unrolled column is flat at `2·NTAP` regardless of width** — which looks like a plateau worth
 hard-coding, and is not. Lane count falls as width rises while DSP-per-multiply rises, and over this
@@ -92,30 +81,13 @@ Hard-coding `2·NTAP` would be indistinguishable on this grid and **wrong at `me
 the product is 4. This is the clearest argument in the repo for encoding physics rather than fitting a
 curve: the fit and the model agree on all the data you have and disagree on the data you do not.
 
-{: .note }
-> One thing the physics does **not** explain: a constant `+1` in the serial packed case. It is constant
-> across every `NTAP`, so it is one multiply that failed to pair rather than a wrong law — kept as a
-> named constant (`SERIAL_PACK_CORRECTION`) so it stays visibly unexplained instead of being absorbed
-> into the formula.
+## BRAM: the assertion holds
 
-## BRAM: a prior that asserts zero
+No module reported any BRAM at any point — which is what
+[the prior asserts](./resource_model.md#bram-a-prior-that-asserts-zero), rather than merely what was
+observed. The design's two BRAMs are in the interface, not the modules.
 
-No module reported any BRAM at any point. The tap and history arrays carry `ARRAY_PARTITION` from their
-[`add_state`](./state.md) declaration, so their storage lands in LUTs and registers. The prior returns
-`0` **deliberately**, so a future configuration that *does* spill into block RAM shows up as a prior
-failure rather than passing unnoticed. The design's two BRAMs are in the interface, not the modules.
-
-## LUT and FF: the fitted half
-
-These are the genuinely estimated counters — partitioned storage, pipeline registers, the accumulate
-tree, address and mux logic. Fitted, but over **structural** features rather than raw parameters:
-
-| feature | what it means |
-|---|---|
-| `n_mult` | multipliers instantiated |
-| `store_bits` | taps + delay line, in bits. Partitioned, so it lands in registers. The delay line is realization-dependent: serial keeps `NTAP` entries, unrolled keeps `NTAP + LW - 1` |
-| `acc_bits` | `2W + ceil(log2 NTAP)` — the width the [format algebra](./fixedpoint.md) derives |
-| `mac_bits` | `n_mult × acc_bits` — pipeline register area to first order |
+## LUT and FF: what the fit achieves
 
 Leave-one-out over the grid:
 
@@ -136,24 +108,14 @@ registers. LUT is the honest limit of the approach.
 
 ## Composing, and validating
 
-Five models, of which only two are written: a prior + fit for `FirCompute` and an interface model for
-the composite's own cost. The three static modules inherit the default `add_rm_self`, a lookup against
-the platform store.
-
 ```python
-install_resource_models()            # gives FirCompute and FirBlock their add_rm_self
-
 top = elaborate(FirBlock, params)
-top.add_rm(platform)                 # recurses; every module ends up with a model
+top.add_rm(platform)
 est = compose(top)
 
 est.total     # {'lut': 9424, 'ff': 11398, 'dsp': 32, 'bram': 2}   predicted
               # measured:    8674 / 11347 /  32 /  2
 ```
-
-`install_resource_models` lives in `fir_block_resource.py` rather than in `fir_block.py` so the design
-module stays free of calibration imports — a design that wanted them inline would just define
-`add_rm_self` on the class.
 
 Validated against **design totals that fit nothing** — only per-module figures train the models:
 
@@ -185,6 +147,7 @@ is the argument for having the model at all.
 
 ## See also
 
-- [Resource Models](../../guide/resource_model/) — the general machinery this instantiates.
+- [Resource models](./resource_model.md) — the four models these measurements check.
 - [Composite kernels](../../guide/resource/composite.md) — how a report becomes per-module numbers.
+- [Validating a model](../../guide/resource_model/validation.md) — the general form of the check above.
 - [The two kernels](./kernels.md) — the serial and unrolled bodies the DSP counts come from.

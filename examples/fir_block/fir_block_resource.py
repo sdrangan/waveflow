@@ -197,56 +197,21 @@ def fir_compute_fitted(platform=None) -> "FittedResourceModel":
 
 
 # ---------------------------------------------------------------------------
-# F — installing the models: the whole author-facing surface for this design
+# F — where the models are installed
 # ---------------------------------------------------------------------------
-
-def install_resource_models() -> None:
-    """Give ``FirCompute`` and ``FirBlock`` their ``add_rm_self`` overrides.
-
-    Only two modules need one.  ``FirCmdRx``, ``MemRStream`` and ``MemWStream`` keep the inherited
-    default — a lookup against the platform store — because they were measured once and their area is
-    a fact to recall rather than a function to fit.  That is the ratio to expect: the fitting work
-    concentrates in the few modules that actually move with the parameters being explored.
-
-    Attached here rather than declared in ``fir_block.py`` so the design module stays free of
-    calibration imports; a design that wanted them inline would simply define ``add_rm_self`` on the
-    class.
-    """
-    from examples.fir_block.fir_block import FirBlock, FirCompute
-
-    def compute_add_rm_self(self, platform):
-        """Prior for the binding decisions, fit for the estimated counters — one model, four counters.
-
-        Loads its fitted coefficients from the committed corpus.  In a design whose corpus lived in the
-        platform library this would load from there instead; the corpus is local here because it is
-        also the example's test fixture.
-        """
-        from examples.fir_block.fir_block_corpus import points
-        from waveflow.build.elaborate import elaborate
-
-        model = fir_compute_fitted(platform=platform)
-        samples = [(elaborate(FirCompute, {"mem_dwidth": 32, "ntap": n, "samp_w": w,
-                                           "samp_i": 2, "unroll_lane": u}, name="fit"), m)
-                   for n, w, u, m in points()]
-        self._resource_model = model.fit(samples)
-
-    def block_add_rm_self(self, platform):
-        """The composite's OWN cost: adapters, channel FIFOs, control block, DATAFLOW shell.
-
-        Keyed on boundary structure, because that is what it depends on — measured invariant across 24
-        compute configurations and moving only when the memory word width did.
-        """
-        from waveflow.calib.resource_model import InterfaceResourceModel, boundary_signature
-        from examples.fir_block.fir_block_corpus import INTERFACE_BY_MEM_DWIDTH
-        from waveflow.build.elaborate import elaborate
-
-        table = {}
-        for dw, counters in INTERFACE_BY_MEM_DWIDTH.items():
-            probe = elaborate(FirBlock, {"mem_dwidth": dw, "ntap": 32, "samp_w": 16,
-                                         "samp_i": 2, "unroll_lane": False}, name="probe")
-            table[boundary_signature(probe)] = dict(counters)
-        self._resource_model = InterfaceResourceModel(
-            name="fir_block_interface", table=table, platform=platform)
-
-    FirCompute.add_rm_self = compute_add_rm_self
-    FirBlock.add_rm_self = block_add_rm_self
+#
+# Nowhere in this file.  ``FirCompute.add_rm_self`` and ``FirBlock.add_rm_self`` are declared on the
+# classes themselves in ``fir_block.py``, so ``top.add_rm(platform)`` works on a design as imported —
+# nothing has to be called first, and a reader looking for a module's model finds it on the module.
+#
+# They were briefly installed from here by assigning onto the classes, to keep ``fir_block.py`` free
+# of calibration imports.  That bought nothing: both methods import what they need inside the body
+# anyway, so the design module gained no module-level dependency either way, and the monkey-patch cost
+# the reader a level of indirection for it.
+#
+# What stays here is the model *content* — the priors, the feature transform and the fitted model's
+# shape.  Those are calibration concerns and there is no reason for a design module to carry them.
+# Only two modules need any of it: ``FirCmdRx``, ``MemRStream`` and ``MemWStream`` keep the inherited
+# default, a lookup against the platform store, because they were measured once and their area is a
+# fact to recall rather than a function to fit.  Expect that ratio — the fitting work concentrates in
+# the few modules that actually move with the parameters being explored.

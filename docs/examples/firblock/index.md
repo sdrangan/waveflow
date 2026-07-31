@@ -85,6 +85,8 @@ The pages build the design up from Python, parallel to [`interleaver`](../interl
   storage declarations generated straight from `add_state`.
 - [RTL simulation](./rtlsim.md) — the generated BFM harness, the run, and bit-exactness for *both*
   realizations against one golden.
-- [Resource modelling](./resources.md) — the 24-point sweep, an analytical DSP prior that is exact with
-  nothing fitted, a LUT/FF fit over structural features, and a composed whole-design estimate checked
-  against totals that trained none of it.
+- [Resource models](./resource_model.md) — what the design *asserts* about its own area: a
+  zero-parameter DSP prior from the DSP48E1's geometry, a BRAM prior that asserts zero, a LUT/FF fit
+  over structural features, and the one method per class that installs them.
+- [The sweep and its results](./resource_fit.md) — what 24 syntheses in 20 minutes actually showed, and
+  a composed whole-design estimate checked against totals that trained none of it.

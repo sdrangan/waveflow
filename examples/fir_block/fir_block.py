@@ -472,6 +472,24 @@ class FirCompute(FreeRunMod):
         carry.val[:] = buf[len(buf) - (t - 1):]       # the next block's initial condition
         return pack_samples(np.asarray(y).reshape(-1), self.samp_cls, self.mem_dwidth)
 
+    def add_rm_self(self, platform):
+        """A prior for the binding decisions, a fit for the estimated counters — one model, four
+        counters, each from whichever of the two is honest for it.
+
+        This is the only module in the design whose area moves with the knobs being explored, so it is
+        the only one that needs a fit.  Its coefficients come from the committed corpus; in a design
+        whose corpus lived in the platform library this would load from there instead, and the corpus
+        is local here because it doubles as the example's test fixture.
+        """
+        from examples.fir_block.fir_block_corpus import points
+        from examples.fir_block.fir_block_resource import fir_compute_fitted
+        from waveflow.build.elaborate import elaborate
+
+        samples = [(elaborate(FirCompute, {"mem_dwidth": 32, "ntap": n, "samp_w": w,
+                                           "samp_i": 2, "unroll_lane": u}, name="fit"), m)
+                   for n, w, u, m in points()]
+        self._resource_model = fir_compute_fitted(platform=platform).fit(samples)
+
 
 #: Seeded loop model for the sample loop — one output per cycle once the pipeline is full.  Replaced
 #: by a measured fit (the interleaver's ``calibrate_compute.py`` shape) when the RTL exists.
@@ -537,3 +555,23 @@ class FirBlock(FreeRunMod):
         self.m_in = self.rstream.m_mem
         self.m_out = self.wstream.m_mem
         self.s_done = self.wstream.s_done
+
+    def add_rm_self(self, platform):
+        """The composite's OWN cost: `m_axi` adapters, channel FIFOs, control block, DATAFLOW shell.
+
+        Keyed on boundary structure rather than on parameters, because that is what it depends on:
+        measured invariant across all 24 compute configurations, and moving only when the memory word
+        width did.  The table is built by elaborating one probe per measured width and asking each for
+        its boundary signature, so the key is computed the same way the lookup will compute it.
+        """
+        from examples.fir_block.fir_block_corpus import INTERFACE_BY_MEM_DWIDTH
+        from waveflow.build.elaborate import elaborate
+        from waveflow.calib.resource_model import InterfaceResourceModel, boundary_signature
+
+        table = {}
+        for dw, counters in INTERFACE_BY_MEM_DWIDTH.items():
+            probe = elaborate(FirBlock, {"mem_dwidth": dw, "ntap": 32, "samp_w": 16,
+                                         "samp_i": 2, "unroll_lane": False}, name="probe")
+            table[boundary_signature(probe)] = dict(counters)
+        self._resource_model = InterfaceResourceModel(
+            name="fir_block_interface", table=table, platform=platform)

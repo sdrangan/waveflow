@@ -32,7 +32,6 @@ from waveflow.calib.platform import Platform, platform_fallback_path
 from waveflow.calib.resource_model import boundary_signature, compose
 from examples.fir_block.fir_block import FirBlock, FirCompute
 from examples.fir_block.fir_block_corpus import GRID, INTERFACE_BY_MEM_DWIDTH
-from examples.fir_block.fir_block_resource import install_resource_models
 
 MEM_DW = 32
 
@@ -45,8 +44,6 @@ MEM_DW = 32
 _EXAMPLE = pathlib.Path(__file__).resolve().parents[2] / "examples" / "fir_block"
 PLATFORM = Platform.resolve(_EXAMPLE / "calib" / "platforms", "zynq7020_bfm_100mhz",
                             fallbacks=platform_fallback_path())
-
-install_resource_models()          # give FirCompute / FirBlock their add_rm_self overrides
 
 
 def _top(ntap, samp_w, unroll, mem_dwidth=MEM_DW, modelled=True):

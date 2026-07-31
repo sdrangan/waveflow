@@ -81,7 +81,7 @@ refusal is the design, not a gap in it.
   see what actually moved, choose a kind per module, validate, publish.
 
 A fully worked instance of all of it, with real numbers, is the
-[block FIR's resource modelling](../../examples/firblock/resources.md).
+[block FIR's resource modelling](../../examples/firblock/resource_model.md).
 
 ## See also
 
