@@ -60,7 +60,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.
 - **`waveflow/mcp/`** — MCP server exposing hardware design tools to AI assistants (Claude Code, VS Code). Two modes: *workspace* (uses host file tools) and *headless* (self-contained, for CI/API use). RAG over a pre-built example corpus lives in `mcp/corpus/`.
-- **`examples/`** — Reference designs: `poly/` (polynomial), `conv2d/`, `histogram/`, `vecunit/`, `interface/`, `timing/`.
+- **`examples/`** — Reference designs: `poly/` (polynomial), `conv2d/`, `histogram/`, `interface/`, `timing/`.
 
 ### Simulation flow
 
