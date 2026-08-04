@@ -1,0 +1,13 @@
+{
+  "key": "fir_compute-59b399b1",
+  "cls_name": "FirCompute",
+  "cls_module": "examples.fir_block.fir_block",
+  "params": {
+    "mem_dwidth": 32,
+    "ntap": 8,
+    "samp_i": 2,
+    "samp_w": 8,
+    "unroll_lane": 1
+  },
+  "signature": "59b399b10df90b15aceba1d83b14a8f7065e9108fc1b82b7f674d7f60d4ec900"
+}

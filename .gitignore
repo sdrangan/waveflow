@@ -39,7 +39,12 @@ hls/
 #                              of publishing at all.  (The untracked work tier is **/calib/work/,
 #                              ignored separately below.)
 !waveflow/calib/platforms/**
-!calib/platforms/**
+!**/calib/platforms/**
+# The `**/` matters: `calib/platforms/**` contains a slash, so git anchors it to the repo
+# root -- an example's library at examples/<name>/calib/platforms/ stayed ignored, with only
+# a few files force-added by hand.  That was invisible until a key change renamed 30 module
+# directories: the deletions staged, the replacements did not, and a fresh clone would have
+# had a store with records but no identities.
 *.o
 *.obj
 *.exe
@@ -122,6 +127,8 @@ Thumbs.db
 
 # MCP files
 !**/mcp/resources/*.json
+# P0 equivalence snapshots (plans/harmonize_calib.md) — committed so the refactor has a bar to clear.
+!tests/calib/golden/*.json
 
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/

@@ -1,0 +1,13 @@
+{
+  "key": "mem_w_stream-85d90eaa",
+  "cls_name": "MemWStream",
+  "cls_module": "waveflow.hw.mem_stream",
+  "params": {
+    "inband": 1,
+    "max_fwd_words": 8,
+    "max_xfer_len": 8,
+    "mem_awidth": 32,
+    "mem_dwidth": 64
+  },
+  "signature": "85d90eaa1d9556ee9b6326895e436affb3c96c5d7dab2611d9042beedbdf7e84"
+}
