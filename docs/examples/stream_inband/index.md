@@ -84,7 +84,7 @@ once cosim has run with tracing enabled.
 | [`examples/stream_inband/poly.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly.py)                               | Schemas,`PolyAccel`, `PolyTB` (SimPy), `PolyTBHls` (codegen-source) |
 | [`examples/stream_inband/poly_build.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_build.py)                   | Build DAG — the five groups above plus step definitions                           |
 | [`examples/stream_inband/poly_evaluate_impl.tpp`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_evaluate_impl.tpp) | Hand-written Horner evaluation hook (sticky impl)                                  |
-| [`examples/stream_inband/run.tcl`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/run.tcl)                               | Vitis HLS TCL driver consumed by`CSimStep` / `CSynthStep`                      |
+| [`examples/stream_inband/run.tcl`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/run.tcl)                               | Vitis HLS TCL driver consumed by `CSimStep` / `CSynthStep`                      |
 
 `gen/` (kernel + TB C++) and `include/` (schema + utility headers) are
 generated artifacts — they are `.gitignored` and rebuilt by the DAG.

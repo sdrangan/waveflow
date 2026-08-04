@@ -31,7 +31,7 @@ memory slave's :class:`~waveflow.hw.memif.BusTiming` — the **platform** bus ch
 (``setup``/``per_word``), configured in ``fir_sim.py`` and reused by any accelerator; the component
 supplies only ``num_trans``/``nwords``.  The **compute** — the one thing calibrated *per kernel* — is
 two learned :class:`~waveflow.calib.LinCalibModel`s (``fill_model``, ``compute_model``) held by the
-accelerator, so the sim reads ``model.predict(row)`` right where the estimate is used.  If both the
+accelerator, so the sim reads ``model.predict_feat(row)`` right where the estimate is used.  If both the
 bus model and the compute fit are right, the loaded end-to-end throughput matches with zero
 end-to-end fitting (Gate B).  The functional truth (``execute``) is bit-exact-shared with the
 kernel; only the timing is modeled.
@@ -152,7 +152,7 @@ COMPUTE_MODEL_PATH = RESULTS / "fir_compute_model.json"
 
 # -- the per-kernel COMPUTE model (the ONLY thing calibrated per accelerator) --------------------
 # Two through-origin :class:`~waveflow.calib.LinCalibModel`s, each a learned estimate of a TIME (so
-# the sim reads ``model.predict(row)`` directly and it's obvious where the estimate is made).  Bus
+# the sim reads ``model.predict_feat(row)`` directly and it's obvious where the estimate is made).  Bus
 # transfer time is NOT here — it's the platform's, configured on the memory slave in fir_sim.py.
 # See [[project-two-level-calibration]].  ``clk_period`` is folded into the features, so the fit is
 # clock-independent (coeffs are cycle-domain rates) and predict returns seconds:
@@ -181,14 +181,14 @@ _COMPUTE_SEED = {"row_setup": 8.0, "compute_beat": 1.0}
 def make_fill_model() -> LinCalibModel:
     """The fill-time model shell (seed + artifact path); fit or ``load_or_default()``."""
     return LinCalibModel(basis=[], target="fill_time", fit_intercept=False,
-                         transform=_fill_features, coeff_names=["L0"],
+                         transform_fn=_fill_features, coeff_names=["L0"],
                          seed=_FILL_SEED, path=FILL_MODEL_PATH)
 
 
 def make_compute_model() -> LinCalibModel:
     """The compute-time model shell (seed + artifact path); fit or ``load_or_default()``."""
     return LinCalibModel(basis=[], target="compute_time", fit_intercept=False,
-                         transform=_compute_features, coeff_names=["row_setup", "compute_beat"],
+                         transform_fn=_compute_features, coeff_names=["row_setup", "compute_beat"],
                          seed=_COMPUTE_SEED, path=COMPUTE_MODEL_PATH)
 
 
@@ -350,8 +350,8 @@ class FIRAccel(HwModule):
             # h-read + X ramp + FP fill); compute_body = the II=1 production span the store then hides
             # under (the write's min_span floor).
             row = {"n_row": n_rows, "n_col": n_cols, "clk_period": self.clk.period}
-            t_store_anchor = t_cmd + self.fill_model.predict(row)
-            compute_body = self.compute_model.predict(row)
+            t_store_anchor = t_cmd + self.fill_model.predict_feat(row)
+            compute_body = self.compute_model.predict_feat(row)
             self._ev("compute_end", tx)
             store_q.put(("job", cmd, (Y, t_store_anchor, compute_body)))
 

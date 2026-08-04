@@ -38,11 +38,14 @@ class TestResolve:
     def test_platform_dir_resolves_to_the_shared_component_library(self, tmp_path):
         r = MemRStream(name="rd", sim=_sim(), mem_dwidth=MEM_DW, inband=True, platform_dir=tmp_path)
         w = MemWStream(name="wr", sim=_sim(), mem_dwidth=MEM_DW, inband=True, platform_dir=tmp_path)
-        # keyed by the task-body id -> the two infra components land in DISTINCT shared libraries.
+        # Keyed by the CONFIGURATION-qualified task id (function name + template args), so the two
+        # infra components land in distinct libraries AND a different width does not collide with
+        # this one.  Nothing exists under either name here, so the resolver points at where a future
+        # calibration should land.
         assert Path(r.timing_model.calib_dir) == PlatformCalib(tmp_path).component_dir(
-            "mem_r_stream_framed_task")
+            f"mem_r_stream_framed_task_{MEM_DW}")
         assert Path(w.timing_model.calib_dir) == PlatformCalib(tmp_path).component_dir(
-            "mem_w_stream_framed_done_task")
+            f"mem_w_stream_framed_done_task_{MEM_DW}_8")
         assert r.timing_model.calib_dir != w.timing_model.calib_dir
 
     def test_calib_dir_overrides_platform_dir(self, tmp_path):
@@ -56,10 +59,30 @@ class TestResolve:
         assert MemWStream(name="wr", sim=_sim(), inband=True).timing_model is None
 
     def test_resolver_precedence_unit(self, tmp_path):
-        assert _resolve_calib_dir("local", tmp_path, "comp") == Path("local")
-        assert _resolve_calib_dir(None, tmp_path, "comp") == PlatformCalib(tmp_path).component_dir(
-            "comp")
-        assert _resolve_calib_dir(None, None, "comp") is None
+        """Returns ``(dir, config_specific)``; an explicit calib_dir wins, neither set is uncalibrated."""
+        assert _resolve_calib_dir("local", tmp_path, "comp") == (Path("local"), True)
+        assert _resolve_calib_dir(None, None, "comp") == (None, False)
+
+    def test_the_qualified_directory_is_preferred(self, tmp_path):
+        """A residual is valid for the configuration it was fit at, so that is what it is keyed by."""
+        qual = PlatformCalib(tmp_path).component_dir("comp_32")
+        qual.mkdir(parents=True)
+        assert _resolve_calib_dir(None, tmp_path, "comp", "comp_32") == (qual, True)
+
+    def test_a_bare_directory_is_found_but_flagged(self, tmp_path):
+        """A library written before the distinction existed still loads — and says it may not match.
+
+        Without the flag, a residual fit at one memory width would be handed to a design at another
+        with exactly the confidence of one fit at this width.
+        """
+        bare = PlatformCalib(tmp_path).component_dir("comp")
+        bare.mkdir(parents=True)
+        assert _resolve_calib_dir(None, tmp_path, "comp", "comp_32") == (bare, False)
+
+    def test_absent_points_at_the_qualified_name(self, tmp_path):
+        """So a future calibration lands correctly keyed rather than perpetuating the old layout."""
+        got, specific = _resolve_calib_dir(None, tmp_path, "comp", "comp_32")
+        assert got == PlatformCalib(tmp_path).component_dir("comp_32") and specific
 
 
 class TestReaderIsCalibratable:

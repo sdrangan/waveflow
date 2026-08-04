@@ -26,7 +26,7 @@ and the design's own multiplier count, which is a fact about the two kernels:
   LW*NTAP multipliers"*), so ``LW * NTAP``, where ``LW = mem_dwidth // samp_w`` is how many samples a
   memory word carries.
 
-Those two combine into one formula, ``DSP = n_mult * dsp_per_mult(samp_w)``, and the combination
+Those two combine into one formula, ``DSP = n_mult * dsp_per_mult(samp_w, PART)``, and the combination
 explains something that looks arbitrary in the raw measurements: **the unrolled kernel uses ``2*NTAP``
 DSPs at every sample width.**  It is not a coincidence and not a plateau — the lane count *shrinks* as
 the width grows while the DSP cost per multiply *rises*, and over this device's step boundaries the two
@@ -52,15 +52,16 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from waveflow.calib.device_rules import dsp_per_mult
 from waveflow.calib.resource_model import PriorResourceModel
 
 if TYPE_CHECKING:                      # imported lazily at use to keep this module import-light
     from waveflow.calib.resource_model import FittedResourceModel
 
-#: DSP48E1 port geometry: the multiplier is 25x18 signed.
-DSP_NARROW_BITS = 8       # at or below this, two multiplies are packed into one DSP
-DSP_SINGLE_BITS = 18      # at or below this, one multiply is one DSP
-DSP_SPLIT_BITS = 25       # at or below this, a split multiply costs two DSPs
+#: The part this corpus was measured on.  The DSP geometry it implies now comes from
+#: :mod:`waveflow.calib.device_rules` rather than from constants duplicated here -- a DSP48E1 is
+#: 25x18 and a DSP48E2 is 27x18, and that is a property of the silicon, not of this filter.
+PART = "xc7z020clg484-1"
 
 #: Unexplained constant in the serial kernel at ``samp_w <= 8``.  The packed prior predicts
 #: ``NTAP/2`` and the measurement is ``NTAP/2 + 1``, at every ``NTAP`` in {8, 16, 32} -- a constant
@@ -68,21 +69,6 @@ DSP_SPLIT_BITS = 25       # at or below this, a split multiply costs two DSPs
 #: Kept explicit and named so it stays visible as *unexplained*: encoding it into the formula would
 #: dress up a measurement as physics.
 SERIAL_PACK_CORRECTION = 1
-
-
-def dsp_per_mult(samp_w: int) -> float:
-    """DSPs consumed by one ``samp_w x samp_w`` signed multiply on a DSP48E1."""
-    w = int(samp_w)
-    if w <= DSP_NARROW_BITS:
-        return 0.5
-    if w <= DSP_SINGLE_BITS:
-        return 1.0
-    if w <= DSP_SPLIT_BITS:
-        return 2.0
-    # Beyond the 25-bit port both operands need splitting; the cost grows as the product of the
-    # per-operand tile counts.  Untested here -- the sweep stops at 24 -- so it is a documented
-    # extrapolation rather than a measured law.
-    return math.ceil(w / DSP_SINGLE_BITS) * math.ceil(w / DSP_SPLIT_BITS)
 
 
 def lane_width(mem_dwidth: int, samp_w: int) -> int:
@@ -102,8 +88,8 @@ def dsp_prior(f: dict) -> int:
     ntap, samp_w = int(f["ntap"]), int(f["samp_w"])
     unroll = bool(f.get("unroll_lane"))
     n = n_multipliers(ntap, samp_w, int(f.get("mem_dwidth", 32)), unroll)
-    dsp = math.ceil(n * dsp_per_mult(samp_w))
-    if not unroll and dsp_per_mult(samp_w) < 1.0:
+    dsp = math.ceil(n * dsp_per_mult(samp_w, PART))
+    if not unroll and dsp_per_mult(samp_w, PART) < 1.0:
         dsp += SERIAL_PACK_CORRECTION
     return dsp
 
@@ -129,8 +115,13 @@ def fir_compute_prior() -> PriorResourceModel:
 # D2 — the learned part: LUT and FF
 # ---------------------------------------------------------------------------
 
-def compute_features(comp) -> dict:
-    """Physically-motivated features for a ``FirCompute`` instance.
+def fir_compute_basis(params) -> dict:
+    """The **transform**: raw ``HwParam`` values -> physically-motivated basis terms.
+
+    Raw features are the resolved parameters and are never hand-written; this is the basis map
+    on top of them, and it belongs to the *model* rather than the module for the same reason
+    :attr:`~waveflow.calib.calib.LinCalibModel.transform` does — it must be identical at fit time
+    and at predict time, so it lives in exactly one place.
 
     Chosen for *meaning* rather than convenience, so the fit extrapolates on structure rather than on
     coincidence between parameters:
@@ -147,8 +138,8 @@ def compute_features(comp) -> dict:
       which sets how wide every pipeline register in the MAC has to be.
     * ``mac_bits`` — ``n_mult * acc_bits``, the pipeline's register area to first order.
     """
-    p = {k: int(getattr(comp, k)) for k in ("ntap", "samp_w", "mem_dwidth")}
-    unroll = bool(getattr(comp, "unroll_lane", False))
+    p = {k: int(params[k]) for k in ("ntap", "samp_w", "mem_dwidth")}
+    unroll = bool(params.get("unroll_lane", False))
     lw = lane_width(p["mem_dwidth"], p["samp_w"])
     n_mult = n_multipliers(p["ntap"], p["samp_w"], p["mem_dwidth"], unroll)
     acc_bits = 2 * p["samp_w"] + math.ceil(math.log2(max(2, p["ntap"])))
@@ -177,9 +168,36 @@ FITTED_BASIS = {"ff": ["store_bits", "n_mult"],
                 "lut": ["n_mult", "store_bits", "mac_bits"]}
 
 
-def fir_compute_fitted() -> "FittedResourceModel":
-    """The LUT/FF model for ``FirCompute``.  Must be :meth:`fit` before it predicts."""
+def fir_compute_fitted(platform=None) -> "FittedResourceModel":
+    """`FirCompute`'s complete model: the exact prior for DSP/BRAM plus the fit for LUT/FF.
+
+    The prior rides *inside* the fitted model (``prior=``) rather than being combined by a wrapper —
+    one object predicts all four counters, with each counter coming from whichever is honest for it.
+    Must be :meth:`~waveflow.calib.resource_model.FittedResourceModel.fit` before it predicts LUT/FF.
+    """
     from waveflow.calib.resource_model import FittedResourceModel
 
-    return FittedResourceModel(name="fir_compute_lutff", counters=("lut", "ff"),
-                               basis=dict(FITTED_BASIS), feature_fn=compute_features)
+    return FittedResourceModel(name="fir_compute", targets=("lut", "ff"),
+                               basis=dict(FITTED_BASIS), transform_fn=fir_compute_basis,
+                               prior=fir_compute_prior(), platform=platform)
+
+
+# ---------------------------------------------------------------------------
+# F — where the models are installed
+# ---------------------------------------------------------------------------
+#
+# Nowhere in this file.  ``FirCompute.add_rm_self`` and ``FirBlock.add_rm_self`` are declared on the
+# classes themselves in ``fir_block.py``, so ``top.add_rm(platform)`` works on a design as imported —
+# nothing has to be called first, and a reader looking for a module's model finds it on the module.
+#
+# They were briefly installed from here by assigning onto the classes, to keep ``fir_block.py`` free
+# of calibration imports.  That bought nothing: both methods import what they need inside the body
+# anyway, so the design module gained no module-level dependency either way, and the monkey-patch cost
+# the reader a level of indirection for it.
+#
+# What stays here is the model *content* — the priors, the feature transform and the fitted model's
+# shape.  Those are calibration concerns and there is no reason for a design module to carry them.
+# Only two modules need any of it: ``FirCmdRx``, ``MemRStream`` and ``MemWStream`` keep the inherited
+# default, a lookup against the platform store, because they were measured once and their area is a
+# fact to recall rather than a function to fit.  Expect that ratio — the fitting work concentrates in
+# the few modules that actually move with the parameters being explored.

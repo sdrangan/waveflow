@@ -1,0 +1,1429 @@
+{
+  "fir_block": {
+    "ntap16_w12_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 3405,
+          "lut": 2628
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 7397,
+        "lut": 7574,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w12_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 3670,
+          "lut": 3010
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 7662,
+        "lut": 7956,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w16_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 4167,
+          "lut": 2813
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 8159,
+        "lut": 7759,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w16_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 4455,
+          "lut": 2999
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 8447,
+        "lut": 7945,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w24_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 74,
+          "lut": 132,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 5689,
+          "lut": 3184
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 9648,
+        "lut": 7983,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w24_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 74,
+          "lut": 132,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 5689,
+          "lut": 3184
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 9648,
+        "lut": 7983,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w8_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 105,
+          "lut": 285,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 9,
+          "ff": 2644,
+          "lut": 2442
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 9,
+        "ff": 6634,
+        "lut": 7394,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap16_w8_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 105,
+          "lut": 285,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 3366,
+          "lut": 4182
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 7356,
+        "lut": 9134,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w12_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 5883,
+          "lut": 4107
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 9875,
+        "lut": 9053,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w12_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 64,
+          "ff": 6341,
+          "lut": 4783
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 64,
+        "ff": 10333,
+        "lut": 9729,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w16_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 32,
+          "ff": 7406,
+          "lut": 4478
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 32,
+        "ff": 11398,
+        "lut": 9424,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w16_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 64,
+          "ff": 7887,
+          "lut": 4747
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 64,
+        "ff": 11879,
+        "lut": 9693,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w24_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 74,
+          "lut": 132,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 64,
+          "ff": 10451,
+          "lut": 5220
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 64,
+        "ff": 14410,
+        "lut": 10019,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w24_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 74,
+          "lut": 132,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 64,
+          "ff": 10451,
+          "lut": 5220
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 64,
+        "ff": 14410,
+        "lut": 10019,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w8_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 105,
+          "lut": 285,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 17,
+          "ff": 4360,
+          "lut": 3736
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 17,
+        "ff": 8350,
+        "lut": 8688,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap32_w8_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 105,
+          "lut": 285,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 64,
+          "ff": 5662,
+          "lut": 6984
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 64,
+        "ff": 9652,
+        "lut": 11936,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w12_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 8,
+          "ff": 2166,
+          "lut": 1875
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 8,
+        "ff": 6158,
+        "lut": 6821,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w12_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 2334,
+          "lut": 2098
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 6326,
+        "lut": 7044,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w16_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 8,
+          "ff": 2547,
+          "lut": 1968
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 8,
+        "ff": 6539,
+        "lut": 6914,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w16_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 107,
+          "lut": 279,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 2739,
+          "lut": 2099
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 6731,
+        "lut": 7045,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w24_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 74,
+          "lut": 132,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 3309,
+          "lut": 2154
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 7268,
+        "lut": 6953,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w24_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 74,
+          "lut": 132,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 3309,
+          "lut": 2154
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 7268,
+        "lut": 6953,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w8_serial": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 105,
+          "lut": 285,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 5,
+          "ff": 1786,
+          "lut": 1782
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 5,
+        "ff": 5776,
+        "lut": 6734,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "ntap8_w8_unroll": {
+      "level": "INTERPOLATED",
+      "per_module": {
+        "FirBlock": {
+          "bram": 2,
+          "dsp": 0,
+          "ff": 1949,
+          "lut": 1984
+        },
+        "FirCmdRx": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 105,
+          "lut": 285,
+          "uram": 0
+        },
+        "FirCompute": {
+          "bram": 0,
+          "dsp": 16,
+          "ff": 2218,
+          "lut": 2729
+        },
+        "MemRStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 472,
+          "lut": 833,
+          "uram": 0
+        },
+        "MemWStream": {
+          "bram": 0,
+          "dsp": 0,
+          "ff": 1464,
+          "lut": 1850,
+          "uram": 0
+        }
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 16,
+        "ff": 6208,
+        "lut": 7681,
+        "srl": 0,
+        "uram": 0
+      }
+    }
+  },
+  "timing_numeric": {
+    "coeffs": {
+      "intercept": 8.0,
+      "num_trans": 3.0,
+      "nwords": 1.5
+    },
+    "levels": [
+      "EXACT",
+      "EXTRAPOLATED"
+    ],
+    "predictions": [
+      65.0,
+      800.0
+    ]
+  },
+  "vecmult": {
+    "vlen1024_dw128": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 8,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 8,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen1024_dw256": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 16,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 16,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen1024_dw32": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 2,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen1024_dw64": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 4,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 4,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen16384_dw128": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 16,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 16,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen16384_dw256": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 16,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 16,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen16384_dw32": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 16,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 16,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen16384_dw64": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 16,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 16,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen4096_dw128": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 8,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 8,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen4096_dw256": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 16,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 16,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen4096_dw32": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 4,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 4,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen4096_dw64": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 4,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 4,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen512_dw128": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 8,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 8,
+        "dsp": 8,
+        "ff": 1397,
+        "lut": 2622,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen512_dw256": {
+      "level": "EXTRAPOLATED",
+      "own": {
+        "bram": 0,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 0,
+        "dsp": 16,
+        "ff": 3622,
+        "lut": 6956,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen512_dw32": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 2,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 2,
+        "dsp": 2,
+        "ff": 419,
+        "lut": 964,
+        "srl": 0,
+        "uram": 0
+      }
+    },
+    "vlen512_dw64": {
+      "level": "INTERPOLATED",
+      "own": {
+        "bram": 4,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      },
+      "total": {
+        "bram": 4,
+        "dsp": 4,
+        "ff": 598,
+        "lut": 1370,
+        "srl": 0,
+        "uram": 0
+      }
+    }
+  }
+}

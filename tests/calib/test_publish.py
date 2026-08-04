@@ -181,3 +181,112 @@ class TestModuleTier:
         work = self._add_module(_make_work(tmp_path / "work"), records=5)
         written = apply_plan(build_plan(work, tracked))
         assert "modules/fir_compute-a1b2c3d4/resource/records.jsonl" in written
+
+
+def _make_platform(root, **kw):
+    """A work dir that is also a real platform — i.e. it carries an identity manifest.
+
+    ``_make_work`` deliberately omits one (it exercises artifact promotion, not identity); seeding
+    requires it, because a directory without a manifest is not a platform to inherit from.
+    """
+    _make_work(root, **kw)
+    (root / "platform.json").write_text(
+        json.dumps({"part": "xc7z020clg484-1", "clk_freq_hz": 100e6}), encoding="utf-8")
+    return root
+
+
+class TestSeeding:
+    """Seeding: copying an upstream platform into a project's own library.
+
+    Necessary because platform resolution is **first-match-wins on the whole directory** — the moment a
+    project owns a platform of a given name, the upstream one of that name stops being consulted.  A
+    project that publishes a single module record would otherwise silently lose the bus law and infra
+    residuals it was relying on.  Seeding makes the inheritance explicit and frozen.
+    """
+
+    def test_seeding_copies_the_stable_artifacts(self, tmp_path):
+        from waveflow.calib.publish import seed_platform
+
+        src = _make_platform(tmp_path / "upstream")
+        dst = tmp_path / "mine"
+        written = seed_platform(src, dst)
+
+        assert (dst / "platform.json").is_file()          # the identity comes across too
+        assert (dst / "mm_bus.json").is_file()
+        assert (dst / "components" / "mem_w_stream_task" / "params.json").is_file()
+        assert written, "nothing was copied"
+        # ...and not the churn
+        assert not (dst / "components" / "mem_w_stream_task" / "pysim").exists()
+
+    def test_seeding_refuses_a_populated_target(self, tmp_path):
+        """So it cannot quietly overwrite a library someone has already calibrated into."""
+        from waveflow.calib.publish import seed_platform
+
+        src = _make_platform(tmp_path / "upstream")
+        dst = _make_platform(tmp_path / "mine")
+        with pytest.raises(FileExistsError, match="already exists"):
+            seed_platform(src, dst)
+        seed_platform(src, dst, force=True)          # explicit override still works
+
+    def test_seeding_a_missing_platform_raises(self, tmp_path):
+        from waveflow.calib.publish import seed_platform
+
+        with pytest.raises(FileNotFoundError, match="no platform to seed from"):
+            seed_platform(tmp_path / "nothing", tmp_path / "mine")
+
+    def test_the_shipped_platform_seeds_completely(self, tmp_path):
+        """The real case: inherit the reference library's bus law, residuals and module records."""
+        from waveflow.calib.platform import packaged_platforms_dir
+        from waveflow.calib.publish import seed_platform
+        from waveflow.calib.record_store import ModuleStore
+
+        src = packaged_platforms_dir() / "zynq7020_bfm_100mhz"
+        dst = tmp_path / "myboard"
+        seed_platform(src, dst)
+
+        assert (dst / "mm_bus.json").is_file()
+        assert len(list((dst / "components").glob("*"))) == 2
+        # Compare against the source rather than a hardcoded count: what the shipped library holds is
+        # a policy question (framework modules only), and this test is about the *copy* being faithful.
+        assert ModuleStore(dst).keys() == ModuleStore(src).keys()
+        assert ModuleStore(dst).keys(), "the shipped library has no module records to inherit"
+
+
+class TestSeedPlatformStep:
+    """The DAG rung: create-if-absent, inheriting rather than starting empty."""
+
+    @staticmethod
+    def _cfg(tmp_path):
+        from waveflow.build.build import BuildConfig
+        return BuildConfig(root_dir=tmp_path, platform="myboard",
+                           platforms_root=tmp_path / "calib" / "platforms",
+                           part="xc7z020clg484-1", clk_freq=100e6)
+
+    def test_it_seeds_then_becomes_a_noop(self, tmp_path):
+        from waveflow.build.build import BuildDag
+        from waveflow.build.calib_steps import SeedPlatformStep
+        from waveflow.calib.record_store import ModuleStore
+
+        cfg = self._cfg(tmp_path)
+        dag = BuildDag()
+        dag.add(SeedPlatformStep(name="seed", seed_from="zynq7020_bfm_100mhz"))
+
+        from waveflow.calib.platform import packaged_platforms_dir
+        upstream = ModuleStore(packaged_platforms_dir() / "zynq7020_bfm_100mhz")
+
+        assert dag.run(cfg, force=True)["seed"].success
+        n = len(ModuleStore(cfg.platform_info.dir).keys())
+        assert n == len(upstream.keys()) > 0
+
+        # Idempotent — leaving it in a DAG costs nothing, and it must not re-copy over local work.
+        assert dag.run(cfg, force=True)["seed"].success
+        assert len(ModuleStore(cfg.platform_info.dir).keys()) == n
+
+    def test_no_platform_selected_is_not_an_error(self, tmp_path):
+        from waveflow.build.build import BuildConfig, BuildDag
+        from waveflow.build.calib_steps import SeedPlatformStep
+
+        cfg = BuildConfig(root_dir=tmp_path)          # no platform
+        dag = BuildDag()
+        dag.add(SeedPlatformStep(name="seed", seed_from="zynq7020_bfm_100mhz"))
+        assert dag.run(cfg, force=True)["seed"].success

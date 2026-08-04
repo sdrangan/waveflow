@@ -279,3 +279,22 @@ def test_signature_digest_is_deterministic_within_a_process():
     b = elaborate(Leaf, {"width": 12}, name="b")
     assert signature_digest(a) == signature_digest(b)
     assert resolved_params(a) == resolved_params(b)
+
+
+def test_calibration_location_is_not_part_of_the_key():
+    """A design pointed at two platform directories is **one** design.
+
+    ``platform_dir`` and friends say where a model's *data* lives; they are not properties of the
+    hardware.  Before this exclusion the same design keyed differently per platform, so records filed
+    under one were invisible from the other — and a lookup miss is silent, so the design simply read
+    as cheaper than it is.  (plans/harmonize_calib.md, P1.)
+    """
+    from examples.fir_block.fir_block import FirBlock
+
+    base = {"mem_dwidth": 32, "ntap": 32, "samp_w": 16, "samp_i": 2, "unroll_lane": False}
+    keys = {
+        identify(FirBlock, base).key,
+        identify(FirBlock, {**base, "platform_dir": "/platforms/a"}).key,
+        identify(FirBlock, {**base, "platform_dir": "/platforms/b"}).key,
+    }
+    assert len(keys) == 1, f"calibration location leaked into the module key: {keys}"

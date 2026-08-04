@@ -15,9 +15,9 @@ what it measures and the pipeline-activity plot it produces; the [next page](./r
 The pysim never runs the RTL. Each stage's cost is a loaded model:
 
 - the **bus law** — each `m_axi` transfer's cost, `nwords + (num_trans − 1)` cycles per read
-  ([`BusCalib`](../../guide/calib/bus_model.md));
+  ([`BusCalib`](../../guide/timing_model/bus_model.md));
 - the **mem-stream residuals** — the reader's ≈15-cycle and writer's ≈22-cycle own control cost, on top of
-  the bus term ([the mem-stream residual](../../guide/calib/memstream.md));
+  the bus term ([the mem-stream residual](../../guide/timing_model/memstream.md));
 - the **compute loop model** — the gather's `cycles = n` ([the timing model](./timing_model.md)).
 
 Each free-running stage records a per-firing `fire_log`, and the whole run lands at **300 cyc/job**.

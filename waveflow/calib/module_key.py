@@ -288,3 +288,20 @@ def walk_modules(top: Any, *, include_top: bool = True) -> "list[tuple[str, Any,
         for name, child in getattr(top, "sub_comps", {}).items():
             visit(child, name)
     return out
+
+
+def config_id(kernel_task: Any) -> str:
+    """The **configuration-qualified** id of a task: its function name plus its template arguments.
+
+    ``mem_r_stream_framed_task`` with ``template_args=(32,)`` -> ``mem_r_stream_framed_task_32``.
+
+    This is the granularity at which a task is actually *synthesized* — it is exactly the prefix Vitis
+    gives the RTL entity — and therefore the granularity at which a measurement about it is valid.  The
+    bare function name is not: one ``mem_r_stream_framed_task`` directory would serve every memory
+    width, so a residual fit at 32 bits would be handed to a design at 64 with nothing to notice.
+
+    Shared deliberately between the resource path (which keys RTL rows by it) and the timing path
+    (which keys residuals by it), so the two cannot drift on what counts as "the same configuration".
+    """
+    args = "".join(f"_{int(a)}" for a in (getattr(kernel_task, "template_args", None) or ()))
+    return f"{kernel_task.task_fn}{args}"

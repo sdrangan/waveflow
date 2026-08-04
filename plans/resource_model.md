@@ -610,3 +610,69 @@ defensible claim at review than a regression table.
   probe" intent and the DSP packing cliff.
 * [`interleaver_timing_overhaul.md`](interleaver_timing_overhaul.md) — the timing half's most recent
   shape; the fixture/measured-fit precedent this mirrors.
+
+## Phase F — models attach to modules, not to a resolver
+
+**Motivation.** Phases D/E left the *mechanism* right and the *policy* undecided. Selecting a model
+meant hand-writing a `model_for` that dispatched on a class-name string, and deriving its inputs meant
+hand-writing a `compute_features` next to the design. Both hand-write information the framework already
+has: the hierarchy is in `sub_comps`, and the parameters are the `HwParam` list.
+
+**The reframing** (ML terminology, and it is the right one):
+
+* **raw features** are *always* the resolved `HwParam` / `HwConst` values — never hand-written.
+* a **transform** turns those into basis functions (`n_mult`, `store_bits`, …). It is hand-written
+  where a design needs derived terms, and it belongs to the **model**, not the module — the same reason
+  [`LinCalibModel.transform`](../waveflow/calib/calib.py) exists: the raw→basis map must be identical at
+  fit time and predict time, so it lives in one place and cannot drift.
+* **selection** is by recursion through the hierarchy, not by a registry.
+
+**Why "features = params" is complete, not just conventional.** `assert_param_pure` enforces that
+*structure* is a pure function of the `HwParam`/`HwConst` parameters. So every structural fact — port
+counts, channel counts, widths — is a function of the params by construction. There is no structural
+input outside the param vector. (A transform may still *read* the elaborated component, because
+structure is param-determined but not always cheap to re-derive; that is an optimization, not a second
+source of truth.)
+
+### F1 — the counter vocabulary belongs to the platform
+
+`Platform.res_types`, persisted in `platform.json`, defaulting to the Vitis set when absent so existing
+platforms load unchanged. `RESOURCE_FIELDS` becomes `VITIS_RES_TYPES` — a default, not the universe.
+This is also the seam an ASIC flow would enter through: a different technology declares different
+counters rather than the model layer being reworked.
+
+Model construction then **validates counter names against the platform's set**. Today a typo
+(`{"dspp": …}`) predicts fine standalone and is silently dropped by `add_counters`, so the module
+contributes **zero** to the design — a missing contribution makes a design look *cheaper*, which turns
+"does not fit" into "fits".
+
+### F2 — attaching a model must not change the module key
+
+`_resource_model` (and `_timing_model`, latently) must join `_CONTEXT_ATTRS`. Measured: attaching a
+real model moved a key from `fir_compute-0768f13d` to `fir_compute-df7acb74`, so every store lookup
+would miss — and there is a chicken-and-egg, since `add_rm` needs the key to *choose* the model it is
+about to attach. This lands before F3 or F3 is silently broken.
+
+### F3 — `add_rm(platform)` recursing the hierarchy
+
+```python
+def add_rm(self, platform):
+    for c in self.sub_comps.values():
+        c.add_rm(platform)
+    self.add_rm_self(platform)
+```
+
+**The default `add_rm_self` installs a lookup against the platform store**, not a null model. Key
+present → `EXACT` measured area; key absent → zeros **and** `UNCALIBRATED`. So a module that was
+measured needs no author code at all, and one that was not is flagged rather than silently free.
+`predict()` always works either way.
+
+### F4 — transform, and the author surface
+
+`feature_fn` → `transform`, owned by the model. A design's whole resource-specific surface becomes: a
+transform (only if it needs derived basis terms), a prior (only if it has physics to encode), and an
+`add_rm_self` override on the modules that need something other than the lookup. `model_for` retires;
+`compose(top)` reads what is attached.
+
+**Fitting stays a calibration-time path** — walk, fit each module, save into the platform — symmetric
+with how timing residuals are fitted once and loaded thereafter. `add_rm` loads; it does not fit.

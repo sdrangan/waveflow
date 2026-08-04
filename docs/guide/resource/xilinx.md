@@ -4,21 +4,29 @@ parent: Resource analysis
 nav_order: 1
 has_children: false
 audience: python
-summary: "What the counters mean — LUT, FF, DSP, BRAM, URAM, SRL — and how Vitis produces an area estimate after C-synthesis. The estimate comes from HLS's own binding decisions plus per-part characterization, before Vivado has optimized anything, which is why DSP and BRAM track well while LUT and FF are genuinely estimates."
+summary: "What the counters mean — LUT, FF, DSP, BRAM, URAM, SRL — and how Vitis produces a utilization estimate after C-synthesis. The estimate comes from HLS's own binding decisions plus per-part characterization, before Vivado has optimized anything, which is why DSP and BRAM track well while LUT and FF are genuinely estimates."
 ---
 
 # FPGA resources
 
-An FPGA is a fixed grid of hard primitives. "Area" is how many of each a design consumes, and a design
-fits only if **every** counter fits — running out of DSPs is as fatal as running out of LUTs, which is
-why a resource model has to predict each of them rather than one aggregate number.
+Waveflow's current focus is on Xilinx / AMD FPGA design flows. An FPGA is not a blank slate: its fabric
+is a fixed grid of hardware **primitives** — logic cells, registers, memory blocks and specialized
+arithmetic units — committed to silicon when the part was manufactured. Vivado's **logic synthesis**
+maps a design's RTL onto those primitives, deciding which becomes a LUT and which becomes a DSP; **place
+and route** then assigns each mapped primitive to a physical site on the die and wires them together.
 
-## The counters
+A design fits only if it stays within the part's supply of **every** primitive, so Vitis HLS estimates
+how many of each a kernel will consume as soon as C-synthesis finishes — before Vivado runs at all.
+Designers use those estimates to tell whether a design is heading past the capacity of the target part
+while there is still time to change it.
 
-Numbers below are for the **xc7z020** (Zynq-7020, Artix-7 fabric) used by the reference platform; the
-kinds are general, the quantities are not.
+## The Xilinx / AMD hardware primitives
 
-| counter | what it is | on xc7z020 |
+The table below lists the hardware primitives used in Xilinx / AMD parts. As an illustration, it also
+gives the number of each available on the **xc7z020** (Zynq-7020, Artix-7 fabric), a low-cost part
+common on educational boards.
+
+| Primitive | what it is | on xc7z020 |
 |---|---|---|
 | **LUT** | Look-Up Table — the combinational primitive. A 6-input LUT implements any Boolean function of 6 inputs (or two 5-input functions sharing inputs). The general-purpose currency of the fabric. | 53,200 |
 | **FF** | Flip-Flop — a 1-bit register, paired with the LUTs in each slice. Pipelining costs these. | 106,400 |
@@ -45,9 +53,9 @@ C-synthesis does not just translate C to RTL — it **schedules** operations int
 **binds** each one to a physical resource. Every multiply is assigned to a DSP or to LUT logic; every
 array is assigned to BRAM, LUTRAM, or registers; every operation gets a functional unit.
 
-The area report is a direct consequence of those binding decisions, costed with per-part
-characterization data. That is why the numbers appear the instant C-synthesis finishes, with no
-place-and-route.
+The utilization report is a direct consequence of those binding decisions, costed with per-part
+characterization data. That is why the numbers appear the instant C-synthesis finishes, without Vivado
+having run.
 
 {: .warning }
 > **The estimate precedes Vivado, and Vivado re-optimizes.** Logic synthesis and implementation share

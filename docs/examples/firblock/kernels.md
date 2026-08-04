@@ -195,11 +195,18 @@ Measured at `T = 32`, `MEM_DW = 32`, xc7z020:
 |---|---|---|---|---|---|
 | 24 | 1 | 64 | 64 | identical | identical |
 | 16 | 2 | **32** | 64 | 4097 cyc | **2049 cyc** |
-| 8 | 4 | **17** | 128 | 4097 cyc | ~1025 cyc |
+| 8 | 4 | **17** | 64 | 4097 cyc | ~1025 cyc |
 
 At `LW = 1` the two converge to the same design, which is a useful sanity check on the pair.
+
+The DSP column is flat at 64 for the unrolled kernel and *falls* for the serial one, which looks
+backwards until you notice both effects are the same one: at `W = 8` HLS packs two multiplies into one
+DSP48. The unrolled kernel has 4× the multiplies at half the cost each, so it lands back on 64. See
+[Resource modelling](./resource_fit.md#dsp-the-prior-holds-exactly), where that cancellation
+holds across the whole grid — and stops holding at `MEM_DW = 64`.
 
 ## Where to next
 
 - [DUT codegen](./codegen_dut.md) — how `unroll_lane` selects a body, and where the storage comes from.
-- **Parameter sweep** *(forthcoming)* — the full resource and throughput curves.
+- [The sweep and its results](./resource_fit.md) — the full 24-point sweep these three rows are a corner of, and
+  a model that predicts the DSP column exactly.

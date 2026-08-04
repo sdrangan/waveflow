@@ -60,12 +60,12 @@ class TestConstruction:
 
     def test_unfitted_predicts_the_seed(self, tmp_path):
         m = StreamTimingModel(component="c", calib_dir=tmp_path)
-        assert m.predict({"nwords": 128, "num_trans": 8}) == [0.0]
+        assert m.predict_feat({"nwords": 128, "num_trans": 8}) == [0.0]
 
     def test_nonzero_seed_is_used_before_fit(self, tmp_path):
         m = StreamTimingModel(component="c", calib_dir=tmp_path,
                               seed={"nwords": 0.0, "num_trans": 2.0, "intercept": 22.0})
-        assert m.predict({"nwords": 128, "num_trans": 8}) == [22.0 + 2.0 * 8]
+        assert m.predict_feat({"nwords": 128, "num_trans": 8}) == [22.0 + 2.0 * 8]
 
 
 class TestResidualAndFit:
@@ -90,7 +90,7 @@ class TestResidualAndFit:
         m = StreamTimingModel(component="c", calib_dir=tmp_path)
         _seed_two_sizes(m)
         m.fit()
-        assert m.predict({"nwords": 256, "num_trans": 16})[0] == pytest.approx(2 * 16, abs=1e-6)
+        assert m.predict_feat({"nwords": 256, "num_trans": 16})[0] == pytest.approx(2 * 16, abs=1e-6)
 
     def test_fit_writes_params_json(self, tm):
         tm.collect_rtl(_rtl_events(), run_id="n128")
@@ -105,9 +105,9 @@ class TestResidualAndFit:
         a = StreamTimingModel(component="c", calib_dir=tmp_path)
         _seed_two_sizes(a)
         a.fit()
-        want = a.predict({"nwords": 256, "num_trans": 16})[0]
+        want = a.predict_feat({"nwords": 256, "num_trans": 16})[0]
         b = StreamTimingModel(component="c", calib_dir=tmp_path)   # fresh, only reads params.json
-        assert b.predict({"nwords": 256, "num_trans": 16})[0] == pytest.approx(want)
+        assert b.predict_feat({"nwords": 256, "num_trans": 16})[0] == pytest.approx(want)
 
     def test_empty_join_fit_raises(self, tm):
         tm.collect_rtl(_rtl_events(), run_id="n128")   # RTL only, no pysim
@@ -117,7 +117,7 @@ class TestResidualAndFit:
     def test_predict_never_negative(self, tmp_path):
         m = StreamTimingModel(component="c", calib_dir=tmp_path,
                               seed={"nwords": 0.0, "num_trans": 0.0, "intercept": -5.0})
-        assert m.predict({"nwords": 0, "num_trans": 0}) == [0.0]
+        assert m.predict_feat({"nwords": 0, "num_trans": 0}) == [0.0]
 
     def test_corpus_csv_is_written_and_inspectable(self, tm):
         tm.collect_rtl(_rtl_events(span=183), run_id="n128")
@@ -179,7 +179,7 @@ class TestCycleTimeConversion:
         m = StreamTimingModel(component="c", calib_dir=tmp_path, clk=clk,
                               seed={"nwords": 0.0, "num_trans": 0.0, "intercept": 5.0})
         # 5 cycles * 10 ns = 50 ns
-        assert m.predict({"nwords": 128, "num_trans": 8}) == [50.0]
+        assert m.predict_feat({"nwords": 128, "num_trans": 8}) == [50.0]
 
     def test_params_are_clock_independent(self, tmp_path):
         """The fitted state_dict is cycles — the SAME params drive different clocks, only the
@@ -195,7 +195,7 @@ class TestCycleTimeConversion:
 
         # Same params, a slower clock: predict scales with the period, params do not.
         b = StreamTimingModel(component="c", calib_dir=tmp_path / "a", clk=_Clk(20.0))
-        assert b.predict({"nwords": 256, "num_trans": 16})[0] == pytest.approx(2 * 16 * 20.0)
+        assert b.predict_feat({"nwords": 256, "num_trans": 16})[0] == pytest.approx(2 * 16 * 20.0)
         assert json.loads((b.calib_dir / "params.json").read_text()) == params
 
 
@@ -237,10 +237,10 @@ class TestReset:
         m = StreamTimingModel(component="c", calib_dir=tmp_path)
         _seed_two_sizes(m)
         m.fit()
-        assert m.predict({"nwords": 256, "num_trans": 16})[0] == pytest.approx(32)
+        assert m.predict_feat({"nwords": 256, "num_trans": 16})[0] == pytest.approx(32)
         m.reset(corpus=False, params=True)
         assert not (m.calib_dir / "params.json").exists()
-        assert m.predict({"nwords": 256, "num_trans": 16})[0] == 0.0
+        assert m.predict_feat({"nwords": 256, "num_trans": 16})[0] == 0.0
 
 
 class TestMultiTargetGuard:
@@ -250,7 +250,7 @@ class TestMultiTargetGuard:
     def test_every_operation_raises(self, tmp_path):
         m = StreamTimingModel(component="c", calib_dir=tmp_path, num_targets=3)
         with pytest.raises(NotImplementedError, match="per-stage"):
-            m.predict({"nwords": 128, "num_trans": 8})
+            m.predict_feat({"nwords": 128, "num_trans": 8})
         with pytest.raises(NotImplementedError):
             m.collect_rtl(_rtl_events(), run_id="x")
         with pytest.raises(NotImplementedError):

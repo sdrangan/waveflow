@@ -24,7 +24,7 @@ the rules; this page is the VMAC-specific datapath they leave out.
 
 ## Shape: a scalar-arg core + a thin wrapper
 
-Per the [csynth gotcha](../../guide/custom_hooks/complex.md#pass-scalars-to-a-core-function--not-a-struct-by-value),
+Per the [csynth gotcha](../../guide/custom_hooks/complex.md#1-pass-scalars-to-a-_core-function--not-a-struct-by-value),
 the real work is in a `vmac_compute_core` taking **flat scalar arguments**, with a
 struct-taking `vmac_compute(VmacCmd cmd, mem)` wrapper kept only for the csim
 testbench. The core is templated on the structural widths and takes the command as
@@ -103,7 +103,7 @@ Addresses arrive in **element** coordinates (matching the Python
 pointers with `elem_to_word<PF>` (which checks PF-alignment) and advances them per
 beat (`a_w += 1` per lane iteration) and per row (`a_row += a_rsw`). Any helper that
 touches `mem` is `INLINE` so the `m_axi` reads bind to the top — again, the
-[guide's gotcha 2](../../guide/custom_hooks/complex.md#pragma-hls-inline-so-maxi-binds-to-the-top).
+[guide's gotcha 2](../../guide/custom_hooks/complex.md#2-pragma-hls-inline-so-m_axi-binds-to-the-top).
 
 ## Validated against the golden
 

@@ -7,9 +7,13 @@ the priors (D1) and the composition fit (E1) to be tested against.
 Three things this does that a shell loop would not:
 
 * **Writes to the work tier.**  The sweep churns and its numbers are unproven, so it lands in an
-  untracked ``calib/work/`` platform under its own name.  Using the shipped platform's name would make
-  ``Platform.resolve`` find the *packaged* directory through its fallbacks and write into the tracked
-  library, which only ``publish_calib`` may do.
+  untracked ``calib/work/`` platform under its own name.  Using a tracked library's name would make
+  ``Platform.resolve`` find that directory through its fallbacks and write into it, which only
+  ``publish_calib`` may do.  Promotion is then a deliberate act:
+
+  .. code-block:: bash
+
+      waveflow_calib publish calib/work/zynq7020_fir_sweep                              calib/platforms/zynq7020_bfm_100mhz --apply
 * **Never silently drops a point.**  A csynth that fails is recorded as a failure with its error, not
   skipped.  A sweep that quietly covered 19 of 24 points, reported as 24, would put a hole in the
   fitted region exactly where an agent would later be told it was interpolating.
@@ -50,10 +54,13 @@ REALIZATIONS = (False, True)
 #: how the interface term's model is tested, hence the CLI override.
 MEM_DWS = (32,)
 
-#: The work-tier platform this sweep accumulates into.  Deliberately NOT the shipped
-#: ``zynq7020_bfm_100mhz`` name — see the module docstring.
+#: The work-tier platform this sweep accumulates into.  Deliberately NOT the name of a tracked
+#: library — see the module docstring.  A deliberate ``publish`` promotes the result into the
+#: **project's** library (``calib/platforms/zynq7020_bfm_100mhz``), which is where this example's own
+#: module measurements belong: they are its design, not framework infrastructure, so they live beside
+#: the example rather than shipping to every installed user.
 PLATFORM = "zynq7020_fir_sweep"
-PLATFORMS_ROOT = "calib/work"
+PLATFORMS_ROOT = HERE / "calib" / "work"
 PART = "xc7z020clg484-1"
 CLK_FREQ = 100e6                      # the 10 ns period the generated TCL creates
 

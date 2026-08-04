@@ -194,7 +194,7 @@ sim.run_sim()
 `cpu.readback` is `[0xA0, 0xA1, 0xA2, 0xA3]`: the master-initiated `write` then `read` round-trip
 through the slave's `rx_write_proc` / `rx_read_proc`. `DirectMMIF` is point-to-point, so no address
 ranges are needed; for the multi-slave **crossbar** you also call
-[`assign_address_ranges()`](#axiammcrossbarif) after `bind` (see the [full example](#full-example)
+[`assign_address_ranges()`](#aximmcrossbarif) after `bind` (see the [full example](#full-example)
 below). See [SimObj](../sim/simobj.md) for the base object and lifecycle.
 
 ## AXIMMCrossBarIF

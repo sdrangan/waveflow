@@ -6,7 +6,7 @@ nav_order: 11
 # Fitting the timing model
 
 [The timing model](./timing_model.md) has two parameters, `latency` and `ii`. This page **recovers them
-from the RTL** — the [direct method](../../guide/calib/fit.md): run the kernel at a range of sizes, record
+from the RTL** — the [direct method](../../guide/timing_model/fit.md): run the kernel at a range of sizes, record
 `(n, cycles)`, and fit a line. The result ships to the platform library so any build loads it.
 
 This is the half of the calibration story `mem_copy` has none of, because the gather is the design's own
@@ -42,7 +42,7 @@ writes a per-firing table to `results/timing_events.json`; the residual calibrat
 (`CollectTimingStep` / `FitTimingStep`) read that table and fit a model — the whole loop is a DAG. So **if
 your stage's cost is its `ap_done` firing span, this path is already automated**: you attach a model and the
 steps measure and fit it for you (this is how the reusable mem-streams the interleaver sits on were
-calibrated — see [component residuals](../../guide/calib/component_residual.md)). `component_firings()`
+calibrated — see [component residuals](../../guide/timing_model/component_residual.md)). `component_firings()`
 anchors on `ap_done`, not the last output beat, because a posted `m_axi` store keeps the component working
 after its final beat.
 
@@ -141,7 +141,7 @@ Two points suffice in principle (two unknowns); the three here confirm the line.
 ## Step 4 — store it with the example
 
 Where the fit lands is the point of the [two-level split](../../guide/calib/index.md). The bus law and the
-mem-stream residuals are *platform* properties and ship in the [platform library](../../guide/calib/platform.md)
+mem-stream residuals are *platform* properties and ship in the [platform library](../../guide/platform/identity.md)
 — but `il_compute` is the interleaver's **own** kernel, not reusable infra, so its fit lives **with the
 example**. [`calibrate`](../../../examples/interleaver/calibrate_compute.py) writes it to the example's calib
 dir, keyed by platform (the cycle counts are platform-dependent):
@@ -192,9 +192,9 @@ il.gather.job_span_cyc        # [256.0, 256.0, 256.0] — the contiguous burst X
 
 ## See also
 
-- [Fitting a timing model](../../guide/calib/fit.md) — the direct method, in general.
+- [Fitting a timing model](../../guide/timing_model/fit.md) — the direct method, in general.
 - [The timing model](./timing_model.md) — what `latency` and `ii` mean (the previous page).
-- [Platforms](../../guide/calib/platform.md) — the library the fit ships into.
-- [Component residuals](../../guide/calib/component_residual.md) — the *other*, DAG-driven method, for the
+- [Platforms](../../guide/platform/identity.md) — the library the fit ships into.
+- [Component residuals](../../guide/timing_model/component_residual.md) — the *other*, DAG-driven method, for the
   reusable mem-streams the interleaver inherits.
 - [Trace pitfalls](../../guide/timing/trace_pitfalls.md) — the span-measurement cautions Step 1 respects.

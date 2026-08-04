@@ -117,7 +117,7 @@ That is the half of the [calibration story](../../guide/calib/) `mem_copy` has n
 through-line of the later pages.
 
 Everything else is reuse. The `m_axi` adaptors are the framework
-[`MemRStream` / `MemWStream`](../../guide/calib/component_residual.md) — so the interleaver inherits
+[`MemRStream` / `MemWStream`](../../guide/timing_model/component_residual.md) — so the interleaver inherits
 their shipped, calibrated timing exactly as it already reuses the platform bus law, and *only* the
 compute needs fitting. `cmd_rx` and `il_store` are thin schema-aware framers (`mem_copy`'s `Sequencer`
 pattern); `il_load` is the one stream↔block bridge the gather's random access requires.

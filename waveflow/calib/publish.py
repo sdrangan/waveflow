@@ -242,3 +242,32 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+# -- seeding: the same copy, in the other direction ---------------------------------------------------
+def seed_platform(src_dir: str | Path, dst_dir: str | Path, *, force: bool = False) -> list[str]:
+    """Copy an existing platform's stable artifacts into *dst_dir* as a starting point.
+
+    The mirror of :func:`apply_plan`, and deliberately the *same* machinery: seeding is publishing in
+    the other direction, so it promotes exactly the artifacts publishing does — identity, fitted
+    params, distilled corpora, module records — and leaves the raw per-run trees behind.
+
+    **Why copy rather than fall back.**  Platform resolution is first-match-wins on the whole
+    directory: the moment a project owns a platform of a given name, the upstream one of that name
+    stops being consulted at all.  So a project that publishes its own module records would otherwise
+    *lose* the infra fits it was relying on.  Seeding makes the inheritance explicit and, more
+    importantly, **frozen** — what you inherited is a reviewable commit, and an upstream change cannot
+    move your numbers without you seeing it.  Calibration is measurement, and measurement should be
+    pinned rather than resolved dynamically.
+
+    Returns the relative paths written.  Refuses a non-empty *dst_dir* unless *force*, so seeding
+    cannot quietly overwrite a library someone has already calibrated into.
+    """
+    src, dst = Path(src_dir), Path(dst_dir)
+    if not (src / "platform.json").is_file():
+        raise FileNotFoundError(f"no platform to seed from at {src} (no platform.json)")
+    if dst.exists() and any(dst.iterdir()) and not force:
+        raise FileExistsError(
+            f"{dst} already exists and is not empty; seeding would overwrite calibration that is "
+            f"already there.  Pass force=True if that is what you want.")
+    return apply_plan(build_plan(src, dst), force=True)

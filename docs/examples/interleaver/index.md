@@ -36,7 +36,7 @@ In going through this example, you will learn to:
   straight from the loosely-timed simulation
 - Reuse the platform's shipped **infra timing** — the mem-stream adaptors *and* the `m_axi` bus law —
   then **fit the custom compute stage's own loop model** from a size sweep (the
-  [direct method](../../guide/calib/fit.md)) and store it in the platform library so a build loads it
+  [direct method](../../guide/timing_model/fit.md)) and store it in the platform library so a build loads it
   with no re-fit
 
 ## In this example

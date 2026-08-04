@@ -115,8 +115,8 @@ The accumulator is `W_acc = 2W + ceil(log2 T)`, so at `T = 32` the sweep caps at
 
 The asymmetry is the thing to remember: **a wide-`W` point fails in pysim while csynth would happily
 build `ap_fixed<69, …>`.** The hardware is not the constraint; the model is. This is a real edge — the
-planned sweep runs `W ∈ {8, 16, 24}` and would hit the ceiling at `W = 32` with 32 taps, which is why
-that point is absent rather than merely uninteresting.
+[sweep](./resource_fit.md) runs `W ∈ {8, 12, 16, 24}` and would hit the ceiling at `W = 32` with 32 taps,
+which is why that point is absent from the grid rather than merely uninteresting.
 
 It constrains the *edges* of the design space, not its useful middle: a DSP48E1 is a 25×18 multiplier,
 so the widths worth studying sit well below 29 anyway.
@@ -135,4 +135,5 @@ had (a delay line seeded one slot off) produces *plausible* numbers. A tolerance
 
 - [Python](./python.md) — the design in code, including where the formats are threaded through.
 - [The two kernels](./kernels.md) — `acc_t` in use, and the MAC that fills it.
-- **Parameter sweep** *(forthcoming)* — what changing `W` costs in DSPs.
+- [The sweep and its results](./resource_fit.md) — what changing `W` actually costs in DSPs, measured: a *fall*
+  at 8 bits where two multiplies share one DSP48, and a doubling at 24 where one product splits.

@@ -2,7 +2,24 @@
     "python.defaultInterpreterPath": "c:\\Users\\sdran\\Documents\\repos\\waveflow-venv\\Scripts\\python.exe",
     "waveflow.pythonPath": "c:\\Users\\sdran\\Documents\\repos\\waveflow-venv\\Scripts\\python.exe",
     "python-envs.defaultEnvManager": "ms-python.python:system",
+    // Markdown is NOT auto-formatted in this repo.  A table formatter that re-pads cells to align
+    // pipes miscounts the display width of non-ASCII characters and deletes a space while doing it,
+    // which silently corrupts content: "≥ 3 `filter`" became "≥ 3`filter`", "a *binding decision*"
+    // became "a*binding decision*".  Every corrupted row we found contained a non-ASCII character.
+    //
+    // formatOnSave alone is not enough — it was already false when this happened.  A table formatter
+    // hooks the format-document provider, so it also fires on an explicit Format Document (easy to
+    // trigger accidentally by queued keystrokes while the editor is hung), on paste, and on type.
     "[markdown]": {
-        "editor.formatOnSave": false
-    }
+        "editor.formatOnSave": false,
+        "editor.formatOnPaste": false,
+        "editor.formatOnType": false,
+        // No provider at all, so even an explicit Format Document is a no-op.
+        "editor.defaultFormatter": null
+    },
+    // Belt-and-braces: disable the offending feature at its source, so it cannot be reached however
+    // formatting is invoked.  (Harmless if the extension is not installed.)
+    "markdown.extension.tableFormatter.enabled": false,
+    // Auto-fix on save is another route into the same file.
+    "editor.codeActionsOnSave": {}
 }

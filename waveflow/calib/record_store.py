@@ -63,6 +63,12 @@ FIDELITY.update({s: i for i, s in enumerate(TIMING_SOURCES)})
 #: The resource counters we store.  Anything else the report carries is kept in the payload untouched.
 RESOURCE_FIELDS = ("lut", "ff", "dsp", "bram", "uram", "srl")
 
+
+def _now() -> str:
+    import datetime as _dt
+
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
 #: Vitis spells some counters by their primitive ("BRAM_18K"), which would otherwise land as a distinct
 #: key from every other tool's ``bram`` and quietly break a cross-source comparison.  Canonicalized at
 #: the boundary so a record's counter names do not depend on which report produced it.
@@ -170,6 +176,10 @@ class Record:
     payload: dict = field(default_factory=dict)
     provenance: Provenance = field(default_factory=lambda: Provenance(signature=""))
     cost_seconds: float = 0.0
+    #: ISO timestamp of when this was measured.  Optional, and **empty on records written before the
+    #: field existed** -- a corpus derived from those carries the blank through rather than inventing
+    #: a plausible date, because a fabricated measurement time is worse than a missing one.
+    measured_at: str = ""
 
     @property
     def fidelity(self) -> int:
@@ -177,21 +187,26 @@ class Record:
         return FIDELITY.get(self.source, -1)
 
     def to_json(self) -> dict:
-        return {"key": self.key, "target": self.target, "source": self.source,
-                "cost_seconds": self.cost_seconds, "payload": self.payload,
-                "provenance": self.provenance.to_json()}
+        out = {"key": self.key, "target": self.target, "source": self.source,
+               "cost_seconds": self.cost_seconds, "payload": self.payload,
+               "provenance": self.provenance.to_json()}
+        if self.measured_at:      # omitted when unset, so existing files round-trip byte-identically
+            out["measured_at"] = self.measured_at
+        return out
 
     @classmethod
     def from_json(cls, data: dict) -> "Record":
         return cls(key=data["key"], target=data["target"], source=data["source"],
                    payload=dict(data.get("payload") or {}),
                    provenance=Provenance.from_json(data.get("provenance") or {}),
-                   cost_seconds=float(data.get("cost_seconds", 0.0) or 0.0))
+                   cost_seconds=float(data.get("cost_seconds", 0.0) or 0.0),
+                   measured_at=data.get("measured_at", ""))
 
 
 def resource_record(identity: ModuleIdentity, resources: dict, *, source: str,
                     part: str = "", period_ns: float = 0.0, tool: str = "",
-                    cost_seconds: float = 0.0, extra: dict | None = None) -> Record:
+                    cost_seconds: float = 0.0, extra: dict | None = None,
+                    measured_at: str | None = None) -> Record:
     """Build a ``target="resource"`` :class:`Record` from a parsed report's resource dict.
 
     Normalizes the counters (:func:`normalize_resources`) and stamps provenance from *identity* plus
@@ -205,7 +220,8 @@ def resource_record(identity: ModuleIdentity, resources: dict, *, source: str,
     return Record(key=identity.key, target="resource", source=source, payload=payload,
                   provenance=Provenance(signature=identity.signature, part=part,
                                         period_ns=period_ns, tool=tool),
-                  cost_seconds=cost_seconds)
+                  cost_seconds=cost_seconds,
+                  measured_at=_now() if measured_at is None else measured_at)
 
 
 class ModuleStore:
@@ -364,3 +380,70 @@ def merge_payloads(records: Iterable[Record]) -> dict[str, int]:
 def with_cost(record: Record, seconds: float) -> Record:
     """*record* with its ``cost_seconds`` set — the timing of a run is usually known after building it."""
     return replace(record, cost_seconds=float(seconds))
+
+
+def corpus_from_records(store: "ModuleStore", *, cls_name: str | None = None,
+                        target: str = "resource", source: str | None = None,
+                        counters: Iterable[str] | None = None):
+    """Reduce a store's records to the canonical corpus — the resource axis's raw-tier generator.
+
+    A corpus is one row per measurement, a column per hardware parameter and per target, plus
+    ``measured_at`` (``docs/guide/calib/corpus.md``).  The record store already holds exactly that,
+    keyed per module rather than per feature point; this is the projection between the two.  It is
+    axis-specific by necessity — only the resource side knows that its raw tier is a
+    ``ModuleStore`` and that a payload holds counters — which is why it lives here and not on
+    :class:`~waveflow.calib.calib.CalibModel`.
+
+    Regenerated on demand rather than maintained: the store is the ground truth, so a corpus can
+    never be stale and deleting one is never data loss.
+
+    Parameters
+    ----------
+    cls_name:
+        Keep only modules of this class.  Usually what you want, and the reason is not efficiency:
+        a model serves one class, and two classes have **different parameter names**, so mixing them
+        yields a frame of mostly-blank columns that no basis can be selected from.  ``None`` takes
+        every module, which is useful for an inventory but rarely for a fit.
+    source:
+        Keep only this fidelity tier (``hls_estimate`` / ``vivado_synth`` / ``vivado_impl``).  The
+        default takes :meth:`ModuleStore.best` per module — the strongest evidence available —
+        because a corpus mixing an estimate and a post-implementation number for the *same* module
+        would fit a line through two different measurement processes.
+    counters:
+        Target columns to emit.  Defaults to whatever each record measured.
+
+    Returns
+    -------
+    CalibDataFrame
+        Empty (but correctly shaped) when nothing matches, so a caller can fit-or-skip on ``len``.
+    """
+    from waveflow.calib.calib import CalibDataFrame
+
+    rows: list[dict] = []
+    param_names: list[str] = []
+    for key in store.keys():
+        ident = store.get_identity(key)
+        if ident is None or (cls_name is not None and ident.cls_name != cls_name):
+            continue
+        if source is None:
+            recs = [r for r in [store.best(key, target, identity=ident)] if r is not None]
+        else:
+            recs = store.read(key, target, identity=ident, source=source)
+        for rec in recs:
+            row = dict(ident.params)
+            for name in (RESOURCE_FIELDS if counters is None else counters):
+                if name in rec.payload:
+                    row[name] = int(rec.payload[name])
+            # Provenance, not features.  A basis is chosen by name, so these can never leak into a
+            # fit -- but they are what makes a row traceable back to the synthesis that produced it.
+            row.update({"module_key": key, "cls_name": ident.cls_name,
+                        "measured_source": rec.source})
+            for p in ident.params:
+                if p not in param_names:
+                    param_names.append(p)
+            rows.append((row, rec.measured_at))
+
+    db = CalibDataFrame(columns=param_names)
+    for row, measured_at in rows:
+        db.add_datapoint(row, measured_at=measured_at or "")
+    return db

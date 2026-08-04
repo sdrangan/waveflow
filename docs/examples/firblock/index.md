@@ -61,8 +61,9 @@ In going through this example, you will learn to:
   without emitting, or a zero-length transfer handled as if it were non-zero — and **avoid** them by
   keeping every stage's token count uniform across opcodes, so that even a no-output command issues a
   (zero-length) transfer and lands its completion
-- **Sweep the bitwidth parameters** and measure the resource and throughput consequences of each
-  realization — the DSP packing cliff, and the trade between area and rate
+- **Sweep the bitwidth parameters** and build a **resource model** from what comes back — encoding the
+  DSP48's geometry as a prior that needs no fitting at all, fitting only the counters no closed form
+  reaches, and composing the parts into a whole-design estimate that reports its own confidence
 
 ## In this example
 
@@ -84,6 +85,8 @@ The pages build the design up from Python, parallel to [`interleaver`](../interl
   storage declarations generated straight from `add_state`.
 - [RTL simulation](./rtlsim.md) — the generated BFM harness, the run, and bit-exactness for *both*
   realizations against one golden.
-- **Parameter sweep** *(forthcoming)* — resources and throughput against sample width, for
-  both kernels. The measurements exist (see [The two kernels](./kernels.md)); the sweep
-  *driver* and its page are being built separately.
+- [Resource models](./resource_model.md) — what the design *asserts* about its own area: a
+  zero-parameter DSP prior from the DSP48E1's geometry, a BRAM prior that asserts zero, a LUT/FF fit
+  over structural features, and the one method per class that installs them.
+- [The sweep and its results](./resource_fit.md) — what 24 syntheses in 20 minutes actually showed, and
+  a composed whole-design estimate checked against totals that trained none of it.

@@ -7,8 +7,13 @@ generality via caller-side derived columns), and the InterpCalibModel lookup.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 import pytest
+
+from waveflow.build.elaborate import elaborate
+from waveflow.hw.hw_module import HwModule, HwParam
 
 from waveflow.calib import (
     CalibDataFrame,
@@ -91,7 +96,7 @@ def test_linear_through_origin_recovers_rates():
     assert c["nwords"] == pytest.approx(1.0, abs=1e-6)
     assert "intercept" not in c
     assert m.score(db) == pytest.approx(1.0, abs=1e-9)
-    assert m.predict({"num_trans": 3, "nwords": 300}) == pytest.approx(315.0)
+    assert m.predict_feat({"num_trans": 3, "nwords": 300}) == pytest.approx(315.0)
 
 
 def test_linear_with_intercept():
@@ -106,7 +111,7 @@ def test_linear_with_intercept():
 def test_predict_requires_fit():
     m = LinCalibModel(["x"], "y")
     with pytest.raises(RuntimeError):
-        m.predict({"x": 1})
+        m.predict_feat({"x": 1})
 
 
 def test_basis_generality_via_derived_column():
@@ -135,11 +140,16 @@ def test_as_dict_serializable():
 # Model-owned transform + load_coeffs deploy + clock-independence (the FIR form)
 # ---------------------------------------------------------------------------
 
-def _compute_features(row):
+def _compute_features(params):
     """FIR compute-time features: clk_period folded in -> predict returns SECONDS and the
-    coefficients are cycle-domain rates (row_setup, compute_beat)."""
-    cp, nr, nc = float(row["clk_period"]), float(row["n_row"]), float(row["n_col"])
-    return [cp * (nr - 1.0), cp * nr * nc]
+    coefficients are cycle-domain rates (row_setup, compute_beat).
+
+    Takes the **parameter row** and returns a *named* mapping, so a feature and the coefficient that
+    multiplies it are the same name.  It never sees a component — that is what guarantees every
+    input is one the corpus recorded.
+    """
+    cp, nr, nc = float(params["clk_period"]), float(params["n_row"]), float(params["n_col"])
+    return {"row_setup": cp * (nr - 1.0), "compute_beat": cp * nr * nc}
 
 
 def test_model_owned_transform_and_clock_independence():
@@ -152,27 +162,27 @@ def test_model_owned_transform_and_clock_independence():
             db.add_datapoint({"n_row": nr, "n_col": nc, "clk_period": CP_FIT,
                               "compute_time": cyc * CP_FIT})
     m = LinCalibModel(["row_setup", "compute_beat"], "compute_time",
-                      fit_intercept=False, transform=_compute_features).fit(db)
+                      fit_intercept=False, transform_fn=_compute_features).fit(db)
     # through-origin coefficients recover the cycle-domain rates
     assert m.coeffs["row_setup"] == pytest.approx(8.0, abs=1e-6)
     assert m.coeffs["compute_beat"] == pytest.approx(1.0, abs=1e-6)
     # predict at a DIFFERENT clock with no re-fit: cycles are clock-independent, time scales
     cyc_4x64 = 8.0 * 3 + 1.0 * 4 * 64          # = 280 cycles
-    assert m.predict({"n_row": 4, "n_col": 64, "clk_period": 10e-9}) == pytest.approx(280 * 10e-9)
-    assert m.predict({"n_row": 4, "n_col": 64, "clk_period": 2e-9}) == pytest.approx(280 * 2e-9)
+    assert m.predict_feat({"n_row": 4, "n_col": 64, "clk_period": 10e-9}) == pytest.approx(cyc_4x64 * 10e-9)
+    assert m.predict_feat({"n_row": 4, "n_col": 64, "clk_period": 2e-9}) == pytest.approx(cyc_4x64 * 2e-9)
 
 
 def test_load_params_deploy_roundtrip():
     # A deployed model (from stored params) predicts identically — no fit / training data needed.
-    fitted = LinCalibModel([], "compute_time", fit_intercept=False, transform=_compute_features,
+    fitted = LinCalibModel([], "compute_time", fit_intercept=False, transform_fn=_compute_features,
                            coeff_names=["row_setup", "compute_beat"])
     fitted.load_params({"row_setup": 8.0, "compute_beat": 1.0})
     row = {"n_row": 4, "n_col": 64, "clk_period": 10e-9}
-    assert fitted.predict(row) == pytest.approx(280 * 10e-9)
+    assert fitted.predict_feat(row) == pytest.approx(280 * 10e-9)
     # a bias-only-style through-origin fill model: fill_time = clk_period * L0
     fill = LinCalibModel([], "fill_time", fit_intercept=False, coeff_names=["L0"],
-                         transform=lambda r: [float(r["clk_period"])]).load_params({"L0": 60.0})
-    assert fill.predict({"clk_period": 10e-9}) == pytest.approx(60 * 10e-9)
+                         transform_fn=lambda p: {"L0": float(p["clk_period"])}).load_params({"L0": 60.0})
+    assert fill.predict_feat({"clk_period": 10e-9}) == pytest.approx(60 * 10e-9)
 
 
 def test_to_params_named_vs_vector():
@@ -187,17 +197,17 @@ def test_to_params_named_vs_vector():
     # intercept goes under intercept_name only when fit_intercept
     biased = LinCalibModel(["x"], "y", fit_intercept=True, intercept_name="L0")
     biased.load_params({"coeffs": [3.0], "L0": 7.0})
-    assert biased.predict({"x": 2}) == pytest.approx(13.0)
+    assert biased.predict_feat({"x": 2}) == pytest.approx(13.0)
 
 
 def test_save_load_default_artifact(tmp_path):
     # save_model -> load_model round-trip through a file; load_or_default falls back to the seed.
     path = tmp_path / "m.json"
     seed = {"row_setup": 8.0, "compute_beat": 1.0}
-    m = LinCalibModel([], "compute_time", fit_intercept=False, transform=_compute_features,
+    m = LinCalibModel([], "compute_time", fit_intercept=False, transform_fn=_compute_features,
                       coeff_names=["row_setup", "compute_beat"], seed=seed, path=path)
     # no file yet -> load_or_default uses the seed
-    assert m.load_or_default().predict({"n_row": 4, "n_col": 64, "clk_period": 10e-9}) \
+    assert m.load_or_default().predict_feat({"n_row": 4, "n_col": 64, "clk_period": 10e-9}) \
         == pytest.approx(280 * 10e-9)
     # fit a DIFFERENT model, save it, and confirm a fresh shell loads those params from the file
     CP = 10e-9
@@ -208,7 +218,7 @@ def test_save_load_default_artifact(tmp_path):
                               "compute_time": (5.0 * (nr - 1) + 2.0 * nr * nc) * CP})
     m.fit(db).save_model()
     assert path.exists()
-    fresh = LinCalibModel([], "compute_time", fit_intercept=False, transform=_compute_features,
+    fresh = LinCalibModel([], "compute_time", fit_intercept=False, transform_fn=_compute_features,
                           coeff_names=["row_setup", "compute_beat"], seed=seed, path=path)
     fresh.load_or_default()   # file exists -> loads fitted params, not the seed
     assert fresh.coeffs["row_setup"] == pytest.approx(5.0, abs=1e-6)
@@ -249,7 +259,7 @@ def test_score_base_predict_not_implemented():
     with pytest.raises(NotImplementedError):
         m.fit([])
     with pytest.raises(RuntimeError):
-        m.predict({"x": 1})   # not fitted
+        m.predict_feat({"x": 1})   # not fitted
 
 
 def test_interp_model_lookup_and_saturation():
@@ -259,12 +269,12 @@ def test_interp_model_lookup_and_saturation():
         db.add_datapoint({"n_col": nc, "row_depth": rd})
     m = InterpCalibModel(["n_col"], "row_depth").fit(db)
     # exact at samples
-    assert m.predict({"n_col": 256}) == pytest.approx(260.0)
+    assert m.predict_feat({"n_col": 256}) == pytest.approx(260.0)
     # linear interpolation between samples (untrained n_col)
-    assert m.predict({"n_col": 160}) == pytest.approx(70.0 + (260.0 - 70.0) * (160 - 64) / (256 - 64))
+    assert m.predict_feat({"n_col": 160}) == pytest.approx(70.0 + (260.0 - 70.0) * (160 - 64) / (256 - 64))
     # flat extrapolation beyond the range (the saturation)
-    assert m.predict({"n_col": 4096}) == pytest.approx(268.0)
-    assert m.predict({"n_col": 1}) == pytest.approx(70.0)
+    assert m.predict_feat({"n_col": 4096}) == pytest.approx(268.0)
+    assert m.predict_feat({"n_col": 1}) == pytest.approx(70.0)
 
 
 def test_interp_model_averages_duplicates():
@@ -274,7 +284,7 @@ def test_interp_model_averages_duplicates():
         db.add_datapoint({"n_col": 256, "row_depth": rd})
     db.add_datapoint({"n_col": 1024, "row_depth": 268.0})
     m = InterpCalibModel(["n_col"], "row_depth").fit(db)
-    assert m.predict({"n_col": 256}) == pytest.approx(70.0)
+    assert m.predict_feat({"n_col": 256}) == pytest.approx(70.0)
 
 
 def test_interp_model_roundtrip_samples():
@@ -285,7 +295,7 @@ def test_interp_model_roundtrip_samples():
     s = m.samples
     assert s["feature"] == "x" and s["x"] == [1.0, 2.0, 4.0] and s["y"] == [10.0, 12.0, 13.0]
     m2 = InterpCalibModel.from_samples("x", s["x"], s["y"], "y")
-    assert m2.predict({"x": 3}) == pytest.approx(m.predict({"x": 3}))
+    assert m2.predict_feat({"x": 3}) == pytest.approx(m.predict_feat({"x": 3}))
 
 
 def test_interp_model_rejects_multifeature():
@@ -312,3 +322,74 @@ def test_plot_smoke():
     m = LinCalibModel(["num_trans", "nwords"], "span", fit_intercept=False).fit(db)
     ax = m.plot(db, x_name="nwords")
     assert ax is not None
+
+
+# ---------------------------------------------------------------------------
+# The component-facing layer (P1 of plans/harmonize_calib.md)
+# ---------------------------------------------------------------------------
+
+@dataclass(kw_only=True)
+class _ParamBlk(HwModule):
+    """Module-level on purpose: with ``from __future__ import annotations`` a *function-local*
+    class keeps its ``HwParam[int]`` annotations as unresolvable strings, so no parameter is
+    discovered and every transform comes back empty."""
+
+    width: HwParam[int] = 16
+    depth: HwParam[int] = 64
+
+
+def test_get_params_defaults_to_the_resolved_parameters():
+    """The default extraction is the identity — every resolved HwParam, by name."""
+    comp = elaborate(_ParamBlk, {"width": 32, "depth": 128}, name="b")
+    assert (LinCalibModel(basis=["width"], target="y").get_params(comp)
+            == {"width": 32, "depth": 128})
+
+
+def test_get_params_folds_in_runtime_inputs():
+    """Timing predicts from design **and workload**, so the extraction takes ``**runtime``.
+
+    A resource model drops them; a timing model consumes them.  This is the one place the shared
+    base is shaped by timing, and it costs resource nothing.
+    """
+    comp = elaborate(_ParamBlk, {"width": 16, "depth": 64}, name="b")
+    got = LinCalibModel(basis=["nwords"], target="y").get_params(comp, nwords=256, num_trans=4)
+    assert got == {"width": 16, "depth": 64, "nwords": 256, "num_trans": 4}
+
+
+def test_transform_cannot_see_the_component():
+    """The guarantee: a feature can only be built from what `get_params` recorded.
+
+    `transform` takes the parameter mapping, so a model physically cannot predict from a fact the
+    corpus does not hold — which is what makes a stored corpus re-fittable.
+    """
+    import inspect
+
+    sig = inspect.signature(LinCalibModel.transform)
+    assert list(sig.parameters) == ["self", "params"]
+
+
+def test_targets_reports_the_single_target():
+    assert LinCalibModel(basis=["n"], target="residual").targets == ("residual",)
+
+
+def test_name_defaults_to_the_target():
+    assert LinCalibModel(basis=["n"], target="residual").name == "residual"
+
+
+def test_paths_derive_from_the_platform_and_name():
+    """Three hand-rolled storage schemes collapse into one derivation."""
+    from pathlib import Path
+
+    from waveflow.calib.platform import Platform
+
+    plat = Platform(name="z20", dir=Path("/plat/z20"), part="xc7z020clg484-1", clk_freq=100e6)
+    m = LinCalibModel(basis=["n"], target="residual", name="mem_r_span", platform=plat)
+    assert m.data_dir.as_posix() == "/plat/z20/models/mem_r_span"
+    assert m.corpus_path.name == "corpus.csv"
+    assert m.params_path.name == "params.json"
+
+
+def test_paths_are_none_without_a_platform():
+    """A model with no platform still works — it simply has nowhere derived to store anything."""
+    m = LinCalibModel(basis=["n"], target="residual")
+    assert m.data_dir is None and m.corpus_path is None and m.params_path is None

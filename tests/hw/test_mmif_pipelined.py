@@ -117,7 +117,7 @@ class _ConstSpan:
     def __init__(self, cyc: float) -> None:
         self.cyc = float(cyc)
 
-    def predict(self, row: dict) -> float:
+    def predict_feat(self, row: dict) -> float:
         return self.cyc
 
 

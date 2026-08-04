@@ -44,8 +44,8 @@ PLATFORM_PATH_ENV = "WAVEFLOW_PLATFORM_PATH"
 
 
 def user_platforms_dir() -> Path:
-    """The per-user, writable platform library — where :mod:`waveflow.calib.retime` lands a platform
-    a user calibrates that did not ship with the package.
+    """The per-user, writable platform library — where a user calibrating a platform that did not
+    ship with the package can land it.
 
     A ``pip``-installed user cannot write into ``site-packages``, so a recalibration for a new board
     needs a writable home outside the wheel.  This is the OS-conventional user-data location
@@ -102,6 +102,20 @@ def platform_fallback_path() -> list[Path]:
 PLATFORM_MANIFEST = "platform.json"
 
 
+#: The Vitis / FPGA counter vocabulary — the default when a platform does not declare its own.
+#: Deliberately named for the technology it describes: it is not a universal set, and an ASIC flow
+#: measures different things (cell area, macro count) in different units (a float, not a count).
+VITIS_RES_TYPES: "tuple[str, ...]" = ("lut", "ff", "dsp", "bram", "uram", "srl")
+
+
+class UnknownCounterError(ValueError):
+    """A model named a resource counter the platform does not measure in.
+
+    Fatal rather than ignored: an unknown counter is dropped when counters are summed, so the module
+    silently contributes zero and the design reads as cheaper than it is.
+    """
+
+
 class PlatformMismatchError(RuntimeError):
     """A selected platform's stored ``part`` / clock does not match the build's, and the build did not
     set ``allow_platform_mismatch``.  Cycle-level calibration is only valid for the part+clock it was
@@ -127,6 +141,37 @@ class Platform:
     dir: Path
     part: str | None = None
     clk_freq: float | None = None      # Hz — the synthesis clock (its period drives HLS scheduling)
+    #: The resource counters this technology is measured in.  ``None`` means the Vitis/FPGA default
+    #: (:data:`VITIS_RES_TYPES`) — see :attr:`res_types`.
+    res_types_stored: "tuple[str, ...] | None" = None
+
+    @property
+    def res_types(self) -> "tuple[str, ...]":
+        """The counter vocabulary for this platform, defaulting to the Vitis/FPGA set.
+
+        A counter set is exactly as technology-specific as ``part`` and ``clk_freq``, so it belongs on
+        the same object rather than as a module-level constant: an ASIC flow counts cell area and macro
+        instances, not LUTs and BRAMs, and it should enter by *declaring a platform* rather than by
+        reworking the model layer.  ``None`` keeps the FPGA default, so every platform written before
+        this existed loads unchanged.
+        """
+        return tuple(self.res_types_stored) if self.res_types_stored else VITIS_RES_TYPES
+
+    def check_counters(self, names) -> None:
+        """Raise :class:`UnknownCounterError` for any name outside this platform's vocabulary.
+
+        The guard that makes the vocabulary real rather than advisory.  Without it a mistyped counter
+        predicts fine in isolation and is silently dropped when summed — so the module contributes
+        **zero**, and a missing contribution makes a design look *cheaper* than it is, which turns
+        "does not fit" into "fits".
+        """
+        unknown = sorted(set(map(str, names)) - set(self.res_types))
+        if unknown:
+            raise UnknownCounterError(
+                f"unknown resource counter(s) {unknown} for platform {self.name!r}; it is measured in "
+                f"{list(self.res_types)}.  A counter outside the vocabulary is silently dropped when "
+                f"counters are summed, so this is refused rather than ignored."
+            )
 
     @property
     def manifest_path(self) -> Path:
@@ -147,7 +192,8 @@ class Platform:
     @classmethod
     def resolve(cls, platforms_root: str | Path, name: str, *, part: str | None = None,
                 clk_freq: float | None = None, allow_mismatch: bool = False,
-                fallbacks: "list[str | Path] | None" = None) -> "Platform":
+                fallbacks: "list[str | Path] | None" = None,
+                res_types: "tuple[str, ...] | None" = None) -> "Platform":
         """Find platform *name* under *platforms_root* (then the *fallbacks*), or create it.
 
         Resolution searches ``[platforms_root, *fallbacks]`` in order for an existing platform:
@@ -188,14 +234,21 @@ class Platform:
                     raise PlatformMismatchError(
                         msg + " Set allow_platform_mismatch=True to reuse it anyway.")
                 warnings.warn(msg, PlatformMismatchWarning, stacklevel=2)
-            return cls(name=name, dir=pdir, part=stored_part, clk_freq=stored_freq)
+            return cls(name=name, dir=pdir, part=stored_part, clk_freq=stored_freq,
+                       res_types_stored=tuple(data["res_types"]) if data.get("res_types") else None)
 
         # Not found in any root — create it in the primary (never a read-only fallback).
         pdir = Path(platforms_root) / name
         pdir.mkdir(parents=True, exist_ok=True)
+        manifest = {"part": part, "clk_freq_hz": clk_freq}
+        if res_types:
+            # Written only when it differs from the FPGA default, so an ordinary Vitis platform's
+            # manifest is byte-identical to what it was before this existed.
+            manifest["res_types"] = list(res_types)
         (pdir / PLATFORM_MANIFEST).write_text(
-            json.dumps({"part": part, "clk_freq_hz": clk_freq}, indent=2) + "\n", encoding="utf-8")
-        return cls(name=name, dir=pdir, part=part, clk_freq=clk_freq)
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        return cls(name=name, dir=pdir, part=part, clk_freq=clk_freq,
+                   res_types_stored=tuple(res_types) if res_types else None)
 
 
 @dataclass

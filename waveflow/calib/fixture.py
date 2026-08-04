@@ -16,8 +16,10 @@ contract, the registry, and the pysim vehicle do not):
   standalone for one point, and :meth:`~ComponentFixture.rtl_firings` (the measured/cosim RTL table
   for a point, or ``None`` when it must be measured).  :meth:`~ComponentFixture.calibrate` composes
   those into a :class:`~waveflow.calib.timing_model.StreamTimingModel` fit.
-* the **registry** — fixtures self-register (:func:`register`) so
-  :mod:`waveflow.calib.retime` can enumerate "every infra component" without a hardcoded list.
+* the **registry** — fixtures self-register (:func:`register`) so a caller can enumerate "every
+  infra component" (:func:`all_fixtures`) without a hardcoded list.  A ``retime`` command that
+  sweeps them all to recalibrate a platform end to end is **planned, not built**; today the
+  enumeration is there and the driving is per-example.
 """
 from __future__ import annotations
 
@@ -160,5 +162,8 @@ def get(component: str) -> ComponentFixture:
 
 
 def all_fixtures() -> "list[ComponentFixture]":
-    """Every registered fixture, in registration order — what :mod:`waveflow.calib.retime` iterates."""
+    """Every registered fixture, in registration order.
+
+    The enumeration a whole-platform recalibration would iterate.  That command is planned, not
+    built — see the module docstring."""
     return list(_REGISTRY.values())

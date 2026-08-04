@@ -18,8 +18,11 @@ ML framework.
 from .calib import (
     CalibDataFrame,
     CalibModel,
+    ConcatCalibModel,
     InterpCalibModel,
     LinCalibModel,
+    LookupCalibModel,
+    PriorCalibModel,
 )
 from .confidence import (
     Confidence,
@@ -52,6 +55,7 @@ __all__ = [
     "CalibDataFrame",
     "CalibModel",
     "ComponentFixture",
+    "ConcatCalibModel",
     "Confidence",
     "ConfidenceError",
     "ConfidenceLevel",
@@ -60,8 +64,10 @@ __all__ = [
     "InterpCalibModel",
     "KeyCollisionError",
     "LinCalibModel",
+    "LookupCalibModel",
     "ModuleIdentity",
     "ModuleStore",
+    "PriorCalibModel",
     "Provenance",
     "Record",
     "StaleRecordError",

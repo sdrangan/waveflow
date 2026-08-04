@@ -226,22 +226,47 @@ def _word_type(mem_dwidth: int) -> type[IntField]:
     return IntField.specialize(bitwidth=int(mem_dwidth), signed=False)
 
 
-def _resolve_calib_dir(calib_dir, platform_dir, component: str) -> "Path | None":
+def _resolve_calib_dir(calib_dir, platform_dir, component: str,
+                       qualified: "str | None" = None) -> "tuple[Path | None, bool]":
     """Where a mem-stream's :class:`~waveflow.calib.timing_model.StreamTimingModel` corpus + params
-    live, or ``None`` (uncalibrated).  Two ways to point it, checked in precedence:
+    live, and whether that residual is **configuration-specific**.
+
+    Returns ``(dir, config_specific)``; ``(None, False)`` means uncalibrated — no model attached, pysim
+    timing exactly as before.
+
+    Two ways to point it, checked in precedence:
 
     * an explicit ``calib_dir`` — the low-level override (a project-local one-off directory), or
-    * a ``platform_dir`` — the shared platform library, where the residual is stored **keyed by the
-      component identity** (:meth:`~waveflow.calib.platform.PlatformCalib.component_dir`) so it reloads
-      in any project composing this same infra component on the same platform, no recalibration.
+    * a ``platform_dir`` — the shared platform library, where the residual is keyed by the component
+      identity so it reloads in any project composing this same infra component on the same platform.
 
-    Neither set → ``None`` → no model attached, pysim timing exactly as before."""
+    **The key is the configuration-qualified id** (``mem_r_stream_framed_task_32``,
+    :func:`~waveflow.calib.module_key.config_id`) — the granularity at which the task is actually
+    synthesized, and therefore the granularity at which a measurement about it is valid.  The bare
+    function name is not: one directory would serve every memory width, so a residual fit at 32 bits
+    would be silently handed to a design at 64.
+
+    A library written before that distinction existed holds bare-named directories.  Those are still
+    found, as a **fallback**, and reported with ``config_specific=False`` so the model can say the
+    residual may not describe this configuration rather than implying it does.
+    """
     if calib_dir is not None:
-        return Path(calib_dir)
-    if platform_dir is not None:
-        from waveflow.calib.platform import PlatformCalib
-        return PlatformCalib(platform_dir).component_dir(component)
-    return None
+        return Path(calib_dir), True
+    if platform_dir is None:
+        return None, False
+
+    from waveflow.calib.platform import PlatformCalib
+    lib = PlatformCalib(platform_dir)
+    if qualified:
+        qdir = lib.component_dir(qualified)
+        if qdir.is_dir():
+            return qdir, True
+    bare = lib.component_dir(component)
+    if bare.is_dir():
+        # Legacy layout: keyed by function name alone, so it is not known to describe this width.
+        return bare, not qualified or qualified == component
+    # Neither exists: point at the qualified name so a future calibration lands correctly keyed.
+    return (lib.component_dir(qualified) if qualified else bare), True
 
 
 @dataclass
@@ -315,12 +340,16 @@ class MemRStream(FreeRunMod):
         self.transfer_spans: list[float] = []
         #: Per-firing ``(start, end)`` cycle windows — the activity-diagram / instrumentation view.
         self.fire_log: list[tuple[float, float]] = []
-        comp_id = self.kernel_task().task_fn
-        resolved = _resolve_calib_dir(self.calib_dir, self.platform_dir, comp_id)
+        kt = self.kernel_task()
+        from waveflow.calib.module_key import config_id
+        comp_id, qual_id = kt.task_fn, config_id(kt)
+        resolved, config_specific = _resolve_calib_dir(
+            self.calib_dir, self.platform_dir, comp_id, qual_id)
         if resolved is not None:
             from waveflow.calib.timing_model import StreamTimingModel
             self.add_timing_model(StreamTimingModel(
-                component=comp_id, calib_dir=resolved, clk=self.clk))
+                component=qual_id if config_specific else comp_id, calib_dir=resolved,
+                clk=self.clk, config_specific=config_specific))
 
     def bind_base(self, base: int = 0) -> None:
         """Set the bound buffer's physical base (the ``offset=slave`` register, host domain).
@@ -500,12 +529,16 @@ class MemWStream(FreeRunMod):
         self.fire_log: list[tuple[float, float]] = []
         # `component` must match the id this stream's firings carry in the RTL timing table — the
         # task-body name, which kernel_task() already knows — and it keys the shared platform library.
-        comp_id = self.kernel_task().task_fn
-        resolved = _resolve_calib_dir(self.calib_dir, self.platform_dir, comp_id)
+        kt = self.kernel_task()
+        from waveflow.calib.module_key import config_id
+        comp_id, qual_id = kt.task_fn, config_id(kt)
+        resolved, config_specific = _resolve_calib_dir(
+            self.calib_dir, self.platform_dir, comp_id, qual_id)
         if resolved is not None:
             from waveflow.calib.timing_model import StreamTimingModel
             self.add_timing_model(StreamTimingModel(
-                component=comp_id, calib_dir=resolved, clk=self.clk))
+                component=qual_id if config_specific else comp_id, calib_dir=resolved,
+                clk=self.clk, config_specific=config_specific))
 
     def bind_base(self, base: int = 0) -> None:
         """Set the bound buffer's physical base (the ``offset=slave`` register, host domain) — the

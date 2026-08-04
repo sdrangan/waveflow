@@ -47,15 +47,18 @@ class TestReferencePlatform:
 
 
 class TestShippedResourceRecords:
-    """The platform also carries **resource** measurements, so a design need not re-synthesize.
+    """The shipped library carries resource measurements for the **framework's own** modules.
 
-    ``waveflow/calib/platforms/zynq7020_bfm_100mhz/modules/`` holds the per-module figures published
-    from the ``fir_block`` sweep — ~26 minutes of Vitis C-synthesis, distilled to 156 KB and shipped.
-    Their whole purpose is to be a *cache hit*: a design that composes one of these modules at one of
-    these configurations gets its area from the library instead of the toolchain.
+    Their whole purpose is to be a *cache hit* for parts of a design you did not write: compose
+    ``MemRStream`` on this part and its area comes from the library instead of the toolchain.
 
-    This guards that. It is toolchain-free by construction, which is the point — if it needed Vitis to
-    verify, the records would not be doing their job.
+    What is guarded here is as much *what is absent* as what is present. A shared library must hold
+    only ``waveflow.*`` modules — one project's own modules shipped to every installed user would be
+    configurations nobody else can use, and would imply they are reference infrastructure when they
+    are not. Example-specific records live in a project library beside the example.
+
+    Toolchain-free by construction, which is the point: a guard needing Vitis would defeat the purpose
+    of storing the numbers.
     """
 
     @staticmethod
@@ -63,19 +66,27 @@ class TestShippedResourceRecords:
         from waveflow.calib.record_store import ModuleStore
         return ModuleStore(PLATFORMS_ROOT / NAME)
 
-    def test_the_library_carries_module_records(self):
+    def test_the_library_carries_the_framework_modules(self):
         store = self._store()
-        assert len(store.keys()) >= 30, "the published module records are missing"
         by_class = {}
         for k in store.keys():
             by_class.setdefault(store.get_identity(k).cls_name, []).append(k)
-        # The two memory modules are the reusable infra half: few configurations, broadly applicable.
         assert len(by_class["MemRStream"]) >= 1
         assert len(by_class["MemWStream"]) >= 1
-        assert len(by_class["FirCompute"]) >= 24
 
-    def test_a_lookup_hits_exactly_with_no_toolchain(self):
-        """The cache-hit property, end to end: elaborate a design, get measured area back."""
+    def test_the_shared_library_holds_no_example_modules(self):
+        """The dividing line, enforced: a shared library ships only what everyone can use.
+
+        Not a judgement call — every record names its module's defining module, so "is this framework
+        code or somebody's design?" is answerable mechanically.
+        """
+        store = self._store()
+        stray = {k: store.get_identity(k).cls_module for k in store.keys()
+                 if not store.get_identity(k).cls_module.startswith("waveflow.")}
+        assert not stray, f"non-framework modules in the shipped library: {stray}"
+
+    def test_a_framework_module_hits_exactly_with_no_toolchain(self):
+        """The cache-hit property: a design composing MemRStream gets measured area, no toolchain."""
         from waveflow.build.elaborate import elaborate
         from waveflow.calib.confidence import ConfidenceLevel
         from waveflow.calib.module_key import walk_modules
@@ -85,11 +96,14 @@ class TestShippedResourceRecords:
         top = elaborate(FirBlock, {"mem_dwidth": 32, "ntap": 32, "samp_w": 16,
                                    "samp_i": 2, "unroll_lane": False}, name="fir_block")
         model = LookupResourceModel(store=self._store())
+        hit = 0
         for _, comp, ident in walk_modules(top):
-            if ident.cls_name == "FirBlock":
-                continue                       # the composite's own term is not a module record
-            assert model.confidence_own(comp).level is ConfidenceLevel.EXACT, ident.cls_name
-            assert model.predict_own(comp)["lut"] > 0
+            if not type(comp).__module__.startswith("waveflow."):
+                continue                       # the example's own modules are not shipped
+            assert model.confidence(comp).level is ConfidenceLevel.EXACT, ident.cls_name
+            assert model.predict(comp)["lut"] > 0
+            hit += 1
+        assert hit == 2, "expected the two mem-streams"
 
     def test_records_verify_against_the_module_they_describe(self):
         """Every stored record's provenance must match the identity it is filed under."""
@@ -100,4 +114,4 @@ class TestShippedResourceRecords:
 
     def test_the_cost_they_represent_is_recorded(self):
         """What the library cost to build, auditable from the library itself."""
-        assert self._store().total_cost_seconds() > 20 * 60
+        assert self._store().total_cost_seconds() > 0

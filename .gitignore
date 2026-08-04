@@ -29,10 +29,22 @@ hls/
 *.jou
 *.xml
 *.json
-# The shipped reference calibration library is tracked package data — `publish_calib` writes the
-# distilled corpus (mostly *.json) here, and its diff must be reviewable, so keep it visible despite
-# the blanket *.json ignore above.
+# Calibration libraries are tracked — `publish_calib` writes the distilled corpus (mostly *.json)
+# into them and its diff must be reviewable, so they stay visible despite the blanket *.json ignore
+# above.  BOTH homes are re-included:
+#   waveflow/calib/platforms/  the reference library shipped as package data
+#   calib/platforms/           a PROJECT's own library — the default `platforms_root`, so this is
+#                              where a user following the documented workflow publishes.  Without
+#                              this line their library is silently ignored, which defeats the point
+#                              of publishing at all.  (The untracked work tier is **/calib/work/,
+#                              ignored separately below.)
 !waveflow/calib/platforms/**
+!**/calib/platforms/**
+# The `**/` matters: `calib/platforms/**` contains a slash, so git anchors it to the repo
+# root -- an example's library at examples/<name>/calib/platforms/ stayed ignored, with only
+# a few files force-added by hand.  That was invisible until a key change renamed 30 module
+# directories: the deletions staged, the replacements did not, and a fresh clone would have
+# had a store with records but no identities.
 *.o
 *.obj
 *.exe
@@ -86,11 +98,16 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Calibration work dir: sweeps / tests / DAG calib steps write here freely (it churns). Only the
-# tracked library waveflow/calib/platforms/<name>/ is committed, and ONLY `publish_calib` writes to it.
-# See waveflow/calib/publish.py. Anchored so it matches the repo-root work dir, not any nested `work/`.
-# (The shipped library's re-include past the *.json ignore is at the top of this file.)
-/calib/work/
+# Calibration work dir: sweeps / tests / DAG calib steps write here freely (it churns). Only a tracked
+# library (waveflow/calib/platforms/ or a project's calib/platforms/) is committed, and ONLY
+# `publish_calib` writes to one. See waveflow/calib/publish.py.
+#
+# `**/` because a pattern with a mid-string separator is anchored to this file's directory, and a
+# project's work tier sits at ITS root — an example under examples/<name>/ is a project, so
+# examples/fir_block/calib/work/ has to match too. The `calib/` prefix keeps it specific enough that it
+# cannot swallow an unrelated directory called `work/`.
+# (The libraries' re-include past the *.json ignore is at the top of this file.)
+**/calib/work/
 
 # Distribution artifacts
 *.egg-info/
@@ -110,6 +127,8 @@ Thumbs.db
 
 # MCP files
 !**/mcp/resources/*.json
+# P0 equivalence snapshots (plans/harmonize_calib.md) � committed so the refactor has a bar to clear.
+!tests/calib/golden/*.json
 
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/

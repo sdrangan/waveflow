@@ -192,7 +192,7 @@ class FreeRunMod(HwModule):
         tm = self.timing_model
         if tm is None:
             return 0.0
-        dly = tm.predict(features)[0]
+        dly = tm.predict_feat(features)[0]
         self._pending_firing = {**features, "current_dly": dly}
         return dly
 
