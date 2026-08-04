@@ -1,20 +1,28 @@
-"""vecmult_resource.py — VecMult's resource model: one structure declaration, four counters.
+"""vecmult_resource.py — the corpus VecMult's LUT/FF fit is trained on.
 
-The whole model is :meth:`VecMultResourceModel.structure`.  Everything else follows from it:
+The *model* is not here: VecMult declares
+:meth:`~examples.vecmult.vecmult.VecMult.resource_structure` and picks a kind in
+:meth:`~examples.vecmult.vecmult.VecMult.get_rm`, because a module's model belongs on the module.
+This file supplies only the measurements that fit reads.
+
+What follows from that structure declaration, once:
 
 * **DSP, BRAM, URAM** are priced exactly by :mod:`waveflow.calib.device_rules` from the declared
-  multipliers and arrays.  Zero fitted parameters, exact at all 16 measured points.
+  multipliers and arrays -- the :class:`~waveflow.calib.vitis_model.VitisDerived` half of the model.
+  Zero fitted parameters, exact at all 16 measured points.
 * **LUT and FF** are regressed on basis terms *derived from the same declaration* -- the per-lane
   datapath and the crossbar.  No device rule reaches them, because hard primitives are allocated and
   countable while fabric is what everything else decomposes into.
+
+:class:`~waveflow.calib.vitis_model.VitisResourceModel` composes those two halves as a
+:class:`~waveflow.calib.calib.ConcatCalibModel`, so each counter comes from whichever is honest for
+it and the weakest-link confidence is the shared machinery's job rather than this example's.
 
 There is deliberately no second place to state the basis.  Declaring a ``Crossbar`` is what puts
 ``LW^2`` in the fit, so "a bad held-out error means a missing structure" is actionable: you fix the
 declaration, not the polynomial.
 """
 from __future__ import annotations
-
-
 
 
 #: The basis LUT and FF are regressed on is **derived** from

@@ -3,8 +3,8 @@ title: Resource models
 parent: Vector Multiply (resource modelling)
 nav_order: 5
 audience: python
-api: [dsp_count, bram_estimate, device_for]
-summary: "What VecMult asserts about its own cost. DSP and BRAM come from device rules with zero fitted parameters — you supply the structural counts, the library supplies the silicon. LUT and FF are fitted, on a basis taken from a structure-to-form dictionary rather than invented. The dividing line is not arbitrary: hard primitives are countable, soft fabric is not."
+api: [resource_structure, get_rm, VitisResourceModel, VitisDerived, DesignStructure, dsp_count, bram_estimate]
+summary: "What VecMult asserts about its own cost. DSP and BRAM come from device rules with zero fitted parameters — you supply the structural counts, the library supplies the silicon. LUT and FF are fitted, on a basis derived from the same structure declaration rather than invented. The dividing line is not arbitrary: hard primitives are countable, soft fabric is not — which is why the model is a concat of a derived half and a fitted half."
 ---
 
 # Resource models
@@ -25,10 +25,15 @@ one regression per counter — is wrong on half of them.
 | LUT | `c0 + c1·LW + c2·LW² + c3·LW²log2(LW)` | 4 | 0.00% held-out |
 | FF | same basis | 4 | 1.73% held-out |
 
+The first two rows are a [prior](../../guide/calib/models.md#priorcalibmodel--a-formula) and the last
+two a [regression](../../guide/calib/models.md#the-regressions); one object presents all four, because
+[`ConcatCalibModel`](../../guide/calib/models.md#concatcalibmodel--one-model-per-target) exists to
+compose exactly this.
+
 ## What you supply, and what the library supplies
 
 DSP and BRAM are **not** reasoned about on this page, and that is the point. They are two calls into
-[`waveflow.calib.device_rules`](../../guide/resource_model/rm.md), and the division of labour is
+[`waveflow.calib.device_rules`](../../guide/resource_model/vitis.md), and the division of labour is
 strict:
 
 | you supply — structural facts about *your* design | the library supplies — facts about *the silicon* |
@@ -48,6 +53,13 @@ def bram_prior(vlen, dwid):
     lw = lane_width(dwid)
     return bram_estimate(lw, vlen // lw, SAMP_W, PART).blocks
 ```
+
+{: .note }
+> Those two live in `vecmult_corpus.py` and exist for the **cross-check**, not for prediction: the
+> tests assert them against all 16 measurements directly, so the rules are shown to reproduce the
+> silicon *without* any model object in the way. The model itself never calls them — it derives the
+> same counters from [`resource_structure`](#installing-the-model), which is the one declaration
+> everything follows from.
 
 Rules are keyed on the **part** because that is what they are properties of — a DSP48E2 is 27×18, and
 a model written against a DSP48E1 is simply wrong on one. This is the same reasoning that puts the
@@ -175,21 +187,40 @@ formula is allowed to be *wrong* in a way a regression is not.
 
 ## Installing the model
 
-A model that is never installed predicts nothing. The chain from the device rules to a usable
-estimate has one more link, and it is declared **on the module**:
+A model that is never installed predicts nothing. VecMult declares two things and neither is device
+knowledge — the rest is the library's.
+
+**What it contains**, in [structure→form](#structure-form-dictionary) terms:
 
 ```python
 class VecMult(FreeRunMod):
 
-    def add_rm_self(self, platform) -> None:
-        samples = [(elaborate(VecMult, {"dwid": d, "vlen": v}, name="fit"), m)
-                   for v, d, m in in_bram_points()]
-        self._resource_model = vec_mult_fitted(platform=platform).fit(samples)
+    def resource_structure(self):
+        lw = self.lw
+        return DesignStructure(
+            multipliers=[MultGroup(count=lw, operand_bits=SAMP_W)],
+            memories=[MemArray(banks=lw, depth=int(self.vlen) // lw, elem_bits=SAMP_W, name="buf")],
+            per_lane=[PerLane(lanes=lw, name="lane datapath + nlane compare")],
+            crossbars=[Crossbar(lanes=lw, name="runtime-position lane pack/unpack")],
+        )
 ```
 
-Declared on the class rather than assigned from `vecmult_resource.py`, so `top.add_rm(platform)`
-works on the design *as imported* — and a reader looking for a module's model finds it on the module,
-not in a registry that has to be kept in step.
+**Which model prices it**, as a [classmethod](../../guide/resource_model/getrm.md) so it cannot close
+over an instance:
+
+```python
+    @classmethod
+    def get_rm(cls, platform):
+        part = getattr(platform, "part", None) or PART
+        require_same_device(part, PART, what="VecMult's resource model")
+        return VitisResourceModel(name="vec_mult", part=part,
+                                  platform=platform).load_or_fit(samples=vec_mult_samples)
+```
+
+`require_same_device` refuses a platform on a **different device** rather than merely an unrecognized
+one. Accepting any *known* part would price an UltraScale+ design with 7-series geometry — a DSP48E2
+is 27×18 — while the fitted LUT/FF coefficients were measured against DSP48E1 fabric. Both halves
+would be wrong, and both would fail silently.
 
 Note what the fit is trained on: `in_bram_points()`, **not** the whole grid. The LUTRAM corner is a
 different regime, and asking one line to span a discontinuity does not make it better there — it
@@ -197,19 +228,30 @@ makes it worse everywhere else.
 
 ### The whole chain
 
+`VitisResourceModel` is a [`ConcatCalibModel`](../../guide/calib/models.md#concatcalibmodel--one-model-per-target):
+each counter comes from whichever model is honest for it, and the composition — not this example —
+owns the arithmetic that combines them.
+
 ```text
-device_rules.dsp_count / bram_estimate        the silicon
-   └─ dsp_prior(features) / bram_prior(features)      your structural counts
-        └─ PriorResourceModel(formulas={"dsp": …, "bram": …})
-             └─ ConcatCalibModel(VitisDerived(dsp/bram), LinCalibModel(lut), LinCalibModel(ff))
-                  └─ VecMult.add_rm_self(platform)     →  self._resource_model
-                       └─ top.add_rm(platform)  →  compose(top)  →  ResourceEstimate
+DesignStructure           what VecMult declares it contains
+  ├─ VitisDerived         dsp, bram, uram, srl   — device rules, 0 free parameters
+  └─ LinCalibModel × 2    lut, ff                — regressed on terms derived from the same declaration
+       ↓
+  VitisResourceModel = ConcatCalibModel(the above)
+       ↓
+  VecMult.get_rm(platform)  →  top.add_rm(platform)  →  compose(top)  →  ResourceEstimate
 ```
 
-One detail is easy to get wrong: `PriorResourceModel.formulas` takes
-`callable(features: dict) -> int`, where *features* is the **resolved `HwParam` set** that
-[elaboration](../../guide/comp_codegen/elaborate.md) produced. Nothing is threaded down from a
-parent, because each model reads its own features off the instance it is attached to.
+There is deliberately **no second place to state the basis**. Declaring a `Crossbar` is what puts
+`LW²·log2(LW)` in the fit, so *"a bad held-out error means a missing structure"* is actionable: you
+fix the declaration, not the polynomial.
+
+{: .note }
+> **What the corpus records is the declaration, not the terms.** A row holds `mult0_count`,
+> `mem0_banks`, `xbar0_lanes` — the flattened structure — and the basis terms are derived from it at
+> fit time. The cost of a crossbar in LUTs is a modelling claim that will be revised; storing lane
+> counts means a revision re-derives from measurements already on disk, rather than stranding them.
+> See [the corpus](../../guide/calib/corpus.md#raw-not-derived).
 
 ### Composing an estimate
 
