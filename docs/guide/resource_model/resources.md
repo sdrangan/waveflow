@@ -1,7 +1,7 @@
 ---
 title: Resource measurements
-parent: Model calibration
-nav_order: 11
+parent: Resource Models
+nav_order: 8
 has_children: false
 audience: python
 api: [InspectSynthStep, store_report, SynthReport]
@@ -24,7 +24,7 @@ synthesis.
 
 `InspectSynthStep` is the DAG rung after `csynth`. It attributes the report
 ([`report_from_solution`](../resource/composite.md)), writes it as JSON, and files the per-module
-records into the platform's [module store](./modules.md):
+records into the platform's [module store](../calib/modules.md):
 
 ```python
 from waveflow.build.resource_steps import InspectSynthStep
@@ -84,7 +84,7 @@ Three habits worth copying into any sweep of your own:
 - **Write incrementally and support resume.** Hours of synthesis should not be lost to one crash near
   the end.
 - **Record failures as failures.** A sweep that quietly covered 19 of 24 points while reporting 24
-  leaves a hole in the fitted region — exactly where [confidence](./modules.md) would later claim
+  leaves a hole in the fitted region — exactly where [confidence](../calib/modules.md) would later claim
   interpolation.
 
 {: .warning }
@@ -106,11 +106,11 @@ about 20 minutes — produced 96 module measurements over only **30 distinct con
 | `MemWStream` | **1** |
 
 The two memory modules were characterized **once** and served all 24 design points. That is the
-[structural keying](./modules.md) paying off in syntheses rather than in argument, and it is the
+[structural keying](../calib/modules.md) paying off in syntheses rather than in argument, and it is the
 mechanism by which a large design space costs far fewer runs than it has points.
 
 ## See also
 
-- [Module keys and the record store](./modules.md) — how a measurement is addressed, verified, filed.
+- [Module keys and the record store](../calib/modules.md) — how a measurement is addressed, verified, filed.
 - [Resource analysis](../resource/) — reading the report and decomposing a composite.
 - [Platforms](../platform/identity.md) — resource counts are part- and clock-specific, and keyed accordingly.

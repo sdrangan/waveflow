@@ -1,7 +1,7 @@
 ---
 title: Component residuals
-parent: Model calibration
-nav_order: 5
+parent: Timing Models
+nav_order: 7
 audience: python
 api: [TimingModel, StreamTimingModel, CollectTimingStep, FitTimingStep]
 summary: "A component's control residual is the delay pysim is MISSING once the bus term is charged: residual = rtl_span - pysim_span + current_dly, fit per (component, platform). TimingModel collects RTL firings (from a trace) and pysim firings (from a run) into independent trees, joins them on the feature point (nwords, num_trans), and fits a CalibModel; predict() returns the delay a FreeRunMod injects via timed_delay. Stored shared (platform_dir -> the committed library) or custom (calib_dir -> a project dir). CollectTimingStep / FitTimingStep automate it."
@@ -104,7 +104,7 @@ plus the firing record the residual fit needs.
 ## Two kinds of component: where the residual lives
 
 The fit is identical; only the storage scope differs (the
-[two kinds](./index.md#where-the-fit-lives-custom-vs-shared-infra)):
+[two kinds](../calib/index.md#where-the-fit-lives-custom-vs-shared-infra)):
 
 |                        | Shared-infra component                   | Custom component                      |
 | ---------------------- | ---------------------------------------- | ------------------------------------- |

@@ -126,6 +126,13 @@ Validated against **design totals that fit nothing** — only per-module figures
 | LUT | 3.2% mean, 8.6% worst | 0.950 |
 | FF | 2.8% mean, 8.7% worst | 0.990 |
 
+{: .note }
+> Rank correlation here is Pearson over `argsort(argsort(·))` ranks. The convention matters at the
+> third decimal: the predictions contain ties, and tie-corrected Spearman gives 0.947 / 0.989 on the
+> same data. Every figure in this table is recomputed from the committed corpus by
+> `tests/docs/test_documented_numbers.py`, so a model change that moves one fails a test naming this
+> page.
+
 ...and the DSP-minimal design is identified correctly.
 
 {: .warning }
@@ -133,7 +140,7 @@ Validated against **design totals that fit nothing** — only per-module figures
 > 24.8% worst; the whole-design figure is better because the interface term and the three static
 > modules are *exact* and dilute the single fitted module. Most of this design is known rather than
 > predicted. Quote the per-module error when describing the model, and the design-level error when
-> describing what a composed estimate delivers — see [Validating a model](../../guide/resource_model/validation.md).
+> describing what a composed estimate delivers — see [Validating a model](../../guide/resource_model/fit.md#validating).
 
 ## A design finding, for free
 
@@ -149,5 +156,5 @@ is the argument for having the model at all.
 
 - [Resource models](./resource_model.md) — the four models these measurements check.
 - [Composite kernels](../../guide/resource/composite.md) — how a report becomes per-module numbers.
-- [Validating a model](../../guide/resource_model/validation.md) — the general form of the check above.
+- [Validating a model](../../guide/resource_model/fit.md#validating) — the general form of the check above.
 - [The two kernels](./kernels.md) — the serial and unrolled bodies the DSP counts come from.

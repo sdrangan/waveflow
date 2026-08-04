@@ -1,5 +1,5 @@
 ---
-title: The corpus — CalibDataFrame
+title: CalibDataFrame — the corpus API
 parent: Model calibration
 nav_order: 3
 audience: python
@@ -7,13 +7,10 @@ api: [CalibDataFrame]
 summary: "CalibDataFrame is the calibration corpus: a thin wrapper composing a pandas.DataFrame, one row per synth/cosim measurement. It adds only what a raw frame lacks — a per-row measured_at timestamp and a save/load storage path — and otherwise exposes the underlying frame as .df for native pandas filter/select."
 ---
 
-# The corpus — `CalibDataFrame`
+# `CalibDataFrame` — the corpus API
 
-Before you can fit a [model](./models.md) you need the *measurements*: a table with one row per
-synth or cosim run, holding both the **features** (sizes, parameters — `n_row`, `n_col`, …) and the
-measured **targets** (`cycles`, `bram`, …). That table is the calibration corpus, and it is the thing
-a future [model-training workflow](./index.md) reuses — so it is worth keeping structured and
-persisted rather than scattered across ad-hoc scripts.
+[The corpus](./corpus.md) specifies *what* measured data looks like and where it comes from. This is
+the object that implements it.
 
 [`CalibDataFrame`](../../../waveflow/calib/calib.py) is that corpus. It is a deliberately thin
 wrapper composing a `pandas.DataFrame` (exposed as `.df`) — it does **not** reimplement the frame. It
@@ -62,11 +59,12 @@ db2 = CalibDataFrame.load("calib/fir_grid.csv")
 ## `measured_at` is metadata, never a feature
 
 The `measured_at` column is **provenance, not a model input**. Models select explicit `basis` /
-`target` columns (see [Models](./models.md)), so the timestamp can never leak into a fit — there is
+`target` columns (see [the model kinds](./models.md)), so the timestamp can never leak into a fit — there is
 no "use all columns" path that would sweep it in.
 
 ## See also
 
-- [Models](./models.md) — fitting a `CalibModel` over the corpus's `basis` / `target` columns.
+- [The corpus](./corpus.md) — the format this implements, and why it is derived rather than maintained.
+- [The model kinds](./models.md) — fitting over the corpus's `basis` / `target` columns.
 - [A worked example](./example.md) — building a corpus and fitting it end-to-end.
 - [Calibration](./index.md) — the overall workflow this corpus feeds.

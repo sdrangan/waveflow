@@ -1,7 +1,7 @@
 ---
 title: The bus-transfer model
-parent: Model calibration
-nav_order: 7
+parent: Timing Models
+nav_order: 8
 audience: python
 api: [BusCalib, BusTiming, CalibBusStep]
 summary: "BusCalib fits the platform's m_axi transfer law — span(num_trans, nwords) per direction — and stores it in mm_bus.json beside the platform manifest. The datapoints are measured component-independently off the memory port (measure_bus_span groups beats into transfers by idle gaps); a sweep accumulates a per-run corpus (add_run -> points/) then fits. bus_timing() hands back a configured BusTiming the memory slave charges during pysim, or an unconfigured one (word_bw fallback) on an uncalibrated platform. CalibBusStep automates it as a DAG step."

@@ -1,7 +1,7 @@
 ---
 title: Fitting a timing model
-parent: Model calibration
-nav_order: 1
+parent: Timing Models
+nav_order: 6
 audience: python
 api: [CalibDataFrame, LinCalibModel]
 summary: "The direct method: recover a loop timing model's parameters (latency, ii) from a sweep. Run the kernel at several input sizes, record (n, cycles) into a CalibDataFrame, and fit the LinCalibModel — the coefficients ARE latency and ii. Two points suffice in principle; use more and check R² / held-out error. unroll_factor reshapes the basis (ceil(n/U)), fixed from synthesis or swept. The (n, cycles) ground truth comes from a Vitis HLS cosim sweep."
@@ -17,7 +17,7 @@ kernel at a range of sizes, record the cycles, and fit. (Reusable infra componen
 ## The sweep
 
 The datapoints are a **sweep**: the kernel run at several input sizes `n`, each yielding one measured
-`(n, cycles)` row. Those rows are the corpus — a [`CalibDataFrame`](./dataframe.md), one row per
+`(n, cycles)` row. Those rows are the corpus — a [`CalibDataFrame`](../calib/dataframe.md), one row per
 measurement:
 
 ```python
@@ -73,15 +73,15 @@ measurement ([LT vs CT](../timing_model/models.md)) used to calibrate the loosel
 fast LT sim predicts the slow RTL. See [cosim timing](../timing/cosim_timing.md) for extracting the
 counts.
 
-The line-fit here uses a [`LinCalibModel`](./models.md); for a smooth, saturating curve that no line
-captures, an [`InterpCalibModel`](./models.md) is a calibrated lookup instead (see
-[the worked example](./example.md)).
+The line-fit here uses a [`LinCalibModel`](../calib/models.md); for a smooth, saturating curve that no line
+captures, an [`InterpCalibModel`](../calib/models.md) is a calibrated lookup instead (see
+[the worked example](../calib/example.md)).
 
 ## See also
 
 - [Timing models for loops](../timing_model/loops.md) — the `latency + ii·(m − 1)` model this fits.
-- [Models](./models.md) / [The corpus — `CalibDataFrame`](./dataframe.md) — the `LinCalibModel` and
+- [Models](../calib/models.md) / [The corpus — `CalibDataFrame`](../calib/dataframe.md) — the `LinCalibModel` and
   corpus this uses.
-- [A worked example](./example.md) — the primitive fit mechanics (score, holdout, `InterpCalibModel`).
+- [A worked example](../calib/example.md) — the primitive fit mechanics (score, holdout, `InterpCalibModel`).
 - [Component residuals](./component_residual.md) — the *residual* fitting method, for reusable infra.
 - [Timing Analysis Tools — cosim timing](../timing/cosim_timing.md) — the measurement side of the fit.

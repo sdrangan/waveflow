@@ -34,7 +34,7 @@ Timing fits are cycle counts, and three things move them:
 - **The synthesis clock.** HLS schedules to meet `create_clock -period`. Tighten the period and it
   inserts pipeline stages — so the *same* C at a different target period can synthesize to a *different*
   cycle count on the *same* part. The clock is a first-class determinant, not a footnote.
-- **The memory system.** The `m_axi` [bus law](../calib/bus_model.md) depends on the interconnect + memory
+- **The memory system.** The `m_axi` [bus law](../timing_model/bus_model.md) depends on the interconnect + memory
   controller (an idealized BFM vs. a real DDR controller), which the part number does not capture at
   all. This is why a platform name usually tags the memory (`..._bfm_...`).
 
@@ -110,7 +110,7 @@ layer.
   under it.
 - [FPGA resources](../resource/xilinx.md) — what the default counters are and how far an HLS estimate of
   them can be trusted.
-- [The bus-transfer model](../calib/bus_model.md) — the platform-scoped `m_axi` law that lives beside the
+- [The bus-transfer model](../timing_model/bus_model.md) — the platform-scoped `m_axi` law that lives beside the
   manifest.
-- [Component residuals](../calib/component_residual.md) — the per-`(component, platform)` fits under
+- [Component residuals](../timing_model/component_residual.md) — the per-`(component, platform)` fits under
   `components/`.

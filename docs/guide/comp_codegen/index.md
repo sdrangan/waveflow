@@ -118,6 +118,7 @@ means when you write a [hook](../custom_hooks/).
 
 - [Automatic vs. manual](./automatic.md) — what codegen writes and what you write: everything structural is generated; the compute inside a `@synthesizable` hook is yours.
 - [Module structure](./structure.md) — the frame all four targets share: one top-level function per module, which method is extracted for which kind, entry-is-extracted vs hook-is-not, and the **contract** for when a module lowers at all.
+- [Elaboration](./elaborate.md) — `elaborate(cls, params)`, the sim-free entry that builds a module purely to read its structure, and the param-purity contract that lets codegen be keyed by `(class, param-set)` instead of by an instance.
 - [Host-activated kernel in HLS](./hostactivated.md) — the `control_driven_kernel`: `ap_ctrl_hs`, the `s_axilite` register block, and `on_start` as the body.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
 - [Free-running kernel in HLS](./freerunning.md) — the `composite_kernel`, 1-task case: the task body that is one firing, the `ap_ctrl_none` top, and `KernelTask`.

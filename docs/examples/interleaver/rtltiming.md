@@ -66,7 +66,7 @@ RTL 302 vs pysim 300, ≈0.7% off. It holds because every stage's cost is now a 
 there took calibrating the **reader**, and that is the interesting part. `mem_copy` is *writer*-bound, so it
 only ever needed the writer's residual; the reader's was never fit. The interleaver is the first
 **reader-bound** design, and it ran **≈10% under** the RTL until a reader residual was fit
-([the mem-stream residual](../../guide/calib/memstream.md) — the fixture the interleaver forced into
+([the mem-stream residual](../../guide/timing_model/memstream.md) — the fixture the interleaver forced into
 existence). The lesson: **you calibrate the stage a design actually bottlenecks on**; an un-fit residual
 only shows where it lands on the critical path.
 
@@ -84,7 +84,7 @@ calibration story, the one this example exists to teach.
 ## See also
 
 - [Timing in the pysim](./pytiming.md) — the modeled timeline this checks against (the previous page).
-- [The mem-stream residual](../../guide/calib/memstream.md) — the reader/writer infra residuals the period
+- [The mem-stream residual](../../guide/timing_model/memstream.md) — the reader/writer infra residuals the period
   rests on, and the fixture that fits them.
 - [Fitting the timing model](./timing_fit.md) — the interleaver's own compute fit (the next page).
 - [`mem_copy` — Visualizing timing](../memcpy/timing.md) — the writer-bound sibling that reproduces its RTL

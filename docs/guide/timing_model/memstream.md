@@ -1,6 +1,6 @@
 ---
 title: The mem-stream residual
-parent: Model calibration
+parent: Timing Models
 nav_order: 9
 audience: python
 api: [MemRStream, MemWStream, StreamTimingModel, ComponentFixture, MemRStreamFixture, MemWStreamFixture]

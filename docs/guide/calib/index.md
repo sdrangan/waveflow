@@ -1,20 +1,34 @@
 ---
 title: Model calibration
 parent: Guide
-nav_order: 13
+nav_order: 12
 has_children: true
 audience: python
-api: [CalibDataFrame, CalibModel, LinCalibModel, InterpCalibModel, StreamTimingModel, BusCalib, Platform, ModuleStore, Confidence]
-summary: "Fit a model's parameters from measurement so a fast Python estimate tracks real hardware. Timing is fit two ways: DIRECT — the whole cycle count from a (size, cycles) sweep (a LinCalibModel recovers a loop's latency/ii); and RESIDUAL — only the gap between RTL and a pysim that already times its transfers. Resources are measured instead, attributed from the csynth report to the modules that caused them. Same CalibModel / CalibDataFrame machinery, same platform identity keyed by FPGA part + clock, same two-tier work → publish flow; only the source of a number differs."
+api: [CalibModel, CalibDataFrame, LookupCalibModel, PriorCalibModel, ConcatCalibModel, LinCalibModel, InterpCalibModel, ModuleStore, Confidence]
+summary: "The machinery both model axes share. One CalibModel base: get_params extracts what the corpus records, transform derives features, predict_feat answers, and every answer carries a Confidence. One corpus format (corpus.csv, one row per measurement, derived from each axis's raw tier). One set of model kinds — lookup, prior, concat, and two regressions. Timing and resource models are the same class; only the source of a number differs."
 ---
 
 # Model calibration
 
-A [timing model](../timing_model/) predicts a component's timeline from a few numbers — a `latency`, an
-initiation interval, a per-transfer cost. Those numbers are properties of the *synthesized* hardware.
-**Fitting** recovers them from measurement: run the kernel through synthesis / RTL cosim, record the
-cycles, and fit a model, so the fast LT simulation reproduces the slow RTL without you transcribing
-report numbers by hand.
+A model here predicts something measurable about a design — how many cycles a firing takes, how many
+LUTs a module costs — and says how much to believe the answer. Those numbers are properties of the
+*synthesized* hardware, so they are **recovered from measurement** rather than asserted: run the
+kernel through synthesis or RTL cosim, record what happened, fit a model, and the fast Python estimate
+tracks the slow truth without anyone transcribing report numbers by hand.
+
+**This section is the machinery, not either axis.** Timing and resource models are the same class:
+they differ in what they predict and where their numbers come from, but not in shape. What follows is
+that shape, once — the two axes then apply it in [Timing Models](../timing_model/) and
+[Resource Models](../resource_model/).
+
+## Start here
+
+1. [What a `CalibModel` is](./model.md) — `get_params` → `transform` → `predict_feat`, plus
+   confidence, fit, and where a model's data lives.
+2. [The corpus](./corpus.md) — the measured data every `fit` reads, and its one canonical shape.
+3. [`CalibDataFrame`](./dataframe.md) — the object implementing that format.
+4. [Confidence](./confidence.md) — the four levels, and why a composed estimate reports the weakest.
+5. [The model kinds](./models.md) — the concrete models you construct, and how to choose between them.
 
 ## Two quantities, one set of machinery
 
@@ -34,36 +48,6 @@ that is what it is. Predicting resources at an **unmeasured** point is a separat
 [module keys](./modules.md) are designed to make cheap: two designs that induce the same module reuse
 one measurement rather than paying for a second synthesis.
 
-## Two methods: direct and residual
-
-There are two ways to fit, and this section is organized around them:
-
-- **Direct** — fit the model's parameters straight from a sweep of `(size, cycles)` measurements. A
-  [loop model](../timing_model/loops.md)'s `latency` / `ii` are the two coefficients of a line, which a
-  `LinCalibModel` recovers. This is the simple case: [Fitting a timing model](./fit.md).
-- **Residual** — when a component's loosely-timed sim *already* charges most of its time (its transfers
-  are timed by the interfaces), fit only the **gap** between the RTL and the pysim — the small control
-  cost pysim misses. This is [Component residuals](./component_residual.md).
-
-Both are the same machinery underneath — a [`CalibModel`](./models.md) over a
-[`CalibDataFrame`](./dataframe.md) corpus — differing only in *what* they fit: the whole cycle count, or
-the residual.
-
-## The two-level split: bus vs component
-
-For a component that moves data over `m_axi`, the residual method leans on a split. The run's cost is:
-
-```
-    RTL cycles  =  bus transfer  +  component control
-                    └─ PLATFORM ─┘   └── COMPONENT ──┘
-```
-
-The **bus transfer** — how long the interconnect takes to move `n` words in `k` bursts — is a property
-of the **platform** (memory system + AXI adapter), so it is fit **once per platform** and reused by
-every accelerator ([`BusCalib`](./bus_model.md)). With that charged in pysim, the **component control**
-residual shrinks to the kernel's own overhead, fit per `(component, platform)`
-([`StreamTimingModel`](./component_residual.md)).
-
 ## Where the fit lives: custom vs shared infra
 
 A fit is stored in one of two places, chosen by one knob:
@@ -76,39 +60,49 @@ A fit is stored in one of two places, chosen by one knob:
   **no re-calibration**. The library is keyed by an FPGA-part identity (see [Platforms](../platform/identity.md))
   and populated through a [two-tier work → publish flow](../platform/workflow.md).
 
-## Everything is in cycles
+## Why a platform is keyed by part *and* clock
 
-Fitted numbers are stored in **cycles**, not seconds, so the artifact is clock-independent — a re-deploy
-at a different *simulation* frequency needs no refit. The one clock that *does* change the numbers is the
-**synthesis** clock (`create_clock -period`): HLS schedules to meet it, so a different target period can
-change the cycle counts. That is why a platform is keyed by part **and** clock — see
-[Platforms](../platform/identity.md).
+Both axes depend on the **synthesis** clock (`create_clock -period`), not just the part: HLS schedules
+to meet it, so a different target period changes the schedule — and therefore both the cycle counts
+and the logic that had to be replicated to hit it. A number measured at one period does not describe
+the same hardware at another, which is why the [platform identity](../platform/identity.md) carries
+both.
+
+The *simulation* frequency is a different thing and changes nothing. Timing artifacts are stored in
+**cycles** rather than seconds precisely so a re-deploy at a different sim frequency needs no refit.
 
 ## In this section
 
-The direct method and its primitives first, then the residual method and the platform infrastructure:
-
-- [Fitting a timing model](./fit.md) — the direct method: recover a loop model's `latency` / `ii` from a
-  `(size, cycles)` sweep, and validate on a held-out point.
-- [Models](./models.md) — the per-target fit / predict / score interface (`CalibModel`), the linear
-  model (`LinCalibModel`), and the calibrated lookup (`InterpCalibModel`).
-- [The corpus — `CalibDataFrame`](./dataframe.md) — one timestamped row per measurement, a
-  `pandas.DataFrame` under `.df`, with `save` / `load`.
-- [A worked example](./example.md) — the primitive fit mechanics: fit a `LinCalibModel`, score it, hold
-  a point out; then a saturating curve with `InterpCalibModel`.
-- [Component residuals](./component_residual.md) — the residual method: `StreamTimingModel`, fit per
-  `(component, platform)` with the bus term already charged.
-- [The bus-transfer model](./bus_model.md) — `BusCalib`: the `m_axi` span law fit once per platform,
-  measured component-independently off the ports.
-- [The mem-stream residual](./memstream.md) — the reusable `MemRStream` / `MemWStream` control residual,
-  and the per-component **fixture** (`waveflow/calib/fixtures/`) that fits it.
-
-Then the per-module layer, shared by both quantities:
-
+- [What a `CalibModel` is](./model.md) — the shape: `get_params` → `transform` → `predict_feat`, plus
+  `confidence`, `fit`, and where a model's data lives.
+- [The corpus](./corpus.md) — `corpus.csv`: one row per measurement, derived from each axis's raw tier
+  rather than maintained.
+- [`CalibDataFrame`](./dataframe.md) — the object implementing that format.
+- [Confidence](./confidence.md) — `EXACT` / `INTERPOLATED` / `EXTRAPOLATED` / `UNCALIBRATED`, and why a
+  composed estimate reports the weakest link.
+- [The model kinds](./models.md) — lookup, prior, concat and the two regressions, and how to choose.
+- [A worked example](./example.md) — the fit mechanics end to end: fit a `LinCalibModel`, score it,
+  hold a point out; then a saturating curve with `InterpCalibModel`.
 - [Module keys and the record store](./modules.md) — addressing a measurement by the module's
-  *structure* rather than its parameter dict, and the one record envelope both quantities use.
-- [Resource measurements](./resources.md) — attributing a `csynth` report to the modules that caused
-  it, the two traps that otherwise corrupt the numbers, and the `InspectSynthStep` build rung.
+  *structure* rather than its parameter dict, and the one record envelope both axes use.
+
+## The two axes
+
+Everything above is shared. What differs is where a number comes from, and each axis documents its own
+half:
+
+- [Timing Models](../timing_model/) — declaring a model's form, then calibrating it: the direct sweep
+  fit, the RTL-vs-pysim residual, the once-per-platform bus model.
+- [Resource Models](../resource_model/) — predicting utilization: the model kinds a design attaches,
+  `compose` over a hierarchy, and attributing a `csynth` report to the modules that caused it.
+
+{: .note }
+> **Pages that moved (2026-08-04).** *Fitting a timing model*, *Component residuals*, *The
+> bus-transfer model* and *The mem-stream residual* are now under
+> [Timing Models](../timing_model/); *Resource measurements* is under
+> [Resource Models](../resource_model/resources.md). They were written when this was the timing
+> calibration section; now that the base is genuinely shared, only the axis-agnostic pages belong
+> here.
 
 Everything here is *stored on a platform* — the identity it is keyed by, the directory layout, and the
 commands that create and publish one are in [Platforms](../platform/).
@@ -116,8 +110,6 @@ commands that create and publish one are in [Platforms](../platform/).
 ## See also
 
 - [Platforms](../platform/) — the target these fits are valid for, and where they live.
-- [Timing Models](../timing_model/) — the forward models whose parameters this section fits, and where a
-  model is [attached to a component](../timing_model/insertion.md).
 - [Timing Analysis Tools](../timing/) — the *measurement* side: extracting cycle counts and bus spans
   from a VCD / cosim run (where the datapoints come from).
 - [`BuildConfig`](../build/corecomp.md) — the `platform` / `part` / `clk_freq` selector that names the

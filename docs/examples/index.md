@@ -24,5 +24,8 @@ many more over time.
   via **shared memory** over an **AXI4 memory-mapped** interface.
 - **[memcpy](./memcpy/)** — Build a simple **free-running** kernel for copying data in
   memory.
+- **[vecmult](./vecmult/)** — Measure and model what a design **costs**: sweep a free-running
+  vector multiplier across its parameters, and turn the measurements into **resource models**
+  — formulas where the hardware is derivable, a fit where it is not.
 - **[interleaver](./interleaver/)** — Build a simple interleaver over memory locations
   using a **load–compute–store** dataflow pipeline.

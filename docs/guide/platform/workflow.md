@@ -70,7 +70,7 @@ waveflow/calib/platforms/<name>/    tracked (committed), and shipped as package 
                                     pip-installed user resolves it. EXACTLY ONE writer: publish.
 ```
 
-A sweep points the [`BusCalib`](../calib/bus_model.md) / [`StreamTimingModel`](../calib/component_residual.md) fits at
+A sweep points the [`BusCalib`](../timing_model/bus_model.md) / [`StreamTimingModel`](../timing_model/component_residual.md) fits at
 the **work** dir. When you are satisfied, one command promotes the result into the **tracked** library —
 `waveflow/calib/platforms/` for the shipped reference platforms, or a user/project overlay for a
 platform you calibrate locally (see [Platforms](./identity.md)). Because the tracked dir has a single
@@ -110,8 +110,8 @@ force=…)` writes the changed files; the CLI is a thin wrapper.
 ### Why publish is not a DAG step
 
 Promotion to shared infra is a deliberate "I'm satisfied" act, not a build side effect. The DAG steps
-([`CalibBusStep`](../calib/bus_model.md#automating-it-calibbusstep),
-[`CollectTimingStep` / `FitTimingStep`](../calib/component_residual.md#automating-it-collecttimingstep--fittimingstep))
+([`CalibBusStep`](../timing_model/bus_model.md#automating-it-calibbusstep),
+[`CollectTimingStep` / `FitTimingStep`](../timing_model/component_residual.md#automating-it-collecttimingstep--fittimingstep))
 populate the **work** dir; `publish_calib` is the manual gate to the tracked one.
 
 ## What is committed, and what is not
@@ -154,6 +154,6 @@ before trusting the model to *extrapolate* beyond the swept range.
 ## See also
 
 - [Platforms](./identity.md) — the identity the workflow seeds and confirms.
-- [The bus-transfer model](../calib/bus_model.md) / [Component residuals](../calib/component_residual.md) — the two
+- [The bus-transfer model](../timing_model/bus_model.md) / [Component residuals](../timing_model/component_residual.md) — the two
   fits the sweep produces.
 - [Build system](../build/) — the DAG the calibration steps plug into.

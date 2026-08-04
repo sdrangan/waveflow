@@ -40,7 +40,7 @@ correct. That is a design-space-exploration job: you run it constantly, over man
 and you need it to be fast and to compose across dozens of blocks. An LT model delivers that. The
 trade is precision: an LT model predicts timing within a calibrated error band rather than to the
 exact cycle. When you need the exact cycle count, you fall back to cosim — and you can *calibrate*
-the LT model against it (see [Fitting a timing model](../calib/fit.md)).
+the LT model against it (see [Fitting a timing model](../timing_model/fit.md)).
 
 The flows in this section — [block](./block.md) and [streaming](./streaming.md) — are LT models. They
 differ only in how much load/compute/store overlap their timeline exposes, not in whether they step

@@ -1,7 +1,7 @@
 ---
 title: Module keys and the record store
 parent: Model calibration
-nav_order: 10
+nav_order: 7
 has_children: false
 audience: python
 api: [module_key, identify, walk_modules, ModuleIdentity, ModuleStore, Record, Provenance]
@@ -10,7 +10,7 @@ summary: "Every measurement — a cycle count from cosim, a DSP count from csynt
 
 # Module keys and the record store
 
-A [component residual](./component_residual.md) is filed under a component *name* — a string like
+A [component residual](../timing_model/component_residual.md) is filed under a component *name* — a string like
 `mem_r_stream_framed_task`. That works when the thing being calibrated is one reusable framework
 kernel with one shape. It stops working as soon as the same module exists in many configurations and
 you want to know which one a number belongs to.
@@ -20,7 +20,7 @@ the **record store** that files measurements under it.
 
 {: .note }
 > This machinery is not timing-specific. The same keys and the same record envelope carry
-> [resource measurements](./resources.md); only the *source* of a number differs.
+> [resource measurements](../resource_model/resources.md); only the *source* of a number differs.
 
 ## The key is the structure, not the parameters
 
@@ -187,6 +187,6 @@ wipe is real cost. Unlike a firing tree there is no churny raw tier here to leav
 
 ## See also
 
-- [Resource measurements](./resources.md) — where resource records come from.
+- [Resource measurements](../resource_model/resources.md) — where resource records come from.
 - [Platforms](../platform/identity.md) — the part/clock identity these records are keyed under.
 - [The calibration workflow](../platform/workflow.md) — the work → publish split.

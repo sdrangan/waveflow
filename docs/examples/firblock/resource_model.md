@@ -96,16 +96,23 @@ parameters:
 
 ```python
 FittedResourceModel(targets=("lut", "ff"),
-                    transform=fir_compute_basis,        # comp -> {feature name: value}
+                    transform_fn=fir_compute_basis,     # params -> {feature name: value}
                     basis={"ff":  ["store_bits", "n_mult"],
                            "lut": ["n_mult", "store_bits", "mac_bits"]},
                     prior=fir_compute_prior())          # DSP/BRAM ride inside
 ```
 
-`transform` turns a module into named features; `basis` picks, per counter, which of them that counter
-regresses on. They are separate because one transform feeds both counters and the two have different
-forms. The `prior=` is not a wrapper — one object predicts all four counters, each from whichever half
-is honest for it.
+`transform_fn` turns a **parameter row** into named features; `basis` picks, per counter, which of
+them that counter regresses on. They are separate because one transform feeds both counters and the
+two have different forms. The `prior=` is not a wrapper — one object predicts all four counters, each
+from whichever half is honest for it.
+
+{: .note }
+> `transform_fn` takes parameters rather than a component, which is what guarantees the fit can be
+> reproduced from a stored [corpus](../../guide/calib/corpus.md) — see
+> [What a `CalibModel` is](../../guide/calib/model.md). The general form of this
+> prior-plus-fit pairing is now [`ConcatCalibModel`](../../guide/calib/models.md#concatcalibmodel--one-model-per-target);
+> `prior=` predates it and is scheduled for retirement.
 
 **Features are chosen for meaning, not for fit.** `store_bits` is what partitioned storage physically
 costs; it is also what lets a *single* model span both kernels, since its length carries the
@@ -123,7 +130,7 @@ table[boundary_signature(probe)] = counters      # one probe per measured mem_dw
 
 That is not a preference; it is what the measurements say. The term was invariant across all 24 compute
 configurations and moved only when the memory word width did — the evidence is in
-[the interface term](../../guide/resource_model/composition.md#the-interface-term).
+[the interface term](../../guide/resource_model/predict.md#the-interface-term).
 
 ## Installing them
 
@@ -163,6 +170,6 @@ them.
 ## See also
 
 - [The sweep and its results](./resource_fit.md) — the measurements these models are checked against.
-- [The model kinds](../../guide/resource_model/models.md) — prior, fitted, lookup and interface in general.
+- [The model kinds](../../guide/resource_model/rm.md) — prior, fitted, lookup and interface in general.
 - [The two kernels](./kernels.md) — the bodies the multiplier counts are read off.
 - [Fixed point](./fixedpoint.md) — where `acc_bits` comes from.
