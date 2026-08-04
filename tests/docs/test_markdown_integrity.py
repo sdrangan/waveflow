@@ -33,11 +33,40 @@ _OPEN_BOLD = re.compile(r"(?<=\w)\*\*")
 #: A kramdown attribute list must sit immediately above the block it styles.
 _ATTR_LIST = re.compile(r"^\{:\s*\.\w+\s*\}\s*$")
 
+#: Trees exempt from :func:`test_relative_links_resolve`, each for a stated reason rather than because
+#: it was inconvenient:
+#:
+#: * ``plans/`` are working notes.  A plan routinely cites another that was finished and deleted, and
+#:   that is a true record of how the work went, not rot to repair.
+#: * ``examples/_archive/`` is archived by definition — its links point at the world as it was.
+#: * ``waveflow/mcp/corpus/`` is a snapshot corpus, regenerated wholesale rather than edited.
+#:
+#: Everything a reader is actually pointed at — ``docs/`` and the live example READMEs — is checked.
+_LINK_CHECK_SKIP = ("plans/", "examples/_archive/", "waveflow/mcp/corpus/")
+
 
 def _tracked_markdown() -> list[Path]:
-    out = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
-                         capture_output=True, text=True, check=True)
-    return [REPO / p for p in out.stdout.split()]
+    """Every markdown file that is committed **or about to be**, that still exists on disk.
+
+    ``git ls-files`` alone reads the *index*, which has two failure modes this guard cannot afford:
+
+    * a **new** page is invisible until it is staged — so an entire docs section can be written,
+      reviewed and merged without a single check running on it.  That happened: six example pages and
+      five guide pages went unchecked, and the first thing this saw when they were finally staged was
+      a broken anchor;
+    * a **deleted** page is still listed until the deletion is staged, so the guard crashes reading a
+      file that is gone.
+
+    Adding untracked-but-not-ignored files and filtering to what exists closes both.  Ignored paths
+    stay out, so build output and vendored trees are still skipped.
+    """
+    def _ls(*args: str) -> list[str]:
+        out = subprocess.run(["git", "ls-files", *args, "*.md"], cwd=REPO,
+                             capture_output=True, text=True, check=True)
+        return out.stdout.split()
+
+    paths = {REPO / p for p in _ls() + _ls("--others", "--exclude-standard")}
+    return sorted(p for p in paths if p.is_file())
 
 
 @pytest.fixture(scope="module")
@@ -188,7 +217,29 @@ def test_anchors_point_at_headings_that_exist(md_files):
             for rel, anc in re.findall(r"\]\((\.\.?/[^)#]+\.md)#([A-Za-z0-9_-]+)\)", line):
                 tgt = (p.parent / rel).resolve()
                 if tgt not in by_path:
-                    continue                     # the file link itself is covered elsewhere
+                    continue                     # covered by test_relative_links_resolve
                 if anc.lower().strip("-") not in anchors[by_path[tgt]]:
                     broken.append(f"{_rel(p)}:{i} -> {rel}#{anc}  (no such heading there)")
     assert not broken, "links point at headings that do not exist:\n  " + "\n  ".join(broken)
+
+
+def test_relative_links_resolve(md_files):
+    """A relative link must point at a file that exists.
+
+    This was a genuine hole rather than a hypothetical one.  `test_anchors_point_at_headings_that_exist`
+    skips a target it cannot find, with the comment that the file link is "covered elsewhere" -- and it
+    was not.  Moving five pages out of `guide/calib` broke thirteen files' worth of links and the guard
+    stayed green, because every broken link was to a file the anchor check then declined to resolve.
+
+    A dead cross-page link is invisible in review: the page still renders, and only a reader who
+    follows it finds out.  That is exactly the failure a guard is for.
+    """
+    broken = []
+    for p in md_files:
+        if any(part in _rel(p) for part in _LINK_CHECK_SKIP):
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            for rel in re.findall(r"\]\((\.\.?/[^)#\s]+\.md)(?:#[^)]*)?\)", line):
+                if not (p.parent / rel).resolve().is_file():
+                    broken.append(f"{_rel(p)}:{i} -> {rel}")
+    assert not broken, "relative links point at files that do not exist:\n  " + "\n  ".join(broken)
