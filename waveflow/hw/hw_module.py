@@ -431,8 +431,41 @@ class HwModule(SimObj):
             child.add_rm(platform)
         self.add_rm_self(platform)
 
+    #: One model per ``(class, platform)``.  Params are deliberately **absent** from the key: a
+    #: model reads structure off the component it is asked about, so one object prices every
+    #: configuration of its class.  That is only true because a model never closes over an instance
+    #: -- which :meth:`get_rm` being a *classmethod* is what guarantees.
+    _RM_CACHE: ClassVar[dict] = {}
+
+    @classmethod
+    def get_rm(cls, platform):
+        """This class's resource model for *platform*, or ``None`` to take the default lookup.
+
+        **A classmethod on purpose.**  A resource model must not close over a module instance: it is
+        handed the component to predict for, and the same object has to price a whole corpus during
+        :meth:`~waveflow.calib.resource_model.ResourceModel.fit` and every sibling during
+        ``compose``.  Binding one instance would make every fitted row identical.  Having no ``self``
+        makes that mistake impossible rather than merely discouraged.
+
+        Everything instance-specific -- parameters, ports, the partitioning of an array -- reaches
+        the model through :meth:`resource_structure` on the component it is asked about, at predict
+        time.
+
+        Raise here if *platform* is one this class cannot be modelled on; returning a model that
+        silently applies another technology's geometry is the worse failure.
+        """
+        return None
+
+    @classmethod
+    def _rm_key(cls, platform):
+        return (cls, getattr(platform, "name", None), getattr(platform, "part", None),
+                str(getattr(platform, "dir", "")))
+
     def add_rm_self(self, platform) -> None:
-        """Install *this* module's own model.  Override to supply a prior, a fit, or an interface model.
+        """Install what :meth:`get_rm` returns, cached per ``(class, platform)``.
+
+        Override only for a module that genuinely needs the *instance* to choose its model -- and
+        expect to justify it, since the model it installs still must not close over ``self``.
 
         The default is a **lookup against the platform's measurement store**, which is the right answer
         far more often than it sounds: a module that does not vary with the parameters being explored
@@ -444,12 +477,45 @@ class HwModule(SimObj):
         is, which is the one direction an area estimate must not err: it turns "does not fit" into
         "fits".
         """
+        key = self._rm_key(platform)
+        if key not in HwModule._RM_CACHE:
+            HwModule._RM_CACHE[key] = self.get_rm(platform)
+        rm = HwModule._RM_CACHE[key]
+        if rm is not None:
+            self._resource_model = rm
+            return
+
         from waveflow.calib.record_store import ModuleStore
         from waveflow.calib.resource_model import LookupResourceModel
 
+        if platform is None:
+            # No platform, and the class declared no model of its own: there is no store to look a
+            # measurement up in.  Left uninstalled rather than faked, so `compose` reports the module
+            # UNCALIBRATED instead of contributing a silent zero.
+            self._resource_model = None
+            return
         self._resource_model = LookupResourceModel(
             name=f"{type(self).__name__}:measured",
             store=ModuleStore(platform.dir), platform=platform)
+
+    def resource_structure(self):
+        """What this module physically **contains** — multiplier groups, partitioned arrays, and the
+        fabric structures (per-lane datapath, crossbars, counters) its body is built from.
+
+        Declared here, beside :meth:`kernel_task`, because it is a fact about the *design* rather
+        than about any model of it: the multiplies and the ``ARRAY_PARTITION`` factor are true
+        whether or not anyone ever estimates resources.  Keeping it next to the body it describes is
+        what stops the two drifting.
+
+        Returns a :class:`~waveflow.calib.vitis_model.DesignStructure`.  Overriding it is all a
+        module needs to do to be priced by
+        :class:`~waveflow.calib.vitis_model.VitisResourceModel` — the device geometry, the rounding
+        and the basis terms all follow from it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not declare resource_structure(); a VitisResourceModel "
+            f"cannot derive any counter without it.  Override it to say what the module contains, "
+            f"or install a different model kind in add_rm_self().")
 
     @property
     def resource_model(self):

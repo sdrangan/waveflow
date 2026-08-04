@@ -4,7 +4,7 @@
 own docstring says, "no infrastructure for collecting data".  :class:`TimingModel` is that missing
 layer: it collects a component's per-firing measurements from an RTL trace and from pysim, fits the
 **residual** (the delay pysim is missing) with a composed :class:`~waveflow.calib.calib.CalibModel`,
-and exposes a ``predict`` the component's ``run_iter`` calls.
+and exposes a ``predict_feat`` the component's ``run_iter`` calls.
 
 See ``plans/timing_model.md``.  The design in four pieces, each earned the hard way:
 
@@ -22,8 +22,8 @@ See ``plans/timing_model.md``.  The design in four pieces, each earned the hard 
   side cannot yield a residual and are reported, not silently dropped.
 * **Everything internal is in CYCLES**, so ``params.json`` is clock-independent (reused unchanged
   across a re-synth at a different clock).  Conversion is only at the boundary: RTL is natively
-  cycles; pysim is time, so :meth:`collect_pysim` divides by ``clk.period`` and :meth:`predict`
-  multiplies back.  With ``clk=None`` the data is assumed already in cycles (tests, pure analysis).
+  cycles; pysim is time, so :meth:`collect_pysim` divides by ``clk.period`` and
+  :meth:`predict_feat` multiplies back.  With ``clk=None`` the data is assumed already in cycles (tests, pure analysis).
 """
 from __future__ import annotations
 
@@ -34,15 +34,22 @@ from typing import Any
 
 import pandas as pd
 
-from waveflow.calib.calib import LinCalibModel
+from waveflow.calib.calib import CalibModel, LinCalibModel
 
 #: Fit-target column name (the residual, in cycles).
 RESIDUAL = "residual"
 
 
 @dataclass
-class TimingModel:
+class TimingModel(CalibModel):
     """A component's timing residual model plus the corpus that fits it.
+
+    A :class:`~waveflow.calib.calib.CalibModel` specialization.  Unlike the resource kinds, timing has
+    genuine domain machinery that is not model-ness -- :meth:`collect_rtl`, :meth:`collect_pysim`,
+    :meth:`is_record_valid`, the cycle<->time conversion -- so it *subclasses* rather than dissolving.
+    The numeric layer is a composed :class:`~waveflow.calib.calib.LinCalibModel`; what the base
+    supplies is the vocabulary (:meth:`predict_feat` / :meth:`confidence_feat` / :attr:`targets`) and
+    the storage derivation.
 
     Parameters
     ----------
@@ -56,20 +63,22 @@ class TimingModel:
     features : list[str]
         The regression basis, columns present on *both* sides (``["nwords", "num_trans"]``).
     num_targets : int
-        Delays :meth:`predict` returns (default 1).  ``> 1`` is the API for a delay *between*
+        Delays :meth:`predict_feat` returns (default 1).  ``> 1`` is the API for a delay *between*
         internal stages, but needs per-stage measurement (Tier-2 tracing) — every op raises for now.
     placement : str
         ``"leading"`` | ``"trailing"`` — advisory: where ``run_iter`` injects the delay.
     seed : dict | None
-        Seed params (the ``state_dict``) used by :meth:`predict` before any fit, so a fresh component
+        Seed params (the ``state_dict``) used by :meth:`predict_feat` before any fit, so a fresh component
         still simulates.  ``None`` seeds to zero additional delay.
     clk : Any
         Anything with a ``.period``.  When set, :meth:`collect_pysim` converts its time spans to
-        cycles and :meth:`predict` returns time.  ``None`` = data already in cycles.
+        cycles and :meth:`predict_feat` returns time.  ``None`` = data already in cycles.
     """
 
-    component: str
-    calib_dir: str | Path
+    #: Required in practice -- defaulted only so this can inherit a base whose fields all have
+    #: defaults.  :meth:`__post_init__` refuses an instance missing either.
+    component: str = ""
+    calib_dir: str | Path = ""
     features: list[str] | None = None
     num_targets: int = 1
     placement: str = "trailing"
@@ -78,13 +87,19 @@ class TimingModel:
     #: Whether this residual is keyed to the component's **configuration** (its template arguments) or
     #: only to its function name.  A library written before that distinction existed holds bare-named
     #: directories, and a residual fit at one memory width would otherwise be served silently to a
-    #: design at another; ``False`` surfaces that in :meth:`confidence` instead of implying a match.
+    #: design at another; ``False`` surfaces that in :meth:`confidence_feat` instead of implying a match.
     config_specific: bool = True
     _model: LinCalibModel = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.component or not self.calib_dir:
+            raise ValueError(
+                f"{type(self).__name__} requires `component` and `calib_dir` (both keyword-only in "
+                f"practice; they carry defaults only so the base's defaulted fields can precede them)")
         if not self.features:
             raise ValueError(f"{type(self).__name__} requires `features` (the regression basis)")
+        self.target = self.target or RESIDUAL
+        self.name = self.name or self.component
         self.calib_dir = Path(self.calib_dir)
         self.features = [str(f) for f in self.features]
         #: Populated by :meth:`gen_data_frame`: {"matched", "rtl_only", "pysim_only"} feature points.
@@ -97,8 +112,21 @@ class TimingModel:
 
     # -- paths & unit conversion -------------------------------------------
     @property
-    def corpus_path(self) -> Path:
-        return self.calib_dir / "corpus.csv"
+    def data_dir(self) -> Path:
+        """This model's storage root.
+
+        Overrides the base's ``<platform.dir>/models/<name>``: a timing model is keyed per
+        **component**, and its directory is handed in as :attr:`calib_dir` by whatever assembled the
+        platform.  ``corpus_path`` and ``params_path`` still derive from it, so the base's storage
+        contract holds -- only the root differs.
+        """
+        return Path(self.calib_dir)
+
+    @property
+    def targets(self) -> tuple:
+        """The residual, always.  ``num_targets > 1`` is the API for a delay *between* internal
+        stages, but needs per-stage measurement that does not exist yet -- every op raises."""
+        return (RESIDUAL,)
 
     def _run_dir(self, side: str, run_id: str) -> Path:
         d = self.calib_dir / side / str(run_id)
@@ -234,10 +262,17 @@ class TimingModel:
         return out
 
     # -- fit / deploy ------------------------------------------------------
-    def fit(self) -> "TimingModel":
-        """Build the merged frame and fit the residual model; write ``params.json``.  Raises if
-        nothing joined, so a silent no-op cannot leave a seed model looking fitted."""
-        df = self.gen_data_frame()
+    def fit(self, data=None) -> "TimingModel":
+        """Fit the residual model and write ``params.json``.
+
+        The normal path passes nothing: the corpus is **regenerated** from the raw RTL and pysim runs
+        first, so a fit can never train on a stale table.  Passing *data* is the explicit override for
+        a test or a one-off — the same contract as
+        :meth:`~waveflow.calib.calib.CalibModel.fit`.
+
+        Raises if nothing joined, so a silent no-op cannot leave a seed model looking fitted.
+        """
+        df = self.gen_data_frame() if data is None else data
         if len(df) == 0:
             raise RuntimeError(
                 f"{self.component}: no residual datapoints — RTL and pysim did not join on "
@@ -246,17 +281,21 @@ class TimingModel:
         self._model.save_model()
         return self
 
-    def predict(self, row: dict) -> list[float]:
+    def predict_feat(self, row: dict) -> list[float]:
         """Additional delay(s), in **time** (``clk`` set) or cycles (``clk=None``), for a firing
-        described by *row*.  Length :attr:`num_targets`.  An unfitted model falls back to the seed,
+        described by *row*.
+
+        Named for the base's split: this is the numeric half, taking a **feature mapping** rather than
+        a component.  A firing's cost depends on its workload (``nwords``, ``num_trans``), which no
+        component carries -- so this, not ``predict(comp)``, is what a ``run_iter`` calls.  Length :attr:`num_targets`.  An unfitted model falls back to the seed,
         so this is safe before any calibration.  Clamped at 0 — a negative timeout is meaningless."""
         self._guard_single()
         if not self._model._fitted:
             self._model.load_or_default()
-        return [self._to_time(max(0.0, self._model.predict(row)))]
+        return [self._to_time(max(0.0, self._model.predict_feat(row)))]
 
-    def confidence(self, row: dict):
-        """How much :meth:`predict` should be believed for *row*
+    def confidence_feat(self, row: dict):
+        """How much :meth:`predict_feat` should be believed for *row*
         (:class:`~waveflow.calib.confidence.Confidence`).
 
         The passthrough a per-module report needs: without it nothing outside this class can reach the
@@ -267,7 +306,7 @@ class TimingModel:
         self._guard_single()
         if not self._model._fitted:
             self._model.load_or_default()
-        conf = self._model.confidence(row)
+        conf = self._model.confidence_feat(row)
         conf.facts.setdefault("component", self.component)
         conf.facts.setdefault("config_specific", bool(self.config_specific))
         if not self.config_specific:
@@ -281,11 +320,11 @@ class TimingModel:
         return conf
 
     def estimate(self, row: dict, *, source: str = "pysim"):
-        """:meth:`predict` paired with :meth:`confidence` — one entry for assembling a report."""
+        """:meth:`predict_feat` paired with :meth:`confidence_feat` — one report entry."""
         from waveflow.calib.confidence import Estimate
 
-        return Estimate(value=float(self.predict(row)[0]), source=source,
-                        confidence=self.confidence(row))
+        return Estimate(value=float(self.predict_feat(row)[0]), source=source,
+                        confidence=self.confidence_feat(row))
 
     # -- lifecycle ---------------------------------------------------------
     def reset(self, corpus: bool = True, params: bool = False) -> None:
@@ -293,7 +332,7 @@ class TimingModel:
 
         ``corpus=True`` (default) clears the ``rtl/`` and ``pysim/`` trees and ``corpus.csv`` — the
         common "re-sweep from scratch".  ``params=True`` deletes ``params.json`` so the next
-        :meth:`predict` falls back to the seed."""
+        :meth:`predict_feat` falls back to the seed."""
         if corpus:
             for side in ("rtl", "pysim"):
                 shutil.rmtree(self.calib_dir / side, ignore_errors=True)

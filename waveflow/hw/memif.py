@@ -298,7 +298,7 @@ class BusTiming:
     def _span_secs(self, model, num_trans, nwords) -> float | None:
         if model is None or num_trans is None:
             return None
-        cyc = max(0.0, float(model.predict(
+        cyc = max(0.0, float(model.predict_feat(
             {"num_trans": float(num_trans), "nwords": float(nwords)})))
         return cyc / float(self.clk_freq)
 

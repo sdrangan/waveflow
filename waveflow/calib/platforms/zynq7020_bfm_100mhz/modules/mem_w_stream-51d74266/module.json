@@ -1,5 +1,5 @@
 {
-  "key": "mem_w_stream-cc38eace",
+  "key": "mem_w_stream-51d74266",
   "cls_name": "MemWStream",
   "cls_module": "waveflow.hw.mem_stream",
   "params": {
@@ -9,5 +9,5 @@
     "mem_awidth": 32,
     "mem_dwidth": 32
   },
-  "signature": "cc38eacec8fc357a3cd6a6581a6acda5d2c4f49da3e00829d7de0b0cd0e99fdf"
+  "signature": "51d742662655ec2b669920a9f2ea97f33cd20c858ad700f4df8323653863c329"
 }

@@ -1,4 +1,4 @@
-"""resource_model.py — predicting a design's area by composing per-module models.
+"""resource_model.py — predicting a design's resource utilization by composing per-module models.
 
 The composition rule is one line, applied recursively:
 
@@ -30,7 +30,7 @@ Two consequences of the arithmetic, both deliberate:
 
 *Features are not only parameters.*  A composite's own cost depends on how many ``m_axi`` ports and
 internal channels it has, at what widths — structural facts, not ``HwParam`` values.  So
-:meth:`ResourceModel.features` is handed the elaborated component and takes whatever it needs.  Nothing
+:meth:`ResourceModel.transform` is handed the elaborated component and takes whatever it needs.  Nothing
 is passed down from a parent: elaboration already resolved each child's parameters, so reading them off
 the instance cannot drift from what was synthesized.
 
@@ -43,9 +43,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import pandas as pd
+
+from waveflow.calib.calib import CalibDataFrame, CalibModel, LookupCalibModel
 from waveflow.calib.confidence import Confidence, ConfidenceLevel
 from waveflow.calib.module_key import identify_instance
-from waveflow.calib.record_store import RESOURCE_FIELDS
+from waveflow.calib.record_store import RESOURCE_FIELDS, normalize_resources
 
 #: Counters a prediction is expressed in.  A design fits only if *every* one fits, so a model that
 #: predicts a single aggregate number would be answering the wrong question.
@@ -67,26 +70,34 @@ def add_counters(*terms: dict) -> dict:
 
 
 @dataclass
-class ResourceModel:
-    """A module's **own** area — what it costs beyond its children.
+class ResourceModel(CalibModel):
+    """A module's **own** utilization — what it costs beyond its children.
 
-    Subclasses implement :meth:`predict_own` and, if they have free parameters, :meth:`fit`.  The base
+    A resource model *is* a :class:`~waveflow.calib.calib.CalibModel` whose targets are the
+    platform's counters.  Everything generic — :attr:`name`, :attr:`platform`, the derived storage
+    paths, :meth:`transform`, corpus reading — comes from the base; what remains here is the two
+    things that are genuinely resource-flavoured: a **counter vocabulary** validated against the
+    platform, and a prediction that is a *mapping* rather than a scalar.
+
+    Subclasses implement :meth:`predict` and, if they have free parameters, :meth:`fit`.  The base
     handles confidence and the "no free parameters" default, which is the common case here: a lookup
     and a formula both have nothing to fit, so ``fit`` is a no-op *by construction* rather than by an
     exclusion flag.
     """
 
-    #: Human label for reports.  Defaults to the class name.
-    name: str = ""
-    #: The platform this model is expressed against.  Supplies the counter vocabulary
-    #: (:attr:`~waveflow.calib.platform.Platform.res_types`) — a counter set is technology-specific, so
-    #: it belongs to the platform rather than to a module-level constant.  ``None`` skips validation,
-    #: for a model built outside any platform (a test, an inspection).
-    platform: Any = None
-
     def __post_init__(self) -> None:
         self.name = self.name or type(self).__name__
         self.check_counters(self.declared_counters())
+
+    @property
+    def targets(self) -> tuple:
+        """Every counter this model predicts — the base's notion of *target*, in resource terms.
+
+        A model that names its counters reports those; one that does not falls back to the platform
+        vocabulary.  This is why :meth:`predict` returns a mapping: resource models are the
+        multi-target case the base contemplates.
+        """
+        return self.declared_counters() or self.counters()
 
     def declared_counters(self) -> tuple:
         """The counters this model claims to predict.  Subclasses that name counters override it."""
@@ -106,25 +117,60 @@ class ResourceModel:
         return tuple(self.platform.res_types) if self.platform is not None else COUNTERS
 
     # -- interface ---------------------------------------------------------
-    def features(self, comp: Any) -> dict:
-        """Whatever this model needs, read off the **elaborated component**.
+    #: Optional ``callable(comp) -> dict`` overriding :meth:`get_params` -- the **extraction**, for a
+    #: model that needs a structural fact no ``HwParam`` records.  Whatever it returns is what the
+    #: corpus stores, so keep it raw.
+    params_fn: Any = None
+    #: The :class:`~waveflow.calib.record_store.ModuleStore` this model's measurements live in.  When
+    #: set, it is the corpus source (see :meth:`corpus`).
+    store: Any = None
+    #: Module class whose records form this model's corpus.  A model serves one class, and two
+    #: classes have different parameter names, so an unfiltered corpus is mostly blank columns.
+    cls_name: str = ""
 
-        Parameters *or* structure: a leaf model typically wants resolved ``HwParam`` values, a
-        composite's model wants port and channel counts.  Nothing is threaded down from a parent —
-        elaboration already resolved each instance's parameters, so reading them here cannot drift
-        from the design that was synthesized.
+    def corpus(self):
+        """The record store, **reduced on demand** -- resources derive a corpus, never store one.
+
+        The resource raw tier is a :class:`~waveflow.calib.record_store.ModuleStore` keyed per
+        module, not a ``corpus.csv`` keyed per feature point, so this is where the projection happens.
+        Regenerating rather than caching is what makes a stale resource corpus impossible: the store
+        is the ground truth, and there is no second copy to fall behind it.
+
+        Falls back to the base (a literal ``corpus.csv``) when no store is set, which is what lets a
+        test hand a model a frame directly.
         """
-        return {}
+        if self.store is None:
+            return super().corpus()
+        from waveflow.calib.record_store import corpus_from_records
 
-    def predict_own(self, comp: Any) -> dict:
-        """This module's own counters, excluding its children."""
-        raise NotImplementedError
+        return corpus_from_records(self.store, cls_name=self.cls_name or None,
+                                   counters=self.counters())
 
-    def confidence_own(self, comp: Any) -> Confidence:
-        """How much :meth:`predict_own` should be believed for *comp*."""
-        return Confidence.uncalibrated(f"{self.name} reports no confidence")
+    def get_params(self, comp: Any, **runtime) -> dict:
+        """The base's identity default, narrowed to what a resource model sees.
 
-    def fit(self, samples) -> "ResourceModel":
+        Utilization is fixed at elaboration, so ``**runtime`` is dropped rather than recorded: a
+        workload cannot change what was synthesized, and a corpus column that never varies is noise
+        a basis could still be selected from by accident.
+        """
+        if self.params_fn is not None:
+            return dict(self.params_fn(comp))
+        return dict(identify_instance(comp, require_bound=False).params)
+
+    def predict(self, comp: Any, **runtime) -> dict:
+        """This module's own counters, excluding its children.
+
+        The base composition, ``predict_feat`` of :meth:`get_params` — every resource kind now goes
+        through it, which is what lets them be composed by
+        :class:`~waveflow.calib.calib.ConcatCalibModel` rather than by a bespoke ``prior=`` field.
+        """
+        return self.predict_feat(self.get_params(comp, **runtime))
+
+    def confidence(self, comp: Any, **runtime) -> Confidence:
+        """How much :meth:`predict` should be believed for *comp*."""
+        return self.confidence_feat(self.get_params(comp, **runtime))
+
+    def fit(self, samples=None) -> "ResourceModel":
         """Fit free parameters from ``[(comp, measured_counters), ...]``.
 
         The default is a **no-op**, because most models here have no free parameters.  A model whose
@@ -143,51 +189,123 @@ class ResourceModel:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class LookupResourceModel(ResourceModel):
-    """Return the stored measurement for this module's key.
+class LookupResourceModel(LookupCalibModel, ResourceModel):
+    """Look the measurement up for exactly this configuration; refuse to interpolate.
 
-    The right model for a module that does not vary with the knobs being explored — measured across
-    the reference sweep, that was three of the four modules.  It has no free parameters and **cannot
-    interpolate**: a key it has not seen gets ``UNCALIBRATED``, not a guess.  That refusal is the
-    point; a lookup pretending to generalize is how an exploration walks into a region nothing
-    measured.
+    A :class:`~waveflow.calib.calib.LookupCalibModel` **keyed on the module key**.  Everything that
+    makes a lookup a lookup -- memorizing, refusing to interpolate, the ``EXACT``/``UNCALIBRATED``
+    transition, the artifact round-trip -- is inherited and identical on both axes.  What is
+    specialized is the *identity*, and only that.
+
+    The key is the module's **elaborated structure**, not its parameter tuple, and the two are not
+    the same partition.  A bound FIFO depth is physical and reaches the signature, but is no
+    ``HwParam``; two instances with identical parameters and different wiring therefore collide under
+    a parameter key and stay distinct under this one.  Since a colliding second measurement would
+    silently overwrite the first, the finer key is the safe one.
+
+    It is reconciled with the shared machinery by *recording the key as a parameter*
+    (:meth:`get_params`), which is exactly what the record-store corpus already emits.  So the
+    specialization costs one column rather than a parallel implementation.
+
+    The refusal to interpolate matters more here than on the timing axis: resource laws are full of
+    binding thresholds (DSP-vs-LUT inference, block-RAM-vs-LUTRAM partitioning) that make
+    interpolation actively wrong rather than merely imprecise.
     """
 
-    store: Any = None                      #: a ModuleStore
     target: str = "resource"
-    #: Optional in-memory table {module key: counters}, used when there is no store (tests, or a
-    #: model carried around without a platform).
-    table: dict = field(default_factory=dict)
+    #: Counters this lookup stores, when there is no platform to take a vocabulary from.
+    res_types: tuple = ()
+    #: Keyed on the module key alone — see the class docstring for why not the parameter tuple.
+    basis: list = field(default_factory=lambda: ["module_key"])
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        # A committed table is naturally written {module_key: counters} with a bare string key;
+        # internally every key is the tuple `_key` returns.  Normalizing here keeps the ergonomic
+        # spelling working rather than silently never matching it.
+        self.table = {(k if isinstance(k, tuple) else (str(k),)): v for k, v in self.table.items()}
+        self._fitted = bool(self.table)
+
+    def counters(self) -> tuple:
+        """:attr:`res_types` if given, else the platform's vocabulary."""
+        return tuple(self.res_types) if self.res_types else ResourceModel.counters(self)
 
     def declared_counters(self) -> tuple:
         return ()          # a lookup returns whatever was measured; it claims no counters up front
 
-    def _record(self, comp: Any):
-        ident = identify_instance(comp, require_bound=False)
-        if ident.key in self.table:
-            return ident, self.table[ident.key], "table"
-        if self.store is not None:
-            rec = self.store.best(ident.key, self.target)
-            if rec is not None:
-                return ident, rec.payload, rec.source
-        return ident, None, None
+    def get_params(self, comp: Any, **runtime) -> dict:
+        """Resolved parameters **plus the module key**, which is what this lookup keys on.
 
-    def predict_own(self, comp: Any) -> dict:
-        _, payload, _ = self._record(comp)
+        Recording it rather than deriving it is the point: a corpus row then carries the identity its
+        measurement was filed under, so the same row serves the fit and the prediction.
+        """
+        ident = identify_instance(comp, require_bound=False)
+        params = dict(ident.params)
+        params["module_key"] = ident.key
+        params["cls_name"] = ident.cls_name
+        return params
+
+    def predict(self, comp: Any, **runtime) -> dict:
+        """Through :meth:`predict_feat`, the base path — the only resource kind that uses it."""
+        return self.predict_feat(self.get_params(comp, **runtime))
+
+    def confidence(self, comp: Any, **runtime) -> Confidence:
+        return self.confidence_feat(self.get_params(comp, **runtime))
+
+    def fit(self, samples=None) -> "LookupResourceModel":
+        """Record one table row per measured configuration.
+
+        Accepts either shape: ``[(component, measured_counters), ...]`` -- the resource-side sample
+        list -- or a corpus frame, which is what the inherited
+        :meth:`~waveflow.calib.calib.LookupCalibModel.fit` reads.  Report spellings (``LUT``,
+        ``BRAM_18K``) are normalized on the way in, so a raw synthesis dict is accepted alongside the
+        canonical counter names.
+        """
+        if samples is None or isinstance(samples, (pd.DataFrame, CalibDataFrame)):
+            return super().fit(samples)
+        for comp, measured in samples:
+            row = normalize_resources(measured)
+            key = self._key(self.get_params(comp))
+            self.table[key] = {c: int(row[c]) for c in self.counters() if c in row}
+        self._fitted = bool(self.table)
+        return self
+
+    def _record(self, row: dict):
+        """The stored measurement for *row*: the fitted table first, the record store second.
+
+        The store fallback is what lets a model predict against a **committed platform library**
+        without being fitted at all — the measurements are already on disk, addressed by the same
+        key. ``source`` distinguishes the two so a report can say which.
+        """
+        key = self._key(row)
+        if key in self.table:
+            return self.table[key], "table"
+        mod_key = row.get("module_key")
+        if self.store is not None and mod_key:
+            rec = self.store.best(str(mod_key), self.target)
+            if rec is not None:
+                return rec.payload, rec.source
+        return None, None
+
+    def predict_feat(self, row):
+        payload, _ = self._record(row)
         if payload is None:
             return {c: 0 for c in self.counters()}
         return {c: int(payload[c]) for c in self.counters() if c in payload}
 
-    def confidence_own(self, comp: Any) -> Confidence:
-        ident, payload, source = self._record(comp)
+    def confidence_feat(self, row) -> Confidence:
+        payload, source = self._record(row)
+        cls_name = row.get("cls_name") or self.name
+        mod_key = row.get("module_key")
+        params = {k: v for k, v in row.items() if k not in ("module_key", "cls_name")}
         if payload is None:
             return Confidence(level=ConfidenceLevel.UNCALIBRATED, facts={
-                "summary": f"{ident.cls_name}: no measurement stored for key {ident.key}; a lookup "
+                "summary": f"{cls_name}: no measurement stored for key {mod_key}; a lookup "
                            f"cannot interpolate, so this is a gap, not an estimate",
-                "module_key": ident.key, "params": ident.params, "model": "lookup"})
+                "module_key": mod_key, "params": params, "model": "lookup"})
         return Confidence(level=ConfidenceLevel.EXACT, facts={
-            "summary": f"{ident.cls_name}: measured directly at this configuration",
-            "module_key": ident.key, "params": ident.params, "model": "lookup",
+            "summary": f"{cls_name}: measured directly at this configuration",
+            "module_key": mod_key, "params": params, "model": "lookup",
             "measured_source": source})
 
 
@@ -206,34 +324,44 @@ class PriorResourceModel(ResourceModel):
     than any fit, and is reported as such.
     """
 
-    #: ``{counter: callable(features) -> int}``.  Counters absent here are simply not predicted.
+    #: ``{counter: callable(inputs) -> int}``.  Counters absent here are simply not predicted.
     formulas: dict = field(default_factory=dict)
-    transform: Any = None                  #: callable(comp) -> basis dict; raw params by default
+    #: Optional ``callable(params) -> dict`` overriding :meth:`ResourceModel.transform` -- the
+    #: **derivation**.  Prefer subclassing; this exists for a one-off built inline.
+    transform_fn: Any = None
 
     def declared_counters(self) -> tuple:
         return tuple(self.formulas)
 
-    def features(self, comp: Any) -> dict:
-        """Raw features are the resolved ``HwParam`` values; a *transform* derives basis terms.
+    def transform(self, params: dict) -> dict:
+        """:attr:`transform_fn` when given, else the base identity.
 
-        The split matters: raw features are never hand-written (elaboration resolved them), and the
-        transform is owned by the model so the raw -> basis map cannot differ between fit and predict.
+        Takes **parameters, not a component** — so a derived basis can only be built from facts
+        :meth:`get_params` recorded.  Extraction belongs in :attr:`params_fn`.
         """
-        if self.transform is not None:
-            return dict(self.transform(comp))
-        return dict(identify_instance(comp, require_bound=False).params)
+        if self.transform_fn is not None:
+            return dict(self.transform_fn(params))
+        return super().transform(params)
 
-    def predict_own(self, comp: Any) -> dict:
-        f = self.features(comp)
+    def predict_feat(self, row) -> dict:
+        f = self.transform(row)
         return {c: int(fn(f)) for c, fn in self.formulas.items()}
 
-    def confidence_own(self, comp: Any) -> Confidence:
-        ident = identify_instance(comp, require_bound=False)
+    def confidence_feat(self, row) -> Confidence:
         return Confidence(level=ConfidenceLevel.EXACT, facts={
-            "summary": f"{ident.cls_name}: {', '.join(sorted(self.formulas))} from an analytical "
-                       f"prior with no fitted parameters",
-            "module_key": ident.key, "model": "prior", "counters": sorted(self.formulas),
-            "features": self.features(comp)})
+            "summary": f"{', '.join(sorted(self.formulas))} from an analytical prior with no "
+                       f"fitted parameters",
+            "model": "prior", "counters": sorted(self.formulas),
+            "inputs": self.transform(row)})
+
+    def confidence(self, comp: Any, **runtime) -> Confidence:
+        """The row-based confidence, with the component's identity attached for a report."""
+        conf = self.confidence_feat(self.get_params(comp, **runtime))
+        ident = identify_instance(comp, require_bound=False)
+        facts = dict(conf.facts)
+        facts["module_key"] = ident.key
+        facts["summary"] = f"{ident.cls_name}: {facts['summary']}"
+        return Confidence(level=conf.level, facts=facts)
 
 
 # ---------------------------------------------------------------------------
@@ -259,18 +387,23 @@ class FittedResourceModel(ResourceModel):
 
     targets: tuple = ("lut", "ff")                 #: the counters this model fits
     basis: dict = field(default_factory=dict)      #: {counter: [basis-term names]}
-    transform: Any = None                          #: callable(comp) -> basis dict
+    #: Optional ``callable(comp) -> dict`` overriding :meth:`ResourceModel.transform`.
+    transform_fn: Any = None
     prior: ResourceModel = None                    #: optional model whose counters are added on top
     models: dict = field(default_factory=dict)     #: {counter: LinCalibModel}, built by fit/load
 
     def declared_counters(self) -> tuple:
         return tuple(self.targets)
 
-    def features(self, comp: Any) -> dict:
-        """See :meth:`PriorResourceModel.features` — raw params by default, transform when given."""
-        if self.transform is None:
-            return dict(identify_instance(comp, require_bound=False).params)
-        return dict(self.transform(comp))
+    def transform(self, params: dict) -> dict:
+        """:attr:`transform_fn` when given, else the base identity.
+
+        Takes **parameters, not a component** — so a derived basis can only be built from facts
+        :meth:`get_params` recorded.  Extraction belongs in :attr:`params_fn`.
+        """
+        if self.transform_fn is not None:
+            return dict(self.transform_fn(params))
+        return super().transform(params)
 
     @property
     def has_free_params(self) -> bool:
@@ -280,7 +413,7 @@ class FittedResourceModel(ResourceModel):
         """Fit from ``[(comp, measured_counters), ...]``.
 
         Features are recomputed from each component rather than taken from the caller, so the fit
-        cannot be trained on a different feature definition than :meth:`predict_own` will evaluate.
+        cannot be trained on a different feature definition than :meth:`predict` will evaluate.
         """
         import pandas as pd
 
@@ -288,7 +421,7 @@ class FittedResourceModel(ResourceModel):
 
         rows = []
         for comp, measured in samples:
-            row = dict(self.features(comp))
+            row = dict(self.transform(self.get_params(comp)))
             row.update({c: int(measured[c]) for c in self.targets if c in measured})
             rows.append(row)
         df = pd.DataFrame(rows)
@@ -300,32 +433,33 @@ class FittedResourceModel(ResourceModel):
             self.models[c] = LinCalibModel(basis=basis, target=c).fit(df)
         return self
 
-    def predict_own(self, comp: Any) -> dict:
-        row = self.features(comp)
-        out = {c: int(round(m.predict(row))) for c, m in self.models.items()}
+    def predict_feat(self, row) -> dict:
+        feats = self.transform(row)
+        out = {c: int(round(m.predict_feat(feats))) for c, m in self.models.items()}
         if self.prior is not None:
-            out = add_counters(out, self.prior.predict_own(comp))
+            out = add_counters(out, self.prior.predict_feat(row))
         return out
 
-    def confidence_own(self, comp: Any) -> Confidence:
-        ident = identify_instance(comp, require_bound=False)
-        row = self.features(comp)
+    def confidence_feat(self, row) -> Confidence:
+        feats = self.transform(row)
         if not self.models:
-            return Confidence.uncalibrated(
-                f"{ident.cls_name}: {self.name} has not been fitted")
-
-        per = {c: m.confidence(row) for c, m in self.models.items()}
-        worst = min(cf.level for cf in per.values())
+            return Confidence.uncalibrated(f"{self.name} has not been fitted")
+        per = {c: m.confidence_feat(feats) for c, m in self.models.items()}
         detail = "; ".join(f"{c}: {cf.facts.get('summary', cf.level.value)}"
                            for c, cf in sorted(per.items()))
-        facts = {
-            "summary": f"{ident.cls_name}: {detail}",
-            "module_key": ident.key, "model": "fitted", "features": row,
-            "per_counter": {c: cf.to_json() for c, cf in per.items()},
-        }
+        facts = {"summary": detail, "model": "fitted", "inputs": feats,
+                 "per_counter": {c: cf.to_json() for c, cf in per.items()}}
         if self.prior is not None:
             facts["prior"] = self.prior.name
-        return Confidence(level=worst, facts=facts)
+        return Confidence(level=min(cf.level for cf in per.values()), facts=facts)
+
+    def confidence(self, comp: Any, **runtime) -> Confidence:
+        conf = self.confidence_feat(self.get_params(comp, **runtime))
+        ident = identify_instance(comp, require_bound=False)
+        facts = dict(conf.facts)
+        facts["module_key"] = ident.key
+        facts["summary"] = f"{ident.cls_name}: {facts.get('summary', '')}"
+        return Confidence(level=conf.level, facts=facts)
 
 
 # ---------------------------------------------------------------------------
@@ -382,18 +516,35 @@ class InterfaceResourceModel(ResourceModel):
     def declared_counters(self) -> tuple:
         return ()
 
-    def features(self, comp: Any) -> dict:
+    def get_params(self, comp: Any, **runtime) -> dict:
+        """The boundary, as parameters — **extraction**, so it is what a corpus would record.
+
+        This model is the clearest case for the params/transform split: its cost depends on ports
+        and channels, and **no** ``HwParam`` records either.  Reading them here rather than in
+        :meth:`transform` is what puts them in the corpus, and a fit over a boundary term whose
+        boundary was never recorded could not be reproduced.
+        """
         ports, channels = boundary_signature(comp)
         return {"n_ports": len(ports), "n_channels": len(channels),
                 "ports": [list(p) for p in ports], "channels": [list(c) for c in channels]}
 
-    def predict_own(self, comp: Any) -> dict:
-        got = self.table.get(boundary_signature(comp))
+    def _signature(self, row) -> tuple:
+        """Rebuild the boundary signature from a recorded row — the table's key.
+
+        Reconstructed from `ports` / `channels` rather than re-read from a component, so the same
+        lookup serves a live instance and a stored corpus row.
+        """
+        ports = tuple(sorted(tuple(p) for p in row.get("ports", ())))
+        channels = tuple(sorted(tuple(c) for c in row.get("channels", ())))
+        return (ports, channels)
+
+    def predict_feat(self, row) -> dict:
+        got = self.table.get(self._signature(row))
         return dict(got) if got else zero_counters()
 
-    def confidence_own(self, comp: Any) -> Confidence:
-        sig = boundary_signature(comp)
-        f = self.features(comp)
+    def confidence_feat(self, row) -> Confidence:
+        sig = self._signature(row)
+        f = self.transform(row)
         if sig not in self.table:
             return Confidence(level=ConfidenceLevel.UNCALIBRATED, facts={
                 "summary": f"no interface measurement for this boundary "
@@ -466,8 +617,8 @@ def compose(top: Any, model_for=None) -> ResourceEstimate:
                                    f"{ident.cls_name} has no resource model; its cost is missing "
                                    f"from this estimate, not zero")))
             continue
-        res = model.predict_own(comp)
-        per_module.append((path, ident.cls_name, res, model.confidence_own(comp)))
+        res = model.predict(comp)
+        per_module.append((path, ident.cls_name, res, model.confidence(comp)))
         total = add_counters(total, res)
         if comp is top:
             own = dict(res)
