@@ -75,7 +75,7 @@ def fit(points: list[dict], holdout: tuple[int, int]) -> dict:
             if actual is None:
                 continue
             cp = float(p["clk_ns"]) * 1e-9
-            pred_cyc = model.predict({"n_row": p["n_row"], "n_col": p["n_col"], "clk_period": cp}) / cp
+            pred_cyc = model.predict_feat({"n_row": p["n_row"], "n_col": p["n_col"], "clk_period": cp}) / cp
             out.append({"point": [p["n_row"], p["n_col"]], "held_out": (p["n_row"], p["n_col"]) == holdout,
                         "pred": round(pred_cyc, 1), "actual": round(actual, 1),
                         "rel_err": round(abs(pred_cyc - actual) / actual, 4) if actual else None})

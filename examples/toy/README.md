@@ -9,9 +9,9 @@ docs pages of its own. It exists so the guide's component pages quote code that 
 
 | kind | component | quoted by |
 |---|---|---|
-| `FreeRunMod` | `Square` — `y = x²` over a 4-vector, one firing | [`freerun.md`](../../docs/guide/components/freerun.md) |
-| `FreeRunMod` | `Double` — `z = x + x` | [`composite.md`](../../docs/guide/components/composite.md) |
-| `CompositeComp` | `ScaledSquare` — `x → double → z → square → y` | [`composite.md`](../../docs/guide/components/composite.md) |
+| `FreeRunMod` | `Square` — `y = x²` over a 4-vector, one firing | [`freerunning.md`](../../docs/guide/comp_codegen/freerunning.md) |
+| `FreeRunMod` | `Double` — `z = x + x` | [`freerunning_composite.md`](../../docs/guide/comp_codegen/freerunning_composite.md) |
+| `CompositeComp` | `ScaledSquare` — `x → double → z → square → y` | [`freerunning_composite.md`](../../docs/guide/comp_codegen/freerunning_composite.md) |
 
 Backed by [`tests/examples/test_toy.py`](../../tests/examples/test_toy.py).
 

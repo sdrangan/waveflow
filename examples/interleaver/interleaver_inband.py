@@ -265,7 +265,7 @@ class IlComputeInband(FreeRunMod):
         yblock = yield from self.y_blk.acquire_write()
         t0 = self.now
         yblock.val[:n] = xblock.val[pblock.val[:n]]     # the gather, vectorized: Y[i] = X[P[i]]
-        cycles = float(self.timing.predict({"n": n}))
+        cycles = float(self.timing.predict_feat({"n": n}))
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         yield from self.p_blk.release_read()
         yield from self.x_blk.release_read()
