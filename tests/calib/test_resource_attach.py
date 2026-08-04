@@ -163,8 +163,8 @@ def test_a_measured_module_needs_no_author_code(platform):
                  identity=ident)
 
     leaf.add_rm(platform)
-    assert leaf.resource_model.confidence_own(leaf).level is ConfidenceLevel.EXACT
-    assert leaf.resource_model.predict_own(leaf)["lut"] == 833
+    assert leaf.resource_model.confidence(leaf).level is ConfidenceLevel.EXACT
+    assert leaf.resource_model.predict(leaf)["lut"] == 833
 
 
 def test_add_rm_self_can_be_overridden(platform):
@@ -176,7 +176,7 @@ def test_add_rm_self_can_be_overridden(platform):
 
     comp = elaborate(Special, {"width": 16}, name="s")
     comp.add_rm(platform)
-    assert comp.resource_model.predict_own(comp) == {"dsp": 4}
+    assert comp.resource_model.predict(comp) == {"dsp": 4}
 
 
 def test_recursion_is_children_first(platform):

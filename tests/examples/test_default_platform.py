@@ -100,8 +100,8 @@ class TestShippedResourceRecords:
         for _, comp, ident in walk_modules(top):
             if not type(comp).__module__.startswith("waveflow."):
                 continue                       # the example's own modules are not shipped
-            assert model.confidence_own(comp).level is ConfidenceLevel.EXACT, ident.cls_name
-            assert model.predict_own(comp)["lut"] > 0
+            assert model.confidence(comp).level is ConfidenceLevel.EXACT, ident.cls_name
+            assert model.predict(comp)["lut"] > 0
             hit += 1
         assert hit == 2, "expected the two mem-streams"
 
