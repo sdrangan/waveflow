@@ -177,3 +177,54 @@ class TestStageForce:
         runner = SweepRunner(dag_factory=_Dag, root_dir=Path("."))
         runner.run_stage({"n_words": 128}, Stage("pysim"))
         assert seen["force"] is True
+
+
+class TestStageBarrier:
+    """`barrier` makes a stage finish across the whole grid before the next stage begins.
+
+    The default is point-major, which is right when a point's stages are about that point.  It is
+    wrong for a stage measuring a PLATFORM property: the m_axi bus law needs two distinct sizes
+    before it fits at all, so point-major would fit point 1's component residual against no bus law
+    and point 2's against a two-point one -- each point's number meaning something different.
+    """
+
+    @staticmethod
+    def _order(stages, npoints=3):
+        seen = []
+
+        class _Dag:
+            def run(self, config, *, through, force):
+                seen.append((through, config.params["n"]))
+                return {}
+
+        runner = SweepRunner(dag_factory=_Dag, root_dir=Path("."))
+        runner.run(ParamGrid(n=tuple(range(npoints))), stages, verbose=False)
+        return seen
+
+    def test_without_a_barrier_the_order_is_point_major(self):
+        order = self._order([Stage("a"), Stage("b")])
+        assert order == [("a", 0), ("b", 0), ("a", 1), ("b", 1), ("a", 2), ("b", 2)]
+
+    def test_a_barrier_stage_finishes_the_whole_grid_first(self):
+        order = self._order([Stage("bus", barrier=True), Stage("timing")])
+        assert order == [("bus", 0), ("bus", 1), ("bus", 2),
+                         ("timing", 0), ("timing", 1), ("timing", 2)]
+
+    def test_stages_after_a_barrier_regroup_point_major(self):
+        """Only the barrier is special; what follows it goes back to per-point."""
+        order = self._order([Stage("bus", barrier=True), Stage("x"), Stage("y")], npoints=2)
+        assert order == [("bus", 0), ("bus", 1),
+                         ("x", 0), ("y", 0), ("x", 1), ("y", 1)]
+
+    def test_every_point_is_still_recorded_once_per_stage(self):
+        """The regrouping must not drop or duplicate a (point, stage) pair."""
+        class _Dag:
+            def run(self, config, *, through, force):
+                return {}
+
+        runner = SweepRunner(dag_factory=_Dag, root_dir=Path("."))
+        res = runner.run(ParamGrid(n=(0, 1, 2)),
+                         [Stage("bus", barrier=True), Stage("timing")], verbose=False)
+        assert res.complete
+        assert all(set(st) == {"bus", "timing"} for st in res.points.values())
+        assert len(res.points) == 3

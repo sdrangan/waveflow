@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
-from waveflow.build.calib_steps import CollectTimingStep, FitTimingStep
+from waveflow.build.calib_steps import CalibBusStep, CollectTimingStep, FitTimingStep
 from waveflow.build.cli import run_dag_cli
 from waveflow.build.trace_steps import (
     AddVcdTopStep,
@@ -286,6 +286,13 @@ def build_mem_copy_dag() -> BuildDag:
     dag.add(ExtractBurstsStep(name="extract_bursts",
                               output_path="results/mem_copy_timing.json",
                               expect_firings=lambda cfg: _scenario(cfg)[1]))
+    # The PLATFORM half, and it has to be fitted before the component half means anything: the
+    # writer's residual is what is left after the bus is charged, so a pysim running against no bus
+    # law rolls the transfer cost into the component's own number.  Read off the m_axi ports, so it
+    # needs no design factory -- and it needs >= 2 distinct sizes, which is why the sweep runs it as
+    # a barrier stage across the whole grid first.
+    dag.add(CalibBusStep(name="calib_bus", clk_freq=CLK_FREQ,
+                         run_id=lambda cfg: "n{}x{}".format(*_scenario(cfg))))
     # The calibration rung: turn this point's extracted table plus a calibrated pysim run into one
     # more corpus row, then fit.  `collect_timing` needs a platform (that is where the corpus lives);
     # `fit_timing` skips rather than fails while a sweep is still only partly covered.

@@ -67,7 +67,32 @@ RUNNER = SweepRunner(dag_factory=build_mem_copy_dag, root_dir=HERE,
 #: `codegen_dut` and `csynth` are deliberately absent -- the DUT is scenario-independent.
 _TIMING_STEPS = ["pysim", "codegen_tb", "trace_manifest", "rtlsim"]
 
-STAGES = [Stage("fit_timing", name="timing", force=_TIMING_STEPS)]
+#: Two passes, and the order is load-bearing rather than tidy.
+#:
+#: The bus law is a property of the **platform**, measured off the m_axi ports, and it needs at least
+#: two distinct sizes before it can be fitted at all.  The writer's residual is what is left *after*
+#: the bus is charged -- so a component pass running before the law exists rolls the transfer cost
+#: into the component's own number, and one running while the law is still growing gives every point
+#: a different meaning.  ``barrier=True`` finishes the bus across the whole grid first.
+#:
+#: The second pass re-runs ``rtlsim`` rather than reusing the first pass's waveform: the trace
+#: artifacts are single-slot (``results/mem_copy_timing.json``), so after the barrier what is on disk
+#: belongs to the *last* point.  That doubles the RTL time, which at ~16 s a point is the cheaper
+#: half of being correct.
+#: The collect pass stops at ``collect_timing``, short of the fit, and that is the whole point.
+#:
+#: ``fit_timing`` writes ``params.json``; the next point's pysim loads it and charges the predicted
+#: delay.  ``residual = rtl - pysim + current_dly`` is meant to undo that, but it assumes the delay is
+#: **additive in the measured span**, and in a back-pressured pipeline it is not.  Measured, fitting
+#: after every point: residuals of 23, 16, 0 for a cost that is flat, with the n=256 pysim overshooting
+#: the RTL outright (334 vs 327) because it charged a delay fitted at n=128.
+#:
+#: Collecting every point against one frozen model, then fitting once, removes the coupling: no
+#: params.json is written while the corpus is being built, so every point is measured from the same
+#: baseline.
+STAGES = [Stage("calib_bus", name="bus", barrier=True, force=_TIMING_STEPS),
+          Stage("collect_timing", name="collect", barrier=True, force=_TIMING_STEPS),
+          Stage("fit_timing", name="fit", force=["fit_timing"])]
 
 #: A dry run stops at the pysim: it needs no toolchain, and it is where a scenario that does not fit
 #: the arena fails.  No platform, because nothing was measured.

@@ -190,10 +190,16 @@ class CalibBusStep(BuildStep):
 
     Construction parameters
     -----------------------
-    platform_dir : str
+    platform_dir : str | None
         The shared platform calibration directory (``<dir>/points/`` + ``<dir>/mm_bus.json``).
-    run_id : str
-        Scenario key for this run's point (e.g. ``"n128"``); a re-run overwrites it.
+        ``None`` takes it from ``config.platform_info``, which is how a sweep supplies it — the
+        runner attaches the platform per point and a DAG assembled by a zero-argument factory cannot
+        know it at construction.
+    run_id : str | callable
+        Scenario key for this run's point (e.g. ``"n128"``); a re-run overwrites it.  Pass a
+        ``callable(config) -> str`` to derive it from ``config.params``: a fixed string would make
+        every point of a sweep overwrite the same bus point, and the law would then be fitted from
+        one size however many were measured — which is exactly the case it cannot fit at all.
     clk_freq : float
         Clock the platform model is expressed against.
     refit : bool
@@ -203,12 +209,26 @@ class CalibBusStep(BuildStep):
     description: str = "Calibrate the platform m_axi bus model from a traced run's ports."
     params: ClassVar[dict] = {}
 
-    platform_dir: str
-    run_id: str
+    platform_dir: "str | None" = None
+    run_id: "str | Callable[[BuildConfig], str]" = "run"
     manifest_artifact: str = "trace_manifest"
     vcd_artifact: str = "trace_vcd"
     clk_freq: float = 100e6
     refit: bool = True
+
+    def resolve_run_id(self, config: BuildConfig) -> str:
+        return self.run_id if isinstance(self.run_id, str) else self.run_id(config)
+
+    def resolve_platform_dir(self, config: BuildConfig) -> str:
+        if self.platform_dir is not None:
+            return self.platform_dir
+        plat = getattr(config, "platform_info", None)
+        if plat is None:
+            raise RuntimeError(
+                "CalibBusStep has no platform_dir and the build has no platform -- the bus law is a "
+                "property OF a platform, so there is nowhere for it to live. Pass platform_dir, or "
+                "run with a platform attached.")
+        return str(plat.dir)
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -217,8 +237,11 @@ class CalibBusStep(BuildStep):
     @property
     def produces(self) -> dict:  # type: ignore[override]
         # A per-run sentinel; the real outputs are the platform corpus + mm_bus.json (side effects,
-        # since platform_dir is shared and typically outside this design's tree).
-        return {"bus_calibrated": Path("results") / f"bus_{self.run_id}.json"}
+        # since platform_dir is shared and typically outside this design's tree).  A derived run_id
+        # cannot be resolved here -- `produces` is read without a config -- so the sentinel is named
+        # for the step, and `run` must write exactly this path.
+        stem = self.run_id if isinstance(self.run_id, str) else self.name
+        return {"bus_calibrated": Path("results") / f"bus_{stem}.json"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         from waveflow.calib.bus_model import BusCalib, measure_bus_span
@@ -234,14 +257,15 @@ class CalibBusStep(BuildStep):
                 if measured is not None:
                     point[direction] = measured
 
-        bc = BusCalib(platform_dir=self.platform_dir, clk_freq=self.clk_freq)
-        bc.add_run(self.run_id, read=point["read"], write=point["write"])
+        run_id = self.resolve_run_id(config)
+        bc = BusCalib(platform_dir=self.resolve_platform_dir(config), clk_freq=self.clk_freq)
+        bc.add_run(run_id, read=point["read"], write=point["write"])
         fitted = bc.fit() if self.refit else {}
 
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
-        out = root / "results" / f"bus_{self.run_id}.json"
+        out = root / self.produces["bus_calibrated"]
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"run_id": self.run_id, "point": point,
+        out.write_text(json.dumps({"run_id": run_id, "point": point,
                                    "fitted_directions": sorted(fitted)}, indent=2) + "\n",
                        encoding="utf-8")
         return {"bus_calibrated": out}

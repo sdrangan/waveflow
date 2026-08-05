@@ -324,11 +324,38 @@ the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
    The check therefore deliberately names **no cause**: the obvious guess was wrong on the very case
    that motivated it, and a message naming the cycle bound would have sent a reader to the one place
    the fault was not.
-2. **The fit is order-dependent.**  `current_dly` climbs 0 → 148 across the points, because each
-   point's pysim loads the `params.json` fitted from the points before it.  `max_abs_residual` of
-   1e-14 on 4 points against 3 free parameters is therefore tautological rather than validating.
-   Collection should run against a **frozen** model and fit once at the end — which is a stage
-   question (collect-all, then fit), so it belongs here rather than in the timing model.
+2. ~~**The fit is order-dependent.**~~ **FIXED**, and it split into two things, only one of which I
+   had right.
+
+   *What was actually wrong first:* the sweep's platform had **no `mm_bus.json`**.  `CalibBusStep`
+   existed and, like `CollectTimingStep` before it, nothing drove it — so the pysim charged no bus
+   law and the "component residual" absorbed the transfer cost.  That is a direct violation of the
+   two-level split (bus once per platform, control cost per component) and it is why the first fit
+   came out proportional to `nwords`.  Now wired, and the fitted write law reproduces the analytic
+   `nwords + 2·(num_trans − 1)` **exactly** at 128 / 256 / 512 (142, 286, 574).
+
+   Ordering that required `Stage.barrier`: the bus law needs ≥ 2 distinct sizes before it fits at
+   all, so point-major would fit point 1's residual against no law and point 2's against a two-point
+   one.
+
+   *The order-dependence itself was real but not the cause of the symptom I blamed it for.*
+   `fit_timing` per point wrote a `params.json` the next point's pysim charged; `residual = rtl −
+   pysim + current_dly` is meant to undo that but assumes the delay is **additive in the measured
+   span**, which fails under back-pressure — the n=256 pysim overshot the RTL outright (334 vs 327).
+   Collecting behind a barrier that stops short of the fit removes it: `current_dly` is now 0 at
+   every point.  **But the residuals did not move** (23 / 16 / 0 before and after), so ordering was a
+   genuine defect that was not producing this symptom.
+
+4. **The writer's residual falls with job size — 23, 16, 0 at n = 128 / 256 / 512** — and nothing yet
+   explains it.  Not ordering (`current_dly` is 0 throughout) and not the bus law (exact at all three
+   points).  A linear model on `(nwords, num_trans)` fits it with a *negative* slope, which
+   extrapolates to negative delay; and at n=512 the pysim equals the RTL to the cycle, which is
+   suspiciously exact.
+
+   Note the grid cannot separate the two features: `num_trans/nwords = 0.0625` at every point, since
+   `max_burst_len` is fixed at 16.  Separating them needs a **second axis that breaks the
+   proportionality** — vary the burst length, not only the size.  That is the next thing to try, and
+   it is a timing-model / grid-design question rather than a sweep one.
 
 3. **`mem_copy` stalls after two jobs at `n_words=1024` in RTL** — new, and the most serious of the
    three.  Not a sweep problem: the sweep is what made it visible.  pysim runs all four jobs clean

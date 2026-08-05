@@ -162,6 +162,16 @@ class Stage:
     still reads the point, through the scenario its ``prepare`` writes.  Inferring would quietly skip
     it, and the failure is the one already recorded in that class: the previous run's waveform stays
     on disk and five job sizes measure an identical period.
+
+    *barrier* makes the stage finish across the **whole grid** before the next stage begins.  The
+    default is point-major -- every stage of point 1, then every stage of point 2 -- which is right
+    when the stages of a point are about that point.  It is wrong when a stage measures a **platform**
+    property: the ``m_axi`` bus law needs two distinct sizes before it can be fitted at all, so
+    point-major would have point 1's component residual fitted against no bus law, point 2's against
+    a two-point one, and each point's number would mean something different from the next.
+
+    That is the two-level split the whole calibration rests on -- bus once per platform, control cost
+    per component -- and it only holds if the platform half is finished first.
     """
 
     through: str
@@ -169,6 +179,7 @@ class Stage:
     when: "Callable[[Mapping[str, Any]], bool] | None" = None
     use_platform: bool = True
     force: "bool | Sequence[str]" = True
+    barrier: bool = False
 
     @property
     def label(self) -> str:
@@ -315,30 +326,32 @@ class SweepRunner:
 
         started = time.perf_counter()
         total = len(grid)
-        for i, point in enumerate(grid, 1):
-            label = grid.label(point)
-            per = result.points.setdefault(label, {})
-            for stage in stages:
-                if not stage.applies_to(point):
-                    continue
-                if resume and per.get(stage.label, {}).get("ok"):
+        points = list(enumerate(grid, 1))
+        for group in _stage_groups(stages):
+            for i, point in points:
+                label = grid.label(point)
+                per = result.points.setdefault(label, {})
+                for stage in group:
+                    if not stage.applies_to(point):
+                        continue
+                    if resume and per.get(stage.label, {}).get("ok"):
+                        if verbose:
+                            print(f"[{i}/{total}] {label} {stage.label} - skipped (already ok)")
+                        continue
                     if verbose:
-                        print(f"[{i}/{total}] {label} {stage.label} - skipped (already ok)")
-                    continue
-                if verbose:
-                    print(f"[{i}/{total}] {label} {stage.label} ...", flush=True)
-                rec = self.run_stage(point, stage)
-                per[stage.label] = rec
-                if verbose:
-                    tail = (f"FAILED  {rec.get('error', '')[:110]}" if not rec["ok"] else
-                            f"ok  {rec['elapsed']:.1f}s"
-                            + (f"  filed {len(rec['filed'])}" if rec.get("filed") else ""))
-                    print(f"    {tail}")
-                # Incremental: a crash costs one stage, not the sweep.  Writing only at the end means
-                # an interruption at point 15 saves nothing AND leaves the previous run's file in
-                # place -- a stale summary that reads as a fresh one.
-                result.total_seconds = time.perf_counter() - started
-                _save(self.summary, result)
+                        print(f"[{i}/{total}] {label} {stage.label} ...", flush=True)
+                    rec = self.run_stage(point, stage)
+                    per[stage.label] = rec
+                    if verbose:
+                        tail = (f"FAILED  {rec.get('error', '')[:110]}" if not rec["ok"] else
+                                f"ok  {rec['elapsed']:.1f}s"
+                                + (f"  filed {len(rec['filed'])}" if rec.get("filed") else ""))
+                        print(f"    {tail}")
+                    # Incremental: a crash costs one stage, not the sweep.  Writing only at the end
+                    # means an interruption at point 15 saves nothing AND leaves the previous run's
+                    # file in place -- a stale summary that reads as a fresh one.
+                    result.total_seconds = time.perf_counter() - started
+                    _save(self.summary, result)
 
         result.total_seconds = time.perf_counter() - started
         result.complete = len(result.points) == total
@@ -351,6 +364,26 @@ class SweepRunner:
                 print(f"  FAILED {lbl} {st}: {err[:140]}")
             print(f"summary -> {self.summary}")
         return result
+
+
+def _stage_groups(stages: "Sequence[Stage]") -> "list[list[Stage]]":
+    """Split stages into passes, each run over the whole grid before the next starts.
+
+    A ``barrier`` stage becomes a pass of its own; runs of ordinary stages stay together and keep the
+    point-major order (all of point 1's stages, then all of point 2's).  With no barriers this is one
+    group, so the loop is exactly what it was.
+
+    Grouping rather than a flag consulted inside the loop: "finish this across every point first" is a
+    statement about the *order of the whole sweep*, and expressing it as the shape of the iteration
+    makes it impossible to half-apply.
+    """
+    groups: "list[list[Stage]]" = []
+    for stage in stages:
+        if stage.barrier or not groups or groups[-1][-1].barrier:
+            groups.append([stage])
+        else:
+            groups[-1].append(stage)
+    return groups
 
 
 def _load_points(path: Path) -> dict:
