@@ -350,7 +350,7 @@ class FirCompute(FreeRunMod):
         self.add_state(self.taps)
         self.add_state(self.carry)
 
-        self.timing = self._build_timing_model()
+        self.compute_timing = self._build_timing_model()
         self.fire_log: list[tuple[float, float]] = []
         self.job_span_cyc: list[float] = []
 
@@ -404,7 +404,7 @@ class FirCompute(FreeRunMod):
         serial body trips once per sample and the unrolled body once per lane (``ceil(n/LW)`` beats).
         Both measured at II=1, so this is the throughput difference the parameter buys."""
         beats = nwords(n, self.lw) if bool(self.unroll_lane) else int(n)
-        return max(0.0, float(self.timing.predict_feat({"n": beats}))) * self.clk.period
+        return max(0.0, float(self.compute_timing.predict_feat({"n": beats}))) * self.clk.period
 
     @sim_only
     def _log_firing(self) -> None:

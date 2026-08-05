@@ -29,8 +29,8 @@ def test_fit_load_predict_roundtrip(tmp_path):
     # The loaded model must reproduce the fit — predicted on the element count n.
     c = IlComputeInband(name="c", sim=Simulation(), mem_dwidth=64, n=256, calib_dir=str(tmp_path))
     assert c.n == 256
-    assert c.timing.predict_feat({"n": 256}) == pytest.approx(400.0, abs=0.1)
-    assert c.timing.predict_feat({"n": 128}) == pytest.approx(200.0, abs=0.1)
+    assert c.compute_timing.predict_feat({"n": 256}) == pytest.approx(400.0, abs=0.1)
+    assert c.compute_timing.predict_feat({"n": 128}) == pytest.approx(200.0, abs=0.1)
 
 
 def test_seed_used_without_calib(tmp_path):
@@ -41,7 +41,7 @@ def test_seed_used_without_calib(tmp_path):
     # No calib_dir -> the seed loop model (latency + ii·(n−1)), keyed on the element count n.
     c = IlComputeInband(name="c", sim=Simulation(), mem_dwidth=64, n=256)
     expect = IL_COMPUTE_LATENCY_SEED + IL_COMPUTE_II_SEED * (256 - 1)
-    assert c.timing.predict_feat({"n": 256}) == pytest.approx(expect, abs=0.1)
+    assert c.compute_timing.predict_feat({"n": 256}) == pytest.approx(expect, abs=0.1)
 
 
 def test_fit_needs_two_sizes(tmp_path):
