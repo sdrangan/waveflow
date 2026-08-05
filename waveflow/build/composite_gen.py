@@ -255,7 +255,23 @@ def _task_trace(task: TaskInst) -> dict:
     # `args` are the channel / boundary-port names this task is wired to, in signature order.  They
     # are what makes a component's OWN surface answerable -- "which streams does this component
     # touch" is otherwise only derivable by scanning every channel for a matching endpoint.
-    return {"id": task.task_fn,
+    #
+    # `id` is the CONFIGURATION-QUALIFIED id, not the bare `task_fn`.  A measured span belongs to the
+    # body at the template args it was synthesized with -- `config_id` says so, and says it is shared
+    # "between the resource path and the timing path, so the two cannot drift on what counts as the
+    # same configuration".  This side had drifted: it emitted `mem_w_stream_framed_done_task` while
+    # the attached StreamTimingModel keyed itself `mem_w_stream_framed_done_task_64_8`, so
+    # `collect_rtl` -- which matches the two by equality -- filed an EMPTY rtl corpus beside a full
+    # pysim one, and the fit died on a headerless csv.  That is why mem_copy's RTL spans were
+    # hand-typed constants: the automated path silently produced nothing.
+    #
+    # `body` keeps the bare name alongside it, so "look this component up by its task body" -- which
+    # ComponentView documents and callers use -- still works without anyone having to know the
+    # template args.  Two fields rather than one lossy field: the qualified id is what a measurement
+    # is keyed by, the body is what a human names.
+    from waveflow.calib.module_key import config_id
+    return {"id": config_id(task),
+            "body": task.task_fn,
             "inst": task.inst_name,
             "args": list(task.args),
             "signals": {p: f"{task.inst_name}_{p}" for p in _TASK_PINS}}

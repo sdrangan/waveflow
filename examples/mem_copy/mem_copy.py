@@ -209,6 +209,11 @@ class MemCopy(FreeRunMod):
     #: When set, the writer sub-component attaches a timing model at this directory (the writer is
     #: the bottleneck the calibration targets).  ``None`` (default) leaves the composite uncalibrated.
     calib_dir: "str | None" = None
+    #: The shared platform library, the other way to attach.  Prefer it: ``_resolve_calib_dir`` then
+    #: picks the component directory itself, keyed by the **configuration-qualified** id, so a
+    #: 64-bit writer's residual cannot be handed to a 32-bit one.  Naming ``calib_dir`` directly
+    #: forces one directory and takes that check away.
+    platform_dir: "str | None" = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -222,7 +227,7 @@ class MemCopy(FreeRunMod):
                                   clk=self.clk)
         self.wstream = MemWStream(
             name=f"{self.name}_w", sim=self.sim, mem_dwidth=w, emit_done=True, inband=True,
-            clk=self.clk, calib_dir=self.calib_dir)
+            clk=self.clk, calib_dir=self.calib_dir, platform_dir=self.platform_dir)
         for c in (self.seq, self.rstream, self.wstream):
             self.add_comp(c)
 

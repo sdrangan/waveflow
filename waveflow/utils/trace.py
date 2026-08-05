@@ -295,9 +295,24 @@ class BoundTrace:
         return {"in": _side(view.inputs, "read"), "out": _side(view.outputs, "write")}
 
     def _task(self, inst: str) -> dict:
+        """Resolve an RTL instance, a configuration-qualified id, or a bare task body to its entry.
+
+        The bare body is matched only after both exact forms miss, and an **ambiguous** one raises:
+        a top may hold the same body at two different template arg sets (a 32-bit and a 64-bit
+        reader), and those are different hardware with different timing.  Silently returning the
+        first would attribute one's measurements to the other.
+        """
         for t in self.manifest["tasks"]:
             if t["inst"] == inst or t["id"] == inst:
                 return t
+
+        by_body = [t for t in self.manifest["tasks"] if t.get("body") == inst]
+        if len(by_body) == 1:
+            return by_body[0]
+        if by_body:
+            raise KeyError(
+                f"task body {inst!r} is ambiguous in {self.manifest['top']!r}: it is instantiated at "
+                f"{[t['id'] for t in by_body]}. Name the configuration you mean.")
         raise KeyError(
             f"no task {inst!r} in manifest for {self.manifest['top']!r}; have "
             f"{[t['id'] for t in self.manifest['tasks']]}")

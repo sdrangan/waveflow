@@ -196,8 +196,11 @@ class TestExtractedTableAgainstTheRealTrace:
 
         Only the reader's FIRST firing is uncontended; every later one absorbs 30 cycles waiting on
         a writer that is still draining.  The writer is never blocked -- it is the bottleneck."""
-        r = [f for f in events["firings"] if f["component"] == "mem_r_stream_framed_task"]
-        w = [f for f in events["firings"] if f["component"] == "mem_w_stream_framed_done_task"]
+        # Configuration-QUALIFIED ids: a span belongs to the body at the template args it was
+        # synthesized with.  The bare name here is what made the RTL and pysim corpora fail to
+        # join -- silently, as an empty rtl csv.  See `_task_trace`.
+        r = [f for f in events["firings"] if f["component"] == "mem_r_stream_framed_task_64"]
+        w = [f for f in events["firings"] if f["component"] == "mem_w_stream_framed_done_task_64_8"]
 
         assert r[0]["blocked"] == 0 and r[0]["span"] == 153
         assert {f["blocked"] for f in r[1:]} == {30}
@@ -216,8 +219,8 @@ class TestExtractedTableAgainstTheRealTrace:
             bus = f["nwords"] + 2 * (f["num_trans"] - 1)
             fixed.setdefault(f["component"], set()).add(f["span"] - bus)
 
-        assert fixed["mem_w_stream_framed_done_task"] == {41}
-        assert fixed["mem_r_stream_framed_task"] == {11}
+        assert fixed["mem_w_stream_framed_done_task_64_8"] == {41}
+        assert fixed["mem_r_stream_framed_task_64"] == {11}
 
     def test_num_trans_matches_the_recorded_burst_length(self, events):
         """128 words at max_burst_len=16 is 8 bursts -- measured off AW/AR, so this cross-checks

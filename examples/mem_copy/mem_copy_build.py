@@ -235,11 +235,11 @@ def _write_scenario_bundles(xsi_dir: Path, config: BuildConfig) -> None:
 def _calibrated_pysim(config: BuildConfig):
     """Run the pysim with its timing models attached, and return the design.
 
-    Two things must be true for the run to be a calibration sample rather than just a simulation:
-    ``calib_dir`` attaches the writer's model (without it there are no ``firing_records`` at all --
-    the attribute does not even exist), and ``platform_dir`` makes the run charge the platform's bus
-    law, so what the model then fits is the component's own *control* cost rather than the bus term
-    all over again.
+    ``platform_dir`` alone, deliberately -- no ``calib_dir``.  It does both jobs: the run charges the
+    platform's bus law (so what the model fits is the component's own *control* cost rather than the
+    bus term a second time), and ``_resolve_calib_dir`` picks the corpus directory itself, keyed by
+    the **configuration-qualified** id.  Naming a directory here instead would file a 64-bit writer's
+    measurements under a name that also serves the 32-bit one.
     """
     plat = config.platform_info
     if plat is None:
@@ -247,16 +247,13 @@ def _calibrated_pysim(config: BuildConfig):
             "the timing rung needs a platform to calibrate into -- run with --platform, or set one "
             "on the SweepRunner.  Without it the firings have nowhere to be filed.")
     n, k = _scenario(config)
-    return MemCopySim(jobs=xsi_jobs(n, k),
-                      calib_dir=str(plat.component_dir(WRITER)),
-                      platform_dir=str(plat.dir)).run()
+    return MemCopySim(jobs=xsi_jobs(n, k), platform_dir=str(plat.dir)).run()
 
 
 def _mem_copy_design(config: BuildConfig):
     """A built (un-run) design carrying the attached models — enough for the fit to find them."""
     plat = config.platform_info
     return MemCopySim(jobs=xsi_jobs(*_scenario(config)),
-                      calib_dir=str(plat.component_dir(WRITER)) if plat else None,
                       platform_dir=str(plat.dir) if plat else None).tb.dut
 
 
