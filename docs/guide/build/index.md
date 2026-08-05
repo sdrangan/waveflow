@@ -44,6 +44,8 @@ That fork is two realizations of one flow, not two separate flows.
 - [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
 - [BFM Testbenches](./bfm.md) — the framework's AXI-MM / AXI-Stream models and their five-phase
   lifecycle, assembled from the testbench graph or by hand.
+- [Sweeping a design](./sweep.md) — running the DAG at every point of a parameter grid to build a
+  calibration corpus: `ParamGrid`, `Stage`, `SweepRunner` and `sweep_cli`.
 
 ## Quick example
 

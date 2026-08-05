@@ -136,14 +136,18 @@ corpus the fit reads is *derived* from them on demand, never stored twice.
 
 ## Writing your own sweep
 
-{: .warning }
-> `vecmult_sweep.py` is ~150 lines, and only about fifteen of them are about *this design* — the
-> parameter axes, the DAG, the platform name. The rest (resume, incremental save, per-point failure
-> isolation, the argparse entry point) is the same code `fir_block_sweep.py` also contains.
->
-> That duplication is a gap in the framework rather than something to copy. A `SweepRunner` that owns
-> it is planned; until it lands, take `vecmult_sweep.py` as a working template rather than as a
-> pattern worth reproducing by hand, and expect this section to shrink to a few lines.
+`vecmult_sweep.py` is now mostly its docstring. The design-specific part is three declarations:
+
+```python
+GRID   = ParamGrid(vlen=VLENS, dwid=DWIDS)
+RUNNER = SweepRunner(dag_factory=build_vecmult_dag, root_dir=HERE,
+                     platform=PLATFORM, platforms_root=PLATFORMS_ROOT,
+                     part=PART, clk_freq=CLK_FREQ)
+STAGES = [Stage("resources")]
+```
+
+Everything else — resume, incremental save, per-point failure isolation, the CLI — belongs to
+[`waveflow.build.sweep`](../../guide/build/sweep.md), which is where to look when writing your own.
 
 ## Next
 
