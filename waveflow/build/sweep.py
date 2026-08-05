@@ -146,12 +146,29 @@ class Stage:
     *when* skips the stage for a point, which is how the expensive side covers a subset without a
     special mode.  *use_platform* off is for a dry run: nothing was synthesized, so there is no report
     to file, and attaching a platform would only invite a half-written library.
+
+    *force* is ``True`` by default, and for a **build** sweep that is the only safe answer: DAG
+    freshness is decided on file mtimes and knows nothing about params, so without it the second
+    point would find the first point's artifacts up to date and skip -- filing a report attributed to
+    the wrong configuration.
+
+    A **workload** sweep is the case where it is wrong.  The hardware is identical at every point
+    (mem_copy's job size is a runtime command field), so forcing would re-synthesize per point for a
+    design that cannot have changed.  Naming the steps the workload actually reaches leaves the build
+    half alone, and the ones downstream of them re-run anyway by cascade.
+
+    It is a list of step names rather than an inferred set on purpose.  A step re-runs when a *param
+    it declares* changes -- but :class:`~waveflow.build.trace_steps.RtlSimStep` declares none and
+    still reads the point, through the scenario its ``prepare`` writes.  Inferring would quietly skip
+    it, and the failure is the one already recorded in that class: the previous run's waveform stays
+    on disk and five job sizes measure an identical period.
     """
 
     through: str
     name: str = ""
     when: "Callable[[Mapping[str, Any]], bool] | None" = None
     use_platform: bool = True
+    force: "bool | Sequence[str]" = True
 
     @property
     def label(self) -> str:
@@ -233,7 +250,9 @@ class SweepRunner:
         before = self._store_fingerprint() if stage.use_platform else {}
         try:
             results = self.dag_factory().run(self._config(point, stage),
-                                             through=stage.through, force=True)
+                                             through=stage.through,
+                                             force=(stage.force if isinstance(stage.force, bool)
+                                                    else list(stage.force)))
         except Exception as exc:                    # noqa: BLE001 - a failure is a datapoint
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
                     "elapsed": round(time.perf_counter() - started, 2)}

@@ -7,9 +7,11 @@ two existing sweeps disagree about it — one iterates its first-named axis fast
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from waveflow.build.sweep import ParamGrid
+from waveflow.build.sweep import ParamGrid, Stage, SweepRunner
 
 
 class TestReproducesTheExistingSweeps:
@@ -131,3 +133,47 @@ def test_an_empty_axis_is_refused():
     """It would yield no points at all — a whole sweep quietly doing nothing."""
     with pytest.raises(ValueError, match="no values"):
         ParamGrid(ntap=())
+
+
+class TestStageForce:
+    """What a stage forces, which is the difference between a build sweep and a workload sweep.
+
+    DAG freshness is decided on file mtimes and knows nothing about params, so a build sweep must
+    force or the second point silently reuses the first point's artifacts.  A workload sweep must
+    NOT: the hardware is identical at every point, and forcing re-synthesizes for a design that
+    cannot have changed.
+    """
+
+    def test_forcing_everything_is_the_default(self):
+        """The safe answer, because the unsafe one mis-attributes a measurement rather than failing."""
+        assert Stage("resources").force is True
+
+    def test_a_stage_can_name_the_steps_a_point_reaches(self):
+        stage = Stage("fit_timing", force=["pysim", "rtlsim"])
+        assert stage.force == ["pysim", "rtlsim"]
+
+    def test_the_runner_passes_it_through_verbatim(self):
+        """The list reaches `BuildDag.run`, which is the only place it can mean anything."""
+        seen = {}
+
+        class _Dag:
+            def run(self, config, *, through, force):
+                seen["through"], seen["force"] = through, force
+                return {}
+
+        runner = SweepRunner(dag_factory=_Dag, root_dir=Path("."))
+        runner.run_stage({"n_words": 128}, Stage("fit_timing", force=["rtlsim"]))
+        assert seen == {"through": "fit_timing", "force": ["rtlsim"]}
+
+    def test_a_bool_stays_a_bool(self):
+        """`force=True` must not arrive as `['T','r','u','e']` -- a bool is not a sequence of names."""
+        seen = {}
+
+        class _Dag:
+            def run(self, config, *, through, force):
+                seen["force"] = force
+                return {}
+
+        runner = SweepRunner(dag_factory=_Dag, root_dir=Path("."))
+        runner.run_stage({"n_words": 128}, Stage("pysim"))
+        assert seen["force"] is True
