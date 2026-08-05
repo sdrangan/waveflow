@@ -380,9 +380,42 @@ the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
      against bounds of 4128 and 5404, so the run idles for thousands of cycles after dying.
 
    **This is not the token-pacing law.**  That predicts a deadlock at `done = N+1`, a fixed job index
-   set by pipeline depth; what happens here is fixed by volume.  The pysim moves 4096 words cleanly,
-   so the fault is in the RTL or in the C++ BFM — and the BFM is our own code, which is where to look
-   first.  A likely next step: instrument the AXI write channel and find what stops accepting.
+   set by pipeline depth; this is not a fixed job index.
+
+   **A single job is exempt, however large.**  One job of **2816** words passes, and so does one of
+   **3072** — the same volumes that stall when split across jobs.  So it is not transfer size, not
+   burst count (192 bursts in one job is fine; 160 across ten jobs is not), not address range (the
+   single job reaches word 6912, further than any stalling case), and not a fixed cycle (it runs to
+   ~2900 cycles, past the 2405 where `n=1024` dies).
+
+   **And there is no single cumulative ceiling either.**  Full probe set, all forced runs:
+
+   | n | k | jobs done | words done | next would reach | |
+   |---|---|---|---|---|---|
+   | 128 | 16 | 16 | 2048 | — | all done |
+   | 128 | 32 | **18** | 2304 | 2432 | stalled |
+   | 256 | 16 | **10** | 2560 | 2816 | stalled |
+   | 512 | 4 | 4 | 2048 | — | all done |
+   | 768 | 4 | **3** | 2304 | 3072 | stalled |
+   | 1024 | 2 | 2 | 2048 | — | all done |
+   | 1024 | 3 | **2** | 2048 | 3072 | stalled |
+   | 1024 | 4 | **2** | 2048 | 3072 | stalled |
+   | 2816 | 1 | 1 | 2816 | — | **all done** |
+   | 3072 | 1 | 1 | 3072 | — | **all done** |
+
+   `n=256` *completes* 2560 words while `n=128` *fails* at 2432 — so no cumulative-word ceiling fits.
+   Jobs range 2–18, bursts 128–160.  **The invariant is not identified**, and further black-box
+   probing is curve-fitting rather than diagnosis.
+
+   **Stop probing; instrument.**  Dump `AWVALID/AWREADY/WVALID/WREADY/BVALID` around the stall cycle:
+   whichever side stops asserting names the culprit — DUT stops issuing means the RTL, BFM stops
+   accepting means our C++.  Then isolate with **`mem_w_stream` standalone**, a *single-task* top on
+   the same BFM whose `write_mem_w_xsi_bundles(n=…)` is already parameterized; if it stalls too,
+   mem_copy's three-task pipeline is exonerated and the fault is in the shared mem-stream path.
+   `examples/interleaver` shares the same tasks and BFM, and its XSI gate is one small fixed
+   scenario — so it may carry the same latent bug without ever reaching it.
+
+   Constant across every stall: the **sequencer is exactly one job ahead** of the reader and writer.
 
 Neither of the first two invalidates the gate: the raw spans are clean and the 41 is consistent at
 128 / 256 / 512.  All three must be settled before this corpus is published to the tracked tier —
