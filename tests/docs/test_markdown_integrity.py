@@ -115,13 +115,33 @@ def test_attribute_lists_bind_to_a_block(md_files):
                         + "\n  ".join(broken))
 
 
+#: An inline code span.  Its *contents* are literal text to the renderer, so a ``**`` inside one is
+#: not a bold delimiter and must not be counted as if it were.
+_CODE_SPAN = re.compile(r"`[^`]*`")
+
+
+def _mask_code_spans(line: str) -> str:
+    """Blank out the inside of every code span, preserving length so offsets still line up.
+
+    Without this, documenting Python's ``**kwargs`` breaks the parity count: a cell containing
+    `` `**axes` `` leaves an odd number of ``**`` to the left of everything after it, so the next
+    legitimate bold pair reads as an unclosed opening delimiter glued to a word.  That is a false
+    positive, and a check with false positives gets suppressed — after which it protects nothing.
+    """
+    return _CODE_SPAN.sub(lambda m: "`" + " " * (len(m.group(0)) - 2) + "`", line)
+
+
 def _eaten_spaces(line: str) -> list[int]:
     """Positions where an *opening* inline delimiter is glued to the preceding word.
 
     Openness is decided by counting delimiters to the left: a backtick with an even number before it
     opens a span, an odd number closes one.  That distinction matters — ``` `RegField`s ``` is a
     deliberate pluralisation and must not be flagged, while ``become`hls::task` `` is damage.
+
+    Emphasis delimiters are counted on a **code-masked** copy, since markup inside a code span is
+    literal text rather than markup.
     """
+    line = _mask_code_spans(line)
     out = []
     for m in _OPEN_CODE.finditer(line):
         if line[:m.start()].count("`") % 2 == 0:
@@ -156,6 +176,11 @@ def test_the_pluralisation_idiom_is_not_flagged():
     """
     assert _eaten_spaces("| `RegMap` | Ordered collection of `RegField`s; owns the values |") == []
     assert _eaten_spaces("| a **bold** cell | and `code` here |") == []
+    # Python kwargs in a code span: the ** inside is literal text, not a bold delimiter.  Counting it
+    # left the next legitimate bold pair looking unclosed — a false positive that would have taught
+    # someone to suppress the check.
+    assert _eaten_spaces("| `**axes` | `name=values`. **Declaration order** — the outer loop |") == []
+    assert _eaten_spaces("| `f(**kw)` | passes **everything** through |") == []
     # ...and it must still catch the real thing.
     assert _eaten_spaces("| which children become`hls::task`s |")
     assert _eaten_spaces("| stored in | the committed**platform library** |")

@@ -4,13 +4,20 @@ parent: Build System
 nav_order: 8
 audience: python
 api: [ParamGrid, Stage, SweepRunner, SweepResult, sweep_cli]
-summary: "Running a design at every point of a parameter grid and keeping what the steps measured. ParamGrid is the points, in declaration order; Stage is one pass through the DAG, so a timing sweep can run RTL and pysim at different cadences; SweepRunner owns resume, incremental save and per-point failure isolation; sweep_cli is the entry point. An example supplies its axes, its DAG factory and its platform — the parts that are about the design."
+summary: "Running a design at every point of a parameter grid and keeping what the steps measured. Three pieces: ParamGrid is the points, in declaration order; SweepRunner runs them, owning resume, incremental save and per-point failure isolation, through one or more Stages; sweep_cli is the entry point. An example supplies its axes, its DAG factory and its platform — the parts that are about the design."
 ---
 
 # Sweeping a design
 
-A calibration corpus is built by **sweeping**: elaborate a design at each point of a parameter grid,
-run it through the [build DAG](./corecomp.md), and let the steps file what they measured.
+In many scenarios, you will want to repeat one or multiple stages of a build process with different
+parameters. This process is called **sweeping**. Sweeping is used, for example, in
+[calibration](../calib/), where one measures cycle times or resource utilization for a hardware module
+as a function of its parameters or the parameters of a workload. Since sweeping is used widely,
+Waveflow provides a simple method for performing such sweeps.
+
+The basic syntax for performing sweeps in Waveflow can be illustrated by example. The following code
+initiates a sweep over two parameters, `vlen` and `dwid`, for the
+[vector multiplier example](../../examples/vecmult/):
 
 ```python
 GRID   = ParamGrid(vlen=(512, 1024, 4096, 16384), dwid=(32, 64, 128, 256))
@@ -24,21 +31,41 @@ def main(argv=None):
                      dry_run_stages=[Stage("codegen_dut", use_platform=False)], argv=argv)
 ```
 
-That is a whole sweep script. What it does *not* contain — resume, incremental save, per-point
-failure isolation, progress, the exit code — is the point: those are properties of sweeping, not of
-this design, and they live here.
+That is a whole sweep script.
 
-{: .note }
-> **Why not `GridSearchCV`?** The resemblance is real but the shape is wrong. `GridSearchCV` is an
-> *optimizer*: it cross-validates, scores, and returns `best_params_`. A synthesis sweep is a
-> **census** — it measures every point to build a corpus, with no score to maximize and no held-out
-> fold at sweep time. The closer analogue is `ParameterGrid`, plus a runner owning what sklearn has no
-> concept of because its estimators fit in milliseconds while these points cost ~45 seconds of Vitis.
+**Everything a sweep needs beyond those declarations, you get for free.** Resume after an
+interruption, a summary written after every point, a failing point recorded rather than aborting the
+run, progress output and a meaningful exit code are all supplied by `SweepRunner` — you do not write
+them, and you cannot forget one. They are properties of *sweeping*, not of any particular design,
+which is why they live in the framework.
+
+The rest of this page is the API of the three pieces, using the script above as the running example.
 
 ## `ParamGrid` — the points
 
-A Cartesian product over named axes. **Declaration order is iteration order**, so a grid reads the way
-it runs:
+```python
+ParamGrid(**axes, _workload=())
+```
+
+| parameter | meaning |
+|---|---|
+| `**axes` | `name=values` per axis. **Declaration order is iteration order** — the first named is the outer loop |
+| `_workload` | names of axes that vary the *workload* rather than the hardware (see below) |
+
+| member | returns |
+|---|---|
+| `len(grid)` | number of points |
+| `iter(grid)` | one `dict` per point, in declaration order |
+| `grid.label(point)` | a filesystem- and log-safe name, e.g. `vlen512_dwid32` |
+| `grid.subset(**overrides)` | a narrowed grid; `None` leaves an axis alone |
+| `grid.build_axes` / `grid.workload_axes` | the two kinds, separated |
+
+{: .note }
+> `_workload` carries a leading underscore not because it is private but because `**axes` swallows
+> every other keyword — an axis could legitimately be called `workload`, so the framework's own
+> parameters need names an axis cannot collide with.
+
+### Order is worth choosing
 
 ```python
 ParamGrid(vlen=(512, 1024), dwid=(32, 64))
@@ -46,13 +73,15 @@ ParamGrid(vlen=(512, 1024), dwid=(32, 64))
 #   {vlen: 512, dwid: 32}, {vlen: 512, dwid: 64}, {vlen: 1024, dwid: 32}, ...
 ```
 
-Order is worth choosing rather than accepting. `vecmult` puts `vlen` outside because its grid is
-organised along the [BRAM regimes](../../examples/vecmult/sweep.md), so a partial run covers whole
-regimes rather than a slice of each.
+`vecmult` puts `vlen` outside because its grid is organised along the
+[BRAM regimes](../../examples/vecmult/sweep.md), so a partial run covers whole regimes rather than a
+slice of each.
 
-**A single-value axis is a constant.** `samp_i=(2,)` rides into every point without branching — how a
-design says "this one is held fixed" without a second concept for it. Constants stay out of labels,
-where they could only pad every log line.
+### A single-value axis is a constant
+
+`samp_i=(2,)` rides into every point without branching — how a design says "this one is held fixed"
+without a second concept for it. Constants stay out of labels, where they could only pad every log
+line.
 
 ### Build axes versus workload axes
 
@@ -69,7 +98,46 @@ This is not bookkeeping. Utilization does not depend on workload at all —
 timing corpus is mostly workload points against one build. A sweep that could not tell them apart
 would re-synthesize for a change in `nwords`.
 
-## `Stage` — one pass through the DAG
+## `SweepRunner` — running them
+
+```python
+SweepRunner(*, dag_factory, root_dir, summary=None, platform=None,
+            platforms_root=None, part=None, clk_freq=None, extra_params=None)
+```
+
+| parameter | meaning |
+|---|---|
+| `dag_factory` | zero-arg callable returning the assembled `BuildDag` — called fresh per point |
+| `root_dir` | build root, passed to every `BuildConfig` |
+| `summary` | log path; defaults to `<root_dir>/results/sweep.json` |
+| `platform`, `platforms_root` | the work-tier library measurements are filed into (see [Two tiers](#two-tiers)) |
+| `part`, `clk_freq` | the device identity a record is keyed by |
+| `extra_params` | params every point carries but that are not swept, e.g. `{"live_output": False}` |
+
+```python
+runner.run(grid, stages, *, resume=False, verbose=True) -> SweepResult
+```
+
+`stages` is a single `Stage` or a sequence of them. `SweepResult` carries `.points`, `.grid`,
+`.total_seconds`, `.complete`, `.failures` and `.ok`.
+
+{: .note }
+> `complete` means **coverage, not success**: a sweep that attempted every point is complete even if
+> some failed, because the failures are recorded. What must never read as complete is a run that
+> stopped early.
+
+### `Stage` — one pass through the DAG
+
+```python
+Stage(through, name="", when=None, use_platform=True)
+```
+
+| parameter | meaning |
+|---|---|
+| `through` | run the DAG up to and including this step |
+| `name` | label in the log; defaults to `through` |
+| `when` | `callable(point) -> bool`; skip this stage for points it rejects |
+| `use_platform` | attach the platform for this stage — `False` for a dry run |
 
 A resource sweep is one stage per point: synthesize, attribute, file. A **timing** sweep is two, and
 deliberately at different cadences:
@@ -92,12 +160,12 @@ point. Two useful things fall out of stages rather than needing modes of their o
 `use_platform=False` is for a dry run: nothing was synthesized, so there is no report to file, and
 attaching a platform would only invite a half-written library.
 
-## `SweepRunner` — what it owns
+### What you get for free
 
-| concern | why it is not in the example |
+| behaviour | why it is not yours to write |
 |---|---|
-| build a `BuildConfig` per point, with or without a platform | identical everywhere |
-| run the DAG `through` the stage, `force=True` | ditto |
+| a `BuildConfig` per point, with or without a platform | identical everywhere |
+| the DAG run `through` the stage, with `force=True` | ditto |
 | **a failing point is recorded, not raised** | losing fifteen good points to one bad one is the wrong trade |
 | **the summary is written after every point** | see the warning below |
 | `--resume` skipping `(point, stage)` pairs already `ok` | hours of synthesis should not be lost to one crash |
@@ -109,7 +177,7 @@ attaching a platform would only invite a half-written library.
 > fresh one. That lesson was learned once, in one example's docstring, and the other two sweeps did
 > not have it. It lives here now.
 
-### A failing point is data
+A failing point looks like this, and the sweep carries on:
 
 ```text
 [7/16] vlen4096_dwid128 resources ...
@@ -118,11 +186,11 @@ attaching a platform would only invite a half-written library.
     ok  54.1s  filed 1
 ```
 
-The sweep continues and the failure is recorded with its error. A point that fails to synthesize is
-information about the design space; a sweep that quietly covered 19 of 24 points and reported 24 would
-put a hole in the fitted region exactly where an agent would later be told it was interpolating.
+A point that fails to synthesize is information about the design space; a sweep that quietly covered
+19 of 24 points and reported 24 would put a hole in the fitted region exactly where an agent would
+later be told it was interpolating.
 
-## The summary is a log, not a corpus
+### The summary is a log, not a corpus
 
 ```json
 {"point": {"vlen": 512, "dwid": 64},
@@ -139,7 +207,44 @@ included, responsible for knowing that some rows are not data. So failures stay 
 also why `--resume` reads the summary rather than the store: a failed point is invisible in a store,
 and a store-only resume would retry it on every run.
 
+### Two tiers: sweep, then publish {#two-tiers}
+
+A sweep writes to an **untracked work tier** and a deliberate act promotes it:
+
+```bash
+waveflow_calib publish examples/vecmult/calib/work/zynq7020_vecmult_sweep \
+                       examples/vecmult/calib/platforms/zynq7020_vecmult --apply
+```
+
+A sweep churns and re-runs freely; a library is reviewed. Naming a tracked library directly would let
+`Platform.resolve` find it and write into it, which only `publish` may do — see the
+[work → publish flow](../platform/workflow.md).
+
+{: .warning }
+> **Setting a platform at all is what makes a sweep produce records.** Without one,
+> `InspectSynthStep` attributes the report and has nowhere shared to file it, so the measurements
+> survive only as numbers a human copies into source. That is not hypothetical: it is exactly how
+> `examples/vecmult`'s corpus began life.
+
 ## `sweep_cli` — the entry point
+
+```python
+sweep_cli(runner, grid, *, description, stages, dry_run_stages=None,
+          extra_args=(), grid_from_args=None, argv=None) -> int
+```
+
+| parameter | meaning |
+|---|---|
+| `runner`, `grid` | what to run, and over what |
+| `description` | shown in `--help` and in the opening progress line |
+| `stages` | the normal stage list |
+| `dry_run_stages` | what `--dry-run` runs instead; omitting it makes `--dry-run` an error |
+| `extra_args` | `[(flags_tuple, kwargs_dict), ...]` — example-specific flags |
+| `grid_from_args` | `callable(grid, args) -> grid`, for a flag that maps onto an axis |
+| `argv` | for testing; defaults to `sys.argv` |
+
+Returns a process exit code — non-zero if any stage of any point failed, so a sweep is usable in a
+script without parsing its output.
 
 The sibling of [`run_dag_cli`](./corecomp.md), one level up. It supplies `--dry-run`, `--resume`,
 `--out`, and **one `--<axis>` flag per numeric or string axis, derived from the grid**:
@@ -150,8 +255,10 @@ python -m examples.vecmult.vecmult_sweep --vlen 512 --resume
 python -m examples.fir_block.fir_block_sweep --ntap 8 16 --realization unroll
 ```
 
+### A flag that is not an axis
+
 Boolean axes get no automatic flag, because `--unroll-lane 0 1` is a worse interface than a named
-choice. An example supplies that itself:
+choice. That is what `extra_args` and `grid_from_args` are for:
 
 ```python
 _REALIZATIONS = {"serial": (False,), "unroll": (True,), "both": (False, True)}
@@ -170,25 +277,6 @@ with the design rather than in the framework.
 > nothing, and silently re-run every point it already had. `ParamGrid` carries its label axes through
 > `subset()` for this reason; it was a real bug, found by running the CLI rather than by reasoning
 > about it.
-
-## Two tiers: sweep, then publish
-
-A sweep writes to an **untracked work tier** and a deliberate act promotes it:
-
-```bash
-waveflow_calib publish examples/vecmult/calib/work/zynq7020_vecmult_sweep \
-                       examples/vecmult/calib/platforms/zynq7020_vecmult --apply
-```
-
-A sweep churns and re-runs freely; a library is reviewed. Naming a tracked library directly would let
-`Platform.resolve` find it and write into it, which only `publish` may do — see the
-[work → publish flow](../platform/workflow.md).
-
-{: .warning }
-> **Setting a platform at all is what makes a sweep produce records.** Without one,
-> `InspectSynthStep` attributes the report and has nowhere shared to file it, so the measurements
-> survive only as numbers a human copies into source. That is not hypothetical: it is exactly how
-> `examples/vecmult`'s corpus began life.
 
 ## See also
 
