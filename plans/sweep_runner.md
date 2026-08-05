@@ -233,20 +233,19 @@ this design must serve is the **live** one — `CollectTimingStep` in a DAG — 
 
 ## Phases
 
-### P0 — the equivalence gate (after the summary format settles)
+### P0 — ~~the summary golden~~ **dropped as circular**
 
-Both sweeps produce a `results/sweep.json`.  Capture the current one for each as a golden, and assert
-the refactored runner reproduces it **byte-identically** for a `--dry-run` over the full grid.
+The original gate was a byte-identical `results/sweep.json`.  That cannot work: this same plan sheds
+the summary's counter blobs, so the gate would pin a format the first commit changes — and a gate
+that must be regenerated to pass is not a gate.
 
-Dry-run because it needs no Vitis, exercises `points()` / `label()` / config construction / record
-shape / save / resume, and runs in seconds.  The synthesis path is covered by P4.
+What it was *protecting* survives, split across the phases that can actually hold it:
 
-{: .warning }
-Capture the golden **after** the summary sheds its number blobs, not before.  A golden taken now pins
-a format that `plans/integration_record.md` makes redundant, and the first thing this plan would do is
-break its own gate.
+* **the same points, in the same order** — P1's tests, which compare `ParamGrid` against each
+  example's `points()` element for element.  This is the real content of the old P0.
+* **the same records get filed** — P4's single re-measurement against the real path.
 
-**Gate:** a dry-run sweep of each example produces the committed golden summary unchanged.
+**Gate:** none of its own; P1 and P4 carry it.
 
 ### P1 — `ParamGrid`
 
@@ -296,9 +295,12 @@ real re-sweep.
 
 ### P5 — docs
 
-`docs/examples/vecmult/sweep.md` loses its "this is a template, not a pattern" warning and gains a
-short **Writing your own sweep** section against the real API.  A guide page under
-`guide/resource_model/` on building a corpus is the likely home for the general version.
+Home is **`docs/guide/build/`**, beside the pages on the DAG and `BuildConfig` a sweep drives — not
+under either model section, since one runner serves both axes and filing it under `resource_model/`
+would imply otherwise.
+
+`docs/examples/vecmult/sweep.md` loses its "this is a template, not a pattern" warning and shrinks to
+a short **Writing your own sweep** section pointing at the guide.
 
 **Gate:** docs guard; the symbol guard already refuses a page naming an API that does not exist.
 
