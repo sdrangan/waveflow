@@ -216,16 +216,26 @@ class VecMult(FreeRunMod):
         and both fail silently.
         """
         from waveflow.calib.device_rules import require_same_device
-        from waveflow.calib.vitis_model import VitisResourceModel
+        from waveflow.calib.record_store import ModuleStore
 
         from examples.vecmult.vecmult_corpus import PART
-        from examples.vecmult.vecmult_resource import vec_mult_samples
+        from examples.vecmult.vecmult_resource import (VecMultResourceModel, vec_mult_samples,
+                                                       vec_mult_shell)
 
         part = getattr(platform, "part", None) or PART
         require_same_device(part, PART, what="VecMult's resource model")
-        return VitisResourceModel(
-            name="vec_mult", part=part, platform=platform,
-        ).load_or_fit(samples=vec_mult_samples)
+
+        plat_dir = getattr(platform, "dir", None)
+        model = VecMultResourceModel(
+            name="vec_mult", part=part, platform=platform, cls_name="VecMult",
+            comp_class=cls,
+            store=ModuleStore(plat_dir) if plat_dir else None,
+            shell=vec_mult_shell() if plat_dir else None)
+
+        # With a platform, the measurements are already on disk as records: the fit reads them and
+        # `samples` is never built.  Without one there is no store to read, so the committed grid is
+        # the only corpus there is -- which is what keeps this example usable with `add_rm(None)`.
+        return model.load_or_fit() if plat_dir else model.load_or_fit(samples=vec_mult_samples)
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing: ``[cmd | x | y]`` in, ``[z | resp]`` out.  The pysim golden."""

@@ -36,9 +36,20 @@ SAMP_W = 16
 #: shapes and multiplier ports they encode are properties of the silicon and of nothing else.
 PART = "xc7z020clg484-1"
 
-#: ``(vlen, dwid)`` -> measured whole-design counters.  VecMult is a standalone top, so these are
-#: also the module's own figures up to the integration term (a constant ``lut=-2`` here: HLS shares
-#: two LUTs across the task boundary).
+#: ``(vlen, dwid)`` -> measured **whole-design** counters, committed as source.
+#:
+#: NOT the corpus the model is fitted from.  Since the sweep began filing records, the fit reads the
+#: per-module measurements in the platform's record store and adds :data:`INTEGRATION_TERM` back --
+#: these are ``top``, which is ``module + integration``.  Two narrower jobs remain:
+#:
+#: * the **oracle** ``tests/examples/test_vecmult.py`` checks predictions against, which is why it is
+#:   committed as source: it runs with no toolchain installed, so a machine without Vitis still
+#:   catches a model that stopped reproducing its own measurements;
+#: * the fallback corpus for ``add_rm(None)``, where there is no platform and so no store to read.
+#:
+#: A second independent copy is a feature exactly while one checks the other.  It stops being one the
+#: moment both claim to be the source -- so if these ever disagree with the store, the store is right
+#: and this is stale.
 GRID: dict = {
     (  512,  32): dict(lut= 964, ff= 415, dsp= 2, bram= 2),
     (  512,  64): dict(lut=1370, ff= 593, dsp= 4, bram= 4),

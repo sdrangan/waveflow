@@ -158,3 +158,65 @@ def test_the_pages_still_contain_tables_to_check():
     """
     assert re.search(r"^\|\s*\*\*\d+\*\*\s*\|", _page("examples/vecmult/sweep.md"), flags=re.M)
     assert "rank correlation" in _page("examples/firblock/resource_fit.md")
+
+
+# ---------------------------------------------------------------------------
+# Symbols — a page naming an API that does not exist
+# ---------------------------------------------------------------------------
+
+_SRC_ROOTS = ("waveflow", "examples", "tests")
+
+#: Excluded from the identifier scan, each for a reason:
+#:
+#: * ``tests/docs`` is documentation *about* documentation — and it defeated this check the first
+#:   time it ran, because the docstring below names the very phantom symbol the check exists to
+#:   catch, which put that name into the set and made the check pass.
+#: * ``_archive`` and ``mcp/corpus`` are snapshots; a name surviving only there is not an API.
+_SCAN_SKIP = ("_archive", "mcp/corpus", "tests/docs")
+
+
+@pytest.fixture(scope="module")
+def source_identifiers() -> set:
+    """Every identifier appearing in the **Python** source, plus builtins and numpy.
+
+    Deliberately a *token* set rather than a resolved symbol table.  Resolving properly would mean
+    importing every module and following re-exports; a token set answers the weaker question this
+    check needs — *does this name exist at all?* — with essentially no false positives.
+
+    Python only, because the check reads Python code blocks.  Including the generated ``.h`` / ``.cpp``
+    made the scan take 28 seconds and found nothing extra: 0.5s here.
+    """
+    import builtins
+
+    import numpy
+
+    names: set = set(dir(builtins)) | set(dir(numpy)) | set(dir(numpy.testing))
+    for root in _SRC_ROOTS:
+        for p in (REPO / root).rglob("*.py"):
+            if any(x in p.as_posix() for x in _SCAN_SKIP):
+                continue
+            names |= set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b",
+                                    p.read_text(encoding="utf-8", errors="ignore")))
+    return names
+
+
+def test_example_pages_do_not_document_symbols_that_do_not_exist(source_identifiers):
+    """An example page shows code a reader is meant to run, so its names must be real.
+
+    This caught three phantoms in one page: `vecmult/resource_model.md` documented an `add_rm_self`
+    override and a `vec_mult_fitted()` constructor that the example never had, and
+    `vecmult_resource.py` described a `VecMultResourceModel` class that was never written.  Nothing
+    flagged them — the links resolved and the numbers were right, because the *prose* was wrong.
+
+    Scoped to `docs/examples/`, whose code blocks quote real modules.  Guide pages are exempt: they
+    use illustrative snippets (`def transform(self, params): ...` on a class that does not exist), and
+    checking those would produce noise that gets the whole check suppressed.
+    """
+    missing: dict = {}
+    for p in sorted((DOCS / "examples").rglob("*.md")):
+        for block in re.findall(r"```python\n(.*?)```", p.read_text(encoding="utf-8"), flags=re.S):
+            for name in set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]{3,})\s*\(", block)):
+                if name not in source_identifiers:
+                    missing.setdefault(p.relative_to(DOCS).as_posix(), set()).add(name)
+    assert not missing, "example pages call names that exist nowhere in the source:\n  " + "\n  ".join(
+        f"{f}: {', '.join(sorted(s))}" for f, s in sorted(missing.items()))
