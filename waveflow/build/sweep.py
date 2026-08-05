@@ -1,0 +1,466 @@
+"""sweep.py — run a design at every point of a parameter grid, and keep the measurements.
+
+A calibration corpus is built by sweeping: elaborate a design at each point of a grid, run it through
+the build DAG, and let the steps file what they measured.  Two examples did that with ~150 lines
+each, of which about fifteen were about the design; a third (``examples/mem_copy``) did it again for
+timing.  The rest was the same ten concerns written three times -- config construction, failure
+isolation, incremental save, resume, dry-run, progress, exit code.
+
+Not modelled on ``GridSearchCV``, despite the surface resemblance.  That is an *optimizer*: it
+cross-validates, scores, and hands back ``best_params_``.  A synthesis sweep is a **census** -- it
+measures every point to build a corpus, and there is no score to maximize and no held-out fold at
+sweep time.  The right analogue is ``ParameterGrid``, the iterator, plus a runner owning what sklearn
+has no concept of because its estimators fit in milliseconds while these points cost ~45 seconds of
+Vitis each.
+
+See ``plans/sweep_runner.md``.
+"""
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from itertools import product
+from pathlib import Path
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+
+
+class ParamGrid:
+    """The points a sweep visits: a Cartesian product over named axes, in **declaration order**.
+
+    ```python
+    ParamGrid(vlen=(512, 1024), dwid=(32, 64))
+    # vlen is the OUTER loop -- {vlen:512,dwid:32}, {vlen:512,dwid:64}, {vlen:1024,dwid:32}, ...
+    ```
+
+    Declaration order *is* iteration order, so a grid reads the way it runs.  That matters more than
+    it looks: the two existing sweeps disagree about it (one iterates its first-named axis fastest and
+    the other slowest), and a runner that imposed its own order would silently reorder an interrupted
+    sweep's remaining work.
+
+    **A single-value axis is a constant.**  ``samp_i=(2,)`` contributes one value to every point and no
+    branching, which is how a design that holds a parameter fixed says so without a second concept for
+    it.
+    """
+
+    def __init__(self, _workload: "Sequence[str]" = (), _label_axes: "Sequence[str] | None" = None,
+                 **axes: "Sequence[Any]") -> None:
+        empty = [k for k, v in axes.items() if not len(tuple(v))]
+        if empty:
+            raise ValueError(
+                f"axis {empty} has no values; a grid with an empty axis yields no points at all, "
+                f"which is almost never what was meant — pass a single-value tuple for a constant")
+        unknown = [w for w in _workload if w not in axes]
+        if unknown:
+            raise ValueError(f"_workload names {unknown}, which are not axes of this grid")
+        self.axes: dict = {k: tuple(v) for k, v in axes.items()}
+        #: Which axes a label names.  Carried through :meth:`subset` rather than recomputed, because
+        #: **a label must not change when the grid is narrowed**: ``--vlen 512`` leaves that axis with
+        #: one value, and a label derived from the *narrowed* grid would drop it -- so ``--resume``
+        #: would look for ``dwid64`` in a summary written as ``vlen512_dwid64`` and re-run the lot.
+        self._label_axes: tuple = tuple(
+            _label_axes if _label_axes is not None
+            else [k for k, v in self.axes.items() if len(v) > 1] or list(self.axes))
+        #: Axes that vary the **workload** rather than the hardware.
+        #:
+        #: A build axis is a ``HwParam``: changing it produces different hardware, so every stage from
+        #: elaboration onward must re-run.  A workload axis is a runtime input -- the hardware is
+        #: unchanged and only the simulation repeats.  Utilization does not depend on workload at all
+        #: (``ResourceModel.get_params`` drops ``**runtime`` for exactly that reason), while a timing
+        #: corpus is mostly workload points against one build.  A runner that could not tell them
+        #: apart would re-synthesize for a change in ``nwords``, turning a seconds-long pysim sweep
+        #: into an hours-long one.
+        self.workload: frozenset = frozenset(_workload)
+
+    @property
+    def build_axes(self) -> dict:
+        """Axes whose change requires re-elaboration and re-synthesis."""
+        return {k: v for k, v in self.axes.items() if k not in self.workload}
+
+    @property
+    def workload_axes(self) -> dict:
+        return {k: v for k, v in self.axes.items() if k in self.workload}
+
+    def __len__(self) -> int:
+        n = 1
+        for v in self.axes.values():
+            n *= len(v)
+        return n
+
+    def __iter__(self) -> "Iterator[dict]":
+        names = list(self.axes)
+        for combo in product(*(self.axes[n] for n in names)):
+            yield dict(zip(names, combo))
+
+    def label(self, point: "Mapping[str, Any]") -> str:
+        """A filesystem- and log-safe name for one point.
+
+        Derived from the point rather than written per example, so the summary key and the progress
+        line cannot disagree about which point a record belongs to.  Only the axes appear -- a
+        constant contributes nothing to distinguishing points and would only pad every label.
+        """
+        parts = [f"{k}{_slug(point[k])}" for k in self._label_axes if k in point]
+        return "_".join(parts) or "point"
+
+    def subset(self, **overrides: "Sequence[Any] | None") -> "ParamGrid":
+        """A grid with some axes restricted — what a ``--ntap 8 16`` flag produces.
+
+        ``None`` leaves an axis alone, so a CLI can pass every axis through without special-casing
+        the ones the user did not mention.
+        """
+        axes = dict(self.axes)
+        for k, v in overrides.items():
+            if v is None:
+                continue
+            if k not in axes:
+                raise ValueError(f"{k!r} is not an axis of this grid ({sorted(axes)})")
+            axes[k] = tuple(v)
+        return ParamGrid(_workload=tuple(self.workload), _label_axes=self._label_axes,
+                         **axes)
+
+    def __repr__(self) -> str:
+        inner = ", ".join(f"{k}={v!r}" for k, v in self.axes.items())
+        return f"ParamGrid({inner})"
+
+
+def _slug(value: Any) -> str:
+    """A label fragment: ``True``/``False`` read better than ``1``/``0`` in a sweep log."""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    return str(value).replace(" ", "").replace("/", "-")
+
+
+# ---------------------------------------------------------------------------
+# Stages — a point may need more than one run
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Stage:
+    """One pass over a point: run the DAG up to *through*.
+
+    A resource sweep is one stage per point -- synthesize, attribute, file.  A timing sweep is two,
+    at deliberately different cadences: :class:`~waveflow.calib.timing_model.TimingModel` keeps its
+    ``rtl/`` and ``pysim/`` trees apart because RTL is Vitis-expensive and pysim is every-edit-cheap,
+    and joins them at fit time on the feature point rather than on the run id.
+
+    *when* skips the stage for a point, which is how the expensive side covers a subset without a
+    special mode.  *use_platform* off is for a dry run: nothing was synthesized, so there is no report
+    to file, and attaching a platform would only invite a half-written library.
+
+    *force* is ``True`` by default, and for a **build** sweep that is the only safe answer: DAG
+    freshness is decided on file mtimes and knows nothing about params, so without it the second
+    point would find the first point's artifacts up to date and skip -- filing a report attributed to
+    the wrong configuration.
+
+    A **workload** sweep is the case where it is wrong.  The hardware is identical at every point
+    (mem_copy's job size is a runtime command field), so forcing would re-synthesize per point for a
+    design that cannot have changed.  Naming the steps the workload actually reaches leaves the build
+    half alone, and the ones downstream of them re-run anyway by cascade.
+
+    It is a list of step names rather than an inferred set on purpose.  A step re-runs when a *param
+    it declares* changes -- but :class:`~waveflow.build.trace_steps.RtlSimStep` declares none and
+    still reads the point, through the scenario its ``prepare`` writes.  Inferring would quietly skip
+    it, and the failure is the one already recorded in that class: the previous run's waveform stays
+    on disk and five job sizes measure an identical period.
+
+    *barrier* makes the stage finish across the **whole grid** before the next stage begins.  The
+    default is point-major -- every stage of point 1, then every stage of point 2 -- which is right
+    when the stages of a point are about that point.  It is wrong when a stage measures a **platform**
+    property: the ``m_axi`` bus law needs two distinct sizes before it can be fitted at all, so
+    point-major would have point 1's component residual fitted against no bus law, point 2's against
+    a two-point one, and each point's number would mean something different from the next.
+
+    That is the two-level split the whole calibration rests on -- bus once per platform, control cost
+    per component -- and it only holds if the platform half is finished first.
+    """
+
+    through: str
+    name: str = ""
+    when: "Callable[[Mapping[str, Any]], bool] | None" = None
+    use_platform: bool = True
+    force: "bool | Sequence[str]" = True
+    barrier: bool = False
+
+    @property
+    def label(self) -> str:
+        return self.name or self.through
+
+    def applies_to(self, point: "Mapping[str, Any]") -> bool:
+        return True if self.when is None else bool(self.when(point))
+
+
+@dataclass
+class SweepResult:
+    """What a sweep did: one entry per point, each a map of stage label -> outcome."""
+
+    points: dict = field(default_factory=dict)
+    grid: dict = field(default_factory=dict)
+    total_seconds: float = 0.0
+    complete: bool = False
+
+    @property
+    def failures(self) -> list:
+        return [(lbl, st, rec.get("error", ""))
+                for lbl, stages in sorted(self.points.items())
+                for st, rec in sorted(stages.items()) if not rec.get("ok")]
+
+    @property
+    def ok(self) -> bool:
+        return not self.failures
+
+    def to_json(self) -> dict:
+        return {"grid": self.grid, "complete": self.complete,
+                "n_points": len(self.points),
+                "total_seconds": round(self.total_seconds, 1),
+                "points": self.points}
+
+
+class SweepRunner:
+    """Run a design at every point of a grid, and keep what the steps measured.
+
+    Owns the concerns three hand-written sweeps each reinvented: config construction, per-point
+    failure isolation, incremental save, resume, progress and the exit code.  What an example supplies
+    is its axes, its DAG factory and its platform -- the parts that are about the design.
+
+    **The summary is a log, not a corpus.**  It records what was attempted, what failed, how long it
+    took, and *pointers* to what was filed.  The numbers live in the record store; duplicating them
+    here would make a second copy with the untracked one easy to leave stale, which is the failure the
+    whole calibration tier exists to prevent.
+    """
+
+    def __init__(self, *, dag_factory, root_dir, summary=None, platform=None, platforms_root=None,
+                 part=None, clk_freq=None, extra_params=None) -> None:
+        self.dag_factory = dag_factory
+        self.root_dir = Path(root_dir)
+        self.summary = Path(summary) if summary else self.root_dir / "results" / "sweep.json"
+        self.platform = platform
+        self.platforms_root = platforms_root
+        self.part = part
+        self.clk_freq = clk_freq
+        #: Params every point carries that are not swept -- ``live_output=False`` and friends.
+        self.extra_params = dict(extra_params or {})
+
+    # -- one point, one stage ------------------------------------------------
+    def _config(self, point: "Mapping[str, Any]", stage: Stage):
+        from waveflow.build.build import BuildConfig
+
+        kw: dict = {"root_dir": self.root_dir, "params": {**point, **self.extra_params}}
+        if stage.use_platform and self.platform is not None:
+            kw.update(platform=self.platform, platforms_root=self.platforms_root,
+                      part=self.part, clk_freq=self.clk_freq)
+        return BuildConfig(**kw)
+
+    def run_stage(self, point: "Mapping[str, Any]", stage: Stage) -> dict:
+        """Run one stage of one point.  **Never raises.**
+
+        A point that blows up is data about the design space, not a reason to lose the other fifteen
+        -- the behaviour all three hand-written sweeps chose independently.  The exception becomes the
+        record's ``error`` and the sweep carries on.
+        """
+        started = time.perf_counter()
+        before = self._store_fingerprint() if stage.use_platform else {}
+        try:
+            results = self.dag_factory().run(self._config(point, stage),
+                                             through=stage.through,
+                                             force=(stage.force if isinstance(stage.force, bool)
+                                                    else list(stage.force)))
+        except Exception as exc:                    # noqa: BLE001 - a failure is a datapoint
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                    "elapsed": round(time.perf_counter() - started, 2)}
+
+        failed = {n: r.message for n, r in results.items() if not r.success}
+        rec: dict = {"ok": not failed, "elapsed": round(time.perf_counter() - started, 2)}
+        if failed:
+            rec["error"] = "; ".join(f"{n}: {m}" for n, m in failed.items())
+        elif stage.use_platform:
+            filed = sorted(self._filed_since(before))
+            if filed:
+                rec["filed"] = filed
+        return rec
+
+    # -- what a stage filed --------------------------------------------------
+    def _store_dir(self) -> "Path | None":
+        if self.platform is None or self.platforms_root is None:
+            return None
+        return Path(self.platforms_root) / str(self.platform) / "modules"
+
+    def _store_fingerprint(self) -> dict:
+        """``{module key: total records}`` -- enough to notice an *append*, not only a new key.
+
+        A re-measured configuration files another record under a key that already exists, so
+        comparing key sets alone would report that the point filed nothing.
+        """
+        root = self._store_dir()
+        if root is None or not root.is_dir():
+            return {}
+        out: dict = {}
+        for jsonl in root.rglob("records.jsonl"):
+            key = jsonl.parent.parent.name
+            try:
+                with jsonl.open(encoding="utf-8") as fh:
+                    out[key] = out.get(key, 0) + sum(1 for _ in fh)
+            except OSError:
+                continue
+        return out
+
+    def _filed_since(self, before: dict) -> list:
+        after = self._store_fingerprint()
+        return [k for k, n in after.items() if n != before.get(k, 0)]
+
+    # -- the sweep -----------------------------------------------------------
+    def run(self, grid: ParamGrid, stages: "Sequence[Stage] | Stage", *, resume: bool = False,
+            verbose: bool = True) -> SweepResult:
+        """Run every point through every applicable stage.
+
+        With *resume*, a ``(point, stage)`` already recorded ``ok`` is skipped -- **per stage** rather
+        than per point, so re-running after a change to the cheap side does not re-run the expensive
+        one.
+        """
+        stages = [stages] if isinstance(stages, Stage) else list(stages)
+        result = SweepResult(grid={k: list(v) for k, v in grid.axes.items()})
+        if resume:
+            result.points = _load_points(self.summary)
+            done = sum(1 for st in result.points.values() for r in st.values() if r.get("ok"))
+            if verbose and done:
+                print(f"resuming: {done} (point, stage) pair(s) already recorded ok")
+
+        started = time.perf_counter()
+        total = len(grid)
+        points = list(enumerate(grid, 1))
+        for group in _stage_groups(stages):
+            for i, point in points:
+                label = grid.label(point)
+                per = result.points.setdefault(label, {})
+                for stage in group:
+                    if not stage.applies_to(point):
+                        continue
+                    if resume and per.get(stage.label, {}).get("ok"):
+                        if verbose:
+                            print(f"[{i}/{total}] {label} {stage.label} - skipped (already ok)")
+                        continue
+                    if verbose:
+                        print(f"[{i}/{total}] {label} {stage.label} ...", flush=True)
+                    rec = self.run_stage(point, stage)
+                    per[stage.label] = rec
+                    if verbose:
+                        tail = (f"FAILED  {rec.get('error', '')[:110]}" if not rec["ok"] else
+                                f"ok  {rec['elapsed']:.1f}s"
+                                + (f"  filed {len(rec['filed'])}" if rec.get("filed") else ""))
+                        print(f"    {tail}")
+                    # Incremental: a crash costs one stage, not the sweep.  Writing only at the end
+                    # means an interruption at point 15 saves nothing AND leaves the previous run's
+                    # file in place -- a stale summary that reads as a fresh one.
+                    result.total_seconds = time.perf_counter() - started
+                    _save(self.summary, result)
+
+        result.total_seconds = time.perf_counter() - started
+        result.complete = len(result.points) == total
+        _save(self.summary, result)
+        if verbose:
+            bad = result.failures
+            print(f"\n{total - len({b[0] for b in bad})}/{total} point(s) clean, "
+                  f"{len(bad)} stage failure(s), {result.total_seconds:.0f}s")
+            for lbl, st, err in bad:
+                print(f"  FAILED {lbl} {st}: {err[:140]}")
+            print(f"summary -> {self.summary}")
+        return result
+
+
+def _stage_groups(stages: "Sequence[Stage]") -> "list[list[Stage]]":
+    """Split stages into passes, each run over the whole grid before the next starts.
+
+    A ``barrier`` stage becomes a pass of its own; runs of ordinary stages stay together and keep the
+    point-major order (all of point 1's stages, then all of point 2's).  With no barriers this is one
+    group, so the loop is exactly what it was.
+
+    Grouping rather than a flag consulted inside the loop: "finish this across every point first" is a
+    statement about the *order of the whole sweep*, and expressing it as the shape of the iteration
+    makes it impossible to half-apply.
+    """
+    groups: "list[list[Stage]]" = []
+    for stage in stages:
+        if stage.barrier or not groups or groups[-1][-1].barrier:
+            groups.append([stage])
+        else:
+            groups[-1].append(stage)
+    return groups
+
+
+def _load_points(path: Path) -> dict:
+    if not Path(path).is_file():
+        return {}
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")).get("points", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def _save(path: Path, result: SweepResult) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(result.to_json(), indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The entry point
+# ---------------------------------------------------------------------------
+
+def sweep_cli(runner: SweepRunner, grid: ParamGrid, *, description: str,
+              stages: "Sequence[Stage]", dry_run_stages: "Sequence[Stage] | None" = None,
+              extra_args: "Iterable[tuple]" = (), grid_from_args=None, argv=None) -> int:
+    """Standard command line for a sweep — the sibling of :func:`~waveflow.build.cli.run_dag_cli`.
+
+    Supplies ``--dry-run``, ``--resume``, ``--out``, and **one ``--<axis>`` flag per numeric or string
+    axis**, derived from the grid rather than declared.  Today one example has per-axis flags and the
+    other has none; that was not a decision, just which script someone extended.
+
+    Boolean axes get no automatic flag: ``--unroll-lane 0 1`` is a worse interface than a named choice
+    like ``--realization serial|unroll|both``.  An example supplies that through *extra_args* and maps
+    it in *grid_from_args*, which keeps the vocabulary where the design's vocabulary lives (open
+    decision 2 in the plan).
+
+    Returns a process exit code: non-zero if any stage of any point failed, so a sweep is usable in a
+    script without parsing its output.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run the cheap stages only (no toolchain) — a pre-flight over the grid")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip (point, stage) pairs already recorded ok")
+    parser.add_argument("--out", default=None,
+                        help="summary path (default results/sweep.json) — give a focused run its own")
+    for name, values in grid.axes.items():
+        kind = type(values[0])
+        if kind is bool:
+            continue                    # see the docstring: a named choice reads better
+        parser.add_argument(f"--{name.replace('_', '-')}", dest=name, nargs="+", type=kind,
+                            default=None, help=f"restrict the {name} axis (default {list(values)})")
+    for flags, kwargs in extra_args:
+        parser.add_argument(*flags, **kwargs)
+    args = parser.parse_args(argv)
+
+    if args.out:
+        out = Path(args.out)
+        runner.summary = out if out.is_absolute() else runner.root_dir / out
+
+    grid = grid.subset(**{n: getattr(args, n, None) for n in grid.axes
+                          if type(grid.axes[n][0]) is not bool})
+    if grid_from_args is not None:
+        grid = grid_from_args(grid, args)
+
+    chosen = list(stages)
+    if args.dry_run:
+        if dry_run_stages is None:
+            raise SystemExit("--dry-run given but this sweep declares no dry-run stages")
+        chosen = list(dry_run_stages)
+
+    print(f"{description}: {len(grid)} point(s) x {len(chosen)} stage(s)")
+    if not args.dry_run and runner.platform is not None:
+        print(f"  platform {runner.platform} under {runner.platforms_root} (work tier, untracked)")
+    result = runner.run(grid, chosen, resume=args.resume)
+    return 0 if result.ok else 1
+
+
+__all__ = ["ParamGrid", "Stage", "SweepResult", "SweepRunner", "sweep_cli"]

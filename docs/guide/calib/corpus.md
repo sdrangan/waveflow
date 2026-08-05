@@ -135,6 +135,11 @@ nothing it assumes can be wrong — but it answers only where you measured. A fi
 shape and, in exchange, answers between the points. `examples/vecmult` fits four coefficients from 15
 rows and predicts anywhere in the region; a lookup over the same space would need every point.
 
+Whichever number you land on, the way to *produce* those rows is a
+[sweep](../build/sweep.md): a grid of design points run through the build DAG, each filing what its
+steps measured. Coverage is then the grid you chose, which is the point — it is written down rather
+than accumulated by hand.
+
 ## The trap: rows keyed to a module that was never wired
 
 A resource row is keyed by the module's **elaborated structure**, and a module with ports has no

@@ -187,9 +187,17 @@ class RtlSimStep(BuildStep):
     xsi_dir : str
         Directory holding ``run.bat`` (repo-relative).
     prepare : callable | None
-        Called with the resolved ``xsi_dir`` before the run, to materialize the scenario bundles the
+        Called as ``prepare(xsi_dir, config)`` before the run, to materialize the scenario bundles the
         BFM reads (for mem_copy, ``write_mem_copy_xsi_bundles``).  The scenario is an *input* to the
         run, so a step that did not write it would measure whatever was left behind.
+
+        It receives the :class:`BuildConfig` because under a **sweep** the scenario is the thing that
+        varies: :class:`~waveflow.build.sweep.SweepRunner` calls a *zero-argument* dag factory and
+        delivers the point through ``config.params``, so a ``prepare`` closed over one scenario at
+        construction time would write the same vectors at every point -- and the run would then be
+        measured against the wrong ones.  That failure has a precedent here: see the note in
+        :meth:`run` about the stale VCD, which produced an identical period at five different job
+        sizes before it was caught.
     """
 
     description: str = "Run the RTL under XSI with $dumpvars tracing enabled."
@@ -200,7 +208,7 @@ class RtlSimStep(BuildStep):
     xsi_dir: str = "xsi"
     rtl_artifact: str = "report_dir"
     dumper_artifact: str = "vcd_dumper"
-    prepare: Callable[[Path], None] | None = None
+    prepare: Callable[[Path, "BuildConfig"], None] | None = None
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -216,7 +224,7 @@ class RtlSimStep(BuildStep):
         vcd = xsi / f"{self.top}_trace.vcd"
 
         if self.prepare is not None:
-            self.prepare(xsi)
+            self.prepare(xsi, config)
 
         # Delete first, then require it to reappear.  Re-running the built .exe does NOT regenerate
         # the VCD -- only the full run.bat path, which re-elaborates, does -- so without this guard
@@ -268,6 +276,9 @@ class ExtractBurstsStep(BuildStep):
     #: Recorded so a consumer can CHECK ``num_trans`` against ``ceil(nwords / max_burst_len)``
     #: rather than assume it.
     max_burst_len: int = 16
+    #: How many firings each task is expected to complete -- the job count the scenario issued, as an
+    #: int or a ``callable(config) -> int`` when a sweep varies it.  ``None`` disables the check.
+    expect_firings: "int | Callable[[BuildConfig], int] | None" = None
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -309,6 +320,46 @@ class ExtractBurstsStep(BuildStep):
                 })
         return rows
 
+    def _check_coverage(self, rows: list[dict], config: BuildConfig) -> None:
+        """Refuse a table that is missing firings the scenario issued.
+
+        mem_copy at ``n_words=1024`` produced ``seq=3, reader=2, writer=2`` for a four-job scenario.
+        Every span in it was correct, which is what makes it dangerous: nothing upstream objects,
+        because :class:`RtlSimStep` asserts nothing by design and the golden that passes in the log
+        is the *pysim's*.  The measurement looks like a clean point and is half a point.
+
+        The check deliberately does **not** name a cause.  The obvious guess -- the harness cycle
+        bound ran out -- was wrong on the very case that motivated it: the bound was 5404, the last
+        ``ap_done`` landed at 2405, and the waveform then ran on for some four thousand idle cycles.
+        A short table means the design stopped firing, and whether that is a tight bound, a stall or
+        a scenario that never delivered the later jobs is what the reader has to go and find out.
+
+        That matters most exactly where it is least visible.  A sweep files this table as a corpus
+        row; a short point does not fail, it silently narrows the evidence a residual is fitted from,
+        and the fit still reports a tiny error because the rows that survived are individually right.
+
+        Left as a count comparison rather than "all components agree": a design may legitimately fire
+        one stage more often than another, and a check that guesses would either miss the truncation
+        or reject a correct design.  The scenario knows the number; it should say it.
+        """
+        want = self.expect_firings
+        if want is None:
+            return
+        want = int(want(config) if callable(want) else want)
+
+        got: dict[str, int] = {}
+        for r in rows:
+            got[r["component"]] = got.get(r["component"], 0) + 1
+        short = {c: n for c, n in got.items() if n != want}
+        if short:
+            raise RuntimeError(
+                f"incomplete trace: expected {want} firing(s) per task, got "
+                f"{ {c: n for c, n in sorted(got.items())} }. The design stopped firing before the "
+                f"scenario finished. Check, in this order: the last ap_done cycle against the "
+                f"harness bound (a tight bound truncates; a large gap means it stalled instead), "
+                f"then whether the later jobs' data reached the DUT at all. "
+                f"Off by count: {sorted(short)}")
+
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         from waveflow.utils.trace import load_trace
 
@@ -341,8 +392,13 @@ class ExtractBurstsStep(BuildStep):
                 boundary.append({"id": p["id"], "kind": p["kind"], "bursts": len(bursts),
                                  "beats": int(sum(len(b["data"]) for b in bursts))})
 
+        rows = self._firing_rows(bt)
+        # Before writing, not after: a short table that reached disk is one a later step can pick up
+        # and file as a corpus row, and the raise would then be about a run nobody is looking at.
+        self._check_coverage(rows, config)
+
         events = {"version": 1, "top": man["top"], "max_burst_len": self.max_burst_len,
-                  "firings": self._firing_rows(bt), "channels": channels, "boundary": boundary}
+                  "firings": rows, "channels": channels, "boundary": boundary}
 
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
         out_path = root / self.output_path

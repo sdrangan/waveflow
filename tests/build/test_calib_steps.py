@@ -65,7 +65,7 @@ class TestCollect:
     def test_collect_appends_both_sides(self, tmp_path):
         calib = tmp_path / "cal"
         step = CollectTimingStep(name="collect", run_id="n128",
-                                 run_pysim=lambda: _run_leaf(calib, 128))
+                                 run_pysim=lambda _cfg: _run_leaf(calib, 128))
         ev = _write_events(tmp_path, 128, span=1183)
         out = step.run(BuildConfig(root_dir=str(tmp_path)), timing_events=ev)
 
@@ -77,7 +77,7 @@ class TestCollect:
 
     def test_no_models_is_an_error(self, tmp_path):
         """A design built without calib_dir has no models — the step should say so, not no-op."""
-        def bare():
+        def bare(_cfg):
             sim = Simulation()
             return _Leaf(name="c", sim=sim)     # no add_timing_model
 
@@ -94,12 +94,12 @@ class TestFit:
         for nw in (128, 512):
             nt = math.ceil(nw / 16)
             CollectTimingStep(name="c", run_id=f"n{nw}",
-                              run_pysim=lambda nw=nw: _run_leaf(calib, nw)).run(
+                              run_pysim=lambda _cfg, nw=nw: _run_leaf(calib, nw)).run(
                 BuildConfig(root_dir=str(tmp_path)),
                 timing_events=_write_events(tmp_path, nw, span=(1000 + nw) + 10 + 2 * nt))
 
         fit = FitTimingStep(name="fit",
-                            build_design=lambda: _run_leaf(calib, 128),
+                            build_design=lambda _cfg: _run_leaf(calib, 128),
                             output_path="results/fit.json")
         out = fit.run(BuildConfig(root_dir=str(tmp_path)))
 
@@ -115,7 +115,7 @@ class TestFit:
         tm = StreamTimingModel(component="c", calib_dir=calib)
         tm.collect_rtl(_events(128, 1183), run_id="n128")   # rtl only
 
-        fit = FitTimingStep(name="fit", build_design=lambda: _leaf_with(calib))
+        fit = FitTimingStep(name="fit", build_design=lambda _cfg: _leaf_with(calib))
         out = fit.run(BuildConfig(root_dir=str(tmp_path)))
         report = json.loads(out["timing_fit"].read_text())
         assert report["fitted"] == []

@@ -233,22 +233,21 @@ this design must serve is the **live** one — `CollectTimingStep` in a DAG — 
 
 ## Phases
 
-### P0 — the equivalence gate (after the summary format settles)
+### P0 — ~~the summary golden~~ **dropped as circular**
 
-Both sweeps produce a `results/sweep.json`.  Capture the current one for each as a golden, and assert
-the refactored runner reproduces it **byte-identically** for a `--dry-run` over the full grid.
+The original gate was a byte-identical `results/sweep.json`.  That cannot work: this same plan sheds
+the summary's counter blobs, so the gate would pin a format the first commit changes — and a gate
+that must be regenerated to pass is not a gate.
 
-Dry-run because it needs no Vitis, exercises `points()` / `label()` / config construction / record
-shape / save / resume, and runs in seconds.  The synthesis path is covered by P4.
+What it was *protecting* survives, split across the phases that can actually hold it:
 
-{: .warning }
-Capture the golden **after** the summary sheds its number blobs, not before.  A golden taken now pins
-a format that `plans/integration_record.md` makes redundant, and the first thing this plan would do is
-break its own gate.
+* **the same points, in the same order** — P1's tests, which compare `ParamGrid` against each
+  example's `points()` element for element.  This is the real content of the old P0.
+* **the same records get filed** — P4's single re-measurement against the real path.
 
-**Gate:** a dry-run sweep of each example produces the committed golden summary unchanged.
+**Gate:** none of its own; P1 and P4 carry it.
 
-### P1 — `ParamGrid`
+### P1 — `ParamGrid` — **DONE**
 
 Product, order, `label`, subsetting.  Pure and fast, so it gets ordinary unit tests: order is
 declaration order, a single-value axis still yields dicts, an empty axis yields nothing rather than
@@ -257,7 +256,7 @@ silently dropping the axis.
 **Gate:** `list(ParamGrid(**axes))` equals each example's current `points()` output, element for
 element, including order.
 
-### P2 — `SweepRunner`
+### P2 — `SweepRunner` — **DONE**
 
 Execution, record shape, incremental save, resume, cost accounting.  The lessons from the existing
 docstrings move here **with their reasoning**, because a comment explaining why a save is incremental
@@ -267,14 +266,14 @@ is worth more in the framework than in one example.
 propagated, that resume skips only `ok` points, and that an interrupted run leaves a summary marked
 incomplete.
 
-### P3 — `sweep_cli`, and the examples collapse onto it
+### P3 — `sweep_cli`, and the examples collapse onto it — **DONE**
 
 Rewrite both resource sweep scripts against the three pieces.  Expected: ~150 → ~25 lines each.
 
 **Gate:** P0 golden still byte-identical; both scripts' CLI surface is a superset of what they have
 today (nothing an existing invocation could do is lost).
 
-### P3b — one timing sweep, to prove the stage model
+### P3b — one timing sweep, to prove the stage model — **DONE**
 
 A multi-stage sweep driving `CollectTimingStep` over a workload grid, against a design that already
 has an attached `TimingModel`.  This is the phase that decides whether `Stage` is the right shape or
@@ -285,7 +284,95 @@ while the abstraction is still cheap to change.
 `waveflow/calib/fixture.py` is the reference, since it already drives collect_rtl / collect_pysim over
 a set of points.
 
-### P4 — re-measure once, on the real path
+*Result: met, against the stronger reference — the hand-typed constants themselves.*
+
+| point | measured span | `calibrate_platform.RTL_SPAN` | bus term `n + 2(t−1)` | residual |
+|---|---|---|---|---|
+| 128 | **183.0** | 183.0 ✓ | 142 | 41 |
+| 256 | 327.0 | — | 286 | 41 |
+| 512 | **615.0** | 615.0 ✓ | 574 | 41 |
+| 1024 | 1191.0 | — | 1150 | 41 |
+
+4 points, 211 s, **one** 45 s csynth for the lot.  The residual is a flat 41 across an 8× span — the
+same 41 the `-m xsi` trace test asserts independently.
+
+**`Stage` is the right shape**, with one addition: `force` had to stop being unconditional.  A build
+sweep must force (freshness is mtime-based and knows nothing about params); a workload sweep must
+not (the hardware is identical at every point).  Named steps rather than an inferred set, because
+`RtlSimStep` declares no params and still reads the point through the scenario its `prepare` writes.
+
+Getting there took three prerequisites that had nothing to do with `Stage` — no example DAG drove
+`CollectTimingStep` at all, the trace manifest named tasks by function where the timing model named
+them by configuration (so the two corpora never joined), and `platform_dir` was never forwarded to
+the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
+
+#### Two defects it exposed, both open {#p3b-open}
+
+1. ~~**Silent partial coverage.**~~ **FIXED.**  `n=1024` captured 2 of 4 firings and nothing
+   objected: `RtlSimStep` asserts nothing by design, and the `all_ok` in the log is the **pysim's**
+   golden, not the RTL's.  `ExtractBurstsStep` now takes `expect_firings` and refuses a table that is
+   short, *before* writing it — a short table on disk is one a later step files as a corpus row.
+   mem_copy passes the scenario's job count; the point now fails loudly and the sweep records it.
+
+   **It immediately found something worse, and disproved my own diagnosis.**  I assumed a tight
+   cycle bound.  Measured: the bound is **5404**, the last `ap_done` is at **2405**, and the
+   waveform then runs on for roughly four thousand idle cycles.  So the design *stops firing* rather
+   than being cut off — `seq=3, reader=2, writer=2` is a **stall after two jobs at `n_words=1024`**,
+   in a scenario whose pysim completes all four cleanly.  That is an RTL-level bug, not a
+   measurement artifact, and it is tracked below rather than here.
+
+   The check therefore deliberately names **no cause**: the obvious guess was wrong on the very case
+   that motivated it, and a message naming the cycle bound would have sent a reader to the one place
+   the fault was not.
+2. ~~**The fit is order-dependent.**~~ **FIXED**, and it split into two things, only one of which I
+   had right.
+
+   *What was actually wrong first:* the sweep's platform had **no `mm_bus.json`**.  `CalibBusStep`
+   existed and, like `CollectTimingStep` before it, nothing drove it — so the pysim charged no bus
+   law and the "component residual" absorbed the transfer cost.  That is a direct violation of the
+   two-level split (bus once per platform, control cost per component) and it is why the first fit
+   came out proportional to `nwords`.  Now wired, and the fitted write law reproduces the analytic
+   `nwords + 2·(num_trans − 1)` **exactly** at 128 / 256 / 512 (142, 286, 574).
+
+   Ordering that required `Stage.barrier`: the bus law needs ≥ 2 distinct sizes before it fits at
+   all, so point-major would fit point 1's residual against no law and point 2's against a two-point
+   one.
+
+   *The order-dependence itself was real but not the cause of the symptom I blamed it for.*
+   `fit_timing` per point wrote a `params.json` the next point's pysim charged; `residual = rtl −
+   pysim + current_dly` is meant to undo that but assumes the delay is **additive in the measured
+   span**, which fails under back-pressure — the n=256 pysim overshot the RTL outright (334 vs 327).
+   Collecting behind a barrier that stops short of the fit removes it: `current_dly` is now 0 at
+   every point.  **But the residuals did not move** (23 / 16 / 0 before and after), so ordering was a
+   genuine defect that was not producing this symptom.
+
+4. **The writer's residual falls with job size — 23, 16, 0 at n = 128 / 256 / 512** — and nothing yet
+   explains it.  Not ordering (`current_dly` is 0 throughout) and not the bus law (exact at all three
+   points).  A linear model on `(nwords, num_trans)` fits it with a *negative* slope, which
+   extrapolates to negative delay; and at n=512 the pysim equals the RTL to the cycle, which is
+   suspiciously exact.
+
+   Note the grid cannot separate the two features: `num_trans/nwords = 0.0625` at every point, since
+   `max_burst_len` is fixed at 16.  Separating them needs a **second axis that breaks the
+   proportionality** — vary the burst length, not only the size.  That is the next thing to try, and
+   it is a timing-model / grid-design question rather than a sweep one.
+
+3. **`mem_copy` stalls after two jobs at `n_words=1024` in RTL** — new, and the most serious of the
+   three.  Not a sweep problem: the sweep is what made it visible.  pysim runs all four jobs clean
+   (`end=4181`), the RTL issues 3 commands, reads 2, writes 2, and then idles for ~4000 cycles.
+   128 / 256 / 512 are unaffected, so it is size-dependent.
+
+   Worth checking against
+   [`reference-freerun-pipeline-token-pacing`](../plans/) — "an un-paced free-running
+   `ap_ctrl_none` N-stage pipe deadlocks at `done = N+1`" — since three stages stopping after two to
+   three firings is that shape.  The size dependence is the part that does not fit, and is where to
+   start.
+
+Neither of the first two invalidates the gate: the raw spans are clean and the 41 is consistent at
+128 / 256 / 512.  All three must be settled before this corpus is published to the tracked tier —
+and **1024 must not be swept again until (3) is understood**, since the check now refuses it.
+
+### P4 — re-measure once, on the real path — **DONE**
 
 Run one example's real sweep end to end and confirm the records land in the work tier exactly as
 before.  `vecmult` is the cheap one: 16 points, ~12 minutes, and the new
@@ -294,13 +381,33 @@ before.  `vecmult` is the cheap one: 16 points, ~12 minutes, and the new
 **Gate:** `-m vitis`-free test suite at baseline, plus the grid/store agreement test green after a
 real re-sweep.
 
-### P5 — docs
+*Result: met, as a genuine A/B.*  The tracked platform holds what the **hand-written loop** produced;
+the work tier was wiped and re-swept from scratch through `SweepRunner`.  All 16 points reproduce
+**identically** — same keys, same per-module counters, same integration records — in 890 s.
+`tests/build/test_sweep_against_real_path.py` pins it, with the comparison running unmarked so a
+machine with no Vitis still checks the last sweep's output rather than skipping silently.
 
-`docs/examples/vecmult/sweep.md` loses its "this is a template, not a pattern" warning and gains a
-short **Writing your own sweep** section against the real API.  A guide page under
-`guide/resource_model/` on building a corpus is the likely home for the general version.
+### P5 — docs — **DONE**
+
+Home is **`docs/guide/build/`**, beside the pages on the DAG and `BuildConfig` a sweep drives — not
+under either model section, since one runner serves both axes and filing it under `resource_model/`
+would imply otherwise.
+
+`docs/examples/vecmult/sweep.md` loses its "this is a template, not a pattern" warning and shrinks to
+a short **Writing your own sweep** section pointing at the guide.
 
 **Gate:** docs guard; the symbol guard already refuses a page naming an API that does not exist.
+
+*Result: met.*  `docs/guide/build/sweep.md` is one section per piece — `ParamGrid`, `SweepRunner`
+(with `Stage`, the free behaviours, the summary format and the two tiers under it) and `sweep_cli` —
+each opening with a signature and a parameter table.  Every claim in those tables was checked by
+running it rather than read off the source.  The example page had already shrunk in P3.
+
+Writing it found a **false positive in the docs guard**: `` `**axes` `` put an odd number of `**` to
+the left of the rest of the line, so the next legitimate bold pair read as an unclosed opening
+delimiter.  Fixed by masking code spans before the parity count — worth chasing rather than working
+around, since the check's own docstring says a check that cries wolf gets suppressed, and `**kwargs`
+recurs on any API page.
 
 ## Open decisions
 

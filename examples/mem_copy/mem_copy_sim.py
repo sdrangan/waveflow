@@ -101,7 +101,7 @@ class MemCopyTB(FreeRunMod):
         self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
-                           calib_dir=self.calib_dir)
+                           calib_dir=self.calib_dir, platform_dir=self.platform_dir)
         # The testbench owns the schema: it serializes each command into raw stream words.  Those words
         # are the ONE source -- write_scenario materializes them to <root>/vectors/s_cmd, the driver
         # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the

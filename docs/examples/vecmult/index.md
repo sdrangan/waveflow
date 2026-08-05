@@ -57,8 +57,9 @@ In going through this example, you will learn to:
    `kernel_task()`, and keep the Python `run_iter` as the golden.
 3. **Prove the twin** — replay the pysim job through the C++ in Vitis C-simulation, so "Python golden,
    C++ twin" is a checked claim rather than an intention.
-4. **Measure utilization across a parameter sweep** — drive a grid of design points through the build
-   DAG and collect an attributed report per point.
+4. **Write a parameter sweep with `sweep_cli`** — declare the points as a `ParamGrid`, the run as a
+   `SweepRunner` and one `Stage`, and get a program with `--dry-run`, `--resume` and a flag per axis;
+   then collect an attributed utilization report at each of the 16 points.
 5. **Recognize which law each counter obeys** — a derivable formula, a discontinuous ceiling, or a
    genuine regression — and encode the first two rather than fitting them.
 6. **Choose fitted features from structure**, using a small structure→form dictionary, and validate
@@ -74,7 +75,7 @@ python -m examples.vecmult.vecmult_build --list-steps
 
 python -m examples.vecmult.vecmult_build --through pysim        # no toolchain, seconds
 python -m examples.vecmult.vecmult_build --through resources    # needs Vitis, ~40 s
-python -m examples.vecmult.vecmult_sweep                        # the 16-point grid, ~8 min
+python -m examples.vecmult.vecmult_sweep                        # the 16-point grid, ~15 min
 ```
 
 `csynth` consumes the `csim` verdict, so a design whose C++ disagrees with its Python golden cannot
@@ -94,12 +95,15 @@ reach synthesis and cannot contribute a resource measurement.
   ragged final beat.
 - [Testbench](./testbench.md) — the pysim golden and the csim twin check, driven from one set of
   vectors.
-- [The sweep](./sweep.md) — 16 design points through the DAG, and the committed corpus.
+- [The sweep](./sweep.md) — how the sweep script is written, 16 design points through the DAG, and
+  the committed corpus.
 - [Resource models](./resource_model.md) — the two device rules and the one fit, the structure→form
   dictionary the fit's features come from, and installing the result so `compose()` can use it.
 
 ## See also
 
 - [Resource analysis](../../guide/resource/) — where the measurements come from.
+- [Sweeping a design](../../guide/build/sweep.md) — the sweep API this example is the worked instance
+  of.
 - [Resource models](../../guide/resource_model/) — the concepts this example is the worked instance of.
 - [Block FIR](../firblock/) — the advanced resource-modelling design: composite, stateful, RTL-gated.
