@@ -187,9 +187,17 @@ class RtlSimStep(BuildStep):
     xsi_dir : str
         Directory holding ``run.bat`` (repo-relative).
     prepare : callable | None
-        Called with the resolved ``xsi_dir`` before the run, to materialize the scenario bundles the
+        Called as ``prepare(xsi_dir, config)`` before the run, to materialize the scenario bundles the
         BFM reads (for mem_copy, ``write_mem_copy_xsi_bundles``).  The scenario is an *input* to the
         run, so a step that did not write it would measure whatever was left behind.
+
+        It receives the :class:`BuildConfig` because under a **sweep** the scenario is the thing that
+        varies: :class:`~waveflow.build.sweep.SweepRunner` calls a *zero-argument* dag factory and
+        delivers the point through ``config.params``, so a ``prepare`` closed over one scenario at
+        construction time would write the same vectors at every point -- and the run would then be
+        measured against the wrong ones.  That failure has a precedent here: see the note in
+        :meth:`run` about the stale VCD, which produced an identical period at five different job
+        sizes before it was caught.
     """
 
     description: str = "Run the RTL under XSI with $dumpvars tracing enabled."
@@ -200,7 +208,7 @@ class RtlSimStep(BuildStep):
     xsi_dir: str = "xsi"
     rtl_artifact: str = "report_dir"
     dumper_artifact: str = "vcd_dumper"
-    prepare: Callable[[Path], None] | None = None
+    prepare: Callable[[Path, "BuildConfig"], None] | None = None
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -216,7 +224,7 @@ class RtlSimStep(BuildStep):
         vcd = xsi / f"{self.top}_trace.vcd"
 
         if self.prepare is not None:
-            self.prepare(xsi)
+            self.prepare(xsi, config)
 
         # Delete first, then require it to reappear.  Re-running the built .exe does NOT regenerate
         # the VCD -- only the full run.bat path, which re-elaborates, does -- so without this guard

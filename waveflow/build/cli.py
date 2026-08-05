@@ -26,6 +26,7 @@ def run_dag_cli(
     root_dir: Path,
     extra_args: Iterable[tuple[tuple, dict]] = (),
     params_from_args: Callable[[argparse.Namespace], dict] | None = None,
+    config_from_args: Callable[[argparse.Namespace], dict] | None = None,
 ) -> None:
     """Run an example's ``BuildDag`` with the standard introspection CLI.
 
@@ -44,6 +45,13 @@ def run_dag_cli(
         generic listing flags and ``--force`` — the example-specific knobs.
     params_from_args:
         Maps the parsed ``argparse`` namespace to the ``BuildConfig`` params dict.
+    config_from_args:
+        Maps the namespace to **non-param** :class:`BuildConfig` fields — ``platform``,
+        ``platforms_root``, ``part``, ``clk_freq``.  Return ``{}`` for an uncalibrated build.
+
+        Params alone could not express this: a platform is not a knob the steps read, it is where a
+        calibrated build *files what it measured*.  Without this hook no example CLI could target a
+        platform at all, so a single point of a calibration sweep could only be run by the sweep.
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--through", metavar="STEP", default=default_through,
@@ -85,6 +93,7 @@ def run_dag_cli(
     config = BuildConfig(
         root_dir=Path(root_dir),
         params=(params_from_args(args) if params_from_args else {}),
+        **(config_from_args(args) if config_from_args else {}),
     )
 
     if args.list_artifacts:

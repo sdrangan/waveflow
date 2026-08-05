@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, Sequence
 
 from waveflow.build.build import BuildConfig, BuildStep
 from waveflow.hw.hw_freerun import discover_timing_models
@@ -47,12 +47,19 @@ class CollectTimingStep(BuildStep):
     Construction parameters
     -----------------------
     run_pysim : callable
-        Returns a built component tree whose pysim has been RUN — so ``firing_records`` are populated
-        and the models are attached.  The design must carry ``calib_dir`` on its calibrated
-        components (that is what attaches the models).
-    run_id : str
+        Called as ``run_pysim(config)``; returns a built component tree whose pysim has been RUN — so
+        ``firing_records`` are populated and the models are attached.  The design must carry
+        ``calib_dir`` on its calibrated components (that is what attaches the models), which is why
+        it receives the config: the platform to calibrate into is ``config.platform_info``.
+    run_id : str | callable
         Scenario key for this run's folders (e.g. ``"n128"``).  A re-run of the same scenario
-        overwrites, so a sweep uses one ``run_id`` per point.
+        overwrites, so a sweep uses one ``run_id`` per point — pass a ``callable(config) -> str`` to
+        derive it from ``config.params``.
+
+        A plain string is right for a DAG built per scenario by hand.  It is *wrong* under a sweep:
+        :class:`~waveflow.build.sweep.SweepRunner` calls a zero-argument dag factory and varies the
+        point through ``config.params``, so a fixed ``run_id`` would make every point overwrite the
+        same corpus folder and the fit would see one point however many were run.
     events_artifact : str
         Upstream artifact naming the ``ExtractBurstsStep`` timing JSON.
     """
@@ -60,9 +67,13 @@ class CollectTimingStep(BuildStep):
     description: str = "Collect a run's RTL + pysim firings into each timing model's corpus."
     params: ClassVar[dict] = {}
 
-    run_pysim: Callable[[], Any]
-    run_id: str
+    run_pysim: Callable[["BuildConfig"], Any]
+    run_id: "str | Callable[[BuildConfig], str]"
     events_artifact: str = "timing_events"
+
+    def resolve_run_id(self, config: BuildConfig) -> str:
+        """This point's scenario key — the string, or what the callable makes of the config."""
+        return self.run_id if isinstance(self.run_id, str) else self.run_id(config)
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -70,13 +81,18 @@ class CollectTimingStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        # A sentinel marking the collection done for this run_id; the real outputs are the per-model
-        # corpus folders (declared by the models, not this step).
-        return {"timing_collected": Path("results") / f"collected_{self.run_id}.json"}
+        # A sentinel marking the collection done; the real outputs are the per-model corpus folders
+        # (declared by the models, not this step).  A *derived* run_id cannot be resolved here --
+        # `produces` is read without a config, e.g. by --list-steps -- so the sentinel is named for
+        # the step instead, and carries the resolved run_id in its contents.  `run` must write
+        # exactly this path: the DAG checks that a declared artifact appears.
+        stem = self.run_id if isinstance(self.run_id, str) else self.name
+        return {"timing_collected": Path("results") / f"collected_{stem}.json"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
+        run_id = self.resolve_run_id(config)
         events = json.loads(Path(artifacts[self.events_artifact]).read_text(encoding="utf-8"))
-        design = self.run_pysim()
+        design = self.run_pysim(config)
         found = discover_timing_models(design)
         if not found:
             raise RuntimeError(
@@ -85,15 +101,15 @@ class CollectTimingStep(BuildStep):
 
         report = []
         for comp, tm in found:
-            tm.collect_rtl(events, self.run_id)
-            tm.collect_pysim(getattr(comp, "firing_records", []), self.run_id)
+            tm.collect_rtl(events, run_id)
+            tm.collect_pysim(getattr(comp, "firing_records", []), run_id)
             report.append({"component": tm.component,
                            "pysim_firings": len(getattr(comp, "firing_records", []))})
 
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
-        out = root / "results" / f"collected_{self.run_id}.json"
+        out = root / self.produces["timing_collected"]
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"run_id": self.run_id, "models": report}, indent=2) + "\n",
+        out.write_text(json.dumps({"run_id": run_id, "models": report}, indent=2) + "\n",
                        encoding="utf-8")
         return {"timing_collected": out}
 
@@ -109,26 +125,37 @@ class FitTimingStep(BuildStep):
     Construction parameters
     -----------------------
     build_design : callable
-        Returns a built component tree (no pysim run needed — ``fit`` reads the on-disk corpus).  Its
-        attached models carry the ``calib_dir`` the corpus lives in.
+        Called as ``build_design(config)``; returns a built component tree (no pysim run needed —
+        ``fit`` reads the on-disk corpus).  Its attached models carry the ``calib_dir`` the corpus
+        lives in, which is why it takes the config: that directory comes from
+        ``config.platform_info``.
+    after : sequence of str
+        Artifacts that must exist first — normally ``("timing_collected",)``, the sentinel
+        :class:`CollectTimingStep` produces.
+
+        Fitting reads an on-disk corpus, so this step has no *data* dependency and declared none.
+        In a DAG holding both, that put it **before** the step that fills the corpus: nothing
+        ordered them, and the topological sort is free to emit an unconstrained step first.  It
+        would then fit whatever the previous run left behind and report success.
     """
 
     description: str = "Fit each timing model from its corpus; write params.json."
     params: ClassVar[dict] = {}
 
-    build_design: Callable[[], Any]
+    build_design: Callable[["BuildConfig"], Any]
     output_path: str = "results/timing_fit.json"
+    after: "Sequence[str]" = ()
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
-        return []
+        return list(self.after)
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
         return {"timing_fit": Path(self.output_path)}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
-        found = discover_timing_models(self.build_design())
+        found = discover_timing_models(self.build_design(config))
         fitted, skipped = [], []
         for _comp, tm in found:
             try:

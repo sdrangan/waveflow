@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
+from waveflow.build.calib_steps import CollectTimingStep, FitTimingStep
 from waveflow.build.cli import run_dag_cli
 from waveflow.build.trace_steps import (
     AddVcdTopStep,
@@ -40,12 +41,14 @@ from waveflow.build.trace_steps import (
 from waveflow.toolchain import toolchain
 
 try:
-    from examples.mem_copy.mem_copy import (DEFAULT_MEM_DW, XSI_JOBS, generate_dut, generate_tb,
-                                            write_mem_copy_xsi_bundles)
+    from examples.mem_copy.mem_copy import (DEFAULT_MEM_DW, XSI_N, XSI_NUM_CMDS, generate_dut,
+                                            generate_tb, write_mem_copy_xsi_bundles, xsi_jobs,
+                                            xsi_run_cycles)
     from examples.mem_copy.mem_copy_sim import MemCopySim
 except ModuleNotFoundError:  # run as a script from the example directory
-    from mem_copy import (DEFAULT_MEM_DW, XSI_JOBS, generate_dut,  # type: ignore[no-redef]
-                          generate_tb, write_mem_copy_xsi_bundles)
+    from mem_copy import (DEFAULT_MEM_DW, XSI_N, XSI_NUM_CMDS,  # type: ignore[no-redef]
+                          generate_dut, generate_tb, write_mem_copy_xsi_bundles, xsi_jobs,
+                          xsi_run_cycles)
     from mem_copy_sim import MemCopySim  # type: ignore[no-redef]
 
 try:
@@ -55,6 +58,15 @@ except ModuleNotFoundError:  # run as a script from the example directory
                                   TimingFiguresStep)
 
 HERE = Path(__file__).resolve().parent
+
+#: The task-body id the writer's firings carry.  Keys its subdirectory in the platform library, and
+#: must equal the id the extracted RTL timing table uses -- the two sides join on this string.
+WRITER = "mem_w_stream_framed_done_task"
+
+#: The device the measurements are keyed by.  ``bfm`` in the platform name is load-bearing: the XSI
+#: memory model is idealised, so the bus law measured against it is optimistic for real DDR.
+PART = "xc7z020clg484-1"
+CLK_FREQ = 100e6
 
 
 @dataclass(kw_only=True)
@@ -70,12 +82,16 @@ class PySimStep(BuildStep):
     description = "Run the MemCopyTB pysim golden and record correctness + timing."
     consumes = ["mem_copy_source"]
     produces = {"pysim_results": Path("results/pysim.json")}
-    params = {"mem_dwidth": DEFAULT_MEM_DW}
+    #: ``n_words`` / ``num_cmds`` default to the committed gate scenario, so an ordinary build is
+    #: byte-identical to before.  They are params rather than constants because a **timing sweep**
+    #: varies exactly them -- and a step that read ``XSI_JOBS`` directly would silently run the same
+    #: 16x128 scenario at every point while the summary reported a grid.
+    params = {"mem_dwidth": DEFAULT_MEM_DW, "n_words": XSI_N, "num_cmds": XSI_NUM_CMDS}
 
-    def run(self, config: BuildConfig, mem_dwidth, **_) -> dict:
+    def run(self, config: BuildConfig, mem_dwidth, n_words, num_cmds, **_) -> dict:
         w = int(mem_dwidth)
         bpw = w // 8
-        msim = MemCopySim(jobs=XSI_JOBS, mem_dwidth=w)
+        msim = MemCopySim(jobs=xsi_jobs(int(n_words), int(num_cmds)), mem_dwidth=w)
         tb = msim.tb
         # Materialize the command bundle under the build root; the driver loads it in pre_sim.
         msim.write_scenario(config.root_dir)
@@ -145,10 +161,22 @@ class CodegenTbStep(BuildStep):
     consumes = ["mem_copy_source", "dut_ports"]
     produces = {"tb_harness": Path("xsi/mem_copy_tb_harness.h"),
                 "tb_main": Path("xsi/mem_copy_bfm_tb.cpp")}
-    params = {"mem_dwidth": DEFAULT_MEM_DW}
+    #: The scenario sizes the harness arena and the ``h.run(N)`` bound, so a sweep point must reach
+    #: here -- but *not* the DUT: ``len`` is a runtime command field, so the RTL is unchanged and
+    #: needs no re-synthesis.  That asymmetry is the whole reason a timing sweep is cheap.
+    params = {"mem_dwidth": DEFAULT_MEM_DW, "n_words": XSI_N, "num_cmds": XSI_NUM_CMDS}
 
-    def run(self, config: BuildConfig, mem_dwidth, **_) -> dict:
-        generate_tb(out_dir=config.root_dir, width=int(mem_dwidth))
+    def run(self, config: BuildConfig, mem_dwidth, n_words, num_cmds, **_) -> dict:
+        n, k = int(n_words), int(num_cmds)
+        # At the default point, pass nothing: `generate_tb`'s own defaults ARE the committed gate
+        # scenario, including its hand-picked 3400-cycle bound.  Deriving the bound here instead
+        # would emit ~3600 -- harmless to the run, but it would diff `xsi/mem_copy_bfm_tb.cpp`,
+        # which is a *tracked* file the `-m xsi` gate drives.  A build that rewrites a committed
+        # artifact merely because it ran is how a gate stops meaning what it meant.
+        default = (n, k) == (XSI_N, XSI_NUM_CMDS)
+        generate_tb(out_dir=config.root_dir, width=int(mem_dwidth),
+                    jobs=None if default else xsi_jobs(n, k),
+                    n_cycles=None if default else xsi_run_cycles(n, k))
         return {
             "tb_harness": config.root_dir / "xsi" / "mem_copy_tb_harness.h",
             "tb_main": config.root_dir / "xsi" / "mem_copy_bfm_tb.cpp",
@@ -184,6 +212,54 @@ class CSynthStep(BuildStep):
         return {"report_dir": config.root_dir / "mem_copy_proj" / "solution1"}
 
 
+def _scenario(config: BuildConfig) -> tuple:
+    """This point's ``(n_words, num_cmds)``, defaulting to the committed gate scenario.
+
+    One reader for the pair, because three steps need it and the point arrives as loose params: a
+    sweep varies them, an ordinary build does not pass them at all.
+    """
+    p = config.params or {}
+    return int(p.get("n_words", XSI_N)), int(p.get("num_cmds", XSI_NUM_CMDS))
+
+
+def _write_scenario_bundles(xsi_dir: Path, config: BuildConfig) -> None:
+    """Materialize the BFM's input + golden bundles for **this point's** scenario.
+
+    The vectors are an *input* to the RTL run, so writing the wrong ones does not fail -- it
+    produces a clean run measured against another point's data.
+    """
+    n, k = _scenario(config)
+    write_mem_copy_xsi_bundles(xsi_dir, jobs=xsi_jobs(n, k))
+
+
+def _calibrated_pysim(config: BuildConfig):
+    """Run the pysim with its timing models attached, and return the design.
+
+    Two things must be true for the run to be a calibration sample rather than just a simulation:
+    ``calib_dir`` attaches the writer's model (without it there are no ``firing_records`` at all --
+    the attribute does not even exist), and ``platform_dir`` makes the run charge the platform's bus
+    law, so what the model then fits is the component's own *control* cost rather than the bus term
+    all over again.
+    """
+    plat = config.platform_info
+    if plat is None:
+        raise RuntimeError(
+            "the timing rung needs a platform to calibrate into -- run with --platform, or set one "
+            "on the SweepRunner.  Without it the firings have nowhere to be filed.")
+    n, k = _scenario(config)
+    return MemCopySim(jobs=xsi_jobs(n, k),
+                      calib_dir=str(plat.component_dir(WRITER)),
+                      platform_dir=str(plat.dir)).run()
+
+
+def _mem_copy_design(config: BuildConfig):
+    """A built (un-run) design carrying the attached models — enough for the fit to find them."""
+    plat = config.platform_info
+    return MemCopySim(jobs=xsi_jobs(*_scenario(config)),
+                      calib_dir=str(plat.component_dir(WRITER)) if plat else None,
+                      platform_dir=str(plat.dir) if plat else None).tb.dut
+
+
 def build_mem_copy_dag() -> BuildDag:
     from examples.mem_copy.mem_copy import MemCopy
 
@@ -206,9 +282,20 @@ def build_mem_copy_dag() -> BuildDag:
     # `-m xsi` gate; this one exists to produce a waveform.  `extract_bursts` then turns the
     # waveform plus the manifest into a per-firing timing table.
     dag.add(RtlSimStep(name="rtlsim", top="mem_copy", tb="mem_copy_bfm_tb", xsi_dir="xsi",
-                       prepare=write_mem_copy_xsi_bundles))
+                       prepare=_write_scenario_bundles))
     dag.add(ExtractBurstsStep(name="extract_bursts",
                               output_path="results/mem_copy_timing.json"))
+    # The calibration rung: turn this point's extracted table plus a calibrated pysim run into one
+    # more corpus row, then fit.  `collect_timing` needs a platform (that is where the corpus lives);
+    # `fit_timing` skips rather than fails while a sweep is still only partly covered.
+    #
+    # The run_id is DERIVED from the point.  A fixed string would make every point of a sweep
+    # overwrite the same corpus folder, and the fit would then see one point however many ran --
+    # which looks exactly like a successful sweep.
+    dag.add(CollectTimingStep(name="collect_timing", run_pysim=_calibrated_pysim,
+                              run_id=lambda cfg: "n{}x{}".format(*_scenario(cfg))))
+    dag.add(FitTimingStep(name="fit_timing", build_design=_mem_copy_design,
+                          after=["timing_collected"]))
     # Figures are on-demand: `--through timing_figures` renders into results/ (gitignored), and
     # `--through sync_docs_figures` promotes them into docs/ as committed assets, so a docs figure
     # only changes when you mean it to and the change is a reviewable diff.
@@ -228,8 +315,19 @@ def main() -> None:
                                  "help": "Memory data width in bits (default 64)."}),
             (("--live-output",), {"action": "store_true",
                                   "help": "Stream Vitis output live (csynth)."}),
+            (("--n-words",), {"type": int, "default": XSI_N,
+                              "help": f"Words per copy job (default {XSI_N}, the gate scenario)."}),
+            (("--num-cmds",), {"type": int, "default": XSI_NUM_CMDS,
+                               "help": f"Number of copy jobs (default {XSI_NUM_CMDS})."}),
+            (("--platform",), {"default": None,
+                               "help": "Calibration platform to collect timing into."}),
+            (("--platforms-root",), {"default": None, "help": "Platform library root."}),
         ],
-        params_from_args=lambda a: {"mem_dwidth": a.mem_dwidth, "live_output": a.live_output},
+        params_from_args=lambda a: {"mem_dwidth": a.mem_dwidth, "live_output": a.live_output,
+                                    "n_words": a.n_words, "num_cmds": a.num_cmds},
+        config_from_args=lambda a: ({"platform": a.platform, "platforms_root": a.platforms_root,
+                                     "part": PART, "clk_freq": CLK_FREQ}
+                                    if a.platform else {}),
     )
 
 
