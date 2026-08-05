@@ -234,7 +234,7 @@ class IlComputeInband(FreeRunMod):
         self.y_blk = SobIFMaster(name=f"{self.name}_y_blk", sim=self.sim, element_type=elem_block)
         for ep in (self.desc_in, self.p_blk, self.x_blk, self.desc_out, self.y_blk):
             self.add_endpoint(ep)
-        self.timing = self._build_timing_model()
+        self.compute_timing = self._build_timing_model()
         self.job_start_cyc: list[float] = []
         self.job_end_cyc: list[float] = []
         self.job_span_cyc: list[float] = []
@@ -265,7 +265,7 @@ class IlComputeInband(FreeRunMod):
         yblock = yield from self.y_blk.acquire_write()
         t0 = self.now
         yblock.val[:n] = xblock.val[pblock.val[:n]]     # the gather, vectorized: Y[i] = X[P[i]]
-        cycles = float(self.timing.predict_feat({"n": n}))
+        cycles = float(self.compute_timing.predict_feat({"n": n}))
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         yield from self.p_blk.release_read()
         yield from self.x_blk.release_read()

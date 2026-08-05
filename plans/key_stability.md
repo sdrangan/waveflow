@@ -164,13 +164,28 @@ Per-example test first, since it is what would have caught this.  The CLI after.
 
 **Gate:** it fails when a key is perturbed, and passes on both migrated stores.
 
-### P4 — retire the second name
+### P4 — retire the second name — **premise was wrong; done differently**
 
-With the signature no longer sensitive to it, `self.timing` is merely a duplicate handle on
-`_timing_model`.  Collapse the two in both examples, so the idiom does not propagate to a third.
+This phase assumed `self.timing` was a duplicate handle on `_timing_model`, to be collapsed.  It is
+not:
 
-**Gate:** P0 predictions unchanged; no key moves (P1 already removed the sensitivity, so this is a pure
-rename).
+| | |
+|---|---|
+| `self.timing` | a `LinCalibModel` — the **compute** model, `cycles = latency + ii·n`, read directly in `timed_delay` |
+| `_timing_model` | **`None`** on these modules — set only by `add_timing_model()`, for *residual* calibration, discovered by `CollectTimingStep` |
+
+Two different models with confusingly adjacent names.  Collapsing them would have deleted the only
+model the module has.
+
+The hazard the phase existed to remove was already gone: P1 excludes **by type**, so a model is
+harmless whatever it is called — verified by attaching one under an attribute name no exclusion list
+knows about and confirming the key does not move.
+
+What remained was the naming collision alone, since `self.timing` sat beside a `timing_model` property
+returning something else.  Renamed to `self.compute_timing` in both examples.
+
+**Gate:** P0 keys unchanged (a rename cannot move them, now that names do not matter — which is itself
+the check).
 
 ## Open decisions
 

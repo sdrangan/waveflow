@@ -124,6 +124,31 @@ def test_no_calibration_model_reaches_a_signature():
         "addressing structure.")
 
 
+def test_a_model_under_a_brand_new_name_does_not_leak():
+    """The guarantee excluding-by-name could never give.
+
+    The original leak was a model held under an attribute no exclusion list covered.  Renaming that
+    attribute, or adding it to the list, fixes one instance; what matters is that the *next* one
+    cannot happen.  So this attaches a model under a name nobody has ever excluded and asserts both
+    that it stays out of the signature and that the key does not move.
+    """
+    from waveflow.calib.calib import LinCalibModel
+    from waveflow.calib.module_key import signature_digest
+    from examples.fir_block.fir_block import FirBlock
+
+    top = elaborate(FirBlock, _fir_points()[0], name="fir_block")
+    comp = next(c for _p, c, i in walk_modules(top) if i.cls_name == "FirCompute")
+    before = signature_digest(comp)
+
+    comp.some_attribute_no_list_knows_about = LinCalibModel(
+        basis=["q"], target="z", seed={"q": 1.0})
+
+    assert "CalibModel" not in _serialize(structure_signature(comp))
+    assert signature_digest(comp) == before, (
+        "attaching a model under a new attribute name moved the key — the exclusion is still "
+        "happening by name somewhere.")
+
+
 def test_mutating_a_model_does_not_move_a_key():
     """The invariant, asserted directly rather than via its symptom.
 
@@ -138,7 +163,7 @@ def test_mutating_a_model_does_not_move_a_key():
 
     touched = 0
     for _p, comp, _i in walk_modules(top):
-        for attr in ("timing", "_timing_model"):
+        for attr in ("compute_timing", "_timing_model"):
             model = getattr(comp, attr, None)
             if model is None:
                 continue
