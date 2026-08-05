@@ -39,8 +39,9 @@ PART = "xc7z020clg484-1"
 #: ``(vlen, dwid)`` -> measured **whole-design** counters, committed as source.
 #:
 #: NOT the corpus the model is fitted from.  Since the sweep began filing records, the fit reads the
-#: per-module measurements in the platform's record store and adds :data:`INTEGRATION_TERM` back --
-#: these are ``top``, which is ``module + integration``.  Two narrower jobs remain:
+#: per-module measurements in the platform record store and adds the **integration record**
+#: back -- these are ``top``, which is ``module + integration``, and both halves are now measured
+#: rather than transcribed.  Two narrower jobs remain:
 #:
 #: * the **oracle** ``tests/examples/test_vecmult.py`` checks predictions against, which is why it is
 #:   committed as source: it runs with no toolchain installed, so a machine without Vitis still
@@ -91,10 +92,6 @@ LUTRAM_CORNER = (512, 256)
 FITTED_BASIS = {"lut": ["lw", "lw2", "lw2_log2lw"],
                 "ff":  ["lw", "lw2", "lw2_log2lw"]}
 
-#: The composite's own cost.  VecMult is a leaf top with one task, so there is nothing here but what
-#: HLS shared across the task boundary -- and it is NEGATIVE, which is information rather than an
-#: error (see ``waveflow.calib.resource_model.SynthReport.integration``).
-INTEGRATION_TERM = {"lut": -2, "ff": 0, "dsp": 0, "bram": 0}
 
 
 def fit_basis(vlen: int, dwid: int) -> dict:

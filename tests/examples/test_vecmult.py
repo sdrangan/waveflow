@@ -23,7 +23,6 @@ from examples.vecmult.vecmult import (
 )
 from examples.vecmult.vecmult_corpus import (
     GRID,
-    INTEGRATION_TERM,
     LUTRAM_CORNER,
     PART,
     bram_prior,
@@ -342,12 +341,22 @@ def test_the_committed_grid_agrees_with_the_record_store():
     goes through the integration term rather than being direct.  That is not bookkeeping: it is the
     same decomposition the model predicts with.
     """
-    from waveflow.calib.record_store import ModuleStore, corpus_from_records
+    from waveflow.calib.record_store import (INTEGRATION_TARGET, ModuleStore,
+                                             corpus_from_records)
 
     if not VEC_PLATFORM.is_dir():
         pytest.skip("vecmult platform library not present")
 
-    db = corpus_from_records(ModuleStore(VEC_PLATFORM), cls_name="VecMult")
+    store = ModuleStore(VEC_PLATFORM)
+    # The integration term comes from the store too, now that it is filed -- so this check reads no
+    # transcribed number at all: measurement + measurement == the committed oracle.
+    integ = corpus_from_records(store, cls_name="VecMult", target=INTEGRATION_TARGET)
+    assert len(integ), "no integration records; the store cannot bridge module to top figures"
+    lut_off = {int(r["lut"]) for r in integ.df.to_dict("records")}
+    assert len(lut_off) == 1, f"integration term is not invariant across the grid: {lut_off}"
+    integration = {"lut": next(iter(lut_off))}
+
+    db = corpus_from_records(store, cls_name="VecMult")
     assert len(db) == len(GRID), f"store has {len(db)} rows, GRID has {len(GRID)}"
 
     disagree = []
@@ -356,7 +365,7 @@ def test_the_committed_grid_agrees_with_the_record_store():
         want = GRID[key]
         for c in ("lut", "ff", "dsp", "bram"):
             # store (per module) + integration == GRID (whole design)
-            got = int(row[c]) + int(INTEGRATION_TERM.get(c, 0))
+            got = int(row[c]) + int(integration.get(c, 0))
             if got != int(want[c]):
                 disagree.append(f"{key} {c}: store+integration={got} GRID={want[c]}")
     assert not disagree, (

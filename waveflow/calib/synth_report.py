@@ -205,16 +205,33 @@ def report_from_solution(top_comp: Any, sol_path: str | Path, *,
 
 def store_report(report: SynthReport, store: Any, identities: "dict[str, ModuleIdentity]", *,
                  source: str = "hls_estimate", part: str = "", period_ns: float = 0.0,
-                 tool: str = "", cost_seconds: float = 0.0) -> list:
-    """File *report*'s per-module figures into a :class:`~waveflow.calib.record_store.ModuleStore`.
+                 tool: str = "", cost_seconds: float = 0.0,
+                 top_identity: "ModuleIdentity | None" = None,
+                 boundary: "dict | None" = None) -> list:
+    """File *report*'s figures into a :class:`~waveflow.calib.record_store.ModuleStore`.
+
+    Both durable halves of the attribution:
+
+    * one ``resource`` record per module row, keyed by the module's elaborated structure;
+    * one ``integration`` record for the **composite's own cost** (``top - Σ modules``), keyed by
+      *top_identity*.
+
+    The second used to be dropped.  It is the largest single term in a multi-task design -- 29% of
+    ``examples/fir_block`` -- and being unstored is why both examples ended up transcribing it into
+    source.  Filing it costs nothing: the synthesis already computed it.
 
     *identities* maps module key -> :class:`ModuleIdentity` (from
     :func:`~waveflow.calib.module_key.walk_modules`), which is what lets each record carry the
     provenance a later read verifies against.  ``cost_seconds`` is divided evenly across the modules:
     the synthesis was one indivisible run, and pretending to know each module's share of it would be
     inventing data.
+
+    **One integration record per synthesis**, not one per distinct value.  A 24-point sweep files 24
+    that happen to agree, which is the point: the invariance across compute parameters becomes
+    *derivable from the store* rather than asserted in a docstring, and a point that broke it would
+    appear as a second value instead of silently contradicting a comment.
     """
-    from waveflow.calib.record_store import resource_record
+    from waveflow.calib.record_store import integration_record, resource_record
 
     share = (cost_seconds / len(report.modules)) if report.modules else 0.0
     written = []
@@ -226,5 +243,11 @@ def store_report(report: SynthReport, store: Any, identities: "dict[str, ModuleI
                               tool=tool, cost_seconds=share,
                               extra={"rtl_module": m.rtl_module, "attributed_from": report.top_name})
         store.append(rec, identity=ident)
+        written.append(rec)
+
+    if top_identity is not None:
+        rec = integration_record(top_identity, report.integration, source=source, boundary=boundary,
+                                 part=part, period_ns=period_ns, tool=tool, cost_seconds=0.0)
+        store.append(rec, identity=top_identity)
         written.append(rec)
     return written

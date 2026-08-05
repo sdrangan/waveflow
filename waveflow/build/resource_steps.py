@@ -66,14 +66,24 @@ class InspectSynthStep(BuildStep):
 
         platform = getattr(config, "platform_info", None)
         if platform is not None:
+            from waveflow.calib.resource_model import InterfaceResourceModel
+
             identities = {i.key: i for _, _, i in walk_modules(top)}
+            # The composite's own cost is keyed on its *boundary*, not on its parameters -- measured
+            # invariant across every compute knob and moving only with the memory word width.  So the
+            # boundary is recorded alongside the counters; deriving it later would need the component,
+            # which a corpus row does not have.
+            top_ident = next((i for _p, c, i in walk_modules(top) if c is top), None)
+            boundary = InterfaceResourceModel().get_params(top)
             store_report(
                 report, ModuleStore(platform.dir), identities,
                 source="hls_estimate", part=platform.part or "",
                 period_ns=platform.synth_period_ns or 0.0,
                 tool=f"vitis_hls {config.vitis_version}" if config.vitis_version else "vitis_hls",
-                cost_seconds=float(synth_seconds or 0.0))
-            print(f"  filed {len(report.modules)} module record(s) into {platform.dir}")
+                cost_seconds=float(synth_seconds or 0.0),
+                top_identity=top_ident, boundary=boundary)
+            print(f"  filed {len(report.modules)} module record(s) + 1 integration record "
+                  f"into {platform.dir}")
         else:
             # No platform selected: the attribution is still written, it just has nowhere shared to
             # live.  Not an error — plenty of builds synthesize without wanting to publish anything.
