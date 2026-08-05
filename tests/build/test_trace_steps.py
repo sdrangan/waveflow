@@ -145,9 +145,16 @@ class TestRtlSimStepWiring:
     def test_declares_the_vcd_it_produces(self, step):
         assert step.produces["trace_vcd"] == Path("xsi/mem_copy_trace.vcd")
 
-    def test_consumes_rtl_and_the_dumper(self, step):
-        """It needs synthesized RTL *and* the second top, or run.bat cannot trace."""
-        assert set(step.consumes) == {"report_dir", "vcd_dumper"}
+    def test_consumes_rtl_the_dumper_and_the_generated_tb(self, step):
+        """It needs synthesized RTL *and* the second top, or run.bat cannot trace -- and the
+        generated testbench, because run.bat recompiles whatever ``<tb>.cpp`` is on disk.
+
+        The TB edge is the load-bearing one: without it the codegen step sits outside this step's
+        dependency closure, so ``--through extract_bursts`` never runs it and the RTL is measured
+        against the last-generated harness -- its arena size and its ``h.run(N)`` bound both.  A
+        sweep then runs every point under one point's cycle bound, and the truncated runs read as
+        a design stall.  See plans/sweep_runner.md."""
+        assert set(step.consumes) == {"report_dir", "vcd_dumper", "tb_main"}
 
     def test_asserts_nothing_about_cycle_counts(self, step):
         """Correctness stays with the -m xsi gate; this step only produces a waveform.  Routing a

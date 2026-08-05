@@ -39,12 +39,11 @@ from examples.mem_copy.mem_copy_build import CLK_FREQ, PART, build_mem_copy_dag 
 #: Job sizes.  128 and 512 are the two ``calibrate_platform.py`` measured by hand -- kept so the
 #: sweep can be checked against them -- and 256 widens the span a little.
 #:
-#: **1024 is deliberately absent.**  Its RTL stalls after two of four jobs (the bound is 5404, the
-#: last ``ap_done`` is 2405, and the run then idles ~4000 cycles) while its pysim completes all four.
-#: ``ExtractBurstsStep``'s coverage check now refuses the resulting short trace, so leaving it in
-#: would fail the sweep on every run for a reason that has nothing to do with sweeping.  Put it back
-#: once the stall is understood -- it is the widest point available and the fit wants the span.
-N_WORDS = (128, 256, 512)
+#: 1024 was held out for a while on the belief that its RTL stalled.  It never did: ``rtlsim`` did
+#: not depend on the step that GENERATES the harness, so every point ran under the committed gate's
+#: 3400-cycle bound and the large ones were simply cut off mid-job.  With that edge in place
+#: (``RtlSimStep.tb_artifact``) each point gets its own ``xsi_run_cycles`` bound and 1024 completes.
+N_WORDS = (128, 256, 512, 1024)
 
 #: Jobs per point, the same at every size.  It could be a second axis -- more small jobs sharpen a
 #: median -- but the grid is a cartesian product, so pairing one job count to each size is not

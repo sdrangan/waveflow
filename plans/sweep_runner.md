@@ -357,7 +357,56 @@ the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
    proportionality** — vary the burst length, not only the size.  That is the next thing to try, and
    it is a timing-model / grid-design question rather than a sweep one.
 
-3. **`mem_copy`'s RTL stalls after a fixed VOLUME of data, not a fixed number of jobs.**  Not a sweep
+3. ~~**`mem_copy`'s RTL stalls after a fixed VOLUME of data.**~~  **FIXED — and there was never a
+   stall.**  `RtlSimStep.consumes` was `[report_dir, vcd_dumper]`, with **no edge to the step that
+   generates the testbench**.  `run.bat` recompiles whatever `<tb>.cpp` is on disk, so `codegen_tb`
+   sat outside `rtlsim`'s dependency closure: `--through extract_bursts` never ran it, and every
+   point of the sweep executed the RTL under the **committed gate scenario's** harness — its arena
+   size and its `h.run(3400)` bound.  Forcing `codegen_tb` did not help, because a step outside the
+   closure is never consulted, forced or not.  So the large points were **truncated mid-job**, and
+   the missing firings read as a design that stopped.
+
+   One law reproduces the entire probe table below: a job costs about `1.065·n + 60` cycles, so
+   `k` jobs need `≈ k·(1.065n + 60)` — and every row is just that against a fixed 3400.
+
+   | n | k | cycles needed | vs 3400 | jobs that fit | observed |
+   |---|---|---|---|---|---|
+   | 128 | 16 | 3136 | fits | 16 | 16 ✓ |
+   | 128 | 32 | 6272 | over | 17.4 | 18 |
+   | 256 | 16 | 5320 | over | 10.2 | 10 |
+   | 512 | 4 | 2420 | fits | 4 | 4 ✓ |
+   | 768 | 4 | 3512 | over | 3.3 | 3 |
+   | 1024 | 2 | 2302 | fits | 2 | 2 ✓ |
+   | 1024 | 3 | 3453 | over | 2.4 | 2 |
+   | 1024 | 4 | 4604 | over | 2.4 | 2 |
+   | 2816 | 1 | 3059 | fits | 1 | 1 ✓ |
+   | 3072 | 1 | 3332 | fits | 1 | 1 ✓ |
+
+   The two cases that looked most exculpatory were the closest calls: one job of 3072 needs 3332
+   cycles against 3400, and the 16×128 gate itself needs 3136.  Both passed with under 300 cycles
+   of margin, which is why "a single job is exempt, however large" looked like a fact about job
+   structure rather than an accident of arithmetic.
+
+   **What settled it was one waveform, not one more scenario.**  The VCD already dumps every m_axi
+   port at the top level, so no instrumentation was needed — binning AXI beats per 100 cycles
+   showed a steady **94 read beats and 89 write beats per 100 cycles right through the final
+   cycle**, with the last `ap_done` 1011 cycles earlier.  A stalled design does not move 2990 words.
+   The "thousands of idle cycles" were never measured: the gap was computed against
+   `xsi_run_cycles`'s *intended* bound (4128) rather than the *compiled* one (3400), which the
+   waveform's own end time gives for free.
+
+   The "sequencer is exactly one job ahead" invariant, held to be the deep clue, is the ordinary
+   consequence of cutting a three-stage pipeline at an arbitrary cycle.
+
+   **The lesson is about the DAG, not the design.**  A step that shells out to a script inherits
+   that script's real inputs, and `run.bat` compiles a source file.  Declaring only the RTL and the
+   dumper left the *testbench* — which is where the scenario's arena and cycle bound live — as an
+   undeclared input, and an undeclared input under a sweep is one point's value used at every
+   point.  `RtlSimStep.tb_artifact` now closes it and `tests/build/test_trace_steps.py` pins it.
+
+   <details><summary>The original (wrong) characterisation, kept for the record</summary>
+
+   Not a sweep
    problem — the sweep is what made it visible.  Characterised by measurement:
 
    | n | k | jobs done | words moved | next job would reach | |
@@ -417,9 +466,14 @@ the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
 
    Constant across every stall: the **sequencer is exactly one job ahead** of the reader and writer.
 
+   </details>
+
 Neither of the first two invalidates the gate: the raw spans are clean and the 41 is consistent at
-128 / 256 / 512.  All three must be settled before this corpus is published to the tracked tier —
-and **1024 must not be swept again until (3) is understood**, since the check now refuses it.
+128 / 256 / 512.  **(4) is the only one still open**, and it is unaffected by (3): 128 / 256 / 512
+all fit inside 3400 cycles, so their firings and residuals were measured from complete runs.  What
+does need redoing is the **n=1024 row of the P3b table (1191)** — it came from a truncated trace,
+before the coverage check existed to refuse one.  Re-sweep it now that `mem_copy_sweep.py` carries
+1024 again, before this corpus is published to the tracked tier.
 
 ### P4 — re-measure once, on the real path — **DONE**
 
