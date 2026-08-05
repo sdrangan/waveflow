@@ -224,6 +224,45 @@ def resource_record(identity: ModuleIdentity, resources: dict, *, source: str,
                   measured_at=_now() if measured_at is None else measured_at)
 
 
+#: Storage target for a composite's **own** cost — ``top - Σ modules``.
+#:
+#: A separate target rather than a flag inside a ``resource`` payload, because the two must never be
+#: summed together: a composite's own cost added to its modules' as though it were a leaf's would
+#: double-count the design.  Keeping them apart means a caller that forgets the distinction reads an
+#: empty list rather than a wrong total.
+INTEGRATION_TARGET = "integration"
+
+
+def integration_record(identity: ModuleIdentity, integration: dict, *, source: str,
+                       boundary: dict | None = None, part: str = "", period_ns: float = 0.0,
+                       tool: str = "", cost_seconds: float = 0.0,
+                       measured_at: str | None = None) -> Record:
+    """Build an ``target="integration"`` :class:`Record` — the composite's own cost.
+
+    This is the third additive term a synthesis reports, and until it was filed here it was the only
+    one with nowhere durable to live: the module rows became records, the top was recomputed, and the
+    difference survived only in an untracked JSON.  Both examples ended up transcribing it into source
+    as a result.
+
+    **Negative is legal and is not clamped.**  If HLS shared logic across a module boundary the term
+    goes below zero — on a single-task design with no adapters it reliably does.  A clamp would hide
+    exactly what a whole-design synthesis exists to reveal.
+
+    *boundary* is what the term is keyed on for prediction (port kinds and widths, channel widths).
+    It is recorded in the payload rather than derived later because it is a **fact about what was
+    built**: a corpus row that could not say which boundary it measured would be unusable by the model
+    that consumes it.
+    """
+    payload: dict = dict(normalize_resources(integration))
+    if boundary:
+        payload.update(boundary)
+    return Record(key=identity.key, target=INTEGRATION_TARGET, source=source, payload=payload,
+                  provenance=Provenance(signature=identity.signature, part=part,
+                                        period_ns=period_ns, tool=tool),
+                  cost_seconds=cost_seconds,
+                  measured_at=_now() if measured_at is None else measured_at)
+
+
 class ModuleStore:
     """The ``modules/`` tier of a platform's calibration library.
 
@@ -384,7 +423,8 @@ def with_cost(record: Record, seconds: float) -> Record:
 
 def corpus_from_records(store: "ModuleStore", *, cls_name: str | None = None,
                         target: str = "resource", source: str | None = None,
-                        counters: Iterable[str] | None = None):
+                        counters: Iterable[str] | None = None,
+                        payload_keys: Iterable[str] | None = None):
     """Reduce a store's records to the canonical corpus — the resource axis's raw-tier generator.
 
     A corpus is one row per measurement, a column per hardware parameter and per target, plus
@@ -434,6 +474,13 @@ def corpus_from_records(store: "ModuleStore", *, cls_name: str | None = None,
             for name in (RESOURCE_FIELDS if counters is None else counters):
                 if name in rec.payload:
                     row[name] = int(rec.payload[name])
+            # Payload entries that are neither counters nor provenance -- a *fact about what was
+            # built* that the identity's parameters do not carry.  An integration record's boundary
+            # is the case this exists for: the term is keyed on ports and channels, and a row that
+            # could not say which boundary it measured would be unusable by the model reading it.
+            for name in (payload_keys or ()):
+                if name in rec.payload:
+                    row[name] = rec.payload[name]
             # Provenance, not features.  A basis is chosen by name, so these can never leak into a
             # fit -- but they are what makes a row traceable back to the synthesis that produced it.
             row.update({"module_key": key, "cls_name": ident.cls_name,

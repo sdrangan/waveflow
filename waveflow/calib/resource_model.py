@@ -516,6 +516,51 @@ class InterfaceResourceModel(ResourceModel):
     def declared_counters(self) -> tuple:
         return ()
 
+    def table_from_store(self) -> dict:
+        """Build the boundary -> counters table from the store's **integration** records.
+
+        The composite's own cost is a measurement like any other, and since it is filed it no longer
+        has to be transcribed into source.  One record per synthesis, deduplicated here by boundary --
+        which is what makes the invariance *derivable*: a 24-point sweep files 24 records, and if they
+        agree the table has one entry.
+
+        **A boundary carrying two different measurements raises.**  That is a contradiction in the
+        data, not something to average: either the term is not a function of the boundary alone, or two
+        different designs were filed against one platform.  Both need a person, and picking one
+        quietly would bury the finding the store exists to surface.
+        """
+        from waveflow.calib.record_store import INTEGRATION_TARGET, corpus_from_records
+
+        if self.store is None:
+            return {}
+        db = corpus_from_records(self.store, cls_name=self.cls_name or None,
+                                 target=INTEGRATION_TARGET,
+                                 payload_keys=("n_ports", "n_channels", "ports", "channels"))
+        table: dict = {}
+        for row in db.df.to_dict("records"):
+            sig = self._signature(row)
+            counters = {c: int(row[c]) for c in self.counters()
+                        if c in row and pd.notna(row[c])}
+            prev = table.get(sig)
+            if prev is not None and prev != counters:
+                raise ValueError(
+                    f"{self.name}: boundary {sig} carries two different integration measurements, "
+                    f"{prev} and {counters}. The term is either not a function of the boundary alone, "
+                    f"or two designs were filed against one platform.")
+            table[sig] = counters
+        return table
+
+    def load_table(self) -> "InterfaceResourceModel":
+        """Fill :attr:`table` from the store when one is set, and return self.
+
+        A no-op without a store, which is what lets a design whose measurements have not been filed
+        yet keep supplying a table directly -- see ``plans/integration_record.md`` on why the
+        transcribed constants must outlive the reader that replaces them.
+        """
+        if self.store is not None:
+            self.table = self.table_from_store()
+        return self
+
     def get_params(self, comp: Any, **runtime) -> dict:
         """The boundary, as parameters — **extraction**, so it is what a corpus would record.
 

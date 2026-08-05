@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from waveflow.calib.device_rules import bram_estimate
-from waveflow.calib.resource_model import InterfaceResourceModel, boundary_signature
+from waveflow.calib.resource_model import InterfaceResourceModel
 from waveflow.calib.vitis_model import VitisResourceModel
 
 #: The basis LUT and FF are regressed on is **derived** from
@@ -118,8 +118,8 @@ def vec_mult_samples() -> list:
             for v, d, m in in_bram_points()]
 
 
-def vec_mult_shell() -> InterfaceResourceModel:
-    """The **integration term** -- ``top - sum(modules)`` -- as a boundary-keyed table.
+def vec_mult_shell(store=None) -> InterfaceResourceModel:
+    """The **integration term** -- ``top - sum(modules)`` -- read from the record store.
 
     Negative here, and that is information rather than an error.  In a design with several tasks this
     term is substantial and positive: it holds the ``m_axi`` adapters, the inter-task FIFOs, the
@@ -128,19 +128,11 @@ def vec_mult_shell() -> InterfaceResourceModel:
     almost nothing at the boundary for the term to contain, and what remains is Vitis optimizing two
     LUTs away as it flattens the single instance into the top.
 
-    One entry per measured port width, built by elaborating a probe at each and asking it for its
-    boundary signature -- so the key is computed the same way the lookup will compute it, and a table
-    keyed by hand cannot drift the first time the boundary changes shape.  Measured invariant across
-    width as well as configuration, which is itself the finding: the signature changes with ``dwid``
-    and the term does not, so this is flattening slack rather than interface logic.
+    Built from the store rather than from a constant, which is the point: the number is a measurement
+    the synthesis already produced, and a transcription of it into source would have the same
+    provenance problem the per-module figures used to have.  One record per synthesis, deduplicated by
+    boundary -- so the invariance across compute parameters is *derived* from 16 measurements rather
+    than asserted, and a point that broke it would raise instead of contradicting a docstring.
     """
-    from waveflow.build.elaborate import elaborate
-
-    from examples.vecmult.vecmult import VecMult
-    from examples.vecmult.vecmult_corpus import GRID, INTEGRATION_TERM
-
-    table = {}
-    for dwid in sorted({d for _v, d in GRID}):
-        probe = elaborate(VecMult, {"dwid": dwid, "vlen": 4096}, name="probe")
-        table[boundary_signature(probe)] = dict(INTEGRATION_TERM)
-    return InterfaceResourceModel(name="vec_mult_shell", table=table)
+    return InterfaceResourceModel(name="vec_mult_shell", store=store,
+                                  cls_name="VecMult").load_table()

@@ -230,7 +230,7 @@ class VecMult(FreeRunMod):
             name="vec_mult", part=part, platform=platform, cls_name="VecMult",
             comp_class=cls,
             store=ModuleStore(plat_dir) if plat_dir else None,
-            shell=vec_mult_shell() if plat_dir else None)
+            shell=vec_mult_shell(ModuleStore(plat_dir)) if plat_dir else None)
 
         # With a platform, the measurements are already on disk as records: the fit reads them and
         # `samples` is never built.  Without one there is no store to read, so the committed grid is

@@ -330,3 +330,115 @@ class TestAgainstTheCommittedStore:
         """These predate `measured_at`.  A plausible invented date would be worse than a gap."""
         db = corpus_from_records(store, cls_name="FirCompute")
         assert (db.df["measured_at"] == "").all()
+
+
+# ---------------------------------------------------------------------------
+# The integration term — a measurement, not a constant
+# ---------------------------------------------------------------------------
+
+VEC_PLATFORM = REPO / "examples" / "vecmult" / "calib" / "platforms" / "zynq7020_vecmult"
+
+
+class TestIntegrationRecords:
+    """P1-P4 of ``plans/integration_record.md`` — the third additive term is stored like the others.
+
+    ``top = Σ(modules) + integration``.  Two of those were durable and the third was not, so both
+    examples transcribed it into source.  On ``fir_block`` that term is 29% of the design and was the
+    only number in the estimate with no provenance behind it.
+    """
+
+    @pytest.fixture(scope="class")
+    def store(self):
+        from waveflow.calib.record_store import ModuleStore
+
+        if not VEC_PLATFORM.is_dir():
+            pytest.skip("vecmult platform library not present")
+        return ModuleStore(VEC_PLATFORM)
+
+    def test_the_term_is_filed_at_all(self, store):
+        from waveflow.calib.record_store import INTEGRATION_TARGET, corpus_from_records
+
+        db = corpus_from_records(store, cls_name="VecMult", target=INTEGRATION_TARGET)
+        assert len(db) >= 16, f"only {len(db)} integration record(s); expected one per synthesis"
+
+    def test_it_is_never_summed_as_a_module(self, store):
+        """A ``resource`` read never returns the composite's own cost, and vice versa.
+
+        For a **single-task** design the top and its only module share a key, so both kinds of
+        measurement are filed against it — legitimately.  What keeps them from being summed together
+        is the separate ``target``, not a separate key, which is exactly why the term is a target
+        rather than a flag inside a ``resource`` payload: a caller that forgets the distinction reads
+        an empty list rather than a double-counted design.
+        """
+        from waveflow.calib.record_store import INTEGRATION_TARGET
+
+        shared = 0
+        for key in store.keys():
+            resource = store.read(key, "resource", verify=False)
+            integ = store.read(key, INTEGRATION_TARGET, verify=False)
+            if resource and integ:
+                shared += 1
+            # whatever a key holds, the two reads must not return each other's rows
+            assert all(r.target == "resource" for r in resource)
+            assert all(r.target == INTEGRATION_TARGET for r in integ)
+        assert shared, (
+            "no key carries both — this test is meant to cover the single-task case where the top "
+            "and its only module share a key, and would pass vacuously otherwise")
+
+    def test_negative_is_preserved(self, store):
+        """VecMult's term is negative — HLS reclaims two LUTs flattening its single task.
+
+        Nothing clamps it.  A negative own-cost is the signal that additivity is leaking across a
+        module boundary, and hiding it would hide what whole-design synthesis exists to catch.
+        """
+        from waveflow.calib.record_store import INTEGRATION_TARGET, corpus_from_records
+
+        db = corpus_from_records(store, cls_name="VecMult", target=INTEGRATION_TARGET)
+        assert set(db.df["lut"]) == {-2}, f"expected a constant -2, got {sorted(set(db.df['lut']))}"
+
+    def test_the_invariance_is_derived_rather_than_asserted(self, store):
+        """One distinct value across every measured point — checked, not claimed in a docstring.
+
+        This is why one record is filed per *synthesis* rather than one per distinct value: a point
+        that broke the invariance would appear here as a second value instead of silently
+        contradicting a comment.
+        """
+        from waveflow.calib.record_store import INTEGRATION_TARGET, corpus_from_records
+
+        db = corpus_from_records(store, cls_name="VecMult", target=INTEGRATION_TARGET)
+        for counter in ("lut", "ff", "dsp", "bram"):
+            if counter in db.df.columns:
+                assert len(set(db.df[counter])) == 1, (
+                    f"{counter} integration is not invariant across the grid: "
+                    f"{sorted(set(db.df[counter]))}")
+
+    def test_the_model_builds_its_table_from_the_store(self, store):
+        """And deduplicates 16 records to one entry per boundary."""
+        from waveflow.calib.resource_model import InterfaceResourceModel
+
+        m = InterfaceResourceModel(name="shell", store=store, cls_name="VecMult").load_table()
+        assert len(m.table) == 4, f"expected one entry per port width, got {len(m.table)}"
+        assert all(t.get("lut") == -2 for t in m.table.values())
+
+    def test_a_contradicted_boundary_raises(self, store):
+        """Two different measurements for one boundary is a finding, not something to average."""
+        from waveflow.calib.resource_model import InterfaceResourceModel
+
+        m = InterfaceResourceModel(name="shell", store=store, cls_name="VecMult")
+        rows = [{"ports": [["StreamIFMaster", 32], ["StreamIFSlave", 32]], "channels": [], "lut": -2},
+                {"ports": [["StreamIFMaster", 32], ["StreamIFSlave", 32]], "channels": [], "lut": -9}]
+
+        class _Fake:
+            df = pd.DataFrame(rows)
+
+            def __len__(self):
+                return len(self.df)
+
+        import waveflow.calib.record_store as rs
+        orig = rs.corpus_from_records
+        rs.corpus_from_records = lambda *a, **k: _Fake()
+        try:
+            with pytest.raises(ValueError, match="two different integration measurements"):
+                m.table_from_store()
+        finally:
+            rs.corpus_from_records = orig

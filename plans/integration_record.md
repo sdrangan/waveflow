@@ -127,7 +127,7 @@ it is green before anything moves and records that the golden must not shift.
 
 **Gate:** P0 snapshot byte-identical at the start and end of this work.
 
-### P1 — write the record
+### P1 — write the record — **DONE**
 
 Extend `store_report` to file the integration row.  Decide the payload marker (open decision 1).
 
@@ -135,7 +135,7 @@ Extend `store_report` to file the integration row.  Decide the payload marker (o
 `results/resources.json`'s `integration` block exactly.  `vecmult` is the cheap check — 16 points,
 ~12 minutes.
 
-### P2 — read it back
+### P2 — read it back — **DONE**
 
 `corpus_from_records` (or a sibling) yields the integration corpus.  `InterfaceResourceModel` builds
 its table from that corpus rather than from a passed-in dict, deduplicating by boundary and **raising
@@ -145,7 +145,7 @@ something to average away.
 **Gate:** the table built from the store equals the transcribed constants, entry for entry, on both
 examples.  This is the phase that proves the transcriptions were right.
 
-### P3 — retire the constants
+### P3 — retire the constants — **vecmult DONE; fir_block deferred**
 
 Delete `INTEGRATION_TERM` and `INTERFACE_BY_MEM_DWIDTH`, and the probe-table builders that consume
 them.  Update `docs/guide/resource_model/predict.md` and both examples' pages, which currently
@@ -154,7 +154,15 @@ describe a table built by hand.
 **Gate:** P0 unchanged; `test_documented_numbers` still green (the 1984 appears in prose); the symbol
 guard catches any page still naming a deleted constant.
 
-### P4 — the invariance becomes a check
+**`fir_block` deferred, deliberately.**  Its store holds no integration records — populating them
+means re-sweeping 26 points on a bigger design.  Deleting `INTERFACE_BY_MEM_DWIDTH` first was measured
+rather than guessed at: the composed estimate drops from 6734 to **4750 LUT**, losing 1984 — 29% of
+the design.  It would not be *silent* (the confidence correctly collapses to `UNCALIBRATED`, which is
+the "nothing is silently zero" property working), but the estimate would be wrong and P0 would fail.
+So the constant stays until `fir_block` is next swept, at which point this phase completes for it with
+no code change — `InterfaceResourceModel.load_table` already prefers the store.
+
+### P4 — the invariance becomes a check — **DONE**
 
 Replace the docstring claims — *"measured invariant across all 24 compute configurations"* — with a
 test that reads the store and asserts one distinct value per boundary.
@@ -183,12 +191,12 @@ test that reads the store and asserts one distinct value per boundary.
    scales.  The alternative is a sibling tier (`integration/` beside `modules/`).  Leaning: same tier,
    different `target`, per decision 1.
 
-4. **`fir_block`'s store has 26 `FirCompute` records but a current elaboration of `(8, 8, False)`
-   finds none.**  Noticed while verifying the interface term and *not yet explained*.  The composed
-   estimate is unaffected because `FirCompute` is fitted rather than looked up — but if the sweep's
-   keys and a fresh elaboration's keys disagree, that is either a stale store or a key that moved, and
-   both matter for this work.  **Resolve before P1**: a reduction that silently finds nothing is the
-   failure mode this whole tier exists to prevent.
+4. ~~**`fir_block`'s store has 26 `FirCompute` records but a current elaboration finds none.**~~
+   **RESOLVED — it was a bug, now fixed** (`plans/key_stability.md`, merged).  A `LinCalibModel`
+   reached the structure signature through an attribute the exclusion list did not cover, so
+   refactoring that class moved the key of every module holding one.  The store has been re-addressed
+   and a reachability guard now fails if it happens again.  P2's equality check can therefore trust
+   what it reads.
 
 ## Risks
 
@@ -198,5 +206,5 @@ test that reads the store and asserts one distinct value per boundary.
   oracle for the mechanism that replaces them.
 * **Deleting the constants removes the only copy** until the store is populated on every platform that
   needs one.  Sequence matters: P2 must prove equality *before* P3 deletes.
-* **Decision 4 is unresolved and load-bearing.**  If `fir_block`'s store is stale, P2's equality check
-  is testing against the wrong thing.
+* ~~**Decision 4 is unresolved and load-bearing.**~~  Resolved and fixed before starting; the store
+  now resolves for every leaf, guarded by `tests/calib/test_key_stability.py`.
