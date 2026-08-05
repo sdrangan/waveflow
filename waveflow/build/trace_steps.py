@@ -186,6 +186,17 @@ class RtlSimStep(BuildStep):
         Kernel top and BFM testbench basename, exactly as ``run.bat`` takes them.
     xsi_dir : str
         Directory holding ``run.bat`` (repo-relative).
+    tb_artifact : str
+        Artifact of the step that GENERATES ``<tb>.cpp`` and its harness.  ``run.bat`` recompiles
+        whatever ``.cpp`` is on disk, so without this edge the TB codegen step is not in this
+        step's dependency closure: ``--through extract_bursts`` skips it entirely, and every point
+        of a sweep runs the RTL against the **last-generated** testbench.
+
+        That is not a hypothetical either.  The harness carries the scenario's arena size and its
+        ``h.run(N)`` cycle bound, so a sweep silently ran every point under the committed gate's
+        3400-cycle bound: the larger points were cut off mid-job and the missing firings read as a
+        *design stall* -- see ``plans/sweep_runner.md``.  Forcing the codegen step does not help,
+        because a step outside the closure is never consulted, forced or not.
     prepare : callable | None
         Called as ``prepare(xsi_dir, config)`` before the run, to materialize the scenario bundles the
         BFM reads (for mem_copy, ``write_mem_copy_xsi_bundles``).  The scenario is an *input* to the
@@ -208,11 +219,12 @@ class RtlSimStep(BuildStep):
     xsi_dir: str = "xsi"
     rtl_artifact: str = "report_dir"
     dumper_artifact: str = "vcd_dumper"
+    tb_artifact: str = "tb_main"
     prepare: Callable[[Path, "BuildConfig"], None] | None = None
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
-        return [self.rtl_artifact, self.dumper_artifact]
+        return [self.rtl_artifact, self.dumper_artifact, self.tb_artifact]
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
