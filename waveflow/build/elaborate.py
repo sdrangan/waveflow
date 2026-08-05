@@ -189,6 +189,27 @@ def assert_param_pure(
         )
 
 
+#: Class-level marker: instances of a type carrying this are elaboration *context*, never structure,
+#: wherever they are found and whatever they are called.
+#:
+#: ``_CONTEXT_ATTRS`` below excludes by attribute **name**, which repairs a known leak but not the
+#: mechanism.  That distinction cost 26 orphaned records: ``FirCompute`` held its timing model under a
+#: second name the list did not cover, so a ``LinCalibModel`` refactor moved the module's key and every
+#: measurement filed against it became unreachable — silently, because a missing key looks exactly like
+#: a configuration nobody measured.
+#:
+#: A calibration model predicts something *about* a module; it is not part of it.  Nothing about a
+#: module's ports, sub-components, interfaces or parameters changes because a coefficient was refitted,
+#: so a key that moves when a coefficient moves is not addressing structure.  Excluding by type means
+#: the next attribute holding one cannot leak, whatever it is named.
+_STRUCTURE_CONTEXT_MARKER = "__wf_structure_context__"
+
+
+def _is_structure_context(value: Any) -> bool:
+    """Whether *value* is calibration/runtime context rather than part of the structure."""
+    return bool(getattr(type(value), _STRUCTURE_CONTEXT_MARKER, False))
+
+
 # Object attributes that are elaboration *context* / runtime scaffolding, never
 # structure — dropped from the fingerprint so two elaborations compare on
 # structure alone (``name``/identity, the sim, simpy resources, and
@@ -279,6 +300,8 @@ def _canon(value: Any, seen: frozenset) -> Any:
         if k in _CONTEXT_ATTRS or k.startswith("__"):
             continue
         v = d[k]
+        if _is_structure_context(v):
+            continue
         if k in _NAME_KEYED_COLLECTIONS and isinstance(v, dict):
             # Name-agnostic: a multiset of canonical values, sorted by content.
             vals = sorted((_canon(x, seen) for x in v.values()), key=repr)

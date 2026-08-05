@@ -1,0 +1,447 @@
+{
+  "fir_block": {
+    "FirBlock": {
+      "fir_block-08fd7ac6": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 1
+      },
+      "fir_block-0a0b8bb1": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 1
+      },
+      "fir_block-0b6042b9": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 1
+      },
+      "fir_block-1735d2c5": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 0
+      },
+      "fir_block-1c4e5634": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 0
+      },
+      "fir_block-223e1cae": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 1
+      },
+      "fir_block-288c2c69": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 1
+      },
+      "fir_block-32572804": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 1
+      },
+      "fir_block-3c940b6c": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 0
+      },
+      "fir_block-426c3a36": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 1
+      },
+      "fir_block-57e2b62d": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 1
+      },
+      "fir_block-5800178f": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 0
+      },
+      "fir_block-5d8e6f42": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 0
+      },
+      "fir_block-60916402": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 0
+      },
+      "fir_block-77f5b2be": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 0
+      },
+      "fir_block-87e2706c": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 0
+      },
+      "fir_block-8fc98831": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 1
+      },
+      "fir_block-9f386ede": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 1
+      },
+      "fir_block-ac9773d8": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 0
+      },
+      "fir_block-aea75677": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 0
+      },
+      "fir_block-c19cb168": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 1
+      },
+      "fir_block-c5b32779": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 1
+      },
+      "fir_block-f50607f5": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 0
+      },
+      "fir_block-fd835fdb": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 0
+      }
+    },
+    "FirCmdRx": {
+      "fir_cmd_rx-2e3d03fb": {
+        "mem_dwidth": 32,
+        "samp_w": 24
+      },
+      "fir_cmd_rx-34097db1": {
+        "mem_dwidth": 32,
+        "samp_w": 8
+      },
+      "fir_cmd_rx-6ab02764": {
+        "mem_dwidth": 32,
+        "samp_w": 12
+      },
+      "fir_cmd_rx-93cb7e21": {
+        "mem_dwidth": 32,
+        "samp_w": 16
+      }
+    },
+    "FirCompute": {
+      "fir_compute-0295b0c7": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 0
+      },
+      "fir_compute-0f3f9cbb": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 1
+      },
+      "fir_compute-1ae29669": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 0
+      },
+      "fir_compute-2571174e": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 1
+      },
+      "fir_compute-2c13c16c": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 1
+      },
+      "fir_compute-3c0ce9cc": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 0
+      },
+      "fir_compute-400bcb71": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 0
+      },
+      "fir_compute-5b644c1c": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 1
+      },
+      "fir_compute-63f2b4c0": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 0
+      },
+      "fir_compute-702e5623": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 1
+      },
+      "fir_compute-7e2b3d49": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 0
+      },
+      "fir_compute-7ed11862": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 1
+      },
+      "fir_compute-95101292": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 1
+      },
+      "fir_compute-9b33843b": {
+        "mem_dwidth": 32,
+        "ntap": 16,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 0
+      },
+      "fir_compute-adab1eed": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 1
+      },
+      "fir_compute-b7d5ff06": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 1
+      },
+      "fir_compute-bc6f2033": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 0
+      },
+      "fir_compute-c458eca6": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 1
+      },
+      "fir_compute-d1d80fe9": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 8,
+        "unroll_lane": 0
+      },
+      "fir_compute-dec387ce": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": 0
+      },
+      "fir_compute-ef0c42b7": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 1
+      },
+      "fir_compute-f849ae32": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 12,
+        "unroll_lane": 1
+      },
+      "fir_compute-f920722f": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 0
+      },
+      "fir_compute-ffc62d01": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": 0
+      }
+    },
+    "MemRStream": {
+      "mem_r_stream-b4cc8581": {
+        "inband": 1,
+        "max_xfer_len": 8,
+        "mem_awidth": 32,
+        "mem_dwidth": 32
+      }
+    },
+    "MemWStream": {
+      "mem_w_stream-51d74266": {
+        "inband": 1,
+        "max_fwd_words": 8,
+        "max_xfer_len": 8,
+        "mem_awidth": 32,
+        "mem_dwidth": 32
+      }
+    }
+  },
+  "vecmult": {
+    "VecMult": {
+      "vec_mult-0a630bcd": {
+        "dwid": 64,
+        "vlen": 512
+      },
+      "vec_mult-0b56d8c2": {
+        "dwid": 64,
+        "vlen": 1024
+      },
+      "vec_mult-185032be": {
+        "dwid": 128,
+        "vlen": 16384
+      },
+      "vec_mult-1990700a": {
+        "dwid": 64,
+        "vlen": 16384
+      },
+      "vec_mult-4353da6e": {
+        "dwid": 256,
+        "vlen": 1024
+      },
+      "vec_mult-489d6ca0": {
+        "dwid": 32,
+        "vlen": 4096
+      },
+      "vec_mult-498119c5": {
+        "dwid": 32,
+        "vlen": 512
+      },
+      "vec_mult-7b35f713": {
+        "dwid": 64,
+        "vlen": 4096
+      },
+      "vec_mult-7f963540": {
+        "dwid": 256,
+        "vlen": 512
+      },
+      "vec_mult-ac2557e7": {
+        "dwid": 256,
+        "vlen": 4096
+      },
+      "vec_mult-b71178a5": {
+        "dwid": 32,
+        "vlen": 16384
+      },
+      "vec_mult-bd67e6b4": {
+        "dwid": 128,
+        "vlen": 4096
+      },
+      "vec_mult-cc0d954f": {
+        "dwid": 128,
+        "vlen": 512
+      },
+      "vec_mult-e934dd1a": {
+        "dwid": 128,
+        "vlen": 1024
+      },
+      "vec_mult-ea9406fe": {
+        "dwid": 256,
+        "vlen": 16384
+      },
+      "vec_mult-edd38d8f": {
+        "dwid": 32,
+        "vlen": 1024
+      }
+    }
+  }
+}

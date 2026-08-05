@@ -24,7 +24,7 @@ import datetime as _datetime
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, ClassVar, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -124,6 +124,20 @@ class CalibModel:
     (:meth:`save_model` / :meth:`load_model`) + the :attr:`seed` fallback (:meth:`default_model` /
     :meth:`load_or_default`).  The model *shell* (basis / transform / names) is built in code; only
     the numbers live in the artifact at :attr:`path` (which the BuildDAG tracks)."""
+
+    #: A model is elaboration **context**, never structure: it predicts something *about* a module and
+    #: is not part of it.  Marked so :func:`~waveflow.build.elaborate.structure_signature` excludes it
+    #: by type wherever it is attached and whatever it is called.
+    #:
+    #: Excluding by attribute name was not enough, and the gap was expensive: a module held its timing
+    #: model under a second name, so refactoring this class moved that module's content-addressed key
+    #: and orphaned every measurement filed against it -- silently, because a missing key is
+    #: indistinguishable from a configuration nobody measured.  A key that moves when a coefficient
+    #: moves is not addressing structure.  See ``plans/key_stability.md``.
+    #: Must be an *unquoted* ``ClassVar`` annotation: under ``from __future__ import annotations`` a
+    #: quoted one stringifies to ``'"ClassVar[bool]"'``, which ``dataclasses`` does not recognise --
+    #: so it becomes a real field, and being declared first it shifts every positional argument.
+    __wf_structure_context__: ClassVar[bool] = True
 
     #: Column names forming the design matrix.  Empty for a model that does not predict from a flat
     #: feature vector at all -- a lookup keyed on a module, or a formula reading structure.
