@@ -357,16 +357,32 @@ the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
    proportionality** — vary the burst length, not only the size.  That is the next thing to try, and
    it is a timing-model / grid-design question rather than a sweep one.
 
-3. **`mem_copy` stalls after two jobs at `n_words=1024` in RTL** — new, and the most serious of the
-   three.  Not a sweep problem: the sweep is what made it visible.  pysim runs all four jobs clean
-   (`end=4181`), the RTL issues 3 commands, reads 2, writes 2, and then idles for ~4000 cycles.
-   128 / 256 / 512 are unaffected, so it is size-dependent.
+3. **`mem_copy`'s RTL stalls after a fixed VOLUME of data, not a fixed number of jobs.**  Not a sweep
+   problem — the sweep is what made it visible.  Characterised by measurement:
 
-   Worth checking against
-   [`reference-freerun-pipeline-token-pacing`](../plans/) — "an un-paced free-running
-   `ap_ctrl_none` N-stage pipe deadlocks at `done = N+1`" — since three stages stopping after two to
-   three firings is that shape.  The size dependence is the part that does not fit, and is where to
-   start.
+   | n | k | jobs done | words moved | next job would reach | |
+   |---|---|---|---|---|---|
+   | 128 | 16 | 16 | 2048 | — | all done |
+   | 512 | 4 | 4 | 2048 | — | all done |
+   | 1024 | 2 | 2 | 2048 | — | all done |
+   | 256 | 16 | **10** | 2560 | 2816 | stalled |
+   | 768 | 4 | **3** | 2304 | 3072 | stalled |
+   | 1024 | 3 | **2** | 2048 | 3072 | stalled |
+   | 1024 | 4 | **2** | 2048 | 3072 | stalled |
+
+   **The ceiling is between 2560 words (completed) and 2816 (never reached)** — 20–22 KB at 64 bits.
+   It does not depend on how the total is divided: 16×128, 4×512 and 2×1024 all complete and all sit
+   at exactly 2048.  Job size looked causal only because those three happened to stop at the ceiling.
+
+   Two further facts:
+   * the **sequencer is always exactly one job ahead** of the reader and writer (11/10, 4/3, 3/2);
+   * it is a **stall, not a truncation** — at `n=1024` the last `ap_done` is 2405 whether k is 3 or 4,
+     against bounds of 4128 and 5404, so the run idles for thousands of cycles after dying.
+
+   **This is not the token-pacing law.**  That predicts a deadlock at `done = N+1`, a fixed job index
+   set by pipeline depth; what happens here is fixed by volume.  The pysim moves 4096 words cleanly,
+   so the fault is in the RTL or in the C++ BFM — and the BFM is our own code, which is where to look
+   first.  A likely next step: instrument the AXI write channel and find what stops accepting.
 
 Neither of the first two invalidates the gate: the raw spans are clean and the 41 is consistent at
 128 / 256 / 512.  All three must be settled before this corpus is published to the tracked tier —
