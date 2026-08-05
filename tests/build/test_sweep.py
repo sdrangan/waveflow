@@ -84,6 +84,22 @@ class TestConstantsAndSubsets:
         with pytest.raises(ValueError, match="not an axis"):
             ParamGrid(ntap=(8,)).subset(ntapp=(16,))
 
+    def test_a_label_does_not_change_when_the_grid_is_narrowed(self):
+        """Caught for real by running `--dry-run --vlen 512`, which labelled points `dwid64`.
+
+        Narrowing an axis to one value makes it *look* like a constant, and a label recomputed from
+        the narrowed grid drops it.  `--vlen 512 --resume` would then look for `dwid64` in a summary
+        written as `vlen512_dwid64`, match nothing, and silently re-run every point it already had.
+        """
+        full = ParamGrid(vlen=(512, 1024), dwid=(32, 64))
+        point = {"vlen": 512, "dwid": 64}
+        assert full.subset(vlen=(512,)).label(point) == full.label(point) == "vlen512_dwid64"
+
+    def test_narrowing_twice_still_agrees(self):
+        full = ParamGrid(a=(1, 2), b=(3, 4))
+        once = full.subset(a=(1,))
+        assert once.subset(b=(3,)).label({"a": 1, "b": 3}) == full.label({"a": 1, "b": 3})
+
 
 class TestBuildVersusWorkloadAxes:
     """The distinction that keeps a pysim sweep from re-synthesizing.

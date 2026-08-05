@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 
 class ParamGrid:
@@ -43,7 +43,8 @@ class ParamGrid:
     it.
     """
 
-    def __init__(self, _workload: "Sequence[str]" = (), **axes: "Sequence[Any]") -> None:
+    def __init__(self, _workload: "Sequence[str]" = (), _label_axes: "Sequence[str] | None" = None,
+                 **axes: "Sequence[Any]") -> None:
         empty = [k for k, v in axes.items() if not len(tuple(v))]
         if empty:
             raise ValueError(
@@ -53,6 +54,13 @@ class ParamGrid:
         if unknown:
             raise ValueError(f"_workload names {unknown}, which are not axes of this grid")
         self.axes: dict = {k: tuple(v) for k, v in axes.items()}
+        #: Which axes a label names.  Carried through :meth:`subset` rather than recomputed, because
+        #: **a label must not change when the grid is narrowed**: ``--vlen 512`` leaves that axis with
+        #: one value, and a label derived from the *narrowed* grid would drop it -- so ``--resume``
+        #: would look for ``dwid64`` in a summary written as ``vlen512_dwid64`` and re-run the lot.
+        self._label_axes: tuple = tuple(
+            _label_axes if _label_axes is not None
+            else [k for k, v in self.axes.items() if len(v) > 1] or list(self.axes))
         #: Axes that vary the **workload** rather than the hardware.
         #:
         #: A build axis is a ``HwParam``: changing it produces different hardware, so every stage from
@@ -91,8 +99,7 @@ class ParamGrid:
         line cannot disagree about which point a record belongs to.  Only the axes appear -- a
         constant contributes nothing to distinguishing points and would only pad every label.
         """
-        varying = [k for k, v in self.axes.items() if len(v) > 1]
-        parts = [f"{k}{_slug(point[k])}" for k in (varying or list(self.axes)) if k in point]
+        parts = [f"{k}{_slug(point[k])}" for k in self._label_axes if k in point]
         return "_".join(parts) or "point"
 
     def subset(self, **overrides: "Sequence[Any] | None") -> "ParamGrid":
@@ -108,7 +115,8 @@ class ParamGrid:
             if k not in axes:
                 raise ValueError(f"{k!r} is not an axis of this grid ({sorted(axes)})")
             axes[k] = tuple(v)
-        return ParamGrid(_workload=tuple(self.workload), **axes)
+        return ParamGrid(_workload=tuple(self.workload), _label_axes=self._label_axes,
+                         **axes)
 
     def __repr__(self) -> str:
         inner = ", ".join(f"{k}={v!r}" for k, v in self.axes.items())
@@ -341,4 +349,66 @@ def _save(path: Path, result: SweepResult) -> None:
     p.write_text(json.dumps(result.to_json(), indent=2), encoding="utf-8")
 
 
-__all__ = ["ParamGrid", "Stage", "SweepResult", "SweepRunner"]
+# ---------------------------------------------------------------------------
+# The entry point
+# ---------------------------------------------------------------------------
+
+def sweep_cli(runner: SweepRunner, grid: ParamGrid, *, description: str,
+              stages: "Sequence[Stage]", dry_run_stages: "Sequence[Stage] | None" = None,
+              extra_args: "Iterable[tuple]" = (), grid_from_args=None, argv=None) -> int:
+    """Standard command line for a sweep — the sibling of :func:`~waveflow.build.cli.run_dag_cli`.
+
+    Supplies ``--dry-run``, ``--resume``, ``--out``, and **one ``--<axis>`` flag per numeric or string
+    axis**, derived from the grid rather than declared.  Today one example has per-axis flags and the
+    other has none; that was not a decision, just which script someone extended.
+
+    Boolean axes get no automatic flag: ``--unroll-lane 0 1`` is a worse interface than a named choice
+    like ``--realization serial|unroll|both``.  An example supplies that through *extra_args* and maps
+    it in *grid_from_args*, which keeps the vocabulary where the design's vocabulary lives (open
+    decision 2 in the plan).
+
+    Returns a process exit code: non-zero if any stage of any point failed, so a sweep is usable in a
+    script without parsing its output.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--dry-run", action="store_true",
+                        help="run the cheap stages only (no toolchain) — a pre-flight over the grid")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip (point, stage) pairs already recorded ok")
+    parser.add_argument("--out", default=None,
+                        help="summary path (default results/sweep.json) — give a focused run its own")
+    for name, values in grid.axes.items():
+        kind = type(values[0])
+        if kind is bool:
+            continue                    # see the docstring: a named choice reads better
+        parser.add_argument(f"--{name.replace('_', '-')}", dest=name, nargs="+", type=kind,
+                            default=None, help=f"restrict the {name} axis (default {list(values)})")
+    for flags, kwargs in extra_args:
+        parser.add_argument(*flags, **kwargs)
+    args = parser.parse_args(argv)
+
+    if args.out:
+        out = Path(args.out)
+        runner.summary = out if out.is_absolute() else runner.root_dir / out
+
+    grid = grid.subset(**{n: getattr(args, n, None) for n in grid.axes
+                          if type(grid.axes[n][0]) is not bool})
+    if grid_from_args is not None:
+        grid = grid_from_args(grid, args)
+
+    chosen = list(stages)
+    if args.dry_run:
+        if dry_run_stages is None:
+            raise SystemExit("--dry-run given but this sweep declares no dry-run stages")
+        chosen = list(dry_run_stages)
+
+    print(f"{description}: {len(grid)} point(s) x {len(chosen)} stage(s)")
+    if not args.dry_run and runner.platform is not None:
+        print(f"  platform {runner.platform} under {runner.platforms_root} (work tier, untracked)")
+    result = runner.run(grid, chosen, resume=args.resume)
+    return 0 if result.ok else 1
+
+
+__all__ = ["ParamGrid", "Stage", "SweepResult", "SweepRunner", "sweep_cli"]
