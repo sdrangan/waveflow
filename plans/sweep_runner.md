@@ -308,20 +308,42 @@ the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
 
 #### Two defects it exposed, both open {#p3b-open}
 
-1. **Silent partial coverage.**  `n=1024` captured 2 of 4 firings — `seq=3, reader=2, writer=2` is a
-   run cut off mid-flight, `xsi_run_cycles`' bound being marginal there.  Nothing objected:
-   `RtlSimStep` asserts nothing by design, and the `all_ok` in the log is the **pysim's** golden, not
-   the RTL's.  A sweep quietly covering half a point is the failure this design guards against
-   everywhere else, so the fix belongs at the step: compare firings captured against jobs issued and
-   fail the point when they disagree.
+1. ~~**Silent partial coverage.**~~ **FIXED.**  `n=1024` captured 2 of 4 firings and nothing
+   objected: `RtlSimStep` asserts nothing by design, and the `all_ok` in the log is the **pysim's**
+   golden, not the RTL's.  `ExtractBurstsStep` now takes `expect_firings` and refuses a table that is
+   short, *before* writing it — a short table on disk is one a later step files as a corpus row.
+   mem_copy passes the scenario's job count; the point now fails loudly and the sweep records it.
+
+   **It immediately found something worse, and disproved my own diagnosis.**  I assumed a tight
+   cycle bound.  Measured: the bound is **5404**, the last `ap_done` is at **2405**, and the
+   waveform then runs on for roughly four thousand idle cycles.  So the design *stops firing* rather
+   than being cut off — `seq=3, reader=2, writer=2` is a **stall after two jobs at `n_words=1024`**,
+   in a scenario whose pysim completes all four cleanly.  That is an RTL-level bug, not a
+   measurement artifact, and it is tracked below rather than here.
+
+   The check therefore deliberately names **no cause**: the obvious guess was wrong on the very case
+   that motivated it, and a message naming the cycle bound would have sent a reader to the one place
+   the fault was not.
 2. **The fit is order-dependent.**  `current_dly` climbs 0 → 148 across the points, because each
    point's pysim loads the `params.json` fitted from the points before it.  `max_abs_residual` of
    1e-14 on 4 points against 3 free parameters is therefore tautological rather than validating.
    Collection should run against a **frozen** model and fit once at the end — which is a stage
    question (collect-all, then fit), so it belongs here rather than in the timing model.
 
-Neither invalidates the gate: the raw spans are clean and the 41 is consistent.  Both must be fixed
-before this corpus is published to the tracked tier.
+3. **`mem_copy` stalls after two jobs at `n_words=1024` in RTL** — new, and the most serious of the
+   three.  Not a sweep problem: the sweep is what made it visible.  pysim runs all four jobs clean
+   (`end=4181`), the RTL issues 3 commands, reads 2, writes 2, and then idles for ~4000 cycles.
+   128 / 256 / 512 are unaffected, so it is size-dependent.
+
+   Worth checking against
+   [`reference-freerun-pipeline-token-pacing`](../plans/) — "an un-paced free-running
+   `ap_ctrl_none` N-stage pipe deadlocks at `done = N+1`" — since three stages stopping after two to
+   three firings is that shape.  The size dependence is the part that does not fit, and is where to
+   start.
+
+Neither of the first two invalidates the gate: the raw spans are clean and the 41 is consistent at
+128 / 256 / 512.  All three must be settled before this corpus is published to the tracked tier —
+and **1024 must not be swept again until (3) is understood**, since the check now refuses it.
 
 ### P4 — re-measure once, on the real path — **DONE**
 

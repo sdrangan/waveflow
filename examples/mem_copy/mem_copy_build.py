@@ -280,8 +280,12 @@ def build_mem_copy_dag() -> BuildDag:
     # waveform plus the manifest into a per-firing timing table.
     dag.add(RtlSimStep(name="rtlsim", top="mem_copy", tb="mem_copy_bfm_tb", xsi_dir="xsi",
                        prepare=_write_scenario_bundles))
+    # Every task here fires once per copy job, so the job count is what a complete trace must show.
+    # Without this a point whose cycle bound is too tight files a short table as if it were whole --
+    # n_words=1024 gave 2 of 4 firings and the sweep called it ok.
     dag.add(ExtractBurstsStep(name="extract_bursts",
-                              output_path="results/mem_copy_timing.json"))
+                              output_path="results/mem_copy_timing.json",
+                              expect_firings=lambda cfg: _scenario(cfg)[1]))
     # The calibration rung: turn this point's extracted table plus a calibrated pysim run into one
     # more corpus row, then fit.  `collect_timing` needs a platform (that is where the corpus lives);
     # `fit_timing` skips rather than fails while a sweep is still only partly covered.

@@ -230,3 +230,60 @@ class TestExtractedTableAgainstTheRealTrace:
         for f in events["firings"]:
             if f["nwords"]:
                 assert f["num_trans"] == math.ceil(f["nwords"] / mb), f
+
+
+class TestCoverageCheck:
+    """A trace missing firings the scenario issued must fail, not file half a measurement.
+
+    Real shape, from the n_words=1024 point of mem_copy's timing sweep: four jobs issued, and the
+    table held `seq=3, reader=2, writer=2` because the harness cycle bound ended the run mid-flight.
+    Every span in it was correct, which is exactly what made it dangerous -- the sweep recorded the
+    point as ok and the residual was then fitted from half the evidence.
+    """
+
+    @staticmethod
+    def _rows(counts: dict) -> list:
+        return [{"component": c, "span": 183} for c, n in counts.items() for _ in range(n)]
+
+    def _step(self, expect):
+        return ExtractBurstsStep(name="x", expect_firings=expect)
+
+    def test_a_complete_table_passes(self):
+        step = self._step(4)
+        step._check_coverage(self._rows({"seq": 4, "reader": 4, "writer": 4}), BuildConfig())
+
+    def test_the_truncated_run_is_refused(self):
+        step = self._step(4)
+        with pytest.raises(RuntimeError, match="incomplete trace"):
+            step._check_coverage(self._rows({"seq": 3, "reader": 2, "writer": 2}), BuildConfig())
+
+    def test_the_message_reports_counts_and_does_not_guess_a_cause(self):
+        """It must show what was seen and where to look -- and NOT assert why.
+
+        The obvious cause, a tight cycle bound, was wrong on the case that motivated the check: the
+        bound was 5404, the last ap_done was 2405, and the run then idled.  A message that had named
+        the bound would have sent the reader to the one place the fault was not.
+        """
+        step = self._step(4)
+        with pytest.raises(RuntimeError) as exc:
+            step._check_coverage(self._rows({"seq": 3, "writer": 2}), BuildConfig())
+        msg = str(exc.value)
+        assert "'seq': 3" in msg and "'writer': 2" in msg
+        assert "ap_done" in msg and "stalled" in msg
+
+    def test_a_callable_reads_the_point(self):
+        """A sweep varies the job count, so the expectation has to come from the config."""
+        step = self._step(lambda cfg: int(cfg.params["num_cmds"]))
+        cfg = BuildConfig(params={"num_cmds": 2})
+        step._check_coverage(self._rows({"writer": 2}), cfg)
+        with pytest.raises(RuntimeError, match="incomplete trace"):
+            step._check_coverage(self._rows({"writer": 1}), cfg)
+
+    def test_none_disables_it(self):
+        """Designs whose tasks do not fire once per job opt out rather than guess."""
+        self._step(None)._check_coverage(self._rows({"a": 1, "b": 7}), BuildConfig())
+
+    def test_too_many_is_also_refused(self):
+        """Not `< want`: more firings than jobs means the scenario is not what was assumed."""
+        with pytest.raises(RuntimeError, match="incomplete trace"):
+            self._step(4)._check_coverage(self._rows({"writer": 5}), BuildConfig())
