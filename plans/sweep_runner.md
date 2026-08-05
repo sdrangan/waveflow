@@ -247,7 +247,7 @@ What it was *protecting* survives, split across the phases that can actually hol
 
 **Gate:** none of its own; P1 and P4 carry it.
 
-### P1 — `ParamGrid`
+### P1 — `ParamGrid` — **DONE**
 
 Product, order, `label`, subsetting.  Pure and fast, so it gets ordinary unit tests: order is
 declaration order, a single-value axis still yields dicts, an empty axis yields nothing rather than
@@ -256,7 +256,7 @@ silently dropping the axis.
 **Gate:** `list(ParamGrid(**axes))` equals each example's current `points()` output, element for
 element, including order.
 
-### P2 — `SweepRunner`
+### P2 — `SweepRunner` — **DONE**
 
 Execution, record shape, incremental save, resume, cost accounting.  The lessons from the existing
 docstrings move here **with their reasoning**, because a comment explaining why a save is incremental
@@ -266,7 +266,7 @@ is worth more in the framework than in one example.
 propagated, that resume skips only `ok` points, and that an interrupted run leaves a summary marked
 incomplete.
 
-### P3 — `sweep_cli`, and the examples collapse onto it
+### P3 — `sweep_cli`, and the examples collapse onto it — **DONE**
 
 Rewrite both resource sweep scripts against the three pieces.  Expected: ~150 → ~25 lines each.
 
@@ -284,7 +284,7 @@ while the abstraction is still cheap to change.
 `waveflow/calib/fixture.py` is the reference, since it already drives collect_rtl / collect_pysim over
 a set of points.
 
-### P4 — re-measure once, on the real path
+### P4 — re-measure once, on the real path — **DONE**
 
 Run one example's real sweep end to end and confirm the records land in the work tier exactly as
 before.  `vecmult` is the cheap one: 16 points, ~12 minutes, and the new
@@ -292,6 +292,12 @@ before.  `vecmult` is the cheap one: 16 points, ~12 minutes, and the new
 
 **Gate:** `-m vitis`-free test suite at baseline, plus the grid/store agreement test green after a
 real re-sweep.
+
+*Result: met, as a genuine A/B.*  The tracked platform holds what the **hand-written loop** produced;
+the work tier was wiped and re-swept from scratch through `SweepRunner`.  All 16 points reproduce
+**identically** — same keys, same per-module counters, same integration records — in 890 s.
+`tests/build/test_sweep_against_real_path.py` pins it, with the comparison running unmarked so a
+machine with no Vitis still checks the last sweep's output rather than skipping silently.
 
 ### P5 — docs
 
