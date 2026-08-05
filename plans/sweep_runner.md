@@ -299,7 +299,7 @@ the work tier was wiped and re-swept from scratch through `SweepRunner`.  All 16
 `tests/build/test_sweep_against_real_path.py` pins it, with the comparison running unmarked so a
 machine with no Vitis still checks the last sweep's output rather than skipping silently.
 
-### P5 — docs
+### P5 — docs — **DONE**
 
 Home is **`docs/guide/build/`**, beside the pages on the DAG and `BuildConfig` a sweep drives — not
 under either model section, since one runner serves both axes and filing it under `resource_model/`
@@ -309,6 +309,17 @@ would imply otherwise.
 a short **Writing your own sweep** section pointing at the guide.
 
 **Gate:** docs guard; the symbol guard already refuses a page naming an API that does not exist.
+
+*Result: met.*  `docs/guide/build/sweep.md` is one section per piece — `ParamGrid`, `SweepRunner`
+(with `Stage`, the free behaviours, the summary format and the two tiers under it) and `sweep_cli` —
+each opening with a signature and a parameter table.  Every claim in those tables was checked by
+running it rather than read off the source.  The example page had already shrunk in P3.
+
+Writing it found a **false positive in the docs guard**: `` `**axes` `` put an odd number of `**` to
+the left of the rest of the line, so the next legitimate bold pair read as an unclosed opening
+delimiter.  Fixed by masking code spans before the parity count — worth chasing rather than working
+around, since the check's own docstring says a check that cries wolf gets suppressed, and `**kwargs`
+recurs on any API page.
 
 ## Open decisions
 
