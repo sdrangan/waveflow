@@ -33,6 +33,28 @@ second-largest contributor after the compute.  It is the `m_axi` adapters, the i
 AXI-Lite control block and the DATAFLOW shell — and it is the one number in the estimate with no
 provenance behind it.
 
+### The diagnostic is "no writer", not "a number in source"
+
+Worth stating precisely, because the obvious pattern-match is wrong and was made once already while
+drafting this.  `examples/mem_copy/calibrate_platform.py` also holds measurements as literals:
+
+```python
+RTL_SPAN = {128: 183.0, 512: 615.0}
+```
+
+That is **not** this defect.  The timing axis has a complete writer —
+`RtlSimStep` → `ExtractBurstsStep` → `CollectTimingStep`, which calls `collect_rtl` and
+`collect_pysim` and fills the raw tier from the trace with no transcription anywhere.  That script
+bypasses it deliberately so the platform can be regenerated on a machine with no Vivado, with the real
+loop gated behind `-m xsi`.  It is a reproduction path with a stated purpose, closer in kind to
+`vecmult`'s `GRID` oracle than to a gap.
+
+The integration term has no such path.  Nothing files it, so a literal is the *only* place it can
+live — which is why the fix is a writer rather than discipline.
+
+**The test to apply before calling something this defect:** ask whether an automated path exists that
+would file the number, and whether the literal is bypassing it or substituting for it.
+
 ### The architecture already says it should be a record
 
 Nothing here needs a new concept, which is why this is worth doing before anything is built on top:
