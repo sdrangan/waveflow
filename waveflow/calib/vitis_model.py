@@ -62,6 +62,10 @@ SUBSUMED_COUNTERS = ("srl",)
 #: Counters it regresses, when a basis is supplied.
 FITTED_COUNTERS = ("lut", "ff")
 
+#: Columns a store-derived corpus carries that are **measurements**, not parameters -- excluded when
+#: reconstructing the elaboration parameters for a probe.
+RESOURCE_ENRICH_SKIP = DERIVED_COUNTERS + SUBSUMED_COUNTERS + FITTED_COUNTERS
+
 
 @dataclass(frozen=True)
 class MultGroup:
@@ -404,6 +408,45 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
                 for i, m in enumerate(self.structure(comp).memories)]
 
     # -- the fitted half ----------------------------------------------------
+    #: The module class this model prices.  Needed only to **enrich a store-derived corpus**: a
+    #: record store holds a module's resolved ``HwParam`` values, and the structure columns the fabric
+    #: basis is derived from are not among them.  Structure is a pure function of the parameters
+    #: (elaboration's param-purity gate guarantees it), so a probe elaborated at each recorded point
+    #: reconstructs exactly what the synthesized design declared -- no synthesis, no second source.
+    comp_class: Any = None
+
+    def corpus(self):
+        """The store's corpus, with each row's declared structure filled back in.
+
+        Without this the basis terms evaluate to zero on every row and the regression is handed a
+        design matrix with no columns -- a failure that looks like "the model predicts nothing"
+        rather than "the corpus is missing the features".
+        """
+        db = super().corpus()
+        if db is None or not len(db) or self.comp_class is None:
+            return db
+        if any(c.startswith("mult0_") or c.startswith("mem0_") for c in db.df.columns):
+            return db                      # already carries structure (a corpus.csv, not a store)
+
+        from waveflow.build.elaborate import elaborate
+
+        param_names = [c for c in db.df.columns
+                       if c not in ("module_key", "cls_name", "measured_source", "measured_at")
+                       and c not in RESOURCE_ENRICH_SKIP]
+        extra: dict = {}
+        for i, row in enumerate(db.df.to_dict("records")):
+            params = {k: int(row[k]) for k in param_names
+                      if k in row and str(row[k]).lstrip("-").isdigit()}
+            try:
+                probe = elaborate(self.comp_class, params, name="probe")
+            except Exception:
+                continue                   # a row whose params no longer elaborate is not fittable
+            for k, v in self.structure(probe).flatten().items():
+                extra.setdefault(k, {})[i] = v
+        for k, col in extra.items():
+            db.df[k] = [col.get(i) for i in range(len(db.df))]
+        return db
+
     def get_params(self, comp: Any, **runtime) -> dict:
         """Resolved ``HwParam`` values **plus a flat record of the declared structure**.
 
@@ -464,6 +507,14 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
             return self
         if samples is not None:
             return self.fit(samples() if callable(samples) else samples)
+
+        # No artifact and no samples: fit from the corpus if there is one.  Without this a model
+        # given a `store` silently returns unfitted -- every derived counter exact, every fitted one
+        # zero -- which reads as a model that predicts almost nothing rather than one that was never
+        # asked to fit.
+        db = self.corpus()
+        if db is not None and len(db):
+            return self.fit(db)
         return self
 
     def save_model(self, path=None) -> "Path":
@@ -485,30 +536,47 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out
 
-    def fit(self, samples) -> "VitisResourceModel":
-        """Fit LUT/FF from ``[(comp, measured_counters), ...]``.  A no-op with no ``fit_transform``.
+    def fit(self, samples=None) -> "VitisResourceModel":
+        """Fit LUT/FF from a **corpus**, or from ``[(comp, measured_counters), ...]``.
 
-        Features are recomputed from each component rather than taken from the caller, so the fit
-        cannot be trained on a different feature definition than :meth:`predict` will evaluate.
+        With nothing passed it reads :meth:`~waveflow.calib.resource_model.ResourceModel.corpus` --
+        for a model given a ``store``, the record store reduced on demand.  That is the normal path:
+        the measurements are already on disk, addressed by module key, and a fit that re-elaborated
+        components to rediscover them would be doing the same work twice from a worse source.
+
+        The sample-pair form remains for a design whose measurements are not in a store yet.  Either
+        way the features are recomputed here rather than taken from the caller, so the fit cannot be
+        trained on a different feature definition than :meth:`predict` will evaluate.
         """
         if not self._fits:
             return self
         import pandas as pd
 
-        from waveflow.calib.calib import LinCalibModel
+        from waveflow.calib.calib import CalibDataFrame, LinCalibModel
 
-        rows = []
-        for comp, measured in samples:
-            row = dict(self.get_params(comp))          # raw params -- the corpus row shape
-            row.update({c: int(measured[c]) for c in FITTED_COUNTERS if c in measured})
-            rows.append(row)
-        df = pd.DataFrame(rows)
-        comp0 = samples[0][0] if samples else None
+        comp0 = None
+        if samples is None or isinstance(samples, (pd.DataFrame, CalibDataFrame)):
+            df = self._frame(self._fit_data(samples))
+        else:
+            rows = []
+            for comp, measured in samples:
+                row = dict(self.get_params(comp))      # raw params -- the corpus row shape
+                row.update({c: int(measured[c]) for c in FITTED_COUNTERS if c in measured})
+                rows.append(row)
+            df = pd.DataFrame(rows)
+            comp0 = samples[0][0] if samples else None
+
         for c in FITTED_COUNTERS:
             if c not in df.columns:
                 continue
-            basis = self.basis_for(comp0, c) if comp0 is not None else                 [k for k in df.columns if k not in FITTED_COUNTERS]
-            self.fits[c] = LinCalibModel(basis=basis, target=c, name=f"{self.name}.{c}",
+            if comp0 is not None:
+                basis = self.basis_for(comp0, c)
+            else:
+                # No component to ask, so take the basis from the recorded structure itself -- every
+                # term the declaration produces that is not identically zero across the corpus.
+                terms = [DesignStructure.basis_terms_from(r) for r in df.to_dict("records")]
+                basis = self.fit_basis.get(c) or [k for k in sorted(terms[0]) if any(t[k] for t in terms)]
+            self.fits[c] = LinCalibModel(basis=list(basis), target=c, name=f"{self.name}.{c}",
                                          transform_fn=DesignStructure.basis_terms_from).fit(df)
         return self
 

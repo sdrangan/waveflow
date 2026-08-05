@@ -103,26 +103,49 @@ than treated as an outlier.
 Five extra syntheses pinned where it happens — bank depths 40, 48, 56, 60 and 63 are all LUTRAM, 64 is
 block RAM — so the threshold sits between 1008 and 1024 bits per bank.
 
-## The committed corpus
+## Where the measurements go
 
-The sweep writes `results/sweep.json`, which is **untracked** — `results/*.json` is gitignored
-repo-wide. So the numbers are committed as Python source in `vecmult_corpus.py`:
+Each point's report is attributed and **filed as a record**, keyed by the module's elaborated
+structure, into an untracked work tier:
 
-```python
-GRID: dict = {
-    (  512,  32): dict(lut= 964, ff= 415, dsp= 2, bram= 2),
-    ...
-}
+```text
+examples/vecmult/calib/work/zynq7020_vecmult_sweep/modules/<key>/resource/records.jsonl
 ```
 
-Two reasons, and neither is tidiness. Committing the numbers is what makes the measurement **outlive
-the work directory**, and it is what lets the model gates in `tests/examples/test_vecmult.py` run with
-**no toolchain installed** — so a machine without Vitis can still catch a model that stopped
-reproducing its own corpus.
+A deliberate publish promotes that into the example's tracked library, which is what the model reads:
 
-Re-running the sweep regenerates the same grid; the corpus is the snapshot everything else is written
-against.
+```bash
+waveflow_calib publish examples/vecmult/calib/work/zynq7020_vecmult_sweep \
+                       examples/vecmult/calib/platforms/zynq7020_vecmult --apply
+```
+
+Two tiers because a sweep is exploratory and re-runs freely, while a library is reviewed: the
+[work → publish flow](../../guide/platform/workflow.md) keeps an interrupted or experimental run from
+quietly editing committed measurements. The sweep also writes `results/sweep.json`, a human-readable
+summary; it is untracked, and nothing reads it.
+
+The records are the [raw tier](../../guide/calib/corpus.md#it-is-derived-never-authoritative) — the
+corpus the fit reads is *derived* from them on demand, never stored twice.
+
+{: .note }
+> **`GRID` in `vecmult_corpus.py` is not that corpus.** It is the same 16 measurements committed as
+> Python source, and it now serves two narrower jobs: the **oracle** the tests check predictions
+> against with no toolchain installed, and the fallback corpus for `add_rm(None)` when there is no
+> platform to read a store from. Keeping a second independent copy is a feature while one checks the
+> other — it stops being one the moment both claim to be the source.
+
+## Writing your own sweep
+
+{: .warning }
+> `vecmult_sweep.py` is ~150 lines, and only about fifteen of them are about *this design* — the
+> parameter axes, the DAG, the platform name. The rest (resume, incremental save, per-point failure
+> isolation, the argparse entry point) is the same code `fir_block_sweep.py` also contains.
+>
+> That duplication is a gap in the framework rather than something to copy. A `SweepRunner` that owns
+> it is planned; until it lands, take `vecmult_sweep.py` as a working template rather than as a
+> pattern worth reproducing by hand, and expect this section to shrink to a few lines.
 
 ## Next
 
-- [Resource models](./resource_model.md) — turning these 16 points into two rules and one fit.
+- [Resource models](./resource_model.md) — turning these 16 points into two rules, one fit and one
+  integration term.

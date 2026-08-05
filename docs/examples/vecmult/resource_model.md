@@ -270,6 +270,45 @@ weakest    [('vec_mult', 'VecMult')]
 Measured at that configuration: `{'lut': 1370, 'ff': 599, 'dsp': 4, 'bram': 4}`. Across the whole
 corpus, DSP and BRAM are exact at all 16 points and LUT is exact at all 15 in-BRAM points.
 
+### The integration term, and why it is negative here {#integration-term}
+
+A synthesis reports a figure per task **and** a figure for the whole design, and they are not the
+same number. The difference is the **integration term**:
+
+```text
+integration  =  top  −  Σ(modules)
+```
+
+For most designs that term is substantial and positive — it holds the `m_axi` adapters, the
+inter-task FIFOs, the AXI-Lite control block and the DATAFLOW shell. On
+[`fir_block`](../firblock/resource_model.md), which has four tasks, it is **1984 LUT: 29% of the
+design**, the second-largest contributor after the compute.
+
+VecMult is the rare opposite case. It has **one** task and no adapters, so there is almost nothing at
+the boundary for the term to contain — and what remains is negative:
+
+```text
+top          lut 6956          the whole design
+module_sum   lut 6958          VecMult's own cost
+integration  lut   -2          Vitis flattening the single instance
+```
+
+Two LUTs the tool optimized away as it flattened the only instance into the top. Measured at all 16
+points and identical at every one, including across all four port widths — so it is flattening slack
+rather than anything that scales with the interface.
+
+{: .note }
+> **Nothing clamps it at zero.** A negative own-cost is the signal that additivity is leaking across a
+> module boundary, and hiding it would hide exactly what whole-design synthesis exists to catch. It is
+> carried by an [`InterfaceResourceModel`](../../guide/resource_model/predict.md) keyed on the
+> boundary signature — the same class and the same lookup a multi-task composite uses, so the
+> single-task case is not a special path.
+
+The practical consequence is that the model is fitted on **module** figures and the integration term
+is added back, rather than the module model being fitted on design totals with the −2 silently
+absorbed into its coefficients. Same prediction either way here; only one of them stays right when a
+second task appears.
+
 ### Why the verdict is not `EXACT`
 
 Two of the four counters have zero free parameters and reproduce every measurement. The composed

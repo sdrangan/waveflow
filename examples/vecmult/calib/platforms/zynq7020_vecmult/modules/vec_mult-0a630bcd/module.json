@@ -1,0 +1,10 @@
+{
+  "key": "vec_mult-0a630bcd",
+  "cls_name": "VecMult",
+  "cls_module": "examples.vecmult.vecmult",
+  "params": {
+    "dwid": 64,
+    "vlen": 512
+  },
+  "signature": "0a630bcd84f30a164752d5743280168b1897d529e6c566e2ba84327655f6e97b"
+}

@@ -23,6 +23,7 @@ from examples.vecmult.vecmult import (
 )
 from examples.vecmult.vecmult_corpus import (
     GRID,
+    INTEGRATION_TERM,
     LUTRAM_CORNER,
     PART,
     bram_prior,
@@ -320,3 +321,44 @@ def test_lut_does_not_depend_on_the_compile_time_length():
     for dwid in (32, 64, 128):        # 256 excluded: its 512-point is the LUTRAM corner
         luts = {GRID[(v, dwid)]["lut"] for v in (512, 1024, 4096, 16384)}
         assert len(luts) == 1, f"dwid={dwid}: LUT varies with vlen: {luts}"
+
+
+# ---------------------------------------------------------------------------
+# The committed grid vs the record store
+# ---------------------------------------------------------------------------
+
+VEC_PLATFORM = HERE / "calib" / "platforms" / "zynq7020_vecmult"
+
+
+def test_the_committed_grid_agrees_with_the_record_store():
+    """`GRID` is the oracle; the store is the measurement.  They must not drift apart.
+
+    Two independent copies of the same 16 points is a feature exactly while one checks the other --
+    it is what lets the model gates run with no toolchain installed.  It stops being a feature the
+    moment they disagree and nobody notices, because then "the model reproduces its corpus" is being
+    checked against a stale transcription.
+
+    The store holds **per-module** figures and `GRID` holds **whole-design** ones, so the comparison
+    goes through the integration term rather than being direct.  That is not bookkeeping: it is the
+    same decomposition the model predicts with.
+    """
+    from waveflow.calib.record_store import ModuleStore, corpus_from_records
+
+    if not VEC_PLATFORM.is_dir():
+        pytest.skip("vecmult platform library not present")
+
+    db = corpus_from_records(ModuleStore(VEC_PLATFORM), cls_name="VecMult")
+    assert len(db) == len(GRID), f"store has {len(db)} rows, GRID has {len(GRID)}"
+
+    disagree = []
+    for row in db.df.to_dict("records"):
+        key = (int(row["vlen"]), int(row["dwid"]))
+        want = GRID[key]
+        for c in ("lut", "ff", "dsp", "bram"):
+            # store (per module) + integration == GRID (whole design)
+            got = int(row[c]) + int(INTEGRATION_TERM.get(c, 0))
+            if got != int(want[c]):
+                disagree.append(f"{key} {c}: store+integration={got} GRID={want[c]}")
+    assert not disagree, (
+        "the committed grid and the record store describe different hardware:\n  "
+        + "\n  ".join(disagree) + "\nThe store is the measurement; GRID is the transcription.")

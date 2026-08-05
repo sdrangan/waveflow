@@ -31,6 +31,21 @@ from examples.vecmult.vecmult_build import build_vecmult_dag  # noqa: E402
 DWIDS = (32, 64, 128, 256)
 VLENS = (512, 1024, 4096, 16384)
 
+#: The work-tier platform this sweep accumulates into.  Deliberately **not** the name of a tracked
+#: library: a sweep is exploratory and re-runs freely, so it writes to the untracked ``calib/work/``
+#: tier and a deliberate ``publish`` promotes the result:
+#:
+#:     waveflow_calib publish examples/vecmult/calib/work/zynq7020_vecmult_sweep #:                            examples/vecmult/calib/platforms/zynq7020_vecmult --apply
+#:
+#: Setting it at all is what makes the sweep produce a **record store** rather than only a summary
+#: JSON.  Without it ``InspectSynthStep`` attributes the report and has nowhere shared to file it, so
+#: the measurements survive only as numbers a human copies into source -- which is exactly how this
+#: example's corpus started life.
+PLATFORM = "zynq7020_vecmult_sweep"
+PLATFORMS_ROOT = HERE / "calib" / "work"
+PART = "xc7z020clg484-1"
+CLK_FREQ = 100e6
+
 SUMMARY = HERE / "results" / "sweep.json"
 
 
@@ -42,11 +57,18 @@ def label(p: dict) -> str:
     return f"vlen{p['vlen']}_dw{p['dwid']}"
 
 
-def run_point(p: dict, *, through: str) -> dict:
-    """Run one design point through the DAG; return a record (never raises)."""
+def run_point(p: dict, *, through: str, use_platform: bool = True) -> dict:
+    """Run one design point through the DAG; return a record (never raises).
+
+    *use_platform* off is for a ``--dry-run``, which never synthesizes and so has no report to file.
+    """
     started = time.perf_counter()
     try:
-        config = BuildConfig(root_dir=HERE, params={**p, "live_output": False})
+        cfg_kw = dict(root_dir=HERE, params={**p, "live_output": False})
+        if use_platform:
+            cfg_kw.update(platform=PLATFORM, platforms_root=PLATFORMS_ROOT,
+                          part=PART, clk_freq=CLK_FREQ)
+        config = BuildConfig(**cfg_kw)
         results = build_vecmult_dag().run(config, through=through, force=True)
     except Exception as exc:                    # a point that blows up is data, not a stop
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
@@ -108,7 +130,7 @@ def main(argv: "list[str] | None" = None) -> int:
             print(f"[{i}/{len(grid)}] {label(p)} — skipped (already ok)")
             continue
         print(f"[{i}/{len(grid)}] {label(p)} ...", flush=True)
-        rec = run_point(p, through=through)
+        rec = run_point(p, through=through, use_platform=not args.dry_run)
         recs[label(p)] = rec
         if not rec["ok"]:
             print(f"    FAILED: {rec.get('error')}")
