@@ -3,7 +3,8 @@ title: The sweep
 parent: Vector Multiply (resource modelling)
 nav_order: 4
 audience: python
-summary: "Driving 16 design points through the build DAG to get an attributed resource report per point, and what the grid was designed to separate: the two BRAM regimes that look like different laws and are one ceiling. Also the committed corpus, and why it is Python source rather than the sweep's JSON."
+api: [ParamGrid, SweepRunner, Stage, sweep_cli]
+summary: "Driving 16 design points through the build DAG to get an attributed resource report per point. How the sweep script is written — a ParamGrid, a SweepRunner, one Stage and sweep_cli — and what the grid was designed to separate: the two BRAM regimes that look like different laws and are one ceiling. Also the committed corpus, and why it is Python source rather than the sweep's JSON."
 ---
 
 # The sweep
@@ -11,31 +12,64 @@ summary: "Driving 16 design points through the build DAG to get an attributed re
 One synthesis gives you one point. A resource *model* needs a grid, and which grid you choose decides
 what you are able to learn — a sweep that only samples one regime will validate a law it never tested.
 
+## How the sweep is written
+
+The whole of `vecmult_sweep.py`, minus its docstring, is four declarations and a `main`:
+
+```python
+GRID = ParamGrid(vlen=(512, 1024, 4096, 16384), dwid=(32, 64, 128, 256))
+
+RUNNER = SweepRunner(dag_factory=build_vecmult_dag, root_dir=HERE,
+                     platform=PLATFORM, platforms_root=PLATFORMS_ROOT,
+                     part=PART, clk_freq=CLK_FREQ,
+                     extra_params={"live_output": False})
+
+STAGES         = [Stage("resources")]
+DRY_RUN_STAGES = [Stage("codegen_dut", use_platform=False)]
+
+def main(argv=None):
+    return sweep_cli(RUNNER, GRID, description="Sweep vecmult resource points",
+                     stages=STAGES, dry_run_stages=DRY_RUN_STAGES, argv=argv)
+```
+
+Read in order, each line says one thing about *this* design:
+
+| declaration | what it settles |
+|---|---|
+| `ParamGrid` | the points — 4 × 4 = 16, `vlen` first so it is the **outer** loop |
+| `SweepRunner` | which DAG to run, and the device and work-tier library the measurements are keyed by and filed into |
+| `Stage("resources")` | run that DAG through its `resources` step: synthesize, attribute, file |
+| `DRY_RUN_STAGES` | what `--dry-run` does instead — stop at codegen, and attach no platform |
+| `sweep_cli` | turn the three of them into a program with `--help` |
+
+Everything a sweep needs beyond those is supplied: resume, a summary written after every point, a
+failing point recorded rather than aborting the run, progress output and an exit code. None of it is
+written here, and none of it can be forgotten. See
+[Sweeping a design](../../guide/build/sweep.md) for the API in full.
+
+{: .note }
+> **`force=True` is why each point is honest — and you do not pass it.** Without it the DAG would see
+> up-to-date artifacts from the *previous* point and skip, and the report on disk would then be
+> attributed to the wrong configuration. `SweepRunner` forces every run for exactly that reason.
+
 ## Running it
+
+`sweep_cli` derives one flag per axis from the grid, so the two axes above are also the CLI:
 
 ```bash
 python -m examples.vecmult.vecmult_sweep --dry-run   # codegen only, no Vitis — a cheap pre-flight
-python -m examples.vecmult.vecmult_sweep             # 16 points, ~8 minutes
+python -m examples.vecmult.vecmult_sweep             # all 16 points, ~15 minutes
+python -m examples.vecmult.vecmult_sweep --vlen 512 --resume     # one row, continuing a stopped run
 ```
 
 Each point re-runs the whole DAG with different `params`, so every measurement comes from a design
 that was **re-generated, re-simulated, re-checked against its golden and re-synthesized** at that
 configuration. Nothing is reused across points except the source.
 
-```python
-config = BuildConfig(root_dir=HERE, params={**p, "live_output": False})
-results = build_vecmult_dag().run(config, through="resources", force=True)
-```
-
-`force=True` matters. Without it the DAG would see up-to-date artifacts from the *previous* point and
-skip — and the report on disk would then be attributed to the wrong configuration.
-
-{: .warning }
-> **The summary is written after every point, not at the end.** A 16-point grid is ~8 minutes, easily
-> long enough to be interrupted, and writing only at the end means an interruption at point 15 saves
-> nothing *and* leaves the previous run's file in place — a stale corpus that reads as a fresh one.
-> The file records `"complete": true/false` so a partial one cannot be mistaken for a whole one, and
-> `--resume` skips points already recorded as ok.
+At a quarter of an hour the grid is easily long enough to be interrupted, which is why the summary is
+written after every point rather than at the end, and why `--resume` skips the `(point, stage)` pairs
+already recorded as ok — [both belong to the runner](../../guide/build/sweep.md#what-you-get-for-free)
+rather than to this script.
 
 ## The grid, and what it was designed to separate
 
@@ -134,22 +168,9 @@ corpus the fit reads is *derived* from them on demand, never stored twice.
 > platform to read a store from. Keeping a second independent copy is a feature while one checks the
 > other — it stops being one the moment both claim to be the source.
 
-## Writing your own sweep
-
-`vecmult_sweep.py` is now mostly its docstring. The design-specific part is three declarations:
-
-```python
-GRID   = ParamGrid(vlen=VLENS, dwid=DWIDS)
-RUNNER = SweepRunner(dag_factory=build_vecmult_dag, root_dir=HERE,
-                     platform=PLATFORM, platforms_root=PLATFORMS_ROOT,
-                     part=PART, clk_freq=CLK_FREQ)
-STAGES = [Stage("resources")]
-```
-
-Everything else — resume, incremental save, per-point failure isolation, the CLI — belongs to
-[`waveflow.build.sweep`](../../guide/build/sweep.md), which is where to look when writing your own.
-
 ## Next
 
 - [Resource models](./resource_model.md) — turning these 16 points into two rules, one fit and one
   integration term.
+- [Sweeping a design](../../guide/build/sweep.md) — `ParamGrid`, `SweepRunner` and `sweep_cli` in
+  full, for when you write one of your own.

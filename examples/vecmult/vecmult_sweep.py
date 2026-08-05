@@ -11,7 +11,7 @@ The grid is chosen to separate the two BRAM regimes rather than to cover a box u
 ``vlen`` is the **outer** axis because that is how the regimes are organised: a partial run then
 covers whole regimes rather than a slice of each.
 
-Each point is one csynth (~35 s), so the whole grid is about twelve minutes::
+Each point is one csynth, and the whole grid measured 890 s end to end::
 
     python -m examples.vecmult.vecmult_sweep --dry-run    # codegen only, no Vitis
     python -m examples.vecmult.vecmult_sweep
