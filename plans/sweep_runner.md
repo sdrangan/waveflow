@@ -273,7 +273,7 @@ Rewrite both resource sweep scripts against the three pieces.  Expected: ~150 �
 **Gate:** P0 golden still byte-identical; both scripts' CLI surface is a superset of what they have
 today (nothing an existing invocation could do is lost).
 
-### P3b — one timing sweep, to prove the stage model
+### P3b — one timing sweep, to prove the stage model — **DONE**
 
 A multi-stage sweep driving `CollectTimingStep` over a workload grid, against a design that already
 has an attached `TimingModel`.  This is the phase that decides whether `Stage` is the right shape or
@@ -283,6 +283,45 @@ while the abstraction is still cheap to change.
 **Gate:** the corpus a swept run produces equals the one the equivalent hand-written loop produces —
 `waveflow/calib/fixture.py` is the reference, since it already drives collect_rtl / collect_pysim over
 a set of points.
+
+*Result: met, against the stronger reference — the hand-typed constants themselves.*
+
+| point | measured span | `calibrate_platform.RTL_SPAN` | bus term `n + 2(t−1)` | residual |
+|---|---|---|---|---|
+| 128 | **183.0** | 183.0 ✓ | 142 | 41 |
+| 256 | 327.0 | — | 286 | 41 |
+| 512 | **615.0** | 615.0 ✓ | 574 | 41 |
+| 1024 | 1191.0 | — | 1150 | 41 |
+
+4 points, 211 s, **one** 45 s csynth for the lot.  The residual is a flat 41 across an 8× span — the
+same 41 the `-m xsi` trace test asserts independently.
+
+**`Stage` is the right shape**, with one addition: `force` had to stop being unconditional.  A build
+sweep must force (freshness is mtime-based and knows nothing about params); a workload sweep must
+not (the hardware is identical at every point).  Named steps rather than an inferred set, because
+`RtlSimStep` declares no params and still reads the point through the scenario its `prepare` writes.
+
+Getting there took three prerequisites that had nothing to do with `Stage` — no example DAG drove
+`CollectTimingStep` at all, the trace manifest named tasks by function where the timing model named
+them by configuration (so the two corpora never joined), and `platform_dir` was never forwarded to
+the DUT.  See commits 4960a51 / 3cd9b4c / d9980aa.
+
+#### Two defects it exposed, both open {#p3b-open}
+
+1. **Silent partial coverage.**  `n=1024` captured 2 of 4 firings — `seq=3, reader=2, writer=2` is a
+   run cut off mid-flight, `xsi_run_cycles`' bound being marginal there.  Nothing objected:
+   `RtlSimStep` asserts nothing by design, and the `all_ok` in the log is the **pysim's** golden, not
+   the RTL's.  A sweep quietly covering half a point is the failure this design guards against
+   everywhere else, so the fix belongs at the step: compare firings captured against jobs issued and
+   fail the point when they disagree.
+2. **The fit is order-dependent.**  `current_dly` climbs 0 → 148 across the points, because each
+   point's pysim loads the `params.json` fitted from the points before it.  `max_abs_residual` of
+   1e-14 on 4 points against 3 free parameters is therefore tautological rather than validating.
+   Collection should run against a **frozen** model and fit once at the end — which is a stage
+   question (collect-all, then fit), so it belongs here rather than in the timing model.
+
+Neither invalidates the gate: the raw spans are clean and the 41 is consistent.  Both must be fixed
+before this corpus is published to the tracked tier.
 
 ### P4 — re-measure once, on the real path — **DONE**
 
