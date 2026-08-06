@@ -3,6 +3,7 @@ title: Installation
 parent: Guide
 nav_order: 1
 has_children: true
+summary: "Two paths, and which you want depends on whether you are using Waveflow or changing it: a pip install from GitHub into a virtual environment for building designs with it as a library, or a clone plus an editable install with the development tools for modifying it and running the bundled examples and tests. Python 3.10 or newer either way; the AI-assistant integrations are optional and covered separately."
 ---
 
 # Installing Waveflow

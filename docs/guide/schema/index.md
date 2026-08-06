@@ -3,6 +3,7 @@ title: Data Schemas
 parent: Guide
 nav_order: 2
 has_children: true
+summary: "The type system, and the one description both sides are generated from. A DataSchema class states its fields and their bitwidths once — at the arbitrary precisions Vitis HLS supports — and from it Waveflow derives the Python representation (NumPy-backed wherever it can be) and the C++ header together: a matching struct plus templated serializers for arrays, HLS streams and AXI4-Streams. That is what makes the Python model and the HLS implementation incapable of disagreeing about layout. Split into Python (building schemas, the source of truth) and HLS (the synthesizable C++ they generate)."
 ---
 
 # Waveflow Data Schemas

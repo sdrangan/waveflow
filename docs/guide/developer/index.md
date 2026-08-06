@@ -3,6 +3,7 @@ title: Developers
 parent: Guide
 nav_order: 14
 has_children: true
+summary: "Notes for people editing the Waveflow package itself rather than building designs with it. Currently one topic: running the MCP server's tests headless, without a host editor to supply the file tools."
 ---
 
 # Guide for Developers

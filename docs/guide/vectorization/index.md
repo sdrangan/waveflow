@@ -3,6 +3,7 @@ title: Vectorization
 parent: Guide
 nav_order: 3
 has_children: true
+summary: "How the functional simulation manages to be fast and bit-exact at once. Data lives in NumPy arrays end to end, so a whole vector moves through one C-level call instead of a Python loop over elements — and the result still matches the Vitis HLS datapath bit for bit. Split into Python (defining NumPy-backed vectors and computing on them, one page per element type) and HLS (packing arrays into words: the raw array and its lane loop, the generated wrapper struct, and complex elements)."
 ---
 
 # Vectorization
