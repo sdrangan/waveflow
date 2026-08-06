@@ -120,4 +120,6 @@ linear-in-width would look harmless.
 
 ## Next
 
+- [DUT codegen](./codegen_dut.md) — the `ap_ctrl_none` top this rung synthesizes, and the headers
+  the body includes.
 - [The sweep](./sweep.md) — 16 design points, and the grid that separates the two BRAM regimes.

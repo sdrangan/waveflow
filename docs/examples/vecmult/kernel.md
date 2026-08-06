@@ -3,7 +3,7 @@ title: The kernel
 parent: Vector Multiply (resource modelling)
 nav_order: 2
 audience: hls
-summary: "The hand-written vec_mult_task.h: why a shared input port forces a buffer (and why two separate streams would not), why sustaining II=1 forces a cyclic ARRAY_PARTITION, and how the ragged final beat is handled. This is the file every resource number on the example traces back to."
+summary: "The hand-written vec_mult_task.h: why a shared input port forces a buffer (and why two separate streams would not), why the buffer is firing-local rather than declared state, why sustaining II=1 forces a cyclic ARRAY_PARTITION, how the ragged final beat is handled, and why the product wraps rather than saturates. This is the file every resource number on the example traces back to."
 ---
 
 # The kernel
@@ -26,9 +26,25 @@ static void vec_mult_task(hls::stream<ap_uint<DWID> >& s_in,
 
     samp_t buf[VLEN];
 #pragma HLS ARRAY_PARTITION variable=buf cyclic factor=LW dim=1
+
+    samp_t xlane[LW], ylane[LW], zlane[LW];
+#pragma HLS ARRAY_PARTITION variable=xlane complete dim=1
     ...
 }
 ```
+
+`buf` is partitioned **cyclic**; the three lane arrays are partitioned **complete**. The difference
+is what each one is for: `buf` is storage that must serve `LW` accesses a cycle, so it stays a memory
+split into banks, while `xlane`/`ylane`/`zlane` are `LW`-element staging registers written and read
+whole every beat — completely partitioning them makes them registers rather than a memory at all.
+
+{: .note }
+> **`buf` is firing-local, not state.** It is filled in `LOAD` and fully consumed in `MULT`, so
+> nothing has to survive to the next firing — which is why it is an ordinary local and **not** an
+> [`add_state`](../firblock/state.md) declaration. `fir_block`'s taps are the contrasting case: they
+> carry across firings and must be declared, because the generator has to give them a lifetime the
+> C++ scope does not. Here the whole buffer dies with the job, and its cost is still paid — that is
+> the point the [resource model](./resource_model.md) makes.
 
 ## Why it buffers
 
@@ -100,6 +116,47 @@ a variable-position mux — a crossbar — and that is why LUT grows as `LW²` r
 
 The [testbench](./testbench.md) checks `n ∈ {1, 7, 63, 64, 65, 253}` for exactly this reason: a
 full-length run never reaches the partial beat.
+
+## The multiply
+
+`MULT` has the same beat structure as `LOAD` — same ragged `nlane`, same inner loop run to the
+compile-time `LW` and guarded rather than bounded. What is new is the arithmetic, and one line of it
+is where the twin can silently drift:
+
+```cpp
+MULT:
+    for (int i = 0; i < n; i += LW) {
+#pragma HLS PIPELINE II=1
+#pragma HLS LOOP_TRIPCOUNT max=VLEN
+        const int nlane = (n - i < LW) ? (n - i) : LW;
+        vm_au::read_stream_lane<DWID>(s_in, ylane, nlane);
+        for (int j = 0; j < LW; ++j) {
+#pragma HLS UNROLL
+            ap_int<2 * 16> p = (ap_int<2 * 16>)buf[i + j] * (ap_int<2 * 16>)ylane[j];
+            zlane[j] = (samp_t)p;
+        }
+        vm_au::write_stream_lane<DWID>(zlane, z_out, nlane);
+    }
+```
+
+This is the loop the [DSP rule](./resource_model.md#the-three-laws) prices: `LW` multiplies per beat,
+16-bit operands, one DSP each. It reads `buf` `LW` samples at a time — the access the `cyclic`
+partition exists to make conflict-free — and writes through the generated `write_stream_lane`, the
+mirror of the read on the way in.
+
+{: .warning }
+> **The product wraps; it does not saturate.** The multiply widens to `ap_int<32>` and the result is
+> cast straight back to `samp_t` (`ap_int<16>`), discarding the high half. That is not carelessness
+> about overflow — it is what makes the C++ agree with the Python golden, which is numpy `int16`
+> arithmetic and wraps. A saturating `ap_fixed` here would be the *more careful* choice and the
+> *wrong* one: every product that overflowed would differ from Python, and only for operands large
+> enough to reach the corner, so a short test would never see it. The
+> [csim twin check](./testbench.md) is what holds the two definitions together.
+
+`LOOP_TRIPCOUNT max=VLEN` is for the synthesis **report**, not the hardware. `n` is a runtime value,
+so without it HLS cannot bound the latency it prints. It is a deliberate over-estimate — the loop
+actually runs `ceil(n/LW)` times — which is safe precisely because the pragma never reaches the
+generated logic.
 
 ## The response
 

@@ -95,6 +95,10 @@ reach synthesis and cannot contribute a resource measurement.
   ragged final beat.
 - [Testbench](./testbench.md) — the pysim golden and the csim twin check, driven from one set of
   vectors.
+- [DUT codegen](./codegen_dut.md) — how one leaf lowers to an `ap_ctrl_none` top, what
+  `template_args` reaches, and the two kinds of file in `include/`.
+- [Testbench codegen](./codegen_tb.md) — what is generated for the csim rung and what deliberately
+  is not.
 - [The sweep](./sweep.md) — how the sweep script is written, 16 design points through the DAG, and
   the committed corpus.
 - [Resource models](./resource_model.md) — the two device rules and the one fit, the structure→form

@@ -104,7 +104,14 @@ class VecResp(DataList):
 
 
 def vec_type(vlen: int = DEFAULT_VLEN):
-    """The payload buffer type: a vector of up to ``vlen`` samples."""
+    """The payload buffer type: a vector of up to ``vlen`` samples.
+
+    Used by the build to emit the array-utils headers at the compile-time bound
+    (``vecmult_build.gen_headers``), and held on the module as ``vec_cls`` where it contributes to
+    the resource-record key.  :meth:`VecMult.run_iter` does **not** use it: it writes a
+    :class:`DataArray` specialized at the *runtime* ``n``, because the pysim model has no buffer to
+    size -- the ``vlen``-sized storage is a fact about the C++ body, not about the behaviour.
+    """
     return DataArray.specialize(Samp, max_shape=(int(vlen),), static=True)
 
 
@@ -147,6 +154,13 @@ class VecMult(FreeRunMod):
         for ep in (self.s_in, self.z_out):
             self.add_endpoint(ep)
 
+        # Never READ by this class -- and deleting it anyway is a data migration, not a cleanup.  It
+        # is part of the elaborated structure, so it is part of the module KEY the committed resource
+        # records are filed under: removing it moves all 16 VecMult keys at once and orphans
+        # calib/platforms/zynq7020_vecmult.  `tests/calib/test_key_stability.py` catches exactly that.
+        # It carries no information `vlen` does not already, so it is a fair candidate for a
+        # *deliberate* re-key -- with the store regenerated in the same commit.  See
+        # plans/key_stability.md.
         self.vec_cls = vec_type(int(self.vlen))
 
     @property

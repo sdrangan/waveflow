@@ -1,7 +1,7 @@
 ---
 title: The sweep
 parent: Vector Multiply (resource modelling)
-nav_order: 4
+nav_order: 6
 audience: python
 api: [ParamGrid, SweepRunner, Stage, sweep_cli]
 summary: "Driving 16 design points through the build DAG to get an attributed resource report per point. How the sweep script is written — a ParamGrid, a SweepRunner, one Stage and sweep_cli — and what the grid was designed to separate: the two BRAM regimes that look like different laws and are one ceiling. Also the committed corpus, and why it is Python source rather than the sweep's JSON."

@@ -1,7 +1,7 @@
 ---
 title: Resource models
 parent: Vector Multiply (resource modelling)
-nav_order: 5
+nav_order: 7
 audience: python
 api: [resource_structure, get_rm, VitisResourceModel, VitisDerived, DesignStructure, dsp_count, bram_estimate]
 summary: "What VecMult asserts about its own cost. DSP and BRAM come from device rules with zero fitted parameters — you supply the structural counts, the library supplies the silicon. LUT and FF are fitted, on a basis derived from the same structure declaration rather than invented. The dividing line is not arbitrary: hard primitives are countable, soft fabric is not — which is why the model is a concat of a derived half and a fitted half."
