@@ -1,6 +1,6 @@
 ---
 title: Understanding Vitis Register Maps
-parent: Register Map (simple function)
+parent: Register mapped simple function
 nav_order: 1
 has_children: false
 ---

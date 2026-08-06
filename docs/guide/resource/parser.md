@@ -1,6 +1,6 @@
 ---
 title: Reading the report — CsynthParser
-parent: Resource analysis
+parent: Resource Analysis Tools
 nav_order: 2
 has_children: false
 audience: python

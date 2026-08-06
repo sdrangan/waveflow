@@ -1,8 +1,9 @@
 ---
-title: Memory Copy 
+title: Free-running memory copy
 parent: Examples
 nav_order: 5
 has_children: true
+summary: "The worked example for the free-running flow, and the counterpart to the register-map one. Where a control-driven kernel is a single host-launched function, this is a composite of free-running hls::tasks copying words between memory regions — which Vitis cannot co-simulate, so it is verified by driving the real RTL cycle by cycle through an XSI BFM. It also reuses the MemRStream / MemWStream adaptors, whose timing models ship pre-fit, so the loosely-timed pysim reproduces the RTL with no calibration of its own."
 ---
 # Memory Copy — a free-running composite kernel
 

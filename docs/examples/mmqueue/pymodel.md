@@ -1,6 +1,6 @@
 ---
 title: The Python model
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 4
 has_children: false
 ---

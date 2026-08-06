@@ -1,6 +1,6 @@
 ---
 title: Module Overview
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 1
 ---
 # Interleaver — a gather accelerator

@@ -1,6 +1,6 @@
 ---
 title: The two kernels
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 6
 ---
 # The two kernels — one filter, two unrolling structures

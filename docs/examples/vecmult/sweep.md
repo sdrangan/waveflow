@@ -1,6 +1,6 @@
 ---
 title: The sweep
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 6
 audience: python
 api: [ParamGrid, SweepRunner, Stage, sweep_cli]

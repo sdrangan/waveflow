@@ -1,6 +1,6 @@
 ---
 title: Fitting the timing model
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 11
 ---
 # Fitting the timing model

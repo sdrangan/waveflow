@@ -1,6 +1,6 @@
 ---
 title: Module Overview
-parent: Memory Copy
+parent: Free-running memory copy
 nav_order: 1
 ---
 # Memory Copy

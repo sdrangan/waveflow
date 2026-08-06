@@ -1,6 +1,6 @@
 ---
 title: RTL simulation
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 8
 ---
 # RTL simulation — does the state actually survive?

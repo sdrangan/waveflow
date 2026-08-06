@@ -1,6 +1,6 @@
 ---
 title: Viewing Timing and Bursts
-parent: Shared Memory (histogram)
+parent: Histogram with shared memory
 nav_order: 6
 has_children: false
 ---

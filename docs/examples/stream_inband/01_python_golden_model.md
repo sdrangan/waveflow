@@ -1,6 +1,6 @@
 ---
 title: Python Golden Model
-parent: Stream In-Band Control (polynomial)
+parent: Streaming polynomial
 nav_order: 1
 ---
 

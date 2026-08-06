@@ -1,8 +1,9 @@
 ---
-title: Register Map (simple function)
+title: Register mapped simple function
 parent: Examples
 nav_order: 2
 has_children: true
+summary: "The first end-to-end example: design, simulation, synthesis and RTL co-simulation of a standalone control-driven Vitis kernel, over the simplest AXI interface there is — an AXI-Lite register map. A host modelled as a SimObj drives the launch protocol (write the inputs, assert ap_start, poll ap_done, read the result), so a system simulation confirms the design works before any testbench exists, and the measured RTL cycles are compared back against the Python estimate."
 ---
 # Register Map Interface for a Simple Function
 

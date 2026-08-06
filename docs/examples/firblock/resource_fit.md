@@ -1,6 +1,6 @@
 ---
 title: The sweep and its results
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 10
 has_children: false
 audience: python

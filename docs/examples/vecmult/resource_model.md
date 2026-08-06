@@ -1,6 +1,6 @@
 ---
 title: Resource models
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 7
 audience: python
 api: [resource_structure, get_rm, VitisResourceModel, VitisDerived, DesignStructure, dsp_count, bram_estimate]

@@ -1,6 +1,6 @@
 ---
 title: Sequential execution
-parent: Register Map (simple function)
+parent: Register mapped simple function
 nav_order: 4
 has_children: false
 ---

@@ -1,6 +1,6 @@
 ---
 title: Testbench
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 3
 audience: python
 summary: "Two bodies, one behaviour, and the rung that makes them agree. The pysim testbench drives one job through the SimPy model; the csim rung replays that exact job through the hand-written C++ and compares element for element. csynth consumes the verdict, so a design whose twin check failed cannot contribute a resource measurement."

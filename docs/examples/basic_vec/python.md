@@ -1,6 +1,6 @@
 ---
 title: The Python model
-parent: Basic Vectorization (MAC)
+parent: Basic vector arithmetic
 nav_order: 1
 ---
 # The Python golden model

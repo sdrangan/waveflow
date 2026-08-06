@@ -1,6 +1,6 @@
 ---
 title: The timing model
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 8
 ---
 # The compute stage's timing model

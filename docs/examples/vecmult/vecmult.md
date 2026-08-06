@@ -1,6 +1,6 @@
 ---
 title: The module
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 1
 audience: python
 applies_to: [FreeRunMod]

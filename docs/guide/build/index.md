@@ -3,6 +3,7 @@ title: Build System
 parent: Guide
 nav_order: 9
 has_children: true
+summary: "The path from a Python design to its Vitis outputs, modelled as a DAG of typed steps. Each step declares the named artifacts it consumes and produces — files on disk or in-memory Python objects — and the DAG wires the dependencies, runs them in topological order, propagates failures, and skips whatever is already fresh. One flow and one fidelity ladder (schema/codegen, pysim golden, csim, csynth) with a fork only at the RTL rung: a control-driven top goes through Vitis cosim, a free-running composite through XSI and a BFM. Also covers sweeping a parameter grid through the same DAG."
 ---
 
 # Build System

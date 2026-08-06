@@ -1,6 +1,6 @@
 ---
 title: C and RTL Simulation
-parent: Shared Memory (histogram)
+parent: Histogram with shared memory
 nav_order: 5
 has_children: false
 ---

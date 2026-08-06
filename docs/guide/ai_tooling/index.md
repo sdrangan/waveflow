@@ -3,6 +3,7 @@ title: AI Tooling
 parent: Guide
 nav_order: 15
 has_children: true
+summary: "The optional AI-assistant integrations: a VS Code extension, an MCP server exposing Waveflow's hardware-design tools to agents, OpenAI-backed semantic search over the example corpus, and the keys and environment each needs. None of them are required — the core package runs standalone — and this is an evolving area whose pages can lag the code, so treat them as intent rather than exact steps."
 ---
 
 # AI Tooling

@@ -1,6 +1,6 @@
 ---
 title: C-Sim Functional Verification
-parent: Stream In-Band Control (polynomial)
+parent: Streaming polynomial
 nav_order: 3
 ---
 

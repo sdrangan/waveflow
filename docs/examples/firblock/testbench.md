@@ -1,6 +1,6 @@
 ---
 title: Testbench (Python)
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 5
 ---
 # Testbench — how do you know stateful hardware is right?

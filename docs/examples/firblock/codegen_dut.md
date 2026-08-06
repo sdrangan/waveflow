@@ -1,6 +1,6 @@
 ---
 title: DUT codegen
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 7
 ---
 # DUT codegen — the graph becomes an `hls::task` top

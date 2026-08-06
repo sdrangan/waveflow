@@ -1,6 +1,6 @@
 ---
 title: Testbench codegen
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 5
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Timing — LT model + cosim calibration
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 9
 has_children: false
 ---
@@ -243,7 +243,7 @@ committed.
   and the RTL conformance whose cycle counts feed the calibration here.
 - The [C and RTL simulation](./rtlsim.md) page — where the committed RTL cycle
   counts this calibration fits come from.
-- The [Shared Memory (histogram)](../shared_mem/) example — the previous step in the
+- The [Histogram with shared memory](../shared_mem/) example — the previous step in the
   [examples progression](../), where the `m_axi` shared-memory pattern is introduced,
   with its own [RTL cosim](../shared_mem/rtlsim.md) and
   [committed timing figures](../shared_mem/timing.md).

@@ -1,6 +1,6 @@
 ---
 title: RTL Cosim Timing Verification
-parent: Stream In-Band Control (polynomial)
+parent: Streaming polynomial
 nav_order: 5
 ---
 

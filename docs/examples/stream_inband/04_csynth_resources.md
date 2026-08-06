@@ -1,6 +1,6 @@
 ---
 title: C-Synth Resource Estimation
-parent: Stream In-Band Control (polynomial)
+parent: Streaming polynomial
 nav_order: 4
 ---
 

@@ -1,8 +1,9 @@
 ---
-title: Interleaver (gather)
+title: Composite kernel interleaver
 parent: Examples
 nav_order: 6
 has_children: true
+summary: "A gather accelerator — Y[i] = X[P[i]], reordering one vector under an index vector. It builds on the data mover by adding the two things copying never needs: a real compute stage, and on-chip random access, holding X in block RAM so the index-driven reads are single-cycle. Same free-running composite flow, and this is where fitting a custom component's own timing model is taken up rather than inherited."
 ---
 # Interleaver — a gather accelerator with a custom compute stage
 

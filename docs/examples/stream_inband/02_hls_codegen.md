@@ -1,6 +1,6 @@
 ---
 title: HLS Code Generation
-parent: Stream In-Band Control (polynomial)
+parent: Streaming polynomial
 nav_order: 2
 ---
 

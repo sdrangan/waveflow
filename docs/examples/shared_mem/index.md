@@ -1,11 +1,12 @@
 ---
-title: Shared Memory (histogram)
+title: Histogram with shared memory
 parent: Examples
 nav_order: 4
 has_children: true
+summary: "The payload moves off the control plane and into memory. A histogram accelerator takes three buffer addresses in its command, reads samples and bin edges and writes counts back over a single AXI4 memory-mapped master, while a stream still carries the command and the status response. The first example to exercise multiple distinct buffers at independent addresses, two element types over one bundle, and bounds checks that select a typed error status."
 ---
 
-# Shared Memory (histogram)
+# Histogram with shared memory
 
 The **shared-memory** pattern moves the *data* off the control plane and into
 memory: the accelerator reads its inputs and writes its outputs over an AXI4

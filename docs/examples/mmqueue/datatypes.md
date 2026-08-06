@@ -1,6 +1,6 @@
 ---
 title: Data types — command and formats
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 2
 has_children: false
 ---

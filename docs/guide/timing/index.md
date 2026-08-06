@@ -3,6 +3,7 @@ title: Timing Analysis Tools
 parent: Guide
 nav_order: 11
 has_children: true
+summary: "Getting time back out of a run. Two complementary views, each buildable by hand or from a trace — timing diagrams (waveforms, a value box per transition, for a 10 to 50 cycle zoom) and activity diagrams (activity bands plus an optional occupancy panel, for the whole run and stage overlap) — plus the build steps that dump a VCD of a free-running kernel's internal channels and bind its signals by exact name, protocol analysis for AXI-Lite, AXI-Stream and AXI-MM, and the three subtle ways such a measurement goes silently wrong."
 ---
 
 # Waveflow Timing Analysis Tools

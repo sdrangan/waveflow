@@ -1,8 +1,9 @@
 ---
-title: Block FIR (state + fixed point)
+title: Block FIR with state
 parent: Examples
 nav_order: 8
 has_children: true
+summary: "The first design in the tree whose firings are not independent. A block FIR has to carry two things from one firing to the next, with different lifetimes — the coefficients, loaded once, and the tail of the previous block — so both are storage the module itself owns and declares with add_state. In fixed point, as a four-module composite, RTL-gated and resource-modelled: the advanced counterpart to the vector multiply."
 ---
 # Block FIR — a stateful accelerator, in fixed point, built two ways
 

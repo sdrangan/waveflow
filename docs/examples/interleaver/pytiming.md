@@ -1,6 +1,6 @@
 ---
 title: Timing in the pysim
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 9
 ---
 # Timing in the pysim

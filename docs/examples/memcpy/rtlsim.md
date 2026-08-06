@@ -1,6 +1,6 @@
 ---
 title: RTL simulation
-parent: Memory Copy
+parent: Free-running memory copy
 nav_order: 6
 ---
 

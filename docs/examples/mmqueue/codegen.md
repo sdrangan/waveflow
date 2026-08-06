@@ -1,6 +1,6 @@
 ---
 title: Code generation
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 6
 has_children: false
 ---

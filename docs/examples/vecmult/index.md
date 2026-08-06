@@ -1,8 +1,9 @@
 ---
-title: Vector Multiply (resource modelling)
+title: Vector multiply resource modeling
 parent: Examples
 nav_order: 5.5
 has_children: true
+summary: "Measuring and modelling what a design costs. A free-running vector multiplier swept across its two parameters, with the measurements turned into resource models: formulas where the hardware is derivable, a fit only where it is not. The arithmetic is trivial on purpose — the subject is that four counters obey three different kinds of law, and telling them apart is what separates a model you can trust from a curve that happens to pass through your measurements."
 ---
 # Vector Multiply — measuring and modelling what a design costs
 
@@ -106,7 +107,7 @@ reach synthesis and cannot contribute a resource measurement.
 
 ## See also
 
-- [Resource analysis](../../guide/resource/) — where the measurements come from.
+- [Resource Analysis Tools](../../guide/resource/) — where the measurements come from.
 - [Sweeping a design](../../guide/build/sweep.md) — the sweep API this example is the worked instance
   of.
 - [Resource models](../../guide/resource_model/) — the concepts this example is the worked instance of.

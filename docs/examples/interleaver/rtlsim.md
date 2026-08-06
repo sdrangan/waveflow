@@ -1,6 +1,6 @@
 ---
 title: RTL simulation
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 6
 ---
 

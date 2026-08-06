@@ -1,6 +1,6 @@
 ---
 title: Python Simulation
-parent: Shared Memory (histogram)
+parent: Histogram with shared memory
 nav_order: 3
 has_children: false
 ---
