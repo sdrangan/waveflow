@@ -106,7 +106,7 @@ reach synthesis and cannot contribute a resource measurement.
 
 ## See also
 
-- [Resource analysis](../../guide/resource/) — where the measurements come from.
+- [Resource Analysis Tools](../../guide/resource/) — where the measurements come from.
 - [Sweeping a design](../../guide/build/sweep.md) — the sweep API this example is the worked instance
   of.
 - [Resource models](../../guide/resource_model/) — the concepts this example is the worked instance of.

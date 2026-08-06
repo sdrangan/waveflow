@@ -1,14 +1,14 @@
 ---
-title: Resource analysis
+title: Resource Analysis Tools
 parent: Guide
-nav_order: 13.5
+nav_order: 11.5
 has_children: true
 audience: python
 api: [CsynthParser, attribute_resources, report_from_solution, SynthReport]
 summary: "The measurement side of FPGA resource utilization: what an FPGA's resources are, how Vitis estimates them after C-synthesis, how to read that report with CsynthParser, and how to decompose a composite kernel's total into the modules and the interface logic that caused it. This section extracts the numbers; Resource models predict them, and Model calibration stores and fits them."
 ---
 
-# Resource analysis
+# Resource Analysis Tools
 
 Any hardware module occupies **resources** — physical components of the silicon it is built from. An
 ASIC flow measures these as **area** and **power**. Waveflow's initial focus is FPGA flows, specifically

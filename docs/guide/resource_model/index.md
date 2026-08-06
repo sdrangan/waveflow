@@ -10,7 +10,7 @@ summary: "Predicting a design's resource utilization without synthesizing it. On
 
 # Resource Models
 
-[Resource analysis](../resource/) *measures* utilization from a synthesis report. This section
+[Resource Analysis Tools](../resource/) *measures* utilization from a synthesis report. This section
 *predicts* it, so a design-space exploration can price thousands of configurations from a handful of
 syntheses.
 
@@ -99,6 +99,6 @@ interface term — is [the block FIR](../../examples/firblock/resource_model.md)
 
 - [Model calibration](../calib/) — the shared base these models are built on: the `CalibModel` shape,
   the corpus format, the confidence levels and the model kinds.
-- [Resource analysis](../resource/) — where the measurements these models are built from come from.
+- [Resource Analysis Tools](../resource/) — where the measurements these models are built from come from.
 - [Model calibration](../calib/) — storing measurements per module, and the confidence machinery.
 - [Timing Models](../timing_model/) — the same role on the other axis.

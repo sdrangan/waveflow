@@ -1,6 +1,6 @@
 ---
 title: Composite kernels
-parent: Resource analysis
+parent: Resource Analysis Tools
 nav_order: 3
 has_children: false
 audience: python

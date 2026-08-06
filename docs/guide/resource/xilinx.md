@@ -1,6 +1,6 @@
 ---
 title: FPGA resources
-parent: Resource analysis
+parent: Resource Analysis Tools
 nav_order: 1
 has_children: false
 audience: python

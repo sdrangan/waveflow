@@ -5,7 +5,7 @@ nav_order: 8
 has_children: false
 audience: python
 api: [InspectSynthStep, store_report, SynthReport]
-summary: "Filing resource measurements as calibration data: the InspectSynthStep build rung that attributes a csynth report and stores the per-module records, how synthesis cost is recorded rather than modelled, and how to sweep a parameter grid so the library accumulates. The analysis mechanics — reading the report and decomposing a composite — are in Resource analysis; this page is about keeping the results."
+summary: "Filing resource measurements as calibration data: the InspectSynthStep build rung that attributes a csynth report and stores the per-module records, how synthesis cost is recorded rather than modelled, and how to sweep a parameter grid so the library accumulates. The analysis mechanics — reading the report and decomposing a composite — are in Resource Analysis Tools; this page is about keeping the results."
 ---
 
 # Resource measurements
@@ -17,7 +17,7 @@ synthesis.
 
 {: .note }
 > This page covers storing and sweeping. For how a report is read and how a composite's total is
-> decomposed into modules and interface logic, see [Resource analysis](../resource/) — in particular
+> decomposed into modules and interface logic, see [Resource Analysis Tools](../resource/) — in particular
 > [Composite kernels](../resource/composite.md), which explains the attribution this page files.
 
 ## The build step
@@ -112,5 +112,5 @@ mechanism by which a large design space costs far fewer runs than it has points.
 ## See also
 
 - [Module keys and the record store](../calib/modules.md) — how a measurement is addressed, verified, filed.
-- [Resource analysis](../resource/) — reading the report and decomposing a composite.
+- [Resource Analysis Tools](../resource/) — reading the report and decomposing a composite.
 - [Platforms](../platform/identity.md) — resource counts are part- and clock-specific, and keyed accordingly.
