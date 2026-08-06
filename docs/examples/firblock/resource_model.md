@@ -1,6 +1,6 @@
 ---
 title: Resource models
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 9
 has_children: false
 audience: python

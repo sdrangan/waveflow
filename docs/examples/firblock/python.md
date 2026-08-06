@@ -1,6 +1,6 @@
 ---
 title: Python
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 4
 ---
 # Python Model

@@ -1,6 +1,6 @@
 ---
 title: DUT codegen
-parent: Memory Copy
+parent: Free-running memory copy
 nav_order: 4
 ---
 

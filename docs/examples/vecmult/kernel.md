@@ -1,6 +1,6 @@
 ---
 title: The kernel
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 2
 audience: hls
 summary: "The hand-written vec_mult_task.h: why a shared input port forces a buffer (and why two separate streams would not), why the buffer is firing-local rather than declared state, why sustaining II=1 forces a cyclic ARRAY_PARTITION, how the ragged final beat is handled, and why the product wraps rather than saturates. This is the file every resource number on the example traces back to."

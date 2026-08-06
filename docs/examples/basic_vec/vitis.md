@@ -1,6 +1,6 @@
 ---
 title: The Vitis equivalent
-parent: Basic Vectorization (MAC)
+parent: Basic vector arithmetic
 nav_order: 2
 ---
 # The Vitis equivalent (hand-written)

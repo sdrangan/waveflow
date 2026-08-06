@@ -1,8 +1,9 @@
 ---
-title: Basic Vectorization (MAC)
+title: Basic vector arithmetic
 parent: Examples
 nav_order: 1
 has_children: true
+summary: "The front door for vectorization, and the smallest demonstration of the claim the rest of the framework rests on: one element-wise multiply-accumulate, computed over NumPy arrays with no per-element Python loop, in integer, float and fixed point — and asserted equal to the Vitis kernel bit for bit in all three. A data and schema example, so it comes before any module-to-module interface exists."
 ---
 # Basic Vectorization — one MAC, bit-exact
 

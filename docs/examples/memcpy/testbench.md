@@ -1,6 +1,6 @@
 ---
 title: Testbench (Python)
-parent: Memory Copy
+parent: Free-running memory copy
 nav_order: 3
 ---
 

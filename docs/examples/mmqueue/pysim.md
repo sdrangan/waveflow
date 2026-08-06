@@ -1,6 +1,6 @@
 ---
 title: Python simulation
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 5
 has_children: false
 ---

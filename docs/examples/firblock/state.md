@@ -1,6 +1,6 @@
 ---
 title: Cross-firing state
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 2
 ---
 # Cross-firing state — two flavours in one module

@@ -1,6 +1,6 @@
 ---
 title: System simulation
-parent: Register Map (simple function)
+parent: Register mapped simple function
 nav_order: 3
 has_children: false
 ---

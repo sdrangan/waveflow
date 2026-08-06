@@ -1,6 +1,6 @@
 ---
 title: Python
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 2
 ---
 # Python Model

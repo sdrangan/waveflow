@@ -1,6 +1,6 @@
 ---
 title: Understanding AXI Memory-Mapped
-parent: Shared Memory (histogram)
+parent: Histogram with shared memory
 nav_order: 1
 has_children: false
 ---

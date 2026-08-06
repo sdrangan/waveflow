@@ -1,6 +1,6 @@
 ---
 title: Visualizing timing
-parent: Memory Copy
+parent: Free-running memory copy
 nav_order: 7
 ---
 

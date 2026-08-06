@@ -1,6 +1,6 @@
 ---
 title: Python model
-parent: Register Map (simple function)
+parent: Register mapped simple function
 nav_order: 2
 has_children: false
 ---

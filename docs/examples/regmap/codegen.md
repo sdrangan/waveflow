@@ -1,6 +1,6 @@
 ---
 title: Vitis HLS Code Generation
-parent: Register Map (simple function)
+parent: Register mapped simple function
 nav_order: 5
 has_children: false
 ---

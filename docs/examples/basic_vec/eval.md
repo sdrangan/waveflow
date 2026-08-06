@@ -1,6 +1,6 @@
 ---
 title: Confirming the match
-parent: Basic Vectorization (MAC)
+parent: Basic vector arithmetic
 nav_order: 3
 ---
 # Confirming the match

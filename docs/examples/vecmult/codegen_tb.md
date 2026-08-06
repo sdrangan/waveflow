@@ -1,6 +1,6 @@
 ---
 title: Testbench codegen
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 5
 audience: hls
 summary: "What is generated for the csim rung and what deliberately is not. The C++ testbench is hand-written, because a csim TB is a main() and not a graph; what is generated is vec_mult_params.h, the one header that stops the testbench drifting from the DUT's knobs and points it at the vectors the pysim rung wrote. Also why the TB calls the task rather than the top, and why there are two TCLs."

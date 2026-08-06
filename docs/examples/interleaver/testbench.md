@@ -1,6 +1,6 @@
 ---
 title: Testbench (Python)
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 3
 ---
 

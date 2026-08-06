@@ -1,6 +1,6 @@
 ---
 title: RTL timing and the comparison
-parent: Interleaver (gather)
+parent: Composite kernel interleaver
 nav_order: 10
 ---
 # RTL timing and the comparison

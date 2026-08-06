@@ -1,6 +1,6 @@
 ---
 title: DUT codegen
-parent: Vector Multiply (resource modelling)
+parent: Vector multiply resource modeling
 nav_order: 4
 audience: hls
 applies_to: [FreeRunMod, KernelTask]

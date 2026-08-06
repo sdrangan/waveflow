@@ -1,6 +1,6 @@
 ---
 title: What we're building
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 1
 has_children: false
 ---

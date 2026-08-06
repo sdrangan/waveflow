@@ -1,6 +1,6 @@
 ---
 title: Writing the kernel hook
-parent: AXI-MM Command Queue (VMAC)
+parent: VMAC with an AXI-MM command queue
 nav_order: 7
 has_children: false
 ---

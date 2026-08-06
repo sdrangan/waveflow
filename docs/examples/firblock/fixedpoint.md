@@ -1,6 +1,6 @@
 ---
 title: Fixed point
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 3
 ---
 # Fixed point — one declared format, one derived accumulator

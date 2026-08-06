@@ -1,6 +1,6 @@
 ---
 title: Python
-parent: Memory Copy
+parent: Free-running memory copy
 nav_order: 2
 ---
 # Python Model

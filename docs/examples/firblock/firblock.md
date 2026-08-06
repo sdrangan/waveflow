@@ -1,6 +1,6 @@
 ---
 title: Module Overview
-parent: Block FIR (state + fixed point)
+parent: Block FIR with state
 nav_order: 1
 ---
 # Block FIR — a filter that remembers

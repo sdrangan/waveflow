@@ -1,6 +1,6 @@
 ---
 title: Python model
-parent: Shared Memory (histogram)
+parent: Histogram with shared memory
 nav_order: 2
 has_children: false
 ---

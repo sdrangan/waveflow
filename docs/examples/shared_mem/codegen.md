@@ -1,6 +1,6 @@
 ---
 title: Vitis HLS Code Generation
-parent: Shared Memory (histogram)
+parent: Histogram with shared memory
 nav_order: 4
 has_children: false
 ---

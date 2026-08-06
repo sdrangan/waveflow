@@ -1,6 +1,6 @@
 ---
 title: AXI4-Stream Timing Analysis
-parent: Stream In-Band Control (polynomial)
+parent: Streaming polynomial
 nav_order: 6
 has_children: false
 ---
