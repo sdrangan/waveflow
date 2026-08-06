@@ -4,7 +4,7 @@ parent: Vector Multiply (resource modelling)
 nav_order: 1
 audience: python
 applies_to: [FreeRunMod]
-summary: "VecMult as a standalone free-running module: two stream ports, an in-band command carrying a transaction id and a runtime length, a response that echoes the id, and two parameters whose difference is load-bearing — vlen is the compile-time bound the area is priced against, n is the runtime length that costs nothing."
+summary: "VecMult as a standalone free-running module: two stream ports, an in-band command carrying a transaction id and a runtime length, a response that echoes the id, two parameters whose difference is load-bearing — vlen is the compile-time bound the area is priced against, n is the runtime length that costs nothing — and one shared golden() so the twin check has something real to disagree with."
 ---
 
 # The module
@@ -64,6 +64,23 @@ class VecResp(DataList):
         "tx_id": {"schema": Word32, "description": "the command's tx_id, echoed unmodified"},
     }
 ```
+
+### The sample type, and where the generated headers land
+
+Both schemas above are built from two specialized `IntField`s, declared once at module level:
+
+```python
+SAMP_W = 16
+INCLUDE_DIR = "include"
+
+Samp   = IntField.specialize(bitwidth=SAMP_W, signed=True,  include_dir=INCLUDE_DIR)
+Word32 = IntField.specialize(bitwidth=32,     signed=False, include_dir=INCLUDE_DIR)
+```
+
+`include_dir` is not cosmetic. Specializing `Samp` is what generates `int16_array_utils.h` — the
+serializer the hand-written body calls for every word↔element conversion — and it has to land where
+that body's `#include` will find it. Left at the default it lands at the example root instead, beside
+the `.tcl` rather than beside the other headers.
 
 ### Why there is a response at all
 
@@ -128,12 +145,38 @@ def run_iter(self) -> ProcessGen[None]:
     x = yield from self.s_in.get(Samp, count=n)
     y = yield from self.s_in.get(Samp, count=n)
     z = golden(np.asarray(x.val), np.asarray(y.val))
-    yield from self.z_out.write(...)
+    yield from self.z_out.write(DataArray.specialize(Samp, max_shape=(n,), static=True)(z))
     yield from self.z_out.write(VecResp(tx_id=int(cmd.tx_id)))
 ```
 
-Two bodies for one behaviour is a liability unless something checks them against each other — which
-is what the [testbench](./testbench.md) exists for.
+The output array is specialized at **`n`**, the runtime length — not at `vlen`. In fact `vlen` never
+appears in `run_iter` at all: the Python model has no buffer to size, because nothing forces it to
+hold `x` while `y` arrives. That absence is worth noticing, since the buffer is the entire subject of
+this example. **The BRAM is a fact about the implementation, not about the behaviour** — which is
+exactly why a resource model has to be keyed on declared structure rather than on what the module
+computes.
+
+### The golden
+
+`run_iter` does not compute the product itself. It calls a module-level function:
+
+```python
+def golden(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Element-wise product, wrapping in the sample's own width."""
+    prod = np.asarray(x, dtype=np.int64) * np.asarray(y, dtype=np.int64)
+    return ((prod + (1 << (SAMP_W - 1))) % (1 << SAMP_W) - (1 << (SAMP_W - 1))).astype(np.int64)
+```
+
+**One definition, called from two places** — `run_iter` above, and the test that checks the C++.
+That is the point of factoring it out. If `run_iter` computed the product inline and the test
+re-derived the expected answer, the test would be asserting that the model agrees with *itself*, and
+would pass just as happily if both were wrong. Sharing one function leaves the C++ as the only thing
+that can disagree.
+
+Which it can, in one specific way: the arithmetic **wraps** in 16 bits rather than saturating, so
+`vec_mult_task.h` has to truncate identically — see
+[the multiply](./kernel.md#the-multiply). Two bodies for one behaviour is a liability unless
+something checks them against each other, which is what the [testbench](./testbench.md) exists for.
 
 `template_args` bakes both knobs, so the generated top instantiates
 `vec_mult_task<64, 4096>` and the RTL entity is named `vec_mult_task_64_4096_s`. That name is what
