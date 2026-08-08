@@ -4,75 +4,68 @@ parent: Guide
 nav_order: 13
 has_children: true
 audience: python
-api: [ResourceModel, VitisResourceModel, DesignStructure, compose, get_rm, resource_structure]
-summary: "Predicting a design's resource utilization without synthesizing it. On an FPGA the split is not a judgement call: hard primitives are allocated and therefore countable from declared structure, while fabric is what everything else decomposes into and has to be fitted. A design declares what it contains once; the device rules price the countable half exactly and supply the basis for the rest. Every prediction carries how much to believe it, and a composed estimate is only as good as its weakest link."
+api: [ResourceModel, get_rm, predict, compose, Confidence, ConfidenceLevel]
+summary: "Predicting a design's resource utilization without synthesizing it, so a design-space exploration can price thousands of configurations from a handful of syntheses. Every module has a model — the default recalls measurements and needs no authoring; others derive from declared structure or regress from a corpus. Every prediction carries a confidence saying how much to believe it, and a composed estimate reports its weakest link rather than its average."
 ---
-
 # Resource Models
 
-[Resource Analysis Tools](../resource/) *measures* utilization from a synthesis report. This section
-*predicts* it, so a design-space exploration can price thousands of configurations from a handful of
-syntheses.
+## What a resource model is
 
-## The one split everything follows from
+[Resource Analysis Tools](../resource/) *measures* utilization, specifically counters of quantities of resource types, from a synthesis report. A **`ResourceModel`**  **predicts** the resource utilization based on a hardware models configuration.  For example, in an Xilinx / AMD FPGA flow, it can predict the number of FF, LUTs, or BRAM based on a hardware module's parameters such as the bitwidths or buffer sizes.  This predictio enables design-space exploration  to price thousands of configurations from just a handful of syntheses.
 
-```text
-hard primitives are ALLOCATED     ->  countable    ->  derived from structure, 0 parameters
-soft fabric is what the rest
-  DECOMPOSES INTO                 ->  not countable ->  fitted from measurements
-```
+## What you write
 
-A DSP or a block RAM is a thing the tool *assigns*: you can count how many your design needs and look
-up what the device charges. LUTs and flip-flops are what everything else turns into, and how much
-depends on how the tool shares, retimes and packs — there is no table to look it up in.
+To add a resource model to a `HwModule` class, you generally need to write the function: [`def get_rm(platform)`](./getrm.md) to provide a model for a specified [platform](../platform/).
 
-That is not a per-design decision. On a Vitis target it is a property of the fabric, so
-[`VitisResourceModel`](./vitis.md) encodes it once rather than every design re-deriving it.
+Once `get_rm(platform)` function is specified, the `HwModule`'s functions [`predict`](./predict.md)  and [`compose`](./predict.md) can be used to predict the resource consumption of a `HwModule` and its hierarchy of modules contained by it.
 
-## What you supply
+**Every module has a model.** Returning `None` does not mean "unmodelled" — it means the default
+[lookup](./lookup.md), a model whose parameters are the measurements themselves. That is the right
+answer more often than it looks: a lookup assumes nothing about the shape of the cost function, so no
+structural assumption can be wrong, and it is exact at every configuration it has seen.
 
-Two things, and neither is device knowledge:
+## Model types
 
-| you write | answers |
-|---|---|
-| [`get_rm(platform)`](./getrm.md) on the class | *which model prices this design?* — return `None` for the default lookup |
-| [`resource_structure()`](./vitis.md#what-you-declare) on the module | *what does it contain?* — only needed by a model that **derives** |
+Three kinds, each with a page of its own. They differ in what they trade for an answer:
 
-Everything else follows. The declared multipliers and arrays are priced exactly by the
-[device rules](./vitis.md#the-device-rules); the declared fabric structures become the
-[basis](./fit.md) for the regression. There is deliberately no
-second place to state the basis, which is what makes *"a bad held-out error means a missing
-structure"* actionable rather than advisory.
-
-## Most modules need no model at all
-
-The instinct is that per-module modelling means writing a model per module. Measured on
-`examples/fir_block` across a 24-point sweep, it does not:
-
-| module | distinct configurations | what it needs |
+| kind | how it answers | costs you |
 |---|---|---|
-| `MemRStream` | **1** | a lookup |
-| `MemWStream` | **1** | a lookup |
-| `FirCmdRx` | 4 | a 4-entry lookup |
-| `FirCompute` | 24 | the only one needing a fit |
+| [`LookupResourceModel`](./lookup.md) | recalls the measurement for exactly this configuration; refuses to interpolate | one synthesis per point you will ask about |
+| [`VitisResourceModel`](./vitis.md) | prices countable structure by device rule, regresses the rest | a structure declaration, and a basis you have to choose |
+| [`InterfaceResourceModel`](./interface.md) | recalls what a composite costs **beyond** its sub-modules | nothing — it is read from records the sweep already filed |
 
-None of those needed a model that *generalizes*, because each was cheap to cover exhaustively —
-measure every configuration it is ever asked about and a [lookup](./lookup.md) answers exactly, with
-no assumption about shape that could be wrong. `get_rm` returning `None` gets you one, which is why
-**a structural model is the exception, not the default**.
+The first and third are the same machinery: an interface model **is** a lookup, keyed on the
+composite's boundary instead of on a module key. What differs is the *quantity* it recalls, not the
+method.
 
-The choice is about **coverage, not complexity**: you reach for a structural model when the parameter
-space is too large to enumerate, and you accept some bias in exchange.
+So the only real choice is the second row, and it is about **coverage, not sophistication**. Reach
+past a lookup when the parameter space is too large to enumerate, and accept some bias in exchange for
+answering points you never measured.
 
-## Every prediction says how much to believe it
+## What a confidence is
 
-A bare number invites an exploration to optimize into a region nothing ever measured. So every model
-returns a [`Confidence`](./predict.md#confidence) alongside its counters, and a composed estimate
-reports its **weakest link** — including which modules sit at it, which is what you would recalibrate
-first.
+A bare number invites an exploration to optimize into a region nothing ever measured. So a prediction
+is never just counters: every model returns a [`Confidence`](./predict.md#confidence) beside them.
 
-A [lookup](./lookup.md) that has not seen a configuration reports `UNCALIBRATED` rather than its nearest entry. That
-refusal is the design, not a gap in it.
+| level            | means                                                                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EXACT`        | the model's form reproduces every calibration point with zero residual — a checked claim, not an approximation                                                |
+| `INTERPOLATED` | the query lies **inside** the region the model was calibrated over                                                                                        |
+| `EXTRAPOLATED` | outside it. The level that matters most here, because what you cross on the way out is usually a *regime boundary* — and those move several counters at once |
+| `UNCALIBRATED` | no fit backs this number                                                                                                                                       |
+
+Two properties are worth knowing because they are what make the level trustworthy rather than
+decorative:
+
+**A composed estimate reports its weakest link, not its average.** If three modules are exact and one
+is extrapolated, the total is `EXTRAPOLATED` — and it names which module, which is what you would go
+and measure first. An estimate that averaged its confidences would read as fine while resting on the
+one number nobody checked.
+
+**A model that has not seen a configuration says so.** A [lookup](./lookup.md) asked about a point it
+does not hold reports `UNCALIBRATED` rather than returning its nearest entry. That refusal is the
+design, not a gap in it: a plausible wrong number is worse than an admitted absence, because only one
+of the two gets investigated.
 
 ## In this section
 
@@ -84,11 +77,13 @@ Simplest first — each page has one job.
 2. [The lookup model](./lookup.md) — the simplest one, and the default: recall a measurement, refuse
    to interpolate. With a runnable example.
 3. [Binding a model to a design](./getrm.md) — `get_rm`, and why it is a classmethod.
-4. [`VitisResourceModel`](./vitis.md) — the model that *derives*: `resource_structure`, the structures
-   you can declare, and the rule each primitive is priced by.
-5. [Predicting](./predict.md) — `predict`, `compose` over a hierarchy, and reading the confidence.
-6. [Fitting](./fit.md) — corpus, basis, `load_or_fit`, and validating held-out.
-7. [Resource measurements](./resources.md) — attributing a `csynth` report to the modules that caused
+4. [`VitisResourceModel`](./vitis.md) — the model that *derives*: `resource_structure` field by
+   field, the rule each primitive is priced by, and how to choose the basis LUT and FF are fitted on.
+5. [The interface model](./interface.md) — a composite's own cost, keyed on its boundary: why that
+   is the right key, and why it is a lookup rather than a fit.
+6. [Predicting](./predict.md) — `predict`, `compose` over a hierarchy, and reading the confidence.
+7. [Fitting](./fit.md) — corpus, basis, `load_or_fit`, and validating held-out.
+8. [Resource measurements](./resources.md) — attributing a `csynth` report to the modules that caused
    it, the two traps that otherwise corrupt the numbers, and the `InspectSynthStep` build rung.
 
 A fully worked instance, built and measured end to end, is
@@ -100,5 +95,4 @@ interface term — is [the block FIR](../../examples/firblock/resource_model.md)
 - [Model calibration](../calib/) — the shared base these models are built on: the `CalibModel` shape,
   the corpus format, the confidence levels and the model kinds.
 - [Resource Analysis Tools](../resource/) — where the measurements these models are built from come from.
-- [Model calibration](../calib/) — storing measurements per module, and the confidence machinery.
 - [Timing Models](../timing_model/) — the same role on the other axis.

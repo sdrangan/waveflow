@@ -63,6 +63,10 @@ class BramGeometry:
     #: Smallest bits per bank observed to land in a block.  Between the two the rule reports
     #: ``uncertain`` rather than picking a side -- see :func:`bram_estimate`.
     bram_min_bank_bits: int
+    #: Distributed-RAM bits in one SLICEM LUT.  A LUT6 is a 64x1 RAM (or two 32x1), so an array that
+    #: HLS declines to put in a block costs its bits back in fabric at this rate.  Verified exactly
+    #: on xc7z020 -- see :func:`lutram_luts`.
+    lutram_bits_per_lut: int = 64
 
 
 @dataclass(frozen=True)
@@ -276,6 +280,47 @@ def bram_estimate(n_banks: int, depth: int, elem_bits: int,
         binding = "uncertain"
     return BramEstimate(blocks=0 if binding == "lutram" else blocks, binding=binding,
                         entries_per_block=entries, blocks_per_element=per_elem)
+
+
+def lutram_luts(n_banks: int, depth: int, elem_bits: int, part: "str | None" = None) -> int:
+    """LUTs an array costs when it binds to **distributed RAM** instead of a block.
+
+    The companion to :func:`bram_estimate`, and the reason a design at the LUTRAM corner does not
+    need excluding from a fit: when ``bram_estimate`` says ``binding == "lutram"`` it returns zero
+    blocks, and the storage does not vanish -- it reappears here, in the same LUT counter the fabric
+    regression predicts.  Modelling it means the corner is a *predicted regime* on both counters
+    rather than a point the fit has to be protected from.
+
+    **Zero fitted parameters**, because distributed RAM is as countable as a block: a SLICEM LUT6 is
+    a 64x1 RAM, so the array costs ``total_bits / 64`` LUTs.
+
+        LUTs = n_banks * depth * elem_bits / lutram_bits_per_lut
+
+    Note there is **no per-bank ceiling** here, unlike :func:`bram_estimate`.  That is measured, not
+    assumed, and it is the discriminating prediction: rounding each bank up to whole LUTs per bit
+    would cost ``16 * 16 = 256`` at the ``LW=16, depth=32`` corner where the truth is **128**.  A
+    LUT6 splits into two 32x1 RAMs, so shallow banks share one rather than each claiming their own.
+
+    Verified against dedicated syntheses on xc7z020 (2025.1), predicted *before* measuring:
+
+    ======  =====  =====  =========  ========
+    banks   depth  bits   predicted  measured
+    ======  =====  =====  =========  ========
+    2       32     1024   +16        +16
+    8       16     2048   +32        +32
+    8       32     4096   +64        +64
+    16      16     4096   +64        +64
+    16      32     8192   +128       +128
+    ======  =====  =====  =========  ========
+
+    Flip-flops are deliberately **not** modelled here.  Their cost at the corner is flat in depth
+    (140 at 8192 bits and at 4096), so it is per-lane registering rather than storage, and three lane
+    counts did not determine a form.  Predicting a number for LUT and nothing for FF is the honest
+    split; see ``docs/examples/vecmult/resmodfit.md``.
+    """
+    g = device_for(part).bram
+    total_bits = int(n_banks) * int(depth) * int(elem_bits)
+    return total_bits // int(g.lutram_bits_per_lut)
 
 
 def bram_count(n_banks: int, depth: int, elem_bits: int, part: "str | None" = None) -> int:

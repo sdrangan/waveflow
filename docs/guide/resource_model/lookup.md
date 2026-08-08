@@ -111,13 +111,24 @@ thousands of points — you need a model that **generalizes**, and generalizing 
 shape. That is bias you accept in exchange for coverage, and it is
 [`VitisResourceModel`](./vitis.md)'s trade.
 
+The instinct is that per-module modelling means authoring a model per module. Measured on
+`examples/fir_block` across a 24-point sweep, it does not — a sweep's points collapse onto far fewer
+*distinct configurations* per module, because not every knob reaches every module:
+
+| module | distinct configurations | what it needs |
+|---|---|---|
+| `MemRStream` | **1** | a lookup |
+| `MemWStream` | **1** | a lookup |
+| `FirCmdRx` | 4 | a 4-entry lookup |
+| `FirCompute` | 24 | the only one needing a fit |
+
+Three of the four were cheap to cover exhaustively, so none of them needed a model that generalizes —
+and the one that did is the one whose cost the sweep actually moved.
+
 {: .note }
-> The case where a lookup is *obviously* right is when the configurations are few — often one. In
-> `examples/fir_block`, three of the four modules kept identical resource numbers across a 24-point
-> sweep, because none of the swept knobs reached them: one measurement each, total coverage.
->
-> That is a happy special case, not the criterion. A module whose cost varies wildly is still a
-> lookup if you can afford to measure every point you will ask about.
+> That is a happy special case, not the criterion. A module whose cost varies wildly is still a lookup
+> if you can afford to measure every point you will ask about; a module with two configurations you
+> cannot synthesize is not.
 
 ## Next
 

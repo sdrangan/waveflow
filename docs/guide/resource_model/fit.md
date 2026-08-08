@@ -1,135 +1,141 @@
 ---
 title: Fitting
 parent: Resource Models
-nav_order: 7
+nav_order: 8
 audience: python
-api: [load_or_fit, save_model, fit, basis_terms, params_path]
-summary: "Where the fabric half's coefficients come from. The basis is derived from the structure declaration rather than invented, so a bad held-out error means a missing structure and not a missing polynomial term. load_or_fit resolves published artifact first and local corpus second, so installing a model and calibrating one stay separate acts. Validate held out, and lead with decision fidelity rather than relative error."
+api: [fit, load_or_fit, save_model, params_path, corpus, ModuleStore]
+summary: "Determining a model's free parameters from measurements, on the resource axis. Where the data is stored (records filed per module key, promoted from an untracked work tier into a committed library), how a sweep produces it, how load_or_fit resolves a published artifact before a corpus, and why installing a model and calibrating one are separate acts. The shared machinery lives in the calibration guide; this page is the resource-specific path through it."
 ---
 
 # Fitting
 
-Only the fabric half is fitted. DSP, BRAM and URAM come from
-[device rules](./vitis.md#the-device-rules) with zero free parameters — nothing about them needs
-calibrating, and a formula that reproduces every measured point is a **stronger** claim than a
-regression that fits them.
+**Fitting a model means determining its free parameters from data.** A
+[lookup](./lookup.md) fits by memorizing one row per measured configuration; a regression fits by
+solving for coefficients. Both are `fit`, and both store their result the same way — which is the
+point of the [shared calibration machinery](../calib/), and why this page is short.
 
-## The basis comes from the declaration
+What is specific to the resource axis is only *where the measurements come from*: they are synthesis
+reports, so producing one costs a toolchain run rather than a simulation.
 
-You do not choose basis functions. The fabric structures you already declared in
-[`resource_structure()`](./vitis.md#what-you-declare) *are* the features:
+{: .note }
+> A model with **no** free parameters is not fitted at all. A prior whose formula reproduces every
+> measured point needs no calibration, and says so by reporting `EXACT` — see
+> [confidence](../calib/confidence.md#how-a-model-earns-one). On a Vitis target that covers DSP and
+> BRAM, which is why `VitisResourceModel` only ever fits LUT and FF.
 
-| declared | basis term |
-|---|---|
-| `PerLane(lanes)` | `n_lane` |
-| `Crossbar(lanes)` | `xbar_sw`, `xbar_depth` |
-| `Counter(over)` | `addr_bits` |
-| `ReductionTree(lanes)` | `reduce_ops` |
+## How the data is stored
 
-Terms accumulate across instances under fixed names, so two crossbars of different widths sum rather
-than requiring you to invent a term.
+Measurements are **filed as records**, not transcribed into source. One record per synthesis, keyed
+by the module's [elaborated structure](../calib/modules.md#the-key-is-the-structure-not-the-parameters):
 
-This is the structure→form dictionary as arithmetic, and the reason there is no second place to state
-the basis:
-
-{: .warning }
-> **A bad held-out error means a missing structure, not a missing polynomial term.** You fix it by
-> going back to the body and asking what is physically there that you did not declare — not by adding
-> `p²` until the residual falls. That discipline is only enforceable because the basis has exactly one
-> source.
-
-On `VecMult` the payoff is concrete. The obvious features — the raw parameters `dwid` and
-`log2(vlen)` — reach **43% error on LUT and 52% on FF**. They assume a per-lane datapath and a
-counter, and miss the crossbar entirely. Declaring the `Crossbar` puts `LW²` and `LW²·log2(LW)` in the
-basis, and held-out error drops to **0.00% on LUT**. Same measurements, same fitter; the difference is
-one line of declaration.
-
-## Building a corpus
-
-`fit` takes `[(component, measured_counters), ...]`:
-
-```python
-def vec_mult_samples() -> list:
-    return [(elaborate(VecMult, {"dwid": d, "vlen": v}, name="fit"), m)
-            for v, d, m in in_bram_points()]
+```text
+<platform>/modules/<module-key>/resource/records.jsonl
 ```
 
-Two things worth copying.
+Two tiers, and the split matters because a sweep is exploratory while a library is reviewed:
 
-**Features are recomputed from each component**, never taken from the caller — so the fit cannot be
-trained on a different feature definition than `predict` will evaluate.
+| tier | path | tracked? |
+|---|---|---|
+| work | `calib/work/<platform>/` | no — a sweep re-runs freely and overwrites |
+| library | `calib/platforms/<platform>/` | yes — what a model reads |
 
-**Train on one regime only.** `in_bram_points()` excludes the point where HLS put the buffer in LUTRAM
-instead of block RAM. Asking one line to span a discontinuity does not make it better at the
-discontinuity; it makes it worse everywhere else. A regime the prior *predicts* should not also be
-smoothed over by the fit.
+A deliberate [publish](../platform/workflow.md#publishing-into-one) promotes work into the library, so
+an interrupted or experimental run cannot quietly edit committed measurements.
 
-### Where the numbers live
+The [corpus](../calib/corpus.md) a fit trains on is **derived** from those records on demand and never
+stored twice. Its format, why it records raw facts rather than derived ones, and how many rows you
+need are all covered there.
 
-Commit the corpus as **source**, not as the sweep's JSON. `results/*.json` is untracked, so committing
-the numbers is what makes a measurement outlive the work directory — and it is what lets the model
-gates run with **no toolchain installed**, so a machine without Vitis can still catch a model that
-stopped reproducing its own corpus.
+## Producing the data: a sweep
 
-## `load_or_fit` — install and calibrate are different acts
+One synthesis gives one point. A [sweep](../build/sweep.md) drives the build DAG across a grid and
+files a record per point:
 
-```python
-VitisResourceModel(name="vec_mult", part=part, platform=platform).load_or_fit(
-    samples=vec_mult_samples,
-)
+```bash
+python -m examples.vecmult.vecmult_sweep --dry-run   # codegen only, no toolchain
+python -m examples.vecmult.vecmult_sweep             # the full grid
+python -m examples.vecmult.vecmult_sweep --resume    # continue a stopped run
 ```
 
-Resolution order:
+Two properties are worth knowing because getting either wrong corrupts the data rather than failing:
 
-1. **Load** the artifact if it exists — a published artifact predicts with no corpus and no sklearn,
-   which is the point of having artifacts at all.
-2. **Fit** *samples* otherwise. Pass a **callable**, so the common case (an artifact exists) never
-   pays to elaborate every calibration point.
-3. **Neither** — the derived half still answers exactly; the fitted half reports `UNCALIBRATED` rather
-   than returning a seed dressed as a measurement.
+**Every point re-runs the whole DAG, forced.** Without that the DAG would see up-to-date artifacts
+from the *previous* point and skip, and the report on disk would be attributed to the wrong
+configuration. `SweepRunner` forces every run for exactly this reason — you do not pass a flag.
+
+**Choosing the grid is part of choosing the model.** A grid that samples one regime will validate a
+law it never tested. If a cost has a threshold in it — a multiply that stops fitting one DSP, an array
+that stops fitting block RAM — the grid has to span it, or the fit will look excellent and be wrong on
+the other side.
+
+## Running the fit
+
+```python
+model.fit()                  # from the corpus the store reduces
+model.fit(samples)           # or from [(component, measured_counters), ...]
+```
+
+Prefer the first. A hand-built sample list is a second copy of numbers already on disk, and a second
+copy is a second thing to keep in step. The explicit form exists for a design whose measurements have
+not been filed yet.
+
+**Features are recomputed from each row**, never taken from the caller, so a fit cannot be trained on
+a different feature definition than `predict` will evaluate. That is
+[`transform`](../calib/model.md#transformparams--derive)'s job and it runs on both paths.
+
+## Loading a fitted model
+
+Installing a model and calibrating one are **different acts**, and conflating them is why a model can
+end up refitting on every elaboration. `load_or_fit` keeps them apart by resolving cheapest-first:
+
+```python
+model.load_or_fit()          # artifact -> corpus
+```
+
+1. **Load** the published artifact if one exists — it predicts with no corpus and no sklearn, which is
+   the point of having artifacts at all.
+2. **Fit** from `samples` if you passed them. Pass a **callable** and it is only invoked if this step
+   is reached, so the common case never pays to elaborate every calibration point.
+3. **Fit** from the corpus otherwise.
+4. **Neither** — parameters that have no fit behind them report
+   [`UNCALIBRATED`](../calib/confidence.md) rather than returning a seed dressed as a measurement.
 
 `save_model()` writes the artifact back. Neither call is told **where**: both default to
 [`params_path`](../calib/model.md#where-a-models-data-lives), derived from the model's `name` and
 `platform`, so publishing and loading cannot disagree about where a model lives.
 
 That path is keyed by model *name* rather than by module key, because one model serves every
-configuration of its class — the same reason `get_rm` is cached per `(class, platform)`.
+configuration of its class — the same reason [`get_rm`](./getrm.md) is cached per `(class, platform)`.
 
 ## Validating {#validating}
 
-**Held out, never in-sample.** Four parameters will fit fifteen points comfortably and tell you
-nothing. Leave-one-out is cheap at this scale and is what the committed gates assert:
+**Held out, never in-sample.** Fitted on all your points, even a wrong basis looks good — a model with
+as many free parameters as measurements interpolates them exactly and predicts nothing. Leave-one-out
+is cheap at these grid sizes and is what the committed gates assert.
 
-```python
-def test_crossbar_basis_predicts_lut_and_ff_held_out():
-    for target, mean_lim, max_lim in (("lut", 0.001, 0.001), ("ff", 0.01, 0.02)):
-        mean_err, max_err = _loo_error(A, y)
-        assert mean_err <= mean_lim and max_err <= max_lim
-```
+Three things worth checking beyond a mean error:
 
-**Pin why the basis is what it is.** A test that the *naive* basis is >30% wrong is as valuable as one
-that the real basis is right — without it the quadratic terms read as unexplained curve-fitting, and a
-later "simplification" back to linear-in-width looks harmless.
+**The direction of the error.** Under-prediction is the one that matters, because it turns *"does not
+fit"* into *"fits"*. A known gap should be pinned with a bound rather than left as a footnote, so it
+fails if it grows.
 
-**Watch the direction of error.** Under-prediction is the one that matters: it turns "does not fit"
-into "fits". `VecMult` under-predicts LUT by 1.8% at the LUTRAM corner — the prior correctly returns
-0 BRAM there, but the fit has no term for a buffer that became registers. That is pinned with a bound
-rather than left as a footnote, so it fails if it grows.
+**Decision fidelity, not just accuracy.** A resource model exists to answer *does this fit* and *which
+of these is cheaper*. A flattering mean error can hide a reversed pair near the budget, and a model
+that ranks configurations correctly is more useful than one with a better average that does not.
 
-**Lead with decision fidelity.** A resource model exists to answer *does this fit* and *which of these
-is cheaper*. A headline mean error can flatter a model that gets those wrong at the one point an
-exploration cares about — and a model that ranks configurations correctly is more useful than one with
-a better average and a reversed pair near the budget.
-
-{: .note }
-> **Validating the formulas is not validating the model.** Checking `dsp_prior` and `bram_prior`
-> directly can show four green counters while the installed model disagrees with itself — the
-> `VecMult` corner gap was invisible until the model was actually [composed](./predict.md). Test
-> through `compose`, not around it.
+**The model, not the formulas.** Checking a prior's formula directly can show green counters while the
+installed model disagrees with itself — a gap in `VecMult` was invisible until the model was actually
+[composed](./predict.md). Test through `compose`, not around it.
 
 ## Next
 
-- [The VecMult example](../../examples/vecmult/resource_model.md) — all of this on a real design, with
-  measured numbers and the sweep that produced them.
-- [The block FIR](../../examples/firblock/resource_fit.md) — the advanced case: a composite, with an
-  interface term and a second basis.
+- [Predicting](./predict.md) — using the fitted model over a hierarchy.
+- [The corpus](../calib/corpus.md) — the format, and how many rows a fit needs.
+- [Sweeping a design](../build/sweep.md) — `ParamGrid`, `SweepRunner` and `sweep_cli` in full.
+
+## See also
+
+- [Model calibration](../calib/) — the shared `fit` / `load_or_fit` / artifact machinery both axes use.
+- [Platform workflow](../platform/workflow.md) — the work tier, publishing, and what is committed.
+- [The VecMult example](../../examples/vecmult/resmodfit.md) — all of this on a real design, with the
+  sweep that produced the numbers.

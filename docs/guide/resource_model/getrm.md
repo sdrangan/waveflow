@@ -34,9 +34,11 @@ lives with it.
 def get_rm(cls, platform):
     part = getattr(platform, "part", None) or PART
     require_same_device(part, PART, what="VecMult's resource model")
+    store = ModuleStore(getattr(platform, "dir", None) or COMMITTED_CALIB)
     return VitisResourceModel(
         name="vec_mult", part=part, platform=platform,
-    ).load_or_fit(samples=vec_mult_samples)
+        cls_name="VecMult", comp_class=cls, store=store,
+    ).load_or_fit()
 ```
 
 ### Why a classmethod

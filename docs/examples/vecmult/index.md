@@ -3,7 +3,7 @@ title: Vector multiply resource modeling
 parent: Examples
 nav_order: 5.5
 has_children: true
-summary: "Measuring and modelling what a design costs. A free-running vector multiplier swept across its two parameters, with the measurements turned into resource models: formulas where the hardware is derivable, a fit only where it is not. The arithmetic is trivial on purpose — the subject is that four counters obey three different kinds of law, and telling them apart is what separates a model you can trust from a curve that happens to pass through your measurements."
+summary: "Measuring and modelling what a design costs. A free-running vector multiplier swept across its two parameters, with the measurements handed to a VitisResourceModel that predicts LUT, FF, DSP and BRAM anywhere in the space. The arithmetic is trivial on purpose — the subject is how little you have to say to get a trustworthy model: describe what the design contains, and the library picks the features, prices the device geometry and fits whatever is left."
 ---
 # Vector Multiply — measuring and modelling what a design costs
 
@@ -13,9 +13,10 @@ design in the tree that takes such a kernel all the way to a *number*: how many 
 DSPs and block RAMs it occupies, and how that changes as you turn its knobs.
 
 That is the subject here. The arithmetic is deliberately trivial — `z = x * y`, element-wise — because
-the interesting content is not the compute. It is that **four counters obey three different kinds of
-law**, and telling them apart is what separates a resource model you can trust from a curve fit that
-happens to pass through your measurements.
+the interesting content is not the compute. It is how little you have to say to get a resource model
+you can trust: you **describe what the design contains** — this many multipliers, this many memory
+banks, this many lanes — and the library chooses the features, prices the device geometry and fits
+whatever is left over.
 
 `fir_block` also models its resources, but it does so while simultaneously teaching cross-firing
 state, fixed point, a four-module composite and RTL verification. This example does one thing.
@@ -61,12 +62,13 @@ In going through this example, you will learn to:
 4. **Write a parameter sweep with `sweep_cli`** — declare the points as a `ParamGrid`, the run as a
    `SweepRunner` and one `Stage`, and get a program with `--dry-run`, `--resume` and a flag per axis;
    then collect an attributed utilization report at each of the 16 points.
-5. **Recognize which law each counter obeys** — a derivable formula, a discontinuous ceiling, or a
-   genuine regression — and encode the first two rather than fitting them.
-6. **Choose fitted features from structure**, using a small structure→form dictionary, and validate
-   the result held-out rather than in-sample.
-7. **Install the model on the module and compose an estimate** — `add_rm_self`, `add_rm`, `compose` —
-   and read the confidence it reports, which is the *weakest* link rather than the best one.
+5. **Describe a design's structure and install a model on the module** — `resource_structure` and
+   `get_rm` — reading each declared number straight off the kernel body, and getting DSP and BRAM
+   exactly right before any synthesis has run.
+6. **Sweep for the measurements the declaration cannot give you**, and let `VitisResourceModel`
+   choose the features and fit the coefficients for LUT and FF.
+7. **Compose an estimate over a hierarchy** — `add_rm`, `compose` — and read the confidence it
+   reports, which is the *weakest* link rather than the best one.
 
 ## The build
 
@@ -100,10 +102,12 @@ reach synthesis and cannot contribute a resource measurement.
   `template_args` reaches, and the two kinds of file in `include/`.
 - [Testbench codegen](./codegen_tb.md) — what is generated for the csim rung and what deliberately
   is not.
+- [The resource model](./vitis_resmod.md) — what `VitisResourceModel` does for you, the six terms it
+  asks for and where each number comes from, and what it already predicts with nothing measured.
 - [The sweep](./sweep.md) — how the sweep script is written, 16 design points through the DAG, and
   the committed corpus.
-- [Resource models](./resource_model.md) — the two device rules and the one fit, the structure→form
-  dictionary the fit's features come from, and installing the result so `compose()` can use it.
+- [How well it fits](./resmodfit.md) — the model checked against points held out of its own fit, plus
+  an appendix on why it is built the way it is.
 
 ## See also
 

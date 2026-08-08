@@ -41,6 +41,9 @@ static void vec_mult_task(hls::stream<ap_uint<DWID> >& s_in,
                           hls::stream<ap_uint<DWID> >& z_out) {
     typedef vm_au::value_type samp_t;
     const int LW = vm_au::lane_capacity<DWID>();
+    // Taken FROM the sample type rather than written as a literal, so a change to value_type cannot
+    // leave a stale width behind in the product below.
+    const int SAMP_W = samp_t::width;
 
     // The command: a plain struct on a plain stream, not a framed descriptor -- nothing relays this
     // stream, so there is no payload anyone downstream must forward unparsed.
@@ -78,9 +81,14 @@ MULT:
         vm_au::read_stream_lane<DWID>(s_in, ylane, nlane);
         for (int j = 0; j < LW; ++j) {
 #pragma HLS UNROLL
+            // No widening cast on the operands: ap_int multiply already returns W1+W2 bits, so
+            // ap_int<16> * ap_int<16> IS ap_int<32> and the product is exact by construction.
+            // Casting the operands up to 32 first would make the product ap_int<64> and push a
+            // silent 32-bit truncation into this assignment -- harmless at SAMP_W=16 and wrong the
+            // moment it changes.  The ONE cast that carries a decision is the narrowing one below.
+            ap_int<2 * SAMP_W> p = buf[i + j] * ylane[j];
             // Wrapping product in the sample's own width -- the golden is numpy int16 arithmetic,
             // so the C++ must truncate identically rather than saturate.
-            ap_int<2 * 16> p = (ap_int<2 * 16>)buf[i + j] * (ap_int<2 * 16>)ylane[j];
             zlane[j] = (samp_t)p;
         }
         vm_au::write_stream_lane<DWID>(zlane, z_out, nlane);

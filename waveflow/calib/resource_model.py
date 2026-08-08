@@ -48,7 +48,8 @@ import pandas as pd
 from waveflow.calib.calib import CalibDataFrame, CalibModel, LookupCalibModel
 from waveflow.calib.confidence import Confidence, ConfidenceLevel
 from waveflow.calib.module_key import identify_instance
-from waveflow.calib.record_store import RESOURCE_FIELDS, normalize_resources
+from waveflow.calib.record_store import (INTEGRATION_TARGET, RESOURCE_FIELDS,
+                                         normalize_resources)
 
 #: Counters a prediction is expressed in.  A design fits only if *every* one fits, so a model that
 #: predicts a single aggregate number would be answering the wrong question.
@@ -495,26 +496,92 @@ def boundary_signature(comp: Any) -> tuple:
     return (tuple(sorted(ports)), tuple(sorted(channels)))
 
 
+def boundary_text(sig) -> str:
+    """Canonical text for a boundary signature — the key an interface lookup stores under.
+
+    Text rather than the tuple itself because a lookup key has to survive a CSV round-trip: the same
+    boundary written by a live component and read back from a corpus must land on one entry, and a
+    nested tuple does not survive that trip while its ``repr`` does.  Sorted on the way in, so port
+    order is not part of the identity.
+    """
+    ports, channels = sig
+    return repr((tuple(sorted(tuple(p) for p in ports)),
+                 tuple(sorted(tuple(c) for c in channels))))
+
+
 @dataclass
-class InterfaceResourceModel(ResourceModel):
+class InterfaceResourceModel(LookupResourceModel):
     """A composite's **own** cost — the adapters, channel FIFOs, control block and DATAFLOW shell.
 
-    Keyed on :func:`boundary_signature` rather than on the composite's parameters, because that is
+    A :class:`LookupResourceModel` **keyed on the boundary** rather than on the module key, and that
+    is the entire difference.  Everything that makes a lookup a lookup — memorizing, refusing to
+    interpolate, the ``EXACT``/``UNCALIBRATED`` transition, the artifact round-trip — is inherited,
+    so what is specialized here is the *identity*, exactly as :class:`LookupResourceModel`
+    specializes it away from a parameter tuple.
+
+    Keyed on :func:`boundary_signature` rather than on the composite's parameters because that is
     what the term actually depends on.  The evidence is two-sided: across 24 points varying
     ``ntap``/``samp_w``/realization the term never moved, and it *did* move when ``mem_dwidth``
     changed — identically for both realizations at each width.
 
-    It is a **lookup**, not a fit, and that is a statement about the evidence rather than a
-    limitation of ambition.  A per-port / per-channel decomposition (``Σ adapter_cost(kind, width) +
-    Σ fifo_cost(width, depth) + shell``) is the natural next form and is what the signature is shaped
-    to support — but separating those coefficients needs more boundary configurations than the two
-    measured so far, and fitting them from two points would be inventing structure, not finding it.
+    A lookup and not a fit is a statement about the evidence rather than a limitation of ambition.
+    A per-port / per-channel decomposition (``Σ adapter_cost(kind, width) + Σ fifo_cost(width,
+    depth) + shell``) is the natural next form and is what the signature is shaped to support — but
+    separating those coefficients needs more boundary configurations than the two measured so far,
+    and fitting them from two points would be inventing structure, not finding it.
     """
 
-    table: dict = field(default_factory=dict)      #: {boundary_signature: counters}
+    #: Integration records, not resource records: this term is ``top - Σ(modules)``, which is filed
+    #: under its own target because it is a different measurement rather than another module's.
+    target: str = INTEGRATION_TARGET
+    #: The one thing this specializes.  ``LookupResourceModel`` keys on ``module_key``.
+    basis: list = field(default_factory=lambda: ["boundary"])
 
-    def declared_counters(self) -> tuple:
-        return ()
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        # A table is naturally written {boundary_signature: counters}, and internally every key is
+        # the one-element tuple `_key` produces.  A signature is a 2-tuple of tuples and an
+        # already-keyed entry is a 1-tuple of str, so the two are told apart without a flag.
+        self.table = {(k if len(k) == 1 and isinstance(k[0], str) else (boundary_text(k),)): v
+                      for k, v in self.table.items()}
+        self._fitted = bool(self.table)
+
+    def get_params(self, comp: Any, **runtime) -> dict:
+        """The boundary, as parameters — **extraction**, so it is what a corpus would record.
+
+        This model is the clearest case for the params/transform split: its cost depends on ports
+        and channels, and **no** ``HwParam`` records either.  Reading them here rather than in
+        :meth:`transform` is what puts them in the corpus, and a term whose boundary was never
+        recorded could not be re-derived from the measurements it was built from.
+
+        ``ports`` and ``channels`` are kept alongside the key they produce, because the key is a
+        modelling choice that may be revised and they are the evidence it was derived from.
+        """
+        ports, channels = boundary_signature(comp)
+        return {"n_ports": len(ports), "n_channels": len(channels),
+                "ports": [list(p) for p in ports], "channels": [list(c) for c in channels],
+                "boundary": boundary_text((ports, channels))}
+
+    def _key(self, feats) -> tuple:
+        """The boundary column when a row carries it, else rebuilt from ``ports``/``channels``.
+
+        Both spellings occur: a live component goes through :meth:`get_params`, while a stored row
+        predates the column or was written by the record step.  Rebuilding rather than raising is
+        what lets one lookup serve both.
+        """
+        if "boundary" in feats:
+            return (str(feats["boundary"]),)
+        return (boundary_text(self._signature(feats)),)
+
+    def _signature(self, row) -> tuple:
+        """Rebuild the boundary signature from a recorded row.
+
+        Reconstructed from ``ports`` / ``channels`` rather than re-read from a component, so the
+        same lookup serves a live instance and a stored corpus row.
+        """
+        ports = tuple(sorted(tuple(p) for p in row.get("ports", ())))
+        channels = tuple(sorted(tuple(c) for c in row.get("channels", ())))
+        return (ports, channels)
 
     def table_from_store(self) -> dict:
         """Build the boundary -> counters table from the store's **integration** records.
@@ -529,7 +596,7 @@ class InterfaceResourceModel(ResourceModel):
         different designs were filed against one platform.  Both need a person, and picking one
         quietly would bury the finding the store exists to surface.
         """
-        from waveflow.calib.record_store import INTEGRATION_TARGET, corpus_from_records
+        from waveflow.calib.record_store import corpus_from_records
 
         if self.store is None:
             return {}
@@ -538,16 +605,16 @@ class InterfaceResourceModel(ResourceModel):
                                  payload_keys=("n_ports", "n_channels", "ports", "channels"))
         table: dict = {}
         for row in db.df.to_dict("records"):
-            sig = self._signature(row)
+            key = self._key(row)
             counters = {c: int(row[c]) for c in self.counters()
                         if c in row and pd.notna(row[c])}
-            prev = table.get(sig)
+            prev = table.get(key)
             if prev is not None and prev != counters:
                 raise ValueError(
-                    f"{self.name}: boundary {sig} carries two different integration measurements, "
+                    f"{self.name}: boundary {key[0]} carries two different integration measurements, "
                     f"{prev} and {counters}. The term is either not a function of the boundary alone, "
                     f"or two designs were filed against one platform.")
-            table[sig] = counters
+            table[key] = counters
         return table
 
     def load_table(self) -> "InterfaceResourceModel":
@@ -559,47 +626,26 @@ class InterfaceResourceModel(ResourceModel):
         """
         if self.store is not None:
             self.table = self.table_from_store()
+            self._fitted = bool(self.table)
         return self
 
-    def get_params(self, comp: Any, **runtime) -> dict:
-        """The boundary, as parameters — **extraction**, so it is what a corpus would record.
-
-        This model is the clearest case for the params/transform split: its cost depends on ports
-        and channels, and **no** ``HwParam`` records either.  Reading them here rather than in
-        :meth:`transform` is what puts them in the corpus, and a fit over a boundary term whose
-        boundary was never recorded could not be reproduced.
-        """
-        ports, channels = boundary_signature(comp)
-        return {"n_ports": len(ports), "n_channels": len(channels),
-                "ports": [list(p) for p in ports], "channels": [list(c) for c in channels]}
-
-    def _signature(self, row) -> tuple:
-        """Rebuild the boundary signature from a recorded row — the table's key.
-
-        Reconstructed from `ports` / `channels` rather than re-read from a component, so the same
-        lookup serves a live instance and a stored corpus row.
-        """
-        ports = tuple(sorted(tuple(p) for p in row.get("ports", ())))
-        channels = tuple(sorted(tuple(c) for c in row.get("channels", ())))
-        return (ports, channels)
-
-    def predict_feat(self, row) -> dict:
-        got = self.table.get(self._signature(row))
-        return dict(got) if got else zero_counters()
-
     def confidence_feat(self, row) -> Confidence:
-        sig = self._signature(row)
-        f = self.transform(row)
-        if sig not in self.table:
+        """The inherited EXACT/UNCALIBRATED split, worded for a boundary rather than a module key."""
+        payload, source = self._record(row)
+        ports, channels = self._signature(row)
+        n_p = int(row.get("n_ports", len(ports)))
+        n_c = int(row.get("n_channels", len(channels)))
+        facts = {"model": "interface", "n_ports": n_p, "n_channels": n_c,
+                 "boundary": self._key(row)[0]}
+        if payload is None:
             return Confidence(level=ConfidenceLevel.UNCALIBRATED, facts={
                 "summary": f"no interface measurement for this boundary "
-                           f"({f['n_ports']} port(s), {f['n_channels']} channel(s)); the term is a "
-                           f"lookup over measured boundaries and cannot interpolate",
-                "model": "interface", **f})
+                           f"({n_p} port(s), {n_c} channel(s)); the term is a lookup over measured "
+                           f"boundaries and cannot interpolate", **facts})
         return Confidence(level=ConfidenceLevel.EXACT, facts={
             "summary": f"interface measured directly for this boundary "
-                       f"({f['n_ports']} port(s), {f['n_channels']} channel(s))",
-            "model": "interface", **f})
+                       f"({n_p} port(s), {n_c} channel(s))",
+            "measured_source": source, **facts})
 
 
 # ---------------------------------------------------------------------------

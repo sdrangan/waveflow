@@ -6,7 +6,7 @@ The **committed record** of 16 Vitis C-syntheses of ``examples/vecmult`` on xc7z
 It lives here as source rather than as the sweep's JSON because ``results/*.json`` is untracked:
 committing the numbers is what makes the measurement outlive the work directory, and what lets the
 model gates run with no toolchain installed.  Re-running the sweep regenerates the same grid; this
-file is the snapshot the tests and ``docs/guide/resource_model/example.md`` are written against.
+file is the snapshot the tests and ``docs/examples/vecmult/resmodfit.md`` are written against.
 
 The grid is chosen to separate the two BRAM regimes rather than to cover a box uniformly, because
 the point of the example is that the two regimes obey *different-looking* laws that are in fact one
@@ -26,6 +26,7 @@ and one corner where the law does not apply at all, which is recorded rather tha
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from waveflow.calib.device_rules import bram_estimate, dsp_count
 
@@ -51,6 +52,12 @@ PART = "xc7z020clg484-1"
 #: A second independent copy is a feature exactly while one checks the other.  It stops being one the
 #: moment both claim to be the source -- so if these ever disagree with the store, the store is right
 #: and this is stale.
+#: The example's own committed record library -- 16 syntheses filed by module key, promoted out of
+#: the sweep's untracked work tier.  Named here so :meth:`~examples.vecmult.vecmult.VecMult.get_rm`
+#: can fall back to it when no platform is supplied, which is what lets the model fit itself with no
+#: hand-written sample list and no toolchain installed.
+COMMITTED_CALIB = Path(__file__).resolve().parent / "calib" / "platforms" / "zynq7020_vecmult"
+
 GRID: dict = {
     (  512,  32): dict(lut= 964, ff= 415, dsp= 2, bram= 2),
     (  512,  64): dict(lut=1370, ff= 593, dsp= 4, bram= 4),
