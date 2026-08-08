@@ -4,8 +4,10 @@ On this technology the split between what can be *derived* and what must be *fit
 per-design judgement call.  It follows from the fabric:
 
 * **Hard primitives are allocated, so they are countable.**  A multiply consumes DSPs by the
-  device's port geometry; a partitioned array consumes blocks by the block's shape.  Declare how many
-  you have and :mod:`waveflow.calib.device_rules` prices them, with **zero** fitted parameters.
+  device's port geometry; a partitioned array consumes blocks by the block's shape -- or, if it is too
+  shallow for a block, LUTs by the SLICEM's.  Declare how many you have and
+  :mod:`waveflow.calib.device_rules` prices them, with **zero** fitted parameters, in whichever
+  primitive they actually land in.
 * **Soft fabric is what everything else decomposes into, so it is not.**  How much logic a structure
   becomes depends on how the tool shares, retimes and packs.  There is no table to look it up in, so
   LUT and FF are regressed.
@@ -15,8 +17,9 @@ author supplies two things and neither is device knowledge:
 
 1. :meth:`VitisResourceModel.structure` — what the design *contains*: multiplier groups and
    partitioned arrays.
-2. :meth:`VitisResourceModel.fit_features` + ``fit_basis`` — the basis for the remainder, chosen from
-   the structure->form dictionary (see ``docs/examples/vecmult/resource_model.md``).
+2. The basis for the remainder, either written directly as a :class:`LutFfBasis` or inferred from
+   named structures (:class:`PerLane`, :class:`Crossbar`, ...).  See
+   ``docs/examples/vecmult/vitis_resmod.md``.
 
 Both are **overridden methods**, not injected callables: each takes the elaborated component and
 describes it, which is what a method is.
@@ -41,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from waveflow.calib.confidence import Confidence, ConfidenceLevel
-from waveflow.calib.device_rules import bram_estimate, dsp_count
+from waveflow.calib.device_rules import bram_estimate, dsp_count, lutram_luts
 from waveflow.calib.module_key import identify_instance
 from waveflow.calib.calib import ConcatCalibModel, PriorCalibModel
 from waveflow.calib.resource_model import ResourceModel
@@ -85,9 +88,11 @@ class MemArray:
     """One array as the design partitions it.
 
     ``banks`` is the ``ARRAY_PARTITION`` factor, ``depth`` the entries **per bank**, and
-    ``elem_bits`` the element width.  Those three are what decide block cost, and all three are facts
-    about the design rather than about the device -- the rounding, the legal block shapes and the
-    LUTRAM threshold all live in :func:`~waveflow.calib.device_rules.bram_estimate`.
+    ``elem_bits`` the element width.  Those three decide the cost **whichever primitive the array
+    lands in** -- block RAM via :func:`~waveflow.calib.device_rules.bram_estimate`, or distributed RAM
+    via :func:`~waveflow.calib.device_rules.lutram_luts` when a bank is too shallow for a block.  You
+    declare the same three numbers either way, because which one it binds to is the tool's decision
+    and not yours.  The rounding, the legal block shapes and the threshold all live in the rules.
 
     An unpartitioned array is ``banks=1`` with the full depth.
     """
@@ -147,6 +152,39 @@ class ReductionTree:
 
 
 @dataclass(frozen=True)
+class LutFfBasis:
+    """The terms the LUT/FF regression is fitted on, **written directly**.
+
+    The alternative is to name a structure (:class:`PerLane`, :class:`Crossbar`) and let a fixed
+    dictionary decide its growth form.  That reads well when the design happens to be in the
+    dictionary and badly when it is not -- and it asks an author to learn a taxonomy in order to say
+    something they can say in arithmetic.  Here they say the arithmetic::
+
+        LutFfBasis(bases=[lw, lw ** 2], names=("lw", "lw2"))
+
+    ``bases`` are the term *values* at this configuration, evaluated by the module that knows its own
+    parameters, so anything expressible in Python is expressible here.  ``names`` are optional labels
+    that make a fitted formula readable; without them the terms are ``b0``, ``b1``, ...
+
+    A constant term is **not** declared -- every regression carries an intercept already, and a
+    declared column of ones would be collinear with it.
+    """
+
+    bases: tuple = ()
+    names: tuple = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bases", tuple(self.bases))
+        object.__setattr__(self, "names", tuple(self.names))
+        if self.names and len(self.names) != len(self.bases):
+            raise ValueError(f"LutFfBasis: {len(self.names)} names for {len(self.bases)} bases")
+
+    def labels(self) -> tuple:
+        """One label per basis term -- the declared name, or ``b<i>``."""
+        return tuple(self.names) if self.names else tuple(f"b{i}" for i in range(len(self.bases)))
+
+
+@dataclass(frozen=True)
 class DesignStructure:
     """What a module contains, in the terms the device rules price.
 
@@ -164,12 +202,21 @@ class DesignStructure:
     crossbars: tuple = ()
     counters: tuple = ()
     reductions: tuple = ()
+    #: The fitted basis stated **directly**, as an alternative to the four rows above.  When present
+    #: it REPLACES them: a design that writes its own terms is not also having them inferred, which
+    #: would silently double-count the same growth.
+    lut_ff_basis: "LutFfBasis | None" = None
 
     _SEQ = ("multipliers", "memories", "per_lane", "crossbars", "counters", "reductions")
 
     def __post_init__(self) -> None:
         for f in self._SEQ:
             object.__setattr__(self, f, tuple(getattr(self, f)))
+        if self.lut_ff_basis is not None and any(getattr(self, f) for f in self._SEQ[2:]):
+            raise ValueError(
+                "DesignStructure: declare EITHER lut_ff_basis OR the per_lane/crossbars/counters/"
+                "reductions rows, not both -- two sources for one basis is two things to keep in "
+                "step, and the failure is a silently double-counted term.")
 
     def flatten(self) -> dict:
         """The declaration as **flat scalar columns**, for a corpus row.
@@ -197,6 +244,9 @@ class DesignStructure:
                 out[f"{kind}{i}_lanes"] = int(r.lanes)
         for i, c in enumerate(self.counters):
             out[f"count{i}_over"] = int(c.over)
+        if self.lut_ff_basis is not None:
+            for lbl, val in zip(self.lut_ff_basis.labels(), self.lut_ff_basis.bases):
+                out[f"basis_{lbl}"] = float(val)
         return out
 
     @staticmethod
@@ -212,6 +262,15 @@ class DesignStructure:
         must run at fit time from a stored corpus row where no :class:`DesignStructure` exists.  That
         is the whole point of recording :meth:`flatten` rather than the terms.
         """
+        # A directly-declared basis wins outright.  It is not merged with the inferred terms: the
+        # declaration forbids declaring both, so seeing these columns means the inferred ones are
+        # absent by construction -- and returning them anyway would resurrect a vocabulary the author
+        # deliberately did not use.
+        written = {k[len("basis_"):]: float(v) for k, v in params.items()
+                   if isinstance(k, str) and k.startswith("basis_")}
+        if written:
+            return written
+
         def vals(prefix: str, suffix: str) -> list:
             out = []
             i = 0
@@ -316,6 +375,15 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
     #: The part the device rules are keyed on.  ``None`` takes it from :attr:`platform`, then from
     #: the device-rule default.
     part: "str | None" = None
+
+    #: The **integration term**: ``top - sum(modules)``, what a design costs beyond its modules --
+    #: the ``m_axi`` adapters, the inter-task FIFOs, the AXI-Lite block and the DATAFLOW shell.
+    #:
+    #: Optional and generic rather than something each design subclasses in.  Every design has one;
+    #: it is merely large and positive on a multi-task composite and small (here, ``-2`` LUT of
+    #: flattening slack) on a single task.  Kept a separate term rather than folded into the fabric
+    #: fit because it *is* separate: the modules are measured per module, and this is the remainder.
+    shell: Any = None
 
     #: ``{counter: [basis-term names]}``.  Empty means "every non-zero term the declaration
     #: produced", which is the intended path -- see :meth:`basis_for`.
@@ -448,7 +516,7 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
         return db
 
     def get_params(self, comp: Any, **runtime) -> dict:
-        """Resolved ``HwParam`` values **plus a flat record of the declared structure**.
+        """Resolved ``HwParam`` values, the declared structure, and the shell's boundary key.
 
         The structure is what this model actually prices, and it is not recoverable from parameters
         alone by anything that does not hold the component -- so it is recorded here, in
@@ -463,11 +531,61 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
         """
         params = dict(super().get_params(comp, **runtime))
         params.update(self.structure(comp).flatten())
+        if self.shell is not None:
+            params.update(self.shell.get_params(comp, **runtime))
         return params
 
     def transform(self, params: dict) -> dict:
         """The basis terms for the LUT/FF regression, from the recorded structure columns."""
         return DesignStructure.basis_terms_from(params)
+
+    def derived_offset(self, params: dict, counter: str) -> int:
+        """The part of *counter* a **device rule** already accounts for, to be held out of the fit.
+
+        Storage that HLS declines to put in a block does not disappear -- it reappears in the LUT
+        counter as distributed RAM, and :func:`~waveflow.calib.device_rules.lutram_luts` prices it
+        exactly.  Subtracting it before fitting and adding it back when predicting is what lets a
+        LUTRAM-regime point **join** the corpus instead of being excluded from it: the fit sees only
+        the fabric it is actually modelling, and the regime is carried by a rule with zero free
+        parameters rather than by a coefficient inferred from one point.
+
+        Zero for every counter without such a rule -- notably ``ff``, whose cost at the corner is
+        flat in depth and so is not storage at all.
+        """
+        if counter != "lut":
+            return 0
+        total, i = 0, 0
+        while f"mem{i}_banks" in params:
+            b, d = int(params[f"mem{i}_banks"]), int(params[f"mem{i}_depth"])
+            e = int(params[f"mem{i}_elem_bits"])
+            binding = bram_estimate(b, d, e, self._part()).binding
+            if binding == "lutram" and not int(params.get(f"mem{i}_uram", 0)):
+                total += lutram_luts(b, d, e, self._part())
+            i += 1
+        return total
+
+    def fit_rows(self, df, counter: str):
+        """Which corpus rows *counter* is fitted on.  Every row it can honestly learn from.
+
+        A hook per **counter** rather than one corpus for the whole model, because the regimes a
+        model must be protected from are not the same for every target.
+
+        The default handles the one boundary this technology has: an array too shallow for a block
+        lands in distributed RAM, and its storage reappears in fabric.  ``lut`` keeps those rows,
+        because :meth:`derived_offset` prices exactly what moved and holds it out of the fit.  Every
+        other fitted counter drops them, because it has no such rule and the row is therefore
+        describing hardware its basis cannot express -- training across it makes the model worse
+        everywhere else.
+
+        **A no-op for the designs that do not straddle the boundary**, which is most of them: with no
+        LUTRAM-bound row in the corpus there is nothing to drop.  That is why this is a default rather
+        than something each design subclasses in.
+        """
+        need = ("mem0_banks", "mem0_depth", "mem0_elem_bits")
+        if counter == "lut" or any(c not in df.columns for c in need):
+            return df
+        keep = [self.derived_offset(r, "lut") == 0 for r in df.to_dict("records")]
+        return df if all(keep) else df[keep].reset_index(drop=True)
 
     @property
     def has_free_params(self) -> bool:
@@ -569,15 +687,25 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
         for c in FITTED_COUNTERS:
             if c not in df.columns:
                 continue
+            sub = self.fit_rows(df, c)
+            if sub is None or not len(sub):
+                continue
+            # Hold out the part a device rule already accounts for, so the regression models only
+            # the fabric it is responsible for.  Done on a copy: the frame is shared across counters
+            # and `ff` must not see `lut`'s adjustment.
+            sub = sub.copy()
+            offs = [self.derived_offset(r, c) for r in sub.to_dict("records")]
+            if any(offs):
+                sub[c] = sub[c].to_numpy() - offs
             if comp0 is not None:
                 basis = self.basis_for(comp0, c)
             else:
                 # No component to ask, so take the basis from the recorded structure itself -- every
                 # term the declaration produces that is not identically zero across the corpus.
-                terms = [DesignStructure.basis_terms_from(r) for r in df.to_dict("records")]
+                terms = [DesignStructure.basis_terms_from(r) for r in sub.to_dict("records")]
                 basis = self.fit_basis.get(c) or [k for k in sorted(terms[0]) if any(t[k] for t in terms)]
             self.fits[c] = LinCalibModel(basis=list(basis), target=c, name=f"{self.name}.{c}",
-                                         transform_fn=DesignStructure.basis_terms_from).fit(df)
+                                         transform_fn=DesignStructure.basis_terms_from).fit(sub)
         return self
 
     # -- composition ---------------------------------------------------------
@@ -601,7 +729,15 @@ class VitisResourceModel(ConcatCalibModel, ResourceModel):
         """
         out = dict(self._derived_model().predict_feat(row))
         for c, m in self.fits.items():
-            out[c] = int(round(float(m.predict_feat(row))))
+            # ...and add back what was held out of the fit, so the caller sees the whole counter.
+            out[c] = int(round(float(m.predict_feat(row)))) + self.derived_offset(row, c)
+        if self.shell is not None:
+            # The fit is trained on MODULE figures, so the integration term is added back here rather
+            # than absorbed into the coefficients.  Same answer on a single task; only this one stays
+            # right when a second task appears.
+            for c, v in self.shell.predict_feat(row).items():
+                if v:
+                    out[c] = int(out.get(c, 0)) + int(v)
         return out
 
     def predict(self, comp: Any, **runtime) -> dict:
