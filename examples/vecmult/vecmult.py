@@ -1,7 +1,7 @@
 """vecmult.py — the resource-model teaching example: a buffered element-wise vector multiplier.
 
 ``z = x * y`` over a vector of ``n`` 16-bit samples.  The design exists to make **resource
-modelling** concrete (``docs/guide/resource_model/example.md``), so it is deliberately the smallest
+modelling** concrete (``docs/examples/vecmult/``), so it is deliberately the smallest
 module whose four counters need three *different* kinds of model:
 
 * **DSP** — one multiply per lane, ``LW = dwid / samp_w`` lanes.  A binding decision HLS reports;
@@ -187,41 +187,56 @@ class VecMult(FreeRunMod):
         the LUTRAM threshold -- and no basis functions either.  Only structures whoever wrote the
         body already knows, because they wrote them:
 
-        * ``LW`` multiplies per beat with ``SAMP_W`` operands  (the ``MULT`` loop);
-        * ``buf`` partitioned ``cyclic factor=LW``, so ``LW`` banks of ``vlen/LW`` entries;
-        * the per-lane datapath and the ``LW`` comparators against ``nlane``;
-        * a **crossbar**: ``n`` is a runtime length, so the final beat places a variable number of
-          lanes at variable positions.  That one fact is why LUT grows as ``LW^2`` rather than
-          linearly, and declaring it is what puts the right terms in the fit.
+        * ``LW`` multiplies per beat with ``SAMP_W`` operands  (the ``MULT`` loop) -> ``dsp``;
+        * ``buf`` partitioned ``cyclic factor=LW``, so ``LW`` banks of ``ceil(vlen/LW)`` entries ->
+          ``bram``, or ``lut`` when the banks are too shallow for a block.  Same declaration either
+          way: which primitive it lands in is the tool's decision, not this module's;
+        * the LUT/FF basis, written directly: ``LW`` because the ``MULT`` loop is unrolled that many
+          times, ``LW^2`` because ``n`` is a *runtime* length so the ragged final beat places a
+          variable number of lanes at variable positions, and ``LW^2*log2(LW)`` because two terms
+          fit LUT to 0.25% but FF to only 10.4% held out.
 
         Note ``vlen``, not ``n``: the buffer is sized by the compile-time bound, so that is what the
         hardware is priced against.
         """
+        import math
+
         from waveflow.calib.vitis_model import (
-            Crossbar,
             DesignStructure,
+            LutFfBasis,
             MemArray,
             MultGroup,
-            PerLane,
         )
 
         lw = self.lw
         return DesignStructure(
             multipliers=[MultGroup(count=lw, operand_bits=SAMP_W)],
-            memories=[MemArray(banks=lw, depth=int(self.vlen) // lw, elem_bits=SAMP_W,
+            # ceil: every bank is allocated to the deepest one, so a VLEN that LW does not divide
+            # still costs the extra entry.  Under-counting is the one direction area must not err.
+            memories=[MemArray(banks=lw, depth=math.ceil(int(self.vlen) / lw), elem_bits=SAMP_W,
                                name="buf")],
-            per_lane=[PerLane(lanes=lw, name="lane datapath + nlane compare")],
-            crossbars=[Crossbar(lanes=lw, name="runtime-position lane pack/unpack")],
+            # The LUT/FF basis, written directly.  `lw` because the MULT loop is unrolled LW times;
+            # `lw^2` because the ragged final beat places a runtime number of lanes at runtime
+            # positions, which is any-to-any routing.  The third term is NOT a guess: [lw, lw^2]
+            # alone fits LUT to 0.25% and FF to only 10.4% held out, and adding it takes FF to 1.7%.
+            lut_ff_basis=LutFfBasis(bases=[lw, lw ** 2, lw ** 2 * math.log2(lw) if lw > 1 else 0.0],
+                                    names=("lw", "lw2", "lw2_log_lw")),
         )
 
     @classmethod
     def get_rm(cls, platform):
-        """VecMult's resource model for *platform*: DSP/BRAM derived, LUT/FF fitted.
+        """VecMult's resource model for *platform*: a stock ``VitisResourceModel``, fitted from the
+        measurements already on disk.
 
         A classmethod, so it cannot close over an instance.  Everything configuration-specific
         reaches the model through :meth:`resource_structure` on whatever component it is asked to
         predict for -- which is why one object prices every ``(dwid, vlen)`` of this class, and why
         the base can cache it per ``(class, platform)``.
+
+        No subclass and no hand-built sample list: the class is the stock one, and the corpus is the
+        record library this example ships.  With a platform the caller's library is used; without
+        one -- ``add_rm(None)``, the toolchain-free path the tests take -- it falls back to the
+        committed library HERE rather than to a second, hand-maintained copy of the same numbers.
 
         Refuses a platform on a **different device** from the one the corpus was measured on --
         not merely an unrecognized one.  Checking only that the part is *known* admits every other
@@ -231,25 +246,18 @@ class VecMult(FreeRunMod):
         """
         from waveflow.calib.device_rules import require_same_device
         from waveflow.calib.record_store import ModuleStore
+        from waveflow.calib.vitis_model import VitisResourceModel
 
-        from examples.vecmult.vecmult_corpus import PART
-        from examples.vecmult.vecmult_resource import (VecMultResourceModel, vec_mult_samples,
-                                                       vec_mult_shell)
+        from examples.vecmult.vecmult_corpus import COMMITTED_CALIB, PART
+        from examples.vecmult.vecmult_resource import vec_mult_shell
 
         part = getattr(platform, "part", None) or PART
         require_same_device(part, PART, what="VecMult's resource model")
 
-        plat_dir = getattr(platform, "dir", None)
-        model = VecMultResourceModel(
-            name="vec_mult", part=part, platform=platform, cls_name="VecMult",
-            comp_class=cls,
-            store=ModuleStore(plat_dir) if plat_dir else None,
-            shell=vec_mult_shell(ModuleStore(plat_dir)) if plat_dir else None)
-
-        # With a platform, the measurements are already on disk as records: the fit reads them and
-        # `samples` is never built.  Without one there is no store to read, so the committed grid is
-        # the only corpus there is -- which is what keeps this example usable with `add_rm(None)`.
-        return model.load_or_fit() if plat_dir else model.load_or_fit(samples=vec_mult_samples)
+        store = ModuleStore(getattr(platform, "dir", None) or COMMITTED_CALIB)
+        return VitisResourceModel(name="vec_mult", part=part, platform=platform,
+                                  cls_name="VecMult", comp_class=cls, store=store,
+                                  shell=vec_mult_shell(store)).load_or_fit()
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing: ``[cmd | x | y]`` in, ``[z | resp]`` out.  The pysim golden."""
