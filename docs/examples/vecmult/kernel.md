@@ -19,6 +19,7 @@ static void vec_mult_task(hls::stream<ap_uint<DWID> >& s_in,
                           hls::stream<ap_uint<DWID> >& z_out) {
     typedef vm_au::value_type samp_t;
     const int LW = vm_au::lane_capacity<DWID>();
+    const int SAMP_W = samp_t::width;          // from the type, never a literal
 
     VecCmd cmd;
     cmd.read_stream<DWID>(s_in);
@@ -44,7 +45,7 @@ whole every beat — completely partitioning them makes them registers rather th
 > [`add_state`](../firblock/state.md) declaration. `fir_block`'s taps are the contrasting case: they
 > carry across firings and must be declared, because the generator has to give them a lifetime the
 > C++ scope does not. Here the whole buffer dies with the job, and its cost is still paid — that is
-> the point the [resource model](./resource_model.md) makes.
+> the point the [resource model](./vitis_resmod.md#memarray) makes: it is declared against `VLEN`.
 
 ## Why it buffers
 
@@ -112,7 +113,7 @@ Two things to notice, because they are where a vectorized body goes wrong:
 
 This is also where the example's LUT cost comes from. A **runtime** lane count at runtime positions is
 a variable-position mux — a crossbar — and that is why LUT grows as `LW²` rather than linearly. See
-[the model page](./resource_model.md#structure-form-dictionary).
+[the `LW²` basis term](./vitis_resmod.md#perlane).
 
 The [testbench](./testbench.md) checks `n ∈ {1, 7, 63, 64, 65, 253}` for exactly this reason: a
 full-length run never reaches the partial beat.
@@ -132,26 +133,52 @@ MULT:
         vm_au::read_stream_lane<DWID>(s_in, ylane, nlane);
         for (int j = 0; j < LW; ++j) {
 #pragma HLS UNROLL
-            ap_int<2 * 16> p = (ap_int<2 * 16>)buf[i + j] * (ap_int<2 * 16>)ylane[j];
+            ap_int<2 * SAMP_W> p = buf[i + j] * ylane[j];
             zlane[j] = (samp_t)p;
         }
         vm_au::write_stream_lane<DWID>(zlane, z_out, nlane);
     }
 ```
 
-This is the loop the [DSP rule](./resource_model.md#the-three-laws) prices: `LW` multiplies per beat,
-16-bit operands, one DSP each. It reads `buf` `LW` samples at a time — the access the `cyclic`
+This is the loop the [DSP rule](./vitis_resmod.md#multgroup) prices: `LW` multiplies per beat,
+`SAMP_W`-bit operands, one DSP each. It reads `buf` `LW` samples at a time — the access the `cyclic`
 partition exists to make conflict-free — and writes through the generated `write_stream_lane`, the
 mirror of the read on the way in.
 
 {: .warning }
-> **The product wraps; it does not saturate.** The multiply widens to `ap_int<32>` and the result is
-> cast straight back to `samp_t` (`ap_int<16>`), discarding the high half. That is not carelessness
-> about overflow — it is what makes the C++ agree with the Python golden, which is numpy `int16`
-> arithmetic and wraps. A saturating `ap_fixed` here would be the *more careful* choice and the
-> *wrong* one: every product that overflowed would differ from Python, and only for operands large
-> enough to reach the corner, so a short test would never see it. The
+> **The product wraps; it does not saturate.** The multiply widens to `ap_int<2 * SAMP_W>` and the
+> result is cast straight back to `samp_t` (`ap_int<16>`), discarding the high half. That is not
+> carelessness about overflow — it is what makes the C++ agree with the Python golden, which is numpy
+> `int16` arithmetic and wraps. A saturating `ap_fixed` here would be the *more careful* choice and
+> the *wrong* one: every product that overflowed would differ from Python, and only for operands
+> large enough to reach the corner, so a short test would never see it. The
 > [csim twin check](./testbench.md) is what holds the two definitions together.
+
+### Cast where you narrow, never where you widen {#cast-where-you-narrow}
+
+That warning is about the **one** cast on the line, and the rule generalizes:
+
+> In `ap_int` / `ap_fixed`, arithmetic already returns a result type wide enough to be exact —
+> `W1 + W2` bits for a multiply, `max(W1, W2) + 1` for an add. So cast only where you **deliberately
+> narrow**. A widening cast tells the tool nothing it did not already know.
+
+`ap_int<16> * ap_int<16>` **is** `ap_int<32>`, so `p` is exact with no cast at all. Widening the
+operands first would make the product `ap_int<64>` and push a silent 32-bit truncation into the
+assignment — harmless at `SAMP_W = 16`, and wrong the moment it changes. Casting everywhere also
+costs you the signal: a reader can no longer tell which cast is a decision and which is noise, and
+here exactly one of them is a decision.
+
+{: .note }
+> **The C habit is backwards here, which is why this is worth stating.** In C, `int16 * int16`
+> promotes to `int` and `int * int` overflows, so C programmers correctly learn to cast up before
+> multiplying — `(int64_t)a * b`. With AP types that reflex is unnecessary *and* harmful. (It still
+> applies to native operands; mixing native and AP types in one expression is where it bites.)
+
+The companion rule is on the same line: widths come **from the parameter**, never from a literal.
+`const int SAMP_W = samp_t::width` is taken from the type itself, so `ap_int<2 * SAMP_W>` cannot go
+stale. The check to apply to any such line is *"if `SAMP_W` changed tomorrow, would this still be
+right?"* — a hard-coded `ap_int<2 * 16>` fails it silently, returning a positive number for a
+negative product.
 
 `LOOP_TRIPCOUNT max=VLEN` is for the synthesis **report**, not the hardware. `n` is a runtime value,
 so without it HLS cannot bound the latency it prints. It is a deliberate over-estimate — the loop

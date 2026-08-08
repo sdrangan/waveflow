@@ -196,10 +196,12 @@ subtracted from the measurement before fitting and added back when predicting, s
 only the fabric it is responsible for, and the regime is carried by a rule rather than by a coefficient
 inferred from one point. LUT is now exact at **all 16** points, the corner included.
 
-This is also what `VecMultResourceModel` exists for. Its `corpus()` keeps a row only when
-`bram_estimate` says that row's declared banks bound to block RAM — the same function the derived half
-uses to *predict* the counter — so the training regime cannot drift away from the threshold that
-defines it, and a future grid point on the LUTRAM side is excluded automatically.
+FF, having no such rule, still drops that row — and that decision is `VitisResourceModel`'s default
+rather than anything `VecMult` writes. It is expressed as a **rule applied to the recorded structure**,
+not as a coordinate: a row is dropped when `bram_estimate` says its declared banks bound to LUTRAM, the
+same function the derived half uses to *predict* the counter. So the training regime cannot drift away
+from the threshold that defines it, and a future grid point on the LUTRAM side is handled without
+anyone noticing it arrived.
 
 ### Where the composed number comes from
 

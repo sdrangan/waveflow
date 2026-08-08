@@ -1,15 +1,16 @@
 ---
 title: Predicting
 parent: Resource Models
-nav_order: 6
+nav_order: 7
 audience: python
 api: [predict, compose, ResourceEstimate, Confidence, boundary_signature]
 summary: "Getting a number out: predict for one module, compose for a hierarchy. The composition rule is one line applied recursively — a module's own cost plus the sum of its children — where a composite's own cost is the interface term, and that term is defined exactly as a synthesis report measures it. Every estimate carries the weakest confidence that fed it, and names the modules sitting at it."
 ---
-
 # Predicting
 
 ## One module
+
+Once the `add_rm` method of a `HwModule` is defined, we can use the `predict` method to estimate the resources consumed by  a particular configuration.  For example, in the [vector multiplier example](../../examples/vecmult/):
 
 ```python
 top = elaborate(VecMult, {"dwid": 64, "vlen": 4096}, name="vec_mult")
@@ -24,6 +25,8 @@ never its children's.
 
 ## A hierarchy
 
+To estimate the *total* resource used by the `HwModule` and its sub-modules, use the `compose` method.   The `compose` method returns a structure with total resources, the confidence level, and other parameters:
+
 ```python
 est = compose(top)
 
@@ -35,7 +38,7 @@ est.per_module   # [(path, cls_name, counters, Confidence), ...]
 
 ### The composition rule
 
-One line, applied recursively:
+The `compose` method is based on recursively applying `predict`:
 
 ```text
 predict(comp)  =  comp's OWN model  +  Σ predict(child)
@@ -53,17 +56,17 @@ Nothing is passed down. Each model reads its own features off the component it i
 [elaboration](../comp_codegen/elaborate.md) already resolved every child's parameters — so a child's
 features cannot drift from the design that was synthesized.
 
-### The interface term {#the-interface-term}
+### The interface term
 
 A composite's own cost comes out by subtraction only because Vitis declines to itemize it. It is in
 one-to-one correspondence with the design's interface graph:
 
-| unreported RTL | comes from |
-|---|---|
-| `gmem<n>_m_axi` | one per `m_axi` boundary port |
-| `fifo_w<W>_d<D>_S` | one per **internal** task-to-task channel |
-| `control_s_axi` | the ap_ctrl / AXI-Lite block |
-| `entry_proc`, `regslice_both`, `sparsemux_*` | the DATAFLOW shell |
+| unreported RTL                                     | comes from                                     |
+| -------------------------------------------------- | ---------------------------------------------- |
+| `gmem<n>_m_axi`                                  | one per `m_axi` boundary port                 |
+| `fifo_w<W>_d<D>_S`                               | one per **internal** task-to-task channel |
+| `control_s_axi`                                  | the ap_ctrl / AXI-Lite block                   |
+| `entry_proc`, `regslice_both`, `sparsemux_*` | the DATAFLOW shell                             |
 
 So `InterfaceResourceModel` keys on a `boundary_signature` — port kinds and widths, channel widths —
 rather than on parameters. The evidence is two-sided: across 24 points varying the compute parameters
@@ -76,17 +79,17 @@ realizations at each width.
 > whole-design synthesis exists to catch, and it is invisible if modules are only ever measured
 > standalone. `VecMult` shows a small one: `lut: -2`.
 
-## Confidence {#confidence}
+## Confidence
 
 Every model returns a `Confidence` beside its counters, and a composed estimate reports the
 **weakest** one:
 
-| level | means |
-|---|---|
-| `EXACT` | the form reproduces every calibration point with zero residual — a checked claim |
-| `INTERPOLATED` | the query lies inside the region the model was fit over |
-| `EXTRAPOLATED` | outside it — and what you cross on the way out is usually a *regime boundary* |
-| `UNCALIBRATED` | no fit backs this number |
+| level            | means                                                                             |
+| ---------------- | --------------------------------------------------------------------------------- |
+| `EXACT`        | the form reproduces every calibration point with zero residual — a checked claim |
+| `INTERPOLATED` | the query lies inside the region the model was fit over                           |
+| `EXTRAPOLATED` | outside it — and what you cross on the way out is usually a *regime boundary*   |
+| `UNCALIBRATED` | no fit backs this number                                                          |
 
 A `VitisResourceModel` illustrates why the weakest link is the right rule. Two of its counters are
 zero-parameter rules that reproduce every measurement; two are regressions. The composed verdict is
