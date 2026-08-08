@@ -78,16 +78,27 @@ class TestTransformCannotSeeTheComponent:
         top.add_rm(None)
         m = top.resource_model
         row = m.get_params(top)
-        # A CSV round-trip returns floats and nothing else; the terms must survive it.
-        via_csv = {k: float(v) for k, v in row.items()}
+        # A CSV round-trip returns floats, so every column the basis reads must survive becoming
+        # one.  Non-numeric columns are exempt rather than overlooked: `ports` and `channels` are
+        # the interface term's boundary signature, looked up whole and never arithmetic.  Coercing
+        # them here would assert something false about the row -- that all of it is numbers.
+        via_csv = {k: (float(v) if isinstance(v, (int, float, bool)) else v)
+                   for k, v in row.items()}
         assert m.transform(via_csv) == m.transform(row)
+        assert all(isinstance(v, float) for k, v in via_csv.items()
+                   if k in m.transform(row)), "a basis column did not survive the round trip"
 
     def test_vitis_records_the_declaration_not_the_cost_dictionary(self):
-        """`xbar0_lanes`, not `xbar_sw` — so revising the structure->form dictionary keeps the corpus.
+        """The corpus row carries what the module *declared*, alongside the raw parameters.
 
-        This is the concrete payoff of the split. The LUT cost of a crossbar is a modelling claim
-        that will be revised; had the corpus stored the derived term, every measurement would be
-        stranded by that revision.
+        `VecMult` states its fabric basis directly (`LutFfBasis`), so the declaration IS the terms
+        and the columns are `basis_*`.  What must still hold is that the raw parameters travel with
+        them: a revised basis has to be re-derivable from measurements already on disk, and `dwid`
+        is what makes that possible.  A row of terms alone would strand every point the moment the
+        modelling claim changed.
+
+        The structural vocabulary (`xbar0_lanes` -> `xbar_sw`) keeps its own split for designs that
+        use it; `TestVitisStructuralVocabulary` below covers that path.
         """
         from examples.vecmult.vecmult import VecMult
         from waveflow.build.elaborate import elaborate
@@ -95,8 +106,38 @@ class TestTransformCannotSeeTheComponent:
         top = elaborate(VecMult, {"dwid": 128, "vlen": 4096}, name="vec_mult")
         top.add_rm(None)
         row = top.resource_model.get_params(top)
-        assert "xbar0_lanes" in row and "mult0_count" in row      # the declaration
-        assert "xbar_sw" not in row and "xbar_depth" not in row   # not the derived terms
+        assert "mult0_count" in row and "mem0_banks" in row       # the device-rule declaration
+        assert "basis_lw" in row and "basis_lw2" in row           # the fitted declaration
+        assert "dwid" in row and "vlen" in row                    # ...and what it is re-derivable from
+
+
+class TestVitisStructuralVocabulary:
+    """The named-structure path (`PerLane`/`Crossbar`), which infers the basis instead of taking it.
+
+    Kept as a first-class test rather than folded into `VecMult`'s, because the two declaration
+    styles are separately reachable and a design using either must not silently get the other's
+    terms.
+    """
+
+    def test_named_structures_still_derive_their_terms(self):
+        from waveflow.calib.vitis_model import Crossbar, DesignStructure, PerLane
+
+        s = DesignStructure(per_lane=[PerLane(lanes=8)], crossbars=[Crossbar(lanes=8)])
+        assert "xbar0_lanes" in s.flatten()                       # the declaration
+        assert "xbar_sw" not in s.flatten()                       # not the derived term
+        assert s.basis_terms()["xbar_sw"] == 64.0                 # derived on demand
+
+    def test_a_written_basis_wins_and_is_not_merged(self):
+        """Declaring both is refused, so the two vocabularies can never double-count one growth."""
+        import pytest
+
+        from waveflow.calib.vitis_model import Crossbar, DesignStructure, LutFfBasis
+
+        s = DesignStructure(lut_ff_basis=LutFfBasis(bases=[8, 64], names=("lw", "lw2")))
+        assert s.basis_terms() == {"lw": 8.0, "lw2": 64.0}
+        with pytest.raises(ValueError, match="EITHER"):
+            DesignStructure(crossbars=[Crossbar(lanes=8)],
+                            lut_ff_basis=LutFfBasis(bases=[64]))
 
 
 class TestStorageIsDerived:

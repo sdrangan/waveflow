@@ -243,20 +243,34 @@ def test_composed_lut_is_exact_where_the_buffer_is_in_block_ram():
         assert _composed(vlen, dwid).total["lut"] == m["lut"], f"({vlen},{dwid})"
 
 
-def test_the_lutram_corner_is_under_predicted_and_that_is_known():
-    """At the LUTRAM corner the fit under-predicts fabric, because the storage moved into it.
+def test_the_lutram_corner_is_now_exact_on_lut():
+    """The corner used to under-predict LUT by 1.8%.  The regime term exists now, so it does not.
 
-    The BRAM prior correctly returns 0 there, but the LUT/FF fit was trained on in-BRAM points and
-    has no term for a buffer that became registers.  Pinned rather than tolerated silently, because
-    **under**-prediction is the one direction a resource estimate must not drift: it turns "does not
-    fit" into "fits".  A complete model would add a LUTRAM regime term.
+    What changed is not the fit: it is that `lutram_luts` prices the storage HLS moved into fabric,
+    so the corner is a *predicted regime* on LUT rather than a point the fit had to be protected
+    from.  Asserted as equality, because a device rule that merely got closer would be a
+    coincidence -- the claim is that distributed RAM is countable, and a countable thing is counted
+    exactly.
+    """
+    vlen, dwid = LUTRAM_CORNER
+    total = _composed(vlen, dwid).total
+    assert total["lut"] == GRID[LUTRAM_CORNER]["lut"]
+
+
+def test_the_corner_still_under_predicts_ff_and_that_is_known():
+    """FF has no LUTRAM rule, so the corner is still the point it is worst at.
+
+    Deliberately NOT fixed by widening the FF basis: measured across three lane counts the cost is
+    **flat in depth** (140 at 8192 bits and at 4096), so it is per-lane registering rather than
+    storage, and three points did not determine a form.  Bounded rather than tolerated silently,
+    because **under**-prediction is the one direction a resource estimate must not drift.
     """
     vlen, dwid = LUTRAM_CORNER
     total = _composed(vlen, dwid).total
     measured = GRID[LUTRAM_CORNER]
-    assert total["lut"] < measured["lut"], "expected under-prediction at the corner"
-    assert (measured["lut"] - total["lut"]) / measured["lut"] < 0.05, \
-        "corner under-prediction grew beyond 5% — the regime term is now worth adding"
+    assert total["ff"] < measured["ff"], "expected under-prediction of FF at the corner"
+    assert (measured["ff"] - total["ff"]) / measured["ff"] < 0.05, \
+        "corner FF under-prediction grew beyond 5% — the regime term is now worth determining"
 
 
 def test_composed_confidence_is_not_exact():

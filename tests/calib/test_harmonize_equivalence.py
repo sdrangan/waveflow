@@ -24,6 +24,15 @@ otherwise.  Two exceptions were sanctioned, both deliberate and both recorded in
    ``mem0_depth=32`` is plainly below the fitted ``[64, 8192]``.  So the model stopped vouching for a
    point it was known to get wrong — the refactor made the confidence *more* honest, which is the one
    direction a changed level is allowed to move.
+3. **VecMult's ``LutFfBasis`` switch**, which moved ``ff`` by **one** at the ``dwid=64`` points.  The
+   basis is mathematically the same three terms as the ``PerLane``/``Crossbar`` declaration it
+   replaced; only the column *order* into the least-squares solve changed.  The underlying value at
+   those points is exactly ``597.5`` either way -- a rounding knife-edge, and ``round`` picks the
+   side the last floating-point bit lands on.  Measured is 599, so neither answer is more right.
+4. **The LUTRAM corner's ``lut``**, 6956 -> **7084**, which is the measured value.  The corner used
+   to under-predict by 1.8% because the fit had no term for storage HLS moved into fabric;
+   ``lutram_luts`` now prices it exactly.  A snapshot moving *onto* the measurement is the one
+   direction this guard should never block.
 """
 from __future__ import annotations
 

@@ -29,6 +29,9 @@ REPO = Path(__file__).resolve().parents[2]
 #: one — ``≥``, ``…``, ``—``.
 _OPEN_CODE = re.compile(r"(?<=\w)`")
 _OPEN_BOLD = re.compile(r"(?<=\w)\*\*")
+#: Single-asterisk emphasis.  A separate pattern from bold because the two are counted on
+#: different views of the line — see :func:`_eaten_spaces`.
+_OPEN_EM = re.compile(r"(?<=\w)\*(?!\*)")
 
 #: A kramdown attribute list must sit immediately above the block it styles.
 _ATTR_LIST = re.compile(r"^\{:\s*\.\w+\s*\}\s*$")
@@ -148,6 +151,13 @@ def _eaten_spaces(line: str) -> list[int]:
             out.append(m.start())
     for m in _OPEN_BOLD.finditer(line):
         if line[:m.start()].count("**") % 2 == 0:
+            out.append(m.start())
+    # Emphasis is counted with bold blanked out to same-length spaces: bold owns its own
+    # asterisks, so counting them here would flip the open/closed parity, and a length-changing
+    # substitution would misreport the position.
+    em = line.replace("**", "  ")
+    for m in _OPEN_EM.finditer(em):
+        if em[:m.start()].count("*") % 2 == 0:
             out.append(m.start())
     return sorted(out)
 
