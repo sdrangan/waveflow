@@ -24,11 +24,10 @@ author supplies two things and neither is device knowledge:
 Both are **overridden methods**, not injected callables: each takes the elaborated component and
 describes it, which is what a method is.
 
-WHY THIS AND NOT ``FittedResourceModel(prior=PriorResourceModel(...))``.  That composition works and
-is what this replaces, but it names its halves for the *mechanism* (``targets``, ``prior``) rather
-than for what they are, so a reader looking for where ``bram`` is predicted has to know that
-``predict`` adds the prior in.  Here the halves are ``structure`` and ``fit``, and every counter
-is accounted for by name.
+WHY THIS AND NOT A FITTED-MODEL-WRAPPING-A-PRIOR.  That composition is what this replaced, and it
+named its halves for the *mechanism* (``targets``, ``prior``) rather than for what they are, so a
+reader looking for where ``bram`` is predicted had to know that ``predict`` added the prior in.
+Here the halves are ``structure`` and ``fit``, and every counter is accounted for by name.
 
 AN UNCOVERED COUNTER IS NEVER SILENT.  A model that returned ``{dsp, bram}`` and omitted LUT/FF would
 make a design read as *cheaper* than it is -- the one direction an area estimate must not err, since

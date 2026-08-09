@@ -22,8 +22,15 @@ Three things the grid records beyond the compute module's own counters:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 #: ``(ntap, samp_w, unroll_lane)`` -> measured counters.  ``lut``/``ff``/``dsp`` are ``FirCompute``'s
 #: own attributed figures; ``top_*`` are the whole-design totals.
+#: The example's committed record library — the resource measurements ``FirCompute`` is fitted from.
+#: Named here so :meth:`~examples.fir_block.fir_block.FirCompute.get_rm` can fall back to it when no
+#: platform is supplied, which is what lets the model fit itself with no hand-written sample list.
+COMMITTED_CALIB = (Path(__file__).resolve().parent / "calib" / "platforms" / "zynq7020_bfm_100mhz")
+
 GRID: dict = {
     ( 8,  8, False): dict(lut=2287, ff= 2135, dsp= 5, top_lut= 7239, top_ff= 6125, top_dsp= 5, top_bram=2),
     ( 8,  8, True ): dict(lut=2968, ff= 2061, dsp=16, top_lut= 7920, top_ff= 6051, top_dsp=16, top_bram=2),

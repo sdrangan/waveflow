@@ -50,13 +50,8 @@ recorded as a residual rather than rationalized — see :data:`SERIAL_PACK_CORRE
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
 
 from waveflow.calib.device_rules import dsp_per_mult
-from waveflow.calib.resource_model import PriorResourceModel
-
-if TYPE_CHECKING:                      # imported lazily at use to keep this module import-light
-    from waveflow.calib.resource_model import FittedResourceModel
 
 #: The part this corpus was measured on.  The DSP geometry it implies now comes from
 #: :mod:`waveflow.calib.device_rules` rather than from constants duplicated here -- a DSP48E1 is
@@ -105,81 +100,49 @@ def bram_prior(f: dict) -> int:
     return 0
 
 
-def fir_compute_prior() -> PriorResourceModel:
-    """The zero-parameter DSP + BRAM prior for :class:`~examples.fir_block.fir_block.FirCompute`."""
-    return PriorResourceModel(name="fir_compute_prior",
-                              formulas={"dsp": dsp_prior, "bram": bram_prior})
-
-
 # ---------------------------------------------------------------------------
 # D2 — the learned part: LUT and FF
 # ---------------------------------------------------------------------------
 
-def fir_compute_basis(params) -> dict:
-    """The **transform**: raw ``HwParam`` values -> physically-motivated basis terms.
-
-    Raw features are the resolved parameters and are never hand-written; this is the basis map
-    on top of them, and it belongs to the *model* rather than the module for the same reason
-    :attr:`~waveflow.calib.calib.LinCalibModel.transform` does — it must be identical at fit time
-    and at predict time, so it lives in exactly one place.
-
-    Chosen for *meaning* rather than convenience, so the fit extrapolates on structure rather than on
-    coincidence between parameters:
-
-    * ``n_mult`` — multipliers instantiated (``NTAP``, or ``NTAP*LW`` unrolled).  Drives the
-      accumulate tree and whatever multiply logic the DSPs do not absorb.
-    * ``store_bits`` — the tap array plus the delay line, in bits.  These arrays are
-      ``ARRAY_PARTITION``-ed, so they land in registers, and across the reference grid storage alone
-      correlates 0.985 with FF.  The delay line's length is **realization-dependent**: the serial body
-      keeps ``NTAP`` entries, the unrolled one keeps ``NTAP + LW - 1`` (it shifts a whole lane per
-      beat — ``SH: for (m = NTAP + LW - 2; m >= LW; --m)``), so this feature is one of the two that
-      distinguish the kernels.
-    * ``acc_bits`` — the accumulator width the format algebra derives (``2W + ceil(log2 NTAP)``),
-      which sets how wide every pipeline register in the MAC has to be.
-    * ``mac_bits`` — ``n_mult * acc_bits``, the pipeline's register area to first order.
-    """
-    p = {k: int(params[k]) for k in ("ntap", "samp_w", "mem_dwidth")}
-    unroll = bool(params.get("unroll_lane", False))
-    lw = lane_width(p["mem_dwidth"], p["samp_w"])
-    n_mult = n_multipliers(p["ntap"], p["samp_w"], p["mem_dwidth"], unroll)
-    acc_bits = 2 * p["samp_w"] + math.ceil(math.log2(max(2, p["ntap"])))
-    # The unrolled body shifts a whole lane per beat, so its history is LW-1 entries longer.
-    delay_entries = p["ntap"] + (lw - 1 if unroll else 0)
-    return {
-        "ntap": p["ntap"], "samp_w": p["samp_w"], "lw": lw, "n_mult": n_mult,
-        "acc_bits": acc_bits,
-        "store_bits": p["samp_w"] * (p["ntap"] + delay_entries),
-        "mac_bits": n_mult * acc_bits,
-    }
-
-
-#: The fitted bases, chosen by held-out (leave-one-out) error over the 24-point reference grid rather
-#: than by in-sample R².  Two findings shaped them:
+#: Which of the declared terms each counter is regressed on.  The terms themselves are declared by
+#: :meth:`~examples.fir_block.fir_block.FirCompute.resource_structure`; this says which subset each
+#: counter uses, because the two counters genuinely want different ones:
 #:
-#: * FF tracks **storage** — partitioned arrays become registers — with a multiplier-count term for the
-#:   MAC pipeline.  LOO: ~6% mean, ~17% worst.
-#: * LUT is genuinely the harder counter: ~10% mean, ~25% worst.  That is reported rather than tuned
-#:   away, and it is why validation leads with *decision fidelity* instead of relative error.
+#: * **FF** tracks storage -- partitioned arrays become registers -- with a multiplier-count term for
+#:   the MAC pipeline.
+#: * **LUT** needs the accumulator width as well, and is the harder counter regardless: held out over
+#:   the reference grid it runs about 10% mean and 25% worst, against FF's 7% / 19%.  That is reported
+#:   rather than tuned away, and it is why validation leads with *decision fidelity* instead of
+#:   relative error.
 #:
 #: Both are **pooled across realizations**.  Forking them (serial vs unrolled) was tried and made LUT
-#: *worse* — 12 points against 4 free parameters overfits — so the realization forks the module *key*
-#: and the lookup, but not the regression, which carries the difference in ``n_mult`` and ``lw``.
+#: *worse* -- 12 points against 4 free parameters overfits -- so the realization forks the module
+#: *key* and the lookup, but not the regression, which carries the difference through ``n_mult`` and
+#: the lane-extended delay line.
 FITTED_BASIS = {"ff": ["store_bits", "n_mult"],
                 "lut": ["n_mult", "store_bits", "mac_bits"]}
 
 
-def fir_compute_fitted(platform=None) -> "FittedResourceModel":
-    """`FirCompute`'s complete model: the exact prior for DSP/BRAM plus the fit for LUT/FF.
+def fir_compute_model(platform=None, store=None):
+    """`FirCompute`'s model, **unfitted** -- a stock :class:`VitisResourceModel`.
 
-    The prior rides *inside* the fitted model (``prior=``) rather than being combined by a wrapper —
-    one object predicts all four counters, with each counter coming from whichever is honest for it.
-    Must be :meth:`~waveflow.calib.resource_model.FittedResourceModel.fit` before it predicts LUT/FF.
+    Everything configuration-specific reaches it through
+    :meth:`~examples.fir_block.fir_block.FirCompute.resource_structure`, so this function carries only
+    what is the same at every point: the part, the class it serves, and the per-counter basis.
+
+    Exposed as a function rather than inlined into ``get_rm`` because a fit wants to be re-run against
+    a *subset* of the corpus -- leave-one-out is the honest measure of a 4-parameter fit, and it needs
+    to build this object 24 times.
+
+    Call ``.load_or_fit()`` for the shipped model, or ``.fit(samples)`` to train it on chosen points.
     """
-    from waveflow.calib.resource_model import FittedResourceModel
+    from waveflow.calib.vitis_model import VitisResourceModel
 
-    return FittedResourceModel(name="fir_compute", targets=("lut", "ff"),
-                               basis=dict(FITTED_BASIS), transform_fn=fir_compute_basis,
-                               prior=fir_compute_prior(), platform=platform)
+    from examples.fir_block.fir_block import FirCompute
+
+    return VitisResourceModel(name="fir_compute", part=PART, platform=platform, store=store,
+                              cls_name="FirCompute", comp_class=FirCompute,
+                              fit_basis=dict(FITTED_BASIS))
 
 
 # ---------------------------------------------------------------------------
