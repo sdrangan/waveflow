@@ -67,6 +67,10 @@ include-package-data = true
 # corpus includes a .csv the MANIFEST's *.json recursion would otherwise miss).
 [tool.setuptools.package-data]
 "waveflow.calib" = ["platforms/**", "fixtures/**"]
+# The XSI harness is C++ source + the run.bat / run.sh drivers, copied into a design's xsi/
+# workspace by XsiHarnessStep.  Not Python, so package discovery misses it; without this a
+# pip-installed user hits "XSI harness source file not found" the first time they build a testbench.
+"waveflow.build" = ["xsi/**"]
 
 # Pytest configuration
 [tool.pytest.ini_options]
