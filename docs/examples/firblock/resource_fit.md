@@ -69,13 +69,12 @@ of the packing cliff one expects at the wide end.
 hard-coding, and is not. Lane count falls as width rises while DSP-per-multiply rises, and over this
 device's boundaries they cancel exactly:
 
-```text
-    samp_w   LW = 32//w   DSP/mult   product
-       8         4          0.5      2·NTAP
-      12         2          1        2·NTAP
-      16         2          1        2·NTAP
-      24         1          2        2·NTAP
-```
+| `samp_w` | `LW = 32 // samp_w` | DSP per multiply | product |
+|---|---|---|---|
+| 8 | 4 | 0.5 | **2·NTAP** |
+| 12 | 2 | 1 | **2·NTAP** |
+| 16 | 2 | 1 | **2·NTAP** |
+| 24 | 1 | 2 | **2·NTAP** |
 
 Hard-coding `2·NTAP` would be indistinguishable on this grid and **wrong at `mem_dwidth=64`**, where
 the product is 4. This is the clearest argument in the repo for encoding physics rather than fitting a
