@@ -128,7 +128,10 @@ def test_run_vitis_hls_result_runtime_error(monkeypatch, tmp_path):
         "status": "runtime_error",
         "stdout": None,
         "stderr": None,
-        "message": "Vitis installation not found. Please set WAVEFLOW_VITIS_PATH.",
+        "message": (
+            "Vitis installation not found. Please set WAVEFLOW_VITIS_PATH "
+            "(run `test_amd_tools` to diagnose)."
+        ),
     }
 
 
