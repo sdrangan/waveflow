@@ -18,8 +18,9 @@ integration  =  top  −  Σ(modules)
 
 That term holds the `m_axi` adapters, the inter-task FIFOs, the AXI-Lite control block and the
 DATAFLOW shell — everything the design needs to *be* a design rather than a bag of modules. On
-[`fir_block`](../../examples/firblock/resource_model.md) it is **1984 LUT, 29 % of the design**: the
-second-largest contributor after the compute, and far too large to leave out of an estimate.
+[`fir_block`](../../examples/firblock/resource_model.md) it is **1984 LUT — 16–30 % of the design**
+depending on the configuration, and the second-largest contributor after the compute at every one
+of them. Far too large to leave out of an estimate.
 
 ## It is a lookup with a different key
 
@@ -117,6 +118,6 @@ appears.
 
 ## See also
 
-- [Block FIR resource models](../../examples/firblock/resource_model.md) — where the term is 29 % of
-  the design.
+- [Block FIR resource models](../../examples/firblock/resource_model.md) — where the term reaches
+  30 % of the design.
 - [VecMult's resource model](../../examples/vecmult/resmodfit.md#integration-term) — where it is `-2`.

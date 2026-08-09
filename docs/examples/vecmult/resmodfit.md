@@ -237,8 +237,8 @@ integration  =  top  −  Σ(modules)
 
 For most designs it is substantial and positive — it holds the `m_axi` adapters, the inter-task FIFOs,
 the AXI-Lite control block and the DATAFLOW shell. On [`fir_block`](../firblock/resource_model.md),
-which has four tasks, it is **1984 LUT: 29 % of the design**, the second-largest contributor after the
-compute.
+which has four tasks, it is **1984 LUT — 16–30 % of the design** depending on the configuration, and
+the second-largest contributor after the compute at every one of them.
 
 VecMult is the rare opposite. It has **one** task and no adapters, so there is almost nothing at the
 boundary for the term to contain — and what remains is negative:

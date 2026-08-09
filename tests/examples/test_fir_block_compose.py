@@ -157,13 +157,13 @@ def test_a_truly_held_out_point():
     total ever is.
     """
     from examples.fir_block.fir_block_corpus import points
-    from examples.fir_block.fir_block_resource import fir_compute_fitted
+    from examples.fir_block.fir_block_resource import fir_compute_model
 
     held = (32, 16, False)
     top = _top(*held)
     # Re-fit the compute model without the held point and swap it in, leaving every other module's
     # attached model alone — the override path `model_for` still exists for exactly this.
-    refit = fir_compute_fitted(platform=PLATFORM).fit(
+    refit = fir_compute_model(platform=PLATFORM).fit(
         [(_compute(n, w, u), m) for n, w, u, m in points() if (n, w, u) != held])
     compute = next(c for c in top.sub_comps.values() if type(c).__name__ == "FirCompute")
     compute._resource_model = refit

@@ -19,8 +19,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 3405,
-          "lut": 2628
+          "ff": 3382,
+          "lut": 2586,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -40,8 +42,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 7397,
-        "lut": 7574,
+        "ff": 7374,
+        "lut": 7532,
         "srl": 0,
         "uram": 0
       }
@@ -65,8 +67,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 3670,
-          "lut": 3010
+          "ff": 3696,
+          "lut": 3040,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -86,8 +90,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 7662,
-        "lut": 7956,
+        "ff": 7688,
+        "lut": 7986,
         "srl": 0,
         "uram": 0
       }
@@ -111,8 +115,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 4167,
-          "lut": 2813
+          "ff": 4150,
+          "lut": 2780,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -132,8 +138,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 8159,
-        "lut": 7759,
+        "ff": 8142,
+        "lut": 7726,
         "srl": 0,
         "uram": 0
       }
@@ -157,8 +163,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 4455,
-          "lut": 2999
+          "ff": 4488,
+          "lut": 3096,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -178,8 +186,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 8447,
-        "lut": 7945,
+        "ff": 8480,
+        "lut": 8042,
         "srl": 0,
         "uram": 0
       }
@@ -203,8 +211,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 5689,
-          "lut": 3184
+          "ff": 5684,
+          "lut": 3168,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -224,8 +234,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 9648,
-        "lut": 7983,
+        "ff": 9643,
+        "lut": 7967,
         "srl": 0,
         "uram": 0
       }
@@ -249,8 +259,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 5689,
-          "lut": 3184
+          "ff": 5684,
+          "lut": 3168,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -270,8 +282,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 9648,
-        "lut": 7983,
+        "ff": 9643,
+        "lut": 7967,
         "srl": 0,
         "uram": 0
       }
@@ -295,8 +307,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 9,
-          "ff": 2644,
-          "lut": 2442
+          "ff": 2615,
+          "lut": 2392,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -316,8 +330,8 @@
       "total": {
         "bram": 2,
         "dsp": 9,
-        "ff": 6634,
-        "lut": 7394,
+        "ff": 6605,
+        "lut": 7344,
         "srl": 0,
         "uram": 0
       }
@@ -341,8 +355,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 3366,
-          "lut": 4182
+          "ff": 3485,
+          "lut": 4171,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -362,8 +378,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 7356,
-        "lut": 9134,
+        "ff": 7475,
+        "lut": 9123,
         "srl": 0,
         "uram": 0
       }
@@ -387,8 +403,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 5883,
-          "lut": 4107
+          "ff": 5926,
+          "lut": 4001,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -408,8 +426,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 9875,
-        "lut": 9053,
+        "ff": 9918,
+        "lut": 8947,
         "srl": 0,
         "uram": 0
       }
@@ -433,8 +451,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 64,
-          "ff": 6341,
-          "lut": 4783
+          "ff": 6483,
+          "lut": 4840,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -454,8 +474,8 @@
       "total": {
         "bram": 2,
         "dsp": 64,
-        "ff": 10333,
-        "lut": 9729,
+        "ff": 10475,
+        "lut": 9786,
         "srl": 0,
         "uram": 0
       }
@@ -479,8 +499,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 32,
-          "ff": 7406,
-          "lut": 4478
+          "ff": 7461,
+          "lut": 4390,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -500,8 +522,8 @@
       "total": {
         "bram": 2,
         "dsp": 32,
-        "ff": 11398,
-        "lut": 9424,
+        "ff": 11453,
+        "lut": 9336,
         "srl": 0,
         "uram": 0
       }
@@ -525,8 +547,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 64,
-          "ff": 7887,
-          "lut": 4747
+          "ff": 8041,
+          "lut": 4940,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -546,8 +570,8 @@
       "total": {
         "bram": 2,
         "dsp": 64,
-        "ff": 11879,
-        "lut": 9693,
+        "ff": 12033,
+        "lut": 9886,
         "srl": 0,
         "uram": 0
       }
@@ -571,8 +595,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 64,
-          "ff": 10451,
-          "lut": 5220
+          "ff": 10531,
+          "lut": 5166,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -592,8 +618,8 @@
       "total": {
         "bram": 2,
         "dsp": 64,
-        "ff": 14410,
-        "lut": 10019,
+        "ff": 14490,
+        "lut": 9965,
         "srl": 0,
         "uram": 0
       }
@@ -617,8 +643,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 64,
-          "ff": 10451,
-          "lut": 5220
+          "ff": 10531,
+          "lut": 5166,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -638,8 +666,8 @@
       "total": {
         "bram": 2,
         "dsp": 64,
-        "ff": 14410,
-        "lut": 10019,
+        "ff": 14490,
+        "lut": 9965,
         "srl": 0,
         "uram": 0
       }
@@ -663,8 +691,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 17,
-          "ff": 4360,
-          "lut": 3736
+          "ff": 4392,
+          "lut": 3613,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -684,8 +714,8 @@
       "total": {
         "bram": 2,
         "dsp": 17,
-        "ff": 8350,
-        "lut": 8688,
+        "ff": 8382,
+        "lut": 8565,
         "srl": 0,
         "uram": 0
       }
@@ -709,8 +739,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 64,
-          "ff": 5662,
-          "lut": 6984
+          "ff": 5988,
+          "lut": 6995,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -730,8 +762,8 @@
       "total": {
         "bram": 2,
         "dsp": 64,
-        "ff": 9652,
-        "lut": 11936,
+        "ff": 9978,
+        "lut": 11947,
         "srl": 0,
         "uram": 0
       }
@@ -755,8 +787,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 8,
-          "ff": 2166,
-          "lut": 1875
+          "ff": 2110,
+          "lut": 1869,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -776,8 +810,8 @@
       "total": {
         "bram": 2,
         "dsp": 8,
-        "ff": 6158,
-        "lut": 6821,
+        "ff": 6102,
+        "lut": 6815,
         "srl": 0,
         "uram": 0
       }
@@ -801,8 +835,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 2334,
-          "lut": 2098
+          "ff": 2303,
+          "lut": 2121,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -822,8 +858,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 6326,
-        "lut": 7044,
+        "ff": 6295,
+        "lut": 7067,
         "srl": 0,
         "uram": 0
       }
@@ -847,8 +883,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 8,
-          "ff": 2547,
-          "lut": 1968
+          "ff": 2494,
+          "lut": 1966,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -868,8 +906,8 @@
       "total": {
         "bram": 2,
         "dsp": 8,
-        "ff": 6539,
-        "lut": 6914,
+        "ff": 6486,
+        "lut": 6912,
         "srl": 0,
         "uram": 0
       }
@@ -893,8 +931,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 2739,
-          "lut": 2099
+          "ff": 2711,
+          "lut": 2155,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -914,8 +954,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 6731,
-        "lut": 7045,
+        "ff": 6703,
+        "lut": 7101,
         "srl": 0,
         "uram": 0
       }
@@ -939,8 +979,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 3309,
-          "lut": 2154
+          "ff": 3261,
+          "lut": 2160,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -960,8 +1002,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 7268,
-        "lut": 6953,
+        "ff": 7220,
+        "lut": 6959,
         "srl": 0,
         "uram": 0
       }
@@ -985,8 +1027,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 3309,
-          "lut": 2154
+          "ff": 3261,
+          "lut": 2160,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -1006,8 +1050,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 7268,
-        "lut": 6953,
+        "ff": 7220,
+        "lut": 6959,
         "srl": 0,
         "uram": 0
       }
@@ -1031,8 +1075,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 5,
-          "ff": 1786,
-          "lut": 1782
+          "ff": 1726,
+          "lut": 1772,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -1052,8 +1098,8 @@
       "total": {
         "bram": 2,
         "dsp": 5,
-        "ff": 5776,
-        "lut": 6734,
+        "ff": 5716,
+        "lut": 6724,
         "srl": 0,
         "uram": 0
       }
@@ -1077,8 +1123,10 @@
         "FirCompute": {
           "bram": 0,
           "dsp": 16,
-          "ff": 2218,
-          "lut": 2729
+          "ff": 2233,
+          "lut": 2722,
+          "srl": 0,
+          "uram": 0
         },
         "MemRStream": {
           "bram": 0,
@@ -1098,8 +1146,8 @@
       "total": {
         "bram": 2,
         "dsp": 16,
-        "ff": 6208,
-        "lut": 7681,
+        "ff": 6223,
+        "lut": 7674,
         "srl": 0,
         "uram": 0
       }

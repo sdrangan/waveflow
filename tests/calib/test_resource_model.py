@@ -210,11 +210,18 @@ def test_prior_has_nothing_to_fit():
 # The fir_block prior, wired as a model
 # ---------------------------------------------------------------------------
 
-def test_fir_compute_prior_predicts_through_the_model_interface():
+def test_fir_compute_derives_dsp_and_bram_before_any_fit():
+    """The declared structure alone prices the countable counters — no corpus involved.
+
+    ``bram: 0`` is an assertion rather than an omission: the taps and delay line are partitioned
+    into registers, so declaring no ``MemArray`` is what claims they cost no block RAM.
+    """
     from examples.fir_block.fir_block import FirCompute
-    from examples.fir_block.fir_block_resource import fir_compute_prior
+    from examples.fir_block.fir_block_resource import fir_compute_model
 
     comp = elaborate(FirCompute, {"mem_dwidth": 32, "ntap": 32, "samp_w": 16,
                                   "samp_i": 2, "unroll_lane": False}, name="fir_compute")
-    out = fir_compute_prior().predict(comp)
-    assert out == {"dsp": 32, "bram": 0}       # one DSP per tap, partitioned taps -> no BRAM
+    out = fir_compute_model().predict(comp)    # unfitted: only the derived half answers
+    assert out["dsp"] == 32                    # one DSP per tap at samp_w=16
+    assert out["bram"] == 0                    # partitioned taps -> registers, not block RAM
+    assert "lut" not in out                    # nothing fitted, so nothing claimed

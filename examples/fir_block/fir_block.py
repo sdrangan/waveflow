@@ -472,23 +472,83 @@ class FirCompute(FreeRunMod):
         carry.val[:] = buf[len(buf) - (t - 1):]       # the next block's initial condition
         return pack_samples(np.asarray(y).reshape(-1), self.samp_cls, self.mem_dwidth)
 
-    def add_rm_self(self, platform):
-        """A prior for the binding decisions, a fit for the estimated counters — one model, four
-        counters, each from whichever of the two is honest for it.
+    def resource_structure(self):
+        """What the FIR body physically contains, in the terms the device rules price.
 
-        This is the only module in the design whose area moves with the knobs being explored, so it is
-        the only one that needs a fit.  Its coefficients come from the committed corpus; in a design
-        whose corpus lived in the platform library this would load from there instead, and the corpus
-        is local here because it doubles as the example's test fixture.
+        No device knowledge here and no basis functions -- only structures whoever wrote
+        ``fir_compute_task.h`` already knows, because they wrote them:
+
+        * ``n_mult`` multiplies of ``samp_w`` operands.  ``NTAP`` for the serial body, ``NTAP*LW`` for
+          the unrolled one, which is the whole of what the realization knob changes about the
+          arithmetic.
+        * a **second** multiplier group of exactly one, when the packed serial kernel applies.  At
+          ``samp_w <= 8`` two multiplies share a DSP, and the measurement is consistently one DSP
+          above what pairing predicts -- at every ``NTAP`` in {8, 16, 32}, so it is one multiply that
+          failed to find a partner rather than a wrong law.  Declaring it as its own group of one is
+          that sentence in code; folding a ``+1`` into a formula would dress a measurement up as
+          physics.
+        * **no memories.**  The taps and the delay line carry an ``ARRAY_PARTITION`` from their
+          ``add_state`` declaration, so they land in registers rather than block RAM.  Declaring no
+          array is the *assertion* that BRAM is zero, not an omission -- a future configuration that
+          spilled into block RAM would show up as a failure rather than pass unnoticed.
+        * the LUT/FF basis, written directly.  ``store_bits`` because partitioned arrays become
+          registers, ``n_mult`` and ``mac_bits`` because the MAC pipeline's registers scale with the
+          multiplier count and the accumulator width.
+
+        Two of those terms are **realization-dependent**, which is what lets one basis span both
+        bodies: the unrolled kernel shifts a whole lane per beat, so its delay line is ``LW-1``
+        entries longer, and its ``n_mult`` is ``LW`` times larger.
         """
-        from examples.fir_block.fir_block_corpus import points
-        from examples.fir_block.fir_block_resource import fir_compute_fitted
-        from waveflow.build.elaborate import elaborate
+        import math
 
-        samples = [(elaborate(FirCompute, {"mem_dwidth": 32, "ntap": n, "samp_w": w,
-                                           "samp_i": 2, "unroll_lane": u}, name="fit"), m)
-                   for n, w, u, m in points()]
-        self._resource_model = fir_compute_fitted(platform=platform).fit(samples)
+        from waveflow.calib.device_rules import dsp_per_mult
+        from waveflow.calib.vitis_model import DesignStructure, LutFfBasis, MultGroup
+
+        from examples.fir_block.fir_block_resource import PART, lane_width, n_multipliers
+
+        ntap, samp_w = int(self.ntap), int(self.samp_w)
+        unroll = bool(self.unroll_lane)
+        lw = lane_width(int(self.mem_dwidth), samp_w)
+        n_mult = n_multipliers(ntap, samp_w, int(self.mem_dwidth), unroll)
+
+        mults = [MultGroup(count=n_mult, operand_bits=samp_w)]
+        if not unroll and dsp_per_mult(samp_w, PART) < 1.0:
+            mults.append(MultGroup(count=1, operand_bits=samp_w))
+
+        acc_bits = 2 * samp_w + math.ceil(math.log2(max(2, ntap)))
+        delay_entries = ntap + (lw - 1 if unroll else 0)
+        return DesignStructure(
+            multipliers=mults,
+            lut_ff_basis=LutFfBasis(
+                bases=[n_mult, samp_w * (ntap + delay_entries), n_mult * acc_bits],
+                names=("n_mult", "store_bits", "mac_bits")),
+        )
+
+    @classmethod
+    def get_rm(cls, platform):
+        """A stock :class:`~waveflow.calib.vitis_model.VitisResourceModel`, fitted from the records.
+
+        This is the only module in the design whose area moves with the knobs being explored, so it
+        is the only one that needs a fit; the other three keep the inherited lookup.
+
+        The two counters are given **different bases**, which is the one thing this design needs that
+        ``VecMult`` does not.  FF tracks storage with a multiplier term for the MAC pipeline; LUT
+        needs the accumulator width as well.  Chosen by held-out error over the 24-point grid rather
+        than in-sample fit, and **pooled across realizations**: forking the fit serial-vs-unrolled was
+        tried and made LUT worse, because 12 points against 4 free parameters overfits.  The
+        realization forks the module *key*, and the regression carries the difference through
+        ``n_mult`` and the delay-line length.
+        """
+        from waveflow.calib.record_store import ModuleStore
+        from waveflow.calib.vitis_model import VitisResourceModel
+
+        from examples.fir_block.fir_block_corpus import COMMITTED_CALIB
+        from examples.fir_block.fir_block_resource import FITTED_BASIS, PART
+
+        store = ModuleStore(getattr(platform, "dir", None) or COMMITTED_CALIB)
+        return VitisResourceModel(name="fir_compute", part=PART, platform=platform,
+                                  cls_name="FirCompute", comp_class=cls, store=store,
+                                  fit_basis=dict(FITTED_BASIS)).load_or_fit()
 
 
 #: Seeded loop model for the sample loop — one output per cycle once the pipeline is full.  Replaced
@@ -556,13 +616,19 @@ class FirBlock(FreeRunMod):
         self.m_out = self.wstream.m_mem
         self.s_done = self.wstream.s_done
 
-    def add_rm_self(self, platform):
+    @classmethod
+    def get_rm(cls, platform):
         """The composite's OWN cost: `m_axi` adapters, channel FIFOs, control block, DATAFLOW shell.
 
-        Keyed on boundary structure rather than on parameters, because that is what it depends on:
+        An :class:`~waveflow.calib.resource_model.InterfaceResourceModel`, which is a lookup keyed on
+        boundary structure rather than on parameters -- because that is what the term depends on:
         measured invariant across all 24 compute configurations, and moving only when the memory word
-        width did.  The table is built by elaborating one probe per measured width and asking each for
-        its boundary signature, so the key is computed the same way the lookup will compute it.
+        width did.
+
+        The table is built by elaborating one probe per measured width and asking each for its
+        boundary signature, so the key is computed the same way the lookup will compute it rather
+        than transcribed.  A composite's children are priced by their own models and summed by
+        ``compose``; this is only the part that is left over.
         """
         from examples.fir_block.fir_block_corpus import INTERFACE_BY_MEM_DWIDTH
         from waveflow.build.elaborate import elaborate
@@ -570,8 +636,7 @@ class FirBlock(FreeRunMod):
 
         table = {}
         for dw, counters in INTERFACE_BY_MEM_DWIDTH.items():
-            probe = elaborate(FirBlock, {"mem_dwidth": dw, "ntap": 32, "samp_w": 16,
-                                         "samp_i": 2, "unroll_lane": False}, name="probe")
+            probe = elaborate(cls, {"mem_dwidth": dw, "ntap": 32, "samp_w": 16,
+                                    "samp_i": 2, "unroll_lane": False}, name="probe")
             table[boundary_signature(probe)] = dict(counters)
-        self._resource_model = InterfaceResourceModel(
-            name="fir_block_interface", table=table, platform=platform)
+        return InterfaceResourceModel(name="fir_block_interface", table=table, platform=platform)

@@ -134,7 +134,7 @@ def test_firblock_rank_correlations_match_the_documented_estimator(fir_validatio
     ``tests/examples/test_fir_block_compose.py``.
 
     That the estimator is named matters, because the choices disagree where it counts.  Tie-corrected
-    Spearman (``scipy.stats.spearmanr``) gives 0.947 / 0.989 on this same data, against 0.950 / 0.990
+    Spearman (``scipy.stats.spearmanr``) gives 0.951 / 0.987 on this same data, against 0.954 / 0.988
     here — the predictions contain ties, and the two conventions rank them differently.  A third
     decimal that depends on an unstated convention is not reproducible, so the convention is stated.
     """
