@@ -196,13 +196,17 @@ class XsiHarnessStep(Buildable):
     """Build step that copies the XSI testbench harness into an example's ``xsi/`` directory.
 
     The harness is **framework**, not example code: ``xsi_bfm.h`` models AXI4 / AXI4-Stream and knows
-    nothing about any kernel (see :mod:`waveflow.build.xsi`), and ``xsi_loader`` + ``run.bat`` are the
-    generic XSI flow.  They lived in ``examples/interleaver/xsi/`` only because that is where the
-    first four testbenches were written, which made any second example wanting XSI reach across into
-    a sibling example.
+    nothing about any kernel (see :mod:`waveflow.build.xsi`), and ``xsi_loader`` + ``run.bat`` /
+    ``run.sh`` are the generic XSI flow.  They lived in ``examples/interleaver/xsi/`` only because
+    that is where the first four testbenches were written, which made any second example wanting XSI
+    reach across into a sibling example.
+
+    Both runner scripts are copied regardless of host OS, so a workspace built on one platform can
+    be simulated on the other; :func:`waveflow.build.trace_steps.xsi_runner_cmd` picks the one that
+    matches the machine actually running it.
 
     Copied rather than included-in-place for the same reason the task-body headers are (cf.
-    :class:`MemStreamStep`): each example builds in its own directory, and ``run.bat`` compiles the
+    :class:`MemStreamStep`): each example builds in its own directory, and the runner compiles the
     testbench against files beside it.
 
     Parameters
@@ -228,6 +232,7 @@ class XsiHarnessStep(Buildable):
             "xsi_loader_cpp": self._output_dir / "xsi_loader.cpp",
             "xsi_shared_lib": self._output_dir / "xsi_shared_lib.h",
             "xsi_run_bat": self._output_dir / "run.bat",
+            "xsi_run_sh": self._output_dir / "run.sh",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
@@ -238,6 +243,7 @@ class XsiHarnessStep(Buildable):
             "xsi_loader_cpp": "xsi_loader.cpp",
             "xsi_shared_lib": "xsi_shared_lib.h",
             "xsi_run_bat": "run.bat",
+            "xsi_run_sh": "run.sh",
         }
         if key not in src_names:
             raise KeyError(f"Unknown XsiHarnessStep output key: {key!r}")

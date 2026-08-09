@@ -7,7 +7,15 @@
 namespace mem_r_stream_ports {
 
 static const char* const TOP        = "mem_r_stream";
+
+// xelab -dll emits the platform's native shared library, so the name differs by OS.  The
+// conditional lives in the generated header rather than in the generator so ONE emitted
+// header serves a Windows and a Linux build of the same testbench.
+#ifdef _WIN32
 static const char* const DESIGN_DLL = "xsim.dir/mem_r_stream/xsimk.dll";
+#else
+static const char* const DESIGN_DLL = "xsim.dir/mem_r_stream/xsimk.so";
+#endif
 
 static const char* const s_cmd    = "s_cmd";   // axis_in
 static const char* const m_mem    = "m_axi_gmem0";   // maxi_read on gmem0

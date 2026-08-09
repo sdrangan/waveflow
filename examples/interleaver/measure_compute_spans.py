@@ -121,7 +121,7 @@ def build_rtl_trace(
     from waveflow.build.build import BuildConfig, BuildDag
     from waveflow.build.composite_gen import render_rtl_f
     from waveflow.build.streamutils import XsiHarnessStep
-    from waveflow.build.trace_steps import _DUMPER_TEMPLATE
+    from waveflow.build.trace_steps import _DUMPER_TEMPLATE, XSI_RUNNER, xsi_runner_cmd
     from waveflow.toolchain.toolchain import run_vitis_hls
 
     from examples.interleaver.interleaver_inband import (
@@ -155,13 +155,12 @@ def build_rtl_trace(
     write_xsi_bundles(d / "xsi", width=width, sizes=sizes)
     shutil.rmtree(d / "xsi" / "xsim.dir" / "interleaver_inband", ignore_errors=True)
 
-    print("--- run.bat trace ---", flush=True)
+    print(f"--- {XSI_RUNNER} trace ---", flush=True)
     r = subprocess.run(
-        ["cmd", "/c", str(d / "xsi" / "run.bat"),
-         "interleaver_inband", "interleaver_inband_bfm_tb", "trace"],
-        capture_output=True, text=True,
+        xsi_runner_cmd("interleaver_inband", "interleaver_inband_bfm_tb", trace=True),
+        cwd=str(d / "xsi"), capture_output=True, text=True,
     )
-    print(f"run.bat returncode: {r.returncode}", flush=True)
+    print(f"{XSI_RUNNER} returncode: {r.returncode}", flush=True)
     vcd = d / "xsi" / "interleaver_inband_trace.vcd"
     if not vcd.exists():
         print((r.stdout or "")[-3000:], flush=True)

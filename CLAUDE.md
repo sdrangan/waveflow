@@ -26,8 +26,10 @@ pytest -m "not vitis and not xsi"
 pytest -m vitis
 
 # Run only the XSI RTL gates: the four free-running kernels driven through real RTL by the BFM
-# library, asserting exact cycle counts (158 / 176 / 2835 / 3469).  Needs Vivado xsim + mingw g++
-# AND a prior csynth of each top (they skip loudly if the RTL is absent).  See
+# library, asserting exact cycle counts (158 / 176 / 2835 / 3469).  Needs Vivado xsim + a C++
+# compiler (the mingw g++ bundled with Vivado on Windows, the system g++ on Linux) AND a prior
+# csynth of each top (they skip loudly if the RTL is absent).  The flow is driven by run.bat on
+# Windows and run.sh on Linux -- see waveflow.build.trace_steps.xsi_runner_cmd and
 # plans/xsi_tb_codegen.md.
 pytest -m xsi
 

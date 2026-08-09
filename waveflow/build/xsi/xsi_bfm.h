@@ -381,10 +381,19 @@ private:
 // XsiSim — open/close, the clock phases, reset, and pinning undriven inputs.
 // ---------------------------------------------------------------------------
 
+// The xsim engine ships under a different name per platform: xv_simulator_kernel.dll beside
+// Vivado's win64.o libraries, libxv_simulator_kernel.so under lib/lnx64.o.  run.bat and run.sh
+// each put the right directory on the loader path; this picks the matching file name.
+#ifdef _WIN32
+#  define WAVEFLOW_XSI_ENGINE "xv_simulator_kernel.dll"
+#else
+#  define WAVEFLOW_XSI_ENGINE "libxv_simulator_kernel.so"
+#endif
+
 class XsiSim {
 public:
     XsiSim(const std::string& design, const std::string& wdb,
-           const std::string& engine = "xv_simulator_kernel.dll")
+           const std::string& engine = WAVEFLOW_XSI_ENGINE)
         : xsi_(design, engine), d_(xsi_) {
         s_xsi_setup_info info; std::memset(&info, 0, sizeof(info));
         std::vector<char> wdbbuf(wdb.begin(), wdb.end()); wdbbuf.push_back('\0');

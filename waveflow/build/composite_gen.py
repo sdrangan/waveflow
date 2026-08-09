@@ -1114,7 +1114,15 @@ def render_ports_h(spec: TopSpec) -> str:
         f"namespace {ns} {{",
         "",
         f'static const char* const TOP        = "{spec.top_name}";',
+        "",
+        "// xelab -dll emits the platform's native shared library, so the name differs by OS.  The",
+        "// conditional lives in the generated header rather than in the generator so ONE emitted",
+        "// header serves a Windows and a Linux build of the same testbench.",
+        "#ifdef _WIN32",
         f'static const char* const DESIGN_DLL = "xsim.dir/{spec.top_name}/xsimk.dll";',
+        "#else",
+        f'static const char* const DESIGN_DLL = "xsim.dir/{spec.top_name}/xsimk.so";',
+        "#endif",
         "",
     ]
     for p in spec.ports:

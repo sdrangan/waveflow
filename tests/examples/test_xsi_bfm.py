@@ -15,7 +15,6 @@ absorb the first kind.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,6 +27,7 @@ from examples.interleaver.mem_stream_gen import (
 )
 from examples.mem_copy.mem_copy import check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles
 from waveflow.build.composite_gen import render_rtl_f
+from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
@@ -106,8 +106,7 @@ def _require(cond: bool, why: str) -> None:
 def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     root = ROOT_OF[top]
     xsi = root / "xsi"
-    _require(os.name == "nt", "the XSI flow is a Windows .bat (xvlog/xelab/mingw)")
-    _require((xsi / "run.bat").exists(), f"{xsi / 'run.bat'}")
+    _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
     proj = root / f"{top}_proj" / "solution1" / "syn" / "verilog"
     _require(proj.is_dir(), f"no csynth RTL at {proj} — run {top}.tcl first")
 
@@ -119,7 +118,7 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     # 2) Force a clean build.  A cached xsimk.dll is the other half: xelab would reuse RTL elaborated
     # from a previous design and the run would prove nothing about the current one.
     shutil.rmtree(xsi / "xsim.dir" / top, ignore_errors=True)
-    for stale in (f"{tb}.exe", f"{tb}.o"):
+    for stale in (f"{tb}.exe", f"{tb}.bin", f"{tb}.o"):
         (xsi / stale).unlink(missing_ok=True)
 
     # 2b) Migrated tops read their scenario (memory, command, golden) from bundles under vectors/ —
@@ -133,9 +132,10 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
         for od in ("out", "s_done"):
             shutil.rmtree(xsi / "vectors" / od, ignore_errors=True)
 
-    # ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and the bare form
-    # fails with "not recognized as an internal or external command" rather than anything useful.
-    r = subprocess.run(["cmd", "/c", ".\\run.bat", top, tb], cwd=str(xsi),
+    # On Windows this is ".\\run.bat", not "run.bat": cmd does not resolve a bare name from cwd, and
+    # the bare form fails with "not recognized as an internal or external command" rather than
+    # anything useful.  xsi_runner_cmd handles that and the Linux `bash run.sh` form.
+    r = subprocess.run(xsi_runner_cmd(top, tb), cwd=str(xsi),
                        capture_output=True, text=True, timeout=1800)
     out = (r.stdout or "") + (r.stderr or "")
 
