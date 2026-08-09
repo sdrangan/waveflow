@@ -19,8 +19,7 @@ from examples.fir_block.fir_block import FirCompute
 from examples.fir_block.fir_block_corpus import GRID, points
 from examples.fir_block.fir_block_resource import (
     FITTED_BASIS,
-    fir_compute_basis,
-    fir_compute_fitted,
+    fir_compute_model,
 )
 
 MEM_DW = 32
@@ -53,7 +52,7 @@ def _samples(exclude=None):
 
 @pytest.fixture(scope="module")
 def fitted():
-    return fir_compute_fitted().fit(_samples())
+    return fir_compute_model().fit(_samples())
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +63,7 @@ def _leave_one_out():
     """Refit without each point and predict it.  Returns {counter: [rel errors]}."""
     errs = {"lut": [], "ff": []}
     for n, w, u, measured in points():
-        model = fir_compute_fitted().fit(_samples(exclude=(n, w, u)))
+        model = fir_compute_model().fit(_samples(exclude=(n, w, u)))
         pred = model.predict(_comp(n, w, u))
         for c in errs:
             errs[c].append(abs(pred[c] - measured[c]) / measured[c])
@@ -103,11 +102,16 @@ def test_ff_beats_lut_which_is_the_expected_ordering(loo):
 # ---------------------------------------------------------------------------
 
 def test_predicts_every_counter_it_claims(fitted):
-    """The prior rides inside the fitted model, so one object answers for all four counters."""
+    """One object answers for every counter, each from whichever half is honest for it.
+
+    ``uram`` and ``srl`` are present and zero rather than absent, which is the difference that
+    matters: an omitted counter contributes silently and makes a design read as cheaper than it is.
+    """
     out = fitted.predict(_comp(32, 16, False))
-    assert set(out) == {"lut", "ff", "dsp", "bram"}
-    assert out["lut"] > 0 and out["ff"] > 0
-    assert out["dsp"] == 32 and out["bram"] == 0        # from the prior, exact
+    assert set(out) == {"lut", "ff", "dsp", "bram", "uram", "srl"}
+    assert out["lut"] > 0 and out["ff"] > 0             # regressed
+    assert out["dsp"] == 32 and out["bram"] == 0        # derived from structure, exact
+    assert out["uram"] == 0 and out["srl"] == 0         # predicted zero, not omitted
 
 
 def test_in_sample_predictions_are_close(fitted):
@@ -120,26 +124,42 @@ def test_in_sample_predictions_are_close(fitted):
 def test_unfitted_model_reports_uncalibrated():
     from waveflow.calib.confidence import ConfidenceLevel
 
-    conf = fir_compute_fitted().confidence(_comp(32, 16, False))
+    conf = fir_compute_model().confidence(_comp(32, 16, False))
     assert conf.level is ConfidenceLevel.UNCALIBRATED
     assert "not been fitted" in conf.summary
 
 
 def test_confidence_is_per_counter_and_takes_the_worst(fitted):
+    """Every counter reports its own level, and the composite one is the weakest of them.
+
+    The derived counters are `EXACT` and the regressed ones are not, so this also pins that a model
+    which is exact on half its counters does not get to claim `EXACT` overall.
+    """
+    from waveflow.calib.confidence import ConfidenceLevel
+
     conf = fitted.confidence(_comp(32, 16, False))
-    assert set(conf.facts["per_counter"]) == {"lut", "ff"}
-    assert conf.level.rank <= min(
-        __import__("waveflow.calib.confidence", fromlist=["ConfidenceLevel"])
-        .ConfidenceLevel(c["level"]).rank for c in conf.facts["per_counter"].values())
+    per = conf.facts["per_target"]
+    assert {"lut", "ff", "dsp", "bram"} <= set(per)
+    assert ConfidenceLevel(per["dsp"]["level"]) is ConfidenceLevel.EXACT
+    assert conf.level.rank <= min(ConfidenceLevel(c["level"]).rank for c in per.values())
+    assert conf.level is not ConfidenceLevel.EXACT
 
 
 def test_extrapolation_beyond_the_grid_is_reported(fitted):
-    """``ntap=256`` is far outside the fitted 8..32 — the model must say so, not quietly answer."""
+    """``ntap=256`` is far outside the fitted 8..32 — the model must say so, not quietly answer.
+
+    Checked against the structured `outside` rather than a substring of the summary: it names the
+    quantity, its value and the fitted range, so a report can say *which* knob left the region and
+    by how far. `ntap` is the knob the caller turned; `n_mult` is the structure that actually grew.
+    """
     from waveflow.calib.confidence import ConfidenceLevel
 
     conf = fitted.confidence(_comp(256, 16, False))
     assert conf.level is ConfidenceLevel.EXTRAPOLATED
-    assert "outside" in conf.summary
+    outside = conf.facts["per_target"]["lut"]["outside"]
+    assert outside["ntap"][0] == 256                       # value asked for
+    assert outside["ntap"][1:] == [8.0, 32.0]              # fitted range it left
+    assert "basis_n_mult" in outside                       # and the basis term that followed it
 
 
 def test_inside_the_grid_is_not_flagged_as_extrapolation(fitted):
@@ -152,20 +172,45 @@ def test_inside_the_grid_is_not_flagged_as_extrapolation(fitted):
 # The features, which are the actual design decision
 # ---------------------------------------------------------------------------
 
+def _terms(ntap, samp_w, unroll):
+    """The declared basis terms — what the module says, not what a separate transform derives."""
+    return _comp(ntap, samp_w, unroll).resource_structure().basis_terms()
+
+
 def test_features_are_structural_not_raw_parameters():
-    f = fir_compute_basis(_params(32, 16, True))
-    assert f["lw"] == 2                       # 32 // 16
-    assert f["n_mult"] == 32 * 2              # unrolled: NTAP * LW
-    assert f["acc_bits"] == 2 * 16 + 5        # 2W + ceil(log2 32)
-    assert f["store_bits"] == 16 * (32 + (32 + 2 - 1))   # taps + a lane-extended delay line
+    """The declared terms are quantities of hardware, not the knobs the caller turned.
+
+    ``ntap`` and ``samp_w`` are nowhere in the basis: what the fit sees is how many multipliers were
+    instantiated and how many bits of state, which is why one basis spans both realizations.
+    """
+    f = _terms(32, 16, True)
+    assert f["n_mult"] == 32 * 2                          # unrolled: NTAP * LW, LW = 32 // 16
+    assert f["store_bits"] == 16 * (32 + (32 + 2 - 1))    # taps + a lane-extended delay line
+    assert f["mac_bits"] == 32 * 2 * (2 * 16 + 5)         # n_mult * (2W + ceil(log2 NTAP))
+    assert "ntap" not in f and "samp_w" not in f
 
 
 def test_serial_and_unrolled_differ_in_the_features_not_in_the_model():
     """Pooling across realizations only works because the features carry the difference."""
-    ser = fir_compute_basis(_params(32, 16, False))
-    unr = fir_compute_basis(_params(32, 16, True))
+    ser, unr = _terms(32, 16, False), _terms(32, 16, True)
     assert ser["n_mult"] != unr["n_mult"]
     assert ser["store_bits"] != unr["store_bits"]
+
+
+def test_the_declared_multipliers_reproduce_the_dsp_oracle():
+    """The structure declaration and the corpus's prior must agree — two statements of one law.
+
+    ``dsp_prior`` stays as a test oracle (it is what the measurements were checked against); the
+    model no longer calls it, deriving DSP from the declared ``MultGroup`` rows instead. This is what
+    keeps the two from drifting.
+    """
+    from waveflow.calib.device_rules import dsp_count
+    from examples.fir_block.fir_block_resource import PART, dsp_prior
+
+    for ntap, samp_w, unroll, _ in points():
+        mults = _comp(ntap, samp_w, unroll).resource_structure().multipliers
+        derived = sum(dsp_count(g.count, g.operand_bits, PART) for g in mults)
+        assert derived == dsp_prior(_params(ntap, samp_w, unroll)), (ntap, samp_w, unroll)
 
 
 def test_basis_is_declared_per_counter():

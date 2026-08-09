@@ -33,6 +33,15 @@ otherwise.  Two exceptions were sanctioned, both deliberate and both recorded in
    to under-predict by 1.8% because the fit had no term for storage HLS moved into fabric;
    ``lutram_luts`` now prices it exactly.  A snapshot moving *onto* the measurement is the one
    direction this guard should never block.
+5. **FirCompute's migration to ``VitisResourceModel``**, which moved every ``fir_block`` LUT/FF by
+   under ~1%.  DSP and BRAM are unchanged and still exact.  The cause is the corpus, not the model:
+   the old path hand-built 24 sample pairs from ``GRID`` while the new one reads the record store,
+   which holds those 24 **plus two at ``mem_dwidth=64``**.  Those are valid in-regime measurements of
+   the same module -- ``mem_dwidth`` reaches the basis through ``n_mult`` and ``store_bits`` -- so
+   they are trained on rather than filtered out.  Measured leave-one-out over the grid, including
+   them is a wash for LUT (9.78 -> 9.57% mean) and about 2pp worse on FF's worst case
+   (18.85 -> 21.33%); excluding valid data to flatter a metric is exactly the trade this guard exists
+   to make visible.
 """
 from __future__ import annotations
 
