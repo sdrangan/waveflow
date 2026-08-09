@@ -16,14 +16,44 @@ hierarchy. What the measurements say about whether they hold is
 evidence do not get read as one thing.
 
 The general machinery is [Resource Models](../../guide/resource_model/); this is one design's use of
-it, and the thing it adds over [`VecMult`](../vecmult/vitis_resmod.md) is **composition**: five
-modules, four of which need no authoring at all.
+it, and the thing it adds over [`VecMult`](../vecmult/vitis_resmod.md) is **composition**.
 
-## What `FirCompute` declares
+## The five modules
 
-`FirCompute` is the only module in the design whose area moves with the knobs being explored, so it is
-the only one that gets a structural model. Like every module that does, it says what it *contains* and
-lets a stock [`VitisResourceModel`](../../guide/resource_model/vitis.md) price it:
+`compose` walks the whole hierarchy and sums every module's prediction, so **every module has a
+model**. What differs is how much of it anyone had to write:
+
+| module | model | keyed on | entries it needs | authored? |
+|---|---|---|---|---|
+| `MemRStream`, `MemWStream` | `LookupResourceModel` | module key | **1** each — nothing swept reaches them | no — the default |
+| `FirCmdRx` | `LookupResourceModel` | module key | **4** — one per `samp_w` | no — the default |
+| `FirCompute` | `VitisResourceModel` | declared structure | a fit over 26 records | **yes** |
+| `FirBlock` | `InterfaceResourceModel` | boundary signature | **2** — one per `mem_dwidth` | **yes** |
+
+Only two of the five needed anything written. That is the ratio to expect, and the reason is in the
+fourth column: three of these modules are cheap to cover *exhaustively*, so recalling a measurement
+beats fitting a function to it. A [lookup](../../guide/resource_model/lookup.md) is exact wherever it
+answers and `UNCALIBRATED` where it does not, and neither of those is a guess.
+
+{: .note }
+> **"The default" is a behaviour, not a shared model.** No module inherits a resource model from
+> anywhere. `HwModule.add_rm_self` resolves in one step: use whatever `get_rm(platform)` returns, and
+> if the class does not define one, install a `LookupResourceModel` against the platform's record
+> store. `FirCmdRx` is a module of this design like any other — it simply has nothing that a
+> structural model would buy, so it takes the default.
+>
+> That still needs **measurements**: a lookup's parameters *are* its table. What it does not need is
+> an author.
+
+The rest of this page takes the four rows in turn.
+
+## `FirCompute` — the one that is fitted
+
+`FirCompute` is the only module whose area moves with the knobs being explored — all three of `ntap`,
+`samp_w` and `unroll_lane` reach it, giving **24 distinct configurations across the 24-point grid**.
+Covering that exhaustively would mean 24 syntheses to answer 24 questions, which is what a structural
+model is for. It says what it *contains* and lets a stock
+[`VitisResourceModel`](../../guide/resource_model/vitis.md) price it:
 
 ```python
 def resource_structure(self):
@@ -121,7 +151,7 @@ realization difference. That choice has a measured price and is kept anyway — 
 > carries the difference through `n_mult` and the lane-extended delay line. A basis that spans both is
 > a stronger claim than two that each fit half the data.
 
-## Adding the model to the class
+### Adding the model to the class
 
 ```python
     @classmethod
@@ -136,7 +166,7 @@ A **classmethod**, so a model cannot close over one instance — everything conf
 reaches it through `resource_structure` on whatever component it is asked about. No sample list is
 built: the measurements are already filed as records, and `load_or_fit` reads them.
 
-### What you already have, before any sweep {#before-any-sweep}
+#### What you already have, before any sweep {#before-any-sweep}
 
 Both of those are authored with the module and neither needed a measurement, so the model already
 answers — with **zero** syntheses run:
@@ -151,23 +181,42 @@ answers — with **zero** syntheses run:
 Both figures are the ones synthesis will later report. LUT and FF are **named as missing rather than
 defaulted to zero**, because they have no coefficients yet — which is what the sweep is for.
 
-## Composing five modules
+## `FirCmdRx` — a lookup, and what it looks up
 
-This is what the example adds over `VecMult`. Only **two** of the five modules declare anything:
+`FirCmdRx` declares no model at all, and it is worth being precise about why that is adequate rather
+than lazy.
 
-| module | model | why |
-|---|---|---|
-| `MemRStream`, `MemWStream` | lookup (inherited) | one configuration across the whole grid |
-| `FirCmdRx` | lookup (inherited) | four, one per sample width |
-| `FirCompute` | `VitisResourceModel` | the only module the swept knobs reach |
-| `FirBlock` | `InterfaceResourceModel` | its **own** cost only — children are summed by `compose` |
+It has **two** `HwParam`s — `mem_dwidth` and `samp_w` — and the sweep varies `ntap`, `samp_w` and
+`unroll_lane`. Only one of the three reaches it. So across 24 design points it elaborates to just
+**four distinct modules**:
 
-The three lookups are not a shortcut. Each was measured once and its area is a fact to recall rather
-than a function to fit, so a [lookup](../../guide/resource_model/lookup.md) is exact where it answers
-and honest where it does not. Expect this ratio: the authoring effort concentrates in the few modules
-whose area actually moves.
+```python
+>>> identify_instance(cmd_rx).params
+{'mem_dwidth': 32, 'samp_w': 16}
+>>> identify_instance(cmd_rx).key
+'fir_cmd_rx-93cb7e21'
+```
 
-### `FirBlock` declares only what is left over
+That key — not the parameter tuple — is what the lookup stores under. The distinction matters: the key
+is a digest of the module's **elaborated structure**, so a bound FIFO depth or a differently-wired
+port reaches it even though neither is a `HwParam`. Two instances with identical parameters and
+different wiring would collide under a parameter key and stay distinct under this one, and a colliding
+second measurement would silently overwrite the first.
+
+Four keys means four rows in the table, filed in the platform's record store by the same sweep that
+measured everything else. Asking for a fifth configuration returns zeros and `UNCALIBRATED` — a
+lookup will not interpolate, which is the right refusal here because nothing guarantees a command
+receiver's area is smooth in `samp_w`.
+
+{: .note }
+> **A lookup is a model, and it is fitted.** Its parameters are the table: `n_free_params` counts one
+> per stored cell, which is exactly why it makes no claim to generalize. The reason it costs no
+> authoring is that the measurements already exist as records — not that it is somehow free.
+>
+> The two mem-streams are the same story with the numbers turned down: **one** key each, because
+> nothing the sweep varies reaches them at all.
+
+## `FirBlock` — only what is left over
 
 A composite's own cost — `m_axi` adapters, channel FIFOs, control block, DATAFLOW shell — is
 everything the design needs beyond its modules. It is an
@@ -189,11 +238,16 @@ across all 24 compute configurations and moved only when the memory word width d
 by elaborating one probe per measured width and asking each for its signature, so the key is
 *computed* the same way the lookup will compute it rather than transcribed.
 
+The choice of key is doing real work here. `FirBlock` elaborates to **24 distinct module keys** across
+the grid — every parameter reaches the composite — so a lookup on the module key would need 24 entries
+to say something that is genuinely a function of **2**. Keying on the boundary is what collapses them,
+and it is a claim the measurements support rather than a convenience.
+
 On this design the term is **1984 LUT**, which is **16–30 % of the design total** depending on the
 configuration — largest, naturally, where the compute is smallest. It is the second-largest
 contributor after the compute at every one of the 24 points. Leaving it out is not a rounding error.
 
-### One call attaches everything
+## Composing them
 
 ```python
 top = elaborate(FirBlock, params)
