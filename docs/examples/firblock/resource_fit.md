@@ -5,7 +5,7 @@ nav_order: 10
 has_children: false
 audience: python
 api: [fir_block_sweep, points, compose]
-summary: "What 24 syntheses in 20 minutes actually showed. The DSP prior lands exactly at every point with zero fitted parameters; the LUT/FF fit is 9.8%/7.1% mean under leave-one-out; the composed whole-design estimate is validated against totals that trained none of it, with the warning that the 3.2% design-level figure flatters the model because most of the design is known rather than predicted. Includes the two results that only appear because the design has coupled step functions in it -- the DSP packing win at 8 bits, and the unrolled plateau that is two effects cancelling -- and a design finding: the right realization inverts with sample width."
+summary: "What 24 syntheses in 20 minutes actually showed. The DSP prior lands exactly at every point with zero fitted parameters; the LUT/FF fit is 9.8%/7.1% mean under leave-one-out; the composed whole-design estimate is validated against totals that trained none of it, with the warning that the 3.3% design-level figure flatters the model because most of the design is known rather than predicted. Includes the two results that only appear because the design has coupled step functions in it -- the DSP packing win at 8 bits, and the unrolled plateau that is two effects cancelling -- and a design finding: the right realization inverts with sample width."
 ---
 
 # The sweep and its results
@@ -123,12 +123,12 @@ Validated against **design totals that fit nothing** — only per-module figures
 |---|---|---|
 | DSP | **24/24 exact** | 1.000 |
 | BRAM | **24/24 exact** | — |
-| LUT | 3.2% mean, 8.6% worst | 0.950 |
-| FF | 2.8% mean, 8.7% worst | 0.990 |
+| LUT | 3.3% mean, 7.6% worst | 0.954 |
+| FF | 3.0% mean, 8.3% worst | 0.988 |
 
 {: .note }
 > Rank correlation here is Pearson over `argsort(argsort(·))` ranks. The convention matters at the
-> third decimal: the predictions contain ties, and tie-corrected Spearman gives 0.947 / 0.989 on the
+> third decimal: the predictions contain ties, and tie-corrected Spearman gives 0.951 / 0.987 on the
 > same data. Every figure in this table is recomputed from the committed corpus by
 > `tests/docs/test_documented_numbers.py`, so a model change that moves one fails a test naming this
 > page.
@@ -136,7 +136,7 @@ Validated against **design totals that fit nothing** — only per-module figures
 ...and the DSP-minimal design is identified correctly.
 
 {: .warning }
-> **The 3.2% is not the model's accuracy.** The compute module's own held-out LUT error is 9.8% mean /
+> **The 3.3% is not the model's accuracy.** The compute module's own held-out LUT error is 9.8% mean /
 > 24.8% worst; the whole-design figure is better because the interface term and the three static
 > modules are *exact* and dilute the single fitted module. Most of this design is known rather than
 > predicted. Quote the per-module error when describing the model, and the design-level error when
