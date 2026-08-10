@@ -13,9 +13,17 @@ dependencies = [
     "pandas>=2.0",
     "simpy>=4.1",
     "scikit-learn>=1.3",
-    "mcp[cli]>=1.0",
+    # Upper-bounded on purpose: waveflow.mcp imports `mcp.server.fastmcp.FastMCP`, which the 2.x
+    # line removed.  Unbounded, a fresh install resolves to 2.x and every MCP entry point fails to
+    # import.  Lift the bound only together with a port to the 2.x server API.
+    "mcp[cli]>=1.0,<2.0",
     "openai>=1.0",
     "platformdirs>=4.0",
+    # Imported at module scope by waveflow.utils.vcd / .timing (matplotlib) and
+    # waveflow.utils.trace / .vcd (vcdvcd), so they are runtime requirements, not extras --
+    # `import waveflow.utils.vcd` fails outright without them.
+    "matplotlib>=3.7",
+    "vcdvcd>=2.0",
 ]
 
 # Optional developer dependencies
@@ -32,6 +40,7 @@ create_doc_assets = "waveflow.scripts.create_doc_assets:main"
 xsim_vcd = "waveflow.scripts.xsim_vcd:main"
 collect_overlay = "waveflow.scripts.collect_overlay:main"
 sv_sim = "waveflow.scripts.sv_sim:main"
+test_amd_tools = "waveflow.scripts.test_amd_tools:main"
 sv_synth = "waveflow.scripts.sv_build:run_synth"
 sv_impl  = "waveflow.scripts.sv_build:run_impl"
 build_lab_autograder = "waveflow.scripts.build_lab_autograder:main"
@@ -66,6 +75,10 @@ include-package-data = true
 # corpus includes a .csv the MANIFEST's *.json recursion would otherwise miss).
 [tool.setuptools.package-data]
 "waveflow.calib" = ["platforms/**", "fixtures/**"]
+# The XSI harness is C++ source + the run.bat / run.sh drivers, copied into a design's xsi/
+# workspace by XsiHarnessStep.  Not Python, so package discovery misses it; without this a
+# pip-installed user hits "XSI harness source file not found" the first time they build a testbench.
+"waveflow.build" = ["xsi/**"]
 
 # Pytest configuration
 [tool.pytest.ini_options]

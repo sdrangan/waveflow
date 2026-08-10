@@ -22,6 +22,11 @@ recursive-include waveflow/assets *
 recursive-include waveflow/calib/platforms *
 recursive-include waveflow/calib/fixtures *
 
+# The XSI testbench harness — BFM/loader C++ headers plus the run.bat / run.sh drivers.  These are
+# source files that XsiHarnessStep copies into a design's xsi/ workspace at build time, so they must
+# be in the wheel: without them a pip-installed user gets "XSI harness source file not found".
+recursive-include waveflow/build/xsi *
+
 # Exclude Python cache and build artifacts
 global-exclude __pycache__/
 global-exclude *.pyc

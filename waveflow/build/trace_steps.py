@@ -18,7 +18,7 @@ reason :mod:`waveflow.build.cosim_steps` is: one small concern with one consumer
 from __future__ import annotations
 
 import json
-import math
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +28,58 @@ from waveflow.build.build import BuildConfig, BuildStep
 from waveflow.build.composite_gen import DEFAULT_MEM_DW, composite_top_spec
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwgen import cpp_kernel_name
+
+
+def xsi_runner_name(os_name: str | None = None) -> str:
+    """
+    Name of the XSI runner script for ``os_name`` (defaults to this host's ``os.name``).
+
+    Both scripts are copied into every ``xsi/`` workspace by
+    :class:`~waveflow.build.streamutils.XsiHarnessStep`; only one of them runs on a given host.
+    """
+    return "run.bat" if (os_name or os.name) == "nt" else "run.sh"
+
+
+#: The runner for the host importing this module — the common case, kept as a constant so error
+#: messages and skip reasons can name the script the reader will actually look for.
+XSI_RUNNER = xsi_runner_name()
+
+
+def xsi_runner_cmd(
+    top: str,
+    tb: str,
+    trace: bool = False,
+    os_name: str | None = None,
+) -> list[str]:
+    """
+    Build the argv that drives one XSI run, for whichever platform this is.
+
+    ``run.bat`` needs ``cmd /c`` because a batch file is not directly executable; ``run.sh`` is
+    invoked through ``bash`` rather than as ``./run.sh`` because the harness is copied out as file
+    *text* by the build step, which does not preserve the executable bit.
+
+    Parameters
+    ----------
+    top : str
+        Kernel top name, as ``xelab -s`` names the snapshot.
+    tb : str
+        Testbench basename, without extension.
+    trace : bool, optional
+        Pass the runner's ``trace`` argument, elaborating the VCD dumper as a second top.
+    os_name : str | None, optional
+        Override the platform, in :data:`os.name` spelling. Exists so both forms stay testable
+        from either host; leave it ``None`` in production callers.
+
+    Returns
+    -------
+    list[str]
+        Argument vector to hand to :func:`subprocess.run`, with ``cwd`` set to the ``xsi/`` dir.
+    """
+    runner = xsi_runner_name(os_name)
+    args = [top, tb] + (["trace"] if trace else [])
+    if (os_name or os.name) == "nt":
+        return ["cmd", "/c", f".\\{runner}"] + args
+    return ["bash", runner] + args
 
 
 #: The dumper module.  One line of Verilog does the work; the comment is most of it, because the
@@ -245,15 +297,16 @@ class RtlSimStep(BuildStep):
         # at five different job sizes before it was caught.
         vcd.unlink(missing_ok=True)
 
-        r = subprocess.run(["cmd", "/c", ".\\run.bat", self.top, self.tb, "trace"],
+        r = subprocess.run(xsi_runner_cmd(self.top, self.tb, trace=True),
                            cwd=str(xsi), capture_output=True, text=True, timeout=1800)
         out = (r.stdout or "") + (r.stderr or "")
         if "XSI_EXITCODE=0" not in out:
             raise RuntimeError(f"{self.top}: XSI run did not complete cleanly:\n{out[-3000:]}")
         if not vcd.exists():
             raise RuntimeError(
-                f"{self.top}: run.bat completed but wrote no {vcd.name}. Is vcd_dumper_{self.top}.v "
-                f"present in {xsi} (AddVcdTopStep), and did run.bat get the `trace` argument?")
+                f"{self.top}: {XSI_RUNNER} completed but wrote no {vcd.name}. Is "
+                f"vcd_dumper_{self.top}.v present in {xsi} (AddVcdTopStep), and did "
+                f"{XSI_RUNNER} get the `trace` argument?")
         return {"trace_vcd": vcd}
 
 

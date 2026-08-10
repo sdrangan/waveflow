@@ -34,6 +34,22 @@ def test_axis_keeps_its_name_maxi_is_named_after_its_bundle():
     assert 'const DESIGN_DLL = "xsim.dir/k/xsimk.dll";' in h
 
 
+def test_design_library_is_named_per_platform():
+    """One emitted header has to serve a Windows and a Linux build of the same testbench.
+
+    xelab -dll writes xsimk.dll on Windows and xsimk.so on Linux, so the name cannot be baked in
+    at generation time — the host that GENERATES the header is not necessarily the host that
+    compiles the TB against it.
+    """
+    h = render_ports_h(_spec(ports=[_axis_port("s_cmd", 64, kind="axis_in")]))
+    assert "#ifdef _WIN32" in h
+    assert 'const DESIGN_DLL = "xsim.dir/k/xsimk.dll";' in h
+    assert 'const DESIGN_DLL = "xsim.dir/k/xsimk.so";' in h
+    assert "#endif" in h
+    # Exactly one definition is live per compile: the two sit in opposite arms of one conditional.
+    assert h.count("DESIGN_DLL") == 2
+
+
 def test_binding_tracks_the_spec():
     """The drift claim: rename the bundle in Python and the TB's binding follows, with no edit.
 

@@ -58,7 +58,9 @@ Verify, then run the tests:
 ```
 
 The Vitis HLS integration tests run under `pytest -m vitis` and require a Vitis
-installation — see [Synthesis](../comp_codegen/).
+installation — see [Connecting Vitis and Vivado](./vitis.md) to set that up, and
+[Synthesis](../comp_codegen/) for the flow itself. Run `test_amd_tools` to check whether
+your AMD tools are visible to Waveflow.
 
 ## Maintaining the requirements files
 
