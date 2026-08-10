@@ -18,7 +18,6 @@ reason :mod:`waveflow.build.cosim_steps` is: one small concern with one consumer
 from __future__ import annotations
 
 import json
-import math
 import os
 import subprocess
 from dataclasses import dataclass, field
