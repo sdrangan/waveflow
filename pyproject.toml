@@ -13,9 +13,17 @@ dependencies = [
     "pandas>=2.0",
     "simpy>=4.1",
     "scikit-learn>=1.3",
-    "mcp[cli]>=1.0",
+    # Upper-bounded on purpose: waveflow.mcp imports `mcp.server.fastmcp.FastMCP`, which the 2.x
+    # line removed.  Unbounded, a fresh install resolves to 2.x and every MCP entry point fails to
+    # import.  Lift the bound only together with a port to the 2.x server API.
+    "mcp[cli]>=1.0,<2.0",
     "openai>=1.0",
     "platformdirs>=4.0",
+    # Imported at module scope by waveflow.utils.vcd / .timing (matplotlib) and
+    # waveflow.utils.trace / .vcd (vcdvcd), so they are runtime requirements, not extras --
+    # `import waveflow.utils.vcd` fails outright without them.
+    "matplotlib>=3.7",
+    "vcdvcd>=2.0",
 ]
 
 # Optional developer dependencies
