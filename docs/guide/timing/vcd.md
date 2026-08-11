@@ -110,7 +110,13 @@ or
 histogram/waveflow_hist_proj/solution1/sim/verilog
 ```
 
-    This directory contains the generated RTL testbench, the Tcl batch file used by XSIM, and the original `run_xsim.bat` launcher.
+    This directory contains the generated RTL testbench, the Tcl batch file used by XSIM, and the original launcher Vitis emitted — `run_xsim.bat` on Windows, `run_xsim.sh` on Linux.
+
+{: .note }
+> **The flow works on both Windows and Linux.** The only platform difference is that
+> launcher: same two commands (`xelab`, then `xsim`), same `<top>.tcl`, different shell.
+> `xsim_vcd` picks the right one automatically, so the steps below are identical on either
+> OS — substitute `.sh` for `.bat` when reading them on Linux.
 
 2. It copies `<top>.tcl` to `<top>_vcd.tcl` and injects VCD commands before the existing `log_wave ...` command.
 
@@ -138,7 +144,7 @@ close_vcd
 quit
 ```
 
-4. In the same simulator directory, it copies `run_xsim.bat` to `run_xsim_vcd.bat` and changes the batch file so XSIM uses `<top>_vcd.tcl` instead of the original Tcl.
+4. In the same simulator directory, it copies the launcher to `run_xsim_vcd.bat` (Windows) or `run_xsim_vcd.sh` (Linux) and changes it so XSIM uses `<top>_vcd.tcl` instead of the original Tcl. Only the `xsim` line is copied — the original cosim already ran `xelab`, so the elaborated snapshot is on disk and re-elaborating would only cost time.
 
     The important line in the original batch file looks like:
 
@@ -153,14 +159,15 @@ cd /d "%~dp0"
 call C:/Xilinx/2025.1/Vivado/bin/xsim ... -tclbatch hist_vcd.tcl -view hist_dataflow_ana.wcfg -protoinst hist.protoinst
 ```
 
-    The added `cd /d "%~dp0"` makes the batch file runnable from any working directory.
+    The added `cd /d "%~dp0"` makes the batch file runnable from any working directory. The Linux script uses the bash equivalent, `cd "$(dirname "$0")"`, under a `#!/usr/bin/env bash` line.
 
-5. Finally, the helper runs `run_xsim_vcd.bat`, waits for XSIM to finish, and copies the generated `dump.vcd` into the example's `vcd/` directory.
+5. Finally, the helper runs the generated launcher, waits for XSIM to finish, and copies the resulting `dump.vcd` into the example's `vcd/` directory.
 
 The rerun command is effectively:
 
 ```bash
-run_xsim_vcd.bat
+run_xsim_vcd.bat        # Windows
+bash run_xsim_vcd.sh    # Linux
 ```
 
 This re-runs the simulation and produces `dump.vcd`, which Waveflow then copies to the output path you requested.

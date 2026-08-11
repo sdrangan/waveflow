@@ -55,7 +55,7 @@ endmodule
 
 Two decisions carry the weight.
 
-**It is a second top, not a wrapper.** `run.bat … trace` elaborates `work.<top>
+**It is a second top, not a wrapper.** The runner's `trace` argument elaborates `work.<top>
 work.vcd_dumper_<top>`. The DUT itself is untouched, so every BFM port number and every cycle count
 is identical to an untraced run — the dumper *observes*, it does not perturb. (A pass-through wrapper
 would also work, but means mirroring the whole port list by hand — tedium that fails for reasons
@@ -78,9 +78,10 @@ Level 0 would dump the entire subtree for no extra reach. The cost stays bounded
 
 The module is named after the top because one `xsi/` directory can serve several tops
 (`examples/interleaver/xsi` builds three), and a dumper naming a scope that is not part of *this*
-elaboration is a hard error. The `trace` argument that selects it lives in the **master**
-`run.bat` ([`waveflow/build/xsi/run.bat`](https://github.com/sdrangan/waveflow/tree/main/waveflow/build/xsi/run.bat)),
-which `XsiHarnessStep` copies into each example — editing the copied `run.bat` would be undone on the
+elaboration is a hard error. The `trace` argument that selects it lives in the **master** runner —
+[`run.bat`](https://github.com/sdrangan/waveflow/tree/main/waveflow/build/xsi/run.bat) on Windows,
+[`run.sh`](https://github.com/sdrangan/waveflow/tree/main/waveflow/build/xsi/run.sh) on Linux —
+which `XsiHarnessStep` copies into each example. Editing the copied script would be undone on the
 next codegen.
 
 ## `TraceManifestStep` — what the nets are called
@@ -108,13 +109,14 @@ The manifest is the artifact the loader ([`waveflow/utils/trace.py`](https://git
 
 ## `RtlSimStep` — run it, tracing
 
-A thin wrapper over `xsi/run.bat`, passing its third argument `trace`. It **asserts nothing**: it
-runs and produces `xsi/<top>_trace.vcd`. Correctness — the exact cycle count — stays with the
-`-m xsi` gate, which calls `run.bat` directly. Two callers of one script is deliberate; routing a
+A thin wrapper over the example's XSI runner, passing its third argument `trace`. Which script that
+is comes from `xsi_runner_cmd()` — `cmd /c run.bat` on Windows, `bash run.sh` on Linux. It
+**asserts nothing**: it runs and produces `xsi/<top>_trace.vcd`. Correctness — the exact cycle
+count — stays with the `-m xsi` gate, which calls the runner directly. Two callers of one script is deliberate; routing a
 green gate through new code is how a gate quietly stops meaning what it meant.
 
 {: .warning }
-> **Re-running the built `.exe` does not regenerate the VCD.** Only the full `run.bat` path does,
+> **Re-running the built binary does not regenerate the VCD.** Only the full runner path does,
 > because the dump comes from the *elaborated snapshot*. A driver that re-ran the binary per data
 > point once silently re-measured the **previous** trace and reported an identical result at five
 > different inputs. `RtlSimStep` deletes the VCD first and fails if it does not reappear — copy that
