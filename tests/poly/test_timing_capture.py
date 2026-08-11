@@ -9,10 +9,7 @@ when that environment is unavailable.
 from __future__ import annotations
 
 import os
-import sys
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -25,17 +22,16 @@ from waveflow.scripts.xsim_vcd import (
     run_xsim_vcd,
     modify_tcl,
     create_vcd_batch,
+    launcher_names,
 )
 
 
 # ---------------------------------------------------------------------------
-# Platform guard: tests that need Windows are skipped elsewhere
+# Platform guard: the flow itself runs on both OSes, but the integration test
+# still needs a real Vivado install plus a prior cosim.
 # ---------------------------------------------------------------------------
 
 IS_WINDOWS = os.name == "nt"
-requires_windows = pytest.mark.skipif(
-    not IS_WINDOWS, reason="xsim_vcd only works on Windows"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -84,19 +80,47 @@ class TestModifyTcl:
         assert "log_vcd [get_objects -filter {type == in_port || type == out_port || type == inout_port || type == port} /apatb_poly_top/AESL_inst_poly/*]" in content
 
 
-class TestCreateVcdBatch:
-    """Tests for the batch file creator — no simulator required."""
+class TestLauncherNames:
+    """The launcher Vitis emits differs by OS; both forms stay covered from either host."""
 
-    def test_creates_file_with_xsim_line(self, tmp_path: Path) -> None:
+    def test_windows(self) -> None:
+        assert launcher_names("nt") == ("run_xsim.bat", "run_xsim_vcd.bat")
+
+    def test_posix(self) -> None:
+        assert launcher_names("posix") == ("run_xsim.sh", "run_xsim_vcd.sh")
+
+    def test_defaults_to_this_host(self) -> None:
+        assert launcher_names() == launcher_names(os.name)
+
+
+class TestCreateVcdBatch:
+    """Tests for the launcher creator — no simulator required."""
+
+    def test_creates_windows_batch_with_xsim_line(self, tmp_path: Path) -> None:
         original = tmp_path / "run_xsim.bat"
         new_bat = tmp_path / "run_xsim_vcd.bat"
         original.write_text(
             "@echo off\nC:\\Xilinx\\Vivado\\bin\\xsim poly.tcl --nolog\n"
         )
-        create_vcd_batch("poly", str(original), str(new_bat))
+        create_vcd_batch("poly", str(original), str(new_bat), os_name="nt")
         content = new_bat.read_text()
         assert "poly_vcd.tcl" in content
         assert "cd /d" in content
+
+    def test_creates_posix_script_with_xsim_line(self, tmp_path: Path) -> None:
+        original = tmp_path / "run_xsim.sh"
+        new_sh = tmp_path / "run_xsim_vcd.sh"
+        original.write_text(
+            "\n/eda/xilinx/2026.1/Vivado/bin/xelab work.poly -s poly\n"
+            "/eda/xilinx/2026.1/Vivado/bin/xsim poly -tclbatch poly.tcl\n"
+        )
+        create_vcd_batch("poly", str(original), str(new_sh), os_name="posix")
+        content = new_sh.read_text()
+        assert "poly_vcd.tcl" in content
+        assert content.startswith("#!/usr/bin/env bash")
+        assert 'cd "$(dirname "$0")"' in content
+        # The xelab line is deliberately omitted -- the snapshot already exists.
+        assert "xelab" not in content
 
     def test_raises_if_no_xsim_line(self, tmp_path: Path) -> None:
         original = tmp_path / "run_xsim.bat"
@@ -107,15 +131,19 @@ class TestCreateVcdBatch:
 
 
 # ---------------------------------------------------------------------------
-# run_xsim_vcd: non-Windows raises RuntimeError
+# run_xsim_vcd: no longer platform-gated
 # ---------------------------------------------------------------------------
 
 
-class TestRunXsimVcdNonWindows:
-    @pytest.mark.skipif(IS_WINDOWS, reason="Test only meaningful on non-Windows")
-    def test_raises_on_non_windows(self) -> None:
-        with pytest.raises(RuntimeError, match="Windows"):
-            run_xsim_vcd(top="poly")
+class TestRunXsimVcdIsCrossPlatform:
+    def test_does_not_refuse_on_non_windows(self, tmp_path: Path) -> None:
+        """The old Windows-only guard is gone.
+
+        With no component on disk the call must fail on the *missing files*, not on the platform.
+        """
+        with pytest.raises((FileNotFoundError, RuntimeError)) as exc:
+            run_xsim_vcd(top="poly", comp="does_not_exist", workdir=tmp_path)
+        assert "only works on Windows" not in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +151,8 @@ class TestRunXsimVcdNonWindows:
 # ---------------------------------------------------------------------------
 
 _XSIM_AVAILABLE = (
-    IS_WINDOWS
-    and (Path("waveflow_poly_proj").exists() or Path("examples/stream_inband/waveflow_poly_proj").exists())
+    Path("waveflow_poly_proj").exists()
+    or Path("examples/stream_inband/waveflow_poly_proj").exists()
 )
 
 requires_xsim = pytest.mark.skipif(

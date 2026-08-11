@@ -2,7 +2,8 @@
 xsim_vcd.py — Run Vivado simulation with VCD output
 
 This script re-runs a Vivado HLS RTL simulation using `xsim` and generates a VCD (Value Change Dump) file
-for waveform analysis. It is intended for use on Windows systems where Vivado is installed.
+for waveform analysis. It runs on Windows and Linux; the only platform difference is the
+launcher script Vitis emits beside the simulation (`run_xsim.bat` vs `run_xsim.sh`).
 
 Usage (CLI):
 First, run RTL co-simulation in Vitis HLS to generate the necessary simulation files.
@@ -51,6 +52,25 @@ import argparse
 from pathlib import Path
 
 
+def launcher_names(os_name: str | None = None) -> tuple[str, str]:
+    """
+    ``(original, vcd)`` simulation-launcher filenames for a platform.
+
+    Vitis writes the cosim launcher beside the generated RTL as ``run_xsim.bat`` on Windows and
+    ``run_xsim.sh`` on Linux.  Both contain the same two commands (``xelab`` then ``xsim``); only
+    the shell differs.
+
+    Parameters
+    ----------
+    os_name : str | None
+        Platform in :data:`os.name` spelling.  Defaults to this host.  Exists so both forms stay
+        testable from either OS; leave it ``None`` in production callers.
+    """
+    if (os_name or os.name) == "nt":
+        return "run_xsim.bat", "run_xsim_vcd.bat"
+    return "run_xsim.sh", "run_xsim_vcd.sh"
+
+
 def _get_log_vcd_command(lines, trace_level):
     for line in lines:
         stripped = line.strip()
@@ -86,7 +106,18 @@ def modify_tcl(tcl_path, tcl_vcd_path, trace_level):
     with open(tcl_vcd_path, 'w') as f:
         f.writelines(lines)
 
-def create_vcd_batch(top_name, original_bat, new_bat):
+def create_vcd_batch(top_name, original_bat, new_bat, os_name: str | None = None):
+    """
+    Write a launcher that re-runs only ``xsim``, pointed at the VCD-enabled Tcl.
+
+    Just the ``xsim`` line is copied: the original cosim already ran ``xelab``, so the elaborated
+    snapshot is on disk and re-elaborating would only cost time.  The header differs by platform
+    (``cd /d "%~dp0"`` for cmd, ``cd "$(dirname "$0")"`` for bash) because the launcher must run
+    from the simulation directory to find the snapshot and the Tcl.
+
+    ``os_name`` overrides the platform, in :data:`os.name` spelling; leave it ``None`` in
+    production callers.
+    """
     with open(original_bat, 'r') as f:
         for line in f:
             if 'xsim' in line:
@@ -95,12 +126,31 @@ def create_vcd_batch(top_name, original_bat, new_bat):
         else:
             raise RuntimeError("No xsim line found in batch file.")
 
+    windows = (os_name or os.name) == "nt"
     with open(new_bat, 'w') as f:
-        f.write('cd /d "%~dp0"\n')
+        if windows:
+            f.write('cd /d "%~dp0"\n')
+        else:
+            f.write('#!/usr/bin/env bash\n')
+            f.write('cd "$(dirname "$0")" || exit 1\n')
         f.write(xsim_line)
 
-def run_batch(batch_path):
-    subprocess.run(batch_path, shell=True, check=True)
+    if not windows:
+        os.chmod(new_bat, 0o755)
+
+
+def run_batch(batch_path, os_name: str | None = None):
+    """
+    Execute the launcher written by :func:`create_vcd_batch`.
+
+    On Windows the batch file is handed to the shell; on Linux it is run through ``bash``
+    explicitly rather than relying on the executable bit, matching
+    :func:`waveflow.build.trace_steps.xsi_runner_cmd`.
+    """
+    if (os_name or os.name) == "nt":
+        subprocess.run(batch_path, shell=True, check=True)
+    else:
+        subprocess.run(["bash", str(batch_path)], check=True)
 
 def copy_vcd(sim_dir, base_dir, component_path, output_vcd):
     src = os.path.join(sim_dir, 'dump.vcd')
@@ -197,16 +247,16 @@ def run_xsim_vcd(
     Raises
     ------
     RuntimeError
-        If the platform is not Windows, if required simulation files are
-        missing, or if the simulation process fails.
+        If required simulation files are missing, or if the simulation process fails.
     FileNotFoundError
         If the expected simulation directory does not exist.
-    """
-    if os.name != 'nt':
-        raise RuntimeError(
-            "run_xsim_vcd only works on Windows (Vivado xsim is Windows-only)."
-        )
 
+    Notes
+    -----
+    Runs on Windows and Linux.  The launcher Vitis emits beside the RTL differs by platform
+    (``run_xsim.bat`` / ``run_xsim.sh``) but is self-contained in both cases — it invokes ``xsim``
+    by absolute path, so no toolchain environment needs to be set up first.
+    """
     base_dir = str(Path(workdir).resolve()) if workdir is not None else os.getcwd()
     component_name = comp
     top_name = top
@@ -243,10 +293,17 @@ def run_xsim_vcd(
             f"No valid simulation directory found. Checked: {sim_dir_candidates}"
         )
 
+    launcher, launcher_vcd = launcher_names()
     tcl_path = os.path.join(sim_dir, f'{top_name}.tcl')
     tcl_vcd_path = os.path.join(sim_dir, f'{top_name}_vcd.tcl')
-    bat_path = os.path.join(sim_dir, 'run_xsim.bat')
-    bat_vcd_path = os.path.join(sim_dir, 'run_xsim_vcd.bat')
+    bat_path = os.path.join(sim_dir, launcher)
+    bat_vcd_path = os.path.join(sim_dir, launcher_vcd)
+
+    if not os.path.exists(bat_path):
+        raise FileNotFoundError(
+            f"No simulation launcher at {bat_path}. Run the RTL co-simulation with trace capture "
+            f"enabled (e.g. trace_level all) before generating a VCD."
+        )
 
     modify_tcl(tcl_path, tcl_vcd_path, trace_level)
     create_vcd_batch(top_name, bat_path, bat_vcd_path)
@@ -258,11 +315,6 @@ def run_xsim_vcd(
 
 
 def main():
-
-    # Check if OS is Windows.  If not declare error and exit.
-    if os.name != 'nt':
-        print("ERROR: This script only works on Windows.  I will try to add a linux version later.")
-        sys.exit(1)
 
     # Get arguments
     args = parse_args()
@@ -312,13 +364,19 @@ def main():
             print(f"  - {d}")
         sys.exit(1)
 
+    launcher, launcher_vcd = launcher_names()
     tcl_path = os.path.join(sim_dir, f'{top_name}.tcl')
     tcl_vcd_path = os.path.join(sim_dir, f'{top_name}_vcd.tcl')
-    bat_path = os.path.join(sim_dir, 'run_xsim.bat')
-    bat_vcd_path = os.path.join(sim_dir, 'run_xsim_vcd.bat')
+    bat_path = os.path.join(sim_dir, launcher)
+    bat_vcd_path = os.path.join(sim_dir, launcher_vcd)
 
     if not os.path.exists(sim_dir):
         raise FileNotFoundError(f"Simulation directory not found: {sim_dir}")
+
+    if not os.path.exists(bat_path):
+        print(f"ERROR: No simulation launcher at {bat_path}.")
+        print("Run the RTL co-simulation with trace capture enabled before generating a VCD.")
+        sys.exit(1)
 
     modify_tcl(tcl_path, tcl_vcd_path, trace_level)
     create_vcd_batch(top_name, bat_path, bat_vcd_path)
