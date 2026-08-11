@@ -1134,3 +1134,54 @@ class TestDataUnionCodegen:
         assert f"struct {DU.cpp_class_name()}" in content
         assert "payload_bits" in content
         assert "#ifndef" in content
+
+
+class TestSchemaIDFieldScopedEnumConversions:
+    """The C++ side of SchemaIDField is a scoped enum; the Python side inherits IntField.
+
+    A scoped enum has no implicit conversion to or from an integer, so IntField's identity
+    ``to_uint_expr`` and DataField's C-style ``from_uint_expr`` both emit code that no
+    conforming C++ compiler accepts.  These pin the casts so the regression cannot come back
+    silently -- the failure it caused was a Vitis csim compile error, which only the (slow,
+    tool-dependent) ``-m vitis`` suite would otherwise catch.
+    """
+
+    @staticmethod
+    def _field():
+        reg = SchemaRegistry("ScopedEnumConv")
+
+        @register_schema(schema_id=1, registry=reg)
+        class Pkt(DataList):
+            elements = {"a": IntField.specialize(bitwidth=8, signed=False)}
+
+        return SchemaIDField.specialize(registry=reg, bitwidth=16)
+
+    def test_pack_casts_through_unsigned(self) -> None:
+        expr = self._field().to_uint_expr("data.schema_id")
+        # Bare `data.schema_id` would be `ap_range_ref = <scoped enum>`: no viable operator=.
+        assert "static_cast<unsigned int>" in expr
+        assert expr != "data.schema_id"
+
+    def test_write_path_casts_too(self) -> None:
+        # The write_array / write_stream path goes through to_uint_value_expr, not to_uint_expr.
+        expr = self._field().to_uint_value_expr("self->schema_id")
+        assert "static_cast<unsigned int>" in expr
+
+    def test_unpack_casts_through_unsigned(self) -> None:
+        cls = self._field()
+        expr = cls.from_uint_expr("packed.range(15, 0)")
+        # A C-style `(EnumT)(ap_range_ref)` is an invalid cast; it must go via an integer.
+        assert f"static_cast<{cls.cpp_class_name()}>" in expr
+        assert "static_cast<unsigned int>" in expr
+
+    def test_generated_header_has_no_bare_enum_assignment(self, tmp_path: Path) -> None:
+        _, DU = _make_du_registry("ScopedEnumHdr")
+        cfg = BuildConfig(root_dir=tmp_path)
+        for _, schema_cls in DU.registry.items():
+            schema_cls.as_buildable(word_bw_supported=[32]).run(cfg)
+        DU.hdr_type.as_buildable(word_bw_supported=[32]).run(cfg)
+        hdr = next(tmp_path.rglob("*_hdr.h"))
+        text = hdr.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if ".range(" in line and "schema_id" in line and "=" in line:
+                assert "static_cast" in line, f"uncast enum conversion: {line.strip()}"

@@ -204,6 +204,30 @@ class SchemaIDField(IntField):
             )
         return result
 
+    # -- C++ conversions -------------------------------------------------------------------
+    #
+    # The Python side of this field is an integer, so it inherits IntField -- but the C++ side
+    # is a *scoped* enum (`enum class`, see _gen_include_decl below), and a scoped enum has no
+    # implicit conversion to or from an integer.  IntField's identity `to_uint_expr` therefore
+    # emits `res.range(hi, lo) = data.schema_id;` (no viable operator=), and DataField's C-style
+    # `from_uint_expr` emits `(SensorSchemaID)(packed.range(hi, lo))` (no conversion from
+    # ap_range_ref to a scoped enum).  Both are hard compile errors in HLS.
+    #
+    # Route through `unsigned int` in each direction, matching EnumField -- the other field whose
+    # C++ representation is a scoped enum -- so the two stay consistent.
+
+    @classmethod
+    def to_uint_expr(cls, value_expr: str) -> str:
+        return f"(ap_uint<{cls.get_bitwidth()}>)(static_cast<unsigned int>({value_expr}))"
+
+    @classmethod
+    def to_uint_value_expr(cls, value_expr: str) -> str:
+        return cls.to_uint_expr(value_expr)
+
+    @classmethod
+    def from_uint_expr(cls, uint_expr: str) -> str:
+        return f"static_cast<{cls.cpp_class_name()}>(static_cast<unsigned int>({uint_expr}))"
+
     @classmethod
     def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
         registry = cls.registry
