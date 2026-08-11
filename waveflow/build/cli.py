@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
+from textwrap import indent
 from typing import Callable, Iterable
 
 from waveflow.build.build import BuildConfig, BuildDag
@@ -137,6 +138,10 @@ def run_dag_cli(
     def on_step_end(step, result):
         if not result.success:
             print(f"    FAILED: {result.message}")
+            # The message is str(exc); for a toolchain error that is often a bare string with no
+            # file or line.  Print the traceback too so the failure is actionable.
+            if result.traceback:
+                print(indent(result.traceback.rstrip(), "    "))
         elif result.skipped:
             print("    UP-TO-DATE")
         else:

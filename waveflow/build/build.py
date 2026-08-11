@@ -38,6 +38,7 @@ BuildDag
 from __future__ import annotations
 
 import time
+import traceback
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -236,6 +237,12 @@ class BuildResult:
         work).  Recorded on every step because it is the raw material for answering "what would
         recalibrating here cost?" — a question better answered from a history of real runs than from
         an estimate, and unanswerable after the fact if it was never measured.
+    traceback : str | None
+        Formatted traceback of the exception that failed the step, or ``None`` when the step
+        succeeded or failed without raising.  ``message`` alone is ``str(exc)``, which for a
+        toolchain error is often a bare string with no file, line or call site — enough to know
+        something broke and not enough to find it.  Keeping the traceback here means a caller can
+        surface it without every step having to catch and log for itself.
     """
 
     success: bool
@@ -244,6 +251,7 @@ class BuildResult:
     timestamp: float = field(default_factory=time.time)
     skipped: bool = False
     elapsed_seconds: float = 0.0
+    traceback: str | None = None
 
     def object(self, name: str) -> Any:
         """Return the artifact value for *name*."""
@@ -625,8 +633,12 @@ class BuildDag:
                         success=True, artifacts=produced,
                         elapsed_seconds=time.perf_counter() - started)
                 except Exception as exc:
+                    # Keep the traceback, not just str(exc).  A toolchain failure often stringifies
+                    # to a bare message with no file, line or call site; without this the caller has
+                    # no way to recover where it came from.
                     results[step.name] = BuildResult(
                         success=False, message=str(exc),
+                        traceback=traceback.format_exc(),
                         elapsed_seconds=time.perf_counter() - started)
                     failed.add(step.name)
 
