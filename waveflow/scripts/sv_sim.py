@@ -181,8 +181,12 @@ def run_sv_sim(
     else:
         sim_cmd = f'"{xsim}" {top}_sim --runall -log logs/xsim.log'
     for key, value in (plusargs or {}).items():
-        # Absolute paths keep the testbench independent of where sim_dir sits.
-        sim_cmd += f' -testplusarg "{key}={value}"'
+        # Absolute paths keep the testbench independent of where sim_dir sits.  Paths are
+        # emitted in POSIX form: a Windows path reaches $value$plusargs with its backslashes
+        # interpreted as escapes, so "...\repos\..." arrives carrying a carriage return.
+        # $fopen accepts forward slashes on Windows, so this costs nothing.
+        text = value.as_posix() if isinstance(value, Path) else value
+        sim_cmd += f' -testplusarg "{key}={text}"'
 
     commands = [vlog_cmd, elab_cmd, sim_cmd]
     chunks: list[str] = []

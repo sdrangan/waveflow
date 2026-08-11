@@ -60,6 +60,12 @@ class SvSimStep(BuildStep):
         The testbench file.
     sim_artifact:
         Artifact name for the simulation directory this step produces.
+    outputs:
+        ``artifact name -> path`` for files the *testbench itself* writes, e.g. the results it
+        was asked to record.  These join ``produces``, so freshness is judged on the data the
+        simulation actually produced rather than only on the scratch directory — without them
+        a run that died before writing anything still leaves a ``sim_dir`` behind and the step
+        looks up to date on the next build.
     sim_dir:
         Where the simulator's scratch output goes.  Defaults to ``sim``.
     top:
@@ -85,6 +91,7 @@ class SvSimStep(BuildStep):
     tb: str | Path
     sim_artifact: str
     consumes: list = field(default_factory=list)  # type: ignore[assignment]
+    outputs: dict[str, str | Path] = field(default_factory=dict)
     sim_dir: str | Path = "sim"
     top: str | None = None
     tcl: str | Path | None = None
@@ -94,14 +101,16 @@ class SvSimStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {self.sim_artifact: Path(self.sim_dir)}
+        return {self.sim_artifact: Path(self.sim_dir),
+                **{k: Path(v) for k, v in self.outputs.items()}}
 
     def _abs(self, config: BuildConfig, p: str | Path) -> Path:
         path = Path(p)
         return path if path.is_absolute() else config.root_dir / path
 
     def expected_paths(self, config: BuildConfig) -> dict[str, Path]:
-        return {self.sim_artifact: self._abs(config, self.sim_dir)}
+        return {self.sim_artifact: self._abs(config, self.sim_dir),
+                **{k: self._abs(config, v) for k, v in self.outputs.items()}}
 
     def run(self, config: BuildConfig, **_) -> dict[str, Any]:
         result = run_sv_sim(
@@ -117,4 +126,14 @@ class SvSimStep(BuildStep):
             },
             capture_output=self.capture_output,
         )
-        return {self.sim_artifact: result.sim_dir}
+        produced: dict[str, Any] = {self.sim_artifact: result.sim_dir}
+        for name, rel in self.outputs.items():
+            path = self._abs(config, rel)
+            if not path.exists():
+                raise RuntimeError(
+                    f"{self.name}: the testbench did not write its declared output {name} "
+                    f"({path}). The simulation may have failed without a non-zero exit code — "
+                    f"check {result.xsim_log}."
+                )
+            produced[name] = path
+        return produced

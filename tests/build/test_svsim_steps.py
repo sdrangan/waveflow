@@ -97,7 +97,21 @@ class TestRunSvSim:
         calls, _ = recorded
         run_sv_sim([], tmp_path / "tb.sv", sim_dir=tmp_path / "sim",
                    plusargs={"vecdir": tmp_path / "vectors"}, echo=False)
-        assert f'-testplusarg "vecdir={tmp_path / "vectors"}"' in calls[2]["cmd"]
+        assert f'-testplusarg "vecdir={(tmp_path / "vectors").as_posix()}"' in calls[2]["cmd"]
+
+    def test_path_plusargs_use_forward_slashes(self, recorded, tmp_path):
+        """A Windows path reaches $value$plusargs with its backslashes read as escapes."""
+        calls, _ = recorded
+        run_sv_sim([], tmp_path / "tb.sv", sim_dir=tmp_path / "sim",
+                   plusargs={"vecdir": Path("C:/Users/x/repos/hw/vectors")}, echo=False)
+        arg = [tok for tok in calls[2]["cmd"].split() if "vecdir" in tok][0]
+        assert "\\" not in arg
+
+    def test_string_plusargs_pass_through_verbatim(self, recorded, tmp_path):
+        calls, _ = recorded
+        run_sv_sim([], tmp_path / "tb.sv", sim_dir=tmp_path / "sim",
+                   plusargs={"mode": "fast"}, echo=False)
+        assert '-testplusarg "mode=fast"' in calls[2]["cmd"]
 
     def test_no_plusargs_leaves_command_unchanged(self, recorded, tmp_path):
         calls, _ = recorded
@@ -220,8 +234,30 @@ class TestSvSimStep:
         calls, _ = recorded
         step = self._step(tmp_path, plusargs={"vecdir": Path("vectors"), "mode": "fast"})
         step.run(BuildConfig(root_dir=tmp_path))
-        assert f'-testplusarg "vecdir={tmp_path / "vectors"}"' in calls[2]["cmd"]
+        assert f'-testplusarg "vecdir={(tmp_path / "vectors").as_posix()}"' in calls[2]["cmd"]
         assert '-testplusarg "mode=fast"' in calls[2]["cmd"]  # plain strings pass through
+
+    def test_outputs_join_produces(self, tmp_path):
+        step = self._step(tmp_path, outputs={"results": "vectors/out.txt"})
+        assert step.produces == {"sim_dir": Path("sim"), "results": Path("vectors/out.txt")}
+
+    def test_outputs_in_expected_paths(self, tmp_path):
+        step = self._step(tmp_path, outputs={"results": "vectors/out.txt"})
+        paths = step.expected_paths(BuildConfig(root_dir=tmp_path))
+        assert paths["results"] == tmp_path / "vectors/out.txt"
+
+    def test_outputs_returned_when_written(self, recorded, tmp_path):
+        (tmp_path / "vectors").mkdir()
+        (tmp_path / "vectors" / "out.txt").write_text("data")
+        step = self._step(tmp_path, outputs={"results": "vectors/out.txt"})
+        out = step.run(BuildConfig(root_dir=tmp_path))
+        assert out["results"] == tmp_path / "vectors" / "out.txt"
+
+    def test_missing_declared_output_raises(self, recorded, tmp_path):
+        """xsim exits 0 even after $fatal, so a silent testbench failure must be caught here."""
+        step = self._step(tmp_path, outputs={"results": "vectors/out.txt"})
+        with pytest.raises(RuntimeError, match="did not write its declared output"):
+            step.run(BuildConfig(root_dir=tmp_path))
 
     def test_failure_propagates(self, recorded, tmp_path):
         _, plan = recorded
