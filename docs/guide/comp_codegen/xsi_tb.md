@@ -59,7 +59,7 @@ Each declares which via `bfm_model()`:
 `render_tb_harness` instantiates those models on the DUT's ports (it `#include`s the
 `<top>_ports.h` that `render_ports_h` emitted), and `render_tb_main` writes a main that is just
 construct → run *N* cycles → close. Any per-instance configuration rides across as
-[`DynParam`](../flows/parametrization.md) member assignments — `s_cmd.in_bundle = "vectors/s_cmd";` —
+[`DynParam`](../flows/parametrization.md#dynparam) member assignments — `s_cmd.in_bundle = "vectors/s_cmd";` —
 so adding a knob is a field on the Python class plus a public member on the C++ model, with no
 generator change.
 
