@@ -1,6 +1,6 @@
 # `examples/toy` — minimal components
 
-Minimal components used by [`docs/guide/components`](../../docs/guide/components/) and by the infra
+Minimal components used by [`docs/guide/comp_codegen`](../../docs/guide/comp_codegen/) and by the infra
 tests. **See [`examples/regmap`](../regmap/) for a real end-to-end example** (build DAG, Vitis
 C-simulation and co-simulation, its own docs pages).
 

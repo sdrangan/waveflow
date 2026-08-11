@@ -274,7 +274,12 @@ def test_relative_links_resolve(md_files):
         if any(part in _rel(p) for part in _LINK_CHECK_SKIP):
             continue
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            for rel in re.findall(r"\]\((\.\.?/[^)#\s]+\.md)(?:#[^)]*)?\)", line):
-                if not (p.parent / rel).resolve().is_file():
+            # Every relative target, not just `.md`.  These docs link into the source tree on
+            # purpose -- 419 such links, all of which resolve -- so a renamed module rots them
+            # exactly the way a moved page rots a cross-page link, and silently for the same reason.
+            # A directory target is legitimate: `[Resource Models](../resource_model/)`.
+            for rel in re.findall(r"\]\((\.\.?/[^)#\s]+)(?:#[^)]*)?\)", line):
+                tgt = (p.parent / rel).resolve()
+                if not (tgt.is_file() or tgt.is_dir()):
                     broken.append(f"{_rel(p)}:{i} -> {rel}")
     assert not broken, "relative links point at files that do not exist:\n  " + "\n  ".join(broken)

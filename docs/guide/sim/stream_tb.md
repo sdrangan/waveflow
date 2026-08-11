@@ -139,7 +139,7 @@ transaction events vs. exact per-cycle handshakes).
 This is why one design description serves both: the [concurrent flow](../flows/concurrent.md) runs the
 identical graph as a fast Python check and as a cycle-accurate RTL test — and, because the driver plays
 a bundle, from the identical vectors too. The `AxisMaster` reads that same bundle directly: the
-participant carries an `in_bundle` [`DynParam`](../../../waveflow/hw/hw_module.py) which the
+participant carries an `in_bundle` [`DynParam`](../flows/parametrization.md#dynparam) which the
 generated harness emits as `s_cmd.in_bundle = "…";`, and the model loads it in `pre_sim`. No vectors are
 baked into a generated header, and neither side owns a second copy of the stimulus.
 

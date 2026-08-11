@@ -3,8 +3,8 @@ title: Parameterization
 parent: Hardware modules and Flows
 nav_order: 4
 audience: python
-api: [HwParam, HwParamValue, HwConst, discover_hw_const, param_supports]
-summary: "Parameterizing a HwModule (both flows): HwParam[T] for per-instance, configurable synthesis knobs (bus widths, datapath sizing — vary per instance and per generated kernel variant) and HwConst[T] for class-level, fixed structural constants (static array extents). The crux is per-instance-configurable vs class-level-fixed. param_supports declares a set of HwParam values to emit as kernel variants; its C++ realization is comp_codegen/templating."
+api: [HwParam, HwParamValue, HwConst, DynParam, discover_hw_const, discover_dyn_params, param_supports]
+summary: "Parameterizing a HwModule (both flows). The family is one axis — when does the value bind — with four points: HwConst at class definition, HwParam at build (so distinct values mean distinct artifacts), DynParam at init/pre-sim, and a regmap register at runtime. The last two share one artifact across every value. param_supports declares a set of HwParam values to emit as kernel variants; its C++ realization is comp_codegen/templating."
 ---
 
 # Parameterization
@@ -27,8 +27,18 @@ That buys three things:
 - **Reusable IP.** A component parameterized on its widths/shapes is reusable across designs without
   editing its body.
 
-Waveflow has two parameter markers, and choosing between them is the crux: **`HwParam` is
-per-instance and configurable; `HwConst` is class-level and fixed.**
+Waveflow's parameter markers are all one axis — **when does the value bind?** — and where a knob sits
+on it decides the thing you actually care about: whether changing it means building a new artifact.
+
+| marker | binds at | one artifact per value? |
+|---|---|---|
+| [`HwConst[T]`](#hwconstt--class-level-structural-constants) | class definition | fixed structurally |
+| [`HwParam[T]`](#hwparamt--per-instance-synthesis-parameters) | build / elaboration | **no** — distinct values are distinct artifacts (`mem_r_stream_32` vs `_64`) |
+| [`DynParam[T]`](#dynparam) | init / pre-sim | **yes** |
+| [regmap / `s_axilite`](../interface/regmap.md) | runtime, over AXI-Lite | **yes** — one bitstream serves every value |
+
+`HwParam` is the one synthesizable code can take, and most of this page is about it. The bottom two
+rows are the same idea at different times: a value set on a *built* thing rather than baked into it.
 
 ## `HwParam[T]` — per-instance synthesis parameters
 
@@ -69,18 +79,66 @@ In Python simulation a `HwConst` is just a regular class attribute (the framewor
 immutability — the marker signals intent). [`discover_hw_const(cls)`](../../../waveflow/hw/hw_module.py)
 walks the MRO and returns every `HwConst` field so codegen can find them.
 
-## HwParam vs. HwConst — the distinction
+## `DynParam[T]` — init-time knobs on a fixed artifact {#dynparam}
 
-|  | `HwParam[T]` | `HwConst[T]` |
+[`DynParam[T]`](../../../waveflow/hw/hw_module.py) marks a field bound at **init / pre-sim** rather
+than at build. The value is set on the instance and, for a generated model, emitted as a member
+assignment — so **one artifact serves every value**, where a `HwParam` would have forced a second.
+
+Its first and still-primary use is configuring [XSI testbench models](../comp_codegen/xsi_tb.md):
+
+```python
+class StreamDriver(...):
+    in_bundle: DynParam[str] = ""       # which recorded bundle this driver plays
+```
+
+```cpp
+s_cmd.in_bundle = "vectors/s_cmd";      // what the generated harness emits
+```
+
+[`discover_dyn_params(obj)`](../../../waveflow/hw/hw_module.py) returns `{field: value}` for every
+`DynParam` whose value differs from the class default, and the generator emits one assignment per
+entry. A field left at its default emits **nothing** — which is what lets a knob be added without
+every existing harness growing a line.
+
+The four declared today are all testbench-side configuration:
+
+| field | on | says |
 |---|---|---|
-| Scope | **per-instance** field | **class-level** attribute |
-| Set when | at instantiation (`MyComp(in_bw=64)`) | at class definition |
-| Varies | per instance, and per kernel **variant** | never — fixed for the class |
-| In simulation | int-like value (wrapped `HwParamValue`) | plain class attribute |
-| Use for | configurable knobs: bus widths, datapath sizing | fixed structure: static array extents |
+| `in_bundle` | `StreamDriver` | which bundle to play into the DUT |
+| `out_bundle` | `StreamSink` | where to capture what comes out |
+| `load_segs` | [`MemoryMod`](../memory/memorymod.md) | regions to load from bundles at `pre_sim` |
+| `dump_segs` | `MemoryMod` | regions to dump to bundles at `post_sim` |
 
-Rule of thumb: if a value should be **dialable per instance / per generated variant**, it is a
-`HwParam`; if it is a **fixed structural fact of the class**, it is a `HwConst`.
+{: .note }
+> **The axis is binding time, not synthesizable-vs-not.** It is tempting to read `DynParam` as "the
+> marker for non-synthesized blocks" because every current user is a testbench model — but that is a
+> fact about what has been built, not about the marker. Its synthesizable cousin is a
+> [regmap / `s_axilite` register](../interface/regmap.md): also set on a finished artifact, just at
+> runtime over a bus rather than at init in a C++ constructor.
+
+{: .warning }
+> **Bound once at `pre_sim`, and constant for the run.** A `DynParam` is not a per-cycle value and not
+> a stream. Something that changes during a run is [state](../memory/hwstate.md), a stream payload, or
+> a regmap write — and each of those is a different mechanism with a different cost.
+
+## Choosing between them
+
+|  | `HwParam[T]` | `HwConst[T]` | `DynParam[T]` |
+|---|---|---|---|
+| Scope | **per-instance** field | **class-level** attribute | **per-instance** field |
+| Set when | at instantiation (`MyComp(in_bw=64)`) | at class definition | at init, before `pre_sim` |
+| Varies | per instance, and per kernel **variant** | never — fixed for the class | per instance, on one built artifact |
+| In simulation | int-like value (wrapped `HwParamValue`) | plain class attribute | a plain field |
+| In codegen | template argument or literal | `static constexpr` | `<model>.<field> = <value>;` |
+| Use for | configurable knobs: bus widths, datapath sizing | fixed structure: static array extents | config of a *generated model*: which vectors to play |
+
+Rules of thumb:
+
+- the value **sizes the hardware** → `HwParam`;
+- it is a **fixed structural fact of the class** → `HwConst`;
+- it **configures an already-built thing** → `DynParam`, or a
+  [regmap register](../interface/regmap.md) if that thing is synthesized.
 
 ## `param_supports` — declaring kernel variants
 
@@ -103,19 +161,23 @@ This **declares** that the build should emit `my_kernel` (defaults), `my_kernel_
 generated — concrete top functions per key — is the realization page:
 [Module Code Generation: Templating](../comp_codegen/templating.md).
 
-> Forward pointer: a third parameter binding-site, `XSIParam`, is planned for the concurrent flow's
-> testbench participants (a value that becomes a constructor argument of a generated XSI model, and
-> makes the class non-synthesizable). It is not built yet.
-
 ## See also
 
 - [Module Code Generation: Templating](../comp_codegen/templating.md) — the C++ realization: how `HwParam` lowers into kernel signatures, `HwConst` into `static constexpr`, and `param_supports` into variant kernels.
 - [Hardware modules](./modules.md) — where these fields are declared on the class.
 - [Module structure](../comp_codegen/structure.md) — the generated kernel these parameters shape.
+- [XSI testbenches](../comp_codegen/xsi_tb.md) — where `DynParam` assignments are emitted.
+- [Register maps](../interface/regmap.md) — the runtime binding site, for synthesized blocks.
 
 ## Quick reference
 
-- `HwParam[T]` = per-instance synthesis knob; int-like in sim, wrapped `HwParamValue`, immutable after construction.
+- One axis: **when does the value bind?** — class definition (`HwConst`), build (`HwParam`), init
+  (`DynParam`), runtime ([regmap](../interface/regmap.md)).
+- `HwParam[T]` = per-instance synthesis knob; int-like in sim, wrapped `HwParamValue`, immutable after
+  construction. **Distinct values mean distinct artifacts.** The only kind synthesizable code takes.
 - `HwConst[T]` = class-level fixed structural constant; a plain class attribute in sim.
-- Per-instance-configurable → `HwParam`; class-level-fixed → `HwConst`.
+- `DynParam[T]` = init-time knob on a fixed artifact; emitted as `<model>.<field> = <value>;` via
+  `discover_dyn_params`. Bound once at `pre_sim`, constant for the run.
+- Sizes the hardware → `HwParam`; fixed fact of the class → `HwConst`; configures an already-built
+  thing → `DynParam`, or a regmap register if it is synthesized.
 - `param_supports` declares variant kernels (key → `HwParam` overrides); realization is [Templating](../comp_codegen/templating.md).
