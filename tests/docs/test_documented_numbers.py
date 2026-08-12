@@ -147,6 +147,116 @@ def test_firblock_rank_correlations_match_the_documented_estimator(fir_validatio
 
 
 # ---------------------------------------------------------------------------
+# rf_loopback / rf sampling — the metronome demonstration and the loss counts
+# ---------------------------------------------------------------------------
+#
+# These pages are the first non-calibration ones covered here, and deliberately so: the reason the
+# stale ``2835 / 3469`` cycle gates survived for weeks in two docs pages with every test green is
+# that this file only ever checked calibration figures.  A number in a doc that nothing recomputes
+# *will* rot, whatever kind of number it is.
+#
+# Every figure below is **recomputed by running the thing**, never read from a constant the page and
+# the test could drift from together.
+
+
+def test_sampling_page_metronome_table_is_recomputed():
+    """``guide/rf/sampling.md``'s table is the page's load-bearing claim: a relative ``timeout``
+    loop slips and the absolute grid does not.  It is quoted as a *demonstrated* result, so the
+    demonstration is re-run here and the page's cells matched against it.
+    """
+    import simpy
+
+    from waveflow.hw.clock import Clock
+    from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
+    from waveflow.simulation.simulation import Simulation
+    from tests.hw.test_rf_sample_if import TracingRFSampIF, _feeder
+
+    text = _page("guide/rf/sampling.md")
+    n, period, body = 6, 1.0, 0.1
+
+    # (a) the rejected scheduler, run.
+    env = simpy.Environment()
+    naive: list[float] = []
+
+    def loop():
+        while len(naive) < n:
+            yield env.timeout(period)
+            naive.append(float(env.now))
+            yield env.timeout(body)
+
+    env.process(loop())
+    env.run()
+
+    # (b) the real edge, same yielding body.
+    sim = Simulation()
+    iface = TracingRFSampIF(name="doc_if", sim=sim, samp_clk=Clock(freq=8.0 / period), n_ch=1,
+                            blksize=8, n_blk=n, body_delay=body)
+    tx, rx = RFSampIFTx(name="tx", sim=sim), RFSampIFRx(name="rx", sim=sim, depth=n + 1)
+    iface.bind("tx", tx)
+    iface.bind("rx", rx)
+    sim.env.process(_feeder(iface, tx, n)())
+    sim.run_sim()
+
+    # The page states both rows' first, second and last cells.  Matched as whole TABLE CELLS
+    # (`| 1.0 s |`), not as substrings: "1 s" is a substring of "0.1 s", so a loose match would pass
+    # on a table whose cells were wrong -- which is how the first draft of this page shipped with two
+    # incorrect cells and a green test.
+    def _row(label: str) -> str:
+        for line in text.splitlines():
+            if line.startswith(f"| {label}"):
+                return line
+        raise AssertionError(f"sampling.md no longer has a '{label}' row in the metronome table")
+
+    slipped, on_grid = _row("`timeout(period)`"), _row("absolute grid")
+    for t in (naive[0], naive[1], naive[-1]):
+        assert f"| {t:.1f} s " in slipped, f"the slipped row no longer quotes {t:.1f} s"
+    for t in (iface.ticks[0], iface.ticks[1], iface.ticks[-1]):
+        assert f"| {t:.1f} s " in on_grid, f"the absolute-grid row no longer quotes {t:.1f} s"
+
+    drift = naive[-1] - n * period
+    assert drift == pytest.approx((n - 1) * body)
+    assert f"**{drift:g} s" in text, f"sampling.md no longer quotes the {drift:g}s cumulative error"
+    assert f"`(k-1)·{body:g} s`" in text
+    assert f"{n} blocks of a {period:.1f} s period" in text
+    assert f"yields for {body:g} s" in text
+    assert iface.ticks == pytest.approx([k * period for k in range(1, n + 1)])
+
+
+def test_rf_loopback_page_loss_counts_are_recomputed():
+    """``examples/rf_loopback/python.md`` quotes three predicted counts and one counter dict.
+
+    Each is produced by actually injecting the fault, because the whole argument of that section is
+    that these numbers are *predictions the model meets* rather than observations written down.
+    """
+    from examples.rf_loopback.rf_loopback import RfLoopbackSim
+
+    text = _page("examples/rf_loopback/python.md")
+
+    clean = RfLoopbackSim(n_src_blk=8)
+    clean.run()
+    clean.check()
+    for line in (f"adc  {clean.tb.adc_if.counters()}", f"dac  {clean.tb.dac_if.counters()}"):
+        assert line in text, f"python.md no longer quotes the clean-run counters: {line}"
+
+    late = RfLoopbackSim(n_src_blk=8, blksize=64)
+    late.tb.source.start_delay = 2.5 * late.tb.blk_period
+    late.run()
+    assert f"`adc_if.underrun == {late.tb.adc_if.underrun}`" in text
+    assert np.array_equal(late.captured[0], np.zeros((1, late.tb.blksize)))    # "all zeros"
+
+    stalled = RfLoopbackSim(n_src_blk=8, blksize=64, sink_stall_after=1, sink_depth=2)
+    stalled.run()
+    deeper = RfLoopbackSim(n_src_blk=8, blksize=64, sink_stall_after=1, sink_depth=4)
+    deeper.run()
+    assert f"`dac_if.overrun == {stalled.tb.dac_if.overrun}`" in text
+    assert "`8 − 1 − 2`" in text and f"= {deeper.tb.dac_if.overrun}`" in text
+
+    # The structural one-block loop cost, as the page states it: declared by the pipeline and
+    # checked against the DAC edge's startup transient.
+    assert f"blk_latency: HwParam[int] = {clean.tb.loop_blk_latency}" in text
+
+
+# ---------------------------------------------------------------------------
 # The guard on the guard
 # ---------------------------------------------------------------------------
 
@@ -158,6 +268,9 @@ def test_the_pages_still_contain_tables_to_check():
     """
     assert re.search(r"^\|\s*\*\*\d+\*\*\s*\|", _page("examples/vecmult/sweep.md"), flags=re.M)
     assert "rank correlation" in _page("examples/firblock/resource_fit.md")
+    # The RF pages' claims live in one table and one counter dict; prose would make both vacuous.
+    assert "| absolute grid |" in _page("guide/rf/sampling.md")
+    assert "'underrun':" in _page("examples/rf_loopback/python.md")
 
 
 # ---------------------------------------------------------------------------

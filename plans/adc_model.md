@@ -1,172 +1,504 @@
 # Modeling the ADC in Waveflow
 
-## Overview
+**Status:** revised 2026-08-12. **Unblocked** by `plans/design_cut.md` (S0–S4, S6 landed, PR #146),
+which answers the "what kind is the RFDC block?" question this plan was parked behind. Stage 2 below
+now depends on `plans/behavioral_edges.md`.
 
-Many applications, esp. in wireless, connect to and ADC block, like the RFDC block in Xilinx FPGAs.  This document is start of a plan of how to extend Waveflow to enable development of systems with ADCs, particularly in wireless applications.   
-For the discussion below, we can think of the following classes of blocks in Waveflow. 
+Many applications, especially in wireless, connect to an ADC block like the RFDC in AMD/Xilinx RFSoC
+parts. This is a plan for extending Waveflow to develop systems with ADCs.
 
-- *Digital logic* blocks representing synthesizable hardware for processing the digital signals to and from the ADC block.  These logic blocks would be `HwModules` that would be synthesized and represent blocks like FIR filters, FFTs and other standard communications processing blocks
-- *RFDC emulator* an emulation of the RFDC block that the digital logic blocks would connect to and has the same interface as the true RFDC block.
-- *RF environment*:  Blocks that emulate the RF environment or channel or RF sources and sinks.  THese blocks are only for simulation and are not synthesized. 
+## The three classes of block
+
+- **Digital logic** — synthesizable hardware processing the signals to and from the RFDC. `HwModule`s
+  that get synthesized: FIR filters, FFTs, and other standard communications blocks.
+- **The RFDC** — a model of the converter the digital logic connects to, presenting the same interface
+  as the real IP.
+- **RF environment** — channel, RF sources and sinks. Simulation only; never synthesized.
+
+### Component kinds — resolved
+
+All three are **plain `HwModule`s.** There is no separate class for "participates in simulation but
+isn't synthesized"; the earlier `ExternalIP` / `ExtMod` proposal was rejected because it freezes a
+*per-build role* into a *class fact*. The boundary between DUT and testbench is a **cut** chosen per
+build, and a module's role follows the cut.
+
+What differs is only which **realization hooks** each declares:
+
+| block | `kernel_task()` | `bfm_model()` | realized as |
+|---|---|---|---|
+| digital logic | yes | — | an `hls::task` inside the generated top |
+| `Rfdc` | — | yes | an `XsiSimObj` beside the top (later: an IPI block) |
+| `Channel`, sources, sinks | — | — | pysim only |
+
+This is a *finding*, not a declaration: `check(mod, "xsi_bfm_model")` answers per module. It also makes
+the Flow-3 requirement checkable rather than aspirational — the DUT's boundary ports are identical in
+all three use cases, and only what is attached beyond them is re-realized.
+
+**The same-nodes invariant.** A given testbench graph has the **same nodes in both backends** — that is
+why the XSI walk is edge-owned rather than participant-owned. It does *not* follow that every graph runs
+in both. Use cases 1 and 2 below are deliberately **different testbenches**
+(`RfDataSource → Channel → Rfdc` versus `RfDataSource → Rfdc`), and a graph containing a pysim-only
+`Channel` fails `check(tb, "sequential_xsi_tb")` loudly at generate time.
 
 ## Use cases
 
-We would imagine three use cases:
+- **Full Python simulation.** One or more wireless nodes, each with digital logic and at least one
+  `Rfdc`, connected to RF environment blocks. Python only. What matters: rich environments;
+  bit-exactness in the digital logic so bit-width choices can be evaluated in Python; and speed, from
+  processing vectors of RF samples at a time.
 
-- *Full python simulation*:  The system could consist of one or more wireless nodes.  Each wireless node would have digital logic blocks and at least one RFDC emulator block.  The RFDC blocks are connected to the RF environment blocks.  This simulation can be complex and is expected only for python simulation.  What is important is:   
-   - ability to model rich environments, 
-   - remain bit-exact in the digital logic so one can evaluate the effect of parameters like bit widths in python; and
-   - fast.  The fast simulation is enabled by processing of vectors of RF samples at a time.  See below
-   
-- *Unit python and RTL simulation*:  This would be a smaller simulation that can be run in both python or XSI for unit function verification and resource, and timing modeling.  In XSI:
-    - The digital logic blocks are synthesized to verilog and run as exact verilog blocks
-    - The RFDC emulation is modeled as an XSI testbench object
-    - The RF environment is limited to a small class (probably just data sources and sinks) that interface with the RFDC emulator and can also be run in XSI
+- **Unit Python and RTL simulation.** A smaller graph runnable in both Python and XSI for functional
+  verification, resource, and timing modeling. In XSI: the digital logic is synthesized and runs as real
+  Verilog; the `Rfdc` is an XSI BFM; the RF environment is limited to file-backed sources and sinks.
 
-- *Bitstream generation*:  This mode would not be initially supported, but nothing we do now should preclude it.  In this mode, the RFDC emulation block would somehow get substituted with an AMD RFDC block and combined with the synthesized digital logic.  The digital logic should not have to change its interface. The resulting system would not be simulated (since there is no AMD software that can emulate the RF environment).  But, the goal is that we can generate a complete bitstream.
+- **Bitstream generation.** Not initially supported, but nothing here should preclude it. The `Rfdc` is
+  replaced by the real AMD RFDC IP and combined with the synthesized digital logic. **The digital logic
+  must not have to change its interface.** No simulation — the goal is only that a complete bitstream
+  can be generated.
 
+## `RFSampIF` — the RF-domain sample channel
 
-## `RFDCEmulator` block
+**The metronome lives in the edge, not the node.** `RFSampIF` is an `Interface` (already a `SimObj`, so
+it already has `run_proc`) that owns the sample-rate clock and the block cadence. This is the idiomatic
+choice here: the XSI walk is edge-owned by design, and `StreamIF.depth` is already *"a physical property,
+single-source for both backends"* — an edge owning hardware state, read by both.
 
-This block is an **emulation** of the RFDC block.  It is a `HwModule` that will synthesize to an XSI testbench task, but not (at least now) to an actual RFDC block.
+Generic to any converter, not only the RFDC.
 
-### Interface Endpoints
+### Structure
 
-- `tx_stream`, `rx_stream`:  AXI4-streaming interface emulating the interface to and from the programming logic.  Data is packed identically to the AMD RFDC block
-- `tx_rf`, `rx_rf`:  Unsynthesized streams of complex baseband samples at the carrier frequency out of the block to the RF environment.  To make the simulation fast, RF data is sent in blocks of shape `(n_rx, blksize)` and `(n_tx,blksize)`.    The `rx_rf` endpoint is a *master* endpoint, meaning it pulls data at the sample boundaries.  
+**Unidirectional, all channels.** One interface carries every channel of a tile as an `(n_ch, blksize)`
+block — one array, one SimPy event. Splitting per channel gives `n_ch` events per block period and works
+against the entire reason for block-LT. The channels of a tile share one grid and one **scalar**
+`t0`; channels that genuinely need independent grids are not one tile and should have their own
+interface.
 
-Design question:  Do we build a custom interface for `tx_rf` and `rx_rf`?  We do not need to synthesize this interface.  But, we need an interface that the blocks of size `(n_rx,blksize)` are numpy arrays in Python and C++ arrays in XSI.  
+**Not bidirectional.** TX and RX share exactly one quantity — the time origin — and differ in every
+other: sample rate, channel count (4 ADC / 2 DAC on the RFSoC 4x2), `blksize`, buffer, counters, and
+peer. A bidirectional interface would carry `(fs_tx, fs_rx)`, `(n_tx, n_rx)`, `(blksize_tx,
+blksize_rx)`, two buffers and two metronomes — two interfaces wearing one name, with every consumer
+paying for the duality. The counters make the same point: **underrun is a TX concept, overrun an RX
+concept**; kept apart, each object has exactly one natural failure mode. A *mode flag* would be worse
+still — two code paths for one concept, and a flag is expensive to mirror in the C++ model. A genuinely
+symmetric case (a TDD antenna port) is a **pair** of interfaces held by one node, which costs nothing.
+
+- Two endpoint types: **`RFSampIFTx`** (master, the producer) and **`RFSampIFRx`** (slave, the
+  consumer). One interface per data direction, so the `Rfdc` holds `Tx` on the DAC path and `Rx` on the
+  ADC path.
+- Parameters: a `Clock` at the **sample rate**, `blksize`, a buffer `depth`, and an epoch **`t0`**.
+- `RFSampIFTx.put()` fills the buffer and **yields when full** — real backpressure on the producer.
+- `run_proc` drains one block every `blksize / samp_rate` and pushes to `RFSampIFRx`. It does **not**
+  wait for samples: a short buffer is **zero-filled** (modeling underflow) and counted.
+- `RFSampIFRx` delivery is **non-blocking** — the receiver accepts or the block is **dropped** and
+  counted.
+
+### Underflow and overflow are the contract
+
+There is a real asymmetry in the hardware and this design captures both halves in one object:
+
+- **Buffer full → backpressure on `Tx`.** Legitimate; the converter has a real input FIFO and it does
+  stall the fabric.
+- **Buffer empty → underflow.** There is *no protocol signal for this.* Nothing in AXIS can express "you
+  were late"; the samples simply are not there and the analog output glitches. Backpressure protects
+  against over-production, never under-production.
+
+Zero-fill is the right filler — deterministic, visible in the RF output, and it does not hide the error.
+But **the padding is not the contract; the counters are.** Make `underrun == 0 && overrun == 0` a gate
+assertion on every RFDC-connected example. Without it, a design that fails on hardware passes in both
+simulators — "deadlock looks like success" in a new costume.
+
+### Schedule on an absolute grid
+
+```python
+k = 0
+while True:
+    k += 1
+    yield self.timeout(self.t0 + k * self.blk_period - self.env.now)
+    ...                                   # the body may now yield freely
+```
+
+**Not** `yield self.timeout(blk_period)` in a loop. Any yield in the body — a blocking push, an
+interface that charges transfer time, a `timeout(0)` in a callback — makes the next period start from a
+later `env.now`, and the grid slips **cumulatively and silently**. The non-blocking `Rx` avoids today's
+obvious case; absolute scheduling makes it structural rather than one refactor away.
+
+(`Clock.period` is a `@property` — `self.samp_clk.period`, no parens.)
+
+### `t0` is the synchronization primitive
+
+Sample *n* on an interface occurs at `t0 + n / samp_rate`. Alignment across TX/RX and across antennas is
+then **derived and assertable** — `n_rx / fs_rx == n_tx / fs_tx` — rather than emergent from scheduling
+coincidence.
+
+**`t0` is owned by the `Rfdc` and pushed to its interfaces at bind.** It is when *the tile's* sample
+counter starts — a property of the converter, not of a wire — so one source sets it for every interface
+the `Rfdc` binds. That is what makes TX/RX alignment structural without a bidirectional interface: the
+two edges share an origin because they share the node that assigns it, not because they are one object.
+(Note the direction is opposite to `samp_rate`, which lives on the interface clock and the `Rfdc` reads
+at bind. Each quantity lives where it physically belongs and is read, never restated.)
+
+Two properties fall out:
+
+1. **It handles unequal rates.** ADC and DAC tiles routinely run at different sample rates on RFSoC, so
+   there is no common event grid to share; a shared metronome event could not express the relationship
+   and `t0` plus a rate can.
+2. **It is where MTS lives.** The Synchronization section below concludes that MTS is a bring-up
+   procedure, not a modelable thing, and should become *a fixed, measured offset parameter*. `t0` **is**
+   that parameter — per tile, measured at bring-up, zero in simulation.
+
+*(Note: with the metronome in the edge, nothing "pulls" — the original master-pull design for lazy
+channel evaluation is retired. What replaces it is equivalent for the purpose: `Tx` backpressure limits
+the producer to at most `depth` blocks ahead, so the environment computes with **bounded lookahead**
+rather than exactly on demand.)*
+
+### XSI realization
+
+`RFSampIF` is a **behavioral edge**: both its endpoints are outside the cut, so it needs no BFM dual, but
+its peer must still exist as a node — the endpoint set is invariant across backends. That machinery is
+`plans/behavioral_edges.md`, and this is its motivating case. Stage 2 depends on it.
+
+## `Rfdc`
+
+*Named `Rfdc`, not `RFDCEmulator`: "emulator" describes only one of its three realizations. In Flow 3
+this same module binds to the real IP.*
+
+**One module carrying both directions**, not separate `RfdcAdc` / `RfdcDac` blocks — this supersedes the
+two-block sketch in `plans/rfsoc_4x2_bringup.md`. The reason is synchronization: TX and RX sample
+counters must hold a fixed relation, which is a property *of the converter*, not of two unrelated blocks.
+
+### Interface endpoints
+
+- `tx_stream`, `rx_stream` — AXI4-Stream to and from the programmable logic, packed identically to the
+  real RFDC. These **cross the cut** and take BFM duals.
+- `tx_rf`, `rx_rf` — `RFSampIF` endpoints to the RF environment. These **do not cross the cut**, so they
+  need no dual — but they exist in both backends.
+
+With the metronome in `RFSampIF`, the `Rfdc` is **reactive on the RF side**: it has no timer of its own
+and responds to block arrivals.
 
 ### Parameters
 
-The module can be dynamically parameterized (`DynParam`) since it is XSI testbench block:
+| param | binding | why |
+|---|---|---|
+| `n_rx`, `n_tx` | `HwParam` | sets the AXIS word layout the synthesized logic is built against |
+| `nbits` | `HwParam` | ditto |
+| `iq_mode` | `HwParam` | ditto |
+| `samp_per_word` | `HwParam`, **integer** | port width = `samp_per_word × nbits` (×2 for interleaved IQ) |
+| `full_scale` | `DynParam` | the amplitude reference quantization is relative to |
+| bundle paths | `DynParam` | the `in_bundle` / `out_bundle` pattern |
 
-- `n_rx`, `n_tx`:  number of RX and TX channels
-- `nbits`:  number of bits per channel 
-- `iq_mode`:  boolean variable indicating if channels are mapped to IQ
-- `samp_rate`:  Sample rate in Hz
-- `rx_freq`, `tx_freq`:  floating point carrier frequency
-- `blksize`:  Block sizes 
+`samp_rate` is **not** declared here. It lives on the `RFSampIF` clock and the `Rfdc` reads it **at
+bind** — the same single-source discipline as `StreamIF.depth`. Two declarations could disagree.
 
+> **Trap on the `DynParam` rows.** `discover_dyn_params` skips **falsy** values, so `0.0` and `False`
+> emit *nothing* and silently take the C++ default. Sentinel them or fix the predicate first.
 
-### Python model
+### There is no `spc` — there are two derived rate conversions
 
-- The master `rx_rf` enpoint pulls data every `blksize / samp_rate` seconds, quantizes the samples pushes that data into the `rx_stream`.
-- There is a small inaccuracy since the `blksize` samples are pushed in at a time
-- In the the transmit direction, it pulls data `blksize` sampels every `blksize / samp_rate` seconds and pushes that data into the `tx_rf` port.  
-- One issue:  Since the streaming on the RF side is in blocks of `blksize` samples, there can be no dependency of the RX data on the TX data within less than `blksize` samples.  For fixed data source / sink, this is not an issue.  But, in interactive systems, this blocking places a limit on how large of blocks we can make.  In particular, it precludes loopback emulation where the TX-RX delay is very short.  It may also preclude RADAR experiments unless the return waveform can be pre-computed.  But this may be OK for now.  We may be able to pre-compute the response.
+An earlier draft declared `spc` ("samples per cycle"), conflating a structural integer with a rate ratio.
+The integer is `samp_per_word` (a sample cannot straddle a slot). Everything else is **derived, and may
+be fractional**:
 
-### XSI model
+| boundary | conversion | lives in |
+|---|---|---|
+| AXIS ↔ fabric | `samp_rate / (samp_per_word × f_axis)` words per AXI cycle | the `Rfdc` BFM |
+| RF ↔ fabric | `samp_rate / (blksize × f_axis)` blocks per AXI cycle | the `RFSampIF` model |
 
-- In XSI, we lower this (somehow) to a similar system
+One mechanism at two granularities — a fractional-credit accumulator:
 
-## `RFDataSource` and `RFDataSink`
+```cpp
+credit += credit_per_cycle;
+if (credit >= 1.0) { credit -= 1.0; /* one unit due this cycle */ }
+```
 
-These would be initial blocks that connect to the `rx_rf` and `tx_if` endpoints of the `RFDCEmulator` block with fixed data sources and sinks from files.  These blocks will be good for unit testing.
+The Python model needs **neither**: it works in seconds off `blksize / samp_rate` and uses
+`samp_per_word` only to pack a block into words. Check `samp_rate <= samp_per_word × f_axis` at
+`pre_sim` and fail loud — a ratio above 1 is a design error the AXIS port cannot carry, not something to
+simulate.
 
-## `RFSampBuf`
+`plans/circ_buf_fac.md` is the packing contract (samples time-ascending from the LSBs). Cite it; do not
+re-derive it. *Note the name collision: `SPC` there means `samp_per_word` here.*
 
-This would be an initial digital logic block that we would design that would actually get synthesized.  It provides a time-stamped packetized interface to and RFDC block that could be tested with a connection to an `RFDCEmulator`.
+### The AXIS-side BFMs
 
-On the TX side it has a two port BRAM.
+Both sit on the **PL/AXIS** boundary — the only boundary that exists in XSI:
 
-Data loader -> TX buffer (two port BRAM) -> TX player
+| path | direction | DUT port | BFM plays |
+|---|---|---|---|
+| ADC | RFDC → PL | AXIS **slave** input | AXIS **master** → `RfdcAdcMaster` |
+| DAC | PL → RFDC | AXIS **master** output | AXIS **slave** → `RfdcDacSlave` |
 
-The TX player task continuously reads out from the TX buffer in a circular manner.  There are no dropped samples.  TX buffer is not a FIFO.  It is a circular buffer.   
-The data loader tasks gets a transactional command with fields:
+Neither is a generic `AxisMaster`/`AxisSlave`, and the reason is the same asymmetry as above: the ADC
+presents a beat every cycle **regardless of `TREADY`** and counts dropped samples; the DAC is always
+ready and counts cycles where a beat was due but `TVALID` was low. A generic model blocks, and blocking
+hides exactly the failure that matters. That protocol difference — not a data difference — is what
+justifies new BFM classes at all, per the bar in `guide/custom_hooks/bfm_model.md`.
 
-`TxCmd`:
-- `tid`:  transaction ID
-- `samp_ind_start`:  index in the buffer to place the first sample
-- `nsamp`:  number of samples
-- `data_addr`:  Address in memory for the `(nsamp,ntx)` samples in row-major form
+## `Channel`, `RfDataSource`, `RfDataSink`
 
-Alternatively, we could have a streaming in-band data so that the data follows after the `TxCmd`.
+Pysim-only `HwModule`s on `RFSampIF` endpoints. Sources and sinks follow the bundle discipline: **the
+on-disk bundle is the single source**, materialized once and read by both backends.
 
-On the RX side, 
+### Signal processing stays out of the interface
 
-RX stream IF -> RX buffer (two port BRAM) -> Data capture
+Gain, delay, and multipath belong in a `Channel` block, **not** in `RFSampIF`. Three reasons:
 
-RX stream IF is a free-running task constantly filling up a two port BRAM
-Data Capture gets a similar `RxCmd` to capture samples from a particular sample
+1. **The equivalence obligation.** Every behavior in an interface must be reproduced by hand in its C++
+   model, and nothing checks that they agree. Zero-fill plus two counters is ten obvious lines; a
+   multipath channel with fractional delays and Doppler is a DSP library you would then have to prove
+   bit-exact against numpy.
+2. **Inter-block state.** A multipath channel has memory spanning block boundaries (overlap-save, a
+   Doppler phase accumulator). `RFSampIF` is stateless with respect to signal *content* — it moves whole
+   blocks and accounts for loss. `plans/rfsoc_4x2_bringup.md` already specifies `Channel` as sparse FIR
+   plus Doppler with exactly this discipline.
+3. **Asymmetric cost.** Adding a `Channel` later is purely additive — a new pysim-only module, no
+   interface change, no C++ change, no re-gated model. Removing behavior from an interface later means
+   rewriting its C++ model and re-verifying the gate. "Add it later" is true in one direction only.
+
+**Two of the three are already covered elsewhere:**
+
+- **Bulk delay is `t0`.** Sample *n* arrives at `t0 + n/fs`, so raising `t0` delays everything. Only
+  *fractional* and *per-path* delays are filters, and those are `Channel`.
+- **Gain is not an interface property.** It interacts with quantization, which is the `Rfdc`'s job.
+  Split it the way the hardware does: a `full_scale` reference on the `Rfdc`, path loss in the
+  `Channel`. Accept a scalar gain on the edge and the next request is frequency-dependent gain — a
+  filter in the transport layer by accident.
+
+## `RfSampBuf`
+
+The first synthesized digital-logic block: a time-stamped, packetized interface to the RFDC.
+
+**TX side:** `Data loader → TX buffer → TX player`. The player reads out continuously and circularly —
+the buffer is a **circular buffer, not a FIFO**, and there are no dropped samples. The loader takes a
+transactional command:
+
+`TxCmd`: `tid` (transaction ID), `samp_ind_start` (index in the buffer for the first sample), `nsamp`,
+`data_addr` (address of the `(nsamp, ntx)` row-major samples).
+
+**RX side:** `RX stream IF → RX buffer → Data capture`. The RX stream IF is a free-running task
+continuously filling the buffer; Data Capture takes an `RxCmd` to capture from a given sample index.
+
+### What is expressible today
+
+- **Make the in-band variant primary.** Data streaming in-band *after* the `TxCmd` is precisely the
+  `mem_copy` / interleaver shape (framed command, then forwarded payload) and is XSI-proven. The
+  two-port-BRAM version with the PS writing port A is a **block-diagram** structure (Block Memory
+  Generator + AXI BRAM Controller), not an HLS interface: Waveflow has no BRAM-port endpoint type and
+  Flow 3 is not built. Keep it as the Flow-3 note.
+- **`data_addr` is not blocked.** `m_axi` coexists with an `ap_ctrl_none` `hls::task` top — see the
+  generated `mem_copy.cpp`, carrying `m_axi ... offset=slave` alongside `ap_ctrl_none`. What to verify
+  before betting on it: the *host-writable offset register* story under `ap_ctrl_none`. An address the
+  PS must write is a different claim from one that arrives in-band.
+- **Watch the AXI-Lite hole.** `BFM_DUALS` carries `axilite_slave` with **`model = None`** — no BFM
+  answers an AXI4-Lite control slave, so a regmap-controlled `RfSampBuf` **cannot be XSI-lowered** until
+  `design_cut.md` S7 fills it. The in-band design sidesteps this; a regmap design walks into it.
+- **Moving a module across a cut is not yet safe.** Re-cutting currently emits a top that does not
+  compile, with no diagnostic (the body's word type and the boundary port's disagree). RTL-unit-testing
+  `RfSampBuf` apart from its neighbours is `design_cut.md` S5, and needs its own measured gate.
 
 ## Synchronization
 
-It is important that the the counters on the Tx and Rx are aligned across antennas and between TX and RX.  So, receive sample 0 has a fixed time relation with TX sample 0.  This needs careful design in the digital logic (somehow? maybe via shared counters).  Also, somehow MTS needs to be configured.  
+TX and RX sample counters must be aligned across antennas and between TX and RX, so receive sample 0
+holds a fixed time relation to TX sample 0.
 
-Claude Comments
+- **Modelable, and checkable today.** `t0` plus the sample rate defines the grid (above); alignment is an
+  assertion on sample indices in pysim and on beat counts in XSI.
+- **Not modelable.** MTS is a bring-up procedure (SYSREF distribution, tile calibration). It enters the
+  model as a measured `t0` offset and nothing more. Pretending to simulate it would be worse than
+  declaring it out of scope.
 
-Structural issues
+## Fidelity boundary
 
-> **[2026-08-11] Point 1 below is SUPERSEDED — see `plans/design_cut.md`.** The `ExternalIP` / `ExtMod`
-> proposal ("a third kind") was **rejected** on further review: it freezes a *per-build role* into a
-> *class fact*. The boundary is already derived from the graph (`hw_freerun.py::boundary` — an endpoint
-> not bound to an internal interface **is** a boundary port), and `MemRStream` is already realized both
-> ways today (its own top, XSI gate 158; a task inside `mem_copy`, gate 2835). The resolution is **one
-> `HwModule` with two symmetric optional hooks** — `kernel_task()` (inside the cut) and `bfm_model()`
-> (outside it) — with the cut chosen per build and `check(mod, target)` answering lowerability.
-> `adc_model.md` is **parked** until `design_cut.md` lands; it then reduces to "three plain
-> `HwModule`s". Points 2-8 and the gaps below are unaffected. (The "Nits" reference to "the ExternalIP
-> framing" reads as "the `bfm_model()` hook" instead.)
+Feedforward DSP — filters, FFTs, channelizers, mixers, matched filters — is **block-perfect** at this
+granularity. **Sample-level feedback loops** (carrier recovery, timing recovery, AGC) have dynamics block
+granularity cannot resolve; model those functionally or at finer grain. Most SDR receivers contain at
+least one.
 
-1. RFDCEmulator is not a HwModule in today's vocabulary — and that's the interesting part.
+Channels and stateful DSP have memory spanning block boundaries, so those SimObjs **must** carry state
+across blocks (overlap-save; a Doppler phase accumulator). Bake it in from day one or get discontinuities
+at every block edge.
 
-The sketch says it "is a HwModule that will synthesize to an XSI testbench task." Nothing does that. XSI TB participants are SimObjs that declare bfm_model() returning a BfmModel naming a hand-written C++ class (composite_gen.py:98); HwModules lower to hls::task bodies inside the DUT. Those are different sides of the boundary.
+## Bit-exactness
 
-But the sketch is reaching for something real that neither side covers: in Flow 3 the RFDC is a node in the system graph — it just gets realized as vendor IP instantiated by IPI TCL rather than generated. That is a third kind, and naming it now is the highest-value thing this plan can do:
+"Evaluate the effect of bit widths in Python" means the quantizer must be the integer-backed
+`FixedField`, and sample↔word packing must go through the generated `<stem>_array_utils.h` twins.
+**Never hand-roll `.range()` packing**; the bug it causes hides at the degenerate widths.
 
-ExternalIP — a graph node whose behavior is Python, and whose realizations are (a) a pysim run_proc, (b) a hand-written XSI BFM class, (c) an IPI create_bd_cell + set_property CONFIG.* block. The invariant across all three is the AXIS boundary contract (width, packing, framing, rate).
+## Golden / acceptance test
 
-That framing is what makes your Flow-3 requirement — "the digital logic should not have to change its interface" — a checkable property rather than a hope, and it generalizes past RFDC (BRAM controller, DMA, SmartConnect). It also slots cleanly into codegen_targets.py, where bitstream is already a declared-but-unimplemented name.
+The natural golden is the **channel sounder**: transmit a known sequence (Zadoff–Chu / PN), pass it
+through the sparse-FIR + Doppler channel, correlate at RX to estimate the CIR, and compare against the
+channel that was configured. Trivially checkable, and it exercises the overlap/state discipline.
 
-2. The RFDC is not backpressure-honest, and the existing BFMs will hide exactly the bug you care about.
+## Staging
 
-This is the strongest technical reason for an RFDC-specific model, and it's absent from the plan. AxisMaster/AxisSlave and pysim's StreamDriver/StreamSink model a well-behaved AXIS peer: the master waits when TREADY is low, the sink is always ready. The RFDC is neither. Per your own circ_buf_fac.md:134-148: the DAC consumes one beat every clock and backpressure does not protect you — a missed beat is an underflow, an analog glitch, not a stall. Symmetrically the ADC produces one beat every clock regardless of TREADY; a slow consumer drops samples.
+1. **`Rfdc` + `RFSampIF` + `RfDataSource`/`RfDataSink` + a trivial pass-through DUT, pysim only.**
+   — **DONE 2026-08-12** (branch `rf-stage1`). Assert declared-exact underrun/overrun and a byte-identical
+   loopback. No RTL, no DSP. Deliberately small: it exercises the kind question, the
+   underflow/overflow contract, the param split, the absolute-grid metronome and `t0` — every
+   structural decision above — before any is expensive to change.
 
-So both the pysim model and the BFM need non-blocking variants that count the violations:
+   Landed as `waveflow/hw/rf_sample_if.py`, `waveflow/simulation/rf_tb.py`,
+   `examples/rf_loopback/`, `tests/hw/test_rf_sample_if.py` (20),
+   `tests/examples/test_rf_loopback.py` (29). Gates: byte-identical loopback (source bundle ==
+   sink bundle on disk); `underrun == 0 and overrun == 0`; both counters driven off zero against
+   *predicted* values (a producer 2.5 periods late → underrun 2; a sink stalled after 1 block →
+   overrun `n_blk − 1 − depth`, checked at two depths); the metronome demonstration in both halves;
+   `check(RfDataSource, "xsi_bfm_model")` False with the hook named. No toolchain needed and
+   `waveflow/hw/interface.py` was not touched, so the XSI cycle gates are untouched by construction.
+2. **The same graph under XSI.** *Depends on `plans/behavioral_edges.md`.* Write `RfdcAdcMaster` /
+   `RfdcDacSlave` and the `RFSampIF` channel model, land the counter-equivalence gate, record a cycle
+   gate.
+3. **`RfSampBuf`, in-band variant** — pysim → csynth → XSI.
+4. **`Channel`**, then loopback with a real DSP block (decimating FIR / DDC), then the channel sounder.
 
-RfdcDacSlave — always ready; after the first beat, every cycle with TVALID low is an underrun. Assert zero.
-RfdcAdcMaster — presents a beat every cycle unconditionally; every cycle with TREADY low is a dropped sample. Assert zero.
-Without this, a design that fails on hardware passes in both sim backends — the "deadlock looks like success" failure mode in a new costume. Make "underrun/overrun count == 0" the gate assertion for every RFDC-connected example.
+## Stage-1 deviations from this plan
 
-3. Most of the parameter list is HwParam, not DynParam.
+Recorded here rather than silently absorbed, because two of them change what the sections above say.
 
-n_rx, n_tx, nbits, iq_mode and the samples-per-beat factor determine the AXIS word layout — which the synthesized logic must be built against. They bind at elaboration and are shared with the DUT; distinct values are distinct artifacts. Only samp_rate, rx_freq/tx_freq, and the vector file paths are genuinely init-time. Splitting them is not pedantry: if nbits is a DynParam you can set it to a value the generated RTL cannot represent, and nothing will complain.
+**1. `t0` is one epoch *per tile*, not one per converter.** The plan says "one source sets it for
+every interface the `Rfdc` binds", which reads as one *value*. Building it showed that is a fiction:
+ADC and DAC are separate tiles, started separately, and the plan itself says elsewhere that they
+routinely run at different rates. So the `Rfdc` owns **`t0_rx` and `t0_tx`**. The argument the plan
+actually rests on survives intact and is arguably strengthened — what makes TX/RX alignment
+structural is that the two epochs have one **owner**, which gives their difference a fixed, known
+value; it was never that they have one value.
 
-Concrete landmine on the ones that do stay DynParam: discover_dyn_params skips falsy values (hw_module.py:150) — rx_freq = 0.0 (baseband!) and iq_mode = False emit nothing and silently take the C++ default. Both are ordinary values here. Either sentinel them or fix the discovery predicate before relying on it.
+This surfaced as a *gate failure*: with both epochs at zero the loopback underran exactly once. The
+DAC grid is a metronome, not a queue — it emits a block whether or not the samples have finished
+their trip through the fabric — so a loopback must start the DAC tile later than the ADC tile by at
+least the fabric round trip. The converter was behaving correctly and the design was wrong, which is
+precisely the failure the counters exist to expose. It is now a documented example rather than a
+surprise.
 
-4. Your design question — a custom tx_rf/rx_rf interface — mostly dissolves.
+**2. The RX-side queue depth belongs to `RFSampIFRx`, not to `RFSampIF`.** The plan lists "a buffer
+`depth`" among the interface's parameters. There are *two* physical buffers on this path — the
+producer-side one the metronome drains (interface-owned, what `put()` blocks on) and the receiver's
+own input queue (what overrun is measured against). Keeping the second on the endpoint keeps each
+where it physically lives and makes the overrun prediction a function of the receiver's depth.
 
-The hard part you named ("numpy arrays in Python and C++ arrays in XSI") only exists if the RF boundary must cross into XSI. It doesn't. In use case 2 the RF environment is restricted to file sources/sinks, so the honest lowering is: quantize in Python, write a burst bundle, drive the RTL with the existing AxisMaster. The RF-domain interface then never exists in C++ at all, and you inherit the project's established "one on-disk bundle drives both backends, so both provably play identical bytes" discipline (stream_tb.py:38-51).
+**3. Placement.** `RFSampIF` is its own module (`waveflow/hw/rf_sample_if.py`) rather than an
+addition to `interface.py` — `interface.py` is already ~1160 lines and is the file the XSI flow
+depends on, so keeping it untouched made the whole stage a zero-risk change to existing gates.
+`RfDataSource`/`RfDataSink` are **framework** (`waveflow/simulation/rf_tb.py`, beside `stream_tb.py`)
+rather than example code, for the reason recorded in `stream_tb`'s own docstring.
 
-So: build one sim-only block interface (numpy (n_rx, blksize) transfer, @sim_only, master-pull) for use case 1 only. Note the existing bundle format is UINT64 words — RF-domain float/complex vectors need a format decision, but it's a Python-side one.
+**4. The RF bundle format open question is answered for stage 1 only.** One burst per block,
+`n_ch × blksize` words row-major, each word one `float64` sample through
+`write_array`/`read_array` over `FloatField.specialize(bitwidth=64)`. The existing `uint64` burst
+bundle already carries per-burst boundaries, which *is* the block framing, so no new file format
+appears. Complex and fixed-point RF vectors are stage 2/4 and will need a manifest field rather than
+a convention.
 
-The master-pull direction on rx_rf is a good call and worth stating why in the plan: pull = lazy channel evaluation, which is what lets the environment compute a block only when the converter needs it.
+**5. Two things are refused loudly rather than settled.** `n_rx`/`n_tx` > 1 raises and names the
+open question (how many AXIS ports a multi-channel tile presents decides how many BFM duals a
+testbench needs); `iq_mode = 1` raises as stage 2/4 work. The RF side is already general — one
+interface, `(n_ch, blksize)` — and is exercised at `n_ch = 4`.
 
-5. The missing parameter is the gearbox, SPC.
+**6. Added, not in the plan: the metronome fails loud if it cannot keep up.** A block body that
+outlasts a block period raises rather than slipping. Without it, the one case the absolute grid
+*cannot* absorb would degrade into exactly the silent drift the grid exists to prevent.
 
-Samples-per-beat is the number that ties everything together: f_axis = samp_rate / SPC fixes the fabric clock, and SPC × nbits fixes the AXIS width. It's the anchor for the CDC model, the rate model, and the packing layout — and it's fully worked out in circ_buf_fac.md:154-190 (time-ascending from the LSBs) but absent from the param list here. Add it, and cite that layout section as the packing contract rather than re-deriving it.
+## Docs
 
-Related: the bit-exactness goal in use case 1 ("evaluate the effect of bit widths in python") means the quantizer must be the integer-backed FixedField, and the sample↔word packing must go through the generated <stem>_array_utils.h twins — not hand-rolled .range() math. That's a standing rule in this codebase and the bug it prevents hides at the degenerate widths.
+Written as the stages land, not at the end — the concepts here are the kind that get mis-taught if the
+page is written from the plan rather than from the working code. **A page is earned when the thing it
+describes has been built and exercised**, so the schedule below is not "when convenient" but "when the
+claims become checkable".
 
-6. RFSampBuf as drawn is a Flow-3 system, not a kernel.
+| written after | pages | why then |
+|---|---|---|
+| **stage 1** (pysim) — **WRITTEN** | `rf/index.md`, `rf/sampling.md`, the pysim page of `examples/rf_loopback/`, the `flows/modules.md` row | Everything `sampling.md` teaches is exercised: block-LT, the `blksize` knob, the absolute-grid metronome, `t0` and the sample grid. Its most valuable claim — *a relative `timeout` loop slips* — can be stated as a **demonstrated** failure, because the stage-1 gate deliberately yields in the body and shows the grid holding. |
+| **after `behavioral_edges` S1–S3** | `build/bfm.md` edit, `comp_codegen/xsi_tb.md` edit, the mechanism half of `interface/behavioral.md` | The channel primitive and the second walk exist; "models may bind each other" and "`tb_top_spec` has two walks" become descriptions rather than intentions. |
+| **stage 2** (XSI) | `rf/converter.md`, the XSI page of `examples/rf_loopback/`, `RFSampIF` as the worked example in `interface/behavioral.md` | The AXIS side and **both** rate conversions only exist here. Written earlier, `converter.md` would be half plan. Its underflow/overflow section is *drafted from* stage 1's gate but only complete once the BFM counters exist to agree with the pysim ones. |
+| **stage 4** (DSP + channel) | `rf/fidelity.md` | The page I was keenest on is the **least** earned early. Stage 1 has no DSP at all, so every claim about block-perfect feedforward vs. unresolvable sample-level feedback would be written from the plan — the exact failure this schedule exists to prevent. It becomes writable when the FIR/DDC and the channel sounder can demonstrate both halves. |
 
-"Two-port BRAM, PS writes port A" is a block-diagram structure (Block Memory Generator + AXI BRAM Controller), not an HLS interface — Waveflow has no BRAM-port endpoint type and Flow 3 isn't built. The variant that is expressible today is the alternative you already floated: in-band data following the TxCmd, which is precisely the mem_copy/interleaver shape (framed command → forwarded payload) and is XSI-proven. I'd make in-band the primary design and the shared-BRAM version the Flow-3 note.
+**If these pages cite numbers, extend `test_documented_numbers.py` to cover them.** It covers calibration
+figures only — not cycle counts — which is why the stale `2835/3469` gate numbers survived in `CLAUDE.md`
+and two docs pages for weeks with every test green. A number in a doc that nothing checks *will* rot.
 
-On data_addr: m_axi in a free-running ap_ctrl_none hls::task top is proven — see the generated mem_copy.cpp, which carries m_axi ... offset=slave alongside ap_ctrl_none. So a descriptor carrying an address isn't blocked. What I'd verify before betting on it is the host-writable offset register story under ap_ctrl_none — an address the PS must set is a different claim than an address that arrives in-band.
+*(Done for stage 1: two checks recompute the metronome table and the four loss counts by re-running
+the scenarios. Both earned their keep immediately — the first caught two wrong cells in `sampling.md`'s
+table on its first run, and it had to be tightened to match whole table cells because "1 s" is a
+substring of "0.1 s" and the loose form passed on the wrong table.)*
 
-7. Synchronization needs to become a contract, not a to-do.
+**One stage-1 docs deviation.** The underflow/overflow contract is written in `sampling.md`, not held
+back for `converter.md`. The counters live on `RFSampIF`, so a page describing that edge without them
+would describe an object without its contract. What *is* held back is the half `converter.md` was
+scheduled for: the AXIS-side counters and the pysim/RTL equivalence gate, which do not exist. The page
+says so.
 
-The section currently says "somehow (maybe via shared counters)". Split it into the part that is modelable and the part that isn't:
+| page | status | what it says |
+|---|---|---|
+| `guide/rf/index.md` | **new** | A new guide section. Why an RF converter is not just another AXIS peer, and the three-block decomposition. |
+| `guide/rf/sampling.md` | **new** | **The block-LT sampling model** — the core concept. Block = the transaction, numpy = the function, block duration = the timing. Why one SimPy event per block and not per sample; `blksize` as the fidelity/speed knob; the absolute-grid metronome and why relative `timeout` slips; `t0`, the sample grid, and alignment as a derived assertion. |
+| `guide/rf/converter.md` | **new** | The `Rfdc` module: the AXIS packing contract (pointing at `circ_buf_fac.md`'s layout, not restating it), `samp_per_word` vs. the two derived rate conversions, quantization via `FixedField`, and **the underflow/overflow contract** — backpressure protects against over-production and nothing protects against under-production, so the counters are the gate. |
+| `guide/rf/fidelity.md` | **new** | What this modeling style *cannot* tell you: block-perfect feedforward DSP vs. unresolvable sample-level feedback loops; the overlap-state requirement. A page that states limits, which the guide is currently thin on. |
+| `guide/interface/behavioral.md` | edit *(created by `behavioral_edges.md`)* | Add `RFSampIF` as the worked example of a behavioral edge. |
+| `guide/flows/modules.md` | edit | One row in the kinds table: a module with **neither** hook is a pysim-only node, and `Channel` is the canonical example. The table currently implies every module has a realization. |
+| `docs/examples/rf_loopback/` | **new** | The worked example behind stage 1 — the ADC arc's `mem_copy`. Python model → the underrun/overrun gate → the XSI cut. Follows the existing per-example page structure. |
 
-Modelable: define a single sample-index time base (sample 0 at t=0) plus a per-tile constant latency parameter; TX/RX alignment becomes an assertion on sample indices in pysim and on beat counts in XSI. This is checkable today.
-Not modelable: MTS is a bring-up procedure (SYSREF distribution, tile calibration). Model it as "a fixed, measured offset parameter", and say so — pretending to simulate it would be worse than declaring it out of scope.
-8. This plan overlaps rfsoc_4x2_bringup.md substantially, with different names.
+Two documentation rules that apply, both existing discipline: reference flow steps **by name** with a
+link, never a hard-coded "Step N"; and any figure (the sample grid and `t0` offset would earn one) goes
+through the committed TikZ → SVG workflow.
 
-That plan already specifies RfdcAdc / RfdcDac / Channel, the block-LT architecture, the inter-block overlap-state discipline (channels and stateful DSP must carry state across block boundaries), and — importantly — the fidelity boundary: feedforward DSP is block-perfect, sample-level feedback loops (AGC, carrier/timing recovery) are not resolvable at block granularity. Two divergent component sets for the same thing is the failure mode here. I'd either fold adc_model.md in as the component-level spec that page's "Components to model" section points to, or explicitly supersede it — and pull the overlap-state and fidelity-boundary paragraphs into this plan, since both bite RFDCEmulator directly.
+**Docs gates:** `tests/docs/test_markdown_integrity.py`, `tests/docs/test_documented_numbers.py`.
 
-Gaps worth a section each
-Golden / conformance. Every accelerator in this repo that worked has a conformance twin and a checkable golden. For RF, the natural one is the channel sounder from the bring-up plan: transmit a known sequence, correlate at RX, compare the estimated CIR to the channel you configured. State it as the acceptance test.
-Staging. No milestone ordering. Suggested first gate, deliberately small: RFDCEmulator + RFDataSource/RFDataSink + a trivial pass-through DUT, pysim only, asserting zero underrun/overrun and a byte-identical loopback. No RTL, no DSP. That exercises the kind question (#1), the backpressure contract (#2), the param split (#3), and the file-bundle boundary (#4) — i.e. every structural decision above — before any of them is expensive to change.
-Nits: §RFDataSource says tx_if, should be tx_rf. "Emulator" vs "model" is used interchangeably — worth fixing on one, since under the ExternalIP framing the same class is a model in sim and a binding to real IP in Flow 3.
-Want me to fold this into plans/adc_model.md as a revised draft (restructured around the ExternalIP framing with the param split and milestone list), or leave the sketch as yours and add a review-notes section at the bottom?
+### Two corrections the build forced (2026-08-12, second pass)
+
+**7. `t0` is a scalar, not a per-channel vector.** The vector was meant to hold channel-to-channel
+skew and the transport ignored it: every channel rides one `(n_ch, blksize)` block delivered by one
+event, so no per-channel offset could change when samples arrive. Its only consumers were `min(t0)`
+(the grid anchor) and a reporting accessor — recordable, never applied, and able to report a skew the
+model did not exhibit. The category error: **`t0` is an epoch** (when a counter starts, a *tile*
+property) while **skew is a delay** (how much later a path delivers, a *path* property). Applying skew
+means shifting samples inside a block, i.e. signal processing, which an edge does not do. A vector is
+now refused by `set_t0`.
+
+This is the third candidate the transport-not-signal-processing rule has caught, after gain and
+delay, so the operational form is now stated in `plans/behavioral_edges.md` and in the module
+docstring: **if the edge can only record a quantity and never apply it, it does not belong on the
+edge** — checkable by grepping for who reads the field.
+
+**8. The loop's one-block cost is declared by the pipeline, not bought with a tile offset.** The
+first pass gave the DAC epoch a `dac_lag_blk` head start so the loopback would come out clean. That
+was backwards twice over: it made an impossible configuration *constructible* and then steered away
+from it with a default, and it modelled a tile stagger that MTS exists to prevent. It also justified
+itself with the measured fabric round trip, inviting a sub-block lag — i.e. leaning on exactly the
+timing block-LT does not resolve.
+
+The correction. A loop through the RF grids costs **at least one block index, structurally**: the ADC
+delivers block *k* at the instant the DAC period for it comes due, so no fabric speed closes it. So
+`t0_rx == t0_tx` (aligned tiles, what MTS gives you), a block-processing module declares
+`blk_latency >= 1`, and `blk_latency = 0` is **refused at elaboration** — a loop that claims to be
+free is not a slow system, it is not a system. The resulting first-block underrun is not a fault but
+the **startup transient**, which is physical and is why real designs prime a buffer before enabling a
+tile. `assert_clean(startup_blocks=N)` checks it *exactly* and checks the grid index too, so an
+over-declared latency fails and a steady-state fault cannot hide inside a transient's budget. The
+declaration is therefore checked, not trusted — it passes the rule in correction 7.
+
+Alignment and latency stay separate quantities: alignment is *when a grid ticks*, `blk_latency` is
+*which block each tick carries*. Neither has to fudge the other.
+
+## Relationship to other plans
+
+- `plans/design_cut.md` — supplies the component-kind answer. S5 (cut-aware `kernel_task()`) and S7 (the
+  AXI-Lite dual) are the two stages this plan can bump into.
+- `plans/behavioral_edges.md` — **stage 2 depends on it.** `RFSampIF` is its motivating case.
+- `plans/rfsoc_4x2_bringup.md` — system/board context: block-LT architecture, Vivado TCL autogen, the
+  archival contract for a reference design. **This plan supersedes its two-block `RfdcAdc`/`RfdcDac`
+  sketch**; everything else there stands.
+- `plans/circ_buf_fac.md` — the packing layout and the timing correction on flow control. Cite; do not
+  re-derive. Note the `SPC` / `samp_per_word` name collision.
+
+## Open questions
+
+- ~~Bundle format for RF-domain complex/float vectors (the existing format is UINT64 words).~~
+  **Answered for real `float64` at stage 1** (see deviation 4): one burst per block, one `float64`
+  per UINT64 word, through the sanctioned array serializers. Still open for **complex** and
+  fixed-point vectors, which need a manifest field rather than a convention.
+- Where does the DDC/DUC live — inside `Rfdc` (matching the real IP's digital mixer) or as a separate
+  modelled block? The real IP has it; a separate block is easier to make bit-exact.
+- `n_rx`/`n_tx` > 1: one AXIS port per channel or one wide port? The real RFDC's answer depends on tile
+  configuration, and it determines how many duals the testbench needs. *(This is the AXIS side only —
+  the RF side is settled: one interface, `(n_ch, blksize)`.)*

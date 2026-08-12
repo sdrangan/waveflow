@@ -128,11 +128,27 @@ A module's C++ is either derived from its Python or handed over ready-made. Hand
 |---|---|---|
 | [`kernel_task()`](../custom_hooks/writing.md) | "my `hls::task` body is *X*" | a task **inside** the generated top |
 | [`bfm_model()`](../custom_hooks/bfm_model.md) | "my cycle model is *Y*" | an `XsiSimObj` **beside** the top |
+| *neither* | nothing — there is no pre-written artifact | **nothing is emitted**: a pysim-only node |
 
 A module may declare either, both, or neither. **Neither is not an error** — it is a plain `HwModule`
 that never leaves simulation, and that is a *finding* from `check`, not something the class states
 about itself. (Overriding is the declaration: the base `bfm_model()` raises, and `declares_hook()`
 detects the override by identity, exactly as `_kind()` detects a `run_iter` override.)
+
+The third row is easy to read past, so it is worth naming a real one. The canonical pysim-only nodes
+are the [RF environment](../rf/) participants — `RfDataSource` and `RfDataSink`, and today the
+`Rfdc` converter with them:
+
+```pycon
+>>> check(RfDataSource, "xsi_bfm_model")
+(False, 'RfDataSource declares no bfm_model() hook, so it has no pre-written cycle model ...')
+>>> potential_targets(RfDataSource)
+frozenset()
+```
+
+They exist in the Python graph and nowhere else, and asking `check` is how you find that out. Note
+this is a statement about *today's build*, not about the class: a module acquires a hook when
+somebody writes one, and nothing else about it changes.
 
 Note what a hook is *not*: it is not a kind. `MemRStream` hands over an entirely hand-written
 `hls::task` body and lives **inside** a synthesized kernel; `StreamDriver` hands over an entirely
