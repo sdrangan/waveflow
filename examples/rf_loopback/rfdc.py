@@ -1,0 +1,258 @@
+"""rfdc.py — :class:`Rfdc`, a model of an RF data converter presenting the real IP's interfaces.
+
+Named ``Rfdc``, not ``RFDCEmulator``: "emulator" describes only one of its three realizations.  In
+pysim it is a behavioural model; in XSI (stage 2) it becomes a BFM beside the generated top; in a
+bitstream build it is replaced by the real AMD RFDC IP — and **the digital logic must not have to
+change its interface** across any of those.
+
+**One module carrying both directions**, not separate ADC / DAC blocks.  The reason is
+synchronization: the TX and RX sample counters must hold a fixed relation, and that is a property
+*of the converter*, not of two unrelated blocks.  It is also what lets :attr:`t0` have exactly one
+owner (see :meth:`on_rf_bind`).
+
+**Reactive on the RF side.**  The metronome lives in
+:class:`~waveflow.hw.rf_sample_if.RFSampIF`, so this module has no timer of its own: it responds to
+block arrivals on the ADC path and to word arrivals on the DAC path.
+
+Stage 1 scope (``plans/adc_model.md``): real-valued samples, one RF channel per direction on the
+AXIS side.  ``n_rx``/``n_tx`` > 1 is an **open question** (one AXIS port per channel or one wide
+port — the real IP's answer depends on tile configuration, and it determines how many BFM duals a
+testbench needs), so it is refused loudly rather than settled by a throwaway choice here.  The RF
+side is already general: one interface, ``(n_ch, blksize)``.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from waveflow.hw.fixpoint import FixedField, from_real, to_real
+from waveflow.hw.hw_module import DynParam, HwModule, HwParam
+from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
+from waveflow.simulation.simobj import ProcessGen
+from waveflow.utils.fixputils import OMode, QMode
+
+
+@dataclass
+class Rfdc(HwModule):
+    """An RF data converter: AXI-Stream to and from the programmable logic, RF sample blocks to and
+    from the environment.
+
+    Endpoints
+    ---------
+    ``rx_rf`` / ``rx_stream``
+        The **ADC** path — RF blocks in from the environment, AXIS words out to the PL.
+    ``tx_stream`` / ``tx_rf``
+        The **DAC** path — AXIS words in from the PL, RF blocks out to the environment.
+
+    The two AXIS endpoints **cross the cut** and take BFM duals in stage 2; the two RF endpoints do
+    not cross it, so they need no dual — but they exist in both backends, which is what
+    ``plans/behavioral_edges.md`` is for.
+    """
+
+    # -- build-time structure: what the synthesized logic is built against -----------------------
+    #: RF receive (ADC) channels.  Stage 1: 1.
+    n_rx: HwParam[int] = 1
+    #: RF transmit (DAC) channels.  Stage 1: 1.
+    n_tx: HwParam[int] = 1
+    #: Converter resolution in bits — the width of one sample on the wire.
+    nbits: HwParam[int] = 16
+    #: ``0`` = real samples, ``1`` = interleaved I/Q (doubles the bits per sample slot).  Stage 1
+    #: implements real only.
+    iq_mode: HwParam[int] = 0
+    #: Samples per AXIS word — the **structural** integer, because a sample cannot straddle a slot.
+    #: Port width is ``samp_per_word * nbits`` (x2 for interleaved I/Q).  There is deliberately no
+    #: ``spc``: everything else at this boundary is a *rate ratio*, derived and possibly fractional.
+    samp_per_word: HwParam[int] = 4
+
+    # -- init-time knobs -------------------------------------------------------------------------
+    #: The amplitude reference quantization is relative to: a sample of ``+full_scale`` maps to the
+    #: top of the converter's range.  A :class:`~waveflow.hw.hw_module.DynParam` — one artifact
+    #: serves every value.  Note the trap on this row: ``discover_dyn_params`` skips **falsy**
+    #: values, so a ``full_scale`` of ``0.0`` would emit nothing and silently take the C++ default.
+    #: Zero is meaningless for an amplitude reference, so it is refused in ``__post_init__``.
+    full_scale: DynParam[float] = 1.0
+
+    # -- t0: owned here, pushed to the interfaces at bind ----------------------------------------
+    #
+    # **One epoch per tile, both owned here.**  ADC and DAC are separate tiles on an RFSoC — they run
+    # at different sample rates and are started separately — so a single shared number would be a
+    # fiction.  What matters, and what the plan's "t0 is the synchronization primitive" argument
+    # actually rests on, is that the two epochs have **one owner**: their difference is then a fixed,
+    # known quantity of the converter rather than something emergent from scheduling coincidence.  On
+    # hardware that difference is exactly what MTS bring-up measures; in simulation it is whatever the
+    # design sets, and alignment (``n_rx / fs_rx == n_tx / fs_tx``) is derived from it and assertable.
+    #
+    #: When the **ADC** tile's sample counter starts.
+    t0_rx: float = 0.0
+    #: When the **DAC** tile's sample counter starts.  In a loopback this must be at least the fabric
+    #: round-trip later than :attr:`t0_rx`: the DAC grid does not wait for the pipeline, and a DAC
+    #: block period that arrives before its samples do is an underrun — zero-filled and counted,
+    #: which is precisely what the real converter does.
+    t0_tx: float = 0.0
+    #: Measured per-channel skew on the ADC path, added to :attr:`t0_rx`.  Empty = an unskewed tile.
+    rx_skew: tuple[float, ...] = ()
+    #: Measured per-channel skew on the DAC path, added to :attr:`t0_tx`.
+    tx_skew: tuple[float, ...] = ()
+
+    # A converter declares neither ``kernel_task()`` nor ``bfm_model()`` at stage 1, so it is a
+    # pysim-only node and ``check`` says so — the base's empty ``potential_targets`` is already that
+    # statement, and restating it here would only be a second place to keep in step.  Stage 2 adds
+    # ``bfm_model()`` naming ``RfdcAdcMaster`` / ``RfdcDacSlave``.
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if int(self.n_rx) != 1 or int(self.n_tx) != 1:
+            raise NotImplementedError(
+                f"Rfdc stage 1 supports n_rx == n_tx == 1 on the AXIS side (got n_rx={int(self.n_rx)}, "
+                f"n_tx={int(self.n_tx)}). Whether >1 channel is one AXIS port per channel or one wide "
+                f"port is an open question in plans/adc_model.md — it decides how many BFM duals a "
+                f"testbench needs, so it is not settled here. The RF side is already general: one "
+                f"RFSampIF carrying (n_ch, blksize).")
+        if int(self.iq_mode) != 0:
+            raise NotImplementedError(
+                f"Rfdc stage 1 implements real samples only (iq_mode=0), got {int(self.iq_mode)}. "
+                f"Interleaved I/Q doubles the bits per sample slot and needs the complex bundle "
+                f"format, which is stage 2/4 work.")
+        if not self.full_scale or float(self.full_scale) <= 0:
+            raise ValueError(
+                f"Rfdc.full_scale must be a positive amplitude reference, got {self.full_scale!r}. "
+                f"(0.0 is doubly wrong here: it is meaningless *and* falsy, so discover_dyn_params "
+                f"would skip it and the generated model would silently take its C++ default.)")
+        w = self.axis_bitwidth
+        if w > 64:
+            raise ValueError(
+                f"Rfdc: AXIS word is samp_per_word * nbits = {int(self.samp_per_word)} * "
+                f"{int(self.nbits)} = {w} bits, wider than the 64-bit stream word.")
+
+        #: The element type one sample is quantized to: ``ap_fixed<nbits, 1>`` over [-1, 1), rounding
+        #: and **saturating** — a converter clips, it does not wrap.  Integer-backed, so it is
+        #: bit-exact with the Vitis type rather than a float approximation of it.
+        self.SampType = FixedField.specialize(int(self.nbits), 1, signed=True,
+                                              q_mode=QMode.AP_RND, o_mode=OMode.AP_SAT)
+
+        self.rx_rf = RFSampIFRx(sim=self.sim, name=f"{self.name}_rx_rf")
+        self.rx_stream = StreamIFMaster(sim=self.sim, name=f"{self.name}_rx_stream",
+                                        bitwidth=w, has_tlast=True)
+        self.tx_stream = StreamIFSlave(sim=self.sim, name=f"{self.name}_tx_stream",
+                                       bitwidth=w, has_tlast=True)
+        self.tx_rf = RFSampIFTx(sim=self.sim, name=f"{self.name}_tx_rf")
+        for ep in (self.rx_rf, self.rx_stream, self.tx_stream, self.tx_rf):
+            self.add_endpoint(ep)
+
+        # Read off the RF interfaces at bind (see on_rf_bind); None until then.
+        self.rx_samp_rate: float | None = None
+        self.tx_samp_rate: float | None = None
+        self.rx_blksize: int | None = None
+        self.tx_blksize: int | None = None
+        #: Blocks converted on each path — reporting, not a contract (the contract is the interface
+        #: counters).
+        self.n_adc_blk = 0
+        self.n_dac_blk = 0
+
+    # -- derived structure -----------------------------------------------------------------------
+
+    @property
+    def axis_bitwidth(self) -> int:
+        """AXIS word width in bits: ``samp_per_word * nbits`` (x2 for interleaved I/Q)."""
+        return int(self.samp_per_word) * int(self.nbits) * (2 if int(self.iq_mode) else 1)
+
+    # -- bind-time: read the rate, push the epoch ------------------------------------------------
+
+    def on_rf_bind(self, iface, ep_name: str) -> None:
+        """Called by :class:`~waveflow.hw.rf_sample_if.RFSampIF` when one of this module's RF
+        endpoints is bound.
+
+        Two reads in **opposite directions**, each where the quantity physically belongs:
+
+        - ``samp_rate`` lives on the interface's clock and is **read** here.  A converter declaring
+          its own copy would be a second declaration that could disagree — the same single-source
+          discipline as ``StreamIF.depth``.
+        - ``t0`` is owned **here** and **pushed** onto the interface, because it describes a tile's
+          sample counter rather than any one wire.  One source sets it for every interface this
+          module binds, which is how the two edges get a *fixed, known* relation without being one
+          object (see :attr:`t0_rx` / :attr:`t0_tx`).
+        """
+        skew = self.rx_skew if ep_name == 'rx' else self.tx_skew
+        epoch = self.t0_rx if ep_name == 'rx' else self.t0_tx
+        base = np.full(int(iface.n_ch), float(epoch))
+        if skew:
+            skew_vec = np.asarray(skew, dtype=float)
+            if skew_vec.size != int(iface.n_ch):
+                raise ValueError(
+                    f"Rfdc '{self.name}': {ep_name}_skew has {skew_vec.size} entries but the "
+                    f"interface carries {int(iface.n_ch)} channels")
+            base = base + skew_vec
+        iface.set_t0(base, owner=self)
+
+        if ep_name == 'rx':
+            self.rx_samp_rate = iface.samp_rate
+            self.rx_blksize = int(iface.blksize)
+        else:
+            self.tx_samp_rate = iface.samp_rate
+            self.tx_blksize = int(iface.blksize)
+
+    def pre_sim(self) -> None:
+        """Check the one rate relation the AXIS port physically cannot violate.
+
+        ``samp_rate <= samp_per_word * f_axis`` — a ratio above 1 means more samples arrive per
+        second than the port can carry, which is a design error, not something to simulate.  Fail
+        loud.  (The *fractional* part of that ratio is the credit accumulator the C++ model needs;
+        the Python model needs neither conversion — it works in seconds.)
+        """
+        for path, rate, ep in (('ADC', self.rx_samp_rate, self.rx_stream),
+                               ('DAC', self.tx_samp_rate, self.tx_stream)):
+            if rate is None:
+                raise RuntimeError(
+                    f"Rfdc '{self.name}': the {path} RF endpoint was never bound to an RFSampIF, so "
+                    f"there is no sample rate to check against the AXIS clock.")
+            if ep.interface is None or ep.interface.clk is None:
+                raise RuntimeError(
+                    f"Rfdc '{self.name}': the {path} AXIS endpoint has no bound interface/clock.")
+            f_axis = float(ep.interface.clk.freq)
+            cap = int(self.samp_per_word) * f_axis
+            if rate > cap:
+                raise ValueError(
+                    f"Rfdc '{self.name}': {path} sample rate {rate:g} Hz exceeds what the AXIS port "
+                    f"can carry — samp_per_word * f_axis = {int(self.samp_per_word)} * {f_axis:g} = "
+                    f"{cap:g} samples/s. Raise samp_per_word, widen the port, or lower the rate.")
+        if int(self.rx_blksize) % int(self.samp_per_word):
+            raise ValueError(
+                f"Rfdc '{self.name}': ADC blksize {int(self.rx_blksize)} is not a multiple of "
+                f"samp_per_word {int(self.samp_per_word)}; a sample cannot straddle a word.")
+        if int(self.tx_blksize) % int(self.samp_per_word):
+            raise ValueError(
+                f"Rfdc '{self.name}': DAC blksize {int(self.tx_blksize)} is not a multiple of "
+                f"samp_per_word {int(self.samp_per_word)}.")
+
+    # -- the two conversion paths ----------------------------------------------------------------
+
+    def run_proc(self) -> ProcessGen[None]:
+        """Run both directions concurrently: the DAC path as its own process, the ADC path here."""
+        self.process(self._dac_proc())
+        yield from self._adc_proc()
+
+    def _adc_proc(self) -> ProcessGen[None]:
+        """RF block in → quantize → pack → one AXIS burst out.
+
+        Quantization goes through the integer-backed ``FixedField``, and packing through the
+        generated array (de)serializers — never a hand-rolled ``.range()``.  That is what makes "evaluate
+        the effect of bit widths in Python" mean the same thing the RTL will do.
+        """
+        fs = float(self.full_scale)
+        while True:
+            blk = yield from self.rx_rf.get()
+            samples = np.asarray(blk.data, dtype=np.float64)[0]     # n_rx == 1 (stage 1)
+            quantized = from_real(samples / fs, self.SampType)
+            self.n_adc_blk += 1
+            yield from self.rx_stream.write(quantized)
+
+    def _dac_proc(self) -> ProcessGen[None]:
+        """One AXIS burst in → unpack → dequantize → RF block out."""
+        fs = float(self.full_scale)
+        while True:
+            quantized = yield from self.tx_stream.get(self.SampType, count=int(self.tx_blksize))
+            samples = to_real(quantized) * fs
+            self.n_dac_blk += 1
+            yield from self.tx_rf.put(samples.reshape(1, -1))
