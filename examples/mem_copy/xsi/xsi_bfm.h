@@ -23,29 +23,15 @@
 #include <vector>
 #include "xsi_loader.h"
 #include "xsi_bundle.h"
+// The participant lifecycle (pre_sim / sample / update / drive / post_sim).  It lives in its own
+// header because it is not a bus model: an edge model (xsi_channel.h) implements the same five
+// phases and must compile with no Vivado headers at all.  Included here so every existing user of
+// xsi_bfm.h still gets `wfbfm::XsiSimObj` exactly as before.
+#include "xsi_simobj.h"
 
 namespace wfbfm {
 
 typedef s_xsi_vlog_logicval LV;
-
-// ---------------------------------------------------------------------------
-// XsiSimObj — the lifecycle a testbench participant shares, mirroring Python's
-// SimObj: pre_sim -> (sample / update / drive, once per cycle) -> post_sim.  All
-// five phases are virtual with no-op defaults, so a passive participant (a memory)
-// overrides only pre_sim/post_sim while a per-cycle model overrides only
-// sample/update/drive.  The Harness holds participants by base pointer and drives
-// each phase over one list, exactly as Simulation.run_sim() drives its SimObjs.
-// ---------------------------------------------------------------------------
-
-class XsiSimObj {
-public:
-    virtual ~XsiSimObj() = default;
-    virtual void pre_sim()  {}   ///< before reset: seed memory / load vectors from files
-    virtual void sample()   {}   ///< clk low: read kernel outputs, latch beat flags (VALID && READY)
-    virtual void update()   {}   ///< after the rising edge: apply this cycle's beats, advance FSMs
-    virtual void drive()    {}   ///< present held values for the next cycle
-    virtual void post_sim() {}   ///< after the run: dump results to files, collect metrics
-};
 
 // ---------------------------------------------------------------------------
 // Dut — typed port access over the XSI loader.
@@ -381,10 +367,19 @@ private:
 // XsiSim — open/close, the clock phases, reset, and pinning undriven inputs.
 // ---------------------------------------------------------------------------
 
+// The xsim engine ships under a different name per platform: xv_simulator_kernel.dll beside
+// Vivado's win64.o libraries, libxv_simulator_kernel.so under lib/lnx64.o.  run.bat and run.sh
+// each put the right directory on the loader path; this picks the matching file name.
+#ifdef _WIN32
+#  define WAVEFLOW_XSI_ENGINE "xv_simulator_kernel.dll"
+#else
+#  define WAVEFLOW_XSI_ENGINE "libxv_simulator_kernel.so"
+#endif
+
 class XsiSim {
 public:
     XsiSim(const std::string& design, const std::string& wdb,
-           const std::string& engine = "xv_simulator_kernel.dll")
+           const std::string& engine = WAVEFLOW_XSI_ENGINE)
         : xsi_(design, engine), d_(xsi_) {
         s_xsi_setup_info info; std::memset(&info, 0, sizeof(info));
         std::vector<char> wdbbuf(wdb.begin(), wdb.end()); wdbbuf.push_back('\0');
