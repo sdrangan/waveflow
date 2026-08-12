@@ -1476,8 +1476,9 @@ def _behavioral_edge_walk(tb, dut, boundary_parts: set, dyn_of) -> tuple[list, l
         channels.append(ChannelInst(cm.cls, chan, cm.extra_args, dyn_of(iface)))
         for side in cm.peers:
             part = parts[side]
-            peers.append(BfmInst(part.bfm_model().cls, f"{chan}_{side}", "",
-                                 part.bfm_model().extra_args, dyn_of(part), channel=chan))
+            bm = part.bfm_model()          # one call: the hook is the module's, not ours to re-run
+            peers.append(BfmInst(bm.cls, f"{chan}_{side}", "", bm.extra_args,
+                                 dyn_of(part), channel=chan))
     return channels, peers
 
 
