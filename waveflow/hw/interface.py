@@ -265,6 +265,48 @@ class Interface(SimObj):
         self.endpoints[ep_name] = endpoint
         endpoint.interface = self
 
+    # -- realization hook ---------------------------------------------------------------------
+    #
+    # The **edge-side twin** of a module's ``bfm_model()`` (``plans/behavioral_edges.md`` S1).  An
+    # interface is not only a wiring record — it may carry *behaviour and state*.  ``StreamIF.depth``
+    # is already an edge owning a physical property read by both backends; an edge with a ``run_proc``
+    # goes further, and this hook is how that behaviour reaches the XSI backend.
+    #
+    #   |        | module (node)                       | interface (edge)                          |
+    #   |--------|-------------------------------------|-------------------------------------------|
+    #   | pysim  | ``run_proc`` on a ``HwModule``       | ``run_proc`` on an ``Interface``          |
+    #   | XSI    | ``bfm_model()`` -> an ``XsiSimObj``  | ``xsi_model()`` -> an ``XsiSimObj``       |
+    #   |        | bound to RTL pins                    | bound to **two peer models**              |
+    #
+    # An edge that declares it is a **behavioral edge**: both its endpoints lie outside the cut, so it
+    # needs no BFM dual (a dual answers a DUT port, and there is no DUT port here) but its peers must
+    # still exist as nodes — the endpoint set is invariant across backends.
+
+    def xsi_model(self) -> "object":
+        """The pre-written XSI **channel model** this interface is realized as when *both* of its
+        endpoints lie outside the cut — the edge-side peer of
+        :meth:`~waveflow.hw.hw_module.HwModule.bfm_model`.
+
+        Returns a :class:`~waveflow.build.composite_gen.ChannelModel`: the C++ class name, this
+        interface's two endpoint *side* names in constructor order (producer first), and any literal
+        extra ctor args.
+
+        **Declared, never derived** — the same anti-goal as ``bfm_model()``.  Nothing extracts a
+        cycle model from a SimPy ``run_proc``, and the C++ half is hand-written, so the bar for what
+        an edge may own is *"obviously the same in ten lines"*: rate, buffering, ordering and loss
+        accounting clear it; signal processing does not.
+
+        The base raises: overriding **is** the declaration, detected by identity via
+        :func:`~waveflow.hw.hw_module.declares_hook` — ``hasattr`` answers ``True`` for every
+        interface once this method exists here, which is the trap that predicate exists to close.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} declares no xsi_model() hook, so it has no pre-written channel "
+            f"model to place between two peer models. An edge whose endpoints both lie OUTSIDE the "
+            f"cut overrides xsi_model() to name one (see docs/guide/interface/behavioral.md); an "
+            f"edge that crosses the cut is a boundary port and takes a BFM dual instead."
+        )
+
 # ---------------------------------------------------------------------------
 # Shared base classes
 # ---------------------------------------------------------------------------

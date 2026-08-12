@@ -122,6 +122,34 @@ class BfmModel:
 
 
 @dataclass(frozen=True)
+class ChannelModel:
+    """The XSI **channel** a behavioral edge lowers to — the edge-side twin of :class:`BfmModel`.
+
+    A ``BfmModel`` says "this *module* is realized as model *X*, bound to these RTL pins".  A
+    ``ChannelModel`` says "this *interface* is realized as channel *X*, bound by these two peer
+    models".  The difference is the whole of what a behavioral edge is: both its endpoints lie
+    outside the cut, so there is no DUT port between them and no BFM dual to look up — but the edge
+    is not therefore invisible, because the endpoint set is invariant across backends.
+
+    * ``cls`` — the C++ channel class, e.g. ``"BlockChannel<uint64_t>"``.  Template arguments are
+      part of the name; the registry check strips them (a class exists, a specialization is a use).
+    * ``peers`` — this interface's **endpoint side names** (keys of ``Interface.endpoints``), the
+      producer first.  Side names rather than attribute names because an interface *owns* its sides —
+      the naming problem :class:`BfmModel` has, where ``ports`` must be attribute names because C++
+      constructor order is recorded nowhere else, simply does not arise here.
+    * ``extra_args`` — literal C++ ctor args, e.g. the depth.  What the channel needs and the graph
+      does not carry.
+
+    Order matters and is stated rather than inferred: ``peers[0]`` is the side that *pushes*.  A
+    channel is one-producer/one-consumer (multi-producer is deferred, ``plans/behavioral_edges.md``
+    S5), so a wrong order is a direction error, not a cosmetic one.
+    """
+    cls: str
+    peers: tuple[str, ...] = ()
+    extra_args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class IntChannel:
     """One internal channel of the generated top: its ``hls_thread_local`` decl + what it connects.
 
@@ -917,13 +945,39 @@ def bfm_dual_class(kind: str, declared: str | None) -> str:
 
 @dataclass(frozen=True)
 class BfmInst:
-    """One model construction in the generated testbench: ``<cls> <name>(dut, "<prefix>", <args>);``"""
+    """One model construction in the generated testbench.
+
+    Two shapes, and which one applies is decided by :attr:`channel`:
+
+    * a **boundary** model — ``<cls> <name>(sim.dut(), ports::<name>, <args>);`` — binds RTL pins;
+    * a **peer** model — ``<cls> <name>(<channel>, <args>);`` — binds a
+      :class:`ChannelInst` instead, because the port it would otherwise drive does not exist: both
+      ends of its edge lie outside the cut.
+    """
     cls: str
     name: str
-    xsi_prefix: str                  # the RTL port prefix this model drives
-    args: tuple[str, ...] = ()       # extra C++ args after the prefix
+    xsi_prefix: str                  # the RTL port prefix this model drives ("" for a peer model)
+    args: tuple[str, ...] = ()       # extra C++ args after the prefix / channel
     #: Init-time config to emit after construction as ``<name>.<field> = <expr>;`` -- one entry per
     #: DynParam the participant carries (field name, rendered C++ initializer).
+    dyn_params: tuple[tuple[str, str], ...] = ()
+    #: The :class:`ChannelInst` variable this model binds, or ``None`` for a boundary model.  Set
+    #: makes the construction take the channel in place of ``(sim.dut(), ports::<name>)``.
+    channel: str | None = None
+
+
+@dataclass(frozen=True)
+class ChannelInst:
+    """One channel construction in the generated testbench: ``<cls> <name>(<args>);``
+
+    The edge-side counterpart of :class:`BfmInst`, and it takes no ``sim.dut()`` because it binds no
+    RTL: a behavioral edge sits *between two models*.  Declared before both of its peers, which is
+    what puts its ``sample()`` first in every phase sweep and therefore makes the transfer
+    order-independent — see ``waveflow/build/xsi/xsi_channel.h``.
+    """
+    cls: str
+    name: str
+    args: tuple[str, ...] = ()
     dyn_params: tuple[tuple[str, str], ...] = ()
 
 
@@ -935,6 +989,9 @@ class TbSpec:
     #: DynParams (load_segs/dump_segs) attach here, not to the per-bundle models, so they emit once.
     shared: tuple[tuple[str, str, tuple[str, ...], tuple[tuple[str, str], ...]], ...] = ()
     models: tuple[BfmInst, ...] = ()
+    #: Behavioral edges — one per TB interface with **neither** endpoint on the DUT boundary.  Empty
+    #: for every design that has only boundary edges, which is every design built before this existed.
+    channels: tuple[ChannelInst, ...] = ()
 
 
 def _find_dut(tb):
@@ -1088,6 +1145,123 @@ def resolve_bfm_model(mod, crossing=None):
     return bm
 
 
+# ---------------------------------------------------------------------------
+# The edge-side hook: xsi_model() -> a channel between two peer models.
+# ---------------------------------------------------------------------------
+#
+# **A separate registry, not rows in BFM_DUALS**, and the reason is structural rather than tidiness:
+# `BFM_DUALS` is keyed by the *DUT's boundary port kind*, because the DUT boundary is the spine the
+# testbench walk iterates.  A model<->model edge has no DUT port kind — that is the definition of a
+# behavioral edge — so the table cannot answer for it and a row would have nothing to key on.  What
+# a channel needs answered is a different question with a different shape: "does the named C++
+# channel class exist?"
+
+#: The channel library the ``xsi_model()`` hook resolves against — the edge-side peer of
+#: :data:`_XSI_BFM_HEADER`.
+_XSI_CHANNEL_HEADER = "xsi_channel.h"
+
+
+def xsi_channel_classes() -> frozenset[str]:
+    """Every channel class the C++ library defines, read **from the library itself**.
+
+    The same discipline as :func:`xsi_model_classes`, and for the same reason: a Python list of names
+    would be a second copy of the header's contents and would drift the first time a channel was
+    added or renamed.
+
+    Tolerates a preceding ``template <...>`` line, because a channel is generic over what it carries
+    while a bus model is not — that is the one syntactic difference between the two libraries.
+    """
+    import re
+    from pathlib import Path
+
+    hdr = Path(__file__).resolve().parent / "xsi" / _XSI_CHANNEL_HEADER
+    text = hdr.read_text(encoding="utf-8")
+    return frozenset(re.findall(
+        r"^(?:template\s*<[^>\n]*>\s*\n)?(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
+        text, re.M))
+
+
+def _channel_base_class(cls: str) -> str:
+    """``"BlockChannel<uint64_t>"`` -> ``"BlockChannel"`` — the name to look up in the registry.
+
+    A template *specialization* is a use of a class, not a class: the library defines
+    ``BlockChannel``, and every edge names a different instantiation of it.  Checking the base is
+    what makes "you named a channel that does not exist" catchable while leaving the payload type
+    free.
+    """
+    return cls.split("<", 1)[0].strip()
+
+
+def resolve_channel_model(iface):
+    """Resolve *iface*'s ``xsi_model()``, or raise a
+    :class:`~waveflow.build.hwcodegen.LoweringError` saying why the edge cannot be realized.
+
+    The edge-side peer of :func:`resolve_bfm_model`, with the checks it can meaningfully make:
+
+    1. **The hook is declared.**  An interface with no ``xsi_model()`` has no channel; that is a
+       finding about the graph, not an error the interface had to anticipate.
+    2. **The named class exists** in the C++ channel library (:func:`xsi_channel_classes`).
+    3. **``peers`` names exactly this interface's two sides**, each of them bound.  A peer naming a
+       side that does not exist, or an unbound one, is a channel with nothing on one end — at RTL
+       that is a queue nobody fills or nobody drains, and the run simply produces nothing.
+    4. **Every ``DynParam`` renders** to a C++ initializer.
+
+    What it deliberately does **not** check — the same gap ``resolve_bfm_model`` documents — is that
+    the C++ behaves like the Python ``run_proc``.  Nothing static can, which is exactly why the bar
+    for what an edge may own is "obviously the same in ten lines".
+    """
+    from waveflow.hw.hw_module import declares_hook, discover_dyn_params
+
+    name = f"{type(iface).__name__} '{getattr(iface, 'name', '?')}'"
+    if not declares_hook(iface, "xsi_model"):
+        raise LoweringError(
+            f"{name} declares no xsi_model() hook, so this edge has no pre-written channel model. "
+            f"An interface whose endpoints BOTH lie outside the cut is a behavioral edge and must "
+            f"override xsi_model() to name one; an interface that crosses the cut is a boundary "
+            f"port and takes a BFM dual instead."
+        )
+    cm = iface.xsi_model()
+
+    known = xsi_channel_classes()
+    if _channel_base_class(cm.cls) not in known:
+        raise LoweringError(
+            f"{name}.xsi_model() names the C++ channel {cm.cls!r}, whose class "
+            f"{_channel_base_class(cm.cls)!r} is not an XsiSimObj in {_XSI_CHANNEL_HEADER}. "
+            f"Known channels: {sorted(known)}."
+        )
+
+    sides = getattr(iface, "endpoints", {})
+    if len(cm.peers) != 2:
+        raise LoweringError(
+            f"{name}.xsi_model() names {list(cm.peers)} as its peers; a channel connects exactly "
+            f"two, the producer first. Multi-producer channels are deferred "
+            f"(plans/behavioral_edges.md S5)."
+        )
+    for side in cm.peers:
+        if side not in sides:
+            raise LoweringError(
+                f"{name}.xsi_model() names peer side {side!r}, which is not one of this "
+                f"interface's sides {sorted(sides)}. ChannelModel.peers are endpoint SIDE names "
+                f"(the keys of Interface.endpoints), not attribute names on a module."
+            )
+        if sides[side] is None:
+            raise LoweringError(
+                f"{name}.xsi_model() names peer side {side!r}, but nothing is bound to it — the "
+                f"channel would have no model on that end, so at RTL it is a queue nobody fills or "
+                f"nobody drains and the run produces nothing with no diagnostic."
+            )
+
+    for field, value in sorted(discover_dyn_params(iface).items()):
+        try:
+            _render_dyn_value(value)
+        except LoweringError as e:
+            raise LoweringError(
+                f"{name}.{field} is a DynParam the harness would emit as "
+                f"`<channel>.{field} = ...;`, but it cannot be rendered: {e}"
+            ) from e
+    return cm
+
+
 #: A module's **own** endpoint kind → the DUT boundary-port kind(s) it faces across the cut.
 #:
 #: :data:`BFM_DUALS` is keyed by the *DUT's* port kind, because that is the spine the testbench walk
@@ -1199,6 +1373,129 @@ def _render_dyn_value(value) -> str:
     )
 
 
+def _dut_interior(dut) -> set:
+    """``id()`` of *dut* and every module inside it — what "on the far side of the cut" means.
+
+    A TB interface reaching one of these *without* touching a boundary port is reaching **inside**
+    the synthesized top, which is a graph error rather than a behavioral edge: at RTL there is no
+    such connection point.  Naming it needs the interior set, not just the DUT itself.
+    """
+    seen: set = set()
+    stack = [dut]
+    while stack:
+        m = stack.pop()
+        if id(m) in seen:
+            continue
+        seen.add(id(m))
+        stack.extend(getattr(m, "sub_comps", {}).values())
+    return seen
+
+
+def _behavioral_edge_walk(tb, dut, boundary_parts: set, dyn_of) -> tuple[list, list]:
+    """The **second walk**: TB interfaces with *neither* endpoint on the DUT boundary.
+
+    The first walk iterates ``dut.boundary`` — one model per RTL port — and that spine is what makes
+    "did we cover every port?" structural.  It is also blind by construction: an edge with no DUT
+    port on either end emits nothing, and is not rejected so much as *invisible*.  This walk is that
+    blind spot, closed.
+
+    **The two walks must not double-count.**  An interface with at least one endpoint on the DUT
+    boundary is the existing case and stays there; this one claims only the rest.  The partition is
+    on the interface, not on the model, so no edge can be claimed twice or missed.
+
+    Returns ``(channels, peer_models)``.  Both are empty for a graph whose edges all touch the DUT,
+    which is every design that existed before this walk did — hence byte-identical output for them.
+    """
+    from waveflow.hw.hw_module import declares_hook
+
+    boundary_eps = {id(ep) for _n, ep in dut.boundary}
+    interior = _dut_interior(dut)
+    children = {id(c) for c in tb.ordered_subcomps}
+
+    channels: list[ChannelInst] = []
+    peers: list[BfmInst] = []
+    for iface in tb.interfaces.values():
+        bound = {side: ep for side, ep in getattr(iface, "endpoints", {}).items() if ep is not None}
+        if any(id(ep) in boundary_eps for ep in bound.values()):
+            continue                                   # walk 1's case
+        if len(bound) < 2:
+            # Checked before resolving so the message is about the real defect. An interface with
+            # nothing (or one thing) bound would otherwise be reported as "declares no xsi_model()",
+            # which sends the reader to write a hook for an edge that is simply not wired.
+            raise LoweringError(
+                f"{type(tb).__name__}: interface '{iface.name}' has {len(bound)} bound endpoint(s) "
+                f"({sorted(bound)}), so it connects nothing. Bind both sides, or drop it from the "
+                f"graph — an edge in the testbench's interface list is a claim that two things are "
+                f"connected."
+            )
+        cm = resolve_channel_model(iface)              # raises if this edge cannot be realized
+        chan = _cpp_ident(iface.name)
+
+        parts: dict[str, object] = {}
+        for side in cm.peers:
+            ep = bound[side]                           # resolve_channel_model proved it is bound
+            part = getattr(ep, "comp", None)
+            if part is None:
+                raise LoweringError(
+                    f"{type(tb).__name__}: interface '{iface.name}' side {side!r} is bound to an "
+                    f"endpoint that belongs to no module (add_endpoint was never called), so there "
+                    f"is nothing to realize on that end of the channel."
+                )
+            if id(part) in interior:
+                raise LoweringError(
+                    f"{type(tb).__name__}: interface '{iface.name}' reaches {type(part).__name__} "
+                    f"INSIDE the DUT, but not through a boundary port. At RTL there is no such "
+                    f"connection point — a testbench edge either meets a DUT boundary port or joins "
+                    f"two modules outside the cut."
+                )
+            if id(part) not in children:
+                raise LoweringError(
+                    f"{type(tb).__name__}: interface '{iface.name}' side {side!r} belongs to "
+                    f"{type(part).__name__}, which is not a sub-component of this testbench. An "
+                    f"edge reaching neither a participant nor the DUT has nothing to emit against."
+                )
+            if not declares_hook(part, "bfm_model"):
+                raise LoweringError(
+                    f"{type(tb).__name__}: interface '{iface.name}' side {side!r} belongs to "
+                    f"{type(part).__name__}, which declares no bfm_model() — so it is a pysim-only "
+                    f"node and this graph has no XSI realization. That is a finding about the "
+                    f"graph, not a defect in the module: build a different testbench for RTL, or "
+                    f"give the module a model."
+                )
+            if id(part) in boundary_parts:
+                raise LoweringError(
+                    f"{type(tb).__name__}: {type(part).__name__} has endpoints on BOTH a DUT "
+                    f"boundary port and the behavioral edge '{iface.name}', but bfm_model() names "
+                    f"one C++ class for the whole module and the two bindings have different "
+                    f"constructor shapes ((dut, prefix) vs (channel)). Resolving that needs a "
+                    f"per-port resolution in BfmModel — deliberately out of scope here "
+                    f"(plans/behavioral_edges.md S3)."
+                )
+            parts[side] = part
+
+        channels.append(ChannelInst(cm.cls, chan, cm.extra_args, dyn_of(iface)))
+        for side in cm.peers:
+            part = parts[side]
+            bm = part.bfm_model()          # one call: the hook is the module's, not ours to re-run
+            peers.append(BfmInst(bm.cls, f"{chan}_{side}", "", bm.extra_args,
+                                 dyn_of(part), channel=chan))
+    return channels, peers
+
+
+def _cpp_ident(name: str) -> str:
+    """*name* as a C++ identifier — the generated variable for a channel.
+
+    Interface names are Python-side and already identifier-shaped in every graph today; this is the
+    guard for the day one is not, so a bad name is a build error rather than uncompilable C++.
+    """
+    if not name or not name.isidentifier():
+        raise LoweringError(
+            f"interface name {name!r} is not a valid C++ identifier, so no channel variable can be "
+            f"emitted for it. Name the interface something identifier-shaped."
+        )
+    return name
+
+
 def tb_top_spec(tb, dut=None) -> TbSpec:
     """Derive the XSI testbench harness from *tb*'s component/interface graph, cut at *dut*.
 
@@ -1221,6 +1518,13 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
 
     Participants declaring ``shared`` (a `MemoryMod` -> one `FlatMemory` behind both bundles) are
     constructed once and passed by name.
+
+    **There are two walks.**  The one above claims every interface that touches a DUT boundary port.
+    A second, :func:`_behavioral_edge_walk`, claims the rest: an interface whose endpoints *both*
+    lie outside the cut is a **behavioral edge**, and it emits a channel plus the two peer models
+    bound to it rather than a BFM per port.  The partition is on the interface, so nothing is
+    claimed twice, and an interface reaching neither a participant nor the DUT is an error rather
+    than a silent no-op — which is what it used to be.
     """
     from waveflow.hw.hw_module import discover_dyn_params
 
@@ -1243,6 +1547,12 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
 
     shared: dict[str, tuple[str, str, tuple[str, ...]]] = {}
     models: list[BfmInst] = []
+    #: Participants claimed by walk 1.  Walk 2 consults it to refuse a module that would need one
+    #: bfm_model() class to serve two different constructor shapes.
+    boundary_parts: set = set()
+
+    def dyn_of(obj) -> tuple[tuple[str, str], ...]:
+        return tuple((f, _render_dyn_value(v)) for f, v in sorted(discover_dyn_params(obj).items()))
 
     bundles = bundle_map(dut.boundary)
     for entry in dut.boundary:
@@ -1260,10 +1570,10 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
                 f"{type(tb).__name__}: DUT boundary port '{name}' is not wired to any testbench "
                 f"participant — nothing would drive it, and the run would hang on that port."
             )
+        boundary_parts.add(id(part))
         bm = part.bfm_model()
         # Init-time config: every DynParam the participant carries, rendered to a C++ initializer.
-        dyn = tuple((f, _render_dyn_value(v))
-                    for f, v in sorted(discover_dyn_params(part).items()))
+        dyn = dyn_of(part)
         if bm.shared is not None:
             # A shared object's DynParams (a memory's load/dump segs) attach to the shared entry so
             # they emit once as `<shared>.<field> = ...;`; the per-bundle slave models carry none.
@@ -1276,8 +1586,26 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
             models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, port.xsi_prefix,
                                   bm.extra_args, dyn))
 
+    channels, peer_models = _behavioral_edge_walk(tb, dut, boundary_parts, dyn_of)
+    models.extend(peer_models)
+
+    # Every emitted C++ identifier lives in one struct scope, so a collision would shadow rather than
+    # fail to compile -- a model silently binding the wrong thing.  Checked once, over all three
+    # sources of names, rather than trusted.
+    emitted: dict[str, str] = {}
+    for kind, nm in ([("shared", s[1]) for s in shared.values()]
+                     + [("channel", c.name) for c in channels]
+                     + [("model", m.name) for m in models]):
+        if nm in emitted:
+            raise LoweringError(
+                f"{type(tb).__name__}: the generated harness would declare {nm!r} twice (as a "
+                f"{emitted[nm]} and as a {kind}), and the second would shadow the first. Rename the "
+                f"interface or the DUT port it collides with."
+            )
+        emitted[nm] = kind
+
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
-                  models=tuple(models))
+                  models=tuple(models), channels=tuple(channels))
 
 
 def render_tb_harness(spec: TbSpec) -> str:
@@ -1301,13 +1629,14 @@ def render_tb_harness(spec: TbSpec) -> str:
     ports_ns = f"{spec.top_name}_ports"
     guard = f"WAVEFLOW_GEN_{ns.upper()}_HARNESS_H"
 
-    shared_names = {name for _cls, name, *_ in spec.shared}
-    # A ctor param is a value the *test* must supply: a plain identifier that is not a shared member.
-    # A literal ctor arg (e.g. an empty word vector "{}") is not an identifier, so it is not a param.
+    # A ctor param is a value the *test* must supply: a plain identifier that is not already a member
+    # of the harness.  A literal ctor arg (e.g. an empty word vector "{}") is not an identifier, so it
+    # is not a param; a shared arena or a channel is a member, so neither is one either.
+    members = ({name for _cls, name, *_ in spec.shared} | {c.name for c in spec.channels})
     ctor_params: list[str] = []
     for m in spec.models:
         for a in m.args:
-            if a.isidentifier() and a not in shared_names and a not in ctor_params:
+            if a.isidentifier() and a not in members and a not in ctor_params:
                 ctor_params.append(a)
 
     lines = [
@@ -1324,6 +1653,13 @@ def render_tb_harness(spec: TbSpec) -> str:
         '#include <string>',
         '#include <vector>',
         '#include "xsi_bfm.h"',
+    ]
+    # Only when the graph HAS a behavioral edge: a workspace with no channel should not carry a
+    # dependency on the channel library, and every harness generated before this existed must stay
+    # byte-identical.
+    if spec.channels:
+        lines.append('#include "xsi_channel.h"')
+    lines += [
         f'#include "{ports_ns}.h"',
         "",
         f"namespace {ns} {{",
@@ -1337,6 +1673,12 @@ def render_tb_harness(spec: TbSpec) -> str:
     ]
     for cls, name, *_ in spec.shared:
         lines.append(f"    {cls} {name};")
+    if spec.channels:
+        lines.append("    // Behavioral edges. Declared BEFORE their peer models, so each channel's")
+        lines.append("    // sample() commits before any peer observes it -- which is what makes the")
+        lines.append("    // transfer independent of participant order (see xsi_channel.h).")
+        for c in spec.channels:
+            lines.append(f"    {c.cls} {c.name};")
     for m in spec.models:
         lines.append(f"    {m.cls} {m.name};")
     lines.append("    // Every participant by base pointer, in construction order (shared arenas")
@@ -1349,9 +1691,13 @@ def render_tb_harness(spec: TbSpec) -> str:
     inits = [f"sim({ports_ns}::DESIGN_DLL, wdb)"]
     for _cls, name, args, _dyn in spec.shared:
         inits.append(f"{name}({', '.join(args)})")
+    for c in spec.channels:
+        inits.append(f"{c.name}({', '.join(c.args)})")
     for m in spec.models:
-        a = ", ".join(("sim.dut()", f"{ports_ns}::{m.name}") + m.args)
-        inits.append(f"{m.name}({a})")
+        # A peer model binds its CHANNEL where a boundary model binds (dut, port): both ends of its
+        # edge are outside the cut, so the RTL port it would otherwise drive does not exist.
+        head = (m.channel,) if m.channel else ("sim.dut()", f"{ports_ns}::{m.name}")
+        inits.append(f"{m.name}({', '.join(head + m.args)})")
     lines.append("")
     lines.append(sig)
     lines.append("      : " + ",\n        ".join(inits))
@@ -1363,10 +1709,14 @@ def render_tb_harness(spec: TbSpec) -> str:
     lines.append("        // memory's pre_sim runs before the models that serve from it).")
     for _cls, name, *_ in spec.shared:
         lines.append(f"        participants_.push_back(&{name});")
+    for c in spec.channels:
+        lines.append(f"        participants_.push_back(&{c.name});")
     for m in spec.models:
         lines.append(f"        participants_.push_back(&{m.name});")
     dyn_lines = [f"        {name}.{field} = {expr};"
                  for _cls, name, _args, dyn in spec.shared for field, expr in dyn]
+    dyn_lines += [f"        {c.name}.{field} = {expr};"
+                  for c in spec.channels for field, expr in c.dyn_params]
     dyn_lines += [f"        {m.name}.{field} = {expr};"
                   for m in spec.models for field, expr in m.dyn_params]
     if dyn_lines:
