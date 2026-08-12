@@ -7,8 +7,8 @@ import numpy as np
 from enum import Enum
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_module import DynParam
-from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.hw.hw_module import DynParam, HwModule
+from waveflow.simulation.simobj import ProcessGen
 
 
 class AddrUnit(Enum):
@@ -459,7 +459,7 @@ class _DirectBackedMMIFMaster:
 
 
 # ---------------------------------------------------------------------------
-# MemoryMod — a SimObj wrapping a Memory with MM interface endpoints
+# MemoryMod — an HwModule wrapping a Memory with MM interface endpoints
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -481,9 +481,9 @@ class MemSeg:
 
 
 @dataclass
-class MemoryMod(SimObj):
+class MemoryMod(HwModule):
     """
-    A latency-modeling :class:`~waveflow.simulation.simobj.SimObj` that wraps a
+    A latency-modeling :class:`~waveflow.hw.hw_module.HwModule` that wraps a
     :class:`Memory` and exposes MM interface endpoints.
 
     ``m_mm`` is a directly-backed master (zero-latency, for the owner's use).
@@ -606,6 +606,14 @@ class MemoryMod(SimObj):
             # modeled aggregately by the poller registry, so the peek is free).
             peek_read=lambda nwords, local_addr: self._mem.read(local_addr, nwords),
         )
+        # The endpoint surface is `s_mm` ALONE, and the exclusion of `m_mm` is principled rather
+        # than curated (plans/design_cut.md S1/S3).  `s_mm` is the bus-facing port: it is what gets
+        # wired into a graph, what `bfm_model().ports` names, and what crosses a cut.  `m_mm` is a
+        # direct, zero-latency back door the owner uses to poke the store without a bus — it is
+        # never bound to an interface anywhere in the tree.  Registering it would make it a phantom
+        # boundary port in `derive_boundary` and an uncoverable one in the `xsi_bfm_model` check,
+        # which is how the coverage predicate found this in the first place.
+        self.add_endpoint(self.s_mm)
 
     def pre_sim(self) -> None:
         """Seed the memory from ``load_segs`` — the pysim mirror of the C++ ``FlatMemory::pre_sim``.

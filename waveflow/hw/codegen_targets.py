@@ -19,6 +19,12 @@ Flow                            DUT target                  TB target
 **This must not drift from ``guide/flows/index.md``.**  If a flow is renamed,
 added, or removed there, change it here in the same commit (and vice versa).
 
+**One target is not a flow row.**  The table above is per-**graph**: a DUT and its
+testbench.  :data:`XSI_BFM_MODEL` is per-**module** — "could *this* module be
+realized as a cycle model beside a top?" — so it sits beside Flow 2 rather than
+inside it, and is listed separately on the same docs page.  See
+:data:`CUT_INDEPENDENT_TARGETS` for why it is not a ``potential_targets`` entry.
+
 **Two flows collapsed into one.**  ``free_running_kernel`` and ``composite_kernel``
 were two names for one product — a free-running ``ap_ctrl_none`` ``hls::task`` top —
 because a leaf and a composite looked like different kinds.  Since the
@@ -67,6 +73,22 @@ COMPOSITE_KERNEL = "composite_kernel"
 #: (:func:`~waveflow.build.composite_gen.tb_top_spec` + ``render_tb_harness``).
 SEQUENTIAL_XSI_TB = "sequential_xsi_tb"
 
+#: **One module** realized as a pre-written XSI cycle model *beside* the top — the realization of a
+#: module that lies **outside** the cut, and the peer of ``composite_kernel`` (inside it).
+#:
+#: Distinct from :data:`SEQUENTIAL_XSI_TB`, and the distinction is the useful part: that target is
+#: per-**graph** ("does this whole testbench lower to a harness?"), this one is per-**module** ("could
+#: *this* module be realized beside a top?").  A design can answer yes to the second for every
+#: participant and still fail the first, because the graph adds questions a module cannot answer alone
+#: (is there exactly one DUT? is every DUT port driven?).
+#:
+#: **Resolved, not derived** — the asymmetry to keep honest.  ``composite_kernel`` runs the real
+#: extractor, so it answers with rules nobody restated.  This one can only say *"you named a model,
+#: the class exists, its ports cover your endpoints, and each has a dual"*.  It can never say *"your
+#: Python behaviour is realizable as a BFM"*; nothing static can, and the standing answer is a
+#: byte-identical vector gate.  See ``plans/design_cut.md``.
+XSI_BFM_MODEL = "xsi_bfm_model"
+
 # --- Flow 3 · Full system, on hardware (future) -----------------------------
 
 #: An FPGA bitstream (a Vivado IPI system).  No testbench — host software drives it.
@@ -80,8 +102,43 @@ ALL_TARGETS: frozenset[str] = frozenset({
     SEQUENTIAL_VITIS_TB,
     COMPOSITE_KERNEL,
     SEQUENTIAL_XSI_TB,
+    XSI_BFM_MODEL,
     BITSTREAM,
 })
+
+#: Targets that are **not a property of the kind**, so ``potential_targets`` does not gate them.
+#:
+#: Every other target answers "how is this module's body invoked?" — a class fact that no build
+#: changes.  ``xsi_bfm_model`` answers a different question: "is this module on the far side of the
+#: cut?"  And **the cut is a property of the build, not of the class** (``plans/design_cut.md``): the
+#: same module is inside the DUT in one synthesis and a testbench model in another, with nothing
+#: about the module changed.  A ``potential_targets`` entry would freeze that per-build role into a
+#: class fact, which is exactly the ``ExtMod`` answer the plan rejected.
+#:
+#: So :func:`~waveflow.build.codegen_check.check`'s *kind* gate lets these through for any
+#: ``HwModule`` and the verdict comes from the per-module resolution instead.  They are deliberately
+#: absent from ``potential_targets`` for the same reason: that function reports the class fact, and
+#: this is not one.
+CUT_INDEPENDENT_TARGETS: frozenset[str] = frozenset({
+    XSI_BFM_MODEL,
+})
+
+#: The **realization hook** a source must declare to reach each target, where one exists.
+#:
+#: A hook says *"here is my pre-written artifact"*; which hook applies is decided by the **cut** (is
+#: this module inside the synthesized top, or beside it?), and the cut is a property of the build, not
+#: of the class — see ``plans/design_cut.md``.  ``kernel_task()`` is the hook for a module **inside**
+#: the cut (its ``hls::task`` body); ``bfm_model()`` is its peer for a module **outside** it (a
+#: pre-written cycle model beside the top).
+#:
+#: This is a **message** aid, not a rule: nothing here decides whether a source lowers — the graph
+#: walk does, and reports a :class:`~waveflow.build.hwcodegen.LoweringError`.  It exists so a refusal
+#: at :func:`~waveflow.build.codegen_check.check`'s *kind* gate can still name the hook the caller is
+#: missing, instead of only naming the kind they do not have.
+REALIZATION_HOOKS: dict[str, str] = {
+    COMPOSITE_KERNEL: "kernel_task",
+    XSI_BFM_MODEL: "bfm_model",
+}
 
 #: The targets codegen can actually produce today — Flows 1 and 2.  A target in
 #: :data:`ALL_TARGETS` but not here is a **declared-but-unimplemented** path:
@@ -92,4 +149,5 @@ IMPLEMENTED_TARGETS: frozenset[str] = frozenset({
     SEQUENTIAL_VITIS_TB,
     COMPOSITE_KERNEL,
     SEQUENTIAL_XSI_TB,
+    XSI_BFM_MODEL,
 })

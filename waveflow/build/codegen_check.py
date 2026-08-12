@@ -30,9 +30,12 @@ from waveflow.hw.codegen_targets import (
     ALL_TARGETS,
     COMPOSITE_KERNEL,
     CONTROL_DRIVEN_KERNEL,
+    CUT_INDEPENDENT_TARGETS,
     IMPLEMENTED_TARGETS,
+    REALIZATION_HOOKS,
     SEQUENTIAL_VITIS_TB,
     SEQUENTIAL_XSI_TB,
+    XSI_BFM_MODEL,
 )
 
 
@@ -60,7 +63,32 @@ def potential_targets(source) -> frozenset[str]:
     return frozenset(getattr(_source_class(source), "potential_targets", frozenset()))
 
 
-def _no_targets_message(cls: type) -> str:
+def _hook_clause(cls: type, target: str | None) -> str:
+    """The sentence naming the **realization hook** *target* needs and *cls* does not declare.
+
+    A refusal that names only the *kind* answers a question the caller did not ask.  "``StreamDriver``
+    is not on an execution-model class" is true, but what they wanted to know is *why it cannot go
+    inside the top* — and the answer is that it declares no ``kernel_task()``: no pre-written body,
+    nothing to instantiate.  Naming the peer hook when it IS present turns the refusal into a
+    diagnosis: this module is realized on the **other side of the cut** (``plans/design_cut.md``).
+
+    Empty when the target has no hook, or when the class already declares the one it needs (in which
+    case the hook is not what is wrong and saying so would mislead).
+    """
+    from waveflow.hw.hw_module import declares_hook
+
+    hook = REALIZATION_HOOKS.get(target or "")
+    if hook is None or declares_hook(cls, hook):
+        return ""
+    peers = [h for t, h in sorted(REALIZATION_HOOKS.items())
+             if h != hook and declares_hook(cls, h)]
+    also = (f" It does declare {', '.join(h + '()' for h in peers)} — the realization hook(s) for a "
+            f"module realized on the OTHER side of the cut." if peers else "")
+    return (f" It also declares no {hook}() hook, which is what a module realized as {target!r} "
+            f"provides.{also}")
+
+
+def _no_targets_message(cls: type, target: str | None = None) -> str:
     """Explain an empty ``potential_targets`` — without sending the caller round in a circle.
 
     Naming a target explicitly cannot help here (gate 2 rejects every name against an empty set), so
@@ -68,6 +96,8 @@ def _no_targets_message(cls: type) -> str:
     ``HwModule`` that predates the execution-model classes — the honest answer names the migration
     *and* admits that codegen still emits for it, so a caller who has watched ``generate`` succeed is
     not told something they can see is false.
+
+    *target*, when the caller named one, adds :func:`_hook_clause`: the kind is only half the answer.
     """
     from waveflow.hw.hw_module import HwModule
 
@@ -79,10 +109,12 @@ def _no_targets_message(cls: type) -> str:
             f"not generate — codegen still emits for un-migrated leaves through the interim fallback "
             f"in codegen_dispatch (extracting on_start when a regmap is present, else run_proc). "
             f"Migrating it onto an execution-model class is what makes it checkable."
+            + _hook_clause(cls, target)
         )
     return (
         f"{cls.__name__} is not a codegen source: it declares no potential targets and is not a "
         f"HwModule or SeqTB. Known targets: {_sorted(ALL_TARGETS)}."
+        + _hook_clause(cls, target)
     )
 
 
@@ -96,7 +128,7 @@ def _resolve_target(source, cls: type) -> tuple[str | None, str | None]:
     if len(targets) == 1:
         return next(iter(targets)), None
     if not targets:
-        return None, _no_targets_message(cls)
+        return None, _no_targets_message(cls, None)
     return None, (
         f"{cls.__name__} has several potential targets ({_sorted(targets)}), so the target cannot "
         f"be inferred; name one explicitly."
@@ -107,7 +139,8 @@ def _sorted(names) -> str:
     return "{" + ", ".join(repr(n) for n in sorted(names)) + "}"
 
 
-def check(source, target: str | None = None) -> tuple[bool, str | None]:
+def check(source, target: str | None = None, *,
+          crossing: "tuple[str, ...] | None" = None) -> tuple[bool, str | None]:
     """Would *source* lower to *target*?  Returns ``(True, None)`` or ``(False, message)``.
 
     *source* is a component/testbench **class or instance** — not a bare function.  Resolving
@@ -128,6 +161,18 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
        yet (Flow 2/3/4 future work).
     4. **The rules** — run the real extraction and convert its raise into a verdict.
 
+    *crossing* applies only to the per-module ``xsi_bfm_model`` target: the endpoint attribute names
+    that cross the cut.  ``None`` (the default) means **every registered endpoint** — the strictest
+    and only *cut-independent* answer, so a verdict never silently depends on a graph the caller did
+    not supply.
+
+    **One target is not derived, and the difference is load-bearing.**  ``composite_kernel`` and the
+    two sequential targets run the real generator, so they answer with rules nobody restated.
+    ``xsi_bfm_model`` is *resolved*: a hook lookup, a class lookup, port coverage, a registry lookup.
+    It can say "you named a model and its ports line up"; it can never say "your Python behaviour is
+    realizable as a BFM".  Nothing static can — the standing answer is a byte-identical vector gate,
+    and this function's existence must not be read as covering it.
+
     The ``(ok, msg)`` shape reports the **first** violation.  Collecting every violation in one pass
     is a later refinement; the return is shaped so it can grow into a structured report without
     breaking callers.
@@ -146,14 +191,27 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
             return False, msg
 
     # Gate 2 — does this path exist for this KIND?  (The class states the kind.)
+    #
+    # ...except for a CUT-INDEPENDENT target, which is not a kind fact at all: being realized outside
+    # the cut is a property of the BUILD, and freezing it into `potential_targets` would be the
+    # `ExtMod` answer `plans/design_cut.md` rejected.  The only kind requirement is being a module.
+    if target in CUT_INDEPENDENT_TARGETS:
+        from waveflow.hw.hw_module import HwModule
+        if not issubclass(cls, HwModule):
+            return False, (
+                f"{target!r} asks whether a MODULE can be realized outside the cut, and "
+                f"{cls.__name__} is not an HwModule — it has no endpoints to place a model against."
+            )
+        return _check_generates(source, cls, target, crossing)
+
     kind_targets = potential_targets(source)
     if not kind_targets:
         # Empty is not "you picked the wrong one of several" — no name would work. Say the real thing.
-        return False, _no_targets_message(cls)
+        return False, _no_targets_message(cls, target)
     if target not in kind_targets:
         return False, (
             f"{target!r} is not a potential target for {cls.__name__}; its potential targets are "
-            f"{_sorted(kind_targets)}"
+            f"{_sorted(kind_targets)}" + _hook_clause(cls, target)
         )
 
     # Gate 3 — the path exists for the kind, but codegen cannot walk it yet.
@@ -165,10 +223,11 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
         )
 
     # Gate 4 — the rules.  Run the REAL generator for THIS target; the rules live there, nowhere else.
-    return _check_generates(source, cls, target)
+    return _check_generates(source, cls, target, crossing)
 
 
-def _check_generates(source, cls: type, target: str) -> tuple[bool, str | None]:
+def _check_generates(source, cls: type, target: str,
+                     crossing: "tuple[str, ...] | None" = None) -> tuple[bool, str | None]:
     """Run the real generator **for *target*** and turn its "cannot lower" signal into a verdict.
 
     Gate 4 must run *the same code* :func:`~waveflow.build.hwcodegen_steps` runs for *target* — a
@@ -184,15 +243,18 @@ def _check_generates(source, cls: type, target: str) -> tuple[bool, str | None]:
     * ``sequential_xsi_tb``      → :func:`~waveflow.build.composite_gen.tb_top_spec` (the TB graph walk)
 
     **On the verdict exception.**  The two *extractor* paths raise ``SynthesisError`` for "not in the
-    synthesizable subset" — the one exception that is a legitimate *answer* to check's question;
-    anything else (``TypeError``/``AttributeError``/``ParamPurityError``/…) is a **bug**, and letting
-    it propagate keeps the traceback that explains it.  The two *graph* paths do not raise
-    ``SynthesisError`` — a malformed graph raises ``ValueError``/``TypeError`` — and those are **not
-    yet classified** as verdicts here: a well-formed composite/TB validates ``True`` by generating, and
-    a malformed one propagates loudly.  Giving the graph walk its own verdict exception (so check can
-    report "this graph will not lower" as ``(False, msg)`` instead of raising) is the deliberate
-    follow-up flagged in ``plans/one_component_two_flows.md`` — not folded in here to avoid changing
-    ``composite_top_spec``'s exception contract under its existing callers.
+    synthesizable subset"; the two *graph* paths raise
+    :class:`~waveflow.build.hwcodegen.LoweringError` for "this graph will not lower" (a child with no
+    realization hook, an endpoint wired to nothing, a boundary that does not match the graph).  Those
+    two are the **only** exceptions that are legitimate *answers* to check's question — anything else
+    (``AttributeError``/``ParamPurityError``/…) is a **bug**, and letting it propagate keeps the
+    traceback that explains it.  ``LoweringError`` is a ``SynthesisError``, so the one ``except``
+    below covers both.
+
+    Classifying the graph half was the follow-up flagged here and in
+    ``plans/one_component_two_flows.md``, landed as ``plans/design_cut.md`` S0.  It did **not** change
+    ``composite_top_spec``'s exception contract under its existing callers: ``LoweringError`` also
+    inherits ``ValueError`` and ``TypeError``, so every site that caught either still does.
     """
     # Local imports: the emitter/graph modules are heavy and this module is imported for a predicate.
     from waveflow.build.elaborate import elaborate
@@ -213,6 +275,9 @@ def _check_generates(source, cls: type, target: str) -> tuple[bool, str | None]:
         elif target == SEQUENTIAL_XSI_TB:
             from waveflow.build.composite_gen import tb_top_spec
             tb_top_spec(comp)
+        elif target == XSI_BFM_MODEL:
+            from waveflow.build.composite_gen import resolve_bfm_model
+            resolve_bfm_model(comp, crossing)
         else:
             # Unreachable: gate 3 has already rejected any non-implemented target, and every
             # implemented target is handled above. If this fires, IMPLEMENTED_TARGETS grew a name

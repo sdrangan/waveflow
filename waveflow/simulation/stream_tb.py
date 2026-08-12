@@ -12,10 +12,21 @@ across into a sibling example.  Nothing here knows about any particular kernel �
 place that knows the schema, does the ``[c.serialize(bw) for c in cmds]`` conversion and hands the
 resulting word arrays here.
 
-They are :class:`~waveflow.simulation.simobj.SimObj`\\ s, not
-:class:`~waveflow.hw.hw_module.HwModule`\\ s: a testbench participant needs a ``run_proc`` and an
-endpoint, not a synthesizable body, an endpoint registry, or a codegen target.  (Whether that stays
-true is an open question — see ``plans/xsi_tb_codegen.md``, "what kind is a TB participant".)
+They are :class:`~waveflow.hw.hw_module.HwModule`\\ s.  They were bare
+:class:`~waveflow.simulation.simobj.SimObj`\\ s, on the reasoning that "a testbench participant needs
+a ``run_proc`` and an endpoint, not a synthesizable body, an endpoint registry, or a codegen target".
+Two of those three turned out to be needed after all (``plans/design_cut.md`` S1): without an endpoint
+registry, ``BfmModel.ports`` could only re-state endpoint attribute names as **strings** resolved by
+``getattr``, so a rename was a runtime failure rather than an elaboration-time one; and being
+realizable *outside* the cut is a codegen question (``xsi_bfm_model``) even though it is not a
+synthesis one.
+
+What did **not** change is the reason they are not kernels: a participant declares
+:meth:`~waveflow.hw.hw_module.HwModule.bfm_model`, not ``kernel_task``, so it is realized beside the
+top rather than inside it.  ``HwModule`` **is** a ``SimObj``, so ``pre_sim``/``run_proc`` are
+untouched — this buys structure, it does not change behaviour.  The question this settles was posed
+in ``plans/xsi_tb_codegen.md`` ("what kind is a TB participant"): the answer is *not a new kind* — it
+is a hook on the one module class.
 """
 from __future__ import annotations
 
@@ -24,14 +35,14 @@ from pathlib import Path
 
 import numpy as np
 
-from waveflow.hw.hw_module import DynParam
+from waveflow.hw.hw_module import DynParam, HwModule
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave, Words
-from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils.burst_io import read_burst_bundle
 
 
 @dataclass
-class StreamDriver(SimObj):
+class StreamDriver(HwModule):
     """Plays a burst bundle onto a stream — a schema-blind, file-driven source.
 
     The pysim twin of the XSI ``AxisMaster``: it offers each burst's words in turn and lets the
@@ -71,6 +82,10 @@ class StreamDriver(SimObj):
         self.bursts = None       # loaded in pre_sim from in_bundle
         self.stream_ep = StreamIFMaster(sim=self.sim, bitwidth=self.bitwidth,
                                         has_tlast=self.has_tlast)
+        # Registered, not merely assigned: `bfm_model().ports` names this attribute, and the registry
+        # is what lets that name be VALIDATED at elaboration time instead of resolving by getattr at
+        # generate time (plans/design_cut.md S1).
+        self.add_endpoint(self.stream_ep)
 
     def pre_sim(self) -> None:
         if not self.in_bundle:
@@ -96,7 +111,7 @@ class StreamDriver(SimObj):
 
 
 @dataclass
-class StreamSink(SimObj):
+class StreamSink(HwModule):
     """Collects raw word bursts off a stream — a schema-blind sink.
 
     The pysim twin of the XSI ``AxisSlave``: always ready, keeps everything it is given.
@@ -116,6 +131,7 @@ class StreamSink(SimObj):
         self.stream_ep = StreamIFSlave(
             sim=self.sim, bitwidth=self.bitwidth, has_tlast=self.has_tlast,
             rx_proc=self.rx_proc, queue_size=64)
+        self.add_endpoint(self.stream_ep)      # see StreamDriver.__post_init__
 
     def rx_proc(self, words: Words) -> ProcessGen[None]:
         self.words.append(np.array(words, copy=True))

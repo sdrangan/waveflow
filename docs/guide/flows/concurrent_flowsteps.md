@@ -54,7 +54,7 @@ fixed-N cycle loop. The BFM model classes themselves are hand-written framework
 
 **5 · XSI simulation.** Because the kernel is `ap_ctrl_none`, Vitis co-sim refuses it — so the harness
 drives the elaborated RTL directly in `xsim` through **XSI**, cycle by cycle. The gate is **exact**: a
-bit-exact result *and* an exact cycle count (e.g. `mem_copy` = 2835 cycles for 16 jobs), so a count
+bit-exact result *and* an exact cycle count (e.g. `mem_copy` = 2908 cycles for 16 jobs), so a count
 that moves is a real behaviour change.
 
 > The kernel and its testbench are generated from the **same** graphs that run the Python golden — one

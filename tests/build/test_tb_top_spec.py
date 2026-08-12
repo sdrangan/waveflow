@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from waveflow.build.composite_gen import tb_top_spec
+from waveflow.hw.hw_module import declares_hook
 from waveflow.simulation.simulation import Simulation
 
 
@@ -98,10 +99,181 @@ def test_an_unwired_dut_port_fails_loudly():
         tb_top_spec(tb)
 
 
+# ==============================================================================================
+# The protocol x role BFM registry (design_cut S2)
+#
+# `_SLAVE_FOR_KIND` was two entries, and its AXIS rows were *implicit* — they lived in whatever class
+# each participant declared.  So "which duals exist?" had no single answer, and a kind with no dual
+# surfaced as a KeyError on a kind string rather than as a named gap.
+# ==============================================================================================
+
+def _tb_graphs():
+    """Every testbench declared as a graph — the designs `tb_top_spec` actually walks.
+
+    The two standalone mem-stream tops (gates 158 / 176) are deliberately absent: they hand-assemble
+    their `main`, so there is no graph to derive and nothing here to reproduce.
+    """
+    from examples.fir_block.fir_block_sim import FirBlockTB
+    from examples.interleaver.interleaver_inband_sim import InterleaverInbandTB
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+    from examples.state_toy.state_toy import StateAccumTB
+
+    return [MemCopyTB, InterleaverInbandTB, FirBlockTB, StateAccumTB]
+
+
+@pytest.mark.parametrize("tb_cls", _tb_graphs(), ids=lambda c: c.__name__)
+def test_the_registry_reproduces_todays_model_selection(tb_cls):
+    """S2's gate: every graph-declared design resolves to exactly the models it resolved before.
+
+    This is a re-siting exercise over code that works, so the only acceptable outcome is *no change*.
+    The assertion is against the **committed generated harness** where one exists — the artifact that
+    was actually compiled and run through RTL — rather than against a restatement of the table, which
+    would only prove the table equals itself.
+    """
+    import re
+    from pathlib import Path
+
+    tb = tb_cls(name="tb", sim=Simulation())
+    spec = tb_top_spec(tb)
+
+    root = Path(__file__).resolve().parents[2] / "examples"
+    harness = next(root.glob(f"*/xsi/{spec.top_name}_tb_harness.h"), None)
+    if harness is None:
+        pytest.skip(f"no committed harness for {spec.top_name} to compare against")
+
+    # The harness declares its participants as `    <Cls> <name>;` inside `struct Harness`.
+    text = harness.read_text(encoding="utf-8")
+    declared = {name: cls
+                for cls, name in re.findall(r"^    ([A-Z]\w+) (\w+);$", text, re.M)
+                if cls != "XsiSim"}      # the simulator itself is not a participant model
+    got = {m.name: m.cls for m in spec.models}
+    got.update({name: cls for cls, name, *_ in spec.shared})
+    assert got == declared, "the registry changed which model serves a port"
+
+
+def test_an_unregistered_kind_names_the_protocol_and_the_role():
+    """A kind with no dual must say what is missing, not raise a KeyError on a string.
+
+    Two distinct answers, and the difference matters to whoever reads it: an *unregistered* kind is a
+    gap in the table (someone must add a row), while a **registered row with no model** is a known,
+    named hole in the model library.
+    """
+    from waveflow.build.composite_gen import BFM_DUALS, bfm_dual_class
+    from waveflow.build.hwcodegen import LoweringError
+
+    with pytest.raises(LoweringError, match="no BFM dual is registered"):
+        bfm_dual_class("i2c_target", None)
+
+    # AXI-Lite is the known hole: the protocol and the role are real, the model is not.
+    assert BFM_DUALS["axilite_slave"].model is None
+    with pytest.raises(LoweringError) as e:
+        bfm_dual_class("axilite_slave", None)
+    assert "AXI4-Lite" in str(e.value) and "master" in str(e.value)
+
+
+def test_the_participant_chooses_only_where_the_protocol_leaves_a_choice():
+    """The table's one asymmetry, stated as a test rather than left to the reader.
+
+    On AXI-Stream the role fixes the direction but not the class — a source, a sink and a peer that
+    never backpressures are three classes in one role.  On m_axi there is nothing to choose: the DUT
+    is the master, so the TB supplies the slave the DUT's port kind implies, and a memory does not get
+    to decide whether it is read or written.
+    """
+    from waveflow.build.composite_gen import bfm_dual_class
+
+    assert bfm_dual_class("axis_in", "NeverBackpressureMaster") == "NeverBackpressureMaster"
+    assert bfm_dual_class("axis_in", None) == "AxisMaster"          # the reference model
+    assert bfm_dual_class("maxi_read", "FlatMemory") == "AxiMmReadSlave"    # declaration ignored
+    assert bfm_dual_class("maxi_write", "FlatMemory") == "AxiMmWriteSlave"
+
+
+def test_the_registry_covers_every_kind_the_endpoint_vocabulary_produces():
+    """The table and `kind_of_endpoint` must not drift: a kind with no row is a KeyError waiting."""
+    from waveflow.build.composite_gen import BFM_DUALS, kind_of_endpoint
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.hw.memif import MMIFReadMaster, MMIFWriteMaster
+    from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
+    from waveflow.hw.dataschema import IntField
+
+    sim = Simulation()
+    Int32 = IntField.specialize(bitwidth=32, signed=True)
+    eps = [
+        StreamIFSlave(name="a", sim=sim, bitwidth=32),
+        StreamIFMaster(name="b", sim=sim, bitwidth=32),
+        MMIFReadMaster(name="c", sim=sim, bitwidth=64),
+        MMIFWriteMaster(name="d", sim=sim, bitwidth=64),
+        VitisRegMapMMIFSlave(name="e", sim=sim, bitwidth=32,
+                             regmap=VitisRegMap({"x": RegField(Int32, RegAccess.RW)}),
+                             on_start=lambda: None),
+    ]
+    for ep in eps:
+        assert kind_of_endpoint(ep) in BFM_DUALS, f"{type(ep).__name__} has no BFM_DUALS row"
+
+
+# ==============================================================================================
+# The cut is an argument (design_cut S4)
+#
+# `_find_dut` probed for the one child with a `boundary`.  That works because today's graphs happen
+# to contain exactly one synthesizable child — a property of the examples, not of the design.  The
+# whole thesis is that a graph can be cut in more than one place, and a discovered cut cannot express
+# a second one.
+# ==============================================================================================
+
+@pytest.mark.parametrize("tb_cls", _tb_graphs(), ids=lambda c: c.__name__)
+def test_naming_the_dut_explicitly_reproduces_the_discovered_cut(tb_cls):
+    """S4's gate: every design regenerates identically with the DUT named.
+
+    Discovery becomes the DEFAULT rather than the mechanism, so this must be a no-op for every graph
+    that has one synthesizable child — which is all of them today.
+    """
+    tb = tb_cls(name="tb", sim=Simulation())
+    assert tb_top_spec(tb, dut=tb.dut) == tb_top_spec(tb)
+
+
+def test_the_dut_may_be_named_by_module_or_by_name():
+    """Both spellings resolve to the same cut — the sub_comps key and the module itself."""
+    tb = _tb()
+    assert tb_top_spec(tb, dut=tb.dut.name) == tb_top_spec(tb, dut=tb.dut)
+
+
+def test_a_named_dut_is_validated_against_the_graph():
+    """A DUT that is not in this graph would bind models to ports nothing is wired to.
+
+    That failure would land thousands of cycles into an RTL run with no diagnostic, so it is refused
+    here instead — the same reasoning as the unwired-port check above.
+    """
+    from waveflow.build.hwcodegen import LoweringError
+
+    tb = _tb()
+    stranger = type(tb.dut)(name="stranger", sim=tb.sim, mem_dwidth=64)
+
+    with pytest.raises(LoweringError, match="not a sub-component"):
+        tb_top_spec(tb, dut=stranger)
+    with pytest.raises(LoweringError, match="not one of its sub-components"):
+        tb_top_spec(tb, dut="no_such_child")
+    # A participant is not a candidate: it has no RTL ports to drive.
+    with pytest.raises(LoweringError, match="no `boundary`"):
+        tb_top_spec(tb, dut=tb.driver)
+
+
+def test_discovery_now_says_what_to_do_when_the_graph_is_ambiguous():
+    """The fallback's refusal must point at the argument that resolves it.
+
+    Before S4 there was nothing to suggest: "expected exactly one child with a boundary" named the
+    problem and left the reader with no move. Now the move exists.
+    """
+    from waveflow.build.hwcodegen import LoweringError
+
+    tb = _tb()
+    tb.add_comp(type(tb.dut)(name="second_dut", sim=tb.sim, mem_dwidth=64))
+    with pytest.raises(LoweringError, match=r"tb_top_spec\(tb, dut=\.\.\.\)"):
+        tb_top_spec(tb)
+
+
 def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     """Regression: `kernel_task` does NOT identify the DUT — a composite has none (only its
     children do), so both the DUT and the participants answer False. The discriminator is
-    `boundary` (RTL ports) vs `bfm_model()` (a TB model)."""
+    `boundary` (RTL ports) vs a DECLARED `bfm_model()` (a TB model)."""
     tb = _tb()
     # Every FreeRunMod now HAS a kernel_task (the base derives one for a leaf), so presence cannot
     # be the discriminator — the canary that used to assert its absence has fired and been checked.
@@ -109,5 +281,55 @@ def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     with pytest.raises(TypeError, match="composite"):
         tb.dut.kernel_task()            # a composite has no task of its own
     assert hasattr(tb.dut, "boundary")  # ...but it does have RTL ports
-    assert hasattr(tb.dut, "boundary") and not hasattr(tb.dut, "bfm_model")
-    assert hasattr(tb.driver, "bfm_model") and not hasattr(tb.driver, "boundary")
+    assert not declares_hook(tb.dut, "bfm_model")
+    assert declares_hook(tb.driver, "bfm_model") and not hasattr(tb.driver, "boundary")
+
+
+def test_hasattr_is_not_the_bfm_discriminator_declaration_is():
+    """The canary for the S1 migration: `hasattr(c, "bfm_model")` now answers True for EVERYTHING.
+
+    Once `bfm_model()` is a documented hook on `HwModule` (rather than a duck-typed convention), the
+    base method exists on every module — including the DUT.  So the probe the TB walk used to
+    identify participants would sweep the DUT in with them, and `_find_dut`'s two-way split would
+    collapse.  `declares_hook` compares against the base by identity instead, which is the same way
+    `FreeRunMod._kind` detects a `run_iter` override.
+
+    This test exists so that reintroducing the `hasattr` spelling fails loudly rather than producing
+    a subtly wrong participant set.
+    """
+    tb = _tb()
+    assert hasattr(tb.dut, "bfm_model"), "the base hook exists on every HwModule — that is the trap"
+    assert not declares_hook(tb.dut, "bfm_model"), "...but the DUT does not DECLARE one"
+
+    # And the base is a sentinel, not a silent default: calling it says what to do.
+    with pytest.raises(NotImplementedError, match="declares no bfm_model"):
+        tb.dut.bfm_model()
+
+
+def test_participants_register_their_endpoints_so_bfm_ports_are_checkable():
+    """S1's structural payoff: `BfmModel.ports` names can be VALIDATED, not merely `getattr`-ed.
+
+    `ports` are attribute names in the C++ model's constructor order; `add_endpoint` keys by
+    `endpoint.name`.  Those are two different namespaces, and before participants were `HwModule`s
+    there was no registry to reconcile them against — so a renamed attribute was a runtime failure
+    deep in the walk (or, worse, resolved to some other attribute and modelled the wrong port).
+    """
+    tb = _tb()
+    for part in (tb.driver, tb.done_sink, tb.mem):
+        registered = {id(e) for e in part.endpoints.values()}
+        assert registered, f"{type(part).__name__} registered no endpoints"
+        for attr in part.bfm_model().ports:
+            assert id(getattr(part, attr)) in registered, (
+                f"{type(part).__name__}.bfm_model() names {attr!r}, which is not a registered "
+                f"endpoint")
+
+
+def test_a_bfm_port_naming_an_unregistered_attribute_fails_at_elaboration():
+    """The failure the registry converts: a stale `ports` entry, caught with both namespaces named."""
+    from waveflow.build.composite_gen import BfmModel
+    from waveflow.build.hwcodegen import LoweringError
+
+    tb = _tb()
+    tb.driver.bfm_model = lambda: BfmModel("AxisMaster", ports=("stream_epp",), extra_args=("{}",))
+    with pytest.raises(LoweringError, match="no such attribute"):
+        tb_top_spec(tb)

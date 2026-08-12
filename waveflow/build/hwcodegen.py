@@ -48,6 +48,31 @@ class SynthesisError(Exception):
     """Raised when ``run_proc`` contains a non-synthesizable pattern."""
 
 
+class LoweringError(SynthesisError, ValueError, TypeError):
+    """Raised when a component **graph** will not lower — the graph walks' verdict exception.
+
+    The peer of :class:`SynthesisError` on the other half of codegen.  ``SynthesisError`` means *"this
+    body is outside the synthesizable subset"*; ``LoweringError`` means *"this graph cannot be turned
+    into a top"*: a child with no realization hook, an endpoint wired to nothing, a boundary that does
+    not match the graph, an edge type with no channel lowering.
+
+    **Why it exists.**  :func:`~waveflow.build.codegen_check.check`'s gate 4 converts a raise into a
+    verdict, but only for the one exception that *is* an answer to its question.  The graph walks
+    (:func:`~waveflow.build.composite_gen.composite_top_spec` /
+    :func:`~waveflow.build.composite_gen.tb_top_spec`) raised bare ``ValueError``/``TypeError``, which
+    are indistinguishable from a genuine bug — so ``check`` could not report "this graph will not
+    lower" and instead propagated.  Classifying those raises is what makes the graph half answerable.
+
+    **Why it also inherits ``ValueError`` and ``TypeError``.**  Deliberately, so this is an *additive*
+    classification rather than a contract change: every existing ``except ValueError`` /
+    ``pytest.raises(TypeError)`` around the graph walks keeps working unchanged.  The plan
+    (``plans/design_cut.md`` S0) flags breaking ``composite_top_spec``'s exception contract under its
+    existing callers as the risk to avoid; multiple inheritance avoids it outright.  A site that
+    caught ``ValueError`` and a site that caught ``TypeError`` both still match, so no caller had to
+    be audited for which of the two a given raise happened to use.
+    """
+
+
 _PIPELINED_OP_NAMES = frozenset({'get_pipelined', 'write_pipelined'})
 
 #: The SimPy spawn method.  ``<env>.process(gen)`` schedules *gen* as a **new** process that runs
@@ -364,12 +389,17 @@ class HwStmtExtractor:
             and isinstance(stmt.value, ast.Call)
         ):
             local_name = stmt.targets[0].id
-            bind = self._try_dut_bind(local_name, stmt.value, stmt)
-            if bind is not None:
-                return bind
+            # MOST SPECIFIC FIRST.  `MemoryMod` is an `HwModule`, so the DUT probe (which accepts any
+            # `HwModule` subclass) would claim it and then reject its kwargs — a memory is declared
+            # with computed sizes, a DUT with literals.  Probing for the memory first keeps the two
+            # apart by subclass depth rather than by a negative condition that has to be maintained.
+            # (Free before `plans/design_cut.md` S1, when a `MemoryMod` was a bare `SimObj`.)
             mem_bind = self._try_mem_bind(local_name, stmt.value, stmt)
             if mem_bind is not None:
                 return mem_bind
+            bind = self._try_dut_bind(local_name, stmt.value, stmt)
+            if bind is not None:
+                return bind
             schema_bind = self._try_schema_bind(local_name, stmt.value, stmt)
             if schema_bind is not None:
                 return schema_bind

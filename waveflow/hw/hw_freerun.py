@@ -44,6 +44,25 @@ from waveflow.hw.hw_module import ControlMode, HwModule
 from waveflow.simulation.simobj import ProcessGen
 
 
+def _lowering_error(msg: str):
+    """A structural "this will not lower" verdict, in the graph walks' verdict exception.
+
+    The four raises below are the **body-XOR-children** invariant and its consequences: a module
+    that is neither a leaf nor a composite, one that is both, a composite that did not name its
+    boundary, and a composite asked for a task it does not have.  Each is a fact about the
+    *graph*, which is what :class:`~waveflow.build.hwcodegen.LoweringError` classifies, so
+    :func:`~waveflow.build.codegen_check.check` can report them as verdicts instead of letting
+    them propagate as bugs.
+
+    Imported lazily: ``hw/`` must not take a module-level dependency on ``build/`` (see
+    :mod:`waveflow.hw.codegen_targets` on why that is a real cycle risk).  ``LoweringError`` IS a
+    ``TypeError``, so every existing caller and test is unaffected.
+    """
+    from waveflow.build.hwcodegen import LoweringError
+
+    return LoweringError(msg)
+
+
 class FreeRunMod(HwModule):
     """A free-running synthesizable component — a leaf (implements :meth:`run_iter`) **or** a composite
     (has sub-components). Lowers to a free-running ``ap_ctrl_none`` ``hls::task`` top."""
@@ -68,7 +87,7 @@ class FreeRunMod(HwModule):
         has_body = type(self).run_iter is not FreeRunMod.run_iter
         has_children = bool(self.sub_comps)
         if has_body and has_children:
-            raise TypeError(
+            raise _lowering_error(
                 f"{type(self).__name__} defines both a run_iter body and sub-components; a "
                 f"FreeRunMod is one or the other (body XOR children). Move the body into a "
                 f"sub-component, or drop the sub-components."
@@ -77,7 +96,7 @@ class FreeRunMod(HwModule):
             return 'standalone'
         if has_children:
             return 'composite'
-        raise TypeError(
+        raise _lowering_error(
             f"{type(self).__name__} has neither a run_iter body nor sub-components; it must either "
             f"implement run_iter (a standalone kernel) or add_comp sub-components (a composite)."
         )
@@ -114,7 +133,7 @@ class FreeRunMod(HwModule):
                 return derive_boundary(self, ov)
             return ov
         if self.sub_comps:
-            raise TypeError(
+            raise _lowering_error(
                 f"{type(self).__name__} is a composite (has sub-components) but does not declare "
                 f"self.boundary; a composite must name its boundary ports in __post_init__ (a list of "
                 f"port names, in add_comp x add_endpoint order). Only a leaf derives its boundary "
@@ -240,7 +259,7 @@ class FreeRunMod(HwModule):
         detects a ``run_iter`` override.
         """
         if self._kind() == 'composite':
-            raise TypeError(
+            raise _lowering_error(
                 f"{type(self).__name__} is a composite; it has no task of its own — its children "
                 f"each have one. A composite's codegen is the sub-component graph."
             )

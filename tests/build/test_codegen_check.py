@@ -29,9 +29,12 @@ from waveflow.hw.codegen_targets import (
     IMPLEMENTED_TARGETS,
     SEQUENTIAL_VITIS_TB,
     SEQUENTIAL_XSI_TB,
+    XSI_BFM_MODEL,
 )
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_hostactivated import HostActivated
+from waveflow.hw.hw_module import HwModule
+from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.hw_testbench import SeqTB
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import synthesizable
@@ -667,6 +670,318 @@ def test_no_real_kernel_or_tb_trips_the_sequential_gate():
         extract_kernel(elaborate(cls))          # must not raise
     for cls in (SimpFunTBHls, PolyTBHls, HistTBHls, BlockScaleTBHls):
         extract_testbench(elaborate(cls))       # must not raise
+
+
+# ==============================================================================================
+# Gate 4 — the GRAPH half.  `LoweringError` is the graph walks' verdict exception (design_cut S0).
+#
+# Before this, `composite_top_spec` / `tb_top_spec` raised bare `ValueError`/`TypeError` for
+# "this graph will not lower", which is indistinguishable from a bug — so `check` could not report
+# them and instead propagated.  The tests below pin both halves of the fix: the raises are
+# classified, AND the classification did not change the exception contract under existing callers.
+# ==============================================================================================
+
+def test_lowering_error_is_a_verdict_and_keeps_the_old_contract():
+    """`LoweringError` must be catchable three ways at once.
+
+    As a `SynthesisError` it is a *verdict* — gate 4's one `except` converts it.  As a `ValueError`
+    and a `TypeError` it keeps every pre-existing `except` / `pytest.raises` around the graph walks
+    working unchanged, which is what let the classification be additive rather than a contract
+    change (the risk `plans/design_cut.md` S0 flags).
+    """
+    from waveflow.build.hwcodegen import LoweringError, SynthesisError
+
+    assert issubclass(LoweringError, SynthesisError)
+    assert issubclass(LoweringError, ValueError)
+    assert issubclass(LoweringError, TypeError)
+
+
+def test_a_tb_participant_is_refused_for_composite_kernel_by_NAME_of_the_missing_hook():
+    """The S0 gate: `check(StreamDriver, "composite_kernel")` answers, and names `kernel_task`.
+
+    A refusal that named only the *kind* ("not on an execution-model class") answers a question the
+    caller did not ask.  What they wanted to know is why this module cannot go inside the top — and
+    the answer is the missing realization hook: no pre-written body, nothing to instantiate.
+    """
+    from waveflow.simulation.stream_tb import StreamDriver
+
+    ok, msg = check(StreamDriver, COMPOSITE_KERNEL)
+    assert ok is False
+    assert "kernel_task()" in msg, "the message must name the MISSING HOOK, not only the kind"
+
+
+def test_a_child_without_a_kernel_task_is_a_verdict_not_an_AttributeError():
+    """A composite carrying a child with no realization hook: `check` answers, it does not explode.
+
+    This is the shape the whole S0 stage exists for.  The walk used to call `sub.kernel_task()`
+    blind, so a hookless child produced a bare `AttributeError` — a traceback out of a *predicate*.
+    """
+    from dataclasses import dataclass
+
+    from waveflow.build.hwcodegen import LoweringError
+    from waveflow.hw.hw_freerun import FreeRunMod
+    from waveflow.hw.hw_module import HwModule
+    from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+
+    @dataclass
+    class _Hookless(HwModule):
+        """A module with ports and no realization hook at all — a pysim-only node."""
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.y_out = StreamIFMaster(name=f"{self.name}_y", sim=self.sim, bitwidth=32)
+            self.add_endpoint(self.y_out)
+
+    @dataclass
+    class _Sink(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "s0_sink"
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.x_in = StreamIFSlave(name=f"{self.name}_x", sim=self.sim, bitwidth=32)
+            self.add_endpoint(self.x_in)
+
+        def run_iter(self):
+            yield from self.x_in.get()
+
+    @dataclass
+    class _TopWithAHooklessChild(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "s0_top"
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.src = _Hookless(name=f"{self.name}_src", sim=self.sim)
+            self.snk = _Sink(name=f"{self.name}_snk", sim=self.sim)
+            self.add_comp(self.src)
+            self.add_comp(self.snk)
+            edge = StreamIF(name=f"{self.name}_d_if", sim=self.sim, bitwidth=32,
+                            clk=Clock(freq=100e6))
+            edge.bind("master", self.src.y_out)
+            edge.bind("slave", self.snk.x_in)
+            self.add_if(edge)
+            self.boundary = []
+
+    sim = Simulation()
+    top = _TopWithAHooklessChild(name="t", sim=sim)
+
+    # The generator still fails LOUDLY — the rule lives there, and a build wants the traceback.
+    from waveflow.build.composite_gen import composite_top_spec
+    with pytest.raises(LoweringError, match="no kernel_task"):
+        composite_top_spec(top)
+
+    # ...but the PREDICATE answers instead of raising, which is the whole point of S0.
+    ok, msg = check(top, COMPOSITE_KERNEL)
+    assert ok is False
+    assert "kernel_task()" in msg
+    assert "_Hookless" in msg, "the message must name WHICH child"
+
+
+def test_a_malformed_tb_graph_is_a_verdict_not_a_raise():
+    """The TB walk's "will not lower" raises are verdicts too.
+
+    An unwired DUT boundary port would hang the run thousands of cycles later with no diagnostic, so
+    `tb_top_spec` refuses at generate time — and `check` must be able to *report* that refusal.
+    """
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+    from waveflow.hw.interface import StreamIFSlave
+
+    tb = MemCopyTB(name="tb", sim=Simulation(), mem_dwidth=64)
+    ghost = StreamIFSlave(name="s_ghost", sim=tb.sim, bitwidth=64, has_tlast=False)
+    tb.dut.boundary = tuple(tb.dut.boundary) + (("s_ghost", ghost),)
+
+    ok, msg = check(tb, SEQUENTIAL_XSI_TB)
+    assert ok is False
+    assert "not wired to any testbench participant" in msg
+
+
+# ==============================================================================================
+# The per-module target `xsi_bfm_model` (design_cut S3)
+#
+# Distinct from `sequential_xsi_tb`: that one is per-GRAPH ("does this whole testbench lower to a
+# harness?"), this one is per-MODULE ("could THIS module be realized beside a top?").
+#
+# And it is RESOLVED, not derived.  `composite_kernel` runs the real extractor, so it answers with
+# rules nobody restated.  This one can only report a hook lookup, a class lookup, port coverage and a
+# registry lookup — never "your Python behaviour is realizable as a BFM".  The tests are written to
+# that weaker claim on purpose; see `test_the_check_does_not_claim_behavioural_equivalence`.
+# ==============================================================================================
+
+@dataclass
+class _UnderCoveringParticipant(HwModule):
+    """Declares a model that covers ONE of its two endpoints — the uncovered-port case.
+
+    Deliberately synthetic.  No real participant under-covers, because the ones in the tree were
+    written alongside their C++ twins; the failure this pins is what happens when a module GROWS a
+    port and its `bfm_model()` is not updated, which is the realistic way to arrive here.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.stream_ep = StreamIFMaster(name=f"{self.name}_s", sim=self.sim, bitwidth=64)
+        self.extra_ep = StreamIFSlave(name=f"{self.name}_x", sim=self.sim, bitwidth=64)
+        self.add_endpoint(self.stream_ep)
+        self.add_endpoint(self.extra_ep)
+
+    def bfm_model(self):
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel("AxisMaster", ports=("stream_ep",), extra_args=("{}",))
+
+
+@dataclass
+class _AxiLiteParticipant(HwModule):
+    """Declares a model, but presents an AXI4-Lite port — the missing-dual case (the S7 gap)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _add_xy_regmap(self)          # -> self.s_lite, a VitisRegMapMMIFSlave
+        self.add_endpoint(self.s_lite)
+
+    def on_start(self) -> ProcessGen[None]:
+        yield self.timeout(0)
+
+    def bfm_model(self):
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel("AxisMaster", ports=("s_lite",))
+
+
+@dataclass
+class _NamesAMissingModel(_UnderCoveringParticipant):
+    """Names a C++ class the model library does not define."""
+
+    def bfm_model(self):
+        from waveflow.build.composite_gen import BfmModel
+        return BfmModel("AxisOverlord", ports=("stream_ep", "extra_ep"))
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["StreamDriver", "StreamSink", "MemoryMod"],
+)
+def test_every_real_participant_resolves_as_a_bfm_model(source):
+    """The three framework participants pass under the STRICTEST cut (every registered endpoint).
+
+    This is the anti-shadow gate for the resolved half: all three are driven through real RTL by the
+    XSI gates, so a False here would mean the resolution invented a requirement the emitter does not
+    have.
+    """
+    from waveflow.hw.memory import MemoryMod
+    from waveflow.simulation.stream_tb import StreamDriver, StreamSink
+
+    cls = {"StreamDriver": StreamDriver, "StreamSink": StreamSink, "MemoryMod": MemoryMod}[source]
+    assert check(cls, XSI_BFM_MODEL) == (True, None)
+
+
+def test_a_module_with_no_hook_is_a_finding_not_a_declaration():
+    """A module realized only INSIDE the cut answers False, and names the hook it does not have.
+
+    Note which reason fires, because it is not the one the plan predicted: `MemCopy` never reaches
+    the port-coverage check, since it declares no `bfm_model()` at all.  That is the more useful
+    answer — "you have no model" beats "your model misses a port" — so the coverage case is pinned
+    with a fixture instead (below).
+    """
+    from examples.mem_copy.mem_copy import MemCopy
+
+    ok, msg = check(MemCopy, XSI_BFM_MODEL)
+    assert ok is False
+    assert "declares no bfm_model() hook" in msg
+    assert "kernel_task" in msg, "the message should name the hook it DOES have a place for"
+
+
+def test_an_uncovered_port_is_named_and_the_default_cut_is_stated():
+    """Predicate item 3.  An uncovered port is a wire nobody drives — a hang, not a wrong answer."""
+    ok, msg = check(_UnderCoveringParticipant, XSI_BFM_MODEL)
+    assert ok is False
+    assert "extra_ep" in msg, "the message must name the UNCOVERED port"
+    assert "every registered endpoint" in msg, "and say which cut it judged against"
+
+
+def test_naming_the_cut_narrows_the_question():
+    """`crossing=` is what makes the verdict about a BUILD rather than about the class.
+
+    The same module, the same model, two cuts, two answers — which is the whole thesis: a module is
+    not realizable-or-not, a *(module, cut)* pair is.
+    """
+    assert check(_UnderCoveringParticipant, XSI_BFM_MODEL) [0] is False
+    assert check(_UnderCoveringParticipant, XSI_BFM_MODEL, crossing=("stream_ep",)) == (True, None)
+
+
+def test_an_axilite_port_names_the_missing_dual():
+    """Predicate item 2, and the known gap: no BFM implements AXI4-Lite, in either role.
+
+    So a regmap / `HostActivated` DUT cannot be XSI-lowered at all today.  The message must name the
+    protocol rather than saying "unknown endpoint type", because the endpoint type is perfectly well
+    known — it is the *model* that is missing.
+    """
+    ok, msg = check(_AxiLiteParticipant, XSI_BFM_MODEL)
+    assert ok is False
+    assert "AXI4-Lite" in msg
+    assert "known gap" in msg
+
+
+def test_a_model_class_that_does_not_exist_is_caught_against_the_LIBRARY():
+    """The class list is read from `xsi_bfm.h`, not restated in Python.
+
+    A Python list of model names would be a second copy of the library's contents and would drift the
+    first time a model was added or renamed — the same shadow this module's docstring forbids for
+    extraction rules.
+    """
+    from waveflow.build.composite_gen import xsi_model_classes
+
+    ok, msg = check(_NamesAMissingModel, XSI_BFM_MODEL)
+    assert ok is False
+    assert "AxisOverlord" in msg and "xsi_bfm.h" in msg
+
+    # The known set really comes from the header, and really contains the live models.
+    assert {"AxisMaster", "AxisSlave", "AxiMmReadSlave", "AxiMmWriteSlave", "FlatMemory"} \
+        <= xsi_model_classes()
+    assert "XsiSim" not in xsi_model_classes(), "the simulator is not a participant model"
+
+
+def test_the_target_is_not_a_kind_fact():
+    """`xsi_bfm_model` must NOT be a `potential_targets` entry, and that is the design.
+
+    Freezing "this module is realized outside the cut" into a class fact is exactly the `ExtMod`
+    answer the plan rejected: the cut is a property of the build. So the kind gate lets it through
+    for any `HwModule`, `potential_targets` keeps reporting only the invocation model, and `check`
+    with no target still resolves to the kind's single target rather than becoming ambiguous.
+    """
+    from waveflow.hw.codegen_targets import CUT_INDEPENDENT_TARGETS
+    from waveflow.simulation.stream_tb import StreamDriver
+
+    assert XSI_BFM_MODEL in CUT_INDEPENDENT_TARGETS
+    assert XSI_BFM_MODEL not in potential_targets(StreamDriver)
+    assert XSI_BFM_MODEL not in potential_targets(Square)
+
+    # A FreeRunMod DUT can still be ASKED the question — the answer is just no.
+    assert check(Square, XSI_BFM_MODEL)[0] is False
+    # ...and naming no target is unaffected: it still resolves to the kind's single target.
+    assert check(Square) == check(Square, COMPOSITE_KERNEL)
+
+
+def test_a_non_module_cannot_be_asked_the_question():
+    """The one kind requirement: you need endpoints to place a model against."""
+    ok, msg = check(_SequentialTB, XSI_BFM_MODEL)
+    assert ok is False
+    assert "not an HwModule" in msg
+
+
+def test_the_check_does_not_claim_behavioural_equivalence():
+    """Predicate item 5 is NOT checked, and the docs must not imply it is.
+
+    `StreamDriver` passes with a model whose C++ could do anything at all; nothing here compares the
+    Python body to the C++ FSM, and nothing static could. The standing answer is a byte-identical
+    vector gate. This test exists so that a future change which starts *claiming* equivalence has to
+    delete an assertion that says it does not.
+    """
+    from waveflow.build.composite_gen import resolve_bfm_model
+    from waveflow.build.elaborate import elaborate
+    from waveflow.simulation.stream_tb import StreamDriver
+
+    bm = resolve_bfm_model(elaborate(StreamDriver))
+    assert bm.cls == "AxisMaster"
+    # The resolution returns the DECLARATION. It never opened the C++, never ran the Python body, and
+    # never compared them -- so `(True, None)` means "resolvable", not "correct".
+    assert check(StreamDriver, XSI_BFM_MODEL) == (True, None)
 
 
 # ==============================================================================================

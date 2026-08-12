@@ -44,6 +44,67 @@ stages should run concurrently — anything that benefits from pipelining rather
 - **−** No Vitis co-sim — verification is at RTL through a hand-built (but *generated*) XSI harness.
 - **−** More machinery: internal channels, per-job tokens, and the RTL/XSI toolchain (xsim).
 
+## The DUT / TB boundary {#dut-tb-boundary}
+
+This flow has a **cut**: some modules are synthesized into the top, the rest become models beside it.
+It is worth making explicit, because none of it is declared anywhere.
+
+**The boundary is derived.** A composite names only its external port *names* — and only because
+local names collide (both `MemRStream` and `MemWStream` call their memory port `m_mem`, and the top
+needs `m_in` / `m_out`). Everything else is read off the graph: *a child endpoint not bound to one of
+the composite's internal interfaces **is** a boundary port*, in `add_comp` × `add_endpoint` order.
+The direction comes from the endpoint's type, and the `gmem` bundles from the assembler's policy.
+
+**The cut is a build choice.** `tb_top_spec(tb, dut=...)` names which child is synthesized;
+everything else in the graph becomes a testbench model. Discovery — "the one child with a
+`boundary`" — is the default, not the mechanism. So which modules are inside the boundary is a
+property of *this build*, not of the classes. See
+[Hardware modules](./modules.md#the-cut).
+
+**An internal channel and a boundary port are different objects.** This is the part that surprises
+people, and it is a Vitis constraint rather than a design preference:
+
+| | internal channel | boundary port |
+|---|---|---|
+| carries a packet boundary as | `streamutils::framed_word<W>` (a plain struct) | a real `TLAST` wire |
+| C++ type | `hls::stream<framed_word<W>>` | `hls::stream<ap_axis<W,0,0,0>>` |
+| why | HLS 214-208: `ap_axis` is reserved for interface ports and rejected on an internal FIFO | it *is* an interface port |
+
+`framed_word`'s members are deliberately named to match `ap_axis` (`.data` / `.last`) so one
+templated helper — `read_boundary_word<WordT, W>` — serves both.
+
+### Moving the cut: what it costs today
+
+The capability is real in the **graph** and not yet real in the **artifact**, and it is worth being
+precise about which is which.
+
+`MemRStream` genuinely is generated at two cuts: as its own top
+([`examples/interleaver/gen/mem_r_stream.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/gen/mem_r_stream.cpp),
+XSI gate **158**) and as a task inside `mem_copy`
+([`examples/mem_copy/gen/mem_copy.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/gen/mem_copy.cpp),
+gate **2908**). But those two are **two protocols**, not one module at two cuts: the standalone one
+reads an `MRCmd` and bursts; the composite one reads a `MemRCmd` and relays `fwd_bursts` opaque
+bursts first. `inband` is a `HwParam` — a build-time parameter of the *design* — precisely because it
+selects a protocol, and the framing follows from the protocol rather than the other way round.
+
+Holding the protocol fixed and moving *only* the cut does not work yet. Ask the generator for the
+in-band reader as a standalone top and it will emit this:
+
+```cpp
+void mem_r_stream(hls::stream<ap_uint<64> >& s_cmd, ...) {          // plain words at the boundary
+    hls_thread_local hls::task t0(mem_r_stream_framed_task<64>, s_cmd, m_mem, m_out);
+}                                          // ...but the body's signature demands framed_word<64>
+```
+
+That does not compile, and nothing in Python catches it. The task body's argument word types are not
+part of `kernel_task()`'s contract, so the generator cannot check them — and the obvious proxy does
+not work either: `mem_copy`'s own `s_done` endpoint is `has_tlast=True` in Python while
+`mem_w_stream_framed_done_task` declares it a plain `ap_uint` stream, and that design is the 2908
+gate. The Python framing flag and the C++ word type already disagree on a *working* design.
+
+Making the cut free in the artifact means teaching `kernel_task()` about the cut. That is designed
+but not built — see `plans/design_cut.md` §S5.
+
 ## How to read this flow
 
 - **[Writing it in Python](./concurrent_python.md)** — how to describe the module: a leaf's
