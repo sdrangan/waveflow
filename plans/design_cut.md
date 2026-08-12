@@ -164,7 +164,7 @@ is downstream of lowering (the spec already built) and gate 4 never reaches it.
 pre-existing failures; `-m xsi` unchanged (13 passed, 1 pre-existing `fir_block` failure — verified
 byte-identical against a stashed clean tree, see the note under Verification).
 
-### S1 — `bfm_model()` becomes a documented hook; participants become `HwModule`s
+### S1 — `bfm_model()` becomes a documented hook; participants become `HwModule`s — **DONE**
 
 Promote `bfm_model()` from duck-typed convention to an optional hook on `HwModule`, documented as the
 peer of `kernel_task()`. Migrate `StreamDriver`, `StreamSink`, `MemoryMod` from `SimObj` to
@@ -173,6 +173,35 @@ peer of `kernel_task()`. Migrate `StreamDriver`, `StreamSink`, `MemoryMod` from 
 `hasattr(c, "bfm_model")` probe with the hook.
 
 **Gate:** all four XSI gates byte-identical; `tests/build/test_tb_top_spec.py` green.
+
+**Landed as.** `HwModule.bfm_model()` is a base method that **raises** — overriding it *is* the
+declaration. `StreamDriver` / `StreamSink` / `MemoryMod` are `HwModule`s and register their endpoints
+(`MemoryMod` registers `m_mm` as well as `s_mm`: a curated subset is the kind of thing that goes
+stale).
+
+Three consequences the plan did not anticipate, each of which is the interesting part:
+
+- **`hasattr` stops being a usable probe, and that is the point.** Once the hook exists on the base,
+  `hasattr(c, "bfm_model")` is `True` for *every* module including the DUT — so `tb_top_spec`'s
+  participant probe would have swept the DUT in with the participants. `declares_hook(source, hook)`
+  (`hw_module.py`) compares against the base by identity, the way `FreeRunMod._kind` detects a
+  `run_iter` override. A canary test pins this, because the failure mode is a silently wrong
+  participant set rather than an error.
+- **`MemoryMod` becoming an `HwModule` broke the *sequential* extractor**, nowhere near the XSI path.
+  The TB `main()` walk dispatched `_try_dut_bind` (accepts any `HwModule`) before `_try_mem_bind`, so
+  a memory was claimed as a DUT and then rejected for having non-literal kwargs — 8 failures across
+  `hist` and `block_scale`. Fixed by probing **most-specific-first** (memory before DUT), which is a
+  rule rather than a negative condition someone has to maintain. Worth noting as a general hazard:
+  widening a base class re-orders every `issubclass` dispatch that was previously disjoint by accident.
+- **Open question 4 is resolved.** `BfmModel.ports` stay **attribute names** — constructor order is a
+  fact about the C++ and nothing else records it — but `_bfm_port_endpoint` now validates each against
+  the module's `add_endpoint` registry, so a stale entry is an elaboration-time `LoweringError` naming
+  both namespaces instead of a runtime `AttributeError` (or, worse, a silent resolution to some other
+  attribute that models the wrong port).
+
+**Result:** `-m xsi` byte-identical — 13 passed / 1 pre-existing `fir_block` failure, and **no
+generated artifact changed** (the XSI runs regenerate the harnesses in place; `git status` showed only
+source edits). Dev loop back at 6. `tests/build/test_tb_top_spec.py` 9 passed (4 new).
 
 ### S2 — an explicit protocol × role → BFM registry
 

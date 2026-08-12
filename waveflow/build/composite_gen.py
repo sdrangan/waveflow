@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from waveflow.build.hwcodegen import LoweringError
+from waveflow.hw.hw_module import declares_hook
 from waveflow.hw.interface import DEFAULT_STREAM_DEPTH
 
 #: Output-directory convention shared by the generated tops and their csynth .tcl.
@@ -693,7 +694,7 @@ def _kernel_task_of(sub, comp):
     if kt is None:
         outside = " It does declare bfm_model(), which is the realization hook for a module " \
                   "OUTSIDE the cut (an XSI testbench model) — so it belongs beside the top, not " \
-                  "inside it." if hasattr(sub, "bfm_model") else ""
+                  "inside it." if declares_hook(sub, "bfm_model") else ""
         raise LoweringError(
             f"composite_top_spec: {type(sub).__name__} (a child of {type(comp).__name__}) declares "
             f"no kernel_task() hook, so it has no hls::task body to instantiate inside the top."
@@ -865,6 +866,49 @@ def _find_dut(tb):
     return duts[0]
 
 
+def _bfm_port_endpoint(part, attr: str):
+    """*part*'s endpoint named by ``BfmModel.ports`` entry *attr*, validated against its registry.
+
+    Two namespaces meet here, and reconciling them is what this function is for.  ``BfmModel.ports``
+    are **attribute names** in the C++ model's constructor order (``"stream_ep"``) — they have to be,
+    because constructor order is a fact about the C++ and nothing else records it.  ``add_endpoint``
+    keys by ``endpoint.name`` (``"streamdriver3_stream_ep"``), which is a different string entirely.
+
+    Before participants had an endpoint registry there was nothing to check against, so a renamed
+    attribute produced a bare ``AttributeError`` — or worse, resolved to some *other* attribute that
+    happened to exist and quietly modelled the wrong port.  Now that a participant is an
+    :class:`~waveflow.hw.hw_module.HwModule` (``plans/design_cut.md`` S1) the registry exists, so the
+    name can be checked at elaboration time and the failure names both namespaces.
+    """
+    ep = getattr(part, attr, None)
+    if ep is None:
+        raise LoweringError(
+            f"{type(part).__name__}.bfm_model() names port {attr!r}, but the module has no such "
+            f"attribute. BfmModel.ports are ATTRIBUTE names in the C++ model's constructor order; "
+            f"this module's endpoint attributes are {sorted(_endpoint_attrs(part))}."
+        )
+    if id(ep) not in {id(e) for e in getattr(part, "endpoints", {}).values()}:
+        raise LoweringError(
+            f"{type(part).__name__}.bfm_model() names port {attr!r}, which is an attribute but was "
+            f"never registered with add_endpoint — so it is not part of the module's surface and "
+            f"nothing can resolve it through the graph. Registered endpoints: "
+            f"{sorted(getattr(part, 'endpoints', {}))}."
+        )
+    return ep
+
+
+def _endpoint_attrs(part) -> list[str]:
+    """The **attribute** names under which *part*'s registered endpoints are reachable — what the
+    error above needs in order to suggest what the author probably meant.
+
+    Reads the instance ``__dict__`` only.  Walking ``dir(type(part))`` would evaluate every class
+    property on the way past (``boundary``, ``internal_edges``, …), several of which raise by design —
+    building an error message must not be able to raise a different error.
+    """
+    reg = {id(e) for e in getattr(part, "endpoints", {}).values()}
+    return [a for a, v in vars(part).items() if id(v) in reg]
+
+
 def _render_dyn_value(value) -> str:
     """Render a ``DynParam`` value as a C++ initializer for a ``<model>.<field> = <expr>;`` line.
 
@@ -909,10 +953,10 @@ def tb_top_spec(tb) -> TbSpec:
     # endpoint identity -> the participant it belongs to
     owner: dict[int, object] = {}
     for c in tb.ordered_subcomps:
-        if c is dut or not hasattr(c, "bfm_model"):
+        if c is dut or not declares_hook(c, "bfm_model"):
             continue
         for attr in c.bfm_model().ports:
-            owner[id(getattr(c, attr))] = c
+            owner[id(_bfm_port_endpoint(c, attr))] = c
 
     # endpoint identity -> the other endpoints on its interface (so a DUT port finds its participant)
     peers: dict[int, list] = {}

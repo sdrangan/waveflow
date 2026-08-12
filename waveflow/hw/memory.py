@@ -7,8 +7,8 @@ import numpy as np
 from enum import Enum
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_module import DynParam
-from waveflow.simulation.simobj import ProcessGen, SimObj
+from waveflow.hw.hw_module import DynParam, HwModule
+from waveflow.simulation.simobj import ProcessGen
 
 
 class AddrUnit(Enum):
@@ -459,7 +459,7 @@ class _DirectBackedMMIFMaster:
 
 
 # ---------------------------------------------------------------------------
-# MemoryMod — a SimObj wrapping a Memory with MM interface endpoints
+# MemoryMod — an HwModule wrapping a Memory with MM interface endpoints
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -481,9 +481,9 @@ class MemSeg:
 
 
 @dataclass
-class MemoryMod(SimObj):
+class MemoryMod(HwModule):
     """
-    A latency-modeling :class:`~waveflow.simulation.simobj.SimObj` that wraps a
+    A latency-modeling :class:`~waveflow.hw.hw_module.HwModule` that wraps a
     :class:`Memory` and exposes MM interface endpoints.
 
     ``m_mm`` is a directly-backed master (zero-latency, for the owner's use).
@@ -606,6 +606,13 @@ class MemoryMod(SimObj):
             # modeled aggregately by the poller registry, so the peek is free).
             peek_read=lambda nwords, local_addr: self._mem.read(local_addr, nwords),
         )
+        # Register both, so this module has a real endpoint surface rather than two attributes
+        # (plans/design_cut.md S1).  `s_mm` is what `bfm_model().ports` names — the registry is what
+        # lets that name be checked at elaboration time.  `m_mm` is registered too because it IS an
+        # endpoint (the owner's direct, zero-latency path); leaving it out would make the surface a
+        # curated subset, and a curated subset is the kind of thing that quietly goes stale.
+        self.add_endpoint(self.m_mm)
+        self.add_endpoint(self.s_mm)
 
     def pre_sim(self) -> None:
         """Seed the memory from ``load_segs`` — the pysim mirror of the C++ ``FlatMemory::pre_sim``.

@@ -73,11 +73,13 @@ def _hook_clause(cls: type, target: str | None) -> str:
     Empty when the target has no hook, or when the class already declares the one it needs (in which
     case the hook is not what is wrong and saying so would mislead).
     """
+    from waveflow.hw.hw_module import declares_hook
+
     hook = REALIZATION_HOOKS.get(target or "")
-    if hook is None or hasattr(cls, hook):
+    if hook is None or declares_hook(cls, hook):
         return ""
     peers = [h for t, h in sorted(REALIZATION_HOOKS.items())
-             if h != hook and hasattr(cls, h)]
+             if h != hook and declares_hook(cls, h)]
     also = (f" It does declare {', '.join(h + '()' for h in peers)} — the realization hook(s) for a "
             f"module realized on the OTHER side of the cut." if peers else "")
     return (f" It also declares no {hook}() hook, which is what a module realized as {target!r} "

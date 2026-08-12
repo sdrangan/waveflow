@@ -389,12 +389,17 @@ class HwStmtExtractor:
             and isinstance(stmt.value, ast.Call)
         ):
             local_name = stmt.targets[0].id
-            bind = self._try_dut_bind(local_name, stmt.value, stmt)
-            if bind is not None:
-                return bind
+            # MOST SPECIFIC FIRST.  `MemoryMod` is an `HwModule`, so the DUT probe (which accepts any
+            # `HwModule` subclass) would claim it and then reject its kwargs — a memory is declared
+            # with computed sizes, a DUT with literals.  Probing for the memory first keeps the two
+            # apart by subclass depth rather than by a negative condition that has to be maintained.
+            # (Free before `plans/design_cut.md` S1, when a `MemoryMod` was a bare `SimObj`.)
             mem_bind = self._try_mem_bind(local_name, stmt.value, stmt)
             if mem_bind is not None:
                 return mem_bind
+            bind = self._try_dut_bind(local_name, stmt.value, stmt)
+            if bind is not None:
+                return bind
             schema_bind = self._try_schema_bind(local_name, stmt.value, stmt)
             if schema_bind is not None:
                 return schema_bind

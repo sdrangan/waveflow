@@ -406,9 +406,68 @@ class HwModule(SimObj):
         child).  Sub-component names are not globally unique — the same child
         type in two parents shares a name — which is fine here (they are keyed
         per parent, and every SimObj is separately registered with the
-        ``Simulation`` for pysim)."""
+        ``Simulation`` for pysim).
+
+        The ``HwModule`` annotation is **true** as of ``plans/design_cut.md`` S1.  It used to be
+        aspirational: a testbench graph added bare ``SimObj`` participants (``StreamDriver``,
+        ``StreamSink``, ``MemoryMod``) to a composite, so the declared type was a lie the type checker
+        could not see and the endpoint registry those children lacked had to be worked around with
+        attribute-name strings."""
         comp.parent = self
         self.sub_comps[comp.name] = comp
+
+    # -- realization hooks -------------------------------------------------
+    #
+    # A module can be realized in more than one way, and **which realization applies is a property of
+    # the build, not of the class** (``plans/design_cut.md``).  The same three-module design can be cut
+    # so that mod1 is the DUT and mod2/mod3 are testbench models, or so that all three are inside the
+    # DUT — and nothing about mod2 changed, only where the boundary was drawn.
+    #
+    # So the two realizations are declared by two OPTIONAL, exactly symmetric hooks, and the **cut**
+    # decides which one is consulted:
+    #
+    #   hook             says                                    used when the module is
+    #   ---------------  --------------------------------------  ---------------------------
+    #   kernel_task()    "my hls::task body is X"                 INSIDE the cut  (in the top)
+    #   bfm_model()      "my pre-written cycle model is Y"        OUTSIDE the cut (beside it)
+    #
+    # `kernel_task()` lives on FreeRunMod (only a free-running module HAS a task body, and a generated
+    # leaf derives it).  `bfm_model()` lives here, on HwModule, because being realized outside the cut
+    # is not a property of the execution model — a memory, a converter and a stream source are all
+    # candidates and none of them is a kernel.
+    #
+    # A module may declare either, both, or neither.  **Neither is not an error**: it is a pysim-only
+    # node (an RF channel, a golden reference), and that is a FINDING from `check`, not something a
+    # class has to declare about itself.
+
+    def bfm_model(self) -> "object":
+        """The pre-written XSI **cycle model** this module is realized as when it lies *outside* the
+        cut — the peer of :meth:`~waveflow.hw.hw_freerun.FreeRunMod.kernel_task`.
+
+        Returns a :class:`~waveflow.build.composite_gen.BfmModel`: the C++ class name, this module's
+        endpoint attribute names in the model's constructor order, and any literal extra ctor args.
+
+        **Declared, never derived.**  Nothing can extract a cycle-exact protocol FSM from Python
+        behaviour, and re-deriving a hand-written, verified bus model would not be progress
+        (``plans/xsi_tb_codegen.md`` Stage 0).  So a module in that position simply *names* its model,
+        exactly as an override of ``kernel_task()`` names a hand-written ``hls::task`` body.
+
+        **The asymmetry to keep honest.**  ``composite_kernel`` is *derived* — gate 4 runs the real
+        extractor, so it can answer "no" with a real reason nobody wrote down.  This side is only
+        *resolved*: a registry lookup plus port coverage.  It can say "you named a model and its ports
+        line up"; it can never say "your Python behaviour is realizable as a BFM".  That gap is closed
+        by a byte-identical vector gate and by nothing else — see
+        ``docs/guide/custom_hooks/bfm_model.md``.
+
+        The base raises: overriding is the declaration, detected by identity via
+        :func:`declares_hook` (the same way ``FreeRunMod._kind`` detects a ``run_iter`` override).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} declares no bfm_model() hook, so it has no pre-written cycle "
+            f"model to place beside the top. A module realized OUTSIDE the cut overrides bfm_model() "
+            f"to name one (see docs/guide/custom_hooks/bfm_model.md); a module realized INSIDE the "
+            f"cut declares kernel_task() instead."
+        )
 
     # -- resource models ---------------------------------------------------
     def add_rm(self, platform) -> None:
@@ -647,3 +706,27 @@ class HwModule(SimObj):
                 object.__setattr__(
                     self, name, HwParamValue(int(value), name)
                 )
+
+
+def declares_hook(source, hook: str) -> bool:
+    """Does *source* **declare** the realization hook named *hook*, or merely inherit the base's
+    "not declared" sentinel?
+
+    ``hasattr`` cannot answer this and must not be used for it.  Once :meth:`HwModule.bfm_model`
+    exists as a base method, ``hasattr(mod, "bfm_model")`` is ``True`` for *every* module including
+    the DUT — which is exactly the probe the testbench walk used to identify participants.  So the
+    predicate is identity against the base, the same way ``FreeRunMod._kind`` detects a ``run_iter``
+    override and ``FreeRunMod.kernel_task`` documents detecting its own.
+
+    A hook the base class does not define at all (``kernel_task``, which lives on ``FreeRunMod``) has
+    no sentinel to compare against, so *present* is *declared* — correct, because a ``FreeRunMod``
+    leaf really does have one (derived from the module itself), and a plain ``HwModule`` really has
+    none.
+
+    Accepts a class or an instance.
+    """
+    cls = source if isinstance(source, type) else type(source)
+    fn = getattr(cls, hook, None)
+    if fn is None:
+        return False
+    return fn is not getattr(HwModule, hook, None)

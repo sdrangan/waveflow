@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from waveflow.build.composite_gen import tb_top_spec
+from waveflow.hw.hw_module import declares_hook
 from waveflow.simulation.simulation import Simulation
 
 
@@ -101,7 +102,7 @@ def test_an_unwired_dut_port_fails_loudly():
 def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     """Regression: `kernel_task` does NOT identify the DUT — a composite has none (only its
     children do), so both the DUT and the participants answer False. The discriminator is
-    `boundary` (RTL ports) vs `bfm_model()` (a TB model)."""
+    `boundary` (RTL ports) vs a DECLARED `bfm_model()` (a TB model)."""
     tb = _tb()
     # Every FreeRunMod now HAS a kernel_task (the base derives one for a leaf), so presence cannot
     # be the discriminator — the canary that used to assert its absence has fired and been checked.
@@ -109,5 +110,55 @@ def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     with pytest.raises(TypeError, match="composite"):
         tb.dut.kernel_task()            # a composite has no task of its own
     assert hasattr(tb.dut, "boundary")  # ...but it does have RTL ports
-    assert hasattr(tb.dut, "boundary") and not hasattr(tb.dut, "bfm_model")
-    assert hasattr(tb.driver, "bfm_model") and not hasattr(tb.driver, "boundary")
+    assert not declares_hook(tb.dut, "bfm_model")
+    assert declares_hook(tb.driver, "bfm_model") and not hasattr(tb.driver, "boundary")
+
+
+def test_hasattr_is_not_the_bfm_discriminator_declaration_is():
+    """The canary for the S1 migration: `hasattr(c, "bfm_model")` now answers True for EVERYTHING.
+
+    Once `bfm_model()` is a documented hook on `HwModule` (rather than a duck-typed convention), the
+    base method exists on every module — including the DUT.  So the probe the TB walk used to
+    identify participants would sweep the DUT in with them, and `_find_dut`'s two-way split would
+    collapse.  `declares_hook` compares against the base by identity instead, which is the same way
+    `FreeRunMod._kind` detects a `run_iter` override.
+
+    This test exists so that reintroducing the `hasattr` spelling fails loudly rather than producing
+    a subtly wrong participant set.
+    """
+    tb = _tb()
+    assert hasattr(tb.dut, "bfm_model"), "the base hook exists on every HwModule — that is the trap"
+    assert not declares_hook(tb.dut, "bfm_model"), "...but the DUT does not DECLARE one"
+
+    # And the base is a sentinel, not a silent default: calling it says what to do.
+    with pytest.raises(NotImplementedError, match="declares no bfm_model"):
+        tb.dut.bfm_model()
+
+
+def test_participants_register_their_endpoints_so_bfm_ports_are_checkable():
+    """S1's structural payoff: `BfmModel.ports` names can be VALIDATED, not merely `getattr`-ed.
+
+    `ports` are attribute names in the C++ model's constructor order; `add_endpoint` keys by
+    `endpoint.name`.  Those are two different namespaces, and before participants were `HwModule`s
+    there was no registry to reconcile them against — so a renamed attribute was a runtime failure
+    deep in the walk (or, worse, resolved to some other attribute and modelled the wrong port).
+    """
+    tb = _tb()
+    for part in (tb.driver, tb.done_sink, tb.mem):
+        registered = {id(e) for e in part.endpoints.values()}
+        assert registered, f"{type(part).__name__} registered no endpoints"
+        for attr in part.bfm_model().ports:
+            assert id(getattr(part, attr)) in registered, (
+                f"{type(part).__name__}.bfm_model() names {attr!r}, which is not a registered "
+                f"endpoint")
+
+
+def test_a_bfm_port_naming_an_unregistered_attribute_fails_at_elaboration():
+    """The failure the registry converts: a stale `ports` entry, caught with both namespaces named."""
+    from waveflow.build.composite_gen import BfmModel
+    from waveflow.build.hwcodegen import LoweringError
+
+    tb = _tb()
+    tb.driver.bfm_model = lambda: BfmModel("AxisMaster", ports=("stream_epp",), extra_args=("{}",))
+    with pytest.raises(LoweringError, match="no such attribute"):
+        tb_top_spec(tb)
