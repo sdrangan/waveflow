@@ -3,7 +3,7 @@ title: XSI testbench in HLS
 parent: Module Code Generation
 nav_order: 8
 audience: hls
-api: [tb_top_spec, render_tb_harness, render_tb_main, render_ports_h, render_rtl_f, bfm_model]
+api: [tb_top_spec, render_tb_harness, render_tb_main, render_ports_h, render_rtl_f, bfm_model, resolve_bfm_model, declares_hook]
 summary: "How a testbench FreeRunMod graph is realized as a cycle-based XSI BFM: tb_top_spec walks the graph, each participant maps to a pre-written C++ BFM model via bfm_model(), and render_tb_harness plus render_tb_main emit a harness that drives the elaborated RTL in xsim. The target is sequential_xsi_tb, and it exists because Vitis cannot co-simulate an ap_ctrl_none DUT."
 ---
 
@@ -48,7 +48,14 @@ kernel".
 ## Participants map to pre-written models
 
 A testbench participant does not *lower* to C++ — it **maps** to a pre-written, cycle-exact model.
-Each declares which via `bfm_model()`:
+Each declares which via [`bfm_model()`](../custom_hooks/bfm_model.md), a **documented hook** on
+`HwModule` and the exact peer of `kernel_task()`: one hands over a pre-written artifact for a module
+*inside* the cut, the other for a module *outside* it.
+
+(It was a duck-typed convention until recently — the walk found participants with
+`hasattr(c, "bfm_model")`. That probe no longer works, and could not: now the hook exists on the base
+class it answers `True` for every module including the DUT. Declaration is detected by identity
+against the base, via `declares_hook()`.)
 
 | Python participant | C++ model | drives |
 |---|---|---|
@@ -61,7 +68,36 @@ Each declares which via `bfm_model()`:
 construct → run *N* cycles → close. Any per-instance configuration rides across as
 [`DynParam`](../flows/parametrization.md#dynparam) member assignments — `s_cmd.in_bundle = "vectors/s_cmd";` —
 so adding a knob is a field on the Python class plus a public member on the C++ model, with no
-generator change.
+generator change. (Watch the falsy-value trap when you do —
+[Writing a BFM model](../custom_hooks/bfm_model.md#config-contract).)
+
+## Two questions, two targets
+
+| target | scope | asks |
+|---|---|---|
+| `sequential_xsi_tb` | per **graph** | does this whole testbench lower to a harness? |
+| `xsi_bfm_model` | per **module** | could *this* module be realized as a model beside a top? |
+
+They are not the same question, and a design can answer the second yes for every participant and
+still fail the first — the graph adds questions a module cannot answer alone (is there exactly one
+DUT? is every DUT port driven?). The per-module one takes an optional `crossing=` naming the endpoints
+that cross the cut; with none given it judges against **every** registered endpoint, which is the
+strictest and the only cut-independent answer.
+
+### What `check` can and cannot tell you
+
+The two are not the same kind of verdict, and the difference is load-bearing:
+
+- `composite_kernel` is **derived**. Gate 4 runs the real extractor and converts its raise into a
+  verdict, so it answers with rules nobody restated — there is no second copy to drift.
+- `xsi_bfm_model` is **resolved**. Four lookups: the hook is declared, the named C++ class exists in
+  `xsi_bfm.h`, its `ports` cover every crossing endpoint, and each endpoint has a dual in the
+  [protocol × role table](../build/bfm.md#bfm-duals).
+
+That is the complete list. `(True, None)` means **resolvable**, not correct: nothing compares your
+Python module's behavior to the C++ model's, and nothing static can. Closing that gap is a
+[byte-identical vector gate](../custom_hooks/bfm_model.md#conformance) and nothing
+else.
 
 ## The scenario lives in files, not in the C++
 
@@ -101,3 +137,4 @@ feeds five all-ones vectors through a running total and requires `1,2,3,4,5`: a 
 - [Free-running kernel in HLS](./freerunning.md) — the DUT this harness drives.
 - [Concurrent (free-running)](../flows/concurrent.md) — the flow end to end.
 - [Testbench](./testbench.md) — the other testbench target, `sequential_vitis_tb`, from a `SeqTB` body.
+- [Writing a BFM model](../custom_hooks/bfm_model.md) — the authoring page for the `bfm_model()` hook.

@@ -29,6 +29,31 @@ Burst bookkeeping, beat counters, `RLAST`/`WLAST` handling, byte-address-to-word
 handshake accounting are all inside those classes. A testbench composes them; it does not reimplement
 them, and it contains no per-cycle bus code.
 
+### Which model serves which port {#bfm-duals}
+
+A testbench port is never free: it must present the **dual** of the DUT port it faces — the opposite
+role on the same protocol. That pairing is one table, `BFM_DUALS` in
+[`composite_gen.py`](../../../waveflow/build/composite_gen.py), and every caller goes through it. So
+"which duals exist?" has one lookup, and the **holes are rows in the same table** rather than a
+caveat in prose:
+
+| DUT boundary port | protocol | the TB must present | model |
+|---|---|---|---|
+| `axis_in` | AXI4-Stream | master | `AxisMaster` * |
+| `axis_out` | AXI4-Stream | slave | `AxisSlave` * |
+| `maxi_read` | AXI4-MM | read slave | `AxiMmReadSlave` |
+| `maxi_write` | AXI4-MM | write slave | `AxiMmWriteSlave` |
+| `mm_slave` | AXI4-MM | master | **none** — in this flow the kernel is always the master |
+| `axilite_slave` | AXI4-Lite | master | **none** — so a `HostActivated` DUT cannot be driven at RTL |
+
+\* On AXI-Stream the role fixes the direction but not the class, so the **participant** names it: a
+source, a sink, and a peer that never backpressures are three classes in one role. On `m_axi` there
+is nothing to choose — a memory does not get to decide whether it is read or written; the DUT's port
+kind decides, and the participant supplies only the arena.
+
+The AXI4-Lite hole is the load-bearing one: it is why every design verified this way is free-running.
+Filling it is future work (`plans/design_cut.md` §S7).
+
 ## One lifecycle, five phases
 
 Every model derives from `XsiSimObj`, the C++ mirror of Python's `SimObj`. All five phases default to
@@ -45,6 +70,10 @@ no-ops, so a model implements only what it needs:
 The cycle loop just applies those phases in order across the participants. Sampling in the clock-low
 phase is what keeps handshake accounting consistent and avoids off-by-one timing errors — but that
 discipline now lives in the loop and the models, not in code you maintain per testbench.
+
+Writing a *new* model is a separate page: [Writing a BFM model](../custom_hooks/bfm_model.md) covers
+when one is warranted (usually it is not), why `sample` and `update` must stay split, the `DynParam`
+config contract, and the conformance gate a new model owes.
 
 ## Two ways to assemble one
 
@@ -130,10 +159,11 @@ pipeline's throughput.
 
 One trap worth stating plainly: the meaningful number is **time-to-last-completion**, not the loop
 count. A run loops a fixed number of cycles and then drains, so the loop bound overstates the work —
-`mem_copy` finishes at 2835 inside a 3400-cycle loop. Compare completion cycles, never the total.
+`mem_copy` finishes at 2908 inside a 3400-cycle loop. Compare completion cycles, never the total.
 
 ## See also
 
 - [XSI Build Rung](./xsi.md) — terminology and the full compile/elaborate/run flow.
 - [The mem_copy testbench](../../examples/memcpy/testbench.md) — the generated path end to end.
 - [Stream drivers and sinks](../sim/stream_tb.md) — the pysim participants and their BFM twins.
+- [Writing a BFM model](../custom_hooks/bfm_model.md) — authoring a sixth model, if you really need one.

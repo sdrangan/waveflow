@@ -3,8 +3,8 @@ title: Hardware modules
 parent: Hardware modules and Flows
 nav_order: 1
 audience: python
-api: [SimObj, HwModule, HostActivated, FreeRunMod, add_endpoint]
-summary: "The foundation both flows build on. A HwModule is a SimObj with typed ports and a behavior — the single source of truth for a hardware block, both the model you simulate and the source for a generated kernel. It is defined by three things: its endpoints, how it is wired, and what it does. The taxonomy then sorts the kinds and hands off to a flow: a plain HwModule is a simulation-only model, HostActivated maps to the sequential flow, and FreeRunMod (a leaf, or a composite of sub-components) maps to the concurrent flow."
+api: [SimObj, HwModule, HostActivated, FreeRunMod, add_endpoint, kernel_task, bfm_model, declares_hook]
+summary: "The foundation both flows build on. A HwModule is a SimObj with typed ports and a behavior — the single source of truth for a hardware block, both the model you simulate and the source for a generated kernel. It is defined by three things: its endpoints, how it is wired, and what it does. The taxonomy then sorts the kinds and hands off to a flow: a plain HwModule is a simulation-only model, HostActivated maps to the sequential flow, and FreeRunMod (a leaf, or a composite of sub-components) maps to the concurrent flow. Kind is only one of three axes: kind is how the body is invoked (a class fact), hooks are how it is realized (kernel_task / bfm_model), and the cut decides which hook applies (a build choice)."
 ---
 
 # Hardware modules
@@ -105,6 +105,63 @@ There are exactly **two synthesizable kinds**, and each is the entry point to on
 > (its sub-components do the work). The kind is decided by **content** — a `run_iter` body vs
 > sub-components — so codegen dispatches on it directly rather than inferring the execution model from
 > the shape of the code.
+
+## Kind is not the only axis
+
+The kinds above answer one question: **how is this module's body invoked?** That is a class fact —
+host-launched or free-running — and no build changes it.
+
+There are two more axes, and keeping them apart is what lets one module serve more than one design.
+
+| axis | question | decided by |
+|---|---|---|
+| **kind** | how is the body *invoked*? | the class (`HostActivated` / `FreeRunMod`) |
+| **hooks** | is there a *pre-written* artifact for it? | the module, by declaring one |
+| **cut** | *which* artifact applies? | the **build** |
+
+### Hooks: the two pre-written realizations
+
+A module's C++ is either derived from its Python or handed over ready-made. Handing it over is a
+**hook**, and there are two — symmetric, both optional:
+
+| hook | declares | realized as |
+|---|---|---|
+| [`kernel_task()`](../custom_hooks/writing.md) | "my `hls::task` body is *X*" | a task **inside** the generated top |
+| [`bfm_model()`](../custom_hooks/bfm_model.md) | "my cycle model is *Y*" | an `XsiSimObj` **beside** the top |
+
+A module may declare either, both, or neither. **Neither is not an error** — it is a plain `HwModule`
+that never leaves simulation, and that is a *finding* from `check`, not something the class states
+about itself. (Overriding is the declaration: the base `bfm_model()` raises, and `declares_hook()`
+detects the override by identity, exactly as `_kind()` detects a `run_iter` override.)
+
+Note what a hook is *not*: it is not a kind. `MemRStream` hands over an entirely hand-written
+`hls::task` body and lives **inside** a synthesized kernel; `StreamDriver` hands over an entirely
+hand-written cycle model and lives **outside** one. Extracted-vs-pre-written
+([`comp_codegen`](../comp_codegen/) vs [`custom_hooks`](../custom_hooks/)) is a real axis, and it is
+not this one.
+
+### The cut is a build choice, not a class fact {#the-cut}
+
+Consider a design of three modules. In one synthesis the DUT is `mod1` alone and `mod2`/`mod3` are
+testbench models; in another all three are inside the DUT. **Nothing about `mod2` changed** — only
+where the boundary was drawn.
+
+![The same three modules under two cuts. In cut A the boundary encloses mod1 alone, so mod2 and mod3 are realized outside it through bfm_model(); in cut B the boundary encloses all three, so each is realized inside it through kernel_task(). The modules themselves are identical in both panels.](./figures/design_cut.svg)
+
+So no module declares which side it is on, and the framework does not either:
+
+- The **boundary is derived**. A child endpoint not bound to one of the composite's internal
+  interfaces *is* a boundary port. Only the external port *names* are declared, and only because
+  local names collide (two children both call their memory port `m_mem`).
+- The **cut is an argument**. `tb_top_spec(tb, dut=...)` names which child is synthesized; discovery
+  is the default, not the mechanism.
+- **The cut decides which hook is consulted** — inside the top, `kernel_task()`; beside it,
+  `bfm_model()`.
+
+This is why "is this a DUT or a testbench participant?" is not a property you will find on any class.
+Asking it of a *(module, cut)* pair is what `check(mod, target)` is for. See
+[Concurrent flow — the DUT/TB boundary](./concurrent.md#dut-tb-boundary) for what re-cutting
+costs in practice, which as of today is more than it should.
 
 ## Next
 

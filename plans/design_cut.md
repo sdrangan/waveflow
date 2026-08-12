@@ -39,7 +39,8 @@ Four pieces of evidence, all in the tree today:
 
 2. **One module, two cuts, both green.** `MemRStream` is generated as its own top
    (`examples/interleaver/gen/mem_r_stream.cpp`, XSI gate **158**) *and* instantiated as a task inside
-   `mem_copy` (`examples/mem_copy/gen/mem_copy.cpp`, gate **2835**). The capability is real and proven.
+   `mem_copy` (`examples/mem_copy/gen/mem_copy.cpp`, gate **2908**). The capability is real for the
+   *graph*; see S5 for why it is not what it looks like for the *artifact*.
 
 3. **But the crossing encoding is baked into the hand-written body.** In the same two files:
 
@@ -119,7 +120,8 @@ rather than implied away by the existence of a `check`.
 ## Stages
 
 Each stage is independently landable and independently gated. The four XSI cycle gates
-(**158 / 176 / 2835 / 3469**) are the safety net throughout: this is a re-typing and re-siting
+(**158 / 176 / 2908** — see the measured baselines below; the plan's original "2835 / 3469" was
+stale) are the safety net throughout: this is a re-typing and re-siting
 exercise over code that works, so any drift is a regression, not a design change.
 
 ### S0 — a verdict exception for the graph walks *(prerequisite)* — **DONE**
@@ -323,7 +325,7 @@ exactly one synthesizable child, which is a property of the examples rather than
 explicitly. `tests/build/test_tb_top_spec.py` 22 passed, 1 skipped (4 new). Dev loop at 6; `-m xsi`
 unchanged.
 
-### S5 — the crossing encoding stops being baked into the body ⟵ *the stage that buys the feature*
+### S5 — the crossing encoding stops being baked into the body — **NOT DONE; premise refuted**
 
 S1–S4 are hygiene and checkability. **This** is the finding from evidence item 3: `mem_r_stream_task`
 vs `mem_r_stream_framed_task` are two hand-written artifacts for one module at two cuts. Until the
@@ -340,7 +342,76 @@ Also in scope here: `StreamIF.depth` is a physical property that must survive th
 **Gate:** `mem_r_stream` generated at **both** cuts from **one** module declaration — standalone top
 (158) and inside `mem_copy` (2835) — with no second hand-written body.
 
-### S6 — the docs
+---
+
+#### Outcome: the gate is unmeetable as written, and the reason is a factual error in evidence item 3
+
+Not a shortfall of effort or of tooling — the two cycle counts the gate names **do not describe two
+cuts of one module**, so no amount of framing work could make one declaration produce both. Three
+findings, in order of importance.
+
+**1. `mem_r_stream_task` and `mem_r_stream_framed_task` are two PROTOCOLS, not two cuts.**
+Evidence item 3's table lists what differs (the edge type and the body name) and omits what *causes*
+it. Read side by side:
+
+| | `mem_r_stream_task` (gate 158) | `mem_r_stream_framed_task` (gate 2908) |
+|---|---|---|
+| command schema | `MRCmd{addr, len, xfer_len, xfer_msg[8]}` — 6 words @64b | `MemRCmd{addr, len, fwd_bursts}` — 2 words @64b |
+| behaviour | dequeue, burst `len` words | dequeue, **relay `fwd_bursts` opaque bursts**, then burst |
+| channel word | `ap_uint<W>` | `framed_word<W>` |
+
+Only the third row is a framing/cut concern. The first two are a different wire format and a
+different behaviour, and `inband` is a **`HwParam`** — a build-time parameter of the *design* —
+precisely because it selects a protocol. Framing follows from the protocol (the forwarding protocol
+*needs* packet boundaries), not the other way round. Meeting the gate literally would mean merging
+two protocols into one body: not "the crossing encoding stops being baked in", but the opposite.
+
+**2. The genuine framing question is real, and the generator currently answers it with silently
+uncompilable C++.** Asking for the *same* declaration (`MemRStream(inband=True)`) at the standalone
+cut — protocol held fixed, only the cut moved — emits:
+
+```cpp
+void mem_r_stream(hls::stream<ap_uint<64> >& s_cmd, const ap_uint<64>* m_mem,
+                  hls::stream<ap_uint<64> >& m_out) {          // plain words at the boundary
+    hls_thread_local hls::task t0(mem_r_stream_framed_task<64>, s_cmd, m_mem, m_out);
+}                                     // ...but the body's signature demands framed_word<64>&
+```
+
+That is the real "you cannot move the cut", and it is worse than the plan supposed: not "you must
+write another body" but "you get a top that does not compile, with nothing in Python to say so".
+
+**3. Neither candidate shape is stage-sized, and the cheaper one is blocked where the plan does not
+look.** The template-parameter path is genuinely the right idea — `streamutils_hls.h` was *already
+designed for it*: `write_boundary_word<WordT, W>` is documented as "one realization for BOTH
+boundary-carrying word types", and `framed_word`'s members are named to match `ap_axis` for exactly
+this reason. But threading `WordT` through the body is the easy half. The body also calls
+`MemRCmd::read_framed_stream<W>`, which the **schema emitter** generates with
+`hls::stream<framed_word<word_bw>>` hard-coded — so the template must go through `dataschema.py` for
+every schema with a framed reader. And then `KernelTask.template_args` must become **cut-dependent**,
+while `kernel_task()` is called with no knowledge of the cut at all. That is a contract change to the
+one hook this whole plan is built on, plus a new `ap_axis` boundary-port flavour (TLAST wires in
+`ExtPort` / `render_ports_h` / `_boundary_trace`), BFM TLAST handling, a fresh csynth, and a **new**
+exact-cycle gate established by measurement.
+
+**4. And the obvious guard rail cannot be derived from what the graph knows today.** The natural
+consolation prize — refuse to emit a top whose boundary port type disagrees with the body's word
+type — cannot be built from `has_tlast`: `mem_copy`'s own `s_done` endpoint is `has_tlast=True` in
+Python while `mem_w_stream_framed_done_task` declares it a plain `ap_uint` stream, and **that design
+is the 2908 gate**. The Python framing flag and the C++ word type already disagree on a *working*
+design, so a `has_tlast`-based check would fail the flagship gate as a false positive. A real guard
+needs `KernelTask` to declare its argument word types — the same contract change as above.
+
+#### What S5 should become
+
+One stage: **make `kernel_task()` cut-aware.** `kernel_task(cut)` (or a descriptor that carries
+per-argument word types) is the single change that unblocks all of it — it makes the guard rail
+derivable *and* makes `template_args` cut-dependent, and it is the honest place the framing shift
+attaches. Everything else in the list above follows from it. It is its own arc, comparable in size to
+S0–S4 combined, and it should be planned against a **new** measured gate rather than against 158/2908.
+
+Nothing was landed for S5. No gate was weakened and no second body was written.
+
+### S6 — the docs — **DONE**
 
 **Mostly deltas, not new pages.** Four of the five pages this feature needs already exist, and two of
 them already name `bfm_model` — so the risk is *drift*, not absence. `docs/guide/comp_codegen/xsi_tb.md`
@@ -350,7 +421,7 @@ after S1 the page becomes true without changing a word of its claim.
 | page | status | what changes |
 |---|---|---|
 | `guide/flows/modules.md` | edit | The taxonomy page — today it sorts modules into kinds ("a plain `HwModule` is a simulation-only model; `HostActivated` → sequential; `FreeRunMod` → concurrent"). It gains the **second axis**: *kind* = how the body is invoked (class fact); *hooks* = how it is realized (`kernel_task()` / `bfm_model()`); *cut* = which hook applies (build choice). This is where "the cut is a build choice, not a class fact" belongs, because it is the foundation page both flows read. |
-| `guide/flows/concurrent.md` | edit | Make the **DUT/TB boundary** an explicit concept rather than an assumption: the boundary is *derived* (an endpoint not bound to an internal interface **is** a boundary port); an internal channel and a boundary port are **different objects** (`framed_word<W>` vs AXIS + `TLAST`); re-cutting is a build choice with a cost. Carries the `mem_r_stream` two-cut worked example — real, already gated (158 standalone / 2835 inside `mem_copy`). |
+| `guide/flows/concurrent.md` | edit | Make the **DUT/TB boundary** an explicit concept rather than an assumption: the boundary is *derived* (an endpoint not bound to an internal interface **is** a boundary port); an internal channel and a boundary port are **different objects** (`framed_word<W>` vs AXIS + `TLAST`); re-cutting is a build choice with a cost. Carries the `mem_r_stream` two-cut worked example — real, already gated (158 standalone / 2908 inside `mem_copy`). |
 | `guide/comp_codegen/xsi_tb.md` | edit | `bfm_model()` is a **documented hook**, not a duck-typed convention (S1). Add `xsi_bfm_model` (per-**module**) alongside `sequential_xsi_tb` (per-**graph**) and say plainly which question each answers. State the **resolved-vs-derived asymmetry**: what `check` can and cannot tell you about a BFM. |
 | `guide/build/bfm.md` | edit | Already documents the model library and the `XsiSimObj` lifecycle. Add the S2 **protocol × role registry** as a table, so "which duals exist" has one lookup, and name the AXI-Lite hole in the same table rather than in prose. |
 | `guide/custom_hooks/bfm_model.md` | **new** | The authoring page. Sited as the sibling of `custom_hooks/writing.md` (how to write a `hls::task` body) — **the symmetry is the pedagogy**: one section teaches both pre-written realizations, inside and outside the cut. |
@@ -384,6 +455,28 @@ The new page's contents, in order:
 `tests/docs/test_documented_numbers.py` — the latter matters because the cycle counts this plan leans on
 appear *in* the docs, so an S5 change to `mem_r_stream`'s generated form must update both or fail.
 
+**Landed as.** All five pages, plus the figure. Four edits (`flows/modules.md`, `flows/concurrent.md`,
+`comp_codegen/xsi_tb.md`, `build/bfm.md`) and one new page (`custom_hooks/bfm_model.md`, sited as the
+sibling of `custom_hooks/writing.md` — the symmetry is the pedagogy). `flows/index.md` gained
+`xsi_bfm_model` back in S3, per the no-drift contract.
+
+The figure earned its place and is built the committed way (`docs/guide/flows/figures/design_cut.tex`
+→ `design_cut.svg` via a local `render.sh`, MiKTeX `pdflatex` → `dvisvgm`): one diagram, the same
+three modules under two cuts, with the hook labels changing and the modules not.
+
+**`concurrent.md` carries the S5 finding rather than the S5 promise.** The plan's brief said
+"re-cutting is a build choice with a cost"; what the witness showed is that it is a build choice in
+the *graph* and not yet in the *artifact*, so the page says that instead — including the
+uncompilable-C++ example and the `has_tlast` false-positive trap. Writing the intended claim would
+have documented a feature that does not exist.
+
+**Three stale cycle counts fixed while here** (`guide/build/bfm.md` and
+`guide/flows/concurrent_flowsteps.md` both said mem_copy finishes at 2835; `CLAUDE.md` listed
+"158 / 176 / 2835 / 3469"). `test_documented_numbers.py` does not cover these — its scope is the
+calibration/resource figures — so they had drifted silently against a gate that asserts 2908 exactly.
+
+**Result:** `tests/docs` 12 passed. Dev loop at 6.
+
 ### S7 — deferred
 
 - **AXI-Lite BFM** (unblocks XSI for `HostActivated` DUTs).
@@ -404,9 +497,9 @@ never mistaken for a regression:
   (`block 0 word 0: 0x00000000 != golden 0x0dab0666` — the RTL dumps a zero arena). It is **not** one
   of the four cycle gates, and it was confirmed pre-existing by stashing this branch's work and
   re-running `-m xsi` against the clean tree: byte-identical failure. The four cycle gates
-  (158 / 176 / 2835 / 3469) are green throughout.
+  (158 / 176 / 2908) are green throughout.
 
-- The four XSI gates (158 / 176 / 2835 / 3469) after every stage. Nothing here is allowed to move them.
+- The XSI cycle gates (158 / 176 / 2908) after every stage. Nothing here is allowed to move them.
 - New unit tests in `tests/build/test_codegen_check.py` (S0, S3) and `tests/build/test_tb_top_spec.py`
   (S1, S2, S4).
 - S5 is the only stage whose gate is a *new* artifact rather than an unchanged one.

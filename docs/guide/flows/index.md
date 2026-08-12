@@ -49,7 +49,7 @@ it). A module answers it by declaring a `bfm_model()` hook, just as a module ins
 
 It is deliberately not a row in the table, because **the cut is a property of the build, not of the
 class**: the same module is inside the DUT in one synthesis and a testbench model in another, with
-nothing about the module changed. See [Hardware modules](./modules.md) for that axis, and
+nothing about the module changed. See [Hardware modules](./modules.md#the-cut) for that axis, and
 `check(mod, "xsi_bfm_model")` for the per-module answer.
 
 ## See also
