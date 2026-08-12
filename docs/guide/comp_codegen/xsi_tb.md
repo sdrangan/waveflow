@@ -71,6 +71,43 @@ so adding a knob is a field on the Python class plus a public member on the C++ 
 generator change. (Watch the falsy-value trap when you do —
 [Writing a BFM model](../custom_hooks/bfm_model.md#config-contract).)
 
+## `tb_top_spec` has two walks {#two-walks}
+
+The walk above iterates **`dut.boundary`** — one model per RTL port — and that spine is what makes
+"did we cover every port?" structural rather than a review question. It is also blind by
+construction: an edge with no DUT port on either end emits nothing, and was not rejected so much as
+*invisible*.
+
+So there is a second walk, over the TB's own interfaces. The partition is on the **interface**, so
+nothing can be claimed twice or missed:
+
+| the interface has | is | walk 1 or 2 | emits |
+|---|---|---|---|
+| at least one endpoint on the DUT boundary | a boundary edge | **1** | one BFM per DUT port |
+| neither endpoint on the DUT boundary | a [behavioral edge](../interface/behavioral.md) | **2** | one channel + its two peer models |
+| an endpoint inside the DUT that is not a boundary port | a graph error | — | a refusal |
+| an endpoint on no testbench child at all | a graph error | — | a refusal |
+
+The last two rows are the point of the change as much as the second walk is: those cases used to be
+**silent no-ops**, and the temptation they created was to collapse an edge's far peer into a file
+read by the neighbouring model. That is precisely the invariant violation this whole flow exists to
+prevent — *the pysim graph and the XSI graph must have the same nodes*. An edge that reaches nowhere
+useful is now an error that names what it reached.
+
+Two consequences worth knowing before you hit them:
+
+- **A channel is declared before both of its peers** — in the member list, in the constructor's
+  initializer list, and in the participant registration. All three, because declaration order *is*
+  construction order and construction order is what puts the channel's `sample()` first. See
+  [Behavioral edges](../interface/behavioral.md#why-a-queue-and-not-a-direct-call).
+- **A module cannot yet sit on both a boundary port and a behavioral edge.** `bfm_model()` names one
+  C++ class for the whole module, and the two bindings have different constructor shapes
+  (`(dut, prefix, …)` versus `(channel, …)`). It is refused with that sentence rather than emitted
+  wrongly; resolving it needs per-port resolution in `BfmModel`.
+
+A graph with no behavioral edge emits exactly what it did before — byte for byte, including the
+`#include "xsi_channel.h"` that only appears when a channel does.
+
 ## Two questions, two targets
 
 | target | scope | asks |

@@ -24,6 +24,7 @@ This section is the **Python transactional model**: the interface classes, their
 - [Register Maps](./regmap.md) — AXI-Lite control/status fields (`RegMap`, `VitisRegMap`).
 - [Schema Transfer Interface](./schema_transfer.md) — carrying serializable schema objects over a transport.
 - [Array Transfer Interface](./array_transfer.md) — carrying a variable-length typed array over a transport.
+- [Behavioral Edges](./behavioral.md) — an interface that carries **behavior and state**, not only wiring: the `xsi_model()` hook, the `BlockChannel` primitive, and the phase discipline that makes a model-to-model transfer order-independent.
 
 ## See also
 

@@ -257,6 +257,53 @@ def test_rf_loopback_page_loss_counts_are_recomputed():
 
 
 # ---------------------------------------------------------------------------
+# behavioral edges — the latency a channel hop adds
+# ---------------------------------------------------------------------------
+
+def test_the_hop_latency_the_edge_pages_quote_is_the_one_the_channel_has():
+    """"each hop costs exactly one cycle" is a figure a reader designs against.
+
+    It is what makes an N-hop chain N cycles slower in XSI than in pysim, which is a real disagreement
+    between the two backends and one someone will budget for. So it is recomputed from the C++
+    primitive rather than asserted in prose: the same push/pop sequence the pages describe is run, and
+    the measured latency must be the number both pages quote.
+    """
+    import shutil
+    import subprocess
+
+    gxx = shutil.which("g++")
+    if gxx is None:
+        pytest.skip("g++ not on PATH — cannot measure the channel's hop latency")
+
+    xsi_src = REPO / "waveflow" / "build" / "xsi"
+    tmp = REPO / "docs" / "_hoplat_check"          # cleaned up below; no tmp_path in a plain function
+    tmp.mkdir(exist_ok=True)
+    try:
+        src = tmp / "hop.cpp"
+        src.write_text(
+            '#include "xsi_channel.h"\n#include <cstdio>\n'
+            "int main(){ wfbfm::BlockChannel<int> ch(4); int v=0, push_c=3, pop_c=-1;\n"
+            "  for (int c=1;c<=8;++c){ ch.sample();\n"
+            "    if (pop_c<0 && ch.pop(v)) pop_c=c;\n"
+            "    if (c==push_c) ch.push(7); }\n"
+            "  std::printf(\"%d\\n\", pop_c-push_c); return 0; }\n", encoding="utf-8")
+        exe = tmp / "hop.exe"
+        subprocess.run([gxx, "-std=c++17", f"-I{xsi_src}", str(src), "-o", str(exe)],
+                       check=True, capture_output=True, text=True)
+        measured = int(subprocess.run([str(exe)], check=True, capture_output=True,
+                                      text=True).stdout.strip())
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    assert measured == 1, f"a channel hop now costs {measured} cycles, not 1"
+    word = {1: "one", 2: "two", 3: "three"}[measured]
+    for page in ("guide/interface/behavioral.md", "guide/build/bfm.md"):
+        text = _page(page)
+        assert f"costs exactly {word} cycle" in text, (
+            f"{page} no longer quotes the measured hop latency of {word} cycle")
+
+
+# ---------------------------------------------------------------------------
 # The guard on the guard
 # ---------------------------------------------------------------------------
 

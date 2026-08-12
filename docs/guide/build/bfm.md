@@ -54,6 +54,38 @@ kind decides, and the participant supplies only the arena.
 The AXI4-Lite hole is the load-bearing one: it is why every design verified this way is free-running.
 Filling it is future work (`plans/design_cut.md` §S7).
 
+### Models may bind each other {#channels}
+
+The table above answers "what must the testbench present against a DUT **port**?" — which presumes
+there is a port. Not every edge has one. An interface whose endpoints *both* lie outside the cut has
+no DUT port between them and therefore no dual to look up, but it is not thereby absent: its peers
+are still nodes, and something has to move values between them.
+
+That something is a **channel**, and it lives in its own header:
+
+| primitive | in | is |
+|---|---|---|
+| `BlockChannel<T>` | `waveflow/build/xsi/xsi_channel.h` | a depth-bounded queue between **two models**, with drop / starve counters |
+| `RateTick` | same | the fractional-credit accumulator for an edge running on its own clock |
+
+A channel is a separate header and a separate registry rather than a row in `BFM_DUALS`, and the
+reason is structural: `BFM_DUALS` is keyed by the DUT's boundary port kind, and a model↔model edge
+has no such kind — that is the definition of one.
+
+**The rule that makes it work: write in `update()`, read in the next `sample()`.** A direct call
+between two models would make the transfer's timing depend on the order the harness happens to visit
+its participants in — a generator-ordering detail deciding a functional result. So a channel
+*stages*: `push()` sets the item aside and the channel's own `sample()` commits it, and the channel
+is declared before both peers so that commit runs first in every sweep. An item pushed anywhere in
+cycle *c* becomes readable at the start of cycle *c+1*, whatever order the peers appear in. Each hop
+therefore costs exactly one cycle that pysim does not have.
+
+`xsi_channel.h` deliberately depends on nothing but the standard library and the lifecycle base
+(`xsi_simobj.h`, split out of `xsi_bfm.h` for exactly this) — an edge model binds models, never
+pins, so it needs no Vivado headers and is compiled *and run* under a plain `g++`
+(`tests/build/test_xsi_channel.py`). Authoring one is
+[Behavioral edges](../interface/behavioral.md).
+
 ## One lifecycle, five phases
 
 Every model derives from `XsiSimObj`, the C++ mirror of Python's `SimObj`. All five phases default to

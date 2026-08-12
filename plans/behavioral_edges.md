@@ -80,15 +80,36 @@ granularities, one mechanism.
 
 ## Stages
 
-### S1 — `xsi_model()` as an `Interface` hook
+**S1–S3 DONE 2026-08-12** (branch `behavioral-edges`, 3 commits). S4 and S5 untouched.
+
+### S1 — `xsi_model()` as an `Interface` hook — **DONE**
 
 Declare the hook and its resolver, mirroring `bfm_model()`: `declares_hook(iface, "xsi_model")`, a
 `ChannelModel` record (C++ class, the two peer endpoints in constructor order, `extra_args`), and
 `DynParam` config emission. No emitter changes yet.
 
-**Gate:** unit tests only; the four XSI designs unchanged (none declares the hook).
+**Gate:** unit tests only; the four XSI designs unchanged (none declares the hook). — *met.*
 
-### S2 — the C++ channel primitive
+**Deviation: `ChannelModel.peers` names the interface's SIDE names, not endpoint attribute names.**
+`BfmModel.ports` has to be attribute names because C++ constructor order is recorded nowhere else and
+`_bfm_port_endpoint` must reconcile two namespaces. An interface *owns* its sides (`endpoints` is
+keyed by them), so that problem simply does not arise and the record is the shorter one.
+
+**A required change nobody costed: `declares_hook` had to learn its sentinel base.** It compared
+against `HwModule`, and `getattr(HwModule, "xsi_model")` is `None` — so `fn is not None` would have
+answered **True for every interface including the base**. That is the exact `hasattr` trap the
+predicate exists to close, one level up, and it would have made the second walk treat every `StreamIF`
+in every design as a behavioral edge. Fixed with `_hook_sentinel_base` (Interface for an interface,
+HwModule otherwise) plus an explicit `base=` override; the module side is byte-for-byte unaffected,
+including `kernel_task`'s deliberate no-sentinel case, and both are tested.
+
+**Open question resolved (per the plan's own list): an edge model needs no `pre_sim`/`post_sim` file
+I/O.** Bundle I/O lives on **nodes** — `RfDataSource.pre_sim` reads `in_bundle`, `RfDataSink.post_sim`
+writes `out_bundle`, and `RFSampIF` has no file I/O at all. That is the same split
+`StreamDriver`/`StreamSink` versus `StreamIF.depth` already uses, and it is why `BlockChannel` carries
+no bundle machinery. A channel that logged its own traffic would be a monitor node attached to it.
+
+### S2 — the C++ channel primitive — **DONE**
 
 A `wfbfm::BlockChannel<T>` in `waveflow/build/xsi/`: a bounded deque with the phase discipline
 (`update()` publishes, next `sample()` observes), a depth, and **drop / starve counters** so an overrun
@@ -96,9 +117,28 @@ or underrun is a number rather than a silent behavior. Plus the fractional-credi
 reusable `RateTick` helper.
 
 **Gate:** a standalone C++ test, driven the way `tests/build/test_xsi_bundle_io.py` drives the bundle
-round-trip — no Vivado needed, `g++ -fsyntax-only` plus a run.
+round-trip — no Vivado needed, `g++ -fsyntax-only` plus a run. — *met, and it compiles **and runs**
+rather than only type-checking.* `tests/build/test_xsi_channel.py`, 8 tests: deferred visibility,
+order-independence in both registration orders, the one-cycle hop, the depth bound counting staged
+items, peek-is-not-a-starve, `RateTick` at 256/300 over 300 cycles, and a ratio > 1 aborting.
+**Verified sensitive:** making `push()` commit eagerly fails 3 of them, including the
+order-independence one.
 
-### S3 — the second walk in `tb_top_spec`
+**Deviation: `XsiSimObj` had to be split out into `xsi_simobj.h`.** It was defined in `xsi_bfm.h`,
+which reaches Vivado's `xsi.h` — so a `BlockChannel : public XsiSimObj` could not have been compiled
+without the toolchain, and the gate above could not have existed. The split is the honest factoring
+anyway: a lifecycle base is not a bus model, and an edge model binds *models* rather than *pins*.
+`xsi_bfm.h` includes it, so every existing user is unaffected. Both new headers join
+`XsiHarnessStep`'s copy list.
+
+**A trap found on the way, not fixed here.** The committed `examples/*/xsi/xsi_bfm.h` copies are
+**already stale** against `waveflow/build/xsi/xsi_bfm.h` (missing a 9-line block added later), and
+nothing checks it. The XSI gates compile against those copies, so they are unaffected by the split —
+but a freshly generated workspace and a committed one are now running different library code, which
+is a silent-drift hazard of exactly the kind `test_committed_rtl_f_matches_the_rtl_on_disk` exists to
+catch for the `.f` files. Worth its own gated change.
+
+### S3 — the second walk in `tb_top_spec` — **DONE**
 
 Today's walk iterates the DUT boundary. Add a second pass over the TB's interfaces whose endpoints are
 **both** outside the cut, emitting a channel and binding the two peer models to it. Declaration order
@@ -109,6 +149,29 @@ case and stays there. An interface with *neither* endpoint on a participant is a
 
 **Gate:** all existing designs byte-identical (none has a non-boundary edge); a new minimal two-model
 fixture emits a channel, compiles, and moves a value between two participants across a cycle boundary.
+— *met, in three pieces.* Byte-identity is checked against the **committed** harnesses using the very
+TB factories their generators use (`make_xsi_tb`), plus the three XSI cycle gates unmoved. The
+fixture (a monitor → scoreboard token edge, the *other* clause of the deferred note this plan
+promotes) emits a channel and its two peers; the emitted harness compiles under `-fsyntax-only`
+(Vivado-gated, because it reaches `xsi.h`); and the value-across-a-cycle-boundary claim is the
+toolchain-free C++ gate in S2, which is where it can actually be *run*.
+
+**Deviation: a module may not sit on both a boundary port and a behavioral edge.** `bfm_model()`
+names one C++ class for the whole module, and the two bindings have different constructor shapes —
+`(sim.dut(), ports::X, …)` versus `(channel, …)`. It is **refused with that sentence** rather than
+emitted wrongly. This matters for `plans/adc_model.md` stage 2: the `Rfdc` is exactly such a module
+(two AXIS endpoints crossing the cut, two RF endpoints not), so stage 2 must first give `BfmModel`
+per-port resolution — the generator would then resolve each named port to a DUT prefix *or* a channel
+name and pass them in `ports` order to one constructor. That is a `BfmModel` change, not a walk
+change, and the walk is written so it stays one.
+
+**Added, not in the plan: a name-collision check.** Every emitted identifier (shared objects,
+channels, models) shares one struct scope, so a collision would *shadow* rather than fail to compile
+— a model silently binding the wrong object. Checked once over all three sources.
+
+**Also found: a channel's `DynParam` must land on a real C++ member**, exactly as a model's does, and
+nothing static checks either side. Caught by the harness compile test, which is the only thing that
+would have.
 
 ### S4 — the pysim/XSI equivalence gate
 
@@ -129,6 +192,12 @@ behavioral edge inherits, so build it once as a reusable harness rather than per
 
 | page | status | what it says |
 |---|---|---|
+*(Written for S1–S3: `guide/interface/behavioral.md` (mechanism half only — the `RFSampIF` worked
+example needs its channel model, which is `adc_model` stage 2), the `guide/build/bfm.md` edit, the
+`guide/comp_codegen/xsi_tb.md` edit, and the one-line `guide/interface/index.md` entry the new page
+needs to be reachable. `overview.md` and the `custom_hooks/bfm_model.md` cross-reference are not yet
+written.)*
+
 | `guide/interface/overview.md` | edit | The axis this adds: an interface is not only a *wiring* record — it may carry **behavior and state** (`StreamIF.depth` already does; a behavioral edge adds a `run_proc`). Name the two hooks side by side so `bfm_model()` (node) and `xsi_model()` (edge) are learned together. |
 | `guide/interface/index.md` | edit | One line in the section index pointing at the new page below. |
 | `guide/interface/behavioral.md` | **new** | The authoring page for a behavioral edge: when an edge deserves behavior *(rate conversion, buffering, loss accounting — not signal processing, see below)*; the `run_proc` half; the `xsi_model()` half; the queue phase discipline and why a direct call is wrong; the counter contract; the equivalence obligation and its gate. |
@@ -159,9 +228,12 @@ modelling anything, and a page that documents it is documenting a wish.
 ## Verification
 
 - The three XSI cycle gates (**158 / 176 / 2908**) unchanged through S1–S3 — no existing design has a
-  behavioral edge, so any movement is a regression.
-- S2's C++ test needs no Vivado.
-- S4's equivalence harness is the deliverable that makes every later edge cheap to trust.
+  behavioral edge, so any movement is a regression. **Run and unmoved.**
+- S2's C++ test needs no Vivado. **It compiles and runs under a plain `g++`** — which is what the
+  `xsi_simobj.h` split bought.
+- S4's equivalence harness is the deliverable that makes every later edge cheap to trust. **Not
+  built.** Until it is, "the two realizations agree on the counters" is asserted by reading both, and
+  `guide/interface/behavioral.md` says so rather than implying the gate exists.
 
 ## Not in scope
 
@@ -172,10 +244,21 @@ modelling anything, and a page that documents it is documenting a wish.
 
 ## Open questions
 
-- Does `BFM_DUALS` gain channel rows, or is a channel a separate table? It is keyed by *DUT port kind*
-  today, which a model↔model edge does not have — leaning separate.
-- Does an edge model need `pre_sim`/`post_sim` file I/O of its own (a channel that logs its traffic to a
-  bundle), or does that belong to a monitor node attached to it?
-- Ordering when two behavioral edges are chained: the queue discipline makes each hop take one cycle,
-  so an N-hop chain adds N cycles of latency in XSI that pysim does not have. Real, and probably
-  acceptable — but it must be *stated*, since pysim and XSI already disagree on timing by design.
+- ~~Does `BFM_DUALS` gain channel rows, or is a channel a separate table?~~ **Separate**, as the
+  plan leaned. `xsi_channel_classes()` reads `xsi_channel.h`; `BFM_DUALS` is untouched. The reason is
+  structural rather than stylistic: that table is keyed by the DUT's boundary port kind, and a
+  model↔model edge has no such kind — a row would have nothing to key on.
+- ~~Does an edge model need `pre_sim`/`post_sim` file I/O of its own?~~ **No** — see S1. Bundle I/O
+  lives on nodes; `BlockChannel` carries no bundle machinery. A channel that logged its own traffic
+  would be a monitor node attached to it.
+- ~~Ordering when two behavioral edges are chained…~~ **Stated and measured.** One hop = exactly one
+  cycle, pinned by `test_one_hop_costs_exactly_one_cycle`, quoted in
+  `guide/interface/behavioral.md` and `guide/build/bfm.md`, and re-derived from the C++ by
+  `tests/docs/test_documented_numbers.py` so the figure cannot rot. An N-hop chain adds N cycles that
+  pysim does not have.
+
+### Still open
+
+- **Per-port `BfmModel` resolution**, so one module can bind a DUT port *and* a channel in one C++
+  object. Refused loudly today; required by `plans/adc_model.md` stage 2 (the `Rfdc`).
+- **The stale committed `xsi_bfm.h` copies** under `examples/*/xsi/` — see the S2 note.
