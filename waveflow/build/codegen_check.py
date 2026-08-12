@@ -30,10 +30,12 @@ from waveflow.hw.codegen_targets import (
     ALL_TARGETS,
     COMPOSITE_KERNEL,
     CONTROL_DRIVEN_KERNEL,
+    CUT_INDEPENDENT_TARGETS,
     IMPLEMENTED_TARGETS,
     REALIZATION_HOOKS,
     SEQUENTIAL_VITIS_TB,
     SEQUENTIAL_XSI_TB,
+    XSI_BFM_MODEL,
 )
 
 
@@ -137,7 +139,8 @@ def _sorted(names) -> str:
     return "{" + ", ".join(repr(n) for n in sorted(names)) + "}"
 
 
-def check(source, target: str | None = None) -> tuple[bool, str | None]:
+def check(source, target: str | None = None, *,
+          crossing: "tuple[str, ...] | None" = None) -> tuple[bool, str | None]:
     """Would *source* lower to *target*?  Returns ``(True, None)`` or ``(False, message)``.
 
     *source* is a component/testbench **class or instance** — not a bare function.  Resolving
@@ -158,6 +161,18 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
        yet (Flow 2/3/4 future work).
     4. **The rules** — run the real extraction and convert its raise into a verdict.
 
+    *crossing* applies only to the per-module ``xsi_bfm_model`` target: the endpoint attribute names
+    that cross the cut.  ``None`` (the default) means **every registered endpoint** — the strictest
+    and only *cut-independent* answer, so a verdict never silently depends on a graph the caller did
+    not supply.
+
+    **One target is not derived, and the difference is load-bearing.**  ``composite_kernel`` and the
+    two sequential targets run the real generator, so they answer with rules nobody restated.
+    ``xsi_bfm_model`` is *resolved*: a hook lookup, a class lookup, port coverage, a registry lookup.
+    It can say "you named a model and its ports line up"; it can never say "your Python behaviour is
+    realizable as a BFM".  Nothing static can — the standing answer is a byte-identical vector gate,
+    and this function's existence must not be read as covering it.
+
     The ``(ok, msg)`` shape reports the **first** violation.  Collecting every violation in one pass
     is a later refinement; the return is shaped so it can grow into a structured report without
     breaking callers.
@@ -176,6 +191,19 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
             return False, msg
 
     # Gate 2 — does this path exist for this KIND?  (The class states the kind.)
+    #
+    # ...except for a CUT-INDEPENDENT target, which is not a kind fact at all: being realized outside
+    # the cut is a property of the BUILD, and freezing it into `potential_targets` would be the
+    # `ExtMod` answer `plans/design_cut.md` rejected.  The only kind requirement is being a module.
+    if target in CUT_INDEPENDENT_TARGETS:
+        from waveflow.hw.hw_module import HwModule
+        if not issubclass(cls, HwModule):
+            return False, (
+                f"{target!r} asks whether a MODULE can be realized outside the cut, and "
+                f"{cls.__name__} is not an HwModule — it has no endpoints to place a model against."
+            )
+        return _check_generates(source, cls, target, crossing)
+
     kind_targets = potential_targets(source)
     if not kind_targets:
         # Empty is not "you picked the wrong one of several" — no name would work. Say the real thing.
@@ -195,10 +223,11 @@ def check(source, target: str | None = None) -> tuple[bool, str | None]:
         )
 
     # Gate 4 — the rules.  Run the REAL generator for THIS target; the rules live there, nowhere else.
-    return _check_generates(source, cls, target)
+    return _check_generates(source, cls, target, crossing)
 
 
-def _check_generates(source, cls: type, target: str) -> tuple[bool, str | None]:
+def _check_generates(source, cls: type, target: str,
+                     crossing: "tuple[str, ...] | None" = None) -> tuple[bool, str | None]:
     """Run the real generator **for *target*** and turn its "cannot lower" signal into a verdict.
 
     Gate 4 must run *the same code* :func:`~waveflow.build.hwcodegen_steps` runs for *target* — a
@@ -246,6 +275,9 @@ def _check_generates(source, cls: type, target: str) -> tuple[bool, str | None]:
         elif target == SEQUENTIAL_XSI_TB:
             from waveflow.build.composite_gen import tb_top_spec
             tb_top_spec(comp)
+        elif target == XSI_BFM_MODEL:
+            from waveflow.build.composite_gen import resolve_bfm_model
+            resolve_bfm_model(comp, crossing)
         else:
             # Unreachable: gate 3 has already rejected any non-implemented target, and every
             # implemented target is handled above. If this fires, IMPLEMENTED_TARGETS grew a name

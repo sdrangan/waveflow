@@ -458,7 +458,7 @@ def kind_of_endpoint(ep) -> str:
     delete, and guessing wrong emits a ``const`` pointer for a port that is written.
     """
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
-    from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFWriteMaster
+    from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFSlave, MMIFWriteMaster
     from waveflow.hw.regmap import RegMapMMIFSlave
 
     # A regmap slave is the AXI4-Lite control port Vitis creates for a host-activated kernel.  It has
@@ -468,6 +468,11 @@ def kind_of_endpoint(ep) -> str:
     # actual diagnosis.  See plans/design_cut.md S2/S7.
     if isinstance(ep, RegMapMMIFSlave):
         return "axilite_slave"
+    # A plain AXI-MM slave — a memory's bus-facing port.  Never a *kernel* boundary port in this flow
+    # (the kernel is always the master), so `_boundary_port` still refuses it; but it is a real kind a
+    # participant presents, and naming it is what lets the BFM-dual lookup answer for a `MemoryMod`.
+    if isinstance(ep, MMIFSlave):
+        return "mm_slave"
     if isinstance(ep, MMIFReadMaster):
         return "maxi_read"
     if isinstance(ep, MMIFWriteMaster):
@@ -871,6 +876,11 @@ BFM_DUALS: dict[str, BfmDual] = {
     "axis_out":      BfmDual("AXI4-Stream", "slave", "AxisSlave", participant_declares=True),
     "maxi_read":     BfmDual("AXI4-MM", "read slave", "AxiMmReadSlave"),
     "maxi_write":    BfmDual("AXI4-MM", "write slave", "AxiMmWriteSlave"),
+    # A port that is an AXI-MM *slave* would need the testbench to MASTER the bus into it.  No model
+    # does that, and none is planned: in this flow the kernel is always the m_axi master and the
+    # testbench always supplies the memory.  The row exists so a module that would need it gets that
+    # sentence instead of a KeyError.
+    "mm_slave":      BfmDual("AXI4-MM", "master", None),
     # THE KNOWN GAP.  A regmap / HostActivated DUT presents an AXI4-Lite control slave, and no model
     # in waveflow/build/xsi/ answers it — so such a DUT cannot be XSI-lowered at all today.  Recorded
     # here, as a row with no model, rather than in prose: "which duals exist" is one lookup, and the
@@ -937,6 +947,152 @@ def _find_dut(tb):
             f"found {[type(d).__name__ for d in duts]}. A testbench drives one kernel."
         )
     return duts[0]
+
+
+#: The model library the ``bfm_model()`` hook resolves against.
+_XSI_BFM_HEADER = "xsi_bfm.h"
+
+
+def xsi_model_classes() -> frozenset[str]:
+    """Every ``XsiSimObj`` subclass the C++ model library defines, read **from the library itself**.
+
+    Not a Python list of names.  A list would be a second copy of the library's contents, and the two
+    would drift the first time a model was added or renamed — the same shadow ``codegen_check``'s
+    docstring forbids for extraction rules.  The header is the source, so a model that exists is
+    found and one that does not cannot be faked.
+
+    Only ``XsiSimObj`` subclasses count: ``XsiSim`` and ``Dut`` are in the header but are the
+    simulator and its handle, not participants, and naming one as a ``bfm_model()`` would compile
+    into nonsense rather than a model.
+    """
+    import re
+    from pathlib import Path
+
+    hdr = Path(__file__).resolve().parent / "xsi" / _XSI_BFM_HEADER
+    text = hdr.read_text(encoding="utf-8")
+    return frozenset(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
+                                text, re.M))
+
+
+def resolve_bfm_model(mod, crossing=None):
+    """Resolve *mod*'s ``bfm_model()`` against the cut, or raise a
+    :class:`~waveflow.build.hwcodegen.LoweringError` saying why it cannot be realized beside a top.
+
+    This is the ``xsi_bfm_model`` **target's** rule set, and it lives here — beside the registry and
+    the walk that consumes it — rather than in :mod:`waveflow.build.codegen_check`, which converts a
+    raise into a verdict and knows no rules of its own.
+
+    Four mechanically checkable things (``plans/design_cut.md``, "the predicate"):
+
+    1. **The hook is declared.**  A module with no ``bfm_model()`` has no pre-written model; that is
+       a finding, not an error the module had to anticipate.
+    2. **The named class exists** in the C++ library (:func:`xsi_model_classes`).
+    3. **Its ``ports`` cover every crossing endpoint.**  An uncovered port is a wire nobody drives —
+       at RTL that is a hang thousands of cycles later with no diagnostic.
+    4. **Every crossing endpoint has a dual** in :data:`BFM_DUALS`, and every ``DynParam`` the module
+       carries renders to a C++ initializer.
+
+    *crossing* names the endpoints that cross the cut, as attribute names.  ``None`` — the default —
+    means **every registered endpoint**, which is the strictest and the only *cut-independent* answer:
+    a module that passes under it can be placed outside any cut, so the verdict does not silently
+    depend on a graph the caller did not supply.  Narrow it when asking about a specific build.
+
+    What this deliberately does **not** check is item 5, behavioural equivalence between the Python
+    body and the C++ model.  Nothing here can, and the existence of this function must not be read as
+    covering it — see ``docs/guide/custom_hooks/bfm_model.md``.
+    """
+    from waveflow.hw.hw_module import declares_hook, discover_dyn_params
+
+    name = type(mod).__name__
+    if not declares_hook(mod, "bfm_model"):
+        raise LoweringError(
+            f"{name} declares no bfm_model() hook, so it has no pre-written cycle model to place "
+            f"beside a top. A module realized OUTSIDE the cut overrides bfm_model() to name one; a "
+            f"module realized INSIDE the cut declares kernel_task() instead."
+        )
+    bm = mod.bfm_model()
+
+    known = xsi_model_classes()
+    if bm.cls not in known:
+        raise LoweringError(
+            f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj in "
+            f"{_XSI_BFM_HEADER}. Known models: {sorted(known)}."
+        )
+
+    attrs = list(_endpoint_attrs(mod)) if crossing is None else list(crossing)
+    cross = {a: _bfm_port_endpoint(mod, a) for a in attrs}
+
+    covered = {id(_bfm_port_endpoint(mod, a)) for a in bm.ports}
+    uncovered = sorted(a for a, ep in cross.items() if id(ep) not in covered)
+    if uncovered:
+        raise LoweringError(
+            f"{name}.bfm_model() ({bm.cls}) covers {list(bm.ports)} but leaves {uncovered} "
+            f"uncovered. Every endpoint that CROSSES the cut needs a model, or the port is a wire "
+            f"nobody drives — at RTL that is a hang with no diagnostic, thousands of cycles later. "
+            f"If those endpoints do not cross this particular cut, say so with crossing=(...)."
+            + (" (No cut was given, so the strictest one was used: every registered endpoint.)"
+               if crossing is None else "")
+        )
+
+    for attr, ep in cross.items():
+        for facing in _facing_kinds(ep, mod, attr):
+            bfm_dual_class(facing, bm.cls)
+
+    for field, value in sorted(discover_dyn_params(mod).items()):
+        try:
+            _render_dyn_value(value)
+        except LoweringError as e:
+            raise LoweringError(
+                f"{name}.{field} is a DynParam the harness would emit as "
+                f"`<model>.{field} = ...;`, but it cannot be rendered: {e}"
+            ) from e
+    return bm
+
+
+#: A module's **own** endpoint kind → the DUT boundary-port kind(s) it faces across the cut.
+#:
+#: :data:`BFM_DUALS` is keyed by the *DUT's* port kind, because that is the spine the testbench walk
+#: iterates.  Asking the question from the module's side needs this inversion, and it is an inversion
+#: rather than a lookup because **a module presents the opposite role of the port it faces**: a module
+#: that drives a stream faces a DUT that receives one.
+#:
+#: A memory slave faces *either* m_axi direction — it is the DUT's port kind that decides, not the
+#: memory's — so both are required to have a dual, which is exactly the "a memory does not get to
+#: choose whether it is read or written" rule stated from the other end.
+#:
+#: AXI-Lite maps to itself, and that is not a slip: there is no model in **either** role, so the one
+#: row answers the question from both sides.
+_FACING_KINDS: dict[str, tuple[str, ...]] = {
+    "axis_out": ("axis_in",),
+    "axis_in": ("axis_out",),
+    "mm_slave": ("maxi_read", "maxi_write"),
+    "maxi_read": ("mm_slave",),      # an m_axi master outside the cut would need the TB to be a slave
+    "maxi_write": ("mm_slave",),
+    "axilite_slave": ("axilite_slave",),
+}
+
+
+def _facing_kinds(ep, mod, attr: str) -> tuple[str, ...]:
+    """What *ep* faces on the other side of the cut — a verdict, never a bare raise.
+
+    ``kind_of_endpoint`` refuses an endpoint type it has no lowering for, which is right for the
+    kernel walk and wrong here: "this endpoint type has no BFM" is precisely the answer
+    ``xsi_bfm_model`` exists to give, so the refusal is re-framed rather than propagated.
+    """
+    try:
+        kind = kind_of_endpoint(ep)
+    except LoweringError as e:
+        raise LoweringError(
+            f"{type(mod).__name__}.{attr} ({type(ep).__name__}) has no boundary kind, so no BFM dual "
+            f"can be looked up for it: {e}"
+        ) from e
+    facing = _FACING_KINDS.get(kind)
+    if facing is None:
+        raise LoweringError(
+            f"{type(mod).__name__}.{attr} is kind {kind!r}, which has no entry in _FACING_KINDS — so "
+            f"what it faces across the cut is unknown and no dual can be resolved for it."
+        )
+    return facing
 
 
 def _bfm_port_endpoint(part, attr: str):

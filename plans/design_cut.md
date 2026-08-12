@@ -238,7 +238,7 @@ table, which would only prove the table equals itself.
 **Result:** `tests/build/test_tb_top_spec.py` 16 passed, 1 skipped (`InterleaverInbandTB` has no
 committed harness to compare against). Dev loop at 6. `-m xsi` unchanged, no artifact drift.
 
-### S3 — the target `xsi_bfm_model` + its gate
+### S3 — the target `xsi_bfm_model` + its gate — **DONE**
 
 Add `XSI_BFM_MODEL = "xsi_bfm_model"` to `codegen_targets.py` (per-**module**, distinct from
 `sequential_xsi_tb`, which is per-**graph**). Gate 4 implements predicate items 1–4: resolve
@@ -251,6 +251,57 @@ narrows it.
 **Gate:** `check(StreamDriver, "xsi_bfm_model")` True; `check(MemCopy, "xsi_bfm_model")` False with a
 message naming the uncovered port; `check(<a module with an AXI-Lite port>, "xsi_bfm_model")` False
 naming the missing dual.
+
+**Landed as.** `resolve_bfm_model(mod, crossing=None)` in `composite_gen.py` — beside the registry and
+the walk, *not* in `codegen_check.py`, which keeps knowing no rules and only converts the raise. Gate 4
+dispatches to it; `check(..., crossing=...)` narrows the cut.
+
+**Open question 1 resolved: "all endpoints" is the right default.** The alternative — making the
+question ill-posed without a cut — would force every caller to supply a graph to ask a question about
+a module, which is precisely the coupling this stage removes. "Every registered endpoint" is the
+strictest cut *and* the only cut-independent one: a module that passes under it can be placed outside
+**any** cut, so the verdict cannot silently depend on a graph the caller did not give. `crossing=` is
+what makes the answer about a build, and there is a test asserting the same module answers differently
+under two cuts — which is the whole thesis in one assertion.
+
+**`xsi_bfm_model` is deliberately NOT a `potential_targets` entry.** It is listed in a new
+`CUT_INDEPENDENT_TARGETS`, and `check`'s kind gate lets it through for any `HwModule`. Putting it in
+`potential_targets` would freeze a per-build role into a class fact — the `ExtMod` answer this plan
+rejects — and would also make `check(SimpFun)` (no target named) ambiguous where it is currently
+unambiguous.
+
+**Two of the three gate cases were unreachable as written**, and the corrected versions are better:
+
+- `check(MemCopy, "xsi_bfm_model")` does not reach port coverage. `MemCopy` declares no `bfm_model()`
+  at all, so the verdict is *"declares no bfm_model() hook"* — a more useful answer than "your model
+  misses a port". Same for the AXI-Lite case with a real `HostActivated`. Both reasons are pinned on
+  the real modules; the coverage and missing-dual paths are pinned with fixtures, which is also the
+  realistic way to arrive at them (a module *grows* a port and its `bfm_model()` is not updated).
+- The model-class check reads `xsi_bfm.h` (`xsi_model_classes()`) rather than restating the library in
+  Python — a Python list would be a second copy that drifts the first time a model is added.
+
+**Two corrections found by building the predicate**, both recorded here because they are the kind of
+thing that would otherwise look arbitrary:
+
+- **`MemoryMod` should register only `s_mm`.** S1 registered `m_mm` too, on the reasoning that a
+  curated subset goes stale. The coverage predicate showed that reasoning was wrong *for this case*:
+  `m_mm` is a direct, zero-latency back door that is never bound to an interface anywhere in the tree,
+  so registering it makes it a phantom boundary port in `derive_boundary` and a permanently uncoverable
+  one here. The exclusion is now principled and documented rather than curated.
+- **`kind_of_endpoint` gained `mm_slave`.** A plain `MMIFSlave` (a memory's bus-facing port) had no
+  kind, so nothing could look up a dual for a `MemoryMod`. It is a real kind that a participant
+  presents; `_boundary_port` still refuses it, which is correct (a kernel is never an AXI-MM slave in
+  this flow).
+
+The dual lookup needed an explicit inversion, `_FACING_KINDS`: `BFM_DUALS` is keyed by the *DUT's*
+port kind because that is the spine the TB walk iterates, and asking from the module's side means
+inverting it — a module presents the **opposite** role of the port it faces. A memory slave faces
+either m_axi direction, which is the "a memory does not get to choose whether it is read or written"
+rule stated from the other end.
+
+**Result:** `tests/build/test_codegen_check.py` 71 passed (11 new). `xsi_bfm_model` lands in
+`codegen_targets.py` and `docs/guide/flows/index.md` in the same commit, per the no-drift contract.
+Docs gates green; dev loop at 6; `-m xsi` unchanged with no artifact drift.
 
 ### S4 — the cut becomes an argument
 

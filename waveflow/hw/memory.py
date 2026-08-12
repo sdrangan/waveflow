@@ -606,12 +606,13 @@ class MemoryMod(HwModule):
             # modeled aggregately by the poller registry, so the peek is free).
             peek_read=lambda nwords, local_addr: self._mem.read(local_addr, nwords),
         )
-        # Register both, so this module has a real endpoint surface rather than two attributes
-        # (plans/design_cut.md S1).  `s_mm` is what `bfm_model().ports` names — the registry is what
-        # lets that name be checked at elaboration time.  `m_mm` is registered too because it IS an
-        # endpoint (the owner's direct, zero-latency path); leaving it out would make the surface a
-        # curated subset, and a curated subset is the kind of thing that quietly goes stale.
-        self.add_endpoint(self.m_mm)
+        # The endpoint surface is `s_mm` ALONE, and the exclusion of `m_mm` is principled rather
+        # than curated (plans/design_cut.md S1/S3).  `s_mm` is the bus-facing port: it is what gets
+        # wired into a graph, what `bfm_model().ports` names, and what crosses a cut.  `m_mm` is a
+        # direct, zero-latency back door the owner uses to poke the store without a bus — it is
+        # never bound to an interface anywhere in the tree.  Registering it would make it a phantom
+        # boundary port in `derive_boundary` and an uncoverable one in the `xsi_bfm_model` check,
+        # which is how the coverage predicate found this in the first place.
         self.add_endpoint(self.s_mm)
 
     def pre_sim(self) -> None:
