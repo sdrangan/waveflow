@@ -348,7 +348,45 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
    `waveflow/hw/interface.py` was not touched, so the XSI cycle gates are untouched by construction.
 2. **The same graph under XSI.** *Depends on `plans/behavioral_edges.md`.* Write `RfdcAdcMaster` /
    `RfdcDacSlave` and the `RFSampIF` channel model, land the counter-equivalence gate, record a cycle
-   gate.
+   gate. **Opens with the `BfmModel` prerequisite below.**
+### Stage 2's opening prerequisite: `BfmModel` per-port resolution
+
+`behavioral_edges.md` S3 refuses a module with endpoints on **both** a DUT boundary port and a
+behavioral edge, because `bfm_model()` names one C++ class for the whole module and the two bindings
+have different constructor shapes. `Rfdc` is exactly that shape, so stage 2 opens here. Two distinct
+gaps, both confirmed against the code:
+
+1. **One class cannot serve two boundary ports.** `bfm_dual_class` returns the participant's single
+   declared class for AXIS (`participant_declares=True`), so `rx_stream` and `tx_stream` would get the
+   same model — but they need `RfdcAdcMaster` and `RfdcDacSlave`.
+2. **A port's constructor contribution depends on which side of the cut its peer is.** A boundary
+   endpoint contributes `dut, "prefix"`; an edge endpoint contributes a channel variable. Today walk 1
+   assumes every port of a model is a boundary port.
+
+The shape that resolves both — a module declares **several** models, each naming a class and the
+endpoints it spans, and each endpoint resolves by its own kind:
+
+```python
+def bfm_model(self):
+    return (BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf")),   # dut+prefix, then channel
+            BfmModel("RfdcDacSlave",  ports=("tx_stream", "tx_rf")))
+```
+
+Note what this is *not*: it is not two C++ objects per path glued together, and it is not the channel
+peer that walk 2 emits today. The ADC path is **one** object that binds RTL pins on one side and a
+channel on the other — which is exactly what a converter is. Walk 2 must therefore skip a module
+already claimed by such a model rather than emitting a separate peer for its RF endpoint.
+
+Back-compatible by construction: a single `BfmModel` whose ports are all boundary ports resolves
+exactly as today, which is every existing design.
+
+**Deliberately not built ahead of its consumer.** The constructor shapes above are a guess until
+`RfdcAdcMaster` / `RfdcDacSlave` exist, and this repo has already paid for designing emitter machinery
+against a presumed surface once (`CodegenSource`, "designed against a presumed surface and reverted" —
+`plans/xsi_tb_codegen.md`). The same ordering argument put stage 1 before `behavioral_edges` and was
+repaid: the working `RFSampIF` retired one of that plan's open questions and shrank `BlockChannel`.
+So: write the two C++ models first, let them state what they need, then generalize `BfmModel` to fit.
+
 3. **`RfSampBuf`, in-band variant** — pysim → csynth → XSI.
 4. **`Channel`**, then loopback with a real DSP block (decimating FIR / DDC), then the channel sounder.
 
