@@ -130,8 +130,10 @@ decided from values observed *before* the clock edge and applied *after* it.
 
 Two consequences follow, and both are stated rather than left to be discovered:
 
-- **Each hop costs exactly one cycle** that the pysim graph does not have. An N-hop chain adds N
-  cycles in XSI. Real, and by design — the two backends already disagree on timing.
+- **Each hop costs exactly one cycle** that the pysim graph does not have, *whichever phase a peer
+  reads in* — that uniformity is what the channel-first rule buys, and it is why the rule is asserted
+  in all three places rather than left to declaration luck. An N-hop chain adds N cycles in XSI.
+  Real, and by design — the two backends already disagree on timing.
 - **Ordering is a property, not a convention.** `tests/build/test_xsi_channel.py` runs the same
   producer/consumer pair in both registration orders and requires identical transcripts, and it is
   verified to fail if the staging is removed.
