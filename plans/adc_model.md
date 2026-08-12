@@ -67,6 +67,21 @@ Generic to any converter, not only the RFDC.
 
 ### Structure
 
+**Unidirectional, all channels.** One interface carries every channel of a tile as an `(n_ch, blksize)`
+block — one array, one SimPy event. Splitting per channel gives `n_ch` events per block period and works
+against the entire reason for block-LT. Channel-to-channel skew is a **`t0` vector** on the one
+interface, which states "these channels share a grid, with these known offsets" directly; N interfaces
+would restate it and could disagree.
+
+**Not bidirectional.** TX and RX share exactly one quantity — the time origin — and differ in every
+other: sample rate, channel count (4 ADC / 2 DAC on the RFSoC 4x2), `blksize`, buffer, counters, and
+peer. A bidirectional interface would carry `(fs_tx, fs_rx)`, `(n_tx, n_rx)`, `(blksize_tx,
+blksize_rx)`, two buffers and two metronomes — two interfaces wearing one name, with every consumer
+paying for the duality. The counters make the same point: **underrun is a TX concept, overrun an RX
+concept**; kept apart, each object has exactly one natural failure mode. A *mode flag* would be worse
+still — two code paths for one concept, and a flag is expensive to mirror in the C++ model. A genuinely
+symmetric case (a TDD antenna port) is a **pair** of interfaces held by one node, which costs nothing.
+
 - Two endpoint types: **`RFSampIFTx`** (master, the producer) and **`RFSampIFRx`** (slave, the
   consumer). One interface per data direction, so the `Rfdc` holds `Tx` on the DAC path and `Rx` on the
   ADC path.
@@ -114,6 +129,13 @@ obvious case; absolute scheduling makes it structural rather than one refactor a
 Sample *n* on an interface occurs at `t0 + n / samp_rate`. Alignment across TX/RX and across antennas is
 then **derived and assertable** — `n_rx / fs_rx == n_tx / fs_tx` — rather than emergent from scheduling
 coincidence.
+
+**`t0` is owned by the `Rfdc` and pushed to its interfaces at bind.** It is when *the tile's* sample
+counter starts — a property of the converter, not of a wire — so one source sets it for every interface
+the `Rfdc` binds. That is what makes TX/RX alignment structural without a bidirectional interface: the
+two edges share an origin because they share the node that assigns it, not because they are one object.
+(Note the direction is opposite to `samp_rate`, which lives on the interface clock and the `Rfdc` reads
+at bind. Each quantity lives where it physically belongs and is read, never restated.)
 
 Two properties fall out:
 
@@ -323,7 +345,20 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
 ## Docs
 
 Written as the stages land, not at the end — the concepts here are the kind that get mis-taught if the
-page is written from the plan rather than from the working code.
+page is written from the plan rather than from the working code. **A page is earned when the thing it
+describes has been built and exercised**, so the schedule below is not "when convenient" but "when the
+claims become checkable".
+
+| written after | pages | why then |
+|---|---|---|
+| **stage 1** (pysim) | `rf/index.md`, `rf/sampling.md`, the pysim page of `examples/rf_loopback/`, the `flows/modules.md` row | Everything `sampling.md` teaches is exercised: block-LT, the `blksize` knob, the absolute-grid metronome, `t0` and the sample grid. Its most valuable claim — *a relative `timeout` loop slips* — can be stated as a **demonstrated** failure, because the stage-1 gate deliberately yields in the body and shows the grid holding. |
+| **after `behavioral_edges` S1–S3** | `build/bfm.md` edit, `comp_codegen/xsi_tb.md` edit, the mechanism half of `interface/behavioral.md` | The channel primitive and the second walk exist; "models may bind each other" and "`tb_top_spec` has two walks" become descriptions rather than intentions. |
+| **stage 2** (XSI) | `rf/converter.md`, the XSI page of `examples/rf_loopback/`, `RFSampIF` as the worked example in `interface/behavioral.md` | The AXIS side and **both** rate conversions only exist here. Written earlier, `converter.md` would be half plan. Its underflow/overflow section is *drafted from* stage 1's gate but only complete once the BFM counters exist to agree with the pysim ones. |
+| **stage 4** (DSP + channel) | `rf/fidelity.md` | The page I was keenest on is the **least** earned early. Stage 1 has no DSP at all, so every claim about block-perfect feedforward vs. unresolvable sample-level feedback would be written from the plan — the exact failure this schedule exists to prevent. It becomes writable when the FIR/DDC and the channel sounder can demonstrate both halves. |
+
+**If these pages cite numbers, extend `test_documented_numbers.py` to cover them.** It covers calibration
+figures only — not cycle counts — which is why the stale `2835/3469` gate numbers survived in `CLAUDE.md`
+and two docs pages for weeks with every test green. A number in a doc that nothing checks *will* rot.
 
 | page | status | what it says |
 |---|---|---|
@@ -358,6 +393,5 @@ through the committed TikZ → SVG workflow.
 - Where does the DDC/DUC live — inside `Rfdc` (matching the real IP's digital mixer) or as a separate
   modelled block? The real IP has it; a separate block is easier to make bit-exact.
 - `n_rx`/`n_tx` > 1: one AXIS port per channel or one wide port? The real RFDC's answer depends on tile
-  configuration, and it determines how many duals the testbench needs.
-- Does one `RFSampIF` carry all channels of a tile as `(n_ch, blksize)`, or one interface per channel?
-  The first matches the numpy block shape; the second makes per-channel `t0` natural.
+  configuration, and it determines how many duals the testbench needs. *(This is the AXIS side only —
+  the RF side is settled: one interface, `(n_ch, blksize)`.)*
