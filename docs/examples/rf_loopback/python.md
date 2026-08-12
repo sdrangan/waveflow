@@ -4,7 +4,7 @@ parent: RF loopback
 nav_order: 1
 audience: python
 api: [Rfdc, RfSampPassThrough, RfLoopbackTB, RfLoopbackSim, RfDataSource, RfDataSink, RFSampIF]
-summary: "Building the loopback in Python: the converter and its parameter split, the pass-through DUT, the testbench graph and the run procedure, and the stage-1 gate — a byte-identical loopback with both loss counters at zero. Then the two deliberate faults (a late producer, a stalled consumer) that drive those counters off zero by predicted amounts, because a counter that has never counted is not evidence."
+summary: "Building the loopback in Python: the converter and its parameter split, the pass-through DUT, the testbench graph and the run procedure, and the stage-1 gate — a loopback that is byte-identical once shifted by the pipeline's declared block latency, with loss exactly as declared. Then the two deliberate faults (a late producer, a stalled consumer) that drive those counters off zero by predicted amounts, because a counter that has never counted is not evidence."
 ---
 
 # Python model
@@ -117,16 +117,33 @@ samples **exactly on the converter's quantization grid** — `m / 2^(nbits-1) ·
 `m` — so a clean loopback is *bit*-identical rather than close. A tolerance would hide a packing bug,
 and packing is what this example tests.
 
-### The DAC tile has to start later than the ADC tile
+### A loop through the RF grids costs one block, structurally
 
-The one number a loopback cannot leave at zero. The DAC grid is a metronome, not a queue: it emits a
-block every period whether or not the samples for it have finished their trip through the fabric.
-With both tiles started at the same instant, the first DAC period comes due before the first samples
-arrive and one zero block goes out — `dac_if.underrun == 1`, with the ADC side unaffected.
+The DAC grid is a metronome, not a queue: it emits a block every period whether or not the samples
+for it have arrived. And DAC block *k* **cannot** carry ADC block *k* — the ADC only delivers block
+*k* at the instant the DAC period for it comes due, so the loop costs at least one block *index*
+**however fast the fabric is**. A zero-latency fabric would not close it either. That is
+`plans/adc_model.md`'s "no dependency within < `blksize` samples", applied to the fabric path.
 
-That is the converter behaving *correctly*; the design is what is wrong, and `t0` is where a design
-says so. The example lags the DAC epoch by one block period, comfortably more than the two AXI-Stream
-bursts this pipeline costs.
+So the pipeline declares what it costs:
+
+```python
+class RfSampPassThrough(FreeRunMod):
+    blk_latency: HwParam[int] = 1      # >= 1 for any block-processing module
+```
+
+and `blk_latency = 0` is **refused at construction** rather than reported later as a symptom — a loop
+that claims to be free is not a slow system, it is not a system.
+
+Two things this deliberately does *not* do. It does not stagger the tile epochs: `t0_rx == t0_tx` is
+what MTS gives you, and buying pipeline latency by starting a tile late would model the thing MTS
+exists to prevent. And it does not treat the resulting first-block underrun as a fault — a converter
+fed by a pipeline **must** underrun until the data reaches it, which is exactly why a real design
+primes its buffer before enabling the tile.
+
+The declaration is *checked*, not trusted: the gate asserts the DAC edge underran exactly
+`blk_latency` times **and** that the last one was inside the transient, so a module that claims two
+blocks and exhibits one fails just as loudly as one that drifts in steady state.
 
 ## The gate
 
@@ -140,17 +157,23 @@ sim.check()
 
 ```
 adc  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 0, 'overrun': 0}
-dac  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 0, 'overrun': 0}
+dac  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 1, 'overrun': 0}
 ```
 
-1. **Byte-identical.** The sink's bundle is compared to the source's *as bytes on disk*, not as
-   arrays in memory — both participants are bundle-backed, so the loopback is a file-to-file
-   comparison.
-2. **`underrun == 0 and overrun == 0`** on both RF edges.
+1. **Byte-identical, once shifted by the declared latency.** The sink's bundle is compared to the
+   source's *as bytes on disk*, not as arrays in memory — both participants are bundle-backed, so
+   the loopback is a file-to-file comparison. DAC block *k* must equal ADC block *k* − `blk_latency`,
+   and the leading `blk_latency` blocks must be exactly the zero-fill.
+2. **Loss is exactly what the graph declared.** `underrun == 0` on the ADC edge, which is fed
+   straight from the source and entitled to nothing; `underrun == blk_latency` on the DAC edge, and
+   at the *start* — `assert_clean(startup_blocks=…)` checks the grid index too, so a steady-state
+   fault cannot hide inside a transient's budget. `overrun == 0` everywhere: overrun has no
+   transient to hide in.
 3. Block counts agree end to end (the DUT relayed as many bursts as the source sent).
-4. **Alignment is derived**: DAC sample *n* occurs exactly one block period after ADC sample *n*, for
-   every *n* — arithmetic on `t0` and the rate, not something a particular scheduling order made
-   true.
+4. **Alignment is derived**: with both tiles on one epoch, DAC sample *n* occurs at the same instant
+   as ADC sample *n*, for every *n* — arithmetic on `t0` and the rate, not something a particular
+   scheduling order made true. Note what this is *not* claiming: aligned grids do not make the loop
+   free. Alignment is about when a grid ticks; `blk_latency` is about which block each tick carries.
 
 ## Why claim 2 is not redundant
 
@@ -170,9 +193,10 @@ sim.tb.source.start_delay = 2.5 * sim.tb.blk_period
 ```
 
 `adc_if.underrun == 2` — exactly the two missed periods. And the padding is visible at the far end of
-the loopback: the sink's first two blocks are all zeros, and real data resumes at the third with the
-source's *first* block. Nothing was reordered or lost; the grid simply ran while the producer was not
-ready.
+the loopback, shifted by the pipeline's declared block: the sink's first three blocks are all zeros
+(the DAC's own structural startup block, then the two the ADC zero-filled) and real data resumes at
+the fourth with the source's *first* block. Nothing was reordered or lost; the grid simply ran while
+the producer was not ready.
 
 ### A stalled consumer overruns
 

@@ -37,9 +37,14 @@ class TestLoopback:
         tb = sim.check()                        # data, counters, block counts and alignment
         assert tb.adc_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
                                         "underrun": 0, "overrun": 0}
+        # The DAC edge underruns exactly once: its first grid period comes due before the pipeline
+        # has delivered anything, which is the structural one-block cost of a loop through the RF
+        # grids and is what a real converter does before its buffer is primed.
         assert tb.dac_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
-                                        "underrun": 0, "overrun": 0}
-        assert sim._in_bytes == sim._out_bytes
+                                        "underrun": 1, "overrun": 0}
+        assert tb.dac_if.last_underrun_idx == 1         # the transient, and nothing after it
+        blk_bytes = tb.blksize * 8                      # n_ch=1, float64
+        assert sim._out_bytes[blk_bytes:] == sim._in_bytes[:-blk_bytes]
 
     @pytest.mark.parametrize("nbits,samp_per_word", [(8, 8), (16, 4), (12, 4), (16, 2)])
     def test_bit_widths_round_trip_exactly(self, nbits, samp_per_word):
@@ -66,14 +71,20 @@ class TestLoopback:
         assert tb.nwords_blk == 16                      # blksize / samp_per_word
 
     def test_samples_land_on_the_grid_t0_defines(self):
-        """Alignment is arithmetic on ``t0`` and the rate, not an artifact of the run."""
+        """Alignment is arithmetic on ``t0`` and the rate, not an artifact of the run.
+
+        Both tiles share one epoch -- what MTS gives you -- so the grids are aligned.  The loop's
+        one-block cost is a separate quantity (``loop_blk_latency``) and is deliberately NOT paid by
+        staggering an epoch: which block a tick carries is not the same question as when it ticks.
+        """
         sim = RfLoopbackSim(n_src_blk=4, blksize=64)
         sim.run()
         tb = sim.check()
-        lag = tb.dac_if.t0[0] - tb.adc_if.t0[0]
-        assert lag == pytest.approx(tb.blk_period)      # dac_lag_blk == 1 by default
-        assert tb.adc_if.samp_time(0, 128) == pytest.approx(128 / tb.samp_rate)
-        assert tb.dac_if.samp_time(0, 128) == pytest.approx(lag + 128 / tb.samp_rate)
+        assert tb.dac_if.t0 == pytest.approx(tb.adc_if.t0)
+        assert tb.adc_if.samp_time(128) == pytest.approx(128 / tb.samp_rate)
+        assert tb.dac_if.samp_time(128) == pytest.approx(128 / tb.samp_rate)
+        # ...and the loop still costs a whole block index, carried where it belongs.
+        assert tb.loop_blk_latency == 1
 
 
 # --------------------------------------------------------------------------------------------
@@ -99,10 +110,15 @@ class TestCountersAreNonVacuous:
         assert tb.adc_if.overrun == 0
         assert tb.adc_if.blocks_sent == 8
         # ...and the padding is visible in the RF output at the far end of the loopback.
+        # ...and the padding is visible in the RF output at the far end of the loopback, one block
+        # later than it happened: the DAC's own startup zero comes first, then the two the ADC
+        # zero-filled, then real data.
         captured = sim.captured
-        assert np.array_equal(captured[0], np.zeros((1, tb.blksize)))
-        assert np.array_equal(captured[1], np.zeros((1, tb.blksize)))
-        assert np.array_equal(captured[2], sim.sent[0])  # real data resumes, from source block 0
+        z = np.zeros((1, tb.blksize))
+        assert np.array_equal(captured[0], z)            # the DAC's structural startup block
+        assert np.array_equal(captured[1], z)            # ADC period 1, zero-filled
+        assert np.array_equal(captured[2], z)            # ADC period 2, zero-filled
+        assert np.array_equal(captured[3], sim.sent[0])  # real data resumes, from source block 0
         # The clean-run gate would have caught this; that is the point of asserting it every time.
         with pytest.raises(AssertionError, match="underrun=2"):
             tb.adc_if.assert_clean()
@@ -120,7 +136,7 @@ class TestCountersAreNonVacuous:
         assert tb.dac_if.blocks_delivered == 3          # 1 consumed + 2 sitting in the queue
         assert tb.dac_if.blocks_sent == 8
         assert tb.dac_if.blocks_sent == tb.dac_if.blocks_delivered + tb.dac_if.overrun
-        assert tb.dac_if.underrun == 0
+        assert tb.dac_if.underrun == 1   # its structural startup block, nothing more
         assert len(tb.sink.blocks) == 1
         with pytest.raises(AssertionError, match="overrun=5"):
             tb.dac_if.assert_clean()
@@ -235,18 +251,26 @@ class TestRfdcGuards:
         assert tb.rfdc.rx_samp_rate == 128e6            # read OFF the interface clock
         assert tb.rfdc.tx_samp_rate == 128e6
         assert tb.rfdc.rx_blksize == 64
-        assert tb.adc_if.t0[0] == pytest.approx(tb.rfdc.t0_rx)   # pushed ONTO the interface
-        assert tb.dac_if.t0[0] == pytest.approx(tb.rfdc.t0_tx)
+        assert tb.adc_if.t0 == pytest.approx(tb.rfdc.t0_rx)      # pushed ONTO the interface
+        assert tb.dac_if.t0 == pytest.approx(tb.rfdc.t0_tx)
 
-    def test_a_zero_dac_lag_underruns_the_dac_grid(self):
-        """The DAC grid does not wait for the fabric — which is why ``t0`` has to say so.
-
-        With the DAC tile started at the same instant as the ADC tile, its first block period comes
-        due before the first samples have finished the round trip, and one zero block goes out.  That
-        is the converter behaving correctly; the *design* is what is wrong, and the counter is how
-        anyone finds out.
+    def test_a_zero_block_latency_loop_is_refused_not_reported(self):
+        """A loop through the RF grids that claims zero block latency is not a slow system -- it is
+        not a system.  Block *k* cannot be played in the period it was captured, however fast the
+        fabric is, so the graph refuses to be built rather than reporting a symptom later.
         """
-        sim = RfLoopbackSim(n_src_blk=4, blksize=64, dac_lag_blk=0.0)
+        with pytest.raises(ValueError, match=r"blk_latency must be >= 1"):
+            RfSampPassThrough(name="d", sim=Simulation(), blk_latency=0)
+
+    def test_the_dac_underruns_exactly_its_declared_startup_transient(self):
+        """The declaration is *checked*, not trusted: the DAC edge must underrun exactly
+        ``blk_latency`` times, at the start and nowhere else."""
+        sim = RfLoopbackSim(n_src_blk=4, blksize=64)
         sim.run()
-        assert sim.tb.dac_if.underrun == 1
-        assert sim.tb.adc_if.underrun == 0              # the ADC side is unaffected
+        tb = sim.tb
+        assert tb.dac_if.underrun == tb.loop_blk_latency == 1
+        assert tb.dac_if.last_underrun_idx == 1          # the transient, not a steady-state fault
+        assert tb.adc_if.underrun == 0                   # fed straight from the source
+        # A module that over-declares its latency fails the same gate.
+        with pytest.raises(AssertionError, match="declared startup transient is 2"):
+            tb.dac_if.assert_clean(startup_blocks=2)

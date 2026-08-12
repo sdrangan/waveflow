@@ -3,7 +3,7 @@ title: RF loopback
 parent: Examples
 nav_order: 10
 has_children: true
-summary: "The worked example for designs that talk to an RF data converter. A source plays sample blocks into an ADC, the samples cross into the fabric as AXI-Stream words, a trivial pass-through relays them, and a DAC turns them back into sample blocks at a sink — a loopback that is byte-identical end to end. Deliberately without DSP: the point is the converter boundary itself, and the loss counters that are the only evidence a sample grid was actually met."
+summary: "The worked example for designs that talk to an RF data converter. A source plays sample blocks into an ADC, the samples cross into the fabric as AXI-Stream words, a trivial pass-through relays them, and a DAC turns them back into sample blocks at a sink — a loopback that is byte-identical end to end, one block later. Deliberately without DSP: the point is the converter boundary itself, and the loss counters that are the only evidence a sample grid was actually met."
 ---
 
 # RF loopback — a design with a data converter
@@ -30,7 +30,7 @@ mode that no protocol signal reports.
   (resolution, samples per word) separated from `DynParam` knobs (the amplitude reference).
 - Quantize bit-exactly with the integer-backed `FixedField` and pack samples into stream words
   through the generated array serializers.
-- Assert a **byte-identical** loopback *and* `underrun == 0 and overrun == 0`, and understand why the
+- Assert a **byte-identical** loopback (shifted by the pipeline's declared block latency) *and* that loss is exactly what the graph declared, and understand why the
   first check is not sufficient without the second.
 - Read `check(mod, "xsi_bfm_model")` as a **finding** about a module rather than a declaration on it.
 

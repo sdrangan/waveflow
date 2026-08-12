@@ -86,15 +86,12 @@ class Rfdc(HwModule):
     #
     #: When the **ADC** tile's sample counter starts.
     t0_rx: float = 0.0
-    #: When the **DAC** tile's sample counter starts.  In a loopback this must be at least the fabric
-    #: round-trip later than :attr:`t0_rx`: the DAC grid does not wait for the pipeline, and a DAC
-    #: block period that arrives before its samples do is an underrun — zero-filled and counted,
-    #: which is precisely what the real converter does.
+    #: When the **DAC** tile's sample counter starts.  Normally **equal** to :attr:`t0_rx` — that is
+    #: what MTS gives you, and it is the default.  A loopback does *not* stagger this to buy pipeline
+    #: latency: the one-block cost of a loop through the RF grids is structural and is paid by the
+    #: startup transient (see :attr:`~examples.rf_loopback.rf_loopback.RfSampPassThrough.blk_latency`).
+    #: Set it non-zero only to model a tile deliberately started late, or a measured MTS residual.
     t0_tx: float = 0.0
-    #: Measured per-channel skew on the ADC path, added to :attr:`t0_rx`.  Empty = an unskewed tile.
-    rx_skew: tuple[float, ...] = ()
-    #: Measured per-channel skew on the DAC path, added to :attr:`t0_tx`.
-    tx_skew: tuple[float, ...] = ()
 
     # A converter declares neither ``kernel_task()`` nor ``bfm_model()`` at stage 1, so it is a
     # pysim-only node and ``check`` says so — the base's empty ``potential_targets`` is already that
@@ -174,17 +171,7 @@ class Rfdc(HwModule):
           module binds, which is how the two edges get a *fixed, known* relation without being one
           object (see :attr:`t0_rx` / :attr:`t0_tx`).
         """
-        skew = self.rx_skew if ep_name == 'rx' else self.tx_skew
-        epoch = self.t0_rx if ep_name == 'rx' else self.t0_tx
-        base = np.full(int(iface.n_ch), float(epoch))
-        if skew:
-            skew_vec = np.asarray(skew, dtype=float)
-            if skew_vec.size != int(iface.n_ch):
-                raise ValueError(
-                    f"Rfdc '{self.name}': {ep_name}_skew has {skew_vec.size} entries but the "
-                    f"interface carries {int(iface.n_ch)} channels")
-            base = base + skew_vec
-        iface.set_t0(base, owner=self)
+        iface.set_t0(self.t0_rx if ep_name == 'rx' else self.t0_tx, owner=self)
 
         if ep_name == 'rx':
             self.rx_samp_rate = iface.samp_rate

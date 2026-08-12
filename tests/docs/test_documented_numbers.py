@@ -251,9 +251,9 @@ def test_rf_loopback_page_loss_counts_are_recomputed():
     assert f"`dac_if.overrun == {stalled.tb.dac_if.overrun}`" in text
     assert "`8 − 1 − 2`" in text and f"= {deeper.tb.dac_if.overrun}`" in text
 
-    zero_lag = RfLoopbackSim(n_src_blk=4, blksize=64, dac_lag_blk=0.0)
-    zero_lag.run()
-    assert f"`dac_if.underrun == {zero_lag.tb.dac_if.underrun}`" in text
+    # The structural one-block loop cost, as the page states it: declared by the pipeline and
+    # checked against the DAC edge's startup transient.
+    assert f"blk_latency: HwParam[int] = {clean.tb.loop_blk_latency}" in text
 
 
 # ---------------------------------------------------------------------------

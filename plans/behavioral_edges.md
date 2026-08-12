@@ -142,6 +142,17 @@ behavioral edge inherits, so build it once as a reusable harness rather than per
 > processing**. Every behavior here is reproduced by hand in C++ and nothing checks the two agree, so
 > the bar is "obviously the same in ten lines". A filter is not that; put it in a block.
 
+And its operational form, which is what actually catches cases — the rule above is a judgement call,
+this one is a grep:
+
+> **If the edge can only *record* a quantity and never *apply* it, it does not belong on the edge.**
+
+It has caught three candidates so far, all of which looked like transport properties: gain, delay, and
+per-channel skew. The last one had already shipped as a `t0` vector on `RFSampIF` before anyone asked
+who read it — the answer was `min()` and a reporting accessor, so a design could declare skew the
+model provably did not exhibit. A field whose only consumers are aggregates and getters is not
+modelling anything, and a page that documents it is documenting a wish.
+
 **Docs gates:** `tests/docs/test_markdown_integrity.py` (relative-link guard) and
 `tests/docs/test_documented_numbers.py`.
 

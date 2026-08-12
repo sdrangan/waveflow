@@ -44,10 +44,18 @@ any `blksize`, provided the block spans the state it needs.
 
 A four-channel tile is one `RFSampIF` carrying `(4, blksize)`, not four interfaces carrying
 `(1, blksize)`. Splitting per channel would produce `n_ch` events per block period and work against
-the entire reason for block granularity. Channel-to-channel skew is expressed instead as a
-[`t0` vector](#t0-is-the-synchronization-primitive) on the one interface, which states *"these
-channels share a grid, with these known offsets"* directly. Four interfaces would restate it four
-times, and four statements can disagree.
+the entire reason for block granularity. The channels of a tile share one grid and one scalar
+[`t0`](#t0-is-the-synchronization-primitive).
+
+Channels that genuinely need *independent* grids are not one tile — give them their own interface.
+Per-channel **skew** is a different thing again, and it does not live here: `t0` is an *epoch* (when
+a counter starts, a tile property) while skew is a *delay* (how much later a path delivers, a path
+property). An earlier draft made `t0` a per-channel vector to hold skew and the transport promptly
+ignored it — every channel rides one block delivered by one event, so no per-channel offset could
+change when samples arrive. It was recordable and never applied, which is worse than absent: an
+accessor would have reported a skew the model did not exhibit. Applying it would mean shifting
+samples inside a block, which is signal processing, which an edge does not do. Measured skew belongs
+where it can be acted on — a channel or DSP block that applies the delay.
 
 ### One interface per direction
 
@@ -74,13 +82,13 @@ computes with bounded lookahead rather than free-running into memory.
 
 ### Schedule on an absolute grid {#absolute-grid}
 
-Block *k* fires at `t_epoch + k · blk_period`, recomputed from the epoch every time:
+Block *k* fires at `t0 + k · blk_period`, recomputed from the epoch every time:
 
 ```python
 k = 0
 while True:
     k += 1
-    yield self.timeout(self.t_epoch + k * self.blk_period - self.env.now)
+    yield self.timeout(self.t0 + k * self.blk_period - self.env.now)
     yield from self._drain_one(k)          # the body may now yield freely
 ```
 
@@ -112,12 +120,12 @@ block period raises rather than slipping.
 
 ## `t0` is the synchronization primitive {#t0-is-the-synchronization-primitive}
 
-Sample *n* on channel *c* occurs at `t0[c] + n / samp_rate`. Two numbers define the entire grid, so
+Sample *n* occurs at `t0 + n / samp_rate`, on every channel. Two numbers define the entire grid, so
 alignment across TX/RX and across antennas is **derived and assertable** rather than emergent from
 scheduling coincidence:
 
 ```python
-lag = tb.dac_if.samp_time(0, n) - tb.adc_if.samp_time(0, n)   # same for every n
+lag = tb.dac_if.samp_time(n) - tb.adc_if.samp_time(n)   # same for every n
 ```
 
 `t0` is **owned by the converter and pushed onto the interface at bind**; the sample rate travels the
@@ -142,10 +150,20 @@ a rate can.
 tile calibration — and is not a modelable thing. What it *produces* is a fixed, measured offset, and
 `t0` is that parameter: per tile, measured at bring-up, zero in simulation.
 
-A concrete consequence, from the loopback example: a converter loopback has fabric latency, and the
-DAC grid does not wait for it. Starting both tiles at the same instant means the DAC's first block
-period comes due before its samples have arrived, and a zero block goes out. The fix is not a queue —
-it is to say so in `t0`, by starting the DAC tile later than the ADC tile by at least the round trip.
+**What `t0` is *not* for.** A loop through the RF grids — ADC into the fabric and back out of the
+DAC — costs at least one block *index*, because the ADC only delivers block *k* at the instant the
+DAC period for it comes due. That is structural: a zero-latency fabric would not close it either, and
+it is the "no dependency within < `blksize` samples" limit applied to the fabric path.
+
+It is tempting to buy that block by staggering the DAC epoch. Don't — that models a tile stagger MTS
+exists to *prevent*, and it makes correctness depend on a wall-clock margin the block-LT model does
+not resolve. The cost belongs to the pipeline, which declares it (`blk_latency`, ≥ 1 for any
+block-processing module) and gets checked against the DAC edge's startup underruns. Aligned grids and
+a one-block loop cost are not in tension: alignment is about *when a grid ticks*, latency is about
+*which block each tick carries*.
+
+A loop that declares zero block latency is refused at elaboration rather than reported later as an
+underrun — it is not a slow system, it is not a system.
 
 ## The counters are the contract
 

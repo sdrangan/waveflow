@@ -53,9 +53,32 @@ class RfSampPassThrough(FreeRunMod):
     bitwidth: HwParam[int] = 64
     #: Words in one block's burst — ``blksize / samp_per_word``.
     nwords_blk: HwParam[int] = 64
+    #: **Block latency**: how many RF block periods pass before this module's output for a given
+    #: input block is available downstream.
+    #:
+    #: It is **>= 1 for any block-processing module, structurally** — not as a safety margin.  A block
+    #: only exists at its grid tick, so a module cannot emit block *k* before it has received block
+    #: *k*, and a converter downstream therefore cannot play block *k* in the same period the
+    #: converter upstream delivered it.  A loop through the RF grids costs at least one block index no
+    #: matter how fast the fabric is; even a zero-latency fabric cannot close it.  That is the
+    #: "no dependency within < blksize samples" limit in ``plans/adc_model.md``, applied to the fabric
+    #: path rather than the environment path.
+    #:
+    #: This is a **declaration that gets checked**, not a knob: the testbench asserts the downstream
+    #: edge underran exactly this many times at startup, so a module that claims two blocks and
+    #: exhibits one fails.  (Wall-clock latency here is sub-block — the fabric is ~4.7x oversized for
+    #: this rate — but a design must not lean on that: sub-block timing is precisely what block-LT
+    #: does not resolve.)
+    blk_latency: HwParam[int] = 1
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if int(self.blk_latency) < 1:
+            raise ValueError(
+                f"{type(self).__name__} '{self.name}': blk_latency must be >= 1 block, got "
+                f"{int(self.blk_latency)}. A zero-latency loop through the RF grids is not a system "
+                f"that can exist — block k cannot be played in the period it was captured — so it is "
+                f"refused here rather than reported later as an underrun.")
         w = int(self.bitwidth)
         self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
         self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
@@ -101,17 +124,12 @@ class RfLoopbackTB(FreeRunMod):
     nbits: int = 16
     samp_per_word: int = 4
     full_scale: float = 1.0
-    #: The **ADC** tile's epoch, pushed to the ADC interface at bind.
+    #: The tiles' epoch — pushed to **both** RF interfaces at bind, so the ADC and DAC grids are
+    #: aligned.  That is what MTS gives you, and it is deliberately *not* where the loop's one-block
+    #: cost is paid: staggering a tile start to buy pipeline latency would model something MTS exists
+    #: to prevent.  The cost is structural and shows up as the startup transient instead — see
+    #: :attr:`RfSampPassThrough.blk_latency`.
     t0: float = 0.0
-    #: How much later the **DAC** tile's epoch is than the ADC's, in **block periods**.
-    #:
-    #: This is the one number a loopback cannot leave at zero, and the reason is worth stating: the
-    #: DAC grid is a metronome, not a queue.  It emits a block every period whether or not the
-    #: samples for it have finished their trip through the fabric, and a period that arrives first
-    #: is an underrun — zero-filled and counted.  So the DAC tile has to be *started later* than the
-    #: ADC tile by at least the fabric round trip, and ``t0`` is where a design says so.  One block
-    #: period is comfortably more than the two AXIS bursts this pipeline costs.
-    dac_lag_blk: float = 1.0
     #: Seconds the source waits before its first block — a **late** producer (provokes underrun).
     src_start_delay: float = 0.0
     #: Blocks after which the sink stops consuming forever (provokes overrun).  ``None`` = never.
@@ -129,13 +147,17 @@ class RfLoopbackTB(FreeRunMod):
         self.blk_period = int(self.blksize) / float(self.samp_rate)
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, nbits=int(self.nbits),
                          samp_per_word=int(self.samp_per_word), full_scale=float(self.full_scale),
-                         t0_rx=float(self.t0),
-                         t0_tx=float(self.t0) + float(self.dac_lag_blk) * self.blk_period)
+                         t0_rx=float(self.t0), t0_tx=float(self.t0))
         w = self.rfdc.axis_bitwidth
         self.nwords_blk = int(self.blksize) // int(self.samp_per_word)
 
         self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
                                      nwords_blk=self.nwords_blk)
+        #: Block latency of the wired path from the ADC edge to the DAC edge — **summed from what the
+        #: modules on that path declare**, not inferred.  One module here, so it is the DUT's.  A
+        #: general graph would need loop detection; a design that states its latency does not.  This
+        #: is the DAC edge's entitled startup transient.
+        self.loop_blk_latency = int(self.dut.blk_latency)
         self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in",
                                    start_delay=float(self.src_start_delay))
         self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim, out_bundle="vectors/rf_out",
@@ -239,23 +261,46 @@ class RfLoopbackSim:
         return self._captured
 
     def check(self) -> "RfLoopbackTB":
-        """The stage-1 gate: a byte-identical loopback with both loss counters at zero.
+        """The stage-1 gate: a loopback that is byte-identical **once shifted by the pipeline's
+        declared block latency**, with both loss counters exactly as declared.
 
-        Two separate claims, and both are needed.  The data check says the samples survived
-        quantization, packing, transport and unpacking unchanged.  The counter check says nothing was
-        *quietly* lost on the way — backpressure protects against over-production and **nothing**
-        protects against under-production, so a run that dropped or zero-filled blocks could still
-        show a plausible-looking prefix of correct data.
+        Three claims, and all three are needed.  The data check says the samples survived
+        quantization, packing, transport and unpacking unchanged.  The shift check says the loop cost
+        exactly what the pipeline declared — no more, no less.  The counter check says nothing was
+        *quietly* lost, because backpressure protects against over-production and **nothing** protects
+        against under-production, so a run that dropped or zero-filled blocks could still show a
+        plausible-looking prefix of correct data.
+
+        The shift is not an artifact to be tolerated.  DAC block *k* carries ADC block *k - L*
+        because a loop through the RF grids costs at least one block index, structurally — so the
+        first ``L`` DAC periods have nothing to play and emit the zero-fill.  That is the startup
+        transient a real converter has, and it is why a design primes its buffer before enabling the
+        tile.
         """
         tb = self.tb
+        n_lat = int(tb.loop_blk_latency)
+        # Fed straight from the source, the ADC edge is entitled to no transient at all.
         tb.adc_if.assert_clean()
-        tb.dac_if.assert_clean()
+        # The DAC edge sits at the end of a pipeline declaring n_lat blocks, so exactly that many of
+        # its leading periods have no data.  Checked exactly, and against the grid index too.
+        tb.dac_if.assert_clean(startup_blocks=n_lat)
+
         assert len(self.captured) == self.n_src_blk, (
             f"sink captured {len(self.captured)} blocks, expected {self.n_src_blk}")
-        for k, (exp, got) in enumerate(zip(self.sent, self.captured)):
-            assert np.array_equal(exp, got), f"block {k} differs after loopback"
-        assert self._in_bytes == self._out_bytes, (
-            "the sink's bundle is not byte-identical to the source's")
+        for k in range(n_lat):
+            assert not np.any(self.captured[k]), (
+                f"block {k} is inside the {n_lat}-block startup transient, so it must be the "
+                f"zero-fill the DAC emits when its samples have not arrived yet")
+        for k in range(n_lat, self.n_src_blk):
+            assert np.array_equal(self.sent[k - n_lat], self.captured[k]), (
+                f"DAC block {k} != ADC block {k - n_lat} after the loopback")
+
+        # The same claim at the byte level, on the bundles both backends will share from stage 2.
+        blk_bytes = int(tb.blksize) * 8          # n_ch=1, float64
+        assert self._out_bytes[n_lat * blk_bytes:] == self._in_bytes[:len(self._out_bytes)
+                                                                     - n_lat * blk_bytes], (
+            f"the sink's bundle is not byte-identical to the source's once shifted by the declared "
+            f"{n_lat}-block latency")
         assert tb.dut.n_blk == self.n_src_blk, (
             f"DUT relayed {tb.dut.n_blk} bursts, expected {self.n_src_blk}")
         self.check_alignment()
@@ -265,17 +310,21 @@ class RfLoopbackSim:
         """Assert TX/RX alignment as a **derived** quantity, not a scheduling coincidence.
 
         ``t0`` plus a rate defines the grid, so the time of any sample on either side follows from
-        two numbers and alignment is arithmetic.  The relation held here is the one the design
-        configured: DAC sample *n* occurs exactly ``dac_lag_blk`` block periods after ADC sample *n*.
-        Nothing about the run can make this true by luck — if the epochs were emergent from whoever
-        happened to be scheduled first, it would not hold at every *n*.
+        two numbers and alignment is arithmetic.  With both tiles on one epoch — the normal case, and
+        what MTS is for — DAC sample *n* occurs at exactly the same instant as ADC sample *n*.
+
+        Nothing about the run can make this true by luck: if the epochs were emergent from whoever
+        happened to be scheduled first, it would not hold at every *n*.  And note what is **not**
+        being claimed — that the two grids being aligned means the loop is free.  The loop still costs
+        ``loop_blk_latency`` block *indices*; alignment is about when the grids tick, latency is about
+        which block each tick carries.  Keeping those separate is why neither has to fudge the other.
         """
         tb = self.tb
-        want = float(tb.dac_lag_blk) * tb.blk_period
         for n in (0, int(tb.blksize), int(tb.blksize) * max(self.n_src_blk - 1, 0)):
-            got = tb.dac_if.samp_time(0, n) - tb.adc_if.samp_time(0, n)
-            assert abs(got - want) < 1e-15, (
-                f"sample {n}: DAC grid is {got:g}s after the ADC grid, expected {want:g}s")
+            got = tb.dac_if.samp_time(n) - tb.adc_if.samp_time(n)
+            assert abs(got) < 1e-15, (
+                f"sample {n}: the DAC grid is {got:g}s off the ADC grid; both tiles share one epoch, "
+                f"so they should be aligned")
 
 
 def run_loopback(n_src_blk: int = 8, **tb_kwargs) -> "RfLoopbackTB":

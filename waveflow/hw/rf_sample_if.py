@@ -8,9 +8,9 @@ RFDC, or about any converter at all.
 
 **Block-LT, not sample-LT.**  One SimPy event carries one ``(n_ch, blksize)`` block for *every*
 channel of a tile.  Splitting per channel would give ``n_ch`` events per block period and work
-against the entire reason for block granularity; channel-to-channel skew is instead a **``t0``
-vector** on the one interface, which states "these channels share a grid, with these known offsets"
-directly rather than as ``n_ch`` declarations that could disagree.
+against the entire reason for block granularity.  The channels of a tile share one grid and one
+scalar :attr:`~RFSampIF.t0`; channels that genuinely need independent grids are not one tile, and
+should have their own interface.
 
 **Unidirectional.**  TX and RX share exactly one quantity — the time origin — and differ in every
 other (sample rate, channel count, ``blksize``, buffer, counters, peer).  So there is one interface
@@ -19,11 +19,15 @@ symmetric case (a TDD antenna port) is a **pair** of interfaces held by one node
 nothing.
 
 **Transport only.**  An edge may own rate, buffering, ordering and loss accounting.  It must **not**
-own signal processing: gain, fractional delay and multipath belong in a ``Channel`` block.  Every
-behaviour here has to be reproduced by hand in C++ for the XSI realization
+own signal processing: gain, fractional delay, per-channel skew and multipath belong in a ``Channel``
+block.  Every behaviour here has to be reproduced by hand in C++ for the XSI realization
 (``plans/behavioral_edges.md``) and nothing checks that the two agree, so the bar is "obviously the
 same in ten lines".  Zero-fill plus two counters clears it; a filter does not.  Bulk delay is
 already :attr:`t0`.
+
+The operational form of that rule, which has now caught three candidates (gain, delay, per-channel
+skew): **if the edge can only record a quantity and never apply it, it does not belong on the edge.**
+It is checkable by grepping for who reads the field.
 
 **The counters are the contract, not the zero-fill.**  There is a real asymmetry in the hardware:
 
@@ -62,7 +66,7 @@ class RfBlock(NamedTuple):
     """One block handed across an :class:`RFSampIF`: its grid index and its samples.
 
     ``idx`` is the 1-based block number on the interface's absolute grid, so the block covers
-    samples ``[(idx-1)*blksize, idx*blksize)`` and completes at ``t_epoch + idx*blk_period``.
+    samples ``[(idx-1)*blksize, idx*blksize)`` and completes at ``t0 + idx*blk_period``.
     Carrying it beside the data is what lets a receiver place samples on the grid without counting
     arrivals — a dropped block does not shift everything after it.  (Named ``idx`` rather than
     ``index`` so it does not shadow ``tuple.index``.)
@@ -222,7 +226,7 @@ class RFSampIF(Interface):
         if int(self.depth) < 1:
             raise ValueError(f"depth must be >= 1 block, got {self.depth}")
         self._buf = simpy.Store(self.env, capacity=int(self.depth))
-        self._t0: np.ndarray | None = None
+        self._t0: float | None = None
         self._t0_owner = None
 
         # --- the counters: this edge's contract ---------------------------------------------
@@ -235,6 +239,12 @@ class RFSampIF(Interface):
         self.underrun = 0
         #: Blocks the receiver refused (its queue was full) and which were therefore **dropped**.
         self.overrun = 0
+        #: Grid index of the most recent underrun / overrun (0 = never).  A *count* cannot tell a
+        #: startup transient from a steady-state fault, and the difference is the whole question: a
+        #: converter fed by a pipeline **must** underrun for its first blocks (the data has not
+        #: arrived yet) and must never underrun afterwards.  See :meth:`assert_clean`.
+        self.last_underrun_idx = 0
+        self.last_overrun_idx = 0
 
     # -- derived rates ---------------------------------------------------------------------------
 
@@ -251,31 +261,30 @@ class RFSampIF(Interface):
     # -- t0: the synchronization primitive -------------------------------------------------------
 
     @property
-    def t0(self) -> np.ndarray:
-        """Per-channel time origin, shape ``(n_ch,)``: sample *n* of channel *c* occurs at
-        ``t0[c] + n / samp_rate``.
+    def t0(self) -> float:
+        """The time origin, a **scalar**: sample *n* occurs at ``t0 + n / samp_rate``, on every
+        channel.  It is also the block grid anchor — block *k* fires at ``t0 + k * blk_period``.
 
-        A **vector**, so channel-to-channel skew is stated once on the one interface that carries
-        those channels.  Alignment across TX/RX and across antennas is then *derived and assertable*
+        Alignment across TX/RX and across antennas is *derived and assertable*
         (``n_rx / fs_rx == n_tx / fs_tx``) rather than emergent from scheduling coincidence, and it is
-        also where MTS lands: a bring-up procedure is not modelable, but its outcome is a measured,
-        fixed offset — this one.
+        where MTS lands: a bring-up procedure is not modelable, but its outcome is a measured, fixed
+        offset — this one.
 
-        Defaults to all-zeros when nobody set it (a graph with no converter in it).
+        **Scalar, not a per-channel vector**, and the reason is worth keeping.  ``t0`` is an *epoch*
+        — when a counter starts — which is a property of a **tile**.  Channel-to-channel skew is a
+        *delay* — how much later a path delivers — which is a property of a **path**.  An earlier
+        draft made this a vector to hold the skew, and the transport promptly ignored it: every
+        channel rides one ``(n_ch, blksize)`` block delivered by one event, so no per-channel offset
+        could ever change when samples arrive.  It was recordable and never applied, which is worse
+        than absent — an accessor would have reported a skew the model did not exhibit.  Applying it
+        would mean shifting samples inside a block, i.e. signal processing, which an edge does not
+        do.  Measured skew belongs where it can be *acted on*: a channel/DSP block that applies the
+        delay.  Channels that genuinely need independent grids are not one tile — give them their own
+        interface.
+
+        Defaults to ``0.0`` when nobody set it (a graph with no converter in it).
         """
-        if self._t0 is None:
-            self._t0 = np.zeros(int(self.n_ch), dtype=float)
-        return self._t0
-
-    @property
-    def t_epoch(self) -> float:
-        """The **block grid anchor**: the earliest channel's origin, ``min(t0)``.
-
-        The transport moves whole ``(n_ch, blksize)`` blocks, so it fires on one grid; the per-channel
-        offsets in :attr:`t0` place the *samples* within it.  With an unskewed tile (the common case,
-        and what MTS is for) the two coincide.
-        """
-        return float(np.min(self.t0))
+        return 0.0 if self._t0 is None else float(self._t0)
 
     def set_t0(self, t0, owner=None) -> None:
         """Push the time origin onto this interface — **called by the converter that owns it**.
@@ -285,27 +294,29 @@ class RFSampIF(Interface):
         TX/RX alignment structural without a bidirectional interface — the two edges share an origin
         because they share the node that assigns it.
 
-        A scalar broadcasts to all channels.  A second, *different* owner setting it is an error, not
-        a last-writer-wins: two declarations that can disagree is exactly the bug.
+        A second, *different* owner setting it is an error, not a last-writer-wins: two declarations
+        that can disagree is exactly the bug.
         """
-        vec = np.asarray(t0, dtype=float).reshape(-1)
-        if vec.size == 1:
-            vec = np.full(int(self.n_ch), float(vec[0]))
-        if vec.size != int(self.n_ch):
+        arr = np.asarray(t0, dtype=float).reshape(-1)
+        if arr.size != 1:
             raise ValueError(
-                f"RFSampIF '{self.name}': t0 must be a scalar or a length-{self.n_ch} vector "
-                f"(one per channel), got shape {np.shape(t0)}")
+                f"RFSampIF '{self.name}': t0 is a scalar epoch (when this tile's sample counter "
+                f"starts), got shape {np.shape(t0)}. Per-channel skew is a path delay, not an "
+                f"epoch — see the t0 docstring for where it belongs.")
         if self._t0 is not None and self._t0_owner is not owner:
             raise ValueError(
                 f"RFSampIF '{self.name}': t0 was already set by {self._t0_owner!r} and "
                 f"{owner!r} is setting it again. t0 has exactly one owner — the converter whose "
                 f"sample counter it describes.")
-        self._t0 = vec
+        self._t0 = float(arr[0])
         self._t0_owner = owner
 
-    def samp_time(self, ch: int, n: int) -> float:
-        """The absolute time of sample *n* on channel *ch*: ``t0[ch] + n / samp_rate``."""
-        return float(self.t0[int(ch)]) + int(n) / self.samp_rate
+    def samp_time(self, n: int) -> float:
+        """The absolute time of sample *n*: ``t0 + n / samp_rate``.
+
+        No channel argument, and that signature is the honest one: every channel of a tile rides the
+        same block on the same grid, so nothing here can differ per channel."""
+        return self.t0 + int(n) / self.samp_rate
 
     # -- the producer side -----------------------------------------------------------------------
 
@@ -329,7 +340,7 @@ class RFSampIF(Interface):
     def run_proc(self) -> ProcessGen[None]:
         """Emit one block every :attr:`blk_period`, **on an absolute grid**.
 
-        Block *k* fires at ``t_epoch + k * blk_period`` — computed from the epoch each time, *not*
+        Block *k* fires at ``t0 + k * blk_period`` — computed from the epoch each time, *not*
         as ``yield timeout(blk_period)`` in a loop.  The difference is not stylistic.  Any yield in
         the body — a blocking push, an edge that charges transfer time, a ``timeout(0)`` in a
         callback — makes the next period start from a later ``env.now`` under the relative form, and
@@ -342,15 +353,15 @@ class RFSampIF(Interface):
             raise RuntimeError(
                 f"RFSampIF '{self.name}' is not fully bound (tx={self.endpoints['tx']}, "
                 f"rx={self.endpoints['rx']}); the metronome has nowhere to draw from or deliver to.")
-        t_epoch = self.t_epoch
+        t0 = self.t0
         period = self.blk_period
         k = 0
         while self.n_blk is None or k < int(self.n_blk):
             k += 1
-            dly = t_epoch + k * period - self.env.now
+            dly = t0 + k * period - self.env.now
             if dly < 0:
                 raise RuntimeError(
-                    f"RFSampIF '{self.name}': block {k} was due at {t_epoch + k * period:g}s but "
+                    f"RFSampIF '{self.name}': block {k} was due at {t0 + k * period:g}s but "
                     f"the previous block's body did not finish until {self.env.now:g}s — the edge "
                     f"cannot hold its sample grid. Shorten the body or raise blksize.")
             yield self.timeout(dly)
@@ -371,11 +382,13 @@ class RFSampIF(Interface):
             # anyone is actually allowed to rely on.
             block = np.zeros((int(self.n_ch), int(self.blksize)), dtype=float)
             self.underrun += 1
+            self.last_underrun_idx = k
         self.blocks_sent += 1
         if self.endpoints['rx'].deliver(RfBlock(idx=k, data=block)):
             self.blocks_delivered += 1
         else:
             self.overrun += 1
+            self.last_overrun_idx = k
 
     # -- reporting -------------------------------------------------------------------------------
 
@@ -388,16 +401,41 @@ class RFSampIF(Interface):
         return {"blocks_sent": self.blocks_sent, "blocks_delivered": self.blocks_delivered,
                 "underrun": self.underrun, "overrun": self.overrun}
 
-    def assert_clean(self) -> None:
-        """Raise unless ``underrun == 0 and overrun == 0`` — the gate every converter-connected
+    def assert_clean(self, startup_blocks: int = 0) -> None:
+        """Raise unless this edge was clean **in steady state** — the gate every converter-connected
         example is expected to carry.  Without it a design that fails on hardware passes in both
-        simulators."""
-        if self.underrun or self.overrun:
+        simulators.
+
+        *startup_blocks* is the transient this edge is **entitled** to: the number of leading grid
+        periods that may underrun because the data feeding them has not arrived yet.  It is not a
+        fudge factor and it is not a tolerance — it is a *declared* property of the graph (the block
+        latency of the pipeline upstream of this edge), and it is checked exactly: an underrun at
+        grid index ``> startup_blocks`` fails, and so does a shortfall in the expected count, so a
+        design that declares two blocks of latency and exhibits one is a failure too.
+
+        The default of ``0`` is the right one for an edge fed directly by a source: it may not
+        underrun at all.  An edge fed *through* a pipeline must pass that pipeline's latency, because
+        a converter at the end of one **must** underrun for its first blocks — that is the startup
+        transient, and it is why real designs prime a buffer before enabling the tile.
+        """
+        n = int(startup_blocks)
+        if self.overrun:
             raise AssertionError(
-                f"RFSampIF '{self.name}': underrun={self.underrun} overrun={self.overrun} "
-                f"(sent={self.blocks_sent} delivered={self.blocks_delivered}). Underrun means the "
-                f"producer was late and zero samples went out; overrun means the receiver refused "
-                f"blocks and they were dropped.")
+                f"RFSampIF '{self.name}': overrun={self.overrun} (last at block "
+                f"{self.last_overrun_idx}, sent={self.blocks_sent} "
+                f"delivered={self.blocks_delivered}) — the receiver refused blocks and they were "
+                f"dropped. Overrun is never entitled: there is no startup transient for it.")
+        if self.underrun != n:
+            raise AssertionError(
+                f"RFSampIF '{self.name}': underrun={self.underrun} but the declared startup "
+                f"transient is {n} block(s). More means the producer was late in steady state; "
+                f"fewer means the pipeline feeding this edge declares more block latency than it "
+                f"actually has.")
+        if self.last_underrun_idx > n:
+            raise AssertionError(
+                f"RFSampIF '{self.name}': underran at block {self.last_underrun_idx}, past the "
+                f"{n}-block startup transient. The count is right but the timing is not — this is a "
+                f"steady-state fault wearing a transient's clothes.")
 
     # -- binding ---------------------------------------------------------------------------------
 

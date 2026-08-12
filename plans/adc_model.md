@@ -69,9 +69,9 @@ Generic to any converter, not only the RFDC.
 
 **Unidirectional, all channels.** One interface carries every channel of a tile as an `(n_ch, blksize)`
 block — one array, one SimPy event. Splitting per channel gives `n_ch` events per block period and works
-against the entire reason for block-LT. Channel-to-channel skew is a **`t0` vector** on the one
-interface, which states "these channels share a grid, with these known offsets" directly; N interfaces
-would restate it and could disagree.
+against the entire reason for block-LT. The channels of a tile share one grid and one **scalar**
+`t0`; channels that genuinely need independent grids are not one tile and should have their own
+interface.
 
 **Not bidirectional.** TX and RX share exactly one quantity — the time origin — and differ in every
 other: sample rate, channel count (4 ADC / 2 DAC on the RFSoC 4x2), `blksize`, buffer, counters, and
@@ -333,7 +333,7 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
 ## Staging
 
 1. **`Rfdc` + `RFSampIF` + `RfDataSource`/`RfDataSink` + a trivial pass-through DUT, pysim only.**
-   — **DONE 2026-08-12** (branch `rf-stage1`). Assert zero underrun/overrun and a byte-identical
+   — **DONE 2026-08-12** (branch `rf-stage1`). Assert declared-exact underrun/overrun and a byte-identical
    loopback. No RTL, no DSP. Deliberately small: it exercises the kind question, the
    underflow/overflow contract, the param split, the absolute-grid metronome and `t0` — every
    structural decision above — before any is expensive to change.
@@ -393,7 +393,7 @@ a convention.
 **5. Two things are refused loudly rather than settled.** `n_rx`/`n_tx` > 1 raises and names the
 open question (how many AXIS ports a multi-channel tile presents decides how many BFM duals a
 testbench needs); `iq_mode = 1` raises as stage 2/4 work. The RF side is already general — one
-interface, `(n_ch, blksize)` — and is exercised at `n_ch = 4` with a skewed `t0` vector.
+interface, `(n_ch, blksize)` — and is exercised at `n_ch = 4`.
 
 **6. Added, not in the plan: the metronome fails loud if it cannot keep up.** A block body that
 outlasts a block period raises rather than slipping. Without it, the one case the absolute grid
@@ -443,6 +443,42 @@ link, never a hard-coded "Step N"; and any figure (the sample grid and `t0` offs
 through the committed TikZ → SVG workflow.
 
 **Docs gates:** `tests/docs/test_markdown_integrity.py`, `tests/docs/test_documented_numbers.py`.
+
+### Two corrections the build forced (2026-08-12, second pass)
+
+**7. `t0` is a scalar, not a per-channel vector.** The vector was meant to hold channel-to-channel
+skew and the transport ignored it: every channel rides one `(n_ch, blksize)` block delivered by one
+event, so no per-channel offset could change when samples arrive. Its only consumers were `min(t0)`
+(the grid anchor) and a reporting accessor — recordable, never applied, and able to report a skew the
+model did not exhibit. The category error: **`t0` is an epoch** (when a counter starts, a *tile*
+property) while **skew is a delay** (how much later a path delivers, a *path* property). Applying skew
+means shifting samples inside a block, i.e. signal processing, which an edge does not do. A vector is
+now refused by `set_t0`.
+
+This is the third candidate the transport-not-signal-processing rule has caught, after gain and
+delay, so the operational form is now stated in `plans/behavioral_edges.md` and in the module
+docstring: **if the edge can only record a quantity and never apply it, it does not belong on the
+edge** — checkable by grepping for who reads the field.
+
+**8. The loop's one-block cost is declared by the pipeline, not bought with a tile offset.** The
+first pass gave the DAC epoch a `dac_lag_blk` head start so the loopback would come out clean. That
+was backwards twice over: it made an impossible configuration *constructible* and then steered away
+from it with a default, and it modelled a tile stagger that MTS exists to prevent. It also justified
+itself with the measured fabric round trip, inviting a sub-block lag — i.e. leaning on exactly the
+timing block-LT does not resolve.
+
+The correction. A loop through the RF grids costs **at least one block index, structurally**: the ADC
+delivers block *k* at the instant the DAC period for it comes due, so no fabric speed closes it. So
+`t0_rx == t0_tx` (aligned tiles, what MTS gives you), a block-processing module declares
+`blk_latency >= 1`, and `blk_latency = 0` is **refused at elaboration** — a loop that claims to be
+free is not a slow system, it is not a system. The resulting first-block underrun is not a fault but
+the **startup transient**, which is physical and is why real designs prime a buffer before enabling a
+tile. `assert_clean(startup_blocks=N)` checks it *exactly* and checks the grid index too, so an
+over-declared latency fails and a steady-state fault cannot hide inside a transient's budget. The
+declaration is therefore checked, not trusted — it passes the rule in correction 7.
+
+Alignment and latency stay separate quantities: alignment is *when a grid ticks*, `blk_latency` is
+*which block each tick carries*. Neither has to fudge the other.
 
 ## Relationship to other plans
 

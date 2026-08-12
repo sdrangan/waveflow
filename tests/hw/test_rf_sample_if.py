@@ -136,7 +136,7 @@ class TestMetronome:
         sim.run_sim()
 
         assert iface.blk_period == pytest.approx(self.T)
-        expect = [iface.t_epoch + k * self.T for k in range(1, self.N + 1)]
+        expect = [iface.t0 + k * self.T for k in range(1, self.N + 1)]
         assert iface.ticks == pytest.approx(expect)
         # The paired claim, stated as a number: the relative loop would have ended (N-1)*DELTA late.
         assert iface.ticks[-1] == pytest.approx(self.N * self.T)
@@ -221,7 +221,7 @@ class TestLossContract:
         iface, tx, rx = _edge(sim, n_blk=4, rx_depth=1)
         sim.env.process(_feeder(iface, tx, 4)())
         sim.run_sim()
-        with pytest.raises(AssertionError, match=r"underrun=0 overrun=3"):
+        with pytest.raises(AssertionError, match=r"overrun=3"):
             iface.assert_clean()
 
 
@@ -286,24 +286,22 @@ class TestStructure:
         with pytest.raises(ValueError, match=r"a block must be exactly \(2, 8\)"):
             sim.run_sim()
 
-    def test_t0_is_a_per_channel_vector_and_samp_time_derives_from_it(self):
-        """Channel-to-channel skew is stated once, on the one interface those channels ride."""
+    def test_t0_is_a_scalar_and_samp_time_derives_from_it(self):
+        """One epoch per tile, shared by every channel it carries."""
         sim = Simulation()
         iface, tx, rx = _edge(sim, n_ch=3, blksize=8, samp_rate=8.0, n_blk=1)
-        skew = [0.0, 0.25, 0.5]
-        iface.set_t0(skew, owner="tile")
-        assert np.array_equal(iface.t0, np.asarray(skew))
-        # sample n of channel c is at t0[c] + n/fs -- derived, not scheduled.
-        assert iface.samp_time(0, 8) == pytest.approx(1.0)
-        assert iface.samp_time(2, 8) == pytest.approx(1.5)
-        # The block grid anchors on the earliest channel; the offsets place samples within it.
-        assert iface.t_epoch == pytest.approx(0.0)
+        iface.set_t0(0.5, owner="tile")
+        assert iface.t0 == pytest.approx(0.5)
+        # sample n is at t0 + n/fs -- derived, not scheduled, and the same for every channel.
+        assert iface.samp_time(8) == pytest.approx(1.5)
+        assert iface.samp_time(0) == pytest.approx(0.5)
 
-    def test_a_scalar_t0_broadcasts(self):
+    def test_t0_defaults_to_zero_when_no_converter_set_it(self):
         sim = Simulation()
         iface, _, _ = _edge(sim, n_ch=4, n_blk=1)
+        assert iface.t0 == pytest.approx(0.0)
         iface.set_t0(2.0, owner="tile")
-        assert np.array_equal(iface.t0, np.full(4, 2.0))
+        assert iface.t0 == pytest.approx(2.0)
 
     def test_t0_has_exactly_one_owner(self):
         """Two declarations that can disagree is the bug this refuses."""
@@ -314,11 +312,18 @@ class TestStructure:
         with pytest.raises(ValueError, match="t0 has exactly one owner"):
             iface.set_t0(2.0, owner="tile_b")
 
-    def test_t0_vector_length_must_match_n_ch(self):
+    def test_a_per_channel_t0_vector_is_refused(self):
+        """t0 is an *epoch* (a tile property); per-channel skew is a *delay* (a path property).
+
+        An earlier draft accepted a vector here, and the transport ignored it -- every channel rides
+        one block delivered by one event, so no per-channel offset could change when samples arrive.
+        A field that can only be recorded and never applied does not belong on the edge, so it is
+        refused rather than silently inert.
+        """
         sim = Simulation()
         iface, _, _ = _edge(sim, n_ch=3, n_blk=1)
-        with pytest.raises(ValueError, match="length-3 vector"):
-            iface.set_t0([0.0, 1.0], owner="tile")
+        with pytest.raises(ValueError, match="scalar epoch"):
+            iface.set_t0([0.0, 0.25, 0.5], owner="tile")
 
     def test_samp_rate_and_blksize_are_read_through_the_interface(self):
         """Endpoints restate nothing: there is one declaration of each quantity."""
