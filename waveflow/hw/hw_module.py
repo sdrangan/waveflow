@@ -708,7 +708,24 @@ class HwModule(SimObj):
                 )
 
 
-def declares_hook(source, hook: str) -> bool:
+def _hook_sentinel_base(cls) -> type:
+    """The framework class whose definition of a hook **is** the "not declared" sentinel for *cls*.
+
+    Two roots carry realization hooks, and they are peers rather than a hierarchy: a **node** hook
+    (``bfm_model``) is defined on :class:`HwModule`, an **edge** hook (``xsi_model``) on
+    :class:`~waveflow.hw.interface.Interface`.  Picking the wrong root is not a cosmetic error — it
+    is the exact ``hasattr`` trap :func:`declares_hook` exists to close, one level up: comparing an
+    ``Interface`` subclass's ``xsi_model`` against ``HwModule``'s (which is ``None``) answers *True*
+    for every interface, including the base.
+
+    Imported lazily because ``hw_module`` is imported *by* ``interface``, not the other way round.
+    """
+    from waveflow.hw.interface import Interface
+
+    return Interface if issubclass(cls, Interface) else HwModule
+
+
+def declares_hook(source, hook: str, base: type | None = None) -> bool:
     """Does *source* **declare** the realization hook named *hook*, or merely inherit the base's
     "not declared" sentinel?
 
@@ -723,10 +740,17 @@ def declares_hook(source, hook: str) -> bool:
     leaf really does have one (derived from the module itself), and a plain ``HwModule`` really has
     none.
 
+    *base* names the class holding the sentinel.  ``None`` resolves it from *source* via
+    :func:`_hook_sentinel_base` — :class:`HwModule` for a module, ``Interface`` for an interface —
+    so ``declares_hook(iface, "xsi_model")`` is correct without the caller restating which root it
+    means.  Pass it explicitly only when asking about a root the object does not derive from.
+
     Accepts a class or an instance.
     """
     cls = source if isinstance(source, type) else type(source)
     fn = getattr(cls, hook, None)
     if fn is None:
         return False
-    return fn is not getattr(HwModule, hook, None)
+    if base is None:
+        base = _hook_sentinel_base(cls)
+    return fn is not getattr(base, hook, None)
