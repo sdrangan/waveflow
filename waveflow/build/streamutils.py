@@ -227,6 +227,12 @@ class XsiHarnessStep(Buildable):
     def build_outputs(self) -> dict[str, Path]:
         return {
             "xsi_bfm": self._output_dir / "xsi_bfm.h",
+            # The participant lifecycle, and the edge model that implements it without binding any
+            # RTL pin.  Copied unconditionally rather than only for a graph with a behavioral edge:
+            # xsi_bfm.h includes xsi_simobj.h, so a workspace without it does not compile at all,
+            # and a per-graph copy list would make that a build-order question.
+            "xsi_simobj": self._output_dir / "xsi_simobj.h",
+            "xsi_channel": self._output_dir / "xsi_channel.h",
             "xsi_bundle": self._output_dir / "xsi_bundle.h",
             "xsi_loader_h": self._output_dir / "xsi_loader.h",
             "xsi_loader_cpp": self._output_dir / "xsi_loader.cpp",
@@ -238,6 +244,8 @@ class XsiHarnessStep(Buildable):
     def generate(self, key: str, config: BuildConfig) -> str:
         src_names = {
             "xsi_bfm": "xsi_bfm.h",
+            "xsi_simobj": "xsi_simobj.h",
+            "xsi_channel": "xsi_channel.h",
             "xsi_bundle": "xsi_bundle.h",
             "xsi_loader_h": "xsi_loader.h",
             "xsi_loader_cpp": "xsi_loader.cpp",

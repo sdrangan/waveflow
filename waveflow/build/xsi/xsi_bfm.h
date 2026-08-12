@@ -23,29 +23,15 @@
 #include <vector>
 #include "xsi_loader.h"
 #include "xsi_bundle.h"
+// The participant lifecycle (pre_sim / sample / update / drive / post_sim).  It lives in its own
+// header because it is not a bus model: an edge model (xsi_channel.h) implements the same five
+// phases and must compile with no Vivado headers at all.  Included here so every existing user of
+// xsi_bfm.h still gets `wfbfm::XsiSimObj` exactly as before.
+#include "xsi_simobj.h"
 
 namespace wfbfm {
 
 typedef s_xsi_vlog_logicval LV;
-
-// ---------------------------------------------------------------------------
-// XsiSimObj — the lifecycle a testbench participant shares, mirroring Python's
-// SimObj: pre_sim -> (sample / update / drive, once per cycle) -> post_sim.  All
-// five phases are virtual with no-op defaults, so a passive participant (a memory)
-// overrides only pre_sim/post_sim while a per-cycle model overrides only
-// sample/update/drive.  The Harness holds participants by base pointer and drives
-// each phase over one list, exactly as Simulation.run_sim() drives its SimObjs.
-// ---------------------------------------------------------------------------
-
-class XsiSimObj {
-public:
-    virtual ~XsiSimObj() = default;
-    virtual void pre_sim()  {}   ///< before reset: seed memory / load vectors from files
-    virtual void sample()   {}   ///< clk low: read kernel outputs, latch beat flags (VALID && READY)
-    virtual void update()   {}   ///< after the rising edge: apply this cycle's beats, advance FSMs
-    virtual void drive()    {}   ///< present held values for the next cycle
-    virtual void post_sim() {}   ///< after the run: dump results to files, collect metrics
-};
 
 // ---------------------------------------------------------------------------
 // Dut — typed port access over the XSI loader.
