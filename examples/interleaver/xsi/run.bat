@@ -5,10 +5,14 @@ rem   run.bat mem_r_stream mem_r_bfm_tb
 rem   run.bat mem_w_stream mem_w_bfm_tb
 rem
 rem Pass a third argument `trace` to also elaborate vcd_dumper_<top>.v as a SECOND top, whose
-rem $dumpvars writes <top>_trace.vcd.  That leaves the XSI top -- and every BFM port number --
-rem untouched, so the run is identical apart from the dump; the gate cycle counts are unchanged.
-rem The dumper is per-top because this directory serves three of them.
-rem   run.bat interleaver_canon interleaver_canon_bfm_tb trace
+rem $dumpvars writes <top>_trace.vcd.  The XSI top -- and so every BFM port number -- is untouched,
+rem so the cycle counts are identical either way; only the dump is added.  The dumper is per-top
+rem because one xsi/ directory can serve several (examples/interleaver/xsi builds three), and a
+rem dumper naming a scope that is not part of THIS elaboration is a hard error.
+rem   run.bat mem_copy mem_copy_bfm_tb trace
+rem
+rem Note: re-running the built .exe does NOT regenerate the VCD -- only this script does, because
+rem the dump comes from the elaborated snapshot.  See waveflow.build.trace_steps.RtlSimStep.
 cd /d "%~dp0"
 set VIV=C:\Xilinx\2025.1\Vivado
 set MINGW=%VIV%\tps\mingw\6.2.0\win64.o\nt
