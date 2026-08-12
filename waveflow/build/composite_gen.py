@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from waveflow.build.hwcodegen import SynthesisError
+from waveflow.build.hwcodegen import LoweringError
 from waveflow.hw.interface import DEFAULT_STREAM_DEPTH
 
 #: Output-directory convention shared by the generated tops and their csynth .tcl.
@@ -464,7 +464,7 @@ def kind_of_endpoint(ep) -> str:
     if isinstance(ep, MMIFWriteMaster):
         return "maxi_write"
     if isinstance(ep, MMIFMaster):
-        raise ValueError(
+        raise LoweringError(
             f"{type(ep).__name__} '{getattr(ep, 'name', '?')}' does not declare a direction, so its "
             f"pointer cannot be lowered (const + stable, or plain?). Construct it as an "
             f"MMIFReadMaster or MMIFWriteMaster — the direction is the type."
@@ -473,7 +473,7 @@ def kind_of_endpoint(ep) -> str:
         return "axis_in"
     if isinstance(ep, StreamIFMaster):
         return "axis_out"
-    raise ValueError(f"no boundary kind for endpoint type {type(ep).__name__}")
+    raise LoweringError(f"no boundary kind for endpoint type {type(ep).__name__}")
 
 
 def _edge_name(comp, iface) -> str:
@@ -513,14 +513,14 @@ def derive_internal_edges(comp) -> list:
         master = iface.endpoints.get("master")
         slave = iface.endpoints.get("slave")
         if master is None or slave is None:
-            raise ValueError(
+            raise LoweringError(
                 f"derive_internal_edges: interface {iface.name!r} on {type(comp).__name__} is not "
                 f"bound on both sides (master={master!r}, slave={slave!r}) — an internal edge needs "
                 f"both, so this is a wiring bug, not an edge.")
         if isinstance(iface, StreamOfBlocksIF):
             et = iface.element_type
             if et is None:
-                raise ValueError(
+                raise LoweringError(
                     f"derive_internal_edges: SOBIF {iface.name!r} has no element_type, so its block "
                     f"width/length cannot be derived. Construct it with element_type=<DataArray>.")
             edges.append(SobEdge(name, master, slave, elem_bw=int(et.element_type.bitwidth),
@@ -533,7 +533,7 @@ def derive_internal_edges(comp) -> list:
             # have a depth, so reject it at the synthesis boundary rather than emit an unsized FIFO.
             depth = getattr(iface, "depth", DEFAULT_STREAM_DEPTH)
             if depth is None:
-                raise SynthesisError(
+                raise LoweringError(
                     f"derive_internal_edges: internal channel {name!r} on {type(comp).__name__} has "
                     f"depth=None (explicit unbounded). An unbounded FIFO is not synthesizable — give "
                     f"the StreamIF a depth (default {DEFAULT_STREAM_DEPTH}), or keep it unbounded only "
@@ -543,7 +543,7 @@ def derive_internal_edges(comp) -> list:
             else:
                 edges.append(StreamEdge(name, master, slave, depth=depth))
         else:
-            raise ValueError(
+            raise LoweringError(
                 f"derive_internal_edges: no edge lowering for interface type "
                 f"{type(iface).__name__} ({iface.name!r}). Add one here rather than hand-declaring "
                 f"the edge, so every composite lowers the same way.")
@@ -570,7 +570,7 @@ def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
 
     if len(names) != len(eps):
         got = ", ".join(getattr(e, "name", "?") for e in eps)
-        raise ValueError(
+        raise LoweringError(
             f"{type(comp).__name__}.boundary names {len(names)} port(s) {tuple(names)!r} but the "
             f"graph has {len(eps)} unwired child endpoint(s): [{got}]. Every child endpoint not "
             f"bound to an internal interface is a boundary port, so either a name is missing or a "
@@ -597,7 +597,7 @@ def _unpack_boundary(entry) -> tuple[str, object]:
         kind = entry[2]
         derived = kind_of_endpoint(ep)
         if kind != derived:
-            raise ValueError(
+            raise LoweringError(
                 f"boundary port '{name}' declares kind {kind!r} but its endpoint "
                 f"({type(ep).__name__}) implies {derived!r}. The type is the source of truth — drop "
                 f"the kind from the boundary entry, or construct the endpoint with the direction you "
@@ -628,7 +628,7 @@ def bundle_map(boundary) -> dict[str, str]:
             out[name] = f"gmem{n}"
             n += 1
         if len(entry) == 4 and entry[3] is not None and out.get(name, None) != entry[3]:
-            raise ValueError(
+            raise LoweringError(
                 f"boundary port '{name}' declares bundle {entry[3]!r} but the assembler's policy "
                 f"(gmem0, gmem1, ... in declaration order) gives {out.get(name)!r}. Drop the bundle "
                 f"from the boundary entry; if the order is wrong, reorder the boundary."
@@ -647,9 +647,9 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtP
         return _axis_port(name, width, kind=kind)
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
-            raise ValueError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
+            raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
         return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle)
-    raise ValueError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
+    raise LoweringError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 
 def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
@@ -674,6 +674,32 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
         master_task=ep_task.get(id(edge.master_ep)),
         slave_task=ep_task.get(id(edge.slave_ep)),
     )
+
+
+def _kernel_task_of(sub, comp):
+    """*sub*'s ``kernel_task()`` descriptor, or a :class:`LoweringError` naming the missing hook.
+
+    ``kernel_task()`` is the realization hook of a module **inside** the cut: it says *"here is my
+    pre-written ``hls::task`` body"* (or, for a generated leaf, is derived from the module itself).
+    A module that does not declare one has no body to place in a top, and that is a *verdict* about
+    this (module, cut) pair, not a bug — so it must read as one.  Without this the walk raised a bare
+    ``AttributeError``, which :func:`~waveflow.build.codegen_check.check` correctly refuses to swallow.
+
+    The message names the peer hook when it is present, because that is the actual diagnosis: a
+    module carrying only ``bfm_model()`` is not un-realizable, it is realized on the *other* side of
+    the cut.  See ``plans/design_cut.md``.
+    """
+    kt = getattr(sub, "kernel_task", None)
+    if kt is None:
+        outside = " It does declare bfm_model(), which is the realization hook for a module " \
+                  "OUTSIDE the cut (an XSI testbench model) — so it belongs beside the top, not " \
+                  "inside it." if hasattr(sub, "bfm_model") else ""
+        raise LoweringError(
+            f"composite_top_spec: {type(sub).__name__} (a child of {type(comp).__name__}) declares "
+            f"no kernel_task() hook, so it has no hls::task body to instantiate inside the top."
+            f"{outside}"
+        )
+    return kt()
 
 
 def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
@@ -715,13 +741,13 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     tasks: list[TaskInst] = []
     ep_task: dict[int, int] = {}
     for sub in comp.ordered_subcomps:
-        kt = sub.kernel_task()
+        kt = _kernel_task_of(sub, comp)
         args: list[str] = []
         for attr in kt.signature:
             ep = getattr(sub, attr)
             arg = ep_arg.get(id(ep))
             if arg is None:
-                raise ValueError(
+                raise LoweringError(
                     f"composite_top_spec: {type(sub).__name__}.{attr} is not wired to any internal "
                     f"edge or boundary port of {type(comp).__name__} — cannot resolve its task arg")
             args.append(arg)
@@ -832,7 +858,7 @@ def _find_dut(tb):
     ``bfm_model()``.  Not ``kernel_task`` — a composite DUT has none, only its children do."""
     duts = [c for c in tb.ordered_subcomps if hasattr(c, "boundary")]
     if len(duts) != 1:
-        raise ValueError(
+        raise LoweringError(
             f"{type(tb).__name__}: expected exactly one child with a `boundary` (the DUT); "
             f"found {[type(d).__name__ for d in duts]}. A testbench drives one kernel."
         )
@@ -855,7 +881,7 @@ def _render_dyn_value(value) -> str:
         return str(value)
     if isinstance(value, str):
         return '"' + value + '"'
-    raise TypeError(
+    raise LoweringError(
         f"DynParam value {value!r} ({type(value).__name__}) has no C++ rendering yet — "
         f"add a case to _render_dyn_value."
     )
@@ -910,7 +936,7 @@ def tb_top_spec(tb) -> TbSpec:
                 part = owner[id(peer)]
                 break
         if part is None:
-            raise ValueError(
+            raise LoweringError(
                 f"{type(tb).__name__}: DUT boundary port '{name}' is not wired to any testbench "
                 f"participant — nothing would drive it, and the run would hang on that port."
             )
@@ -924,7 +950,7 @@ def tb_top_spec(tb) -> TbSpec:
             shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args, dyn))
             cls = _SLAVE_FOR_KIND.get(kind)
             if cls is None:
-                raise ValueError(
+                raise LoweringError(
                     f"{type(tb).__name__}: participant {type(part).__name__} is shared but boundary "
                     f"port '{name}' is kind {kind!r}, which names no slave model."
                 )

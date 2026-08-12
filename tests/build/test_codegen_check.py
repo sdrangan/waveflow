@@ -670,6 +670,128 @@ def test_no_real_kernel_or_tb_trips_the_sequential_gate():
 
 
 # ==============================================================================================
+# Gate 4 — the GRAPH half.  `LoweringError` is the graph walks' verdict exception (design_cut S0).
+#
+# Before this, `composite_top_spec` / `tb_top_spec` raised bare `ValueError`/`TypeError` for
+# "this graph will not lower", which is indistinguishable from a bug — so `check` could not report
+# them and instead propagated.  The tests below pin both halves of the fix: the raises are
+# classified, AND the classification did not change the exception contract under existing callers.
+# ==============================================================================================
+
+def test_lowering_error_is_a_verdict_and_keeps_the_old_contract():
+    """`LoweringError` must be catchable three ways at once.
+
+    As a `SynthesisError` it is a *verdict* — gate 4's one `except` converts it.  As a `ValueError`
+    and a `TypeError` it keeps every pre-existing `except` / `pytest.raises` around the graph walks
+    working unchanged, which is what let the classification be additive rather than a contract
+    change (the risk `plans/design_cut.md` S0 flags).
+    """
+    from waveflow.build.hwcodegen import LoweringError, SynthesisError
+
+    assert issubclass(LoweringError, SynthesisError)
+    assert issubclass(LoweringError, ValueError)
+    assert issubclass(LoweringError, TypeError)
+
+
+def test_a_tb_participant_is_refused_for_composite_kernel_by_NAME_of_the_missing_hook():
+    """The S0 gate: `check(StreamDriver, "composite_kernel")` answers, and names `kernel_task`.
+
+    A refusal that named only the *kind* ("not on an execution-model class") answers a question the
+    caller did not ask.  What they wanted to know is why this module cannot go inside the top — and
+    the answer is the missing realization hook: no pre-written body, nothing to instantiate.
+    """
+    from waveflow.simulation.stream_tb import StreamDriver
+
+    ok, msg = check(StreamDriver, COMPOSITE_KERNEL)
+    assert ok is False
+    assert "kernel_task()" in msg, "the message must name the MISSING HOOK, not only the kind"
+
+
+def test_a_child_without_a_kernel_task_is_a_verdict_not_an_AttributeError():
+    """A composite carrying a child with no realization hook: `check` answers, it does not explode.
+
+    This is the shape the whole S0 stage exists for.  The walk used to call `sub.kernel_task()`
+    blind, so a hookless child produced a bare `AttributeError` — a traceback out of a *predicate*.
+    """
+    from dataclasses import dataclass
+
+    from waveflow.build.hwcodegen import LoweringError
+    from waveflow.hw.hw_freerun import FreeRunMod
+    from waveflow.hw.hw_module import HwModule
+    from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+
+    @dataclass
+    class _Hookless(HwModule):
+        """A module with ports and no realization hook at all — a pysim-only node."""
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.y_out = StreamIFMaster(name=f"{self.name}_y", sim=self.sim, bitwidth=32)
+            self.add_endpoint(self.y_out)
+
+    @dataclass
+    class _Sink(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "s0_sink"
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.x_in = StreamIFSlave(name=f"{self.name}_x", sim=self.sim, bitwidth=32)
+            self.add_endpoint(self.x_in)
+
+        def run_iter(self):
+            yield from self.x_in.get()
+
+    @dataclass
+    class _TopWithAHooklessChild(FreeRunMod):
+        cpp_kernel_name: ClassVar[str | None] = "s0_top"
+
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.src = _Hookless(name=f"{self.name}_src", sim=self.sim)
+            self.snk = _Sink(name=f"{self.name}_snk", sim=self.sim)
+            self.add_comp(self.src)
+            self.add_comp(self.snk)
+            edge = StreamIF(name=f"{self.name}_d_if", sim=self.sim, bitwidth=32,
+                            clk=Clock(freq=100e6))
+            edge.bind("master", self.src.y_out)
+            edge.bind("slave", self.snk.x_in)
+            self.add_if(edge)
+            self.boundary = []
+
+    sim = Simulation()
+    top = _TopWithAHooklessChild(name="t", sim=sim)
+
+    # The generator still fails LOUDLY — the rule lives there, and a build wants the traceback.
+    from waveflow.build.composite_gen import composite_top_spec
+    with pytest.raises(LoweringError, match="no kernel_task"):
+        composite_top_spec(top)
+
+    # ...but the PREDICATE answers instead of raising, which is the whole point of S0.
+    ok, msg = check(top, COMPOSITE_KERNEL)
+    assert ok is False
+    assert "kernel_task()" in msg
+    assert "_Hookless" in msg, "the message must name WHICH child"
+
+
+def test_a_malformed_tb_graph_is_a_verdict_not_a_raise():
+    """The TB walk's "will not lower" raises are verdicts too.
+
+    An unwired DUT boundary port would hang the run thousands of cycles later with no diagnostic, so
+    `tb_top_spec` refuses at generate time — and `check` must be able to *report* that refusal.
+    """
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+    from waveflow.hw.interface import StreamIFSlave
+
+    tb = MemCopyTB(name="tb", sim=Simulation(), mem_dwidth=64)
+    ghost = StreamIFSlave(name="s_ghost", sim=tb.sim, bitwidth=64, has_tlast=False)
+    tb.dut.boundary = tuple(tb.dut.boundary) + (("s_ghost", ghost),)
+
+    ok, msg = check(tb, SEQUENTIAL_XSI_TB)
+    assert ok is False
+    assert "not wired to any testbench participant" in msg
+
+
+# ==============================================================================================
 # The vocabulary
 # ==============================================================================================
 

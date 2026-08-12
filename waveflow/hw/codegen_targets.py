@@ -83,6 +83,22 @@ ALL_TARGETS: frozenset[str] = frozenset({
     BITSTREAM,
 })
 
+#: The **realization hook** a source must declare to reach each target, where one exists.
+#:
+#: A hook says *"here is my pre-written artifact"*; which hook applies is decided by the **cut** (is
+#: this module inside the synthesized top, or beside it?), and the cut is a property of the build, not
+#: of the class — see ``plans/design_cut.md``.  ``kernel_task()`` is the hook for a module **inside**
+#: the cut (its ``hls::task`` body); its peer for a module **outside** the cut is added in the same
+#: plan's S3.
+#:
+#: This is a **message** aid, not a rule: nothing here decides whether a source lowers — the graph
+#: walk does, and reports a :class:`~waveflow.build.hwcodegen.LoweringError`.  It exists so a refusal
+#: at :func:`~waveflow.build.codegen_check.check`'s *kind* gate can still name the hook the caller is
+#: missing, instead of only naming the kind they do not have.
+REALIZATION_HOOKS: dict[str, str] = {
+    COMPOSITE_KERNEL: "kernel_task",
+}
+
 #: The targets codegen can actually produce today — Flows 1 and 2.  A target in
 #: :data:`ALL_TARGETS` but not here is a **declared-but-unimplemented** path:
 #: the name is real, the lowering is future work (see ``guide/flows``).  Today only
