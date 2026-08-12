@@ -333,14 +333,71 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
 ## Staging
 
 1. **`Rfdc` + `RFSampIF` + `RfDataSource`/`RfDataSink` + a trivial pass-through DUT, pysim only.**
-   Assert zero underrun/overrun and a byte-identical loopback. No RTL, no DSP. Deliberately small: it
-   exercises the kind question, the underflow/overflow contract, the param split, the absolute-grid
-   metronome and `t0` — every structural decision above — before any is expensive to change.
+   — **DONE 2026-08-12** (branch `rf-stage1`). Assert zero underrun/overrun and a byte-identical
+   loopback. No RTL, no DSP. Deliberately small: it exercises the kind question, the
+   underflow/overflow contract, the param split, the absolute-grid metronome and `t0` — every
+   structural decision above — before any is expensive to change.
+
+   Landed as `waveflow/hw/rf_sample_if.py`, `waveflow/simulation/rf_tb.py`,
+   `examples/rf_loopback/`, `tests/hw/test_rf_sample_if.py` (20),
+   `tests/examples/test_rf_loopback.py` (29). Gates: byte-identical loopback (source bundle ==
+   sink bundle on disk); `underrun == 0 and overrun == 0`; both counters driven off zero against
+   *predicted* values (a producer 2.5 periods late → underrun 2; a sink stalled after 1 block →
+   overrun `n_blk − 1 − depth`, checked at two depths); the metronome demonstration in both halves;
+   `check(RfDataSource, "xsi_bfm_model")` False with the hook named. No toolchain needed and
+   `waveflow/hw/interface.py` was not touched, so the XSI cycle gates are untouched by construction.
 2. **The same graph under XSI.** *Depends on `plans/behavioral_edges.md`.* Write `RfdcAdcMaster` /
    `RfdcDacSlave` and the `RFSampIF` channel model, land the counter-equivalence gate, record a cycle
    gate.
 3. **`RfSampBuf`, in-band variant** — pysim → csynth → XSI.
 4. **`Channel`**, then loopback with a real DSP block (decimating FIR / DDC), then the channel sounder.
+
+## Stage-1 deviations from this plan
+
+Recorded here rather than silently absorbed, because two of them change what the sections above say.
+
+**1. `t0` is one epoch *per tile*, not one per converter.** The plan says "one source sets it for
+every interface the `Rfdc` binds", which reads as one *value*. Building it showed that is a fiction:
+ADC and DAC are separate tiles, started separately, and the plan itself says elsewhere that they
+routinely run at different rates. So the `Rfdc` owns **`t0_rx` and `t0_tx`**. The argument the plan
+actually rests on survives intact and is arguably strengthened — what makes TX/RX alignment
+structural is that the two epochs have one **owner**, which gives their difference a fixed, known
+value; it was never that they have one value.
+
+This surfaced as a *gate failure*: with both epochs at zero the loopback underran exactly once. The
+DAC grid is a metronome, not a queue — it emits a block whether or not the samples have finished
+their trip through the fabric — so a loopback must start the DAC tile later than the ADC tile by at
+least the fabric round trip. The converter was behaving correctly and the design was wrong, which is
+precisely the failure the counters exist to expose. It is now a documented example rather than a
+surprise.
+
+**2. The RX-side queue depth belongs to `RFSampIFRx`, not to `RFSampIF`.** The plan lists "a buffer
+`depth`" among the interface's parameters. There are *two* physical buffers on this path — the
+producer-side one the metronome drains (interface-owned, what `put()` blocks on) and the receiver's
+own input queue (what overrun is measured against). Keeping the second on the endpoint keeps each
+where it physically lives and makes the overrun prediction a function of the receiver's depth.
+
+**3. Placement.** `RFSampIF` is its own module (`waveflow/hw/rf_sample_if.py`) rather than an
+addition to `interface.py` — `interface.py` is already ~1160 lines and is the file the XSI flow
+depends on, so keeping it untouched made the whole stage a zero-risk change to existing gates.
+`RfDataSource`/`RfDataSink` are **framework** (`waveflow/simulation/rf_tb.py`, beside `stream_tb.py`)
+rather than example code, for the reason recorded in `stream_tb`'s own docstring.
+
+**4. The RF bundle format open question is answered for stage 1 only.** One burst per block,
+`n_ch × blksize` words row-major, each word one `float64` sample through
+`write_array`/`read_array` over `FloatField.specialize(bitwidth=64)`. The existing `uint64` burst
+bundle already carries per-burst boundaries, which *is* the block framing, so no new file format
+appears. Complex and fixed-point RF vectors are stage 2/4 and will need a manifest field rather than
+a convention.
+
+**5. Two things are refused loudly rather than settled.** `n_rx`/`n_tx` > 1 raises and names the
+open question (how many AXIS ports a multi-channel tile presents decides how many BFM duals a
+testbench needs); `iq_mode = 1` raises as stage 2/4 work. The RF side is already general — one
+interface, `(n_ch, blksize)` — and is exercised at `n_ch = 4` with a skewed `t0` vector.
+
+**6. Added, not in the plan: the metronome fails loud if it cannot keep up.** A block body that
+outlasts a block period raises rather than slipping. Without it, the one case the absolute grid
+*cannot* absorb would degrade into exactly the silent drift the grid exists to prevent.
 
 ## Docs
 
@@ -351,7 +408,7 @@ claims become checkable".
 
 | written after | pages | why then |
 |---|---|---|
-| **stage 1** (pysim) | `rf/index.md`, `rf/sampling.md`, the pysim page of `examples/rf_loopback/`, the `flows/modules.md` row | Everything `sampling.md` teaches is exercised: block-LT, the `blksize` knob, the absolute-grid metronome, `t0` and the sample grid. Its most valuable claim — *a relative `timeout` loop slips* — can be stated as a **demonstrated** failure, because the stage-1 gate deliberately yields in the body and shows the grid holding. |
+| **stage 1** (pysim) — **WRITTEN** | `rf/index.md`, `rf/sampling.md`, the pysim page of `examples/rf_loopback/`, the `flows/modules.md` row | Everything `sampling.md` teaches is exercised: block-LT, the `blksize` knob, the absolute-grid metronome, `t0` and the sample grid. Its most valuable claim — *a relative `timeout` loop slips* — can be stated as a **demonstrated** failure, because the stage-1 gate deliberately yields in the body and shows the grid holding. |
 | **after `behavioral_edges` S1–S3** | `build/bfm.md` edit, `comp_codegen/xsi_tb.md` edit, the mechanism half of `interface/behavioral.md` | The channel primitive and the second walk exist; "models may bind each other" and "`tb_top_spec` has two walks" become descriptions rather than intentions. |
 | **stage 2** (XSI) | `rf/converter.md`, the XSI page of `examples/rf_loopback/`, `RFSampIF` as the worked example in `interface/behavioral.md` | The AXIS side and **both** rate conversions only exist here. Written earlier, `converter.md` would be half plan. Its underflow/overflow section is *drafted from* stage 1's gate but only complete once the BFM counters exist to agree with the pysim ones. |
 | **stage 4** (DSP + channel) | `rf/fidelity.md` | The page I was keenest on is the **least** earned early. Stage 1 has no DSP at all, so every claim about block-perfect feedforward vs. unresolvable sample-level feedback would be written from the plan — the exact failure this schedule exists to prevent. It becomes writable when the FIR/DDC and the channel sounder can demonstrate both halves. |
@@ -359,6 +416,17 @@ claims become checkable".
 **If these pages cite numbers, extend `test_documented_numbers.py` to cover them.** It covers calibration
 figures only — not cycle counts — which is why the stale `2835/3469` gate numbers survived in `CLAUDE.md`
 and two docs pages for weeks with every test green. A number in a doc that nothing checks *will* rot.
+
+*(Done for stage 1: two checks recompute the metronome table and the four loss counts by re-running
+the scenarios. Both earned their keep immediately — the first caught two wrong cells in `sampling.md`'s
+table on its first run, and it had to be tightened to match whole table cells because "1 s" is a
+substring of "0.1 s" and the loose form passed on the wrong table.)*
+
+**One stage-1 docs deviation.** The underflow/overflow contract is written in `sampling.md`, not held
+back for `converter.md`. The counters live on `RFSampIF`, so a page describing that edge without them
+would describe an object without its contract. What *is* held back is the half `converter.md` was
+scheduled for: the AXIS-side counters and the pysim/RTL equivalence gate, which do not exist. The page
+says so.
 
 | page | status | what it says |
 |---|---|---|
@@ -389,7 +457,10 @@ through the committed TikZ → SVG workflow.
 
 ## Open questions
 
-- Bundle format for RF-domain complex/float vectors (the existing format is UINT64 words).
+- ~~Bundle format for RF-domain complex/float vectors (the existing format is UINT64 words).~~
+  **Answered for real `float64` at stage 1** (see deviation 4): one burst per block, one `float64`
+  per UINT64 word, through the sanctioned array serializers. Still open for **complex** and
+  fixed-point vectors, which need a manifest field rather than a convention.
 - Where does the DDC/DUC live — inside `Rfdc` (matching the real IP's digital mixer) or as a separate
   modelled block? The real IP has it; a separate block is easier to make bit-exact.
 - `n_rx`/`n_tx` > 1: one AXIS port per channel or one wide port? The real RFDC's answer depends on tile
