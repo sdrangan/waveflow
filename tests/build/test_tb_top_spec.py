@@ -210,6 +210,66 @@ def test_the_registry_covers_every_kind_the_endpoint_vocabulary_produces():
         assert kind_of_endpoint(ep) in BFM_DUALS, f"{type(ep).__name__} has no BFM_DUALS row"
 
 
+# ==============================================================================================
+# The cut is an argument (design_cut S4)
+#
+# `_find_dut` probed for the one child with a `boundary`.  That works because today's graphs happen
+# to contain exactly one synthesizable child — a property of the examples, not of the design.  The
+# whole thesis is that a graph can be cut in more than one place, and a discovered cut cannot express
+# a second one.
+# ==============================================================================================
+
+@pytest.mark.parametrize("tb_cls", _tb_graphs(), ids=lambda c: c.__name__)
+def test_naming_the_dut_explicitly_reproduces_the_discovered_cut(tb_cls):
+    """S4's gate: every design regenerates identically with the DUT named.
+
+    Discovery becomes the DEFAULT rather than the mechanism, so this must be a no-op for every graph
+    that has one synthesizable child — which is all of them today.
+    """
+    tb = tb_cls(name="tb", sim=Simulation())
+    assert tb_top_spec(tb, dut=tb.dut) == tb_top_spec(tb)
+
+
+def test_the_dut_may_be_named_by_module_or_by_name():
+    """Both spellings resolve to the same cut — the sub_comps key and the module itself."""
+    tb = _tb()
+    assert tb_top_spec(tb, dut=tb.dut.name) == tb_top_spec(tb, dut=tb.dut)
+
+
+def test_a_named_dut_is_validated_against_the_graph():
+    """A DUT that is not in this graph would bind models to ports nothing is wired to.
+
+    That failure would land thousands of cycles into an RTL run with no diagnostic, so it is refused
+    here instead — the same reasoning as the unwired-port check above.
+    """
+    from waveflow.build.hwcodegen import LoweringError
+
+    tb = _tb()
+    stranger = type(tb.dut)(name="stranger", sim=tb.sim, mem_dwidth=64)
+
+    with pytest.raises(LoweringError, match="not a sub-component"):
+        tb_top_spec(tb, dut=stranger)
+    with pytest.raises(LoweringError, match="not one of its sub-components"):
+        tb_top_spec(tb, dut="no_such_child")
+    # A participant is not a candidate: it has no RTL ports to drive.
+    with pytest.raises(LoweringError, match="no `boundary`"):
+        tb_top_spec(tb, dut=tb.driver)
+
+
+def test_discovery_now_says_what_to_do_when_the_graph_is_ambiguous():
+    """The fallback's refusal must point at the argument that resolves it.
+
+    Before S4 there was nothing to suggest: "expected exactly one child with a boundary" named the
+    problem and left the reader with no move. Now the move exists.
+    """
+    from waveflow.build.hwcodegen import LoweringError
+
+    tb = _tb()
+    tb.add_comp(type(tb.dut)(name="second_dut", sim=tb.sim, mem_dwidth=64))
+    with pytest.raises(LoweringError, match=r"tb_top_spec\(tb, dut=\.\.\.\)"):
+        tb_top_spec(tb)
+
+
 def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     """Regression: `kernel_task` does NOT identify the DUT — a composite has none (only its
     children do), so both the DUT and the participants answer False. The discriminator is

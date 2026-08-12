@@ -303,13 +303,25 @@ rule stated from the other end.
 `codegen_targets.py` and `docs/guide/flows/index.md` in the same commit, per the no-drift contract.
 Docs gates green; dev loop at 6; `-m xsi` unchanged with no artifact drift.
 
-### S4 — the cut becomes an argument
+### S4 — the cut becomes an argument — **DONE**
 
 `_find_dut` discovers the DUT by probing for `boundary`; make the DUT an explicit parameter
 (`tb_top_spec(tb, dut=...)`) with today's discovery as the default. This is what lets one graph
 produce two cuts.
 
 **Gate:** all four designs regenerate byte-identically with the DUT named explicitly.
+
+**Landed as.** `tb_top_spec(tb, dut=None)`; `dut` accepts the child module or its `sub_comps` name,
+and is validated against the graph (a DUT that is not a child would bind models to ports nothing is
+wired to — a hang thousands of cycles into an RTL run, refused here instead). `_find_dut` stays as the
+default and its refusal now names the argument that resolves it, which it previously could not.
+
+Discovery was never wrong, it was *under-specified*: it works because today's graphs happen to contain
+exactly one synthesizable child, which is a property of the examples rather than of the design.
+
+**Result:** all four graph-declared designs produce an identical `TbSpec` with the DUT named
+explicitly. `tests/build/test_tb_top_spec.py` 22 passed, 1 skipped (4 new). Dev loop at 6; `-m xsi`
+unchanged.
 
 ### S5 — the crossing encoding stops being baked into the body ⟵ *the stage that buys the feature*
 

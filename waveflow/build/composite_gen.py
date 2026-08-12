@@ -939,14 +939,53 @@ class TbSpec:
 
 def _find_dut(tb):
     """The one child that is the DUT: it has a ``boundary`` (RTL ports); participants have
-    ``bfm_model()``.  Not ``kernel_task`` — a composite DUT has none, only its children do."""
+    ``bfm_model()``.  Not ``kernel_task`` — a composite DUT has none, only its children do.
+
+    **The default cut, not the only one.**  Discovery works because today's graphs contain exactly
+    one synthesizable child, which is a property of the examples rather than of the design: the whole
+    point of ``plans/design_cut.md`` is that a graph of three modules can be cut in several places.
+    So this is what :func:`tb_top_spec` falls back to when no ``dut=`` is named, and the refusal below
+    is the honest one — *this* graph is ambiguous, name the cut you meant."""
     duts = [c for c in tb.ordered_subcomps if hasattr(c, "boundary")]
     if len(duts) != 1:
         raise LoweringError(
             f"{type(tb).__name__}: expected exactly one child with a `boundary` (the DUT); "
-            f"found {[type(d).__name__ for d in duts]}. A testbench drives one kernel."
+            f"found {[type(d).__name__ for d in duts]}. Discovery only works when the graph has one "
+            f"synthesizable child; name the cut explicitly with tb_top_spec(tb, dut=...) when it has "
+            f"more (or fewer) than one."
         )
     return duts[0]
+
+
+def _resolve_dut(tb, dut):
+    """Validate an explicitly named *dut* against *tb*'s graph.
+
+    Accepts the child module itself or its ``sub_comps`` name.  Both are checked against the graph
+    rather than trusted: a DUT that is not a child of this testbench would produce a harness whose
+    models bind to ports no participant is wired to, and the failure would land thousands of cycles
+    into an RTL run rather than here.
+    """
+    children = list(tb.ordered_subcomps)
+    if isinstance(dut, str):
+        by_name = {c.name: c for c in children}
+        if dut not in by_name:
+            raise LoweringError(
+                f"{type(tb).__name__}: dut={dut!r} is not one of its sub-components "
+                f"{sorted(by_name)}."
+            )
+        dut = by_name[dut]
+    elif not any(c is dut for c in children):
+        raise LoweringError(
+            f"{type(tb).__name__}: dut={type(dut).__name__} is not a sub-component of this "
+            f"testbench, so nothing in the graph wires participants to its ports."
+        )
+    if not hasattr(dut, "boundary"):
+        raise LoweringError(
+            f"{type(tb).__name__}: dut={type(dut).__name__} has no `boundary`, so it exposes no RTL "
+            f"ports for the testbench to drive. A module on the far side of the cut declares "
+            f"bfm_model() and is a participant, not the DUT."
+        )
+    return dut
 
 
 #: The model library the ``bfm_model()`` hook resolves against.
@@ -1160,8 +1199,16 @@ def _render_dyn_value(value) -> str:
     )
 
 
-def tb_top_spec(tb) -> TbSpec:
-    """Derive the XSI testbench harness from *tb*'s component/interface graph.
+def tb_top_spec(tb, dut=None) -> TbSpec:
+    """Derive the XSI testbench harness from *tb*'s component/interface graph, cut at *dut*.
+
+    **The cut is an argument.**  *dut* names the child that is synthesized — as the module or as its
+    ``sub_comps`` name — and everything else in the graph becomes a testbench model beside it. That
+    is what lets ONE graph produce more than one harness: which modules are inside the boundary is a
+    property of the build, not of the classes (``plans/design_cut.md``).
+
+    ``None`` (the default) discovers it with :func:`_find_dut`, which is exactly today's behaviour and
+    stays the right answer whenever the graph has one synthesizable child.
 
     **The DUT's boundary is the spine.** Every RTL port the kernel exposes needs exactly one model to
     drive or answer it, so the walk iterates the DUT's boundary rather than the participants — that
@@ -1177,7 +1224,7 @@ def tb_top_spec(tb) -> TbSpec:
     """
     from waveflow.hw.hw_module import discover_dyn_params
 
-    dut = _find_dut(tb)
+    dut = _find_dut(tb) if dut is None else _resolve_dut(tb, dut)
 
     # endpoint identity -> the participant it belongs to
     owner: dict[int, object] = {}
