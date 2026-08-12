@@ -203,7 +203,7 @@ Three consequences the plan did not anticipate, each of which is the interesting
 generated artifact changed** (the XSI runs regenerate the harnesses in place; `git status` showed only
 source edits). Dev loop back at 6. `tests/build/test_tb_top_spec.py` 9 passed (4 new).
 
-### S2 — an explicit protocol × role → BFM registry
+### S2 — an explicit protocol × role → BFM registry — **DONE**
 
 Lift `_SLAVE_FOR_KIND` into a complete, explicit table keyed by `(endpoint kind, role)`, with the
 AXIS entries included rather than implicit in the participant's declared class. A missing entry
@@ -211,6 +211,32 @@ becomes a named gap, not a `KeyError`. Record AXI-Lite as the known hole (S6).
 
 **Gate:** the registry reproduces today's model selection for all four designs; a synthetic
 unregistered kind produces a message naming the protocol and the role.
+
+**Landed as.** `BfmDual(protocol, role, model, participant_declares)` + `BFM_DUALS` keyed by
+`kind_of_endpoint`'s vocabulary, and one `bfm_dual_class(kind, declared)` that every caller goes
+through. `protocol` and `role` are spelled out as separate fields precisely so a missing dual reports
+*"no BFM implements the master role of AXI4-Lite"* rather than a `KeyError` on a kind string.
+
+- **`participant_declares` is the table's one asymmetry**, and it is real rather than a compatibility
+  shim: on AXI-Stream the role fixes the direction but not the class (a source, a sink, and a peer
+  that never backpressures are three classes in one role), while on `m_axi` there is nothing to
+  choose — the DUT is the master, so the DUT's port kind picks the slave and the participant supplies
+  only the arena.
+- **AXI-Lite is a row, not prose.** `kind_of_endpoint` now returns `axilite_slave` for a
+  `RegMapMMIFSlave` — previously it raised "no boundary kind for endpoint type", which is the wrong
+  diagnosis. `BFM_DUALS["axilite_slave"].model is None` makes the hole part of the one lookup that
+  answers "which duals exist". `_boundary_port` still refuses to lower it, which is correct.
+- **One unreachable behaviour was tightened.** Previously a *non-shared* participant on an `m_axi`
+  port would have taken its own declared class; now the registry's class wins regardless of sharing.
+  Nothing does this today (only shared `MemoryMod`s sit on `m_axi` ports), and the new behaviour is
+  the one the design intends: a memory does not get to decide whether it is read or written.
+
+The reproduction gate is asserted against the **committed generated harnesses** (`*_tb_harness.h`) —
+the artifacts that were actually compiled and run through RTL — not against a restatement of the
+table, which would only prove the table equals itself.
+
+**Result:** `tests/build/test_tb_top_spec.py` 16 passed, 1 skipped (`InterleaverInbandTB` has no
+committed harness to compare against). Dev loop at 6. `-m xsi` unchanged, no artifact drift.
 
 ### S3 — the target `xsi_bfm_model` + its gate
 

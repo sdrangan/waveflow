@@ -99,6 +99,117 @@ def test_an_unwired_dut_port_fails_loudly():
         tb_top_spec(tb)
 
 
+# ==============================================================================================
+# The protocol x role BFM registry (design_cut S2)
+#
+# `_SLAVE_FOR_KIND` was two entries, and its AXIS rows were *implicit* — they lived in whatever class
+# each participant declared.  So "which duals exist?" had no single answer, and a kind with no dual
+# surfaced as a KeyError on a kind string rather than as a named gap.
+# ==============================================================================================
+
+def _tb_graphs():
+    """Every testbench declared as a graph — the designs `tb_top_spec` actually walks.
+
+    The two standalone mem-stream tops (gates 158 / 176) are deliberately absent: they hand-assemble
+    their `main`, so there is no graph to derive and nothing here to reproduce.
+    """
+    from examples.fir_block.fir_block_sim import FirBlockTB
+    from examples.interleaver.interleaver_inband_sim import InterleaverInbandTB
+    from examples.mem_copy.mem_copy_sim import MemCopyTB
+    from examples.state_toy.state_toy import StateAccumTB
+
+    return [MemCopyTB, InterleaverInbandTB, FirBlockTB, StateAccumTB]
+
+
+@pytest.mark.parametrize("tb_cls", _tb_graphs(), ids=lambda c: c.__name__)
+def test_the_registry_reproduces_todays_model_selection(tb_cls):
+    """S2's gate: every graph-declared design resolves to exactly the models it resolved before.
+
+    This is a re-siting exercise over code that works, so the only acceptable outcome is *no change*.
+    The assertion is against the **committed generated harness** where one exists — the artifact that
+    was actually compiled and run through RTL — rather than against a restatement of the table, which
+    would only prove the table equals itself.
+    """
+    import re
+    from pathlib import Path
+
+    tb = tb_cls(name="tb", sim=Simulation())
+    spec = tb_top_spec(tb)
+
+    root = Path(__file__).resolve().parents[2] / "examples"
+    harness = next(root.glob(f"*/xsi/{spec.top_name}_tb_harness.h"), None)
+    if harness is None:
+        pytest.skip(f"no committed harness for {spec.top_name} to compare against")
+
+    # The harness declares its participants as `    <Cls> <name>;` inside `struct Harness`.
+    text = harness.read_text(encoding="utf-8")
+    declared = {name: cls
+                for cls, name in re.findall(r"^    ([A-Z]\w+) (\w+);$", text, re.M)
+                if cls != "XsiSim"}      # the simulator itself is not a participant model
+    got = {m.name: m.cls for m in spec.models}
+    got.update({name: cls for cls, name, *_ in spec.shared})
+    assert got == declared, "the registry changed which model serves a port"
+
+
+def test_an_unregistered_kind_names_the_protocol_and_the_role():
+    """A kind with no dual must say what is missing, not raise a KeyError on a string.
+
+    Two distinct answers, and the difference matters to whoever reads it: an *unregistered* kind is a
+    gap in the table (someone must add a row), while a **registered row with no model** is a known,
+    named hole in the model library.
+    """
+    from waveflow.build.composite_gen import BFM_DUALS, bfm_dual_class
+    from waveflow.build.hwcodegen import LoweringError
+
+    with pytest.raises(LoweringError, match="no BFM dual is registered"):
+        bfm_dual_class("i2c_target", None)
+
+    # AXI-Lite is the known hole: the protocol and the role are real, the model is not.
+    assert BFM_DUALS["axilite_slave"].model is None
+    with pytest.raises(LoweringError) as e:
+        bfm_dual_class("axilite_slave", None)
+    assert "AXI4-Lite" in str(e.value) and "master" in str(e.value)
+
+
+def test_the_participant_chooses_only_where_the_protocol_leaves_a_choice():
+    """The table's one asymmetry, stated as a test rather than left to the reader.
+
+    On AXI-Stream the role fixes the direction but not the class — a source, a sink and a peer that
+    never backpressures are three classes in one role.  On m_axi there is nothing to choose: the DUT
+    is the master, so the TB supplies the slave the DUT's port kind implies, and a memory does not get
+    to decide whether it is read or written.
+    """
+    from waveflow.build.composite_gen import bfm_dual_class
+
+    assert bfm_dual_class("axis_in", "NeverBackpressureMaster") == "NeverBackpressureMaster"
+    assert bfm_dual_class("axis_in", None) == "AxisMaster"          # the reference model
+    assert bfm_dual_class("maxi_read", "FlatMemory") == "AxiMmReadSlave"    # declaration ignored
+    assert bfm_dual_class("maxi_write", "FlatMemory") == "AxiMmWriteSlave"
+
+
+def test_the_registry_covers_every_kind_the_endpoint_vocabulary_produces():
+    """The table and `kind_of_endpoint` must not drift: a kind with no row is a KeyError waiting."""
+    from waveflow.build.composite_gen import BFM_DUALS, kind_of_endpoint
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.hw.memif import MMIFReadMaster, MMIFWriteMaster
+    from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
+    from waveflow.hw.dataschema import IntField
+
+    sim = Simulation()
+    Int32 = IntField.specialize(bitwidth=32, signed=True)
+    eps = [
+        StreamIFSlave(name="a", sim=sim, bitwidth=32),
+        StreamIFMaster(name="b", sim=sim, bitwidth=32),
+        MMIFReadMaster(name="c", sim=sim, bitwidth=64),
+        MMIFWriteMaster(name="d", sim=sim, bitwidth=64),
+        VitisRegMapMMIFSlave(name="e", sim=sim, bitwidth=32,
+                             regmap=VitisRegMap({"x": RegField(Int32, RegAccess.RW)}),
+                             on_start=lambda: None),
+    ]
+    for ep in eps:
+        assert kind_of_endpoint(ep) in BFM_DUALS, f"{type(ep).__name__} has no BFM_DUALS row"
+
+
 def test_the_dut_is_found_by_its_boundary_not_by_kernel_task():
     """Regression: `kernel_task` does NOT identify the DUT — a composite has none (only its
     children do), so both the DUT and the participants answer False. The discriminator is

@@ -459,7 +459,15 @@ def kind_of_endpoint(ep) -> str:
     """
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
     from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFWriteMaster
+    from waveflow.hw.regmap import RegMapMMIFSlave
 
+    # A regmap slave is the AXI4-Lite control port Vitis creates for a host-activated kernel.  It has
+    # a real kind, so a walk that meets one can SAY so — `_boundary_port` still refuses to lower it
+    # (there is no ap_ctrl_none top with an s_axilite port) and `BFM_DUALS` records that no model
+    # drives it.  Naming the kind is what turns both refusals from "unknown endpoint type" into the
+    # actual diagnosis.  See plans/design_cut.md S2/S7.
+    if isinstance(ep, RegMapMMIFSlave):
+        return "axilite_slave"
     if isinstance(ep, MMIFReadMaster):
         return "maxi_read"
     if isinstance(ep, MMIFWriteMaster):
@@ -822,14 +830,79 @@ def render_top(spec: TopSpec) -> str:
 # Testbench graph -> XSI model resolution
 # ---------------------------------------------------------------------------
 
-#: Which BFM model serves a DUT boundary port of each kind.  The AXIS entries are ``None`` because
-#: the *participant* decides there (a driver is an `AxisMaster`, a sink an `AxisSlave`); the m_axi
-#: entries are fixed because the kernel is the MASTER and the testbench must supply the missing
-#: slave — a memory does not get to choose whether it is read or written.
-_SLAVE_FOR_KIND = {
-    "maxi_read": "AxiMmReadSlave",
-    "maxi_write": "AxiMmWriteSlave",
+@dataclass(frozen=True)
+class BfmDual:
+    """What a testbench must present against a DUT boundary port of one kind — its **dual**.
+
+    A testbench port is never free: it is the *opposite role* of the DUT port it faces.  The DUT
+    drives an AXIS output, so the TB answers as a slave; the DUT is the ``m_axi`` master, so the TB
+    supplies the missing memory slave.  This records that pairing once, per ``(protocol, role)``.
+
+    * ``protocol`` / ``role`` — the pair, spelled out.  They exist so a *missing* entry can be
+      reported as "no BFM presents the **slave** role of **AXI4-Lite**" rather than as a ``KeyError``
+      on a kind string.
+    * ``model`` — the C++ class in :mod:`waveflow.build.xsi`, or ``None`` for a **known gap**: the
+      protocol and role are real, and no model implements them yet.
+    * ``participant_declares`` — whether the *participant* picks the concrete class.
+
+    On that last field, which is the one asymmetry in the table.  For AXI-Stream the role still fixes
+    the direction, but which specialization plays it is the participant's to say: a source is an
+    ``AxisMaster``, a sink an ``AxisSlave``, and a peer whose *protocol behaviour* differs (one that
+    never backpressures, say) is a third class in the same role.  For ``m_axi`` there is nothing to
+    choose — a memory does not get to decide whether it is read or written; the DUT's port kind
+    decides, and the participant supplies only the arena.
+    """
+    protocol: str
+    role: str
+    model: str | None
+    participant_declares: bool = False
+
+
+#: **The** protocol × role table: which BFM serves a DUT boundary port of each kind.
+#:
+#: Lifted out of a two-entry ``_SLAVE_FOR_KIND`` dict whose AXIS rows were *implicit* — they lived in
+#: whatever class each participant happened to declare, so "which duals exist?" had no single answer
+#: and a kind with no dual surfaced as a ``KeyError`` rather than as a named gap.
+#:
+#: Keys are :func:`kind_of_endpoint`'s vocabulary, so this table and the boundary-port lowering cannot
+#: disagree about what kinds there are.  See ``docs/guide/build/bfm.md``.
+BFM_DUALS: dict[str, BfmDual] = {
+    "axis_in":       BfmDual("AXI4-Stream", "master", "AxisMaster", participant_declares=True),
+    "axis_out":      BfmDual("AXI4-Stream", "slave", "AxisSlave", participant_declares=True),
+    "maxi_read":     BfmDual("AXI4-MM", "read slave", "AxiMmReadSlave"),
+    "maxi_write":    BfmDual("AXI4-MM", "write slave", "AxiMmWriteSlave"),
+    # THE KNOWN GAP.  A regmap / HostActivated DUT presents an AXI4-Lite control slave, and no model
+    # in waveflow/build/xsi/ answers it — so such a DUT cannot be XSI-lowered at all today.  Recorded
+    # here, as a row with no model, rather than in prose: "which duals exist" is one lookup, and the
+    # hole is part of the answer.  Deferred to plans/design_cut.md S7.
+    "axilite_slave": BfmDual("AXI4-Lite", "master", None),
 }
+
+
+def bfm_dual_class(kind: str, declared: str | None) -> str:
+    """The C++ BFM class for a DUT boundary port of *kind*, given the participant's *declared* class.
+
+    The one place the choice is made.  Raises a :class:`~waveflow.build.hwcodegen.LoweringError`
+    naming the protocol and the role when there is no dual — which is what turns "this design cannot
+    be XSI-lowered" from a ``KeyError`` into an answer.
+    """
+    dual = BFM_DUALS.get(kind)
+    if dual is None:
+        raise LoweringError(
+            f"no BFM dual is registered for boundary kind {kind!r}, so nothing can drive or answer a "
+            f"DUT port of that kind. Add a row to composite_gen.BFM_DUALS naming the protocol, the "
+            f"role the testbench must present, and the model that implements it. Registered kinds: "
+            f"{sorted(BFM_DUALS)}."
+        )
+    if dual.model is None:
+        raise LoweringError(
+            f"no BFM implements the {dual.role} role of {dual.protocol} (boundary kind {kind!r}), so "
+            f"a DUT exposing such a port cannot be driven at RTL. This is a known gap, recorded in "
+            f"composite_gen.BFM_DUALS; see plans/design_cut.md S7."
+        )
+    if dual.participant_declares and declared is not None:
+        return declared
+    return dual.model
 
 
 @dataclass(frozen=True)
@@ -991,16 +1064,14 @@ def tb_top_spec(tb) -> TbSpec:
         if bm.shared is not None:
             # A shared object's DynParams (a memory's load/dump segs) attach to the shared entry so
             # they emit once as `<shared>.<field> = ...;`; the per-bundle slave models carry none.
+            # `bm.cls` here is the SHARED object's class (a `FlatMemory` arena), never the per-port
+            # model — so the dual is resolved from the boundary kind alone, with nothing declared.
             shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args, dyn))
-            cls = _SLAVE_FOR_KIND.get(kind)
-            if cls is None:
-                raise LoweringError(
-                    f"{type(tb).__name__}: participant {type(part).__name__} is shared but boundary "
-                    f"port '{name}' is kind {kind!r}, which names no slave model."
-                )
+            cls = bfm_dual_class(kind, None)
             models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
         else:
-            models.append(BfmInst(bm.cls, name, port.xsi_prefix, bm.extra_args, dyn))
+            models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, port.xsi_prefix,
+                                  bm.extra_args, dyn))
 
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
                   models=tuple(models))
