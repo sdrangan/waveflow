@@ -437,6 +437,21 @@ class TestSecondWalkRefusals:
         with pytest.raises(LoweringError, match="endpoints on BOTH a DUT boundary port"):
             tb_top_spec(tb)
 
+    def test_a_half_wired_edge_is_reported_as_half_wired(self):
+        """The message must name the real defect.
+
+        An interface with one side bound would otherwise be reported as "declares no xsi_model()",
+        which sends the reader off to write a hook for an edge that is simply not connected.
+        """
+        tb = _tb(with_edge=False)
+        mon = TokenMonitor(name="m5", sim=tb.sim)
+        tb.add_comp(mon)
+        edge = TokenIF(name="tb_half_if", sim=tb.sim)
+        edge.bind("tx", mon.tok_out)                  # rx never bound
+        tb.add_if(edge)
+        with pytest.raises(LoweringError, match="so it connects nothing"):
+            tb_top_spec(tb)
+
     def test_a_name_collision_between_a_channel_and_a_port_is_refused(self):
         """Every emitted identifier shares one struct scope, so a collision shadows rather than
         fails to compile — a model silently binding the wrong thing."""

@@ -1418,6 +1418,16 @@ def _behavioral_edge_walk(tb, dut, boundary_parts: set, dyn_of) -> tuple[list, l
         bound = {side: ep for side, ep in getattr(iface, "endpoints", {}).items() if ep is not None}
         if any(id(ep) in boundary_eps for ep in bound.values()):
             continue                                   # walk 1's case
+        if len(bound) < 2:
+            # Checked before resolving so the message is about the real defect. An interface with
+            # nothing (or one thing) bound would otherwise be reported as "declares no xsi_model()",
+            # which sends the reader to write a hook for an edge that is simply not wired.
+            raise LoweringError(
+                f"{type(tb).__name__}: interface '{iface.name}' has {len(bound)} bound endpoint(s) "
+                f"({sorted(bound)}), so it connects nothing. Bind both sides, or drop it from the "
+                f"graph — an edge in the testbench's interface list is a claim that two things are "
+                f"connected."
+            )
         cm = resolve_channel_model(iface)              # raises if this edge cannot be realized
         chan = _cpp_ident(iface.name)
 
