@@ -71,6 +71,41 @@ so adding a knob is a field on the Python class plus a public member on the C++ 
 generator change. (Watch the falsy-value trap when you do —
 [Writing a BFM model](../custom_hooks/bfm_model.md#config-contract).)
 
+### A module may declare more than one model {#per-port}
+
+`bfm_model()` returns one `BfmModel` or a **sequence** of them. One is the common case and is what
+every table row above is. Several is what a module needs when its C++ realization is more than one
+object — and two facts turned out not to be per-*module*:
+
+- **The class is per data path.** For AXI-Stream the role fixes the direction but the participant
+  names the class, so a single declaration cannot give a converter's receive port one model and its
+  transmit port another.
+- **The constructor shape is per port.** Each port is resolved *by its own kind*: an endpoint facing
+  a DUT boundary port contributes `sim.dut(), <ns>::<port>`; an endpoint on a
+  [behavioral edge](../interface/behavioral.md) contributes that edge's channel variable.
+
+```python
+def bfm_model(self):
+    return (BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf"), extra_args=(...)),
+            BfmModel("RfdcDacSlave",  ports=("tx_stream", "tx_rf"), extra_args=(...)))
+```
+
+Each of those is **one object spanning the cut** — RTL pins on the fabric side, a channel on the RF
+side — not a boundary model glued to a separate channel peer. Which is why the second walk skips a
+side the boundary walk already claimed: emitting a peer as well would put two objects on one edge,
+and they would disagree about what crossed it.
+
+Port order **is** constructor order, and the ports resolve in that order, so the declaration has to
+match the C++ signature. Nothing checks that pairing at generate time; what does check it is a test
+that reads the signature back out of the header
+(`tests/build/test_bfm_per_port.py::TestEmittedCtorMatchesTheHeader`).
+
+A named port that is wired to *neither* a DUT boundary port nor a behavioral edge is refused: there
+is no argument the generator could write for it, and guessing one binds the wrong object.
+
+Ordinary participants are unaffected — a single `BfmModel` whose ports are all boundary ports
+resolves exactly as it always did.
+
 ## `tb_top_spec` has two walks {#two-walks}
 
 The walk above iterates **`dut.boundary`** — one model per RTL port — and that spine is what makes

@@ -86,6 +86,22 @@ pins, so it needs no Vivado headers and is compiled *and run* under a plain `g++
 (`tests/build/test_xsi_channel.py`). Authoring one is
 [Behavioral edges](../interface/behavioral.md).
 
+### ...and one model may bind both {#spanning}
+
+A model is not restricted to one side. A **converter** binds RTL pins on its fabric side *and* a
+channel on its RF side, in one object — which is what a converter is, rather than a boundary model
+glued to a separate channel peer. The Python module declares one `BfmModel` per data path, and each
+port resolves by its own kind:
+
+```cpp
+RfdcAdcMaster s_in(sim.dut(), edge_toy_ports::s_in, adc_rf, /* fmt */, /* words_per_cycle */);
+//                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^
+//                 the boundary port                the behavioral edge
+```
+
+See [a module may declare more than one model](../comp_codegen/xsi_tb.md#per-port) for the
+declaration and what it refuses.
+
 ## One lifecycle, five phases
 
 Every model derives from `XsiSimObj`, the C++ mirror of Python's `SimObj`. All five phases default to

@@ -349,7 +349,51 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
 2. **The same graph under XSI.** *Depends on `plans/behavioral_edges.md`.* Write `RfdcAdcMaster` /
    `RfdcDacSlave` and the `RFSampIF` channel model, land the counter-equivalence gate, record a cycle
    gate. **Opens with the `BfmModel` prerequisite below.**
-### Stage 2's opening prerequisite: `BfmModel` per-port resolution
+### Stage 2's opening prerequisite: `BfmModel` per-port resolution — **DONE 2026-08-12**
+
+Landed on branch `bfm-per-port`. `bfm_model()` may return several `BfmModel`s; `bfm_models()`
+normalizes, `_resolve_model_binding` resolves each port by its own kind into `BfmInst.binds`, and
+`_emit_behavioral_edges` skips a side the boundary walk already claimed. The dual-role
+`LoweringError` is gone because the case it refused now works. Every existing design regenerates
+byte-identically, and the three XSI cycle gates are unmoved.
+
+**What is *not* here, deliberately: `Rfdc` does not declare `bfm_model()`.** Three reasons, and the
+first is decisive:
+
+1. **It cannot be exercised.** `tb_top_spec` needs `dut.boundary`, and `RfSampPassThrough` is a
+   `FreeRunMod` leaf whose boundary derives from a `kernel_task()` signature that does not exist —
+   so the `rf_loopback` graph cannot be walked at all. A declaration nothing walks is exactly the
+   "designed against a presumed surface" failure the ordering argument below exists to prevent.
+2. **Its `extra_args` are not computable yet.** `words_per_cycle` is `samp_rate / (samp_per_word ×
+   f_axis)`, and the AXIS clock is something the `Rfdc` reads at `pre_sim`, not at elaborate. Writing
+   a literal now would bake in a guess about where that number comes from.
+3. **Stage-1 tests assert `check(Rfdc, "xsi_bfm_model")` is `False`** and that its message names the
+   missing hook. Declaring it would make me edit a passing test to match an unexercised claim.
+
+So this stage delivers the **mechanism** plus synthetic fixtures (`tests/build/test_bfm_per_port.py`)
+that reproduce the converter's shape exactly, including a check that reads the constructor signatures
+back out of `xsi_rfdc.h`. Synthesizing `RfSampPassThrough` is the next step, and declaring `Rfdc`'s
+models belongs with it — at which point they can be walked, emitted and compiled in one go.
+
+**Deviations and findings:**
+
+- **`BfmInst` gained `binds`** — the leading ctor arguments, resolved in `tb_top_spec` instead of
+  derived by the renderer. Which side of the cut a port sits on is a fact about the *graph*, and the
+  renderer does not have one; a model spanning both sides has no rule derivable from its name alone.
+- **Behavioral-edge discovery had to split from emission.** The boundary walk resolves a spanning
+  model's RF port to a channel variable, which does not exist until the edges are known.
+- **The replacement refusal is narrower than the one removed.** An edge endpoint that *no declared
+  model names* is now refused — previously reachable only as a `KeyError`.
+- **A latent bug surfaced from the reordering**: `_discover_behavioral_edges` unpacked `dut.boundary`
+  as a bare 2-tuple. Harmless while it ran second; a `ValueError`-instead-of-diagnosis once it ran
+  first. It reads through `_unpack_boundary` now.
+- **Watch `extra_args` that are bare identifiers.** The harness promotes any identifier in
+  `extra_args` to a `Harness(...)` parameter typed `const std::vector<uint64_t>&`. An `RfdcFormat` is
+  not that, so the converter's format must be emitted as a **literal** (`"RfdcFormat{16, 1, 4}"`) —
+  which works today with no generator change, and is what the fixture does. Passing it as a typed
+  ctor parameter would need a change to `render_tb_harness` that nothing yet requires.
+
+### The original scoping note
 
 `behavioral_edges.md` S3 refuses a module with endpoints on **both** a DUT boundary port and a
 behavioral edge, because `bfm_model()` names one C++ class for the whole module and the two bindings
