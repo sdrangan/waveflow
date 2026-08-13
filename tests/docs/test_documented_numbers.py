@@ -304,6 +304,36 @@ def test_the_hop_latency_the_edge_pages_quote_is_the_one_the_channel_has():
 
 
 # ---------------------------------------------------------------------------
+# rf_pass_through — the RTL cycle gate quoted on the example page
+# ---------------------------------------------------------------------------
+#
+# A CYCLE COUNT, not a calibration figure — and cycle counts are precisely the class this file did
+# not cover, which is how the stale 2835/3469 gates survived for weeks in two docs pages with every
+# test green.  Read from the gate table rather than retyped, so the page and the gate cannot drift.
+
+
+def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
+    """``examples/rf_loopback/python.md`` states the RTL completion cycle and the scenario size.
+
+    The source of truth is ``test_xsi_bfm.py``'s ``GATES`` table — the same tuple the XSI run
+    asserts against — so a re-recorded gate fails here until the page is updated, and a page edited
+    to a number nobody measured fails immediately.
+    """
+    from examples.rf_loopback.rf_dut_build import XSI_NBURST, XSI_NWORDS_BLK
+    from tests.examples.test_xsi_bfm import GATES
+
+    want = {top: cycles for top, _tb, cycles, _m in GATES}
+    assert "rf_pass_through" in want, "the rf_pass_through gate has been removed from GATES"
+    cycles = want["rf_pass_through"]
+
+    text = _page("examples/rf_loopback/python.md")
+    assert f"**{cycles}**" in text, (
+        f"python.md no longer quotes the recorded cycle gate of {cycles}")
+    assert f"{XSI_NBURST} bursts × {XSI_NWORDS_BLK} words = {XSI_NBURST * XSI_NWORDS_BLK} words" \
+        in text, "python.md no longer states the scenario the gate measures"
+
+
+# ---------------------------------------------------------------------------
 # The guard on the guard
 # ---------------------------------------------------------------------------
 

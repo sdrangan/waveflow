@@ -349,6 +349,68 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
 2. **The same graph under XSI.** *Depends on `plans/behavioral_edges.md`.* Write `RfdcAdcMaster` /
    `RfdcDacSlave` and the `RFSampIF` channel model, land the counter-equivalence gate, record a cycle
    gate. **Opens with the `BfmModel` prerequisite below.**
+   - **The digital logic is DONE (2026-08-13, branch `rf-dut-synth`)** — synthesized and proved at
+     RTL *cut alone*, between generic AXIS BFMs. Gate: 8 bursts × 64 words relayed bit-identically,
+     **1072 cycles**. See "The DUT at RTL" below.
+   - Still open: declare `Rfdc.bfm_model()`, give `RFSampIF` an `xsi_model()`, wire the loopback.
+
+### The DUT at RTL — **DONE 2026-08-13**
+
+`examples/rf_loopback/rf_dut_build.py`: `StreamDriver → RfSampPassThrough → StreamSink`, generic AXIS
+BFMs, no converter and no RF edges. Deliberately the *same module under a different cut* — the
+`design_cut.md` property exercised rather than asserted — which also keeps "does the DUT synthesize
+and run?" separate from "do the converter models drive it correctly?".
+
+The task body is **generated** from `run_iter`. Getting there cost two extractor findings, and both
+are recorded rather than worked around:
+
+**Finding 1 — implicit capture of a pysim counter.** `self.n_blk += 1` inline in `run_iter` is
+rejected by the implicit-capture rule, which cannot distinguish a baked-in constant, a register
+someone must write, and a counter with no hardware meaning. `@sim_only` is the answer for the third,
+and it must sit on a **method**: the validator tests `_is_sim_only` on the *resolved object*, and an
+`int` cannot carry an attribute. `add_state` would have been wrong — it declares persistent hardware
+storage and would put a live counter in the RTL.
+
+**Finding 2 — the raw-word `get()` has no extraction rule, and fails as an `IndexError`.**
+`get(nwords_max=N)` carries no schema type, and `hwresolve._populate_output_types` does
+`stmt.outputs[0].typ = stmt.inputs[0]` unconditionally on a `StreamGetStmt`. So an unsupported form
+raises `IndexError: list index out of range` rather than a diagnosis. The form itself is documented
+as *"the old (raw-word) calling convention … used by non-`HwModule` callers such as PolyTB"*, so a
+synthesizable body using the typed convention is correct — but **the failure mode is a bug**: an
+unhandled case, not a refusal. Worth converting to a `SynthesisError` naming the unsupported form.
+
+**Finding 3 — `check(mod, "composite_kernel")` does not check a leaf's body.** Gate 4 runs
+`composite_top_spec`, which for a *standalone leaf* emits the one-line top that instantiates the task
+and never touches `run_iter`. So it answered `True` for `RfSampPassThrough` while the body could not
+be extracted at all — two refusals hiding behind a green check. This is the "csynth OK is not
+evidence" failure one level up. `tests/examples/test_rf_dut_synth.py::test_the_task_body_extracts` is
+the assertion that closes it *for this module*; tightening gate 4 itself is a separate change with
+its own blast radius (distinguishing "derives its body" from "declares a hand-written `kernel_task`"
+is not a `declares_hook` question, because `kernel_task` lives on `FreeRunMod` and so has no
+sentinel).
+
+**Deviations:**
+
+- **`boundary` was never the blocker.** The premise recorded earlier — that the loopback graph had no
+  `dut.boundary` because `RfSampPassThrough` declares no `kernel_task()` — is **wrong**. A
+  `FreeRunMod` leaf *derives* its boundary, and it did:
+  `[('s_in', StreamIFSlave), ('s_out', StreamIFMaster)]`. What the module actually lacked was
+  `cpp_kernel_name`. And what still blocks the *full* loopback walk is neither: it is
+  `RFSampIF` declaring no `xsi_model()`, which is the next step.
+- **The payload type comes from an instance → type bridge.** A `blk_words` property specializes a
+  `DataArray` from the module's own `HwParam`s, so one declaration serves every width the pysim tests
+  sweep while pinning a concrete type at extract time. Reading `self.blk_words` in a synthesizable
+  body is allowed because it resolves to a `DataSchema` subclass.
+- **`has_tlast=True` does not produce a TLAST pin.** The graph declares it on both DUT endpoints, and
+  the generated top still emits plain `hls::stream<ap_uint<64>>` with `#pragma HLS INTERFACE axis` —
+  there is no `ap_axis` boundary flavour in the emitter. That asymmetry is **pre-existing and
+  load-bearing**: `mem_copy`'s `s_done` is `has_tlast=True` in Python against a plain `ap_uint` task
+  port, and that *is* the 2908 gate. The generic BFMs drive no TLAST pin either, so nothing is lost;
+  it is recorded because the two sides look like they disagree and do not.
+- **The gate's cost is honest, not incidental.** 1072 = 71 fill + 7 × ~143. ~143 rather than ~128
+  because the generated body is `read_stream` then `write_stream` — two sequential pipelined loops
+  over one block RAM, so a firing does not overlap its read and write. Overlapping would need two
+  tasks and a channel, which is what `mem_copy` does.
 ### Stage 2's opening prerequisite: `BfmModel` per-port resolution — **DONE 2026-08-12**
 
 Landed on branch `bfm-per-port`. `bfm_model()` may return several `BfmModel`s; `bfm_models()`

@@ -26,6 +26,10 @@ from examples.interleaver.mem_stream_gen import (
     write_mem_w_xsi_bundles,
 )
 from examples.mem_copy.mem_copy import check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles
+from examples.rf_loopback.rf_dut_build import (
+    check_xsi_outputs as check_rf_dut_xsi_outputs,
+    write_scenario as write_rf_dut_scenario,
+)
 from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
 
@@ -38,6 +42,7 @@ _XSI_SETUP = {
     "mem_r_stream": lambda xsi: write_mem_r_xsi_bundles(xsi),
     "mem_w_stream": lambda xsi: write_mem_w_xsi_bundles(xsi),
     "mem_copy": lambda xsi: write_mem_copy_xsi_bundles(xsi),
+    "rf_pass_through": lambda xsi: write_rf_dut_scenario(xsi),
 }
 
 #: Tops whose generated C++ main just runs + dumps: correctness is checked HERE, in Python, from the
@@ -45,6 +50,7 @@ _XSI_SETUP = {
 #: ``check(xsi_dir, want_cycles)`` and asserts.  A top absent here still self-checks in its C++ main.
 _XSI_CHECK = {
     "mem_copy": check_mem_copy_xsi_outputs,
+    "rf_pass_through": check_rf_dut_xsi_outputs,
 }
 
 #: Which example directory owns each top.  They are no longer all in one place: mem_copy is its own
@@ -55,6 +61,7 @@ ROOT_OF = {
     "mem_r_stream": EXAMPLES / "interleaver",
     "mem_w_stream": EXAMPLES / "interleaver",
     "mem_copy": EXAMPLES / "mem_copy",
+    "rf_pass_through": EXAMPLES / "rf_loopback",
 }
 
 #: (top, tb basename, expected cycles, a substring proving the golden actually ran).
@@ -79,6 +86,16 @@ GATES = [
     # interleaver retired from the gate with InterleaverCanon (2026-07); the in-band interleaver's RTL
     # is checked via its own Y=X[P] XSI harness (examples/interleaver/interleaver_inband_sim.py), not
     # an exact-cycle gate here.
+    #
+    # rf_pass_through: the RF loopback's digital logic, cut ALONE between generic AXIS BFMs
+    # (plans/adc_model.md staging item 2).  8 bursts x 64 words, relayed bit-identically.  1072 =
+    # 71 (fill: the body reads a whole 64-word block into its buffer before writing any of it) +
+    # 7 x ~143 steady.  ~143 rather than ~128 because read and write do NOT overlap: the generated
+    # body is `read_stream` then `write_stream`, two sequential pipelined loops over one block RAM.
+    # That is the DUT's honest cost, not a testbench artifact -- a design wanting overlap would need
+    # two tasks and a channel, which is what mem_copy does and why its per-job cost is ~max() rather
+    # than a sum.
+    ("rf_pass_through", "rf_pass_through_bfm_tb", 1072, ""),
 ]
 
 

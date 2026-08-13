@@ -23,14 +23,17 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
 from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import DataArray, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.rf_sample_if import RFSampIF
+from waveflow.hw.synth import sim_only
 from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, write_rf_bundle
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
@@ -47,6 +50,11 @@ class RfSampPassThrough(FreeRunMod):
     about the converter boundary, and a pass-through makes the loopback golden exact rather than
     approximately equal.  Stage 3's ``RfSampBuf`` is the first block that does something.
     """
+
+    #: The generated top's name.  Without it the module has no codegen identity and
+    #: ``tb_top_spec`` has no ``top_name`` — which, not the boundary, is what actually kept this
+    #: DUT out of a testbench walk.
+    cpp_kernel_name: ClassVar[str | None] = "rf_pass_through"
 
     #: AXIS word width in bits — ``samp_per_word * nbits`` at the converter.  Read off the
     #: :class:`~examples.rf_loopback.rfdc.Rfdc` when the testbench builds the graph.
@@ -85,13 +93,50 @@ class RfSampPassThrough(FreeRunMod):
                                     has_tlast=True)
         self.add_endpoint(self.s_in)
         self.add_endpoint(self.s_out)
-        #: Bursts relayed — the sanity number the check reads.
+        #: Bursts relayed — the sanity number the check reads.  Incremented through
+        #: :meth:`count_burst`, never inline: see there for why.
         self.n_blk = 0
 
-    def run_iter(self) -> ProcessGen[None]:
-        words = yield from self.s_in.get(nwords_max=int(self.nwords_blk))
+    @sim_only
+    def count_burst(self) -> None:
+        """Tally one relayed burst — **instrumentation, and marked as such.**
+
+        ``self.n_blk += 1`` inline in :meth:`run_iter` is what the extractor's implicit-capture rule
+        exists to catch, and it caught it: a read of ``self.X`` in a synthesizable body could be a
+        constant baked into the design, a register someone must write, or a counter that means
+        nothing in hardware, and nothing can tell those apart. The rule makes the author say which.
+
+        ``@sim_only`` is the "means nothing in hardware" answer, and it has to sit on a **method**:
+        the validator tests ``_is_sim_only`` on the resolved object, and an ``int`` cannot carry an
+        attribute. ``add_state`` would have been the wrong answer — it declares persistent hardware
+        storage, and would put a live counter in the RTL that no design reads.
+        """
         self.n_blk += 1
-        yield from self.s_out.write(words)
+
+    @property
+    def blk_words(self) -> type:
+        """The payload type of one firing: ``DataArray`` of ``nwords_blk`` words of ``bitwidth``.
+
+        The **instance → type bridge**: the module's ``HwParam``s feed a schema specialization, so
+        one declaration serves every configuration the pysim tests sweep *and* pins a concrete type
+        at extract time (which elaborates at the defaults).
+
+        Reading ``self.blk_words`` inside :meth:`run_iter` is allowed by the implicit-capture rule
+        precisely because it resolves to a ``DataSchema`` subclass — a type is a fact about the
+        design, not storage someone has to write.
+        """
+        return DataArray.specialize(
+            element_type=IntField.specialize(bitwidth=int(self.bitwidth), signed=False),
+            max_shape=(int(self.nwords_blk),), static=True)
+
+    def run_iter(self) -> ProcessGen[None]:
+        # The TYPED get, not the raw-word ``get(nwords_max=...)`` form.  That form is documented as
+        # the "old (raw-word) calling convention ... used by non-HwModule callers such as PolyTB",
+        # and the extractor has no rule for it — it reaches for the schema type that a raw get does
+        # not carry.  A synthesizable body uses the typed convention.
+        blk = yield from self.s_in.get(self.blk_words)
+        self.count_burst()
+        yield from self.s_out.write(blk)
 
 
 @dataclass
