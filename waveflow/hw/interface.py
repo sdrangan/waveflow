@@ -631,6 +631,16 @@ class StreamIF(QueuedTransferIF):
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')
         super().__post_init__()
+        #: Words a non-blocking :meth:`offer` could not fit and therefore **discarded**.
+        #:
+        #: The contract clause a design can actually be held to.  A producer that can wait cannot
+        #: lose anything, so this stays zero for every ``write()``-based graph; a converter that
+        #: cannot wait makes it the one mechanically checkable half of the block-LT fidelity
+        #: contract (``docs/guide/rf/fidelity.md``).
+        self.dropped = 0
+        #: When the most recent drop happened.  A count alone cannot separate a startup transient
+        #: from a steady-state fault, which is the same reason ``RFSampIF`` keeps its index.
+        self.last_drop_time = 0.0
 
     def write(self, words: Words, tstart: float | None = None) -> ProcessGen[None]:
         """
@@ -652,6 +662,115 @@ class StreamIF(QueuedTransferIF):
             )
         slave = self.endpoints['slave']
         yield from self._push_to_endpoint(slave, words, tstart=tstart)
+
+    # -- the non-blocking write ------------------------------------------------------------------
+    #
+    # ``write()`` waits for room.  That is right for a module: a kernel with nowhere to put its
+    # output stalls, and modelling the stall is the whole point of a bounded queue.  It is WRONG for
+    # a producer that physically cannot wait — a data converter presents a beat whether or not the
+    # fabric is ready, and what the fabric does not take is gone.
+    #
+    # So the difference is a property of the PRODUCER, not of the wire: the same AXI-Stream carries
+    # both, and an ordinary module keeps calling ``write()`` while a converter calls ``offer()``.
+    # Making it an interface flag (or a new interface type) would put a producer's property on the
+    # edge — the category error already caught twice on this arc, in per-channel skew on ``t0`` and
+    # in gain on ``RFSampIF``.
+    #
+    # The counter lives HERE because the interface already owns the queue and its depth, which are
+    # what decide a drop.  Same split as ``RFSampIF``: the producer's ``put()`` yields, the
+    # receiver's ``deliver()`` does not, and the EDGE counts.
+
+    def offer(self, words: Words, word_rate: float | None = None) -> ProcessGen[int]:
+        """Offer a burst **without waiting**; return how many words were accepted.
+
+        Whatever does not fit is dropped and counted in :attr:`dropped`.
+
+        *word_rate* is the producer's own rate in words per second.  ``None`` means the fabric clock,
+        which is what a module inside the fabric runs at.  A converter passes its own — see
+        :meth:`_offer_to_endpoint` for why that changes the answer and not merely the timing.
+        """
+        if self.endpoints['slave'] is None:
+            raise RuntimeError(
+                f"Cannot offer to StreamIF '{self.name}' because the slave side is not bound")
+        return (yield from self._offer_to_endpoint(self.endpoints['slave'], words, word_rate))
+
+    def _offer_to_endpoint(self, ep: "StreamIFSlave", words: Words,
+                           word_rate: float | None) -> ProcessGen[int]:
+        """Charge the transfer, take what fits, drop and count the rest.
+
+        **The transfer is paced by the PRODUCER's rate, not the fabric's.**  Charging a converter's
+        burst at ``f_axis`` says 64 words cross in 213 ns when the converter physically takes
+        1000 ns to produce them — and that 787 ns hole is time the consumer gets for free to drain a
+        queue it would not have drained in hardware.  Getting the *occupancy* right is what makes the
+        drop appear at all; it is not a cosmetic timing correction.
+
+        Still **one event per block**.  A per-word trickle would cost 64x the events and buy nothing:
+        the quantity that matters is how long the producer occupies the wire, not the shape of the
+        beats within it.
+
+        **A burst is dropped exactly where ``write()`` would have blocked** — when the RX queue is
+        *already full* at the start of the window, i.e. the consumer has not kept up since the last
+        one.  It is not clipped to the free space, and that is not a shortcut:
+
+        ``_push_to_endpoint`` puts what fits in ``nrx`` and the remainder in the **unbounded**
+        ``ntx``, blocking at one single point (``nrx.put(1)``, which waits only when the queue is
+        completely full).  So this framework already models ``depth`` as tolerance for a consumer
+        *hiccup between bursts*, not as intra-burst capacity — a 64-word burst through a depth-2
+        stream is legal and always was.  A rule that clipped to the free space would therefore
+        report drops for a consumer that never stalls at all (measured: 504 of 512 words), which
+        makes ``dropped == 0`` unreachable and the contract clause worthless.
+
+        **Still conservative, and in the safe direction.**  Occupancy is judged once, at the start of
+        the window, and a whole burst is lost when a real converter would have lost only the words
+        arriving during the consumer's stall.  Getting that exact needs the consumer's availability
+        *across* the window — sub-block information block-LT does not have.  It does not need it:
+        the contract's clause is ``dropped == 0``, a zero-versus-nonzero question, so the two
+        backends' drop counts are not expected to agree and must not be "fixed" until they do.
+        """
+        n = int(np.asarray(words).shape[0])
+        rate = float(word_rate) if word_rate else float(self.clk.freq)
+
+        with ep.bus.request() as req:
+            yield req
+            # Let the current instant settle before asking.  Without this the queue is read before a
+            # consumer scheduled at the same timestamp has resumed, so a consumer that never stalls
+            # reports drops purely because the producer re-armed first (measured: 256 of 512) --
+            # the same same-instant hazard BlockChannel solves by staging.
+            yield self.timeout(0)
+            # THE QUESTION, asked where a converter asks it: **at the moment I start producing this
+            # block, is the consumer ready for it?**  A consumer still busy with the previous block
+            # is not, and the words produced meanwhile have nowhere to go past the FIFO depth.  That
+            # is exactly the difference between a DUT that never stalls its input and one that does,
+            # and it is why the answer is taken here rather than at the end of the window -- by then
+            # a store-and-forward consumer has finished and looks, wrongly, like it kept up.
+            blocked = ep.nrx.level >= ep.nrx.capacity
+            dly = (self.latency_init + n) / rate
+            if dly > 0:
+                yield self.timeout(dly)
+            if blocked:
+                self.dropped += n
+                self.last_drop_time = float(self.env.now)
+                return 0
+            yield from self._admit(ep, np.asarray(words))
+        return n
+
+    def _admit(self, ep: "StreamIFSlave", words: Words) -> ProcessGen[None]:
+        """Queue accounting for an accepted burst — the same split :meth:`_push_to_endpoint` uses.
+
+        Factored out so the blocking and non-blocking paths cannot drift on what a burst *does* to
+        the queue; they differ only in what happens when there is no room.
+        """
+        rem = int(words.shape[0])
+        if rem > 0:
+            yield ep.nrx.put(1)
+            rem -= 1
+        nrx = int(min(rem, ep.nrx.capacity - ep.nrx.level))
+        if nrx > 0:
+            yield ep.nrx.put(nrx)
+            rem -= nrx
+        if rem > 0:
+            yield ep.ntx.put(rem)
+        yield ep.data_buffer.put(words)
 
     def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
         if ep_name not in ('master', 'slave'):
@@ -838,6 +957,28 @@ class StreamIFMaster(QueuedTransferIFMaster):
                 "is not bound to an interface"
             )
         yield self.process(self._make_write_call(raw_words))
+
+    @port_write
+    def offer(self, data, word_rate: float | None = None) -> ProcessGen[int]:
+        """Write a burst **without waiting for room**; return how many words were accepted.
+
+        For a producer that physically cannot be back-pressured — a data converter presents a beat
+        whether or not the fabric is ready, and what is not taken is gone. Ordinary modules keep
+        calling :meth:`write`, which stalls; that difference is a property of the producer, and this
+        is where it is stated.
+
+        *word_rate* is this producer's own rate in words per second, which paces the transfer. Pass
+        it whenever the producer is not clocked by the fabric.
+
+        Accepts the same two forms as :meth:`write` (raw ``Words`` or a ``DataSchema``).
+        """
+        from waveflow.hw.dataschema import DataSchema
+
+        raw_words = data.serialize(word_bw=self.bitwidth) if isinstance(data, DataSchema) else data
+        if self.interface is None:
+            raise RuntimeError(
+                f"Cannot offer: {type(self).__name__} '{self.name}' is not bound to an interface")
+        return (yield from self.interface.offer(raw_words, word_rate))
 
     @port_write
     def write_pipelined(self, data, t_out_start: float):
