@@ -303,14 +303,26 @@ class Rfdc(HwModule):
         Quantization goes through the integer-backed ``FixedField``, and packing through the
         generated array (de)serializers — never a hand-rolled ``.range()``.  That is what makes "evaluate
         the effect of bit widths in Python" mean the same thing the RTL will do.
+
+        **``offer``, not ``write``, and at the CONVERTER's rate.**  Two corrections, and pysim needed
+        both before it could see what the RTL sees:
+
+        * ``write()`` waits for room.  An ADC cannot: it presents a beat every sample period and what
+          the fabric does not take is gone.  ``offer()`` takes what fits and the interface counts the
+          rest.
+        * The burst must be charged at ``samp_rate / samp_per_word`` words per second, not at the
+          fabric clock.  A block of 64 words is 1000 ns of converter output; charging it at 300 MHz
+          claimed 213 ns and handed the consumer a 787 ns hole to drain in that the hardware never
+          gives it.  Being 4.7x too fast is exactly what hid the loss.
         """
         fs = float(self.full_scale)
+        word_rate = float(self.rx_samp_rate) / int(self.samp_per_word)
         while True:
             blk = yield from self.rx_rf.get()
             samples = np.asarray(blk.data, dtype=np.float64)[0]     # n_rx == 1 (stage 1)
             quantized = from_real(samples / fs, self.SampType)
             self.n_adc_blk += 1
-            yield from self.rx_stream.write(quantized)
+            yield from self.rx_stream.offer(quantized, word_rate=word_rate)
 
     def _dac_proc(self) -> ProcessGen[None]:
         """One AXIS burst in → unpack → dequantize → RF block out."""

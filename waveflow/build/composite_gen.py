@@ -709,6 +709,44 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtP
     raise LoweringError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 
+def _check_boundary_depth(comp, name: str, ep) -> None:
+    """Refuse a declared FIFO depth on a **boundary** port — Vitis cannot honour it.
+
+    ``StreamIF.depth`` is documented as *"a physical property, single-source for both backends"*.
+    That is true of an **internal** edge, which lowers to ``#pragma HLS STREAM depth=N``.  It is
+    **false at a boundary port**, and measured to be false: a top-level argument gets the HLS default
+    of 2 whatever is declared, and Vitis says so —
+
+        WARNING: [HLS 214-387] Ignore depth setting for top argument 's_in'
+        WARNING: [HLS 214-191] The stream pragma on function argument, in 'call' is unsupported
+
+    Worse, in one pragma placement it says *nothing at all* and silently ignores the request.  So the
+    declaration cannot be honoured and cannot be relied on to complain, which leaves pysim modelling
+    a queue the hardware does not have — the exact gap that hid an ADC dropping 72 of 512 words while
+    pysim reported a clean run.
+
+    Refused rather than warned: a depth that is silently 2 is worse than no depth, because the number
+    in the Python reads like a fact.  A design that needs deeper buffering at the boundary must put a
+    real FIFO *inside* the kernel, where a depth pragma does work.
+    """
+    from waveflow.hw.interface import DEFAULT_STREAM_DEPTH, StreamIF
+
+    iface = getattr(ep, "interface", None)
+    if not isinstance(iface, StreamIF):
+        return
+    depth = getattr(iface, "depth", None)
+    if depth is None or int(depth) == DEFAULT_STREAM_DEPTH:
+        return
+    raise LoweringError(
+        f"{type(comp).__name__}: boundary port '{name}' is on interface '{iface.name}', which "
+        f"declares depth={int(depth)} — but a top-level argument cannot carry a FIFO depth. Vitis "
+        f"ignores it (HLS 214-387 / 214-191) and the RTL gets the default of "
+        f"{DEFAULT_STREAM_DEPTH}, so the declaration would make pysim model a queue the hardware "
+        f"does not have. Drop the depth (the boundary is {DEFAULT_STREAM_DEPTH} deep, and pysim "
+        f"should say so), or buffer inside the kernel where a depth pragma is honoured."
+    )
+
+
 def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
     """Lower one internal edge to an :class:`IntChannel`.
 
@@ -790,6 +828,7 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         name, ep = _unpack_boundary(entry)
         bundle = bundles.get(name)
         ep_arg[id(ep)] = name
+        _check_boundary_depth(comp, name, ep)
         ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle))
 
     # Tasks are built before channels so a channel can record WHICH task drives it: the producer
