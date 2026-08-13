@@ -51,7 +51,7 @@ PROJ = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 #: What the ADC produces, and what the fabric actually takes.  8 blocks x 64 words.
 WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
 WANT_ADC_DROPPED = 72
-WANT_DAC_BLOCKS = 6
+WANT_DAC_BLOCKS = 19
 #: Blocks the DAC's grid emits in the run, and how many carry no data.
 #:
 #: **The old 2152 "time to last completion" gate is retired, not moved.**  It measured the cycle the
@@ -62,6 +62,10 @@ WANT_DAC_BLOCKS = 6
 #: is the startup transient below, which IS a result and is checkable on both backends.
 WANT_DAC_BLOCKS_OUT = 19
 WANT_DAC_ZERO_FILLED = 13
+#: Blocks of zero-fill before the first data block reaches the sink **at RTL**.  One, where pysim
+#: shows two: pysim paces the RF side on the edge's metronome and XSI on the source, so the RTL ADC
+#: has its first block at t=0.  A divergence to record, not to average away.
+RTL_STARTUP_BLOCKS = 1
 
 
 def _require(cond: bool, why: str) -> None:
@@ -174,7 +178,11 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
     assert got, "the run dumped no RF output bundle"
     # The startup transient is real at RTL now that the DAC emits on its grid: its first period
     # comes due before the pipeline has delivered anything, so a zero block goes out.
-    lat = int(sim.tb.dut.blk_latency)
+    # The RTL transient is ONE block, where pysim's is two -- a real divergence, not a tolerance.
+    # pysim paces the RF side on the EDGE (the RFSampIF metronome delivers block 1 at t=T), while
+    # XSI paces it on the SOURCE (RfFileSource fills the channel as soon as there is room), so the
+    # RTL ADC has its first block at t=0 and pysim's does not. Recorded, not reconciled.
+    lat = RTL_STARTUP_BLOCKS
     for k in range(lat):
         assert not np.any(got[k]), (
             f"block {k} is inside the {lat}-block startup transient and must be the zero-fill the "
@@ -229,11 +237,22 @@ def test_the_two_backends_disagree_about_loss_and_this_records_how():
     from waveflow.simulation.rf_tb import read_rf_bundle
     rtl = read_rf_bundle(XSI / "vectors" / "rf_out", 1, XSI_BLKSIZE)
 
-    # pysim: whole BLOCKS on the edge, and no loss at the fabric boundary at all (StreamIFMaster
-    # blocks).  XSI: WORDS at the fabric boundary, and fewer blocks out the far end.
+    # --- what each side counts, for one scenario ------------------------------------------------
+    # pysim: whole BLOCKS on the edge.  Its ADC->fabric loss is ZERO -- not because nothing is lost
+    # in hardware, but because the loss is sub-block and block-LT cannot resolve it (see
+    # docs/guide/rf/fidelity.md).  XSI: 72 WORDS at the fabric boundary.
     assert sim.tb.adc_if.counters()["overrun"] == 0
-    assert sim.tb.dac_if.counters()["underrun"] == int(sim.tb.dut.blk_latency)
+    assert sim.tb.dut.s_in.interface.dropped == 0, (
+        "pysim reports no ADC->fabric loss for this design; if that changes, the divergence table "
+        "in plans/adc_model.md and guide/rf/fidelity.md must change with it")
+
+    # Startup transient: 2 blocks in pysim, 1 at RTL.  Same phenomenon, different pacing -- pysim
+    # paces the RF side on the edge metronome, XSI on the source.  Recorded, not averaged away.
+    assert sim.tb.dac_if.counters()["underrun"] == int(sim.tb.loop_blk_latency) == 2
+    assert RTL_STARTUP_BLOCKS == 1
+
+    # Blocks emitted: pysim's grid runs for n_blk periods, the RTL grid for the whole harness run,
+    # because a DAC that plays continuously does not stop when the data does.  Neither number is
+    # "the answer"; the run length is a testbench constant on both sides.
     assert len(sim.captured) == XSI_NBLK
-    assert len(rtl) < len(sim.captured), (
-        "the RTL path is expected to deliver FEWER blocks than pysim, because the ADC drops what "
-        "the fabric cannot take while pysim's master blocks instead")
+    assert len(rtl) == WANT_DAC_BLOCKS > len(sim.captured)

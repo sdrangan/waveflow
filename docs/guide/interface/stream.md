@@ -32,6 +32,32 @@ transfer_time = (latency_init + nwords) / clk.freq   [seconds]
 - `latency_init` — fixed cycles for wire delay, arbitration, etc.
 - `nwords` — one additional cycle per word in the burst (one beat per clock)
 
+### A producer that cannot wait: `offer()` {#offer}
+
+`write()` **waits** when the consumer is full, which is what almost every producer in a design does —
+back-pressure is the AXI-Stream contract. A few producers physically cannot: an ADC hands over the
+samples it has converted, and whatever the fabric is not ready for is *gone*.
+
+```python
+accepted = yield from self.rx_stream.offer(block, word_rate=samp_rate / samp_per_word)
+```
+
+- **Non-blocking.** Returns the number of words the consumer accepted; the rest are dropped.
+- **The interface counts them.** `StreamIF.dropped` accumulates dropped words and `last_drop_time`
+  records when it last happened — on the *edge*, so a checker reads one number regardless of which
+  producer is on the other end.
+- **`word_rate`** paces the transfer at the producer's own rate rather than the interface clock. A
+  converter's block takes `nwords / (samp_rate / samp_per_word)` seconds to exist; charging it at the
+  fabric clock claims it crossed in a fraction of that and hands the consumer drain time the hardware
+  never gives it.
+
+There is deliberately **no separate interface type** for this. A plain AXI-Stream is what is on the
+wire either way — "who is willing to wait" is a property of the producer, not of the link.
+
+`dropped == 0` is therefore the mechanical form of *"this consumer never stalls its input"*, and it
+stays zero for every design whose producers call `write()`. It has a resolution limit worth knowing
+before you rely on it: see [the fidelity boundary](../rf/fidelity.md#the-resolution-limit).
+
 ### Pipelined processing
 
 Use `get_pipelined` / `write_pipelined` when the component processes data as it streams through (rather than buffering the full burst first). These methods carry pipeline timing explicitly so the simulation reflects the latency and throughput of synthesized hardware.

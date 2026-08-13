@@ -68,10 +68,9 @@ sink declares neither, which is a *finding* from `check`, not something it says 
   packing contract, `samp_per_word` versus the two derived rate conversions, bit-exact quantization,
   and the underflow/overflow contract.
 
-One further page is planned and deliberately **not written yet**: the fidelity boundary — what block
-granularity can and cannot resolve. It needs a real DSP block and a channel to demonstrate both
-halves, and neither exists; a page written from a plan rather than from working code is the specific
-failure this schedule exists to prevent. See `plans/adc_model.md`.
+- [The fidelity boundary](./fidelity.md) — what this modelling style can and cannot tell you: the
+  three conditions, which of them anything checks, and a measured case where RTL loses 72 words and
+  pysim reports none.
 
 ## See also
 

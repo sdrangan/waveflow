@@ -157,7 +157,7 @@ sim.check()
 
 ```
 adc  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 0, 'overrun': 0}
-dac  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 1, 'overrun': 0}
+dac  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 2, 'overrun': 0}
 ```
 
 1. **Byte-identical, once shifted by the declared latency.** The sink's bundle is compared to the
@@ -165,10 +165,17 @@ dac  {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 1, 'overrun': 0}
    the loopback is a file-to-file comparison. DAC block *k* must equal ADC block *k* − `blk_latency`,
    and the leading `blk_latency` blocks must be exactly the zero-fill.
 2. **Loss is exactly what the graph declared.** `underrun == 0` on the ADC edge, which is fed
-   straight from the source and entitled to nothing; `underrun == blk_latency` on the DAC edge, and
-   at the *start* — `assert_clean(startup_blocks=…)` checks the grid index too, so a steady-state
-   fault cannot hide inside a transient's budget. `overrun == 0` everywhere: overrun has no
-   transient to hide in.
+   straight from the source and entitled to nothing; `underrun == loop_blk_latency` on the DAC edge,
+   and at the *start* — `assert_clean(startup_blocks=…)` checks the grid index too, so a
+   steady-state fault cannot hide inside a transient's budget. `overrun == 0` everywhere: overrun
+   has no transient to hide in.
+
+   The loop costs **two** blocks, not one, and the second term is the ADC's own: a converter cannot
+   emit samples it has not collected, so a block exists at its grid tick and is transmitted across
+   the *following* period. That hop was invisible while the ADC's burst was charged at the fabric
+   clock rather than at `samp_rate / samp_per_word`, and appeared the moment it was paced honestly.
+   It is the same quantity the [fidelity contract](../../guide/rf/fidelity.md) states as *no
+   dependency shorter than `2 × blksize` — one block per converter hop*.
 3. Block counts agree end to end (the DUT relayed as many bursts as the source sent).
 4. **Alignment is derived**: with both tiles on one epoch, DAC sample *n* occurs at the same instant
    as ADC sample *n*, for every *n* — arithmetic on `t0` and the rate, not something a particular

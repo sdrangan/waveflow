@@ -94,6 +94,14 @@ A FIFO's `depth` is a physical property of the `StreamIF`, single-sourced so the
 emitted pragma cannot disagree. A `StreamIF` with `depth=None` is *explicit unbounded* — fine for
 pysim exploration, refused at the synthesis boundary, because an unbounded FIFO is not hardware.
 
+**That holds for an internal channel, and only there.** A **boundary port** cannot carry a depth at
+all: `#pragma HLS STREAM depth=` on a top-level argument is ignored by Vitis (`HLS 214-387`), which in
+one pragma placement it does *silently* — identical RTL, no warning — leaving the port at the HLS
+default of 2 while the Python says otherwise. `composite_top_spec` therefore **refuses** a non-default
+depth on an interface bound to a boundary port, rather than emitting a number that will not be
+honoured. See [the fidelity boundary](../rf/fidelity.md#the-resolution-limit), where a declared
+`depth=128` that was physically 2 is what a whole debugging session turned on.
+
 ## 2. `add_comp` became the tasks
 
 One `hls::task` per child, in `add_comp` insertion order. Each child's `KernelTask` — derived, or [overridden](./freerunning_override.md) when the body is
