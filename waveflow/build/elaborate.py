@@ -229,6 +229,14 @@ _CONTEXT_ATTRS = frozenset({
     # under the first are invisible from the second and every lookup misses **silently** -- the same
     # failure mode as an unbound key.  (plans/harmonize_calib.md, P1.)
     "platform_dir", "calib_dir", "compute_calib_dir",
+    # Run-time counters an interface accumulates during a simulation.  What a link CARRIED is not
+    # what it IS: a design that dropped a word and one that did not are the same hardware, and the
+    # counters are zero until something runs anyway.  Named explicitly because they are plain ints
+    # on a structural object, so the type marker above cannot reach them -- and this list is not
+    # theoretical here: adding ``StreamIF.dropped`` moved every ``FirBlock`` key in one commit,
+    # caught only by ``tests/calib/test_key_stability.py``.
+    "dropped", "last_drop_time",                        # StreamIF (offer)
+    "blocks_sent", "blocks_delivered", "underrun", "overrun",    # RFSampIF
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value
