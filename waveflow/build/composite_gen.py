@@ -107,13 +107,28 @@ class BfmModel:
     an extractor.
 
     * ``cls`` — the C++ model class, e.g. ``"AxisMaster"``.
-    * ``ports`` — the participant's endpoint attribute names, in constructor order.  Each is resolved
-      through the TB graph to the RTL port prefix it ends up driving (see :func:`tb_top_spec`).
+    * ``ports`` — the participant's endpoint attribute names, in constructor order.  **Each resolves
+      by its own kind** (:func:`_resolve_model_binding`): an endpoint facing a DUT boundary port
+      contributes ``sim.dut(), <ports_ns>::<port>``; an endpoint on a behavioral edge contributes
+      that edge's channel variable.
     * ``extra_args`` — literal C++ expressions appended after the resolved ports, e.g. the words an
       ``AxisMaster`` presents or the arena an ``AxiMmReadSlave`` serves.  They name things the
       hand-written half of the testbench declares.
     * ``shared`` — if set, this model is constructed once and *shared* by name rather than per
       endpoint (the arena behind two m_axi bundles is one ``FlatMemory``, not two).
+
+    **A module may declare more than one.**  ``bfm_model()`` returns one of these or a sequence of
+    them (see :func:`bfm_models`), because two facts turned out not to be per-*module*:
+
+    1. **The class is per data path, not per module.**  ``bfm_dual_class`` hands back the
+       participant's declared class for AXI-Stream, so one declaration cannot give a converter's
+       receive port an ``RfdcAdcMaster`` and its transmit port an ``RfdcDacSlave``.
+    2. **The constructor shape is per port.**  A model that spans *both* sides of the cut — RTL pins
+       on one side, a behavioral edge on the other — is exactly what a converter is, and its ports
+       cannot all resolve the same way.
+
+    A single ``BfmModel`` whose ports are all boundary ports resolves precisely as it always did,
+    which is every design that existed before this generalization.
     """
     cls: str
     ports: tuple[str, ...] = ()
@@ -953,17 +968,31 @@ class BfmInst:
     * a **peer** model — ``<cls> <name>(<channel>, <args>);`` — binds a
       :class:`ChannelInst` instead, because the port it would otherwise drive does not exist: both
       ends of its edge lie outside the cut.
+
+    ...and a model may be **both at once**: a converter binds RTL pins on its fabric side and a
+    channel on its RF side, in one object.  Which is why the leading arguments are *resolved* into
+    :attr:`binds` rather than derived from a flag at render time.
     """
     cls: str
     name: str
     xsi_prefix: str                  # the RTL port prefix this model drives ("" for a peer model)
-    args: tuple[str, ...] = ()       # extra C++ args after the prefix / channel
+    args: tuple[str, ...] = ()       # extra C++ args after the resolved binds
     #: Init-time config to emit after construction as ``<name>.<field> = <expr>;`` -- one entry per
     #: DynParam the participant carries (field name, rendered C++ initializer).
     dyn_params: tuple[tuple[str, str], ...] = ()
-    #: The :class:`ChannelInst` variable this model binds, or ``None`` for a boundary model.  Set
-    #: makes the construction take the channel in place of ``(sim.dut(), ports::<name>)``.
+    #: The first :class:`ChannelInst` variable this model binds, or ``None``.  **Informational** —
+    #: rendering reads :attr:`binds`.  Kept because "does this model touch a behavioral edge?" is a
+    #: question about the graph that callers ask, and recovering it from ``binds`` would mean
+    #: pattern-matching C++ text.
     channel: str | None = None
+    #: The leading constructor arguments, already resolved against the graph and in declaration
+    #: order: ``("sim.dut()", "<ns>::<port>")`` per boundary port, one channel variable per edge
+    #: port, concatenated across :attr:`BfmModel.ports`.  ``args`` follows.
+    #:
+    #: Resolved here rather than reconstructed by the renderer because the mapping is a property of
+    #: the **graph**, which the renderer does not have: a model spanning two sides of the cut has no
+    #: single rule the emitter could apply from the model's name alone.
+    binds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1096,6 +1125,10 @@ def resolve_bfm_model(mod, crossing=None):
     What this deliberately does **not** check is item 5, behavioural equivalence between the Python
     body and the C++ model.  Nothing here can, and the existence of this function must not be read as
     covering it — see ``docs/guide/custom_hooks/bfm_model.md``.
+
+    A module may declare **several** models (:func:`bfm_models`); every check above then applies per
+    model, except coverage, which is the union.  The return is the **first**, which is all a
+    single-model module ever had and all any caller uses — the verdict is the raise, not the value.
     """
     from waveflow.hw.hw_module import declares_hook, discover_dyn_params
 
@@ -1106,23 +1139,27 @@ def resolve_bfm_model(mod, crossing=None):
             f"beside a top. A module realized OUTSIDE the cut overrides bfm_model() to name one; a "
             f"module realized INSIDE the cut declares kernel_task() instead."
         )
-    bm = mod.bfm_model()
+    models = bfm_models(mod)
 
     known = xsi_model_classes()
-    if bm.cls not in known:
-        raise LoweringError(
-            f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj in "
-            f"{_XSI_BFM_HEADER}. Known models: {sorted(known)}."
-        )
+    for bm in models:
+        if bm.cls not in known:
+            raise LoweringError(
+                f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj in "
+                f"{_XSI_BFM_HEADER}. Known models: {sorted(known)}."
+            )
 
     attrs = list(_endpoint_attrs(mod)) if crossing is None else list(crossing)
     cross = {a: _bfm_port_endpoint(mod, a) for a in attrs}
 
-    covered = {id(_bfm_port_endpoint(mod, a)) for a in bm.ports}
+    # Coverage is the UNION over every declared model: what matters is that no crossing endpoint is
+    # left undriven, not which of a module's objects drives it.
+    covered = {id(_bfm_port_endpoint(mod, a)) for bm in models for a in bm.ports}
     uncovered = sorted(a for a, ep in cross.items() if id(ep) not in covered)
     if uncovered:
+        declared = ", ".join(f"{bm.cls}{list(bm.ports)}" for bm in models)
         raise LoweringError(
-            f"{name}.bfm_model() ({bm.cls}) covers {list(bm.ports)} but leaves {uncovered} "
+            f"{name}.bfm_model() ({declared}) leaves {uncovered} "
             f"uncovered. Every endpoint that CROSSES the cut needs a model, or the port is a wire "
             f"nobody drives — at RTL that is a hang with no diagnostic, thousands of cycles later. "
             f"If those endpoints do not cross this particular cut, say so with crossing=(...)."
@@ -1130,9 +1167,13 @@ def resolve_bfm_model(mod, crossing=None):
                if crossing is None else "")
         )
 
+    # The dual is asked per endpoint, against the class of the model that actually spans it — with
+    # several models the question "which class faces this port?" has a different answer per port,
+    # which is the whole reason several exist.
+    cls_of_ep = {id(_bfm_port_endpoint(mod, a)): bm.cls for bm in models for a in bm.ports}
     for attr, ep in cross.items():
         for facing in _facing_kinds(ep, mod, attr):
-            bfm_dual_class(facing, bm.cls)
+            bfm_dual_class(facing, cls_of_ep.get(id(ep)))
 
     for field, value in sorted(discover_dyn_params(mod).items()):
         try:
@@ -1142,7 +1183,7 @@ def resolve_bfm_model(mod, crossing=None):
                 f"{name}.{field} is a DynParam the harness would emit as "
                 f"`<model>.{field} = ...;`, but it cannot be rendered: {e}"
             ) from e
-    return bm
+    return models[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1308,6 +1349,81 @@ def _facing_kinds(ep, mod, attr: str) -> tuple[str, ...]:
     return facing
 
 
+def bfm_models(mod) -> tuple[BfmModel, ...]:
+    """The models *mod* declares, always as a tuple.
+
+    ``bfm_model()`` may return one :class:`BfmModel` or a sequence of them.  One is the common case
+    and stays exactly what it was; several is what a module needs when its C++ realization is more
+    than one object — see :class:`BfmModel` for the two reasons that turned out to be per-*path*
+    rather than per-*module*.
+
+    Normalizing here, rather than at each of the four call sites, is what keeps "a module declares a
+    model" and "a module declares three" from being two code paths.
+    """
+    got = mod.bfm_model()
+    models = tuple(got) if isinstance(got, (tuple, list)) else (got,)
+    if not models:
+        raise LoweringError(
+            f"{type(mod).__name__}.bfm_model() returned no models. A module that declares the hook "
+            f"must name at least one; a module with no C++ realization declares no hook at all, "
+            f"which is a finding rather than an empty answer."
+        )
+    for m in models:
+        if not isinstance(m, BfmModel):
+            raise LoweringError(
+                f"{type(mod).__name__}.bfm_model() returned {type(m).__name__}, not a BfmModel "
+                f"(or a sequence of them)."
+            )
+    return models
+
+
+def _resolve_model_binding(part, bm: BfmModel, ports_ns: str, boundary_of: dict,
+                           channel_of: dict) -> tuple[tuple[str, ...], str, "str | None"]:
+    """Resolve *bm*'s ports into constructor arguments — **each by its own kind**.
+
+    This is the per-port half of the generalization.  A port is not asked "are you a boundary port?"
+    as a property of the model; it is looked up in the graph, and *where its peer sits relative to
+    the cut* decides what it contributes:
+
+    ===========================  ==========================================
+    the port's peer is...        it contributes
+    ===========================  ==========================================
+    a DUT boundary port          ``sim.dut(), <ns>::<port>``  (two arguments)
+    on a behavioral edge         that edge's channel variable  (one argument)
+    neither                      a refusal
+    ===========================  ==========================================
+
+    Returns ``(binds, xsi_prefix, channel)`` — the arguments, the first RTL prefix (informational,
+    for traces), and the first channel variable (likewise).
+
+    The refusal is the load-bearing case: a named port bound to nothing the harness can reach is a
+    constructor argument that cannot be written, and guessing one would produce C++ that compiles
+    against the wrong object or does not compile at all.
+    """
+    binds: list[str] = []
+    prefix = ""
+    channel: str | None = None
+    for attr in bm.ports:
+        ep = _bfm_port_endpoint(part, attr)
+        if id(ep) in boundary_of:
+            bname, bport = boundary_of[id(ep)]
+            binds += ["sim.dut()", f"{ports_ns}::{bname}"]
+            prefix = prefix or bport.xsi_prefix
+        elif id(ep) in channel_of:
+            chan = channel_of[id(ep)]
+            binds.append(chan)
+            channel = channel or chan
+        else:
+            raise LoweringError(
+                f"{type(part).__name__}.bfm_model() model {bm.cls!r} names port {attr!r}, but that "
+                f"endpoint is neither wired to a DUT boundary port nor bound to a behavioral edge — "
+                f"so there is nothing for the model to bind there. Either wire it, or drop it from "
+                f"this model's ports: a constructor argument the graph cannot supply is not "
+                f"something the generator may guess."
+            )
+    return tuple(binds), prefix, channel
+
+
 def _bfm_port_endpoint(part, attr: str):
     """*part*'s endpoint named by ``BfmModel.ports`` entry *attr*, validated against its registry.
 
@@ -1391,29 +1507,44 @@ def _dut_interior(dut) -> set:
     return seen
 
 
-def _behavioral_edge_walk(tb, dut, boundary_parts: set, dyn_of) -> tuple[list, list]:
-    """The **second walk**: TB interfaces with *neither* endpoint on the DUT boundary.
+@dataclass(frozen=True)
+class _BehavioralEdge:
+    """One discovered behavioral edge: its interface, its channel model, and its bound peers."""
+    iface: object
+    model: ChannelModel
+    chan: str
+    sides: dict            # side name -> the endpoint bound there
+
+
+def _discover_behavioral_edges(tb, dut, model_of_ep: dict) -> list[_BehavioralEdge]:
+    """Find and validate the TB interfaces with *neither* endpoint on the DUT boundary.
 
     The first walk iterates ``dut.boundary`` — one model per RTL port — and that spine is what makes
     "did we cover every port?" structural.  It is also blind by construction: an edge with no DUT
-    port on either end emits nothing, and is not rejected so much as *invisible*.  This walk is that
-    blind spot, closed.
+    port on either end emits nothing, and is not rejected so much as *invisible*.  This closes that
+    blind spot.
 
     **The two walks must not double-count.**  An interface with at least one endpoint on the DUT
     boundary is the existing case and stays there; this one claims only the rest.  The partition is
     on the interface, not on the model, so no edge can be claimed twice or missed.
 
-    Returns ``(channels, peer_models)``.  Both are empty for a graph whose edges all touch the DUT,
-    which is every design that existed before this walk did — hence byte-identical output for them.
-    """
-    from waveflow.hw.hw_module import declares_hook
+    **Discovery is split from emission** because the boundary walk needs the answer *first*: a model
+    that spans both sides of the cut has to resolve one of its ports to a channel variable, and that
+    variable does not exist until the edges are known.  Emission then happens in
+    :func:`_emit_behavioral_edges`, after the boundary walk has said which endpoints it already
+    claimed.
 
-    boundary_eps = {id(ep) for _n, ep in dut.boundary}
+    Returns an empty list for a graph whose edges all touch the DUT — which is every design that
+    existed before behavioral edges did, hence byte-identical output for them.
+    """
+    # Through _unpack_boundary, not a bare 2-tuple unpack: a boundary entry may carry a third field,
+    # and discovery now runs BEFORE the boundary walk, so a malformed entry would surface here as a
+    # ValueError instead of there as the diagnosis the caller needs.
+    boundary_eps = {id(_unpack_boundary(entry)[1]) for entry in dut.boundary}
     interior = _dut_interior(dut)
     children = {id(c) for c in tb.ordered_subcomps}
 
-    channels: list[ChannelInst] = []
-    peers: list[BfmInst] = []
+    edges: list[_BehavioralEdge] = []
     for iface in tb.interfaces.values():
         bound = {side: ep for side, ep in getattr(iface, "endpoints", {}).items() if ep is not None}
         if any(id(ep) in boundary_eps for ep in bound.values()):
@@ -1462,23 +1593,53 @@ def _behavioral_edge_walk(tb, dut, boundary_parts: set, dyn_of) -> tuple[list, l
                     f"graph, not a defect in the module: build a different testbench for RTL, or "
                     f"give the module a model."
                 )
-            if id(part) in boundary_parts:
+            # NOTE: a module with endpoints on BOTH a DUT boundary port and this edge used to be
+            # refused here.  It is now the RFDC's shape and it works: one model spans both, and
+            # _emit_behavioral_edges below skips a side the boundary walk already claimed.
+            #
+            # What replaces that refusal is narrower and still true: the endpoint has to be NAMED by
+            # one of the module's models.  A module can declare a model for its stream port and
+            # simply not mention its edge port, and then there is no class to construct against this
+            # channel — which used to be reachable only as a KeyError.
+            if id(ep) not in model_of_ep:
+                declared = ", ".join(f"{m.cls}{list(m.ports)}" for m in bfm_models(part))
                 raise LoweringError(
-                    f"{type(tb).__name__}: {type(part).__name__} has endpoints on BOTH a DUT "
-                    f"boundary port and the behavioral edge '{iface.name}', but bfm_model() names "
-                    f"one C++ class for the whole module and the two bindings have different "
-                    f"constructor shapes ((dut, prefix) vs (channel)). Resolving that needs a "
-                    f"per-port resolution in BfmModel — deliberately out of scope here "
-                    f"(plans/behavioral_edges.md S3)."
+                    f"{type(tb).__name__}: interface '{iface.name}' side {side!r} is "
+                    f"{type(part).__name__}'s endpoint, but none of its declared models names that "
+                    f"port — it declares {declared}. An endpoint on a behavioral edge needs a model "
+                    f"to bind the channel, whether that is a model of its own or one that also "
+                    f"spans a boundary port."
                 )
             parts[side] = part
 
-        channels.append(ChannelInst(cm.cls, chan, cm.extra_args, dyn_of(iface)))
-        for side in cm.peers:
-            part = parts[side]
-            bm = part.bfm_model()          # one call: the hook is the module's, not ours to re-run
-            peers.append(BfmInst(bm.cls, f"{chan}_{side}", "", bm.extra_args,
-                                 dyn_of(part), channel=chan))
+        edges.append(_BehavioralEdge(iface=iface, model=cm, chan=chan,
+                                     sides={s: bound[s] for s in cm.peers}))
+    return edges
+
+
+def _emit_behavioral_edges(edges, model_of_ep: dict, claimed_eps: set,
+                           dyn_of) -> tuple[list, list]:
+    """Turn discovered edges into a channel each, plus a peer model per **unclaimed** side.
+
+    A side is *claimed* when the boundary walk already emitted a model spanning that endpoint — the
+    converter case, where one object binds RTL pins on its fabric side and this channel on its RF
+    side.  Emitting a separate peer for it would construct a second object against the same edge and
+    leave the two disagreeing about what crossed it.
+
+    The channel itself is always emitted: it exists because the edge does, regardless of who binds
+    it.  An edge with both sides claimed is two spanning models talking to each other, which is a
+    perfectly good graph and needs no peers at all.
+    """
+    channels: list[ChannelInst] = []
+    peers: list[BfmInst] = []
+    for e in edges:
+        channels.append(ChannelInst(e.model.cls, e.chan, e.model.extra_args, dyn_of(e.iface)))
+        for side, ep in e.sides.items():
+            if id(ep) in claimed_eps:
+                continue
+            part, bm, _key = model_of_ep[id(ep)]
+            peers.append(BfmInst(bm.cls, f"{e.chan}_{side}", "", bm.extra_args,
+                                 dyn_of(part), channel=e.chan, binds=(e.chan,)))
     return channels, peers
 
 
@@ -1529,14 +1690,20 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
     from waveflow.hw.hw_module import discover_dyn_params
 
     dut = _find_dut(tb) if dut is None else _resolve_dut(tb, dut)
+    ports_ns = f"{dut.cpp_kernel_name}_ports"
 
-    # endpoint identity -> the participant it belongs to
+    # endpoint identity -> (participant, the model spanning it, that model's identity).  Built over
+    # EVERY declared model, so a module with one and a module with three walk the same path.
     owner: dict[int, object] = {}
+    model_of_ep: dict[int, tuple] = {}
     for c in tb.ordered_subcomps:
         if c is dut or not declares_hook(c, "bfm_model"):
             continue
-        for attr in c.bfm_model().ports:
-            owner[id(_bfm_port_endpoint(c, attr))] = c
+        for i, bm in enumerate(bfm_models(c)):
+            for attr in bm.ports:
+                ep = _bfm_port_endpoint(c, attr)
+                owner[id(ep)] = c
+                model_of_ep[id(ep)] = (c, bm, (id(c), i))
 
     # endpoint identity -> the other endpoints on its interface (so a DUT port finds its participant)
     peers: dict[int, list] = {}
@@ -1545,33 +1712,50 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         for ep in eps:
             peers.setdefault(id(ep), []).extend(e for e in eps if e is not ep)
 
-    shared: dict[str, tuple[str, str, tuple[str, ...]]] = {}
-    models: list[BfmInst] = []
-    #: Participants claimed by walk 1.  Walk 2 consults it to refuse a module that would need one
-    #: bfm_model() class to serve two different constructor shapes.
-    boundary_parts: set = set()
-
     def dyn_of(obj) -> tuple[tuple[str, str], ...]:
         return tuple((f, _render_dyn_value(v)) for f, v in sorted(discover_dyn_params(obj).items()))
 
+    # Edges are discovered BEFORE the boundary walk: a model spanning both sides of the cut resolves
+    # one of its ports to a channel variable, which does not exist until the edges are known.
+    edges = _discover_behavioral_edges(tb, dut, model_of_ep)
+    channel_of: dict[int, str] = {id(ep): e.chan for e in edges for ep in e.sides.values()}
+
     bundles = bundle_map(dut.boundary)
+    # participant endpoint -> the DUT boundary port it faces.  Precomputed because a model's ports
+    # are resolved as a set, not in the order the boundary happens to be walked.
+    boundary_of: dict[int, tuple[str, ExtPort]] = {}
+    for entry in dut.boundary:
+        name, dep = _unpack_boundary(entry)
+        port = _boundary_port(name, kind_of_endpoint(dep), 0, bundles.get(name))
+        for peer in peers.get(id(dep), []):
+            boundary_of.setdefault(id(peer), (name, port))
+
+    shared: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+    models: list[BfmInst] = []
+    #: Endpoints a boundary-walk model already spans.  Emission of the edges consults it so a
+    #: converter's RF port does not also get a separate channel peer.
+    claimed_eps: set = set()
+    #: Models already emitted, by identity.  A model spanning two boundary ports is ONE object; the
+    #: second port it covers must not construct it again.  Shared models are exempt — there the same
+    #: endpoint faces two bundles and two slave instances are exactly what is wanted.
+    emitted: set = set()
+
     for entry in dut.boundary:
         name, ep = _unpack_boundary(entry)
         bundle = bundles.get(name)
         kind = kind_of_endpoint(ep)
         port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
-        part = None
+        part = pep = None
         for peer in peers.get(id(ep), []):
             if id(peer) in owner:
-                part = owner[id(peer)]
+                part, pep = owner[id(peer)], peer
                 break
         if part is None:
             raise LoweringError(
                 f"{type(tb).__name__}: DUT boundary port '{name}' is not wired to any testbench "
                 f"participant — nothing would drive it, and the run would hang on that port."
             )
-        boundary_parts.add(id(part))
-        bm = part.bfm_model()
+        _p, bm, key = model_of_ep[id(pep)]
         # Init-time config: every DynParam the participant carries, rendered to a C++ initializer.
         dyn = dyn_of(part)
         if bm.shared is not None:
@@ -1581,12 +1765,18 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
             # model — so the dual is resolved from the boundary kind alone, with nothing declared.
             shared.setdefault(bm.shared, (bm.cls, bm.shared, bm.extra_args, dyn))
             cls = bfm_dual_class(kind, None)
-            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,)))
-        else:
-            models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, port.xsi_prefix,
-                                  bm.extra_args, dyn))
+            models.append(BfmInst(cls, name, port.xsi_prefix, (bm.shared,),
+                                  binds=("sim.dut()", f"{ports_ns}::{name}")))
+            continue
+        if key in emitted:
+            continue          # this boundary port is covered by a model already constructed
+        binds, prefix, chan = _resolve_model_binding(part, bm, ports_ns, boundary_of, channel_of)
+        models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, prefix or port.xsi_prefix,
+                              bm.extra_args, dyn, channel=chan, binds=binds))
+        emitted.add(key)
+        claimed_eps.update(id(_bfm_port_endpoint(part, a)) for a in bm.ports)
 
-    channels, peer_models = _behavioral_edge_walk(tb, dut, boundary_parts, dyn_of)
+    channels, peer_models = _emit_behavioral_edges(edges, model_of_ep, claimed_eps, dyn_of)
     models.extend(peer_models)
 
     # Every emitted C++ identifier lives in one struct scope, so a collision would shadow rather than
@@ -1694,10 +1884,11 @@ def render_tb_harness(spec: TbSpec) -> str:
     for c in spec.channels:
         inits.append(f"{c.name}({', '.join(c.args)})")
     for m in spec.models:
-        # A peer model binds its CHANNEL where a boundary model binds (dut, port): both ends of its
-        # edge are outside the cut, so the RTL port it would otherwise drive does not exist.
-        head = (m.channel,) if m.channel else ("sim.dut()", f"{ports_ns}::{m.name}")
-        inits.append(f"{m.name}({', '.join(head + m.args)})")
+        # `binds` is already resolved per port against the graph -- `(sim.dut(), ports::X)` for a
+        # boundary port, a channel variable for a behavioral-edge port, and both in order for a model
+        # that spans the cut.  The renderer does not re-derive it: which side of the cut a port sits
+        # on is a fact about the graph, which is not in scope here.
+        inits.append(f"{m.name}({', '.join(tuple(m.binds) + m.args)})")
     lines.append("")
     lines.append(sig)
     lines.append("      : " + ",\n        ".join(inits))

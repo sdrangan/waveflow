@@ -417,24 +417,26 @@ class TestSecondWalkRefusals:
         with pytest.raises(LoweringError, match="INSIDE the DUT"):
             tb_top_spec(tb)
 
-    def test_a_module_on_both_a_boundary_port_and_an_edge_is_refused(self):
-        """One ``bfm_model()`` class cannot serve two different constructor shapes.
+    def test_an_edge_endpoint_no_declared_model_names_is_refused(self):
+        """What replaced the old dual-role refusal, and it is narrower on purpose.
 
-        Not a hidden limitation: it is named, and the message says what would fix it. Emitting
-        ``Cls x(sim.dut(), port, ...)`` and ``Cls x(chan, ...)`` from one declaration would be a
-        compile error at best and the wrong binding at worst. Resolving it properly needs per-port
-        resolution in ``BfmModel``, which is the RFDC's problem (``plans/adc_model.md`` stage 2).
+        A module spanning a boundary port *and* an edge is now legal (see
+        ``TestSpanningTheCut``). What is still refused is an edge endpoint that **no declared model
+        names**: there is then no class to construct against the channel. Before per-port
+        resolution this graph was rejected for the wrong reason — because the module touched both
+        sides at all, rather than because nothing covered this port.
         """
         tb = _tb(with_edge=False)
         mon = TokenMonitor(name="m4", sim=tb.sim)
         tb.add_comp(mon)
         rx = TokenRx(name="snk_tok_in", sim=tb.sim)
-        tb.sink.add_endpoint(rx)                      # the sink already answers a DUT boundary port
+        # The sink answers a DUT boundary port, and its bfm_model() names only `stream_ep`.
+        tb.sink.add_endpoint(rx)
         edge = TokenIF(name="tb_dual_if", sim=tb.sim)
         edge.bind("tx", mon.tok_out)
         edge.bind("rx", rx)
         tb.add_if(edge)
-        with pytest.raises(LoweringError, match="endpoints on BOTH a DUT boundary port"):
+        with pytest.raises(LoweringError, match="none of its declared models names that port"):
             tb_top_spec(tb)
 
     def test_a_half_wired_edge_is_reported_as_half_wired(self):
