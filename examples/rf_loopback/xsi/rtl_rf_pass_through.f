@@ -1,0 +1,7 @@
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through.v
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through_flow_control_loop_pipe_sequential_init.v
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through_regslice_both.v
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through_rf_pass_through_task.v
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through_rf_pass_through_task_Pipeline_VITIS_LOOP_184_1.v
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through_rf_pass_through_task_Pipeline_VITIS_LOOP_258_1.v
+../rf_pass_through_proj/solution1/syn/verilog/rf_pass_through_rf_pass_through_task_blk_RAM_AUTO_1R1W.v
