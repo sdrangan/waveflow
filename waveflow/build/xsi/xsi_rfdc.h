@@ -123,7 +123,12 @@ public:
     /// *blk_samples* is `n_ch * blksize` — one block's worth, the unit the RF edge moves.
     RfdcDacSlave(Dut& dut, const char* prefix, RfChannel& rf_out,
                  const RfdcFormat& fmt, double words_per_cycle, std::size_t blk_samples)
-        : d_(dut), rf_(rf_out), fmt_(fmt), rate_(words_per_cycle), blk_(blk_samples),
+        : d_(dut), rf_(rf_out), fmt_(fmt), rate_(words_per_cycle),
+          // The BLOCK grid, derived from the word rate rather than declared: one block is
+          // blk_samples/samp_per_word words, so blocks/cycle = words/cycle / words-per-block.  A DAC
+          // plays continuously and the grid is what it plays ON -- see emit_on_grid_().
+          blk_rate_(words_per_cycle * double(fmt.samp_per_word) / double(blk_samples)),
+          blk_(blk_samples),
           tvalid_(dut.port((std::string(prefix) + "_TVALID").c_str())),
           tready_(dut.port((std::string(prefix) + "_TREADY").c_str())),
           tdata_(dut.port((std::string(prefix) + "_TDATA").c_str())) {}
@@ -141,8 +146,9 @@ public:
             rfdc_unpack_word(word_, fmt_, slot);
             for (int k = 0; k < fmt_.samp_per_word; ++k)
                 samples_.push_back(rfdc_dequantize(slot[k], fmt_));
-            if (samples_.size() >= blk_) emit_();
         }
+        // A DAC plays on its GRID, not when its buffer happens to fill.
+        if (blk_rate_.tick()) emit_on_grid_();
         if (rate_.tick() && !beat_) {
             // A beat was due this cycle and none arrived.  There is no protocol signal for this;
             // the analog output glitches and THIS COUNTER is the only evidence.
@@ -163,12 +169,35 @@ public:
     /// Blocks pushed onto the RF edge.
     std::uint64_t blocks_out = 0;
 
+    /// Blocks the grid emitted with nothing to play, so a ZERO block went out.  The direct
+    /// analogue of pysim's ``RFSampIF.underrun``, and the same physics: there is no protocol signal
+    /// for "you were late", so this counter is the only evidence.  A DAC fed through a pipeline
+    /// MUST zero-fill its first blocks -- compare against the declared startup transient, never
+    /// against zero.
+    std::uint64_t blocks_zero_filled = 0;
+    /// Grid index of the most recent zero-fill (0 = never).  A count cannot separate a startup
+    /// transient from a steady-state fault; this can.
+    std::uint64_t last_zero_fill_idx = 0;
+
 private:
-    void emit_() {
+    /// One block period has elapsed: play whatever is buffered, or zero-fill and count.
+    ///
+    /// **This is the correction that matters.**  It used to emit on buffer fullness
+    /// (`if (samples_.size() >= blk_) emit_()`), which is not what a converter does: a DAC's tile
+    /// clock does not wait for the fabric.  pysim's `RFSampIF` metronome had it right all along --
+    /// the grid is the physics, and the startup zero-fill it produces is a real converter behaviour,
+    /// not "a pysim-side artifact" as an earlier session concluded from this model's silence.
+    void emit_on_grid_() {
         RfBlockMsg blk;
-        blk.idx  = ++blocks_out;
-        blk.data.assign(samples_.begin(), samples_.begin() + (std::ptrdiff_t)blk_);
-        samples_.erase(samples_.begin(), samples_.begin() + (std::ptrdiff_t)blk_);
+        blk.idx = ++blocks_out;
+        if (samples_.size() >= blk_) {
+            blk.data.assign(samples_.begin(), samples_.begin() + (std::ptrdiff_t)blk_);
+            samples_.erase(samples_.begin(), samples_.begin() + (std::ptrdiff_t)blk_);
+        } else {
+            blk.data.assign(blk_, 0.0);                // underflow: deterministic, visible, counted
+            ++blocks_zero_filled;
+            last_zero_fill_idx = blk.idx;
+        }
         rf_.push(blk);                                 // full => the channel counts the drop
     }
 
@@ -176,6 +205,7 @@ private:
     RfChannel& rf_;
     RfdcFormat fmt_;
     RateTick   rate_;
+    RateTick   blk_rate_;
     std::size_t blk_;
     int tvalid_, tready_, tdata_;
     std::vector<double> samples_;

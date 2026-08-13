@@ -37,14 +37,16 @@ class TestLoopback:
         tb = sim.check()                        # data, counters, block counts and alignment
         assert tb.adc_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
                                         "underrun": 0, "overrun": 0}
-        # The DAC edge underruns exactly once: its first grid period comes due before the pipeline
-        # has delivered anything, which is the structural one-block cost of a loop through the RF
-        # grids and is what a real converter does before its buffer is primed.
+        # The DAC edge underruns exactly TWICE: one block for the ADC hop (a converter cannot emit
+        # samples it has not collected, so a block is transmitted across the period AFTER its grid
+        # tick) and one for the DUT.  That is the fidelity contract's "one block per converter hop",
+        # and the ADC term was invisible until the transfer was paced by the converter's own rate
+        # instead of the fabric clock.
         assert tb.dac_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
-                                        "underrun": 1, "overrun": 0}
-        assert tb.dac_if.last_underrun_idx == 1         # the transient, and nothing after it
+                                        "underrun": 2, "overrun": 0}
+        assert tb.dac_if.last_underrun_idx == 2         # the transient, and nothing after it
         blk_bytes = tb.blksize * 8                      # n_ch=1, float64
-        assert sim._out_bytes[blk_bytes:] == sim._in_bytes[:-blk_bytes]
+        assert sim._out_bytes[2 * blk_bytes:] == sim._in_bytes[:-2 * blk_bytes]
 
     @pytest.mark.parametrize("nbits,samp_per_word", [(8, 8), (16, 4), (12, 4), (16, 2)])
     def test_bit_widths_round_trip_exactly(self, nbits, samp_per_word):
@@ -83,8 +85,9 @@ class TestLoopback:
         assert tb.dac_if.t0 == pytest.approx(tb.adc_if.t0)
         assert tb.adc_if.samp_time(128) == pytest.approx(128 / tb.samp_rate)
         assert tb.dac_if.samp_time(128) == pytest.approx(128 / tb.samp_rate)
-        # ...and the loop still costs a whole block index, carried where it belongs.
-        assert tb.loop_blk_latency == 1
+        # ...and the loop still costs whole block indices, carried where they belong: one per
+        # converter hop plus the DUT's own.
+        assert tb.loop_blk_latency == 2
 
 
 # --------------------------------------------------------------------------------------------
@@ -115,10 +118,9 @@ class TestCountersAreNonVacuous:
         # zero-filled, then real data.
         captured = sim.captured
         z = np.zeros((1, tb.blksize))
-        assert np.array_equal(captured[0], z)            # the DAC's structural startup block
-        assert np.array_equal(captured[1], z)            # ADC period 1, zero-filled
-        assert np.array_equal(captured[2], z)            # ADC period 2, zero-filled
-        assert np.array_equal(captured[3], sim.sent[0])  # real data resumes, from source block 0
+        for k in range(4):                               # 2 structural + 2 the ADC zero-filled
+            assert np.array_equal(captured[k], z), f"block {k} should be zero-fill"
+        assert np.array_equal(captured[4], sim.sent[0])  # real data resumes, from source block 0
         # The clean-run gate would have caught this; that is the point of asserting it every time.
         with pytest.raises(AssertionError, match="underrun=2"):
             tb.adc_if.assert_clean()
@@ -136,7 +138,7 @@ class TestCountersAreNonVacuous:
         assert tb.dac_if.blocks_delivered == 3          # 1 consumed + 2 sitting in the queue
         assert tb.dac_if.blocks_sent == 8
         assert tb.dac_if.blocks_sent == tb.dac_if.blocks_delivered + tb.dac_if.overrun
-        assert tb.dac_if.underrun == 1   # its structural startup block, nothing more
+        assert tb.dac_if.underrun == 2   # its structural startup blocks, nothing more
         assert len(tb.sink.blocks) == 1
         with pytest.raises(AssertionError, match="overrun=5"):
             tb.dac_if.assert_clean()
@@ -301,9 +303,9 @@ class TestRfdcGuards:
         sim = RfLoopbackSim(n_src_blk=4, blksize=64)
         sim.run()
         tb = sim.tb
-        assert tb.dac_if.underrun == tb.loop_blk_latency == 1
-        assert tb.dac_if.last_underrun_idx == 1          # the transient, not a steady-state fault
+        assert tb.dac_if.underrun == tb.loop_blk_latency == 2
+        assert tb.dac_if.last_underrun_idx == 2          # the transient, not a steady-state fault
         assert tb.adc_if.underrun == 0                   # fed straight from the source
         # A module that over-declares its latency fails the same gate.
-        with pytest.raises(AssertionError, match="declared startup transient is 2"):
-            tb.dac_if.assert_clean(startup_blocks=2)
+        with pytest.raises(AssertionError, match="declared startup transient is 3"):
+            tb.dac_if.assert_clean(startup_blocks=3)

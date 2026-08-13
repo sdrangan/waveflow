@@ -52,10 +52,16 @@ PROJ = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
 WANT_ADC_DROPPED = 72
 WANT_DAC_BLOCKS = 6
-#: Time to last completion — the cycle the final RF block reached the sink.  A *result*, not the
-#: harness's loop bound (6000).  Exact, like every other cycle gate: a number that moved is a real
-#: behaviour change and worth a human look.
-WANT_LAST_BLOCK_CYCLE = 2152
+#: Blocks the DAC's grid emits in the run, and how many carry no data.
+#:
+#: **The old 2152 "time to last completion" gate is retired, not moved.**  It measured the cycle the
+#: final block reached the sink, which was meaningful only while the DAC emitted on buffer fullness
+#: and therefore stopped when the data ran out.  A DAC plays continuously, so it now emits for the
+#: whole run and that cycle (5702) is `run_length x grid_rate` — a testbench constant wearing a
+#: result's clothes, which is exactly the confusion the cycle gates exist to avoid.  What replaced it
+#: is the startup transient below, which IS a result and is checkable on both backends.
+WANT_DAC_BLOCKS_OUT = 19
+WANT_DAC_ZERO_FILLED = 13
 
 
 def _require(cond: bool, why: str) -> None:
@@ -166,10 +172,17 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
     got = read_rf_bundle(XSI / "vectors" / "rf_out", 1, XSI_BLKSIZE)
     sim = _golden()
     assert got, "the run dumped no RF output bundle"
-    assert np.array_equal(got[0], sim.sent[0]), (
-        "the FIRST block is not bit-identical through the chain. That is a genuine quantization or "
-        "packing disagreement between the C++ and Python converters — diagnose it, do not tolerate "
-        "it.")
+    # The startup transient is real at RTL now that the DAC emits on its grid: its first period
+    # comes due before the pipeline has delivered anything, so a zero block goes out.
+    lat = int(sim.tb.dut.blk_latency)
+    for k in range(lat):
+        assert not np.any(got[k]), (
+            f"block {k} is inside the {lat}-block startup transient and must be the zero-fill the "
+            f"DAC emits when its samples have not arrived yet")
+    assert np.array_equal(got[lat], sim.sent[0]), (
+        "the first DATA block is not bit-identical through the chain. That is a genuine "
+        "quantization or packing disagreement between the C++ and Python converters — diagnose it, "
+        "do not tolerate it.")
 
     # --- 2) The loss, which does NOT match pysim, and is a DESIGN finding ------------------------
     assert counters["ADC_WORDS_SENT"] + counters["ADC_DROPPED"] == WANT_ADC_WORDS, (
@@ -183,11 +196,12 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
         f"worse.")
     assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS == len(got)
 
-    # --- 2b) The cycle gate: time to last completion, not the loop bound ------------------------
-    assert counters["SINK_LAST_BLOCK_CYCLE"] == WANT_LAST_BLOCK_CYCLE, (
-        f"the last RF block landed at cycle {counters['SINK_LAST_BLOCK_CYCLE']}, gate expects "
-        f"{WANT_LAST_BLOCK_CYCLE}. Exact on purpose — a moved cycle count is a real behaviour "
-        f"change, and an inequality would silently absorb a regression.")
+    # --- 2b) The DAC plays on its GRID, so it emits for the whole run ---------------------------
+    assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS_OUT == len(got)
+    assert counters["DAC_BLOCKS_ZERO_FILLED"] == WANT_DAC_ZERO_FILLED, (
+        f"the DAC zero-filled {counters['DAC_BLOCKS_ZERO_FILLED']} of its "
+        f"{counters['DAC_BLOCKS_OUT']} grid periods, gate expects {WANT_DAC_ZERO_FILLED} "
+        f"(1 startup + the tail after the 8 data blocks run out)")
 
     # --- 3) The edges themselves lose nothing: the loss is at the fabric boundary ---------------
     assert counters["ADC_CHAN_DROPPED"] == 0 and counters["DAC_CHAN_DROPPED"] == 0, (

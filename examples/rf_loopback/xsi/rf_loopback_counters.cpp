@@ -31,6 +31,10 @@ int main() {
     std::printf("DAC_WORDS_RECV=%llu\n", (unsigned long long)h.s_out.words_recv);
     std::printf("DAC_UNDERRUN=%llu\n",   (unsigned long long)h.s_out.underrun);
     std::printf("DAC_BLOCKS_OUT=%llu\n", (unsigned long long)h.s_out.blocks_out);
+    // Blocks the DAC's GRID emitted with nothing to play -- the direct analogue of pysim's
+    // RFSampIF.underrun, and the reason the startup transient is visible in RTL at all.
+    std::printf("DAC_BLOCKS_ZERO_FILLED=%llu\n", (unsigned long long)h.s_out.blocks_zero_filled);
+    std::printf("DAC_LAST_ZERO_FILL_IDX=%llu\n", (unsigned long long)h.s_out.last_zero_fill_idx);
     // The two behavioral edges.  `starved` counts polls that found the queue empty, so on a channel
     // read every cycle it is a poll count rather than a loss -- the number that matters here is
     // `dropped`, which is loss.
