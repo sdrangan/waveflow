@@ -171,12 +171,18 @@ def test_the_workspace_carries_the_framework_library():
             f"{name} has drifted from waveflow/build/xsi/"
 
 
-def test_the_workspace_has_no_converter_headers():
-    """This cut uses generic BFMs. ``xsi_rfdc*.h`` belongs to the step after, and copying it here
-    would put a header in the workspace that nothing includes."""
+def test_the_workspace_now_carries_the_converter_headers():
+    """**Inverted deliberately.** This assertion used to say the opposite.
+
+    It was a scope guard: while this cut used only generic BFMs, a converter header in the workspace
+    would have been a header nothing included, and the guard said so. The RF loopback testbench now
+    shares this workspace and names ``RfdcAdcMaster`` / ``RfFileSource``, so the headers belong here
+    and ``XsiHarnessStep`` copies them. Inverted rather than deleted, because "which headers does
+    this workspace carry, and why" is the question that went stale — not the answer.
+    """
     ws = ROOT / "xsi"
-    assert not (ws / "xsi_rfdc.h").exists()
-    assert not (ws / "xsi_rfdc_samp.h").exists()
+    for name in ("xsi_rfdc.h", "xsi_rfdc_samp.h", "xsi_rf_block.h"):
+        assert (ws / name).is_file(), f"{name} missing from {ws}"
 
 
 def test_generated_top_and_harness_are_present():
