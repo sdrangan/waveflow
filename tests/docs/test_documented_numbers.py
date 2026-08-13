@@ -334,6 +334,32 @@ def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
 
 
 # ---------------------------------------------------------------------------
+# guide/rf/converter.md — the loss figures the page reports from a real RTL run
+# ---------------------------------------------------------------------------
+
+def test_converter_page_quotes_the_recorded_rtl_loss():
+    """``guide/rf/converter.md`` reports what the first real RTL run found, so those numbers are
+    claims about the design and must match the gate that measured them.
+
+    Read out of ``test_rf_loopback_xsi.py``'s constants — the same values the XSI gate asserts —
+    rather than retyped, so a re-recorded shortfall fails here until the page is updated.
+    """
+    from tests.examples.test_rf_loopback_xsi import (
+        WANT_ADC_DROPPED,
+        WANT_ADC_WORDS,
+        WANT_LAST_BLOCK_CYCLE,
+    )
+
+    text = _page("guide/rf/converter.md")
+    accepted = WANT_ADC_WORDS - WANT_ADC_DROPPED
+    assert f"**{WANT_ADC_WORDS}** words" in text, "converter.md no longer states what the ADC produces"
+    assert f"accepts **{accepted}**" in text, "converter.md no longer states what the fabric accepts"
+    assert f"**{WANT_ADC_DROPPED} are dropped**" in text, (
+        f"converter.md no longer quotes the measured drop count of {WANT_ADC_DROPPED}")
+    assert WANT_LAST_BLOCK_CYCLE > 0                       # the gate exists; the page need not cite it
+
+
+# ---------------------------------------------------------------------------
 # The guard on the guard
 # ---------------------------------------------------------------------------
 

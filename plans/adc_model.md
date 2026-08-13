@@ -352,7 +352,81 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
    - **The digital logic is DONE (2026-08-13, branch `rf-dut-synth`)** — synthesized and proved at
      RTL *cut alone*, between generic AXIS BFMs. Gate: 8 bursts × 64 words relayed bit-identically,
      **1072 cycles**. See "The DUT at RTL" below.
-   - Still open: declare `Rfdc.bfm_model()`, give `RFSampIF` an `xsi_model()`, wire the loopback.
+   - **The converter is DONE (2026-08-13, branch `rf-xsi-loopback`)** — `RFSampIF.xsi_model()`,
+     `Rfdc.bfm_model()` (two models, one per path), the C++ RF peers, and the full loopback run at
+     RTL. See "The loopback at RTL" below.
+   - Still open: the counter-equivalence gate, which is `plans/behavioral_edges.md` S4.
+
+### The loopback at RTL — **DONE 2026-08-13**
+
+`source → RfdcAdcMaster → real Verilog → RfdcDacSlave → sink`, generated from the same five-node
+graph the pysim golden runs. Gate: `tests/examples/test_rf_loopback_xsi.py`.
+
+**What holds — the claim this arc exists to make.** A block goes Python quantize → pack →
+AXI-Stream → real RTL → unpack → dequantize → Python and comes back **bit-identical**. Cycle gate:
+the last RF block lands at **2152** (time to last completion, not the 6000 loop bound).
+
+**What does not, and it is a design finding rather than a model bug.** The ADC produces 512 words
+and the fabric accepts **440**; **72 are dropped**. `RfSampPassThrough` reads a whole 64-word block
+and only then writes it, so `TREADY` is low for ~64 cycles at a stretch while the converter presents
+a beat every ~4.7 cycles regardless. Divergence begins at sample 264 — block 1, offset 8 — exactly
+where the first write phase starts.
+
+pysim does not show this because its `StreamIFMaster` **blocks** where `RfdcAdcMaster` **drops**.
+That asymmetry was already recorded and thought unexercised because the fabric is ~4.7× oversized
+*on average*; averages are not the constraint, burstiness is. **The fix is a design change** —
+overlap the read and the write, i.e. two tasks and a channel, which is what `mem_copy` does — and is
+deliberately not part of this step. The shortfall is pinned as a gate so it is visible and
+regression-guarded rather than hidden.
+
+**Deviations and findings:**
+
+- **`full_scale` is not a `DynParam`, and the plan's parameter table was wrong to list it as one.**
+  `DynParam` does not mean "binds at init"; it means **"emitted as a member assignment"**. This
+  value's C++ realization is a *constructor argument* inside the `RfdcFormat` literal, so tagging it
+  emitted an assignment to a member that does not exist — exactly the obligation recorded under the
+  per-port section, found the only way such an obligation is ever found.
+- **`_render_dyn_value` had no `float` case at all.** A legitimate `DynParam` type simply had no
+  rendering. Added, with `repr` rather than `str` so a derived rate round-trips exactly.
+- **`RfBlockMsg` / `RfChannel` and the RF peers moved to `xsi_rf_block.h`.** An edge and its
+  file-backed peers bind no RTL pins, so keeping them in `xsi_rfdc.h` (which reaches Vivado's
+  `xsi.h`) would have made them untestable without a toolchain. Same precedent as the `XsiSimObj`
+  split, and it bought a 5-test `g++`-only gate including a cross-language byte-identical bundle
+  round trip.
+- **The second rate conversion needs no object.** The plan lists RF↔fabric (`samp_rate / (blksize ×
+  f_axis)` blocks per cycle) beside the AXIS one. In practice the block cadence *follows from* the
+  word rate — the ADC pulls a block when it has consumed the previous one's words — so only
+  `words_per_cycle` is instantiated and the source merely respects the channel depth.
+- **`f_axis` is read at use, not cached at bind.** `bfm_model()` runs on a fully-bound graph, so no
+  new bind hook was needed; the frequency stays declared once, on the AXIS interface's clock.
+- **One DUT now carries two testbenches.** `render_tb_harness` / `render_tb_main` gained optional
+  `ns` / `harness_header` / `wdb`, because two harnesses in one workspace need two namespaces and two
+  include guards. Defaults preserve every existing design's output byte for byte.
+- **`xsi_model_classes()` scans three headers now.** A model is grouped by *what it binds*, not by
+  being a model, so the registry has to follow that split or a model in the "wrong" header reads as
+  nonexistent.
+- **Two scope-guard assertions were inverted, not deleted**: `test_the_workspace_has_no_converter_headers`
+  (that workspace now hosts a testbench naming them) and the stage-1 kinds tests (these modules now
+  declare `bfm_model()`). The kinds-table row itself is repointed at `RfSampPassThrough`, which
+  declares none because it belongs *inside* the cut.
+- **A checker drafted from the plan was deleted rather than shipped.** It asserted a leading
+  `blk_latency` zero-fill in the RTL output; the run refuted it. XSI's DAC emits only when it has a
+  full block, with no metronome forcing an empty-buffer emission, so there is **no startup zero-fill
+  at all** — that is a pysim-side artifact of the edge metronome. Writing the checker from the plan
+  would have encoded the mistake as a gate.
+
+**The divergence, recorded for S4 rather than reconciled.** Same scenario, same graph:
+
+| | pysim | XSI |
+|---|---|---|
+| where loss is accounted | the `RFSampIF` **edge** | the converter models **and** the channel |
+| units | whole **blocks** | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
+| ADC→fabric | no loss — the master *blocks* | 72 of 512 words dropped |
+| DAC startup | one zero-filled block (the metronome fires regardless) | none — the DAC emits only a full block |
+| blocks delivered | 8 | 6 |
+
+Neither side is being redefined to make them agree; flattening the difference now would destroy
+exactly what S4 needs.
 
 ### The DUT at RTL — **DONE 2026-08-13**
 

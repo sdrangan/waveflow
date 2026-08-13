@@ -64,11 +64,13 @@ sink declares neither, which is a *finding* from `check`, not something it says 
 
 - [Block sampling](./sampling.md) — the sampling model: the block as the transaction, `blksize` as
   the fidelity knob, the absolute-grid metronome, `t0` and the sample grid, and the loss counters.
+- [The converter](./converter.md) — the `Rfdc` module and its two RTL-side models: the AXI-Stream
+  packing contract, `samp_per_word` versus the two derived rate conversions, bit-exact quantization,
+  and the underflow/overflow contract.
 
-Two further pages are planned and deliberately **not written yet**: the converter's AXI-Stream side
-(packing, the two derived rate conversions, and the counter-equivalence gate against the RTL model)
-and the fidelity boundary (what block granularity can and cannot resolve). Both describe machinery
-that does not exist, and a page written from a plan rather than from working code is the specific
+One further page is planned and deliberately **not written yet**: the fidelity boundary — what block
+granularity can and cannot resolve. It needs a real DSP block and a channel to demonstrate both
+halves, and neither exists; a page written from a plan rather than from working code is the specific
 failure this schedule exists to prevent. See `plans/adc_model.md`.
 
 ## See also
