@@ -33,20 +33,12 @@
 
 #include "xsi_bfm.h"
 #include "xsi_channel.h"
+// RfBlockMsg / RfChannel and the file-backed peers on either end of the edge.  They live in their
+// own header because none of them binds an RTL pin, so they compile (and are gated) without Vivado.
+#include "xsi_rf_block.h"
 #include "xsi_rfdc_samp.h"
 
 namespace wfbfm {
-
-/// One RF block as it crosses a behavioral edge: `n_ch * blksize` real samples, channel-major, and
-/// its 1-based index on the interface's absolute grid.  The index rides beside the data for the same
-/// reason it does in Python — a receiver places samples on the grid without counting arrivals, so a
-/// dropped block does not shift everything after it.
-struct RfBlockMsg {
-    std::uint64_t       idx = 0;
-    std::vector<double> data;
-};
-
-using RfChannel = BlockChannel<RfBlockMsg>;
 
 // ---------------------------------------------------------------------------
 // ADC: RF blocks in, AXI-Stream master out.
