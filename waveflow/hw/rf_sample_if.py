@@ -458,3 +458,32 @@ class RFSampIF(Interface):
         hook = getattr(getattr(endpoint, 'comp', None), 'on_rf_bind', None)
         if hook is not None:
             hook(self, ep_name)
+
+    # -- the XSI realization ---------------------------------------------------------------------
+
+    def xsi_model(self):
+        """This edge's C++ channel: a ``BlockChannel<RfBlockMsg>`` between the two peer models.
+
+        A **behavioral edge** — both endpoints lie outside the cut, so there is no DUT port between
+        them and no BFM dual to look up, but the peers are still nodes and something has to move
+        blocks between them.
+
+        :attr:`depth` is single-sourced from here, exactly as ``StreamIF.depth`` is: a bound is a
+        physical property of the channel, and pysim's producer-side buffer and the C++ channel are
+        the same bound stated once.
+
+        ``peers`` is producer-first, matching :meth:`bind`'s side names.
+
+        *What this edge does NOT carry across:* the metronome. In pysim the block cadence is this
+        interface's ``run_proc``; in XSI there is no such process, and the cadence emerges from the
+        converter's own derived word rate (``words_per_cycle``) pulling blocks as it consumes them.
+        Same grid, arrived at from opposite ends — see ``plans/adc_model.md`` on where the two
+        backends account differently.
+        """
+        from waveflow.build.composite_gen import ChannelModel
+
+        # The class is ``BlockChannel``; ``RfChannel`` is only a convenience alias for this
+        # specialization, and naming the alias would make the registry lookup fail for a class that
+        # plainly exists.  Spelling the specialization keeps the emitted C++ identical either way.
+        return ChannelModel("BlockChannel<RfBlockMsg>", peers=("tx", "rx"),
+                            extra_args=(str(int(self.depth)),))

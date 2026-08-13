@@ -1077,6 +1077,15 @@ def _resolve_dut(tb, dut):
 #: The model library the ``bfm_model()`` hook resolves against.
 _XSI_BFM_HEADER = "xsi_bfm.h"
 
+#: Every header that may define a node model, in the order a reader would meet them.  More than one
+#: because a model is grouped by **what it binds**, not by being a model: ``xsi_bfm.h`` holds the ones
+#: that bind RTL pins and therefore need Vivado's ``xsi.h``; ``xsi_rf_block.h`` holds the file-backed
+#: peers of a behavioral edge, which bind nothing and are gated under a plain ``g++``; ``xsi_rfdc.h``
+#: holds the converters, which bind both.  Scanning the set rather than one file is what keeps that
+#: split from silently shrinking the registry — a model in the "wrong" header would otherwise be
+#: reported as not existing.
+_XSI_MODEL_HEADERS = ("xsi_bfm.h", "xsi_rf_block.h", "xsi_rfdc.h")
+
 
 def xsi_model_classes() -> frozenset[str]:
     """Every ``XsiSimObj`` subclass the C++ model library defines, read **from the library itself**.
@@ -1093,10 +1102,56 @@ def xsi_model_classes() -> frozenset[str]:
     import re
     from pathlib import Path
 
-    hdr = Path(__file__).resolve().parent / "xsi" / _XSI_BFM_HEADER
-    text = hdr.read_text(encoding="utf-8")
-    return frozenset(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
+    xsi = Path(__file__).resolve().parent / "xsi"
+    found: set[str] = set()
+    for name in _XSI_MODEL_HEADERS:
+        text = (xsi / name).read_text(encoding="utf-8")
+        found |= set(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
                                 text, re.M))
+    return frozenset(found)
+
+
+def _xsi_type_headers() -> dict[str, str]:
+    """``{declared type name: the header that declares it}`` across the model headers.
+
+    Read from the headers rather than listed, for the same reason :func:`xsi_model_classes` is: a
+    list would be a second copy of the library and would drift the first time a model moved.  Covers
+    ``class`` / ``struct`` / ``using`` declarations, because a harness may name any of the three —
+    ``RfdcAdcMaster`` is a class, ``RfdcFormat`` a struct, ``RfChannel`` an alias.
+    """
+    import re
+    from pathlib import Path
+
+    xsi = Path(__file__).resolve().parent / "xsi"
+    out: dict[str, str] = {}
+    for name in _XSI_MODEL_HEADERS:
+        text = (xsi / name).read_text(encoding="utf-8")
+        for m in re.findall(r"^(?:class|struct)\s+(\w+)\s*[:{]", text, re.M):
+            out.setdefault(m, name)
+        for m in re.findall(r"^using\s+(\w+)\s*=", text, re.M):
+            out.setdefault(m, name)
+    return out
+
+
+def _harness_extra_includes(spec: "TbSpec") -> list[str]:
+    """The framework headers *spec*'s named classes come from, beyond the ones always included.
+
+    ``xsi_bfm.h`` and (when there are channels) ``xsi_channel.h`` are unconditional; anything else a
+    model or channel names — a converter, an RF peer, the block message a channel is specialized on —
+    has to be included or the harness does not compile.  Derived from the spec so that adding a model
+    to a new header needs no generator change.
+    """
+    import re
+
+    known = _xsi_type_headers()
+    named: list[str] = []
+    for text in ([m.cls for m in spec.models] + [c.cls for c in spec.channels]
+                 + [a for m in spec.models for a in m.args]):
+        for ident in re.findall(r"\w+", text):
+            hdr = known.get(ident)
+            if hdr is not None and hdr != _XSI_BFM_HEADER and hdr not in named:
+                named.append(hdr)
+    return named
 
 
 def resolve_bfm_model(mod, crossing=None):
@@ -1481,6 +1536,10 @@ def _render_dyn_value(value) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
+    # `repr` rather than `str`: a float's C++ initializer has to round-trip exactly, and str() drops
+    # digits at the precisions a derived rate lands on (0.21333333333333335 -> 0.213333333333).
+    if isinstance(value, float):
+        return repr(value)
     if isinstance(value, str):
         return '"' + value + '"'
     raise LoweringError(
@@ -1798,7 +1857,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
                   models=tuple(models), channels=tuple(channels))
 
 
-def render_tb_harness(spec: TbSpec) -> str:
+def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
     """Emit ``<top>_tb_harness.h`` — the testbench's participants, phases and fixed-N loop.
 
     This is the derivable half of an XSI testbench. What is left for the hand-written half is the
@@ -1815,7 +1874,11 @@ def render_tb_harness(spec: TbSpec) -> str:
     (``AxisSlave::cycle_of_word``). The loop's bound is a testbench constant, and conflating the two
     is how three of the four hand-written testbenches came to report a drain tail as latency.
     """
-    ns = f"{spec.top_name}_tb"
+    # *ns* names this harness.  It defaults to the DUT's top, which is right when a DUT has one
+    # testbench -- and every design had exactly one until an RF loopback and a DUT-alone gate came to
+    # share `rf_pass_through`.  Two harnesses in one workspace need two namespaces and two include
+    # guards, or the second silently takes the first's.
+    ns = ns or f"{spec.top_name}_tb"
     ports_ns = f"{spec.top_name}_ports"
     guard = f"WAVEFLOW_GEN_{ns.upper()}_HARNESS_H"
 
@@ -1849,6 +1912,11 @@ def render_tb_harness(spec: TbSpec) -> str:
     # byte-identical.
     if spec.channels:
         lines.append('#include "xsi_channel.h"')
+    # ...and whichever framework headers declare the classes this harness actually names.  Derived,
+    # so a model living outside xsi_bfm.h is included because the spec names it, not because someone
+    # remembered to.
+    for hdr in _harness_extra_includes(spec):
+        lines.append(f'#include "{hdr}"')
     lines += [
         f'#include "{ports_ns}.h"',
         "",
@@ -2042,7 +2110,8 @@ def render_ports_h(spec: TopSpec) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_tb_main(spec: TbSpec, n_cycles: int) -> str:
+def render_tb_main(spec: TbSpec, n_cycles: int, ns: str | None = None,
+                   harness_header: str | None = None, wdb: str | None = None) -> str:
     """Emit ``<top>_bfm_tb.cpp`` — the whole TB ``main``, now derivable from the graph.
 
     Once every participant loads its inputs in ``pre_sim`` and dumps its outputs in ``post_sim``, the
@@ -2050,7 +2119,10 @@ def render_tb_main(spec: TbSpec, n_cycles: int) -> str:
     golden here — correctness is checked in Python from the dumped bundles (memory arena + the sink's
     capture with per-word arrival cycles), so nothing example-specific remains in the C++.
     """
-    ns = f"{spec.top_name}_tb"
+    # See render_tb_harness on *ns*: one DUT may carry more than one testbench.
+    ns = ns or f"{spec.top_name}_tb"
+    harness_header = harness_header or f"{spec.top_name}_tb_harness.h"
+    wdb = wdb or f"{spec.top_name}_bfm.wdb"
     lines = [
         f"// {spec.top_name}_bfm_tb.cpp -- GENERATED by waveflow (build/composite_gen.py::render_tb_main)",
         f"// from the {spec.top_name} testbench graph.  DO NOT EDIT: regenerate instead.",
@@ -2058,10 +2130,10 @@ def render_tb_main(spec: TbSpec, n_cycles: int) -> str:
         "// The whole TB main: construct the generated harness, run a fixed number of cycles (the",
         "// participants load their input bundles in pre_sim and dump their outputs in post_sim), then",
         "// close.  No golden here -- correctness is checked in Python from the dumped output bundles.",
-        f'#include "{spec.top_name}_tb_harness.h"',
+        f'#include "{harness_header}"',
         "",
         "int main() {",
-        f'    {ns}::Harness h("{spec.top_name}_bfm.wdb");',
+        f'    {ns}::Harness h("{wdb}");',
         f"    h.run({int(n_cycles)});",
         "    h.close();",
         "    return 0;",

@@ -152,19 +152,43 @@ class TestCountersAreNonVacuous:
 # Gate 5 — the component-kind finding
 # --------------------------------------------------------------------------------------------
 
+def _bound_rfdc():
+    """An ``Rfdc`` inside a built graph — ``bfm_model()`` reads its rates off the bound clocks."""
+    return RfLoopbackTB(name="k", sim=Simulation()).rfdc
+
+
 class TestKinds:
     """``check`` answers per module; a pysim-only node is a **finding**, not a declaration."""
 
     @pytest.mark.parametrize("mod", [RfDataSource, RfDataSink, Rfdc])
-    def test_rf_environment_nodes_are_not_xsi_bfm_models_yet(self, mod):
-        ok, msg = check(mod, "xsi_bfm_model")
-        assert ok is False
-        assert msg and "bfm_model" in msg               # names the hook that is missing
-        assert mod.__name__ in msg
+    def test_rf_environment_nodes_now_declare_their_models(self, mod):
+        """**Inverted deliberately.** This used to assert the opposite, and that was correct then.
 
-    def test_the_refusal_explains_rather_than_only_refusing(self):
-        _, msg = check(RfDataSource, "xsi_bfm_model")
-        assert "declares no bfm_model()" in msg or "bfm_model" in msg
+        At stage 1 none of these had a C++ realization, and ``check`` reporting ``False`` was the
+        *finding* — the third row of the kinds table, a node that exists in the Python graph and
+        nowhere else. They now have one, so the finding has changed and the assertion follows it.
+        A module acquires a hook when somebody writes one; nothing else about it changed.
+        """
+        from waveflow.hw.hw_module import declares_hook
+
+        assert declares_hook(mod, "bfm_model"), f"{mod.__name__} should now name a C++ model"
+
+    def test_the_converter_declares_one_model_per_data_path(self):
+        """Two, not one: the classes differ per path, which a single declaration cannot express."""
+        from waveflow.build.composite_gen import bfm_models
+
+        rfdc = _bound_rfdc()
+        assert [m.cls for m in bfm_models(rfdc)] == ["RfdcAdcMaster", "RfdcDacSlave"]
+
+    def test_a_module_with_neither_hook_is_still_a_finding(self):
+        """The row itself is not retired — only these modules moved off it.
+
+        Kept pointed at something real so the kinds table keeps a live example: the DUT declares no
+        ``bfm_model()`` because it belongs *inside* the cut.
+        """
+        ok, msg = check(RfSampPassThrough, "xsi_bfm_model")
+        assert ok is False
+        assert "declares no bfm_model()" in msg
         assert "kernel_task" in msg or "outside" in msg
 
     def test_an_rf_environment_node_claims_no_codegen_target(self):
@@ -240,10 +264,19 @@ class TestRfdcGuards:
         with pytest.raises(ValueError, match="positive amplitude reference"):
             Rfdc(name="r", sim=Simulation(), full_scale=0.0)
 
-    def test_full_scale_is_a_dynparam_the_generator_would_emit(self):
+    def test_full_scale_rides_the_format_literal_not_a_member_assignment(self):
+        """``full_scale`` is an init-time knob but deliberately **not** a ``DynParam``.
+
+        ``DynParam`` does not mean "binds at init" — it means "emitted as ``<model>.<field> = ...;``".
+        This value's C++ realization is a *constructor argument* inside the ``RfdcFormat`` literal,
+        so tagging it would emit an assignment to a member that does not exist. Found the moment it
+        had a real consumer, which is the only way that obligation is ever found.
+        """
         from waveflow.hw.hw_module import discover_dyn_params
+
         r = Rfdc(name="r", sim=Simulation(), full_scale=0.5)
-        assert discover_dyn_params(r) == {"full_scale": 0.5}
+        assert discover_dyn_params(r) == {}, "the Rfdc should emit no member assignments"
+        assert "0.5" in r._fmt_literal() and r._fmt_literal().startswith("RfdcFormat{")
 
     def test_the_converter_reads_the_sample_rate_and_pushes_t0_at_bind(self):
         """The two opposite-direction reads, each where the quantity physically lives."""

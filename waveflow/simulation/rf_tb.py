@@ -120,6 +120,21 @@ class RfDataSource(HwModule):
         for b in self.blocks:
             yield from self.rf_ep.put(b)
 
+    def bfm_model(self):
+        """XSI twin: an ``RfFileSource`` bound to the RF channel, sized in samples per block.
+
+        Its stimulus is the ``in_bundle`` :class:`DynParam`, which the generator emits as a member
+        assignment and the model loads in ``pre_sim`` — the same on-disk bundle this node reads in
+        pysim, so both play the identical bytes.  Bundle I/O on the **node**, never the edge.
+
+        ``blk_samples`` is read off the bound interface rather than restated, exactly as
+        :meth:`pre_sim` reads it.
+        """
+        from waveflow.build.composite_gen import BfmModel
+
+        return BfmModel("RfFileSource", ports=("rf_ep",),
+                        extra_args=(str(int(self.rf_ep.n_ch) * int(self.rf_ep.blksize)),))
+
 
 @dataclass
 class RfDataSink(HwModule):
@@ -167,3 +182,16 @@ class RfDataSink(HwModule):
         if self.root is not None and not p.is_absolute():
             p = Path(self.root) / p
         write_rf_bundle(self.blocks, p)
+
+    def bfm_model(self):
+        """XSI twin: an ``RfFileSink`` on the RF channel, dumping its capture to ``out_bundle`` in
+        ``post_sim`` — the same format :class:`RfDataSource` reads, so a loopback is a file-to-file
+        byte comparison in either backend.
+
+        No ``stall_after`` counterpart: that is pysim fault injection, and the C++ sink always
+        drains. A stalling sink would make the channel's drop counter measure the *model* rather
+        than the design.
+        """
+        from waveflow.build.composite_gen import BfmModel
+
+        return BfmModel("RfFileSink", ports=("rf_ep",))
