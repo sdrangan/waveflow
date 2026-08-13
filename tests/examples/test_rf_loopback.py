@@ -37,14 +37,16 @@ class TestLoopback:
         tb = sim.check()                        # data, counters, block counts and alignment
         assert tb.adc_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
                                         "underrun": 0, "overrun": 0}
-        # The DAC edge underruns exactly once: its first grid period comes due before the pipeline
-        # has delivered anything, which is the structural one-block cost of a loop through the RF
-        # grids and is what a real converter does before its buffer is primed.
+        # The DAC edge underruns exactly TWICE: one block for the ADC hop (a converter cannot emit
+        # samples it has not collected, so a block is transmitted across the period AFTER its grid
+        # tick) and one for the DUT.  That is the fidelity contract's "one block per converter hop",
+        # and the ADC term was invisible until the transfer was paced by the converter's own rate
+        # instead of the fabric clock.
         assert tb.dac_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
-                                        "underrun": 1, "overrun": 0}
-        assert tb.dac_if.last_underrun_idx == 1         # the transient, and nothing after it
+                                        "underrun": 2, "overrun": 0}
+        assert tb.dac_if.last_underrun_idx == 2         # the transient, and nothing after it
         blk_bytes = tb.blksize * 8                      # n_ch=1, float64
-        assert sim._out_bytes[blk_bytes:] == sim._in_bytes[:-blk_bytes]
+        assert sim._out_bytes[2 * blk_bytes:] == sim._in_bytes[:-2 * blk_bytes]
 
     @pytest.mark.parametrize("nbits,samp_per_word", [(8, 8), (16, 4), (12, 4), (16, 2)])
     def test_bit_widths_round_trip_exactly(self, nbits, samp_per_word):
@@ -83,8 +85,9 @@ class TestLoopback:
         assert tb.dac_if.t0 == pytest.approx(tb.adc_if.t0)
         assert tb.adc_if.samp_time(128) == pytest.approx(128 / tb.samp_rate)
         assert tb.dac_if.samp_time(128) == pytest.approx(128 / tb.samp_rate)
-        # ...and the loop still costs a whole block index, carried where it belongs.
-        assert tb.loop_blk_latency == 1
+        # ...and the loop still costs whole block indices, carried where they belong: one per
+        # converter hop plus the DUT's own.
+        assert tb.loop_blk_latency == 2
 
 
 # --------------------------------------------------------------------------------------------
@@ -115,10 +118,9 @@ class TestCountersAreNonVacuous:
         # zero-filled, then real data.
         captured = sim.captured
         z = np.zeros((1, tb.blksize))
-        assert np.array_equal(captured[0], z)            # the DAC's structural startup block
-        assert np.array_equal(captured[1], z)            # ADC period 1, zero-filled
-        assert np.array_equal(captured[2], z)            # ADC period 2, zero-filled
-        assert np.array_equal(captured[3], sim.sent[0])  # real data resumes, from source block 0
+        for k in range(4):                               # 2 structural + 2 the ADC zero-filled
+            assert np.array_equal(captured[k], z), f"block {k} should be zero-fill"
+        assert np.array_equal(captured[4], sim.sent[0])  # real data resumes, from source block 0
         # The clean-run gate would have caught this; that is the point of asserting it every time.
         with pytest.raises(AssertionError, match="underrun=2"):
             tb.adc_if.assert_clean()
@@ -136,7 +138,7 @@ class TestCountersAreNonVacuous:
         assert tb.dac_if.blocks_delivered == 3          # 1 consumed + 2 sitting in the queue
         assert tb.dac_if.blocks_sent == 8
         assert tb.dac_if.blocks_sent == tb.dac_if.blocks_delivered + tb.dac_if.overrun
-        assert tb.dac_if.underrun == 1   # its structural startup block, nothing more
+        assert tb.dac_if.underrun == 2   # its structural startup blocks, nothing more
         assert len(tb.sink.blocks) == 1
         with pytest.raises(AssertionError, match="overrun=5"):
             tb.dac_if.assert_clean()
@@ -152,19 +154,43 @@ class TestCountersAreNonVacuous:
 # Gate 5 — the component-kind finding
 # --------------------------------------------------------------------------------------------
 
+def _bound_rfdc():
+    """An ``Rfdc`` inside a built graph — ``bfm_model()`` reads its rates off the bound clocks."""
+    return RfLoopbackTB(name="k", sim=Simulation()).rfdc
+
+
 class TestKinds:
     """``check`` answers per module; a pysim-only node is a **finding**, not a declaration."""
 
     @pytest.mark.parametrize("mod", [RfDataSource, RfDataSink, Rfdc])
-    def test_rf_environment_nodes_are_not_xsi_bfm_models_yet(self, mod):
-        ok, msg = check(mod, "xsi_bfm_model")
-        assert ok is False
-        assert msg and "bfm_model" in msg               # names the hook that is missing
-        assert mod.__name__ in msg
+    def test_rf_environment_nodes_now_declare_their_models(self, mod):
+        """**Inverted deliberately.** This used to assert the opposite, and that was correct then.
 
-    def test_the_refusal_explains_rather_than_only_refusing(self):
-        _, msg = check(RfDataSource, "xsi_bfm_model")
-        assert "declares no bfm_model()" in msg or "bfm_model" in msg
+        At stage 1 none of these had a C++ realization, and ``check`` reporting ``False`` was the
+        *finding* — the third row of the kinds table, a node that exists in the Python graph and
+        nowhere else. They now have one, so the finding has changed and the assertion follows it.
+        A module acquires a hook when somebody writes one; nothing else about it changed.
+        """
+        from waveflow.hw.hw_module import declares_hook
+
+        assert declares_hook(mod, "bfm_model"), f"{mod.__name__} should now name a C++ model"
+
+    def test_the_converter_declares_one_model_per_data_path(self):
+        """Two, not one: the classes differ per path, which a single declaration cannot express."""
+        from waveflow.build.composite_gen import bfm_models
+
+        rfdc = _bound_rfdc()
+        assert [m.cls for m in bfm_models(rfdc)] == ["RfdcAdcMaster", "RfdcDacSlave"]
+
+    def test_a_module_with_neither_hook_is_still_a_finding(self):
+        """The row itself is not retired — only these modules moved off it.
+
+        Kept pointed at something real so the kinds table keeps a live example: the DUT declares no
+        ``bfm_model()`` because it belongs *inside* the cut.
+        """
+        ok, msg = check(RfSampPassThrough, "xsi_bfm_model")
+        assert ok is False
+        assert "declares no bfm_model()" in msg
         assert "kernel_task" in msg or "outside" in msg
 
     def test_an_rf_environment_node_claims_no_codegen_target(self):
@@ -240,10 +266,19 @@ class TestRfdcGuards:
         with pytest.raises(ValueError, match="positive amplitude reference"):
             Rfdc(name="r", sim=Simulation(), full_scale=0.0)
 
-    def test_full_scale_is_a_dynparam_the_generator_would_emit(self):
+    def test_full_scale_rides_the_format_literal_not_a_member_assignment(self):
+        """``full_scale`` is an init-time knob but deliberately **not** a ``DynParam``.
+
+        ``DynParam`` does not mean "binds at init" — it means "emitted as ``<model>.<field> = ...;``".
+        This value's C++ realization is a *constructor argument* inside the ``RfdcFormat`` literal,
+        so tagging it would emit an assignment to a member that does not exist. Found the moment it
+        had a real consumer, which is the only way that obligation is ever found.
+        """
         from waveflow.hw.hw_module import discover_dyn_params
+
         r = Rfdc(name="r", sim=Simulation(), full_scale=0.5)
-        assert discover_dyn_params(r) == {"full_scale": 0.5}
+        assert discover_dyn_params(r) == {}, "the Rfdc should emit no member assignments"
+        assert "0.5" in r._fmt_literal() and r._fmt_literal().startswith("RfdcFormat{")
 
     def test_the_converter_reads_the_sample_rate_and_pushes_t0_at_bind(self):
         """The two opposite-direction reads, each where the quantity physically lives."""
@@ -268,9 +303,9 @@ class TestRfdcGuards:
         sim = RfLoopbackSim(n_src_blk=4, blksize=64)
         sim.run()
         tb = sim.tb
-        assert tb.dac_if.underrun == tb.loop_blk_latency == 1
-        assert tb.dac_if.last_underrun_idx == 1          # the transient, not a steady-state fault
+        assert tb.dac_if.underrun == tb.loop_blk_latency == 2
+        assert tb.dac_if.last_underrun_idx == 2          # the transient, not a steady-state fault
         assert tb.adc_if.underrun == 0                   # fed straight from the source
         # A module that over-declares its latency fails the same gate.
-        with pytest.raises(AssertionError, match="declared startup transient is 2"):
-            tb.dac_if.assert_clean(startup_blocks=2)
+        with pytest.raises(AssertionError, match="declared startup transient is 3"):
+            tb.dac_if.assert_clean(startup_blocks=3)

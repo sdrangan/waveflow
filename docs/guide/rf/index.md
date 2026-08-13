@@ -64,12 +64,13 @@ sink declares neither, which is a *finding* from `check`, not something it says 
 
 - [Block sampling](./sampling.md) — the sampling model: the block as the transaction, `blksize` as
   the fidelity knob, the absolute-grid metronome, `t0` and the sample grid, and the loss counters.
+- [The converter](./converter.md) — the `Rfdc` module and its two RTL-side models: the AXI-Stream
+  packing contract, `samp_per_word` versus the two derived rate conversions, bit-exact quantization,
+  and the underflow/overflow contract.
 
-Two further pages are planned and deliberately **not written yet**: the converter's AXI-Stream side
-(packing, the two derived rate conversions, and the counter-equivalence gate against the RTL model)
-and the fidelity boundary (what block granularity can and cannot resolve). Both describe machinery
-that does not exist, and a page written from a plan rather than from working code is the specific
-failure this schedule exists to prevent. See `plans/adc_model.md`.
+- [The fidelity boundary](./fidelity.md) — what this modelling style can and cannot tell you: the
+  three conditions, which of them anything checks, and a measured case where RTL loses 72 words and
+  pysim reports none.
 
 ## See also
 

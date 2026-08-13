@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from waveflow.hw.fixpoint import FixedField, from_real, to_real
-from waveflow.hw.hw_module import DynParam, HwModule, HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
 from waveflow.simulation.simobj import ProcessGen
@@ -68,11 +68,20 @@ class Rfdc(HwModule):
 
     # -- init-time knobs -------------------------------------------------------------------------
     #: The amplitude reference quantization is relative to: a sample of ``+full_scale`` maps to the
-    #: top of the converter's range.  A :class:`~waveflow.hw.hw_module.DynParam` — one artifact
-    #: serves every value.  Note the trap on this row: ``discover_dyn_params`` skips **falsy**
-    #: values, so a ``full_scale`` of ``0.0`` would emit nothing and silently take the C++ default.
-    #: Zero is meaningless for an amplitude reference, so it is refused in ``__post_init__``.
-    full_scale: DynParam[float] = 1.0
+    #: top of the converter's range.  An **init-time** knob — one artifact serves every value — but
+    #: deliberately *not* a :class:`~waveflow.hw.hw_module.DynParam`, and the distinction is finer
+    #: than the plan's table assumed.
+    #:
+    #: ``DynParam`` does not mean "binds at init"; it means "**emitted as a member assignment**"
+    #: (``<model>.<field> = <expr>;``).  This value's C++ realization is a *constructor argument* —
+    #: it rides inside the ``RfdcFormat`` literal the models take — so tagging it would emit a line
+    #: assigning a member that does not exist, which is the obligation recorded in
+    #: ``plans/adc_model.md``: a DynParam must land on a real C++ member and nothing static checks
+    #: that it does.  Stated once, in :meth:`_fmt_literal`, and read from there.
+    #:
+    #: (Zero would be doubly wrong — meaningless as an amplitude reference *and* falsy, which
+    #: ``discover_dyn_params`` skips — so ``__post_init__`` refuses it either way.)
+    full_scale: float = 1.0
 
     # -- t0: owned here, pushed to the interfaces at bind ----------------------------------------
     #
@@ -213,6 +222,74 @@ class Rfdc(HwModule):
                 f"Rfdc '{self.name}': DAC blksize {int(self.tx_blksize)} is not a multiple of "
                 f"samp_per_word {int(self.samp_per_word)}.")
 
+    # -- the XSI realization ---------------------------------------------------------------------
+
+    def f_axis(self, ep) -> float:
+        """The fabric clock, **read** off the AXIS interface *ep* is bound to.
+
+        The same single-source discipline ``samp_rate`` already follows: the frequency is declared
+        once, on the clock of the interface that physically carries it, and the converter reads it
+        rather than restating it.  Read here at *use* rather than cached at bind because
+        :meth:`bfm_model` is the only consumer and it runs on a fully-bound graph — caching it would
+        add a second copy with nothing to gain.
+        """
+        if ep.interface is None or ep.interface.clk is None:
+            raise RuntimeError(
+                f"Rfdc '{self.name}': {ep.name} has no bound interface/clock, so the fabric rate "
+                f"the model needs cannot be read. Bind the AXIS side before generating.")
+        return float(ep.interface.clk.freq)
+
+    def words_per_cycle(self, ep, samp_rate: float) -> float:
+        """AXIS words per fabric cycle — ``samp_rate / (samp_per_word * f_axis)``.
+
+        **Derived, never declared.**  Both terms already exist elsewhere (the RF interface's clock,
+        the AXIS interface's clock), so a declared ratio would be a third statement of something the
+        design fixes twice — and the one that could disagree.  Fractional by nature: 256/(4*300) MHz
+        is 0.2133, which no integer expresses, and it is the ``RateTick`` accumulator's input.
+        """
+        return float(samp_rate) / (int(self.samp_per_word) * self.f_axis(ep))
+
+    def _fmt_literal(self) -> str:
+        """``RfdcFormat{nbits, samp_per_word, full_scale}`` as a C++ **literal**.
+
+        A literal and not an identifier, deliberately: the harness promotes any bare identifier in
+        ``extra_args`` to a ``Harness(...)`` parameter typed ``const std::vector<uint64_t>&``, and an
+        ``RfdcFormat`` is not that.  Recorded as a trap in ``plans/adc_model.md`` before it could
+        bite; this is the shape that avoids it with no generator change.
+        """
+        return (f"RfdcFormat{{{int(self.nbits)}, {int(self.samp_per_word)}, "
+                f"{float(self.full_scale)!r}}}")
+
+    def bfm_model(self):
+        """**Two** models, one per data path, each spanning the cut.
+
+        The ADC path is one object binding RTL pins on the fabric side and the RF channel on the
+        other — which is what a converter *is*, rather than a boundary model glued to a separate
+        channel peer.  Port order is constructor order, and it is ``xsi_rfdc.h``'s:
+        ``(Dut&, const char*, RfChannel&, const RfdcFormat&, double [, size_t])``.
+
+        This is the first real consumer of per-port ``BfmModel`` resolution
+        (``plans/adc_model.md``): ``rx_stream`` resolves to ``sim.dut(), <ns>::<port>`` because its
+        peer is a DUT boundary port, and ``rx_rf`` to a channel variable because its peer is not.
+        """
+        from waveflow.build.composite_gen import BfmModel
+
+        if self.rx_samp_rate is None or self.tx_samp_rate is None:
+            raise RuntimeError(
+                f"Rfdc '{self.name}': an RF endpoint was never bound, so the sample rate the models "
+                f"need has not been read. Bind both RF interfaces before generating.")
+        adc_rate = self.words_per_cycle(self.rx_stream, self.rx_samp_rate)
+        dac_rate = self.words_per_cycle(self.tx_stream, self.tx_samp_rate)
+        # blk_samples is n_ch * blksize -- one block's worth, the unit the RF edge moves.  The DAC
+        # needs it to know when a block is complete; the ADC learns it from the block it is handed.
+        blk_samples = int(self.rx_rf.n_ch) * int(self.tx_blksize)
+        return (
+            BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf"),
+                     extra_args=(self._fmt_literal(), repr(adc_rate))),
+            BfmModel("RfdcDacSlave", ports=("tx_stream", "tx_rf"),
+                     extra_args=(self._fmt_literal(), repr(dac_rate), str(blk_samples))),
+        )
+
     # -- the two conversion paths ----------------------------------------------------------------
 
     def run_proc(self) -> ProcessGen[None]:
@@ -226,14 +303,26 @@ class Rfdc(HwModule):
         Quantization goes through the integer-backed ``FixedField``, and packing through the
         generated array (de)serializers — never a hand-rolled ``.range()``.  That is what makes "evaluate
         the effect of bit widths in Python" mean the same thing the RTL will do.
+
+        **``offer``, not ``write``, and at the CONVERTER's rate.**  Two corrections, and pysim needed
+        both before it could see what the RTL sees:
+
+        * ``write()`` waits for room.  An ADC cannot: it presents a beat every sample period and what
+          the fabric does not take is gone.  ``offer()`` takes what fits and the interface counts the
+          rest.
+        * The burst must be charged at ``samp_rate / samp_per_word`` words per second, not at the
+          fabric clock.  A block of 64 words is 1000 ns of converter output; charging it at 300 MHz
+          claimed 213 ns and handed the consumer a 787 ns hole to drain in that the hardware never
+          gives it.  Being 4.7x too fast is exactly what hid the loss.
         """
         fs = float(self.full_scale)
+        word_rate = float(self.rx_samp_rate) / int(self.samp_per_word)
         while True:
             blk = yield from self.rx_rf.get()
             samples = np.asarray(blk.data, dtype=np.float64)[0]     # n_rx == 1 (stage 1)
             quantized = from_real(samples / fs, self.SampType)
             self.n_adc_blk += 1
-            yield from self.rx_stream.write(quantized)
+            yield from self.rx_stream.offer(quantized, word_rate=word_rate)
 
     def _dac_proc(self) -> ProcessGen[None]:
         """One AXIS burst in → unpack → dequantize → RF block out."""

@@ -199,10 +199,17 @@ class RfLoopbackTB(FreeRunMod):
         self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
                                      nwords_blk=self.nwords_blk)
         #: Block latency of the wired path from the ADC edge to the DAC edge — **summed from what the
-        #: modules on that path declare**, not inferred.  One module here, so it is the DUT's.  A
-        #: general graph would need loop detection; a design that states its latency does not.  This
-        #: is the DAC edge's entitled startup transient.
-        self.loop_blk_latency = int(self.dut.blk_latency)
+        #: modules on that path declare**, not inferred.  A general graph would need loop detection;
+        #: a design that states its latency does not.  This is the DAC edge's entitled startup
+        #: transient.
+        #:
+        #: Two terms, not one.  The DUT's own hop, plus **one block for the ADC**: a converter cannot
+        #: emit samples it has not yet collected, so a block exists only at its grid tick and is
+        #: transmitted across the *following* period.  That hop was invisible while the model charged
+        #: the ADC's burst at the fabric clock (213 ns instead of 1000 ns) and appeared the moment the
+        #: transfer was paced by the converter's own rate.  It is the same quantity the fidelity
+        #: contract states as "no dependency shorter than 2*blksize — one block per converter hop".
+        self.loop_blk_latency = 1 + int(self.dut.blk_latency)
         self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in",
                                    start_delay=float(self.src_start_delay))
         self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim, out_bundle="vectors/rf_out",
@@ -225,16 +232,20 @@ class RfLoopbackTB(FreeRunMod):
         self.add_if(self.dac_if)
 
         # --- the PL domain -------------------------------------------------------------------
-        # Depth is a physical property of the channel and is read by pysim as the queue bound: two
-        # blocks, so the pass-through is not the thing throttling the RF grid.
+        # NO depth override, and that is a correction rather than an omission.  These interfaces
+        # become the DUT's top-level AXIS ports, and a top-level argument CANNOT carry a FIFO depth:
+        # Vitis ignores the pragma (HLS 214-387) and the RTL gets the default of 2.  Declaring 128
+        # here made pysim model a 128-word queue the hardware does not have, which is one of the
+        # three reasons pysim could not see the ADC dropping words.  `composite_top_spec` now refuses
+        # the declaration outright, so this cannot come back by accident.
         adc_axis = StreamIF(name=f"{self.name}_adc_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w, depth=self.nwords_blk * 2)
+                            bitwidth=w)
         adc_axis.bind("master", self.rfdc.rx_stream)
         adc_axis.bind("slave", self.dut.s_in)
         self.add_if(adc_axis)
 
         dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w, depth=self.nwords_blk * 2)
+                            bitwidth=w)
         dac_axis.bind("master", self.dut.s_out)
         dac_axis.bind("slave", self.rfdc.tx_stream)
         self.add_if(dac_axis)

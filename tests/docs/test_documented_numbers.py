@@ -251,9 +251,12 @@ def test_rf_loopback_page_loss_counts_are_recomputed():
     assert f"`dac_if.overrun == {stalled.tb.dac_if.overrun}`" in text
     assert "`8 − 1 − 2`" in text and f"= {deeper.tb.dac_if.overrun}`" in text
 
-    # The structural one-block loop cost, as the page states it: declared by the pipeline and
-    # checked against the DAC edge's startup transient.
-    assert f"blk_latency: HwParam[int] = {clean.tb.loop_blk_latency}" in text
+    # The MODULE's own declaration, which is what the page quotes.  Distinct from the LOOP's cost
+    # (`loop_blk_latency`), which adds one block for the ADC hop -- a converter cannot emit samples
+    # it has not collected.  The two were the same number until the ADC's burst was paced at the
+    # converter's rate rather than the fabric clock, and conflating them is what this line used to do.
+    assert f"blk_latency: HwParam[int] = {int(clean.tb.dut.blk_latency)}" in text
+    assert clean.tb.loop_blk_latency == int(clean.tb.dut.blk_latency) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +334,27 @@ def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
         f"python.md no longer quotes the recorded cycle gate of {cycles}")
     assert f"{XSI_NBURST} bursts × {XSI_NWORDS_BLK} words = {XSI_NBURST * XSI_NWORDS_BLK} words" \
         in text, "python.md no longer states the scenario the gate measures"
+
+
+# ---------------------------------------------------------------------------
+# guide/rf/converter.md — the loss figures the page reports from a real RTL run
+# ---------------------------------------------------------------------------
+
+def test_converter_page_quotes_the_recorded_rtl_loss():
+    """``guide/rf/converter.md`` reports what the first real RTL run found, so those numbers are
+    claims about the design and must match the gate that measured them.
+
+    Read out of ``test_rf_loopback_xsi.py``'s constants — the same values the XSI gate asserts —
+    rather than retyped, so a re-recorded shortfall fails here until the page is updated.
+    """
+    from tests.examples.test_rf_loopback_xsi import WANT_ADC_DROPPED, WANT_ADC_WORDS
+
+    text = _page("guide/rf/converter.md")
+    accepted = WANT_ADC_WORDS - WANT_ADC_DROPPED
+    assert f"**{WANT_ADC_WORDS}** words" in text, "converter.md no longer states what the ADC produces"
+    assert f"accepts **{accepted}**" in text, "converter.md no longer states what the fabric accepts"
+    assert f"**{WANT_ADC_DROPPED} are dropped**" in text, (
+        f"converter.md no longer quotes the measured drop count of {WANT_ADC_DROPPED}")
 
 
 # ---------------------------------------------------------------------------

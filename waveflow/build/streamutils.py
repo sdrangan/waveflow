@@ -233,6 +233,13 @@ class XsiHarnessStep(Buildable):
             # and a per-graph copy list would make that a build-order question.
             "xsi_simobj": self._output_dir / "xsi_simobj.h",
             "xsi_channel": self._output_dir / "xsi_channel.h",
+            # The RF-domain edge + its file-backed peers, and the converter models.  Copied
+            # unconditionally, like every other framework header: a per-graph copy list would make
+            # "which headers does this workspace need?" a build-order question, and the cost of an
+            # unused header in a workspace is nothing.
+            "xsi_rf_block": self._output_dir / "xsi_rf_block.h",
+            "xsi_rfdc_samp": self._output_dir / "xsi_rfdc_samp.h",
+            "xsi_rfdc": self._output_dir / "xsi_rfdc.h",
             "xsi_bundle": self._output_dir / "xsi_bundle.h",
             "xsi_loader_h": self._output_dir / "xsi_loader.h",
             "xsi_loader_cpp": self._output_dir / "xsi_loader.cpp",
@@ -246,6 +253,9 @@ class XsiHarnessStep(Buildable):
             "xsi_bfm": "xsi_bfm.h",
             "xsi_simobj": "xsi_simobj.h",
             "xsi_channel": "xsi_channel.h",
+            "xsi_rf_block": "xsi_rf_block.h",
+            "xsi_rfdc_samp": "xsi_rfdc_samp.h",
+            "xsi_rfdc": "xsi_rfdc.h",
             "xsi_bundle": "xsi_bundle.h",
             "xsi_loader_h": "xsi_loader.h",
             "xsi_loader_cpp": "xsi_loader.cpp",

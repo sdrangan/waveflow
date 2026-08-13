@@ -309,10 +309,18 @@ holds a fixed time relation to TX sample 0.
 
 ## Fidelity boundary
 
+*(Now a docs page a reader can act on: [`guide/rf/fidelity.md`](../docs/guide/rf/fidelity.md) — the
+three conditions, which of them anything checks, and where the check stops seeing.)*
+
 Feedforward DSP — filters, FFTs, channelizers, mixers, matched filters — is **block-perfect** at this
 granularity. **Sample-level feedback loops** (carrier recovery, timing recovery, AGC) have dynamics block
 granularity cannot resolve; model those functionally or at finer grain. Most SDR receivers contain at
 least one.
+
+The third condition is the one this plan under-stated: **the DUT never stalls its input.** It is the
+only one of the three that is mechanically checkable, and it now is, in pysim, as
+`StreamIF.dropped == 0` — but only at block granularity. See "Making the pysim model honest" below
+for what that buys and what it still cannot see.
 
 Channels and stateful DSP have memory spanning block boundaries, so those SimObjs **must** carry state
 across blocks (overlap-save; a Doppler phase accumulator). Bake it in from day one or get discontinuities
@@ -352,7 +360,164 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
    - **The digital logic is DONE (2026-08-13, branch `rf-dut-synth`)** — synthesized and proved at
      RTL *cut alone*, between generic AXIS BFMs. Gate: 8 bursts × 64 words relayed bit-identically,
      **1072 cycles**. See "The DUT at RTL" below.
-   - Still open: declare `Rfdc.bfm_model()`, give `RFSampIF` an `xsi_model()`, wire the loopback.
+   - **The converter is DONE (2026-08-13, branch `rf-xsi-loopback`)** — `RFSampIF.xsi_model()`,
+     `Rfdc.bfm_model()` (two models, one per path), the C++ RF peers, and the full loopback run at
+     RTL. See "The loopback at RTL" below.
+   - Still open: the counter-equivalence gate, which is `plans/behavioral_edges.md` S4.
+
+### The loopback at RTL — **DONE 2026-08-13**
+
+`source → RfdcAdcMaster → real Verilog → RfdcDacSlave → sink`, generated from the same five-node
+graph the pysim golden runs. Gate: `tests/examples/test_rf_loopback_xsi.py`.
+
+**What holds — the claim this arc exists to make.** A block goes Python quantize → pack →
+AXI-Stream → real RTL → unpack → dequantize → Python and comes back **bit-identical**. Cycle gate:
+the last RF block lands at **2152** (time to last completion, not the 6000 loop bound).
+
+**What does not, and it is a design finding rather than a model bug.** The ADC produces 512 words
+and the fabric accepts **440**; **72 are dropped**. `RfSampPassThrough` reads a whole 64-word block
+and only then writes it, so `TREADY` is low for ~64 cycles at a stretch while the converter presents
+a beat every ~4.7 cycles regardless. Divergence begins at sample 264 — block 1, offset 8 — exactly
+where the first write phase starts.
+
+pysim does not show this because its `StreamIFMaster` **blocks** where `RfdcAdcMaster` **drops**.
+That asymmetry was already recorded and thought unexercised because the fabric is ~4.7× oversized
+*on average*; averages are not the constraint, burstiness is. **The fix is a design change** —
+overlap the read and the write, i.e. two tasks and a channel, which is what `mem_copy` does — and is
+deliberately not part of this step. The shortfall is pinned as a gate so it is visible and
+regression-guarded rather than hidden.
+
+**Deviations and findings:**
+
+- **`full_scale` is not a `DynParam`, and the plan's parameter table was wrong to list it as one.**
+  `DynParam` does not mean "binds at init"; it means **"emitted as a member assignment"**. This
+  value's C++ realization is a *constructor argument* inside the `RfdcFormat` literal, so tagging it
+  emitted an assignment to a member that does not exist — exactly the obligation recorded under the
+  per-port section, found the only way such an obligation is ever found.
+- **`_render_dyn_value` had no `float` case at all.** A legitimate `DynParam` type simply had no
+  rendering. Added, with `repr` rather than `str` so a derived rate round-trips exactly.
+- **`RfBlockMsg` / `RfChannel` and the RF peers moved to `xsi_rf_block.h`.** An edge and its
+  file-backed peers bind no RTL pins, so keeping them in `xsi_rfdc.h` (which reaches Vivado's
+  `xsi.h`) would have made them untestable without a toolchain. Same precedent as the `XsiSimObj`
+  split, and it bought a 5-test `g++`-only gate including a cross-language byte-identical bundle
+  round trip.
+- **The second rate conversion needs no object.** The plan lists RF↔fabric (`samp_rate / (blksize ×
+  f_axis)` blocks per cycle) beside the AXIS one. In practice the block cadence *follows from* the
+  word rate — the ADC pulls a block when it has consumed the previous one's words — so only
+  `words_per_cycle` is instantiated and the source merely respects the channel depth.
+- **`f_axis` is read at use, not cached at bind.** `bfm_model()` runs on a fully-bound graph, so no
+  new bind hook was needed; the frequency stays declared once, on the AXIS interface's clock.
+- **One DUT now carries two testbenches.** `render_tb_harness` / `render_tb_main` gained optional
+  `ns` / `harness_header` / `wdb`, because two harnesses in one workspace need two namespaces and two
+  include guards. Defaults preserve every existing design's output byte for byte.
+- **`xsi_model_classes()` scans three headers now.** A model is grouped by *what it binds*, not by
+  being a model, so the registry has to follow that split or a model in the "wrong" header reads as
+  nonexistent.
+- **Two scope-guard assertions were inverted, not deleted**: `test_the_workspace_has_no_converter_headers`
+  (that workspace now hosts a testbench naming them) and the stage-1 kinds tests (these modules now
+  declare `bfm_model()`). The kinds-table row itself is repointed at `RfSampPassThrough`, which
+  declares none because it belongs *inside* the cut.
+- ~~**A checker drafted from the plan was deleted rather than shipped.**~~ **That conclusion was
+  WRONG and is reversed** (see "Making the pysim model honest" below). The checker asserted a leading
+  `blk_latency` zero-fill in the RTL output, the run did not show one, and I concluded the metronome
+  was "a pysim-side artifact of the edge". Backwards: `RfdcDacSlave` was emitting on *buffer
+  fullness*, which is not what a converter does. A DAC plays on its tile clock and underflows when
+  starved — the metronome is the physics and pysim was right. With the model corrected the RTL shows
+  the transient too, and the checker is restored. The real lesson is the one I did not draw: when the
+  backends disagree, ask which is modelling the hardware, not which is more convenient.
+
+**The divergence, recorded for S4 rather than reconciled.** Same scenario, same graph:
+
+| | pysim | XSI |
+|---|---|---|
+| where loss is accounted | the `RFSampIF` **edge**, and `StreamIF.dropped` at the fabric boundary | the converter models **and** the channel |
+| units | whole **blocks**, and **words** at the fabric boundary | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
+| ADC→fabric | **0** — the loss is sub-block, below the model's resolution | 72 of 512 words dropped |
+| DAC startup | 2 zero-filled blocks (the metronome fires regardless) | 1 — the RF grid starts at the source, not the edge |
+| blocks the DAC emits | 8 (one per source block) | 19 — the grid runs for the whole harness run |
+
+Neither side is being redefined to make them agree; flattening the difference now would destroy
+exactly what S4 needs.
+
+**The two backends' drop NUMBERS are not expected to match, and never will be.** pysim samples the
+consumer's queue once per block window, so it is deliberately *conservative* — it over-counts when
+the consumer drains mid-window, which is the safe direction for a contract clause. The clause is
+`dropped == 0`: **zero versus nonzero** is the agreement being claimed, not the integer. Anyone who
+later "fixes" the discrepancy by making the numbers equal will have made pysim wrong.
+
+### Making the pysim model honest — **DONE 2026-08-13**, one acceptance test **NOT MET**
+
+Branch `rf-model-fidelity`. Four changes aimed at one outcome: pysim should reproduce the sample loss
+only RTL could see. All four landed and are verified. **The outcome was not achieved, and the reason
+is a resolution limit rather than a missing change** — the honest result is written up in
+[`guide/rf/fidelity.md`](../docs/guide/rf/fidelity.md).
+
+**A. `offer()` — a producer that cannot wait.** `StreamIFMaster.write()` blocks, and a converter
+physically cannot. `offer()` is non-blocking: it returns words accepted, and the **interface** counts
+the rest (`StreamIF.dropped`, `last_drop_time`). No new interface type — a plain AXI-Stream is what is
+on the wire, and "who is willing to wait" is a property of the *producer*, not the edge. (The same
+category error caught twice before, at `t0` and at gain.)
+
+Three admission rules were tried, and the choice was made against a **consumer that never stalls** —
+a design that satisfies the condition by construction and must therefore report zero:
+
+| rule | the loopback | never-stalling consumer |
+|---|---|---|
+| clip a burst to the free space | 496 | **504** ✗ |
+| refuse when full, sampled before the instant settles | 496 | **256** ✗ |
+| refuse when full, after `yield timeout(0)` lets it settle | 0 | 0 ✓ |
+
+The first two make `dropped == 0` unreachable, which makes the clause worthless. They fail
+structurally: this framework has never treated "a 64-word burst through a depth-2 stream" as a
+violation — `_push_to_endpoint` routes intra-burst overflow to an unbounded counter, because depth
+models a consumer hiccup *between* bursts. The second failed on a same-instant scheduling artifact
+(the producer re-arms before the consumer resumes), which the settling `timeout(0)` removes.
+
+**B. The ADC's burst is paced at the converter's rate.** 64 words were charged at the fabric clock —
+213 ns — when the converter takes `nwords / (samp_rate / samp_per_word)` = 1000 ns to produce them,
+handing the consumer a 787 ns hole to drain in that the hardware never gives it. One event per block
+still; a per-word trickle would cost 64× the events and buy nothing.
+
+*Consequence, and it is a finding:* the DAC's underrun went 1 → 2. Not a bug — the **ADC's own block
+hop** became visible for the first time. A converter cannot emit samples it has not collected, so the
+loop costs two blocks, not one: `loop_blk_latency = 1 + dut.blk_latency`. The DUT's declared
+`blk_latency` and the loop's cost are now different numbers, and a docs gate that had been asserting
+one against the other was conflating them.
+
+**C. The boundary depth was fiction.** The testbench declared `depth=128` on the AXIS interfaces; the
+generated top emits no depth pragma, so the RTL had HLS's default of 2. The smoking gun was that RTL
+divergence begins at word 66 = 64 + 2. Two fixes were possible; **the first was probed empirically and
+is impossible**: Vitis ignores `#pragma HLS STREAM depth=` on a top-level argument (`HLS 214-387` /
+`214-191`), and in the first pragma placement tried it produced *identical RTL and no warning at all*
+— silent. So pysim takes the real depth, and `composite_top_spec` now **refuses** a non-default depth
+declared at a boundary port, naming the Vitis message. A depth that is silently 2 is worse than no
+depth: the number in the Python reads like a fact.
+
+⚠️ **The claim "`StreamIF.depth` is a physical property, single-source for both backends" is FALSE at
+a boundary port** and must stop being stated unconditionally. It holds for internal channels only.
+
+**D. The DAC emits on the sample grid.** `RfdcDacSlave` emitted on buffer fullness; a real DAC plays
+continuously and underflows when starved. Now a `RateTick` at block granularity, zero-filling on empty
+and counting it. This **reverses last session's conclusion** that the metronome was a pysim-side
+artifact: the checker was right, the RTL model was wrong, and `blk_latency` is now assertable on both
+backends (RTL: block 0 zeros, block 1 == `sent[0]` bit-exact).
+
+**THE ACCEPTANCE TEST WAS NOT MET.** pysim reports `dropped == 0` on the same 8-block scenario where
+RTL loses 72 of 512 words. All three prerequisites were confirmed present in that run — `offer()` in
+use, ADC window 1000 ns not 213 ns, boundary depth 2 not 128 — so this is not "one of A/B/C did not
+land". `RfSampPassThrough` needs ~213 ns of work per 1000 ns block period, so **at block granularity
+it keeps up**, and that is what pysim correctly measures. The RTL loss is a *phase* effect inside one
+block period: the write phase is a contiguous 213 ns during which the DUT accepts nothing, and about
+13.6 words arrive into a 2-deep FIFO meanwhile. Block-LT carries one event per block, so the
+information is not there to be found. The check has a coarse half (free, every run, no toolchain) and
+a fine half (needs RTL) — stated on the docs page so a designer can use it rather than trust it.
+
+**Cost caught by an existing gate:** adding `dropped` to `StreamIF.__post_init__` **moved every
+`FirBlock` calibration key**, because `_canon` walks `__dict__` and a run-time counter is not
+structure. `tests/calib/test_key_stability.py` caught it — the exact failure mode that plan was
+written for, on its first live outing. Fixed by excluding the counters in `_CONTEXT_ATTRS`
+(`RFSampIF`'s four are excluded with them: same leak, latent only because no calibrated design uses
+that edge yet).
 
 ### The DUT at RTL — **DONE 2026-08-13**
 
