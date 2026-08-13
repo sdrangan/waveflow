@@ -48,9 +48,10 @@ mode that no protocol signal reports.
 - [Python model](./python.md) — the graph, the converter, the loopback gate, and the two faults that
   make the loss counters mean something.
 
-The RTL page is not written: the converter's RTL-side models and the machinery that realizes a
-behavioural edge under XSI do not exist yet. See `plans/adc_model.md` and
-`plans/behavioral_edges.md`.
+The digital logic is [synthesized and proved at RTL](./python.md#synthesis) — cut **alone**, between
+generic AXI-Stream BFMs. A page for the *converter* at RTL is not written: the models exist but
+nothing wires them into a graph yet, so its rate conversions and counter-equivalence gate would be
+written from the plan rather than from working code. See `plans/adc_model.md`.
 
 ## See also
 

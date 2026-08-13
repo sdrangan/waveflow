@@ -229,4 +229,67 @@ frozenset({'composite_kernel'})
 The contrast is what makes it meaningful: the digital logic *does* claim a target, because it is the
 one module here that is meant to become hardware.
 
-**Source of truth:** `examples/rf_loopback/`, `tests/examples/test_rf_loopback.py`.
+## The digital logic becomes hardware {#synthesis}
+
+`RfSampPassThrough` is the one module in this graph that is *meant* to become RTL, and it now does.
+It is verified **cut alone** — `StreamDriver → dut → StreamSink`, generic AXI-Stream BFMs, no
+converter and no RF edges — by `examples/rf_loopback/rf_dut_build.py`.
+
+That is not a second design. It is the *same module under a different cut*, which is the property
+[the cut is a build choice](../../guide/flows/modules.md#the-cut) asserts; this is the first place it
+is exercised rather than stated. It also keeps two risks apart: whether the DUT synthesizes and runs
+at RTL is one question, whether the converter models drive it correctly is another, and answering the
+first with generic BFMs means a later failure has one place to be.
+
+### The body is generated
+
+Not hand-written. `run_iter` extracts to:
+
+```cpp
+static void rf_pass_through_task(hls::stream<ap_uint<64> >& s_in,
+                                 hls::stream<ap_uint<64> >& s_out) {
+    UInt64Array blk;
+    blk.read_stream<64>(s_in);
+    blk.write_stream<64>(s_out);
+}
+```
+
+Getting there needed two changes to the Python, and both are worth knowing because they are rules,
+not quirks:
+
+- **A pysim counter cannot be read inline in a synthesizable body.** `self.n_blk += 1` trips the
+  implicit-capture rule, which cannot tell a baked-in constant from a register someone must write
+  from a counter with no hardware meaning. `@sim_only` is the answer for the third — and it has to
+  sit on a **method**, because the check is an attribute on the resolved object and an `int` cannot
+  carry one. (`add_state` would be wrong: it declares persistent *hardware* storage.)
+- **Use the typed `get`.** `get(nwords_max=N)` is the raw-word convention for non-`HwModule` callers;
+  it carries no schema type and the extractor has no rule for it. The payload type here comes from a
+  `blk_words` property that specializes a `DataArray` from the module's own `HwParam`s — one
+  declaration serving every width the pysim tests sweep, and a concrete type at extract time.
+
+### What each layer proves
+
+| layer | says | does **not** say |
+|---|---|---|
+| `check(…, "composite_kernel")` | the graph lowers | anything about the body — for a leaf it never runs the extractor |
+| pysim | the relay is bit-identical in Python | anything about RTL |
+| csynth | the RTL exists **and has a datapath** | that it is correct — a DCE'd kernel still reports success |
+| XSI | the real RTL relays the words | — |
+
+The csynth check therefore asserts the *module set*, not the exit code: the task module, the two
+pipelined loops (the read and the write), and the block RAM between them. A top with nothing under it
+is exactly what a silently optimized-away kernel looks like.
+
+### The gate
+
+8 bursts × 64 words = 512 words, relayed bit-identically, with the last word landing at cycle
+**1072**.
+
+That number is the DUT's honest cost. The generated body is `read_stream` then `write_stream` — two
+sequential pipelined loops over one block RAM — so a firing does **not** overlap its read and write,
+and each block costs about 143 cycles rather than 128. Overlapping them would need two tasks and a
+channel between them, which is what `mem_copy` does and why its per-job cost is roughly a `max()`
+rather than a sum. Recorded in `tests/examples/test_xsi_bfm.py` beside the other cycle gates.
+
+**Source of truth:** `examples/rf_loopback/`, `tests/examples/test_rf_loopback.py`,
+`tests/examples/test_rf_dut_synth.py`.
