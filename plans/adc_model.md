@@ -542,6 +542,18 @@ fixes nothing: the reader still stops reading `s_in` for the 64 cycles of its ha
 touches the boundary port must never stop reading, which means its firing is **one word in, one word
 out**. Everything else about the design follows from that.
 
+**The alternative considered and not needed: `StreamOfBlocksIF`.** A stage that must *both* hold a
+block and never stop reading has to write while it reads — acquire a block buffer, fill `buf[i]`
+inside the read loop, release on scope exit — and that is what SOBIF is for. This design does not
+need it, because the two requirements are split across two stages: the ingress never stops reading
+and holds nothing, the block stage holds a block and is *allowed* to stall, and the FIFO between them
+is what makes that legal. **The block boundary is not lost** — the block stage reconstitutes it with
+`get(blk_words)`, so a real DSP stage in that position sees exactly the block it expects. SOBIF
+becomes the answer only for a stage that cannot be split this way (one that must start emitting
+transformed samples before the input block is complete). Its cost is known and unpleasant: the locks
+are RAII *inside* the task, there are no `acquire()` members for the extractor to lower, and the RTL
+never contains the words `stream_of_blocks` — see `reference-hls-sob-lock-is-raii`.
+
 **Consequences of the word relay, both recorded rather than worked around:**
 
 1. **It has no pysim expression, so the ingress hands over a hand-written body.** `StreamIFSlave.get`
