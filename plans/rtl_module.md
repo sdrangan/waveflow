@@ -1,7 +1,9 @@
 # Plan: `rtl_module()` — a module realized as hand-written Verilog beside the kernel
 
-**Status:** designed 2026-08-14. **S1 landed 2026-08-14** (branch `rtl-module-s1`) — see "What landed"
-below.  S2–S4 not started.  **Has a working witness** (see below) — every claim about what Vitis does
+**Status:** designed 2026-08-14. **S1, S2 and S3 landed 2026-08-14** (branches `rtl-module-s1`,
+`rtl-module-s23`) — see the "What landed" blocks below.  **S4 not started**, and deliberately: its RX
+design turns on whether `RxCmd` names a FUTURE window (no buffer needed) or a PAST one (buffer needed),
+and those are different designs.  **Has a working witness** (see below) — every claim about what Vitis does
 or refuses was measured, not recalled.
 
 Split out of the RF arc, where `RfSampBuf` needs a circular capture buffer shared by two concurrent
@@ -208,6 +210,49 @@ one rather than worked around here.
 **Gate:** a two-module fixture emits a wrapper that elaborates; every existing design byte-identical
 (none declares the hook).
 
+#### What landed (S2, 2026-08-14)
+
+**`derive_boundary` does NOT thread through nesting — measured first, as instructed.**  A two-level
+fixture (`Outer` -> `Inner` -> `Leaf`) raises *"names 2 port(s) … but the graph has 0 unwired child
+endpoint(s)"*: the walk reads each child's own `endpoints` registry, and a composite child's is
+empty.  **S2 does not need it** — the tasks are direct children of the composite, one level — so this
+is recorded as a general gap rather than worked around.  Whoever nests a composite inside a composite
+will meet it; it is not a BRAM problem and must not be fixed with a BRAM special case.
+
+| piece | where |
+|---|---|
+| the accessor endpoint | `hw/bram.py::BramIFMaster` — a sized `mode=bram` array in C++, 14 RTL ports |
+| the wire | `hw/bram.py::BramIF` — checks geometry + direction at bind; carries `read_latency` |
+| the registries | `HwModule.add_rtl_mod` / `add_rtl_if` (+ lazy `rtl_mods` / `rtl_ifs`) |
+| the wrapper | `build/wrapper_gen.py`: `WrapperSpec`, `MemInst`, `wrapper_spec`, `render_wrapper` |
+| the step | `build/rtl_steps.py::GenWrapperStep` |
+| the elaborated top | `TopSpec.rtl_top` / `.pin_ports` / `.elab_top`; `composite_gen.wrapper_name` |
+| pysim | `BramIFMaster.mem_read/mem_write` (untimed) + `T2pBram.storage/store/load` |
+| tests | `tests/build/test_wrapper_gen.py` (18) |
+
+**Deviations, both deliberate:**
+
+1. **The `BramIF` is registered on the composite, not on the system graph.**  The plan said *"never as
+   an `add_if` of the Vitis composite … register it on the system graph"*.  It is registered on the
+   composite through `add_rtl_if` — a registry that is **not** `add_if` — which honours the
+   instruction's *purpose* (the accessor's port stays a boundary port, with zero changes to
+   `derive_boundary`) while keeping the memory in the same elaborated object as the kernel.  That is
+   what preserves S1's latency contract: `elaborate(BramToy)` alone can reach the memory's published
+   `READ_LATENCY`.  On the system graph the kernel would elaborate with an **unbound** bram port, and
+   the only way to emit its pragma would be a second latency authored in Python — the exact drift S1
+   removed.  The composite is then the *design scope* (kernel + memory), which is what the plan
+   already says a wrapper is.
+
+2. **A Verilog-keyword guard the plan did not anticipate.**  The instance name comes from the Python
+   attribute, and the first design called its memory `self.buf` — a Verilog **primitive gate**.  The
+   emitter refuses by name with the fix, rather than letting `xvlog` fail on a syntax error that
+   mentions no Python.
+
+**One trap, for the record:** `rtl_mods`/`rtl_ifs` as dataclass *fields* moved the structure signature
+— and therefore the calibration key — of every module in the repo, and two `fir_block` resource
+numbers in the docs went stale within one test run.  They are created lazily now (the `add_state`
+precedent).  Third time this trap has bitten; see `plans/harmonize_calib.md`.
+
 ### S3 — XSI, the cheapest of the four
 
 Two changes: the `.f` gains the memory and wrapper files, and the **xelab top becomes the wrapper**.
@@ -222,6 +267,40 @@ the kernel's internals sit one level deeper, so trace and timing consumers need 
 
 **Gate:** a design with a `T2pBram` runs under XSI with a recorded cycle count; the four existing cycle
 gates unmoved.
+
+#### What landed (S3, 2026-08-14) — and the acceptance gate
+
+`examples/bram_toy` is the witness's design expressed in Waveflow, and it **reproduces the witness's
+values through real RTL**: addresses `0, 1, 7, 255, 128` returned `100, 101, 107, 355, 228`.  Not
+shifted by one, so the latency chain — `localparam READ_LATENCY = 1` → `latency=1` in the generated
+C++ → the memory's actual behaviour — holds end to end.  **New cycle gate: 529** (time to the last
+answer; most of it is the design's own sequencing).
+
+S3 was as small as predicted.  Three changes, no BFM work:
+
+* `render_rtl_f(top, root, extra=(...))` appends the memory and the wrapper after csynth's own files
+  (all five of them — a `.f` naming only the top does not elaborate);
+* the runner is invoked with the **wrapper** as `TOP`, so the `.f`, the snapshot and the shared
+  library are named for it while csynth's project keeps the kernel's name;
+* `render_ports_h` emits `spec.elab_top` and skips bram ports, and `tb_top_spec` skips them too —
+  they are not pins on the elaborated design, so there is nothing for a model to bind and no dual to
+  look up.
+
+**The gate S1 deferred is closed.**  The generated kernel declares all 28 bram ports, exactly the
+names `bram_port_signals()` derived without ever seeing this RTL, with no `ap_vld` degradation — read
+off `bram_toy.v`, not off an exit code.  A second test asserts both tasks are
+`ap_start`/`ap_continue` `= 1'b1`, i.e. **not** the PIPO structure experiment 1 produced.
+
+**One thing the plan did not foresee: sequencing.**  The witness's `tb.v` drove 256 samples and *then*
+the addresses; a concurrent BFM harness cannot (both `AxisMaster`s push from cycle 0), so a read of
+address 255 would land hundreds of cycles early.  The ordering moved into the **design** — the writer
+emits one "buffer ready" token on an ordinary internal stream, the reader waits for it once — which is
+also exactly the invariant the memory asserts, and the gate checks that `$error` never fired.
+
+The wrinkle the plan flagged (`trace_manifest` derives names in *"the top's own scope"*, so a wrapped
+kernel's internals sit one level deeper) is **real and untouched**: nothing in `bram_toy` traces or
+times, so no consumer needed the scope prefix yet.  Whoever traces a wrapped design first will need
+it.
 
 ### S4 — `RfSampBuf`
 
@@ -304,12 +383,14 @@ three times in this arc.
 
 ## Open questions
 
-- Does `derive_boundary` handle nested composites? Decides S2's size (see above). **Not touched by
-  S1** — nothing walks a `T2pBram` yet.
+- Does `derive_boundary` handle nested composites? **Answered: NO** — measured in S2 with a two-level
+  fixture; it reads each child's own `endpoints` registry, and a composite child's is empty.  S2 did
+  not need it (the tasks are direct children), so it stands as a **general gap**, not a BRAM one.
 - Where does the wrapper's resource number come from? **Settled enough to build on** — see
   "Resource accounting" below. Declared for S1; the open part is only when a measured run gates it.
-- Does a `T2pBram` need a pysim model of its own, or is it a plain `HwModule` whose `run_proc` is a
-  numpy array? The latter, presumably — but then which endpoint carries the access latency.
+- ~~Does a `T2pBram` need a pysim model of its own?~~ **Answered in S2**: a numpy array on the module,
+  accessed untimed through the endpoint.  "Which endpoint carries the access latency" turned out to be
+  the wrong question — neither does; the memory publishes it and both ports read it from there.
 - One memory, two ports, and Vitis emits an **A/B pair per interface** — four physical ports for one
   memory, of which the witness wires the A half of each. Is that always the right choice, or should the
   B halves ever be used (two accesses per cycle per side)?
