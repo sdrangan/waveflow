@@ -34,7 +34,7 @@ from examples.rf_loopback.rf_dut_build import (
     input_bursts,
     write_scenario,
 )
-from examples.rf_loopback.rf_loopback import RfSampPassThrough
+from examples.rf_loopback.rf_loopback import RfSampBlockRelay, RfSampPassThrough
 from waveflow.build.codegen_check import check
 from waveflow.simulation.simulation import Simulation
 
@@ -54,19 +54,49 @@ def test_the_graph_lowers():
 def test_the_task_body_extracts():
     """The check the graph-level one does not make.
 
-    ``check(mod, "composite_kernel")`` runs ``composite_top_spec``, which for a **leaf** emits the
-    one-line top that instantiates the task — and never touches ``run_iter``. So it answered ``True``
-    for this module while the body could not be extracted at all. Two separate refusals were hiding
-    behind that ``True``; this is the assertion that would have shown them.
+    ``check(mod, "composite_kernel")`` runs ``composite_top_spec``, which walks the graph and never
+    touches ``run_iter``. So it answered ``True`` while the body could not be extracted at all — two
+    separate refusals were hiding behind that ``True``, and this is the assertion that would have
+    shown them.
+
+    The subject is the **block relay child**, not the composite: a composite has no body of its own,
+    and the ingress hands over a hand-written one.
     """
     from waveflow.build.hwgen import task_files_to_str
 
-    files = task_files_to_str(RfSampPassThrough)
-    body = files[f"{TOP}_task.h"]
-    assert f"static void {TOP}_task(" in body
+    files = task_files_to_str(RfSampBlockRelay)
+    body = files["rf_samp_relay_task.h"]
+    assert "static void rf_samp_relay_task(" in body
     # It relays through the generated array (de)serializers -- never hand-rolled packing.
-    assert "read_stream<64>(s_in)" in body and "write_stream<64>(s_out)" in body
+    assert "read_stream<64>(blk_in)" in body and "write_stream<64>(s_out)" in body
     assert '#include "u_int64_array.h"' in body
+
+
+def test_the_composite_has_no_body_of_its_own():
+    """A composite's codegen IS its sub-component graph, and asking it for a task must say so."""
+    from waveflow.build.hwgen import task_files_to_str
+
+    with pytest.raises(Exception, match="composite"):
+        task_files_to_str(RfSampPassThrough)
+
+
+def test_the_ingress_hands_over_a_hand_written_body():
+    """The ingress's C++ is a word relay; its ``run_iter`` is a burst relay, and that is not a bug.
+
+    ``StreamIFSlave.get`` pops one burst and truncates it, so a word-granular Python body would
+    discard 63 of every 64 words — the relay the hardware needs has no pysim expression. The module
+    therefore overrides ``kernel_task()`` and leaves ``run_iter`` as the block-granular twin.
+    """
+    from examples.rf_loopback.rf_dut_build import FIXED_TASK_BODIES
+    from examples.rf_loopback.rf_loopback import RfSampIngress
+
+    kt = RfSampIngress(name="i", sim=Simulation()).kernel_task()
+    assert kt.task_fn == "rf_samp_ingress_task" and kt.header in FIXED_TASK_BODIES
+    assert kt.signature == ("s_in", "w_out")
+    src = (ROOT / "src" / kt.header).read_text(encoding="utf-8")
+    assert "w_out.write(s_in.read());" in src, (
+        "the ingress body must be ONE word in, ONE word out — anything that buffers stops reading "
+        "the boundary port, which is the defect this task exists to remove")
 
 
 def test_the_pysim_counter_is_marked_sim_only():
@@ -76,7 +106,7 @@ def test_the_pysim_counter_is_marked_sim_only():
     implicit-capture rule rejects. If someone moves it back inline, extraction breaks — but only in a
     toolchain-gated test unless this one exists.
     """
-    assert getattr(RfSampPassThrough.count_burst, "_is_sim_only", False)
+    assert getattr(RfSampBlockRelay.count_burst, "_is_sim_only", False)
 
 
 # ---------------------------------------------------------------------------
@@ -108,9 +138,11 @@ def test_the_dut_is_the_same_module_the_loopback_uses():
     loop = RfLoopbackTB(name="l", sim=Simulation())
     alone = RfPassThroughTB(name="a", sim=Simulation())
     assert type(loop.dut) is type(alone.dut) is RfSampPassThrough
-    assert sorted(loop.dut.endpoints) and (
-        [type(e).__name__ for _n, e in loop.dut.boundary]
-        == [type(e).__name__ for _n, e in alone.dut.boundary])
+    # The composite's ports live on its children, so compare the BOUNDARY (names and endpoint types)
+    # rather than its own endpoint dict, which a composite does not populate.
+    assert [(n, type(e).__name__) for n, e in loop.dut.boundary] == \
+        [(n, type(e).__name__) for n, e in alone.dut.boundary]
+    assert [n for n, _e in loop.dut.boundary] == ["s_in", "s_out"]
 
 
 # ---------------------------------------------------------------------------
@@ -136,13 +168,23 @@ def test_csynth_produces_a_real_datapath():
     assert PROJ.is_dir(), f"no RTL at {PROJ}"
     mods = {p.stem for p in PROJ.glob("*.v")}
     assert TOP in mods, f"no top module in {sorted(mods)}"
-    assert f"{TOP}_{TOP}_task" in mods, (
-        f"the task body is missing from the RTL — the kernel was optimized away: {sorted(mods)}")
+    # BOTH task modules, because a composite that DCE'd one of them would still report OK and still
+    # write a top. The ingress is the one that keeps the boundary port drained; a top with only the
+    # relay in it is exactly the design this change replaced.
+    for task in (f"{TOP}_rf_samp_ingress_task_64_s", f"{TOP}_rf_samp_relay_task"):
+        assert task in mods, (
+            f"{task} is missing from the RTL — the kernel was optimized away: {sorted(mods)}")
     pipelines = [m for m in mods if "Pipeline_VITIS_LOOP" in m]
     assert len(pipelines) >= 2, (
         f"expected the read and write loops as pipelined modules, found {pipelines}")
     assert any("RAM" in m for m in mods), (
         f"expected a block buffer between the two loops, found {sorted(mods)}")
+    # The internal channel is one block deep AS RTL. Unlike a boundary port, this depth declaration
+    # is honoured (HLS 214-387 applies to top-level arguments only), and the whole overlap depends
+    # on it: the FIFO is what the ingress hands a block off into.
+    assert f"{TOP}_fifo_w64_d64_A" in mods, (
+        f"no depth-64 internal FIFO in the RTL — the declared channel depth did not reach the "
+        f"hardware: {sorted(mods)}")
 
 
 @pytest.mark.vitis
@@ -189,12 +231,18 @@ def test_generated_top_and_harness_are_present():
     for f in (f"{TOP}_ports.h", f"{TOP}_tb_harness.h", f"{TOP}_bfm_tb.cpp"):
         assert (ROOT / "xsi" / f).is_file(), f"{f} was not generated"
     assert (ROOT / "gen" / f"{TOP}.cpp").is_file()
-    assert (ROOT / "include" / f"{TOP}_task.h").is_file()
+    # One generated body and one copied one -- both must be in the include dir the top #includes.
+    assert (ROOT / "include" / "rf_samp_relay_task.h").is_file()
+    assert (ROOT / "include" / "rf_samp_ingress_task.h").is_file()
 
 
-def test_the_generated_top_declares_axis_ports():
+def test_the_generated_top_is_two_tasks_and_a_channel():
     top = (ROOT / "gen" / f"{TOP}.cpp").read_text(encoding="utf-8")
     assert "#pragma HLS INTERFACE axis port=s_in" in top
     assert "#pragma HLS INTERFACE axis port=s_out" in top
     assert "#pragma HLS INTERFACE ap_ctrl_none port=return" in top
-    assert f"hls_thread_local hls::task t0({TOP}_task, s_in, s_out);" in top
+    # The whole fix, as four lines of generated C++: a one-block channel between two tasks.
+    assert "hls_thread_local hls::stream<ap_uint<64> > blk_fifo;" in top
+    assert "#pragma HLS STREAM variable=blk_fifo depth=64" in top
+    assert "hls_thread_local hls::task t0(rf_samp_ingress_task<64>, s_in, blk_fifo);" in top
+    assert "hls_thread_local hls::task t1(rf_samp_relay_task, blk_fifo, s_out);" in top

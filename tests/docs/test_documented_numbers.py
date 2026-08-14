@@ -341,20 +341,29 @@ def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
 # ---------------------------------------------------------------------------
 
 def test_converter_page_quotes_the_recorded_rtl_loss():
-    """``guide/rf/converter.md`` reports what the first real RTL run found, so those numbers are
-    claims about the design and must match the gate that measured them.
+    """``guide/rf/converter.md`` reports what the RTL run found, so those numbers are claims about
+    the design and must match the gate that measured them.
 
     Read out of ``test_rf_loopback_xsi.py``'s constants — the same values the XSI gate asserts —
-    rather than retyped, so a re-recorded shortfall fails here until the page is updated.
+    rather than retyped, so a change fails here until the page is updated.
+
+    The page now tells a **before and after**: it lost 72 words, and after the ingress/block split it
+    loses none. Only the "after" is a live number, so only that is read from the gate; the historical
+    72 is prose about a design that no longer exists, and pinning it to a constant would mean the
+    constant could never move again. What is checked instead is that the page has not quietly dropped
+    the history — a page that only ever showed the good number teaches nothing.
     """
     from tests.examples.test_rf_loopback_xsi import WANT_ADC_DROPPED, WANT_ADC_WORDS
 
     text = _page("guide/rf/converter.md")
     accepted = WANT_ADC_WORDS - WANT_ADC_DROPPED
+    assert WANT_ADC_DROPPED == 0, (
+        "the gate no longer asserts a lossless fabric; converter.md's claim rests on it")
     assert f"**{WANT_ADC_WORDS}** words" in text, "converter.md no longer states what the ADC produces"
     assert f"accepts **{accepted}**" in text, "converter.md no longer states what the fabric accepts"
-    assert f"**{WANT_ADC_DROPPED} are dropped**" in text, (
-        f"converter.md no longer quotes the measured drop count of {WANT_ADC_DROPPED}")
+    assert "**72 were dropped**" in text and "the design was then fixed" in text.lower(), (
+        "converter.md no longer tells the before/after — the drop finding is the reason the counter "
+        "contract exists, and a page showing only the fixed number loses the lesson")
 
 
 # ---------------------------------------------------------------------------
