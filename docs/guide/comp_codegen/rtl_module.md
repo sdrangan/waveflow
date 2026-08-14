@@ -173,17 +173,22 @@ here. The answer is the same one, stated once and referenced three times — a
 both and compare outputs, because the two artifacts are the design's two halves and only their
 outputs can testify that they agree.
 
-## What is not here yet
+## Where the declared module ends up
 
-This page describes what exists. Deliberately absent:
+This page is the *declaration*. Two more pieces turn it into a design, and both exist:
 
-- **The wrapper.** A module instantiating the kernel plus its memories and joining them is the next
-  step; the witness's version is 49 lines and entirely mechanical, because both sides' port names are
-  known here.
-- **The wiring.** There is no `BramIF` yet, so nothing binds a `BramIFSlave` to an accessor and
-  `T2pBram` has no pysim behaviour of its own — including which endpoint carries the access latency.
-- **XSI.** Simulating a design that contains one needs the memory and the wrapper in the `.f` and the
-  wrapper as the `xelab` top.
+- **The wiring** — a [`BramIF`](../interface/bram.md) binds an accessor's port to a memory port, and
+  `add_rtl_if` (deliberately **not** `add_if`) is what keeps the accessor's port a boundary port of
+  the kernel.
+- **The wrapper** — [`wrapper_gen`](../../../waveflow/build/wrapper_gen.py) emits a module
+  instantiating the kernel plus its memories and joining them, and that module is what a simulator
+  elaborates. See [Free-running composite](./freerunning_composite.md#when-the-composite-is-not-the-whole-design-the-wrapper).
+
+`examples/bram_toy` is the worked design, gated at RTL against the witness's own values.
+
+One thing genuinely absent: `trace_manifest` derives net names in *the top's own scope*, so with a
+wrapper as the elaborated top the kernel's internals sit one level deeper. Nothing traces or times a
+wrapped design yet, so no consumer has needed the scope prefix — the first one will.
 
 ## See also
 
