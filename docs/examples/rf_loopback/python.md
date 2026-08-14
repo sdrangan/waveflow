@@ -85,19 +85,42 @@ hand-rolled packing produces hide at exactly the awkward widths.
 ## The digital logic
 
 `RfSampPassThrough` is a [`FreeRunMod`](../../guide/flows/concurrent.md): one burst in, the same
-burst out.
+burst out — as **two tasks over an internal channel**.
 
-```python
-def run_iter(self) -> ProcessGen[None]:
-    words = yield from self.s_in.get(nwords_max=int(self.nwords_blk))
-    self.n_blk += 1
-    yield from self.s_out.write(words)
+```
+s_in --> [RfSampIngress] --blk_fifo (depth = nwords_blk)--> [RfSampBlockRelay] --> s_out
 ```
 
 Free-running is the honest kind here — logic sitting between two converter ports has no host to
-start it and re-fires on each arriving block. The body is trivial so that the loopback golden is
-*exact* rather than approximate: any difference between what went in and what came out is the
-plumbing, not an algorithm.
+start it and re-fires on each arriving block. The payload behaviour is trivial so that the loopback
+golden is *exact* rather than approximate: any difference between what went in and what came out is
+the plumbing, not an algorithm.
+
+The **structure** is not trivial, and it is not decoration. It was one task — read a whole block,
+then write it — and that design dropped 72 of 512 samples at RTL. A converter cannot be
+back-pressured, so a stage that stops reading its input for 64 cycles at a stretch loses whatever
+arrives meanwhile. Splitting the read from the write is what lets block *k+1* arrive while block *k*
+is going out:
+
+```python
+class RfSampIngress(FreeRunMod):        # never stops reading the boundary port
+    def run_iter(self):
+        words = yield from self.s_in.get()
+        yield from self.w_out.write(words)
+
+
+class RfSampBlockRelay(FreeRunMod):     # allowed to be busy: it holds a block
+    def run_iter(self):
+        blk = yield from self.blk_in.get(self.blk_words)
+        self.count_burst()
+        yield from self.s_out.write(blk)
+```
+
+The channel between them is declared one block deep, and **that declaration is honoured because the
+channel is internal**: `#pragma HLS STREAM depth=` works inside a top and is ignored on a top-level
+argument, so a boundary port is 2 deep whatever the Python says. That asymmetry is why the elastic
+buffer has to be a task plus a channel rather than a bigger number on the port — see
+[the fidelity boundary](../../guide/rf/fidelity.md#the-resolution-limit).
 
 ## Graph and procedure
 
@@ -248,21 +271,49 @@ is exercised rather than stated. It also keeps two risks apart: whether the DUT 
 at RTL is one question, whether the converter models drive it correctly is another, and answering the
 first with generic BFMs means a later failure has one place to be.
 
-### The body is generated
+### One body is generated, one is handed over
 
-Not hand-written. `run_iter` extracts to:
+The top is derived from the graph — two tasks and the channel between them, exactly as `mem_copy`'s
+is:
 
 ```cpp
-static void rf_pass_through_task(hls::stream<ap_uint<64> >& s_in,
-                                 hls::stream<ap_uint<64> >& s_out) {
+hls_thread_local hls::stream<ap_uint<64> > blk_fifo;
+#pragma HLS STREAM variable=blk_fifo depth=64
+hls_thread_local hls::task t0(rf_samp_ingress_task<64>, s_in, blk_fifo);
+hls_thread_local hls::task t1(rf_samp_relay_task, blk_fifo, s_out);
+```
+
+The block relay's body is **generated** from its `run_iter`:
+
+```cpp
+static void rf_samp_relay_task(hls::stream<ap_uint<64> >& blk_in,
+                               hls::stream<ap_uint<64> >& s_out) {
     UInt64Array blk;
-    blk.read_stream<64>(s_in);
+    blk.read_stream<64>(blk_in);
     blk.write_stream<64>(s_out);
 }
 ```
 
-Getting there needed two changes to the Python, and both are worth knowing because they are rules,
-not quirks:
+The ingress's is **hand-written**, and the reason is a real boundary rather than a gap in the
+extractor:
+
+```cpp
+template <int W>
+static void rf_samp_ingress_task(hls::stream<ap_uint<W> >& s_in,
+                                 hls::stream<ap_uint<W> >& w_out) {
+    w_out.write(s_in.read());
+}
+```
+
+One word in, one word out — that is what "never stops reading" means in hardware. **pysim cannot say
+that.** `StreamIFSlave.get` pops one burst and truncates it to the width asked for, so a word-granular
+Python body would silently discard 63 of every 64 words; a burst is pysim's quantum. So the module
+[overrides `kernel_task()`](../../guide/comp_codegen/freerunning_override.md) and leaves `run_iter` as
+the pysim twin, relaying a whole burst. The two are identical at block granularity, which is the only
+granularity pysim resolves.
+
+Getting the generated half there needed two changes to the Python, and both are worth knowing because
+they are rules, not quirks:
 
 - **A pysim counter cannot be read inline in a synthesizable body.** `self.n_blk += 1` trips the
   implicit-capture rule, which cannot tell a baked-in constant from a register someone must write
@@ -278,25 +329,31 @@ not quirks:
 
 | layer | says | does **not** say |
 |---|---|---|
-| `check(…, "composite_kernel")` | the graph lowers | anything about the body — for a leaf it never runs the extractor |
+| `check(…, "composite_kernel")` | the graph lowers | anything about the body — it never runs the extractor |
 | pysim | the relay is bit-identical in Python | anything about RTL |
 | csynth | the RTL exists **and has a datapath** | that it is correct — a DCE'd kernel still reports success |
 | XSI | the real RTL relays the words | — |
 
-The csynth check therefore asserts the *module set*, not the exit code: the task module, the two
-pipelined loops (the read and the write), and the block RAM between them. A top with nothing under it
-is exactly what a silently optimized-away kernel looks like.
+The csynth check therefore asserts the *module set*, not the exit code: **both** task modules, the
+two pipelined loops (the read and the write), the block RAM between them, and the depth-64 internal
+FIFO. A top with nothing under it is exactly what a silently optimized-away kernel looks like — and
+with two tasks there are now two things that could vanish.
 
 ### The gate
 
 8 bursts × 64 words = 512 words, relayed bit-identically, with the last word landing at cycle
-**1072**.
+**1066**.
 
-That number is the DUT's honest cost. The generated body is `read_stream` then `write_stream` — two
-sequential pipelined loops over one block RAM — so a firing does **not** overlap its read and write,
-and each block costs about 143 cycles rather than 128. Overlapping them would need two tasks and a
-channel between them, which is what `mem_copy` does and why its per-job cost is roughly a `max()`
-rather than a sum. Recorded in `tests/examples/test_xsi_bfm.py` beside the other cycle gates.
+It was 1072 before the split, and **the six cycles are the point**: the change was not made to go
+faster. The block stage still costs 136 cycles per firing (two sequential pipelined loops over one
+block RAM), so per-block cost is ~133 either way, and this testbench — whose `StreamDriver` pushes at
+full rate — is bound by that. The read/write serialization inside a block stage is intrinsic to block
+processing, not a defect: a stage that transforms a block cannot emit before it has received one.
+
+What changed is *where the stall lands*. Here it lands on a driver that waits, so it is invisible;
+in the loopback it lands on a converter that cannot, which is where the change is measured — the ADC
+went from dropping 72 words to dropping none. Both numbers live in
+`tests/examples/test_xsi_bfm.py` and `tests/examples/test_rf_loopback_xsi.py`.
 
 **Source of truth:** `examples/rf_loopback/`, `tests/examples/test_rf_loopback.py`,
 `tests/examples/test_rf_dut_synth.py`.

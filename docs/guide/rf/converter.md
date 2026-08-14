@@ -116,22 +116,28 @@ check on the data that did arrive.
 
 ### What that caught, on the first real run {#the-drop-finding}
 
-The RF loopback's digital logic reads a whole block before writing it, so `TREADY` is low for ~64
-cycles at a stretch while the converter presents a beat every ~4.7 cycles regardless. Over eight
-blocks:
+The RF loopback's digital logic *used to* read a whole block before writing it, so `TREADY` was low
+for ~64 cycles at a stretch while the converter presented a beat every ~4.7 cycles regardless. Over
+eight blocks:
 
-- the ADC produces **512** words and the fabric accepts **440**;
-- **72 are dropped**;
-- the first block is still bit-identical, and everything after the first write phase is not.
+- the ADC produces **512** words and the fabric accepted **440**;
+- **72 were dropped**;
+- the first block was still bit-identical, and everything after the first write phase was not.
 
-pysim does not show this either, but no longer for the reason first recorded. Its stream master now
-`offer()`s rather than `write()`s, at the converter's own rate and against the real 2-deep boundary
-— and still reports zero, because at **block** granularity this DUT genuinely keeps up (213 ns of
-work per 1000 ns period). The loss is a phase effect *inside* a block period, which is below what
-block-LT can resolve. See [the fidelity boundary](./fidelity.md#the-resolution-limit).
+Nothing but the counters said so. The run completed, the output was well-formed, and the data that
+did arrive was exact — which is the failure mode this contract exists for.
 
-That is a design shortfall (the fix is to overlap the read and the write, i.e. two tasks and a
-channel), not a modelling error, and it is recorded as a gate rather than smoothed over.
+pysim did not show it, and still does not, but not for the reason first recorded. Its stream master
+now `offer()`s rather than `write()`s, at the converter's own rate and against the real 2-deep
+boundary — and still reports zero, because at **block** granularity that DUT genuinely kept up (213
+ns of work per 1000 ns period). The loss was a phase effect *inside* a block period, which is below
+what block-LT can resolve. See [the fidelity boundary](./fidelity.md#the-resolution-limit).
+
+**The design was then fixed**, and the fabric now accepts **512** — an ingress task that relays one
+word at a time into a one-block internal FIFO, with the block stage behind it. What the counter
+guards has flipped accordingly: it is no longer a recorded shortfall to re-measure but a contract to
+hold at zero. The gap it exposed did not close, though — pysim reported zero for the broken design
+too, so only this backend can check the clause.
 
 ## The RF side at RTL
 
@@ -152,7 +158,7 @@ Same scenario, same graph, and they do not line up:
 |---|---|---|
 | where | the `RFSampIF` **edge** | the converter models **and** the channel |
 | units | whole **blocks** | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
-| ADC→fabric loss | none — the master *blocks* | dropped, and counted |
+| ADC→fabric loss | none — and none for a design that *does* lose words | dropped, and counted |
 
 Neither is wrong, and neither is being redefined to make them agree: that mapping is the input to a
 cross-backend equivalence harness (`plans/behavioral_edges.md` S4) which does not exist yet, and

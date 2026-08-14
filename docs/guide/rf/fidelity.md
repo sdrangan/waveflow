@@ -59,15 +59,17 @@ Two things had to be corrected before the count could mean anything:
 
 ## Where the check stops seeing {#the-resolution-limit}
 
-Here is a design that violates condition 3, where **RTL loses 72 of 512 words and pysim reports
-none**. Both are behaving correctly.
+Here is a design that violated condition 3, where **RTL lost 72 of 512 words and pysim reported
+none**. Both were behaving correctly. The design has since been fixed — see
+[what fixing it took](#what-fixing-it-took) — but the *gap* it exposed is permanent, and that is why
+it is still the example on this page.
 
-`RfSampPassThrough` reads a whole 64-word block and only then writes it. Per 1000 ns block period it
-needs about 213 ns of work, so **at block granularity it comfortably keeps up** — it is back at its
-input long before the next block starts, and that is exactly what pysim measures. At RTL the words
+`RfSampPassThrough` read a whole 64-word block and only then wrote it. Per 1000 ns block period it
+needs about 213 ns of work, so **at block granularity it comfortably kept up** — it was back at its
+input long before the next block started, and that is exactly what pysim measures. At RTL the words
 are not a block; they arrive one per ~4.7 cycles, spread across the whole period, and the DUT's write
-phase is a *contiguous* 213 ns during which it accepts nothing. About 13.6 words arrive into a 2-deep
-FIFO. The rest are gone.
+phase was a *contiguous* 213 ns during which it accepted nothing. About 13.6 words arrived into a
+2-deep FIFO. The rest were gone.
 
 The loss is a **phase** effect inside one block period. Block-LT carries one event per block, so the
 information simply is not there. This is not a missing feature; it is the granularity boundary, and
@@ -78,6 +80,34 @@ it is worth stating in the form a designer can use:
 
 So condition 3 has a coarse half and a fine half. pysim checks the coarse half for free, on every
 run, with no toolchain. The fine half needs RTL.
+
+## What fixing it took {#what-fixing-it-took}
+
+The design now drops **nothing**, and every block comes back bit-identical — which was unreachable
+while any of them were missing words. It took a structural change, not a tuning one:
+
+```
+s_in --> [ingress task] --internal FIFO, one block deep--> [block stage] --> s_out
+```
+
+Three things are worth taking away, and none of them is "make the buffer bigger":
+
+- **The stage that touches the boundary port may never stop reading.** The ingress task's whole
+  firing is one word in, one word out, so `TREADY` is low for at most a cycle. Any body that buffers
+  — including one that buffers *into a deep FIFO* — stops reading for the length of its handoff.
+- **The elastic buffer must be an internal channel.** A deeper boundary port is not an option: a
+  depth pragma on a top-level argument is ignored (`HLS 214-387`), so the port is 2 deep whatever the
+  Python says. An internal channel's depth *is* emitted and *is* physical.
+- **The block stage is still allowed to be busy**, and that is the whole point of separating them. A
+  stage that transforms a block cannot emit before it has received one; it just must not be the stage
+  holding the port.
+
+The throughput barely moved (1072 → 1066 cycles on the DUT-alone gate) because the block stage's
+read-then-write was never the bottleneck for *this* testbench. The change was never about speed.
+
+**None of this makes the contract checkable in pysim.** pysim reported `dropped == 0` for the broken
+design and reports it for the fixed one; its zero was uninformative before and is uninformative now.
+The clause is still checked only at RTL.
 
 ### Why not just make pysim stricter
 
@@ -107,7 +137,7 @@ Same scenario, same graph, and the numbers do not match. They are not meant to:
 |---|---|---|
 | where loss is accounted | the `RFSampIF` edge, and `StreamIF.dropped` | the converter models and the channel |
 | units | whole **blocks**, and **words** at the fabric boundary | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
-| ADC→fabric loss | 0 — sub-block, below the resolution | 72 of 512 words |
+| ADC→fabric loss | 0 — and it was 0 for the broken design too | 0 now; 72 of 512 words before the fix |
 | startup transient | 2 blocks | 1 block |
 
 The startup difference is pacing, not physics: pysim paces the RF side on the **edge**'s metronome,
