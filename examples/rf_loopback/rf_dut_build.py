@@ -52,7 +52,7 @@ from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 from waveflow.utils.burst_io import write_burst_bundle  # noqa: E402
 
-from examples.rf_loopback.rf_loopback import RfSampPassThrough  # noqa: E402
+from examples.rf_loopback.rf_loopback import RfSampBlockRelay, RfSampPassThrough  # noqa: E402
 
 #: The generated top's name — the DUT's own ``cpp_kernel_name``.
 TOP = "rf_pass_through"
@@ -92,7 +92,7 @@ class RfPassThroughTB(FreeRunMod):
         super().__post_init__()
         w = int(self.bitwidth)
         self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                                     nwords_blk=int(self.nwords_blk))
+                                     nwords_blk=int(self.nwords_blk), clk=self.clk)
         # has_tlast=True on both participants because the DUT's endpoints declare it and StreamIF
         # refuses a mismatch.  It is pysim framing only: the generated top carries plain
         # `hls::stream<ap_uint<W>>` ports and the generic BFMs drive no TLAST pin — the same
@@ -193,6 +193,27 @@ def gen_headers(config: BuildConfig) -> None:
     failed = [n for n, r in results.items() if not r.success]
     if failed:
         raise RuntimeError(f"gen-include failed: {failed}")
+    copy_fixed_task_bodies(config.root_dir)
+
+
+#: Hand-written ``hls::task`` bodies this design instantiates, copied verbatim from ``src/`` — the
+#: example-local twin of ``MemStreamStep``, which does the same for the framework's ``mem_*`` bodies.
+#: Kept OUT of ``include/`` in the source tree so nothing there is half-generated: everything in
+#: ``include/`` is a build product, and this is the step that puts it there.
+FIXED_TASK_BODIES = ("rf_samp_ingress_task.h",)
+
+
+def copy_fixed_task_bodies(root_dir: Path) -> None:
+    """Copy :data:`FIXED_TASK_BODIES` from ``src/`` into ``include/``."""
+    import shutil
+
+    dst = Path(root_dir) / INCLUDE_DIR
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in FIXED_TASK_BODIES:
+        src = HERE / "src" / name
+        if not src.is_file():
+            raise FileNotFoundError(f"fixed task body missing: {src}")
+        shutil.copyfile(src, dst / name)
 
 
 def generate_dut(out_dir: Path = HERE) -> Path:
@@ -207,9 +228,12 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     gen.mkdir(parents=True, exist_ok=True)
     inc = out_dir / INCLUDE_DIR
     inc.mkdir(parents=True, exist_ok=True)
-    # The body is GENERATED from run_iter; there are no @synthesizable hooks in it, so no sticky
-    # impl stub is written (and none would be wanted -- the whole body is derived).
-    for name, content in task_files_to_str(RfSampPassThrough).items():
+    # ONE task body is generated -- the block relay's, from its run_iter.  The ingress's is
+    # hand-written and was copied by gen_headers: a composite's bodies are per CHILD, and the two
+    # children answer the "who writes this body?" question differently.  There are no
+    # @synthesizable hooks in the generated one, so no sticky impl stub is written (and none would
+    # be wanted -- the whole body is derived).
+    for name, content in task_files_to_str(RfSampBlockRelay).items():
         if name.endswith("_impl.cpp") or name.endswith("_impl.tpp"):
             continue
         (inc / name).write_text(content, encoding="utf-8")
