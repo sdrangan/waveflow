@@ -119,18 +119,19 @@ There are two more axes, and keeping them apart is what lets one module serve mo
 | **hooks** | is there a *pre-written* artifact for it? | the module, by declaring one |
 | **cut** | *which* artifact applies? | the **build** |
 
-### Hooks: the two pre-written realizations
+### Hooks: the three pre-written realizations
 
-A module's C++ is either derived from its Python or handed over ready-made. Handing it over is a
-**hook**, and there are two — symmetric, both optional:
+A module's artifact is either derived from its Python or handed over ready-made. Handing it over is a
+**hook**, and there are three — all optional:
 
 | hook | declares | realized as |
 |---|---|---|
 | [`kernel_task()`](../custom_hooks/writing.md) | "my `hls::task` body is *X*" | a task **inside** the generated top |
+| [`rtl_module()`](../comp_codegen/rtl_module.md) | "my **Verilog** is *Z*" | an RTL module **beside** the generated top |
 | [`bfm_model()`](../custom_hooks/bfm_model.md) | "my cycle model is *Y*" | an `XsiSimObj` **beside** the top |
-| *neither* | nothing — there is no pre-written artifact | **nothing is emitted**: a pysim-only node |
+| *none* | nothing — there is no pre-written artifact | **nothing is emitted**: a pysim-only node |
 
-A module may declare either, both, or neither. **Neither is not an error** — it is a plain `HwModule`
+A module may declare any, all, or none. **None is not an error** — it is a plain `HwModule`
 that never leaves simulation, and that is a *finding* from `check`, not something the class states
 about itself. (Overriding is the declaration: the base `bfm_model()` raises, and `declares_hook()`
 detects the override by identity, exactly as `_kind()` detects a `run_iter` override.)
@@ -171,8 +172,8 @@ So no module declares which side it is on, and the framework does not either:
   local names collide (two children both call their memory port `m_mem`).
 - The **cut is an argument**. `tb_top_spec(tb, dut=...)` names which child is synthesized; discovery
   is the default, not the mechanism.
-- **The cut decides which hook is consulted** — inside the top, `kernel_task()`; beside it,
-  `bfm_model()`.
+- **The cut decides which hook is consulted** — inside the top, `kernel_task()`; beside it in the
+  same design, [`rtl_module()`](../comp_codegen/rtl_module.md); outside the design, `bfm_model()`.
 
 This is why "is this a DUT or a testbench participant?" is not a property you will find on any class.
 Asking it of a *(module, cut)* pair is what `check(mod, target)` is for. See

@@ -33,6 +33,7 @@ from waveflow.hw.codegen_targets import (
     CUT_INDEPENDENT_TARGETS,
     IMPLEMENTED_TARGETS,
     REALIZATION_HOOKS,
+    RTL_MODULE,
     SEQUENTIAL_VITIS_TB,
     SEQUENTIAL_XSI_TB,
     XSI_BFM_MODEL,
@@ -70,7 +71,8 @@ def _hook_clause(cls: type, target: str | None) -> str:
     is not on an execution-model class" is true, but what they wanted to know is *why it cannot go
     inside the top* — and the answer is that it declares no ``kernel_task()``: no pre-written body,
     nothing to instantiate.  Naming the peer hook when it IS present turns the refusal into a
-    diagnosis: this module is realized on the **other side of the cut** (``plans/design_cut.md``).
+    diagnosis: this module is realized **somewhere else** — beside the top as RTL
+    (``plans/rtl_module.md``), or outside the cut entirely (``plans/design_cut.md``).
 
     Empty when the target has no hook, or when the class already declares the one it needs (in which
     case the hook is not what is wrong and saying so would mislead).
@@ -82,8 +84,13 @@ def _hook_clause(cls: type, target: str | None) -> str:
         return ""
     peers = [h for t, h in sorted(REALIZATION_HOOKS.items())
              if h != hook and declares_hook(cls, h)]
+    # "Elsewhere", not "the other side of the cut": with three hooks there is no other side, there
+    # are two of them — inside the top (kernel_task), beside it in RTL (rtl_module), outside the
+    # design as a testbench model (bfm_model).  Naming the hook the class DOES declare is what turns
+    # the refusal into a diagnosis.
     also = (f" It does declare {', '.join(h + '()' for h in peers)} — the realization hook(s) for a "
-            f"module realized on the OTHER side of the cut." if peers else "")
+            f"module realized ELSEWHERE: inside the top, beside it as RTL, or outside the cut."
+            if peers else "")
     return (f" It also declares no {hook}() hook, which is what a module realized as {target!r} "
             f"provides.{also}")
 
@@ -166,12 +173,13 @@ def check(source, target: str | None = None, *,
     and only *cut-independent* answer, so a verdict never silently depends on a graph the caller did
     not supply.
 
-    **One target is not derived, and the difference is load-bearing.**  ``composite_kernel`` and the
-    two sequential targets run the real generator, so they answer with rules nobody restated.
-    ``xsi_bfm_model`` is *resolved*: a hook lookup, a class lookup, port coverage, a registry lookup.
-    It can say "you named a model and its ports line up"; it can never say "your Python behaviour is
-    realizable as a BFM".  Nothing static can — the standing answer is a byte-identical vector gate,
-    and this function's existence must not be read as covering it.
+    **Two targets are not derived, and the difference is load-bearing.**  ``composite_kernel`` and
+    the two sequential targets run the real generator, so they answer with rules nobody restated.
+    ``xsi_bfm_model`` and ``rtl_module`` are *resolved*: a hook lookup, a class or file lookup, port
+    coverage.  They can say "you named a model / a module and its ports line up"; they can never say
+    "your Python behaviour is realizable as this BFM / this Verilog".  Nothing static can — the
+    standing answer is a byte-identical vector gate, and this function's existence must not be read
+    as covering it.
 
     The ``(ok, msg)`` shape reports the **first** violation.  Collecting every violation in one pass
     is a later refinement; the return is shaped so it can grow into a structured report without
@@ -199,8 +207,9 @@ def check(source, target: str | None = None, *,
         from waveflow.hw.hw_module import HwModule
         if not issubclass(cls, HwModule):
             return False, (
-                f"{target!r} asks whether a MODULE can be realized outside the cut, and "
-                f"{cls.__name__} is not an HwModule — it has no endpoints to place a model against."
+                f"{target!r} asks how one MODULE is realized relative to the cut, and "
+                f"{cls.__name__} is not an HwModule — it has no endpoints to place an artifact "
+                f"against."
             )
         return _check_generates(source, cls, target, crossing)
 
@@ -241,6 +250,8 @@ def _check_generates(source, cls: type, target: str,
     * ``composite_kernel``       → :func:`~waveflow.build.composite_gen.composite_top_spec` (the graph
       walk — a leaf is the 1-task case, so the same walk validates both)
     * ``sequential_xsi_tb``      → :func:`~waveflow.build.composite_gen.tb_top_spec` (the TB graph walk)
+    * ``xsi_bfm_model``          → :func:`~waveflow.build.composite_gen.resolve_bfm_model` (per module)
+    * ``rtl_module``             → :func:`~waveflow.build.rtl_gen.resolve_rtl_module` (per module)
 
     **On the verdict exception.**  The two *extractor* paths raise ``SynthesisError`` for "not in the
     synthesizable subset"; the two *graph* paths raise
@@ -278,6 +289,9 @@ def _check_generates(source, cls: type, target: str,
         elif target == XSI_BFM_MODEL:
             from waveflow.build.composite_gen import resolve_bfm_model
             resolve_bfm_model(comp, crossing)
+        elif target == RTL_MODULE:
+            from waveflow.build.rtl_gen import resolve_rtl_module
+            resolve_rtl_module(comp)
         else:
             # Unreachable: gate 3 has already rejected any non-implemented target, and every
             # implemented target is handled above. If this fires, IMPLEMENTED_TARGETS grew a name

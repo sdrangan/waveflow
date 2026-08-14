@@ -37,9 +37,9 @@ elaborated RTL cycle-by-cycle through an **XSI BFM**. Toy example throughout: `m
 A third path — the full system on the fabric (an FPGA `bitstream` via Vivado IPI, no testbench, host
 software drives it) — is future work; it is not one of the two simulation flows above.
 
-## One target that is not a flow
+## Two targets that are not flows
 
-The targets above are per-**graph**: a DUT plus its testbench. There is one more, and it asks a
+The targets above are per-**graph**: a DUT plus its testbench. There are two more, and both ask a
 per-**module** question:
 
 `xsi_bfm_model` — *can this one module be realized as a pre-written cycle model beside a top?* That is
@@ -47,10 +47,17 @@ the realization of a module that lies **outside** the cut, and the peer of `comp
 it). A module answers it by declaring a `bfm_model()` hook, just as a module inside the cut declares
 `kernel_task()`.
 
-It is deliberately not a row in the table, because **the cut is a property of the build, not of the
-class**: the same module is inside the DUT in one synthesis and a testbench model in another, with
-nothing about the module changed. See [Hardware modules](./modules.md#the-cut) for that axis, and
-`check(mod, "xsi_bfm_model")` for the per-module answer.
+[`rtl_module`](../comp_codegen/rtl_module.md) — *can this one module be realized as hand-written
+Verilog beside the kernel?* The third member of the same family, for the parts of a design that have
+no expression inside a Vitis kernel at all — a memory shared by two concurrent accessors is the
+worked case. A module answers it by declaring an `rtl_module()` hook naming a `.v` that already
+exists.
+
+Neither is a row in the table, because **the cut is a property of the build, not of the class**: the
+same module is inside the DUT in one synthesis, hand-written RTL beside it in another, and a testbench
+model in a third, with nothing about the module changed. See
+[Hardware modules](./modules.md#the-cut) for that axis, and `check(mod, "<target>")` for the
+per-module answer.
 
 ## See also
 

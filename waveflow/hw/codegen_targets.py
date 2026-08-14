@@ -19,11 +19,12 @@ Flow                            DUT target                  TB target
 **This must not drift from ``guide/flows/index.md``.**  If a flow is renamed,
 added, or removed there, change it here in the same commit (and vice versa).
 
-**One target is not a flow row.**  The table above is per-**graph**: a DUT and its
-testbench.  :data:`XSI_BFM_MODEL` is per-**module** — "could *this* module be
-realized as a cycle model beside a top?" — so it sits beside Flow 2 rather than
-inside it, and is listed separately on the same docs page.  See
-:data:`CUT_INDEPENDENT_TARGETS` for why it is not a ``potential_targets`` entry.
+**Two targets are not flow rows.**  The table above is per-**graph**: a DUT and its
+testbench.  :data:`XSI_BFM_MODEL` and :data:`RTL_MODULE` are per-**module** — "could
+*this* module be realized as a cycle model beside a top / as hand-written Verilog
+beside the kernel?" — so they sit beside Flow 2 rather than inside it, and are listed
+separately on the same docs page.  See :data:`CUT_INDEPENDENT_TARGETS` for why they
+are not ``potential_targets`` entries.
 
 **Two flows collapsed into one.**  ``free_running_kernel`` and ``composite_kernel``
 were two names for one product — a free-running ``ap_ctrl_none`` ``hls::task`` top —
@@ -73,6 +74,21 @@ COMPOSITE_KERNEL = "composite_kernel"
 #: (:func:`~waveflow.build.composite_gen.tb_top_spec` + ``render_tb_harness``).
 SEQUENTIAL_XSI_TB = "sequential_xsi_tb"
 
+#: **One module** realized as pre-written **Verilog** instantiated *beside* the generated top — the
+#: third member of the realization family, and the peer of ``composite_kernel`` (inside the top) and
+#: :data:`XSI_BFM_MODEL` (outside the design entirely, in the testbench).
+#:
+#: ``rtl_module``, not ``verilog``: the vocabulary names *which realization*, not which language
+#: (``composite_kernel``, ``sequential_xsi_tb``), and the day this holds a vendor IP core "verilog"
+#: is the wrong word.
+#:
+#: **Resolved, not derived**, exactly like :data:`XSI_BFM_MODEL`: the artifact is *declared* by
+#: ``rtl_module()`` and never extracted from Python.  So the verdict can say *"you named a module,
+#: the file exists, it declares the ports your port map names, and every endpoint has a Verilog port
+#: mapping"*.  It can never say *"your Python behaviour is realizable as this Verilog"* — that gap is
+#: closed by a byte-identical vector gate and by nothing else.  See ``plans/rtl_module.md``.
+RTL_MODULE = "rtl_module"
+
 #: **One module** realized as a pre-written XSI cycle model *beside* the top — the realization of a
 #: module that lies **outside** the cut, and the peer of ``composite_kernel`` (inside it).
 #:
@@ -102,6 +118,7 @@ ALL_TARGETS: frozenset[str] = frozenset({
     SEQUENTIAL_VITIS_TB,
     COMPOSITE_KERNEL,
     SEQUENTIAL_XSI_TB,
+    RTL_MODULE,
     XSI_BFM_MODEL,
     BITSTREAM,
 })
@@ -121,6 +138,13 @@ ALL_TARGETS: frozenset[str] = frozenset({
 #: this is not one.
 CUT_INDEPENDENT_TARGETS: frozenset[str] = frozenset({
     XSI_BFM_MODEL,
+    # `rtl_module` is here for the same reason, one boundary further in.  "Is this module realized as
+    # hand-written RTL beside the kernel, or as a cycle model beside the testbench, or as a task
+    # inside the top?" is a question about WHERE THE BUILD PUT IT: a memory is a hand-written module
+    # in a synthesized design and a `FlatMemory` BFM in an XSI testbench, with nothing about the
+    # memory changed.  A `potential_targets` entry would freeze that per-build role into a class
+    # fact.  The only kind requirement is being a module.
+    RTL_MODULE,
 })
 
 #: The **realization hook** a source must declare to reach each target, where one exists.
@@ -138,6 +162,7 @@ CUT_INDEPENDENT_TARGETS: frozenset[str] = frozenset({
 REALIZATION_HOOKS: dict[str, str] = {
     COMPOSITE_KERNEL: "kernel_task",
     XSI_BFM_MODEL: "bfm_model",
+    RTL_MODULE: "rtl_module",
 }
 
 #: The targets codegen can actually produce today — Flows 1 and 2.  A target in
@@ -149,5 +174,6 @@ IMPLEMENTED_TARGETS: frozenset[str] = frozenset({
     SEQUENTIAL_VITIS_TB,
     COMPOSITE_KERNEL,
     SEQUENTIAL_XSI_TB,
+    RTL_MODULE,
     XSI_BFM_MODEL,
 })

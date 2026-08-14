@@ -429,14 +429,15 @@ class HwModule(SimObj):
     #   hook             says                                    used when the module is
     #   ---------------  --------------------------------------  ---------------------------
     #   kernel_task()    "my hls::task body is X"                 INSIDE the cut  (in the top)
+    #   rtl_module()     "my pre-written Verilog is Z"            INSIDE the design, BESIDE the top
     #   bfm_model()      "my pre-written cycle model is Y"        OUTSIDE the cut (beside it)
     #
     # `kernel_task()` lives on FreeRunMod (only a free-running module HAS a task body, and a generated
-    # leaf derives it).  `bfm_model()` lives here, on HwModule, because being realized outside the cut
-    # is not a property of the execution model — a memory, a converter and a stream source are all
-    # candidates and none of them is a kernel.
+    # leaf derives it).  `bfm_model()` and `rtl_module()` live here, on HwModule, because being
+    # realized outside the cut — or as RTL beside the kernel — is not a property of the execution
+    # model: a memory, a converter and a stream source are all candidates and none of them is a kernel.
     #
-    # A module may declare either, both, or neither.  **Neither is not an error**: it is a pysim-only
+    # A module may declare any, all, or none of them.  **None is not an error**: it is a pysim-only
     # node (an RF channel, a golden reference), and that is a FINDING from `check`, not something a
     # class has to declare about itself.
 
@@ -467,6 +468,41 @@ class HwModule(SimObj):
             f"model to place beside the top. A module realized OUTSIDE the cut overrides bfm_model() "
             f"to name one (see docs/guide/custom_hooks/bfm_model.md); a module realized INSIDE the "
             f"cut declares kernel_task() instead."
+        )
+
+    def rtl_module(self) -> "object":
+        """The pre-written **Verilog module** this module is realized as, instantiated *beside* the
+        generated top — the third member of the family, after
+        :meth:`~waveflow.hw.hw_freerun.FreeRunMod.kernel_task` and :meth:`bfm_model`.
+
+        Returns a :class:`~waveflow.build.rtl_gen.RtlModule`: the Verilog module name, the
+        pre-written source file(s), the endpoint → Verilog-port map, and the instantiation
+        parameters.
+
+        **Declared, never derived, and never generated.**  This hook does not turn Python into
+        Verilog — that is the anti-goal it shares with the other two hooks (``plans/rtl_module.md``,
+        "Not in scope").  A generator would be re-deriving code that has already been verified in
+        simulation, and the artifact's whole value is that it *was* verified.
+
+        **Why a module needs this at all.**  Vitis has no shared memory between processes: a local
+        array crossing two ``hls::task`` bodies becomes a synchronizing PIPO channel (silently), and
+        one ``bram`` port used both ways is a hard dataflow error.  So a buffer shared by two
+        concurrent accessors cannot live *inside* a kernel; it lives beside it, and this is how a
+        module says so.
+
+        **The conformance obligation.**  Nothing checks that this module's Python behaviour and the
+        declared Verilog agree — exactly as nothing checks Python against C++ for :meth:`bfm_model`.
+        Same gap, same answer: a byte-identical vector gate.  See
+        ``docs/guide/comp_codegen/rtl_module.md``.
+
+        The base raises: overriding is the declaration, detected by identity via
+        :func:`declares_hook`.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} declares no rtl_module() hook, so it names no pre-written "
+            f"Verilog to instantiate beside the top. A module realized as hand-written RTL "
+            f"overrides rtl_module() to name one (see docs/guide/comp_codegen/rtl_module.md); a "
+            f"module realized as a generated task inside the top declares kernel_task() instead."
         )
 
     # -- resource models ---------------------------------------------------
