@@ -182,6 +182,50 @@ The consumer. `plans/adc_model.md` staging item 3, now with a buffer that is exp
 model and the Verilog agree — exactly as nothing checks Python against C++ for `bfm_model()`. Same
 answer, stated once and referenced twice: a byte-identical vector gate.
 
+### `guide/memory` — the reorganisation this arc earned
+
+The section says storage is *"three objects, split by where the storage lives and who is responsible
+for it."*  The axis is right; the list is short, and `BramMod` makes the gap legible. Restate it as
+**six categories ordered by the scope of sharing**, with the organising rule stated up front:
+
+> **The scope of sharing determines the category — not the size, and not the lifetime.**
+
+| # | category | mechanism | who picks the storage class |
+|---|---|---|---|
+| 1 | local temporaries, one module | plain Python / plain C++ | Vitis, from the body |
+| 2 | persistent, one module | `HwState` | Vitis + directives |
+| 3 | **between modules, inside the top** | **`BramMod` + `BramIF`** (this plan) | **the designer — it is hand-written RTL** |
+| 4 | outside the top | AXI-MM (`MemoryMod`, `MemMgr`) | the platform |
+| 5 | channel storage | `StreamIF.depth` | Vitis, from the pragma |
+| 6 | block handoff | `stream_of_blocks` | Vitis — **implicitly, if you share an array between tasks** |
+
+5 and 6 are additions, and both bit this arc. A FIFO **is** memory and is the storage most designs have
+most of, yet `StreamIF.depth` lives under `interface/` — which is why nobody noticed that a boundary
+port's declared depth is silently discarded. And 6 belongs here because **Vitis creates one whether or
+not you asked**: sharing a local array between two tasks yields a PIPO with a stalling handshake
+(experiment 1). A reader should meet that in the memory guide, not in a netlist.
+
+Category 1 needs one sentence readers will otherwise get wrong: **the Python model is not a storage
+spec.** A numpy array in `run_iter` need not correspond to anything in the RTL; only functional
+behaviour is contracted. `RfSampIngress` is the worked example — a burst in pysim, a word relay in
+hardware.
+
+Two cross-cutting tables the section lacks, both earned by this arc:
+
+- **what each backend models** — FIFO depth (pysim honours the declaration; RTL only for internal
+  channels), AXI-MM (pysim has `BusCalib` timing *and* crossbar contention; XSI has an
+  **un-arbitrated** `FlatMemory`), BRAM (both faithful — deterministic latency). Note this is not
+  one-sided: **pysim is the better memory-system model, XSI the better fabric model.**
+- **what `csynth` counts** — categories 1, 2, 5, 6 yes; 3 and 4 **no**. That is the resource story,
+  and it is the table `plans/resource_model.md` needs.
+
+`Region` gets a mention as a cross-cutting *access view* (element coordinates over word storage), not a
+seventh category.
+
+**Timing:** the reorganisation and categories 5–6 are earned **now** — the reorg is what makes the
+category-3 gap legible. The category-3 page waits until S1 lands, same discipline that has paid off
+three times in this arc.
+
 ## Verification
 
 - The four XSI cycle gates unmoved through S1–S3; a new one recorded in S3.
@@ -201,14 +245,44 @@ answer, stated once and referenced twice: a byte-identical vector gate.
 ## Open questions
 
 - Does `derive_boundary` handle nested composites? Decides S2's size (see above).
-- Where does the wrapper's resource number come from — the module's declaration, or a Vivado run?
-  Declaration is cheaper and testable; a run is authoritative. Possibly both, with the declaration
-  gated against a run the way calibration already is.
+- Where does the wrapper's resource number come from? **Settled enough to build on** — see
+  "Resource accounting" below. Declared for S1; the open part is only when a measured run gates it.
 - Does a `T2pBram` need a pysim model of its own, or is it a plain `HwModule` whose `run_proc` is a
   numpy array? The latter, presumably — but then which endpoint carries the access latency.
 - One memory, two ports, and Vitis emits an **A/B pair per interface** — four physical ports for one
   memory, of which the witness wires the A half of each. Is that always the right choice, or should the
   B halves ever be used (two accesses per cycle per side)?
+
+## Resource accounting: where a per-module number can come from
+
+Three sources, and they are available at different stages with different fidelity:
+
+| stage | granularity | fidelity | sees a hand-written module? |
+|---|---|---|---|
+| **HLS `csynth`** | per generated sub-module (the report's Detail section) | *estimates* — reliable for BRAM/DSP, unreliable for LUT/FF | **no** — it is outside the kernel |
+| **Vivado `synth_design`** | `report_utilization -hierarchical` → **per instance** | real, pre-place | yes |
+| **Vivado implementation** | same, post-route | final | yes |
+
+So a per-Verilog-module number **is** obtainable, but only from Vivado synthesis onward — and only if
+the hierarchy survives. Optimisation crosses module boundaries by default; `KEEP_HIERARCHY` or
+`-flatten_hierarchy none` preserves it *for reporting* at some QoR cost. That trade has to be made
+deliberately, because a design synthesised for accurate per-module reporting is not the design you
+ship.
+
+**For `T2pBram` specifically, hardwiring is not a stopgap — it is the correct method.** A memory's
+footprint is *structural*: depth × width maps to a primitive count by geometry (RAMB18 = 18 Kb,
+RAMB36 = 36 Kb, with width-dependent aspect ratios and TDP-vs-SDP differences). No tool run is needed
+to know that a 1024×16 true-dual-port buffer is one RAMB18. The rounding rules are tool-specific, so
+the declared number should eventually be **gated against a real synthesis** rather than trusted
+forever.
+
+That is the same two-tier shape the calibration work already uses — a cheap derived value, an
+authoritative measured one, and a regression guard between them. `plans/resource_model.md` should
+inherit the pattern rather than invent a second one.
+
+The general rule the taxonomy implies: **structural blocks (memories, FIFOs) can declare their
+footprint; logic blocks cannot and need a run.** That is the same line as "who owns the correctness
+argument" one paragraph up — the designer owns what is derivable, the tool owns what is not.
 
 ## Notes carried in
 
