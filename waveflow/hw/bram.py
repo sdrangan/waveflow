@@ -29,11 +29,6 @@ from math import ceil
 from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import InterfaceEndpoint
 
-#: The write-enable width Vitis drives on a ``bram`` port: one bit per byte lane of the widest
-#: supported word, and the witness's memory takes it as ``[1:0]`` for a 16-bit word.  Recorded here
-#: because it is a fact about the *interface*, not about any one memory.
-BRAM_WE_WIDTH = 2
-
 
 @dataclass
 class BramIFSlave(InterfaceEndpoint):
