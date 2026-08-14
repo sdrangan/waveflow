@@ -157,6 +157,38 @@ what the rule exists to prevent.
 boundaries — one read owner, one write owner — and explicit wiring, rather than an arbitration policy.
 A design needing two masters on one resource has to say so structurally.
 
+## When the composite is not the whole design: the wrapper
+
+Everything above assumes the generated kernel *is* the design. It stops being true the moment a
+composite carries an on-chip memory shared by two of its tasks, because
+[that memory cannot live inside the kernel](../interface/bram.md). It is registered with
+`add_rtl_mod` instead of `add_comp`, realized as hand-written Verilog, and joined to the tasks by a
+generated **wrapper**:
+
+```
+bram_toy_top.v        the WRAPPER — instantiates the kernel + the memory, and joins them
+  bram_toy.v          the generated kernel (csynth's own name, kept)
+  bram_t2p.v          the hand-written memory
+```
+
+Three consequences worth having in mind before you build one:
+
+**The wrapper is the design scope.** From outside it looks like a kernel with only its AXI-Stream
+ports — the memory is internal and invisible to any testbench. That is what makes it the first
+boundary a resource estimate can be *defined* against.
+
+**`csynth` does not count what is outside the kernel.** The synthesis report for `bram_toy` reports
+**no BRAM at all**, because the memory is not in it. That is not a rounding error in an estimate; it
+is a whole category missing, and it is half the reason to have a wrapper. A structural block can
+declare its own footprint instead (`T2pBram` derives BRAM from depth × width by geometry); a logic
+block cannot, and needs a run.
+
+**The elaborated top changes, and only that.** The `.f` file list, the `xelab` top and the shared
+library are named for the wrapper; the csynth project, its report and its generated Verilog keep the
+kernel's name. One artifact keeps the name it has; the new one is visibly the outer layer. Nothing
+about the BFM library changes — the testbench still sees only AXI-Stream, because that is genuinely
+all the elaborated design exposes.
+
 ## The trap worth knowing before you build one
 
 A stage that consumes a job and emits nothing does **not**, on its own, deadlock anything. The stage
