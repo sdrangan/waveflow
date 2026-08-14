@@ -51,8 +51,12 @@ class ExtPort:
     decl: str
     pragmas: tuple[str, ...]
     name: str = ""                  # the boundary port name, e.g. "s_cmd" / "m_in"
-    kind: str = ""                  # axis_in | axis_out | maxi_read | maxi_write
+    kind: str = ""                  # axis_in | axis_out | maxi_read | maxi_write | bram
     bundle: str | None = None       # m_axi bundle for maxi_* kinds, else None
+    #: Payload width in bits.  Kept because a **wrapper** has to declare the same pins in Verilog
+    #: (``input [15:0] rx_str_TDATA``), and recovering a width by parsing ``ap_uint<W>`` back out of
+    #: :attr:`decl` is the kind of second derivation that drifts.  0 where nothing needed it.
+    width: int = 0
 
     @property
     def xsi_prefix(self) -> str:
@@ -207,6 +211,29 @@ class TopSpec:
     cmd_headers: tuple[str, ...]            # command struct headers to include
     channels: tuple[IntChannel, ...] = ()   # internal edges (empty for a standalone kernel)
     extra_includes: tuple[str, ...] = ()    # extra system headers (e.g. hls_streamofblocks.h)
+    #: The module a simulator actually elaborates, when it is **not** the kernel.  ``None`` — the
+    #: usual case — means the kernel *is* the top.  A design with hand-written RTL beside the kernel
+    #: sets it to the wrapper (``<top>_top``), because from that point on the kernel is an internal
+    #: instance: the snapshot, the ``.f`` and the shared library are all named for the wrapper, and a
+    #: testbench that bound to the kernel's name would load a design that is not the one being run.
+    rtl_top: str | None = None
+
+    @property
+    def elab_top(self) -> str:
+        """The name a simulator elaborates: :attr:`rtl_top` when wrapped, else the kernel."""
+        return self.rtl_top or self.top_name
+
+    @property
+    def pin_ports(self) -> tuple[ExtPort, ...]:
+        """The boundary ports that are **pins on the elaborated top**.
+
+        Every port, until a memory came along.  A ``bram`` port is joined to its memory *inside* the
+        wrapper, so it is not a pin on the elaborated design and nothing outside may bind to it — a
+        testbench that tried would be driving a wire that does not exist on the module it loaded.
+        This is what keeps the BFM untouched by ``plans/rtl_module.md`` S3: the testbench still sees
+        only AXI-Stream, because that is genuinely all there is.
+        """
+        return tuple(p for p in self.ports if p.kind != "bram")
 
     @property
     def internal_streams(self) -> tuple[str, ...]:
@@ -432,7 +459,7 @@ def _axis_port(name: str, width: int, kind: str = "axis_in") -> ExtPort:
     testbench needs to know whether to model a master or a slave against it."""
     return ExtPort(f"hls::stream<ap_uint<{width}> >& {name}",
                    (f"#pragma HLS INTERFACE axis port={name}",),
-                   name=name, kind=kind, bundle=None)
+                   name=name, kind=kind, bundle=None, width=width)
 
 
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
@@ -445,7 +472,19 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
     if const:
         pragmas.append(f"#pragma HLS stable variable={name}")
     return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
-                   name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle)
+                   name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle,
+                   width=width)
+
+
+def wrapper_name(top_name: str) -> str:
+    """The wrapper module's name for kernel *top_name* — ``bram_toy`` -> ``bram_toy_top``.
+
+    One artifact keeps the name it has: csynth names the kernel, and renaming it to make room for the
+    wrapper would make every report, every ``.f`` entry and every waveform scope disagree with the
+    tool that produced them.  The new artifact is the one that takes a new name, and ``_top`` says
+    which layer it is.
+    """
+    return f"{top_name}_top"
 
 
 def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
@@ -469,7 +508,7 @@ def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
     return ExtPort(f"ap_uint<{width}> {name}[{depth}]",
                    (f"#pragma HLS INTERFACE mode=bram port={name} storage_type=ram_1wnr "
                     f"latency={latency}",),
-                   name=name, kind="bram", bundle=None)
+                   name=name, kind="bram", bundle=None, width=width)
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +624,14 @@ def kind_of_endpoint(ep) -> str:
         return "axis_in"
     if isinstance(ep, StreamIFMaster):
         return "axis_out"
+    # A kernel-side BRAM port: a sized array parameter carrying `mode=bram`, wired in the WRAPPER to
+    # a memory that lives outside the kernel.  One kind for both directions, unlike m_axi: the RTL
+    # port set is identical either way (Vitis emits the full A/B pair regardless), and what differs
+    # is only which signals the body drives.  The memory-side `BramIFSlave` has no kind here on
+    # purpose -- it is never a kernel boundary port, only the far end of a wrapper wire.
+    from waveflow.hw.bram import BramIFMaster
+    if isinstance(ep, BramIFMaster):
+        return "bram"
     raise LoweringError(f"no boundary kind for endpoint type {type(ep).__name__}")
 
 
@@ -748,12 +795,18 @@ def bundle_map(boundary) -> dict[str, str]:
     return out
 
 
-def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtPort:
+def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None) -> ExtPort:
     """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas).
 
     *bundle* comes from :func:`bundle_map` (the assembler's policy) for the m_axi kinds, and is
     ``None`` for AXIS. There is deliberately no per-kind default here: a default would be a second
     place that decides bundles, and the two could drift.
+
+    *ep* is the endpoint itself, needed only by the ``bram`` kind — whose port is not a function of
+    ``(name, kind, width)`` alone: its **size** is the accessor's array size and its **latency** is
+    the bound memory's published number.  Passing the endpoint rather than three more scalars keeps
+    those facts where they are declared; a caller that only wants a port's RTL prefix may omit it and
+    is refused for ``bram``, which is correct — that caller is asking about a port the wrapper hides.
     """
     if kind in ("axis_in", "axis_out"):
         return _axis_port(name, width, kind=kind)
@@ -761,6 +814,13 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None) -> ExtP
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
         return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle)
+    if kind == "bram":
+        if ep is None:
+            raise LoweringError(
+                f"_boundary_port: bram port {name!r} needs its endpoint — the array size and the "
+                f"latency come from the port and the memory it is wired to, never from a default."
+            )
+        return _bram_port(name, int(ep.bitwidth), int(ep.depth), latency=int(ep.read_latency))
     raise LoweringError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 
@@ -884,7 +944,7 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         bundle = bundles.get(name)
         ep_arg[id(ep)] = name
         _check_boundary_depth(comp, name, ep)
-        ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle))
+        ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle, ep))
 
     # Tasks are built before channels so a channel can record WHICH task drives it: the producer
     # and consumer task indices are what turn a channel name into RTL net names
@@ -907,6 +967,9 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
 
     channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 
+    # A graph with RTL modules beside the kernel is elaborated as its WRAPPER, not as the kernel.
+    # Derived here rather than declared, so a design cannot end up with a wrapper the ports header
+    # does not know about: one registry decides both.
     return TopSpec(
         top_name=comp.cpp_kernel_name,
         ports=tuple(ports),
@@ -914,6 +977,8 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         cmd_headers=tuple(getattr(comp, "cmd_headers", ())),
         channels=channels,
         extra_includes=tuple(getattr(comp, "extra_includes", ())),
+        rtl_top=(wrapper_name(comp.cpp_kernel_name)
+                 if getattr(comp, "rtl_mods", None) else None),
     )
 
 
@@ -1879,6 +1944,8 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
     boundary_of: dict[int, tuple[str, ExtPort]] = {}
     for entry in dut.boundary:
         name, dep = _unpack_boundary(entry)
+        if kind_of_endpoint(dep) == "bram":
+            continue                                   # wrapper-internal: see _is_wrapper_internal
         port = _boundary_port(name, kind_of_endpoint(dep), 0, bundles.get(name))
         for peer in peers.get(id(dep), []):
             boundary_of.setdefault(id(peer), (name, port))
@@ -1897,6 +1964,12 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         name, ep = _unpack_boundary(entry)
         bundle = bundles.get(name)
         kind = kind_of_endpoint(ep)
+        if kind == "bram":
+            # NOT a pin on the elaborated design: the wrapper joins this port to a memory inside the
+            # synthesized scope, so there is nothing here for a testbench to drive and no BFM to look
+            # up.  Skipping it is what keeps the BFM library untouched (plans/rtl_module.md S3) —
+            # and if a memory ever DID need a model, the wrapper would be the thing that is wrong.
+            continue
         port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
         part = pep = None
         for peer in peers.get(id(ep), []):
@@ -2149,8 +2222,13 @@ def render_ports_h(spec: TopSpec) -> str:
     the thing the TB is supposed to be testing, so binding to them would make a broken kernel look
     self-consistent.
     """
+    # The namespace keeps the KERNEL's name (it is the kernel's port map, and every consumer already
+    # spells it that way), but TOP and DESIGN_DLL name the module actually elaborated — the wrapper,
+    # when there is one.  Those two are what the loader opens; naming the kernel there would load a
+    # snapshot that does not exist, or worse, a stale one built from a previous flow.
     ns = f"{spec.top_name}_ports"
     guard = f"WAVEFLOW_GEN_{ns.upper()}_H"
+    elab = spec.elab_top
     lines = [
         f"#ifndef {guard}",
         f"#define {guard}",
@@ -2160,28 +2238,28 @@ def render_ports_h(spec: TopSpec) -> str:
         "",
         f"namespace {ns} {{",
         "",
-        f'static const char* const TOP        = "{spec.top_name}";',
+        f'static const char* const TOP        = "{elab}";',
         "",
         "// xelab -dll emits the platform's native shared library, so the name differs by OS.  The",
         "// conditional lives in the generated header rather than in the generator so ONE emitted",
         "// header serves a Windows and a Linux build of the same testbench.",
         "#ifdef _WIN32",
-        f'static const char* const DESIGN_DLL = "xsim.dir/{spec.top_name}/xsimk.dll";',
+        f'static const char* const DESIGN_DLL = "xsim.dir/{elab}/xsimk.dll";',
         "#else",
-        f'static const char* const DESIGN_DLL = "xsim.dir/{spec.top_name}/xsimk.so";',
+        f'static const char* const DESIGN_DLL = "xsim.dir/{elab}/xsimk.so";',
         "#endif",
         "",
     ]
-    for p in spec.ports:
+    for p in spec.pin_ports:
         comment = p.kind if p.kind else "?"
         if p.bundle:
             comment += f" on {p.bundle}"
         lines.append(f'static const char* const {p.name:<8} = "{p.xsi_prefix}";   // {comment}')
 
     zero: list[str] = []
-    if any(p.kind in ("maxi_read", "maxi_write") for p in spec.ports):
+    if any(p.kind in ("maxi_read", "maxi_write") for p in spec.pin_ports):
         zero.extend(_CONTROL_UNDRIVEN)
-    for p in spec.ports:
+    for p in spec.pin_ports:
         for ch in _MAXI_UNDRIVEN.get(p.kind, ()):
             zero.append(f"{p.xsi_prefix}_{ch}")
 
@@ -2284,8 +2362,18 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_rtl_f(top_name: str, root) -> str:
+def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = ()) -> str:
     """Emit the ``xvlog`` file list (``rtl_<top>.f``) for *top*'s elaborated RTL.
+
+    *extra* names further sources, **relative to the ``xsi/`` directory the ``.f`` lives in** and
+    appended in the order given — the hand-written memory and the wrapper, for a design that has
+    them.  They come last because a wrapper instantiates the kernel: not a requirement of ``xvlog``,
+    which resolves across the whole file set, but the reading order a human needs.
+
+    Note that a ``.f`` naming only the top does **not** elaborate: the witness needed all four of
+    csynth's generated files (``rx.v``, ``rx_read_task.v``, ``rx_write_task.v``,
+    ``rx_regslice_both.v``).  That is why the kernel half of this list is a glob of what csynth
+    actually produced rather than a list anybody maintains.
 
     **Why generate it.**  This list was hand-maintained, and it names RTL modules explicitly — so a
     module rename silently invalidates it.  Combined with a cached ``xsimk.dll`` that is how a stale
@@ -2307,7 +2395,8 @@ def render_rtl_f(top_name: str, root) -> str:
     names = sorted(p.name for p in vdir.glob("*.v"))
     if not names:
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
-    return "".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
+    return ("".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
+            + "".join(f"{e}\n" for e in extra))
 
 
 #: The default csynth target when no platform is selected — the historical hardcoded values, kept so an

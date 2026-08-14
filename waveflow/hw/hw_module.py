@@ -365,6 +365,15 @@ class HwModule(SimObj):
     :meth:`add_endpoint`) — it is the internal graph edges a composite kernel
     lowers to ``hls_thread_local`` FIFOs / BRAM."""
 
+    # `rtl_mods` / `rtl_ifs` are **lazily created**, not dataclass fields, and that is not a style
+    # choice — it is the calibration-key trap, avoided.  A module's key is a digest of its structure
+    # signature, which walks the instance `__dict__`; adding two always-present empty registries
+    # moved the key of EVERY module in the repository, and every stored measurement filed under the
+    # old key became unreachable.  (Caught here by two docs numbers going stale, exactly as
+    # `StreamIF.dropped` was caught by `tests/calib/test_key_stability.py`.)  Created on first use,
+    # they are invisible to a design that has none — which is every design that existed before them.
+    # `add_state` sets the same precedent with `_state`.
+
     control_mode: ClassVar[ControlMode] = ControlMode.AUTO
     cpp_kernel_name: ClassVar[str | None] = None
     cpp_namespace: ClassVar[str | None] = None
@@ -672,6 +681,76 @@ class HwModule(SimObj):
         # re-declares it is not an error — the registry follows the attribute.  Insertion order
         # is preserved for a name that already exists, so declaration order is stable.
         registry[name] = state
+
+    def add_rtl_mod(self, mod: "HwModule") -> None:
+        """Register *mod* as a sub-module realized as **hand-written RTL beside** the generated top.
+
+        The third ``add_*`` for a hierarchy, and it is a *separate registry from* :meth:`add_comp`
+        on purpose — the distinction is what the whole wiring stage rests on:
+
+        =================  ==============================  ==========================================
+        registry           what the child becomes           who instantiates it
+        =================  ==============================  ==========================================
+        ``add_comp``       an ``hls::task`` in the top      Vitis, from the generated C++
+        ``add_rtl_mod``    a Verilog instance in the wrapper  the wrapper emitter, from this registry
+        =================  ==============================  ==========================================
+
+        Keeping it out of ``sub_comps`` means every existing walk is correct without being told about
+        it: ``ordered_subcomps`` still yields exactly the tasks, so the memory is never asked for a
+        ``kernel_task()`` it does not have, and ``derive_boundary`` never offers the memory's own
+        ports as boundary ports of the kernel — they are wrapper-internal, which is the point.
+
+        **The module is still in the design.**  It is inside the wrapper, so it is inside the
+        synthesized scope: it is what a resource estimate must count (``csynth`` of the kernel alone
+        reports none of it), and it is invisible to the testbench, which sees only the wrapper's
+        AXI-Stream ports.
+
+        *mod* must declare ``rtl_module()`` — a module with no pre-written Verilog has nothing to
+        instantiate, and finding that out at wrapper-emit time would be finding it out late.
+        """
+        from waveflow.hw.hw_module import declares_hook  # local: same module, keeps the name honest
+
+        if not declares_hook(mod, "rtl_module"):
+            raise TypeError(
+                f"{type(self).__name__}.add_rtl_mod({type(mod).__name__}): that module declares no "
+                f"rtl_module() hook, so there is no Verilog to instantiate beside the kernel. A "
+                f"module realized as a generated task goes through add_comp instead."
+            )
+        mod.parent = self
+        self.__dict__.setdefault("_rtl_mods", {})[mod.name] = mod
+
+    @property
+    def rtl_mods(self) -> dict:
+        """Sub-modules realized as **hand-written RTL beside the generated kernel**, by name.
+
+        Empty (and *absent from the instance*) unless :meth:`add_rtl_mod` was called — see the note
+        above the method for why that distinction is load-bearing.
+        """
+        return self.__dict__.get("_rtl_mods") or {}
+
+    @property
+    def rtl_ifs(self) -> dict:
+        """Interfaces joining a kernel task to an :attr:`rtl_mods` module — **wrapper wires**, not
+        internal channels.  Populated by :meth:`add_rtl_if`."""
+        return self.__dict__.get("_rtl_ifs") or {}
+
+    def add_rtl_if(self, interface: "Interface") -> None:
+        """Register *interface* as a **wrapper wire** — a task's port joined to an RTL module's port.
+
+        The peer of :meth:`add_if`, and separate from it for the reason
+        :class:`~waveflow.hw.bram.BramIF` states: an ``add_if`` edge is an *internal channel*, and
+        both its endpoints therefore stop being boundary ports.  A wire to a module *outside* the
+        kernel is not that.  One end is inside the generated top and one end is outside it, so the
+        inside end **must stay a boundary port** — which it does, automatically and with no change to
+        :func:`~waveflow.build.composite_gen.derive_boundary`, precisely because this registry is not
+        the one that walk reads.
+
+        That is the mechanism ``plans/rtl_module.md`` S2 predicted ("the BRAM endpoint becomes a
+        boundary port automatically, plumbed out by machinery that already runs"), one registry over
+        from where the plan guessed it would live.  The wrapper emitter reads this registry to know
+        which kernel port joins which memory port.
+        """
+        self.__dict__.setdefault("_rtl_ifs", {})[interface.name] = interface
 
     def add_if(self, interface: "Interface") -> None:
         """Register *interface* as an internal edge between two sub-components.
