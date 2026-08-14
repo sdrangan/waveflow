@@ -294,6 +294,32 @@ _AXI_WRITE_SIGS = ("AWADDR", "AWVALID", "AWREADY", "AWLEN",
 _AXI_READ_SIGS = ("ARADDR", "ARVALID", "ARREADY", "ARLEN",
                   "RDATA", "RVALID", "RREADY", "RLAST")
 
+#: The seven signals Vitis puts on **each half** of a ``mode=bram`` interface, and the two halves.
+#: One C++ array parameter therefore becomes **fourteen** RTL ports: Vitis emits a true-dual-port
+#: pair whether or not the kernel uses both sides (the witness wires the A half of each interface and
+#: ties the B halves off — ``plans/rtl_module.md``, open question 4).
+#:
+#: Capitalization is Vitis's, not a choice: ``buf_w_Addr_A``, ``buf_w_EN_A``, ``buf_w_WEN_A``.
+_BRAM_SIGS = ("Addr", "EN", "Din", "Dout", "WEN", "Clk", "Rst")
+_BRAM_HALVES = ("A", "B")
+
+
+def bram_port_signals(name: str) -> dict[str, str]:
+    """The RTL nets a ``mode=bram`` port named *name* lowers to: ``{'Addr_A': 'buf_w_Addr_A', ...}``.
+
+    The third row of the same table :func:`_boundary_trace` already holds for AXIS and ``m_axi``, and
+    it exists for the same reason: *Vitis picks only the ``_U0`` instance suffix; codegen owns every
+    other name*.  An AXIS port keeps its own name, an ``m_axi`` port takes its bundle's, and a
+    ``bram`` port takes its own name plus a signal-and-half suffix.
+
+    This is the **contract** end of the port-name chain — Waveflow endpoint → C++ parameter name →
+    Vitis port names — and it is what lets a wrapper joining the kernel to a hand-written memory be
+    written from Python at all.  Checked against the witness's ``rx_top.v``, whose kernel
+    instantiation names all 28 nets of a two-interface design
+    (``tests/build/test_rtl_module.py::test_derived_port_names_match_the_witness``).
+    """
+    return {f"{s}_{h}": f"{name}_{s}_{h}" for h in _BRAM_HALVES for s in _BRAM_SIGS}
+
 
 def _task_trace(task: TaskInst) -> dict:
     # `args` are the channel / boundary-port names this task is wired to, in signature order.  They
@@ -345,6 +371,11 @@ def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
                             # wire at all (mem_copy's s_cmd).  Named so a framed port still binds.
                             "tlast": f"{p.name}_TLAST"},
             })
+        elif p.kind == "bram":
+            # One entry per port, unlike `m_axi`: a bram interface is never bundled with another
+            # (each is its own memory port pair), so the port name IS the id.
+            entries.append({"id": p.name, "kind": "bram", "ports": [p.name],
+                            "signals": bram_port_signals(p.name)})
         elif p.kind in ("maxi_read", "maxi_write"):
             bundle = p.bundle or p.name
             bundles.setdefault(bundle, set()).add(
@@ -415,6 +446,30 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
         pragmas.append(f"#pragma HLS stable variable={name}")
     return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
                    name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle)
+
+
+def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
+    """A ``mode=bram`` boundary port — the kernel's half of a memory that lives *outside* it.
+
+    Two details here are load-bearing rather than stylistic, and both were measured
+    (``plans/rtl_module.md``, "Notes carried in"):
+
+    * **The array is SIZED, never a pointer.**  ``mode=bram`` on an *unsized* pointer parameter
+      silently produces an ``ap_vld`` scalar port — no warning, no error, and the design elaborates
+      against a memory that is not there.  Emitting ``ap_uint<W> name[DEPTH]`` is what makes the
+      pragma take effect, so the depth is not decoration.
+    * **``latency`` is not authored here.**  It is read from the memory's own Verilog
+      (:func:`~waveflow.build.rtl_gen.rtl_read_latency`) and passed in, because a pragma latency
+      that disagrees with the memory's read latency shifts every value by a cycle — silently.  One
+      number, two halves; see ``docs/guide/comp_codegen/rtl_module.md``.
+
+    ``storage_type=ram_1wnr`` is the witness's own spelling, kept verbatim: that combination is the
+    one that csynthed to real BRAM ports with both tasks free-running and no PIPO gating.
+    """
+    return ExtPort(f"ap_uint<{width}> {name}[{depth}]",
+                   (f"#pragma HLS INTERFACE mode=bram port={name} storage_type=ram_1wnr "
+                    f"latency={latency}",),
+                   name=name, kind="bram", bundle=None)
 
 
 # ---------------------------------------------------------------------------
