@@ -1,7 +1,8 @@
 # Plan: `rtl_module()` — a module realized as hand-written Verilog beside the kernel
 
-**Status:** designed 2026-08-14, not started. **Has a working witness** (see below) — every claim about
-what Vitis does or refuses was measured, not recalled.
+**Status:** designed 2026-08-14. **S1 landed 2026-08-14** (branch `rtl-module-s1`) — see "What landed"
+below.  S2–S4 not started.  **Has a working witness** (see below) — every claim about what Vitis does
+or refuses was measured, not recalled.
 
 Split out of the RF arc, where `RfSampBuf` needs a circular capture buffer shared by two concurrent
 accessors. It is not an RF feature: it is the **third realization hook**, and the same mechanism Flow 3
@@ -127,6 +128,63 @@ A hand-written memory is *more* verifiable than an emulated one, and that is wor
 **Gate:** `check(T2pBram, "rtl_module")` True; a module with a non-mappable endpoint refused by name;
 the emitted pragma latency and the Verilog's latency provably equal.
 
+#### What landed (2026-08-14)
+
+| piece | where |
+|---|---|
+| the hook | `HwModule.rtl_module()` (base raises; declaration is the override, by `declares_hook`) |
+| the target | `RTL_MODULE` in `codegen_targets.py` — in `ALL_TARGETS`, `IMPLEMENTED_TARGETS`, `REALIZATION_HOOKS`, and **`CUT_INDEPENDENT_TARGETS`** |
+| the rules | `build/rtl_gen.py`: `RtlModule`, `PortMapping`, `rtl_port_mapping`, `rtl_read_latency`, `verilog_module_ports`, `resolve_rtl_module` |
+| the step | `build/rtl_steps.py::GenRtlStep` — resolves at construction, copies with `write_bytes` |
+| the port names | `composite_gen.py::bram_port_signals` + `_bram_port` + a `"bram"` row in `_boundary_trace` |
+| the module | `hw/bram.py`: `BramIFSlave`, `T2pBram`, `ramb18_count` |
+| the artifact | `build/rtl/bram_t2p.v` (package data), copied from the witness |
+| docs | `guide/comp_codegen/rtl_module.md`; rows added to `guide/flows/modules.md` + `guide/flows/index.md` |
+| tests | `tests/build/test_rtl_module.py` (28), `tests/build/test_gen_rtl_step.py` (2) |
+
+**Deviations from the plan as written, all deliberate:**
+
+1. **`RTL_MODULE` is cut-independent.**  The plan did not say which side of `potential_targets` it
+   falls on.  It is in `CUT_INDEPENDENT_TARGETS` with `xsi_bfm_model`, by the same argument: the same
+   memory is hand-written RTL in a synthesized design and a `FlatMemory` BFM in an XSI testbench, with
+   nothing about the memory changed.  A `potential_targets` entry would freeze a per-build role into a
+   class fact.  It is also what makes `check(T2pBram, "rtl_module")` answerable at all — `T2pBram` is a
+   plain `HwModule`, so its `potential_targets` is empty and gate 2 would otherwise refuse.
+
+2. **The latency's single source is the `.v`, not Python.**  The plan said "emit both halves from one
+   number" without saying where the number lives.  Putting it in Python would have left the Verilog
+   free to disagree; putting it in the Verilog and *deriving* the pragma leaves Python with nothing to
+   disagree *with*.  So the artifact publishes `localparam READ_LATENCY = 1;` and
+   `rtl_read_latency()` reads it.  `localparam` rather than `parameter` is the statement that it is a
+   property of the implementation, not a knob an instantiation may turn.  `T2pBram.read_latency` is a
+   property with no setter; the test that proves it asserts both directions (changing the file changes
+   the pragma; the module cannot be told a different number).
+
+3. **The artifact differs from the witness by exactly one insertion** — 7 lines: 6 of comment plus
+   `localparam READ_LATENCY = 1;`, CRLF like the rest of the file.  Everything else, including the
+   `$error` read-during-write assertion, is byte-identical.  `test_shipped_memory_is_the_witness_plus_
+   the_published_latency` proves it with `difflib`: one opcode, `insert`, and every inserted line is a
+   comment, a blank, or that `localparam`.  The witness was **not** modified.
+
+4. **The pragma emitter landed, but nothing in a build emits it yet.**  `_bram_port()` exists beside
+   `_axis_port`/`_maxi_port` and is unit-tested (sized array, never a pointer — the `ap_vld` trap; and
+   `latency=` from the file).  No kernel carries a `bram` port until S4, so the *authoritative* "the
+   pragma took effect" check — a csynth port list — is deferred to where a kernel actually has one.
+   Stated rather than skipped: the static half is gated, the toolchain half is not yet.
+
+5. **A one-row mapping table, as planned, plus a fourth check the plan did not list:** the declared
+   Verilog is parsed for its module header and every mapped port name must be a port that module
+   declares.  Cheap, and it catches the class of error the port map exists to make impossible.
+
+6. **`T2pBram` has no pysim behaviour.**  The plan's open question ("a plain `HwModule` whose
+   `run_proc` is a numpy array?") stays open: with no `BramIF` to drive it there is nothing to model,
+   and guessing which endpoint carries the access latency before the wiring exists is how the wrong
+   answer gets committed.  S2 answers it.
+
+7. **`addr_bits` refuses a non-power-of-two depth** rather than rounding up.  The Verilog indexes
+   `mem[addr[AW-1:0]]`, so any other depth aliases high addresses onto low ones — silently, which is
+   the same failure class as the latency mismatch.
+
 ### S2 — wiring, which is probably cheaper than it looks
 
 A `BramIF` is **not an internal interface of the Vitis composite**: one end is inside the kernel, one
@@ -173,7 +231,9 @@ The consumer. `plans/adc_model.md` staging item 3, now with a buffer that is exp
 
 | page | status | what it says |
 |---|---|---|
-| `guide/comp_codegen/rtl_module.md` | **new** | The third hook, beside `kernel_task()` and `bfm_model()`. The port-name contract, the latency single-source rule, and the conformance obligation. |
+| `guide/comp_codegen/rtl_module.md` | **written (S1)** | The third hook, beside `kernel_task()` and `bfm_model()`. The port-name contract, the latency single-source rule, and the conformance obligation. Also carries a "what is not here yet" section naming the wrapper, the wiring and XSI. |
+| `guide/flows/modules.md` | **edited (S1)** | The hook table is three rows, and the cut paragraph distinguishes "beside it in the same design" from "outside the design". |
+| `guide/flows/index.md` | **edited (S1)** | "Two targets that are not flows" — `xsi_bfm_model` and `rtl_module`. |
 | `guide/interface/bram.md` | **new** | `BramIF` and why a memory shared between processes cannot live inside a kernel — with the PIPO and dataflow-check evidence, because "Vitis won't let you" is unconvincing without it. |
 | `guide/comp_codegen/freerunning_composite.md` | edit | The wrapper as the **design scope**, and that csynth of the kernel alone does not count memory outside it. |
 | `guide/flows/modules.md` | edit | One row: a module realized as RTL beside the kernel. |
@@ -244,7 +304,8 @@ three times in this arc.
 
 ## Open questions
 
-- Does `derive_boundary` handle nested composites? Decides S2's size (see above).
+- Does `derive_boundary` handle nested composites? Decides S2's size (see above). **Not touched by
+  S1** — nothing walks a `T2pBram` yet.
 - Where does the wrapper's resource number come from? **Settled enough to build on** — see
   "Resource accounting" below. Declared for S1; the open part is only when a measured run gates it.
 - Does a `T2pBram` need a pysim model of its own, or is it a plain `HwModule` whose `run_proc` is a
