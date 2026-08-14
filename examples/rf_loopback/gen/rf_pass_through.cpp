@@ -7,7 +7,8 @@
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "memmgr.hpp"
-#include "rf_pass_through_task.h"
+#include "rf_samp_ingress_task.h"
+#include "rf_samp_relay_task.h"
 
 void rf_pass_through(
     hls::stream<ap_uint<64> >& s_in,
@@ -16,5 +17,8 @@ void rf_pass_through(
 #pragma HLS INTERFACE axis port=s_in
 #pragma HLS INTERFACE axis port=s_out
 #pragma HLS INTERFACE ap_ctrl_none port=return
-    hls_thread_local hls::task t0(rf_pass_through_task, s_in, s_out);
+    hls_thread_local hls::stream<ap_uint<64> > blk_fifo;
+    #pragma HLS STREAM variable=blk_fifo depth=64
+    hls_thread_local hls::task t0(rf_samp_ingress_task<64>, s_in, blk_fifo);
+    hls_thread_local hls::task t1(rf_samp_relay_task, blk_fifo, s_out);
 }

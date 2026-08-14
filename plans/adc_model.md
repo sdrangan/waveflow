@@ -359,7 +359,7 @@ channel that was configured. Trivially checkable, and it exercises the overlap/s
    gate. **Opens with the `BfmModel` prerequisite below.**
    - **The digital logic is DONE (2026-08-13, branch `rf-dut-synth`)** — synthesized and proved at
      RTL *cut alone*, between generic AXIS BFMs. Gate: 8 bursts × 64 words relayed bit-identically,
-     **1072 cycles**. See "The DUT at RTL" below.
+     **1066 cycles** (1072 until the overlap fix below). See "The DUT at RTL" below.
    - **The converter is DONE (2026-08-13, branch `rf-xsi-loopback`)** — `RFSampIF.xsi_model()`,
      `Rfdc.bfm_model()` (two models, one per path), the C++ RF peers, and the full loopback run at
      RTL. See "The loopback at RTL" below.
@@ -374,8 +374,9 @@ graph the pysim golden runs. Gate: `tests/examples/test_rf_loopback_xsi.py`.
 AXI-Stream → real RTL → unpack → dequantize → Python and comes back **bit-identical**. Cycle gate:
 the last RF block lands at **2152** (time to last completion, not the 6000 loop bound).
 
-**What does not, and it is a design finding rather than a model bug.** The ADC produces 512 words
-and the fabric accepts **440**; **72 are dropped**. `RfSampPassThrough` reads a whole 64-word block
+**What did not, and it was a design finding rather than a model bug** — since **FIXED**, see "The
+overlap fix" below; the paragraph is kept because the finding is the reason the counter contract
+exists. The ADC produced 512 words and the fabric accepted **440**; **72 were dropped**. `RfSampPassThrough` reads a whole 64-word block
 and only then writes it, so `TREADY` is low for ~64 cycles at a stretch while the converter presents
 a beat every ~4.7 cycles regardless. Divergence begins at sample 264 — block 1, offset 8 — exactly
 where the first write phase starts.
@@ -518,6 +519,95 @@ structure. `tests/calib/test_key_stability.py` caught it — the exact failure m
 written for, on its first live outing. Fixed by excluding the counters in `_CONTEXT_ATTRS`
 (`RFSampIF`'s four are excluded with them: same leak, latent only because no calibrated design uses
 that edge yet).
+
+### The overlap fix — **DONE 2026-08-14**, ADC_DROPPED 72 → **0**
+
+Branch `rf-dut-overlap`, from `main` at `0e8dfd1`. A **design** change; the model work behind it was
+merged in #152. `RfSampPassThrough` is now a composite:
+
+```
+s_in --> [RfSampIngress] --blk_fifo, depth = nwords_blk--> [RfSampBlockRelay] --> s_out
+```
+
+**Result at RTL:** `ADC_DROPPED` 72 → **0**, `DAC_WORDS_RECV` 512 of 512, and **every** block —
+not just the first — is bit-identical through quantize → pack → RTL → unpack → dequantize, shifted by
+the one-block RTL transient. That whole-run comparison was unreachable while blocks were missing
+words. DAC zero-fills 13 → 11 (the two blocks it gained are the ones that used to arrive incomplete).
+pysim is unchanged and still clean: transient 2, `blk_latency` still 1.
+
+**Splitting the read from the write is necessary but NOT sufficient, and this is the part worth
+keeping.** The obvious composite — reader does `get(block)` then `write(block)` to the internal FIFO —
+fixes nothing: the reader still stops reading `s_in` for the 64 cycles of its handoff, so the same
+~11 words per block are lost. It only moves *which* channel the stall is in front of. The stage that
+touches the boundary port must never stop reading, which means its firing is **one word in, one word
+out**. Everything else about the design follows from that.
+
+**The alternative considered and not needed: `StreamOfBlocksIF`.** A stage that must *both* hold a
+block and never stop reading has to write while it reads — acquire a block buffer, fill `buf[i]`
+inside the read loop, release on scope exit — and that is what SOBIF is for. This design does not
+need it, because the two requirements are split across two stages: the ingress never stops reading
+and holds nothing, the block stage holds a block and is *allowed* to stall, and the FIFO between them
+is what makes that legal. **The block boundary is not lost** — the block stage reconstitutes it with
+`get(blk_words)`, so a real DSP stage in that position sees exactly the block it expects. SOBIF
+becomes the answer only for a stage that cannot be split this way (one that must start emitting
+transformed samples before the input block is complete). Its cost is known and unpleasant: the locks
+are RAII *inside* the task, there are no `acquire()` members for the extractor to lower, and the RTL
+never contains the words `stream_of_blocks` — see `reference-hls-sob-lock-is-raii`.
+
+**Consequences of the word relay, both recorded rather than worked around:**
+
+1. **It has no pysim expression, so the ingress hands over a hand-written body.** `StreamIFSlave.get`
+   pops one burst and truncates it to the requested width, so a word-granular Python `run_iter` would
+   silently discard 63 of every 64 words — pysim's quantum is the burst. `RfSampIngress` therefore
+   overrides `kernel_task()` (`src/rf_samp_ingress_task.h`, three lines) and leaves `run_iter` as the
+   block-granular twin, the same arrangement `mem_copy`'s Sequencer has. The two are identical at
+   block granularity, which is the only granularity pysim resolves. *This is the fidelity boundary
+   showing up in the source layout, not a codegen shortfall.*
+2. **The elastic buffer has to be an internal channel** — `#pragma HLS STREAM depth=64` is emitted
+   and physical (`rf_pass_through_fifo_w64_d64_A.v` in the RTL), where the same declaration on a
+   boundary port is silently ignored. The asymmetry settled in #152 is what forces the shape.
+
+**The throughput barely moved: 1072 → 1066 on the DUT-alone gate, and that is expected rather than
+disappointing.** The block stage still costs 136 cycles per firing (csynth: two 66-cycle pipelined
+loops, read-then-write over one block RAM), so per-block cost is ~133 either way, and that TB's
+driver pushes at full rate. Read/write serialization *inside* a block stage is intrinsic to block
+processing — a stage that transforms a block cannot emit before it has received one — and it is
+harmless once it is not the stage holding the port. The change was never about speed; it was about
+where the stall lands, and the DUT-alone gate is precisely the cut that cannot see the difference
+(a `StreamDriver` waits; a converter does not).
+
+**No deadlock, and no token needed.** `reference-freerun-pipeline-token-pacing`'s law is about
+un-paced pipelines whose stages form a *cycle* (SOB recycling). Two tasks and one FIFO have no
+back-edge, and the 8-block run completes with every word accounted for.
+
+**What this does NOT fix.** pysim still cannot see the violation: it reported `dropped == 0` for the
+broken design and reports it for the fixed one. The design is correct; the check is not more capable.
+`docs/guide/rf/fidelity.md` says so in those words.
+
+#### Scoped, not built: a structural "does this body ever stop reading?" lint
+
+The check that *would* have caught this before RTL is not a simulation — it is a property of the body
+shape, and the extractor already parses these bodies into an IR against a fixed vocabulary. Sketch:
+
+- **The question**: for a slave port fed by a producer that cannot wait, what is the longest gap
+  between two consecutive reads of that port that the body can produce? For `[get(N), write(N)]` it
+  is the write: N cycles. For `[get(1), write(1)]` it is ~1.
+- **The budget**: `port.depth × (1 / words_per_cycle)` — how long the port can cover for the body.
+  Both terms already exist: the depth is on the `StreamIF` and the rate is derived on the converter
+  (`Rfdc.words_per_cycle`). 2 × 4.69 ≈ 9 cycles here, against a 64-cycle gap.
+- **The trigger**: a producer declaring that it drops rather than waits. `StreamIFMaster.offer()` is
+  already that declaration in pysim — the lint would fire on any module whose input edge has an
+  offering master.
+- **Where**: `elaborate`-time, so it needs no toolchain and no run. Exact, not heuristic: the numbers
+  are declared, and the body cost comes from the same statement→cycles mapping the block-LT model
+  uses (`read_stream<W>` of an N-word array = N cycles).
+
+Two things make it worth doing and one makes it awkward. Worth: it is the only automated form of
+fidelity condition 3 that runs without RTL, and the failure it catches is *silent* (the design
+finishes, the output is well-formed, the surviving data is exact). Awkward: the graph that knows the
+producer's rate is the loopback cut, while the body being linted is usually elaborated in the DUT
+cut — so the lint belongs to the *composed* graph, not to the module, which is a slightly unusual
+place for a body-shape check to live.
 
 ### The DUT at RTL — **DONE 2026-08-13**
 

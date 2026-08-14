@@ -88,14 +88,22 @@ GATES = [
     # an exact-cycle gate here.
     #
     # rf_pass_through: the RF loopback's digital logic, cut ALONE between generic AXIS BFMs
-    # (plans/adc_model.md staging item 2).  8 bursts x 64 words, relayed bit-identically.  1072 =
-    # 71 (fill: the body reads a whole 64-word block into its buffer before writing any of it) +
-    # 7 x ~143 steady.  ~143 rather than ~128 because read and write do NOT overlap: the generated
-    # body is `read_stream` then `write_stream`, two sequential pipelined loops over one block RAM.
-    # That is the DUT's honest cost, not a testbench artifact -- a design wanting overlap would need
-    # two tasks and a channel, which is what mem_copy does and why its per-job cost is ~max() rather
-    # than a sum.
-    ("rf_pass_through", "rf_pass_through_bfm_tb", 1072, ""),
+    # (plans/adc_model.md staging item 2).  8 bursts x 64 words, relayed bit-identically.
+    #
+    # 1066, re-recorded 2026-08-14 when the DUT became two tasks + a one-block internal FIFO
+    # (ingress word relay -> block stage).  It was 1072, and **the six cycles are the whole
+    # throughput story, deliberately**: the change was not made to go faster.  The block stage still
+    # costs 136 cycles per firing (csynth: two 66-cycle pipelined loops, read-then-write over one
+    # block RAM), so per-block cost is ~133 either way and this TB -- whose driver pushes at full
+    # rate -- is bound by that.  What changed is WHERE the stall lands: the boundary port is now
+    # drained a word at a time by a task with latency 0, so a producer that cannot wait (an ADC)
+    # loses nothing.  That is invisible here, because a StreamDriver BFM waits; it is measured in
+    # tests/examples/test_rf_loopback_xsi.py, where ADC_DROPPED went 72 -> 0.
+    #
+    # The read/write serialization inside the block stage is intrinsic to block processing, not a
+    # defect: a stage that transforms a block cannot emit before it has received one.  Splitting it
+    # further would buy throughput here and change nothing about the converter.
+    ("rf_pass_through", "rf_pass_through_bfm_tb", 1066, ""),
 ]
 
 

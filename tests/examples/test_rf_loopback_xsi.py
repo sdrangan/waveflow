@@ -4,27 +4,27 @@
 digital logic as synthesized RTL, the converters as the ``xsi_rfdc.h`` models, and the RF environment
 as file-backed peers across two behavioral edges.
 
-**What this gate establishes, and what it refuses to paper over.**
+**What this gate establishes.**
 
-The bit-exactness claim *holds*: the first block completes the whole chain — Python quantize → pack →
-AXI-Stream → real RTL → unpack → dequantize → Python — and comes back **bit-identical**. That is the
-claim the arc exists to make, and it is made here for the first time end to end.
+Every one of the eight blocks completes the whole chain — Python quantize → pack → AXI-Stream → real
+RTL → unpack → dequantize → Python — and comes back **bit-identical**, shifted by the one-block
+startup transient. Not the first block: all of them. That was unreachable until the DUT stopped
+stalling its input.
 
-The loss claim does *not* match pysim, and the difference is a real design finding rather than a
-model bug:
+    the ADC produces 512 words and the fabric accepts **512**.  Nothing is dropped.
 
-    the ADC produces 512 words and the fabric accepts 440.  **72 are dropped.**
+This gate used to pin a shortfall of 72 as a known design limit, and the pin was the right call at
+the time — it made the defect visible and regression-guarded instead of hidden behind a tolerance.
+The defect is now fixed, so what is guarded has flipped: ``ADC_DROPPED == 0`` is the mechanical form
+of the fidelity contract's third condition (*the DUT never stalls its input* — see
+``docs/guide/rf/fidelity.md``), and it is checked here because **this is the only backend that can
+check it**. pysim reports zero either way: the loss it cannot see is a phase effect inside a block
+period, and block-LT carries one event per block. So a green pysim run is not evidence for this
+clause, and a reader should not read it as one.
 
-``RfSampPassThrough`` reads a whole 64-word block and only then writes it, so ``TREADY`` is low for
-~64 cycles at a stretch while the converter presents a beat every ~4.7 cycles regardless. A real ADC
-drops; it cannot stall. pysim does not show this because its ``StreamIFMaster`` **blocks** when the
-DUT is not ready — the backend asymmetry recorded in ``plans/adc_model.md``, previously unexercised
-because the fabric is ~4.7x oversized *on average*. Averages are not the constraint; burstiness is.
-
-So the gate asserts the truth: the first block is exact, and the loss is exactly the measured 72.
-Pinning a known shortfall is deliberate — it makes the defect visible and regression-guarded instead
-of hidden behind a tolerance. Fixing it is a design change (overlap the read and write, i.e. two
-tasks and a channel, which is what ``mem_copy`` does) and is not this step.
+What made zero reachable is the design change in ``RfSampPassThrough``: an ingress task that relays
+one word at a time into an internal FIFO, and a block stage behind it that is *allowed* to be busy.
+The converter now meets a port that is drained every cycle rather than in 64-cycle gulps.
 """
 from __future__ import annotations
 
@@ -50,7 +50,12 @@ PROJ = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 
 #: What the ADC produces, and what the fabric actually takes.  8 blocks x 64 words.
 WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
-WANT_ADC_DROPPED = 72
+#: **Zero, and asserted as a contract rather than recorded as a measurement.**  Unlike the cycle
+#: gates below, this number is not "what the design happens to do": a converter cannot be
+#: back-pressured, so any nonzero value is lost signal.  It was 72 while the DUT was a single
+#: store-and-forward task; the overlap fix (an ingress task + a one-block internal FIFO) is what
+#: makes zero achievable.  Do not re-record this one — diagnose it.
+WANT_ADC_DROPPED = 0
 WANT_DAC_BLOCKS = 19
 #: Blocks the DAC's grid emits in the run, and how many carry no data.
 #:
@@ -61,7 +66,10 @@ WANT_DAC_BLOCKS = 19
 #: result's clothes, which is exactly the confusion the cycle gates exist to avoid.  What replaced it
 #: is the startup transient below, which IS a result and is checkable on both backends.
 WANT_DAC_BLOCKS_OUT = 19
-WANT_DAC_ZERO_FILLED = 13
+#: 11, where the store-and-forward design zero-filled 13.  The two blocks it gained are the direct
+#: consequence of the ADC no longer dropping words: a block whose words went missing never reached
+#: the DAC's buffer as a whole block, so the grid played zeros in its place.
+WANT_DAC_ZERO_FILLED = 11
 #: Blocks of zero-fill before the first data block reaches the sink **at RTL**.  One, where pysim
 #: shows two: pysim paces the RF side on the edge's metronome and XSI on the source, so the RTL ADC
 #: has its first block at t=0.  A divergence to record, not to average away.
@@ -187,21 +195,26 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
         assert not np.any(got[k]), (
             f"block {k} is inside the {lat}-block startup transient and must be the zero-fill the "
             f"DAC emits when its samples have not arrived yet")
-    assert np.array_equal(got[lat], sim.sent[0]), (
-        "the first DATA block is not bit-identical through the chain. That is a genuine "
-        "quantization or packing disagreement between the C++ and Python converters — diagnose it, "
-        "do not tolerate it.")
+    # EVERY block, not just the first.  While the DUT stalled its input, blocks after the first were
+    # missing words and could only be compared loosely or not at all; a design that does not drop
+    # makes the whole run checkable, so it is checked.
+    for k in range(XSI_NBLK):
+        assert np.array_equal(got[lat + k], sim.sent[k]), (
+            f"DAC block {lat + k} != ADC block {k} through the chain. With the ADC dropping nothing, "
+            f"every block must survive quantize -> pack -> RTL -> unpack -> dequantize unchanged; a "
+            f"difference here is a genuine disagreement between the C++ and Python converters, or a "
+            f"relay that lost data. Diagnose it, do not tolerate it.")
 
-    # --- 2) The loss, which does NOT match pysim, and is a DESIGN finding ------------------------
+    # --- 2) The loss: ZERO, which is the fidelity contract's third condition ---------------------
     assert counters["ADC_WORDS_SENT"] + counters["ADC_DROPPED"] == WANT_ADC_WORDS, (
         f"the ADC should account for every one of {WANT_ADC_WORDS} words: {counters}")
-    assert counters["ADC_DROPPED"] == WANT_ADC_DROPPED, (
-        f"the ADC dropped {counters['ADC_DROPPED']} words, the recorded shortfall is "
-        f"{WANT_ADC_DROPPED}. This number is pinned because it is a KNOWN DESIGN LIMIT, not a "
-        f"target: RfSampPassThrough reads a whole block before writing it, so TREADY is low for "
-        f"~64 cycles while the converter presents a beat every ~4.7 regardless. If it moved DOWN, "
-        f"the design got better and the gate should be re-recorded; if it moved UP, something got "
-        f"worse.")
+    assert counters["ADC_DROPPED"] == WANT_ADC_DROPPED == 0, (
+        f"the ADC dropped {counters['ADC_DROPPED']} words. A converter cannot be back-pressured, so "
+        f"a dropped word is lost signal, not a slower run — this is the mechanical form of the "
+        f"fidelity contract's 'the DUT never stalls its input' (docs/guide/rf/fidelity.md) and the "
+        f"only backend that can check it. Nonzero means some stage stopped reading its input long "
+        f"enough for a beat to go unanswered: find which, do not re-record the number. (It was 72 "
+        f"while RfSampPassThrough was one store-and-forward task.)")
     assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS == len(got)
 
     # --- 2b) The DAC plays on its GRID, so it emits for the whole run ---------------------------
@@ -209,7 +222,12 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
     assert counters["DAC_BLOCKS_ZERO_FILLED"] == WANT_DAC_ZERO_FILLED, (
         f"the DAC zero-filled {counters['DAC_BLOCKS_ZERO_FILLED']} of its "
         f"{counters['DAC_BLOCKS_OUT']} grid periods, gate expects {WANT_DAC_ZERO_FILLED} "
-        f"(1 startup + the tail after the 8 data blocks run out)")
+        f"(1 startup + the {WANT_DAC_BLOCKS_OUT - XSI_NBLK - RTL_STARTUP_BLOCKS} tail periods after "
+        f"the 8 data blocks run out)")
+    assert counters["DAC_WORDS_RECV"] == WANT_ADC_WORDS, (
+        f"the DAC took {counters['DAC_WORDS_RECV']} words off the fabric of the "
+        f"{WANT_ADC_WORDS} the ADC produced — with nothing dropped at either boundary these must "
+        f"agree, and a shortfall here would mean the relay, not the converter, lost data")
 
     # --- 3) The edges themselves lose nothing: the loss is at the fabric boundary ---------------
     assert counters["ADC_CHAN_DROPPED"] == 0 and counters["DAC_CHAN_DROPPED"] == 0, (
@@ -238,13 +256,14 @@ def test_the_two_backends_disagree_about_loss_and_this_records_how():
     rtl = read_rf_bundle(XSI / "vectors" / "rf_out", 1, XSI_BLKSIZE)
 
     # --- what each side counts, for one scenario ------------------------------------------------
-    # pysim: whole BLOCKS on the edge.  Its ADC->fabric loss is ZERO -- not because nothing is lost
-    # in hardware, but because the loss is sub-block and block-LT cannot resolve it (see
-    # docs/guide/rf/fidelity.md).  XSI: 72 WORDS at the fabric boundary.
+    # Both now report zero ADC->fabric loss -- and the agreement is WEAKER THAN IT LOOKS, which is
+    # the thing worth writing down.  pysim reported zero for the broken design too: the loss was
+    # sub-block, and block-LT carries one event per block (docs/guide/rf/fidelity.md).  So pysim's
+    # zero is uninformative about this clause in both directions, and only XSI's is evidence.
     assert sim.tb.adc_if.counters()["overrun"] == 0
     assert sim.tb.dut.s_in.interface.dropped == 0, (
-        "pysim reports no ADC->fabric loss for this design; if that changes, the divergence table "
-        "in plans/adc_model.md and guide/rf/fidelity.md must change with it")
+        "pysim reports no ADC->fabric loss; note this was ALSO true of the store-and-forward design "
+        "that lost 72 words at RTL, so it is not evidence that the design is correct")
 
     # Startup transient: 2 blocks in pysim, 1 at RTL.  Same phenomenon, different pacing -- pysim
     # paces the RF side on the edge metronome, XSI on the source.  Recorded, not averaged away.

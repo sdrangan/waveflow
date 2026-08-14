@@ -32,6 +32,7 @@ from waveflow.hw.dataschema import DataArray, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.rf_sample_if import RFSampIF
 from waveflow.hw.synth import sim_only
 from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, write_rf_bundle
@@ -41,65 +42,110 @@ from waveflow.simulation.simulation import Simulation
 from examples.rf_loopback.rfdc import Rfdc
 
 
-@dataclass
-class RfSampPassThrough(FreeRunMod):
-    """The digital logic: one AXIS burst in, the same burst out.
+def blk_array(bitwidth: int, nwords: int) -> type:
+    """One block's payload type: ``DataArray`` of *nwords* words of *bitwidth*.
 
-    A free-running module, because that is what the fabric between two converter ports is — it has no
-    host to start it and re-fires on each arriving block.  Its body is trivial on purpose: stage 1 is
-    about the converter boundary, and a pass-through makes the loopback golden exact rather than
-    approximately equal.  Stage 3's ``RfSampBuf`` is the first block that does something.
+    The **instance → type bridge**, as a free function so the two children that need it (the pysim
+    twin's burst and the relay's block) name one type rather than two that happen to agree.  Reading
+    it through a property inside a synthesizable body is allowed by the implicit-capture rule
+    precisely because it resolves to a ``DataSchema`` subclass — a type is a fact about the design,
+    not storage someone has to write.
+    """
+    return DataArray.specialize(
+        element_type=IntField.specialize(bitwidth=int(bitwidth), signed=False),
+        max_shape=(int(nwords),), static=True)
+
+
+@dataclass
+class RfSampIngress(FreeRunMod):
+    """The ingress adapter: one word off the AXIS boundary, one word into the internal FIFO.
+
+    **This exists because a converter cannot be back-pressured.**  The block stage behind it is busy
+    for a contiguous stretch of every block period, and while it is, nothing is reading ``s_in`` — so
+    the ADC, which presents a beat every ~4.7 cycles regardless, loses whatever the 2-deep boundary
+    port cannot hold.  (A top-level AXIS argument *is* 2 deep: a depth pragma on it is ignored by
+    Vitis, which is why the elastic buffer has to be a task and an internal channel rather than a
+    number in the Python.  See ``docs/guide/rf/fidelity.md``.)
+
+    This task never stops reading: its whole firing is one read and one write, so ``TREADY`` is low
+    for at most a cycle at a time and the depth needed to absorb the block stage's busy stretch lives
+    in the internal FIFO behind it, where a depth declaration *is* honoured.
+
+    **The body is hand-written, and the reason is a real boundary rather than an extractor gap.**
+    ``run_iter`` is the pysim golden twin and it relays a whole *burst*, because that is the only
+    granularity pysim has: ``StreamIFSlave.get`` pops one burst and truncates it to the requested
+    width, so a word-granular Python body would silently discard 63 of every 64 words.  The word
+    relay the hardware needs therefore has no pysim expression, and the two are declared separately —
+    identical at block granularity, which is the only granularity pysim resolves.
     """
 
-    #: The generated top's name.  Without it the module has no codegen identity and
-    #: ``tb_top_spec`` has no ``top_name`` — which, not the boundary, is what actually kept this
-    #: DUT out of a testbench walk.
-    cpp_kernel_name: ClassVar[str | None] = "rf_pass_through"
+    cpp_kernel_name: ClassVar[str | None] = "rf_samp_ingress"
 
-    #: AXIS word width in bits — ``samp_per_word * nbits`` at the converter.  Read off the
-    #: :class:`~examples.rf_loopback.rfdc.Rfdc` when the testbench builds the graph.
+    #: AXIS word width in bits — the only parameter the hardware body has.  It takes no block size:
+    #: a word relay does not know what a block is, and that is the point.
     bitwidth: HwParam[int] = 64
-    #: Words in one block's burst — ``blksize / samp_per_word``.
-    nwords_blk: HwParam[int] = 64
-    #: **Block latency**: how many RF block periods pass before this module's output for a given
-    #: input block is available downstream.
-    #:
-    #: It is **>= 1 for any block-processing module, structurally** — not as a safety margin.  A block
-    #: only exists at its grid tick, so a module cannot emit block *k* before it has received block
-    #: *k*, and a converter downstream therefore cannot play block *k* in the same period the
-    #: converter upstream delivered it.  A loop through the RF grids costs at least one block index no
-    #: matter how fast the fabric is; even a zero-latency fabric cannot close it.  That is the
-    #: "no dependency within < blksize samples" limit in ``plans/adc_model.md``, applied to the fabric
-    #: path rather than the environment path.
-    #:
-    #: This is a **declaration that gets checked**, not a knob: the testbench asserts the downstream
-    #: edge underran exactly this many times at startup, so a module that claims two blocks and
-    #: exhibits one fails.  (Wall-clock latency here is sub-block — the fabric is ~4.7x oversized for
-    #: this rate — but a design must not lean on that: sub-block timing is precisely what block-LT
-    #: does not resolve.)
-    blk_latency: HwParam[int] = 1
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if int(self.blk_latency) < 1:
-            raise ValueError(
-                f"{type(self).__name__} '{self.name}': blk_latency must be >= 1 block, got "
-                f"{int(self.blk_latency)}. A zero-latency loop through the RF grids is not a system "
-                f"that can exist — block k cannot be played in the period it was captured — so it is "
-                f"refused here rather than reported later as an underrun.")
         w = int(self.bitwidth)
         self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
-        self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
+        self.w_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_w_out", bitwidth=w,
                                     has_tlast=True)
         self.add_endpoint(self.s_in)
+        self.add_endpoint(self.w_out)
+
+    def kernel_task(self) -> KernelTask:
+        """The hand-written one-word relay (``rf_samp_ingress_task.h``).
+
+        Overriding this is what "the body is mine, not the generator's" means; nothing can derive a
+        function name or a parameter order someone else chose.  See
+        ``docs/guide/comp_codegen/freerunning_override.md``.
+        """
+        return KernelTask("rf_samp_ingress_task", "rf_samp_ingress_task.h", ("s_in", "w_out"),
+                          template_args=(int(self.bitwidth),))
+
+    def run_iter(self) -> ProcessGen[None]:
+        """The pysim twin: relay one whole burst, because a burst is pysim's quantum.
+
+        The raw-word convention on purpose — this body is not extracted, and a burst-shaped relay
+        must not name a block size it does not have.
+        """
+        words = yield from self.s_in.get()
+        yield from self.w_out.write(words)
+
+
+@dataclass
+class RfSampBlockRelay(FreeRunMod):
+    """The block stage: collect a whole block off the internal FIFO, then emit it.
+
+    Trivial on purpose — the arc is about the converter boundary, and a pass-through makes the
+    loopback golden exact rather than approximately equal.  Stage 3's ``RfSampBuf`` is the first
+    block that does something.  What matters structurally is that this stage is *allowed* to be busy:
+    it holds a block, and while it writes one out the ingress ahead of it keeps draining the port.
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_samp_relay"
+
+    bitwidth: HwParam[int] = 64
+    #: Words in one block's burst — ``blksize / samp_per_word``.
+    nwords_blk: HwParam[int] = 64
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.bitwidth)
+        self.blk_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_blk_in", bitwidth=w,
+                                    has_tlast=True)
+        self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
+                                    has_tlast=True)
+        self.add_endpoint(self.blk_in)
         self.add_endpoint(self.s_out)
-        #: Bursts relayed — the sanity number the check reads.  Incremented through
+        #: Blocks relayed — the sanity number the check reads.  Incremented through
         #: :meth:`count_burst`, never inline: see there for why.
         self.n_blk = 0
 
     @sim_only
     def count_burst(self) -> None:
-        """Tally one relayed burst — **instrumentation, and marked as such.**
+        """Tally one relayed block — **instrumentation, and marked as such.**
 
         ``self.n_blk += 1`` inline in :meth:`run_iter` is what the extractor's implicit-capture rule
         exists to catch, and it caught it: a read of ``self.X`` in a synthesizable body could be a
@@ -115,28 +161,125 @@ class RfSampPassThrough(FreeRunMod):
 
     @property
     def blk_words(self) -> type:
-        """The payload type of one firing: ``DataArray`` of ``nwords_blk`` words of ``bitwidth``.
-
-        The **instance → type bridge**: the module's ``HwParam``s feed a schema specialization, so
-        one declaration serves every configuration the pysim tests sweep *and* pins a concrete type
-        at extract time (which elaborates at the defaults).
-
-        Reading ``self.blk_words`` inside :meth:`run_iter` is allowed by the implicit-capture rule
-        precisely because it resolves to a ``DataSchema`` subclass — a type is a fact about the
-        design, not storage someone has to write.
-        """
-        return DataArray.specialize(
-            element_type=IntField.specialize(bitwidth=int(self.bitwidth), signed=False),
-            max_shape=(int(self.nwords_blk),), static=True)
+        """The payload type of one firing — see :func:`blk_array`."""
+        return blk_array(int(self.bitwidth), int(self.nwords_blk))
 
     def run_iter(self) -> ProcessGen[None]:
         # The TYPED get, not the raw-word ``get(nwords_max=...)`` form.  That form is documented as
         # the "old (raw-word) calling convention ... used by non-HwModule callers such as PolyTB",
         # and the extractor has no rule for it — it reaches for the schema type that a raw get does
         # not carry.  A synthesizable body uses the typed convention.
-        blk = yield from self.s_in.get(self.blk_words)
+        blk = yield from self.blk_in.get(self.blk_words)
         self.count_burst()
         yield from self.s_out.write(blk)
+
+
+@dataclass
+class RfSampPassThrough(FreeRunMod):
+    """The digital logic: one AXIS burst in, the same burst out — as **two overlapped tasks**.
+
+    ::
+
+        s_in --> [RfSampIngress] --blk_fifo (depth = nwords_blk)--> [RfSampBlockRelay] --> s_out
+
+    A free-running module, because that is what the fabric between two converter ports is — it has no
+    host to start it and re-fires on each arriving block.
+
+    **Why it is not one task.**  It was, and it lost samples.  A single body that reads a whole block
+    and only then writes it leaves ``TREADY`` low for the entire write, and an ADC does not wait: 72
+    of 512 words were dropped at RTL.  Splitting the read from the write is what lets block *k+1*
+    arrive while block *k* is going out, and it is the same shape ``mem_copy`` has — one
+    ``hls::task`` per child, wired by an internal channel.
+
+    The FIFO between them carries a **declared depth of one block**, and that declaration is honoured
+    because it is an *internal* channel: ``#pragma HLS STREAM depth=`` works there and is ignored on a
+    top-level port (``HLS 214-387``).  That asymmetry is not a footnote here — it is the reason the
+    elastic buffer has to be a channel inside the top rather than a deeper boundary port.
+    """
+
+    #: The generated top's name.  Without it the module has no codegen identity and
+    #: ``tb_top_spec`` has no ``top_name`` — which, not the boundary, is what actually kept this
+    #: DUT out of a testbench walk.
+    cpp_kernel_name: ClassVar[str | None] = "rf_pass_through"
+
+    #: AXIS word width in bits — ``samp_per_word * nbits`` at the converter.  Read off the
+    #: :class:`~examples.rf_loopback.rfdc.Rfdc` when the testbench builds the graph.
+    bitwidth: HwParam[int] = 64
+    #: Words in one block's burst — ``blksize / samp_per_word``.  Also the internal FIFO's depth:
+    #: the ingress must be able to hand off a whole block without waiting on the block stage.
+    nwords_blk: HwParam[int] = 64
+    #: **Block latency**: how many RF block periods pass before this module's output for a given
+    #: input block is available downstream.
+    #:
+    #: It is **>= 1 for any block-processing module, structurally** — not as a safety margin.  A block
+    #: only exists at its grid tick, so a module cannot emit block *k* before it has received block
+    #: *k*, and a converter downstream therefore cannot play block *k* in the same period the
+    #: converter upstream delivered it.  A loop through the RF grids costs at least one block index no
+    #: matter how fast the fabric is; even a zero-latency fabric cannot close it.  That is the
+    #: "no dependency within < blksize samples" limit in ``plans/adc_model.md``, applied to the fabric
+    #: path rather than the environment path.
+    #:
+    #: **Still one block after the overlap**, and that is the point of the overlap: the two stages
+    #: cost ~2 x nwords_blk fabric cycles end to end, which at this rate is a fifth of a block period.
+    #: Pipelining the module did not make it deeper in *blocks*; it made it stop stalling its input.
+    #:
+    #: This is a **declaration that gets checked**, not a knob: the testbench asserts the downstream
+    #: edge underran exactly this many times at startup, so a module that claims two blocks and
+    #: exhibits one fails.  (Wall-clock latency here is sub-block — the fabric is ~4.7x oversized for
+    #: this rate — but a design must not lean on that: sub-block timing is precisely what block-LT
+    #: does not resolve.)
+    blk_latency: HwParam[int] = 1
+    #: The fabric clock the internal channel runs at.  Passed in by the testbench that owns the AXIS
+    #: domain, because the hop's cost is a property of the fabric, not of this module.
+    clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if int(self.blk_latency) < 1:
+            raise ValueError(
+                f"{type(self).__name__} '{self.name}': blk_latency must be >= 1 block, got "
+                f"{int(self.blk_latency)}. A zero-latency loop through the RF grids is not a system "
+                f"that can exist — block k cannot be played in the period it was captured — so it is "
+                f"refused here rather than reported later as an underrun.")
+        w = int(self.bitwidth)
+        nw = int(self.nwords_blk)
+
+        # --- sub-components (add_comp; insertion order == codegen task order) ---
+        self.ingress = RfSampIngress(name=f"{self.name}_ingress", sim=self.sim, bitwidth=w)
+        self.relay = RfSampBlockRelay(name=f"{self.name}_relay", sim=self.sim, bitwidth=w,
+                                      nwords_blk=nw)
+        for c in (self.ingress, self.relay):
+            self.add_comp(c)
+
+        # --- the internal channel: the elastic buffer, one block deep -------------------------
+        # Depth is single-source here in the way it is NOT at a boundary port: pysim reads it as the
+        # slave's queue_size and codegen emits `#pragma HLS STREAM depth=` for it, because this
+        # channel is inside the top.  One block is what the ingress must be able to hand off while
+        # the relay is busy writing the previous one.
+        self._blk_if = StreamIF(name=f"{self.name}_blk_fifo", sim=self.sim, clk=self.clk,
+                                bitwidth=w, depth=nw)
+        self._blk_if.bind("master", self.ingress.w_out)
+        self._blk_if.bind("slave", self.relay.blk_in)
+        self.add_if(self._blk_if)
+
+        # Boundary port NAMES only — the endpoints and their order are the unwired child ports in
+        # add_comp x add_endpoint order, and the endpoint's TYPE gives the direction.  The names must
+        # be stated because the top's ports keep the names the converters bind to.
+        self.boundary = ["s_in", "s_out"]
+
+        # convenience refs for the testbenches (the boundary endpoints live on the children)
+        self.s_in = self.ingress.s_in
+        self.s_out = self.relay.s_out
+
+    @property
+    def n_blk(self) -> int:
+        """Blocks relayed end to end — the block stage's count, which is the composite's."""
+        return int(self.relay.n_blk)
+
+    @property
+    def blk_words(self) -> type:
+        """The payload type of one block — see :func:`blk_array`."""
+        return blk_array(int(self.bitwidth), int(self.nwords_blk))
 
 
 @dataclass
@@ -197,7 +340,7 @@ class RfLoopbackTB(FreeRunMod):
         self.nwords_blk = int(self.blksize) // int(self.samp_per_word)
 
         self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                                     nwords_blk=self.nwords_blk)
+                                     nwords_blk=self.nwords_blk, clk=self.axis_clk)
         #: Block latency of the wired path from the ADC edge to the DAC edge — **summed from what the
         #: modules on that path declare**, not inferred.  A general graph would need loop detection;
         #: a design that states its latency does not.  This is the DAC edge's entitled startup
