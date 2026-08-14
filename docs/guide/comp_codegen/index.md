@@ -123,6 +123,7 @@ means when you write a [hook](../custom_hooks/).
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
 - [Free-running kernel in HLS](./freerunning.md) — the `composite_kernel`, 1-task case: the task body that is one firing, the `ap_ctrl_none` top, and `KernelTask`.
 - [Overriding the generated task](./freerunning_override.md) — handing over a hand-written task body with `KernelTask`, for an `m_axi` owner or anything outside the extractor's vocabulary.
+- [A module realized as Verilog](./rtl_module.md) — the `rtl_module` target: declaring pre-written Verilog to be instantiated *beside* the kernel (the memory a kernel cannot contain), the endpoint → port-name chain, and the rule that its read latency has one source.
 - [Free-running composite in HLS](./freerunning_composite.md) — the same target with several tasks: internal channels from `add_if`, tasks from `add_comp`, and the boundary derived from what was left unbound.
 - [Extractor](./extractor.md) — the synthesizable subset: what the rules are, why each exists, and `check` as their callable form.
 - [Generated files](./codegen.md) — the two file lifecycles (framework-owned `gen/` vs sticky hook impls), `.cpp` vs `.tpp` routing, and naming.
