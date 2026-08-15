@@ -239,3 +239,12 @@ examples/bram_toy/gen/
 examples/bram_toy/include/
 examples/bram_toy/results/
 examples/bram_toy/xsi/vectors/
+
+# rf_capture (the RX capture buffer): csynth project + generated top/headers, same convention as
+# state_toy / fir_block / bram_toy.  The Python source, the two hand-written task bodies in src/,
+# the hand-written counters main, and the generated XSI workspace stay tracked.
+examples/rf_capture/rf_samp_buf_rx_proj/
+examples/rf_capture/gen/
+examples/rf_capture/include/
+examples/rf_capture/results/
+examples/rf_capture/xsi/vectors/

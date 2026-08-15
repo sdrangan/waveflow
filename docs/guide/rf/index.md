@@ -71,6 +71,9 @@ sink declares neither, which is a *finding* from `check`, not something it says 
 - [The fidelity boundary](./fidelity.md) — what this modelling style can and cannot tell you: the
   three conditions, which of them anything checks, and a measured case where RTL loses 72 words and
   pysim reports none.
+- [The capture buffer](./capture.md) — the first RF block that does something: four command cases as
+  one loop, the horizon as a counted contract, which task may block and why, and the rate contract
+  the converter's own check does not cover.
 
 ## See also
 

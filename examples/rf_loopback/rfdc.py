@@ -109,13 +109,21 @@ class Rfdc(HwModule):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if int(self.n_rx) != 1 or int(self.n_tx) != 1:
+        if int(self.n_rx) > 1 or int(self.n_tx) > 1:
             raise NotImplementedError(
-                f"Rfdc stage 1 supports n_rx == n_tx == 1 on the AXIS side (got n_rx={int(self.n_rx)}, "
-                f"n_tx={int(self.n_tx)}). Whether >1 channel is one AXIS port per channel or one wide "
-                f"port is an open question in plans/adc_model.md — it decides how many BFM duals a "
-                f"testbench needs, so it is not settled here. The RF side is already general: one "
-                f"RFSampIF carrying (n_ch, blksize).")
+                f"Rfdc stage 1 supports at most one channel per direction on the AXIS side (got "
+                f"n_rx={int(self.n_rx)}, n_tx={int(self.n_tx)}). Whether >1 channel is one AXIS port "
+                f"per channel or one wide port is an open question in plans/adc_model.md — it decides "
+                f"how many BFM duals a testbench needs, so it is not settled here. The RF side is "
+                f"already general: one RFSampIF carrying (n_ch, blksize).")
+        if int(self.n_rx) < 1 and int(self.n_tx) < 1:
+            raise ValueError("Rfdc: a tile with neither an ADC nor a DAC path converts nothing.")
+        # ZERO is a real configuration, and distinct from the >1 question above: an RX capture design
+        # has no transmitter (plans/adc_model.md staging item 3), and wiring a fake DAC into its graph
+        # to satisfy this model would put a metronome in the design that nothing feeds — inventing
+        # underruns to report.  A path with zero channels is simply absent: no rate check (pre_sim),
+        # no process (run_proc), no BFM model (bfm_model).  Its endpoints still EXIST, unbound, which
+        # costs nothing and keeps the endpoint set a property of the class rather than of a build.
         if int(self.iq_mode) != 0:
             raise NotImplementedError(
                 f"Rfdc stage 1 implements real samples only (iq_mode=0), got {int(self.iq_mode)}. "
@@ -189,6 +197,25 @@ class Rfdc(HwModule):
             self.tx_samp_rate = iface.samp_rate
             self.tx_blksize = int(iface.blksize)
 
+    def _active_paths(self):
+        """The converter paths this tile actually has: ``[(name, samp_rate, axis endpoint), ...]``.
+
+        **A tile may be ADC-only or DAC-only**, and that is a real configuration rather than a
+        convenience: an RX capture design (``plans/adc_model.md`` staging item 3) has no transmitter,
+        and wiring a fake DAC into its graph purely to satisfy this model would put a metronome in
+        the design that nothing feeds — inventing underruns to report.
+
+        ``n_rx`` / ``n_tx`` already declare the channel counts, so zero is the natural way to say
+        "this path does not exist"; nothing new is declared for it.  Every path a tile *does* have is
+        checked exactly as before, so a two-path tile is unaffected.
+        """
+        paths = []
+        if int(self.n_rx) > 0:
+            paths.append(('ADC', self.rx_samp_rate, self.rx_stream))
+        if int(self.n_tx) > 0:
+            paths.append(('DAC', self.tx_samp_rate, self.tx_stream))
+        return paths
+
     def pre_sim(self) -> None:
         """Check the one rate relation the AXIS port physically cannot violate.
 
@@ -197,8 +224,7 @@ class Rfdc(HwModule):
         loud.  (The *fractional* part of that ratio is the credit accumulator the C++ model needs;
         the Python model needs neither conversion — it works in seconds.)
         """
-        for path, rate, ep in (('ADC', self.rx_samp_rate, self.rx_stream),
-                               ('DAC', self.tx_samp_rate, self.tx_stream)):
+        for path, rate, ep in self._active_paths():
             if rate is None:
                 raise RuntimeError(
                     f"Rfdc '{self.name}': the {path} RF endpoint was never bound to an RFSampIF, so "
@@ -213,11 +239,11 @@ class Rfdc(HwModule):
                     f"Rfdc '{self.name}': {path} sample rate {rate:g} Hz exceeds what the AXIS port "
                     f"can carry — samp_per_word * f_axis = {int(self.samp_per_word)} * {f_axis:g} = "
                     f"{cap:g} samples/s. Raise samp_per_word, widen the port, or lower the rate.")
-        if int(self.rx_blksize) % int(self.samp_per_word):
+        if int(self.n_rx) > 0 and int(self.rx_blksize) % int(self.samp_per_word):
             raise ValueError(
                 f"Rfdc '{self.name}': ADC blksize {int(self.rx_blksize)} is not a multiple of "
                 f"samp_per_word {int(self.samp_per_word)}; a sample cannot straddle a word.")
-        if int(self.tx_blksize) % int(self.samp_per_word):
+        if int(self.n_tx) > 0 and int(self.tx_blksize) % int(self.samp_per_word):
             raise ValueError(
                 f"Rfdc '{self.name}': DAC blksize {int(self.tx_blksize)} is not a multiple of "
                 f"samp_per_word {int(self.samp_per_word)}.")
@@ -274,28 +300,39 @@ class Rfdc(HwModule):
         """
         from waveflow.build.composite_gen import BfmModel
 
-        if self.rx_samp_rate is None or self.tx_samp_rate is None:
-            raise RuntimeError(
-                f"Rfdc '{self.name}': an RF endpoint was never bound, so the sample rate the models "
-                f"need has not been read. Bind both RF interfaces before generating.")
-        adc_rate = self.words_per_cycle(self.rx_stream, self.rx_samp_rate)
-        dac_rate = self.words_per_cycle(self.tx_stream, self.tx_samp_rate)
-        # blk_samples is n_ch * blksize -- one block's worth, the unit the RF edge moves.  The DAC
-        # needs it to know when a block is complete; the ADC learns it from the block it is handed.
-        blk_samples = int(self.rx_rf.n_ch) * int(self.tx_blksize)
-        return (
-            BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf"),
-                     extra_args=(self._fmt_literal(), repr(adc_rate))),
-            BfmModel("RfdcDacSlave", ports=("tx_stream", "tx_rf"),
-                     extra_args=(self._fmt_literal(), repr(dac_rate), str(blk_samples))),
-        )
+        for name, rate, _ep in self._active_paths():
+            if rate is None:
+                raise RuntimeError(
+                    f"Rfdc '{self.name}': the {name} RF endpoint was never bound, so the sample rate "
+                    f"the models need has not been read. Bind every RF interface this tile declares "
+                    f"before generating.")
+        models = []
+        if int(self.n_rx) > 0:
+            adc_rate = self.words_per_cycle(self.rx_stream, self.rx_samp_rate)
+            models.append(BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf"),
+                                   extra_args=(self._fmt_literal(), repr(adc_rate))))
+        if int(self.n_tx) > 0:
+            dac_rate = self.words_per_cycle(self.tx_stream, self.tx_samp_rate)
+            # blk_samples is n_ch * blksize -- one block's worth, the unit the RF edge moves.  The
+            # DAC needs it to know when a block is complete; the ADC learns it from the block it is
+            # handed.
+            blk_samples = int(self.rx_rf.n_ch) * int(self.tx_blksize)
+            models.append(BfmModel("RfdcDacSlave", ports=("tx_stream", "tx_rf"),
+                                   extra_args=(self._fmt_literal(), repr(dac_rate),
+                                               str(blk_samples))))
+        return tuple(models)
 
     # -- the two conversion paths ----------------------------------------------------------------
 
     def run_proc(self) -> ProcessGen[None]:
-        """Run both directions concurrently: the DAC path as its own process, the ADC path here."""
-        self.process(self._dac_proc())
-        yield from self._adc_proc()
+        """Run both directions concurrently: the DAC path as its own process, the ADC path here.
+
+        A tile configured ``n_tx = 0`` (or ``n_rx = 0``) runs one path only — see
+        :meth:`_active_paths`."""
+        if int(self.n_tx) > 0:
+            self.process(self._dac_proc())
+        if int(self.n_rx) > 0:
+            yield from self._adc_proc()
 
     def _adc_proc(self) -> ProcessGen[None]:
         """RF block in → quantize → pack → one AXIS burst out.

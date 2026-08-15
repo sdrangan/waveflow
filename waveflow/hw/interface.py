@@ -863,6 +863,33 @@ class StreamIFSlave(QueuedTransferIFSlave):
         return schema_type().deserialize(raw_words, word_bw=self.bitwidth)
 
     @port_read
+    def get_nb(self, schema_type=None, count=None, *, nwords_max=None):
+        """Take a burst **if one is already buffered**, else return ``None`` — the non-blocking read.
+
+        The read-side twin of :meth:`StreamIFMaster.offer`, and the pysim expression of HLS's
+        ``hls::stream::read_nb``.  The two exist for opposite reasons and both are about *who may
+        wait*: ``offer`` is for a producer that physically cannot wait (a converter), ``get_nb`` for a
+        consumer that **must not** wait — one polling a progress channel, say, where an empty channel
+        means "no news", not "stop".
+
+        No simulated time passes when the buffer is empty, so a caller **must** yield something of
+        its own before polling again; a bare ``while True: get_nb()`` is a zero-time infinite loop.
+        The natural pattern is poll-then-block::
+
+            w = yield from ch.get_nb()      # take the latest if there is one
+            if w is None:
+                w = yield from ch.get()     # nothing to do until it advances
+
+        Implemented by delegating to :meth:`get` once the buffer is known to be non-empty, so the
+        accounting (``ntx``/``nrx``, the queue bookkeeping) is the *same code* rather than a second
+        copy of it that could drift.
+        """
+        if not self.data_buffer.items:
+            return None
+            yield  # unreachable: marks this a generator so `yield from` works on the empty path
+        return (yield from self.get(schema_type, count, nwords_max=nwords_max))
+
+    @port_read
     def get_pipelined(self, schema_type=None, count=None):
         """Pull the next burst and return ``(data, tstart)`` where ``tstart``
         is the SimPy time when the first word of the burst arrived.
