@@ -749,6 +749,58 @@ repaid: the working `RFSampIF` retired one of that plan's open questions and shr
 So: write the two C++ models first, let them state what they need, then generalize `BfmModel` to fit.
 
 3. **`RfSampBuf`, in-band variant** — pysim → csynth → XSI.
+   — **RX side DONE 2026-08-15** (branch `rf-samp-buf-rx`), as `examples/rf_capture`. TX (the
+   `TxCmd` loader, the circular playout) is a separate step and is **not** started.
+
+   **The design.** A composite of two tasks and a memory: an *ingress* that writes one sample per
+   firing into a `T2pBram` and posts its position on a depth-1 progress channel, and a *capture* that
+   takes an `RxCmd{tid, start, nsamp}` naming a window in **sample index** and serves it. The buffer
+   cannot live inside the kernel (`plans/rtl_module.md`), so it is hand-written Verilog beside it.
+
+   **The asymmetry is the design.** The never-stall law is the **ingress's alone**, and it is met
+   *structurally* — the ingress writes a BRAM port, which cannot back-pressure it, so unlike the
+   rf_loopback ingress there is no FIFO depth to size. The capture **may block**, and that freedom is
+   what turns four command cases into one loop: in the buffer / in the future / **straddling**
+   (pre-trigger from the buffer, then live — the case a trigger actually wants) / too old (refused
+   and counted). The horizon is checked **per sample**, because a long capture with a back-pressured
+   output can start legal and go stale mid-stream.
+
+   **Staleness, reasoned about rather than assumed.** The progress channel drops rather than stalls,
+   so `last_wr` is a *lower bound*: it makes the "already written?" test harder to pass (safe) and
+   the "not yet overwritten?" test *easier* (unsafe). The usable horizon is therefore declared as
+   `depth - horizon_margin`. Sample counters wrap, so every comparison is a signed circular
+   difference.
+
+   **Gates.** pysim: four cases with predicted values, responses
+   `[(1,OK,8),(2,OK,8),(3,OK,100),(4,TOO_OLD,0)]`, `n_waited == 2` (only the future and straddling
+   cases wait), horizon counter driven off zero to exactly 1, `dropped == 0` on the ADC interface.
+   csynth: the module set inspected — both task bodies, the depth-1 progress FIFO, 28 bram ports,
+   both tasks `ap_start/ap_continue = 1'b1`. XSI: the same four cases bit-exact against the same
+   prediction, `ADC_DROPPED == 0` over 4096 samples, the memory's read-during-write `$error` never
+   fired, **new cycle gate 18411**.
+
+   **THE FINDING, worth more than the feature.** The first RTL run dropped **1695 of 4096 samples**
+   while pysim reported a clean run. Not the BRAM and not a deadlock: the ingress FSM takes **two
+   cycles per firing**, so it absorbs 0.5 samples/cycle against the 0.853 the scenario asked for
+   (2401/4096 accepted is exactly that ratio). Two consequences, both now enforced:
+
+   * **`samp_rate <= samp_per_word * f_axis` is the PORT's capacity, not the design's.** The Rfdc's
+     own check is optimistic by the consuming task's firing cost. `RfCaptureTB.check_rate` refuses
+     the pairing at build time with the arithmetic in the message, and `RfCapIngress.fire_cycles`
+     declares the measured cost beside the body. **A module's throughput is part of its interface
+     contract.**
+   * **pysim structurally cannot see it** — its ingress consumes a whole *burst* per firing, so the
+     per-word rate never enters the model. A second instance of the blind spot
+     `guide/rf/fidelity.md` documents, and this time the counter that caught it lives on the
+     converter model rather than in Python.
+
+   **Two small framework/example changes** it needed: `StreamIFSlave.get_nb()` (the pysim twin of
+   `hls::stream::read_nb`, read-side peer of `offer`), and `Rfdc` accepting `n_rx`/`n_tx == 0` so a
+   capture design is not forced to wire a fake DAC whose metronome nothing feeds.
+
+   **The known pysim/RTL divergence did not bite.** `T2pBram`'s pysim side is untimed where the RTL
+   has a 1-cycle read; the capture's correctness depends on *ordering* (idx vs wr), not on access
+   latency, and both backends produced identical windows. Stated because it was checked, not assumed.
 4. **`Channel`**, then loopback with a real DSP block (decimating FIR / DDC), then the channel sounder.
 
 ## Stage-1 deviations from this plan
