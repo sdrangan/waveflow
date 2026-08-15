@@ -143,6 +143,22 @@ class RfCapIngress(FreeRunMod):
 
     cpp_kernel_name: ClassVar[str | None] = "rf_cap_ingress"
 
+    #: **Fabric cycles per firing** — one sample in, one sample stored, per this many cycles.
+    #:
+    #: MEASURED, not assumed: csynth gives this body a two-state FSM (``ap_ready`` asserts in state
+    #: 2), so a task firing costs two cycles and the ingress accepts **0.5 samples per cycle**.  It is
+    #: declared here because it is a *rate contract* — the maximum sample rate this design can absorb
+    #: is ``samp_per_word * f_axis / fire_cycles``, and a converter faster than that loses samples
+    #: with no protocol event to mark it.
+    #:
+    #: Getting this wrong is not theoretical: at 256 MSPS on a 300 MHz fabric with one sample per
+    #: word, the first RTL run of this design dropped **1695 of 4096 samples** (58.6% accepted =
+    #: 0.5/0.853, exactly this ratio) while pysim reported none — the documented block-granularity
+    #: blind spot (``docs/guide/rf/fidelity.md``), because a pysim ingress consumes a whole burst per
+    #: firing and never meets the per-word rate at all.  :meth:`RfCaptureTB.check_rate` turns that
+    #: into a refusal at build time.
+    fire_cycles: ClassVar[int] = 2
+
     bitwidth: HwParam[int] = WORD_BW
     depth: HwParam[int] = BUF_DEPTH
     clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
@@ -481,7 +497,9 @@ class RfCaptureTB(FreeRunMod):
 
     n_blk: int = XSI_NBLK
     blksize: int = XSI_BLKSIZE
-    samp_rate: float = 256e6
+    #: 64 MSPS on a 300 MHz fabric — 0.213 samples per cycle against an ingress that absorbs 0.5.
+    #: NOT a free parameter: see :meth:`check_rate`, which refuses a rate this design cannot take.
+    samp_rate: float = 64e6
     axis_freq: float = 300e6
     nbits: int = WORD_BW
     depth: int = BUF_DEPTH
@@ -489,6 +507,31 @@ class RfCaptureTB(FreeRunMod):
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
     n_cycles: int = 40000
     axis_clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+
+    def check_rate(self) -> float:
+        """Refuse a sample rate the ingress cannot absorb, and return the utilisation.
+
+        **The converter's own rate check is not enough.**  ``Rfdc.pre_sim`` asserts
+        ``samp_rate <= samp_per_word * f_axis``, which is the *port*'s capacity — one word per cycle.
+        The design behind the port fires every :attr:`RfCapIngress.fire_cycles` cycles, so its real
+        capacity is that divided by the firing cost, and the difference is not academic: the first RTL
+        run of this testbench lost 41% of its samples in the gap between the two numbers, silently,
+        while pysim reported a clean run.
+
+        Checked here rather than inside the module because it is a statement about a *pairing* — this
+        converter with this design — and neither half owns it alone.
+        """
+        cap = float(self.axis_freq) * int(self.rfdc.samp_per_word) / RfCapIngress.fire_cycles
+        if float(self.samp_rate) > cap:
+            raise ValueError(
+                f"{type(self).__name__}: {float(self.samp_rate):g} samples/s exceeds what the "
+                f"ingress can absorb — samp_per_word * f_axis / fire_cycles = "
+                f"{int(self.rfdc.samp_per_word)} * {float(self.axis_freq):g} / "
+                f"{RfCapIngress.fire_cycles} = {cap:g}. The converter cannot be back-pressured, so "
+                f"the excess is not delayed, it is LOST — and pysim will not show it (block "
+                f"granularity, docs/guide/rf/fidelity.md). Lower the rate, widen the word "
+                f"(samp_per_word), or make the ingress body cheaper.")
+        return float(self.samp_rate) / cap
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -502,6 +545,8 @@ class RfCaptureTB(FreeRunMod):
         self.dut = RfSampBufRx(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
                                depth=int(self.depth), horizon_margin=int(self.horizon_margin),
                                clk=self.axis_clk)
+        #: Fraction of the ingress's capacity this scenario asks for — checked, not assumed.
+        self.rate_util = self.check_rate()
         self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in")
         self.cmd_drv = StreamDriver(sim=self.sim, name=f"{self.name}_cmd_drv", bitwidth=w,
                                     in_bundle="vectors/cmd", has_tlast=True)
