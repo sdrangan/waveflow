@@ -1,0 +1,298 @@
+"""wrapper_gen.py — the **wrapper**: the generated kernel plus its hand-written RTL, as one module.
+
+``plans/rtl_module.md`` S2.  A kernel that reaches a memory through ``mode=bram`` ports is only half
+a design: the ports are real, but nothing is on the other end of them.  The wrapper is the other
+half — it instantiates the kernel, instantiates each memory the graph declares through
+:meth:`~waveflow.hw.hw_module.HwModule.add_rtl_mod`, and joins them.
+
+**Three things this module is, in order of importance:**
+
+1. **The design scope.**  What is inside the wrapper is what a resource estimate should count, and
+   the memory *is* inside it.  ``csynth`` of the kernel alone reports **no BRAM at all** — the memory
+   is invisible to it — so the wrapper is the first boundary an area number can even be defined
+   against (``plans/resource_model.md``).
+2. **The elaborated top.**  From here on the simulator elaborates the wrapper, not the kernel: the
+   ``.f``, the snapshot and the shared library are all named for it.  What that buys is that the
+   memory becomes *internal*, so a testbench sees only AXI-Stream — which is the whole reason S3 is
+   small and the BFM library is untouched.
+3. **Entirely mechanical.**  Both sides' port names are known at generate time — the kernel's from
+   :func:`~waveflow.build.composite_gen.bram_port_signals`, the memory's from its declared port map —
+   so there is nothing here to decide at emit time.  The witness's hand-written ``rx_top.v`` is 49
+   lines, and this emits its equivalent.
+
+**The A/B question, settled by the witness rather than rediscovered here.**  Vitis emits a *full
+true-dual-port pair* per ``bram`` interface, so one kernel-side memory port presents four physical
+ports.  The witness wires the **A half of each interface** and ties the B halves off, and that is
+what this emitter does: two interfaces, two memory ports, four halves, of which two are used.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from waveflow.build.composite_gen import bram_port_signals, wrapper_name
+from waveflow.build.hwcodegen import LoweringError
+from waveflow.build.rtl_gen import resolve_rtl_module
+
+#: Verilog port direction per boundary kind, from the kernel's point of view, as ``(signal, dir,
+#: width-expr)`` where a width of 1 is a scalar.  Only the AXI-Stream kinds appear: a ``bram`` port is
+#: never a wrapper port (it is joined inside), and ``m_axi`` in a wrapped design is future work — a
+#: design that has one gets a clear refusal rather than a silently missing port.
+_AXIS_SIGS = {
+    "axis_in":  (("TDATA", "input", True), ("TVALID", "input", False), ("TREADY", "output", False)),
+    "axis_out": (("TDATA", "output", True), ("TVALID", "output", False), ("TREADY", "input", False)),
+}
+
+#: The kernel-side role each memory-port role is wired to.  Mechanical, and it is the join the whole
+#: wrapper exists to make: the memory's ``din`` takes the kernel's ``Din``, and the memory's ``dout``
+#: drives the kernel's ``Dout``.
+_ROLE_TO_VITIS = {"addr": "Addr", "en": "EN", "din": "Din", "dout": "Dout", "we": "WEN"}
+
+
+@dataclass(frozen=True)
+class MemInst:
+    """One hand-written RTL module instantiated in the wrapper."""
+    inst: str                              # instance name, e.g. "buf"
+    module: str                            # Verilog module name, e.g. "bram_t2p"
+    params: tuple[tuple[str, int], ...]    # #(.DW(16), .AW(10))
+    clock: str                             # the module's clock port
+    #: ``(memory port, wrapper wire)`` pairs, in declaration order.
+    conns: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class WrapperSpec:
+    """The wrapper as data: its ports, the kernel instance, the memories, and the wires between.
+
+    Answerable rather than only renderable, exactly as :class:`~waveflow.build.composite_gen.TopSpec`
+    is: a test can ask *"is the A half wired and the B half tied off?"* without parsing Verilog.
+    """
+    name: str                                     # the wrapper module, e.g. "bram_toy_top"
+    kernel: str                                   # the kernel module it instantiates
+    ports: tuple[tuple[str, str, int], ...]       # (port, direction, width) in declaration order
+    mems: tuple[MemInst, ...] = ()
+    #: Every wire the wrapper declares: ``(name, width)``.
+    wires: tuple[tuple[str, int], ...] = ()
+    #: Kernel connections: ``(kernel port, expression)``.  An empty expression is an unconnected
+    #: output — legal, and what a tied-off B half's outputs are.
+    kernel_conns: tuple[tuple[str, str], ...] = ()
+    #: Constant drivers: ``(wire, literal)`` — the B-half ``Dout`` inputs the kernel never uses.
+    tieoffs: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        """The Verilog file names this wrapper needs beside it, wrapper first."""
+        return (f"{self.name}.v",)
+
+
+def _axis_ports(spec) -> list[tuple[str, str, int]]:
+    """The wrapper's own ports: the clock, the reset, and every AXI-Stream pin of the kernel.
+
+    Derived from the kernel's :class:`~waveflow.build.composite_gen.TopSpec`, which is the same spec
+    the kernel's interface pragmas come from — so the wrapper cannot present a port set the kernel
+    does not have.
+    """
+    ports: list[tuple[str, str, int]] = [("ap_clk", "input", 1), ("ap_rst_n", "input", 1)]
+    for p in spec.pin_ports:
+        sigs = _AXIS_SIGS.get(p.kind)
+        if sigs is None:
+            raise LoweringError(
+                f"wrapper_spec: boundary port {p.name!r} is {p.kind!r}, which has no wrapper port "
+                f"mapping. Only AXI-Stream ports can cross a wrapper today; an m_axi port in a "
+                f"wrapped design needs its pass-through written and gated, not guessed."
+            )
+        for sig, direction, wide in sigs:
+            ports.append((f"{p.name}_{sig}", direction, p.width if wide else 1))
+    return ports
+
+
+def wrapper_spec(comp, spec) -> WrapperSpec:
+    """Derive the wrapper for *comp* from its RTL registries and the kernel's *spec*.
+
+    *comp* is the elaborated composite; *spec* its :func:`~waveflow.build.composite_gen.composite_top_spec`.
+    Every name here is already decided somewhere else, which is what makes this a derivation rather
+    than a design:
+
+    * the wrapper's ports are the kernel's non-``bram`` ports (:attr:`TopSpec.pin_ports`);
+    * the kernel's memory pins are :func:`bram_port_signals` of the port name;
+    * the memory's pins are its own declared port map (``rtl_module().ports``);
+    * which kernel port meets which memory port is the ``add_rtl_if`` registry.
+
+    Raises :class:`~waveflow.build.hwcodegen.LoweringError` when a ``bram`` boundary port is not
+    joined to a memory — a wrapper with a dangling memory port would elaborate and then read zeros
+    forever, which is the failure mode this whole path exists to make impossible.
+    """
+    if not getattr(comp, "rtl_mods", None):
+        raise LoweringError(
+            f"{type(comp).__name__} declares no RTL sub-modules (add_rtl_mod), so it has no wrapper: "
+            f"the generated kernel IS the design. A wrapper exists only to join the kernel to "
+            f"hand-written RTL beside it.")
+
+    # kernel-side endpoint identity -> (memory module, its port map for that endpoint)
+    joined: dict[int, tuple[object, dict]] = {}
+    for iface in comp.rtl_ifs.values():
+        master = iface.endpoints.get("master")
+        slave = iface.endpoints.get("slave")
+        if master is None or slave is None:
+            raise LoweringError(
+                f"{type(comp).__name__}: rtl interface {iface.name!r} is not bound on both sides, "
+                f"so the wrapper cannot join anything to it.")
+        mem = slave.comp
+        rtl = resolve_rtl_module(mem)
+        attr = next((a for a, v in vars(mem).items() if v is slave), None)
+        if attr is None or attr not in rtl.ports:
+            raise LoweringError(
+                f"{type(mem).__name__}.rtl_module() has no port map for the endpoint bound to "
+                f"{iface.name!r}; the wrapper cannot name the Verilog ports to connect.")
+        joined[id(master)] = (mem, rtl.ports[attr])
+
+    ports = _axis_ports(spec)
+    wires: list[tuple[str, int]] = []
+    kconns: list[tuple[str, str]] = [("ap_clk", "ap_clk"), ("ap_rst_n", "ap_rst_n")]
+    tieoffs: list[tuple[str, str]] = []
+    mem_conns: dict[int, list[tuple[str, str]]] = {}
+
+    for p in spec.pin_ports:                      # AXIS: straight through, same names
+        for sig, _dir, _wide in _AXIS_SIGS[p.kind]:
+            kconns.append((f"{p.name}_{sig}", f"{p.name}_{sig}"))
+
+    bram_ports = [p for p in spec.ports if p.kind == "bram"]
+    ep_of_port = {name: ep for name, ep in (_unpack(e) for e in comp.boundary)}
+    for p in bram_ports:
+        ep = ep_of_port[p.name]
+        if id(ep) not in joined:
+            raise LoweringError(
+                f"{type(comp).__name__}: boundary port {p.name!r} is a bram port that no rtl "
+                f"interface joins to a memory. The wrapper would leave it dangling — the kernel "
+                f"would read zeros forever and nothing would say so. Wire it with add_rtl_if.")
+        mem, pmap = joined[id(ep)]
+        sigs = bram_port_signals(p.name)
+        for role, mem_port in sorted(pmap.items()):
+            vitis = _ROLE_TO_VITIS.get(role)
+            if vitis is None:
+                raise LoweringError(
+                    f"{type(mem).__name__}.rtl_module() maps the role {role!r}, which has no "
+                    f"kernel-side signal. Known roles: {sorted(_ROLE_TO_VITIS)}.")
+            wire = f"{p.name}_{role}_a"
+            width = p.width if role in ("din", "dout") else (32 if role == "addr" else
+                                                             2 if role == "we" else 1)
+            wires.append((wire, width))
+            kconns.append((sigs[f"{vitis}_A"], wire))
+            mem_conns.setdefault(id(mem), []).append((mem_port, wire))
+        # The B half.  Vitis emits it whether or not the kernel uses it, so it must be connected or
+        # left explicitly dangling -- and its Dout is an INPUT to the kernel, which must be driven or
+        # the elaboration carries an undriven net into the design.
+        for sig in ("Addr", "EN", "Din", "WEN"):
+            kconns.append((sigs[f"{sig}_B"], ""))          # unused kernel outputs: left open
+        tie = f"{p.name}_dout_b"
+        wires.append((tie, p.width))
+        tieoffs.append((tie, f"{p.width}'d0"))
+        kconns.append((sigs["Dout_B"], tie))
+        for sig in ("Clk", "Rst"):                          # both halves' clock/reset outputs
+            kconns.append((sigs[f"{sig}_A"], ""))
+            kconns.append((sigs[f"{sig}_B"], ""))
+
+    mems: list[MemInst] = []
+    for name, mem in comp.rtl_mods.items():
+        rtl = resolve_rtl_module(mem)
+        conns = mem_conns.get(id(mem), [])
+        if not conns:
+            raise LoweringError(
+                f"{type(comp).__name__}: RTL module {name!r} is declared with add_rtl_mod but no "
+                f"rtl interface reaches it, so the wrapper would instantiate a memory nothing talks "
+                f"to.")
+        mems.append(MemInst(inst=_inst_name(comp, mem), module=rtl.module, params=rtl.params,
+                            clock=rtl.clock, conns=tuple(conns)))
+
+    return WrapperSpec(name=wrapper_name(spec.top_name), kernel=spec.top_name, ports=tuple(ports),
+                       mems=tuple(mems), wires=tuple(wires), kernel_conns=tuple(kconns),
+                       tieoffs=tuple(tieoffs))
+
+
+def _unpack(entry) -> tuple[str, object]:
+    from waveflow.build.composite_gen import _unpack_boundary
+    return _unpack_boundary(entry)
+
+
+#: Verilog keywords and gate primitives a Python attribute name could innocently collide with.  Not
+#: the whole language — the ones a memory or a datapath actually gets called.  ``buf`` is the reason
+#: this exists: it is a *primitive gate*, so ``bram_t2p #(...) buf (...)`` is a syntax error, and the
+#: attribute name that produced it (``self.buf``) is the most natural name for a buffer there is.
+_VERILOG_RESERVED = frozenset({
+    "buf", "bufif0", "bufif1", "not", "and", "or", "nand", "nor", "xor", "xnor", "notif0", "notif1",
+    "module", "endmodule", "input", "output", "inout", "wire", "reg", "assign", "always", "initial",
+    "begin", "end", "parameter", "localparam", "generate", "endgenerate", "function", "task",
+    "posedge", "negedge", "case", "endcase", "if", "else", "for", "while", "signed", "table", "time",
+})
+
+
+def _inst_name(comp, mem) -> str:
+    """The wrapper's instance name for *mem*: the attribute it is bound to on the composite.
+
+    The attribute name is what the design calls it, so the RTL calls it that too — one name, and a
+    waveform is readable against the Python without a translation table.
+
+    Refused when that name is a Verilog keyword, by name and with the fix.  This is not a
+    hypothetical: the first design written against this emitter called its memory ``self.buf``, which
+    is a *primitive gate* in Verilog — the file elaborates as far as the instantiation and then dies
+    on a syntax error that says nothing about Python.  Catching it here costs one lookup and turns a
+    confusing xvlog message into a sentence.
+    """
+    name = next((attr for attr, val in vars(comp).items() if val is mem),
+                getattr(mem, "name", "mem"))
+    if name in _VERILOG_RESERVED:
+        raise LoweringError(
+            f"{type(comp).__name__} holds its RTL module in an attribute named {name!r}, which is a "
+            f"Verilog keyword — the wrapper would emit `{name} (` and xvlog would fail on a syntax "
+            f"error that mentions no Python. Rename the attribute (e.g. {name}_mem)."
+        )
+    return name
+
+
+def render_wrapper(spec: WrapperSpec) -> str:
+    """Emit the wrapper Verilog for *spec* — the equivalent of the witness's ``rx_top.v``."""
+    lines = [
+        f"// {spec.name}.v — GENERATED by waveflow (build/wrapper_gen.py::render_wrapper).",
+        "// DO NOT EDIT: regenerate instead.",
+        "//",
+        f"// The design scope: the generated kernel `{spec.kernel}` plus the hand-written memories it",
+        "// reaches through `mode=bram` ports.  The kernel cannot contain them (Vitis turns an array",
+        "// shared between two tasks into a synchronizing PIPO channel, and refuses one port used both",
+        "// ways), so they live beside it and this module is what joins them.",
+        "//",
+        "// From outside this looks like a kernel with only its AXI-Stream ports — the memories are",
+        "// internal and invisible to any testbench.  It is also what a resource estimate should",
+        "// count: csynth of the kernel alone never sees them.",
+        "`timescale 1ns/1ps",
+        f"module {spec.name} (",
+    ]
+    decls = [f"    {d:<7}{'' if w == 1 else f'[{w-1}:0] '}{n}" for n, d, w in spec.ports]
+    lines.append(",\n".join(decls))
+    lines.append(");")
+
+    if spec.wires:
+        lines.append("")
+        for n, w in spec.wires:
+            lines.append(f"    wire{'' if w == 1 else f' [{w-1}:0]'} {n};")
+
+    lines += ["", f"    {spec.kernel} kernel ("]
+    conns = [f"        .{p}({e})" for p, e in spec.kernel_conns]
+    lines.append(",\n".join(conns))
+    lines.append("    );")
+
+    for m in spec.mems:
+        params = ", ".join(f".{k}({v})" for k, v in m.params)
+        head = f"    {m.module} #({params}) {m.inst} (" if params else f"    {m.module} {m.inst} ("
+        lines += ["", head]
+        mc = [f"        .{m.clock}(ap_clk)"] + [f"        .{p}({w})" for p, w in m.conns]
+        lines.append(",\n".join(mc))
+        lines.append("    );")
+
+    if spec.tieoffs:
+        lines.append("")
+        lines.append("    // The B half of each bram interface: Vitis emits a full A/B pair whether or")
+        lines.append("    // not the kernel uses both, so its Dout INPUT must be driven.")
+        for n, v in spec.tieoffs:
+            lines.append(f"    assign {n} = {v};")
+
+    lines += ["endmodule", ""]
+    return "\n".join(lines)

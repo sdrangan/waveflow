@@ -26,8 +26,108 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 
+import numpy as np
+
 from waveflow.hw.hw_module import HwModule, HwParam
-from waveflow.hw.interface import InterfaceEndpoint
+from waveflow.hw.interface import Interface, InterfaceEndpoint
+
+
+@dataclass
+class BramIFMaster(InterfaceEndpoint):
+    """The **accessor** side of a BRAM port pair — a kernel task's window onto storage it does not own.
+
+    Master because this end drives: the address, the enable, the write data and the write enable are
+    all outputs of the kernel, and the memory answers ``Dout`` a fixed number of cycles later.  In
+    C++ it is a **sized array parameter** (``ap_uint<W> buf_w[N]``) carrying
+    ``#pragma HLS INTERFACE mode=bram``; in RTL it is fourteen ports, an A/B pair of seven signals
+    (:func:`~waveflow.build.composite_gen.bram_port_signals`).
+
+    **It carries no latency.**  How many cycles the memory takes to answer is a fact about the
+    *memory*, published by its Verilog and reached through the bound :class:`BramIF` — see
+    :meth:`BramIF.read_latency`.  A copy here is the second authorship site S1 exists to prevent: the
+    two would be free to disagree, and a disagreement shifts every read by a cycle in silence.
+
+    :attr:`access` says what this end *does*, and it is declared rather than inferred for the same
+    reason it is on :class:`BramIFSlave`: a port used both ways is what Vitis refuses (HLS 200-976),
+    and what a true-dual-port memory's correctness argument rules out.
+    """
+
+    #: Bits per word — the C++ array's element width.
+    bitwidth: int = 16
+    #: Words — the C++ array's **size**.  Not decoration: ``mode=bram`` on an unsized pointer
+    #: silently degrades to an ``ap_vld`` scalar port, so this number is what makes the pragma take
+    #: effect.
+    depth: int = 1024
+    #: What this accessor does through the port: ``"read"`` or ``"write"``.
+    access: str = "read"
+    type_name = 'bram_if_master'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.access not in ("read", "write"):
+            raise ValueError(
+                f"BramIFMaster '{self.name}': access must be 'read' or 'write', got "
+                f"{self.access!r}. A port used BOTH ways is the structure Vitis refuses "
+                f"(HLS 200-976); the direction is declared, never inferred."
+            )
+
+    @property
+    def read_latency(self) -> int:
+        """Cycles from address to data, **from the memory this port is wired to**.
+
+        Raises when unbound, and that refusal is the contract: a ``bram`` port whose pragma latency
+        cannot be traced to a memory's published number has no business being emitted, because the
+        number that would be invented here is exactly the one that shifts the ramp.
+        """
+        iface = self.interface
+        if iface is None:
+            raise ValueError(
+                f"BramIFMaster '{self.name}' is not bound to a BramIF, so there is no memory to "
+                f"take a read latency from. A bram port's latency=N pragma is emitted from the "
+                f"MEMORY's published READ_LATENCY (plans/rtl_module.md S1); wire the port with a "
+                f"BramIF before generating the top."
+            )
+        return iface.read_latency
+
+    # -- pysim access ------------------------------------------------------------------------
+    #
+    # Untimed, and deliberately so.  A BRAM access is a *deterministic* one-cycle answer with no
+    # arbitration and no queue, so there is nothing here for a discrete-event model to represent that
+    # the cycle-accurate backend does not represent better.  Modelling it with a `yield` would put a
+    # SimPy timestep between the address and the data and make pysim slower than the hardware for no
+    # gain in fidelity.  (Contrast `MemoryMod`, where the bus, the arbitration and the burst are the
+    # whole point of having a model.)
+    #
+    # These are plain methods rather than generators for the same reason: a caller writes
+    # `self.buf_w.mem_write(i, x)`, not `yield from`, and the absence of the yield is the statement
+    # that no simulated time passes.
+
+    def mem_write(self, addr: int, value: int) -> None:
+        """Write one word through this port (pysim).  Refused on a read port."""
+        if self.access != "write":
+            raise ValueError(
+                f"BramIFMaster '{self.name}' declares access='read'; writing through it is the "
+                f"read-during-write hazard the memory's $error exists to catch.")
+        self._memory().store(int(addr), int(value))
+
+    def mem_read(self, addr: int) -> int:
+        """Read one word through this port (pysim).  Refused on a write port."""
+        if self.access != "read":
+            raise ValueError(
+                f"BramIFMaster '{self.name}' declares access='write'; reading through it is not the "
+                f"direction this port was wired for.")
+        return self._memory().load(int(addr))
+
+    def _memory(self):
+        iface = self.interface
+        if iface is None:
+            raise ValueError(
+                f"BramIFMaster '{self.name}' is not bound to a BramIF, so there is no memory to "
+                f"access. Wire it with add_rtl_if before running the sim.")
+        return iface.endpoints["slave"].comp
 
 
 @dataclass
@@ -69,6 +169,75 @@ class BramIFSlave(InterfaceEndpoint):
             )
 
 
+@dataclass
+class BramIF(Interface):
+    """The wire between an accessor and a memory port — **a wrapper wire, not a channel.**
+
+    That distinction is the whole of S2.  A :class:`~waveflow.hw.interface.StreamIF` between two
+    tasks is an *internal channel*: it lowers to an ``hls::stream`` inside the generated top, and
+    both its endpoints vanish from the top's boundary.  A ``BramIF`` is not that.  One end is inside
+    the kernel and the other is outside it, so the accessor's end **stays a boundary port** and the
+    join happens one level up, in the wrapper.
+
+    Which is why a ``BramIF`` is registered with :meth:`~waveflow.hw.hw_module.HwModule.add_rtl_if`
+    and never with ``add_if``: the walks that derive channels and boundary ports read the ``add_if``
+    registry, and a ``BramIF`` in it would make the kernel's memory ports disappear into a FIFO that
+    does not exist.
+
+    Binding is where the two halves are checked against each other.  The accessor's array size and
+    the memory's geometry **must** agree — a kernel that thinks it has 1024 words of a 4096-word
+    memory is not an error any tool reports, it is just wrong at address 1024 — so a mismatch is
+    refused here rather than discovered in a waveform.
+    """
+
+    type_name = 'bram_if'
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def __post_init__(self) -> None:
+        self.endpoint_names = ('master', 'slave')
+        super().__post_init__()
+
+    def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
+        if ep_name == "master" and not isinstance(endpoint, BramIFMaster):
+            raise TypeError("master side of BramIF must bind to BramIFMaster (the accessor)")
+        if ep_name == "slave" and not isinstance(endpoint, BramIFSlave):
+            raise TypeError("slave side of BramIF must bind to BramIFSlave (the memory port)")
+        super().bind(ep_name, endpoint)
+        m, s = self.endpoints.get("master"), self.endpoints.get("slave")
+        if m is None or s is None:
+            return
+        if (int(m.bitwidth), int(m.depth)) != (int(s.bitwidth), int(s.depth)):
+            raise ValueError(
+                f"BramIF '{self.name}': the accessor's array is {m.depth}x{m.bitwidth} but the "
+                f"memory port is {s.depth}x{s.bitwidth}. The C++ array size IS the port's address "
+                f"range, so a disagreement is a silent aliasing bug at the first address past the "
+                f"smaller one."
+            )
+        if m.access != s.access:
+            raise ValueError(
+                f"BramIF '{self.name}': the accessor declares access={m.access!r} but the memory "
+                f"port declares {s.access!r}. One side writing while the other believes it reads is "
+                f"the read-during-write collision the memory's $error exists to catch."
+            )
+
+    @property
+    def read_latency(self) -> int:
+        """The memory's published read latency — the ONE number the kernel's pragma is emitted from.
+
+        Reached through the memory *module* that owns the slave endpoint, which reads it from the
+        Verilog (``localparam READ_LATENCY``).  So the chain from artifact to pragma has no place a
+        second value could be introduced.
+        """
+        slave = self.endpoints.get("slave")
+        if slave is None or slave.comp is None:
+            raise ValueError(
+                f"BramIF '{self.name}' has no memory bound on its slave side, so no read latency "
+                f"can be resolved.")
+        return int(slave.comp.read_latency)
+
+
 #: RAMB18 aspect ratios: ``(data width, depth at that width)``.  18 Kb of storage, addressable as
 #: 16K x 1 through 1K x 18 (the 2 parity bits per 16 are what make the widths 9 and 18 rather than 8
 #: and 16).  This is device geometry, not a fit.
@@ -108,11 +277,13 @@ class T2pBram(HwModule):
     read-during-write mode happens to be and no tool says a word.  A hand-written memory is *more*
     verifiable than an emulated one, which is worth stating out loud.
 
-    **No pysim behaviour yet.**  S1 declares the artifact and its ports; there is no ``BramIF`` to
-    drive this module through and therefore nothing to model.  Whether the pysim side is a plain
-    numpy array on this class, and which endpoint carries the access latency, is open
-    (``plans/rtl_module.md``, open questions) and answered in S2 where the wiring lands — not guessed
-    at here.
+    **The pysim side is a numpy array, and untimed** — the plan's open question, answered the way it
+    guessed.  A BRAM access is a deterministic one-cycle answer with no arbitration and no queue, so
+    a discrete-event model of it would add a timestep and no fidelity; the latency that matters is
+    the one the RTL enforces, and it is published by the Verilog
+    (:attr:`read_latency`).  Which endpoint "carries" the access latency turned out to be the wrong
+    question: neither does, because the number belongs to the memory and both ports read it from
+    there.
     """
 
     #: Bits per word.  16 in the witness.
@@ -131,6 +302,28 @@ class T2pBram(HwModule):
                                    access="read")
         self.add_endpoint(self.wr_port)
         self.add_endpoint(self.rd_port)
+        #: The storage, for pysim.  Zeroed, like the RTL's uninitialized array is *not* — reading a
+        #: word that was never written gives 0 here and X (or stale data) there, which is why the
+        #: design, not the memory, is what has to guarantee "rd trails wr".
+        self.storage = np.zeros(d, dtype=np.uint64)
+
+    def store(self, addr: int, value: int) -> None:
+        """pysim write.  Refuses an out-of-range address rather than wrapping it, because the RTL
+        wraps silently (``mem[addr[AW-1:0]]``) and a silent wrap is the bug this catches early."""
+        self._check(addr)
+        self.storage[addr] = np.uint64(value)
+
+    def load(self, addr: int) -> int:
+        """pysim read."""
+        self._check(addr)
+        return int(self.storage[addr])
+
+    def _check(self, addr: int) -> None:
+        if not 0 <= int(addr) < int(self.depth):
+            raise IndexError(
+                f"{type(self).__name__} '{self.name}': address {addr} is outside 0..{int(self.depth)-1}. "
+                f"The RTL would index mem[addr[AW-1:0]] and alias it onto a live word without a word "
+                f"of warning; pysim refuses instead.")
 
     @property
     def addr_bits(self) -> int:

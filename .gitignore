@@ -228,3 +228,14 @@ examples/fir_block/fir_block_proj/
 examples/fir_block/gen/
 examples/fir_block/include/
 examples/fir_block/xsi/vectors/
+
+# bram_toy (the memory-beside-the-kernel gate): csynth project + generated top/headers, same
+# convention as state_toy and fir_block.  What stays TRACKED is the Python source, the two
+# hand-written task bodies in src/, and the generated XSI workspace -- including bram_toy_top.v,
+# the wrapper, which is the artifact plans/rtl_module.md S2 exists to produce and therefore the
+# one whose diff is worth reading.
+examples/bram_toy/bram_toy_proj/
+examples/bram_toy/gen/
+examples/bram_toy/include/
+examples/bram_toy/results/
+examples/bram_toy/xsi/vectors/

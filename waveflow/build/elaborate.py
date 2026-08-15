@@ -241,7 +241,15 @@ _CONTEXT_ATTRS = frozenset({
 
 # Attributes holding *name-keyed* structural collections: compare the value
 # multiset (the keys are instance names = context) rather than the mapping.
-_NAME_KEYED_COLLECTIONS = frozenset({"endpoints", "sub_comps", "interfaces"})
+#: ``_rtl_mods`` / ``_rtl_ifs`` belong here for exactly the reason the other three do: they are keyed
+#: by instance NAME, and an instance name is elaboration context.  Without them a design with
+#: hand-written RTL beside the kernel fails the purity gate on its own instance names — which is the
+#: gate working, reporting that the *fingerprint* was reading a name it should not.  (They are spelled
+#: with the underscore because the registries are created lazily and live under their private names;
+#: a module with no RTL beside it has neither attribute, so its signature — and its calibration key —
+#: is exactly what it was.)
+_NAME_KEYED_COLLECTIONS = frozenset({"endpoints", "sub_comps", "interfaces",
+                                    "_rtl_mods", "_rtl_ifs"})
 
 _numpy_mod: Any = None
 
