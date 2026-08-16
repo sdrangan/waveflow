@@ -47,35 +47,42 @@ def render(out: Path = OUT) -> Path:
     got = np.concatenate([b[0] for b in sim.captured])
     n = min(sent.size, got.size)
 
-    fig, ax = plt.subplots(figsize=(9.0, 3.4))
+    # TWO PANELS, not one.  Overlaid traces occlude: the output is drawn over the input, so in the
+    # region where they coincide the input vanishes and the output looks twice as long as it is.
+    # Stacked panels with a shared x-axis show a delay without hiding either signal.
+    fig, (ax_in, ax_out) = plt.subplots(2, 1, figsize=(9.0, 4.2), sharex=True, sharey=True)
 
-    # Block boundaries first, so the traces sit on top of them.
-    for k in range(0, n // blk + 1):
-        ax.axvline(k * blk, color="0.88", lw=0.8, zorder=0)
-
-    ax.plot(np.arange(n), sent[:n], lw=1.0, color="#4c72b0", label="in  (RfDataSource)")
-    ax.plot(np.arange(n), got[:n], lw=1.0, color="#dd8452", label="out (RfDataSink)")
-
-    # The startup transient: the DAC emits before anything has reached it.
-    ax.axvspan(0, lat * blk, color="#dd8452", alpha=0.10, zorder=0)
-    ax.text(lat * blk / 2, ax.get_ylim()[1] * 0.80,
-            f"zero-fill\n{lat} blocks", ha="center", va="top", fontsize=8, color="#a05a30")
-
-    # The shift, measured between the two burst onsets rather than asserted.
     on_in = int(np.argmax(np.abs(sent) > 1e-9))
     on_out = int(np.argmax(np.abs(got) > 1e-9))
-    y = ax.get_ylim()[1] * 0.55
-    ax.annotate("", xy=(on_out, y), xytext=(on_in, y),
-                arrowprops=dict(arrowstyle="<->", color="0.35", lw=1.0))
-    ax.text((on_in + on_out) / 2, y * 1.06,
-            f"{(on_out - on_in) // blk} block = {on_out - on_in} samples",
-            ha="center", va="bottom", fontsize=8, color="0.25")
 
-    ax.set_xlabel("sample index  (grid lines = block boundaries)")
-    ax.set_ylabel("amplitude")
-    ax.set_xlim(0, n)
-    ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
-    ax.spines[["top", "right"]].set_visible(False)
+    for ax, y, colour, label in ((ax_in, sent[:n], "#4c72b0", "in  ·  RfDataSource"),
+                                 (ax_out, got[:n], "#dd8452", "out ·  RfDataSink")):
+        for k in range(0, n // blk + 1):
+            ax.axvline(k * blk, color="0.88", lw=0.8, zorder=0)
+        ax.plot(np.arange(n), y, lw=1.0, color=colour)
+        ax.set_ylabel("amplitude")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.text(0.012, 0.86, label, transform=ax.transAxes, fontsize=9, color=colour,
+                fontweight="bold")
+
+    # The startup transient, on the output panel where it happens.
+    ax_out.axvspan(0, lat * blk, color="#dd8452", alpha=0.10, zorder=0)
+    ax_out.text(lat * blk / 2, ax_out.get_ylim()[1] * 0.62, f"zero-fill: {lat} blocks",
+                ha="center", va="top", fontsize=8, color="#a05a30")
+
+    # The shift, measured between the two burst onsets rather than asserted -- drawn as a guide
+    # from one panel to the other so it reads as a delay.
+    for ax, x in ((ax_in, on_in), (ax_out, on_out)):
+        ax.axvline(x, color="0.35", lw=0.9, ls=(0, (4, 3)))
+    ax_out.annotate("", xy=(on_out, ax_out.get_ylim()[1] * 0.80),
+                    xytext=(on_in, ax_out.get_ylim()[1] * 0.80),
+                    arrowprops=dict(arrowstyle="<->", color="0.35", lw=1.0))
+    ax_out.text((on_in + on_out) / 2, ax_out.get_ylim()[1] * 0.84,
+                f"{(on_out - on_in) // blk} blocks = {on_out - on_in} samples",
+                ha="center", va="bottom", fontsize=8, color="0.25")
+
+    ax_out.set_xlabel("sample index  (grid lines = block boundaries)")
+    ax_in.set_xlim(0, n)
     fig.tight_layout()
 
     out.parent.mkdir(parents=True, exist_ok=True)
