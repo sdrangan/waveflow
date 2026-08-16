@@ -127,7 +127,7 @@ Thumbs.db
 
 # MCP files
 !**/mcp/resources/*.json
-# P0 equivalence snapshots (plans/harmonize_calib.md) — committed so the refactor has a bar to clear.
+# P0 equivalence snapshots (plans/harmonize_calib.md) ï¿½ committed so the refactor has a bar to clear.
 !tests/calib/golden/*.json
 
 # Jupyter Notebook checkpoints
@@ -177,6 +177,16 @@ examples/vmac/results/
 # are promoted into docs/examples/memcpy/images/ by SyncDocsFiguresStep and committed THERE, so a
 # docs asset only changes when you mean it to and the change is a reviewable diff.
 examples/mem_copy/results/
+
+# The in-band interleaver task bodies are hand-written ONCE, in waveflow/build/, and copied into an
+# example's include/ by waveflow.build.streamutils.  The copies are build outputs: same convention
+# as examples/fir_block/include/ below.  mem_copy's include/ also holds genuinely hand-written
+# headers (copy_cmd.h, memmgr.hpp, the cmd_rx/mem_r/mem_w bodies), so the four copies are named
+# rather than the directory ignored.
+examples/mem_copy/include/il_cmd_rx_framed_task.h
+examples/mem_copy/include/il_compute_inband_task.h
+examples/mem_copy/include/il_load_inband_task.h
+examples/mem_copy/include/il_store_inband_task.h
 
 examples/_archive/conv2d/include/
 examples/_archive/conv2d/waveflow_conv2d_proj/
