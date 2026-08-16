@@ -99,7 +99,7 @@ all: `#pragma HLS STREAM depth=` on a top-level argument is ignored by Vitis (`H
 one pragma placement it does *silently* — identical RTL, no warning — leaving the port at the HLS
 default of 2 while the Python says otherwise. `composite_top_spec` therefore **refuses** a non-default
 depth on an interface bound to a boundary port, rather than emitting a number that will not be
-honoured. See [the fidelity boundary](../rf/fidelity.md#the-resolution-limit), where a declared
+honoured. See [the fidelity boundary](../rf/python/fidelity.md#the-resolution-limit), where a declared
 `depth=128` that was physically 2 is what a whole debugging session turned on.
 
 ## 2. `add_comp` became the tasks

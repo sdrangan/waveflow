@@ -143,7 +143,7 @@ went from dropping 72 words to dropping none. Both numbers live in
 
 ## See also
 
-- [The fidelity boundary](../../guide/rf/fidelity.md) — why that 72-word loss was invisible in pysim,
+- [The fidelity boundary](../../guide/rf/python/fidelity.md) — why that 72-word loss was invisible in pysim,
   and still would be.
 - [Overriding a free-running body](../../guide/comp_codegen/freerunning_override.md) — the
   `kernel_task()` hook.

@@ -160,7 +160,7 @@ def test_firblock_rank_correlations_match_the_documented_estimator(fir_validatio
 
 
 def test_sampling_page_metronome_table_is_recomputed():
-    """``guide/rf/sampling.md``'s table is the page's load-bearing claim: a relative ``timeout``
+    """``guide/rf/python/sampling.md``'s table is the page's load-bearing claim: a relative ``timeout``
     loop slips and the absolute grid does not.  It is quoted as a *demonstrated* result, so the
     demonstration is re-run here and the page's cells matched against it.
     """
@@ -171,7 +171,7 @@ def test_sampling_page_metronome_table_is_recomputed():
     from waveflow.simulation.simulation import Simulation
     from tests.hw.test_rf_sample_if import TracingRFSampIF, _feeder
 
-    text = _page("guide/rf/sampling.md")
+    text = _page("guide/rf/python/sampling.md")
     n, period, body = 6, 1.0, 0.1
 
     # (a) the rejected scheduler, run.
@@ -471,33 +471,103 @@ def test_the_rtl_page_reports_the_hook_findings_the_code_actually_produces():
 
 
 # ---------------------------------------------------------------------------
-# guide/rf/converter.md — the loss figures the page reports from a real RTL run
+# guide/rf/python/rules.md — the measurement behind each rule
 # ---------------------------------------------------------------------------
+#
+# The rules page states each law with one sentence of evidence.  That sentence is the whole reason a
+# reader believes the rule, so it is the part that must not rot.  Every live number below is read out
+# of the gate that measured it; the historical ones are checked only for *presence*, because pinning
+# a number about a design that no longer exists would mean the constant could never move again.
 
-def test_converter_page_quotes_the_recorded_rtl_loss():
-    """``guide/rf/converter.md`` reports what the RTL run found, so those numbers are claims about
-    the design and must match the gate that measured them.
+
+def test_rule_1_quotes_the_recorded_rtl_loss():
+    """Rule 1's evidence is what the loopback's RTL run found, before and after the task split.
 
     Read out of ``test_rf_loopback_xsi.py``'s constants — the same values the XSI gate asserts —
     rather than retyped, so a change fails here until the page is updated.
 
-    The page now tells a **before and after**: it lost 72 words, and after the ingress/block split it
-    loses none. Only the "after" is a live number, so only that is read from the gate; the historical
-    72 is prose about a design that no longer exists, and pinning it to a constant would mean the
-    constant could never move again. What is checked instead is that the page has not quietly dropped
-    the history — a page that only ever showed the good number teaches nothing.
+    Only the "after" is a live number. The historical 72 is prose about a design that no longer
+    exists; what is checked is that the page has not quietly dropped it, because a page showing only
+    the good number teaches nothing.
     """
     from tests.examples.test_rf_loopback_xsi import WANT_ADC_DROPPED, WANT_ADC_WORDS
 
-    text = _page("guide/rf/converter.md")
+    text = _page("guide/rf/python/rules.md")
     accepted = WANT_ADC_WORDS - WANT_ADC_DROPPED
     assert WANT_ADC_DROPPED == 0, (
-        "the gate no longer asserts a lossless fabric; converter.md's claim rests on it")
-    assert f"**{WANT_ADC_WORDS}** words" in text, "converter.md no longer states what the ADC produces"
-    assert f"accepts **{accepted}**" in text, "converter.md no longer states what the fabric accepts"
-    assert "**72 were dropped**" in text and "the design was then fixed" in text.lower(), (
-        "converter.md no longer tells the before/after — the drop finding is the reason the counter "
-        "contract exists, and a page showing only the fixed number loses the lesson")
+        "the gate no longer asserts a lossless fabric; rule 1's claim rests on it")
+    assert f"produced **{WANT_ADC_WORDS}** words" in text, (
+        "rules.md no longer states what the ADC produces")
+    assert f"now accepts **{accepted}**" in text, (
+        "rules.md no longer states what the fixed design accepts")
+    assert "**72 were dropped**" in text and "accepted **440**" in text, (
+        "rules.md no longer tells the before/after — the drop finding is the reason the counter "
+        "contract exists, and a rule stated without it is an assertion")
+
+
+def test_the_converter_parameter_split_matches_the_class():
+    """Two pages state which `Rfdc` parameters are `HwParam` and which are plain fields.
+
+    **This is the third check that was missing.**  Both pages said `full_scale` was a `DynParam`.
+    It never was one: `DynParam` means *emitted as a member assignment*, and this value's C++
+    realization is a constructor argument inside an `RfdcFormat` literal, so tagging it would assign
+    a member that does not exist.  The class says so in a comment and nothing compared the two.
+
+    Checked against ``Rfdc.__annotations__`` — the declaration itself — and on **both** pages, so
+    the guide and the example cannot drift apart either.
+    """
+    from examples.rf_loopback.rfdc import Rfdc
+
+    hw = {n for n, a in Rfdc.__annotations__.items() if "HwParam" in str(a)}
+    plain = set(Rfdc.__annotations__) - hw
+    assert hw == {"n_rx", "n_tx", "nbits", "iq_mode", "samp_per_word"}, (
+        f"Rfdc's HwParam set changed to {sorted(hw)}; both parameter tables need updating")
+    assert "full_scale" in plain, "full_scale is now a parameter type the pages do not describe"
+
+    for page in ("examples/rf_loopback/build.md", "guide/rf/python/converter.md"):
+        text = _page(page)
+        assert "`full_scale` is *not* a `DynParam`" in text \
+            or "`full_scale` is not a `DynParam`" in text, (
+                f"{page} must say plainly that full_scale is not a DynParam — it reads as one "
+                f"otherwise, and that is exactly how this went wrong")
+        for name in sorted(plain):
+            assert f"`{name}`" in text, f"{page} no longer mentions the plain field {name}"
+
+
+def test_rule_4_quotes_the_capture_designs_measured_shortfall():
+    """Rule 4's evidence is the capture design's first RTL run, and its firing cost is live code.
+
+    ``fire_cycles`` is a class attribute, so the arithmetic on the page (``f_axis * samp_per_word /
+    fire_cycles``) is only right while that number is what the page says.
+    """
+    from examples.rf_capture.rf_capture import RfCapIngress
+    from tests.examples.test_rf_capture_xsi import WANT_ADC_WORDS
+
+    text = _page("guide/rf/python/rules.md")
+    assert f"every **{RfCapIngress.fire_cycles}** cycles" in text, (
+        f"rules.md quotes a firing cost the code no longer has ({RfCapIngress.fire_cycles})")
+    assert f"**1695 of {WANT_ADC_WORDS}** samples" in text, (
+        "rules.md no longer states the shortfall that motivated the design-capacity check")
+    assert "/ RfCapIngress.fire_cycles" in text
+
+
+def test_rule_6_quotes_the_startup_transient_both_backends_show():
+    """Rule 6's evidence is that the two backends disagree on arrival time and agree on index.
+
+    Both numbers are live: pysim's is the loopback's own ``loop_blk_latency``, XSI's is the gate
+    constant. The rule is worth stating only while they actually differ.
+    """
+    from examples.rf_loopback.rf_loopback import RfLoopbackTB
+    from tests.examples.test_rf_loopback_xsi import RTL_STARTUP_BLOCKS
+    from waveflow.simulation.simulation import Simulation
+
+    text = _page("guide/rf/python/rules.md")
+    pysim = int(RfLoopbackTB(name="rules_check", sim=Simulation()).loop_blk_latency)
+    assert pysim != RTL_STARTUP_BLOCKS, (
+        "the backends now agree on the startup transient; rule 6's evidence needs rewriting")
+    assert f"**{pysim}**-block startup transient in pysim and **{RTL_STARTUP_BLOCKS}** at RTL" in text, (
+        f"rules.md should quote the measured transients as {pysim} (pysim) and "
+        f"{RTL_STARTUP_BLOCKS} (RTL)")
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +584,7 @@ def test_the_pages_still_contain_tables_to_check():
     assert "rank correlation" in _page("examples/firblock/resource_fit.md")
     # The RF pages' claims live in tables, a counter dict and two pycon blocks; prose would make
     # every one of them vacuous.
-    assert "| absolute grid |" in _page("guide/rf/sampling.md")
+    assert "| absolute grid |" in _page("guide/rf/python/sampling.md")
     run = _page("examples/rf_loopback/run.md")
     assert "'underrun':" in run
     assert "| leading flat blocks at the sink |" in run

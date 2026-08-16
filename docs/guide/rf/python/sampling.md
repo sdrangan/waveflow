@@ -1,18 +1,19 @@
 ---
 title: Block sampling
-parent: RF converters
-nav_order: 1
+parent: Python
+grand_parent: RF converters
+nav_order: 5
 audience: python
 api: [RFSampIF, RFSampIFTx, RFSampIFRx, RfBlock, set_t0, samp_time, assert_clean, counters]
-summary: "The block-level sampling model: one SimPy event carries one (n_ch, blksize) block of samples, the block duration is the timing, and NumPy is the function. Covers blksize as the fidelity/speed knob; why the metronome lives in the interface rather than in a node; why it schedules on an absolute grid and a relative timeout loop demonstrably slips; t0 as the synchronization primitive and alignment as a derived assertion; and the underrun/overrun counters that are the edge's actual contract."
+summary: "The model underneath the wiring pages: one SimPy event carries one (n_ch, blksize) block of samples, the block duration is the timing, and NumPy is the function. Covers blksize as the fidelity/speed knob; why the metronome lives in the interface rather than in a node; why it schedules on an absolute grid and a relative timeout loop demonstrably slips; t0 and the sample grid; and the underrun/overrun asymmetry the counters exist to record."
 ---
 
 # Block sampling
 
-The RF sample channel is an **[interface](../interface/)**, not a module:
-[`RFSampIF`](../../../waveflow/hw/rf_sample_if.py). It owns the sample-rate clock, the block cadence,
+The RF sample channel is an **[interface](../../interface/)**, not a module:
+[`RFSampIF`](../../../../waveflow/hw/rf_sample_if.py). It owns the sample-rate clock, the block cadence,
 a buffer, and two loss counters — and because an `Interface` is already a
-[`SimObj`](../sim/), it already has a `run_proc` to run them in.
+[`SimObj`](../../sim/), it already has a `run_proc` to run them in.
 
 ```python
 adc_if = RFSampIF(name="adc_if", sim=sim, samp_clk=Clock(freq=256e6),
@@ -47,25 +48,9 @@ A four-channel tile is one `RFSampIF` carrying `(4, blksize)`, not four interfac
 the entire reason for block granularity. The channels of a tile share one grid and one scalar
 [`t0`](#t0-is-the-synchronization-primitive).
 
-Channels that genuinely need *independent* grids are not one tile — give them their own interface.
-Per-channel **skew** is a different thing again, and it does not live here: `t0` is an *epoch* (when
-a counter starts, a tile property) while skew is a *delay* (how much later a path delivers, a path
-property). An earlier draft made `t0` a per-channel vector to hold skew and the transport promptly
-ignored it — every channel rides one block delivered by one event, so no per-channel offset could
-change when samples arrive. It was recordable and never applied, which is worse than absent: an
-accessor would have reported a skew the model did not exhibit. Applying it would mean shifting
-samples inside a block, which is signal processing, which an edge does not do. Measured skew belongs
-where it can be acted on — a channel or DSP block that applies the delay.
-
-### One interface per direction
-
-`RFSampIF` is **unidirectional**. TX and RX share exactly one quantity — the time origin — and differ
-in every other: sample rate, channel count (four ADC and two DAC on an RFSoC 4x2), `blksize`, buffer,
-counters, and peer. A bidirectional interface would carry `(fs_tx, fs_rx)`, `(n_tx, n_rx)`, two
-buffers and two metronomes, and every consumer would pay for the duality. The counters make the same
-point: **underrun is a TX concept and overrun an RX concept**, so kept apart each object has exactly
-one natural failure mode. A genuinely symmetric case — a TDD antenna port — is a *pair* of
-interfaces held by one node, which costs nothing.
+Independent grids and per-channel skew are both handled elsewhere, and
+[connecting the RF side](./rf_side.md#one-interface-per-direction) says how — along with why the
+interface is unidirectional.
 
 ## The metronome lives in the edge
 
@@ -128,42 +113,21 @@ scheduling coincidence:
 lag = tb.dac_if.samp_time(n) - tb.adc_if.samp_time(n)   # same for every n
 ```
 
-`t0` is **owned by the converter and pushed onto the interface at bind**; the sample rate travels the
-other way, living on the interface's clock and being *read* by the converter at bind. Each quantity
-lives where it physically belongs and is read, never restated — the same discipline as
-`StreamIF.depth`. Setting `t0` from a second owner raises, because two declarations that can disagree
-is the bug.
+`t0` is **owned by the converter and pushed onto the interface at bind**, while the sample rate
+travels the other way — [connecting the RF side](./rf_side.md#t0-and-why-alignment-is-derived) has
+the mechanics and the two reasons the epoch-plus-rate formulation is worth having (unequal tile rates,
+and MTS).
 
-```python
-def on_rf_bind(self, iface, ep_name):
-    iface.set_t0(epoch_for(ep_name), owner=self)   # pushed:  a tile property
-    self.samp_rate = iface.samp_rate               # read:    a wire property
-```
+What matters for the *model* is the consequence: a loop through the RF grids — ADC into the fabric
+and back out of the DAC — costs at least one block *index*, because the ADC only delivers block *k*
+at the instant the DAC period for it comes due. That is structural. A zero-latency fabric would not
+close it either, and it is the "no dependency within < `blksize` samples" limit applied to the fabric
+path.
 
-Two properties fall out of the epoch-plus-rate formulation, and both are the reason for it:
-
-**It handles unequal rates.** ADC and DAC tiles routinely run at different sample rates, so there is
-no common event grid to share. A shared metronome event could not express the relationship; `t0` plus
-a rate can.
-
-**It is where MTS lives.** Multi-tile synchronization is a bring-up procedure — SYSREF distribution,
-tile calibration — and is not a modelable thing. What it *produces* is a fixed, measured offset, and
-`t0` is that parameter: per tile, measured at bring-up, zero in simulation.
-
-**What `t0` is *not* for.** A loop through the RF grids — ADC into the fabric and back out of the
-DAC — costs at least one block *index*, because the ADC only delivers block *k* at the instant the
-DAC period for it comes due. That is structural: a zero-latency fabric would not close it either, and
-it is the "no dependency within < `blksize` samples" limit applied to the fabric path.
-
-It is tempting to buy that block by staggering the DAC epoch. Don't — that models a tile stagger MTS
-exists to *prevent*, and it makes correctness depend on a wall-clock margin the block-LT model does
-not resolve. The cost belongs to the pipeline, which declares it (`blk_latency`, ≥ 1 for any
-block-processing module) and gets checked against the DAC edge's startup underruns. Aligned grids and
-a one-block loop cost are not in tension: alignment is about *when a grid ticks*, latency is about
-*which block each tick carries*.
-
-A loop that declares zero block latency is refused at elaboration rather than reported later as an
-underrun — it is not a slow system, it is not a system.
+The cost belongs to the pipeline, which declares it (`blk_latency`, ≥ 1 for any block-processing
+module) and gets checked against the DAC edge's startup underruns. A loop that declares zero block
+latency is refused at elaboration rather than reported later as an underrun — it is not a slow
+system, it is not a system.
 
 ## The counters are the contract
 
@@ -180,21 +144,11 @@ receiver would push the grid, and a design that silently slips its sample clock 
 absolute schedule exists to make impossible.
 
 Zero-fill is the right filler — deterministic, visible in the RF output, and it does not hide the
-error. But **the padding is not the contract; the counters are.**
+error. But **the padding is not the contract; the counters are**, and an `RfBlock` carries its grid
+index alongside its samples, so a drop leaves a visible gap rather than shifting everything after it.
 
-```python
-adc_if.counters()      # {'blocks_sent': 8, 'blocks_delivered': 8, 'underrun': 0, 'overrun': 0}
-adc_if.assert_clean()  # raises unless underrun == 0 and overrun == 0
-```
-
-Make `assert_clean()` a gate on every converter-connected example. Without it, a design that fails on
-hardware passes in simulation: a starved grid emits well-formed zero blocks and a stalled consumer
-simply sees fewer of them, and every functional check downstream still passes on the data that did
-arrive. It is the same shape as a deadlocked free-running pipeline reading as a clean run: the
-absence of a symptom is not a result.
-
-An `RfBlock` carries its **grid index** alongside its samples, so a drop leaves a visible gap rather
-than shifting everything after it. Loss is legible in the data as well as in the count.
+[Reading them, and asserting them](./rf_side.md#reading-the-counters) is the how-to;
+[rule 5](./rules.md#5-the-counters-are-the-contract) is why it is not optional.
 
 > The counters exist in the Python model today. The obligation that the *generated RTL model* produce
 > the same numbers for the same scenario is a separate gate and is not yet built; see
@@ -226,7 +180,9 @@ frequency-dependent one, which is a filter in the transport layer by accident.
 
 ## Next
 
-- [RF loopback](../../examples/rf_loopback/) — the worked example: a converter, a pass-through, and
+- [The capture buffer](./capture.md) — the first RF block that does something, and the page that
+  needs the sample grid.
+- [RF loopback](../../../examples/rf_loopback/) — the worked example: a converter, a pass-through, and
   the loss gate.
 
 **Source of truth:** `waveflow/hw/rf_sample_if.py`; the metronome demonstration is

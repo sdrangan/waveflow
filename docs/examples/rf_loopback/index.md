@@ -37,7 +37,7 @@ This example is a walkthrough in seven steps, split across three sittings:
 | page | steps | what you get |
 |---|---|---|
 | [Building it](./build.md) | 1–4 | the `Rfdc`, the source and sink, the four edges, and the DUT |
-| [Running it](./run.md) | 5–6 | the three claims the gate makes, and two faults that make the counters mean something |
+| [Running it](./run.md) | 5–6 | what the gate claims, and two faults that make the counters mean something |
 | [Taking it to RTL](./rtl.md) | 7 | csynth, the XSI run, and the cycle gate |
 
 Everything on the first two pages runs with **no toolchain**:
@@ -49,10 +49,11 @@ pytest tests/examples/test_rf_loopback.py tests/hw/test_rf_sample_if.py
 
 ## Learning objectives
 
-- Model an RF sample channel as an [**interface** that owns a metronome](../../guide/rf/sampling.md)
+- Model an RF sample channel as an [**interface** that owns a metronome](../../guide/rf/python/sampling.md)
   — a clock, a block cadence, a buffer, and loss counters living on the edge rather than in a node.
 - Model a **data converter** as a module carrying both directions, with `HwParam` structure
-  (resolution, samples per word) separated from `DynParam` knobs (the amplitude reference).
+  (resolution, samples per word) separated from plain init-time knobs (the amplitude reference, the
+  tile epochs).
 - Quantize bit-exactly with the integer-backed `FixedField` and pack samples into stream words
   through the generated array serializers.
 - Assert a **byte-identical** loopback (shifted by the loop's declared block latency) *and* that loss

@@ -1,7 +1,8 @@
 ---
 title: The capture buffer
-parent: RF converters
-nav_order: 4
+parent: Python
+grand_parent: RF converters
+nav_order: 6
 audience: python
 applies_to: [RfSampBufRx, RfCapIngress, RfCapture, RxCmd, T2pBram]
 summary: "A capture buffer between an ADC and a host: samples stream in continuously, a command names a window in sample index, and the samples come back. Covers the four command cases (in the buffer / in the future / straddling / too old) as one loop, the horizon as a counted contract, the ingress/capture asymmetry over which task may block, and why the progress channel's staleness is safe in one direction and unsafe in the other."
@@ -27,7 +28,7 @@ s_cmd --> [capture]
 The two accessors are concurrent by nature: the ADC never pauses, and a capture may run for a long
 time. Vitis has no way to express a memory shared between two `hls::task` bodies — a local array
 becomes a synchronizing ping-pong whose handshake **stalls the writer** — so the buffer is
-[hand-written Verilog beside the kernel](../interface/bram.md), joined by a generated wrapper.
+[hand-written Verilog beside the kernel](../../interface/bram.md), joined by a generated wrapper.
 
 ## Which task may block — the asymmetry that is the design
 
@@ -113,14 +114,10 @@ the counter wraps, and wrong silently.
 
 ## The rate contract, which the converter's own check does not cover
 
-`Rfdc` already refuses `samp_rate > samp_per_word * f_axis`. That is the **port's** capacity — one
-word per cycle — and the design behind the port is usually slower: this ingress fires every **two**
-cycles, so it absorbs 0.5 samples per cycle, not 1.
-
-The gap is not academic. The first RTL run of this design, at 256 MSPS on a 300 MHz fabric with one
-sample per word, **lost 1695 of 4096 samples** — and pysim reported a clean run, for the documented
-reason: a pysim ingress consumes a whole *burst* per firing, so the per-word rate never enters the
-model at all ([where the check stops seeing](./fidelity.md#the-resolution-limit)).
+`Rfdc` refuses `samp_rate > samp_per_word * f_axis`. That is the **port's** capacity — one word per
+cycle — and the design behind the port is usually slower: this ingress fires every **2** cycles, so
+it absorbs 0.5 samples per cycle, not 1. The first RTL run at 256 MSa/s on a 300 MHz fabric with one
+sample per word **lost 1695 of 4096 samples**, and pysim reported a clean run.
 
 So the design declares its firing cost and the testbench checks the pairing:
 
@@ -132,10 +129,12 @@ if samp_rate > cap:
 
 **A module's throughput is part of its interface contract**, not an implementation detail, and the
 number belongs next to the body it describes — measured from `csynth`, checked by an RTL run whose
-`ADC_DROPPED` must be zero.
+`ADC_DROPPED` must be zero. That is [rule 4](./rules.md#4-port-capacity-is-not-design-capacity); why
+pysim could not see it is [the resolution limit](./fidelity.md#the-resolution-limit).
 
 ## See also
 
+- [The design rules](./rules.md) — this page contributes two of them.
 - [The fidelity boundary](./fidelity.md) — the three conditions, and what block granularity cannot see.
-- [BRAM — memory between modules](../interface/bram.md) — why the buffer cannot live inside the kernel.
-- [A module realized as Verilog](../comp_codegen/rtl_module.md) — how the memory is declared.
+- [BRAM — memory between modules](../../interface/bram.md) — why the buffer cannot live inside the kernel.
+- [A module realized as Verilog](../../comp_codegen/rtl_module.md) — how the memory is declared.

@@ -1,6 +1,8 @@
 # Plan: restructure `docs/guide/rf` around using it
 
-**Status:** designed 2026-08-15. `python/quickstart.md` drafted for review; the rest not started.
+**Status: `python/` DONE, `xsi/` NOT STARTED** — 2026-08-16, branch `rf-docs-restructure`. Stages 1–5
+landed; stage 6 is deliberately unstarted pending the open question below, which is now answered with
+a recommendation rather than a guess. See *What landed*.
 
 ## The problem
 
@@ -92,12 +94,130 @@ the underflow/overflow and rate-conversion contracts to `rules.md`, the proving 
 
 ## Open questions
 
-- **Is `xsi/` about how it lowers, or how to run it?** Different readers. "How `Rfdc` becomes
-  `RfdcAdcMaster`" is implementation curiosity; "how do I run this at RTL and read the counters out"
-  is use-facing, and thinner than expected because the machinery is generated. If it is mostly the
-  latter, `xsi/` is two pages, not four.
+- **Is `xsi/` about how it lowers, or how to run it?** Answered below, under *The `xsi/` question*.
 - **Does the wrapper belong in `xsi/`?** It is not RF-specific — `guide/comp_codegen/rtl_module.md`
   covers it. Probably a link, so RF stays about RF.
 - **Naming, unrelated but adjacent:** the capture example is `examples/rf_capture/`, its class is
   `RfSampBufRx`, and its TCL is `rf_samp_buf_rx.tcl`. Three names for one thing; the docs will have to
-  pick one.
+  pick one. **Still open** — nothing in this pass touched it.
+
+---
+
+## What landed
+
+```
+docs/guide/rf/
+  index.md            REWRITTEN — what a converter is (the three facts), the kinds table, a map
+  figures/            + rf_source_sine.svg, rf_late_producer.svg
+  python/
+    index.md          NEW — the nav grouping page, and why the order is what it is
+    quickstart.md     kept; frontmatter re-parented, links repointed, ONE CLAIM CORRECTED
+    converter.md      NEW page from the how-to half of the old converter.md
+    rf_side.md        NEW — largely extracted from sampling.md and the example
+    axis_side.md      NEW — largely extracted from converter.md
+    sampling.md       MOVED + trimmed
+    capture.md        MOVED + trimmed
+    rules.md          NEW — the seven rules
+    fidelity.md       MOVED + trimmed, and it now ends by naming what needs RTL
+```
+
+`docs/guide/rf/converter.md` is deleted; its three parts went where the plan said.
+
+### Which pages are new writing and which are relocations
+
+**New prose:** `python/index.md`, `python/rules.md`, and the "what needs RTL" close on
+`fidelity.md`. `python/rf_side.md` and `python/axis_side.md` are *mostly* extraction — the interface
+parameter table, the source/sink fields and the constructor's refusals are new, the rest is moved.
+`python/converter.md` is the old page's how-to half plus a parameter table that did not exist as such.
+
+**Relocations with trims:** `sampling.md` lost its `t0` binding mechanics and its per-channel-skew
+history (both now in `rf_side.md`, the second compressed to two sentences) and its `assert_clean`
+how-to. `capture.md`'s rate-contract diagnosis went from three paragraphs to two sentences.
+`fidelity.md`'s "why not just make pysim stricter" kept its table and lost the surrounding argument.
+
+### A fourth stale claim, in the page that sets the voice
+
+`python/quickstart.md` said *"the delay is exactly one block"* and *"the first block is flat"*,
+beside a figure **it generates** that is labelled `zero-fill: 2 blocks` and `2 blocks = 512 samples`.
+`loop_blk_latency` has been 2 since the ADC hop was paced honestly. The page and its own committed
+measurement disagreed, in the newest page in the section.
+
+That is four stale claims across two sections, every one of them outside
+`test_documented_numbers.py` and none of them in a page anybody thought was rotting. The one in the
+quickstart is the sharpest: the figure was right and the sentence next to it was wrong.
+
+### The guard
+
+`tests/docs/test_documented_numbers.py`: 17 → 24 tests over both commits. New on this one — rule 1's
+before/after loss (repointed from the deleted `converter.md`), rule 4's `fire_cycles` and 1695/4096,
+rule 6's two startup transients (both live), and the `Rfdc` parameter split checked against
+`Rfdc.__annotations__` on **both** pages that state it, so the guide and the example cannot drift
+from each other or from the class.
+
+### Gates
+
+`tests/docs` 24 passed, including the link and anchor guards over ten moved or new pages. Dev loop
+`6 failed, 2704 passed, 2 skipped, 168 deselected` against a measured baseline of
+`6 failed, 2697 passed` — same six pre-existing failures, +7 new guard tests. `-m xsi` not run: no
+example code changed.
+
+---
+
+## The `xsi/` question — a recommendation, not a guess
+
+**It should be use-facing, and that makes it two pages, not four.**
+
+Three reasons, in the order they convinced me.
+
+**1. The lowering is already documented, and not here.** `python/converter.md` states the two-model
+split and why one declaration cannot express it. `guide/comp_codegen/xsi_tb.md` owns per-port model
+resolution; `guide/interface/behavioral.md` owns the channel; `guide/comp_codegen/rtl_module.md` owns
+the wrapper. A four-page `xsi/` would restate all of that under an RF heading, which is the second
+copy that rots — and this pass just found four claims that rotted for exactly that reason.
+
+**2. The reader arriving from `fidelity.md` has a question, and it is not "how".** That page now ends
+by naming one clause of one contract that this backend cannot check, with a case where pysim said
+zero and the hardware lost 72 words. The reader wants to *run the check*. "How `Rfdc` becomes
+`RfdcAdcMaster`" does not answer that; it is interesting to someone maintaining the generator, and
+that person is better served by the code.
+
+**3. The counters are the whole payload, and they do not line up.** pysim counts blocks on the edge;
+XSI counts words for an ADC drop, cycles for a DAC underrun, blocks on the channel. That mapping is
+genuinely RF-specific, genuinely not written down anywhere, and genuinely what someone reading an XSI
+run needs. It is also the input to the cross-backend equivalence harness
+(`plans/behavioral_edges.md` S4) that does not exist yet.
+
+So:
+
+```
+docs/guide/rf/xsi/
+  index.md      what changes at RTL and what it buys: the one clause pysim cannot check,
+                what to run, and the file-backed peers that make the scenario identical
+  counters.md   reading the output: what each counter means, why the two backends do not
+                agree, and which disagreements are physics rather than artifacts
+```
+
+`counters.md` is the page with no substitute. Both are writable from the existing gates — the
+constants in `test_rf_loopback_xsi.py` are the numbers, so every figure on them can go into the guard
+on the day they are written.
+
+**What would change my mind:** if a reader is expected to *write* a new converter model rather than
+use `Rfdc`, the lowering becomes a how-to and deserves its own page. Nothing in the arc suggests that
+yet — `Rfdc` is the only converter, and a second one is not on the roadmap.
+
+---
+
+## Left for someone with authority to change code
+
+Nine docstrings and comments in `examples/`, `waveflow/` and `tests/` point at
+`docs/guide/rf/fidelity.md` or `guide/rf/sampling.md`, which are now under `python/`. They are prose
+in `.py` files rather than links, so no guard sees them, and this pass was scoped to docs:
+
+```
+examples/rf_capture/rf_capture.py       (3)
+examples/rf_loopback/rf_loopback.py     (1)
+tests/examples/test_rf_loopback_xsi.py  (3)
+tests/hw/test_rf_sample_if.py           (1)
+tests/hw/test_stream_offer.py           (1)
+waveflow/hw/interface.py                (1)
+```

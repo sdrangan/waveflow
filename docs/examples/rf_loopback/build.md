@@ -39,7 +39,7 @@ Four endpoints, in two pairs:
 The two stream endpoints are the ones that would **cross the [cut](../../guide/flows/modules.md#the-cut)**
 in an RTL build; the two RF endpoints stay behavioural on both sides of it.
 
-With the metronome living in the [interface](../../guide/rf/sampling.md#the-metronome-lives-in-the-edge),
+With the metronome living in the [interface](../../guide/rf/python/sampling.md#the-metronome-lives-in-the-edge),
 the converter is **reactive on the RF side**: it has no timer of its own and simply responds to block
 arrivals.
 
@@ -49,7 +49,7 @@ arrivals.
 |---|---|---|
 | `n_rx`, `n_tx`, `nbits`, `iq_mode` | `HwParam` | they set the word layout synthesized logic is built *against* |
 | `samp_per_word` | `HwParam`, **integer** | port width is `samp_per_word · nbits`; a sample cannot straddle a slot |
-| `full_scale` | `DynParam` | an amplitude reference — one artifact serves every value |
+| `full_scale`, `t0_rx`, `t0_tx` | plain init-time fields | one artifact serves every value |
 
 `samp_rate` is deliberately **not** on this list. It lives on the RF interface's clock and the
 converter *reads* it at bind; `t0` travels the other way and is *pushed*. Two declarations that can
@@ -59,10 +59,12 @@ There is also no `spc`. `samp_per_word` is the structural integer; everything el
 is a rate ratio — derived, and generally fractional. The Python model needs neither conversion,
 because it works in seconds.
 
-> **A trap on the `DynParam` row.** `discover_dyn_params` skips **falsy** values, so a `full_scale` of
-> `0.0` would emit nothing and silently take a generated model's default. Zero is meaningless for an
-> amplitude reference anyway, so the constructor refuses it — but the general shape of that trap
-> applies to any numeric `DynParam`.
+> **`full_scale` is *not* a `DynParam`, and the reason is worth knowing.** `DynParam` does not mean
+> "binds at init"; it means **emitted as a member assignment** — `<model>.<field> = <expr>;`. This
+> value's C++ realization is a *constructor argument*, riding inside the `RfdcFormat` literal the
+> generated models take, so tagging it would emit an assignment to a member that does not exist.
+> Zero would be doubly wrong — meaningless as an amplitude reference *and* falsy, which
+> `discover_dyn_params` skips — so the constructor refuses it either way.
 
 ### Bit-exact quantization
 
@@ -152,7 +154,7 @@ on both sides of it.
 **No `depth=` on the AXIS edges**, and that is a correction rather than an omission. These become the
 DUT's top-level ports, and a top-level argument cannot carry a FIFO depth: Vitis ignores the pragma
 (`HLS 214-387`) and the RTL gets the default of 2. `composite_top_spec` now refuses the declaration
-outright — see [the fidelity boundary](../../guide/rf/fidelity.md#the-resolution-limit).
+outright — see [the fidelity boundary](../../guide/rf/python/fidelity.md#the-resolution-limit).
 
 ### Graph and procedure are separate objects
 
