@@ -33,11 +33,22 @@ deliberately *not* on :class:`RfSampBufCapture`: the capture may block for as lo
 because nothing upstream of it loses data while it waits.  Copying the law onto the capture would
 make it wrong — and the four command cases exist precisely because it may wait.
 
-**One sample per word, so a sample index is a word index.**  A converter configured
-``nbits=16, samp_per_word=1`` makes ``RxCmd.start`` directly a buffer coordinate and keeps the
-capture free of packing arithmetic.  Every port and channel of a Vitis top shares one width today, so
-that choice also fixes the command word width at 16 bits and the sample counter with it: the counter
-**wraps at 65536**, and every comparison against it is therefore a circular (signed-difference) one.
+**A word carries ``samp_per_word`` samples, and the buffer stores words.**  One ``hls::task`` firing
+moves one *word*, so widening the word is the throughput lever: at ``fire_cycles = 2`` the ingress
+absorbs ``samp_per_word / 2`` samples per cycle — 0.5 at one sample per word, 2.0 at four.  The
+buffer is ``depth`` **words** deep and holds ``depth * samp_per_word`` samples.
+
+**Windows are word-aligned.**  ``RxCmd`` names a window in *sample* index, but both ``start`` and
+``nsamp`` must be multiples of ``samp_per_word``, and the capture emits whole words.  A sub-word
+window would mean unpacking, selecting and re-packing inside a loop that must stay cheap; that is
+real work and it is deliberately not done here, so a misaligned window is **refused** with
+:data:`RF_SAMP_BUF_MISALIGNED` rather than silently rounded.  At ``samp_per_word == 1`` the
+constraint is vacuous and the check folds away to a constant in both backends.
+
+**The sample counter wraps at ``2**IDX_BW``**, independently of the word width — widening the word
+must not move where a sample index wraps, or a command naming a sample would mean different things at
+different widths.  Every comparison against the counter is therefore a circular
+(signed-difference) one; see :func:`sdiff`.
 """
 from __future__ import annotations
 
@@ -61,10 +72,16 @@ from waveflow.simulation.simobj import ProcessGen
 # Geometry.  16-bit samples, one per word; a 1024-sample buffer is one RAMB18.
 # ---------------------------------------------------------------------------
 
-#: Default AXIS word width in bits — the configuration the RTL gate runs.
+#: Width of a sample **index** — the counter the hardware keeps and the width of every ``RxCmd`` /
+#: ``RxResp`` field.  Deliberately *not* the AXIS word width: widening the word must not silently
+#: change where the sample counter wraps.  16 bits addresses 65536 samples of history, far more than
+#: any buffer that fits in on-chip RAM.
+IDX_BW = 16
+
+#: Default AXIS word width in bits — the configuration the RTL gate runs (one 16-bit sample/word).
 WORD_BW = 16
 
-#: Default buffer depth in samples.
+#: Default buffer depth in **words**.  1024 x 16 bits is one RAMB18.
 BUF_DEPTH = 1024
 
 #: Default samples of horizon given up to bound the progress channel's staleness — see
@@ -76,8 +93,14 @@ HORIZON_MARGIN = 16
 #: about the value.
 RF_SAMP_BUF_OK = 0
 RF_SAMP_BUF_TOO_OLD = 1
+#: The window was not a whole number of words — see the module docstring.  Refused rather than
+#: rounded: a rounded window is data from the wrong time, which nothing downstream can detect.
+RF_SAMP_BUF_MISALIGNED = 2
 
-Word16 = IntField.specialize(bitwidth=WORD_BW, signed=False)
+#: The element type of every ``RxCmd`` / ``RxResp`` field.  ``Word16`` is kept as an alias because it
+#: is the name the schemas were written against; the width it means is now :data:`IDX_BW`.
+IdxField = IntField.specialize(bitwidth=IDX_BW, signed=False)
+Word16 = IdxField
 
 
 class RxCmd(DataList):
@@ -116,15 +139,58 @@ class RxResp(DataList):
 SCHEMA_CLASSES = [RxCmd, RxResp]
 
 
-def sdiff(a: int, b: int, bits: int = WORD_BW) -> int:
+def sdiff(a: int, b: int, bits: int = IDX_BW) -> int:
     """``a - b`` as a **signed circular difference** on a *bits*-wide counter.
 
-    The pysim twin of the C++ ``(ap_int<W>)(a - b)``.  A plain ``a < b`` on a wrapping counter is
+    The pysim twin of the C++ ``(ap_int<IDX_W>)(a - b)``.  A plain ``a < b`` on a wrapping counter is
     wrong the first time it wraps, and wrong *silently*; this is exact as long as the two positions
     are within ``2**(bits-1)`` of each other, which a 1024-deep buffer guarantees.
     """
     half = 1 << (bits - 1)
     return ((int(a) - int(b) + half) % (1 << bits)) - half
+
+
+def samp_type(word_bw: int, samp_per_word: int) -> type[IntField]:
+    """The element type one buffered **sample** is, given the word geometry.
+
+    Unsigned: the buffer moves raw converter words and never interprets them arithmetically.  This is
+    the type handed to :func:`~waveflow.hw.arrayutils.read_array` /
+    :func:`~waveflow.hw.arrayutils.write_array`, which is how a sample index becomes a slot in a word
+    — never a hand-rolled shift.  Slot order is unobservable at one sample per word, so a mistake
+    there passes every test written at that width; the generated ``<stem>_array_utils.h`` is the C++
+    half of the same statement.
+    """
+    if int(word_bw) % int(samp_per_word):
+        raise ValueError(
+            f"word width {int(word_bw)} is not a multiple of samp_per_word={int(samp_per_word)}: a "
+            f"sample cannot straddle a slot")
+    return IntField.specialize(bitwidth=int(word_bw) // int(samp_per_word), signed=False)
+
+
+def pack_samples(samples, word_bw: int, samp_per_word: int) -> np.ndarray:
+    """``samp_per_word`` samples per word, packed the way the converter packs them.
+
+    Through :func:`~waveflow.hw.arrayutils.write_array` — one source of slot order for both backends.
+    """
+    from waveflow.hw.arrayutils import write_array
+
+    st = samp_type(word_bw, samp_per_word)
+    vals = np.asarray(samples, dtype=np.uint64).ravel()
+    if vals.size % int(samp_per_word):
+        raise ValueError(
+            f"{vals.size} samples is not a whole number of {int(samp_per_word)}-sample words")
+    return np.asarray(write_array(vals, elem_type=st, word_bw=int(word_bw)), dtype=np.uint64)
+
+
+def unpack_samples(words, word_bw: int, samp_per_word: int) -> np.ndarray:
+    """The inverse of :func:`pack_samples`, through the same serializer."""
+    from waveflow.hw.arrayutils import read_array
+
+    st = samp_type(word_bw, samp_per_word)
+    raw = np.asarray(words, dtype=np.uint64).ravel()
+    out = read_array(raw, elem_type=st, word_bw=int(word_bw),
+                     shape=int(raw.size) * int(samp_per_word))
+    return np.asarray(getattr(out, "val", out), dtype=np.uint64).ravel()
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +208,10 @@ class RfSampBufIngress(FreeRunMod):
     The progress write is non-blocking on purpose.  A blocking write would stall the converter in
     order to deliver a number that is stale by the time it lands — see :class:`RfSampBufCapture` for
     what the resulting lag costs and how it is paid for.
+
+    **A word carries ``samp_per_word`` samples**, and that is the throughput lever: one firing moves
+    one *word*, so the sample rate this stage absorbs is ``samp_per_word / fire_cycles`` per fabric
+    cycle.  The buffer behind it is ``depth`` **words** deep.
 
     The hardware body is hand-written (``waveflow/build/rf_samp_buf_ingress_task.h``);
     :meth:`run_iter` is the pysim twin and relays a whole **burst**, because a burst is pysim's
@@ -167,15 +237,25 @@ class RfSampBufIngress(FreeRunMod):
     #: turns that into a refusal at build time.
     fire_cycles: ClassVar[int] = 2
 
+    #: AXIS word width in bits.  Read off the converter's ``axis_bitwidth``.
     bitwidth: HwParam[int] = WORD_BW
+    #: Samples carried by one word; ``bitwidth // samp_per_word`` is the sample width.
+    samp_per_word: HwParam[int] = 1
+    #: Buffer depth in **words** (power of two — the wrap is a bit mask).
     depth: HwParam[int] = BUF_DEPTH
     clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, d = int(self.bitwidth), int(self.depth)
+        w, d, spw = int(self.bitwidth), int(self.depth), int(self.samp_per_word)
         if d & (d - 1):
             raise ValueError(f"buffer depth must be a power of two (got {d}): the wrap is a mask")
+        if spw & (spw - 1):
+            raise ValueError(
+                f"samp_per_word must be a power of two (got {spw}): the sample->word conversion is a "
+                f"shift in the never-stall path, and a divide there would cost cycles the converter "
+                f"does not give back")
+        samp_type(w, spw)                       # refuses a sample that would straddle a slot
         self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
         self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w", bitwidth=w, depth=d,
                                   access="write")
@@ -183,21 +263,28 @@ class RfSampBufIngress(FreeRunMod):
                                      has_tlast=True)
         for ep in (self.s_in, self.buf_w, self.wr_out):
             self.add_endpoint(ep)
-        #: The write pointer in sample index, wrapping at ``2**bitwidth`` exactly as the RTL's does.
+        #: The write pointer in **sample index**, wrapping at ``2**IDX_BW`` exactly as the RTL's does.
         self.wr = 0
+
+    @property
+    def capacity_samp_per_cycle(self) -> float:
+        """Samples this ingress absorbs per fabric cycle — ``samp_per_word / fire_cycles``."""
+        return int(self.samp_per_word) / float(self.fire_cycles)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("rf_samp_buf_ingress_task", "rf_samp_buf_ingress_task.h",
                           ("buf_w", "s_in", "wr_out"),
-                          template_args=(int(self.bitwidth), int(self.depth)))
+                          template_args=(int(self.bitwidth), int(self.samp_per_word),
+                                         int(self.depth), IDX_BW))
 
     def run_iter(self) -> ProcessGen[None]:
         words = yield from self.s_in.get()
         mask = int(self.depth) - 1
-        wrap = 1 << int(self.bitwidth)
+        spw = int(self.samp_per_word)
+        wrap = 1 << IDX_BW
         for x in np.asarray(words).ravel():
-            self.buf_w.mem_write(self.wr & mask, int(x))
-            self.wr = (self.wr + 1) % wrap
+            self.buf_w.mem_write((self.wr // spw) & mask, int(x))
+            self.wr = (self.wr + spw) % wrap
         # `offer`, not `write`: the same non-blocking semantics as the RTL's write_nb, and for the
         # same reason.  What it drops is counted on the interface, and a nonzero count there is
         # normal rather than a fault -- only the newest position has meaning.
@@ -236,8 +323,9 @@ class RfSampBufCapture(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_capture"
 
     bitwidth: HwParam[int] = WORD_BW
+    samp_per_word: HwParam[int] = 1
     depth: HwParam[int] = BUF_DEPTH
-    #: Samples of horizon surrendered to bound the progress channel's lag.  It must exceed the number
+    #: **Samples** of horizon surrendered to bound the progress channel's lag.  It must exceed the number
     #: of samples the ingress can write between this task polling the channel and using the value —
     #: one ingress firing plus whatever the channel dropped while a sample was being written out.  At
     #: one sample per converter period and a capture loop of a few fabric cycles, that is a handful;
@@ -248,6 +336,7 @@ class RfSampBufCapture(FreeRunMod):
     def __post_init__(self) -> None:
         super().__post_init__()
         w, d = int(self.bitwidth), int(self.depth)
+        samp_type(w, int(self.samp_per_word))
         self.wr_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_wr_in", bitwidth=w,
                                    has_tlast=True)
         self.s_cmd = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_cmd", bitwidth=w,
@@ -265,14 +354,21 @@ class RfSampBufCapture(FreeRunMod):
         #: Commands refused because their window had fallen off the horizon.  Not a diagnostic: it is
         #: the counted half of the contract, and a run in which it stays zero has not tested it.
         self.n_too_old = 0
-        #: Commands that had to wait for at least one sample (the future / straddling cases).
+        #: Commands that had to wait for at least one word (the future / straddling cases).
         self.n_waited = 0
+        #: Commands refused because the window was not a whole number of words.
+        self.n_misaligned = 0
+
+    @property
+    def usable_horizon(self) -> int:
+        """Samples of history a command may reach back over — ``depth * spw - horizon_margin``."""
+        return int(self.depth) * int(self.samp_per_word) - int(self.horizon_margin)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("rf_samp_buf_capture_task", "rf_samp_buf_capture_task.h",
                           ("buf_r", "wr_in", "s_cmd", "s_out", "s_resp"),
-                          template_args=(int(self.bitwidth), int(self.depth),
-                                         int(self.horizon_margin)))
+                          template_args=(int(self.bitwidth), int(self.samp_per_word),
+                                         int(self.depth), int(self.horizon_margin), IDX_BW))
 
     @sim_only
     def count_too_old(self) -> None:
@@ -284,11 +380,16 @@ class RfSampBufCapture(FreeRunMod):
         """Tally a command that had to wait for the converter."""
         self.n_waited += 1
 
+    @sim_only
+    def count_misaligned(self) -> None:
+        """Tally a command whose window was not a whole number of words."""
+        self.n_misaligned += 1
+
     def run_iter(self) -> ProcessGen[None]:
-        w = int(self.bitwidth)
         mask = int(self.depth) - 1
-        wrap = 1 << w
-        usable = int(self.depth) - int(self.horizon_margin)
+        spw = int(self.samp_per_word)
+        wrap = 1 << IDX_BW
+        usable = self.usable_horizon
 
         cmd = yield from self.s_cmd.get(RxCmd)
         idx = int(cmd.start)
@@ -296,30 +397,40 @@ class RfSampBufCapture(FreeRunMod):
         status = RF_SAMP_BUF_OK
         waited = False
 
-        for _ in range(int(cmd.nsamp)):
-            # 1. Wait until sample `idx` has been written.  Poll first (take the newest position the
-            #    channel is holding), and only then block -- there is nothing to do until the ingress
-            #    advances, and blocking costs one event instead of one per fabric cycle.
+        # Word alignment, decided before anything is emitted.  Refused rather than rounded: a
+        # rounded window is data from the wrong time, and nothing downstream could detect it.  At
+        # spw == 1 both operands are 0 and the branch folds away in both backends.
+        nword = int(cmd.nsamp) // spw
+        if (int(cmd.start) % spw) or (int(cmd.nsamp) % spw):
+            status = RF_SAMP_BUF_MISALIGNED
+            self.count_misaligned()
+            nword = 0
+
+        for _ in range(nword):
+            # 1. Wait until the word holding sample `idx` has been written.  Poll first (take the
+            #    newest position the channel is holding), and only then block -- there is nothing to
+            #    do until the ingress advances, and blocking costs one event instead of one per
+            #    fabric cycle.
             while True:
                 got = yield from self.wr_in.get_nb()
                 if got is not None:
                     self.last_wr = int(np.asarray(got).ravel()[-1])
-                if sdiff(idx, self.last_wr, w) < 0:
+                if sdiff(idx, self.last_wr) < 0:
                     break
                 waited = True
                 got = yield from self.wr_in.get()
                 self.last_wr = int(np.asarray(got).ravel()[-1])
 
-            # 2. Horizon, per sample.
-            if sdiff(self.last_wr, idx, w) > usable:
+            # 2. Horizon, per word.
+            if sdiff(self.last_wr, idx) > usable:
                 status = RF_SAMP_BUF_TOO_OLD
                 self.count_too_old()
                 break
 
-            val = self.buf_r.mem_read(idx & mask)
+            val = self.buf_r.mem_read((idx // spw) & mask)
             yield from self.s_out.write(np.array([val], dtype=np.uint64))
-            sent += 1
-            idx = (idx + 1) % wrap
+            sent += spw
+            idx = (idx + spw) % wrap
 
         if waited:
             self.count_waited()
@@ -354,18 +465,19 @@ class RfSampBufRx(FreeRunMod):
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
     bitwidth: HwParam[int] = WORD_BW
+    samp_per_word: HwParam[int] = 1
     depth: HwParam[int] = BUF_DEPTH
     horizon_margin: HwParam[int] = HORIZON_MARGIN
     clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, d = int(self.bitwidth), int(self.depth)
+        w, d, spw = int(self.bitwidth), int(self.depth), int(self.samp_per_word)
         self.ingress = RfSampBufIngress(sim=self.sim, name=f"{self.name}_ingress", bitwidth=w,
-                                        depth=d, clk=self.clk)
+                                        samp_per_word=spw, depth=d, clk=self.clk)
         self.capture = RfSampBufCapture(sim=self.sim, name=f"{self.name}_capture", bitwidth=w,
-                                        depth=d, horizon_margin=int(self.horizon_margin),
-                                        clk=self.clk)
+                                        samp_per_word=spw, depth=d,
+                                        horizon_margin=int(self.horizon_margin), clk=self.clk)
         self.add_comp(self.ingress)
         self.add_comp(self.capture)
 
@@ -397,17 +509,31 @@ class RfSampBufRx(FreeRunMod):
         self.s_out = self.capture.s_out
         self.s_resp = self.capture.s_resp
 
-    def max_samp_rate(self, f_axis: float, samp_per_word: int = 1) -> float:
+    @property
+    def nsamp_held(self) -> int:
+        """Samples the buffer holds — ``depth`` words of ``samp_per_word`` samples each."""
+        return int(self.depth) * int(self.samp_per_word)
+
+    @property
+    def capacity_samp_per_cycle(self) -> float:
+        """Samples this buffer absorbs per fabric cycle — the ingress's rate contract."""
+        return self.ingress.capacity_samp_per_cycle
+
+    def max_samp_rate(self, f_axis: float, samp_per_word: int | None = None) -> float:
         """The fastest converter this buffer can be fed by, in samples/s, at *f_axis*.
 
         ``samp_per_word * f_axis / fire_cycles``.  **Not** the port's capacity, which is
         ``samp_per_word * f_axis`` and which :class:`~examples.rf_loopback.rfdc.Rfdc` already checks;
         the difference between the two is where the first RTL run of this design lost 1695 of 4096
         samples.
-        """
-        return float(f_axis) * int(samp_per_word) / RfSampBufIngress.fire_cycles
 
-    def check_rate(self, samp_rate: float, f_axis: float, samp_per_word: int = 1) -> float:
+        *samp_per_word* defaults to this buffer's own, and is an argument only so a caller can ask
+        the counterfactual — "what would widening the word buy me?" — without building a second one.
+        """
+        spw = int(self.samp_per_word) if samp_per_word is None else int(samp_per_word)
+        return float(f_axis) * spw / RfSampBufIngress.fire_cycles
+
+    def check_rate(self, samp_rate: float, f_axis: float, samp_per_word: int | None = None) -> float:
         """Refuse a converter this buffer cannot absorb, and return the utilisation.
 
         **The converter's own rate check is not enough.**  ``Rfdc.pre_sim`` asserts
@@ -421,12 +547,13 @@ class RfSampBufRx(FreeRunMod):
         contract — but it needs the *pairing*, so the converter's rate is an argument rather than a
         lookup.
         """
-        cap = self.max_samp_rate(f_axis, samp_per_word)
+        spw = int(self.samp_per_word) if samp_per_word is None else int(samp_per_word)
+        cap = self.max_samp_rate(f_axis, spw)
         if float(samp_rate) > cap:
             raise ValueError(
                 f"{type(self).__name__} '{self.name}': {float(samp_rate):g} samples/s exceeds what "
                 f"the ingress can absorb — samp_per_word * f_axis / fire_cycles = "
-                f"{int(samp_per_word)} * {float(f_axis):g} / {RfSampBufIngress.fire_cycles} = "
+                f"{spw} * {float(f_axis):g} / {RfSampBufIngress.fire_cycles} = "
                 f"{cap:g}. The converter cannot be back-pressured, so the excess is not delayed, it "
                 f"is LOST — and pysim will not show it (block granularity, "
                 f"docs/guide/rf/python/fidelity.md). Lower the rate, widen the word "
@@ -442,3 +569,8 @@ class RfSampBufRx(FreeRunMod):
     def n_waited(self) -> int:
         """Commands that had to wait for the converter at least once."""
         return int(self.capture.n_waited)
+
+    @property
+    def n_misaligned(self) -> int:
+        """Commands refused because their window was not a whole number of words."""
+        return int(self.capture.n_misaligned)

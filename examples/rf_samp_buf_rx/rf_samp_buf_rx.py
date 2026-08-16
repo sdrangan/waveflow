@@ -30,6 +30,8 @@ from waveflow.hw.interface import StreamIF  # noqa: E402
 from waveflow.hw.rf_samp_buf import (  # noqa: E402
     BUF_DEPTH,
     HORIZON_MARGIN,
+    IDX_BW,
+    RF_SAMP_BUF_MISALIGNED,
     RF_SAMP_BUF_OK,
     RF_SAMP_BUF_TOO_OLD,
     SCHEMA_CLASSES,
@@ -38,7 +40,9 @@ from waveflow.hw.rf_samp_buf import (  # noqa: E402
     RfSampBufRx,
     RxCmd,
     RxResp,
+    pack_samples,
     sdiff,
+    unpack_samples,
 )
 from waveflow.hw.rf_sample_if import RFSampIF  # noqa: E402
 from waveflow.simulation.rf_tb import RfDataSource  # noqa: E402
@@ -50,11 +54,12 @@ from examples.rf_loopback.rfdc import Rfdc  # noqa: E402
 # Re-exported so a reader of this example does not have to know which names are framework and which
 # are the scenario's -- the import above is the statement about where each one lives.
 __all__ = [
-    "BUF_DEPTH", "HORIZON_MARGIN", "RF_SAMP_BUF_OK", "RF_SAMP_BUF_TOO_OLD", "SCHEMA_CLASSES",
-    "WORD_BW", "RfSampBufIngress", "RfSampBufRx", "RxCmd", "RxResp", "sdiff",
+    "BUF_DEPTH", "HORIZON_MARGIN", "IDX_BW", "RF_SAMP_BUF_MISALIGNED", "RF_SAMP_BUF_OK",
+    "RF_SAMP_BUF_TOO_OLD", "SCHEMA_CLASSES", "WORD_BW", "RfSampBufIngress", "RfSampBufRx",
+    "RxCmd", "RxResp", "pack_samples", "sdiff", "unpack_samples",
     "GATE_COMMANDS", "SAMP_BASE", "XSI_BLKSIZE", "XSI_NBLK", "XSI_NSAMP", "RfSampBufRxTB",
-    "captured_words", "command_bursts", "expected_capture", "ramp_samples", "responses",
-    "run_pysim", "write_scenario",
+    "captured_samples", "captured_words", "command_bursts", "expected_capture", "ramp_samples",
+    "responses", "run_pysim", "write_scenario",
 ]
 
 # ---------------------------------------------------------------------------
@@ -73,9 +78,14 @@ XSI_NSAMP = XSI_NBLK * XSI_BLKSIZE
 SAMP_BASE = 1000
 
 
+#: Sample width in bits.  A *sample* is always 16 bits here; what ``samp_per_word`` changes is how
+#: many of them ride one AXIS word, not how wide one is.
+SAMP_BW = 16
+
+
 def ramp_samples(nsamp: int = XSI_NSAMP, base: int = SAMP_BASE) -> np.ndarray:
     """The sample stream both backends play: ``base + i`` at index ``i``."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << WORD_BW)).astype(np.uint64)
+    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 #: The four commands, and **why each one is the case it claims to be**.  Determinism comes from the
@@ -102,33 +112,46 @@ GATE_COMMANDS = (
 )
 
 
-def expected_capture() -> tuple[np.ndarray, list[tuple[int, int, int]]]:
-    """The **predicted** result: the words the sink must see, and one ``(tid, status, nsent)`` per
-    command.
+def expected_capture(samp_per_word: int = 1,
+                     cmds=None) -> tuple[np.ndarray, list[tuple[int, int, int]]]:
+    """The **predicted** result: the *samples* the sink must see, and one ``(tid, status, nsent)``
+    per command.
 
     Derived from the command semantics alone — a captured sample is ``SAMP_BASE + idx`` whatever the
     timing did — so this is a prediction, not a transcription of a run.
+
+    In **samples**, not words, because that is what the command asks for; ``captured_samples``
+    unpacks the sink's words through the same serializer the converter packed them with, so the
+    comparison exercises slot order rather than assuming it.
     """
-    words: list[int] = []
+    spw = int(samp_per_word)
+    held = BUF_DEPTH * spw - HORIZON_MARGIN
+    samples: list[int] = []
     resp: list[tuple[int, int, int]] = []
     ramp = ramp_samples()
-    for tid, start, nsamp in GATE_COMMANDS:
-        if start < XSI_NSAMP - (BUF_DEPTH - HORIZON_MARGIN):
+    for tid, start, nsamp in (GATE_COMMANDS if cmds is None else cmds):
+        if (start % spw) or (nsamp % spw):
+            # Not a whole number of words: refused, and nothing is emitted.
+            resp.append((tid, RF_SAMP_BUF_MISALIGNED, 0))
+            continue
+        if start < XSI_NSAMP - held:
             # The window is older than the horizon by the time it is examined: nothing is emitted.
             resp.append((tid, RF_SAMP_BUF_TOO_OLD, 0))
             continue
-        words.extend(int(ramp[start + i]) for i in range(nsamp))
+        samples.extend(int(ramp[start + i]) for i in range(nsamp))
         resp.append((tid, RF_SAMP_BUF_OK, nsamp))
-    return np.array(words, dtype=np.uint64), resp
+    return np.array(samples, dtype=np.uint64), resp
 
 
-def command_bursts(cmds=GATE_COMMANDS) -> list[np.ndarray]:
+def command_bursts(cmds=GATE_COMMANDS, word_bw: int = WORD_BW) -> list[np.ndarray]:
     """The command stream as one burst per command — the bytes both backends play.
 
-    Serialized through the schema, never by hand: ``RxCmd`` decides how its three fields land in
-    16-bit words, and the C++ ``read_stream<16>`` is generated from that same schema.
+    Serialized through the schema, never by hand: ``RxCmd`` decides how its three ``IDX_BW``-bit
+    fields land in *word_bw* words, and the C++ ``read_stream<word_bw>`` is generated from that same
+    schema.  A wider word packs the same command into fewer beats and nothing else changes.
     """
-    return [np.asarray(RxCmd(tid=t, start=s, nsamp=n).serialize(word_bw=WORD_BW), dtype=np.uint64)
+    return [np.asarray(RxCmd(tid=t, start=s, nsamp=n).serialize(word_bw=int(word_bw)),
+                       dtype=np.uint64)
             for t, s, n in cmds]
 
 
@@ -155,7 +178,10 @@ class RfSampBufRxTB(FreeRunMod):
     #: NOT a free parameter: see :meth:`check_rate`, which refuses a rate this design cannot take.
     samp_rate: float = 64e6
     axis_freq: float = 300e6
-    nbits: int = WORD_BW
+    nbits: int = SAMP_BW
+    #: Samples per AXIS word.  **1 is the gated configuration** — the recorded RTL cycle count is for
+    #: that geometry.  Larger values are the throughput lever, and are exercised in pysim.
+    samp_per_word: int = 1
     depth: int = BUF_DEPTH
     horizon_margin: int = HORIZON_MARGIN
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
@@ -170,8 +196,7 @@ class RfSampBufRxTB(FreeRunMod):
         part of its interface contract; what a testbench owns is the **pairing** — this converter
         with this design — so it is called here with both halves.
         """
-        return self.dut.check_rate(float(self.samp_rate), float(self.axis_freq),
-                                   int(self.rfdc.samp_per_word))
+        return self.dut.check_rate(float(self.samp_rate), float(self.axis_freq))
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -180,11 +205,11 @@ class RfSampBufRxTB(FreeRunMod):
         self.blk_period = int(self.blksize) / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=0,
-                         nbits=int(self.nbits), samp_per_word=1)
+                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
         w = self.rfdc.axis_bitwidth
         self.dut = RfSampBufRx(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                               depth=int(self.depth), horizon_margin=int(self.horizon_margin),
-                               clk=self.axis_clk)
+                               samp_per_word=int(self.samp_per_word), depth=int(self.depth),
+                               horizon_margin=int(self.horizon_margin), clk=self.axis_clk)
         #: Fraction of the ingress's capacity this scenario asks for — checked, not assumed.
         self.rate_util = self.check_rate()
         self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in")
@@ -233,10 +258,12 @@ class RfSampBufRxTB(FreeRunMod):
         self.add_if(resp_axis)
 
 
-def write_scenario(root) -> None:
+def write_scenario(root, samp_per_word: int = 1, cmds=None) -> None:
     """Materialize ``<root>/vectors/rf_in`` and ``.../cmd`` — what BOTH backends play.
 
-    One writer, so the RTL run and the pysim golden cannot start from different bytes.
+    One writer, so the RTL run and the pysim golden cannot start from different bytes.  The RF side
+    is samples and does not depend on the word geometry at all; only the command bundle does, because
+    a command is serialized at the AXIS word width.
     """
     from waveflow.simulation.rf_tb import write_rf_bundle
     from waveflow.utils.burst_io import write_burst_bundle
@@ -246,27 +273,30 @@ def write_scenario(root) -> None:
     # The RF source plays real-valued blocks; the converter quantizes them to `nbits`.  Sending the
     # ramp as an INTEGER amplitude scaled into [-1, 1) means the quantizer round-trips it exactly,
     # so what the buffer holds is the ramp itself and a captured word names its own index.
-    full = float(1 << (WORD_BW - 1))
+    full = float(1 << (SAMP_BW - 1))
     blocks = [np.asarray(_signed(ramp[i * XSI_BLKSIZE:(i + 1) * XSI_BLKSIZE]), dtype=float).reshape(1, -1)
               / full for i in range(XSI_NBLK)]
     write_rf_bundle(blocks, root / "vectors" / "rf_in")
-    write_burst_bundle(command_bursts(), root / "vectors" / "cmd")
+    write_burst_bundle(
+        command_bursts(GATE_COMMANDS if cmds is None else cmds,
+                       word_bw=SAMP_BW * int(samp_per_word)),
+        root / "vectors" / "cmd")
 
 
 def _signed(words: np.ndarray) -> np.ndarray:
     """Reinterpret unsigned 16-bit words as the signed sample values the converter carries."""
     w = np.asarray(words, dtype=np.int64)
-    return np.where(w >= (1 << (WORD_BW - 1)), w - (1 << WORD_BW), w)
+    return np.where(w >= (1 << (SAMP_BW - 1)), w - (1 << SAMP_BW), w)
 
 
-def run_pysim(root=None, tb: "RfSampBufRxTB | None" = None) -> "RfSampBufRxTB":
+def run_pysim(root=None, tb: "RfSampBufRxTB | None" = None, cmds=None) -> "RfSampBufRxTB":
     """Run the graph in SimPy and return the testbench, its sinks holding what was captured."""
     import tempfile
 
     tb = tb or RfSampBufRxTB(name="tb", sim=Simulation())
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
-        write_scenario(base)
+        write_scenario(base, samp_per_word=int(tb.samp_per_word), cmds=cmds)
         for part in (tb.source, tb.cmd_drv, tb.out_sink, tb.resp_sink):
             part.root = base
         tb.sim.run_sim()
@@ -274,20 +304,34 @@ def run_pysim(root=None, tb: "RfSampBufRxTB | None" = None) -> "RfSampBufRxTB":
 
 
 def captured_words(tb: "RfSampBufRxTB") -> np.ndarray:
-    """The captured samples, as unsigned 16-bit words."""
+    """The raw AXIS words the sink collected — ``samp_per_word`` samples in each."""
     if not tb.out_sink.words:
         return np.zeros(0, dtype=np.uint64)
     return np.concatenate(tb.out_sink.words).astype(np.uint64)
+
+
+def captured_samples(tb: "RfSampBufRxTB") -> np.ndarray:
+    """The captured **samples**, unpacked from the sink's words.
+
+    Through :func:`~waveflow.hw.rf_samp_buf.unpack_samples`, i.e. the generated array serializer —
+    the same statement of slot order the converter packed with.  At ``samp_per_word == 1`` this is
+    the identity, which is exactly why a hand-rolled unpack here would be untestable.
+    """
+    raw = captured_words(tb)
+    if raw.size == 0:
+        return raw
+    return unpack_samples(raw, tb.rfdc.axis_bitwidth, int(tb.samp_per_word))
 
 
 def responses(tb: "RfSampBufRxTB") -> list[tuple[int, int, int]]:
     """The ``(tid, status, nsent)`` triples the DUT reported, deserialized through the schema."""
     if not tb.resp_sink.words:
         return []
+    w = int(tb.rfdc.axis_bitwidth)
     flat = np.concatenate(tb.resp_sink.words).astype(np.uint64)
-    n = RxResp.nwords_per_inst(WORD_BW)
+    n = RxResp.nwords_per_inst(w)
     out = []
     for i in range(0, flat.size, n):
-        r = RxResp().deserialize(flat[i:i + n], word_bw=WORD_BW)
+        r = RxResp().deserialize(flat[i:i + n], word_bw=w)
         out.append((int(r.tid), int(r.status), int(r.nsent)))
     return out

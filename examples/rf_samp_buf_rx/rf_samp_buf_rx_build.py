@@ -72,11 +72,35 @@ FIXED_TASK_BODIES = ("rf_samp_buf_ingress_task.h", "rf_samp_buf_capture_task.h")
 #: RTL that must land in ``xsi/`` beside the ``.f`` naming it, in elaboration reading order.
 RTL_FILES = ("bram_t2p.v", f"{WRAPPER}.v")
 
-_ELAB = {"bitwidth": WORD_BW, "depth": BUF_DEPTH, "horizon_margin": HORIZON_MARGIN}
+#: The gated geometry, stated rather than defaulted: ONE sample per word.  The recorded XSI cycle
+#: count is for this configuration, so a change here is a change to what the gate measures.
+#: `samp_per_word > 1` is the throughput lever and is swept in pysim; see
+#: `tests/examples/test_rf_samp_buf_rx.py`.
+XSI_SAMP_PER_WORD = 1
 
 
-def generate_dut(out_dir: Path = HERE) -> Path:
-    """Generate the top, its tcl, the XSI port map, the schema headers, the memory and the wrapper."""
+
+
+def elab_params(samp_per_word: int = XSI_SAMP_PER_WORD) -> dict:
+    """The elaboration parameters for a given word geometry.
+
+    ``bitwidth`` is derived rather than declared: a word is ``samp_per_word`` samples of
+    :data:`WORD_BW` bits, so the two cannot disagree.
+    """
+    return {"bitwidth": WORD_BW * int(samp_per_word), "samp_per_word": int(samp_per_word),
+            "depth": BUF_DEPTH, "horizon_margin": HORIZON_MARGIN}
+
+
+def generate_dut(out_dir: Path = HERE, samp_per_word: int = XSI_SAMP_PER_WORD) -> Path:
+    """Generate the top, its tcl, the XSI port map, the schema headers, the memory and the wrapper.
+
+    *samp_per_word* is a parameter so a synthesis test can build the wider geometry into its own
+    directory without disturbing the gated one — the recorded XSI cycle count belongs to
+    ``samp_per_word == 1`` and nothing here may quietly move it.  The generated top keeps its name
+    (it comes from ``RfSampBufRx.cpp_kernel_name``); what separates the two builds is *out_dir*.
+    """
+    elab = elab_params(samp_per_word)
+    word_bw = int(elab["bitwidth"])
     config = BuildConfig(root_dir=out_dir, params={})
 
     inner = BuildDag()
@@ -84,13 +108,15 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
     inner.add(RfSampBufStep(output_dir=INCLUDE_DIR))
     inner.add(XsiHarnessStep(output_dir="xsi"))
-    # RxCmd / RxResp at the design's word width.  The capture body reads and writes them with the
-    # generated read_stream<16> / write_stream<16> -- never a hand-rolled pack.
+    # RxCmd / RxResp at the design's AXIS word width.  The capture body reads and writes them with
+    # the generated read_stream<W> / write_stream<W> -- never a hand-rolled pack.  The fields stay
+    # IDX_BW wide whatever W is; a wider word just packs the command into fewer beats.
     for cls in SCHEMA_CLASSES:
-        inner.add(DataSchemaStep(cls, word_bw_supported=[WORD_BW], include_dir=INCLUDE_DIR))
-    inner.add(GenRtlStep(name="place_memory", comp_class=_memory_class(), output_dir="xsi"))
-    inner.add(GenWrapperStep(name="wrapper", comp_class=RfSampBufRx, elab_params=dict(_ELAB),
-                             width=WORD_BW, output_dir="xsi"))
+        inner.add(DataSchemaStep(cls, word_bw_supported=[word_bw], include_dir=INCLUDE_DIR))
+    inner.add(GenRtlStep(name="place_memory", comp_class=_memory_class(samp_per_word),
+                         output_dir="xsi"))
+    inner.add(GenWrapperStep(name="wrapper", comp_class=RfSampBufRx, elab_params=dict(elab),
+                             width=word_bw, output_dir="xsi"))
     results = inner.run(config, force=True)
     failed = [n for n, r in results.items() if not r.success]
     if failed:
@@ -98,8 +124,8 @@ def generate_dut(out_dir: Path = HERE) -> Path:
 
     gen = out_dir / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
-    comp = elaborate(RfSampBufRx, dict(_ELAB), name=TOP)
-    spec = composite_top_spec(comp, width=WORD_BW)
+    comp = elaborate(RfSampBufRx, dict(elab), name=TOP)
+    spec = composite_top_spec(comp, width=word_bw)
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
     (out_dir / f"{spec.top_name}.tcl").write_text(
@@ -112,9 +138,9 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     return cpp
 
 
-def _memory_class():
+def _memory_class(samp_per_word: int = XSI_SAMP_PER_WORD):
     """The memory class the design instantiates — read off the elaborated graph, not restated."""
-    comp = elaborate(RfSampBufRx, dict(_ELAB))
+    comp = elaborate(RfSampBufRx, elab_params(samp_per_word))
     mems = {type(m) for m in comp.rtl_mods.values()}
     if len(mems) != 1:
         raise RuntimeError(f"expected exactly one RTL module class in {TOP}, got {mems}")
