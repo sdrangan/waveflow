@@ -82,10 +82,18 @@ hardware will. So quantization is the integer-backed
 **saturating**, because a converter clips rather than wraps — and sample↔word packing goes through
 the [generated array serializers](../../guide/vectorization/), never a hand-rolled `.range()`:
 
-```python
-quantized = from_real(samples / full_scale, self.SampType)   # ADC: real -> stored ints
-yield from self.rx_stream.write(quantized)                   # packed at the stream's own width
+**You do not write this** — the `Rfdc` does it, on both paths. On the way in it quantizes each real
+sample to a stored integer and packs `samp_per_word` of them into a beat; on the way out it unpacks
+and dequantizes. The arithmetic is:
+
 ```
+stored = clamp( floor( x / full_scale * 2^(nbits-1) + 0.5 ),  -2^(nbits-1),  2^(nbits-1) - 1 )
+    x' = stored / 2^(nbits-1) * full_scale
+```
+
+`floor(· + 0.5)` is round-half-**up** (AP_RND — *not* round-half-away-from-zero, which disagrees on
+negative ties), and the clamp is the saturation (AP_SAT): a converter clips, it does not wrap. The
+dequantization is exact, because the scale is a power of two.
 
 At `nbits=16, samp_per_word=4` that is four samples per 64-bit AXI-Stream beat. The gate runs
 `(8, 8)`, `(16, 4)`, `(12, 4)` and `(16, 2)` — including a non-power-of-two width — because the bugs
