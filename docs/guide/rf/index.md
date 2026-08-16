@@ -12,6 +12,23 @@ summary: "Modelling a design that talks to an RF data converter — an ADC/DAC s
 Many applications, wireless ones especially, connect to an RF data converter — an ADC/DAC block such
 as the RFDC on an AMD/Xilinx RFSoC part. This section is about modelling a design that has one.
 
+## What `Rfdc` is, and what it is not
+
+`Rfdc` is a Waveflow `HwModule` modelling a **simplified emulation** of the
+[AMD RF Data Converter LogiCORE IP](https://docs.amd.com/r/en-US/pg269-rf-data-converter/Introduction).
+It is designed to model **the interface the logic would see**, not the converter's internals.
+
+Like the AMD block, it exposes **two AXI4-Stream interfaces**, one per direction, with time origins
+that can hold a fixed relation — the modelling counterpart of multi-tile synchronisation. Its RF side
+simulates the signals that would be emitted by, or presented to, the physical converter, and
+optionally the RF up/down conversion attached to the AMD IP.
+
+What that framing buys you is the thing worth holding on to: **your logic sees the same boundary in
+simulation that it will see in hardware.** What it does not buy you is the converter's own behaviour —
+tile calibration, PLL and clocking, MTS bring-up, the digital mixers' exact arithmetic. Those are
+either configuration you supply as a measured constant or, where they cannot be modelled at all, named
+as out of scope on the page that would otherwise imply them.
+
 ## A converter is not just another AXI-Stream peer
 
 From the fabric it looks like one: words arrive on a stream, words leave on a stream. Three things

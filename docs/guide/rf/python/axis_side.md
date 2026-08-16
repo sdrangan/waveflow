@@ -25,14 +25,41 @@ parallel world to learn.
 ## The word width
 
 ```python
-rfdc.axis_bitwidth      # samp_per_word * nbits   (x2 for interleaved I/Q)
+rfdc.axis_bitwidth      # samp_per_word * nbits
 ```
 
 Read it off the converter rather than restating it. At `nbits=16, samp_per_word=4` that is a 64-bit
-word carrying four samples, and 64 bits is the ceiling the constructor enforces.
+word carrying four sample slots, and 64 bits is the ceiling the constructor enforces.
 
 `samp_per_word` is a `HwParam` and an **integer** because a sample cannot straddle a slot. It is the
-one structural number at this boundary.
+one structural number at this boundary — and note it counts **slots**, not necessarily samples. Which
+they are is what `iq_mode` decides.
+
+## Real and I/Q: what `iq_mode` means {#iq-mode}
+
+A wireless design wants **complex** samples. `iq_mode` says whether a beat's slots are real values or
+interleaved I/Q pairs — and it does **not** change the width of the port:
+
+| `iq_mode` | one beat carries | at `samp_per_word=4`, `nbits=16` |
+|---|---|---|
+| `0` | `samp_per_word` **real** samples | 4 real samples in a 64-bit word |
+| `1` | `samp_per_word / 2` **complex** samples | 2 complex (I,Q) samples in a 64-bit word |
+
+The port width is `samp_per_word * nbits` either way. That is deliberate: the width is a **hardware**
+constraint — it is what the tile's AXI4-Stream actually is — so `iq_mode` reinterprets the slots
+rather than resizing the bus. An I/Q pair occupies two adjacent slots, I in the lower.
+
+**`iq_mode = 1` is not implemented yet.** The constructor refuses it rather than half-supporting it:
+
+```
+NotImplementedError: Rfdc stage 1 implements real samples only (iq_mode=0) ...
+```
+
+Two things are missing, and both are real work rather than a flag: the RF-side bundle format is
+float64 and needs a manifest field to carry complex, and the quantizer's conformance twin covers real
+`FixedField` only. Until those land, a complex design models I and Q as two real channels
+(`n_ch = 2`), which is exactly what the hardware carries anyway — the difference is bookkeeping in the
+model, not in the bits on the wire.
 
 ## The packing contract
 

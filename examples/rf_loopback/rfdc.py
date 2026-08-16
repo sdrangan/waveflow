@@ -169,8 +169,19 @@ class Rfdc(HwModule):
 
     @property
     def axis_bitwidth(self) -> int:
-        """AXIS word width in bits: ``samp_per_word * nbits`` (x2 for interleaved I/Q)."""
-        return int(self.samp_per_word) * int(self.nbits) * (2 if int(self.iq_mode) else 1)
+        """AXIS word width in bits: ``samp_per_word * nbits``, whatever :attr:`iq_mode` is.
+
+        ``samp_per_word`` counts **slots**, not samples.  ``iq_mode`` reinterprets those slots — real
+        values, or interleaved I/Q pairs occupying two adjacent slots each — and does **not** resize
+        the bus.  The width is a hardware constraint (it is what the tile's AXI4-Stream is), so a mode
+        bit must not change it; see ``docs/guide/rf/python/axis_side.md``.
+
+        An earlier form multiplied by two for I/Q, which encoded the opposite convention
+        (``samp_per_word`` as a count of complex samples, and the port widening with the mode).  It
+        was unreachable — ``iq_mode = 1`` is refused in ``__post_init__`` — but a doc and an
+        unreachable line disagreeing is how the next reader gets it wrong.
+        """
+        return int(self.samp_per_word) * int(self.nbits)
 
     # -- bind-time: read the rate, push the epoch ------------------------------------------------
 

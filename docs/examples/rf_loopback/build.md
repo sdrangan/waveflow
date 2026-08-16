@@ -17,7 +17,15 @@ python -m examples.rf_loopback.rf_loopback
 
 ## 1. Create the `Rfdc`
 
-`Rfdc` is **one module carrying both directions**, not separate ADC and DAC blocks. The reason is
+`Rfdc` models a **simplified emulation** of the
+[AMD RF Data Converter LogiCORE IP](https://docs.amd.com/r/en-US/pg269-rf-data-converter/Introduction)
+— specifically, *the interface your logic would see*. Like the AMD block it exposes two AXI4-Stream
+interfaces, one per direction, whose time origins can hold a fixed relation the way multi-tile
+synchronisation does; its RF side simulates the signals the physical converter would emit or receive.
+[What `Rfdc` is, and what it is not](../../guide/rf/index.md) has the full framing, including what the
+model deliberately does not cover.
+
+It is **one module carrying both directions**, not separate ADC and DAC blocks. The reason is
 synchronization: the TX and RX sample counters have to hold a fixed relation, and that is a property
 *of the converter*, not of two unrelated blocks — it is what lets the two grids' time origins have a
 single owner.
@@ -47,7 +55,7 @@ arrivals.
 
 | parameter | binding | why |
 |---|---|---|
-| `n_rx`, `n_tx`, `nbits`, `iq_mode` | `HwParam` | they set the word layout synthesized logic is built *against* |
+| `n_rx`, `n_tx`, `nbits`, `iq_mode` | `HwParam` | they set the word layout synthesized logic is built *against* — see [what `iq_mode` means](../../guide/rf/python/axis_side.md#iq-mode) for real vs complex |
 | `samp_per_word` | `HwParam`, **integer** | port width is `samp_per_word · nbits`; a sample cannot straddle a slot |
 | `full_scale`, `t0_rx`, `t0_tx` | plain init-time fields | one artifact serves every value |
 
