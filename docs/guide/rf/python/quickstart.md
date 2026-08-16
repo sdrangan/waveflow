@@ -12,7 +12,7 @@ summary: "An orientation to designs that talk to an RF data converter, outlined 
 A converter is best understood through an example. The simplest is the
 [RF loopback](../../../examples/rf_loopback/) — a source feeds an ADC, the samples cross into the
 fabric, trivial logic relays them, and a DAC turns them back into samples at a sink. The
-[full walkthrough](../../../examples/rf_loopback/python.md) has every line; this page outlines the
+[full walkthrough](../../../examples/rf_loopback/) has every line; this page outlines the
 construction so you know what you are looking at, and points out the parts that are RF-specific.
 
 Nothing here is RTL. This is the Python model, which is where every RF design starts.

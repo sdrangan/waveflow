@@ -222,27 +222,34 @@ def test_sampling_page_metronome_table_is_recomputed():
     assert iface.ticks == pytest.approx([k * period for k in range(1, n + 1)])
 
 
-def test_rf_loopback_page_loss_counts_are_recomputed():
-    """``examples/rf_loopback/python.md`` quotes three predicted counts and one counter dict.
+def _leading_zero_blocks(captured) -> int:
+    """Whole blocks of zero-fill at the head of a capture — what the late-producer figure shows."""
+    for k, b in enumerate(captured):
+        if np.any(b):
+            return k
+    return len(captured)
 
-    Each is produced by actually injecting the fault, because the whole argument of that section is
+
+def test_rf_loopback_run_page_loss_counts_are_recomputed():
+    """``examples/rf_loopback/run.md`` quotes two counter dicts, three predicted counts and a table.
+
+    Each is produced by actually injecting the fault, because the whole argument of that page is
     that these numbers are *predictions the model meets* rather than observations written down.
     """
     from examples.rf_loopback.rf_loopback import RfLoopbackSim
 
-    text = _page("examples/rf_loopback/python.md")
+    text = _page("examples/rf_loopback/run.md")
 
     clean = RfLoopbackSim(n_src_blk=8)
     clean.run()
     clean.check()
     for line in (f"adc  {clean.tb.adc_if.counters()}", f"dac  {clean.tb.dac_if.counters()}"):
-        assert line in text, f"python.md no longer quotes the clean-run counters: {line}"
+        assert line in text, f"run.md no longer quotes the clean-run counters: {line}"
 
     late = RfLoopbackSim(n_src_blk=8, blksize=64)
     late.tb.source.start_delay = 2.5 * late.tb.blk_period
     late.run()
     assert f"`adc_if.underrun == {late.tb.adc_if.underrun}`" in text
-    assert np.array_equal(late.captured[0], np.zeros((1, late.tb.blksize)))    # "all zeros"
 
     stalled = RfLoopbackSim(n_src_blk=8, blksize=64, sink_stall_after=1, sink_depth=2)
     stalled.run()
@@ -251,12 +258,103 @@ def test_rf_loopback_page_loss_counts_are_recomputed():
     assert f"`dac_if.overrun == {stalled.tb.dac_if.overrun}`" in text
     assert "`8 − 1 − 2`" in text and f"= {deeper.tb.dac_if.overrun}`" in text
 
-    # The MODULE's own declaration, which is what the page quotes.  Distinct from the LOOP's cost
-    # (`loop_blk_latency`), which adds one block for the ADC hop -- a converter cannot emit samples
-    # it has not collected.  The two were the same number until the ADC's burst was paced at the
-    # converter's rate rather than the fabric clock, and conflating them is what this line used to do.
-    assert f"blk_latency: HwParam[int] = {int(clean.tb.dut.blk_latency)}" in text
+    # The loop's cost, which is what the shift on the loopback figure is.
+    n_lat = int(clean.tb.loop_blk_latency)
     assert clean.tb.loop_blk_latency == int(clean.tb.dut.blk_latency) + 1
+    assert f"{n_lat} whole blocks** — {n_lat * int(clean.tb.blksize)} samples" in text, (
+        f"run.md no longer states the loop's shift as {n_lat} blocks "
+        f"({n_lat * int(clean.tb.blksize)} samples)")
+
+
+def test_the_late_producer_table_counts_the_blocks_the_figure_shows():
+    """The zero-fill table on ``run.md`` is the late-producer figure, in numbers.
+
+    **This is the check that was missing**, and its absence is why the page it replaces claimed
+    *three* leading zero blocks when the run produces four.  Every other figure on that page was
+    covered here and none of them rotted; this sentence was not, and it did.  The two rows are
+    matched as whole table CELLS so a loose substring cannot pass on a wrong table.
+    """
+    from examples.rf_loopback.rf_loopback import RfLoopbackSim
+
+    text = _page("examples/rf_loopback/run.md")
+
+    def _run(delay_blocks: float) -> RfLoopbackSim:
+        sim = RfLoopbackSim(n_src_blk=8, blksize=64, waveform="grid")
+        sim.tb.source.start_delay = delay_blocks * sim.tb.blk_period
+        sim.run()
+        return sim
+
+    clean, late = _run(0.0), _run(2.5)
+    rows = {"on time": clean, "source 2.5 block periods late": late}
+    for label, sim in rows.items():
+        want = f"| {label} | {_leading_zero_blocks(sim.captured)} | {sim.tb.adc_if.underrun} |"
+        assert want in text, (
+            f"run.md's zero-fill table no longer has the measured row {want!r} — the figure and "
+            f"the table are drawn from the same run, so one cannot move without the other")
+
+    # The fault must actually ADD zero-fill, or the figure proves nothing.
+    assert _leading_zero_blocks(late.captured) > _leading_zero_blocks(clean.captured)
+
+
+def test_the_build_page_describes_the_source_waveform_the_figure_draws():
+    """``build.md``'s source figure has a shape — 8 blocks, a 4-block window — and prose beside it.
+
+    Recomputed from the bundle the source is actually fed, because that is what the figure plots.
+    """
+    import tempfile
+
+    from examples.rf_loopback.rf_loopback import RfLoopbackSim
+    from waveflow.simulation.rf_tb import read_rf_bundle
+
+    text = _page("examples/rf_loopback/build.md")
+
+    sim = RfLoopbackSim(n_src_blk=8, waveform="sine")
+    with tempfile.TemporaryDirectory() as root:
+        sim.write_scenario(root)
+        blocks = read_rf_bundle(Path(root) / "vectors" / "rf_in", 1, sim.tb.blksize)
+
+    blk = int(sim.tb.blksize)
+    live = [k for k, b in enumerate(blocks) if np.any(b)]
+    assert live == list(range(live[0], live[-1] + 1)), "the window is no longer contiguous"
+    assert f"{len(blocks)} blocks of {blk} samples" in text
+    assert f"middle {len(live)} of them — {len(live) * blk} samples" in text, (
+        f"build.md no longer states the window as {len(live)} blocks ({len(live) * blk} samples)")
+
+    # The MODULE's own declaration, distinct from the LOOP's cost (`loop_blk_latency`), which adds
+    # one block for the ADC hop -- a converter cannot emit samples it has not collected.  The two
+    # were the same number until the ADC's burst was paced at the converter's rate rather than the
+    # fabric clock, and conflating them is what this line used to do.
+    assert f"blk_latency: HwParam[int] = {int(sim.tb.dut.blk_latency)}" in text
+
+
+def test_the_two_waveforms_still_test_different_things():
+    """``build.md``'s "two waveforms" paragraph is a claim about the quantizer, so it is run.
+
+    The grid waveform must survive ``from_real``/``to_real`` unchanged (making the packing check
+    strict and the quantizer untested) and the sine must NOT (exercising rounding).  If that ever
+    stopped holding, the page's reason for having two waveforms would be false.
+    """
+    import tempfile
+
+    from examples.rf_loopback.rf_loopback import RfLoopbackSim
+    from waveflow.hw.fixpoint import from_real, to_real
+
+    text = _page("examples/rf_loopback/build.md")
+
+    def _first_block(waveform: str):
+        sim = RfLoopbackSim(n_src_blk=4, blksize=64, waveform=waveform)
+        with tempfile.TemporaryDirectory() as root:
+            sim.write_scenario(root)
+        x = sim.sent[2]
+        st = sim.tb.rfdc.SampType
+        return x, to_real(from_real(x / float(sim.tb.full_scale), st)) * float(sim.tb.full_scale)
+
+    grid_x, grid_q = _first_block("grid")
+    sine_x, sine_q = _first_block("sine")
+    assert np.array_equal(grid_x, grid_q), "the grid waveform is supposed to be a quantizer no-op"
+    assert not np.array_equal(sine_x, sine_q), "the sine no longer exercises the quantizer"
+    assert "`from_real` a no-op" in text, (
+        "build.md no longer says why there are two waveforms — that is the whole paragraph")
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +414,7 @@ def test_the_hop_latency_the_edge_pages_quote_is_the_one_the_channel_has():
 
 
 def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
-    """``examples/rf_loopback/python.md`` states the RTL completion cycle and the scenario size.
+    """``examples/rf_loopback/rtl.md`` states the RTL completion cycle and the scenario size.
 
     The source of truth is ``test_xsi_bfm.py``'s ``GATES`` table — the same tuple the XSI run
     asserts against — so a re-recorded gate fails here until the page is updated, and a page edited
@@ -329,11 +427,47 @@ def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
     assert "rf_pass_through" in want, "the rf_pass_through gate has been removed from GATES"
     cycles = want["rf_pass_through"]
 
-    text = _page("examples/rf_loopback/python.md")
+    text = _page("examples/rf_loopback/rtl.md")
     assert f"**{cycles}**" in text, (
-        f"python.md no longer quotes the recorded cycle gate of {cycles}")
+        f"rtl.md no longer quotes the recorded cycle gate of {cycles}")
     assert f"{XSI_NBURST} bursts × {XSI_NWORDS_BLK} words = {XSI_NBURST * XSI_NWORDS_BLK} words" \
-        in text, "python.md no longer states the scenario the gate measures"
+        in text, "rtl.md no longer states the scenario the gate measures"
+
+
+def test_the_rtl_page_reports_the_hook_findings_the_code_actually_produces():
+    """``rtl.md`` shows ``check`` / ``potential_targets`` output, which is *executable* prose.
+
+    **This is the second check that was missing.**  The page it replaces used ``RfDataSource`` as
+    its "declares no ``bfm_model()``" example.  That was true when it was written and stopped being
+    true when the RF environment nodes acquired C++ models; the module that carries the finding now
+    is the DUT, which belongs *inside* the cut.  Nothing caught the inversion, because a ``pycon``
+    block is not run by anything unless a test runs it.
+    """
+    from waveflow.build.codegen_check import check, potential_targets
+    from waveflow.hw.hw_module import declares_hook
+    from waveflow.simulation.rf_tb import RfDataSink, RfDataSource
+
+    from examples.rf_loopback.rf_loopback import RfSampPassThrough
+    from examples.rf_loopback.rfdc import Rfdc
+
+    text = _page("examples/rf_loopback/rtl.md")
+
+    ok, msg = check(RfSampPassThrough, "xsi_bfm_model")
+    assert ok is False, "the DUT now declares a bfm_model(); rtl.md's finding is stale"
+    assert "RfSampPassThrough declares no bfm_model() hook" in text, (
+        "rtl.md must name the module that carries the finding today, not one that used to")
+    assert msg.splitlines()[0].split(".")[0] in text.replace("\n ", " "), (
+        "rtl.md quotes a check() message the code no longer produces")
+
+    assert "composite_kernel" in potential_targets(RfSampPassThrough)
+    assert "frozenset({'composite_kernel'})" in text
+
+    # The contrast the page draws: the environment nodes DO name a model, and claim no target.
+    for mod in (RfDataSource, RfDataSink, Rfdc):
+        assert declares_hook(mod, "bfm_model"), (
+            f"{mod.__name__} no longer declares a model; rtl.md's contrast is stale")
+        assert potential_targets(mod) == frozenset()
+    assert ">>> potential_targets(RfDataSource)\nfrozenset()" in text
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +512,13 @@ def test_the_pages_still_contain_tables_to_check():
     """
     assert re.search(r"^\|\s*\*\*\d+\*\*\s*\|", _page("examples/vecmult/sweep.md"), flags=re.M)
     assert "rank correlation" in _page("examples/firblock/resource_fit.md")
-    # The RF pages' claims live in one table and one counter dict; prose would make both vacuous.
+    # The RF pages' claims live in tables, a counter dict and two pycon blocks; prose would make
+    # every one of them vacuous.
     assert "| absolute grid |" in _page("guide/rf/sampling.md")
-    assert "'underrun':" in _page("examples/rf_loopback/python.md")
+    run = _page("examples/rf_loopback/run.md")
+    assert "'underrun':" in run
+    assert "| leading flat blocks at the sink |" in run
+    assert ">>> " in _page("examples/rf_loopback/rtl.md")
 
 
 # ---------------------------------------------------------------------------
