@@ -402,11 +402,20 @@ class RfLoopbackSim:
     """
 
     def __init__(self, n_src_blk: int = 8, name: str = "rf_tb", seed: int = 0xADC0,
+                 waveform: str = "grid", sine_freq: float = 1.0e6,
                  **tb_kwargs) -> None:
         tb_kwargs.setdefault("n_blk", n_src_blk)
         self.tb = RfLoopbackTB(name=name, sim=Simulation(), **tb_kwargs)
         #: Blocks the source will play.  Fewer than ``tb.n_blk`` starves the RF grid on purpose.
         self.n_src_blk = int(n_src_blk)
+        #: ``"grid"`` (on the quantization grid -- strict packing check, quantizer untested) or
+        #: ``"sine"`` (a windowed sinusoid -- exercises the quantizer, and legible in a plot).
+        #: See :meth:`_grid_blocks` and :meth:`_sine_blocks` for why both exist.
+        if waveform not in ("grid", "sine"):
+            raise ValueError(f"waveform must be 'grid' or 'sine', got {waveform!r}")
+        self.waveform = waveform
+        #: Tone frequency for the ``"sine"`` waveform, in Hz.
+        self.sine_freq = float(sine_freq)
         self.seed = int(seed)
         #: The blocks written to the source bundle, kept for the golden.
         self.sent: list[np.ndarray] = []
@@ -417,26 +426,64 @@ class RfLoopbackSim:
     def write_scenario(self, root) -> None:
         """Write ``<root>/vectors/rf_in`` and point both RF participants at *root*.
 
-        The samples are drawn **exactly on the converter's quantization grid** —
-        ``m / 2^(nbits-1) * full_scale`` for integer ``m`` — so a clean loopback is *bit*-identical
-        rather than "close".  That is deliberate: a tolerance would hide a packing bug, and packing
-        is the thing this example is testing.  (It is exact for any power-of-two ``full_scale``; the
-        divide and multiply are then both exact in binary floating point.)
+        Two waveforms, and the difference between them is not cosmetic — see :meth:`_grid_blocks`
+        and :meth:`_sine_blocks`.  Both give an **exact** golden; neither needs a tolerance.
         """
         tb = self.tb
         root = Path(root)
         self.root = root
+        self.sent = (self._sine_blocks() if self.waveform == "sine" else self._grid_blocks())
+        write_rf_bundle(self.sent, root / "vectors" / "rf_in")
+        tb.source.root = root
+        tb.sink.root = root
+
+    def _grid_blocks(self) -> list:
+        """Random samples drawn **exactly on the converter's quantization grid** —
+        ``m / 2^(nbits-1) * full_scale`` for integer ``m``.
+
+        A clean loopback is then *bit*-identical to the input rather than "close", which is what
+        makes the packing check strict: a tolerance would hide a packing bug, and packing is what
+        this waveform exists to test.  (Exact for any power-of-two ``full_scale``; the divide and
+        multiply are both exact in binary floating point.)
+
+        **What it deliberately does NOT test:** quantization.  On-grid samples make ``from_real`` a
+        no-op, so rounding and saturation are never exercised.  That is what the sine is for.
+        """
+        tb = self.tb
         nb = int(tb.nbits)
         fs = float(tb.full_scale)
         rng = np.random.default_rng(self.seed)
         lo, hi = -(1 << (nb - 1)), (1 << (nb - 1)) - 1
-        self.sent = []
-        for _ in range(self.n_src_blk):
-            m = rng.integers(lo, hi + 1, size=(1, int(tb.blksize)))
-            self.sent.append(m.astype(np.float64) / float(1 << (nb - 1)) * fs)
-        write_rf_bundle(self.sent, root / "vectors" / "rf_in")
-        tb.source.root = root
-        tb.sink.root = root
+        return [rng.integers(lo, hi + 1, size=(1, int(tb.blksize))).astype(np.float64)
+                / float(1 << (nb - 1)) * fs
+                for _ in range(self.n_src_blk)]
+
+    def _sine_blocks(self) -> list:
+        """A windowed sinusoid: ``w(t | t0, t1) * sin(2*pi*f*(t - t0))``, zero outside the window.
+
+        Two things this buys that :meth:`_grid_blocks` does not.
+
+        **It exercises the quantizer.**  A sine does not land on the quantization grid, so
+        ``from_real`` really rounds and (near full scale) really saturates — the paths on-grid
+        samples skip entirely.  The golden is still exact, just stated against the *quantized* input:
+        ``captured[k + L] == to_real(from_real(sent[k]))``.  No tolerance.
+
+        **It is legible.**  A burst with a hard start and stop makes the block-latency shift and the
+        leading zero-fill something you can SEE in a plot rather than infer from array indices --
+        which is what ``rf_loopback_figures.py`` renders for the guide.
+        """
+        tb = self.tb
+        n = self.n_src_blk * int(tb.blksize)
+        t = np.arange(n, dtype=np.float64) / float(tb.samp_rate)
+        # The window sits inside the run so both edges are visible, and away from block 0 so the
+        # startup zero-fill is not confused with the window being closed.
+        t0 = t[n // 4]
+        t1 = t[3 * n // 4]
+        amp = 0.9 * float(tb.full_scale)          # near full scale, so rounding is exercised
+        x = np.where((t >= t0) & (t < t1),
+                     amp * np.sin(2.0 * np.pi * self.sine_freq * (t - t0)), 0.0)
+        return [x[i * int(tb.blksize):(i + 1) * int(tb.blksize)].reshape(1, -1)
+                for i in range(self.n_src_blk)]
 
     # -- run and check ---------------------------------------------------------------------------
 
