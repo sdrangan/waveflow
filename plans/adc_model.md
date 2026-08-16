@@ -296,6 +296,108 @@ continuously filling the buffer; Data Capture takes an `RxCmd` to capture from a
   compile, with no diagnostic (the body's word type and the boundary port's disagree). RTL-unit-testing
   `RfSampBuf` apart from its neighbours is `design_cut.md` S5, and needs its own measured gate.
 
+## Two design patterns, and which is the default
+
+**Agreed 2026-08-16, nothing built.** How a user's logic reaches the converter is a choice with two
+answers, and they are not equal — one should be the default and the other the measured exception.
+
+| | **A — raw streaming** | **B — time-stamped buffer** |
+|---|---|---|
+| topology | `Rfdc → your logic` | `Rfdc → RfSampBuf → your logic → RfSampBuf → Rfdc` |
+| applies when | your processing has **no non-streaming phase** — a filter, a running reduction | it does: block algorithms, FFTs, anything that holds a block before emitting |
+| who may not stall the boundary | **your block** | `RfSampBuf` |
+| the hand-written pipelined body | **yours** | infrastructure's, written **once** |
+| what pysim models | badly — a burst-granular twin is silently rate-blind | faithfully — block granularity *is* the real granularity |
+| controls TX↔RX delay | no | yes, that is what the timestamp is for |
+
+### Why B is the default
+
+The decisive argument is the fourth row. Pattern A forces a hand-written `@synthesizable` pipelined
+body on every user who needs to sustain the sample rate, because
+[pipelined ops cannot be extracted](./pipelined_ops.md). Under B that body is written **once**, in
+`RfSampBuf`, and no user's DUT ever has the conversation. Every RF design in this repo has so far
+re-litigated *who may not stall the boundary port* — `rf_loopback` answered with an ingress task plus
+a FIFO-depth argument, `rf_capture` with a BRAM write port. That question should be infrastructure's.
+
+The fifth row is the second argument and it is nearly as strong. pysim lies about rate only at the
+stage touching the converter; if that stage is always `RfSampBuf` — one audited module with a
+measured `fire_cycles` and a `check_rate` refusal — the blind spot stops being every user's and
+becomes one module's.
+
+### What that implies
+
+- **`RfSampBuf` moves to `waveflow/`.** If most users touch it directly it is framework, not
+  `examples/rf_capture/`. That also settles the three-names problem `rf_guide_restructure.md` left
+  open (example `rf_capture/`, class `RfSampBufRx`, TCL `rf_samp_buf_rx.tcl`) — a move forces one.
+- **Its ingress rate becomes the platform's ceiling.** `RfCapIngress.fire_cycles = 2`, measured by
+  csynth — 0.5 samples/cycle, or 150 MSa/s at 300 MHz, well under a real RFSoC converter. Today that
+  is one example's limit; as the default it is everyone's, so pipelining that body moves onto the
+  critical path. Infra is the right place to spend a hand-written pipelined loop.
+- **`samp_per_word > 1` must be designed in, not retrofitted.** `RfCapIngress` is one sample per
+  word. Four samples per 2-cycle firing is 2 samples/cycle, which is most of the ceiling problem.
+- **TX does not exist.** `RfSampBufRx` is built and gated; there is no TX half and no `TxCmd`/`TxResp`
+  beside `RxCmd`/`RxResp`. That is the work item, and it is the TX player this plan already carries.
+
+### The B example
+
+`Rfdc → RfSampBuf → BlkDelay → RfSampBuf → Rfdc`, where **`BlkDelay` is `RfSampPassThrough` renamed
+and given a reason to exist**. A pass-through is a wire; a delay is the minimal block that makes the
+timestamp *mean* something — `out_ts = in_ts + delay` is `RfSampBuf`'s contract, exercised rather
+than described.
+
+Open design questions:
+
+- **One buffer or two.** Recommend two: "never refuse a write" and "never miss a deadline" are
+  different contracts and sharing one buffer would muddle both.
+- **Is the delay in blocks or samples?** Decides whether the TX side ever needs a non-block-aligned
+  read, which is most of the difficulty.
+
+### `rf_loopback` is not the pattern-A example
+
+It was proposed as one and that was wrong: **loopback with a controlled TX–RX delay is intrinsically
+a B problem**, because the delay *is* a timestamp relationship. Teaching it as A would point people
+at A in exactly the situation A does not fit.
+
+What it keeps is narrower and still worth having — the **documented case study of what direct
+connection costs**: 72 dropped words, the silently-ignored depth pragma, the 1066 gate. That evidence
+is the motivation for B existing. Case study, not exemplar. Its one real defect stands and should be
+fixed either way: the Python twin relays a burst and says nothing about rate, which is the blind spot
+that hid the drops. `RfSampIngress.run_iter` is **not extracted** (its `kernel_task()` names a
+hand-written header), so it is free to use `get_pipelined` — worth confirming with one extractor
+call, because the docstring's claim that the word relay "has no pysim expression" then becomes false.
+
+### The pattern-A example, sketched
+
+Deferred, and the sketch is here so it survives the gap:
+
+> TX emits a **windowed complex sinusoid**, continuously and open-loop. The RF environment closes an
+> approximately-zero-delay loopback. RX runs an **energy detector and a simple frequency estimator**,
+> emitting one estimate per window to an output stream.
+
+Why it is a better A than a pass-through: no delay is controlled anywhere, which is *why* A fits, and
+it makes A's actual precondition visible — the processing has no non-streaming phase. An energy
+detector and a filter qualify; a pass-through is degenerate and hides the criterion.
+
+Three notes for whoever builds it:
+
+- **Zero delay is not required, and saying so is the lesson.** Whatever the environment's delay turns
+  out to be (expect one block, from the two metronomes), pattern A does not care. "You do not have to
+  know this number" is the difference from B.
+- **A complex sinusoid needs `iq_mode = 1`, which the constructor refuses.** Two real blockers: the
+  RF-side bundle format is float64 with no manifest field for complex, and the quantizer's
+  conformance twin covers real `FixedField` only. The documented `n_ch = 2` workaround partly defeats
+  an example whose point is that wireless students expect complex samples — so `iq_mode` is likely a
+  **prerequisite**, not a parallel track.
+- **Accumulate at rate, estimate at the window boundary.** Energy is trivially streaming; `atan2` at
+  II=1 is a CORDIC and real work. Accumulate the lag-1 autocorrelation at full rate and take one
+  `atan2` per window, off the critical path. That is the general shape of streaming DSP and teaches
+  the A criterion better than a per-sample estimator would.
+
+### Sequencing
+
+B first — it is the default and its blocker (`RfSampBuf` TX) is already this plan's work item. A
+after, with `iq_mode` ahead of it.
+
 ## Synchronization
 
 TX and RX sample counters must be aligned across antennas and between TX and RX, so receive sample 0
