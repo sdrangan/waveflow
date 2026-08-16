@@ -58,12 +58,42 @@ Anything smaller leaves the trap in place.
 `fire_cycles` is worth noticing: it is a **declared constant standing in for a rate the model cannot
 derive**. That it had to be invented is the clearest evidence the gap is real.
 
-## One thing worth confirming cheaply
+## Measured 2026-08-16: a hooked leaf's `run_iter` CAN use pipelined ops
 
-A `run_iter` on a module that overrides `kernel_task()` is **never extracted**, so it should be free
-to use pipelined ops. If that holds, the RF ingresses can get honest pysim twins today without
-waiting for any of the above — and `RfSampIngress`'s docstring claim that the word relay "has no
-pysim expression" is false. One extractor call settles it.
+The question was whether a `run_iter` on a module that overrides `kernel_task()` is exempt from the
+prohibition. **It is — but by a different mechanism than "the extractor checks the hook", and that
+distinction matters.**
+
+| probe | result |
+|---|---|
+| `check(leaf, 'composite_kernel')`, plain body | `True` |
+| `check(leaf, 'composite_kernel')`, `get_pipelined` body, **no hook** | `True` ← **the gate never extracts a leaf body** |
+| `extract_kernel(comp)`, `get_pipelined` body, **hook overridden** | `SynthesisError` |
+| `extract_kernel(comp)`, `get_pipelined` body, **no hook** | `SynthesisError` |
+| `extract_kernel(comp)`, **today's shipped `RfSampIngress`** | `IndexError` |
+| `composite_top_spec(RfSampPassThrough)`, ingress with `get_pipelined` | **OK** |
+
+Three findings, in order of how much they should change behaviour:
+
+**1. The build path permits it.** `composite_top_spec` — the real generator — succeeds with a
+pipelined `run_iter` in `RfSampIngress`, because a leaf whose `kernel_task()` names a hand-written
+header is never extracted. So the RF ingresses can get honest pysim twins today, and
+`RfSampIngress`'s docstring claim that the word relay "has no pysim expression" is **false**.
+
+**2. The exemption is unguarded.** `extract_kernel` does *not* consult the hook — it raises either
+way. The exemption exists only because the composite generator never calls it for a hooked leaf. That
+is a property of the code path, not a stated rule, so a change to `composite_gen` could withdraw it
+silently. Anyone relying on it should pin it with a test.
+
+It is already load-bearing: **today's shipped `RfSampIngress` body also fails `extract_kernel`**
+(`IndexError`), so the current build already depends on never extracting it.
+
+**3. `check(leaf, 'composite_kernel')` does not run gate 4 on the body.** A leaf with an
+unambiguously illegal body returns `True`. The docstring says gate 4 "runs the real extraction";
+for this combination it does not. Separate defect, worth its own look.
+
+**Not established:** that a `get_pipelined` twin *models the word rate correctly*. Only that codegen
+survives it. That is a simulation question and needs its own measurement.
 
 ## Relationship to other plans
 
