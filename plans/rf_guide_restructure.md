@@ -205,6 +205,12 @@ on the day they are written.
 use `Rfdc`, the lowering becomes a how-to and deserves its own page. Nothing in the arc suggests that
 yet — `Rfdc` is the only converter, and a second one is not on the roadmap.
 
+**⚠ Interacts with a plan written after this one.** `plans/rf_example_restructure.md` phase 2 adds
+`guide/flows/peripheral.md` — the capture-replay methodology as a third flow, general rather than
+RF-specific. Its scope overlaps `xsi/index.md`'s proposed *"what changes at RTL and what it buys"*.
+Write `peripheral.md` first and let `xsi/index.md` be the RF-specific residue, or the same argument
+lands on two pages and one of them rots. `counters.md` is unaffected — it has no substitute either way.
+
 ---
 
 ## Left for someone with authority to change code
