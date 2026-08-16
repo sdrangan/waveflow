@@ -186,6 +186,11 @@ class RfSampBufRxTB(FreeRunMod):
     horizon_margin: int = HORIZON_MARGIN
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
     n_cycles: int = 40000
+    #: **Fault injection.**  ``False`` skips :meth:`check_rate`, so a converter the ingress cannot
+    #: absorb can be wired up on purpose.  In the same spirit as ``RfDataSource.start_delay`` and
+    #: ``RfDataSink.stall_after``: a counter that has never counted is not evidence, and the loss
+    #: this provokes is the only demonstration that the pysim twin models rate at all.
+    enforce_rate: bool = True
     axis_clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
 
     def check_rate(self) -> float:
@@ -196,6 +201,8 @@ class RfSampBufRxTB(FreeRunMod):
         part of its interface contract; what a testbench owns is the **pairing** — this converter
         with this design — so it is called here with both halves.
         """
+        if not self.enforce_rate:
+            return float(self.samp_rate) / self.dut.max_samp_rate(float(self.axis_freq))
         return self.dut.check_rate(float(self.samp_rate), float(self.axis_freq))
 
     def __post_init__(self) -> None:

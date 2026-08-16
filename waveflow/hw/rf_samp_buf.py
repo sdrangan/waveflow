@@ -214,9 +214,8 @@ class RfSampBufIngress(FreeRunMod):
     cycle.  The buffer behind it is ``depth`` **words** deep.
 
     The hardware body is hand-written (``waveflow/build/rf_samp_buf_ingress_task.h``);
-    :meth:`run_iter` is the pysim twin and relays a whole **burst**, because a burst is pysim's
-    quantum.  Identical at block granularity, which is the only granularity pysim resolves
-    (``docs/guide/rf/python/fidelity.md``).
+    :meth:`run_iter` is the **pysim twin**, and it is *paced* — see there for why that is the whole
+    point of this class existing.
     """
 
     cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_ingress"
@@ -278,13 +277,59 @@ class RfSampBufIngress(FreeRunMod):
                                          int(self.depth), IDX_BW))
 
     def run_iter(self) -> ProcessGen[None]:
+        """The pysim twin — burst-granular in *data*, word-granular in **rate**.
+
+        A burst is pysim's quantum: :meth:`StreamIFSlave.get` dequeues a whole burst whatever width
+        is asked for, so a word-at-a-time body would silently discard the rest of it.  What the
+        hardware does is one word per :attr:`fire_cycles` cycles, and **that** is the part the model
+        must get right, because it is the only thing that decides whether the converter outruns this
+        stage.
+
+        The predecessor did not charge that time at all: it drained a burst instantly, so the
+        boundary port never backed up and ``dropped`` was **zero for a design that lost 41% of its
+        samples at RTL**.  Charging ``nwords * fire_cycles`` fabric cycles per firing puts pysim's
+        drop threshold exactly at :meth:`RfSampBufRx.max_samp_rate` — the same number
+        :meth:`RfSampBufRx.check_rate` refuses against — so the static check and the simulation now
+        agree instead of one of them being decorative.  Both terms scale with the burst length, so
+        the threshold is the *design's* capacity and does not depend on the block size.
+
+        **This is deliberately not a ``get_pipelined`` / ``write_pipelined`` body**, and both halves
+        are worth stating because they look like the right constructs and are not:
+
+        *``get_pipelined`` cannot express an unknown-length read.*  With ``count=N`` it unpacks
+        through ``read_array(shape=N)``, which **zero-pads to N** rather than returning what arrived,
+        so it needs a length known in advance.  This ingress has none — the burst is the converter's
+        block, which the module does not and should not know.
+
+        *Its ``tstart`` is the wrong anchor anyway.*  It is back-calculated as
+        ``now - (nwords-1) * fabric_period``, which assumes an II=1 **fabric-paced** producer.  A
+        converter delivers at ``samp_rate / samp_per_word`` words per second, far slower, so pacing
+        from that anchor would discount ``(nwords-1)`` fabric cycles from every firing and move the
+        drop threshold from the *design's* capacity to the *port's* — precisely the confusion that
+        cost 1695 samples in the first place.
+
+        *``write_pipelined`` on the progress channel would stall the converter.*  It blocks, the
+        channel is one deep, and the capture only drains it while it is waiting.  The RTL writes it
+        non-blockingly (``write_nb``) exactly so a stale position never costs a sample, so the twin
+        keeps :meth:`~waveflow.hw.interface.StreamIFMaster.offer`.  A dropped progress update is
+        correct rather than tolerated: only the newest position means anything.
+        """
         words = yield from self.s_in.get()
+        raw = np.asarray(words).ravel()
+
         mask = int(self.depth) - 1
         spw = int(self.samp_per_word)
         wrap = 1 << IDX_BW
-        for x in np.asarray(words).ravel():
+        for x in raw:
             self.buf_w.mem_write((self.wr // spw) & mask, int(x))
             self.wr = (self.wr + spw) % wrap
+
+        # THE RATE CONTRACT, made of time rather than of a comment.  One word per fire_cycles
+        # fabric cycles; the next `get` therefore happens that much later, and a converter offering
+        # faster than this stage drains fills the 2-deep boundary port and drops -- which pysim can
+        # now see, and could not before.
+        yield self.timeout(raw.size * self.fire_cycles * self.clk.period)
+
         # `offer`, not `write`: the same non-blocking semantics as the RTL's write_nb, and for the
         # same reason.  What it drops is counted on the interface, and a nonzero count there is
         # normal rather than a fault -- only the newest position has meaning.
@@ -555,8 +600,9 @@ class RfSampBufRx(FreeRunMod):
                 f"the ingress can absorb — samp_per_word * f_axis / fire_cycles = "
                 f"{spw} * {float(f_axis):g} / {RfSampBufIngress.fire_cycles} = "
                 f"{cap:g}. The converter cannot be back-pressured, so the excess is not delayed, it "
-                f"is LOST — and pysim will not show it (block granularity, "
-                f"docs/guide/rf/python/fidelity.md). Lower the rate, widen the word "
+                f"is LOST. pysim WILL now show it as a nonzero `dropped` on the boundary "
+                f"interface — RfSampBufIngress.run_iter charges fire_cycles per word — so this "
+                f"refusal and the simulation agree. Lower the rate, widen the word "
                 f"(samp_per_word), or make the ingress body cheaper.")
         return float(samp_rate) / cap
 

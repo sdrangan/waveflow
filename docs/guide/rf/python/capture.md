@@ -117,7 +117,14 @@ the counter wraps, and wrong silently.
 `Rfdc` refuses `samp_rate > samp_per_word * f_axis`. That is the **port's** capacity — one word per
 cycle — and the design behind the port is usually slower: this ingress fires every **2** cycles, so
 it absorbs 0.5 samples per cycle, not 1. The first RTL run at 256 MSa/s on a 300 MHz fabric with one
-sample per word **lost 1695 of 4096 samples**, and pysim reported a clean run.
+sample per word **lost 1695 of 4096 samples**, and pysim reported a clean run — because its twin
+drained a whole burst in zero time and so never met the per-word rate at all.
+
+**That blind spot is closed.** The twin now charges `fire_cycles` per word, so the same
+configuration reports **1536 of 4096** dropped in pysim. Quantised to whole blocks and therefore
+slightly optimistic against the RTL's 1695 — pysim drops an offer or takes it, it cannot lose part of
+a block — but the loss is visible without a toolchain, and the drop threshold is exactly the capacity
+the check below refuses against.
 
 So the design declares its firing cost and the testbench checks the pairing:
 

@@ -89,8 +89,13 @@ next to the body it describes, measure it from `csynth`, and check the pairing i
 > port check passed: `1 · 300e6` is more than `256e6`. The design check, which did not exist yet,
 > would have failed: `1 · 300e6 / 2` is not.
 
-pysim reported a clean run, and would again. See [rule 5](#5-the-counters-are-the-contract) for what
-that means and [the fidelity boundary](./fidelity.md#the-resolution-limit) for why.
+pysim reported a clean run at the time, and that is no longer true: `RfSampBufIngress`'s twin now
+charges `fire_cycles` per word, so the same configuration reports **1536 of 4096** dropped without a
+toolchain. It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
+against the RTL's 1695, but the threshold at which it starts reporting is exactly the declared
+capacity. See [rule 5](#5-the-counters-are-the-contract) for what the counters are for, and
+[the fidelity boundary](./fidelity.md#the-resolution-limit) for the loss shape that is still
+invisible: one *inside* a block period, which is a different design and a different module.
 
 ## 5. The counters are the contract
 
