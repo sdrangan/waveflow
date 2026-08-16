@@ -1,4 +1,4 @@
-"""rf_capture_build.py — build the RX capture buffer: pysim -> codegen -> csynth.
+"""rf_samp_buf_rx_build.py — build the RX capture buffer: pysim -> codegen -> csynth.
 
 ``plans/adc_model.md`` staging item 3 (RX).  The rungs, in the order a failure is cheapest to
 diagnose:
@@ -10,7 +10,7 @@ diagnose:
     csynth      -> Vitis HLS (needs the toolchain); re-emits rtl_<wrapper>.f from the RTL on disk
 
 The RTL rung — the same four cases through real Verilog, bit-exact against the pysim golden — is the
-``-m xsi`` gate in ``tests/examples/test_rf_capture_xsi.py``.
+``-m xsi`` gate in ``tests/examples/test_rf_samp_buf_rx_xsi.py``.
 
 As with ``bram_toy``, what a simulator elaborates is the **wrapper** (``rf_samp_buf_rx_top``), not
 the kernel: the memory is inside it, which is why the testbench sees only AXI-Stream.
@@ -37,20 +37,25 @@ from waveflow.build.composite_gen import (  # noqa: E402
 )
 from waveflow.build.elaborate import elaborate  # noqa: E402
 from waveflow.build.rtl_steps import GenRtlStep, GenWrapperStep  # noqa: E402
-from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep, XsiHarnessStep  # noqa: E402
+from waveflow.build.streamutils import (  # noqa: E402
+    MemMgrStep,
+    RfSampBufStep,
+    StreamUtilsStep,
+    XsiHarnessStep,
+)  # noqa: E402
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 
-from examples.rf_capture.rf_capture import (  # noqa: E402
+from examples.rf_samp_buf_rx.rf_samp_buf_rx import (  # noqa: E402
     BUF_DEPTH,
     HORIZON_MARGIN,
     SCHEMA_CLASSES,
     WORD_BW,
     XSI_BLKSIZE,
     XSI_NBLK,
-    RfCaptureTB,
     RfSampBufRx,
+    RfSampBufRxTB,
     write_scenario,
 )
 
@@ -59,9 +64,10 @@ TOP = "rf_samp_buf_rx"
 WRAPPER = f"{TOP}_top"
 INCLUDE_DIR = "include"
 
-#: Hand-written ``hls::task`` bodies, copied from ``src/`` into ``include/`` by the build — the
-#: example-local twin of ``MemStreamStep``.
-FIXED_TASK_BODIES = ("rf_cap_ingress_task.h", "rf_cap_capture_task.h")
+#: Hand-written ``hls::task`` bodies.  They are **framework** now — shipped from ``waveflow/build/``
+#: by :class:`~waveflow.build.streamutils.RfSampBufStep`, exactly as the ``mem_*`` bodies are — so
+#: this example no longer carries a ``src/`` directory of its own.
+FIXED_TASK_BODIES = ("rf_samp_buf_ingress_task.h", "rf_samp_buf_capture_task.h")
 
 #: RTL that must land in ``xsi/`` beside the ``.f`` naming it, in elaboration reading order.
 RTL_FILES = ("bram_t2p.v", f"{WRAPPER}.v")
@@ -69,26 +75,14 @@ RTL_FILES = ("bram_t2p.v", f"{WRAPPER}.v")
 _ELAB = {"bitwidth": WORD_BW, "depth": BUF_DEPTH, "horizon_margin": HORIZON_MARGIN}
 
 
-def copy_fixed_task_bodies(root_dir: Path) -> None:
-    import shutil
-
-    dst = Path(root_dir) / INCLUDE_DIR
-    dst.mkdir(parents=True, exist_ok=True)
-    for name in FIXED_TASK_BODIES:
-        src = HERE / "src" / name
-        if not src.is_file():
-            raise FileNotFoundError(f"fixed task body missing: {src}")
-        shutil.copyfile(src, dst / name)
-
-
 def generate_dut(out_dir: Path = HERE) -> Path:
     """Generate the top, its tcl, the XSI port map, the schema headers, the memory and the wrapper."""
     config = BuildConfig(root_dir=out_dir, params={})
-    copy_fixed_task_bodies(out_dir)
 
     inner = BuildDag()
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
+    inner.add(RfSampBufStep(output_dir=INCLUDE_DIR))
     inner.add(XsiHarnessStep(output_dir="xsi"))
     # RxCmd / RxResp at the design's word width.  The capture body reads and writes them with the
     # generated read_stream<16> / write_stream<16> -- never a hand-rolled pack.
@@ -127,9 +121,9 @@ def _memory_class():
     return mems.pop()
 
 
-def make_xsi_tb() -> RfCaptureTB:
+def make_xsi_tb() -> RfSampBufRxTB:
     """The graph the XSI testbench is generated from — the same class the pysim golden runs."""
-    return RfCaptureTB(name="xsi_tb", sim=Simulation())
+    return RfSampBufRxTB(name="xsi_tb", sim=Simulation())
 
 
 def generate_tb(out_dir: Path = HERE) -> None:
@@ -153,9 +147,9 @@ def generate_tb(out_dir: Path = HERE) -> None:
 class PySimStep(BuildStep):
     """Run the four cases in SimPy against the predicted golden — the toolchain-free checkpoint."""
 
-    description = "Run the RfCaptureTB pysim golden (four command cases + the counters)."
-    consumes = ["rf_capture_source"]
-    produces = {"pysim_results": Path("results/rf_capture_pysim.json")}
+    description = "Run the RfSampBufRxTB pysim golden (four command cases + the counters)."
+    consumes = ["rf_samp_buf_rx_source"]
+    produces = {"pysim_results": Path("results/rf_samp_buf_rx_pysim.json")}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
@@ -163,8 +157,8 @@ class PySimStep(BuildStep):
 
         import numpy as np
 
-        from examples.rf_capture.rf_capture import (captured_words, expected_capture, responses,
-                                                    run_pysim)
+        from examples.rf_samp_buf_rx.rf_samp_buf_rx import (captured_words, expected_capture,
+                                                            responses, run_pysim)
 
         tb = run_pysim()
         got, resp = captured_words(tb), responses(tb)
@@ -172,7 +166,7 @@ class PySimStep(BuildStep):
         assert np.array_equal(got, want_words), "pysim capture is not the predicted window"
         assert resp == want_resp, f"pysim responses {resp} != predicted {want_resp}"
         assert tb.adc_axis.dropped == 0, "the ingress stalled the converter"
-        out = config.root_dir / "results" / "rf_capture_pysim.json"
+        out = config.root_dir / "results" / "rf_samp_buf_rx_pysim.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({"captured": int(got.size), "responses": resp,
                                    "too_old": int(tb.dut.n_too_old),
@@ -185,8 +179,8 @@ class PySimStep(BuildStep):
 @dataclass(kw_only=True)
 class CodegenDutStep(BuildStep):
     description = "Lower RfSampBufRx to its ap_ctrl_none top + the memory + the wrapper."
-    consumes = ["rf_capture_source"]
-    produces: ClassVar[dict] = {"rf_capture_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
+    consumes = ["rf_samp_buf_rx_source"]
+    produces: ClassVar[dict] = {"rf_samp_buf_rx_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
                                 "run_tcl": Path(f"{TOP}.tcl"),
                                 "dut_ports": Path(f"xsi/{TOP}_ports.h"),
                                 "wrapper_v": Path(f"xsi/{WRAPPER}.v"),
@@ -196,7 +190,7 @@ class CodegenDutStep(BuildStep):
     def run(self, config: BuildConfig, **_) -> dict:
         generate_dut(config.root_dir)
         root = config.root_dir
-        return {"rf_capture_cpp": root / GEN_DIR / f"{TOP}.cpp",
+        return {"rf_samp_buf_rx_cpp": root / GEN_DIR / f"{TOP}.cpp",
                 "run_tcl": root / f"{TOP}.tcl",
                 "dut_ports": root / "xsi" / f"{TOP}_ports.h",
                 "wrapper_v": root / "xsi" / f"{WRAPPER}.v",
@@ -205,8 +199,8 @@ class CodegenDutStep(BuildStep):
 
 @dataclass(kw_only=True)
 class CodegenTbStep(BuildStep):
-    description = "Lower RfCaptureTB to the XSI harness + main + scenario bundles."
-    consumes = ["rf_capture_source", "dut_ports"]
+    description = "Lower RfSampBufRxTB to the XSI harness + main + scenario bundles."
+    consumes = ["rf_samp_buf_rx_source", "dut_ports"]
     produces: ClassVar[dict] = {"tb_harness": Path(f"xsi/{TOP}_tb_harness.h"),
                                 "tb_main": Path(f"xsi/{TOP}_bfm_tb.cpp")}
     params: ClassVar[dict] = {}
@@ -222,7 +216,7 @@ class CSynthStep(BuildStep):
     """Vitis HLS C-synthesis of the kernel — and the ``.f`` for the wrapper."""
 
     description = "Run Vitis HLS C-synthesis of the generated top."
-    consumes = ["rf_capture_cpp", "run_tcl"]
+    consumes = ["rf_samp_buf_rx_cpp", "run_tcl"]
     produces: ClassVar[dict] = {"report_dir": Path(f"{TOP}_proj/solution1")}
     params: ClassVar[dict] = {"live_output": False}
 
@@ -241,9 +235,9 @@ class CSynthStep(BuildStep):
         return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
 
 
-def build_rf_capture_dag() -> BuildDag:
+def build_rf_samp_buf_rx_dag() -> BuildDag:
     dag = BuildDag()
-    dag.add(SourceStep(artifact="rf_capture_source", path=HERE / "rf_capture.py"))
+    dag.add(SourceStep(artifact="rf_samp_buf_rx_source", path=HERE / "rf_samp_buf_rx.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
     dag.add(CodegenTbStep(name="codegen_tb"))
@@ -254,7 +248,7 @@ def build_rf_capture_dag() -> BuildDag:
 if __name__ == "__main__":
     from waveflow.build.cli import run_dag_cli
 
-    run_dag_cli(build_rf_capture_dag,
+    run_dag_cli(build_rf_samp_buf_rx_dag,
                 description="Build the RX capture buffer: pysim -> codegen -> csynth.",
                 default_through="csynth",
                 root_dir=HERE)

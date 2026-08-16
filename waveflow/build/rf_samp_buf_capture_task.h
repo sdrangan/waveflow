@@ -1,6 +1,6 @@
-#ifndef WAVEFLOW_RF_CAP_CAPTURE_TASK_H
-#define WAVEFLOW_RF_CAP_CAPTURE_TASK_H
-// rf_cap_capture_task.h — the RX capture buffer's CAPTURE side: one RxCmd in, the named window of
+#ifndef WAVEFLOW_RF_SAMP_BUF_CAPTURE_TASK_H
+#define WAVEFLOW_RF_SAMP_BUF_CAPTURE_TASK_H
+// rf_samp_buf_capture_task.h — the RX capture buffer's CAPTURE side: one RxCmd in, the named window of
 // samples out, one RxResp per command.  A single firing per command; the hls::task runtime re-fires.
 //
 // THIS TASK MAY BLOCK, and that is not a concession — it is the design.  The ingress next door may
@@ -39,7 +39,7 @@
 // iteration of the wait loop and once more before every sample it emits, so at most one ingress
 // firing's worth of progress can have gone unseen between the poll and its use, plus whatever the
 // channel dropped while this task was writing out a sample.  MARGIN is sized by the design (see
-// RfSampBufRx.horizon_margin) and is what turns "probably fine" into a stated bound.
+// RfSampBufCapture.horizon_margin) and is what turns "probably fine" into a stated bound.
 //
 // The same two inequalities are also what keeps the read address away from the write address: a
 // sample is emitted only while `last_wr - N < idx < last_wr <= wr`, so idx and wr are never equal
@@ -52,14 +52,14 @@
 
 //: Response status codes.  Kept as literals rather than an enum so the generated schema header and
 //: this body cannot disagree about the encoding (the schema carries a plain word).
-#define RF_CAP_OK       0
-#define RF_CAP_TOO_OLD  1
+#define RF_SAMP_BUF_OK       0
+#define RF_SAMP_BUF_TOO_OLD  1
 
 /// @tparam W       sample/word width; also the width of the wrapping sample counter
 /// @tparam N       buffer depth in samples (power of two)
 /// @tparam MARGIN  samples of horizon given up to bound progress-channel staleness
 template <int W, int N, int MARGIN>
-static void rf_cap_capture_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& wr_in,
+static void rf_samp_buf_capture_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& wr_in,
                                 hls::stream<ap_uint<W> >& s_cmd,
                                 hls::stream<ap_uint<W> >& s_out,
                                 hls::stream<ap_uint<W> >& s_resp) {
@@ -72,7 +72,7 @@ static void rf_cap_capture_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& w
 
     ap_uint<W> idx = c.start;
     ap_uint<W> sent = 0;
-    ap_uint<W> status = RF_CAP_OK;
+    ap_uint<W> status = RF_SAMP_BUF_OK;
 
     for (ap_uint<W> i = 0; i < c.nsamp; i = i + 1) {
         // -- 1. wait until sample `idx` has been written -------------------------------------
@@ -95,7 +95,7 @@ static void rf_cap_capture_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& w
         // -- 2. horizon: refuse a sample that may already have been overwritten ---------------
         ap_int<W> age = (ap_int<W>)(last_wr - idx);        // >= 1 here, by the loop above
         if (age > (ap_int<W>)(N - MARGIN)) {
-            status = RF_CAP_TOO_OLD;
+            status = RF_SAMP_BUF_TOO_OLD;
             break;                        // no partial nonsense: stop, report, let the host retry
         }
 
@@ -111,4 +111,4 @@ static void rf_cap_capture_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& w
     r.write_stream<W>(s_resp);
 }
 
-#endif  // WAVEFLOW_RF_CAP_CAPTURE_TASK_H
+#endif  // WAVEFLOW_RF_SAMP_BUF_CAPTURE_TASK_H

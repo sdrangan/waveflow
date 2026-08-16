@@ -1,0 +1,444 @@
+"""rf_samp_buf.py — ``RfSampBufRx``: the sample buffer that stands between a converter and a design.
+
+**Framework, not an example.**  ``plans/adc_model.md`` § *Two design patterns* makes this the
+**default** way a user's logic reaches an RF converter: the topology is
+``Rfdc -> RfSampBuf -> your logic -> RfSampBuf -> Rfdc`` rather than ``Rfdc -> your logic``, and the
+reason is that somebody has to own the never-stall obligation.  Under the direct pattern that
+somebody is *every user*, each of whom must hand-write a pipelined ``@synthesizable`` body because
+pipelined ops cannot be extracted (``plans/pipelined_ops.md``).  Here it is written **once**, and no
+user's DUT has the conversation at all.
+
+That is why this module lives beside :mod:`waveflow.hw.mem_stream` — the same shape and the same
+argument.  Both are reusable :class:`~waveflow.hw.hw_module.HwModule`\\ s whose **kernel body is
+fixed** and hand-written, shipped as a width-templated header in ``waveflow/build/`` and copied into
+an example's ``include/`` by a build step.  ``run_iter`` here is the **pysim twin**, not the source
+of the RTL.
+
+::
+
+    s_in --> [ingress] --BramIF(write)--> T2pBram --BramIF(read)--> [capture] --> s_out
+                 |                                                      ^            s_resp
+                 +------------- progress channel (wr) ------------------+
+    s_cmd --> [capture]
+
+**Why two tasks and a memory rather than one task and an array.**  The two accessors are concurrent
+by nature — the ADC never pauses and a capture may run for a long time — and Vitis has no way to
+express a memory shared between two ``hls::task`` bodies: a local array becomes a synchronizing PIPO
+whose handshake *stalls the writer*, which is the one thing a converter-facing stage may never do.
+So the buffer is hand-written Verilog beside the kernel (:class:`~waveflow.hw.bram.T2pBram`), joined
+by a generated wrapper.  See ``docs/guide/interface/bram.md``.
+
+**The never-stall law applies to the ingress only.**  It is written on :class:`RfSampBufIngress` and
+deliberately *not* on :class:`RfSampBufCapture`: the capture may block for as long as it likes,
+because nothing upstream of it loses data while it waits.  Copying the law onto the capture would
+make it wrong — and the four command cases exist precisely because it may wait.
+
+**One sample per word, so a sample index is a word index.**  A converter configured
+``nbits=16, samp_per_word=1`` makes ``RxCmd.start`` directly a buffer coordinate and keeps the
+capture free of packing arithmetic.  Every port and channel of a Vitis top shares one width today, so
+that choice also fixes the command word width at 16 bits and the sample counter with it: the counter
+**wraps at 65536**, and every comparison against it is therefore a circular (signed-difference) one.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+import numpy as np
+
+from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
+from waveflow.hw.clock import Clock
+from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
+from waveflow.hw.dataschema import DataList, IntField
+from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.mem_stream import KernelTask
+from waveflow.hw.synth import sim_only
+from waveflow.simulation.simobj import ProcessGen
+
+# ---------------------------------------------------------------------------
+# Geometry.  16-bit samples, one per word; a 1024-sample buffer is one RAMB18.
+# ---------------------------------------------------------------------------
+
+#: Default AXIS word width in bits — the configuration the RTL gate runs.
+WORD_BW = 16
+
+#: Default buffer depth in samples.
+BUF_DEPTH = 1024
+
+#: Default samples of horizon given up to bound the progress channel's staleness — see
+#: :attr:`RfSampBufCapture.horizon_margin`.  The usable horizon is ``depth - horizon_margin``.
+HORIZON_MARGIN = 16
+
+#: Response status codes, mirrored as literals in ``rf_samp_buf_capture_task.h``.  Two places, one
+#: encoding: the C++ side spells them as literals so the generated schema header cannot disagree
+#: about the value.
+RF_SAMP_BUF_OK = 0
+RF_SAMP_BUF_TOO_OLD = 1
+
+Word16 = IntField.specialize(bitwidth=WORD_BW, signed=False)
+
+
+class RxCmd(DataList):
+    """One capture command: return the samples at indices ``[start, start + nsamp)``.
+
+    The window is in **sample index** — the converter's own running count, not a buffer address —
+    which is what lets a host ask for samples *around an event* it timestamped, and what makes three
+    of the four cases (buffer / future / straddling) one question rather than three.
+    """
+
+    include_filename: ClassVar[str | None] = "rx_cmd.h"
+    elements = {
+        "tid":   {"schema": Word16, "description": "transaction id, echoed on the response"},
+        "start": {"schema": Word16, "description": "first sample index of the window"},
+        "nsamp": {"schema": Word16, "description": "samples to capture"},
+    }
+
+
+class RxResp(DataList):
+    """One response per command — the **counted contract**.
+
+    A capture that returned fewer samples than asked, or none at all, must say so in band: the
+    alternative is a host that cannot tell "your window fell off the end of the buffer" from "the
+    samples have not arrived yet", which is the difference between a bug and a wait.
+    """
+
+    include_filename: ClassVar[str | None] = "rx_resp.h"
+    elements = {
+        "tid":    {"schema": Word16, "description": "the command's transaction id"},
+        "status": {"schema": Word16, "description": "0 = OK, 1 = too old (fell off the horizon)"},
+        "nsent":  {"schema": Word16, "description": "samples actually emitted"},
+    }
+
+
+#: The schema classes an example must run ``DataSchemaStep`` over to get ``rx_cmd.h`` / ``rx_resp.h``.
+SCHEMA_CLASSES = [RxCmd, RxResp]
+
+
+def sdiff(a: int, b: int, bits: int = WORD_BW) -> int:
+    """``a - b`` as a **signed circular difference** on a *bits*-wide counter.
+
+    The pysim twin of the C++ ``(ap_int<W>)(a - b)``.  A plain ``a < b`` on a wrapping counter is
+    wrong the first time it wraps, and wrong *silently*; this is exact as long as the two positions
+    are within ``2**(bits-1)`` of each other, which a 1024-deep buffer guarantees.
+    """
+    half = 1 << (bits - 1)
+    return ((int(a) - int(b) + half) % (1 << bits)) - half
+
+
+# ---------------------------------------------------------------------------
+# The two tasks
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RfSampBufIngress(FreeRunMod):
+    """One sample off the converter port, one sample into the buffer, one progress update.
+
+    **This task may never stall its input**, and it satisfies that *structurally* rather than by a
+    sizing argument: it writes a BRAM port, and a BRAM port has no handshake to refuse it.  The
+    ``rf_loopback`` ingress had to argue about FIFO depth; this one has nothing to size.
+
+    The progress write is non-blocking on purpose.  A blocking write would stall the converter in
+    order to deliver a number that is stale by the time it lands — see :class:`RfSampBufCapture` for
+    what the resulting lag costs and how it is paid for.
+
+    The hardware body is hand-written (``waveflow/build/rf_samp_buf_ingress_task.h``);
+    :meth:`run_iter` is the pysim twin and relays a whole **burst**, because a burst is pysim's
+    quantum.  Identical at block granularity, which is the only granularity pysim resolves
+    (``docs/guide/rf/python/fidelity.md``).
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_ingress"
+
+    #: **Fabric cycles per firing** — one sample in, one sample stored, per this many cycles.
+    #:
+    #: MEASURED, not assumed: csynth gives this body a two-state FSM (``ap_ready`` asserts in state
+    #: 2), so a task firing costs two cycles and the ingress accepts **0.5 samples per cycle**.  It is
+    #: declared here because it is a *rate contract* — the maximum sample rate this design can absorb
+    #: is ``samp_per_word * f_axis / fire_cycles``, and a converter faster than that loses samples
+    #: with no protocol event to mark it.
+    #:
+    #: Getting this wrong is not theoretical: at 256 MSPS on a 300 MHz fabric with one sample per
+    #: word, the first RTL run of this design dropped **1695 of 4096 samples** (58.6% accepted =
+    #: 0.5/0.853, exactly this ratio) while pysim reported none — the documented block-granularity
+    #: blind spot (``docs/guide/rf/python/fidelity.md``), because a pysim ingress consumes a whole
+    #: burst per firing and never meets the per-word rate at all.  :meth:`RfSampBufRx.check_rate`
+    #: turns that into a refusal at build time.
+    fire_cycles: ClassVar[int] = 2
+
+    bitwidth: HwParam[int] = WORD_BW
+    depth: HwParam[int] = BUF_DEPTH
+    clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w, d = int(self.bitwidth), int(self.depth)
+        if d & (d - 1):
+            raise ValueError(f"buffer depth must be a power of two (got {d}): the wrap is a mask")
+        self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
+        self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w", bitwidth=w, depth=d,
+                                  access="write")
+        self.wr_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_wr_out", bitwidth=w,
+                                     has_tlast=True)
+        for ep in (self.s_in, self.buf_w, self.wr_out):
+            self.add_endpoint(ep)
+        #: The write pointer in sample index, wrapping at ``2**bitwidth`` exactly as the RTL's does.
+        self.wr = 0
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("rf_samp_buf_ingress_task", "rf_samp_buf_ingress_task.h",
+                          ("buf_w", "s_in", "wr_out"),
+                          template_args=(int(self.bitwidth), int(self.depth)))
+
+    def run_iter(self) -> ProcessGen[None]:
+        words = yield from self.s_in.get()
+        mask = int(self.depth) - 1
+        wrap = 1 << int(self.bitwidth)
+        for x in np.asarray(words).ravel():
+            self.buf_w.mem_write(self.wr & mask, int(x))
+            self.wr = (self.wr + 1) % wrap
+        # `offer`, not `write`: the same non-blocking semantics as the RTL's write_nb, and for the
+        # same reason.  What it drops is counted on the interface, and a nonzero count there is
+        # normal rather than a fault -- only the newest position has meaning.
+        yield from self.wr_out.offer(np.array([self.wr], dtype=np.uint64))
+
+
+@dataclass
+class RfSampBufCapture(FreeRunMod):
+    """One ``RxCmd`` in, the named window out, one ``RxResp`` per command.
+
+    **This task is allowed to block**, which is the whole reason the four cases collapse into one
+    loop.  Nothing upstream of it loses data while it waits: the ingress keeps filling the buffer
+    whatever this task is doing.
+
+    ==============  =====================================  =========================================
+    case            condition                              what happens
+    ==============  =====================================  =========================================
+    in the buffer   ``wr-N <= start, start+nsamp <= wr``    served straight out of the buffer
+    in the future   ``start >= wr``                         waits per sample, then serves
+    straddling      ``start < wr < start+nsamp``            pre-trigger from the buffer, then streams
+    too old         ``start < wr - N``                      refused, counted, never a silent read
+    ==============  =====================================  =========================================
+
+    **The horizon is checked per sample, not per command.**  A long capture whose output is
+    back-pressured can start legal and go stale mid-stream — valid when it was asked for, overwritten
+    by the time it is read — so both bounds live inside the loop.
+
+    **What the margin is for.**  :attr:`last_wr` is a *lower bound* on the true write pointer, because
+    the progress channel drops rather than stalls.  Staleness makes the "already written?" test
+    harder to pass (safe: this task merely waits longer) and the "not yet overwritten?" test *easier*
+    to pass (unsafe: an overwritten sample could slip through).  So the usable horizon is declared as
+    ``depth - horizon_margin``, and the margin is what makes the unsafe direction bounded rather than
+    hoped-for.
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_capture"
+
+    bitwidth: HwParam[int] = WORD_BW
+    depth: HwParam[int] = BUF_DEPTH
+    #: Samples of horizon surrendered to bound the progress channel's lag.  It must exceed the number
+    #: of samples the ingress can write between this task polling the channel and using the value —
+    #: one ingress firing plus whatever the channel dropped while a sample was being written out.  At
+    #: one sample per converter period and a capture loop of a few fabric cycles, that is a handful;
+    #: 16 is a generous round number, and 1.6% of the buffer is a cheap price for a stated bound.
+    horizon_margin: HwParam[int] = HORIZON_MARGIN
+    clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w, d = int(self.bitwidth), int(self.depth)
+        self.wr_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_wr_in", bitwidth=w,
+                                   has_tlast=True)
+        self.s_cmd = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_cmd", bitwidth=w,
+                                   has_tlast=True)
+        self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
+                                    has_tlast=True)
+        self.s_resp = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_resp", bitwidth=w,
+                                     has_tlast=True)
+        self.buf_r = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_r", bitwidth=w, depth=d,
+                                  access="read")
+        for ep in (self.wr_in, self.s_cmd, self.s_out, self.s_resp, self.buf_r):
+            self.add_endpoint(ep)
+        #: What this task last heard about the ingress's position — a LOWER bound, never an upper one.
+        self.last_wr = 0
+        #: Commands refused because their window had fallen off the horizon.  Not a diagnostic: it is
+        #: the counted half of the contract, and a run in which it stays zero has not tested it.
+        self.n_too_old = 0
+        #: Commands that had to wait for at least one sample (the future / straddling cases).
+        self.n_waited = 0
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("rf_samp_buf_capture_task", "rf_samp_buf_capture_task.h",
+                          ("buf_r", "wr_in", "s_cmd", "s_out", "s_resp"),
+                          template_args=(int(self.bitwidth), int(self.depth),
+                                         int(self.horizon_margin)))
+
+    @sim_only
+    def count_too_old(self) -> None:
+        """Tally a refused command — instrumentation, and marked as such."""
+        self.n_too_old += 1
+
+    @sim_only
+    def count_waited(self) -> None:
+        """Tally a command that had to wait for the converter."""
+        self.n_waited += 1
+
+    def run_iter(self) -> ProcessGen[None]:
+        w = int(self.bitwidth)
+        mask = int(self.depth) - 1
+        wrap = 1 << w
+        usable = int(self.depth) - int(self.horizon_margin)
+
+        cmd = yield from self.s_cmd.get(RxCmd)
+        idx = int(cmd.start)
+        sent = 0
+        status = RF_SAMP_BUF_OK
+        waited = False
+
+        for _ in range(int(cmd.nsamp)):
+            # 1. Wait until sample `idx` has been written.  Poll first (take the newest position the
+            #    channel is holding), and only then block -- there is nothing to do until the ingress
+            #    advances, and blocking costs one event instead of one per fabric cycle.
+            while True:
+                got = yield from self.wr_in.get_nb()
+                if got is not None:
+                    self.last_wr = int(np.asarray(got).ravel()[-1])
+                if sdiff(idx, self.last_wr, w) < 0:
+                    break
+                waited = True
+                got = yield from self.wr_in.get()
+                self.last_wr = int(np.asarray(got).ravel()[-1])
+
+            # 2. Horizon, per sample.
+            if sdiff(self.last_wr, idx, w) > usable:
+                status = RF_SAMP_BUF_TOO_OLD
+                self.count_too_old()
+                break
+
+            val = self.buf_r.mem_read(idx & mask)
+            yield from self.s_out.write(np.array([val], dtype=np.uint64))
+            sent += 1
+            idx = (idx + 1) % wrap
+
+        if waited:
+            self.count_waited()
+        resp = RxResp(tid=int(cmd.tid), status=int(status), nsent=int(sent))
+        yield from self.s_resp.write(resp)
+
+
+# ---------------------------------------------------------------------------
+# The composite: two tasks, one channel, one memory beside the kernel
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RfSampBufRx(FreeRunMod):
+    """The RX sample buffer as one design scope: ingress + capture + the memory between them.
+
+    The registrations are the design:
+
+    ===========================   =============================================================
+    ``add_comp(ingress/capture)`` the two ``hls::task``\\ s inside the generated kernel
+    ``add_if(wr_if)``             the progress channel -> an ``hls::stream`` **depth 1**
+    ``add_rtl_mod(mem)``          the buffer, realized as hand-written Verilog beside the kernel
+    ``add_rtl_if(...)``           wrapper wires -> the tasks' memory ports stay boundary ports
+    ===========================   =============================================================
+
+    **The progress channel is depth 1 on purpose.**  It carries a running position, so only the
+    newest value means anything and a deeper queue would only serve older ones.  Combined with the
+    non-blocking write on one end and a non-blocking poll on the other, "the channel is full" simply
+    means "the capture already knows roughly where we are".
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_rx"
+    potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
+
+    bitwidth: HwParam[int] = WORD_BW
+    depth: HwParam[int] = BUF_DEPTH
+    horizon_margin: HwParam[int] = HORIZON_MARGIN
+    clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w, d = int(self.bitwidth), int(self.depth)
+        self.ingress = RfSampBufIngress(sim=self.sim, name=f"{self.name}_ingress", bitwidth=w,
+                                        depth=d, clk=self.clk)
+        self.capture = RfSampBufCapture(sim=self.sim, name=f"{self.name}_capture", bitwidth=w,
+                                        depth=d, horizon_margin=int(self.horizon_margin),
+                                        clk=self.clk)
+        self.add_comp(self.ingress)
+        self.add_comp(self.capture)
+
+        wr_if = StreamIF(name=f"{self.name}_wr_if", sim=self.sim, clk=self.clk, bitwidth=w, depth=1)
+        wr_if.bind(ep_name="master", endpoint=self.ingress.wr_out)
+        wr_if.bind(ep_name="slave", endpoint=self.capture.wr_in)
+        self.add_if(wr_if)
+
+        # `mem`, not `buf`: the attribute name becomes the Verilog instance name and `buf` is a
+        # primitive gate (the wrapper emitter refuses it by name).
+        self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem", dwidth=w, depth=d)
+        self.add_rtl_mod(self.mem)
+        w_if = BramIF(name=f"{self.name}_bufw_if", sim=self.sim)
+        w_if.bind(ep_name="master", endpoint=self.ingress.buf_w)
+        w_if.bind(ep_name="slave", endpoint=self.mem.wr_port)
+        self.add_rtl_if(w_if)
+        r_if = BramIF(name=f"{self.name}_bufr_if", sim=self.sim)
+        r_if.bind(ep_name="master", endpoint=self.capture.buf_r)
+        r_if.bind(ep_name="slave", endpoint=self.mem.rd_port)
+        self.add_rtl_if(r_if)
+
+        #: ``add_comp`` x ``add_endpoint`` order, with the progress endpoints removed.  The two
+        #: ``buf_*`` entries are ports of the KERNEL, joined to the memory inside the wrapper.
+        self.boundary = ["s_in", "buf_w", "s_cmd", "s_out", "s_resp", "buf_r"]
+
+        # Convenience refs for the testbenches — the boundary endpoints live on the children.
+        self.s_in = self.ingress.s_in
+        self.s_cmd = self.capture.s_cmd
+        self.s_out = self.capture.s_out
+        self.s_resp = self.capture.s_resp
+
+    def max_samp_rate(self, f_axis: float, samp_per_word: int = 1) -> float:
+        """The fastest converter this buffer can be fed by, in samples/s, at *f_axis*.
+
+        ``samp_per_word * f_axis / fire_cycles``.  **Not** the port's capacity, which is
+        ``samp_per_word * f_axis`` and which :class:`~examples.rf_loopback.rfdc.Rfdc` already checks;
+        the difference between the two is where the first RTL run of this design lost 1695 of 4096
+        samples.
+        """
+        return float(f_axis) * int(samp_per_word) / RfSampBufIngress.fire_cycles
+
+    def check_rate(self, samp_rate: float, f_axis: float, samp_per_word: int = 1) -> float:
+        """Refuse a converter this buffer cannot absorb, and return the utilisation.
+
+        **The converter's own rate check is not enough.**  ``Rfdc.pre_sim`` asserts
+        ``samp_rate <= samp_per_word * f_axis``, which is the *port*'s capacity — one word per cycle.
+        The design behind the port fires every :attr:`RfSampBufIngress.fire_cycles` cycles, so its
+        real capacity is that divided by the firing cost, and the difference is not academic: the
+        first RTL run of this design lost 41% of its samples in the gap between the two numbers,
+        silently, while pysim reported a clean run.
+
+        Owned here rather than by a testbench because a module's throughput is part of its interface
+        contract — but it needs the *pairing*, so the converter's rate is an argument rather than a
+        lookup.
+        """
+        cap = self.max_samp_rate(f_axis, samp_per_word)
+        if float(samp_rate) > cap:
+            raise ValueError(
+                f"{type(self).__name__} '{self.name}': {float(samp_rate):g} samples/s exceeds what "
+                f"the ingress can absorb — samp_per_word * f_axis / fire_cycles = "
+                f"{int(samp_per_word)} * {float(f_axis):g} / {RfSampBufIngress.fire_cycles} = "
+                f"{cap:g}. The converter cannot be back-pressured, so the excess is not delayed, it "
+                f"is LOST — and pysim will not show it (block granularity, "
+                f"docs/guide/rf/python/fidelity.md). Lower the rate, widen the word "
+                f"(samp_per_word), or make the ingress body cheaper.")
+        return float(samp_rate) / cap
+
+    @property
+    def n_too_old(self) -> int:
+        """Commands refused because their window had fallen off the horizon."""
+        return int(self.capture.n_too_old)
+
+    @property
+    def n_waited(self) -> int:
+        """Commands that had to wait for the converter at least once."""
+        return int(self.capture.n_waited)

@@ -2,8 +2,8 @@
 ../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_fifo_w16_d1_S.v
 ../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_flow_control_loop_pipe_sequential_init.v
 ../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_regslice_both.v
-../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_rf_cap_capture_task_16_1024_16_Pipeline_VITIS_LOOP_86_2.v
-../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_rf_cap_capture_task_16_1024_16_s.v
-../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_rf_cap_ingress_task_16_1024_s.v
+../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_rf_samp_buf_capture_task_16_1024_16_Pipeline_VITIS_LOOP_86_2.v
+../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_rf_samp_buf_capture_task_16_1024_16_s.v
+../rf_samp_buf_rx_proj/solution1/syn/verilog/rf_samp_buf_rx_rf_samp_buf_ingress_task_16_1024_s.v
 bram_t2p.v
 rf_samp_buf_rx_top.v

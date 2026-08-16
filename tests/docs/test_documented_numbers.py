@@ -540,15 +540,15 @@ def test_rule_4_quotes_the_capture_designs_measured_shortfall():
     ``fire_cycles`` is a class attribute, so the arithmetic on the page (``f_axis * samp_per_word /
     fire_cycles``) is only right while that number is what the page says.
     """
-    from examples.rf_capture.rf_capture import RfCapIngress
-    from tests.examples.test_rf_capture_xsi import WANT_ADC_WORDS
+    from waveflow.hw.rf_samp_buf import RfSampBufIngress
+    from tests.examples.test_rf_samp_buf_rx_xsi import WANT_ADC_WORDS
 
     text = _page("guide/rf/python/rules.md")
-    assert f"every **{RfCapIngress.fire_cycles}** cycles" in text, (
-        f"rules.md quotes a firing cost the code no longer has ({RfCapIngress.fire_cycles})")
+    assert f"every **{RfSampBufIngress.fire_cycles}** cycles" in text, (
+        f"rules.md quotes a firing cost the code no longer has ({RfSampBufIngress.fire_cycles})")
     assert f"**1695 of {WANT_ADC_WORDS}** samples" in text, (
         "rules.md no longer states the shortfall that motivated the design-capacity check")
-    assert "/ RfCapIngress.fire_cycles" in text
+    assert "/ RfSampBufIngress.fire_cycles" in text
 
 
 def test_rule_6_quotes_the_startup_transient_both_backends_show():

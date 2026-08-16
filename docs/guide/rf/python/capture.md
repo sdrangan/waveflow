@@ -4,7 +4,7 @@ parent: Python
 grand_parent: RF converters
 nav_order: 6
 audience: python
-applies_to: [RfSampBufRx, RfCapIngress, RfCapture, RxCmd, T2pBram]
+applies_to: [RfSampBufRx, RfSampBufIngress, RfSampBufCapture, RxCmd, T2pBram]
 summary: "A capture buffer between an ADC and a host: samples stream in continuously, a command names a window in sample index, and the samples come back. Covers the four command cases (in the buffer / in the future / straddling / too old) as one loop, the horizon as a counted contract, the ingress/capture asymmetry over which task may block, and why the progress channel's staleness is safe in one direction and unsafe in the other."
 ---
 
@@ -14,7 +14,7 @@ A receiver that only streams is not much use: something has to decide *which* sa
 capture buffer is the block that lets it — the ADC fills a circular buffer forever, and a command
 names a window of sample indices to be returned.
 
-`examples/rf_capture` is the worked design, gated in pysim and at RTL.
+`examples/rf_samp_buf_rx` is the worked design, gated in pysim and at RTL.
 
 ```
 s_in --> [ingress] --BramIF(write)--> T2pBram --BramIF(read)--> [capture] --> s_out
@@ -122,7 +122,7 @@ sample per word **lost 1695 of 4096 samples**, and pysim reported a clean run.
 So the design declares its firing cost and the testbench checks the pairing:
 
 ```python
-cap = f_axis * samp_per_word / RfCapIngress.fire_cycles     # 300e6 * 1 / 2
+cap = f_axis * samp_per_word / RfSampBufIngress.fire_cycles     # 300e6 * 1 / 2
 if samp_rate > cap:
     raise ValueError(...)                                    # with the arithmetic in the message
 ```

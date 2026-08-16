@@ -3,7 +3,7 @@
 ``plans/adc_model.md`` staging item 3 (RX).  The values here are not transcriptions of a run: a
 captured sample is ``SAMP_BASE + idx`` whatever the timing did, so the whole expected output follows
 from the commands.  What timing decides is *which case* each command exercised, and that is pinned
-down by the ORDER rather than by the clock — see :data:`~examples.rf_capture.rf_capture.GATE_COMMANDS`
+down by the ORDER rather than by the clock — see :data:`~examples.rf_samp_buf_rx.rf_samp_buf_rx.GATE_COMMANDS`
 for the argument, command by command.
 
 Two gates here are about the design rather than the data:
@@ -19,14 +19,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from examples.rf_capture.rf_capture import (
+from examples.rf_samp_buf_rx.rf_samp_buf_rx import (
     BUF_DEPTH,
     GATE_COMMANDS,
     HORIZON_MARGIN,
-    RF_CAP_OK,
-    RF_CAP_TOO_OLD,
+    RF_SAMP_BUF_OK,
+    RF_SAMP_BUF_TOO_OLD,
     WORD_BW,
-    RfCaptureTB,
+    RfSampBufRxTB,
     RxCmd,
     RxResp,
     captured_words,
@@ -40,7 +40,7 @@ from examples.rf_capture.rf_capture import (
 
 
 @pytest.fixture(scope="module")
-def tb() -> RfCaptureTB:
+def tb() -> RfSampBufRxTB:
     """One run, shared: the scenario is fixed and the run is the expensive part."""
     return run_pysim()
 
@@ -111,7 +111,7 @@ def test_the_horizon_counter_is_driven_off_zero_by_a_too_old_request(tb):
     buffer holds 1024.
     """
     assert tb.dut.n_too_old == 1
-    assert (4, RF_CAP_TOO_OLD, 0) in responses(tb)
+    assert (4, RF_SAMP_BUF_TOO_OLD, 0) in responses(tb)
 
 
 def test_a_refused_command_emits_no_samples_at_all(tb):
@@ -119,7 +119,7 @@ def test_a_refused_command_emits_no_samples_at_all(tb):
     from the wrong time, which is worse than an error because nothing downstream can detect it."""
     _, want = expected_capture()
     assert sum(n for _t, _s, n in responses(tb)) == sum(n for _t, _s, n in want)
-    assert captured_words(tb).size == sum(n for _t, s, n in responses(tb) if s == RF_CAP_OK)
+    assert captured_words(tb).size == sum(n for _t, s, n in responses(tb) if s == RF_SAMP_BUF_OK)
 
 
 def test_the_usable_horizon_is_the_depth_minus_the_margin():
@@ -178,9 +178,9 @@ def test_a_command_round_trips_through_its_schema():
 
 
 def test_a_response_round_trips_through_its_schema():
-    r = RxResp(tid=7, status=RF_CAP_OK, nsent=64)
+    r = RxResp(tid=7, status=RF_SAMP_BUF_OK, nsent=64)
     back = RxResp().deserialize(np.asarray(r.serialize(word_bw=WORD_BW)), word_bw=WORD_BW)
-    assert (int(back.tid), int(back.status), int(back.nsent)) == (7, RF_CAP_OK, 64)
+    assert (int(back.tid), int(back.status), int(back.nsent)) == (7, RF_SAMP_BUF_OK, 64)
 
 
 def test_the_buffer_holds_the_last_depth_samples(tb):

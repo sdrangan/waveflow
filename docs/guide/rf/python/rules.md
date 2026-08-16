@@ -76,7 +76,7 @@ need**: it is the *port's* capacity, one word per fabric cycle.
 The design behind the port is usually slower. Divide by the consuming task's firing cost:
 
 ```python
-cap = f_axis * samp_per_word / RfCapIngress.fire_cycles     # e.g. 300e6 * 1 / 2
+cap = f_axis * samp_per_word / RfSampBufIngress.fire_cycles     # e.g. 300e6 * 1 / 2
 if samp_rate > cap:
     raise ValueError(...)                                    # with the arithmetic in the message
 ```
@@ -166,5 +166,5 @@ converter has to be a task plus an internal channel. There is no number you can 
 The full diagnoses live in `plans/adc_model.md` and `plans/behavioral_edges.md`. This page keeps one
 sentence of each, because a rule needs its evidence and does not need its lab notebook.
 
-**Source of truth:** `tests/examples/test_rf_loopback_xsi.py`, `tests/examples/test_rf_capture_xsi.py`,
-`examples/rf_capture/rf_capture.py`.
+**Source of truth:** `tests/examples/test_rf_loopback_xsi.py`, `tests/examples/test_rf_samp_buf_rx_xsi.py`,
+`waveflow/hw/rf_samp_buf.py`.
