@@ -25,29 +25,38 @@ parallel world to learn.
 ## The word width
 
 ```python
-rfdc.axis_bitwidth      # samp_per_word * nbits
+rfdc.axis_bitwidth      # samp_per_word * nbits   (x2 for interleaved I/Q)
 ```
 
-Read it off the converter rather than restating it. At `nbits=16, samp_per_word=4` that is a 64-bit
-word carrying four sample slots, and 64 bits is the ceiling the constructor enforces.
+Read it off the converter rather than restating it. At `nbits=16, samp_per_word=4, iq_mode=0` that is
+a 64-bit word carrying four samples, and 64 bits is the ceiling the constructor enforces.
 
 `samp_per_word` is a `HwParam` and an **integer** because a sample cannot straddle a slot. It is the
-one structural number at this boundary — and note it counts **slots**, not necessarily samples. Which
-they are is what `iq_mode` decides.
+one structural number at this boundary.
 
 ## Real and I/Q: what `iq_mode` means {#iq-mode}
 
-A wireless design wants **complex** samples. `iq_mode` says whether a beat's slots are real values or
-interleaved I/Q pairs — and it does **not** change the width of the port:
+A wireless design wants **complex** samples, so this is the parameter to get straight early.
 
-| `iq_mode` | one beat carries | at `samp_per_word=4`, `nbits=16` |
-|---|---|---|
-| `0` | `samp_per_word` **real** samples | 4 real samples in a 64-bit word |
-| `1` | `samp_per_word / 2` **complex** samples | 2 complex (I,Q) samples in a 64-bit word |
+**`samp_per_word` counts samples, and `iq_mode` says what a sample *is*:**
 
-The port width is `samp_per_word * nbits` either way. That is deliberate: the width is a **hardware**
-constraint — it is what the tile's AXI4-Stream actually is — so `iq_mode` reinterprets the slots
-rather than resizing the bus. An I/Q pair occupies two adjacent slots, I in the lower.
+| `iq_mode` | a sample is | one beat carries | word width |
+|---|---|---|---|
+| `0` | a **real** value | `samp_per_word` real samples | `samp_per_word × nbits` |
+| `1` | a **complex** (I,Q) pair | `samp_per_word` complex samples | `samp_per_word × nbits × 2` |
+
+A complex sample occupies two `nbits` slots — I and Q — so the same `samp_per_word` needs twice the
+bus. Worked through at `nbits=16`:
+
+| configuration | carries | width | |
+|---|---|---|---|
+| `samp_per_word=4, iq_mode=0` | 4 real samples | 64 bits | ✔ |
+| `samp_per_word=4, iq_mode=1` | 4 complex samples | **128 bits** | ✘ over the 64-bit ceiling |
+| `samp_per_word=2, iq_mode=1` | 2 complex samples | 64 bits | ✔ |
+
+So an I/Q design fits the same bus by **halving `samp_per_word`**. The information density is
+identical either way — two complex samples in 64 bits — and the parameter simply counts what the
+design thinks in. If a configuration is refused for width, that arithmetic is why.
 
 **`iq_mode = 1` is not implemented yet.** The constructor refuses it rather than half-supporting it:
 
@@ -57,9 +66,9 @@ NotImplementedError: Rfdc stage 1 implements real samples only (iq_mode=0) ...
 
 Two things are missing, and both are real work rather than a flag: the RF-side bundle format is
 float64 and needs a manifest field to carry complex, and the quantizer's conformance twin covers real
-`FixedField` only. Until those land, a complex design models I and Q as two real channels
-(`n_ch = 2`), which is exactly what the hardware carries anyway — the difference is bookkeeping in the
-model, not in the bits on the wire.
+`FixedField` only. Until they land, a complex design models I and Q as two real channels
+(`n_ch = 2`) — which is what the hardware carries anyway, so the difference is bookkeeping in the
+model rather than bits on the wire.
 
 ## The packing contract
 
