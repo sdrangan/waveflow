@@ -169,7 +169,25 @@ class Rfdc(HwModule):
 
     @property
     def axis_bitwidth(self) -> int:
-        """AXIS word width in bits: ``samp_per_word * nbits`` (x2 for interleaved I/Q)."""
+        """AXIS word width in bits: ``samp_per_word * nbits``, doubled for interleaved I/Q.
+
+        **``samp_per_word`` counts SAMPLES, and what a sample is depends on :attr:`iq_mode`** — real
+        values when it is 0, complex (I,Q) pairs when it is 1.  A complex sample occupies two ``nbits``
+        slots, so the same ``samp_per_word`` needs twice the bus:
+
+        ==========  =======================  =========================================
+        ``iq_mode`` one beat carries         at ``samp_per_word=4``, ``nbits=16``
+        ==========  =======================  =========================================
+        0           4 **real** samples       64-bit word
+        1           4 **complex** samples    128-bit word — over the 64-bit ceiling
+        ==========  =======================  =========================================
+
+        So an I/Q design fits the same bus by halving ``samp_per_word``: ``samp_per_word=2``,
+        ``nbits=16``, ``iq_mode=1`` is two complex samples in 64 bits.  Same information density
+        either way; the parameter just counts what the design thinks in.
+
+        See ``docs/guide/rf/python/axis_side.md``.
+        """
         return int(self.samp_per_word) * int(self.nbits) * (2 if int(self.iq_mode) else 1)
 
     # -- bind-time: read the rate, push the epoch ------------------------------------------------

@@ -1,7 +1,8 @@
 ---
 title: The fidelity boundary
-parent: RF converters
-nav_order: 3
+parent: Python
+grand_parent: RF converters
+nav_order: 8
 audience: python
 api: [RFSampIF, StreamIF, offer, dropped, blk_latency, loop_blk_latency]
 summary: "What block-level modelling can and cannot tell you. The contract has three conditions — behaviour depends only on sample timestamps, no dependency shorter than two blocks, and the DUT never stalls its input — and only the third is mechanically checkable. It now is, in pysim, as `dropped == 0`. The page also says plainly where that check stops seeing: a consumer that stalls inside a block period is below the model's resolution, demonstrated by a design where RTL loses 72 words and pysim reports none."
@@ -43,7 +44,7 @@ assert tb.dut.s_in.interface.dropped == 0
 
 It stays zero for every ordinary design, because an ordinary module calls `write()`, which *waits*.
 Only a producer that physically cannot wait calls
-[`offer()`](../interface/stream.md), and only then can the number move. That asymmetry is deliberate:
+[`offer()`](../../interface/stream.md), and only then can the number move. That asymmetry is deliberate:
 "who is willing to wait" is a property of the **producer**, not of the wire — the same AXI-Stream
 carries both.
 
@@ -111,8 +112,8 @@ The clause is still checked only at RTL.
 
 ### Why not just make pysim stricter
 
-Three admission rules were measured against a consumer that **never stalls** — a design that
-satisfies condition 3 by construction:
+Because the strict rules were measured, against a consumer that **never stalls** — a design that
+satisfies condition 3 by construction — and they fire on it:
 
 | rule | this design | never-stalling consumer |
 |---|---|---|
@@ -120,14 +121,9 @@ satisfies condition 3 by construction:
 | refuse when full, sampled before the instant settles | 496 | **256** |
 | refuse when full, after the instant settles | 0 | 0 |
 
-The first two report heavy loss for a correct design, which makes `dropped == 0` unreachable and the
-clause worthless. They fail for a structural reason: this framework has never treated "a 64-word
-burst through a depth-2 stream" as a violation — `_push_to_endpoint` routes intra-burst overflow to
-an unbounded overflow counter — because depth models a consumer *hiccup between bursts*, not
-intra-burst capacity. A rule that fires on every design is not a stricter check; it is a broken one.
-
-The shipped rule has no false positives and no false negatives *at block granularity*: zero for a
-consumer that never stalls, and rising with the stall for one that cannot keep up.
+The first two make `dropped == 0` unreachable and the clause worthless. A rule that fires on every
+design is not a stricter check; it is a broken one. The shipped rule (the third row) has no false
+positives and no false negatives *at block granularity*.
 
 ## What the two backends count
 
@@ -157,11 +153,22 @@ fullness, which is not what a converter does. With it corrected, both backends s
 The lesson generalises: when the two backends disagree, the question is *which one is modelling the
 hardware*, not which one is more convenient.
 
+## What needs RTL
+
+This page is the hinge into the XSI section, and it is worth being explicit about why. Everything
+above says the same thing from three directions: **the fine half of condition 3 is not observable
+here.** A consumer that stalls inside a block period is below the model's resolution, and that is
+precisely where a converter design loses samples.
+
+So the reason to run at RTL is not "RTL is more accurate" in the abstract. It is one named clause of
+one contract, with a measured case where this backend said zero and the hardware lost 72 words.
+
 ## See also
 
 - [Block sampling](./sampling.md) — the grid, and why the metronome is on the edge.
-- [The converter](./converter.md) — the AXIS side and the underflow/overflow contract.
-- [RF loopback](../../examples/rf_loopback/) — the worked example these numbers come from.
+- [Connecting the fabric side](./axis_side.md) — the AXIS side and the depth asymmetry.
+- [The design rules](./rules.md) — rules 1, 2, 3 and 7 all come from this page.
+- [RF loopback](../../../examples/rf_loopback/) — the worked example these numbers come from.
 
 **Source of truth:** `waveflow/hw/interface.py` (`offer`, `dropped`),
 `tests/hw/test_stream_offer.py`, `tests/examples/test_rf_loopback_xsi.py`.

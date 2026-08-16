@@ -1,6 +1,7 @@
 ---
 title: Quickstart
-parent: RF converters
+parent: Python
+grand_parent: RF converters
 nav_order: 1
 audience: python
 api: [Rfdc, RFSampIF, RfDataSource, RfDataSink, StreamIF, Clock]
@@ -12,7 +13,7 @@ summary: "An orientation to designs that talk to an RF data converter, outlined 
 A converter is best understood through an example. The simplest is the
 [RF loopback](../../../examples/rf_loopback/) — a source feeds an ADC, the samples cross into the
 fabric, trivial logic relays them, and a DAC turns them back into samples at a sink. The
-[full walkthrough](../../../examples/rf_loopback/python.md) has every line; this page outlines the
+[full walkthrough](../../../examples/rf_loopback/) has every line; this page outlines the
 construction so you know what you are looking at, and points out the parts that are RF-specific.
 
 Nothing here is RTL. This is the Python model, which is where every RF design starts.
@@ -38,7 +39,7 @@ what makes a loopback a real test of it.
 The parameters that matter first are `nbits` and `samp_per_word` — together they fix the AXIS word
 width your logic is built against — and `blksize`, the fidelity/speed knob: one simulation event
 carries one `(n_ch, blksize)` block, so larger runs faster and resolves less.
-[Instantiating the converter](../converter.md) has the full list and which kind each is.
+[Instantiating the converter](./converter.md) has the full list and which kind each is.
 
 ## Only one interface is RF-specific
 
@@ -63,17 +64,19 @@ sim.run_sim()
 
 Drive it with a windowed sinusoid and the structure becomes visible:
 
-![RF loopback: a windowed sinusoid in, the same burst out one block later](../figures/rf_loopback_sine.svg)
+![RF loopback: a windowed sinusoid in, the same burst out two blocks later](../figures/rf_loopback_sine.svg)
 
 Three things to read off it:
 
 1. **The output is the input, delayed.** Not approximately — the samples are bit-identical to the
    quantized input.
-2. **The delay is exactly one block.** A loop through the RF grids costs at least one block *index*,
-   structurally: the ADC only delivers block *k* at the instant the DAC period for it comes due, so no
-   fabric speed closes it. Your logic declares that cost as `blk_latency`.
-3. **The first block is flat.** That is the zero-fill the DAC emits before any samples have reached it
-   — the startup transient, and what a real converter does before its buffer is primed.
+2. **The delay is a whole number of blocks — here 2.** A loop through the RF grids costs at least one
+   block *index* per converter hop, structurally: a converter only delivers block *k* at the instant
+   the period for it comes due, so no fabric speed closes it. One hop is the ADC's and one is your
+   logic's, which declares its cost as `blk_latency`.
+3. **The leading blocks are flat.** That is the zero-fill the DAC emits before any samples have
+   reached it — the startup transient, and what a real converter does before its buffer is primed.
+   There are exactly as many of them as the loop's declared latency.
 
 ## The three numbers to check before believing it
 
@@ -102,16 +105,14 @@ the hardware will.
 You do not yet have any statement about **timing inside a block**. The Python model moves one block
 per event, so it cannot see a stall shorter than a block period — and that is exactly where a design
 that stalls the converter loses samples.
-[What this can and cannot tell you](../fidelity.md) is the page to read before trusting a clean run,
+[What this can and cannot tell you](./fidelity.md) is the page to read before trusting a clean run,
 and it is why the XSI section exists.
 
 ## Next
 
-- [Instantiating the converter](../converter.md) — the full parameter list, and which are baked in
-- [The sampling model](../sampling.md) — `blksize`, the metronome, and the sample grid
-- [What this can and cannot tell you](../fidelity.md) — before you trust a clean run
-
-Three pages this restructure still adds: connecting the RF side, connecting the fabric side, and the
-design rules. See `plans/rf_guide_restructure.md`.
+- [Instantiating the converter](./converter.md) — the full parameter list, and which are baked in
+- [Connecting the RF side](./rf_side.md) — the interface, sources and sinks, and `t0`
+- [Connecting the fabric side](./axis_side.md) — packing, `samp_per_word`, and the rate check
+- [The design rules](./rules.md) — seven things that make a design wrong if you break them
 
 **Source of truth:** `examples/rf_loopback/`, `tests/examples/test_rf_loopback.py`.

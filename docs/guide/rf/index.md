@@ -4,7 +4,7 @@ parent: Guide
 nav_order: 10.25
 has_children: true
 audience: python
-summary: "Modelling a design that talks to an RF data converter — an ADC/DAC such as the RFDC on an AMD RFSoC. A converter is not just another AXI-Stream peer: it has its own clock, it cannot be back-pressured on the sample side, and its samples are worth simulating in blocks rather than one at a time. This section covers the block-level sampling model those three facts produce, and the three-block decomposition — digital logic, the converter, and the RF environment — that keeps them apart."
+summary: "Modelling a design that talks to an RF data converter — an ADC/DAC such as the RFDC on an AMD RFSoC. A converter is not just another AXI-Stream peer: it has its own clock, half of it cannot be back-pressured, and its samples are worth simulating in blocks rather than one at a time. This page says what those three facts cost you and maps the rest of the section."
 ---
 
 # RF converters
@@ -12,10 +12,27 @@ summary: "Modelling a design that talks to an RF data converter — an ADC/DAC s
 Many applications, wireless ones especially, connect to an RF data converter — an ADC/DAC block such
 as the RFDC on an AMD/Xilinx RFSoC part. This section is about modelling a design that has one.
 
+## What `Rfdc` is, and what it is not
+
+`Rfdc` is a Waveflow `HwModule` modelling a **simplified emulation** of the
+[AMD RF Data Converter LogiCORE IP](https://docs.amd.com/r/en-US/pg269-rf-data-converter/Introduction).
+It is designed to model **the interface the logic would see**, not the converter's internals.
+
+Like the AMD block, it exposes **two AXI4-Stream interfaces**, one per direction, with time origins
+that can hold a fixed relation — the modelling counterpart of multi-tile synchronisation. Its RF side
+simulates the signals that would be emitted by, or presented to, the physical converter, and
+optionally the RF up/down conversion attached to the AMD IP.
+
+What that framing buys you is the thing worth holding on to: **your logic sees the same boundary in
+simulation that it will see in hardware.** What it does not buy you is the converter's own behaviour —
+tile calibration, PLL and clocking, MTS bring-up, the digital mixers' exact arithmetic. Those are
+either configuration you supply as a measured constant or, where they cannot be modelled at all, named
+as out of scope on the page that would otherwise imply them.
+
 ## A converter is not just another AXI-Stream peer
 
 From the fabric it looks like one: words arrive on a stream, words leave on a stream. Three things
-make it different, and each of them shapes the model.
+make it different, and every page here follows from one of them.
 
 **It has its own clock.** The sample rate is not the fabric clock and is not a multiple of it. A
 converter running at 256 MSa/s into a 300 MHz fabric produces `256/(4·300) ≈ 0.213` words per AXI
@@ -52,28 +69,23 @@ class fact is exactly the mistake that would make the converter unusable in the 
 bitstream, where the model is replaced by AMD's IP and *the digital logic must not have to change its
 interface*).
 
-What differs between them is only which **realization hooks** each declares — and an RF source or
-sink declares neither, which is a *finding* from `check`, not something it says about itself:
+What differs between them is only which **realization hooks** each declares, and that is a *finding*
+from `check` rather than something a module says about itself. The RF loopback example
+[shows both answers side by side](../../examples/rf_loopback/rtl.md#what-check-says-about-these-modules)
+— run there rather than quoted here, so it cannot go stale in two places at once.
 
-```pycon
->>> check(RfDataSource, "xsi_bfm_model")
-(False, 'RfDataSource declares no bfm_model() hook, so it has no pre-written cycle model ...')
-```
+## The map
 
-## Pages
+Two arcs, and they are in the order you need them.
 
-- [Block sampling](./sampling.md) — the sampling model: the block as the transaction, `blksize` as
-  the fidelity knob, the absolute-grid metronome, `t0` and the sample grid, and the loss counters.
-- [The converter](./converter.md) — the `Rfdc` module and its two RTL-side models: the AXI-Stream
-  packing contract, `samp_per_word` versus the two derived rate conversions, bit-exact quantization,
-  and the underflow/overflow contract.
+**[Python](./python/)** — do it, then understand it, then learn what it cannot tell you. Start at the
+[quickstart](./python/quickstart.md); it is the shortest path to samples flowing. The
+[design rules](./python/rules.md) are the page to read before writing code of your own — seven things
+that make a design wrong if you break them.
 
-- [The fidelity boundary](./fidelity.md) — what this modelling style can and cannot tell you: the
-  three conditions, which of them anything checks, and a measured case where RTL loses 72 words and
-  pysim reports none.
-- [The capture buffer](./capture.md) — the first RF block that does something: four command cases as
-  one loop, the horizon as a counted contract, which task may block and why, and the rate contract
-  the converter's own check does not cover.
+**XSI** — what changes at RTL. Not written yet; the Python arc's
+[fidelity boundary](./python/fidelity.md) ends by saying exactly what needs it, which is the honest
+argument for that section existing.
 
 ## See also
 

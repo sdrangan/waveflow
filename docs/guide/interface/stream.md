@@ -56,7 +56,7 @@ wire either way — "who is willing to wait" is a property of the producer, not 
 
 `dropped == 0` is therefore the mechanical form of *"this consumer never stalls its input"*, and it
 stays zero for every design whose producers call `write()`. It has a resolution limit worth knowing
-before you rely on it: see [the fidelity boundary](../rf/fidelity.md#the-resolution-limit).
+before you rely on it: see [the fidelity boundary](../rf/python/fidelity.md#the-resolution-limit).
 
 ### Pipelined processing
 
