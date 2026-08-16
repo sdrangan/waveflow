@@ -14,11 +14,15 @@ belongs to.
 """
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from waveflow.build.codegen_check import check
 from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, write_rf_bundle
+from waveflow.hw.fixpoint import from_real, to_real
 from waveflow.simulation.simulation import Simulation
 
 from examples.rf_loopback.rf_loopback import RfLoopbackSim, RfLoopbackTB, RfSampPassThrough
@@ -93,6 +97,55 @@ class TestLoopback:
 # --------------------------------------------------------------------------------------------
 # Gate 3 — the counters, non-vacuous
 # --------------------------------------------------------------------------------------------
+
+class TestSineWaveform:
+    """The windowed-sinusoid scenario — and why it is not just a prettier picture.
+
+    ``_grid_blocks`` draws samples exactly on the quantization grid so the loopback is bit-identical
+    to its input.  That makes the packing check strict, but it also makes ``from_real`` a **no-op**:
+    rounding and saturation are never exercised by that waveform at all.  A sine does not land on the
+    grid, so it covers the path the grid scenario skips — while keeping an EXACT golden, just stated
+    against the quantized input rather than the raw one.
+    """
+
+    def _quantized(self, tb, blk):
+        fs = float(tb.full_scale)
+        return to_real(from_real(np.asarray(blk) / fs, tb.rfdc.SampType)) * fs
+
+    def test_the_sine_loopback_is_exact_against_the_quantized_input(self):
+        sim = RfLoopbackSim(n_src_blk=8, waveform="sine")
+        tb = sim.run()
+        lat = int(tb.loop_blk_latency)
+        tb.adc_if.assert_clean()
+        tb.dac_if.assert_clean(startup_blocks=lat)
+        for k in range(sim.n_src_blk - lat):
+            assert np.array_equal(sim.captured[k + lat], self._quantized(tb, sim.sent[k])), (
+                f"block {k} does not survive the loopback")
+
+    def test_the_sine_actually_exercises_the_quantizer(self):
+        """The claim above, made non-vacuous.
+
+        If the sine happened to land on the grid this test would pass trivially and prove nothing --
+        so assert the opposite of what the GRID scenario guarantees: quantization must CHANGE the
+        samples.  It is the difference between the two waveforms that is the point.
+        """
+        sine = RfLoopbackSim(n_src_blk=4, blksize=64, waveform="sine")
+        sine.write_scenario(tempfile.mkdtemp())
+        assert not np.array_equal(sine.sent[2], self._quantized(sine.tb, sine.sent[2])), (
+            "the sine landed on the quantization grid, so it tests nothing the grid waveform does not")
+
+        grid = RfLoopbackSim(n_src_blk=4, blksize=64, waveform="grid")
+        grid.write_scenario(tempfile.mkdtemp())
+        assert np.array_equal(grid.sent[2], self._quantized(grid.tb, grid.sent[2])), (
+            "the grid waveform is supposed to be a no-op through the quantizer")
+
+    def test_the_figure_script_renders_from_a_real_run(self):
+        """The committed SVG is an output of the model, not a drawing.  If this import-and-render
+        breaks, the figure in the guide has silently stopped matching what the example does."""
+        from examples.rf_loopback.rf_loopback_figures import render
+        out = Path(tempfile.mkdtemp()) / "fig.svg"
+        assert render(out).exists() and out.stat().st_size > 1000
+
 
 class TestCountersAreNonVacuous:
     """Each counter is driven off zero by a fault whose count is predicted, not observed.
