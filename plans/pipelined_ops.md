@@ -135,6 +135,86 @@ that `composite_top_spec` succeeds and that `extract_kernel` raises on the same 
 exemption is demonstrably load-bearing rather than incidental — and separately that a `get_pipelined`
 body in a hooked leaf still survives composite codegen, since a future body may want one.
 
+## Measured 2026-08-17: what a loop INSIDE a task body actually costs
+
+`plans/witness/task_loop/` — standalone, hand-written, no Waveflow involvement. Eight tops on
+`xczu48dr-ffvg1517-2-e` at 4.0 ns: two body shapes (`ing` = stream-read → BRAM-write, the ingress;
+`ply` = BRAM-read → stream-write, the player) × four loop shapes (1 word per firing, bounded `N=8`
+and `N=64` at `PIPELINE II=1`, and `while (1)`). csynth for the II, xsim for the behaviour.
+
+**The witness reproduces the shipped constants before it is asked anything new**: `ing_1` measures 2
+cycles/word and `ply_1` 3, in csynth *and* RTL, which are exactly `RfSampBufIngress.fire_cycles` and
+`RfSampBufPlayer.fire_cycles`. Independent code, same numbers.
+
+### 1. `while (1)` is legal — accepted at II=1, with a warning
+
+`WARNING: [XFORM 203-561] ... is an infinite loop`, on both shapes. It synthesizes, runs, sustains
+one word per cycle indefinitely, and passes a ramp check. The report carries `TripCount = inf` and no
+overall latency: Vitis cannot bound a firing that never ends, which is correct, and is why the
+witness prints *unbounded* rather than inventing a cycles-per-firing.
+
+### 2. A bounded pipelined loop emits CONTINUOUSLY — it does not store-and-forward
+
+This is the belief that was load-bearing and untested, and it holds. Two independent measurements,
+because either alone is weak:
+
+* **Throughput.** Store-and-forward spends N cycles computing and N draining, so it cannot exceed
+  0.5 words/cycle. Measured 0.956 at N=64 and 1.000 for `while (1)`.
+* **Back-pressure.** `TREADY` held low 40 cycles; count BRAM reads during the stall. A body holding
+  N buffered outputs would keep reading into them. Measured **1–3** — the pipeline stalls as a unit
+  within its own depth. There is no hidden buffer.
+
+Every beat is checked to be `previous + 1`, so a run that hit its throughput by dropping or
+reordering could not have passed.
+
+### 3. The loop boundary costs **3 cycles**, flat, independent of N
+
+Read off the gap histogram and separated using the two N values — `period = a + b·N` with
+`11 = a + 8b` and `67 = a + 64b` gives **b = 1, a = 3**. One word per cycle inside the loop; three
+idle cycles at the boundary. As an inter-beat gap it reads 4 (3 idle, plus the cycle that would have
+carried a beat).
+
+| variant | cycles/word (RTL) | vs. today |
+|---|---|---|
+| `ing_1` / `ply_1` | 2.000 / 3.000 | 1.00x |
+| `_n8` (both shapes) | 1.375 | 1.45x / 2.18x |
+| `_n64` (both shapes) | 1.047 | 1.91x / 2.87x |
+| `_w` (both shapes) | **1.000** | 2.00x / **3.00x** |
+
+**The loop erases the difference between the two body shapes.** `ply_1` costs 3 against `ing_1`'s 2 —
+the extra cycle is the BRAM read latency — and once pipelined both are identical at every N. The
+shape that is more expensive today has the most to gain, which is the one that binds pattern B.
+
+### The `latency + 1` convention does NOT extend to a looped body
+
+This file's neighbours calibrate `fire_cycles = latency + 1`. That is right for a one-word body
+(confirmed twice here) and **wrong by 2 for a looped one**: csynth reports latency 12 at N=8 and 68 at
+N=64, so the convention predicts 13 and 69, while RTL measures 11 and 67. A plausible mechanism —
+*not measured, so not asserted* — is that the runtime overlaps the next firing's fill with the current
+one's drain at pipeline depth 2. The error is in the safe direction (pessimistic) but it is still an
+error, and anyone deriving a looped body's rate from csynth latency should measure instead.
+
+### What it means for the pattern-B ceiling
+
+At `samp_per_word = 4` and `f_axis = 250 MHz` the port carries 1000 MSPS, and the player's design
+ceiling is `4 · 250e6 / (cycles per word)`: **333 MSPS today**, 727 at N=8, 955 at N=64, **1000 with
+`while (1)`** — at which point the *port* binds, not the body, and raising it needs a wider word or a
+faster fabric rather than a better loop.
+
+The boundary is not free at the ingress, though. Its 3 idle cycles are a window in which the task is
+not reading, and the boundary port is 2 deep whatever the Python says (see this file's neighbour on
+`depth=`), so per firing the ADC loses `max(0, 3·r − 2)` words at converter word rate `r`. At today's
+`r = 0.25` that is nothing at any N; at `r = 1.0` it is one word per firing — 1.6% at N=64, 12.5% at
+N=8. **`while (1)` never stops reading and loses nothing at any rate**, which is the argument for
+building the ingress from it rather than from a bounded loop.
+
+### Not measured
+
+Resources, timing closure beyond csynth's estimate, a loop with real arithmetic in it (both bodies
+are a move, not a computation), two looped tasks sharing a BRAM, and `while (1)` under reset — which
+matters, because `adc_model.md` records that a task writing before it reads advances its state during
+reset, and an infinite loop changes the shape of that question.
+
 ## Relationship to other plans
 
 `adc_model.md`'s two-design-patterns section rests on this: pattern A forces a hand-written pipelined
