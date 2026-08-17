@@ -1,9 +1,13 @@
-"""fir_block_quality.py — designing a *quantized* FIR, and scoring it.
+"""fir_quality.py — designing a *quantized* FIR, and scoring it.
 
 Phase M0 of ``plans/mcp_fir.md``.  This file supplies the thing the DSE surface optimizes, because
-nothing in the tree computes it today: ``fir_block_sim.py`` fabricates coefficients
-(``_tap_set``) and asserts the RTL matches its *own* quantized golden.  That is a conformance test —
-a design that is bit-exactly a **bad filter** passes it.
+nothing in the tree computes it today: ``examples/fir_block/fir_block_sim.py`` fabricates
+coefficients (``_tap_set``) and asserts the RTL matches its *own* quantized golden.  That is a
+conformance test — a design that is bit-exactly a **bad filter** passes it.
+
+Lives in ``examples/dse_fir/`` rather than in ``examples/fir_block/``: the DSE work is a *consumer*
+of that design, not part of it.  ``fir_block`` stays a hardware example with its own gates and its own
+committed resource corpus, and everything this arc needs from it arrives by import.
 
 This module is the design half:
 
