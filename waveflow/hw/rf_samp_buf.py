@@ -91,11 +91,21 @@ HORIZON_MARGIN = 16
 #: Response status codes, mirrored as literals in ``rf_samp_buf_capture_task.h``.  Two places, one
 #: encoding: the C++ side spells them as literals so the generated schema header cannot disagree
 #: about the value.
+#: One vocabulary for **both** directions, not two parallel ones: a host that drives an RX buffer and
+#: a TX buffer reads one status table, and a code means the same thing wherever it appears.
 RF_SAMP_BUF_OK = 0
+#: RX only: the window had already been overwritten by the ingress — the data asked for is gone.
 RF_SAMP_BUF_TOO_OLD = 1
 #: The window was not a whole number of words — see the module docstring.  Refused rather than
 #: rounded: a rounded window is data from the wrong time, which nothing downstream can detect.
+#: Shared by both directions, because word alignment is a property of the geometry, not of a path.
 RF_SAMP_BUF_MISALIGNED = 2
+#: TX only: the slot named by the command had **already played**.  A distinct code from
+#: :data:`RF_SAMP_BUF_TOO_OLD` rather than a reuse of it, because the two are opposite failures and
+#: conflating them would make a TX diagnostic read as an RX one — "the data you wanted was
+#: overwritten" versus "the data you sent arrived after its slot went out of the DAC".  See
+#: :mod:`waveflow.hw.rf_samp_buf_tx`.
+RF_SAMP_BUF_TOO_LATE = 3
 
 #: The element type of every ``RxCmd`` / ``RxResp`` field.  ``Word16`` is kept as an alias because it
 #: is the name the schemas were written against; the width it means is now :data:`IDX_BW`.

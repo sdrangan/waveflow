@@ -240,3 +240,70 @@ class CsynthParser(object):
         self.res_df =  pd.DataFrame.from_dict(data, orient="index")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Per-module latency — what a declared `fire_cycles` must be checked against
+# ---------------------------------------------------------------------------
+#
+# `CsynthParser` above reads the TOP's csynth.xml: resources, and the loop table.  A
+# free-running `hls::task` body is a *sub-module*, and what a rate contract needs is that
+# sub-module's own overall latency, which lives in its own `<module>_csynth.xml`.  Hence these two
+# small readers rather than an extension of the class: different file, different question.
+
+
+def module_latency(report_dir, module: str) -> dict | None:
+    """Overall latency of one synthesized module, from ``<report_dir>/<module>_csynth.xml``.
+
+    Returns ``{"latency_min", "latency_max", "interval_min", "interval_max"}`` in clock cycles, or
+    ``None`` when Vitis could not bound the body — it writes ``undef`` for a function whose trip
+    count is data-dependent, and ``None`` is the honest rendering of that.  **A caller must not
+    substitute a number there**: an unbounded body has no cycles-per-firing, and inventing one
+    yields a rate contract whose direction of error is unknown.
+
+    Returns ``None`` too when the report is absent, so a caller can skip loudly rather than pass.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    p = Path(report_dir) / f"{module}_csynth.xml"
+    if not p.is_file():
+        return None
+    summary = ET.parse(p).getroot().find("PerformanceEstimates/SummaryOfOverallLatency")
+    if summary is None:
+        return None
+
+    def _int(tag: str) -> int | None:
+        txt = summary.findtext(tag)
+        try:
+            return int(txt)
+        except (TypeError, ValueError):
+            return None            # 'undef' -- Vitis could not bound it
+
+    out = {"latency_min": _int("Best-caseLatency"), "latency_max": _int("Worst-caseLatency"),
+           "interval_min": _int("Interval-min"), "interval_max": _int("Interval-max")}
+    return None if out["latency_max"] is None else out
+
+
+def loop_pipeline_ii(report_dir, module: str, loop: str) -> int | None:
+    """The **achieved** initiation interval of one pipelined loop, in cycles per iteration.
+
+    Achieved, not target: Vitis reports both and they differ whenever it failed to meet the pragma.
+    A per-word cost derived from the target rather than the achievement is a wish, not a measurement.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    p = Path(report_dir) / f"{module}_csynth.xml"
+    if not p.is_file():
+        return None
+    summary = ET.parse(p).getroot().find("PerformanceEstimates/SummaryOfLoopLatency")
+    if summary is None:
+        return None
+    node = summary.find(loop)
+    if node is None:
+        return None
+    try:
+        return int(node.findtext("PipelineII"))
+    except (TypeError, ValueError):
+        return None

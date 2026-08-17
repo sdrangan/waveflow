@@ -131,10 +131,17 @@ class RfSampBufStep(Buildable):
     example's include directory, because each example builds in its own tree and Vitis compiles
     against the files beside it.
 
-    Both bodies are hand-written for the same reason the ``mem_*`` ones are — the ingress must be a
-    single word-granular firing that never stalls its input, and the capture blocks per sample inside
-    a loop.  Neither shape is in the extractor's vocabulary, and neither should be: this is the one
-    module that is *supposed* to own that difficulty so no user's DUT has to.
+    All four bodies are hand-written for the same reason the ``mem_*`` ones are — the RX ingress must
+    be a single word-granular firing that never stalls its input, the TX player a single firing that
+    never misses a deadline, and the capture and loader block inside a loop.  None of those shapes is
+    in the extractor's vocabulary, and none should be: this is the one module that is *supposed* to
+    own that difficulty so no user's DUT has to.
+
+    **Both directions ship together**, deliberately.  ``RfSampBufRx`` and ``RfSampBufTx`` are two
+    buffers rather than one (``plans/adc_model.md``: "never refuse a write" and "never miss a
+    deadline" are different contracts), but they share a geometry, a status vocabulary and a wrapping
+    sample counter — so a build that copies one and not the other could drift silently.  A TX-only
+    design pays two unused headers, which costs nothing: Vitis compiles what the top includes.
 
     Parameters
     ----------
@@ -157,12 +164,16 @@ class RfSampBufStep(Buildable):
         return {
             "rf_samp_buf_ingress_task": self._output_dir / "rf_samp_buf_ingress_task.h",
             "rf_samp_buf_capture_task": self._output_dir / "rf_samp_buf_capture_task.h",
+            "rf_samp_buf_loader_task": self._output_dir / "rf_samp_buf_loader_task.h",
+            "rf_samp_buf_player_task": self._output_dir / "rf_samp_buf_player_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
         src_names = {
             "rf_samp_buf_ingress_task": "rf_samp_buf_ingress_task.h",
             "rf_samp_buf_capture_task": "rf_samp_buf_capture_task.h",
+            "rf_samp_buf_loader_task": "rf_samp_buf_loader_task.h",
+            "rf_samp_buf_player_task": "rf_samp_buf_player_task.h",
         }
         if key not in src_names:
             raise KeyError(f"Unknown RfSampBufStep output key: {key!r}")
