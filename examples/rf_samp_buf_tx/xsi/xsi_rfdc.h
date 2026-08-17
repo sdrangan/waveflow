@@ -134,7 +134,27 @@ public:
           tdata_(dut.port((std::string(prefix) + "_TDATA").c_str())) {}
 
     void sample() override {
-        beat_ = d_.get1(tvalid_);                   // always ready, so VALID alone is a transfer
+        // TREADY is the DAC's METRONOME, and withholding it is the whole point.
+        //
+        // This used to be `put1(tready_, 1)` unconditionally, with the comment "a converter is always
+        // ready".  That is true of the ADC side (an ADC cannot be told to wait) and **false of this
+        // one**: an RFDC's AXIS slave accepts a word only as fast as its tile consumes samples, and
+        // the depth of its input FIFO is what bounds how far the fabric may run ahead.
+        //
+        // The consequence of the old model was not subtle.  `RfSampBufPlayer` documents that "in RTL
+        // this task is paced by TREADY"; against an always-ready slave it was paced by nothing and
+        // ran at the FABRIC rate -- one word per `fire_cycles` = 3 cycles, where the converter's grid
+        // wants one per 4.  The play pointer therefore advanced 33% faster than the ADC produced, and
+        // in `rf_blk_delay` it overtook the loader after five blocks: every command from the sixth on
+        // came back TOO_LATE, and the measured end-to-end delay was 960 samples instead of the 1024
+        // the design asked for.  Nothing about the design was wrong; the converter model was.
+        //
+        // It also made `underrun` meaningless.  With beats arriving every 3 cycles and words due
+        // every 4, "a word was due and no beat landed this cycle" counted the beat pattern of two
+        // unrelated periods -- 10000 of 60000 cycles on a run that was bit-exact end to end.  Held to
+        // the grid, the counter measures starvation again, which is what it is for.
+        ready_ = (pending_ < cap_);
+        beat_ = ready_ && d_.get1(tvalid_);
         if (beat_) word_ = d_.getW(tdata_);
     }
 
@@ -142,6 +162,7 @@ public:
         ++cycle_;
         if (beat_) {
             ++words_recv;
+            ++pending_;
             std::int64_t slot[64];
             rfdc_unpack_word(word_, fmt_, slot);
             for (int k = 0; k < fmt_.samp_per_word; ++k)
@@ -149,15 +170,20 @@ public:
         }
         // A DAC plays on its GRID, not when its buffer happens to fill.
         if (blk_rate_.tick()) emit_on_grid_();
-        if (rate_.tick() && !beat_) {
-            // A beat was due this cycle and none arrived.  There is no protocol signal for this;
-            // the analog output glitches and THIS COUNTER is the only evidence.
-            ++underrun;
-            last_underrun_cycle = cycle_;
+        if (rate_.tick()) {
+            // One word period has elapsed: the tile consumes a word if it has one.
+            if (pending_ > 0) {
+                --pending_;
+            } else {
+                // A word was due and the FIFO was empty.  There is no protocol signal for this;
+                // the analog output glitches and THIS COUNTER is the only evidence.
+                ++underrun;
+                last_underrun_cycle = cycle_;
+            }
         }
     }
 
-    void drive() override { d_.put1(tready_, 1u); }   // a converter is always ready
+    void drive() override { d_.put1(tready_, ready_ ? 1u : 0u); }
 
     /// Words taken off the fabric.
     std::uint64_t words_recv = 0;
@@ -211,7 +237,16 @@ private:
     std::vector<double> samples_;
     std::uint64_t word_  = 0;
     bool          beat_  = false;
+    bool          ready_ = true;
     std::uint64_t cycle_ = 0;
+
+    /// Words accepted but not yet consumed by the tile — the IP's AXIS input FIFO.
+    std::size_t pending_ = 0;
+    /// Its depth.  **2, the AXI-Stream boundary depth Vitis gives a port**, not a tunable: a deeper
+    /// one lets the fabric run further ahead of the converter and is exactly the fiction this model
+    /// used to tell with an infinite one.  Small enough that the player is held to the grid within a
+    /// couple of words, which is what makes the play pointer track real time.
+    static constexpr std::size_t cap_ = 2;
 };
 
 }  // namespace wfbfm

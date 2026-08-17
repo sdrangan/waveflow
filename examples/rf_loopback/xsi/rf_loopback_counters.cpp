@@ -19,7 +19,11 @@
 
 int main() {
     rf_loopback_tb::Harness h("rf_loopback_counters.wdb");
-    h.run(6000);
+    // 16000, raised from 6000 on 2026-08-17 when RfdcDacSlave began withholding TREADY: the DUT is
+    // unchanged (its own 1066-cycle gate did not move) but the DRAIN is now paced by the converter,
+    // and at 6000 only 6 of the 8 blocks had reached the sink.  See XSI_N_CYCLES in
+    // rf_loopback_xsi.py -- this number is hand-written here and must be kept in step with it.
+    h.run(16000);
 
     // The ADC presents a beat every cycle its rate is due, whatever TREADY says, and DISCARDS what
     // the fabric will not take -- a real converter cannot stall.  `dropped` is therefore a statement

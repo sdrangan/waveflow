@@ -56,10 +56,18 @@ TB_NS = "rf_loopback_tb"
 XSI_NBLK = 8
 XSI_BLKSIZE = 256
 
-#: A generous ``h.run(N)``. The ADC emits ~0.213 words/cycle, so one 64-word block takes ~300 cycles
-#: and eight take ~2400; the loop bound only has to clear completion, and the sink's own capture is
-#: what reports the real number.
-XSI_N_CYCLES = 6000
+#: A generous ``h.run(N)``. The ADC emits 0.25 words/cycle, so one 64-word block takes 256 cycles and
+#: eight take ~2048; the loop bound only has to clear completion, and the sink's own capture is what
+#: reports the real number.
+#:
+#: **16000, raised from 6000 on 2026-08-17** when ``RfdcDacSlave`` began withholding ``TREADY``.  The
+#: DUT is unchanged — its own completion gate in ``test_xsi_bfm.py`` (1066 cycles, generic AXIS BFMs,
+#: no converter models) did not move at all.  What changed is the *drain*: this pass-through reads a
+#: whole block before it writes one, so with the DAC now pacing the write it occupies the boundary for
+#: roughly four grid periods per block instead of running ahead of the converter.  At 6000 cycles only
+#: 6 of the 8 blocks had come out.  The budget is a testbench parameter, not a result — the result is
+#: what the sink collected, and that is gated separately.
+XSI_N_CYCLES = 16000
 
 
 def make_xsi_tb(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopbackTB:

@@ -486,23 +486,31 @@ def test_rule_1_quotes_the_recorded_rtl_loss():
     Read out of ``test_rf_loopback_xsi.py``'s constants — the same values the XSI gate asserts —
     rather than retyped, so a change fails here until the page is updated.
 
-    Only the "after" is a live number. The historical 72 is prose about a design that no longer
-    exists; what is checked is that the page has not quietly dropped it, because a page showing only
-    the good number teaches nothing.
+    The page now tells **three** numbers, and only the last is live. 72 (store-and-forward) and 512
+    (after the task split, against a converter model that never back-pressured) are prose about
+    states this design has been in; what is checked is that the page has not quietly dropped them,
+    because a page showing only the current number teaches nothing — and in this case the middle one
+    is the instructive one, since it was a *green result that was not earned*.
     """
-    from tests.examples.test_rf_loopback_xsi import WANT_ADC_DROPPED, WANT_ADC_WORDS
+    from tests.examples.test_rf_loopback_xsi import (WANT_ADC_DROPPED_IS_STRUCTURAL,
+                                                     WANT_ADC_WORDS)
 
     text = _page("guide/rf/python/rules.md")
-    accepted = WANT_ADC_WORDS - WANT_ADC_DROPPED
-    assert WANT_ADC_DROPPED == 0, (
-        "the gate no longer asserts a lossless fabric; rule 1's claim rests on it")
+    assert WANT_ADC_DROPPED_IS_STRUCTURAL, (
+        "the gate no longer expects pattern A to drop; rule 1's evidence rests on it, and if the "
+        "pass-through has genuinely been fixed this page needs rewriting rather than re-numbering")
     assert f"produced **{WANT_ADC_WORDS}** words" in text, (
         "rules.md no longer states what the ADC produces")
-    assert f"now accepts **{accepted}**" in text, (
-        "rules.md no longer states what the fixed design accepts")
+    assert "accepts **450** and drops **62**" in text, (
+        "rules.md no longer states what pattern A does against a converter that back-pressures — "
+        "which is the live number and the whole point of the rule")
     assert "**72 were dropped**" in text and "accepted **440**" in text, (
         "rules.md no longer tells the before/after — the drop finding is the reason the counter "
         "contract exists, and a rule stated without it is an assertion")
+    assert "not earned" in text, (
+        "rules.md no longer records that the intermediate 512 was an artefact of a converter model "
+        "that accepted everything; without it the page reads as a design regression rather than as "
+        "a measurement becoming honest")
 
 
 def test_the_converter_parameter_split_matches_the_class():
@@ -585,23 +593,33 @@ def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
                        depth=1024).max_samp_rate(300e6) == 150e6
 
 
-def test_rule_6_quotes_the_startup_transient_both_backends_show():
-    """Rule 6's evidence is that the two backends disagree on arrival time and agree on index.
+def test_rule_6_quotes_a_case_where_index_agrees_and_arrival_does_not():
+    """Rule 6's evidence: the two backends agree on the sample index and differ on arrival.
 
-    Both numbers are live: pysim's is the loopback's own ``loop_blk_latency``, XSI's is the gate
-    constant. The rule is worth stating only while they actually differ.
+    **The evidence was replaced on 2026-08-17.** It used to be the loopback's startup transient, 2
+    blocks in pysim against 1 at RTL — and that stopped demonstrating anything when the XSI DAC began
+    withholding ``TREADY`` and the RTL figure became 2 as well. A rule illustrated by two numbers that
+    now match is a rule with no evidence, so it is pointed at a case that still shows the split.
+
+    ``rf_blk_delay`` is the better case anyway: it is one design measured both ways, where the
+    *index* relation (``out_ts = in_ts + delay``) holds exactly on both backends and the *arrival*
+    position differs by a fixed 64 samples. Both numbers are live — the pysim delay is asserted by
+    ``test_rf_blk_delay.py`` and the skew by the XSI gate.
     """
-    from examples.rf_loopback.rf_loopback import RfLoopbackTB
-    from tests.examples.test_rf_loopback_xsi import RTL_STARTUP_BLOCKS
-    from waveflow.simulation.simulation import Simulation
+    from examples.rf_blk_delay.rf_blk_delay import BLKSIZE, DELAY_BLOCKS
+    from tests.examples.test_rf_blk_delay_xsi import RTL_GRID_SKEW
 
     text = _page("guide/rf/python/rules.md")
-    pysim = int(RfLoopbackTB(name="rules_check", sim=Simulation()).loop_blk_latency)
-    assert pysim != RTL_STARTUP_BLOCKS, (
-        "the backends now agree on the startup transient; rule 6's evidence needs rewriting")
-    assert f"**{pysim}**-block startup transient in pysim and **{RTL_STARTUP_BLOCKS}** at RTL" in text, (
-        f"rules.md should quote the measured transients as {pysim} (pysim) and "
-        f"{RTL_STARTUP_BLOCKS} (RTL)")
+    pysim_delay = DELAY_BLOCKS * BLKSIZE
+    assert RTL_GRID_SKEW > 0, (
+        "the backends now agree on arrival position too; rule 6's evidence needs rewriting again "
+        "rather than re-numbering — find a case where they still differ, or drop the rule")
+    assert f"**{pysim_delay}** in pysim and **{pysim_delay - RTL_GRID_SKEW}** at RTL" in text, (
+        f"rules.md should quote the measured arrival positions as {pysim_delay} (pysim) and "
+        f"{pysim_delay - RTL_GRID_SKEW} (RTL)")
+    assert f"**{RTL_GRID_SKEW}**-sample difference" in text, (
+        f"rules.md should name the skew itself ({RTL_GRID_SKEW}), which is the quantity a reader "
+        f"would otherwise have to subtract for themselves")
 
 
 def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():

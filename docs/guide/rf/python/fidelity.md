@@ -137,10 +137,14 @@ Same scenario, same graph, and the numbers do not match. They are not meant to:
 | where loss is accounted | the `RFSampIF` edge, and `StreamIF.dropped` | the converter models and the channel |
 | units | whole **blocks**, and **words** at the fabric boundary | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
 | ADC→fabric loss | 0 — and it was 0 for the broken design too | 0 now; 72 of 512 words before the fix |
-| startup transient | 2 blocks | 1 block |
+| startup transient | 2 blocks | 2 blocks |
 
-The startup difference is pacing, not physics: pysim paces the RF side on the **edge**'s metronome,
-XSI on the **source**, so the RTL ADC has its first block at *t=0* and pysim's does not.
+The startup numbers agree, and the agreement is worth less than it looks. Two unrelated offsets
+happen to sum the same way: pysim paces the RF side on the **edge**'s metronome and XSI on the
+**source**, so the RTL ADC still has its first block at *t=0* and pysim's does not — while on the
+other side of the loop the XSI DAC now withholds `TREADY` until its own grid asks for a word, which
+costs the first data block a grid period. The RTL transient was 1 while that model accepted every
+word the instant it was offered.
 
 None of this should be "fixed" by making one side match the other. The disagreement is the data.
 
