@@ -121,6 +121,57 @@ class MemMgrStep(Buildable):
         return src_path.read_text(encoding="utf-8")
 
 
+class RfSampBufStep(Buildable):
+    """Build step that copies the fixed :class:`~waveflow.hw.rf_samp_buf.RfSampBufRx` task bodies.
+
+    The RF sample buffer is **framework** (``plans/adc_model.md`` § *Two design patterns*: it is the
+    default way a design reaches a converter), so its two hand-written ``hls::task`` bodies ship in
+    ``waveflow/build/`` beside the ``mem_*`` and ``il_*`` ones rather than in whichever example
+    happened to need them first.  Same mechanism as :class:`MemStreamStep`: copied verbatim into an
+    example's include directory, because each example builds in its own tree and Vitis compiles
+    against the files beside it.
+
+    Both bodies are hand-written for the same reason the ``mem_*`` ones are — the ingress must be a
+    single word-granular firing that never stalls its input, and the capture blocks per sample inside
+    a loop.  Neither shape is in the extractor's vocabulary, and neither should be: this is the one
+    module that is *supposed* to own that difficulty so no user's DUT has to.
+
+    Parameters
+    ----------
+    output_dir : str | Path
+        Directory path **relative to** ``BuildConfig.root_dir`` where the task headers are written.
+        Defaults to ``"."`` (the root directory).
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        """Output directory path relative to ``BuildConfig.root_dir``."""
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {
+            "rf_samp_buf_ingress_task": self._output_dir / "rf_samp_buf_ingress_task.h",
+            "rf_samp_buf_capture_task": self._output_dir / "rf_samp_buf_capture_task.h",
+        }
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        src_names = {
+            "rf_samp_buf_ingress_task": "rf_samp_buf_ingress_task.h",
+            "rf_samp_buf_capture_task": "rf_samp_buf_capture_task.h",
+        }
+        if key not in src_names:
+            raise KeyError(f"Unknown RfSampBufStep output key: {key!r}")
+        src_path = _SRC_DIR / src_names[key]
+        if not src_path.exists():
+            raise FileNotFoundError(f"RfSampBuf source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")
+
+
 class MemStreamStep(Buildable):
     """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
     output directory.

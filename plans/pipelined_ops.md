@@ -95,6 +95,46 @@ for this combination it does not. Separate defect, worth its own look.
 **Not established:** that a `get_pipelined` twin *models the word rate correctly*. Only that codegen
 survives it. That is a simulation question and needs its own measurement.
 
+## Measured 2026-08-16 (second pass): `get_pipelined` CANNOT express the RF ingress twin
+
+Finding 1 above said the RF ingresses "can get honest pysim twins today" using `get_pipelined`.
+**The mechanism is refuted; the goal is not.** `RfSampBufIngress` now has an honest, rate-modelling
+twin — it just is not made of pipelined ops. Two independent reasons, both measured:
+
+- **`get_pipelined(count=N)` zero-pads to N.** It unpacks through `read_array(shape=N)`, which
+  forces the length, so it cannot read a burst whose size is not known in advance. This ingress has
+  no such number: it reads *one word* in hardware, and in pysim the burst is the converter's block,
+  which the module does not and should not know. Asking for a generous cap returns a padded array,
+  not a short one.
+- **Its `tstart` is the wrong anchor for a converter-fed port.** It is back-calculated as
+  `now - (nwords-1) * fabric_period`, which assumes an II=1 **fabric-paced** producer. A converter
+  delivers at `samp_rate / samp_per_word` words per second, far slower. Pacing from that anchor
+  discounts `(nwords-1)` fabric cycles from every firing and moves the drop threshold from the
+  *design's* capacity to the *port's* — which is precisely the confusion the design-capacity check
+  exists to catch.
+
+What works instead is one line: **charge the firing cost.** `yield self.timeout(nwords *
+fire_cycles * clk.period)` after the burst. Both terms scale with the burst length, so the drop
+threshold lands exactly on `samp_per_word * f_axis / fire_cycles` — the same number `check_rate`
+refuses against — and the static check and the simulation now agree.
+
+Measured on `examples/rf_samp_buf_rx` at 256 MSa/s, one sample per word (the configuration whose
+first RTL run lost 1695 of 4096):
+
+| twin | pysim `dropped` |
+|---|---|
+| burst-granular (the predecessor) | **0** |
+| paced (shipped) | **1536 of 4096** |
+
+pysim quantises to whole blocks — it drops an offer or takes it — so it under-reports against the
+RTL's 1695 and cannot see loss *inside* a block period at all. That finer blind spot is real and
+unchanged; it is `rf_loopback`'s 72-of-512 case, a different module.
+
+**The exemption is now pinned**, as this file asked: `tests/hw/test_rf_samp_buf_twin.py` asserts both
+that `composite_top_spec` succeeds and that `extract_kernel` raises on the same leaf, so the
+exemption is demonstrably load-bearing rather than incidental — and separately that a `get_pipelined`
+body in a hooked leaf still survives composite codegen, since a future body may want one.
+
 ## Relationship to other plans
 
 `adc_model.md`'s two-design-patterns section rests on this: pattern A forces a hand-written pipelined

@@ -76,7 +76,7 @@ need**: it is the *port's* capacity, one word per fabric cycle.
 The design behind the port is usually slower. Divide by the consuming task's firing cost:
 
 ```python
-cap = f_axis * samp_per_word / RfCapIngress.fire_cycles     # e.g. 300e6 * 1 / 2
+cap = f_axis * samp_per_word / RfSampBufIngress.fire_cycles     # e.g. 300e6 * 1 / 2
 if samp_rate > cap:
     raise ValueError(...)                                    # with the arithmetic in the message
 ```
@@ -89,8 +89,13 @@ next to the body it describes, measure it from `csynth`, and check the pairing i
 > port check passed: `1 · 300e6` is more than `256e6`. The design check, which did not exist yet,
 > would have failed: `1 · 300e6 / 2` is not.
 
-pysim reported a clean run, and would again. See [rule 5](#5-the-counters-are-the-contract) for what
-that means and [the fidelity boundary](./fidelity.md#the-resolution-limit) for why.
+pysim reported a clean run at the time, and that is no longer true: `RfSampBufIngress`'s twin now
+charges `fire_cycles` per word, so the same configuration reports **1536 of 4096** dropped without a
+toolchain. It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
+against the RTL's 1695, but the threshold at which it starts reporting is exactly the declared
+capacity. See [rule 5](#5-the-counters-are-the-contract) for what the counters are for, and
+[the fidelity boundary](./fidelity.md#the-resolution-limit) for the loss shape that is still
+invisible: one *inside* a block period, which is a different design and a different module.
 
 ## 5. The counters are the contract
 
@@ -166,5 +171,5 @@ converter has to be a task plus an internal channel. There is no number you can 
 The full diagnoses live in `plans/adc_model.md` and `plans/behavioral_edges.md`. This page keeps one
 sentence of each, because a rule needs its evidence and does not need its lab notebook.
 
-**Source of truth:** `tests/examples/test_rf_loopback_xsi.py`, `tests/examples/test_rf_capture_xsi.py`,
-`examples/rf_capture/rf_capture.py`.
+**Source of truth:** `tests/examples/test_rf_loopback_xsi.py`, `tests/examples/test_rf_samp_buf_rx_xsi.py`,
+`waveflow/hw/rf_samp_buf.py`.

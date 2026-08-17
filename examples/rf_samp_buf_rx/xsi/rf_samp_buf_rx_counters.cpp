@@ -1,4 +1,4 @@
-// rf_capture_counters.cpp -- HAND-WRITTEN.  Runs the generated capture-buffer harness and prints
+// rf_samp_buf_rx_counters.cpp -- HAND-WRITTEN.  Runs the generated capture-buffer harness and prints
 // the model counters as KEY=VALUE lines.
 //
 // Why this exists beside the generated main.  The generated main runs and dumps, and correctness is
@@ -19,7 +19,7 @@
 #include "rf_samp_buf_rx_tb_harness.h"
 
 int main() {
-    rf_samp_buf_rx_tb::Harness h("rf_capture_counters.wdb");
+    rf_samp_buf_rx_tb::Harness h("rf_samp_buf_rx_counters.wdb");
     h.run(40000);
 
     // The ADC presents a beat every sample period whatever TREADY says, and DISCARDS what the fabric

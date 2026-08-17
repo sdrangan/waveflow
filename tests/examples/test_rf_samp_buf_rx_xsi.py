@@ -24,20 +24,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.rf_capture.rf_capture import (
+from examples.rf_samp_buf_rx.rf_samp_buf_rx import (
     WORD_BW,
     RxResp,
     expected_capture,
     write_scenario,
 )
-from examples.rf_capture.rf_capture_build import RTL_FILES, TOP, WRAPPER
+from examples.rf_samp_buf_rx.rf_samp_buf_rx_build import RTL_FILES, TOP, WRAPPER
 from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
 
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_capture"
+ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_samp_buf_rx"
 #: The hand-written main: the generated one runs and dumps, this one also prints the model counters,
 #: and two of this design's most important numbers live only on the models.
-TB = "rf_capture_counters"
+TB = "rf_samp_buf_rx_counters"
 
 #: Cycle the last captured sample reached the sink.  Recorded 2026-08-15 on the first green run.
 #: Exact, not a bound — it moves only if the design's timing changes, and both directions are worth a
@@ -74,9 +74,9 @@ def run(tmp_path_factory) -> tuple[dict[str, int], str]:
     xsi = ROOT / "xsi"
     _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
     proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
-    _require(proj.is_dir(), f"no csynth RTL at {proj} — run rf_capture_build.py --through csynth")
+    _require(proj.is_dir(), f"no csynth RTL at {proj} — run rf_samp_buf_rx_build.py --through csynth")
     for f in RTL_FILES:
-        _require((xsi / f).is_file(), f"{xsi / f} — run rf_capture_build.py --through codegen_dut")
+        _require((xsi / f).is_file(), f"{xsi / f} — run rf_samp_buf_rx_build.py --through codegen_dut")
 
     # Regenerate the file list from the RTL actually on disk; never trust the committed .f.
     (xsi / f"rtl_{WRAPPER}.f").write_text(render_rtl_f(TOP, ROOT, extra=RTL_FILES), encoding="utf-8")
@@ -137,7 +137,7 @@ def test_the_converter_never_had_a_sample_refused(run):
 
     The counter is what makes this evidence rather than an assertion. It was **not** zero the first
     time: at 256 MSPS this design dropped 1695 of 4096 samples because the ingress fires every two
-    cycles, and pysim reported none — see ``RfCaptureTB.check_rate``, which now refuses that pairing
+    cycles, and pysim reported none — see ``RfSampBufRxTB.check_rate``, which now refuses that pairing
     at build time.
     """
     c, out = run
