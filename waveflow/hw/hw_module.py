@@ -725,14 +725,37 @@ class HwModule(SimObj):
 
         Empty (and *absent from the instance*) unless :meth:`add_rtl_mod` was called — see the note
         above the method for why that distinction is load-bearing.
+
+        A **composite child's** RTL modules are included, because there is one wrapper per generated
+        top and it has to instantiate every memory the flattened design uses.  Names are already
+        instance-qualified (``<parent>_mem``), so two reused buffers do not collide.
         """
-        return self.__dict__.get("_rtl_mods") or {}
+        return self._collect_rtl("_rtl_mods")
 
     @property
     def rtl_ifs(self) -> dict:
         """Interfaces joining a kernel task to an :attr:`rtl_mods` module — **wrapper wires**, not
-        internal channels.  Populated by :meth:`add_rtl_if`."""
-        return self.__dict__.get("_rtl_ifs") or {}
+        internal channels.  Populated by :meth:`add_rtl_if`.
+
+        Aggregated over composite children for the same reason :attr:`rtl_mods` is: the wrapper joins
+        the flattened kernel's ``bram`` ports to the memories, and a wire this missed would leave a
+        port dangling — which ``wrapper_gen`` refuses rather than lets read zeros forever.
+        """
+        return self._collect_rtl("_rtl_ifs")
+
+    def _collect_rtl(self, key: str) -> dict:
+        """*key*'s registry on this module, plus every composite child's, recursively.
+
+        Reads the private ``__dict__`` entries directly rather than the properties, so the recursion
+        is over storage and cannot loop back through an aggregating getter.
+        """
+        out = dict(self.__dict__.get(key) or {})
+        for child in self.sub_comps.values():
+            # Only a composite HwModule child can carry a registry; a testbench's SimObj children
+            # (drivers, sinks) are not modules and have neither attribute.
+            if getattr(child, "sub_comps", None) and hasattr(child, "_collect_rtl"):
+                out.update(child._collect_rtl(key))
+        return out
 
     def add_rtl_if(self, interface: "Interface") -> None:
         """Register *interface* as a **wrapper wire** — a task's port joined to an RTL module's port.

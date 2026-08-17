@@ -709,6 +709,43 @@ def derive_internal_edges(comp) -> list:
     return edges
 
 
+def kernel_tasks(comp) -> list:
+    """*comp*'s sub-tasks **flattened to leaves** — the list the generated top emits one task per.
+
+    ``hls::task`` has no hierarchy: a generated top is one flat list of tasks joined by channels.  So
+    a design that *reuses* a composite — ``RfSampBufRx`` inside a signal-processing loop — has to
+    reach the generator as the leaves it is made of, not as the composite.
+
+    The flattening lives here rather than on
+    :attr:`~waveflow.hw.hw_freerun.FreeRunMod.ordered_subcomps` because that property has a second
+    reader with the opposite need: :func:`tb_top_spec` walks it to find the DUT *among* a testbench's
+    children, and a flattening there would dissolve the node it is looking for.  One level for the
+    graph, all levels for the kernel.
+
+    Recursion needs no base case beyond the leaf rule: a leaf's ``ordered_subcomps`` is ``[self]``.
+    """
+    out: list = []
+    for sub in comp.ordered_subcomps:
+        out += kernel_tasks(sub) if getattr(sub, "sub_comps", None) else [sub]
+    return out
+
+
+def _all_interfaces(comp) -> list:
+    """*comp*'s own ``add_if`` interfaces plus those of any composite child, recursively.
+
+    The peer of :func:`kernel_tasks`, and it has to exist for the same reason: once a reused
+    sub-composite's tasks are flattened into the top, the channels joining *those* tasks are internal
+    to the top too.  A boundary port is a child endpoint bound to no internal interface, so an
+    interface this walk missed would turn a wired channel into a phantom boundary port — and the
+    failure would surface as a boundary-name count mismatch far from its cause.
+    """
+    out = list(comp.interfaces.values())
+    for child in comp.sub_comps.values():
+        if getattr(child, "sub_comps", None):
+            out += _all_interfaces(child)
+    return out
+
+
 def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     """Pair *names* with *comp*'s boundary endpoints, **derived from the component graph**.
 
@@ -722,9 +759,9 @@ def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     Order is significant — :func:`bundle_map` assigns ``gmem`` bundles in boundary order — and it is
     the walk order (children in ``add_comp`` order, ports in ``add_endpoint`` order).
     """
-    internal = {id(ep) for iface in comp.interfaces.values()
+    internal = {id(ep) for iface in _all_interfaces(comp)
                 for ep in iface.endpoints.values() if ep is not None}
-    eps = [ep for child in comp.ordered_subcomps
+    eps = [ep for child in kernel_tasks(comp)
            for ep in child.endpoints.values() if id(ep) not in internal]
 
     if len(names) != len(eps):
@@ -933,7 +970,20 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     *same* generator."""
     ep_arg: dict[int, str] = {}
 
+    seen: dict[str, object] = {}
     for edge in comp.internal_edges:
+        # Two channels with one name would emit two declarations of the same C++ variable and wire
+        # the second channel's tasks to the first.  It is a real hazard once a top reuses a module
+        # twice (both instances name their channels the same), so it is refused rather than left to
+        # surface as a compiler redeclaration with no hint of which edges collided.
+        if edge.name in seen:
+            raise LoweringError(
+                f"composite_top_spec: {type(comp).__name__} has two internal channels named "
+                f"{edge.name!r} ({seen[edge.name]} and {edge}). A channel name is the C++ variable "
+                f"name, so the two would collapse into one and silently join the wrong tasks. If "
+                f"they come from two instances of the same sub-module, the hoist should be "
+                f"qualifying them by child name — see FreeRunMod.internal_edges.")
+        seen[edge.name] = edge
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
 
@@ -951,7 +1001,7 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     # (`<producer_inst>_<ch>_write`), and only this loop knows which endpoint belongs to which task.
     tasks: list[TaskInst] = []
     ep_task: dict[int, int] = {}
-    for sub in comp.ordered_subcomps:
+    for sub in kernel_tasks(comp):
         kt = _kernel_task_of(sub, comp)
         args: list[str] = []
         for attr in kt.signature:
