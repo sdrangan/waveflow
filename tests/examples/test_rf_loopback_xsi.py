@@ -70,11 +70,17 @@ WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
 #: 256 cycles it spends writing — now paced by the DAC — it is not reading, and the ADC has nowhere
 #: to put the words that arrive meanwhile.  A converter cannot be told to wait, so they are gone.
 #:
-#: **The count is deliberately not pinned.**  Measured 62 of 512 with the model's input FIFO at 2
-#: words, and *how many* are lost depends on that depth, which is a modelling choice rather than a
-#: measured property of any real RFDC.  What does not depend on it is the sign: any back-pressure at
-#: all makes a read-then-write relay drop, because the stall is structural.  So the sign is what is
-#: asserted here, and the number is left to the message.
+#: **The count is deliberately not pinned, and 62 should not be quoted.**  It was measured with the
+#: model's input FIFO at 2 words; a real RFDC's AXIS input buffer is much deeper than that, so **62 is
+#: probably pessimistic** — how much of a block's write phase the converter can absorb before it has
+#: to refuse is exactly what the depth sets.  The number is a property of the model, not of the
+#: silicon, and the last time a number from this gate got quoted (72) it outlived the design it
+#: described.
+#:
+#: What does *not* depend on the depth is the **sign**: any back-pressure at all makes a
+#: read-then-write relay drop, because while the stage writes it is not reading, and no depth removes
+#: that.  So the sign is what is asserted, and the count is left in prose where it cannot be mistaken
+#: for a gate.
 #:
 #: **This is the case pattern B exists to answer**, and the contrast is now measured rather than
 #: argued: ``examples/rf_blk_delay`` runs the same converters through ``RfSampBuf`` at both ends and

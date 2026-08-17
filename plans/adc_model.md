@@ -373,8 +373,11 @@ a B problem**, because the delay *is* a timestamp relationship. Teaching it as A
 at A in exactly the situation A does not fit.
 
 What it keeps is narrower and still worth having — the **documented case study of what direct
-connection costs**: 72 dropped words, the silently-ignored depth pragma, the 1066 gate. That evidence
-is the motivation for B existing. Case study, not exemplar. Its one real defect stands and should be
+connection costs**: dropped words, the silently-ignored depth pragma, the 1066 gate. That evidence is
+the motivation for B existing, and it got *stronger* on 2026-08-17: once the DAC model was made to
+withhold `TREADY`, the case study stopped under-reporting its own cost and the A-vs-B comparison
+became controlled — same converters, one changed variable (see the correction under "The overlap
+fix"). Case study, not exemplar. Its one real defect stands and should be
 fixed either way: the Python twin relays a burst and says nothing about rate, which is the blind spot
 that hid the drops. `RfSampIngress.run_iter` is **not extracted** (its `kernel_task()` names a
 hand-written header), so it is free to use `get_pipelined` — worth confirming with one extractor
@@ -490,9 +493,12 @@ graph the pysim golden runs. Gate: `tests/examples/test_rf_loopback_xsi.py`.
 AXI-Stream → real RTL → unpack → dequantize → Python and comes back **bit-identical**. Cycle gate:
 the last RF block lands at **2152** (time to last completion, not the 6000 loop bound).
 
-**What did not, and it was a design finding rather than a model bug** — since **FIXED**, see "The
-overlap fix" below; the paragraph is kept because the finding is the reason the counter contract
-exists. The ADC produced 512 words and the fabric accepted **440**; **72 were dropped**. `RfSampPassThrough` reads a whole 64-word block
+**What did not, and it was a design finding rather than a model bug** — partly fixed, see "The
+overlap fix" below **and the correction under it**: the fix removed the stall in front of `s_in` but
+not the structural one, and the `0` it recorded was measured against a DAC model that never withheld
+`TREADY`. Against one that does, this design still drops. The paragraph is kept because the finding
+is the reason the counter contract exists. The ADC produced 512 words and the fabric accepted
+**440**; **72 were dropped**. `RfSampPassThrough` reads a whole 64-word block
 and only then writes it, so `TREADY` is low for ~64 cycles at a stretch while the converter presents
 a beat every ~4.7 cycles regardless. Divergence begins at sample 264 — block 1, offset 8 — exactly
 where the first write phase starts.
@@ -549,7 +555,7 @@ regression-guarded rather than hidden.
 |---|---|---|
 | where loss is accounted | the `RFSampIF` **edge**, and `StreamIF.dropped` at the fabric boundary | the converter models **and** the channel |
 | units | whole **blocks**, and **words** at the fabric boundary | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
-| ADC→fabric | **0** — the loss is sub-block, below the model's resolution | 72 of 512 words dropped |
+| ADC→fabric | **0** — the loss is sub-block, below the model's resolution | 72 of 512 words dropped (62 after the overlap fix, once the DAC withheld `TREADY`) |
 | DAC startup | 2 zero-filled blocks (the metronome fires regardless) | 1 — the RF grid starts at the source, not the edge |
 | blocks the DAC emits | 8 (one per source block) | 19 — the grid runs for the whole harness run |
 
@@ -650,6 +656,39 @@ not just the first — is bit-identical through quantize → pack → RTL → un
 the one-block RTL transient. That whole-run comparison was unreachable while blocks were missing
 words. DAC zero-fills 13 → 11 (the two blocks it gained are the ones that used to arrive incomplete).
 pysim is unchanged and still clean: transient 2, `blk_latency` still 1.
+
+> ### ⚠ CORRECTION, 2026-08-17 — **the zero above is a dead result, and the sentence below it was
+> right for the wrong reason**
+>
+> `ADC_DROPPED = 0` was measured against a converter model that **never withheld `TREADY`**:
+> `RfdcDacSlave::drive()` asserted it unconditionally, commented "a converter is always ready". That
+> is true of the ADC and false of the DAC. With an always-ready sink the fabric could run arbitrarily
+> far ahead of the converter, so the relay was **never held up on its output** — and a stage that is
+> never held up on its output never has to stall its input. The sink could not fail, so the design
+> could not be seen to fail.
+>
+> Held to the converter's own grid (`xsi_rfdc.h`, depth-2 input FIFO), the same design **accepts 450
+> of 512 and drops 62**.
+>
+> So the overlap fix was **necessary but not sufficient**, and it looked sufficient for exactly the
+> reason the next paragraph gives for why splitting alone is not enough — one level up. Making the
+> boundary stage one-word-in-one-word-out removed the stall in front of `s_in`; it did not remove the
+> fact that this design's *block stage* still has to finish writing a block before the next can be
+> read, and once the DAC paces that write, the ingress has nowhere to put what arrives meanwhile.
+>
+> **No FIFO depth fixes it.** The stall is structural to reading a whole block before writing one.
+> That is what pattern B is for, and the comparison is now controlled — same converters, same clock,
+> one changed variable:
+>
+> | | pattern A (`rf_loopback`) | pattern B (`rf_blk_delay`) |
+> |---|---|---|
+> | ADC words dropped | **62 of 512** | **0** — structurally; the ingress writes a BRAM |
+> | DAC underruns | present | **0** |
+> | blocks bit-exact end to end | 6 of 8 | **13 of 13** |
+>
+> Do not quote **62** the way **72** got quoted here. It is a function of the model's 2-word input
+> FIFO; a real RFDC's is much deeper, so 62 is probably pessimistic. The gate asserts the *sign*,
+> which no depth changes. See `tests/examples/test_rf_loopback_xsi.py`.
 
 **Splitting the read from the write is necessary but NOT sufficient, and this is the part worth
 keeping.** The obvious composite — reader does `get(block)` then `write(block)` to the internal FIFO —

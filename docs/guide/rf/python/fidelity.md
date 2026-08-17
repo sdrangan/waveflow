@@ -61,9 +61,10 @@ Two things had to be corrected before the count could mean anything:
 ## Where the check stops seeing {#the-resolution-limit}
 
 Here is a design that violated condition 3, where **RTL lost 72 of 512 words and pysim reported
-none**. Both were behaving correctly. The design has since been fixed — see
-[what fixing it took](#what-fixing-it-took) — but the *gap* it exposed is permanent, and that is why
-it is still the example on this page.
+none**. Both were behaving correctly. The design was partly fixed — see
+[what fixing it took](#what-fixing-it-took), and the correction there: against a DAC that withholds
+`TREADY` it still drops 62 — but the *gap* this page is about is permanent, and that is why it is
+still the example here.
 
 `RfSampPassThrough` read a whole 64-word block and only then wrote it. Per 1000 ns block period it
 needs about 213 ns of work, so **at block granularity it comfortably kept up** — it was back at its
@@ -103,6 +104,18 @@ Three things are worth taking away, and none of them is "make the buffer bigger"
   stage that transforms a block cannot emit before it has received one; it just must not be the stage
   holding the port.
 
+> **Correction (2026-08-17).** The `dropped == 0` this section reports was measured against a
+> converter model that **never withheld `TREADY`**. With an always-ready sink the fabric could run
+> arbitrarily far ahead, so this design was never held up on its output — and a stage that is never
+> held up on its output never has to stall its input. The sink could not fail, so the design could
+> not be seen to fail. Held to the converter's grid it accepts **450 of 512**.
+>
+> Everything in the three bullets above still holds; what they were not sufficient for is the *block
+> stage*, which still finishes writing a block before the next can be read. **No FIFO depth removes
+> that** — it is structural to reading a whole block before writing one, which is why the answer is a
+> sample buffer (pattern B) rather than a bigger channel. `examples/rf_blk_delay` drops zero on the
+> same converters.
+
 The throughput barely moved (1072 → 1066 cycles on the DUT-alone gate) because the block stage's
 read-then-write was never the bottleneck for *this* testbench. The change was never about speed.
 (That gate reads 1066 today, on the RFSoC part at 250 MHz. It briefly read 1074 at a 300 MHz
@@ -136,7 +149,7 @@ Same scenario, same graph, and the numbers do not match. They are not meant to:
 |---|---|---|
 | where loss is accounted | the `RFSampIF` edge, and `StreamIF.dropped` | the converter models and the channel |
 | units | whole **blocks**, and **words** at the fabric boundary | **words** (ADC drop), **cycles** (DAC underrun), **blocks** (channel) |
-| ADC→fabric loss | 0 — and it was 0 for the broken design too | 0 now; 72 of 512 words before the fix |
+| ADC→fabric loss | 0 — and it was 0 for the broken design too | 72 of 512 before the overlap fix, 62 after (see the correction above) |
 | startup transient | 2 blocks | 2 blocks |
 
 The startup numbers agree, and the agreement is worth less than it looks. Two unrelated offsets

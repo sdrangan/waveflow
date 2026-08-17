@@ -152,6 +152,21 @@ the loopback it lands on a converter that cannot, which is where the change is m
 went from dropping 72 words to dropping none. Both numbers live in
 `tests/examples/test_xsi_bfm.py` and `tests/examples/test_rf_loopback_xsi.py`.
 
+> **Correction (2026-08-17): "dropping none" was measured against a DAC that could not refuse.**
+> `RfdcDacSlave` used to drive `TREADY` high unconditionally, so the fabric could run arbitrarily far
+> ahead of the converter and this design was never held up on its *output* — and a stage that is never
+> held up on its output never has to stall its input. The sink could not fail, so the design could not
+> be seen to fail. Against a DAC that withholds `TREADY` until its own grid asks, the same RTL accepts
+> **450 of 512 and drops 62**.
+>
+> The overlap fix was **necessary but not sufficient**: it stopped the *ingress* stalling, but the
+> block stage still finishes a block's write before the next read, and once the DAC paces that write
+> there is nowhere to put what arrives meanwhile. No FIFO depth removes it — the stall is structural
+> to reading a whole block before writing one. That is the case
+> [pattern B](../../guide/rf/python/rules.md) answers, and `examples/rf_blk_delay` drops **zero** on
+> the same converters. Do not quote 62 as a design constant; it depends on the model's input-FIFO
+> depth, and the gate asserts only the sign.
+
 ## See also
 
 - [The fidelity boundary](../../guide/rf/python/fidelity.md) — why that 72-word loss was invisible in pysim,
