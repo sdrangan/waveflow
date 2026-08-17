@@ -196,7 +196,10 @@ The **structure** is not trivial, and it is not decoration. It was one task — 
 then write it — and that design dropped 72 of 512 samples at RTL. A converter cannot be
 back-pressured, so a stage that stops reading its input for 64 cycles at a stretch loses whatever
 arrives meanwhile. Splitting the read from the write is what lets block *k+1* arrive while block *k*
-is going out:
+is going out — **necessary, and not sufficient**: it takes the loss to 62, not to zero, because the
+block stage still finishes a write before the next read and the DAC paces that write. See
+[the RTL page's correction](rtl.md). The structure below is still the right first move; what it does
+not do is make this design safe against a converter at both ends, which is what pattern B is for.
 
 ```python
 class RfSampIngress(FreeRunMod):        # never stops reading the boundary port

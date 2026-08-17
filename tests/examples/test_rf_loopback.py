@@ -59,8 +59,22 @@ class TestLoopback:
         Quantization runs through the integer-backed ``FixedField`` and packing through the generated
         array serializers, so the degenerate widths that break hand-rolled ``.range()`` packing are
         covered by construction rather than by hope.
+
+        **The sample rate is scaled with the word, and that is not cosmetic.**  This pass-through
+        reads a whole block and then writes it, so it occupies the port for *twice* its utilisation
+        ``samp_rate / (samp_per_word * f_axis)`` — and it declares ``blk_latency = 1``, which only
+        holds while that stays under one block period.  Held at a fixed rate, the narrow-word cases
+        drift over that line as the fabric slows: at 250 MHz, ``(16, 2)`` at 256 MSa/s is 0.512
+        utilisation, so the read-then-write costs 1.02 block periods and the DAC edge underruns a
+        third time.  Scaling the rate keeps every geometry at the same utilisation, so the sweep
+        measures **packing**, which is what it is for, rather than a timing accident of one width.
+        (That the line exists at all is pattern A's cost, and the reason ``RfSampBuf`` exists.)
         """
-        sim = RfLoopbackSim(n_src_blk=4, nbits=nbits, samp_per_word=samp_per_word, blksize=64)
+        # 64 MSa/s per sample-per-word -> utilisation 0.256 at every geometry, comfortably inside
+        # the pass-through's one-block budget.
+        samp_rate = 64e6 * samp_per_word
+        sim = RfLoopbackSim(n_src_blk=4, nbits=nbits, samp_per_word=samp_per_word, blksize=64,
+                            samp_rate=samp_rate)
         sim.run()
         sim.check()
 

@@ -269,3 +269,14 @@ examples/rf_samp_buf_tx/gen/
 examples/rf_samp_buf_tx/include/
 examples/rf_samp_buf_tx/results/
 examples/rf_samp_buf_tx/xsi/vectors/
+
+# rf_blk_delay (the pattern-B loop): same convention, with one difference worth stating -- this
+# example has a src/ of its own, and it is TRACKED.  The four RfSampBuf task bodies are framework
+# and arrive in include/ from waveflow/build/, but blk_delay_task.h is this example's own hand-written
+# body, so it is source rather than build output.  include/ is still entirely generated.
+examples/rf_blk_delay/rf_blk_delay_proj/
+examples/rf_blk_delay/gen/
+examples/rf_blk_delay/include/
+examples/rf_blk_delay/results/
+examples/rf_blk_delay/logs/
+examples/rf_blk_delay/xsi/vectors/

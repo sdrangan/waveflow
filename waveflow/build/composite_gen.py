@@ -709,6 +709,43 @@ def derive_internal_edges(comp) -> list:
     return edges
 
 
+def kernel_tasks(comp) -> list:
+    """*comp*'s sub-tasks **flattened to leaves** — the list the generated top emits one task per.
+
+    ``hls::task`` has no hierarchy: a generated top is one flat list of tasks joined by channels.  So
+    a design that *reuses* a composite — ``RfSampBufRx`` inside a signal-processing loop — has to
+    reach the generator as the leaves it is made of, not as the composite.
+
+    The flattening lives here rather than on
+    :attr:`~waveflow.hw.hw_freerun.FreeRunMod.ordered_subcomps` because that property has a second
+    reader with the opposite need: :func:`tb_top_spec` walks it to find the DUT *among* a testbench's
+    children, and a flattening there would dissolve the node it is looking for.  One level for the
+    graph, all levels for the kernel.
+
+    Recursion needs no base case beyond the leaf rule: a leaf's ``ordered_subcomps`` is ``[self]``.
+    """
+    out: list = []
+    for sub in comp.ordered_subcomps:
+        out += kernel_tasks(sub) if getattr(sub, "sub_comps", None) else [sub]
+    return out
+
+
+def _all_interfaces(comp) -> list:
+    """*comp*'s own ``add_if`` interfaces plus those of any composite child, recursively.
+
+    The peer of :func:`kernel_tasks`, and it has to exist for the same reason: once a reused
+    sub-composite's tasks are flattened into the top, the channels joining *those* tasks are internal
+    to the top too.  A boundary port is a child endpoint bound to no internal interface, so an
+    interface this walk missed would turn a wired channel into a phantom boundary port — and the
+    failure would surface as a boundary-name count mismatch far from its cause.
+    """
+    out = list(comp.interfaces.values())
+    for child in comp.sub_comps.values():
+        if getattr(child, "sub_comps", None):
+            out += _all_interfaces(child)
+    return out
+
+
 def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     """Pair *names* with *comp*'s boundary endpoints, **derived from the component graph**.
 
@@ -722,9 +759,9 @@ def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     Order is significant — :func:`bundle_map` assigns ``gmem`` bundles in boundary order — and it is
     the walk order (children in ``add_comp`` order, ports in ``add_endpoint`` order).
     """
-    internal = {id(ep) for iface in comp.interfaces.values()
+    internal = {id(ep) for iface in _all_interfaces(comp)
                 for ep in iface.endpoints.values() if ep is not None}
-    eps = [ep for child in comp.ordered_subcomps
+    eps = [ep for child in kernel_tasks(comp)
            for ep in child.endpoints.values() if id(ep) not in internal]
 
     if len(names) != len(eps):
@@ -933,7 +970,20 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     *same* generator."""
     ep_arg: dict[int, str] = {}
 
+    seen: dict[str, object] = {}
     for edge in comp.internal_edges:
+        # Two channels with one name would emit two declarations of the same C++ variable and wire
+        # the second channel's tasks to the first.  It is a real hazard once a top reuses a module
+        # twice (both instances name their channels the same), so it is refused rather than left to
+        # surface as a compiler redeclaration with no hint of which edges collided.
+        if edge.name in seen:
+            raise LoweringError(
+                f"composite_top_spec: {type(comp).__name__} has two internal channels named "
+                f"{edge.name!r} ({seen[edge.name]} and {edge}). A channel name is the C++ variable "
+                f"name, so the two would collapse into one and silently join the wrong tasks. If "
+                f"they come from two instances of the same sub-module, the hoist should be "
+                f"qualifying them by child name — see FreeRunMod.internal_edges.")
+        seen[edge.name] = edge
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
 
@@ -951,7 +1001,7 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
     # (`<producer_inst>_<ch>_write`), and only this loop knows which endpoint belongs to which task.
     tasks: list[TaskInst] = []
     ep_task: dict[int, int] = {}
-    for sub in comp.ordered_subcomps:
+    for sub in kernel_tasks(comp):
         kt = _kernel_task_of(sub, comp)
         args: list[str] = []
         for attr in kt.signature:
@@ -2424,14 +2474,24 @@ DEFAULT_PERIOD_NS = 10
 RFSOC4X2_PART = "xczu48dr-ffvg1517-2-e"
 
 #: The fabric clock the RF model's arithmetic is written against — ``check_rate``,
-#: ``words_per_cycle`` and every ceiling in ``docs/guide/rf/`` assume 300 MHz.  Synthesizing at
-#: 100 ns/10 MHz... at 10 ns (100 MHz) made the documented premise unreachable on the synthesized
-#: part while being comfortable on the real one, which is precisely the gap this constant closes.
-RFSOC4X2_CLK_HZ = 300e6
+#: ``words_per_cycle`` and every ceiling in ``docs/guide/rf/``.  It is also what the RF examples
+#: synthesize at, single-sourced here so the model's premise and the RTL's target cannot drift apart
+#: (they had: the model assumed 300 MHz while csynth targeted 100, until PR #162).
+#:
+#: **250 MHz is forced by the geometry, not chosen for headroom.**  The AXIS word carries
+#: ``samp_per_word`` samples, so ``f_axis = samp_rate / samp_per_word`` and ``samp_per_word`` is an
+#: integer — a sample cannot straddle a slot.  For a 1 GSPS converter that gives
+#: ``1000 / 250 = 4`` exactly, where 300 MHz would need ``1000/300 = 3.33`` samples per word, which
+#: is not a thing.  300 MHz was never an engineering choice; it came from the guide's illustrative
+#: arithmetic and propagated.
+#:
+#: It also leaves ~40% margin against the measured csynth Fmax (400–547 MHz) rather than ~25%, and
+#: those are **pre-route estimates**, so the margin is doing real work.
+RFSOC4X2_CLK_HZ = 250e6
 
-#: 3.333 ns rather than 1e9/300e6 exactly: a round figure in the TCL, and 300.03 MHz is marginally
-#: *harder* to close than 300, so the rounding errs toward pessimism.
-RFSOC4X2_PERIOD_NS = 3.333
+#: 4.0 ns — exactly ``1e9 / RFSOC4X2_CLK_HZ``, with no rounding to reason about.  (The 300 MHz it
+#: replaced could not be stated exactly: 3.333 ns is 300.03 MHz.)
+RFSOC4X2_PERIOD_NS = 4.0
 
 
 def tcl_target(config) -> tuple[str, float]:

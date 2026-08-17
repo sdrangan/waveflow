@@ -139,19 +139,21 @@ def test_the_loaders_per_word_cost_is_the_payload_loops_achieved_ii():
 def test_the_rate_ceiling_follows_the_measured_cost():
     """The consequence, asserted so a silent correction cannot pass unnoticed.
 
-    ``fire_cycles = 3`` puts the player's ceiling at 100 MSa/s per sample-per-word on a 300 MHz
-    fabric.  The declaration that stood until 2026-08-17 said 2, which permitted 150 — **50% more
-    than the hardware sustains**.
+    ``fire_cycles = 3`` puts the player's ceiling at ``f_axis / 3`` per sample-per-word.  The
+    declaration that stood until 2026-08-17 said 2, which permitted half again as much as the
+    hardware sustains.  The clock is read from the target rather than written as a literal, so
+    re-clocking the examples cannot leave a stale ceiling here.
     """
     from waveflow.hw.rf_samp_buf_tx import RfSampBufTx
     from waveflow.simulation.simulation import Simulation
 
+    f_axis = 1000.0 / RFSOC_TARGET_NS * 1e6            # 250 MHz
     for spw in (1, 2, 4):
         dut = RfSampBufTx(name=f"ceil{spw}", sim=Simulation(), bitwidth=16 * spw,
                           samp_per_word=spw)
-        assert dut.max_samp_rate(300e6) == 300e6 * spw / 3
+        assert dut.max_samp_rate(f_axis) == f_axis * spw / 3
     assert RfSampBufTx(name="c1", sim=Simulation(), bitwidth=16,
-                       samp_per_word=1).max_samp_rate(300e6) == 100e6
+                       samp_per_word=1).max_samp_rate(f_axis) == f_axis / 3
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +168,11 @@ def test_the_rate_ceiling_follows_the_measured_cost():
 #: ``xc7z020`` physically cannot host an RF data converter, and it reached 137 MHz on this design --
 #: so every ceiling in ``docs/guide/rf/`` was being measured on a part that could not run it.
 RFSOC_PART = "xczu48dr-ffvg1517-2-e"
-RFSOC_TARGET_NS = 3.33          # Vitis rounds the emitted 3.333 to 2dp in the report
+
+#: 4.0 ns = 250 MHz, and it is **forced by the geometry rather than chosen**: the AXIS word carries
+#: an integer number of samples, so ``f_axis = samp_rate / samp_per_word``, and 1 GSPS / 250 MHz = 4
+#: exactly where 1 GSPS / 300 MHz = 3.33 is not a sample count.  It replaced 3.333 ns on 2026-08-18.
+RFSOC_TARGET_NS = 4.0
 
 #: ``(label, report dir)`` for every example that must be on the RFSoC part.
 RF_SOLUTIONS = [
@@ -192,11 +198,11 @@ def test_the_rf_examples_are_synthesized_for_the_rfsoc_part(label, report_dir):
     assert got is not None, f"{label}: no csynth.xml in {report_dir}"
     assert _norm(got["part"]) == _norm(RFSOC_PART), (
         f"{label} was synthesized for {got['part']}, not {RFSOC_PART}. The RF model's rates are "
-        f"written against a 300 MHz fabric on a part that can host a converter; a Zynq-7020 is "
+        f"written against a 250 MHz fabric on a part that can host a converter; a Zynq-7020 is "
         f"neither.")
     assert got["target_period_ns"] == pytest.approx(RFSOC_TARGET_NS, abs=0.01), (
         f"{label} targeted {got['target_period_ns']} ns, not {RFSOC_TARGET_NS} "
-        f"(300 MHz) — the clock every ceiling in docs/guide/rf/ assumes")
+        f"({1000.0 / RFSOC_TARGET_NS:.0f} MHz) — the clock every ceiling in docs/guide/rf/ assumes")
 
 
 @pytest.mark.parametrize("label,report_dir", RF_SOLUTIONS, ids=[s[0] for s in RF_SOLUTIONS])
@@ -204,7 +210,7 @@ def test_the_rf_examples_close_timing_at_300_mhz(label, report_dir):
     """Closing it is the point: the premise is only worth writing against if it is reachable.
 
     A margin check rather than an exact Fmax — the estimate moves in the third significant figure
-    between runs, and what matters is that 300 MHz is met, not by how much.
+    between runs, and what matters is that the target clock is met, not by how much.
     """
     from waveflow.utils.csynthparse import synth_target
 
@@ -212,9 +218,11 @@ def test_the_rf_examples_close_timing_at_300_mhz(label, report_dir):
         pytest.skip(f"no csynth report dir at {report_dir} — run that example's build --through csynth")
     got = synth_target(report_dir)
     assert got is not None and got["fmax_mhz"] is not None, f"{label}: no timing estimate"
-    assert got["fmax_mhz"] >= 300.0, (
-        f"{label} estimates {got['fmax_mhz']:.1f} MHz, below the 300 MHz the RF model assumes. "
-        f"Either the design got slower or the premise needs restating — do not just lower the doc.")
+    floor = 1000.0 / RFSOC_TARGET_NS
+    assert got["fmax_mhz"] >= floor, (
+        f"{label} estimates {got['fmax_mhz']:.1f} MHz, below the {floor:.0f} MHz the RF model "
+        f"assumes. Either the design got slower or the premise needs restating — do not just lower "
+        f"the doc.")
 
 
 def test_the_non_rf_examples_are_left_on_their_original_part():

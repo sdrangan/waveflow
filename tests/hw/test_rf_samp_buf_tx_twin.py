@@ -16,11 +16,9 @@ bodies exactly as ``test_rf_samp_buf_twin.py`` pins it for the RX ones.
 """
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from examples.rf_samp_buf_tx.rf_samp_buf_tx import (
-    RF_SAMP_BUF_OK,
     RF_SAMP_BUF_TOO_LATE,
     XSI_BLKSIZE,
     RfSampBufTxTB,
@@ -30,7 +28,7 @@ from examples.rf_samp_buf_tx.rf_samp_buf_tx import (
     responses,
     run_pysim,
 )
-from waveflow.build.composite_gen import composite_top_spec
+from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ, composite_top_spec
 from waveflow.build.elaborate import elaborate
 from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufPlayer, RfSampBufTx
 from waveflow.simulation.simulation import Simulation
@@ -103,9 +101,14 @@ def test_the_paced_twin_sees_a_loader_that_cannot_keep_up():
     assert slow_underrun > blind_underrun, (
         f"the paced twin reports {slow_underrun} underruns and the blind one {blind_underrun}; "
         f"pacing must make starvation MORE visible, not less")
-    assert slow_run < blind_run, (
-        f"the paced twin got {slow_run} loaded samples out contiguously and the blind one "
-        f"{blind_run}; a starved player must play FEWER of them, not more")
+    # Compared on samples PLACED rather than on the contiguous run: the run-finder measures what
+    # reached the converter unbroken, which saturates at one block once the priming window shifts,
+    # and a saturated measure cannot discriminate.  What the loader actually managed is `nloaded`.
+    slow_placed = sum(n for _t, _s, n in slow_resp)
+    blind_placed = sum(n for _t, _s, n in blind_resp)
+    assert slow_placed < blind_placed, (
+        f"the paced twin placed {slow_placed} samples and the blind one {blind_placed}; a starved "
+        f"loader must place FEWER, not more")
 
 
 def test_the_shipped_cost_plays_the_window_correctly():
@@ -124,19 +127,46 @@ def test_the_shipped_cost_plays_the_window_correctly():
         f"but it must not be everything")
 
 
-def test_the_underrun_counter_is_the_same_at_the_shipped_cost_and_at_zero():
-    """The structural transient is NOT the fault, and this separates the two.
+def test_the_underrun_counter_does_not_measure_the_loaders_cost_while_the_loader_has_margin():
+    """**A correction, and the corrected claim is the weaker one.**
 
-    Before the first command's slot the buffer is genuinely empty and after the last one it is
-    genuinely stale, so a correctly-fed design still reports underruns.  At the shipped cost the
-    paced and zero-cost twins agree exactly, which is what makes the disagreement at
-    ``SLOW_WORD_CYCLES`` mean something.
+    An earlier revision of this file asserted that at 250 MHz the paced twin reports MORE underruns
+    than the zero-cost one — 871 against 763 — and read that as the loader charge finally becoming
+    visible.  It is not.  Sweeping the loader's cost over 0, 1, 2 and 4 cycles per word gives
+    underrun 1821, 1691, 1647, 1612: **monotonically decreasing as the loader gets slower**, which no
+    rate story explains.  Over those same four runs the loader placed the identical 1030 samples with
+    identical responses, and the player fired the identical 3328 times, so neither what was stored nor
+    when it was played differed at all.
+
+    The mechanism is :attr:`~waveflow.hw.rf_samp_buf_tx.RfSampBufPlayer.last_wr`.  It is a *lower
+    bound* on the fill level, advanced only when a non-blocking poll of a **depth-1** channel happens
+    to find a notice.  A fast loader emits its notices in a burst, they overwrite each other before
+    the player polls, and the bound lags further behind — measured, fill notices actually seen went
+    128, 257, 257, 259 across the sweep, and the final bound 1763, 1893, 1937, 1972.  The counter is
+    tracking how the notices interleave with the polls, and over-reporting when they interleave badly.
+    Which is exactly what that attribute's docstring already says it does; what was new was reading
+    the variation as signal.
+
+    So PR #161's original conclusion stands: this counter has no discriminating power for the
+    loader's cost while the loader has margin.  What does discriminate is samples PLACED, and it moves
+    only once the loader genuinely fails to keep up — see
+    ``test_the_paced_twin_sees_a_loader_that_cannot_keep_up``, which is the acceptance criterion.
     """
-    paced, played, _resp, _run_len = _run(RfSampBufLoader.word_cycles)
-    blind, _bp, _bresp, _brun = _run(0)
-    assert abs(paced - blind) < 0.01 * played, (
-        f"paced={paced}, zero-cost={blind} of {played}: at a cost the design can afford the two must "
-        f"agree to within noise, or the pacing is charging for something that is not there")
+    paced, played, resp, _run_len = _run(RfSampBufLoader.word_cycles)
+    blind, _bp, bresp, _brun = _run(0)
+
+    # 1. The loader had margin at both costs: same samples, same slots, same responses.
+    assert resp == bresp == expected_responses(1), (
+        f"the loader no longer has margin at one of these costs ({resp} vs {bresp}), so this test's "
+        f"premise is gone and the counter may well be measuring something real now")
+
+    # 2. And the counter moved anyway — which is the whole point.  A counter that varies while
+    #    nothing it purports to measure varies is not measuring that thing.
+    assert abs(paced - blind) > 0.01 * played, (
+        f"paced={paced} and zero-cost={blind} of {played} now agree to within 1%. That is a BETTER "
+        f"state than the one this test documents: it would mean the fill channel's sampling artefact "
+        f"is gone (a deeper channel, or a blocking notice). If so, delete this test and re-derive "
+        f"whether the loader charge is visible — do not widen the tolerance to keep it passing.")
 
 
 # ---------------------------------------------------------------------------
@@ -195,11 +225,11 @@ def test_the_two_progress_channels_are_declared_depth_one_and_point_opposite_way
 # ---------------------------------------------------------------------------
 #
 # THE ORIGINAL CRITERION FOR THIS STAGE HAD NO DISCRIMINATING POWER, and the measurement above is
-# why: `test_the_underrun_counter_is_the_same_at_the_shipped_cost_and_at_zero` shows the paced and
-# zero-cost LOADER give the same underrun count, because in the gate scenario the loader has margin
-# and the player's starvation is driven by its own metronome outrunning it.  Charging the loader
-# more only matters once the loader is the bottleneck (`SLOW_WORD_CYCLES`), which the test above
-# covers.
+# why: `test_the_underrun_counter_does_not_measure_the_loaders_cost_while_the_loader_has_margin`
+# shows the underrun count varies with how the depth-1 fill notices interleave with the player's
+# polls rather than with the loader's cost, because in the gate scenario the loader has margin and
+# the player's starvation is driven by its own metronome outrunning it.  Charging the loader more
+# only matters once the loader is the bottleneck (`SLOW_WORD_CYCLES`), which the test above covers.
 #
 # The PLAYER's `fire_cycles` needs a different probe, and it took a measurement to find one.  The
 # player's firing costs `max(fabric, DAC demand)`, and those two cross at exactly
@@ -234,10 +264,19 @@ def test_below_the_ceiling_the_players_cost_is_inert():
     it means no legal configuration can be used to check the constant, because ``check_rate`` refuses
     everything above the ceiling.
     """
-    rates = [_sustained_word_rate(fc, 64e6) for fc in (2, 3, 4)]
-    assert rates[0] == pytest.approx(rates[1]) == pytest.approx(rates[2]), (
-        f"the player's cost changed its sustained rate below the ceiling ({rates}); it should be "
-        f"DAC-paced there, and if it is not, `max(fabric, demand)` has stopped being the model")
+    # Which costs are actually *below* the ceiling is a property of the clock, so it is derived:
+    # the player is DAC-paced only while `f_axis / fire_cycles >= samp_rate`.  At 250 MHz and a
+    # 64 MSa/s DAC that is fire_cycles 2 and 3; at 4 the ceiling is 62.5 MSa/s and the FABRIC binds,
+    # which is the other test's territory.  Hard-coding the sweep would have quietly started
+    # measuring the wrong regime when the clock moved.
+    dac_rate = 64e6
+    below = [fc for fc in (2, 3, 4, 5) if RFSOC4X2_CLK_HZ / fc >= dac_rate]
+    assert len(below) >= 2, f"no room to compare: only {below} sit below the ceiling"
+    rates = [_sustained_word_rate(fc, dac_rate) for fc in below]
+    assert all(r == pytest.approx(rates[0]) for r in rates), (
+        f"the player's cost changed its sustained rate below the ceiling (fire_cycles {below} -> "
+        f"{rates}); it should be DAC-paced there, and if it is not, `max(fabric, demand)` has "
+        f"stopped being the model")
 
 
 def test_above_the_ceiling_the_measured_cost_predicts_a_lower_rate_than_the_old_one():
@@ -272,7 +311,7 @@ def test_the_ceiling_is_where_the_two_pacing_terms_cross():
     from waveflow.hw.rf_samp_buf_tx import RfSampBufTx
 
     dut = RfSampBufTx(name="cross", sim=Simulation(), **_ELAB)
-    f_axis = 300e6
+    f_axis = RFSOC4X2_CLK_HZ
     assert dut.max_samp_rate(f_axis) == f_axis / RfSampBufPlayer.fire_cycles
     nwords = 256
     at_ceiling = dut.max_samp_rate(f_axis)

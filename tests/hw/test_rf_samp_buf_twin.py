@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from examples.rf_samp_buf_rx.rf_samp_buf_rx import RfSampBufRxTB, run_pysim
-from waveflow.build.composite_gen import composite_top_spec
+from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ, composite_top_spec
 from waveflow.build.elaborate import elaborate
 from waveflow.hw.rf_samp_buf import IDX_BW, RfSampBufIngress, RfSampBufRx
 from waveflow.simulation.simulation import Simulation
@@ -33,7 +33,15 @@ _ELAB = {"bitwidth": 16, "samp_per_word": 1, "depth": 1024, "horizon_margin": 16
 #: 256 MSa/s on a 300 MHz fabric at one sample per word: the converter offers 0.853 words/cycle and
 #: the ingress absorbs 0.5.  This is the configuration whose FIRST RTL RUN lost 1695 of 4096 samples
 #: while pysim reported a clean run.
-OVER_RATE = 256e6
+#: Derived from the fabric clock rather than written as a literal, so re-clocking the examples
+#: cannot leave a probe that is over the PORT instead of over the DESIGN.  The two ceilings are
+#: ``spw * f_axis`` (250 MSa/s at one sample per word) and ``spw * f_axis / fire_cycles``
+#: (125 MSa/s); the probe has to sit strictly between them, or ``Rfdc`` refuses it before the design
+#: check is ever reached and the test would be measuring a different refusal.
+#:
+#: 1.6x the design ceiling.  It was 256 MSa/s at a 300 MHz fabric, which was 1.7x -- the same band.
+F_AXIS = RFSOC4X2_CLK_HZ
+OVER_RATE = 200e6
 #: Words the converter delivers in the gate scenario (16 blocks x 256 samples, one sample per word).
 N_WORDS = 4096
 
@@ -80,7 +88,7 @@ def test_the_paced_twin_sees_loss_the_burst_granular_one_could_not(monkeypatch):
         "the burst-granular twin is supposed to be blind here — if it now reports loss, this test "
         "no longer demonstrates anything and the reason needs finding")
     assert paced > 0, (
-        f"the paced twin still reports no loss at {OVER_RATE:g} samples/s, which is 1.7x what the "
+        f"the paced twin still reports no loss at {OVER_RATE:g} samples/s, which is 1.6x what the "
         f"ingress can absorb. The twin is not modelling rate.")
 
 
@@ -97,7 +105,7 @@ def test_the_loss_the_twin_reports_is_the_right_size():
     """
     dropped = _dropped_at(OVER_RATE)
     frac = dropped / N_WORDS
-    predicted = 1.0 - (150e6 / OVER_RATE)
+    predicted = 1.0 - (F_AXIS / 2 / OVER_RATE)
     assert 0.25 < frac < 0.55, (
         f"dropped {dropped}/{N_WORDS} = {frac:.1%}, predicted about {predicted:.1%}")
     assert dropped % 256 == 0, (
@@ -108,7 +116,7 @@ def test_the_gated_scenario_stays_clean():
     """The pacing must not invent loss in a design that fits: 64 MSa/s against a 150 MSa/s ingress."""
     tb = run_pysim(tb=RfSampBufRxTB(name="ok", sim=Simulation()))
     assert tb.adc_axis.dropped == 0
-    assert tb.rate_util == pytest.approx(64e6 / 150e6)
+    assert tb.rate_util == pytest.approx(64e6 / (F_AXIS / 2))
 
 
 def test_the_drop_threshold_is_the_declared_capacity():
@@ -119,8 +127,8 @@ def test_the_drop_threshold_is_the_declared_capacity():
     depend on the block size.
     """
     dut = RfSampBufRx(name="cap", sim=Simulation(), **_ELAB)
-    cap = dut.max_samp_rate(300e6)
-    assert cap == 150e6
+    cap = dut.max_samp_rate(F_AXIS)
+    assert cap == F_AXIS / 2
     assert _dropped_at(cap * 0.8) == 0, "a rate inside the declared capacity must not lose samples"
     assert _dropped_at(cap * 1.7) > 0, "a rate outside it must"
 
@@ -142,7 +150,7 @@ def test_the_refusal_message_no_longer_claims_pysim_is_blind():
     """
     dut = RfSampBufRx(name="msg", sim=Simulation(), **_ELAB)
     with pytest.raises(ValueError) as err:
-        dut.check_rate(OVER_RATE, 300e6)
+        dut.check_rate(OVER_RATE, F_AXIS)
     assert "pysim will not show it" not in str(err.value)
     assert "pysim WILL now show it" in str(err.value)
 

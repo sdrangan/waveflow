@@ -148,7 +148,14 @@ class FreeRunMod(HwModule):
     @property
     def ordered_subcomps(self) -> list:
         """The active sub-tasks, in emit order.  A **leaf**'s one task is itself (the 1-task case); a
-        **composite** assigns this (or, if it does not, the children in ``add_comp`` order)."""
+        **composite** assigns this (or, if it does not, the children in ``add_comp`` order).
+
+        **This is one level, deliberately.**  A composite child appears here as itself, not as the
+        tasks it contains — because this property is also how a *testbench* graph finds its DUT among
+        its children, and flattening it there would dissolve the very node being looked for.  The
+        synthesis walk needs the flat list instead, and takes it from
+        :func:`~waveflow.build.composite_gen.kernel_tasks`, which recurses through this.
+        """
         ov = self.__dict__.get('_ordered_subcomps')
         if ov is not None:
             return ov
@@ -167,14 +174,38 @@ class FreeRunMod(HwModule):
         :func:`~waveflow.build.composite_gen.derive_internal_edges`.  ``add_if`` already records the
         master↔slave connection *and* the lowering kind (its type), so declaring a parallel edge list
         could only restate it or contradict it.  An explicit assignment still wins, for a composite
-        that needs an edge the graph does not describe."""
+        that needs an edge the graph does not describe.
+
+        A **reused composite child**'s own channels belong here too: once the synthesis walk flattens
+        its tasks into this top, the channels joining those tasks are internal to this top.  They come
+        first, in ``add_comp`` order, so a channel is declared before the tasks that use it.
+
+        **A hoisted channel is re-qualified by the child it came from**, and it has to be.  An edge
+        name is the interface's name minus its *own* owner's prefix, so two instances of the same
+        module contribute channels with identical names — an ``RfSampBufRx`` and an ``RfSampBufTx``
+        both call their progress channel ``wr``.  Emitted as-is that is two declarations of one C++
+        variable, with the two buffers' tasks silently sharing whichever survived.  Prefixing with the
+        child's local name (``rx_wr``, ``tx_wr``) keeps them distinct and keeps them readable; the
+        generator also refuses a duplicate outright, so this cannot fail quietly.
+        """
         ov = self.__dict__.get('_internal_edges')
         if ov is not None:
             return ov
+        import dataclasses
+
+        from waveflow.build.composite_gen import derive_internal_edges
+
+        edges: list = []
+        for child in self.sub_comps.values():
+            if not getattr(child, "sub_comps", None):
+                continue
+            local = child.name
+            if local.startswith(f"{self.name}_"):
+                local = local[len(self.name) + 1:]
+            edges += [dataclasses.replace(e, name=f"{local}_{e.name}") for e in child.internal_edges]
         if self.interfaces:
-            from waveflow.build.composite_gen import derive_internal_edges
-            return derive_internal_edges(self)
-        return []
+            edges += derive_internal_edges(self)
+        return edges
 
     @internal_edges.setter
     def internal_edges(self, value) -> None:

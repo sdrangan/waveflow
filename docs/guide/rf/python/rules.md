@@ -36,11 +36,20 @@ Knowing **which task** the law is about is the whole skill.
 
 > **The evidence.** A pass-through that read a whole 64-word block before writing it held `TREADY`
 > low for its entire write phase. Over eight blocks the ADC produced **512** words and the fabric
-> accepted **440** — **72 were dropped**, and nothing but the counter said so. Split into an ingress
-> task and a block stage, the same design now accepts **512**.
+> accepted **440** — **72 were dropped**, and nothing but the counter said so. Splitting it into an
+> ingress task and a block stage took that to **512**, and *that number was not earned*: the
+> converter model was accepting every word the instant it was offered, so the relay was never held up
+> on its output and never had to stall its input. Against a DAC that withholds `TREADY` until its own
+> grid asks — which is what a converter does — the same design accepts **450** and drops **62**.
 
-An ingress that writes a BRAM port satisfies this rule **structurally** — a BRAM port has no
-handshake to refuse it, so there is no FIFO depth to size and no argument to get wrong.
+The lesson is the rule, not the arithmetic: **a design that touches the boundary itself has to solve
+never-stall itself, and a read-then-write relay cannot.** No FIFO depth fixes it, because the stall is
+structural — while the stage writes, it is not reading.
+
+An ingress that writes a BRAM port satisfies this rule **structurally** in the other direction — a
+BRAM port has no handshake to refuse it, so there is no depth to size and no argument to get wrong.
+That is what `RfSampBuf` does, and it is why pattern B is the default: `examples/rf_blk_delay` runs
+the same converters through a sample buffer at each end and drops **zero**.
 
 ## 2. Two tasks is not the same thing as overlap
 
@@ -90,8 +99,9 @@ next to the body it describes, measure it from `csynth`, and check the pairing i
 > would have failed: `1 · 300e6 / 2` is not.
 
 pysim reported a clean run at the time, and that is no longer true: `RfSampBufIngress`'s twin now
-charges `fire_cycles` per word, so the same configuration reports **1536 of 4096** dropped without a
-toolchain. It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
+charges `fire_cycles` per word, so an over-rate run reports **1536 of 4096** dropped without a
+toolchain. (200 MSa/s against the 125 MSa/s design ceiling — the original 256 MSa/s now exceeds the
+*port* at a 250 MHz fabric, so it is refused before the design check is reached.) It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
 against the RTL's 1695, but the threshold at which it starts reporting is exactly the declared
 capacity. See [rule 5](#5-the-counters-are-the-contract) for what the counters are for, and
 [the fidelity boundary](./fidelity.md#the-resolution-limit) for the loss shape that is still
@@ -133,11 +143,13 @@ A number that happened to match once is not.
 An `RfBlock` carries its **grid index** alongside its samples, and a command such as `RxCmd` names a
 window in **sample index** — the converter's running count, not a buffer address or a wall-clock time.
 
-Arrival time is block-quantised and differs between backends. The loopback's DAC shows a
-**2**-block startup transient in pysim and **1** at RTL, because pysim paces the RF side on the
-edge's metronome and XSI paces it on the source; neither is wrong. Anything you derive from arrival
-time inherits that disagreement. Anything you derive from the sample index does not, because sample
-*n* is at `t0 + n / samp_rate` in both.
+Arrival time is backend-dependent; the sample index is not. `examples/rf_blk_delay` measures both at
+once. It asks for block *k* at sample index `k·256` and places it at `k·256 + 1024`, and both backends
+honour that exactly — every block, bit-exact. But *where the delayed sample lands in what the DAC
+played* is **1024** in pysim and **960** at RTL: a fixed **64**-sample difference in start-up phase
+between the player's pointer and the converter's block grid. Neither is wrong. Anything derived from
+arrival inherits that 64; anything derived from the sample index does not, because sample *n* is at
+`t0 + n / samp_rate` in both.
 
 The practical payoff is that a host can ask for *"100 samples around the event I timestamped"* and
 mean something exact. A drop then leaves a **visible gap** in the indices rather than silently

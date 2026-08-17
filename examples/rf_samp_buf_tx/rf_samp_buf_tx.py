@@ -28,6 +28,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 
+from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
@@ -207,7 +208,7 @@ class RfSampBufTxTB(FreeRunMod):
     #: 64 MSa/s on a 300 MHz fabric — 0.213 samples per cycle against a player that sustains 0.5.
     #: NOT a free parameter: see :meth:`check_rate`.
     samp_rate: float = 64e6
-    axis_freq: float = 300e6
+    axis_freq: float = RFSOC4X2_CLK_HZ
     nbits: int = SAMP_BW
     #: Samples per AXIS word.  **1 is the gated configuration.**
     samp_per_word: int = 1
@@ -219,7 +220,7 @@ class RfSampBufTxTB(FreeRunMod):
     #: be wired up on purpose.  A counter that has never counted is not evidence, and the underrun
     #: this provokes is the only demonstration that the pysim twin models rate at all.
     enforce_rate: bool = True
-    axis_clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+    axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
 
     def check_rate(self) -> float:
         """Refuse a sample rate the player cannot sustain, and return the utilisation.

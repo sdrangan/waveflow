@@ -27,6 +27,7 @@ from typing import ClassVar
 
 import numpy as np
 
+from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -231,7 +232,7 @@ class RfSampPassThrough(FreeRunMod):
     blk_latency: HwParam[int] = 1
     #: The fabric clock the internal channel runs at.  Passed in by the testbench that owns the AXIS
     #: domain, because the hop's cost is a property of the fabric, not of this module.
-    clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+    clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -308,7 +309,7 @@ class RfLoopbackTB(FreeRunMod):
     #: RF sample rate in Hz (lives on the RF interfaces' clock; the converter reads it at bind).
     samp_rate: float = 256e6
     #: AXIS / fabric clock.
-    axis_freq: float = 300e6
+    axis_freq: float = RFSOC4X2_CLK_HZ
     nbits: int = 16
     samp_per_word: int = 4
     full_scale: float = 1.0
@@ -324,7 +325,7 @@ class RfLoopbackTB(FreeRunMod):
     sink_stall_after: int | None = None
     #: Receiver queue depth at the sink, in blocks.
     sink_depth: int = 2
-    axis_clk: Clock = field(default_factory=lambda: Clock(freq=300e6))
+    axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -1,0 +1,16 @@
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_blk_delay_task_64_4_256_4_16_Pipeline_VITIS_LOOP_97_1.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_blk_delay_task_64_4_256_4_16_s.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_fifo_w64_d1_S.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_fifo_w64_d2_S.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_fifo_w64_d64_A.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_flow_control_loop_pipe_sequential_init.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_regslice_both.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_capture_task_64_4_1024_16_16_Pipeline_VITIS_LOOP_106_2.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_capture_task_64_4_1024_16_16_s.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_ingress_task_64_4_1024_16_s.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_loader_task_64_4_2048_16_16_Pipeline_VITIS_LOOP_99_2.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_loader_task_64_4_2048_16_16_s.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_player_task_64_4_2048_16_s.v
+bram_t2p.v
+rf_blk_delay_top.v
