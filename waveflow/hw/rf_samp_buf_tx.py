@@ -461,6 +461,10 @@ class RfSampBufPlayer(FreeRunMod):
         self.n_underrun = 0
         #: Words emitted, in total — the denominator :attr:`n_underrun` is meaningful against.
         self.n_played = 0
+        #: Firings so far, and the epoch they are timed from — the absolute grid :meth:`run_iter`
+        #: paces on.  See there for why a relative timeout is wrong.
+        self._fired = 0
+        self._t0 = 0.0
 
     @property
     def capacity_samp_per_cycle(self) -> float:
@@ -531,9 +535,23 @@ class RfSampBufPlayer(FreeRunMod):
         # demand (what it must do), whichever is slower.  In RTL the second term arrives as TREADY;
         # here it has to be supplied, because pysim does not back-pressure a burst write -- see
         # :attr:`dac_word_rate`, where the measurement is recorded.
+        #
+        # ON AN ABSOLUTE GRID, not a relative timeout, and for exactly the reason
+        # ``RFSampIF`` schedules its metronome that way (see
+        # ``docs/guide/rf/python/sampling.md#absolute-grid``): a relative wait restarts from wherever
+        # ``now`` happens to be when the body finishes, so everything the body yielded for is ADDED to
+        # the period and never given back.  Here that is the interface's own transfer time for the
+        # burst just written -- 64 words at 250 MHz is a quarter of a block period -- which made the
+        # player slip a whole block every fourth firing and the DAC edge underrun periodically.  The
+        # error was proportional to the firing index, which is what makes it fatal for a converter
+        # rather than merely untidy.  Found by the pattern-B example, whose played stream showed a
+        # gap every third block.
+        self._fired += 1
         fabric = nwords * self.fire_cycles * self.clk.period
         demand = 0.0 if not self.dac_word_rate else nwords / float(self.dac_word_rate)
-        yield self.timeout(max(fabric, demand))
+        period = max(fabric, demand)
+        deadline = self._t0 + self._fired * period
+        yield self.timeout(max(0.0, deadline - self.now))
 
 
 # ---------------------------------------------------------------------------
