@@ -158,12 +158,26 @@ class RfSampBufLoader(FreeRunMod):
 
     cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_loader"
 
-    #: **Fabric cycles per firing**, per payload word.  Declared for symmetry with
-    #: :attr:`~waveflow.hw.rf_samp_buf.RfSampBufIngress.fire_cycles`: the loader's body is the same
-    #: shape (one stream read, one BRAM write) so it costs the same, and the pysim twin charges it.
-    #: Unlike the ingress's, this number is **not** a converter-facing rate contract — the loader may
-    #: block — so it bounds how fast a host can push, not whether samples are lost.
-    fire_cycles: ClassVar[int] = 2
+    #: **Fabric cycles per PAYLOAD WORD** — and deliberately *not* called ``fire_cycles``, because
+    #: this body has no cycles-per-firing to declare.
+    #:
+    #: MEASURED, from ``PipelineII`` on ``VITIS_LOOP_99_2`` in
+    #: ``rf_samp_buf_loader_task_..._Pipeline_VITIS_LOOP_99_2_csynth.xml``: the payload loop is
+    #: pipelined at an **achieved** II of 2 (against a target of 1, which Vitis did not meet — the
+    #: achievement is what a cost model may use, the target is a wish).
+    #:
+    #: **There is no per-firing constant here and this replaces the one that used to be.**  A firing
+    #: is one whole command, and the outer ``VITIS_LOOP_85_1`` has a data-dependent trip count, so
+    #: the module's overall latency is reported ``undef``.  The previous ``fire_cycles = 2`` was
+    #: justified by symmetry with :class:`~waveflow.hw.rf_samp_buf.RfSampBufIngress` — "the same
+    #: shape, so the same cost" — and the report refutes the premise: that body is a single-word
+    #: firing with a bounded 1-cycle latency, this one is a loop over an unbounded payload.
+    #:
+    #: **What is still not charged:** the framing — the command read, the response write, and the
+    #: outer loop's entry and exit.  That is a per-command overhead the report does not bound, so the
+    #: pysim charge is optimistic by it.  It is a constant per command rather than per word, so it
+    #: does not distort the per-word rate, only the fixed offset.
+    word_cycles: ClassVar[int] = 2
 
     #: AXIS word width in bits.  Read off the converter's ``axis_bitwidth``.
     bitwidth: HwParam[int] = WORD_BW
@@ -245,9 +259,9 @@ class RfSampBufLoader(FreeRunMod):
 
         The predecessor pattern this repo removed in PR #160 relayed a whole burst and charged
         nothing for it, which made the model silently rate-blind.  This body charges
-        ``fire_cycles`` per payload word, exactly as
-        :meth:`~waveflow.hw.rf_samp_buf.RfSampBufIngress.run_iter` does, so a host that cannot feed
-        the buffer fast enough shows up as the player underrunning rather than as a clean run.
+        :attr:`word_cycles` per payload word — the payload loop's *measured* pipeline II — so a host
+        that cannot feed the buffer fast enough shows up as the player underrunning rather than as a
+        clean run.
 
         Not a ``get_pipelined`` body, for the reasons recorded in ``plans/pipelined_ops.md``: it
         zero-pads to a length that must be known in advance, and its ``tstart`` assumes an II=1
@@ -280,7 +294,7 @@ class RfSampBufLoader(FreeRunMod):
             # so a body that stored the whole payload instantly and paid for it afterwards would put
             # the data in the buffer before the hardware could have.  That is the same rate-blindness
             # PR #160 removed from the RX ingress, pointing the other way.
-            yield self.timeout(self.fire_cycles * self.clk.period)
+            yield self.timeout(self.word_cycles * self.clk.period)
             if status != RF_SAMP_BUF_OK:
                 continue                      # consumed and discarded, never silently stored
 
@@ -356,14 +370,28 @@ class RfSampBufPlayer(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_player"
 
     #: **Fabric cycles per firing** — one word out of the buffer, one word to the DAC, per this many
-    #: cycles.  Declared for symmetry with
-    #: :attr:`~waveflow.hw.rf_samp_buf.RfSampBufIngress.fire_cycles`, whose body is the same shape
-    #: (one BRAM access, one stream access) and which csynth measured at 2.
+    #: cycles.
     #:
-    #: It is a **rate contract in the same sense**: the fastest DAC this design can feed is
+    #: MEASURED, from ``Worst-caseLatency = 2`` in
+    #: ``rf_samp_buf_player_task_16_1_2048_16_s_csynth.xml``: a firing costs ``latency + 1`` = **3**
+    #: FSM states.  It was **2** until 2026-08-17, justified by symmetry with
+    #: :attr:`~waveflow.hw.rf_samp_buf.RfSampBufIngress.fire_cycles` — "the same shape, so the same
+    #: cost" — and the report refutes the premise: the ingress reports latency 1, this body 2.  The
+    #: extra state is real work: this body reads a BRAM *and* polls the fill channel before it can
+    #: write, where the ingress reads a stream and writes a BRAM with nothing to consult.
+    #:
+    #: **The calibration is anchored, not assumed.**  ``latency + 1`` is what makes the RX ingress's
+    #: declared 2 correct at latency 1, and that value is independently corroborated by RTL: at
+    #: 256 MSa/s the RX design accepted 58.6% of the stream, which is 0.5/0.853 — exactly the ratio
+    #: ``fire_cycles = 2`` predicts.  A guard re-derives all of this from the reports; see
+    #: ``tests/examples/test_rf_samp_buf_fire_cycles.py``.
+    #:
+    #: It is a **rate contract**: the fastest DAC this design can feed is
     #: ``samp_per_word * f_axis / fire_cycles``, and a DAC faster than that underruns with no
-    #: protocol event to mark it.  See :meth:`RfSampBufTx.check_rate`.
-    fire_cycles: ClassVar[int] = 2
+    #: protocol event to mark it.  The correction lowered that ceiling by a third — from 150 to
+    #: 100 MSa/s at one sample per word on a 300 MHz fabric — and the old value **permitted 50% more
+    #: sample rate than the hardware sustains**.  See :meth:`RfSampBufTx.check_rate`.
+    fire_cycles: ClassVar[int] = 3
 
     bitwidth: HwParam[int] = WORD_BW
     samp_per_word: HwParam[int] = 1
@@ -603,9 +631,10 @@ class RfSampBufTx(FreeRunMod):
     def max_samp_rate(self, f_axis: float, samp_per_word: int | None = None) -> float:
         """The fastest DAC this buffer can feed, in samples/s, at *f_axis*.
 
-        ``samp_per_word * f_axis / fire_cycles`` — the same arithmetic as the RX side's, because the
-        player's body is the same shape as the ingress's.  **Not** the port's capacity, which is
-        ``samp_per_word * f_axis``; the difference is where a design silently underruns.
+        ``samp_per_word * f_axis / fire_cycles`` — the same *arithmetic* as the RX side's, but not the
+        same number: the player's ``fire_cycles`` is 3 against the ingress's 2, measured rather than
+        assumed to match.  **Not** the port's capacity either, which is ``samp_per_word * f_axis``;
+        the difference between those two is where a design silently underruns.
         """
         spw = int(self.samp_per_word) if samp_per_word is None else int(samp_per_word)
         return float(f_axis) * spw / RfSampBufPlayer.fire_cycles
