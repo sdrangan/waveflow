@@ -152,3 +152,85 @@ def test_the_rate_ceiling_follows_the_measured_cost():
         assert dut.max_samp_rate(300e6) == 300e6 * spw / 3
     assert RfSampBufTx(name="c1", sim=Simulation(), bitwidth=16,
                        samp_per_word=1).max_samp_rate(300e6) == 100e6
+
+
+# ---------------------------------------------------------------------------
+# The synthesis target — which part each example is actually built for
+# ---------------------------------------------------------------------------
+#
+# Checked from `csynth.xml`, which the RUN writes, rather than from the `.tcl`, which states the
+# intent and can be edited without rebuilding.  Same reason a stale `rtl_*.f` cannot be trusted to
+# describe the RTL beside it.
+
+#: The part the RF examples target, and the clock the RF model's arithmetic is written against.  An
+#: ``xc7z020`` physically cannot host an RF data converter, and it reached 137 MHz on this design --
+#: so every ceiling in ``docs/guide/rf/`` was being measured on a part that could not run it.
+RFSOC_PART = "xczu48dr-ffvg1517-2-e"
+RFSOC_TARGET_NS = 3.33          # Vitis rounds the emitted 3.333 to 2dp in the report
+
+#: ``(label, report dir)`` for every example that must be on the RFSoC part.
+RF_SOLUTIONS = [
+    ("rf_samp_buf_rx", RX_REPORT),
+    ("rf_samp_buf_tx", TX_REPORT),
+    ("rf_loopback dut", _EX / "rf_loopback" / "rf_pass_through_proj" / "solution1" / "syn" / "report"),
+]
+
+
+def _norm(part: str) -> str:
+    """Vitis writes ``xc7z020-clg484-1`` for a ``set_part xc7z020clg484-1``; compare without dashes."""
+    return (part or "").replace("-", "").lower()
+
+
+@pytest.mark.parametrize("label,report_dir", RF_SOLUTIONS, ids=[s[0] for s in RF_SOLUTIONS])
+def test_the_rf_examples_are_synthesized_for_the_rfsoc_part(label, report_dir):
+    """The part is a **per-example** choice, and these three are the examples that need it."""
+    from waveflow.utils.csynthparse import synth_target
+
+    if not report_dir.is_dir():
+        pytest.skip(f"no csynth report dir at {report_dir} — run that example's build --through csynth")
+    got = synth_target(report_dir)
+    assert got is not None, f"{label}: no csynth.xml in {report_dir}"
+    assert _norm(got["part"]) == _norm(RFSOC_PART), (
+        f"{label} was synthesized for {got['part']}, not {RFSOC_PART}. The RF model's rates are "
+        f"written against a 300 MHz fabric on a part that can host a converter; a Zynq-7020 is "
+        f"neither.")
+    assert got["target_period_ns"] == pytest.approx(RFSOC_TARGET_NS, abs=0.01), (
+        f"{label} targeted {got['target_period_ns']} ns, not {RFSOC_TARGET_NS} "
+        f"(300 MHz) — the clock every ceiling in docs/guide/rf/ assumes")
+
+
+@pytest.mark.parametrize("label,report_dir", RF_SOLUTIONS, ids=[s[0] for s in RF_SOLUTIONS])
+def test_the_rf_examples_close_timing_at_300_mhz(label, report_dir):
+    """Closing it is the point: the premise is only worth writing against if it is reachable.
+
+    A margin check rather than an exact Fmax — the estimate moves in the third significant figure
+    between runs, and what matters is that 300 MHz is met, not by how much.
+    """
+    from waveflow.utils.csynthparse import synth_target
+
+    if not report_dir.is_dir():
+        pytest.skip(f"no csynth report dir at {report_dir} — run that example's build --through csynth")
+    got = synth_target(report_dir)
+    assert got is not None and got["fmax_mhz"] is not None, f"{label}: no timing estimate"
+    assert got["fmax_mhz"] >= 300.0, (
+        f"{label} estimates {got['fmax_mhz']:.1f} MHz, below the 300 MHz the RF model assumes. "
+        f"Either the design got slower or the premise needs restating — do not just lower the doc.")
+
+
+def test_the_non_rf_examples_are_left_on_their_original_part():
+    """The split is the point: re-targeting mem_copy would invalidate its gates and the calib corpus.
+
+    A cheap check that the per-example selection did not leak.  Skips if mem_copy has not been built
+    here — its own gates are what really police it, and this is a tripwire, not their replacement.
+    """
+    from waveflow.utils.csynthparse import synth_target
+    from waveflow.build.composite_gen import DEFAULT_PART
+
+    rep = _EX / "mem_copy" / "mem_copy_proj" / "solution1" / "syn" / "report"
+    if not rep.is_dir():
+        pytest.skip(f"mem_copy not built here ({rep}); its own cycle gate is the real check")
+    got = synth_target(rep)
+    assert got is not None and _norm(got["part"]) == _norm(DEFAULT_PART), (
+        f"mem_copy was synthesized for {got and got['part']}, not {DEFAULT_PART}. The RF part "
+        f"selection has leaked into a non-RF example, whose cycle gates and the entire "
+        f"waveflow/calib/ corpus are fit against the original part.")

@@ -600,6 +600,54 @@ def test_rule_6_quotes_the_startup_transient_both_backends_show():
         f"{RTL_STARTUP_BLOCKS} (RTL)")
 
 
+def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():
+    """``guide/rf/index.md`` grounds its "300 MHz fabric" premise in three measured Fmax figures.
+
+    A premise is only worth writing against if it is reachable, so the page says which part reaches
+    it and by how much — and those numbers are recomputed here from each solution's own
+    ``csynth.xml`` rather than transcribed.  Rounded to whole MHz on the page because the estimate
+    moves in the third significant figure between runs; matched here to +/-2 MHz for the same reason.
+    """
+    from waveflow.utils.csynthparse import synth_target
+
+    ex = REPO / "examples"
+    solutions = {
+        "capture buffer": ex / "rf_samp_buf_rx" / "rf_samp_buf_rx_proj",
+        "playout buffer": ex / "rf_samp_buf_tx" / "rf_samp_buf_tx_proj",
+        "loopback DUT": ex / "rf_loopback" / "rf_pass_through_proj",
+    }
+    reports = {k: v / "solution1" / "syn" / "report" for k, v in solutions.items()}
+    if not all(r.is_dir() for r in reports.values()):
+        pytest.skip("the RF examples are not all built here — run each build --through csynth")
+
+    text = _page("guide/rf/index.md")
+    for label, rep in reports.items():
+        got = synth_target(rep)
+        assert got and got["fmax_mhz"], f"{label}: no timing estimate in {rep}"
+        quoted = round(got["fmax_mhz"])
+        # The page writes them as a list: "400 MHz on the capture buffer, 483 on the playout
+        # buffer, 547 on the loopback DUT".  Match the number near its label rather than the whole
+        # sentence, so a rephrasing does not fail while a wrong figure still does.
+        assert any(str(q) in text for q in (quoted, quoted - 1, quoted + 1, quoted - 2, quoted + 2)), (
+            f"guide/rf/index.md quotes no Fmax near {quoted} MHz for the {label}, which is what "
+            f"{rep} reports ({got['fmax_mhz']:.2f} MHz)")
+        assert got["fmax_mhz"] >= 300.0, (
+            f"{label} no longer closes the 300 MHz the page claims ({got['fmax_mhz']:.1f} MHz)")
+
+
+def test_the_rf_guide_names_the_part_its_examples_target():
+    """The page names a part; the reports say what was built. They must agree."""
+    from waveflow.utils.csynthparse import synth_target
+
+    rep = REPO / "examples" / "rf_samp_buf_rx" / "rf_samp_buf_rx_proj" / "solution1" / "syn" / "report"
+    if not rep.is_dir():
+        pytest.skip("rf_samp_buf_rx is not built here — run its build --through csynth")
+    got = synth_target(rep)
+    assert got is not None
+    assert got["part"] in _page("guide/rf/index.md"), (
+        f"guide/rf/index.md does not name {got['part']}, which is what the RF examples are built for")
+
+
 # ---------------------------------------------------------------------------
 # The guard on the guard
 # ---------------------------------------------------------------------------

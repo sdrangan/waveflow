@@ -307,3 +307,39 @@ def loop_pipeline_ii(report_dir, module: str, loop: str) -> int | None:
         return int(node.findtext("PipelineII"))
     except (TypeError, ValueError):
         return None
+
+
+def synth_target(report_dir) -> dict | None:
+    """What a solution was actually synthesized *for*, from its top-level ``csynth.xml``.
+
+    Returns ``{"part", "target_period_ns", "estimated_period_ns", "fmax_mhz"}``, or ``None`` when the
+    report is absent.
+
+    This is the only machine-readable record of the target: the ``.tcl`` states the *intent* and can
+    be edited without rebuilding, while this is written by the run.  A claim about which part an
+    example targets should be checked here rather than against the TCL, for the same reason a stale
+    ``rtl_*.f`` cannot be trusted to describe the RTL beside it.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    p = Path(report_dir) / "csynth.xml"
+    if not p.is_file():
+        return None
+    root = ET.parse(p).getroot()
+    ua = root.find("UserAssignments")
+    ta = root.find("PerformanceEstimates/SummaryOfTimingAnalysis")
+    if ua is None:
+        return None
+
+    def _f(node, tag):
+        try:
+            return float(node.findtext(tag))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    est = _f(ta, "EstimatedClockPeriod") if ta is not None else None
+    return {"part": ua.findtext("Part"),
+            "target_period_ns": _f(ua, "TargetClockPeriod"),
+            "estimated_period_ns": est,
+            "fmax_mhz": (1000.0 / est) if est else None}

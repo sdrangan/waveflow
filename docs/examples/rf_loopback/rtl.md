@@ -128,13 +128,20 @@ and with two tasks there are now two things that could vanish.
 ## The gate
 
 8 bursts × 64 words = 512 words, relayed bit-identically, with the last word landing at cycle
-**1066**.
+**1074**.
 
-It was 1072 before the two-task split, and **the six cycles are the point**: the change was not made
-to go faster. The block stage still runs two sequential pipelined loops over one block RAM, so its
-per-block cost is essentially what it was, and this testbench — whose `StreamDriver` pushes at full
-rate — is bound by that. The read/write serialization inside a block stage is intrinsic to block
-processing, not a defect: a stage that transforms a block cannot emit before it has received one.
+Synthesized for the **RFSoC 4x2** (`xczu48dr-ffvg1517-2-e`) at 300 MHz — the fabric clock every
+number in [the RF guide](../../guide/rf/) is written against. It was 1066 on a Zynq-7020 at 100 MHz,
+and the eight cycles are entirely accounted for: at the tighter clock target Vitis added one pipeline
+stage to the block stage's *write* loop (latency 66 → 67, II unchanged at 65), so each block firing
+costs one cycle more, and the scenario has eight blocks.
+
+Before that it was 1072, from the two-task split, and **those six cycles were the point**: that
+change was not made to go faster. The block stage still runs two sequential pipelined loops over one
+block RAM, so its per-block cost is essentially what it was, and this testbench — whose
+`StreamDriver` pushes at full rate — is bound by that. The read/write serialization inside a block
+stage is intrinsic to block processing, not a defect: a stage that transforms a block cannot emit
+before it has received one.
 
 What changed is *where the stall lands*. Here it lands on a driver that waits, so it is invisible; in
 the loopback it lands on a converter that cannot, which is where the change is measured — the ADC
