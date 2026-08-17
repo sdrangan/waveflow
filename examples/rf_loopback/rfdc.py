@@ -334,7 +334,13 @@ class Rfdc(HwModule):
             # blk_samples is n_ch * blksize -- one block's worth, the unit the RF edge moves.  The
             # DAC needs it to know when a block is complete; the ADC learns it from the block it is
             # handed.
-            blk_samples = int(self.rx_rf.n_ch) * int(self.tx_blksize)
+            #
+            # Read off tx_rf, not rx_rf.  It used to read the RX edge, which is the same number
+            # whenever both paths exist -- and unbound when they do not.  A DAC-ONLY tile (n_rx=0,
+            # the natural shape for a playout design) therefore could not be lowered at all: the
+            # accessor raised "not bound to an RFSampIF".  The DAC path's channel count is a property
+            # of the DAC's own edge, so that is where it comes from.
+            blk_samples = int(self.tx_rf.n_ch) * int(self.tx_blksize)
             models.append(BfmModel("RfdcDacSlave", ports=("tx_stream", "tx_rf"),
                                    extra_args=(self._fmt_literal(), repr(dac_rate),
                                                str(blk_samples))))

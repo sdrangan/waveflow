@@ -259,3 +259,13 @@ examples/rf_samp_buf_rx/gen/
 examples/rf_samp_buf_rx/include/
 examples/rf_samp_buf_rx/results/
 examples/rf_samp_buf_rx/xsi/vectors/
+
+# rf_samp_buf_tx (the TX playout demo): same convention.  The two hand-written task bodies are
+# framework and live in waveflow/build/, copied into include/ by RfSampBufStep -- so include/ is
+# entirely build output.  The Python source, the hand-written counters main and the generated XSI
+# workspace stay tracked.
+examples/rf_samp_buf_tx/rf_samp_buf_tx_proj/
+examples/rf_samp_buf_tx/gen/
+examples/rf_samp_buf_tx/include/
+examples/rf_samp_buf_tx/results/
+examples/rf_samp_buf_tx/xsi/vectors/
