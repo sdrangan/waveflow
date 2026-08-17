@@ -2401,8 +2401,37 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = ()) -> str:
 
 #: The default csynth target when no platform is selected — the historical hardcoded values, kept so an
 #: example built without a ``platform`` emits byte-identical TCL (and therefore identical RTL).
+#:
+#: .. warning::
+#:
+#:    **This part string is wrong as a Pynq-Z2 part and is kept anyway.**  ``xc7z020clg484`` is the
+#:    *ZedBoard* package; a Pynq-Z2 is ``xc7z020clg400``.  It is not corrected here because the whole
+#:    of ``waveflow/calib/`` — the ``zynq7020_bfm_100mhz`` platform and every resource/timing fit in
+#:    it — was measured against *this* string, and every non-RF cycle gate was recorded from RTL
+#:    synthesized for it.  Changing it invalidates the corpus and re-records the gates, which is a
+#:    separate and larger job than any build touching this constant is doing.  Recorded here so the
+#:    next person does not rediscover it.
 DEFAULT_PART = "xc7z020clg484-1"
 DEFAULT_PERIOD_NS = 10
+
+#: The **RFSoC 4x2** csynth target, selected per example by the RF builds.
+#:
+#: A part is a per-example choice and the RF examples are the reason it had to become one: an
+#: ``xc7z020`` physically cannot host an RF data converter, so ``fire_cycles``, the ``check_rate``
+#: ceilings and every number in ``docs/guide/rf/`` were being measured on a device that cannot run
+#: the design.  Non-RF examples deliberately keep :data:`DEFAULT_PART`, because their gates and the
+#: calibration corpus are fit against it and re-targeting them would invalidate both for no benefit.
+RFSOC4X2_PART = "xczu48dr-ffvg1517-2-e"
+
+#: The fabric clock the RF model's arithmetic is written against — ``check_rate``,
+#: ``words_per_cycle`` and every ceiling in ``docs/guide/rf/`` assume 300 MHz.  Synthesizing at
+#: 100 ns/10 MHz... at 10 ns (100 MHz) made the documented premise unreachable on the synthesized
+#: part while being comfortable on the real one, which is precisely the gap this constant closes.
+RFSOC4X2_CLK_HZ = 300e6
+
+#: 3.333 ns rather than 1e9/300e6 exactly: a round figure in the TCL, and 300.03 MHz is marginally
+#: *harder* to close than 300, so the rounding errs toward pessimism.
+RFSOC4X2_PERIOD_NS = 3.333
 
 
 def tcl_target(config) -> tuple[str, float]:

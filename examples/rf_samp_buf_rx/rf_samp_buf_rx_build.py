@@ -26,6 +26,8 @@ HERE = Path(__file__).resolve().parent
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep  # noqa: E402
 from waveflow.build.composite_gen import (  # noqa: E402
     GEN_DIR,
+    RFSOC4X2_PART,
+    RFSOC4X2_PERIOD_NS,
     composite_top_spec,
     render_ports_h,
     render_rtl_f,
@@ -129,7 +131,8 @@ def generate_dut(out_dir: Path = HERE, samp_per_word: int = XSI_SAMP_PER_WORD) -
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
     (out_dir / f"{spec.top_name}.tcl").write_text(
-        render_tcl(spec.top_name, part="xc7z020clg484-1", period_ns=10), encoding="utf-8")
+        render_tcl(spec.top_name, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS),
+        encoding="utf-8")
     xsi = out_dir / "xsi"
     xsi.mkdir(parents=True, exist_ok=True)
     (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")

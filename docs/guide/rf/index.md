@@ -39,6 +39,14 @@ converter running at 256 MSa/s into a 300 MHz fabric produces `256/(4·300) ≈ 
 cycle at four samples per word — a *ratio*, not a count. Whatever else changes, that number is
 fractional and derived.
 
+> **Which 300 MHz fabric.** Every rate on these pages assumes one, so it is worth saying where it
+> comes from: the RF examples synthesize for the **RFSoC 4x2** (`xczu48dr-ffvg1517-2-e`) at 300 MHz,
+> and close it with margin — 400 MHz on the capture buffer, 483 on the playout buffer, 547 on the
+> loopback DUT. The part is chosen *per example*: the non-RF examples stay on the Zynq-7020 their
+> cycle gates and the calibration corpus were measured against. Until 2026-08-17 the RF examples
+> were built for that Zynq too, which reached 137 MHz — so the premise these pages are written
+> against was not reachable on the part that was actually being synthesized.
+
 **Half of it cannot be back-pressured.** On the fabric side, `TREADY` works: the converter has a
 real input FIFO and it does stall the logic feeding it. On the *sample* side there is no such signal
 in either direction. An ADC presents samples whether or not anyone is ready, and a DAC emits
