@@ -324,19 +324,33 @@ stage touching the converter; if that stage is always `RfSampBuf` — one audite
 measured `fire_cycles` and a `check_rate` refusal — the blind spot stops being every user's and
 becomes one module's.
 
-### What that implies
+### What that implies — **all four DONE, PRs #160 and #161**
 
-- **`RfSampBuf` moves to `waveflow/`.** If most users touch it directly it is framework, not
-  `examples/rf_capture/`. That also settles the three-names problem `rf_guide_restructure.md` left
-  open (example `rf_capture/`, class `RfSampBufRx`, TCL `rf_samp_buf_rx.tcl`) — a move forces one.
-- **Its ingress rate becomes the platform's ceiling.** `RfCapIngress.fire_cycles = 2`, measured by
-  csynth — 0.5 samples/cycle, or 150 MSa/s at 300 MHz, well under a real RFSoC converter. Today that
-  is one example's limit; as the default it is everyone's, so pipelining that body moves onto the
-  critical path. Infra is the right place to spend a hand-written pipelined loop.
-- **`samp_per_word > 1` must be designed in, not retrofitted.** `RfCapIngress` is one sample per
-  word. Four samples per 2-cycle firing is 2 samples/cycle, which is most of the ceiling problem.
-- **TX does not exist.** `RfSampBufRx` is built and gated; there is no TX half and no `TxCmd`/`TxResp`
-  beside `RxCmd`/`RxResp`. That is the work item, and it is the TX player this plan already carries.
+- **`RfSampBuf` moves to `waveflow/`.** ✅ `waveflow/hw/rf_samp_buf.py` + `rf_samp_buf_tx.py`, C++
+  bodies in `waveflow/build/`. One name — `rf_samp_buf` — settling the three-names problem
+  `rf_guide_restructure.md` left open.
+- **Its ingress rate becomes the platform's ceiling.** ✅ still true and still 0.5 samples/cycle;
+  pipelining the body to II=1 remains open work with no gate yet.
+- **`samp_per_word > 1` designed in, not retrofitted.** ✅ both directions, csynth-proven at 2 and 4
+  (not RTL-run-proven — nothing yet measures what the widening buys).
+- **The TX half.** ✅ `TxCmd`/`TxResp`, loader + free-running player, XSI gate `RESP_LAST_CYCLE =
+  5191`.
+
+**The lesson that cost the most, and it repeated within one PR:** `fire_cycles` was declared on both
+TX bodies *by symmetry* with the RX ingress — "same shape, same cost" — and the csynth reports
+refuted it both times. The player is 3 cycles, not 2 (its extra state polls the fill channel); the
+loader cannot be bounded at all and now declares `word_cycles = 2` from the payload loop's
+**achieved** `PipelineII`, which Vitis missed its target of 1 on. Both errors were optimistic — the
+direction that hides starvation — and the player's fed `check_rate`, so the static check permitted
+50% more sample rate than the hardware sustains.
+
+`tests/examples/test_rf_samp_buf_fire_cycles.py` now pins each declared cost against the report,
+*and* pins the calibration anchor (`latency + 1` = FSM states, validated on the RX ingress) *and*
+the absence of a loader constant. **A cost is measured, never inherited from a module that looks
+similar.**
+
+Still inherited and still unmeasured: `horizon_margin = 16`, carried from RX where it bounds a
+different test. Last one standing.
 
 ### The B example
 
