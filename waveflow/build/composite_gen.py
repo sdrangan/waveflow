@@ -2424,14 +2424,24 @@ DEFAULT_PERIOD_NS = 10
 RFSOC4X2_PART = "xczu48dr-ffvg1517-2-e"
 
 #: The fabric clock the RF model's arithmetic is written against — ``check_rate``,
-#: ``words_per_cycle`` and every ceiling in ``docs/guide/rf/`` assume 300 MHz.  Synthesizing at
-#: 100 ns/10 MHz... at 10 ns (100 MHz) made the documented premise unreachable on the synthesized
-#: part while being comfortable on the real one, which is precisely the gap this constant closes.
-RFSOC4X2_CLK_HZ = 300e6
+#: ``words_per_cycle`` and every ceiling in ``docs/guide/rf/``.  It is also what the RF examples
+#: synthesize at, single-sourced here so the model's premise and the RTL's target cannot drift apart
+#: (they had: the model assumed 300 MHz while csynth targeted 100, until PR #162).
+#:
+#: **250 MHz is forced by the geometry, not chosen for headroom.**  The AXIS word carries
+#: ``samp_per_word`` samples, so ``f_axis = samp_rate / samp_per_word`` and ``samp_per_word`` is an
+#: integer — a sample cannot straddle a slot.  For a 1 GSPS converter that gives
+#: ``1000 / 250 = 4`` exactly, where 300 MHz would need ``1000/300 = 3.33`` samples per word, which
+#: is not a thing.  300 MHz was never an engineering choice; it came from the guide's illustrative
+#: arithmetic and propagated.
+#:
+#: It also leaves ~40% margin against the measured csynth Fmax (400–547 MHz) rather than ~25%, and
+#: those are **pre-route estimates**, so the margin is doing real work.
+RFSOC4X2_CLK_HZ = 250e6
 
-#: 3.333 ns rather than 1e9/300e6 exactly: a round figure in the TCL, and 300.03 MHz is marginally
-#: *harder* to close than 300, so the rounding errs toward pessimism.
-RFSOC4X2_PERIOD_NS = 3.333
+#: 4.0 ns — exactly ``1e9 / RFSOC4X2_CLK_HZ``, with no rounding to reason about.  (The 300 MHz it
+#: replaced could not be stated exactly: 3.333 ns is 300.03 MHz.)
+RFSOC4X2_PERIOD_NS = 4.0
 
 
 def tcl_target(config) -> tuple[str, float]:

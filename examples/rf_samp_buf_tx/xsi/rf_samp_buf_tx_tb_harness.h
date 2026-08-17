@@ -42,7 +42,7 @@ struct Harness {
         xsi_tb_dac_if(2),
         s_in(sim.dut(), rf_samp_buf_tx_ports::s_in, {}),
         s_resp(sim.dut(), rf_samp_buf_tx_ports::s_resp),
-        s_out(sim.dut(), rf_samp_buf_tx_ports::s_out, xsi_tb_dac_if, RfdcFormat{16, 1, 1.0}, 0.21333333333333335, 256),
+        s_out(sim.dut(), rf_samp_buf_tx_ports::s_out, xsi_tb_dac_if, RfdcFormat{16, 1, 1.0}, 0.256, 256),
         xsi_tb_dac_if_rx(xsi_tb_dac_if)
     {
         // Every TB-driven input the models above do not themselves drive.  Absent

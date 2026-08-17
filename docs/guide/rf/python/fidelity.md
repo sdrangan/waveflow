@@ -105,8 +105,9 @@ Three things are worth taking away, and none of them is "make the buffer bigger"
 
 The throughput barely moved (1072 → 1066 cycles on the DUT-alone gate) because the block stage's
 read-then-write was never the bottleneck for *this* testbench. The change was never about speed.
-(That gate reads 1074 today, on the RFSoC part at 300 MHz; the eight extra cycles are the clock
-target, not the design — see [the example's RTL page](../../../examples/rf_loopback/rtl.md#the-gate).)
+(That gate reads 1066 today, on the RFSoC part at 250 MHz. It briefly read 1074 at a 300 MHz
+target, for a pipeline stage the looser clock does not need — the clock target, not the design; see
+[the example's RTL page](../../../examples/rf_loopback/rtl.md#the-gate).)
 
 **None of this makes the contract checkable in pysim.** pysim reported `dropped == 0` for the broken
 design and reports it for the fixed one; its zero was uninformative before and is uninformative now.

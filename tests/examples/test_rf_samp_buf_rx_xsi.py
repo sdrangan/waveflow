@@ -43,7 +43,13 @@ TB = "rf_samp_buf_rx_counters"
 #: Exact, not a bound — it moves only if the design's timing changes, and both directions are worth a
 #: human.  Most of it is the scenario waiting for the converter: command 3 cannot finish before
 #: sample 3899 has been produced, which at 64 MSPS on a 300 MHz fabric is ~18300 cycles.
-WANT_LAST_CYCLE = 18411
+#: 15441, re-recorded 2026-08-18 when the RF fabric moved 300 -> 250 MHz.  The decomposition is
+#: what makes it a re-record rather than a shrug: a run is part CONVERTER-paced (a fixed wall-clock
+#: wait, so its cycle count scales with f_axis) and part FABRIC-paced (a fixed cycle count, which
+#: does not).  Solving ``15441 = (18411 - x) * 250/300 + x`` gives ``x = 591`` cycles of
+#: clock-independent fabric work -- the capture loop serving its 100 samples -- and 17820 cycles of
+#: waiting for the converter.  Both halves behave exactly as they should.
+WANT_LAST_CYCLE = 15441
 
 #: Words the ADC delivers: 16 blocks x 256 samples, every one of which must be accepted.
 WANT_ADC_WORDS = 4096

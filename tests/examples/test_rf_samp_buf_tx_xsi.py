@@ -55,8 +55,14 @@ TB = "rf_samp_buf_tx_counters"
 #: until the player has walked that far.
 WANT_RESP_LAST_CYCLE = 5191
 
-#: Blocks the DAC pulled out of the fabric over the run — 40000 cycles at 0.213 words/cycle.
-WANT_DAC_BLOCKS_OUT = 33
+#: Blocks the DAC pulled out of the fabric over the run — 40000 cycles at 0.256 words/cycle.
+#:
+#: 40, re-recorded 2026-08-18 with the 300 -> 250 MHz move.  The DAC plays on its own grid, so in a
+#: fixed CYCLE budget the number of blocks it gets through scales with its rate per cycle, and
+#: ``samp_rate / (samp_per_word * f_axis)`` rose by exactly 300/250 = 1.2: 33 x 1.2 = 39.6, and the
+#: run lands on 40.  The design is unchanged -- ``RESP_LAST_CYCLE`` did not move, because the
+#: loader's completion is fabric-paced work that costs the same number of cycles either way.
+WANT_DAC_BLOCKS_OUT = 40
 
 #: Contiguous, in-order, bit-exact loaded samples that reached the RF sink.  A floor rather than an
 #: equality: the converter zero-fills whole blocks during the priming transient, which splits the

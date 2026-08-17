@@ -35,17 +35,25 @@ From the fabric it looks like one: words arrive on a stream, words leave on a st
 make it different, and every page here follows from one of them.
 
 **It has its own clock.** The sample rate is not the fabric clock and is not a multiple of it. A
-converter running at 256 MSa/s into a 300 MHz fabric produces `256/(4·300) ≈ 0.213` words per AXI
+converter running at 256 MSa/s into a 250 MHz fabric produces `256/(4·250) ≈ 0.256` words per AXI
 cycle at four samples per word — a *ratio*, not a count. Whatever else changes, that number is
 fractional and derived.
 
-> **Which 300 MHz fabric.** Every rate on these pages assumes one, so it is worth saying where it
-> comes from: the RF examples synthesize for the **RFSoC 4x2** (`xczu48dr-ffvg1517-2-e`) at 300 MHz,
-> and close it with margin — 400 MHz on the capture buffer, 483 on the playout buffer, 547 on the
-> loopback DUT. The part is chosen *per example*: the non-RF examples stay on the Zynq-7020 their
-> cycle gates and the calibration corpus were measured against. Until 2026-08-17 the RF examples
-> were built for that Zynq too, which reached 137 MHz — so the premise these pages are written
-> against was not reachable on the part that was actually being synthesized.
+> **Which 250 MHz fabric, and why 250.** Every rate on these pages assumes one, so it is worth
+> saying where it comes from. The RF examples synthesize for the **RFSoC 4x2**
+> (`xczu48dr-ffvg1517-2-e`) at 250 MHz, and close it with margin — 365 MHz on the capture buffer,
+> 432 on the playout buffer, 371 on the loopback DUT.
+>
+> **250 is forced by the geometry rather than chosen.** An AXIS word carries an integer number of
+> samples — a sample cannot straddle a slot — so `f_axis = samp_rate / samp_per_word`. For a 1 GSPS
+> converter that gives `1000/250 = 4` samples per word exactly, where 300 MHz would need `3.33`,
+> which is not a sample count. These pages said 300 MHz until 2026-08-18; that came from the
+> illustrative arithmetic above and propagated, and it was never an engineering choice.
+>
+> The part is chosen *per example*: the non-RF examples stay on the Zynq-7020 their cycle gates and
+> the calibration corpus were measured against. Until 2026-08-17 the RF examples were built for that
+> Zynq too, which reached 137 MHz — so the premise these pages are written against was not reachable
+> on the part that was actually being synthesized.
 
 **Half of it cannot be back-pressured.** On the fabric side, `TREADY` works: the converter has a
 real input FIFO and it does stall the logic feeding it. On the *sample* side there is no such signal

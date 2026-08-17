@@ -555,7 +555,7 @@ def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
     """Two pages claim the paced twin *sees* the loss its predecessor could not, and quote a count.
 
     That number is the whole evidence for the claim, so it is produced by running the fault rather
-    than transcribed: the same over-rate configuration whose first RTL run lost 1695 of 4096.
+    than transcribed: an over-rate configuration in the same band as the run that lost 1695 of 4096.
 
     Both pages are checked, because a claim that pysim can now see something is exactly the kind that
     rots the moment the model changes back — and a reader who trusts it stops looking.
@@ -564,7 +564,11 @@ def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
     from waveflow.hw.rf_samp_buf import RfSampBufRx
     from waveflow.simulation.simulation import Simulation
 
-    tb = run_pysim(tb=RfSampBufRxTB(name="doc_over", sim=Simulation(), samp_rate=256e6,
+    # 200 MSa/s: over the DESIGN ceiling (spw * f_axis / fire_cycles = 125 MSa/s) and under the
+    # PORT ceiling (spw * f_axis = 250 MSa/s), which is the band this claim is about.  It was
+    # 256 MSa/s while the fabric was 300 MHz; at 250 MHz that exceeds the port and `Rfdc` refuses it
+    # before the design check is ever reached -- a different failure, and not the one being shown.
+    tb = run_pysim(tb=RfSampBufRxTB(name="doc_over", sim=Simulation(), samp_rate=200e6,
                                     enforce_rate=False))
     dropped = int(tb.adc_axis.dropped)
     assert dropped > 0, "the paced twin no longer sees the loss; both pages claim it does"

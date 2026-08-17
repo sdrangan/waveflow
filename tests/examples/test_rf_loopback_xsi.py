@@ -56,7 +56,23 @@ WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
 #: store-and-forward task; the overlap fix (an ingress task + a one-block internal FIFO) is what
 #: makes zero achievable.  Do not re-record this one — diagnose it.
 WANT_ADC_DROPPED = 0
-WANT_DAC_BLOCKS = 19
+#: Blocks the DAC's grid emits over the fixed ``n_cycles`` run, and how many reach the sink.
+#:
+#: 24/23, re-recorded 2026-08-18 when the RF fabric moved 300 -> 250 MHz.  Both are the SAME
+#: DESIGN doing the same thing for a different number of grid periods: the DAC plays on its own
+#: clock, so in a fixed *cycle* budget the number of blocks it gets through scales with its rate per
+#: cycle, and ``samp_rate / (samp_per_word * f_axis)`` rose by exactly 300/250 = 1.2.  19 x 1.2 =
+#: 22.8, and the run lands on 24 emitted.  Nothing about the data changed: 512 words in, 512 out,
+#: 8 data blocks, zero dropped — see the assertions below, which are what actually police that.
+#:
+#: **The two are now separate constants.** They were one chained equality, which held at 300 MHz by
+#: luck: with 24 emitted the last one is still in the channel when the run ends, so the sink sees 23.
+#: An equality that holds by coincidence is worse than two numbers, because it fails for the wrong
+#: reason first.
+WANT_DAC_BLOCKS = 24
+#: Blocks that actually reached the sink — one fewer than the DAC emitted, the last still in flight
+#: when the cycle budget ran out.
+WANT_SINK_BLOCKS = 23
 #: Blocks the DAC's grid emits in the run, and how many carry no data.
 #:
 #: **The old 2152 "time to last completion" gate is retired, not moved.**  It measured the cycle the
@@ -65,11 +81,13 @@ WANT_DAC_BLOCKS = 19
 #: whole run and that cycle (5702) is `run_length x grid_rate` — a testbench constant wearing a
 #: result's clothes, which is exactly the confusion the cycle gates exist to avoid.  What replaced it
 #: is the startup transient below, which IS a result and is checkable on both backends.
-WANT_DAC_BLOCKS_OUT = 19
-#: 11, where the store-and-forward design zero-filled 13.  The two blocks it gained are the direct
-#: consequence of the ADC no longer dropping words: a block whose words went missing never reached
-#: the DAC's buffer as a whole block, so the grid played zeros in its place.
-WANT_DAC_ZERO_FILLED = 11
+WANT_DAC_BLOCKS_OUT = 24
+#: 16, and the invariant is what makes it checkable rather than the number: the DAC emits
+#: ``DAC_BLOCKS_OUT`` blocks and exactly ``XSI_NBLK`` of them carry data, so the zero-fill is the
+#: remainder.  24 - 8 = 16 at 250 MHz; it was 19 - 8 = 11 at 300 MHz, the same relation.  (Before
+#: the overlap fix it was 13 against 8 data blocks, because a block whose words went missing never
+#: reached the DAC's buffer whole and the grid played zeros in its place.)
+WANT_DAC_ZERO_FILLED = 16
 #: Blocks of zero-fill before the first data block reaches the sink **at RTL**.  One, where pysim
 #: shows two: pysim paces the RF side on the edge's metronome and XSI on the source, so the RTL ADC
 #: has its first block at t=0.  A divergence to record, not to average away.
@@ -215,15 +233,20 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
         f"only backend that can check it. Nonzero means some stage stopped reading its input long "
         f"enough for a beat to go unanswered: find which, do not re-record the number. (It was 72 "
         f"while RfSampPassThrough was one store-and-forward task.)")
-    assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS == len(got)
+    assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS
 
     # --- 2b) The DAC plays on its GRID, so it emits for the whole run ---------------------------
-    assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS_OUT == len(got)
-    assert counters["DAC_BLOCKS_ZERO_FILLED"] == WANT_DAC_ZERO_FILLED, (
+    assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS_OUT
+    assert len(got) == WANT_SINK_BLOCKS, (
+        f"the sink collected {len(got)} blocks of the {counters['DAC_BLOCKS_OUT']} the DAC emitted; "
+        f"the difference is what is still in the channel when the cycle budget ends, and it is one")
+    # The INVARIANT, which is the real check: every grid period that is not one of the 8 data blocks
+    # is zero-fill.  It holds at any clock, which the two raw counts do not.
+    assert (counters["DAC_BLOCKS_ZERO_FILLED"]
+            == counters["DAC_BLOCKS_OUT"] - XSI_NBLK == WANT_DAC_ZERO_FILLED), (
         f"the DAC zero-filled {counters['DAC_BLOCKS_ZERO_FILLED']} of its "
-        f"{counters['DAC_BLOCKS_OUT']} grid periods, gate expects {WANT_DAC_ZERO_FILLED} "
-        f"(1 startup + the {WANT_DAC_BLOCKS_OUT - XSI_NBLK - RTL_STARTUP_BLOCKS} tail periods after "
-        f"the 8 data blocks run out)")
+        f"{counters['DAC_BLOCKS_OUT']} grid periods, gate expects {WANT_DAC_ZERO_FILLED} — the "
+        f"{XSI_NBLK} data blocks and nothing else should be non-empty")
     assert counters["DAC_WORDS_RECV"] == WANT_ADC_WORDS, (
         f"the DAC took {counters['DAC_WORDS_RECV']} words off the fabric of the "
         f"{WANT_ADC_WORDS} the ADC produced — with nothing dropped at either boundary these must "
@@ -274,4 +297,4 @@ def test_the_two_backends_disagree_about_loss_and_this_records_how():
     # because a DAC that plays continuously does not stop when the data does.  Neither number is
     # "the answer"; the run length is a testbench constant on both sides.
     assert len(sim.captured) == XSI_NBLK
-    assert len(rtl) == WANT_DAC_BLOCKS > len(sim.captured)
+    assert len(rtl) == WANT_SINK_BLOCKS > len(sim.captured)

@@ -90,8 +90,9 @@ next to the body it describes, measure it from `csynth`, and check the pairing i
 > would have failed: `1 · 300e6 / 2` is not.
 
 pysim reported a clean run at the time, and that is no longer true: `RfSampBufIngress`'s twin now
-charges `fire_cycles` per word, so the same configuration reports **1536 of 4096** dropped without a
-toolchain. It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
+charges `fire_cycles` per word, so an over-rate run reports **1536 of 4096** dropped without a
+toolchain. (200 MSa/s against the 125 MSa/s design ceiling — the original 256 MSa/s now exceeds the
+*port* at a 250 MHz fabric, so it is refused before the design check is reached.) It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
 against the RTL's 1695, but the threshold at which it starts reporting is exactly the declared
 capacity. See [rule 5](#5-the-counters-are-the-contract) for what the counters are for, and
 [the fidelity boundary](./fidelity.md#the-resolution-limit) for the loss shape that is still

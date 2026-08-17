@@ -104,7 +104,13 @@ GATES = [
     # defect: a stage that transforms a block cannot emit before it has received one.  Splitting it
     # further would buy throughput here and change nothing about the converter.
     #
-    # 1074, re-recorded 2026-08-17 when the RF examples moved to the RFSoC 4x2 part
+    # BACK TO 1066, 2026-08-18, when the RF fabric moved 300 -> 250 MHz (4.0 ns).  PREDICTED FROM
+    # THE REPORTS BEFORE THE RUN: at the looser target Vitis no longer needs the extra pipeline
+    # stage, VITIS_LOOP_258_1 latency returns 67 -> 66, the relay's interval 137 -> 136, and
+    # 8 blocks x 1 cycle = 8.  1074 - 8 = 1066.  Measured 1066.  The two records below are the same
+    # schedule seen at two clock targets, which is why neither is "the" number.
+    #
+    # 1074, recorded 2026-08-17 when the RF examples moved to the RFSoC 4x2 part
     # (xczu48dr-ffvg1517-2-e) at 300 MHz, from xc7z020clg484-1 at 100 MHz.  +8 cycles, and the
     # arithmetic closes exactly:
     #
@@ -117,7 +123,7 @@ GATES = [
     # Measured by A/B in one session: same generated C++ built for both targets, module latencies
     # read from each project's own csynth.xml.  Fmax went 146.74 -> 547.05 MHz, which is the point of
     # the move -- the RF model's arithmetic assumes a 300 MHz fabric and 146 MHz could not host it.
-    ("rf_pass_through", "rf_pass_through_bfm_tb", 1074, ""),
+    ("rf_pass_through", "rf_pass_through_bfm_tb", 1066, ""),
 ]
 
 
