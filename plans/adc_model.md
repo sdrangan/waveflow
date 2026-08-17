@@ -229,10 +229,47 @@ Both sit on the **PL/AXIS** boundary — the only boundary that exists in XSI:
 | DAC | PL → RFDC | AXIS **master** output | AXIS **slave** → `RfdcDacSlave` |
 
 Neither is a generic `AxisMaster`/`AxisSlave`, and the reason is the same asymmetry as above: the ADC
-presents a beat every cycle **regardless of `TREADY`** and counts dropped samples; the DAC is always
-ready and counts cycles where a beat was due but `TVALID` was low. A generic model blocks, and blocking
-hides exactly the failure that matters. That protocol difference — not a data difference — is what
-justifies new BFM classes at all, per the bar in `guide/custom_hooks/bfm_model.md`.
+presents a beat every cycle **regardless of `TREADY`** and counts dropped samples; ~~the DAC is always
+ready~~ **— corrected 2026-08-17, see below —** and counts cycles where a beat was due but `TVALID` was
+low. A generic model blocks, and blocking hides exactly the failure that matters. That protocol
+difference — not a data difference — is what justifies new BFM classes at all, per the bar in
+`guide/custom_hooks/bfm_model.md`.
+
+### What the real RFDC does that this model does not
+
+Recorded 2026-08-17, when the "DAC is always ready" claim above was found to be load-bearing and
+wrong (`RfdcDacSlave::drive()` asserted `TREADY` unconditionally, and `rf_loopback`'s
+`ADC_DROPPED = 0` was measured against it — see the correction under *The overlap fix*).
+
+**Neither RFDC interface is a standard AXI4-Stream handshake.**
+
+| | what the IP does | what this model does |
+|---|---|---|
+| ADC `m_axis` | ignores `TREADY`; drives continuously with `TVALID` tied high | ✅ matches — `offer()` presents regardless and counts `dropped` |
+| DAC `s_axis` | **ignores `TVALID`**; samples whatever is on `TDATA` when its own grid says a beat is due | ⚠ model honours `TVALID` |
+| DAC underrun | **repeats the last frame** | ⚠ model **zero-fills** |
+| DAC `TREADY` | the converter's **metronome** — asserted when it needs a word | ⚠ model approximates it with a **depth-2 input FIFO** |
+
+Three consequences worth holding on to:
+
+1. **`TREADY` is pacing, not back-pressure.** The DAC asserts it when a word is due, and because
+   `TVALID` is ignored there is no way to say "not yet" — valid data must be *present* at that
+   moment. That is a stronger contract than AXI-Stream implies, and it is exactly the "never miss a
+   deadline" obligation `RfSampBufPlayer` already carries. The model's shape is right; its mechanism
+   is a proxy.
+2. **The underrun counter is right and the filler is wrong.** A missed deadline is a missed deadline
+   either way, so `DAC_UNDERRUN` means what it says — but a scope trace of real hardware will show a
+   *held* value where the simulation shows zeros. Anyone comparing waveforms needs to know that
+   before they conclude the design is broken.
+3. **`depth = 2` is a modelling choice, not a measured property.** It sets how much slack the
+   metronome allows, and therefore the *count* of samples pattern A loses. The count is not asserted
+   anywhere; only the sign is. See `tests/examples/test_rf_loopback_xsi.py`.
+
+**Source and its limits.** This comes from a community ZCU111 (Gen 1) write-up plus a summary of
+PG269, **not from PG269 read directly** — the PDF would not parse. Gen 3 on the RFSoC 4x2 may differ.
+Treat it as a strong hypothesis, not a settled fact. **First item for the board bring-up log:** read
+PG269 § AXI4-Stream for the RF-DAC and confirm whether `TVALID` is honoured on Gen 3, and what the
+input buffer actually gives you.
 
 ## `Channel`, `RfDataSource`, `RfDataSink`
 
