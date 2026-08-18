@@ -82,27 +82,54 @@ static void rf_samp_buf_loader_task(ap_uint<W> buf_w[N], hls::stream<ap_uint<W> 
         status = RF_SAMP_BUF_MISALIGNED;
     }
 
-    for (ap_uint<IDX_W> i = 0; i < npay; i = i + 1) {
-        // ALWAYS consume, so the frame stays aligned even for a refused command.
-        ap_uint<W> x = s_in.read();
-        if (status != RF_SAMP_BUF_OK) {
-            continue;                    // refused: consumed and discarded, never silently stored
-        }
-
-        // -- 1. wait for room: the player must have moved far enough that this slot is free -----
-        //
-        // The circular comparison: `idx - last_rd` as a SIGNED IDX_W-bit difference is this slot's
-        // lead over the play pointer, and it stays correct across the counter's wrap as long as the
-        // two are within 2^(IDX_W-1) of each other.  A plain `<` would break the first time the
-        // counter wrapped, and it would break silently.
+    // -- 1. WAIT FOR ROOM ONCE, FOR THE WHOLE FRAME, BEFORE the drain loop -------------------
+    //
+    // This wait used to sit INSIDE the per-word loop, and that nesting is what cost this body its
+    // II.  Vitis said so exactly:
+    //
+    //   [HLS 200-878] Unable to schedule the loop exit test ('icmp_ln99') in the first pipeline
+    //                 iteration (II = 1 cycles)
+    //   [HLS 200-960] Cannot flatten loop 'VITIS_LOOP_85_1' ... sub loop is do-while
+    //   [HLS 200-1470] Target II = NA, Final II = 2, loop 'VITIS_LOOP_99_2'
+    //
+    // -- i.e. it pipelined the INNER spin at II=2 and could not flatten the payload loop into it.
+    // The RX ingress does the same essential work (stream-read -> BRAM-write) and reaches II=1
+    // precisely because it has no inner loop.
+    //
+    // Waiting for the whole frame up front is SAFE RATHER THAN EQUIVALENT, and safe in the
+    // conservative direction: it waits for at least as much room as the per-word version ever did,
+    // because the last word of the frame needs the most.  A frame is at most a block and the buffer
+    // is many blocks, so the wait is the same wait in practice -- what changed is where it sits.
+    //
+    // The circular comparison: `idx - last_rd` as a SIGNED IDX_W-bit difference is a slot's lead
+    // over the play pointer, and it stays correct across the counter's wrap as long as the two are
+    // within 2^(IDX_W-1) of each other.  A plain `<` would break the first time the counter wrapped,
+    // and it would break silently.
+    if (status == RF_SAMP_BUF_OK) {
         bool room = false;
         while (!room) {
             ap_uint<W> r;
             if (rd_in.read_nb(r)) {
                 last_rd = (ap_uint<IDX_W>)r;
             }
-            ap_int<IDX_W> lead = (ap_int<IDX_W>)(idx - last_rd);
-            room = (lead < (ap_int<IDX_W>)(N * SPW));
+            // The END of the frame is what has to fit, not its start.
+            ap_int<IDX_W> lead_end = (ap_int<IDX_W>)(idx + (ap_uint<IDX_W>)(npay * SPW) - last_rd);
+            room = (lead_end < (ap_int<IDX_W>)(N * SPW));
+        }
+    }
+
+    for (ap_uint<IDX_W> i = 0; i < npay; i = i + 1) {
+#pragma HLS PIPELINE II=1
+        // ALWAYS consume, so the frame stays aligned even for a refused command.
+        ap_uint<W> x = s_in.read();
+        if (status != RF_SAMP_BUF_OK) {
+            continue;                    // refused: consumed and discarded, never silently stored
+        }
+
+        // Keep the play position fresh for the too-late test below.  Non-blocking, so no loop.
+        ap_uint<W> r2;
+        if (rd_in.read_nb(r2)) {
+            last_rd = (ap_uint<IDX_W>)r2;
         }
 
         // -- 2. too late: the slot has already played, or is within MARGIN of having played ----

@@ -1,7 +1,8 @@
 #ifndef WAVEFLOW_RF_SAMP_BUF_PLAYER_TASK_H
 #define WAVEFLOW_RF_SAMP_BUF_PLAYER_TASK_H
 // rf_samp_buf_player_task.h — the TX sample buffer's PLAYER: one word out of the circular buffer,
-// one word to the DAC, every slot, forever.  A single firing; the hls::task runtime re-fires it.
+// one word to the DAC, every slot, forever.  ONE WORD PER CYCLE — the body is an infinite pipelined
+// loop, not a firing the runtime re-enters.
 //
 // THE NEVER-MISS-A-DEADLINE LAW APPLIES TO THIS TASK, AND ONLY TO THIS TASK.
 //
@@ -26,9 +27,38 @@
 // TREADY, which is the metronome this task runs on.  The DAC has a real input FIFO and does
 // back-pressure the fabric; being paced by it is correct.  Being paced by the LOADER would not be.
 //
-// A WORD CARRIES SPW SAMPLES, so one firing delivers SPW samples and this task sustains
-// SPW / fire_cycles samples per fabric cycle -- the same throughput lever as the RX ingress, and it
-// has to be, because the two are sized against the same converter.
+// WHY THE BODY IS A `while (1)` AND NOT A FIRING.
+//
+// It used to be one word per firing, which the hls::task runtime re-entered, and that cost THREE
+// cycles per word: one for the work and two for the firing boundary.  At SPW samples per word the
+// design ceiling was SPW * f_axis / 3 -- a third of what the port carries.  Wrapping the same work in
+// an infinite pipelined loop makes it ONE cycle per word, and the ceiling becomes SPW * f_axis
+// exactly: port capacity, at which point the port binds and not this body.
+//
+// The licence for this shape is measured, not assumed -- `plans/witness/task_loop/`, a standalone
+// Vitis project with no Waveflow in it:
+//
+//   * `while (1)` inside a task body is legal, synthesizes at achieved II=1, and warns
+//     ([XFORM 203-561] "is an infinite loop").  The warning is expected; the shape is not a trick.
+//   * A pipelined loop EMITS CONTINUOUSLY -- it does not buffer N outputs and release them at the
+//     end.  Measured two ways: sustained 1.000 words/cycle, and only 1-3 BRAM reads during a
+//     40-cycle output stall, so the pipeline stalls as a unit and there is no hidden buffer.
+//   * NOTHING IS EMITTED DURING RESET.  TVALID is gated on ap_rst_n, measured with TREADY high from
+//     cycle zero, so this shape puts no garbage on the DAC at power-up.  That was the open question
+//     about infinite loops and it is settled.
+//
+// A BOUNDED loop was measured too and is deliberately NOT what this is: its 3-cycle boundary gap is a
+// window in which the task is not serving the converter, which is exactly the thing these two bodies
+// exist to avoid.  `while (1)` has no boundary at all.
+//
+// A WORD CARRIES SPW SAMPLES, so this task sustains SPW / cycles_per_word samples per fabric cycle --
+// the same throughput lever as the RX ingress, and it has to be, because the two are sized against
+// the same converter.
+//
+// WHAT `cycles_per_word` REPLACED.  `fire_cycles` meant *cycles per firing*, and an infinite loop has
+// no firing: csynth reports TripCount = inf and no overall latency for this module.  The quantity
+// that survives is cycles per WORD, which is the loop's achieved PipelineII, and that is what the
+// Python declares and what the guard re-derives.
 //
 // WHY THE UNDERRUN COUNTER IS NOT AN RTL OUTPUT.  It has no port here, exactly as the RX capture's
 // n_too_old has none: a per-firing counter would need a stream of its own and would be read once at
@@ -59,17 +89,32 @@ static void rf_samp_buf_player_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> 
     // channel would be waiting for the loader, which is the one thing this task may not do.
     static ap_uint<IDX_W> last_wr = 0;
 
-    ap_uint<W> w;
-    if (wr_in.read_nb(w)) {
-        last_wr = (ap_uint<IDX_W>)w;
-    }
-    // `rd - last_wr >= 0` means the play pointer has reached or passed everything known to be
-    // filled, so this slot is stale.  The value is emitted anyway -- see the header.  (The counter
-    // itself is pysim-side; there is no port for it here.)
+    // The statics are RESET-QUALIFIED.  A static's `= 0` becomes a simulation initial value in the
+    // RTL, not a reset, and its update carries no ap_rst term -- so a body that is not held still
+    // during reset counts up while reset is asserted.  This one *is* held still (its s_out.write
+    // blocks on a TREADY that Vitis gates on ap_rst_n, measured: zero TVALID cycles in reset), but
+    // relying on that is relying on a downstream property to protect this task's own state.
+    // `examples/rf_blk_delay` lost a day to exactly this on a body that had nothing to block it.
+#pragma HLS reset variable=rd
+#pragma HLS reset variable=last_wr
 
-    s_out.write(buf_r[(rd / SPW) & (N - 1)]);   // the ONE blocking call: the DAC's TREADY
-    rd = rd + SPW;
-    rd_out.write_nb((ap_uint<W>)rd);            // may fail; failing is correct, only the newest counts
+    // ONE WORD PER CYCLE, FOREVER.  The loop is the task -- there is no firing boundary to pay for,
+    // which is what takes this body from 3 cycles per word to 1.  See the header for the measured
+    // licence; `while (1)` is legal here and Vitis will warn that it is an infinite loop.
+    while (1) {
+#pragma HLS PIPELINE II=1
+        ap_uint<W> w;
+        if (wr_in.read_nb(w)) {
+            last_wr = (ap_uint<IDX_W>)w;
+        }
+        // `rd - last_wr >= 0` means the play pointer has reached or passed everything known to be
+        // filled, so this slot is stale.  The value is emitted anyway -- see the header.  (The
+        // counter itself is pysim-side; there is no port for it here.)
+
+        s_out.write(buf_r[(rd / SPW) & (N - 1)]);   // the ONE blocking call: the DAC's TREADY
+        rd = rd + SPW;
+        rd_out.write_nb((ap_uint<W>)rd);            // may fail; only the newest position counts
+    }
 }
 
 #endif  // WAVEFLOW_RF_SAMP_BUF_PLAYER_TASK_H

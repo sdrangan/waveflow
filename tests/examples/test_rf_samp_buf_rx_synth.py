@@ -8,7 +8,7 @@ Two claims, and they fail differently.
   progress FIFO — because with two tasks there are two things that could vanish.
 
 * **``samp_per_word > 1`` is real hardware, not a Python parameter.**  Widening the word is the
-  throughput lever (``samp_per_word / fire_cycles`` samples per cycle), and a generalization that
+  throughput lever (``samp_per_word / cycles_per_word`` samples per cycle), and a generalization that
   only ever ran in pysim would be a claim about the model rather than about the design.  It is built
   into its own directory, because the recorded XSI cycle count belongs to ``samp_per_word == 1`` and
   nothing here may quietly move it.

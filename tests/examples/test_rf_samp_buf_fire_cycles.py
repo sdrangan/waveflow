@@ -1,21 +1,37 @@
-"""Every declared per-firing cost must equal what csynth measured.
+"""Every declared throughput cost must equal what csynth measured — **and be the right KIND of cost.**
 
-**Three modules have now declared this constant and two of them were wrong**, both justified in
-their docstrings by *symmetry* with a module that looked similar — "the same shape, so it costs the
-same".  The reports refuted the premise in both cases.  So the guard is worth more than either
-correction: a cost is **measured**, never inherited.
+**Four modules have now declared such a constant and three of them were wrong at some point**, each
+justified by *symmetry* with a module that looked similar — "the same shape, so it costs the same".
+The reports refuted the premise every time.  So the guard is worth more than any single correction:
+a cost is **measured**, never inherited.
 
-The calibration is ``cycles per firing = latency + 1`` — the FSM state count — and it is anchored
-rather than assumed.  It is what makes :class:`~waveflow.hw.rf_samp_buf.RfSampBufIngress`'s declared
-``2`` correct at a reported latency of 1, and that value is independently corroborated by RTL: at
-256 MSa/s the RX design accepted 58.6% of the stream, which is ``0.5 / 0.853`` — exactly the ratio
-``fire_cycles = 2`` predicts.  The ingress is therefore the **control** in this file: if its row ever
-fails, the calibration is wrong and every other row is meaningless.
+## Two kinds of body, two calibrations, one anchor each
 
-Why it is not bookkeeping.  ``fire_cycles`` feeds
-:meth:`~waveflow.hw.rf_samp_buf_tx.RfSampBufTx.check_rate`'s threshold,
-``samp_per_word * f_axis / fire_cycles``.  Declared too low it permits **more sample rate than the
-hardware sustains** — a static check that says yes where the hardware says no, which is precisely
+The file used to assume every body had a bounded firing.  Since 2026-08-18 the two converter-facing
+bodies are ``while (1)`` loops, and a firing is not a thing they have, so the guard is split:
+
+============  ==================================  =========================================
+kind          the quantity that exists            anchored by
+============  ==================================  =========================================
+**looped**    cycles per WORD = achieved II       the RX ingress (``cycles_per_word``)
+**bounded**   cycles per FIRING = ``latency + 1``  ``BlkDelay`` (``fire_overhead``)
+============  ==================================  =========================================
+
+Each kind keeps an anchor because each calibration can be wrong on its own.  If a looped row moves,
+``achieved II`` is being misread; if the bounded row moves, ``latency + 1`` is.  They are different
+repairs, so they are different tests.
+
+**Do not apply ``latency + 1`` to a looped body.**  It is measured to be **pessimistic by exactly 2**
+there — ``plans/witness/task_loop/`` predicts 13/69 at N=8/64 where RTL measures 11/67 — and for an
+infinite loop it cannot be applied at all, because csynth reports ``TripCount = inf`` and no overall
+latency.  A test below asserts that those two bodies really are unbounded, so a silent revert to a
+bounded shape is caught as a change of *kind* rather than passing with a plausible number.
+
+## Why it is not bookkeeping
+
+The constant feeds :meth:`~waveflow.hw.rf_samp_buf_tx.RfSampBufTx.check_rate`'s threshold,
+``samp_per_word * f_axis / cycles_per_word``.  Declared too low it permits **more sample rate than
+the hardware sustains** — a static check that says yes where the hardware says no, which is exactly
 the failure that cost the RX side 1695 of 4096 samples.  The error is optimistic in both places it
 lands: the threshold and the pysim charge.
 
@@ -40,11 +56,14 @@ TX_REPORT = _EX / "rf_samp_buf_tx" / "rf_samp_buf_tx_proj" / "solution1" / "syn"
 #:
 #: The module names carry their template arguments, so they name the **gated geometry** — one sample
 #: per word — which is the configuration every declared cost is for.
-BOUNDED_BODIES = [
+#:
+#: Both entries are **looped** bodies: their declared number is the loop's achieved ``PipelineII``,
+#: not ``latency + 1``.  See the module docstring for why the two must not be confused.
+LOOPED_BODIES = [
     ("rx ingress", RX_REPORT, "rf_samp_buf_ingress_task_16_1_1024_16_s",
-     RfSampBufIngress.fire_cycles),
+     RfSampBufIngress.cycles_per_word),
     ("tx player", TX_REPORT, "rf_samp_buf_player_task_16_1_2048_16_s",
-     RfSampBufPlayer.fire_cycles),
+     RfSampBufPlayer.cycles_per_word),
 ]
 
 
@@ -58,40 +77,116 @@ def _require(report_dir: Path, module: str):
     return got
 
 
+def _sole_loop(report_dir: Path, module: str) -> str:
+    """The name of the module's one pipelined loop, **found rather than spelled out**.
+
+    Vitis names a loop after the SOURCE LINE it sits on, so editing a comment above the body renames
+    the report entry.  A hard-coded name does not fail when that happens — it stops matching and the
+    test *skips*, which reads as a pass.  Exactly one is asserted: these bodies have a single loop,
+    and more than one means the body was restructured and this file is measuring something else.
+    """
+    from waveflow.utils.csynthparse import module_loops
+
+    loops = module_loops(report_dir, module)
+    assert loops, f"{module} reports no pipelined loop — is it still a `while (1)` body?"
+    assert len(loops) == 1, f"{module} now has {len(loops)} loops ({loops}); it had one"
+    return loops[0]
+
+
 @pytest.mark.parametrize("label,report_dir,module,declared",
-                         BOUNDED_BODIES, ids=[b[0] for b in BOUNDED_BODIES])
-def test_the_declared_firing_cost_is_the_one_csynth_measured(label, report_dir, module, declared):
-    """``fire_cycles == latency + 1``, read out of the module's own ``_csynth.xml``.
+                         LOOPED_BODIES, ids=[b[0] for b in LOOPED_BODIES])
+def test_the_declared_per_word_cost_is_the_loops_achieved_ii(label, report_dir, module, declared):
+    """``cycles_per_word == achieved PipelineII``, read out of the module's own ``_csynth.xml``.
 
-    A single-firing ``hls::task`` body has a bounded latency, and the state count is what a firing
-    costs.  If this fails the declaration is a guess again — correct the constant from the report,
-    never the other way round.
+    **Achieved, not target.**  Vitis reports both and they differ whenever it misses; a per-word cost
+    taken from the target is a wish, and it is optimistic in the direction that hides starvation at a
+    converter.  If this fails the declaration is a guess again — correct the constant from the
+    report, never the other way round.
     """
-    got = _require(report_dir, module)
-    assert got is not None, (
-        f"{label}: csynth could not bound {module} (latency 'undef'), so it has no cycles-per-firing "
-        f"to declare — but {declared} is declared for it. See the loader test below for what to do "
-        f"instead.")
-    measured = int(got["latency_max"]) + 1
-    assert declared == measured, (
-        f"{label}: declares fire_cycles={declared}, but {module} reports latency "
-        f"{got['latency_max']} -> {measured} FSM states. Correct the DECLARATION from the report; "
-        f"raising the threshold back to keep a test green re-introduces the defect the constant "
-        f"exists to prevent.")
+    if not report_dir.is_dir():
+        pytest.skip(f"no csynth report dir at {report_dir} — run the example's build --through csynth")
+    if not (report_dir / f"{module}_csynth.xml").is_file():
+        pytest.skip(f"no report for {module} in {report_dir} — re-run csynth")
+    loop = _sole_loop(report_dir, module)
+    ii = loop_pipeline_ii(report_dir, module, loop)
+    assert ii is not None, f"{label}: {module}'s loop {loop} reports no PipelineII"
+    assert declared == ii, (
+        f"{label}: declares cycles_per_word={declared}, but {module}'s loop {loop} achieved II={ii}. "
+        f"Correct the DECLARATION from the report; raising the threshold back to keep a test green "
+        f"re-introduces the defect the constant exists to prevent.")
 
 
-def test_the_calibration_is_anchored_on_the_rx_ingress():
-    """The control.  If this row moves, ``latency + 1`` is wrong and every other row is meaningless.
+@pytest.mark.parametrize("label,report_dir,module",
+                         [(a, b, c) for a, b, c, _ in LOOPED_BODIES],
+                         ids=[b[0] for b in LOOPED_BODIES])
+def test_the_converter_facing_bodies_really_are_unbounded_loops(label, report_dir, module):
+    """The **kind** check, and it is the one that stops a silent revert.
 
-    Stated separately from the parametrised case above so that a failure says *which* thing broke:
-    a wrong calibration and a wrong declaration are different repairs.
+    A ``while (1)`` body reports ``TripCount = inf`` and no overall latency.  If someone replaces it
+    with a bounded loop the II stays 1 and the row above still passes — while the body acquires a
+    per-firing boundary gap, which at a converter boundary is a window in which it is not reading.
+    That is the regression this asserts against, and nothing else here would see it.
     """
-    got = _require(RX_REPORT, "rf_samp_buf_ingress_task_16_1_1024_16_s")
-    assert got is not None and got["latency_max"] == 1, (
-        f"the RX ingress no longer reports latency 1 ({got}); the calibration this whole file rests "
-        f"on was derived from that value together with its RTL corroboration (58.6% accepted at "
-        f"256 MSa/s == 0.5/0.853), so both need re-deriving before any other row is trusted")
-    assert RfSampBufIngress.fire_cycles == 2
+    if not report_dir.is_dir() or not (report_dir / f"{module}_csynth.xml").is_file():
+        pytest.skip(f"no report for {module} — run the example's build --through csynth")
+    lat = module_latency(report_dir, module)
+    assert lat is None, (
+        f"{label}: csynth can now bound {module} ({lat}), so its body is no longer an infinite loop. "
+        f"A bounded body has a firing boundary — measured at 3 idle cycles in "
+        f"plans/witness/task_loop/ — and a converter-facing task must not have one. If the change "
+        f"was deliberate, this file's two calibrations and check_rate all need re-deriving.")
+    from waveflow.utils.csynthparse import loop_trip_count
+    loop = _sole_loop(report_dir, module)
+    trip = loop_trip_count(report_dir, module, loop)
+    assert trip == "inf", f"{label}: {module}'s loop {loop} reports TripCount={trip}, expected inf"
+
+
+def test_the_looped_calibration_is_anchored_on_the_rx_ingress():
+    """The control for the **looped** kind.  If this row moves, achieved-II is being misread and
+    every other looped row is meaningless.
+
+    Stated separately from the parametrised case so a failure says *which* thing broke: a wrong
+    calibration and a wrong declaration are different repairs.
+    """
+    if not RX_REPORT.is_dir():
+        pytest.skip(f"no csynth report dir at {RX_REPORT} — run rf_samp_buf_rx_build.py --through csynth")
+    mod = "rf_samp_buf_ingress_task_16_1_1024_16_s"
+    if not (RX_REPORT / f"{mod}_csynth.xml").is_file():
+        pytest.skip(f"no report for {mod} — re-run csynth")
+    ii = loop_pipeline_ii(RX_REPORT, mod, _sole_loop(RX_REPORT, mod))
+    assert ii == 1, (
+        f"the RX ingress's loop no longer achieves II=1 (got {ii}). Everything downstream rests on "
+        f"it: check_rate's ceiling is samp_per_word * f_axis / cycles_per_word, and at II=1 that is "
+        f"exactly port capacity. Re-derive before trusting any other row.")
+    assert RfSampBufIngress.cycles_per_word == 1
+
+
+def test_the_bounded_calibration_is_anchored_on_blk_delay():
+    """The control for the **bounded** kind — ``cycles per firing = latency + 1``.
+
+    That calibration still has a live user: ``BlkDelay`` in ``examples/rf_blk_delay`` is a bounded
+    body (its firing is one block) and declares a fixed ``fire_overhead`` derived from latency.  It is
+    the anchor here for the same reason the ingress used to be: if it moves, ``latency + 1`` is wrong
+    wherever it is still applied.
+
+    It is deliberately a *different module in a different example* from the looped anchor, so one
+    report going stale cannot take both calibrations down at once.
+    """
+    from examples.rf_blk_delay.rf_blk_delay import BLKSIZE, SAMP_PER_WORD, BlkDelay
+
+    rd = (_EX / "rf_blk_delay" / "rf_blk_delay_proj" / "solution1" / "syn" / "report")
+    mod = f"blk_delay_task_{SAMP_PER_WORD * 16}_{SAMP_PER_WORD}_{BLKSIZE}_4_16_s"
+    if not rd.is_dir() or not (rd / f"{mod}_csynth.xml").is_file():
+        pytest.skip(f"no report for {mod} — run rf_blk_delay_build.py --through csynth")
+    lat = module_latency(rd, mod)
+    assert lat is not None, (
+        f"{mod} is now unbounded, so `latency + 1` has nothing to anchor on and this file has lost "
+        f"its bounded control. Find another bounded body or retire the calibration.")
+    words = BLKSIZE // SAMP_PER_WORD
+    overhead = int(lat["latency_max"]) - words * BlkDelay.word_cycles
+    assert overhead == BlkDelay.fire_overhead, (
+        f"csynth reports latency {lat['latency_max']} for a {words}-word firing, so the fixed cost is "
+        f"{overhead}; BlkDelay declares fire_overhead={BlkDelay.fire_overhead}.")
 
 
 def test_the_loader_declares_no_per_firing_cost_because_csynth_cannot_bound_it():
@@ -104,9 +199,11 @@ def test_the_loader_declares_no_per_firing_cost_because_csynth_cannot_bound_it()
     What it declares instead is a per-**word** cost, and that one is measurable: the payload loop is
     pipelined, so its achieved II is a real cycles-per-iteration figure.
     """
-    assert not hasattr(RfSampBufLoader, "fire_cycles"), (
-        "RfSampBufLoader declares fire_cycles again. Its overall latency is 'undef' — there is no "
-        "per-firing cost to declare. Use a per-word cost sourced from the payload loop's II.")
+    for gone in ("fire_cycles", "cycles_per_word"):
+        assert not hasattr(RfSampBufLoader, gone), (
+            f"RfSampBufLoader declares {gone}. Its overall latency is 'undef' — there is no "
+            f"per-firing cost to declare, and its per-word cost is `word_cycles`, sourced from the "
+            f"payload loop's achieved II. Two names for one quantity is how they drift apart.")
 
     if not TX_REPORT.is_dir():
         pytest.skip(f"no csynth report dir at {TX_REPORT} — run rf_samp_buf_tx_build.py --through csynth")
@@ -118,42 +215,107 @@ def test_the_loader_declares_no_per_firing_cost_because_csynth_cannot_bound_it()
 
 
 def test_the_loaders_per_word_cost_is_the_payload_loops_achieved_ii():
-    """``word_cycles`` comes from ``PipelineII`` on the payload loop — the **achieved** II.
+    """``word_cycles`` comes from ``PipelineII`` on the **payload** loop — the achieved II.
 
-    Achieved, not target: Vitis reports both, and here they differ (2 achieved against a target of
-    1).  A per-word cost taken from the target would be a wish, and it would be optimistic by a
-    factor of two in the direction that hides starvation.
+    **The loader now has two loops and the test has to pick the right one.**  Its room-wait was
+    hoisted out of the per-word path on 2026-08-18 (that nesting was what held the payload loop at
+    II=2), so the module reports a wait loop *and* a payload loop.  The payload one is the loop that
+    moves a word, so it is the one a per-word cost comes from; the wait runs once per command.
+
+    Discovered rather than named: Vitis names a loop after its source line, so spelling one out means
+    a comment edit silently turns this into a skip.  That is exactly what happened when the hoist
+    moved the loop from line 99 to line 121 — the test skipped, and a skip reads as a pass.
     """
     if not TX_REPORT.is_dir():
         pytest.skip(f"no csynth report dir at {TX_REPORT} — run rf_samp_buf_tx_build.py --through csynth")
-    mod = "rf_samp_buf_loader_task_16_1_2048_16_16_Pipeline_VITIS_LOOP_99_2"
-    if not (TX_REPORT / f"{mod}_csynth.xml").is_file():
-        pytest.skip(f"no report for {mod} — re-run csynth")
-    ii = loop_pipeline_ii(TX_REPORT, mod, "VITIS_LOOP_99_2")
-    assert ii is not None, f"{mod} reports no PipelineII for VITIS_LOOP_99_2"
+    from waveflow.utils.csynthparse import module_loops
+
+    stem = "rf_samp_buf_loader_task_16_1_2048_16_16"
+    subs = sorted(x.name[: -len("_csynth.xml")] for x in TX_REPORT.glob(f"{stem}_Pipeline_*_csynth.xml"))
+    if not subs:
+        pytest.skip(f"no pipelined-loop reports for {stem} — re-run csynth")
+    assert len(subs) == 2, (
+        f"expected the loader to have a wait loop and a payload loop, found {subs}. The body was "
+        f"restructured; re-derive which one carries the per-word cost rather than trusting the pick "
+        f"below.")
+    # The payload loop is the LATER of the two in the source: the wait was hoisted above it.
+    payload = subs[-1]
+    loops = module_loops(TX_REPORT, payload)
+    assert len(loops) == 1, f"{payload} has {loops}"
+    ii = loop_pipeline_ii(TX_REPORT, payload, loops[0])
+    assert ii is not None, f"{payload} reports no PipelineII for {loops[0]}"
     assert RfSampBufLoader.word_cycles == ii, (
-        f"the loader declares word_cycles={RfSampBufLoader.word_cycles} but the payload loop's "
-        f"achieved II is {ii}. Correct the declaration from the report.")
+        f"the loader declares word_cycles={RfSampBufLoader.word_cycles} but the payload loop "
+        f"{loops[0]} achieved II={ii}. Correct the declaration from the report.")
 
 
 def test_the_rate_ceiling_follows_the_measured_cost():
     """The consequence, asserted so a silent correction cannot pass unnoticed.
 
-    ``fire_cycles = 3`` puts the player's ceiling at ``f_axis / 3`` per sample-per-word.  The
-    declaration that stood until 2026-08-17 said 2, which permitted half again as much as the
-    hardware sustains.  The clock is read from the target rather than written as a literal, so
-    re-clocking the examples cannot leave a stale ceiling here.
+    At ``cycles_per_word = 1`` both halves' ceilings are ``samp_per_word * f_axis`` — **exactly what
+    the AXIS port carries**.  The history is worth keeping because the number has moved three times:
+    the player permitted ``f_axis / 2`` per sample-per-word until 2026-08-17 (wrong, by symmetry with
+    the ingress), then ``f_axis / 3`` (right for a one-word firing), and now ``f_axis``.
+
+    The clock is read from the target rather than written as a literal, so re-clocking the examples
+    cannot leave a stale ceiling here.
     """
+    from waveflow.hw.rf_samp_buf import RfSampBufRx
     from waveflow.hw.rf_samp_buf_tx import RfSampBufTx
     from waveflow.simulation.simulation import Simulation
 
     f_axis = 1000.0 / RFSOC_TARGET_NS * 1e6            # 250 MHz
     for spw in (1, 2, 4):
-        dut = RfSampBufTx(name=f"ceil{spw}", sim=Simulation(), bitwidth=16 * spw,
-                          samp_per_word=spw)
-        assert dut.max_samp_rate(f_axis) == f_axis * spw / 3
-    assert RfSampBufTx(name="c1", sim=Simulation(), bitwidth=16,
-                       samp_per_word=1).max_samp_rate(f_axis) == f_axis / 3
+        tx = RfSampBufTx(name=f"ceilt{spw}", sim=Simulation(), bitwidth=16 * spw,
+                         samp_per_word=spw)
+        rx = RfSampBufRx(name=f"ceilr{spw}", sim=Simulation(), bitwidth=16 * spw,
+                         samp_per_word=spw)
+        # Each half is its SLOWEST stage: TX is max(player 1, loader 1) = 1; RX is
+        # max(ingress 1, capture 2) = 2.  Reading either from its converter-facing task alone is the
+        # error this file exists to catch.
+        assert tx.max_samp_rate(f_axis) == f_axis * spw / 1
+        assert rx.max_samp_rate(f_axis) == f_axis * spw / 2
+
+
+def test_only_the_tx_half_reaches_the_port_and_the_capture_is_why():
+    """**Where the ceiling actually sits, stage by stage — and why `check_rate` is still load-bearing.**
+
+    An earlier draft of this test asserted that *both* halves now coincide with the port, on the
+    strength of the ingress and player reaching II=1.  That was wrong, and wrong in the instructive
+    direction: it read the ceiling off the converter-facing tasks and forgot that every sample also
+    crosses a capture or a loader.  The capture is at 2 cycles per word and cannot be pipelined to 1
+    without deleting the straddling case, so the RX half sits at half the port and the **loop** sits
+    there with it.
+
+    That is also the answer to "does `check_rate` still refuse anything?".  For the TX half it no
+    longer does — its ceiling is the port's, and `Rfdc` fires first on everything above.  For the RX
+    half it very much does, at half the port, which is the rate `examples/rf_blk_delay` is sized
+    against.
+    """
+    from waveflow.hw.rf_samp_buf import RfSampBufCapture, RfSampBufIngress, RfSampBufRx
+    from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufPlayer, RfSampBufTx
+    from waveflow.simulation.simulation import Simulation
+
+    f_axis, spw = 1000.0 / RFSOC_TARGET_NS * 1e6, 4
+    port = f_axis * spw
+    rx = RfSampBufRx(name="pc_r", sim=Simulation(), bitwidth=16 * spw, samp_per_word=spw)
+    tx = RfSampBufTx(name="pc_t", sim=Simulation(), bitwidth=16 * spw, samp_per_word=spw)
+
+    # The four measured per-word costs, and the two halves they add up to.
+    assert (RfSampBufIngress.cycles_per_word, RfSampBufCapture.cycles_per_word) == (1, 2)
+    assert (RfSampBufLoader.word_cycles, RfSampBufPlayer.cycles_per_word) == (1, 1)
+    assert rx.cycles_per_word == 2 and tx.cycles_per_word == 1
+
+    assert tx.max_samp_rate(f_axis) == port, "the TX half reaches the port"
+    assert rx.max_samp_rate(f_axis) == port / 2, "the RX half does not, because of the capture"
+
+    # The loop is the slower of the two, and it is what an example may be sized against.
+    assert min(rx.max_samp_rate(f_axis), tx.max_samp_rate(f_axis)) == port / 2
+
+    # TX accepts the port's own rate; RX refuses it.  Both are the check doing its job.
+    tx.check_rate(port, f_axis)
+    with pytest.raises(ValueError, match="exceeds what the ingress can absorb"):
+        rx.check_rate(port, f_axis)
 
 
 # ---------------------------------------------------------------------------
