@@ -42,7 +42,13 @@ fractional and derived.
 > **Which 250 MHz fabric, and why 250.** Every rate on these pages assumes one, so it is worth
 > saying where it comes from. The RF examples synthesize for the **RFSoC 4x2**
 > (`xczu48dr-ffvg1517-2-e`) at 250 MHz, and close it with margin — 365 MHz on the capture buffer,
-> 432 on the playout buffer, 371 on the loopback DUT.
+> 282 on the playout buffer, 371 on the loopback DUT.
+>
+> **The playout figure fell from 432 to 282 on 2026-08-18**, and that is the price of pipelining its
+> bodies to one word per cycle: an II=1 loop does in one cycle what used to take three, so the
+> critical path through it is longer. It still closes 250 MHz with 13% margin, and the throughput it
+> bought is a factor of three — but it is the first change in this arc to cost timing, and a further
+> II=1 body on this path would want checking rather than assuming.
 >
 > **250 is forced by the geometry rather than chosen.** An AXIS word carries an integer number of
 > samples — a sample cannot straddle a slot — so `f_axis = samp_rate / samp_per_word`. For a 1 GSPS

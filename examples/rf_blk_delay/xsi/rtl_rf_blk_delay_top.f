@@ -9,7 +9,8 @@
 ../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_capture_task_64_4_1024_16_16_Pipeline_VITIS_LOOP_106_2.v
 ../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_capture_task_64_4_1024_16_16_s.v
 ../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_ingress_task_64_4_1024_16_s.v
-../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_loader_task_64_4_2048_16_16_Pipeline_VITIS_LOOP_99_2.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_loader_task_64_4_2048_16_16_Pipeline_VITIS_LOOP_110_1.v
+../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_loader_task_64_4_2048_16_16_Pipeline_VITIS_LOOP_121_2.v
 ../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_loader_task_64_4_2048_16_16_s.v
 ../rf_blk_delay_proj/solution1/syn/verilog/rf_blk_delay_rf_samp_buf_player_task_64_4_2048_16_s.v
 bram_t2p.v

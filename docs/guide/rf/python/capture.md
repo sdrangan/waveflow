@@ -122,12 +122,19 @@ drained a whole burst in zero time and so never met the per-word rate at all. (T
 move to a 250 MHz fabric; at 250 MHz its 256 MSa/s would exceed the *port* itself — `samp_per_word ×
 f_axis` — and `Rfdc` refuses it before the design check is reached.)
 
-**That blind spot is closed.** The twin now charges `fire_cycles` per word, so an over-rate run —
-200 MSa/s against a 125 MSa/s design ceiling — reports **1536 of 4096** dropped in pysim. Quantised
-to whole blocks and therefore
-slightly optimistic against the RTL's 1695 — pysim drops an offer or takes it, it cannot lose part of
-a block — but the loss is visible without a toolchain, and the drop threshold is exactly the capacity
-the check below refuses against.
+**That blind spot is closed.** The twin charges `cycles_per_word` per word, so a run at the ingress's
+own ceiling — `samp_per_word × f_axis`, 250 MSa/s at one sample per word — reports **1280 of 4096**
+dropped in pysim. Quantised to whole blocks and therefore slightly optimistic against the RTL's
+1695 — pysim drops an offer or takes it, it cannot lose part of a block — but the loss is visible
+without a toolchain.
+
+The rate that shows it has moved twice, and the second move is worth understanding. It was 200 MSa/s
+against a 125 MSa/s design ceiling. Since the ingress became a `while (1)` loop at II=1 it absorbs a
+word every cycle, so **the boundary keeps up all the way to the port** and 200 shows nothing. What it
+did not do is lift the *buffer*: the capture behind the memory still costs 2 cycles per word, so
+`check_rate` refuses at half the port while this counter stays clean. Between those two rates the
+loss is real but lands elsewhere — samples are overwritten before the capture reaches them, which is
+a `too_old` on a command, not a drop at the port.
 
 So the design declares its firing cost and the testbench checks the pairing:
 

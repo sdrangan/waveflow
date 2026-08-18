@@ -545,18 +545,28 @@ def test_the_converter_parameter_split_matches_the_class():
 def test_rule_4_quotes_the_capture_designs_measured_shortfall():
     """Rule 4's evidence is the capture design's first RTL run, and its firing cost is live code.
 
-    ``fire_cycles`` is a class attribute, so the arithmetic on the page (``f_axis * samp_per_word /
-    fire_cycles``) is only right while that number is what the page says.
+    ``cycles_per_word`` is a class attribute, so the arithmetic on the page (``f_axis * samp_per_word /
+    cycles_per_word``) is only right while that number is what the page says.
     """
     from waveflow.hw.rf_samp_buf import RfSampBufIngress
     from tests.examples.test_rf_samp_buf_rx_xsi import WANT_ADC_WORDS
 
     text = _page("guide/rf/python/rules.md")
-    assert f"every **{RfSampBufIngress.fire_cycles}** cycles" in text, (
-        f"rules.md quotes a firing cost the code no longer has ({RfSampBufIngress.fire_cycles})")
+    # The "**2** cycles" on the page is HISTORY -- the ingress that lost 1695 of 4096 -- and it is
+    # checked for presence, not against the live constant.  The ingress is 1 today, and pinning the
+    # historical figure to the current attribute is what would make the page rewrite its own past.
+    assert "firing every **2** cycles" in text, (
+        "rules.md no longer states the firing cost of the design that lost the samples; without it "
+        "the arithmetic in the evidence block does not follow")
     assert f"**1695 of {WANT_ADC_WORDS}** samples" in text, (
         "rules.md no longer states the shortfall that motivated the design-capacity check")
-    assert "/ RfSampBufIngress.fire_cycles" in text
+    # The LIVE claim: the page must divide by the buffer's slowest stage, not by a boundary task.
+    assert "RfSampBufRx.cycles_per_word" in text, (
+        "rules.md no longer shows the capacity being divided by the buffer's own cycles_per_word; "
+        "dividing by the ingress's alone is the error this rule now exists to prevent")
+    assert RfSampBufIngress.cycles_per_word == 1, (
+        "the ingress is no longer II=1, so rules.md's live claim about the boundary keeping up to "
+        "the port needs re-deriving")
 
 
 def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
@@ -572,11 +582,13 @@ def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
     from waveflow.hw.rf_samp_buf import RfSampBufRx
     from waveflow.simulation.simulation import Simulation
 
-    # 200 MSa/s: over the DESIGN ceiling (spw * f_axis / fire_cycles = 125 MSa/s) and under the
-    # PORT ceiling (spw * f_axis = 250 MSa/s), which is the band this claim is about.  It was
-    # 256 MSa/s while the fabric was 300 MHz; at 250 MHz that exceeds the port and `Rfdc` refuses it
-    # before the design check is ever reached -- a different failure, and not the one being shown.
-    tb = run_pysim(tb=RfSampBufRxTB(name="doc_over", sim=Simulation(), samp_rate=200e6,
+    # The probe rate has to move with the ceiling, and it has moved twice.  It was 256 MSa/s at a
+    # 300 MHz fabric; 200 when the fabric became 250 MHz (over the 125 MSa/s design ceiling, under
+    # the 250 port).  The ingress is now II=1, so 200 is comfortably absorbed and shows nothing --
+    # the rate that still backs the boundary port up is the ingress's own ceiling, spw * f_axis.
+    from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
+    over = RFSOC4X2_CLK_HZ * 1          # spw = 1 in this testbench
+    tb = run_pysim(tb=RfSampBufRxTB(name="doc_over", sim=Simulation(), samp_rate=over,
                                     enforce_rate=False))
     dropped = int(tb.adc_axis.dropped)
     assert dropped > 0, "the paced twin no longer sees the loss; both pages claim it does"
@@ -653,7 +665,12 @@ def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():
         assert any(str(q) in text for q in (quoted, quoted - 1, quoted + 1, quoted - 2, quoted + 2)), (
             f"guide/rf/index.md quotes no Fmax near {quoted} MHz for the {label}, which is what "
             f"{rep} reports ({got['fmax_mhz']:.2f} MHz)")
-        assert got["fmax_mhz"] >= 300.0, (
+        # Against the TARGET the run itself records, not a literal 300.  The examples target 250 MHz
+        # (4.0 ns) and the playout buffer fell to 282 when its bodies were pipelined to II=1 -- an
+        # II=1 loop does in one cycle what took three, so the path through it is longer.  It still
+        # closes with margin; a hard-coded 300 would have failed a design that meets its own clock.
+        target_mhz = 1000.0 / got["target_period_ns"]
+        assert got["fmax_mhz"] >= target_mhz, (
             f"{label} no longer closes the 300 MHz the page claims ({got['fmax_mhz']:.1f} MHz)")
 
 
