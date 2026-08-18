@@ -159,10 +159,16 @@ window in **sample index** — the converter's running count, not a buffer addre
 Arrival time is backend-dependent; the sample index is not. `examples/rf_blk_delay` measures both at
 once. It asks for block *k* at sample index `k·256` and places it at `k·256 + 1024`, and both backends
 honour that exactly — every block, bit-exact. But *where the delayed sample lands in what the DAC
-played* is **1024** in pysim and **960** at RTL: a fixed **64**-sample difference in start-up phase
+played* is **1024** in pysim and **1020** at RTL: a fixed **4**-sample difference in start-up phase
 between the player's pointer and the converter's block grid. Neither is wrong. Anything derived from
-arrival inherits that 64; anything derived from the sample index does not, because sample *n* is at
+arrival inherits that 4; anything derived from the sample index does not, because sample *n* is at
 `t0 + n / samp_rate` in both.
+
+That gap was **64** until 2026-08-18 and is now one word — which makes the rule's point better than
+the larger number did. The skew is how far the player's pointer runs before the grid's first block
+boundary, so it shrank when the player went to one word per cycle and started filling the converter's
+input FIFO immediately. **A quantity derived from arrival moved by a factor of sixteen because an
+unrelated body was pipelined**; the index relation did not move at all.
 
 The practical payoff is that a host can ask for *"100 samples around the event I timestamped"* and
 mean something exact. A drop then leaves a **visible gap** in the indices rather than silently

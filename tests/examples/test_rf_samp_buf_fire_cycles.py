@@ -234,11 +234,13 @@ def test_the_loaders_per_word_cost_is_the_payload_loops_achieved_ii():
     subs = sorted(x.name[: -len("_csynth.xml")] for x in TX_REPORT.glob(f"{stem}_Pipeline_*_csynth.xml"))
     if not subs:
         pytest.skip(f"no pipelined-loop reports for {stem} — re-run csynth")
-    assert len(subs) == 2, (
-        f"expected the loader to have a wait loop and a payload loop, found {subs}. The body was "
+    assert len(subs) in (1, 2), (
+        f"expected one or two pipelined loops in the loader, found {subs}. The body was "
         f"restructured; re-derive which one carries the per-word cost rather than trusting the pick "
         f"below.")
-    # The payload loop is the LATER of the two in the source: the wait was hoisted above it.
+    # One loop is the shipped shape: the per-word drain with its inner room-spin, and the spin is
+    # what Vitis pipelines (at II=2).  Two would mean the room-wait had been hoisted above the drain,
+    # in which case the LATER loop is the drain.  Either way the last one is the per-word cost.
     payload = subs[-1]
     loops = module_loops(TX_REPORT, payload)
     assert len(loops) == 1, f"{payload} has {loops}"
@@ -273,24 +275,27 @@ def test_the_rate_ceiling_follows_the_measured_cost():
         # Each half is its SLOWEST stage: TX is max(player 1, loader 1) = 1; RX is
         # max(ingress 1, capture 2) = 2.  Reading either from its converter-facing task alone is the
         # error this file exists to catch.
-        assert tx.max_samp_rate(f_axis) == f_axis * spw / 1
+        # Both halves are 2, from DIFFERENT stages: RX from the capture, TX from the loader.
+        assert tx.max_samp_rate(f_axis) == f_axis * spw / 2
         assert rx.max_samp_rate(f_axis) == f_axis * spw / 2
 
 
-def test_only_the_tx_half_reaches_the_port_and_the_capture_is_why():
-    """**Where the ceiling actually sits, stage by stage — and why `check_rate` is still load-bearing.**
+def test_neither_half_reaches_the_port_and_two_different_stages_are_why():
+    """**Where the ceiling actually sits, stage by stage.**
 
-    An earlier draft of this test asserted that *both* halves now coincide with the port, on the
-    strength of the ingress and player reaching II=1.  That was wrong, and wrong in the instructive
-    direction: it read the ceiling off the converter-facing tasks and forgot that every sample also
-    crosses a capture or a loader.  The capture is at 2 cycles per word and cannot be pipelined to 1
-    without deleting the straddling case, so the RX half sits at half the port and the **loop** sits
-    there with it.
+    Earlier drafts of this test asserted, in turn, that *both* halves reach the port and that only the
+    TX half does.  Both were wrong, and wrong the same way: they read the ceiling off the tasks that
+    touch a converter.  Those two are at II=1.  The two that do not touch a converter are at 2, and
+    since every sample crosses all four, they are what the halves cost.
 
-    That is also the answer to "does `check_rate` still refuse anything?".  For the TX half it no
-    longer does — its ceiling is the port's, and `Rfdc` fires first on everything above.  For the RX
-    half it very much does, at half the port, which is the rate `examples/rf_blk_delay` is sized
-    against.
+    The two are at 2 for **different and unrelated reasons**, which is why fixing one moves nothing:
+
+    * the **capture** waits per word for the ingress to have written the word asked for.  Hoisting
+      that to the frame would refuse to emit until the whole window exists, deleting the straddling
+      case it has four cases in order to serve.
+    * the **loader** waits per word for the player to have freed the slot.  That one *can* be hoisted
+      -- it asks about the whole frame -- and csynth then reports II=1, but the RTL is wrong; see
+      ``RfSampBufLoader.word_cycles``.  It was reverted.
     """
     from waveflow.hw.rf_samp_buf import RfSampBufCapture, RfSampBufIngress, RfSampBufRx
     from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufPlayer, RfSampBufTx
@@ -301,21 +306,22 @@ def test_only_the_tx_half_reaches_the_port_and_the_capture_is_why():
     rx = RfSampBufRx(name="pc_r", sim=Simulation(), bitwidth=16 * spw, samp_per_word=spw)
     tx = RfSampBufTx(name="pc_t", sim=Simulation(), bitwidth=16 * spw, samp_per_word=spw)
 
-    # The four measured per-word costs, and the two halves they add up to.
-    assert (RfSampBufIngress.cycles_per_word, RfSampBufCapture.cycles_per_word) == (1, 2)
-    assert (RfSampBufLoader.word_cycles, RfSampBufPlayer.cycles_per_word) == (1, 1)
-    assert rx.cycles_per_word == 2 and tx.cycles_per_word == 1
+    # The converter-facing bodies are the fast ones; the ceiling is not theirs.
+    assert (RfSampBufIngress.cycles_per_word, RfSampBufPlayer.cycles_per_word) == (1, 1)
+    assert (RfSampBufCapture.cycles_per_word, RfSampBufLoader.word_cycles) == (2, 2)
+    assert rx.cycles_per_word == tx.cycles_per_word == 2
 
-    assert tx.max_samp_rate(f_axis) == port, "the TX half reaches the port"
-    assert rx.max_samp_rate(f_axis) == port / 2, "the RX half does not, because of the capture"
-
-    # The loop is the slower of the two, and it is what an example may be sized against.
+    assert rx.max_samp_rate(f_axis) == tx.max_samp_rate(f_axis) == port / 2, (
+        "neither half reaches the port; if one now does, a stage was fixed and this example's rate "
+        "can rise -- re-derive SAMP_RATE from the reports rather than guessing")
     assert min(rx.max_samp_rate(f_axis), tx.max_samp_rate(f_axis)) == port / 2
 
-    # TX accepts the port's own rate; RX refuses it.  Both are the check doing its job.
-    tx.check_rate(port, f_axis)
+    # Both refuse the port's own rate, which is what a reader would assume is reachable now that the
+    # two converter-facing bodies are at II=1.
     with pytest.raises(ValueError, match="exceeds what the ingress can absorb"):
         rx.check_rate(port, f_axis)
+    with pytest.raises(ValueError, match="exceeds what the player can sustain"):
+        tx.check_rate(port, f_axis)
 
 
 # ---------------------------------------------------------------------------

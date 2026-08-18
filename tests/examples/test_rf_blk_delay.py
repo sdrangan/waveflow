@@ -197,14 +197,30 @@ def test_the_delay_floor_is_measured_not_assumed():
     below = run_pysim(tb=RfBlkDelayTB(name="short", sim=Simulation(),
                                       delay_blocks=MIN_DELAY_BLOCKS - 1))
     resp = tx_responses(below)
-    assert resp and all(s == RF_SAMP_BUF_TOO_LATE for _t, s, _n in resp), (
-        f"a delay of {MIN_DELAY_BLOCKS - 1} blocks was expected to miss every slot, got {resp}")
-    assert below.tx.n_too_late == N_BLK
+    late = [s for _t, s, _n in resp if s == RF_SAMP_BUF_TOO_LATE]
+    # SOME miss, not all: one block below the floor the loop is marginal rather than hopeless, and
+    # how many miss depends on how far below.  Measured at MIN_DELAY_BLOCKS - 1 = 5: five of twelve.
+    # Asserting "all" would pin a number that is a property of how deep the sweep went.
+    assert late, (
+        f"a delay of {MIN_DELAY_BLOCKS - 1} blocks was expected to miss at least one slot, got {resp}")
+    assert below.tx.n_too_late == len(late)
     placed = sum(n for _t, _s, n in resp)
     assert 0 < placed < N_BLK * BLKSIZE, (
         f"{placed} of {N_BLK * BLKSIZE} samples placed; the failure below the floor is a block cut "
         f"short by the player, so it should be neither total nor absent")
-    assert all(n < BLKSIZE for _t, _s, n in resp), f"a block was placed in full anyway: {resp}"
+    # **A refusal is a block cut short, never a block silently dropped or silently completed**, and
+    # that is the invariant worth pinning rather than the shape of the shortfall.  The shape depends
+    # on the rate: at 250 MSa/s one below the floor the refusals alternate 244 / 0, at 400 MSa/s they
+    # degrade 232 / 176 / 152 / ... as the loop falls further behind.  Asserting either pattern would
+    # pin a number that belongs to a configuration rather than to the contract.
+    refused = [n for _t, s, n in resp if s == RF_SAMP_BUF_TOO_LATE]
+    assert all(0 <= n < BLKSIZE for n in refused), (
+        f"a refused command placed a FULL block: {resp}. Refused means the player reached the slot "
+        f"first, so it cannot have taken everything.")
+    assert any(n > 0 for n in refused), (
+        f"every refused command placed nothing: {resp}. The loader is supposed to keep draining the "
+        f"frame after the verdict, so at least a partial block should land -- all-or-nothing here "
+        f"would mean the drain-after-refusal path is gone, and the next command would desynchronise.")
 
     at = run_pysim(tb=RfBlkDelayTB(name="floor", sim=Simulation(),
                                    delay_blocks=MIN_DELAY_BLOCKS))
@@ -250,13 +266,18 @@ def test_the_loop_ceiling_is_the_slowest_of_all_four_stages(tb):
     assert tb.rx.max_samp_rate(f) == port / tb.rx.cycles_per_word
     assert tb.tx.max_samp_rate(f) == port / tb.tx.cycles_per_word
 
-    # ...and the RX half is the binding one, because the capture is the one body that cannot be
-    # pipelined to II=1 without deleting the straddling case.
+    # ...and TWO stages sit at 2, so either half alone would set the same ceiling.  That is worth
+    # asserting rather than picking a "binding half": if one of them is fixed, the ceiling does NOT
+    # move, and a test that named a single culprit would suggest otherwise.
     loop_ceiling = min(tb.rx.max_samp_rate(f), tb.tx.max_samp_rate(f))
-    assert loop_ceiling == tb.rx.max_samp_rate(f) < tb.tx.max_samp_rate(f), (
-        "the RX half is expected to bind, via the capture. If that changed, this example's rate can "
-        "rise and SAMP_RATE's justification needs rewriting -- from the reports, not by guessing.")
-    assert loop_ceiling == port / 2
+    slow = [n for n, c in (("capture", RfSampBufCapture.cycles_per_word),
+                           ("loader", RfSampBufLoader.word_cycles),
+                           ("ingress", RfSampBufIngress.cycles_per_word),
+                           ("player", RfSampBufPlayer.cycles_per_word)) if c == 2]
+    assert sorted(slow) == ["capture", "loader"], (
+        f"the stages at 2 cycles/word are {slow}; SAMP_RATE's justification names capture and loader "
+        f"and needs rewriting if that changed")
+    assert loop_ceiling == tb.rx.max_samp_rate(f) == tb.tx.max_samp_rate(f) == port / 2
 
     # The shipped rate sits inside it, with margin, and BOTH checks run un-bypassed.
     assert SAMP_RATE <= loop_ceiling

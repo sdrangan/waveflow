@@ -312,19 +312,32 @@ def test_above_the_ceiling_the_measured_cost_predicts_a_lower_rate_than_the_old_
 def test_the_ceiling_is_where_the_two_pacing_terms_cross():
     """Why the criterion has to look above the ceiling: that is where the crossover is.
 
-    The firing costs ``max(nwords * cycles_per_word / f_axis, nwords / word_rate)``.  Those are equal at
-    ``word_rate == f_axis / cycles_per_word``, which is exactly what ``max_samp_rate`` returns — so the
-    constant's whole observable effect starts at the boundary ``check_rate`` refuses beyond.
+    The player's firing costs ``max(nwords * cycles_per_word / f_axis, nwords / word_rate)``.  Those
+    are equal at ``word_rate == f_axis / cycles_per_word`` — the PLAYER's own crossover, which is what
+    decides when its constant is observable in pysim at all.
+
+    **That is no longer the buffer's ceiling**, and the two must not be conflated.  Since the player
+    reached II=1 its crossover sits at ``f_axis``, while ``max_samp_rate`` is the whole buffer's and
+    the loader holds it at ``f_axis / 2``.  So the player's cost becomes observable only *above* a
+    rate ``check_rate`` already refuses — which is a stronger version of the same point this section
+    makes: it is worth nothing in any legal configuration.
     """
-    from waveflow.hw.rf_samp_buf_tx import RfSampBufTx
+    from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufTx
 
     dut = RfSampBufTx(name="cross", sim=Simulation(), **_ELAB)
     f_axis = RFSOC4X2_CLK_HZ
-    assert dut.max_samp_rate(f_axis) == f_axis / RfSampBufPlayer.cycles_per_word
+
+    # The player's own crossover.
     nwords = 256
-    at_ceiling = dut.max_samp_rate(f_axis)
+    player_ceiling = f_axis / RfSampBufPlayer.cycles_per_word
     fabric = nwords * RfSampBufPlayer.cycles_per_word / f_axis
-    demand = nwords / at_ceiling
+    demand = nwords / player_ceiling
     assert fabric == pytest.approx(demand), (
-        "the fabric and DAC pacing terms no longer cross at max_samp_rate, so the ceiling and the "
-        "simulation have stopped meaning the same thing")
+        "the fabric and DAC pacing terms no longer cross at the player's own ceiling, so its cost "
+        "and the simulation have stopped meaning the same thing")
+
+    # The buffer's ceiling is the loader's, and it is strictly below the player's crossover.
+    assert dut.max_samp_rate(f_axis) == f_axis / RfSampBufLoader.word_cycles < player_ceiling, (
+        "the buffer's ceiling has caught up with the player's crossover; if the loader was fixed, "
+        "the player's constant is observable in legal configurations again and this section's "
+        "conclusion needs re-deriving")

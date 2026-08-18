@@ -49,7 +49,13 @@ TB = "rf_samp_buf_rx_counters"
 #: does not).  Solving ``15441 = (18411 - x) * 250/300 + x`` gives ``x = 591`` cycles of
 #: clock-independent fabric work -- the capture loop serving its 100 samples -- and 17820 cycles of
 #: waiting for the converter.  Both halves behave exactly as they should.
-WANT_LAST_CYCLE = 15441
+#:
+#: **+1 on 2026-08-18** when the ingress body became a ``while (1)`` loop at II=1.  One cycle, and it
+#: is the pipeline depth: the loop's depth went 0 -> 3 (csynth), so the last sample of the run leaves
+#: the ingress a fixed few cycles later than it used to, and the capture behind it inherits that.
+#: It is a *latency* cost paid once, against a *throughput* gain of 2x per word -- which is the trade
+#: a pipeline always makes, and the reason this file records the completion cycle rather than a rate.
+WANT_LAST_CYCLE = 15442
 
 #: Words the ADC delivers: 16 blocks x 256 samples, every one of which must be accepted.
 WANT_ADC_WORDS = 4096

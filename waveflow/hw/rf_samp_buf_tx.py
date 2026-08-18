@@ -161,34 +161,41 @@ class RfSampBufLoader(FreeRunMod):
     #: **Fabric cycles per PAYLOAD WORD** — and deliberately *not* called ``cycles_per_word``, because
     #: this body has no cycles-per-firing to declare.
     #:
-    #: MEASURED, from ``PipelineII`` on the payload loop: an **achieved** II of **1** since
-    #: 2026-08-18 (achievement, not target — Vitis reports both and only the first is a measurement).
+    #: MEASURED, from ``PipelineII`` on the payload loop: an **achieved** II of **2** against a target
+    #: of 1 that Vitis does not meet (achievement, not target -- only the first is a measurement).
     #:
-    #: **It was 2, and the 2 was a missed target with a nameable cause.**  The payload loop used to
-    #: contain an inner ``while (!room)`` spin, and Vitis said so precisely::
+    #: **THE MISS HAS A NAMEABLE CAUSE, A FIX WAS TRIED, AND THE FIX WAS WRONG.**  Recorded because
+    #: the next person to look will have the same idea.
+    #:
+    #: The payload loop contains an inner ``while (!room)`` spin, and Vitis says exactly that::
     #:
     #:     [HLS 200-878] Unable to schedule the loop exit test ('icmp_ln99') in the first pipeline
     #:                   iteration (II = 1 cycles)
     #:     [HLS 200-960] Cannot flatten loop 'VITIS_LOOP_85_1' ... sub loop is do-while
     #:
-    #: — it had pipelined the *inner* spin at II=2 and could not flatten the payload loop into it.
-    #: The RX ingress does the same essential work and reached II=1 because it has no inner loop.
-    #: Hoisting the room-wait out of the per-word path (it asks about the whole frame, so it can be
-    #: asked once) took this to 1.  :attr:`~waveflow.hw.rf_samp_buf.RfSampBufCapture.cycles_per_word`
-    #: has the same shape and **cannot** take the same fix — its wait is genuinely per word.
+    #: -- it pipelines the *inner* spin at II=2 and cannot flatten the payload loop into it.  The RX
+    #: ingress does the same essential work and reaches II=1 because it has no inner loop.
     #:
-    #: **There is no per-firing constant here and this replaces the one that used to be.**  A firing
-    #: is one whole command, and the outer ``VITIS_LOOP_85_1`` has a data-dependent trip count, so
-    #: the module's overall latency is reported ``undef``.  The previous ``cycles_per_word = 2`` was
-    #: justified by symmetry with :class:`~waveflow.hw.rf_samp_buf.RfSampBufIngress` — "the same
-    #: shape, so the same cost" — and the report refutes the premise: that body is a single-word
-    #: firing with a bounded 1-cycle latency, this one is a loop over an unbounded payload.
+    #: So the wait was hoisted above the loop: it asks about the whole FRAME ("is there room for all
+    #: of it?"), which looks like a question that can be asked once.  **csynth agreed -- the payload
+    #: loop reached II=1 -- and the RTL was wrong.**  ``examples/rf_samp_buf_tx``'s gate played 0xFFFF
+    #: for all 9984 samples: the loader reported placing every command (``CMD_SENT == CMD_TOTAL``, all
+    #: four answered, completion 4.8x faster at 1084 cycles) while the memory read back all ones.
+    #: Reverting *only* this body restored the gate exactly, so the attribution is not a guess.
+    #: `examples/rf_blk_delay` passed bit-exact throughout, which is why a single example's gate is
+    #: not enough evidence on its own.
     #:
-    #: **What is still not charged:** the framing — the command read, the response write, and the
-    #: outer loop's entry and exit.  That is a per-command overhead the report does not bound, so the
-    #: pysim charge is optimistic by it.  It is a constant per command rather than per word, so it
-    #: does not distort the per-word rate, only the fixed offset.
-    word_cycles: ClassVar[int] = 1
+    #: It was not diagnosed further because **it buys nothing**: the loop's ceiling is set by
+    #: :attr:`~waveflow.hw.rf_samp_buf.RfSampBufCapture.cycles_per_word` = 2, so taking this stage to 1
+    #: moves no ceiling.  It also cost 30% of the TX kernel's LUTs and 150 MHz of Fmax (432 -> 282),
+    #: both traced to the per-word ``rd_in`` poll the hoist required::
+    #:
+    #:     [HLS 200-887] Cannot meet target clock period from fifo read operation ('rd_read') to
+    #:                   'icmp' ... in region 'VITIS_LOOP_121_2'
+    #:
+    #: A correct version would have to keep the per-word room test without nesting a loop -- a flat
+    #: state machine over the drain, not a hoist.  Worth doing only if the capture is fixed first.
+    word_cycles: ClassVar[int] = 2
 
     #: AXIS word width in bits.  Read off the converter's ``axis_bitwidth``.
     bitwidth: HwParam[int] = WORD_BW
