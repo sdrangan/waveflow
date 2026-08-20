@@ -501,27 +501,35 @@ class TxPlayer(FreeRunMod):
     #: twin's ``BEFORE`` case ``continue``\\ s without consuming a slot, and an unbounded version of
     #: that is a data-dependent trip count in a body that must stay II=1.
     max_stale_per_block: HwParam[int] = MAX_IN_FLIGHT
-    #: Seconds per **sample** at the converter — the metronome this player is held to.  Required:
-    #: without it the player would run at the fabric's rate, the loader could never stay ahead, and
-    #: every command would eventually be refused.  That is an artefact of the model, not the design.
+    #: Seconds per **sample** at the converter — the metronome this player is held to.
+    #:
+    #: A **modelling input, not a hardware parameter**, so it is a plain field rather than an
+    #: :class:`~waveflow.hw.hw_module.HwParam`: it must not appear in the elaborated signature or
+    #: the generated top, where the metronome arrives as ``TREADY`` instead.  Same split as
+    #: :attr:`~waveflow.hw.rf_samp_buf_tx.RfSampBufPlayer.dac_word_rate`.
+    #:
+    #: ``None`` is legal at construction and **fatal at the first firing**, which is the only place
+    #: it means anything.  Refusing it in ``__post_init__`` instead would make the module
+    #: unelaboratable — :func:`~waveflow.build.elaborate.elaborate` passes ``HwParam``\s and nothing
+    #: else, by design — and elaboration is the sim-free entry point every codegen path starts from.
+    #: Measured: it did exactly that.
+    #:
+    #: Why it matters at all: without the converter's own rate the player runs at the *fabric's*,
+    #: which no loader can stay ahead of, and every command comes back ``TX_TOO_LATE`` for a reason
+    #: that is in the model rather than in the design.
     slot_period: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
         w, spw = int(self.bitwidth), int(self.samp_per_word)
-        if self.slot_period is None:
-            raise ValueError(
-                f"{type(self).__name__} '{self.name}': slot_period is required. Without the "
-                f"converter's own rate the player runs at the fabric's, which no loader can stay "
-                f"ahead of — every command would come back TX_TOO_LATE for a reason that is in the "
-                f"model rather than in the design.")
         if int(self.blk_samp) % spw:
             raise ValueError(f"blk_samp={int(self.blk_samp)} is not a whole number of "
                              f"{spw}-sample words")
         samp_type(w, spw)
-        self.fwd = AckedStreamSlaveIF(sim=self.sim, name=f"{self.name}_fwd", bitwidth=TAG_BW,
-                                      slot_period=float(self.slot_period))
+        self.fwd = AckedStreamSlaveIF(
+            sim=self.sim, name=f"{self.name}_fwd", bitwidth=TAG_BW,
+            slot_period=None if self.slot_period is None else float(self.slot_period))
         self.samp_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_samp_out", bitwidth=w,
                                        has_tlast=True)
         for ep in (self.fwd, self.samp_out):
@@ -557,7 +565,13 @@ class TxPlayer(FreeRunMod):
 
     @property
     def blk_period(self) -> float:
-        """Seconds per block — ``blk_samp * slot_period``."""
+        """Seconds per block — ``blk_samp * slot_period``.  Raises when there is no metronome."""
+        if self.slot_period is None:
+            raise RuntimeError(
+                f"{type(self).__name__} '{self.name}': slot_period was never set, so this player "
+                f"has no grid to run on. It is a MODELLING input — construction and elaboration do "
+                f"not need it, the first firing does. Pass it from the testbench that owns the "
+                f"converter's sample rate.")
         return int(self.blk_samp) * float(self.slot_period)
 
     @sim_only
