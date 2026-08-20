@@ -142,3 +142,54 @@ class TestThePlayerCostsWhatItCosts:
         assert int(got["latency_max"]) > 60000, (
             "the worst case is a full 16-bit nsamp through the payload loop; a small number here "
             "means the loop stopped being counted by nsamp")
+
+
+class TestCsynthOkIsNotEvidence:
+    """csynth reporting OK is not evidence: **a kernel whose argument was DCE'd still reports
+    success and still writes a top, with nothing under it.**
+
+    So the RTL is asserted to contain the work — both task modules and both internal channels.  With
+    two tasks and two channels there are four things that could vanish, and the numbers the rest of
+    this file reads would be equally green if any of them had.
+
+    Marked ``vitis`` because it **runs the build** rather than reading whatever report is on disk.
+    That is what makes it hermetic where the report-reading tests above cannot be.
+    """
+
+    @pytest.mark.vitis
+    def test_csynth_produces_both_tasks_and_both_channels(self):
+        from waveflow.build.build import BuildConfig
+
+        from examples.rf_repeat_play.rf_repeat_play_build import (
+            MAX_IN_FLIGHT,
+            TOP,
+            build_rf_repeat_play_dag,
+        )
+
+        root = _EX / "rf_repeat_play"
+        results = build_rf_repeat_play_dag().run(BuildConfig(root_dir=root, params={}),
+                                                 through="csynth")
+        failed = [n for n, r in results.items() if not r.success]
+        assert not failed, f"build steps failed: {failed}"
+
+        verilog = root / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
+        assert verilog.is_dir(), f"no RTL at {verilog}"
+        mods = {p.stem for p in verilog.glob("*.v")}
+
+        for task in ("loader", "player"):
+            assert any(f"rf_tx_{task}_task" in m for m in mods), (
+                f"the {task} task module is absent from {sorted(mods)} — a DCE'd task still "
+                f"reports csynth OK")
+
+        # The forward channel carries a TaggedSamp: wr(16) + now(1) + request_status(1) + samp(16)
+        # = 34 bits.  Its WIDTH is the evidence the tag survived — a 16-bit FIFO here would mean the
+        # samples went through and the schedule did not.
+        assert any("fifo_w34_" in m for m in mods), (
+            f"no 34-bit forward FIFO in {sorted(mods)}: the tag travels WITH the sample, so a "
+            f"narrower channel means the slot, the now bit or the status request was optimised "
+            f"away — and the design would still play samples, at the wrong times, silently")
+        # The ack channel carries a TxStatus, sized at MAX_IN_FLIGHT.  The depth IS the sizing rule:
+        # one status per accepted window means it can never need more, and a shallower one would let
+        # a status drop, which mis-pairs every later tid.
+        assert any(f"_d{MAX_IN_FLIGHT}_" in m and "fifo_w50_" in m for m in mods), (
+            f"no depth-{MAX_IN_FLIGHT} status FIFO in {sorted(mods)}")
