@@ -977,7 +977,7 @@ The first five are why this is believable. The last four are what the stages hav
 Five stages, each with a cycle gate. **A stage without a gate is not done.** The three examples are
 ordered so a failure can always be attributed: TX alone, then TX+RX on one grid, then the full loop.
 
-### Stage 0 — both reverse channels in pysim
+### Stage 0 — both reverse channels in pysim  ✅ LANDED (PR #167)
 
 `CreditStreamIF` and `AckedStreamIF`, the four shared rules, and the endpoint API. No hardware.
 
@@ -993,7 +993,7 @@ Four tests, and the last two exist because they cover failures nothing currently
 Plus the `can_write_frame()` → `write_frame()` contract asserted rather than trusted: calling
 `write_frame` on a full pending FIFO is the silent-correspondence bug, and the twin should refuse it.
 
-### Stage 1 — Example 1: the repeat player (TX only)
+### Stage 1 — Example 1: the repeat player (TX only)  ✅ pysim + csynth; ⛔ no RTL gate
 
 **`examples/rf_repeat_play`.** The host loads a waveform of `nsamp` samples and replays it forever on
 a fixed period. TX path only, so nothing in the RX half can confuse a diagnosis.
@@ -1024,6 +1024,94 @@ the slots; the status reports where the last sample landed; `TxResp.samp_start` 
 Assertion 3 is what the example is really for: an all-green repeat test proves far less than one that
 survives a gap.
 
+> #### What Stage 1 measured, and the four things it changed  (2026-08-20)
+>
+> `waveflow/hw/rf_tx_stream.py` + `examples/rf_repeat_play`. All three assertions fire; the two
+> hand-written bodies are csynth-clean at 250 MHz on the RFSoC 4x2 part. **There is no RTL gate** —
+> see *What is still blocked* below.
+>
+> **The measurements.** Read from `csynth.xml`, never the summary's Interval column:
+>
+> | body / loop | measured | against |
+> |---|---|---|
+> | loader payload loop | **`PipelineII = 1`** | `RfSampBufLoader`'s 2 — **the claim, confirmed** |
+> | loader harvest loop | `PipelineII = 3` | bounded at `POLLS = 4` per firing |
+> | loader body | latency 8 .. 65563, **bounded** | `RfSampBufLoader`'s `undef` |
+> | player body | latency 2 → `fire_cycles = 3` | `RfSampBufPlayer`'s 3 — **unchanged** |
+>
+> **Stage 3's target is wrong as written.** "It should now be 1 cycle/word everywhere" holds for the
+> *loader* and not for the *player*, which comes out at the same 3 the BRAM design has. The ceiling
+> is the `max` over stages, so it is **3**, and the rate bound is `samp_per_word * f_axis / 3` —
+> 83.3 MSa/s at 250 MHz and one sample per word, not the port's 1 GSa/s. Re-derive rather than
+> assume: the loader was the stage that was broken, and the loader is the stage that got fixed.
+>
+> **The harvest loop's `II = 3` is not the `break`.** `HLS 200-880` names the carried dependence:
+> successive AXI-Stream port writes on `resp_out`, because a `TxResp` is three words on a 16-bit
+> port. That is worth having measured — this file's argument for a bounded poll is precisely that a
+> data-dependent *exit* costs nothing while a data-dependent *trip count* costs the II.
+>
+> **The Python loader in *Loader — Python* above deadlocks.** It reads
+> `cmd = yield from self.cmd_in.get(TxCmd)` — **blocking** — where the C body beside it writes
+> `if (cmd_in.read_nb(cmd))` inside `NO_CMD`. With responses deferred, a host that waits for its
+> `TxResp` before sending the next command and a loader that waits for the next command before
+> harvesting wait for each other. Measured: the design plays exactly one block and goes quiet, which
+> reads like a player fault. The twin must poll.
+>
+> **The Python player in *Player — Python* above cannot be decision-free.** "It does not model the
+> decision at all" is right for the **underrun** — the edge owns that, and two counters for one
+> phenomenon would disagree — and it does not reach `slot` or `verdict`, which no edge can compute
+> because no edge has seen a `wr` tag. Without them `TX_TOO_LATE` is unreachable in pysim and this
+> file's own assertion 2 cannot be written. The split that works: **the edge counts underruns, the
+> player owns the verdict.**
+>
+> **`read_frame_nb` is the wrong reader for a converter feeder.** It charges the playout *before*
+> returning, so the block is handed over a period late and the player and converter serialise instead
+> of overlapping — the bug `RfSampBufPlayer` already documents as "hand off FIRST, then charge". The
+> player takes frames per item and sequences write → grid → status, which preserves the property
+> `read_frame_nb` exists for without paying for it twice.
+>
+> **`start_now` on the first play and nothing else leaves a hole no host can fill.** A `TxResp` is
+> deferred until its window has played, so "now" is already a period old when it arrives, and the
+> first absolutely-scheduled play cannot be sooner than `base + START_LEAD*PERIOD`. Measured:
+> underruns at blocks `{0, 2, 3, 4}`, and `RFSampIF.assert_clean` **inapplicable**, because the hole
+> is not a prefix. Priming the hole with further `now` windows — this file's own stated property of
+> `now` — makes the playout contiguous, underrun `{0}`, and `assert_clean(1)` pass. Both are run.
+>
+> **`nsamp == 0` is refused**, with a code of its own (`TX_ZERO_LEN`) rather than sharing
+> `TX_MISALIGNED`: a length fault and a geometry fault are different repairs. The evidence that the
+> refusal holds is not the refusal but the 40 windows that resolve normally behind it with
+> `n_no_slot == 0`.
+>
+> **`#pragma HLS reset` did not close the reset trap.** Both bodies carry it on every state register,
+> as `reference-hls-task-reset-trap` prescribes; Vitis 2025.1 ignored all 12 and reported
+> "Register '<x>' is power-on initialization" for each. `config_rtl -reset state` at the **solution**
+> level takes all 12 to zero and costs nothing (payload II still 1, player latency still 2).
+>
+> #### What is still blocked, and by what
+>
+> **No RTL gate, for two independent reasons — both measured, not argued.**
+>
+> 1. **The composite will not lower.** `RfTxStream`'s one internal edge is an `AckedStreamIF`:
+>    ```
+>    LoweringError: derive_internal_edges: no edge lowering for interface type AckedStreamIF
+>    ```
+>    Two sub-problems, and the second is the real one: the edges carry **structs**
+>    (`TaggedSamp`, `TxStatus`), not `ap_uint<W>` words; and one composite endpoint (`to_player`,
+>    `fwd`) must resolve to **two** channels in a task signature, which `KernelTask.signature`'s
+>    one-attr-one-arg mapping cannot express. That wants a signature convention
+>    (`"to_player.fwd"` / `"to_player.ack"`) plus a struct-typed edge plus renderer support — a
+>    framework change, not a Stage 1 change.
+> 2. **The host is reactive and the XSI testbench is file-driven.** The schedule depends on
+>    `TxResp.samp_start` for `tid` 0, which does not exist until the design has run, so no static
+>    bundle can express it:
+>    ```
+>    LoweringError: RfRepeatPlayTB: DUT boundary port 'cmd_in' is not wired to any testbench
+>    participant
+>    ```
+>    This one does not go away by fixing (1). Either the XSI harness grows a reactive BFM, or the RTL
+>    scenario replays a schedule pysim discovered — which measures the *playout* and not the
+>    `start_now` handshake, and that difference should be stated wherever the gate lands.
+
 ### Stage 2 — Example 2: timed capture (TX + RX on one grid)
 
 **`examples/rf_timed_capture`.** Play the repeating waveform, loop it back through the RF
@@ -1053,12 +1141,18 @@ Also here, because this is the first example with a real RX consumer:
 ### Stage 3 — Example 3: `BlkDelay` on the new modules
 
 The pattern-B loop rebuilt on `CreditStreamIF` / `AckedStreamIF`, with the ceiling recomputed as
-`max` over stages. **It should now be 1 cycle/word everywhere** — i.e. port capacity, 1 GSa/s at
-`samp_per_word = 4` and 250 MHz — where the BRAM design is stuck at 500 MSa/s because capture and
-loader both sit at 2.
+`max` over stages.
 
-That number *is* the gate: if the ceiling is not 1 everywhere, one of the new stages has an inner
-loop that should not be there, and the witness harness (`plans/witness/task_loop/`) is how to find it.
+> **The "1 cycle/word everywhere" target was refuted by Stage 1 and needs re-deriving.** The
+> *loader* reaches II=1, measured. The *player* comes out at `fire_cycles = 3` — the same as the BRAM
+> player's — so the `max` over stages is 3 and the ceiling is `samp_per_word * f_axis / 3`, not
+> `samp_per_word * f_axis`. See *What Stage 1 measured* above.
+>
+> The gate is still the right shape: if the ceiling is not what the per-stage measurements predict,
+> one of the new stages has an inner loop that should not be there, and the witness harness
+> (`plans/witness/task_loop/`) is how to find it. What changed is the number it is compared against —
+> and the interesting question this raises is whether the *player* can be made cheaper at all, since
+> nothing about the streaming redesign touched it.
 
 ### Stage 4 — retire or keep
 
@@ -1075,8 +1169,8 @@ with pre-trigger history; this one takes streaming and scheduled capture. See *W
 
 ## Open questions
 
-- **Is `nsamp == 0` legal?** Stage 1 forces the decision: a zero-length frame has no sample to mark,
-  so it never resolves and leaks a pending slot. Refuse it, or special-case the marking rule.
+- ~~**Is `nsamp == 0` legal?**~~ **CLOSED (Stage 1): refused**, with a code of its own
+  (`TX_ZERO_LEN`). Sharing `TX_MISALIGNED` would report a length fault as a geometry fault.
 - **Does the consumer need whole blocks?** If it streams, this design is complete. If it needs a
   block in hand (FFT, sort), a block boundary must come from somewhere and a credit stream does not
   supply one.
