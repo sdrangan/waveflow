@@ -87,6 +87,7 @@ from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.reverse_stream import (
     MAX_IN_FLIGHT,
     AckedStreamIF,
@@ -191,19 +192,27 @@ class TxStatus(DataList):
 
 
 class TaggedSamp(DataList):
-    """One sample and the slot it is for — **the tag travels with the sample**.
+    """One sample, the slot it is for, and whether it must be reported — **the tag travels with the
+    sample**.
 
     A side channel carrying "which sample was for when" is a second stream to keep in step, and
-    keeping two streams in step is the defect this deletes.  ``request_status`` is *not* a field
-    here: it is Stage 0's mark bit, which :class:`~waveflow.hw.reverse_stream.AckedStreamMasterIF`
-    owns and sets on the last item of every frame.  In C++ the two collapse into one struct; in
-    pysim they nest, because the mark belongs to the generic interface and the tag to this design.
+    keeping two streams in step is the defect this deletes.
+
+    ``request_status`` is a field here rather than Stage 0's mark bit, and the reason is that
+    **there is no interface object in C++**: ``AckedStreamIF`` lowers to two plain ``hls::stream``
+    objects plus the ``pending`` FIFO inside the loader, so nothing but the struct can carry the bit.  Making
+    it a field is what lets the two bodies have the same shape — the pysim player reads
+    ``t.request_status`` exactly where the C++ one does, instead of reading a mark that only one
+    backend has.  Stage 0 still sets its mark on the last item of every frame; here that is a frame
+    boundary (the pysim expression of TLAST) and this is the semantic request, and they coincide.
     """
 
     include_filename: ClassVar[str | None] = "rf_tagged_samp.h"
     elements = {
         "wr":   {"schema": IdxField, "description": "the slot this sample is for (ignored when now)"},
         "now":  {"schema": FlagField, "description": "1 = play at the next available slot"},
+        "request_status": {"schema": FlagField,
+                           "description": "emit a TxStatus when this sample resolves"},
         "samp": {"schema": SampField, "description": "the sample value"},
     }
 
@@ -238,10 +247,15 @@ def tag_frame(samples, slot: int, now: bool) -> np.ndarray:
     vals = np.asarray(samples, dtype=np.uint64).ravel()
     out = np.empty(vals.size, dtype=np.uint64)
     wrap = 1 << IDX_BW
+    last = vals.size - 1
     for i, v in enumerate(vals):
         t = TaggedSamp()
         t.wr = int(slot + i) % wrap
         t.now = int(bool(now))
+        # THE LAST SAMPLE ANSWERS THE QUESTION.  One request per window is what bounds the reverse
+        # rate by construction, which is how this channel satisfies the saturation rule structurally
+        # where the RX credit channel satisfies it only by a rate argument.
+        t.request_status = int(i == last)
         t.samp = int(v) & ((1 << SAMP_BW) - 1)
         out[i] = int(np.asarray(t.serialize(word_bw=TAG_BW)).ravel()[0])
     return out
@@ -323,6 +337,18 @@ class TxLoader(FreeRunMod):
         self.n_no_slot = 0
         #: Commands refused because ``nsamp == 0``.
         self.n_zero_len = 0
+
+    def kernel_task(self) -> KernelTask:
+        """The hand-written body this module hands over, and the argument order it chose.
+
+        Overriding is the declaration.  Nothing can derive a hand-written task's parameter order —
+        it is a fact about the C++ and not about the Python — so it is stated here and
+        :meth:`run_iter` stays the pysim golden beside it.
+        """
+        return KernelTask("rf_tx_loader_task", "rf_tx_loader_task.h",
+                          ("cmd_in", "samp_in", "to_player", "resp_out", "to_player"),
+                          template_args=(int(self.bitwidth), int(self.samp_per_word),
+                                         int(self.max_in_flight), int(self.status_polls), IDX_BW))
 
     # -- counters, marked as instrumentation ----------------------------------------------------
 
@@ -523,6 +549,12 @@ class TxPlayer(FreeRunMod):
         #: object that actually owns the sample grid.
         self.tx_edge = None
 
+    def kernel_task(self) -> KernelTask:
+        """The hand-written body this module hands over — see :meth:`TxLoader.kernel_task`."""
+        return KernelTask("rf_tx_player_task", "rf_tx_player_task.h",
+                          ("fwd", "samp_out", "fwd"),
+                          template_args=(int(self.bitwidth), int(self.samp_per_word), IDX_BW))
+
     @property
     def blk_period(self) -> float:
         """Seconds per block — ``blk_samp * slot_period``."""
@@ -611,25 +643,31 @@ class TxPlayer(FreeRunMod):
 
         Per-item rather than :meth:`~waveflow.hw.reverse_stream.AckedStreamSlaveIF.read_frame_nb`,
         because that reader charges the playout **before returning** and this player must write
-        before it waits (see :meth:`run_iter`).  The frame boundary is the mark: Stage 0 puts it on
-        the last item of every frame, so "read until the marked one" needs no length on the wire.
+        before it waits (see :meth:`run_iter`).
+
+        The boundary is read from ``request_status`` **in the tag**, not from Stage 0's mark, so this
+        loop is the same loop the C++ body runs — where no interface object exists to carry a mark.
+        The two bits coincide by construction (:func:`tag_frame` sets the field on the sample
+        ``write_frame`` marks), and reading the one both backends have is what keeps the twins
+        comparable.
         """
         items = []
         while True:
             r = yield from self.fwd.read_nb()
             if r is None:
                 break
-            items.append(untag(r.item))
-            if r.mark:
+            t = untag(r.item)
+            items.append(t)
+            if int(t.request_status):
                 self._held = items
                 return
         # A partial frame cannot happen: `write_frame` writes one burst and `read_nb` hands out a
         # whole burst's items, so the mark is always in the same take as its frame's first item.
         if items:
             raise RuntimeError(
-                f"{self.name}: took {len(items)} item(s) with no mark among them. A frame is one "
-                f"burst, so the mark must arrive in the same take — this means someone wrote the "
-                f"forward channel without write_frame().")
+                f"{self.name}: took {len(items)} item(s) with no request_status among them. A frame "
+                f"is one burst, so the request must arrive in the same take — this means someone "
+                f"wrote the forward channel without write_frame()/tag_frame().")
 
     def _to_grid(self) -> ProcessGen[None]:
         """Wait until this firing's absolute deadline — **never** ``timeout(blk_period)``.

@@ -280,3 +280,15 @@ examples/rf_blk_delay/include/
 examples/rf_blk_delay/results/
 examples/rf_blk_delay/logs/
 examples/rf_blk_delay/xsi/vectors/
+
+# rf_repeat_play (Stage 1 of plans/rf_samp_new.md, the streaming transmitter): csynth project plus
+# the generated harness and headers.  Same convention as rf_samp_buf_rx above -- the two hand-written
+# task bodies are FRAMEWORK and live in waveflow/build/, copied into include/ by RfTxStreamStep, so
+# include/ is entirely build output.  The Python source and the generated tcl stay tracked, the tcl
+# because it records the part, the clock and the reset config a report was produced under.
+examples/rf_repeat_play/rf_tx_stream_tasks_proj/
+examples/rf_repeat_play/gen/
+examples/rf_repeat_play/include/
+examples/rf_repeat_play/results/
+examples/rf_repeat_play/logs/
+examples/rf_repeat_play/dfx_runtime.txt
