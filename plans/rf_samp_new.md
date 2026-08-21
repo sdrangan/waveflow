@@ -1231,7 +1231,7 @@ Four tests, and the last two exist because they cover failures nothing currently
 Plus the `can_write_frame()` → `write_frame()` contract asserted rather than trusted: calling
 `write_frame` on a full pending FIFO is the silent-correspondence bug, and the twin should refuse it.
 
-### Stage 1 — Example 1: the repeat player (TX only)  ✅ pysim + csynth; ⛔ no RTL gate
+### Stage 1 — Example 1: the repeat player (TX only)  ✅ pysim + csynth + **RTL gate**
 
 > **RESOLVED 2026-08-20 — the scheduler moves into the DUT.** Stage 1 could not reach an RTL gate
 > because the repeat scheduler is reactive and the testbench is file-driven. It is now
@@ -1344,30 +1344,62 @@ survives a gap.
 > "Register '<x>' is power-on initialization" for each. `config_rtl -reset state` at the **solution**
 > level takes all 12 to zero and costs nothing (payload II still 1, player latency still 2).
 >
-> #### What is still blocked, and by what
+> #### Second pass (2026-08-20): the gate is reached, and one claim was withdrawn
 >
-> **No RTL gate, for two independent reasons — both measured, not argued.**
+> **The player was not built to spec.**  It had no loop — a per-firing body where this file
+> specifies `while (1)` + `PIPELINE II=1`.  That is `plans/witness/task_loop/`'s `ply_1`
+> (3.000 cycles/word) rather than its `ply_w` (1.000), so the "Stage 3's target is wrong" reading is
+> withdrawn; see the retraction above.  Rebuilt: `TripCount = inf`, `Latency = undef`,
+> `PipelineII = 1`, depth 4.
 >
-> 1. **The composite will not lower.** `RfTxStream`'s one internal edge is an `AckedStreamIF`:
->    ```
->    LoweringError: derive_internal_edges: no edge lowering for interface type AckedStreamIF
->    ```
->    Two sub-problems, and the second is the real one: the edges carry **structs**
->    (`TaggedSamp`, `TxStatus`), not `ap_uint<W>` words; and one composite endpoint (`to_player`,
->    `fwd`) must resolve to **two** channels in a task signature, which `KernelTask.signature`'s
->    one-attr-one-arg mapping cannot express. That wants a signature convention
->    (`"to_player.fwd"` / `"to_player.ack"`) plus a struct-typed edge plus renderer support — a
->    framework change, not a Stage 1 change.
-> 2. **The host is reactive and the XSI testbench is file-driven.** The schedule depends on
->    `TxResp.samp_start` for `tid` 0, which does not exist until the design has run, so no static
->    bundle can express it:
->    ```
->    LoweringError: RfRepeatPlayTB: DUT boundary port 'cmd_in' is not wired to any testbench
->    participant
->    ```
->    This one does not go away by fixing (1). Either the XSI harness grows a reactive BFM, or the RTL
->    scenario replays a schedule pysim discovered — which measures the *playout* and not the
->    `start_now` handshake, and that difference should be stated wherever the gate lands.
+> **Did reset force the per-firing shape?  No.**  The witness left "`while (1)` under reset" open and
+> this is the first body in a position to answer it.  The looped build reports **zero** power-on
+> initialization warnings under `config_rtl -reset state` — the same as the per-firing build.  The
+> shape of the question changes (a per-firing body re-enters its FSM every firing, so its state
+> advances once per firing during reset; a looped body enters once and its state lives in pipeline
+> registers) and the same solution-level setting closes both.  The earlier shape came from copying
+> `rf_samp_buf_player_task.h`, not from a reset argument.
+>
+> **A new finding the witness could not have made: II=1 yes, 4.0 ns no.**  Estimated Fmax 206.95 MHz
+> against 250.  From `HLS 200-1016`, the recurrence is
+> `slot → sub(h.wr - slot) → icmp → and → phi ×3 → fwd_read ENABLE`, i.e. *whether to read a new
+> sample this cycle depends on whether the held one was consumed, which depends on the compare
+> against `slot`*.  Loop-carried, not a coding accident — the witness's `ply_w` is a BRAM read and a
+> stream write with **no decision in it**, so it had no such path.  Shortening the compare bought
+> 3 MHz.  The identified fix is a **two-deep skid** (read into `h_next` on a condition that does not
+> involve the compare); not built, and it belongs to Stage 3 where the ceiling is the deliverable.
+> Meanwhile: 1 cycle/word at 207 MHz = 207 MSa/s per sample-per-word, against the per-firing shape's
+> 83.3.  **2.5×, measured.**
+>
+> **`AckedStreamIF` lowers as two `StreamIF` edges** — `derive_internal_edges` gained no case for it.
+> Endpoints and interfaces gained `physical_endpoints()` / `physical_interfaces()`, `[self]` by
+> default; three walkers needed the expansion (internal edges, boundary ports, the `kernel_task()`
+> signature resolver), and the composite endpoint stays registered because it holds the pending FIFO
+> and the bind-time depth check.  Two smaller gaps fell out: `StreamEdge` had no width of its own
+> (right by coincidence while every composite was single-width; here it would have declared the
+> 64-bit tagged-sample channel as `ap_uint<16>`), and `render_tcl` could not emit solution-level
+> config.
+>
+> **The circular player works, and two defects were found by running it.**  The train must start at
+> `k = LEAD`, not `k = 1`: the `start_now` response arrives when its *last* sample plays, which at
+> `period == nsamp` is exactly slot `base + 1*period`, so play 1 is already gone — before the fix,
+> plays alternated played/late forever (21 / 20).  And an idle `REPEAT` pass must charge a fabric
+> cycle, or the pysim twin is a zero-time infinite loop; it hung.
+>
+> **The RTL gate runs.**  15296 samples, the `start_now` window bit-exact at slot 24, and **two**
+> zero runs in the whole playout — the lead-in and the `LEAD` hole — then 15200 consecutive fed
+> slots.  Not yet established: the repeats are not at the phase the schedule names (they resume at
+> `1008`, and the steady-region differences are `{1, -63, 2}` where a clean ramp tiling is
+> `{1, -63}` — the `2` is a skipped sample).  Pinned as an open defect in
+> `tests/examples/test_rf_circ_play_xsi.py` rather than asserted around.  Candidates: the player's
+> slot granularity against a block-granular twin (explains an offset, not a skip), or the `BEFORE`
+> path discarding a stale sample without advancing the slot.
+>
+> **What moving the host into the DUT cost**: the fault injections behind assertions 2 and 3 (a
+> window aimed into the past, a starved host) were *testbench* behaviours, and a testbench that only
+> pushes a waveform cannot express them.  They keep their coverage from the pysim host-driven graph,
+> which drives the **same** loader and player — a different stimulus for one design, not a second
+> model.
 
 ### Stage 2 — Example 2: timed capture (TX + RX on one grid)
 
