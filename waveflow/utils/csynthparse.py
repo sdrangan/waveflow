@@ -309,6 +309,48 @@ def loop_pipeline_ii(report_dir, module: str, loop: str) -> int | None:
         return None
 
 
+def module_loops(report_dir, module: str) -> list[str]:
+    """The names of a module's pipelined loops, in report order.
+
+    Vitis names a loop after the **source line** it sits on (``VITIS_LOOP_66_1``), so editing a
+    comment above a body renames its report entry.  A caller that spells the name out therefore stops
+    matching on an unrelated edit, and — if it skips on a miss — reads as a pass.  Discovering the
+    name instead is what makes a loop-II guard survive its own file being commented.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    p = Path(report_dir) / f"{module}_csynth.xml"
+    if not p.is_file():
+        return []
+    summary = ET.parse(p).getroot().find("PerformanceEstimates/SummaryOfLoopLatency")
+    return [] if summary is None else [child.tag for child in summary]
+
+
+def loop_trip_count(report_dir, module: str, loop: str) -> str | None:
+    """One loop's ``TripCount``, **as text** — ``"inf"`` for an infinite loop, else the count.
+
+    Returned as a string rather than coerced, because ``inf`` is the interesting value: it is how a
+    ``while (1)`` body is distinguished from a bounded one, and that distinction decides which
+    calibration applies (achieved II versus ``latency + 1``).  Turning it into a number would either
+    lose it or invent one.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    p = Path(report_dir) / f"{module}_csynth.xml"
+    if not p.is_file():
+        return None
+    summary = ET.parse(p).getroot().find("PerformanceEstimates/SummaryOfLoopLatency")
+    if summary is None:
+        return None
+    node = summary.find(loop)
+    if node is None:
+        return None
+    text = node.findtext("TripCount")
+    return None if text is None else text.strip()
+
+
 def synth_target(report_dir) -> dict | None:
     """What a solution was actually synthesized *for*, from its top-level ``csynth.xml``.
 

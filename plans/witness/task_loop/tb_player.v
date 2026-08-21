@@ -83,8 +83,35 @@ module tb;
     integer span, errors = 0;
     integer reads_at_stall, reads_during_stall, beats_at_stall;
 
+    // ---- PHASE 0 instrumentation: what does the task do while ap_rst_n is LOW? ------------------
+    //
+    // A player that asserts TVALID during reset puts a word on the DAC before the design is
+    // initialised -- garbage at power-up, and a hardware bug someone would spend a day on.  This is
+    // the gap the README named as the one to close first, and `while (1)` changes its shape: an
+    // infinite loop has no firing boundary at which the runtime could hold it off.
+    //
+    // Measured with TREADY HIGH throughout reset, which is the hostile case and the realistic one --
+    // RfdcDacSlave drives it from cycle 0, and a real converter's input FIFO is ready as soon as it
+    // is powered.  Both counters below are needed: `valid` catches an emission the sink happened not
+    // to take, `beats` catches one it did.
+    integer rst_valid_cycles = 0, rst_beats = 0;
+    always @(posedge clk) if (!rst_n) begin
+        if (out_v)        rst_valid_cycles = rst_valid_cycles + 1;
+        if (out_v && rdy) rst_beats        = rst_beats + 1;
+    end
+
     initial begin
-        repeat (10) @(posedge clk); rst_n = 1; repeat (5) @(posedge clk);
+        // TREADY high from the very start, before reset is even released.
+        @(negedge clk); rdy = 1;
+        repeat (10) @(posedge clk); rst_n = 1;
+        $display("RESET_TVALID_CYCLES=%0d RESET_BEATS=%0d", rst_valid_cycles, rst_beats);
+        // How many words land in the first 8 cycles after release, before anything has filled the
+        // buffer?  Nonzero is EXPECTED and is the documented free-running startup transient, not a
+        // reset bug -- it is reported separately so the two are not confused with each other.
+        beats_at_stall = total_beats;
+        repeat (8) @(posedge clk);
+        $display("POST_RESET_BEATS_8=%0d", total_beats - beats_at_stall);
+        repeat (5) @(posedge clk);
 
         // ---- PHASE 1: free run ---------------------------------------------------------------
         @(negedge clk); rdy = 1;

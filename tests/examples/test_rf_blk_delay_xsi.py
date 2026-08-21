@@ -55,17 +55,20 @@ TB = "rf_blk_delay_counters"
 #: Word width on the wire — four 16-bit samples, ``Rfdc``'s ceiling.
 WORD_BW = 64
 
-#: Cycle the last TX response reached its sink.  Recorded 2026-08-17 on the first green run.
+#: Cycle the last TX response reached its sink.  Re-recorded 2026-08-18.
 #:
-#: Exact, not a bound: it moves only if the design's timing changes, and either direction is worth a
-#: human.  Almost all of it is the loop waiting on the CONVERTER rather than on the fabric — the last
-#: block cannot be captured before the ADC has produced it, and 13 blocks of 256 samples at one
-#: sample per cycle is ~3328 cycles on its own.  The fabric's whole contribution is the ~130 cycles
-#: between that and this number.
-WANT_TX_RESP_LAST_CYCLE = 4210
-#: ...and the RX response that fed it, 384 cycles earlier: the last block still has to cross
-#: ``BlkDelay`` and be placed by the loader after the capture has finished serving it.
-WANT_RX_RESP_LAST_CYCLE = 3826
+#: **4210 -> 4211: exactly one cycle**, and the same one the RX buffer's own gate moved by.  It is the
+#: ingress's pipeline depth: the body became a ``while (1)`` loop at II=1 and its depth went 0 -> 3
+#: (csynth), so the last sample of the run leaves it a fixed few cycles later and everything behind it
+#: inherits that.  A *latency* cost paid once against a *throughput* gain of 2x per word -- the trade
+#: a pipeline always makes, and the reason this file records a completion cycle rather than a rate.
+#:
+#: The sample rate is unchanged at 250 MSa/s, so the converter-paced part of this number did not move
+#: at all: 13 blocks x 256 samples at 250 MSa/s is 13.3 us = 3328 cycles at 250 MHz, and the rest is
+#: the loop's own latency.
+WANT_TX_RESP_LAST_CYCLE = 4211
+#: ...and the RX response that fed it, +1 for the same reason.
+WANT_RX_RESP_LAST_CYCLE = 3827
 
 #: **Blocks relayed — SRC_NBLK, not N_BLK, and the difference is a real pysim/RTL divergence.**
 #:
@@ -76,10 +79,18 @@ WANT_RX_RESP_LAST_CYCLE = 3826
 #: hardware being wrong, and it is asserted here rather than left as a surprise.
 WANT_BLOCKS_RELAYED = SRC_NBLK
 
-#: Samples of start-up phase between the player's sample index and the DAC's block grid — measured,
-#: 64, a quarter of a block.  See ``test_the_delay_the_rtl_produced_is_the_one_the_design_asked_for``
-#: for why this is a converter-edge property and not a delay error.  pysim's skew is 0.
-RTL_GRID_SKEW = 64
+#: Samples of start-up phase between the player's sample index and the DAC's block grid.
+#:
+#: **64 -> 4 on 2026-08-18, and 4 is one word** — the smallest this can be at ``samp_per_word = 4``.
+#: The skew is how far the player's pointer has run before the grid's first block boundary, so it is
+#: set by how fast the player fills the converter's 2-deep input FIFO relative to how fast the
+#: converter drains it.  At three cycles per word against a DAC taking 0.25 words/cycle the two were
+#: close and the phase was large; at one cycle per word the player fills the 2-deep FIFO essentially
+#: immediately and the phase collapses to a single word.
+#:
+#: It is still a converter-edge property and not a delay error: the bit-exact comparison runs off
+#: this same measured shift and matches every relayed block.  pysim's skew is 0.
+RTL_GRID_SKEW = 4
 
 #: Blocks the DAC pulled out of the fabric over the 60000-cycle run — 15000 words at 0.25 words per
 #: cycle, 64 words to a block.  A property of the run length and the converter's rate, not of the
@@ -223,7 +234,7 @@ def test_the_converter_and_not_the_fabric_set_the_dacs_rate(run):
 
     ``0.25`` words per cycle over the run: 15000 words, and one more in flight. Before the model
     back-pressured, this read 20000 — one word every three cycles, which is the *player's*
-    ``fire_cycles``, not the converter's grid. A design cannot be shown to feed a converter on time by
+    ``cycles_per_word``, not the converter's grid. A design cannot be shown to feed a converter on time by
     a model that accepts everything the instant it is offered.
     """
     c, _out = run
@@ -231,7 +242,7 @@ def test_the_converter_and_not_the_fabric_set_the_dacs_rate(run):
     want = int(60000 * words_per_cycle)
     assert abs(c["DAC_WORDS_RECV"] - want) <= 2, (
         f"the DAC took {c['DAC_WORDS_RECV']} words in 60000 cycles, expected ~{want} at "
-        f"{words_per_cycle} words/cycle. If this has drifted toward 60000/fire_cycles the slave has "
+        f"{words_per_cycle} words/cycle. If this has drifted toward 60000/cycles_per_word the slave has "
         f"stopped back-pressuring and every timing claim in this file is void.")
 
 

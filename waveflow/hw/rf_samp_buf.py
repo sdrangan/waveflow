@@ -33,10 +33,13 @@ deliberately *not* on :class:`RfSampBufCapture`: the capture may block for as lo
 because nothing upstream of it loses data while it waits.  Copying the law onto the capture would
 make it wrong — and the four command cases exist precisely because it may wait.
 
-**A word carries ``samp_per_word`` samples, and the buffer stores words.**  One ``hls::task`` firing
-moves one *word*, so widening the word is the throughput lever: at ``fire_cycles = 2`` the ingress
-absorbs ``samp_per_word / 2`` samples per cycle — 0.5 at one sample per word, 2.0 at four.  The
-buffer is ``depth`` **words** deep and holds ``depth * samp_per_word`` samples.
+**A word carries ``samp_per_word`` samples, and the buffer stores words.**  The ingress body moves one
+*word per cycle*, so widening the word is now the **only** throughput lever: it absorbs
+``samp_per_word`` samples per cycle — 1.0 at one sample per word, 4.0 at four — which is exactly what
+the AXIS port carries, so this stage no longer binds and the port does.  (It absorbed
+``samp_per_word / 2`` until 2026-08-18, when the body became an infinite pipelined loop; see
+:attr:`RfSampBufIngress.cycles_per_word`.)  The buffer is ``depth`` **words** deep and holds
+``depth * samp_per_word`` samples.
 
 **Windows are word-aligned.**  ``RxCmd`` names a window in *sample* index, but both ``start`` and
 ``nsamp`` must be multiples of ``samp_per_word``, and the capture emits whole words.  A sub-word
@@ -219,9 +222,10 @@ class RfSampBufIngress(FreeRunMod):
     order to deliver a number that is stale by the time it lands — see :class:`RfSampBufCapture` for
     what the resulting lag costs and how it is paid for.
 
-    **A word carries ``samp_per_word`` samples**, and that is the throughput lever: one firing moves
-    one *word*, so the sample rate this stage absorbs is ``samp_per_word / fire_cycles`` per fabric
-    cycle.  The buffer behind it is ``depth`` **words** deep.
+    **A word carries ``samp_per_word`` samples**, and that is the throughput lever: the body moves one
+    *word per cycle*, so the sample rate this stage absorbs is
+    ``samp_per_word / cycles_per_word`` = ``samp_per_word`` per fabric cycle.  The buffer behind it is
+    ``depth`` **words** deep.
 
     The hardware body is hand-written (``waveflow/build/rf_samp_buf_ingress_task.h``);
     :meth:`run_iter` is the **pysim twin**, and it is *paced* — see there for why that is the whole
@@ -230,21 +234,32 @@ class RfSampBufIngress(FreeRunMod):
 
     cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_ingress"
 
-    #: **Fabric cycles per firing** — one sample in, one sample stored, per this many cycles.
+    #: **Fabric cycles per WORD** — one word in, one word stored, per this many cycles.
     #:
-    #: MEASURED, not assumed: csynth gives this body a two-state FSM (``ap_ready`` asserts in state
-    #: 2), so a task firing costs two cycles and the ingress accepts **0.5 samples per cycle**.  It is
-    #: declared here because it is a *rate contract* — the maximum sample rate this design can absorb
-    #: is ``samp_per_word * f_axis / fire_cycles``, and a converter faster than that loses samples
-    #: with no protocol event to mark it.
+    #: MEASURED, not assumed: the body is an infinite pipelined loop and this is the loop's
+    #: **achieved** ``PipelineII`` from ``rf_samp_buf_ingress_task_*_csynth.xml``.  Achieved, not the
+    #: target: Vitis reports both and they differ whenever it misses, and a per-word cost taken from
+    #: the target is a wish.
+    #:
+    #: **It replaced ``fire_cycles = 2`` on 2026-08-18**, and the rename is not cosmetic.
+    #: ``fire_cycles`` meant *cycles per firing*, and a ``while (1)`` body has no firing — csynth
+    #: reports ``TripCount = inf`` and no overall latency for this module, so there is no such
+    #: quantity to declare.  What survives the change of shape is cycles per word.  Anyone reaching
+    #: for ``latency + 1`` on a looped body should not: it is measured to be **pessimistic by 2**
+    #: (``plans/witness/task_loop/``), which would silently understate this design's throughput.
+    #:
+    #: It is declared because it is a *rate contract* — the maximum sample rate this design can absorb
+    #: is ``samp_per_word * f_axis / cycles_per_word``, and a converter faster than that loses samples
+    #: with no protocol event to mark it.  At 1 that ceiling is ``samp_per_word * f_axis``, which is
+    #: exactly the port's own capacity: this stage no longer binds, the port does.
     #:
     #: Getting this wrong is not theoretical: at 256 MSPS on a 300 MHz fabric with one sample per
     #: word, the first RTL run of this design dropped **1695 of 4096 samples** (58.6% accepted =
-    #: 0.5/0.853, exactly this ratio) while pysim reported none — the documented block-granularity
-    #: blind spot (``docs/guide/rf/python/fidelity.md``), because a pysim ingress consumes a whole
-    #: burst per firing and never meets the per-word rate at all.  :meth:`RfSampBufRx.check_rate`
-    #: turns that into a refusal at build time.
-    fire_cycles: ClassVar[int] = 2
+    #: 0.5/0.853, exactly the ratio the old 2 predicts) while pysim reported none — the documented
+    #: block-granularity blind spot (``docs/guide/rf/python/fidelity.md``), because a pysim ingress
+    #: consumes a whole burst per firing and never meets the per-word rate at all.
+    #: :meth:`RfSampBufRx.check_rate` turns that into a refusal at build time.
+    cycles_per_word: ClassVar[int] = 1
 
     #: AXIS word width in bits.  Read off the converter's ``axis_bitwidth``.
     bitwidth: HwParam[int] = WORD_BW
@@ -277,8 +292,8 @@ class RfSampBufIngress(FreeRunMod):
 
     @property
     def capacity_samp_per_cycle(self) -> float:
-        """Samples this ingress absorbs per fabric cycle — ``samp_per_word / fire_cycles``."""
-        return int(self.samp_per_word) / float(self.fire_cycles)
+        """Samples this ingress absorbs per fabric cycle — ``samp_per_word / cycles_per_word``."""
+        return int(self.samp_per_word) / float(self.cycles_per_word)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("rf_samp_buf_ingress_task", "rf_samp_buf_ingress_task.h",
@@ -291,13 +306,13 @@ class RfSampBufIngress(FreeRunMod):
 
         A burst is pysim's quantum: :meth:`StreamIFSlave.get` dequeues a whole burst whatever width
         is asked for, so a word-at-a-time body would silently discard the rest of it.  What the
-        hardware does is one word per :attr:`fire_cycles` cycles, and **that** is the part the model
+        hardware does is one word per :attr:`cycles_per_word` cycles, and **that** is the part the model
         must get right, because it is the only thing that decides whether the converter outruns this
         stage.
 
         The predecessor did not charge that time at all: it drained a burst instantly, so the
         boundary port never backed up and ``dropped`` was **zero for a design that lost 41% of its
-        samples at RTL**.  Charging ``nwords * fire_cycles`` fabric cycles per firing puts pysim's
+        samples at RTL**.  Charging ``nwords * cycles_per_word`` fabric cycles per firing puts pysim's
         drop threshold exactly at :meth:`RfSampBufRx.max_samp_rate` — the same number
         :meth:`RfSampBufRx.check_rate` refuses against — so the static check and the simulation now
         agree instead of one of them being decorative.  Both terms scale with the burst length, so
@@ -334,11 +349,11 @@ class RfSampBufIngress(FreeRunMod):
             self.buf_w.mem_write((self.wr // spw) & mask, int(x))
             self.wr = (self.wr + spw) % wrap
 
-        # THE RATE CONTRACT, made of time rather than of a comment.  One word per fire_cycles
+        # THE RATE CONTRACT, made of time rather than of a comment.  One word per cycles_per_word
         # fabric cycles; the next `get` therefore happens that much later, and a converter offering
         # faster than this stage drains fills the 2-deep boundary port and drops -- which pysim can
         # now see, and could not before.
-        yield self.timeout(raw.size * self.fire_cycles * self.clk.period)
+        yield self.timeout(raw.size * self.cycles_per_word * self.clk.period)
 
         # `offer`, not `write`: the same non-blocking semantics as the RTL's write_nb, and for the
         # same reason.  What it drops is counted on the interface, and a nonzero count there is
@@ -376,6 +391,29 @@ class RfSampBufCapture(FreeRunMod):
     """
 
     cpp_kernel_name: ClassVar[str | None] = "rf_samp_buf_capture"
+
+    #: **Fabric cycles per WORD.**  Declared because an undeclared cost is not a cost of zero — it is
+    #: an unmeasured one, and this stage carries a throughput obligation like every other: *every*
+    #: sample in a pattern-B loop passes through all four stages, so the loop's ceiling is the
+    #: **minimum** over them, not the minimum over the two converter-facing ones.
+    #:
+    #: **2, and this body cannot take the fix that got the others to 1.**  Its per-word loop contains
+    #: an inner spin that waits for the ingress to have written the word being asked for, and Vitis
+    #: reports the same pair of diagnostics the loader used to get::
+    #:
+    #:     [HLS 200-960] Cannot flatten loop 'VITIS_LOOP_97_1' ... sub loop is do-while
+    #:     [HLS 200-1470] Target II = NA, Final II = 1, Depth = 1, loop 'VITIS_LOOP_106_2'
+    #:
+    #: The loader's equivalent wait could be hoisted out of the loop because it asks a question about
+    #: the *whole frame* ("is there room for all of it?").  **This one cannot**: it asks a question
+    #: about *this word* ("has it been written yet?"), and hoisting it to the frame would mean
+    #: refusing to emit anything until the entire window exists — which deletes the straddling case
+    #: that is the reason this loop has four cases instead of three.  See the class docstring.
+    #:
+    #: Corroborated end to end rather than read off one report: ``examples/rf_blk_delay`` runs clean
+    #: to 400 MSa/s at ``samp_per_word = 4`` and breaks at exactly 500, which is
+    #: ``samp_per_word * f_axis / 2`` — this stage's ceiling, and the loop's.
+    cycles_per_word: ClassVar[int] = 2
 
     bitwidth: HwParam[int] = WORD_BW
     samp_per_word: HwParam[int] = 1
@@ -577,7 +615,7 @@ class RfSampBufRx(FreeRunMod):
     def max_samp_rate(self, f_axis: float, samp_per_word: int | None = None) -> float:
         """The fastest converter this buffer can be fed by, in samples/s, at *f_axis*.
 
-        ``samp_per_word * f_axis / fire_cycles``.  **Not** the port's capacity, which is
+        ``samp_per_word * f_axis / cycles_per_word``.  **Not** the port's capacity, which is
         ``samp_per_word * f_axis`` and which :class:`~examples.rf_loopback.rfdc.Rfdc` already checks;
         the difference between the two is where the first RTL run of this design lost 1695 of 4096
         samples.
@@ -586,15 +624,31 @@ class RfSampBufRx(FreeRunMod):
         the counterfactual — "what would widening the word buy me?" — without building a second one.
         """
         spw = int(self.samp_per_word) if samp_per_word is None else int(samp_per_word)
-        return float(f_axis) * spw / RfSampBufIngress.fire_cycles
+        return float(f_axis) * spw / self.cycles_per_word
+
+    @property
+    def cycles_per_word(self) -> int:
+        """Cycles per word for the buffer as a whole — the **max over its stages**, hence the slowest.
+
+        **Not the ingress's alone**, and the difference is the whole point.  "May block freely" is a
+        *safety* property: the capture is allowed to stall because nothing upstream loses data while
+        it waits.  It is not a throughput exemption — every sample that crosses this buffer passes
+        through *both* stages, so the buffer sustains what its slowest one does.
+
+        Reading only the converter-facing stage is how a design ends up with a ceiling nothing can
+        reach: the ingress reached II=1 on 2026-08-18 and this buffer's ceiling did **not** become
+        ``samp_per_word * f_axis``, because :attr:`RfSampBufCapture.cycles_per_word` is 2.
+        """
+        return max(RfSampBufIngress.cycles_per_word, RfSampBufCapture.cycles_per_word)
 
     def check_rate(self, samp_rate: float, f_axis: float, samp_per_word: int | None = None) -> float:
         """Refuse a converter this buffer cannot absorb, and return the utilisation.
 
         **The converter's own rate check is not enough.**  ``Rfdc.pre_sim`` asserts
         ``samp_rate <= samp_per_word * f_axis``, which is the *port*'s capacity — one word per cycle.
-        The design behind the port fires every :attr:`RfSampBufIngress.fire_cycles` cycles, so its
-        real capacity is that divided by the firing cost, and the difference is not academic: the
+        The design behind the port moves a word every :attr:`cycles_per_word` cycles -- the **slowest**
+        of its stages, not the ingress's alone -- so its real capacity is that divided by the
+        per-word cost, and the difference is not academic: the
         first RTL run of this design lost 41% of its samples in the gap between the two numbers,
         silently, while pysim reported a clean run.
 
@@ -607,11 +661,11 @@ class RfSampBufRx(FreeRunMod):
         if float(samp_rate) > cap:
             raise ValueError(
                 f"{type(self).__name__} '{self.name}': {float(samp_rate):g} samples/s exceeds what "
-                f"the ingress can absorb — samp_per_word * f_axis / fire_cycles = "
-                f"{spw} * {float(f_axis):g} / {RfSampBufIngress.fire_cycles} = "
+                f"the ingress can absorb — samp_per_word * f_axis / cycles_per_word = "
+                f"{spw} * {float(f_axis):g} / {self.cycles_per_word} = "
                 f"{cap:g}. The converter cannot be back-pressured, so the excess is not delayed, it "
                 f"is LOST. pysim WILL now show it as a nonzero `dropped` on the boundary "
-                f"interface — RfSampBufIngress.run_iter charges fire_cycles per word — so this "
+                f"interface — RfSampBufIngress.run_iter charges cycles_per_word per word — so this "
                 f"refusal and the simulation agree. Lower the rate, widen the word "
                 f"(samp_per_word), or make the ingress body cheaper.")
         return float(samp_rate) / cap

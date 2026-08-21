@@ -93,39 +93,57 @@ BLKSIZE = 256
 #: RF blocks the source plays.
 N_BLK = 12
 
-#: **The delay, in blocks — and 4 is the MEASURED floor, not a guess.**
+#: **The delay, in blocks — and 4 is the MEASURED floor at this sample rate, not a guess.**
 #:
-#: Swept 2..6 in pysim.  At 2 and 3 every one of the 12 ``TxCmd``\ s comes back
-#: :data:`~waveflow.hw.rf_samp_buf.RF_SAMP_BUF_TOO_LATE`, and the shortfall is *partial*: at 3 each
-#: block places 116 of its 256 samples before the player overtakes it (at 2, only the first block
-#: places anything at all, 84 samples).  At 4 and above all 12 place their full 256.
-#: ``test_rf_blk_delay.py`` re-runs that sweep, so the floor is a checked property rather than a
-#: comment.
+#: Swept 2..6 in pysim at 250 MSa/s: at 2 and 3 every one of the 12 ``TxCmd``\ s comes back
+#: :data:`~waveflow.hw.rf_samp_buf.RF_SAMP_BUF_TOO_LATE` with *partial* placement, because the loader
+#: keeps draining the frame after the verdict; at 4 and above all 12 place their full 256.
+#: ``test_rf_blk_delay.py`` re-runs that sweep, so the floor is a checked property, not a comment.
+#:
+#: **The floor scales with the sample rate**, which matters if this example's rate is ever raised: it
+#: is the loop's round trip expressed in *block periods*, and a block period is ``blksize /
+#: samp_rate``.  Measured at 400 MSa/s the floor is 6, not 4 — a delay carried across a rate change
+#: is a delay measured for a different design.
 #:
 #: Why a floor exists at all: the ADC and the DAC share one grid, so block *k* is only complete at
 #: the instant the DAC's period *k* comes due; the RX capture cannot serve it before then, the round
 #: trip through two buffers costs more periods, and the TX loader refuses a slot the player has
 #: reached.  The arithmetic bound is 2 (one period for the ADC to finish the block, one for the
-#: capture to serve it); the extra two are the fabric round trip, and they are why the floor has to
-#: be measured rather than derived.
+#: capture to serve it); the rest is the fabric round trip, and that is why the floor has to be
+#: measured rather than derived.
 DELAY_BLOCKS = 4
 
 #: The minimum this example is known to work at — asserted, so a change that raises the round-trip
 #: cost fails here rather than silently needing a bigger delay.
 MIN_DELAY_BLOCKS = 4
 
-#: Sample rate.  **250 MSPS, and it is the TX half that sets the ceiling**, which is worth stating
-#: because the obvious arithmetic gets it wrong:
+#: Sample rate.  **250 MSPS — and it was NOT raised, which is a result rather than an omission.**
 #:
-#:   port capacity      ``samp_per_word * f_axis``                  = 1000 MSPS
-#:   RX design capacity ``samp_per_word * f_axis / 2`` (ingress)    =  500 MSPS
-#:   TX design capacity ``samp_per_word * f_axis / 3`` (player)     =  333 MSPS
+#: The loop's ceiling is the slowest of its four stages, because every sample crosses all four.
+#: Measured per-word costs (achieved ``PipelineII``; ``tests/examples/test_rf_samp_buf_fire_cycles.py``):
 #:
-#: A **loop** contains both, so its ceiling is the lower: 333 MSPS.  The player costs three cycles
-#: per firing and the ingress two — measured, not assumed (``tests/examples/test_rf_samp_buf_fire_cycles.py``)
-#: — so a B loop can never run as fast as an RX-only design on the same fabric.  250 leaves the RX
-#: half at 0.5 utilisation and the TX half at 0.75, and both ``check_rate``\\ s are **enforced**: this
-#: testbench calls them and does not pass ``enforce_rate=False``.
+#:   ==================  ==============  =====================================
+#:   stage               cycles/word     ceiling at spw=4, 250 MHz
+#:   ==================  ==============  =====================================
+#:   RX ingress          1               1000 MSPS
+#:   **RX capture**      **2**           **500 MSPS  <- binds**
+#:   **TX loader**       **2**           **500 MSPS  <- binds**
+#:   TX player           1               1000 MSPS
+#:   ==================  ==============  =====================================
+#:
+#: so the loop ceiling is **500 MSPS**.  Pipelining the two converter-facing bodies to II=1 on
+#: 2026-08-18 moved neither half's ceiling, because the two stages that bind are the other two — and
+#: neither can currently be fixed: the capture's per-word wait asks whether *this* word has been
+#: written yet (hoisting it would delete the straddling case it exists to serve), and the loader's
+#: *can* be hoisted, and csynth then reports II=1, but the RTL is wrong — see
+#: :attr:`~waveflow.hw.rf_samp_buf_tx.RfSampBufLoader.word_cycles`.
+#:
+#: **400 MSa/s was tried and is not shipped.**  It is inside the 500 ceiling, ``check_rate`` accepts
+#: it, and pysim is clean end to end at ``delay_blocks = 6`` (the floor re-measured at that rate).
+#: At RTL it is not: the played ramp starts 1028 samples early instead of the expected few and breaks
+#: after about seven blocks.  That divergence was identified, not resolved, so the rate stays where
+#: both backends are verified.  Raising it is worth doing *after* one of the two binding stages is,
+#: since the ceiling does not move until then anyway.
 SAMP_RATE = 250e6
 
 #: RX buffer depth in **words**.  1024 words x 4 samples = 4096 samples = 16 blocks of history.

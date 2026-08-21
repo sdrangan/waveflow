@@ -82,10 +82,10 @@ deeper.
 `Rfdc` refuses `samp_rate > samp_per_word · f_axis`. That check is real and it is **not the one you
 need**: it is the *port's* capacity, one word per fabric cycle.
 
-The design behind the port is usually slower. Divide by the consuming task's firing cost:
+The design behind the port is usually slower. Divide by the **slowest stage's** per-word cost:
 
 ```python
-cap = f_axis * samp_per_word / RfSampBufIngress.fire_cycles     # e.g. 300e6 * 1 / 2
+cap = f_axis * samp_per_word / RfSampBufRx.cycles_per_word    # max over the buffer's stages
 if samp_rate > cap:
     raise ValueError(...)                                    # with the arithmetic in the message
 ```
@@ -93,17 +93,30 @@ if samp_rate > cap:
 **A module's throughput is part of its interface contract**, not an implementation detail. Declare it
 next to the body it describes, measure it from `csynth`, and check the pairing in the testbench.
 
+**Divide by the slowest stage, not by the one that touches the converter.** Every sample crosses
+every stage, so a buffer sustains what its slowest one does. "The capture may block freely" is a
+*safety* property — it is allowed to stall because nothing upstream loses data while it waits — and
+reading it as a throughput exemption is how a ceiling gets quoted that nothing can reach. Measured
+per-word costs today: ingress 1, **capture 2**, loader 1, player 1, so the RX half sits at half the
+port and the loop sits there with it.
+
 > **The evidence.** The capture design's first RTL run — 256 MSa/s into a 300 MHz fabric at one
 > sample per word, with an ingress firing every **2** cycles — lost **1695 of 4096** samples. The
 > port check passed: `1 · 300e6` is more than `256e6`. The design check, which did not exist yet,
 > would have failed: `1 · 300e6 / 2` is not.
 
-pysim reported a clean run at the time, and that is no longer true: `RfSampBufIngress`'s twin now
-charges `fire_cycles` per word, so an over-rate run reports **1536 of 4096** dropped without a
-toolchain. (200 MSa/s against the 125 MSa/s design ceiling — the original 256 MSa/s now exceeds the
-*port* at a 250 MHz fabric, so it is refused before the design check is reached.) It is quantised to whole blocks — pysim drops an offer or takes it — so it under-reports
-against the RTL's 1695, but the threshold at which it starts reporting is exactly the declared
-capacity. See [rule 5](#5-the-counters-are-the-contract) for what the counters are for, and
+pysim reported a clean run at the time, and that is no longer true: `RfSampBufIngress`'s twin charges
+`cycles_per_word` per word, so a run at the ingress's own ceiling reports **1280 of 4096** dropped
+without a toolchain.
+
+That ceiling has moved twice since. The ingress became a `while (1)` loop at II=1 on 2026-08-18, so
+it now absorbs one word per cycle and the *boundary* keeps up all the way to the port. What it did
+**not** do is lift the buffer, because the capture behind the memory is still 2 — so `check_rate`
+refuses at half the port while the boundary counter stays clean, and the loss in between moves from
+"refused at the port" to "overwritten before the capture reaches it". Two counters, two failures, and
+the page says so because one number can no longer stand in for the other.
+
+See [rule 5](#5-the-counters-are-the-contract) for what the counters are for, and
 [the fidelity boundary](./fidelity.md#the-resolution-limit) for the loss shape that is still
 invisible: one *inside* a block period, which is a different design and a different module.
 
@@ -146,10 +159,16 @@ window in **sample index** — the converter's running count, not a buffer addre
 Arrival time is backend-dependent; the sample index is not. `examples/rf_blk_delay` measures both at
 once. It asks for block *k* at sample index `k·256` and places it at `k·256 + 1024`, and both backends
 honour that exactly — every block, bit-exact. But *where the delayed sample lands in what the DAC
-played* is **1024** in pysim and **960** at RTL: a fixed **64**-sample difference in start-up phase
+played* is **1024** in pysim and **1020** at RTL: a fixed **4**-sample difference in start-up phase
 between the player's pointer and the converter's block grid. Neither is wrong. Anything derived from
-arrival inherits that 64; anything derived from the sample index does not, because sample *n* is at
+arrival inherits that 4; anything derived from the sample index does not, because sample *n* is at
 `t0 + n / samp_rate` in both.
+
+That gap was **64** until 2026-08-18 and is now one word — which makes the rule's point better than
+the larger number did. The skew is how far the player's pointer runs before the grid's first block
+boundary, so it shrank when the player went to one word per cycle and started filling the converter's
+input FIFO immediately. **A quantity derived from arrival moved by a factor of sixteen because an
+unrelated body was pipelined**; the index relation did not move at all.
 
 The practical payoff is that a host can ask for *"100 samples around the event I timestamped"* and
 mean something exact. A drop then leaves a **visible gap** in the indices rather than silently

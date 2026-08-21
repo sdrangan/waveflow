@@ -3,7 +3,7 @@
 The two halves of ``plans/pipelined_ops.md``, pointed at the TX side.
 
 **1. Is the twin honest?**  PR #160 established the rule for RX: a body that relays a whole burst and
-charges nothing for it is silently rate-blind, and the fix is ``timeout(nwords * fire_cycles *
+charges nothing for it is silently rate-blind, and the fix is ``timeout(nwords * cycles_per_word *
 period)``.  The same rule applies here and the failure it hides is the opposite one — a loader that
 cannot keep up starves the player, which then plays stale slots.  The demonstration below is the
 acceptance criterion: on one graph, with a loader whose body costs more than the shipped one, the
@@ -55,11 +55,19 @@ def _run(loader_word_cycles: int):
     Everything else about the graph — the scenario, the geometry, the player — is identical between
     calls, so the ONLY difference is what the loader's body is charged.  Returns the counters, the
     responses, and the length of the contiguous run of loaded samples that reached the converter.
+
+    ``enforce_rate=False`` **and it is required now, which is itself the news.**  Since 2026-08-18 the
+    buffer's ceiling is the max over its stages rather than the player's alone, so charging the loader
+    16 cycles a word drops the declared ceiling to 15.6 MSa/s and ``check_rate`` refuses the 64 MSa/s
+    scenario before it can be built.  That is the check working: the whole point of this probe is a
+    design that cannot keep up, and the check now sees the stage this probe cripples.  Bypassing it
+    here is deliberate and local; nothing shipped does so.
     """
     original = RfSampBufLoader.word_cycles
     RfSampBufLoader.word_cycles = loader_word_cycles
     try:
-        tb = run_pysim(tb=RfSampBufTxTB(name=f"fc{loader_word_cycles}", sim=Simulation()))
+        tb = run_pysim(tb=RfSampBufTxTB(name=f"fc{loader_word_cycles}", sim=Simulation(),
+                                        enforce_rate=False))
         return (int(tb.dut.n_underrun), int(tb.dut.n_played), responses(tb),
                 find_loaded_run(played_samples(tb)))
     finally:
@@ -73,7 +81,7 @@ def _run(loader_word_cycles: int):
 def test_the_paced_twin_sees_a_loader_that_cannot_keep_up():
     """**The demonstration.**  Same graph, same scenario, same player; only the loader's cost differs.
 
-    ``fire_cycles = 0`` is the burst-granular predecessor exactly — the body is unchanged, it simply
+    ``cycles_per_word = 0`` is the burst-granular predecessor exactly — the body is unchanged, it simply
     charges nothing, which is what "relay the payload and pay for it never" means.  It reports a
     clean window for a loader that in fact cannot keep up.  Charging the cost makes the player's
     starvation visible as both a wrong window and a higher underrun count.
@@ -114,7 +122,7 @@ def test_the_paced_twin_sees_a_loader_that_cannot_keep_up():
 def test_the_shipped_cost_plays_the_window_correctly():
     """The pacing must not invent starvation in a design that fits.
 
-    At the measured ``fire_cycles = 2`` the loader keeps ahead of the player and the primed window is
+    At the measured ``cycles_per_word = 2`` the loader keeps ahead of the player and the primed window is
     bit-exact — so the fault above is the loader's cost, not the model's.
     """
     underrun, played, resp, run_len = _run(RfSampBufLoader.word_cycles)
@@ -221,7 +229,7 @@ def test_the_two_progress_channels_are_declared_depth_one_and_point_opposite_way
 
 
 # ---------------------------------------------------------------------------
-# 3. What the player's fire_cycles is worth in pysim — the replacement criterion
+# 3. What the player's cycles_per_word is worth in pysim — the replacement criterion
 # ---------------------------------------------------------------------------
 #
 # THE ORIGINAL CRITERION FOR THIS STAGE HAD NO DISCRIMINATING POWER, and the measurement above is
@@ -231,12 +239,12 @@ def test_the_two_progress_channels_are_declared_depth_one_and_point_opposite_way
 # the player's starvation is driven by its own metronome outrunning it.  Charging the loader more
 # only matters once the loader is the bottleneck (`SLOW_WORD_CYCLES`), which the test above covers.
 #
-# The PLAYER's `fire_cycles` needs a different probe, and it took a measurement to find one.  The
+# The PLAYER's `cycles_per_word` needs a different probe, and it took a measurement to find one.  The
 # player's firing costs `max(fabric, DAC demand)`, and those two cross at exactly
-# `f_axis / fire_cycles` -- the declared ceiling.  So:
+# `f_axis / cycles_per_word` -- the declared ceiling.  So:
 #
-#   * BELOW the ceiling the DAC term dominates and `fire_cycles` is INERT: measured identical
-#     sustained rates at 64 and 100 MSa/s for fire_cycles 2, 3 and 4.
+#   * BELOW the ceiling the DAC term dominates and `cycles_per_word` is INERT: measured identical
+#     sustained rates at 64 and 100 MSa/s for cycles_per_word 2, 3 and 4.
 #   * ABOVE it the fabric term dominates and the constant is what limits the player.
 #
 # Every LEGAL configuration is below the ceiling, because `check_rate` refuses the rest.  So the
@@ -244,29 +252,29 @@ def test_the_two_progress_channels_are_declared_depth_one_and_point_opposite_way
 # statement of what it is worth, and the reason the probe below has to disable `enforce_rate`.
 
 
-def _sustained_word_rate(fire_cycles: int, samp_rate: float) -> float:
+def _sustained_word_rate(cycles_per_word: int, samp_rate: float) -> float:
     """Words per second the player actually sustained over a run, at a given cost and DAC demand."""
-    original = RfSampBufPlayer.fire_cycles
-    RfSampBufPlayer.fire_cycles = fire_cycles
+    original = RfSampBufPlayer.cycles_per_word
+    RfSampBufPlayer.cycles_per_word = cycles_per_word
     try:
-        tb = run_pysim(tb=RfSampBufTxTB(name=f"sus{fire_cycles}", sim=Simulation(),
+        tb = run_pysim(tb=RfSampBufTxTB(name=f"sus{cycles_per_word}", sim=Simulation(),
                                         samp_rate=samp_rate, enforce_rate=False))
         return int(tb.dut.n_played) / float(tb.sim.env.now)
     finally:
-        RfSampBufPlayer.fire_cycles = original
+        RfSampBufPlayer.cycles_per_word = original
 
 
 def test_below_the_ceiling_the_players_cost_is_inert():
     """**Half of the replacement criterion**, and the half that explains the other.
 
     At a DAC rate the player can sustain, its firing is paced by the converter and not by the fabric,
-    so ``fire_cycles`` changes nothing at all.  That is correct behaviour, not a missing effect — but
+    so ``cycles_per_word`` changes nothing at all.  That is correct behaviour, not a missing effect — but
     it means no legal configuration can be used to check the constant, because ``check_rate`` refuses
     everything above the ceiling.
     """
     # Which costs are actually *below* the ceiling is a property of the clock, so it is derived:
-    # the player is DAC-paced only while `f_axis / fire_cycles >= samp_rate`.  At 250 MHz and a
-    # 64 MSa/s DAC that is fire_cycles 2 and 3; at 4 the ceiling is 62.5 MSa/s and the FABRIC binds,
+    # the player is DAC-paced only while `f_axis / cycles_per_word >= samp_rate`.  At 250 MHz and a
+    # 64 MSa/s DAC that is cycles_per_word 2 and 3; at 4 the ceiling is 62.5 MSa/s and the FABRIC binds,
     # which is the other test's territory.  Hard-coding the sweep would have quietly started
     # measuring the wrong regime when the clock moved.
     dac_rate = 64e6
@@ -274,7 +282,7 @@ def test_below_the_ceiling_the_players_cost_is_inert():
     assert len(below) >= 2, f"no room to compare: only {below} sit below the ceiling"
     rates = [_sustained_word_rate(fc, dac_rate) for fc in below]
     assert all(r == pytest.approx(rates[0]) for r in rates), (
-        f"the player's cost changed its sustained rate below the ceiling (fire_cycles {below} -> "
+        f"the player's cost changed its sustained rate below the ceiling (cycles_per_word {below} -> "
         f"{rates}); it should be DAC-paced there, and if it is not, `max(fabric, demand)` has "
         f"stopped being the model")
 
@@ -297,26 +305,39 @@ def test_above_the_ceiling_the_measured_cost_predicts_a_lower_rate_than_the_old_
         measured = _sustained_word_rate(3, rate)
         assert measured < old, (
             f"at {rate/1e6:g} MSa/s the measured cost (3) sustained {measured/1e6:.1f} MSa/s and the "
-            f"inherited one (2) {old/1e6:.1f}; a costlier firing must sustain LESS, or fire_cycles "
+            f"inherited one (2) {old/1e6:.1f}; a costlier firing must sustain LESS, or cycles_per_word "
             f"is not reaching the model at all")
 
 
 def test_the_ceiling_is_where_the_two_pacing_terms_cross():
     """Why the criterion has to look above the ceiling: that is where the crossover is.
 
-    The firing costs ``max(nwords * fire_cycles / f_axis, nwords / word_rate)``.  Those are equal at
-    ``word_rate == f_axis / fire_cycles``, which is exactly what ``max_samp_rate`` returns — so the
-    constant's whole observable effect starts at the boundary ``check_rate`` refuses beyond.
+    The player's firing costs ``max(nwords * cycles_per_word / f_axis, nwords / word_rate)``.  Those
+    are equal at ``word_rate == f_axis / cycles_per_word`` — the PLAYER's own crossover, which is what
+    decides when its constant is observable in pysim at all.
+
+    **That is no longer the buffer's ceiling**, and the two must not be conflated.  Since the player
+    reached II=1 its crossover sits at ``f_axis``, while ``max_samp_rate`` is the whole buffer's and
+    the loader holds it at ``f_axis / 2``.  So the player's cost becomes observable only *above* a
+    rate ``check_rate`` already refuses — which is a stronger version of the same point this section
+    makes: it is worth nothing in any legal configuration.
     """
-    from waveflow.hw.rf_samp_buf_tx import RfSampBufTx
+    from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufTx
 
     dut = RfSampBufTx(name="cross", sim=Simulation(), **_ELAB)
     f_axis = RFSOC4X2_CLK_HZ
-    assert dut.max_samp_rate(f_axis) == f_axis / RfSampBufPlayer.fire_cycles
+
+    # The player's own crossover.
     nwords = 256
-    at_ceiling = dut.max_samp_rate(f_axis)
-    fabric = nwords * RfSampBufPlayer.fire_cycles / f_axis
-    demand = nwords / at_ceiling
+    player_ceiling = f_axis / RfSampBufPlayer.cycles_per_word
+    fabric = nwords * RfSampBufPlayer.cycles_per_word / f_axis
+    demand = nwords / player_ceiling
     assert fabric == pytest.approx(demand), (
-        "the fabric and DAC pacing terms no longer cross at max_samp_rate, so the ceiling and the "
-        "simulation have stopped meaning the same thing")
+        "the fabric and DAC pacing terms no longer cross at the player's own ceiling, so its cost "
+        "and the simulation have stopped meaning the same thing")
+
+    # The buffer's ceiling is the loader's, and it is strictly below the player's crossover.
+    assert dut.max_samp_rate(f_axis) == f_axis / RfSampBufLoader.word_cycles < player_ceiling, (
+        "the buffer's ceiling has caught up with the player's crossover; if the loader was fixed, "
+        "the player's constant is observable in legal configurations again and this section's "
+        "conclusion needs re-deriving")

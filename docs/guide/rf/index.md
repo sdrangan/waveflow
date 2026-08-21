@@ -44,6 +44,12 @@ fractional and derived.
 > (`xczu48dr-ffvg1517-2-e`) at 250 MHz, and close it with margin — 365 MHz on the capture buffer,
 > 432 on the playout buffer, 371 on the loopback DUT.
 >
+> **These held when the converter-facing bodies were pipelined to one word per cycle on 2026-08-18.**
+> That was worth checking rather than assuming — an II=1 loop does in one cycle what used to take
+> three, so its critical path is longer — and an intermediate version of that work did cost the
+> playout buffer 150 MHz. It was reverted for an unrelated correctness reason, and the figures above
+> are the shipped design's.
+>
 > **250 is forced by the geometry rather than chosen.** An AXIS word carries an integer number of
 > samples — a sample cannot straddle a slot — so `f_axis = samp_rate / samp_per_word`. For a 1 GSPS
 > converter that gives `1000/250 = 4` samples per word exactly, where 300 MHz would need `3.33`,

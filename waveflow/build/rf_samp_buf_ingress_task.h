@@ -51,10 +51,25 @@ static void rf_samp_buf_ingress_task(ap_uint<W> buf_w[N], hls::stream<ap_uint<W>
     // door), and keeping it in SAMPLES rather than words is what lets a host name a sample.
     static ap_uint<IDX_W> wr = 0;
 
-    ap_uint<W> x = s_in.read();               // the ONE blocking call in this task
-    buf_w[(wr / SPW) & (N - 1)] = x;          // a BRAM port: no handshake, cannot refuse
-    wr = wr + SPW;
-    wr_out.write_nb((ap_uint<W>)wr);          // may fail; failing is correct (see above)
+    // RESET-QUALIFIED.  A static's `= 0` is a simulation initial value, not a reset, and the update
+    // carries no ap_rst term.  This body happens to be held still during reset by its blocking
+    // s_in.read(), but that is a property of what is upstream, not of this task -- and the same
+    // omission cost `examples/rf_blk_delay` a day on a body that had nothing to block it.
+#pragma HLS reset variable=wr
+
+    // ONE WORD PER CYCLE, FOREVER, and here the loop buys something the player's does not: **the
+    // task never stops reading**.  A firing boundary -- or a bounded loop's -- is a window in which
+    // this task is not draining the port, and an ADC cannot be told to wait, so words arriving in
+    // that window are lost.  Measured in `plans/witness/task_loop/`: the bounded shapes show a
+    // 3-cycle boundary gap and `while (1)` shows ZERO.  At today's converter rate the 2-deep
+    // boundary port absorbs the gap and nothing is lost; at port capacity it would not.
+    while (1) {
+#pragma HLS PIPELINE II=1
+        ap_uint<W> x = s_in.read();               // the ONE blocking call in this task
+        buf_w[(wr / SPW) & (N - 1)] = x;          // a BRAM port: no handshake, cannot refuse
+        wr = wr + SPW;
+        wr_out.write_nb((ap_uint<W>)wr);          // may fail; failing is correct (see above)
+    }
 }
 
 #endif  // WAVEFLOW_RF_SAMP_BUF_INGRESS_TASK_H

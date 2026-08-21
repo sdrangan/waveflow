@@ -212,15 +212,18 @@ def test_the_same_samples_play_at_every_word_width(tb_by_width, spw):
 def test_a_wider_word_costs_fewer_firings_for_the_same_samples(tb_by_width, spw):
     """The throughput lever: one firing moves one WORD, so ``spw`` samples ride on each.
 
-    ``fire_cycles`` is 3, measured from the player's csynth latency — see
-    ``test_rf_samp_buf_fire_cycles.py``.  So one sample per word sustains 100 MSa/s at 300 MHz, well
-    under a real RFSoC DAC, and four sustains 400 MSa/s.  The divisor is read off the class rather
-    than written as a literal, so a corrected constant cannot leave a stale number here.
+    **Two divisors, and they are different**, which is the thing to get right here.
+    ``capacity_samp_per_cycle`` is the PLAYER's — 1 cycle per word since it became an II=1 loop — and
+    ``max_samp_rate`` is the whole BUFFER's, which is its slowest stage, the loader at 2.  They were
+    the same number while the player was the slowest, and a test written then would pass with either.
+
+    Both divisors are read off their classes rather than written as literals, so a corrected constant
+    cannot leave a stale number here.
     """
     tb = tb_by_width[spw]
     assert tb.rfdc.axis_bitwidth == SAMP_BW * spw
-    assert tb.dut.capacity_samp_per_cycle == spw / RfSampBufPlayer.fire_cycles
-    assert tb.dut.max_samp_rate(300e6) == 300e6 * spw / RfSampBufPlayer.fire_cycles
+    assert tb.dut.capacity_samp_per_cycle == spw / RfSampBufPlayer.cycles_per_word
+    assert tb.dut.max_samp_rate(300e6) == 300e6 * spw / tb.dut.cycles_per_word
     assert tb.dut.nsamp_held == TX_BUF_DEPTH * spw
 
 
@@ -254,21 +257,23 @@ def test_a_dac_faster_than_the_player_is_refused():
     """The mirror of the RX rate check, and it fails the other way: too fast a converter costs RX
     dropped samples and costs TX underruns.
 
-    The ceiling is **100 MSa/s** per sample-per-word on a 300 MHz fabric, from the player's measured
-    ``fire_cycles = 3``.  It was 150 while that constant was inherited from the RX ingress rather
-    than measured, which permitted 50% more rate than the hardware sustains — the band between the
-    two is checked below, because that is exactly where the old value said yes and the hardware said
-    no.
+    **The ceiling is ``samp_per_word * f_axis / 2``, and the 2 is the LOADER's**, not the player's.
+    The player reached II=1 on 2026-08-18; the loader did not, so the half costs what the loader
+    costs.  It was ``f_axis / 3`` per sample-per-word while the player was the slowest stage, and
+    ``f_axis / 2`` before that while the player's constant was inherited from the RX ingress rather
+    than measured — the same number as today, arrived at for a different reason.
     """
     dut = RfSampBufTx(name="cap", sim=Simulation(), bitwidth=SAMP_BW, samp_per_word=1)
-    assert dut.max_samp_rate(300e6) == 100e6
+    assert dut.max_samp_rate(300e6) == 150e6
+    with pytest.raises(ValueError, match="exceeds what the player can sustain"):
+        dut.check_rate(400e6, 300e6)
+    # The band the corrections were about: 120-140 MSa/s was refused while the player cost 3, and
+    # 256 was refused while it cost 2.  All of it is legal now, and that is the result.
+    for rate in (120e6, 140e6):
+        assert dut.check_rate(rate, 300e6) < 1.0
     with pytest.raises(ValueError, match="exceeds what the player can sustain"):
         dut.check_rate(256e6, 300e6)
-    # The band the correction is about: legal under the old constant, refused under the measured one.
-    for rate in (120e6, 140e6):
-        with pytest.raises(ValueError, match="exceeds what the player can sustain"):
-            dut.check_rate(rate, 300e6)
-    assert dut.check_rate(80e6, 300e6) == pytest.approx(0.8)
+    assert dut.check_rate(120e6, 300e6) == pytest.approx(0.8)
     wide = RfSampBufTx(name="wide", sim=Simulation(), bitwidth=SAMP_BW * 4, samp_per_word=4)
     assert wide.check_rate(256e6, 300e6) < 1.0
 

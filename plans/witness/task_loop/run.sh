@@ -61,7 +61,7 @@ if [ "$STEP" = all ] || [ "$STEP" = sim ]; then
       && "$XVLOG" kdef.v "../$TB" ../$RTL/*.v > xvlog.log 2>&1 \
       && "$XELAB" tb -s tbsim --debug off > xelab.log 2>&1 \
       && "$XSIM" tbsim -runall > xsim.log 2>&1 ) \
-      && grep -E "^(KERNEL|BEATS|THROUGHPUT|GAPS_OF_1|BOUNDARY_GAP|BRAM_WRITES|RAMP_ERRORS|READS_DURING_STALL|VERDICT_|RESUMED_BEATS|TB-)" \
+      && grep -E "^(KERNEL|BEATS|THROUGHPUT|GAPS_OF_1|BOUNDARY_GAP|BRAM_WRITES|RAMP_ERRORS|READS_DURING_STALL|VERDICT_|RESET_|POST_RESET|RESUMED_BEATS|TB-)" \
               "xsim_$v/xsim.log" 2>/dev/null | tee -a sim.log \
       || { echo "  ELABORATION OR RUN FAILED — see xsim_$v/*.log" | tee -a sim.log
            tail -5 "xsim_$v/xvlog.log" "xsim_$v/xelab.log" 2>/dev/null | tee -a sim.log; }

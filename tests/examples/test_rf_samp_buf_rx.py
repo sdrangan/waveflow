@@ -257,28 +257,44 @@ def test_the_converter_is_never_stalled_at_any_word_width(tb_by_width, spw):
 
 
 def test_the_ingress_capacity_scales_with_the_word_width():
-    """`samp_per_word / fire_cycles` samples per cycle — most of the throughput ceiling.
+    """`samp_per_word / cycles_per_word` samples per cycle — and since the body became an II=1 loop
+    that is **`samp_per_word` exactly**, which is the whole of the throughput ceiling and no longer
+    "most" of it.
 
-    0.5 samples/cycle at one sample per word is 150 MSa/s on a 300 MHz fabric, which is well under a
-    real RFSoC converter; four samples per word is 600 MSa/s, which is not.  `fire_cycles` is
-    deliberately unchanged here — pipelining the body to II=1 is separate work.
+    1 sample/cycle at one sample per word is 250 MSa/s on this fabric and 1 GSPS at four — which is
+    the AXIS port's own capacity.  It was `spw / 2` until 2026-08-18; see
+    `RfSampBufIngress.cycles_per_word`.
+
+    **The BUFFER does not reach that**, and the difference is the point: `capacity_samp_per_cycle` is
+    the ingress's alone, while `max_samp_rate` is the whole buffer's — the slowest of its stages, and
+    the capture is still 2 cycles per word.  Widening the word remains a lever; pipelining the
+    ingress moved a ceiling that was never the binding one.
     """
-    assert RfSampBufIngress.fire_cycles == 2
+    assert RfSampBufIngress.cycles_per_word == 1
     for spw in (1, 2, 4):
         dut = RfSampBufRx(name=f"cap{spw}", sim=Simulation(), bitwidth=SAMP_BW * spw,
                           samp_per_word=spw)
-        assert dut.capacity_samp_per_cycle == spw / 2
+        # capacity_samp_per_cycle is the INGRESS's (1 cycle/word); max_samp_rate is the whole
+        # BUFFER's, which is its slowest stage -- the capture, at 2.  The two are different
+        # questions and since 2026-08-18 they have different answers.
+        assert dut.capacity_samp_per_cycle == spw
         assert dut.max_samp_rate(300e6) == 300e6 * spw / 2
         assert dut.nsamp_held == BUF_DEPTH * spw
 
 
 def test_a_rate_the_wider_word_can_absorb_is_refused_at_the_narrow_one():
-    """The same converter, two geometries: the refusal is about the pairing, not about either half."""
+    """The same converter, two geometries: the refusal is about the pairing, not about either half.
+
+    The rate had to move with the ceiling.  256 MSa/s used to overrun one sample per word (capacity
+    150 MSa/s at 300 MHz) and fit four; at II=1 the narrow geometry absorbs 300 MSa/s, so the probe
+    is now 400 -- over the narrow ceiling, under the wide one.  What is being tested is the pairing,
+    and that is unchanged.
+    """
     narrow = RfSampBufRx(name="narrow", sim=Simulation(), bitwidth=SAMP_BW, samp_per_word=1)
     wide = RfSampBufRx(name="wide", sim=Simulation(), bitwidth=SAMP_BW * 4, samp_per_word=4)
     with pytest.raises(ValueError, match="exceeds what the ingress can absorb"):
-        narrow.check_rate(256e6, 300e6)
-    assert wide.check_rate(256e6, 300e6) < 1.0
+        narrow.check_rate(400e6, 300e6)
+    assert wide.check_rate(400e6, 300e6) < 1.0
 
 
 # ---------------------------------------------------------------------------

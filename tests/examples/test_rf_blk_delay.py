@@ -38,12 +38,13 @@ from examples.rf_blk_delay.rf_blk_delay import (
 )
 from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.rf_samp_buf import (
+    RfSampBufCapture,
     RF_SAMP_BUF_OK,
     RF_SAMP_BUF_TOO_LATE,
     RfSampBufIngress,
     unpack_samples,
 )
-from waveflow.hw.rf_samp_buf_tx import RfSampBufPlayer
+from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufPlayer
 from waveflow.simulation.simulation import Simulation
 
 
@@ -196,14 +197,30 @@ def test_the_delay_floor_is_measured_not_assumed():
     below = run_pysim(tb=RfBlkDelayTB(name="short", sim=Simulation(),
                                       delay_blocks=MIN_DELAY_BLOCKS - 1))
     resp = tx_responses(below)
-    assert resp and all(s == RF_SAMP_BUF_TOO_LATE for _t, s, _n in resp), (
-        f"a delay of {MIN_DELAY_BLOCKS - 1} blocks was expected to miss every slot, got {resp}")
-    assert below.tx.n_too_late == N_BLK
+    late = [s for _t, s, _n in resp if s == RF_SAMP_BUF_TOO_LATE]
+    # SOME miss, not all: one block below the floor the loop is marginal rather than hopeless, and
+    # how many miss depends on how far below.  Measured at MIN_DELAY_BLOCKS - 1 = 5: five of twelve.
+    # Asserting "all" would pin a number that is a property of how deep the sweep went.
+    assert late, (
+        f"a delay of {MIN_DELAY_BLOCKS - 1} blocks was expected to miss at least one slot, got {resp}")
+    assert below.tx.n_too_late == len(late)
     placed = sum(n for _t, _s, n in resp)
     assert 0 < placed < N_BLK * BLKSIZE, (
         f"{placed} of {N_BLK * BLKSIZE} samples placed; the failure below the floor is a block cut "
         f"short by the player, so it should be neither total nor absent")
-    assert all(n < BLKSIZE for _t, _s, n in resp), f"a block was placed in full anyway: {resp}"
+    # **A refusal is a block cut short, never a block silently dropped or silently completed**, and
+    # that is the invariant worth pinning rather than the shape of the shortfall.  The shape depends
+    # on the rate: at 250 MSa/s one below the floor the refusals alternate 244 / 0, at 400 MSa/s they
+    # degrade 232 / 176 / 152 / ... as the loop falls further behind.  Asserting either pattern would
+    # pin a number that belongs to a configuration rather than to the contract.
+    refused = [n for _t, s, n in resp if s == RF_SAMP_BUF_TOO_LATE]
+    assert all(0 <= n < BLKSIZE for n in refused), (
+        f"a refused command placed a FULL block: {resp}. Refused means the player reached the slot "
+        f"first, so it cannot have taken everything.")
+    assert any(n > 0 for n in refused), (
+        f"every refused command placed nothing: {resp}. The loader is supposed to keep draining the "
+        f"frame after the verdict, so at least a partial block should land -- all-or-nothing here "
+        f"would mean the drain-after-refusal path is gone, and the next command would desynchronise.")
 
     at = run_pysim(tb=RfBlkDelayTB(name="floor", sim=Simulation(),
                                    delay_blocks=MIN_DELAY_BLOCKS))
@@ -222,27 +239,55 @@ def test_the_word_is_exactly_at_the_ceiling(tb):
     assert SAMP_PER_WORD * 16 == 64
 
 
-def test_both_halves_rate_checks_are_enforced_and_the_tx_half_is_the_binding_one(tb):
-    """**The ceiling of a loop is the slower half, and it is the TX half.**
+def test_the_loop_ceiling_is_the_slowest_of_all_four_stages(tb):
+    """**The ceiling of a loop is its slowest STAGE, not its slowest half — and not a boundary task.**
 
-    The obvious arithmetic divides the port capacity by the *ingress's* ``fire_cycles`` and gets
-    500 MSPS. A loop also contains the player, which costs 3 rather than 2 — measured, see
-    ``test_rf_samp_buf_fire_cycles.py`` — so the real ceiling is 333 MSPS and 500 would be refused.
-    Both checks run in ``__post_init__`` and neither is bypassed.
+    This test has now been wrong twice in the same way, so the shape of the error is worth naming.
+    It first said the ceiling was the ingress's; then that it was the player's, because the player
+    cost 3 cycles per word against the ingress's 2. Both readings looked only at the tasks that touch
+    a converter, and both missed the point: **every sample crosses all four stages**, so the loop
+    sustains what the slowest one does.
+
+    "The loader and capture may block freely" is a *safety* property — they are allowed to stall
+    because nothing upstream loses data while they wait. It is not a throughput exemption, and
+    reading it as one is what hid the real ceiling.
+
+    Measured per-word costs (achieved ``PipelineII``, see ``test_rf_samp_buf_cycles_per_word.py``):
+    ingress 1, loader 1, player 1, **capture 2**. So the RX half binds, at ``spw * f_axis / 2``.
     """
     f = RFSOC4X2_CLK_HZ
-    assert tb.rx.max_samp_rate(f) == f * SAMP_PER_WORD / RfSampBufIngress.fire_cycles
-    assert tb.tx.max_samp_rate(f) == f * SAMP_PER_WORD / RfSampBufPlayer.fire_cycles
-    assert tb.tx.max_samp_rate(f) < tb.rx.max_samp_rate(f), (
-        "the TX half is supposed to be the binding one; if the player got cheaper, this example's "
-        "rate can rise and the comment explaining 250 MSPS needs revisiting")
-    assert SAMP_RATE <= tb.tx.max_samp_rate(f)
+    port = f * SAMP_PER_WORD
+
+    # Each half's ceiling is its own slowest stage...
+    assert tb.rx.cycles_per_word == max(RfSampBufIngress.cycles_per_word,
+                                        RfSampBufCapture.cycles_per_word)
+    assert tb.tx.cycles_per_word == max(RfSampBufPlayer.cycles_per_word,
+                                        RfSampBufLoader.word_cycles)
+    assert tb.rx.max_samp_rate(f) == port / tb.rx.cycles_per_word
+    assert tb.tx.max_samp_rate(f) == port / tb.tx.cycles_per_word
+
+    # ...and TWO stages sit at 2, so either half alone would set the same ceiling.  That is worth
+    # asserting rather than picking a "binding half": if one of them is fixed, the ceiling does NOT
+    # move, and a test that named a single culprit would suggest otherwise.
+    loop_ceiling = min(tb.rx.max_samp_rate(f), tb.tx.max_samp_rate(f))
+    slow = [n for n, c in (("capture", RfSampBufCapture.cycles_per_word),
+                           ("loader", RfSampBufLoader.word_cycles),
+                           ("ingress", RfSampBufIngress.cycles_per_word),
+                           ("player", RfSampBufPlayer.cycles_per_word)) if c == 2]
+    assert sorted(slow) == ["capture", "loader"], (
+        f"the stages at 2 cycles/word are {slow}; SAMP_RATE's justification names capture and loader "
+        f"and needs rewriting if that changed")
+    assert loop_ceiling == tb.rx.max_samp_rate(f) == tb.tx.max_samp_rate(f) == port / 2
+
+    # The shipped rate sits inside it, with margin, and BOTH checks run un-bypassed.
+    assert SAMP_RATE <= loop_ceiling
     assert tb.rx_util == pytest.approx(SAMP_RATE / tb.rx.max_samp_rate(f))
     assert tb.tx_util == pytest.approx(SAMP_RATE / tb.tx.max_samp_rate(f))
 
-    # ...and the rate the naive arithmetic suggests really is refused.
-    with pytest.raises(ValueError, match="exceeds what the player can sustain"):
-        tb.tx.check_rate(f * SAMP_PER_WORD / RfSampBufIngress.fire_cycles, f)
+    # And the port's own rate -- what a reader would assume the loop can take now that three of the
+    # four stages are at II=1 -- is refused.
+    with pytest.raises(ValueError, match="exceeds what the ingress can absorb"):
+        tb.rx.check_rate(port, f)
 
 
 def test_a_block_granular_delay_is_word_aligned_by_construction():
@@ -340,17 +385,23 @@ def test_the_fixed_per_firing_cost_is_what_csynth_measured():
         f"{overhead}; BlkDelay declares fire_overhead={BlkDelay.fire_overhead}.")
 
 
-def test_the_user_block_is_cheaper_than_both_buffers_which_is_the_point(tb):
-    """Pattern B's claim, as arithmetic: the relay is not the bottleneck.
+def test_the_user_block_is_not_what_binds_the_loop(tb):
+    """Pattern B's claim, as arithmetic: **the user's relay is not the bottleneck.**
 
-    Per word the ingress costs 2 cycles and the player 3 (measured, see
-    ``test_rf_samp_buf_fire_cycles.py``); this relays at 1 plus a fixed 3 per block. If that ever
-    stops being true the loop's ceiling is no longer the TX half and ``SAMP_RATE``'s justification
-    needs rewriting.
+    The comparison had to change when the buffers did.  It used to be "cheaper than both buffers",
+    which was easy when they cost 2 and 3 cycles per word; three of the four stages are now at 1, and
+    this relay costs ``1 + 3/64`` = 1.047, so it is no longer cheaper than *every* stage.  What still
+    holds — and is the claim pattern B actually makes — is that it is not the one that BINDS.
+
+    If that ever stops being true, the loop's ceiling becomes a property of the user's code rather
+    than of the buffers, which is precisely the situation pattern B exists to prevent.
     """
     per_word = BlkDelay.word_cycles + BlkDelay.fire_overhead / (BLKSIZE / SAMP_PER_WORD)
-    assert per_word < RfSampBufIngress.fire_cycles
-    assert per_word < RfSampBufPlayer.fire_cycles
+    binding = max(RfSampBufIngress.cycles_per_word, RfSampBufCapture.cycles_per_word,
+                  RfSampBufLoader.word_cycles, RfSampBufPlayer.cycles_per_word)
+    assert per_word < binding, (
+        f"the relay costs {per_word:.3f} cycles/word and the slowest buffer stage {binding}; the "
+        f"user's block has become the loop's bottleneck, which pattern B exists to prevent")
 
 
 def test_the_rx_buffer_holds_more_history_than_the_delay_needs(tb):

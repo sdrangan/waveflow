@@ -197,6 +197,30 @@ it follows from the gap.
   multiply-accumulate or a wider datapath may not reach II=1, and this witness says nothing about it.
 - **The interaction with a second task.** Every top here has exactly one task. Whether two looped
   tasks sharing a BRAM keep their II is a different experiment.
-- **`while (1)` under reset.** Not exercised. `plans/adc_model.md` records that a task which writes
-  before it reads advances its state during reset; an infinite loop changes the shape of that
-  question and it was not asked here.
+- ~~**`while (1)` under reset.**~~ **Measured 2026-08-18 — see below.**
+
+## `while (1)` under reset — measured, and it is clean
+
+The gap this page named as the one to close first, closed. The worry was concrete: a free-running
+player that asserts `TVALID` while `ap_rst_n` is low puts a word on the DAC before the design is
+initialised, and `while (1)` has no firing boundary at which the runtime could hold it off.
+
+`tb_player.v` now counts `TVALID` cycles and beats throughout reset, with **`TREADY` high from cycle
+zero** — the hostile case, and the realistic one, since `RfdcDacSlave` drives it from the start and a
+real converter's input FIFO is ready as soon as it is powered.
+
+| variant | `TVALID` cycles during reset | beats during reset | beats in the 8 cycles after release |
+|---|---|---|---|
+| `ply_1` | **0** | **0** | 2 |
+| `ply_n8` | **0** | **0** | 3 |
+| `ply_n64` | **0** | **0** | 3 |
+| `ply_w` | **0** | **0** | 3 |
+
+**Nothing is emitted during reset, in any shape.** Vitis gates the AXIS handshake on `ap_rst_n`, so
+`while (1)` is not a regression on the shape shipped today — the two are identical on this axis.
+
+The post-release beats are **not** a reset defect and are reported separately so the two are not
+confused: a free-running player is *supposed* to emit from the moment it is released, whether or not
+anything has filled the buffer. That is the documented startup transient the TX buffer's priming
+delay exists to cover, and `ply_1` shows it too. What `while (1)` changes is how fast the transient
+runs, not whether it happens.
