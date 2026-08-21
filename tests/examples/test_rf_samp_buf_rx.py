@@ -35,6 +35,7 @@ from examples.rf_samp_buf_rx.rf_samp_buf_rx import (
     captured_words,
     command_bursts,
     expected_capture,
+    SAMP_STEP,
     ramp_samples,
     responses,
     run_pysim,
@@ -108,7 +109,12 @@ def test_the_straddling_window_is_contiguous_across_the_boundary(tb):
     seg = got[-nsamp:]
     ramp = ramp_samples()
     assert np.array_equal(seg, ramp[start:start + nsamp])
-    assert np.all(np.diff(seg.astype(np.int64)) == 1), "the seam is where a straddling capture breaks"
+    # ``SAMP_STEP``, not 1: a slot carries a converter CODE, and on a 14-in-16 part the code sits
+    # justified inside it, so consecutive codes are SAMP_STEP apart on the wire.  Asserting the step
+    # rather than the literal 1 keeps the contiguity claim and adds one: the justification survived
+    # the whole path, converter to buffer to sink.
+    assert np.all(np.diff(seg.astype(np.int64)) == SAMP_STEP), (
+        "the seam is where a straddling capture breaks")
 
 
 # ---------------------------------------------------------------------------

@@ -41,7 +41,7 @@ struct Harness {
     explicit Harness(const std::string& wdb)
       : sim(rf_samp_buf_rx_ports::DESIGN_DLL, wdb),
         xsi_tb_adc_if(2),
-        s_in(sim.dut(), rf_samp_buf_rx_ports::s_in, xsi_tb_adc_if, RfdcFormat{16, 1, 1.0}, 0.256),
+        s_in(sim.dut(), rf_samp_buf_rx_ports::s_in, xsi_tb_adc_if, RfdcFormat{14, 1, 1.0, 16, 2}, 0.256),
         s_cmd(sim.dut(), rf_samp_buf_rx_ports::s_cmd, {}),
         s_out(sim.dut(), rf_samp_buf_rx_ports::s_out),
         s_resp(sim.dut(), rf_samp_buf_rx_ports::s_resp),

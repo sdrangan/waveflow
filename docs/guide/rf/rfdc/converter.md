@@ -43,7 +43,9 @@ lab measurement, and [the fabric-side page](./axis_side.md#justify) says so at l
 
 A board preset is an ordinary subclass restating only what the board fixes, so
 `Rfsoc4x2SampWord.specialize(samp_per_word=4)` keeps the board's sample geometry and asks only for
-the beat width the design wants.
+the beat width the design wants. **The 4x2 preset is 14-in-16** — 14 effective bits in a 16-bit slot
+— which is what a ZU48DR actually is; see
+[effective vs container](./axis_side.md#effective-vs-container) for what that changed.
 
 ## The four endpoints
 
@@ -130,7 +132,13 @@ half-even and not half-away — `-0.5` stored units rounds to `0`. A converter c
 **The width is `bits_per_samp`, the effective count — never the container.** A 14-bit converter on a
 16-bit bus quantizes to 14, and reading the slot width here would make the model's quantization noise
 four times finer than the hardware's. That is the defect the word type exists to fix; it was latent
-while a single `nbits` meant both numbers.
+while a single `nbits` meant both numbers, and on the 4x2 preset it is now fixed rather than merely
+expressible.
+
+Between the quantizer and the bus sits one more step, and it is the only bit manipulation the
+converter does: the stored value is **justified** into its container slot. Word↔slot layout still
+goes through the [generated array serializers](../../vectorization/); the shift is the rule they
+cannot know, and the word type owns it.
 
 The other half of the contract, [packing](./axis_side.md#the-packing-contract), is a property of the
 port rather than of the converter, and lives on the fabric-side page.

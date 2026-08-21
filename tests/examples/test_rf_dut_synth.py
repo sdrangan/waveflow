@@ -174,9 +174,16 @@ def test_csynth_produces_a_real_datapath():
     for task in (f"{TOP}_rf_samp_ingress_task_64_s", f"{TOP}_rf_samp_relay_task"):
         assert task in mods, (
             f"{task} is missing from the RTL — the kernel was optimized away: {sorted(mods)}")
-    pipelines = [m for m in mods if "Pipeline_VITIS_LOOP" in m]
+    # `_Pipeline_`, not `Pipeline_VITIS_LOOP`.  Vitis names a loop's pipeline module either
+    # `..._Pipeline_VITIS_LOOP_<line>_<n>` or `..._Pipeline_<n>`, and which one it picks is NOT a
+    # property of the source: synthesizing this unchanged C++ twice on 2026-08-21 produced one name
+    # each time, and the committed `.f` listings flipped with it.  The claim here is that the read
+    # and the write became separate pipelined modules; the label Vitis hangs on them is not part of
+    # it, and asserting the label made a green test depend on a coin flip.
+    pipelines = [m for m in mods if "_Pipeline_" in m]
     assert len(pipelines) >= 2, (
-        f"expected the read and write loops as pipelined modules, found {pipelines}")
+        f"expected the read and write loops as pipelined modules, found {pipelines} "
+        f"in {sorted(mods)}")
     assert any("RAM" in m for m in mods), (
         f"expected a block buffer between the two loops, found {sorted(mods)}")
     # The internal channel is one block deep AS RTL. Unlike a boundary port, this depth declaration

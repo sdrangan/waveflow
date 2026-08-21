@@ -50,6 +50,20 @@ one that does not. A single parameter meaning both is a latent defect: matching 
 the quantizer finer than the hardware and understates the one effect this model exists to reproduce
 bit-exactly, while matching it to the *converter* makes the word too narrow to carry.
 
+**The RFSoC 4x2 is the part that does not.** `Rfsoc4x2SampWord` is **14-in-16**: the ZU48DR's
+converters resolve 14 bits and the AXI-Stream carries each in a 16-bit slot. Until 2026-08-21 the
+examples said `nbits = 16` — chosen to match the bus, which silently made the model's quantization
+step four times smaller than the hardware's. Correcting it changes numbers on purpose:
+
+| | before | after |
+|---|---|---|
+| quantizer | `ap_fixed<16, 1, AP_RND, AP_SAT>` | `ap_fixed<14, 1, AP_RND, AP_SAT>` |
+| quantization step | `2^-15` of full scale | `2^-13` of full scale |
+| AXIS word at 4 samples/beat | 64 bits | **64 bits** — unchanged |
+
+The word width does not move, because a 14-in-16 slot is still a 16-bit slot. Neither do any cycle
+counts: this is a change to the *values* on the wire, not to how many beats carry them.
+
 ## `justify` -- declared, and **not yet confirmed** {#justify}
 
 When the two widths differ, something has to say where inside the container the effective bits sit.
@@ -69,8 +83,14 @@ That is `justify`:
 > It is a declared field precisely so the model **states** an answer that hardware can contradict,
 > instead of assuming one silently. When the bench says otherwise, one field changes.
 
-`justify` is a no-op whenever `bits_per_samp == bits_per_samp_pack`, which is every configuration
-that predates the split.
+`justify` is a no-op whenever `bits_per_samp == bits_per_samp_pack`. That was every configuration in
+the repository until the 4x2 preset became 14-in-16; it is now the setting that decides where four of
+every sixteen bit patterns land, so **this is the first place its value has an observable
+consequence** — and the first place a lab measurement could contradict the model.
+
+A visible consequence of `"left"`: the converter cannot set the low two bits of a slot, so the slot
+values it produces step by 4. The ramp examples' signals step by `SAMP_STEP` for exactly that reason
+— a ramp stepping by 1 stopped surviving the converter the moment the two widths differed.
 
 ## `iq_order` -- invisible at one sample per word {#iq-order}
 

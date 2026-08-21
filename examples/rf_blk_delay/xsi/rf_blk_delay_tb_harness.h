@@ -44,10 +44,10 @@ struct Harness {
       : sim(rf_blk_delay_ports::DESIGN_DLL, wdb),
         xsi_tb_adc_if(2),
         xsi_tb_dac_if(2),
-        s_in(sim.dut(), rf_blk_delay_ports::s_in, xsi_tb_adc_if, RfdcFormat{16, 4, 1.0}, 0.25),
+        s_in(sim.dut(), rf_blk_delay_ports::s_in, xsi_tb_adc_if, RfdcFormat{14, 4, 1.0, 16, 2}, 0.25),
         rx_resp(sim.dut(), rf_blk_delay_ports::rx_resp),
         tx_resp(sim.dut(), rf_blk_delay_ports::tx_resp),
-        s_out(sim.dut(), rf_blk_delay_ports::s_out, xsi_tb_dac_if, RfdcFormat{16, 4, 1.0}, 0.25, 256),
+        s_out(sim.dut(), rf_blk_delay_ports::s_out, xsi_tb_dac_if, RfdcFormat{14, 4, 1.0, 16, 2}, 0.25, 256),
         xsi_tb_adc_if_tx(xsi_tb_adc_if, 256),
         xsi_tb_dac_if_rx(xsi_tb_dac_if)
     {

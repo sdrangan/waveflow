@@ -59,7 +59,8 @@ __all__ = [
     "BUF_DEPTH", "HORIZON_MARGIN", "IDX_BW", "RF_SAMP_BUF_MISALIGNED", "RF_SAMP_BUF_OK",
     "RF_SAMP_BUF_TOO_OLD", "SCHEMA_CLASSES", "WORD_BW", "RfSampBufIngress", "RfSampBufRx",
     "RxCmd", "RxResp", "pack_samples", "sdiff", "unpack_samples",
-    "GATE_COMMANDS", "SAMP_BASE", "XSI_BLKSIZE", "XSI_NBLK", "XSI_NSAMP", "RfSampBufRxTB",
+    "CODE_BW", "GATE_COMMANDS", "SAMP_BASE", "SAMP_BW", "SAMP_STEP", "XSI_BLKSIZE", "XSI_NBLK",
+    "XSI_NSAMP", "RfSampBufRxTB",
     "captured_samples", "captured_words", "command_bursts", "expected_capture", "ramp_samples",
     "responses", "run_pysim", "write_scenario",
 ]
@@ -80,14 +81,32 @@ XSI_NSAMP = XSI_NBLK * XSI_BLKSIZE
 SAMP_BASE = 1000
 
 
-#: Sample width in bits.  A *sample* is always 16 bits here; what ``samp_per_word`` changes is how
-#: many of them ride one AXIS word, not how wide one is.
-SAMP_BW = 16
+#: Slot width in bits.  A *sample* always rides a 16-bit AXIS slot here; what ``samp_per_word``
+#: changes is how many of them ride one word, not how wide one is.  **Read off the board's word
+#: type**, which is where "a ZU48DR slot is 16 bits" is now stated once.
+SAMP_BW = int(Rfsoc4x2SampWord.bits_per_samp_pack)
+#: Effective converter bits — the code space a sample value lives in, which is NOT the slot width.
+CODE_BW = int(Rfsoc4x2SampWord.bits_per_samp)
+
+#: The gap between adjacent converter codes, **as a slot value**.  The ZU48DR resolves 14 of a slot's
+#: 16 bits, and the model's (declared, still-unconfirmed) ``justify`` puts them at the top, so the two
+#: low bits of a slot are not the converter's to set: reachable values step by 4.
+#:
+#: A ramp stepping by 1 stopped round-tripping the moment ``bits_per_samp`` and ``bits_per_samp_pack``
+#: became two numbers -- three of every four values would round away, and this example's golden would
+#: be measuring the quantizer instead of the design.  Read off the word type so it follows the part.
+SAMP_STEP = 1 << Rfsoc4x2SampWord.justify_shift()
 
 
 def ramp_samples(nsamp: int = XSI_NSAMP, base: int = SAMP_BASE) -> np.ndarray:
-    """The sample stream both backends play: ``base + i`` at index ``i``."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
+    """The sample stream both backends play: converter code ``base + i`` at index ``i``, expressed
+    as the **slot** value that carries it — ``(base + i) * SAMP_STEP``.
+
+    Still a ramp, so a captured word still names the index it came from; the scale factor is the
+    justification, and it is the one thing about this example that 14-in-16 changed.
+    """
+    codes = (np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << CODE_BW)
+    return ((codes * SAMP_STEP) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 #: The four commands, and **why each one is the case it claims to be**.  Determinism comes from the

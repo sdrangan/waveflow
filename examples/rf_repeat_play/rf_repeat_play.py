@@ -84,7 +84,8 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver  # noqa: E402
 
 __all__ = [
-    "BLK_SAMP", "MAX_IN_FLIGHT", "NREPEAT", "NSAMP", "N_BLK", "PERIOD", "SAMP_BASE", "SAMP_BW",
+    "BLK_SAMP", "CODE_BW", "MAX_IN_FLIGHT", "NREPEAT", "NSAMP", "N_BLK", "PERIOD", "SAMP_BASE",
+    "SAMP_BW", "SAMP_STEP",
     "START_LEAD", "FIRST_PLAY_BLK", "first_play_offset",
     "SAMP_RATE", "TX_MISALIGNED", "TX_NO_SLOT", "TX_STREAM_SCHEMA_CLASSES", "TX_TOO_LATE",
     "TX_TRANSMITTED", "TX_ZERO_LEN", "LEAD", "RepeatPlayHost", "RfCircPlayTB", "RfRepeatPlay",
@@ -167,9 +168,27 @@ FIRST_PLAY_BLK = 1
 N_BLK = FIRST_PLAY_BLK + NREPEAT
 
 
+#: Effective converter bits — the code space a sample value lives in, which is NOT the slot width
+#: (``SAMP_BW``, imported above, is the 16-bit AXIS slot and is unchanged).
+CODE_BW = int(Rfsoc4x2SampWord.bits_per_samp)
+
+#: The gap between adjacent converter codes, **as a slot value**.  The ZU48DR resolves 14 of a slot's
+#: 16 bits, and the model's (declared, still-unconfirmed) ``justify`` puts them at the top, so the two
+#: low bits of a slot are not the converter's to set: reachable values step by 4.  A waveform stepping
+#: by 1 stopped round-tripping the moment ``bits_per_samp`` and ``bits_per_samp_pack`` became two
+#: numbers.
+SAMP_STEP = 1 << Rfsoc4x2SampWord.justify_shift()
+
+
 def waveform(nsamp: int = NSAMP, base: int = SAMP_BASE) -> np.ndarray:
-    """The one waveform, replayed every period.  ``base + i`` at position *i* within the play."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
+    """The one waveform, replayed every period: converter code ``base + i`` at position *i*,
+    expressed as the **slot** value that carries it — ``(base + i) * SAMP_STEP``.
+
+    Still a ramp, so a played sample still names its position within the play; the scale factor is
+    the justification.
+    """
+    codes = (np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << CODE_BW)
+    return ((codes * SAMP_STEP) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 # ---------------------------------------------------------------------------

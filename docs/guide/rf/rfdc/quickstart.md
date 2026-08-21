@@ -54,7 +54,8 @@ That is the whole thing. Transmit is the mirror: bind `my_dut.s_out` to `rfdc.tx
 Everything else about the sample layout — how many bits the converter *resolves*, how wide the slot
 each sample rides in is, real or I/Q, and the two packing rules a serializer cannot know — is carried
 by the **word type**, and a board preset already states it:
-`Rfsoc4x2SampWord.specialize(samp_per_word=4)`. See
+`Rfsoc4x2SampWord.specialize(samp_per_word=4)` is **14 effective bits in a 16-bit slot**, which is
+what an RFSoC 4x2's converters are. See
 [the sample geometry is one type](./converter.md#the-sample-geometry-is-one-type).
 
 **`samp_per_word` is the one that needs thought**, and the arithmetic decides it rather than taste:

@@ -308,14 +308,17 @@ class Rfsoc4x2SampWord(RfdcSampWord):
     The ZU48DR's RF-ADCs and RF-DACs resolve **14** bits; the AXI-Stream carries each sample in a
     **16**-bit slot.  Those are two numbers, and this is where they stop being one.
 
-    **Not yet:** this commit introduces the type with *today's* numbers everywhere, so that the
-    refactor is provably behaviour-preserving — 16 effective bits in a 16-bit slot, which is what
-    every RF example has been declaring as ``nbits = 16``.  Setting it to 14-in-16 changes
-    quantization on purpose and is the next commit's job, where the numbers that move are accounted
-    for one at a time.
+    Until 2026-08-21 this preset said 16 in a 16-bit slot, because that is what every RF example
+    declared as ``nbits`` — a number chosen to match the *bus*, which silently made the model's
+    quantization four times finer than the part's.  Correcting it is a deliberate change to what the
+    model reports, not a refactor: quantization noise is the one effect this converter model exists
+    to reproduce bit-exactly, so understating it was the whole defect.
 
     :attr:`~RfdcSampWord.justify` is inherited, **and its default is unconfirmed** — see the field.
+    On a part where the two widths are equal it did not matter; here it decides where four of every
+    sixteen bit patterns land, so this preset is the first place its value has an observable
+    consequence.
     """
 
-    bits_per_samp: ClassVar[int] = 16
+    bits_per_samp: ClassVar[int] = 14
     bits_per_samp_pack: ClassVar[int] = 16

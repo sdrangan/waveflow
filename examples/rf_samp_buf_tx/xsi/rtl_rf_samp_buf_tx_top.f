@@ -2,7 +2,7 @@
 ../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_fifo_w16_d1_S.v
 ../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_flow_control_loop_pipe_sequential_init.v
 ../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_regslice_both.v
-../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_rf_samp_buf_loader_task_16_1_2048_16_16_Pipeline_1.v
+../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_rf_samp_buf_loader_task_16_1_2048_16_16_Pipeline_VITIS_LOOP_99_2.v
 ../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_rf_samp_buf_loader_task_16_1_2048_16_16_s.v
 ../rf_samp_buf_tx_proj/solution1/syn/verilog/rf_samp_buf_tx_rf_samp_buf_player_task_16_1_2048_16_s.v
 bram_t2p.v

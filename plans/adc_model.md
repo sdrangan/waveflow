@@ -197,10 +197,30 @@ bind** — the same single-source discipline as `StreamIF.depth`. Two declaratio
 
 ### `RfdcSampWord` — the packing convention as a type
 
-**Proposed 2026-08-21, not built.** Today the AMD packing rules live as three loose parameters on
-`Rfdc` plus prose in `docs/guide/rf/rfdc/axis_side.md`. Making them a **type** puts the convention in
-one place, names it after the vendor whose convention it is, and fixes a defect that is currently
-latent.
+**Built 2026-08-21** — `waveflow/hw/rfdc_samp_word.py`, in two commits: the type with today's
+numbers (generated C++ byte-identical), then the 4x2 preset at 14-in-16 (quantisation changed on
+purpose). Before it, the AMD packing rules lived as three loose parameters on `Rfdc` plus prose in
+`docs/guide/rf/rfdc/axis_side.md`. Making them a **type** put the convention in one place, named it
+after the vendor whose convention it is, and fixed a defect that was latent.
+
+Three things the sketch below did not survive contact with, all deliberate:
+
+- It subclasses **`IntField`**, not `DataField`. A beat is a bag of bits, and that inheritance is
+  what makes "a block of words is a `DataArray` over the word type" true *today*, with the
+  serializers and the >64-bit convention that already exist.
+- `bitwidth` and `samp_type` are fixed at `specialize` time rather than being properties — the
+  sketch's `@property def bitwidth(cls)` cannot bind, and every other schema type here puts
+  structure on the class.
+- **`word` is a plain field on `Rfdc`, not an `HwParam`.** `HwModule.__post_init__` wraps every
+  `HwParam` value in `HwParamValue(int(value))`, so a type-valued parameter cannot be one. Nothing
+  is lost: an `Rfdc` declares no `kernel_task`, so its parameters never reached a template argument.
+  The parameter tables on both doc pages say this, and say why.
+
+`justify` is declared and its default (`"left"`) is **UNCONFIRMED** — flagged in the field's own
+docs and in `guide/rf/rfdc/axis_side.md#justify`, and now load-bearing, since 14-in-16 is the first
+configuration where its value has an observable consequence. `iq_order` is pinned at two samples per
+word in `tests/hw/test_rfdc_samp_word.py`. `iq_mode = 1` on the **converter** is still refused; the
+word can express it, and the refusal now says which half is missing.
 
 #### The defect it fixes: `nbits` does double duty
 
@@ -285,6 +305,11 @@ preambles and channel sounding are all complex baseband. The two blockers there 
 bundle format and the real-only conformance twin. This type is the third piece: it is where
 `iq_order` gets stated, and where the complex word width stops being an expression on `Rfdc` and
 becomes a property of the format.
+
+**That third piece is done.** `RfdcSampWord.specialize(iq_mode=True)` builds a complex word, its
+width follows from the type, and `iq_interleave` / `iq_deinterleave` state the slot order and are
+tested at two samples per word. What remains for `iq_mode = 1` is the two blockers above — both
+about the converter's halves, neither about packing.
 
 ### There is no `spc` — there are two derived rate conversions
 

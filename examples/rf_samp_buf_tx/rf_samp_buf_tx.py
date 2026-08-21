@@ -64,7 +64,8 @@ __all__ = [
     "BUF_DEPTH", "HORIZON_MARGIN", "IDX_BW", "RF_SAMP_BUF_MISALIGNED", "RF_SAMP_BUF_OK",
     "RF_SAMP_BUF_TOO_LATE", "TX_SCHEMA_CLASSES", "RfSampBufLoader", "RfSampBufPlayer",
     "RfSampBufTx", "TxCmd", "TxResp", "pack_samples", "sdiff", "unpack_samples",
-    "GATE_COMMANDS", "LATE_TIDS", "PRIMED_AT", "SAMP_BASE", "SAMP_BW", "TX_BUF_DEPTH",
+    "CODE_BW", "GATE_COMMANDS", "LATE_TIDS", "PRIMED_AT", "SAMP_BASE", "SAMP_BW", "SAMP_STEP",
+    "TX_BUF_DEPTH",
     "XSI_BLKSIZE",
     "XSI_NBLK", "XSI_NSAMP",
     "RfSampBufTxTB", "command_frame", "expected_responses", "find_loaded_run",
@@ -87,9 +88,21 @@ __all__ = [
 #: does not merely reduce margin; it makes the design not work.
 TX_BUF_DEPTH = 2048
 
-#: Sample width in bits.  A *sample* is always 16 bits here; ``samp_per_word`` changes how many ride
-#: one AXIS word, not how wide one is.
-SAMP_BW = 16
+#: Slot width in bits.  A *sample* always rides a 16-bit AXIS slot here; ``samp_per_word`` changes
+#: how many of them ride one word, not how wide one is.  **Read off the board's word type**, which
+#: is where "a ZU48DR slot is 16 bits" is now stated once.
+SAMP_BW = int(Rfsoc4x2SampWord.bits_per_samp_pack)
+#: Effective converter bits — the code space a sample value lives in, which is NOT the slot width.
+CODE_BW = int(Rfsoc4x2SampWord.bits_per_samp)
+
+#: The gap between adjacent converter codes, **as a slot value**.  The ZU48DR resolves 14 of a slot's
+#: 16 bits, and the model's (declared, still-unconfirmed) ``justify`` puts them at the top, so the two
+#: low bits of a slot are not the converter's to set: reachable values step by 4.
+#:
+#: A ramp stepping by 1 stopped round-tripping the moment ``bits_per_samp`` and ``bits_per_samp_pack``
+#: became two numbers -- three of every four values would round away, and this example's golden would
+#: be measuring the quantizer instead of the design.  Read off the word type so it follows the part.
+SAMP_STEP = 1 << Rfsoc4x2SampWord.justify_shift()
 
 #: The gate scenario: 8 DAC blocks of 256 samples = 2048 sample periods of playout against a
 #: 1024-word buffer, so the play pointer laps the buffer and the circular wrap is exercised rather
@@ -105,8 +118,14 @@ SAMP_BASE = 1000
 
 
 def ramp_samples(nsamp: int = XSI_NSAMP, base: int = SAMP_BASE) -> np.ndarray:
-    """The sample values a command carries: ``base + idx`` at sample index ``idx``."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
+    """The sample values a command carries: converter code ``base + idx`` at sample index ``idx``,
+    expressed as the **slot** value that carries it — ``(base + idx) * SAMP_STEP``.
+
+    Still a ramp, so a played word still names the slot it came from; the scale factor is the
+    justification, and it is the one thing about this example that 14-in-16 changed.
+    """
+    codes = (np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << CODE_BW)
+    return ((codes * SAMP_STEP) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 #: Sample index the first command targets.  **Not zero, and the reason is the design**: the player

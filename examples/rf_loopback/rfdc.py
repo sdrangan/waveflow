@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from waveflow.hw.arrayutils import array, write_array
 from waveflow.hw.fixpoint import from_real, to_real
 from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
@@ -301,7 +302,14 @@ class Rfdc(HwModule):
         return float(samp_rate) / (int(self.word.samp_per_word) * self.f_axis(ep))
 
     def _fmt_literal(self) -> str:
-        """``RfdcFormat{bits_per_samp, samp_per_word, full_scale}`` as a C++ **literal**.
+        """``RfdcFormat{bits_per_samp, samp_per_word, full_scale, bits_per_samp_pack,
+        justify_shift}`` as a C++ **literal**.
+
+        Five fields, and the last two are the effective/container split reaching the twin: a
+        ``RfdcFormat`` that carried one width could only model a part whose resolution equals its
+        slot width.  ``RfdcFormat`` is **aggregate-initialized** from this string, so the order here
+        is the struct's declaration order and the two must not drift — the appended-not-interleaved
+        shape in ``xsi_rfdc_samp.h`` is what keeps that cheap to check.
 
         A literal and not an identifier, deliberately: the harness promotes any bare identifier in
         ``extra_args`` to a ``Harness(...)`` parameter typed ``const std::vector<uint64_t>&``, and an
@@ -309,7 +317,8 @@ class Rfdc(HwModule):
         bite; this is the shape that avoids it with no generator change.
         """
         return (f"RfdcFormat{{{int(self.word.bits_per_samp)}, {int(self.word.samp_per_word)}, "
-                f"{float(self.full_scale)!r}}}")
+                f"{float(self.full_scale)!r}, {int(self.word.bits_per_samp_pack)}, "
+                f"{int(self.word.justify_shift())}}}")
 
     def bfm_model(self):
         """**Two** models, one per data path, each spanning the cut.
@@ -388,15 +397,32 @@ class Rfdc(HwModule):
         while True:
             blk = yield from self.rx_rf.get()
             samples = np.asarray(blk.data, dtype=np.float64)[0]     # n_rx == 1 (stage 1)
-            quantized = from_real(samples / fs, self.SampType)
             self.n_adc_blk += 1
-            yield from self.rx_stream.offer(quantized, word_rate=word_rate)
+            yield from self.rx_stream.offer(self._pack(samples / fs), word_rate=word_rate)
 
     def _dac_proc(self) -> ProcessGen[None]:
         """One AXIS burst in → unpack → dequantize → RF block out."""
         fs = float(self.full_scale)
         while True:
-            quantized = yield from self.tx_stream.get(self.SampType, count=int(self.tx_blksize))
-            samples = to_real(quantized) * fs
+            slots = yield from self.tx_stream.get(self.word.slot_type(),
+                                                  count=int(self.tx_blksize))
             self.n_dac_blk += 1
-            yield from self.tx_rf.put(samples.reshape(1, -1))
+            yield from self.tx_rf.put((self._unpack(slots) * fs).reshape(1, -1))
+
+    # -- quantize/justify/pack, and its inverse ---------------------------------------------------
+    #
+    # TWO steps, and they are different questions.  Quantization is the CONVERTER's, at
+    # ``bits_per_samp``; the slot layout is the BUS's, at ``bits_per_samp_pack``.  What joins them is
+    # the justification shift, which is the one rule the serializers cannot know — the word type owns
+    # it (:meth:`~waveflow.hw.rfdc_samp_word.RfdcSampWord.to_slots`) and this module never open-codes
+    # a mask or a stride.  Word<->slot goes through ``write_array``/``read_array`` exactly as before.
+
+    def _pack(self, normalized: np.ndarray):
+        """Normalized reals in [-1, 1) → the AXIS words one block becomes."""
+        stored = from_real(normalized, self.SampType)
+        return write_array(self.word.to_slots(stored), elem_type=self.word.slot_type(),
+                           word_bw=self.axis_bitwidth)
+
+    def _unpack(self, slots) -> np.ndarray:
+        """Container slots → normalized reals — the exact inverse of :meth:`_pack` on the grid."""
+        return to_real(array(self.SampType, self.word.from_slots(slots)))

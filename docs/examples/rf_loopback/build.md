@@ -102,8 +102,9 @@ stored = clamp( floor( x / full_scale * 2^(b-1) + 0.5 ),  -2^(b-1),  2^(b-1) - 1
 negative ties), and the clamp is the saturation (AP_SAT): a converter clips, it does not wrap. The
 dequantization is exact, because the scale is a power of two.
 
-At 16 effective bits in a 16-bit slot, four to a beat, that is four samples per 64-bit AXI-Stream
-beat. The gate runs
+At the 4x2's 14 effective bits in a 16-bit slot, four to a beat, that is four samples per 64-bit
+AXI-Stream beat — the *effective* width sets `b` above, the *slot* width sets the bus, and they are
+two numbers. The gate runs
 `(8, 8)`, `(16, 4)`, `(12, 4)` and `(16, 2)` — including a non-power-of-two width — because the bugs
 hand-rolled packing produces hide at exactly the awkward widths.
 

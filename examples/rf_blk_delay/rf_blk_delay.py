@@ -81,7 +81,18 @@ from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E
 #: is *not* verified here is the exact padding/justification the IP applies, because nothing in this
 #: repo talks to the real IP yet — see the PR's "could not verify".  16 is the container width, which
 #: is what the packing arithmetic needs, and it is right whatever the low bits turn out to mean.
-SAMP_BW = 16
+SAMP_BW = int(Rfsoc4x2SampWord.bits_per_samp_pack)
+#: Effective converter bits — the code space a sample value lives in, which is NOT the slot width.
+CODE_BW = int(Rfsoc4x2SampWord.bits_per_samp)
+
+#: The gap between adjacent converter codes, **as a slot value**.  The ZU48DR resolves 14 of a slot's
+#: 16 bits, and the model's (declared, still-unconfirmed) ``justify`` puts them at the top, so the two
+#: low bits of a slot are not the converter's to set: reachable values step by 4.
+#:
+#: A ramp stepping by 1 stopped round-tripping the moment ``bits_per_samp`` and ``bits_per_samp_pack``
+#: became two numbers -- three of every four values would round away, and this example's golden would
+#: be measuring the quantizer instead of the design.  Read off the word type so it follows the part.
+SAMP_STEP = 1 << Rfsoc4x2SampWord.justify_shift()
 
 #: Samples per AXIS word.  4 x 16 = 64 bits, **exactly** ``Rfdc``'s ceiling — the widest word this
 #: repo's ``uint64`` burst-bundle word can carry, and the reason a real 1 GSPS RFDC (128 bits or
@@ -177,7 +188,8 @@ SRC_NBLK = N_BLK + 1
 
 def ramp_samples(nsamp: int = SRC_NBLK * BLKSIZE, base: int = SAMP_BASE) -> np.ndarray:
     """The sample stream the source plays: ``base + i`` at sample index ``i``."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
+    codes = (np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << CODE_BW)
+    return ((codes * SAMP_STEP) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 # ---------------------------------------------------------------------------
