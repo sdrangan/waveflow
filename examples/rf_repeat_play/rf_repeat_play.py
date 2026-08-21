@@ -565,7 +565,10 @@ class RfCircPlayTB(FreeRunMod):
                                 slot_period=self.slot_period, clk=self.axis_clk)
         self.wave_drv = StreamDriver(sim=self.sim, name=f"{self.name}_wave_drv", bitwidth=w,
                                      in_bundle="vectors/wave", has_tlast=True)
-        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim)
+        # `out_bundle` is what makes this gate a COMPARISON rather than a smoke test: the pysim
+        # sink and the RTL RfFileSink write the same bundle, so the two backends' playouts can be
+        # diffed sample for sample instead of each being asserted against its own expectations.
+        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim, out_bundle="vectors/rf_out")
         for c in (self.dut, self.rfdc, self.wave_drv, self.sink):
             self.add_comp(c)
 
