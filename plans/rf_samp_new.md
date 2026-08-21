@@ -1,6 +1,6 @@
 # Re-design of the RF sample interface
 
-**Status: DESIGN, not started.** 2026-08-19. Replaces the BRAM + progress-channel structure of
+**Status: Stage 0 and Stage 1 MERGED** (PRs #167, #168); Stages 2-4 not started. Revised 2026-08-21. This file owns the BUFFERS — the reverse channels, `RfShotBuf` / `RfStreamBuf`, and the staging. The converter itself is `plans/adc_model.md`. Replaces the BRAM + progress-channel structure of
 `waveflow/hw/rf_samp_buf.py` / `rf_samp_buf_tx.py` **for the streaming and scheduled-capture cases**.
 See *What this does not do* before assuming it replaces triggered capture with pre-history.
 

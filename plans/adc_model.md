@@ -1,6 +1,8 @@
 # Modeling the ADC in Waveflow
 
-**Status:** revised 2026-08-12. **Unblocked** by `plans/design_cut.md` (S0–S4, S6 landed, PR #146),
+**Status: the CONVERTER's plan.** Revised 2026-08-21. This file owns `Rfdc`, `RFSampIF`, `t0`, the rate conversions, the word format, and what the real RFDC does that the model does not.
+
+**It no longer owns the buffers.** Its two-design-patterns section and its staging were overtaken by `plans/rf_samp_new.md`, which is where `RfShotBuf` / `RfStreamBuf`, the reverse channels and the current staging live. Read that one for anything about holding samples; read this one for anything about converting them.
 which answers the "what kind is the RFDC block?" question this plan was parked behind. Stage 2 below
 now depends on `plans/behavioral_edges.md`.
 
@@ -192,6 +194,97 @@ bind** — the same single-source discipline as `StreamIF.depth`. Two declaratio
 
 > **Trap on the `DynParam` rows.** `discover_dyn_params` skips **falsy** values, so `0.0` and `False`
 > emit *nothing* and silently take the C++ default. Sentinel them or fix the predicate first.
+
+### `RfdcSampWord` — the packing convention as a type
+
+**Proposed 2026-08-21, not built.** Today the AMD packing rules live as three loose parameters on
+`Rfdc` plus prose in `docs/guide/rf/rfdc/axis_side.md`. Making them a **type** puts the convention in
+one place, names it after the vendor whose convention it is, and fixes a defect that is currently
+latent.
+
+#### The defect it fixes: `nbits` does double duty
+
+```python
+axis_bitwidth = samp_per_word * nbits * (2 if iq_mode else 1)   # the CONTAINER width
+SampType      = FixedField.specialize(nbits, 1, signed=True)     # the QUANTIZER precision
+```
+
+**On a Gen 3 RFSoC those are different numbers.** The ZU48DR's converters are **14-bit**, and the
+AXI-Stream carries them in **16-bit** slots. Set `nbits = 16` to match the bus — which is what the
+bus arithmetic tells you to do — and the quantizer becomes 16-bit too: **four times finer than the
+hardware**, understating quantisation noise, which is the one effect this model exists to reproduce
+bit-exactly.
+
+Nothing currently prevents that. One number is asked to mean two things, and the two only coincide
+when the converter's resolution happens to equal its slot width.
+
+#### The shape
+
+A **word**, not a sample — one word is what one AXI-Stream beat carries. The sample stays a
+`FixedField`, so the quantizer is unchanged and remains the integer-backed, bit-exact one.
+
+```python
+class RfdcSampWord(DataField):
+    samp_per_word:      ClassVar[int]  = 1       # samples per beat (COMPLEX samples when iq_mode)
+    bits_per_samp:      ClassVar[int]  = 14      # EFFECTIVE — what the converter resolves
+    bits_per_samp_pack: ClassVar[int]  = 16      # CONTAINER — what the slot occupies
+    iq_mode:            ClassVar[bool] = False
+    justify:            ClassVar[str]  = "left"  # where the effective bits sit in the container
+    iq_order:           ClassVar[str]  = "i_low" # which of I/Q takes the lower slot
+
+    @property
+    def bitwidth(cls): ...    # samp_per_word * bits_per_samp_pack * (2 if iq_mode else 1)
+    @property
+    def samp_type(cls): ...   # FixedField.specialize(bits_per_samp, 1, signed=True, AP_RND, AP_SAT)
+```
+
+`Rfdc` then takes a word type instead of three loose parameters, and **reads** `axis_bitwidth` off
+it — never restates it. Same discipline as reading `samp_rate` off the clock: each quantity declared
+once, where it belongs.
+
+**It is not new packing machinery.** `write_array` / `read_array` already take
+`(elem_type, word_bw)` and do the work. `RfdcSampWord` is a named, checked bundle that *supplies*
+them, plus the two rules the serializers cannot know (`justify`, `iq_order`).
+
+#### Three decisions it forces, which is most of the value
+
+**1. `justify`.** Whether 14 effective bits sit MSB- or LSB-aligned in a 16-bit slot is a **PG269
+question nobody here has answered** — it is on the board bring-up log beside the `TVALID` question.
+Making it a declared field means the model *states* an answer that can be checked against hardware,
+rather than assuming one silently.
+
+**2. `iq_order`.** Which of I and Q occupies the lower slot. **Invisible at `samp_per_word == 1`** —
+the standing trap in this repo (*"the bug hides at LW=1"*), which is exactly how a slot-order bug
+survives every test written at one sample per word. Must be pinned by a test at `samp_per_word >= 2`.
+
+**3. `iq_mode` moves off `Rfdc` and onto the word**, where it belongs: it is a statement about
+packing, not about the converter. That also makes the word self-describing — `bitwidth` follows from
+the type rather than from a flag somewhere else.
+
+#### Naming
+
+**`RfdcSampWord`**, not `AMDSampWord`: RFDC is what PG269 calls the block, and AMD sells other
+converters with other conventions. But naming the vendor at all is the point — it makes the coupling
+visible instead of implying the packing is universal. A different converter family gets a different
+word type, and the fact that one is needed is then obvious rather than discovered.
+
+#### What to be careful about
+
+- **Do not let it become a second source of width.** `Rfdc` reads `axis_bitwidth` from the word type
+  and never restates it, or the two drift and the drift is silent.
+- **Blocks compose; do not build them in.** A block of words is `DataArray` / `DataList` over the
+  word type, using machinery that already exists and already generates its C++ serializers.
+- **The quantizer is unchanged.** `samp_type` is a `FixedField` exactly as today; the word type
+  supplies its width from `bits_per_samp` rather than from the container. That single substitution is
+  the defect fix.
+
+#### Prerequisite for `iq_mode`
+
+`plans/rf_lab_platform.md` records that `iq_mode = 1` is **required, not optional** — PSS, WiFi
+preambles and channel sounding are all complex baseband. The two blockers there are the float64 RF
+bundle format and the real-only conformance twin. This type is the third piece: it is where
+`iq_order` gets stated, and where the complex word width stops being an expression on `Rfdc` and
+becomes a property of the format.
 
 ### There is no `spc` — there are two derived rate conversions
 
