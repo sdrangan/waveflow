@@ -35,8 +35,32 @@ the hardware sustains** — a static check that says yes where the hardware says
 the failure that cost the RX side 1695 of 4096 samples.  The error is optimistic in both places it
 lands: the threshold and the pysim charge.
 
+## A report is build output, not source — and `undef` means opposite things per kind
+
+Everything under ``*_proj/`` is gitignored, so which build wrote the file on disk is decided by
+whatever csynth ran last in this working tree — possibly on another branch, against sources this
+checkout does not contain.  That makes **three** report states, not two, and what each means depends
+on which kind of body is being graded:
+
+===========================  ==============================  ==============================
+report says                  ``_require_bounded``            ``_require_looped``
+===========================  ==============================  ==============================
+absent                       skip — not built here           skip — not built here
+``<Latency>undef</Latency>``  a **looped** body was built     **expected**; go on to read
+                             here → skip (stale artifact)    the achieved ``PipelineII``
+a number                     assert                          the body was **silently
+                                                             reverted** → **FAIL, not skip**
+===========================  ==============================  ==============================
+
+The bottom-right cell is the whole reason there are two helpers rather than one with a flag.  A
+bounded reading on the looped path is a **finding** — someone replaced a ``while (1)`` with a
+counted loop, the II stays 1, and every other row still passes while the body quietly acquires a
+per-firing boundary gap.  Treating it as a missing measurement would file the one regression this
+file exists to catch as "nothing to see".
+
 Skips loudly when a report is absent, the way the XSI gates do: a silent skip on a gate like this
-reads as a pass in a summary line.
+reads as a pass in a summary line.  These tests are never *expected* to skip in a tree that just
+built the examples, which is what makes a skip readable rather than routine.
 """
 from __future__ import annotations
 
@@ -44,6 +68,7 @@ from pathlib import Path
 
 import pytest
 
+from examples.rf_blk_delay.rf_blk_delay import BLKSIZE, SAMP_PER_WORD, BlkDelay
 from waveflow.hw.rf_samp_buf import RfSampBufIngress
 from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufPlayer
 from waveflow.utils.csynthparse import loop_pipeline_ii, module_latency
@@ -51,6 +76,9 @@ from waveflow.utils.csynthparse import loop_pipeline_ii, module_latency
 _EX = Path(__file__).resolve().parents[2] / "examples"
 RX_REPORT = _EX / "rf_samp_buf_rx" / "rf_samp_buf_rx_proj" / "solution1" / "syn" / "report"
 TX_REPORT = _EX / "rf_samp_buf_tx" / "rf_samp_buf_tx_proj" / "solution1" / "syn" / "report"
+_BD_REPORT = _EX / "rf_blk_delay" / "rf_blk_delay_proj" / "solution1" / "syn" / "report"
+#: The synthesized name carries the template arguments, so it names the gated geometry.
+_BD_MODULE = f"blk_delay_task_{SAMP_PER_WORD * 16}_{SAMP_PER_WORD}_{BLKSIZE}_4_16_s"
 
 #: ``(label, report dir, synthesized module, the class attribute that declares the cost)``.
 #:
@@ -67,14 +95,78 @@ LOOPED_BODIES = [
 ]
 
 
-def _require(report_dir: Path, module: str):
-    """The measured latency, or a loud skip — never a silent pass."""
+#: The **bounded** counterpart: bodies whose firing is a thing that exists, graded on
+#: ``latency == words * word_cycles + fire_overhead``.
+#:
+#: One row, and that is the honest state of the design rather than a table waiting to be filled:
+#: since the two converter-facing bodies became ``while (1)`` loops, ``BlkDelay`` is the only
+#: bounded body left.  It is kept as a table anyway because the *kind* is what the two ``_require``
+#: helpers are keyed on, and a second bounded body should arrive as a row rather than as a new test.
+#:
+#: Note the calibration is **not** ``latency + 1`` any more.  That form has no remaining user — it
+#: was the ingress's and the player's, and both are looped now.  ``fire_overhead`` generalises it:
+#: it is what a firing costs *beyond* its per-word work, so it absorbs the old ``+1`` and any other
+#: fixed cost, and it is derived by subtracting the measured per-word part rather than assumed.
+BOUNDED_BODIES = [
+    ("blk_delay", _BD_REPORT, _BD_MODULE, BlkDelay.fire_overhead,
+     BLKSIZE // SAMP_PER_WORD, BlkDelay.word_cycles),
+]
+
+
+def _require_bounded(report_dir: Path, module: str):
+    """The measured latency of a **bounded** body, or a loud skip — never a silent pass.
+
+    See the module docstring for the three report states.  The one worth restating: ``undef`` here
+    means *a looped body was built in this tree*, which is a foreign or stale artifact rather than a
+    measurement of this checkout — so it skips.  It used to fail, and it failed on ``main`` itself
+    whenever a branch that pipelines these bodies had run csynth here, which is a failure ``main``'s
+    sources could neither cause nor fix.
+
+    What that gives up, said plainly: if the committed source really did become unbounded, this path
+    now skips where it used to fail.  That direction is caught from the other side — by
+    :func:`test_the_converter_facing_bodies_really_are_unbounded_loops` for the looped bodies and by
+    :func:`test_the_loader_declares_no_per_firing_cost_because_csynth_cannot_bound_it` for the
+    loader, both of which assert on ``undef`` rather than skipping on it.
+    """
     if not report_dir.is_dir():
         pytest.skip(f"no csynth report dir at {report_dir} — run the example's build --through csynth")
-    got = module_latency(report_dir, module)
-    if got is None and not (report_dir / f"{module}_csynth.xml").is_file():
+    if not (report_dir / f"{module}_csynth.xml").is_file():
         pytest.skip(f"no report for {module} in {report_dir} — re-run csynth")
+    got = module_latency(report_dir, module)
+    if got is None:
+        pytest.skip(
+            f"{module}: the report in {report_dir} says <Latency>undef</Latency>, so the build that "
+            f"wrote it left this body unbounded and there is no per-firing cost to compare against. "
+            f"That is a stale or foreign artifact, not a measurement of this checkout — re-run the "
+            f"example's build --through csynth to make this row mean something.")
     return got
+
+
+def _require_looped(report_dir: Path, module: str) -> str:
+    """The name of a **looped** body's sole pipelined loop — or a skip, or a **failure**.
+
+    The mirror image of :func:`_require_bounded`, and the asymmetry is the point.  ``undef`` is what
+    a ``while (1)`` body is *supposed* to report, so it is the path forward here.  A **number** is
+    the finding: csynth could bound this body, so it is no longer an infinite loop.
+
+    **That case fails; it does not skip.**  A reverted body still reports a loop and still achieves
+    II=1, so the per-word row would pass — while the body has acquired a firing boundary, measured
+    at 3 idle cycles in ``plans/witness/task_loop/``, which at a converter port is a window in which
+    it is not reading.  Filing that as "no measurement" is how the regression would land silently.
+    """
+    if not report_dir.is_dir():
+        pytest.skip(f"no csynth report dir at {report_dir} — run the example's build --through csynth")
+    if not (report_dir / f"{module}_csynth.xml").is_file():
+        pytest.skip(f"no report for {module} in {report_dir} — re-run csynth")
+    lat = module_latency(report_dir, module)
+    assert lat is None, (
+        f"csynth can now bound {module} ({lat}), so its body is no longer a `while (1)` loop. "
+        f"A bounded body has a firing boundary — 3 idle cycles, measured in "
+        f"plans/witness/task_loop/ — and a converter-facing task must not have one. This is a "
+        f"REVERT, not a missing measurement: the II below would still read 1 and every other row "
+        f"here would still pass. If the change was deliberate, this file's two calibrations and "
+        f"check_rate all need re-deriving.")
+    return _sole_loop(report_dir, module)
 
 
 def _sole_loop(report_dir: Path, module: str) -> str:
@@ -103,11 +195,7 @@ def test_the_declared_per_word_cost_is_the_loops_achieved_ii(label, report_dir, 
     converter.  If this fails the declaration is a guess again — correct the constant from the
     report, never the other way round.
     """
-    if not report_dir.is_dir():
-        pytest.skip(f"no csynth report dir at {report_dir} — run the example's build --through csynth")
-    if not (report_dir / f"{module}_csynth.xml").is_file():
-        pytest.skip(f"no report for {module} in {report_dir} — re-run csynth")
-    loop = _sole_loop(report_dir, module)
+    loop = _require_looped(report_dir, module)   # skips on absent; FAILS on a bounded reading
     ii = loop_pipeline_ii(report_dir, module, loop)
     assert ii is not None, f"{label}: {module}'s loop {loop} reports no PipelineII"
     assert declared == ii, (
@@ -127,16 +215,12 @@ def test_the_converter_facing_bodies_really_are_unbounded_loops(label, report_di
     per-firing boundary gap, which at a converter boundary is a window in which it is not reading.
     That is the regression this asserts against, and nothing else here would see it.
     """
-    if not report_dir.is_dir() or not (report_dir / f"{module}_csynth.xml").is_file():
-        pytest.skip(f"no report for {module} — run the example's build --through csynth")
-    lat = module_latency(report_dir, module)
-    assert lat is None, (
-        f"{label}: csynth can now bound {module} ({lat}), so its body is no longer an infinite loop. "
-        f"A bounded body has a firing boundary — measured at 3 idle cycles in "
-        f"plans/witness/task_loop/ — and a converter-facing task must not have one. If the change "
-        f"was deliberate, this file's two calibrations and check_rate all need re-deriving.")
     from waveflow.utils.csynthparse import loop_trip_count
-    loop = _sole_loop(report_dir, module)
+
+    # `_require_looped` carries the "it is bounded now" failure, so this test is left with the half
+    # only it can check: that the loop's trip count really is infinite.  Both live here rather than
+    # in the per-word row because a change of KIND is a different repair from a wrong constant.
+    loop = _require_looped(report_dir, module)
     trip = loop_trip_count(report_dir, module, loop)
     assert trip == "inf", f"{label}: {module}'s loop {loop} reports TripCount={trip}, expected inf"
 
@@ -148,12 +232,8 @@ def test_the_looped_calibration_is_anchored_on_the_rx_ingress():
     Stated separately from the parametrised case so a failure says *which* thing broke: a wrong
     calibration and a wrong declaration are different repairs.
     """
-    if not RX_REPORT.is_dir():
-        pytest.skip(f"no csynth report dir at {RX_REPORT} — run rf_samp_buf_rx_build.py --through csynth")
     mod = "rf_samp_buf_ingress_task_16_1_1024_16_s"
-    if not (RX_REPORT / f"{mod}_csynth.xml").is_file():
-        pytest.skip(f"no report for {mod} — re-run csynth")
-    ii = loop_pipeline_ii(RX_REPORT, mod, _sole_loop(RX_REPORT, mod))
+    ii = loop_pipeline_ii(RX_REPORT, mod, _require_looped(RX_REPORT, mod))
     assert ii == 1, (
         f"the RX ingress's loop no longer achieves II=1 (got {ii}). Everything downstream rests on "
         f"it: check_rate's ceiling is samp_per_word * f_axis / cycles_per_word, and at II=1 that is "
@@ -161,32 +241,24 @@ def test_the_looped_calibration_is_anchored_on_the_rx_ingress():
     assert RfSampBufIngress.cycles_per_word == 1
 
 
-def test_the_bounded_calibration_is_anchored_on_blk_delay():
-    """The control for the **bounded** kind — ``cycles per firing = latency + 1``.
+@pytest.mark.parametrize("label,report_dir,module,declared,words,word_cycles",
+                         BOUNDED_BODIES, ids=[b[0] for b in BOUNDED_BODIES])
+def test_the_declared_firing_overhead_is_the_one_csynth_measured(
+        label, report_dir, module, declared, words, word_cycles):
+    """The control for the **bounded** kind — what a firing costs beyond its per-word work.
 
-    That calibration still has a live user: ``BlkDelay`` in ``examples/rf_blk_delay`` is a bounded
-    body (its firing is one block) and declares a fixed ``fire_overhead`` derived from latency.  It is
-    the anchor here for the same reason the ingress used to be: if it moves, ``latency + 1`` is wrong
-    wherever it is still applied.
+    ``BlkDelay`` is the only bounded body left, and it is the anchor here for the reason the ingress
+    used to be: if this row moves, the bounded calibration is wrong wherever it is still applied.
 
     It is deliberately a *different module in a different example* from the looped anchor, so one
     report going stale cannot take both calibrations down at once.
     """
-    from examples.rf_blk_delay.rf_blk_delay import BLKSIZE, SAMP_PER_WORD, BlkDelay
-
-    rd = (_EX / "rf_blk_delay" / "rf_blk_delay_proj" / "solution1" / "syn" / "report")
-    mod = f"blk_delay_task_{SAMP_PER_WORD * 16}_{SAMP_PER_WORD}_{BLKSIZE}_4_16_s"
-    if not rd.is_dir() or not (rd / f"{mod}_csynth.xml").is_file():
-        pytest.skip(f"no report for {mod} — run rf_blk_delay_build.py --through csynth")
-    lat = module_latency(rd, mod)
-    assert lat is not None, (
-        f"{mod} is now unbounded, so `latency + 1` has nothing to anchor on and this file has lost "
-        f"its bounded control. Find another bounded body or retire the calibration.")
-    words = BLKSIZE // SAMP_PER_WORD
-    overhead = int(lat["latency_max"]) - words * BlkDelay.word_cycles
-    assert overhead == BlkDelay.fire_overhead, (
-        f"csynth reports latency {lat['latency_max']} for a {words}-word firing, so the fixed cost is "
-        f"{overhead}; BlkDelay declares fire_overhead={BlkDelay.fire_overhead}.")
+    lat = _require_bounded(report_dir, module)
+    overhead = int(lat["latency_max"]) - words * word_cycles
+    assert overhead == declared, (
+        f"{label}: csynth reports latency {lat['latency_max']} for a {words}-word firing at "
+        f"word_cycles={word_cycles}, so the fixed cost is {overhead}; the module declares "
+        f"fire_overhead={declared}. Correct the DECLARATION from the report.")
 
 
 def test_the_loader_declares_no_per_firing_cost_because_csynth_cannot_bound_it():

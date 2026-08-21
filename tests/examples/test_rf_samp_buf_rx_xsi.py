@@ -32,7 +32,7 @@ from examples.rf_samp_buf_rx.rf_samp_buf_rx import (
 )
 from examples.rf_samp_buf_rx.rf_samp_buf_rx_build import RTL_FILES, TOP, WRAPPER
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_samp_buf_rx"
 #: The hand-written main: the generated one runs and dumps, this one also prints the model counters,
@@ -87,6 +87,10 @@ def run(tmp_path_factory) -> tuple[dict[str, int], str]:
     _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
     proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
     _require(proj.is_dir(), f"no csynth RTL at {proj} — run rf_samp_buf_rx_build.py --through csynth")
+    # SECOND INSTANCE OF THIS CLASS: `*_proj/` is gitignored build output, and a gate that
+    # compares a cycle count against RTL it did not produce reports "a real behaviour change"
+    # when the truth is a stale artifact. See rtl_staleness().
+    _require(rtl_staleness(ROOT, 'rf_samp_buf_rx') is None, rtl_staleness(ROOT, 'rf_samp_buf_rx') or "")
     for f in RTL_FILES:
         _require((xsi / f).is_file(), f"{xsi / f} — run rf_samp_buf_rx_build.py --through codegen_dut")
 
