@@ -1,7 +1,7 @@
 ---
 title: Choosing a sample buffer
 parent: RF converters
-nav_order: 2
+nav_order: 9
 audience: python
 api: [RfShotBuf, RfStreamBuf, Rfdc]
 summary: "Which sample buffer a design should use, decided by one checkable question: does anything read the buffer while something else is writing it? A no removes the feedback channel entirely — the whole memory is payload and there is nothing to size. A yes buys unbounded duration and changeable-mid-flight data, and costs headroom, a reverse channel, and every failure mode this section's rules exist to describe. Includes what each buffer cannot do, and the mistake of reaching for the continuous one because it sounds more capable."
@@ -14,9 +14,13 @@ summary: "Which sample buffer a design should use, decided by one checkable ques
 > and so the design has something to be checked against. Where a claim here rests on a measurement,
 > it says so; where it rests on the design, it says that too.
 
-A design that talks to a converter needs somewhere to put samples. There are two buffers, and they
-are not a fast one and a slow one, or an old one and a new one. They differ in exactly one property,
-and everything else follows from it.
+**First: you may not need one.** An `Rfdc` gives you an ordinary AXI-Stream, and consuming it
+directly is the right answer for anything that processes samples as they arrive — a filter, a
+detector, a decimator. See [adding an RF path](./python/quickstart.md). A buffer is what you add when
+you need to *hold* samples rather than pass them through.
+
+If you do need one, there are two, and they are not a fast one and a slow one or an old one and a new
+one. They differ in exactly one property, and everything else follows from it.
 
 ## The question that decides it
 
