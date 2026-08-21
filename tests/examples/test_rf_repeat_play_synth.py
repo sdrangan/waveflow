@@ -21,12 +21,14 @@ import pytest
 from waveflow.utils.csynthparse import module_latency
 
 _EX = Path(__file__).resolve().parents[2] / "examples"
-REPORT = _EX / "rf_repeat_play" / "rf_tx_stream_proj" / "solution1" / "syn" / "report"
+REPORT = _EX / "rf_repeat_play" / "rf_repeat_play_proj" / "solution1" / "syn" / "report"
 
 #: The synthesized module names carry their template arguments, so they name the **gated geometry** —
 #: ``<W=16, TAG_W=64, SPW=1, MAXIF=4, POLLS=4, IDX_W=16>`` for the loader and
 #: ``<W=16, TAG_W=64, SPW=1, IDX_W=16>`` for the player.  A change in geometry changes these names, which is the intended kind of loud.
 LOADER = "rf_tx_loader_task_16_64_1_4_4_16_s"
+#: The in-fabric scheduler — see tests/examples/test_rf_circ_play.py for what it does.
+SCHED = "rf_circ_play_task_16_64_64_2_4_16_s"
 PLAYER = "rf_tx_player_task_16_64_1_16_s"
 
 
@@ -174,6 +176,19 @@ class TestThePlayerIsALoopAndTheLoopIsWhatMatters:
 class TestTheLoaderBodyIsStillPerFiring:
     """One command per firing — bounded, unlike the player, and that difference is deliberate."""
 
+    def test_the_scheduler_is_also_an_unbounded_loop(self):
+        """``rf_circ_play_task`` is a ``while (1)`` too, for the same reason the player is.
+
+        It is the third task in the design and the one that used to be a testbench. An unbounded body
+        again: no latency, and its four counted loops (the waveform load and the three payload
+        streams) each pipeline on their own.
+        """
+        _require_dir()
+        if not _report_file(SCHED).is_file():
+            pytest.skip(f"no report for {SCHED} in {REPORT} — re-run csynth")
+        assert module_latency(REPORT, SCHED) is None, (
+            "the scheduler reports a bounded latency, so it is not a while (1) body any more")
+
     def test_the_loader_body_is_bounded_but_data_dependent(self):
         """Bounded, and dominated by the payload loop it wraps.
 
@@ -188,8 +203,8 @@ class TestTheLoaderBodyIsStillPerFiring:
         if got is None:
             pytest.skip(f"{LOADER}: the report says <Latency>undef</Latency> — a stale or foreign "
                         f"artifact, not a measurement of this checkout")
-        assert int(got["latency_min"]) == 8, (
-            "the empty-poll path (harvest, find no command, return) costs 8 cycles")
+        assert int(got["latency_min"]) == 5, (
+            "the empty-poll path (harvest, find no command, return) costs 5 cycles")
         assert int(got["latency_max"]) > 60000, (
             "the worst case is a full 16-bit nsamp through the payload loop; a small number here "
             "means the loop stopped being counted by nsamp")
@@ -227,10 +242,10 @@ class TestCsynthOkIsNotEvidence:
         assert verilog.is_dir(), f"no RTL at {verilog}"
         mods = {p.stem for p in verilog.glob("*.v")}
 
-        for task in ("loader", "player"):
-            assert any(f"rf_tx_{task}_task" in m for m in mods), (
-                f"the {task} task module is absent from {sorted(mods)} — a DCE'd task still "
-                f"reports csynth OK")
+        for task in ("rf_tx_loader_task", "rf_tx_player_task", "rf_circ_play_task"):
+            assert any(task in m for m in mods), (
+                f"the {task} module is absent from {sorted(mods)} — a DCE'd task still reports "
+                f"csynth OK, and with THREE tasks there are three things that could vanish")
 
         # The two internal channels are 64-bit -- a TaggedSamp (34 bits) and a TxStatus (50)
         # PACKED INTO A WORD each by the generated pack_to_uint, which is exactly what the pysim twin

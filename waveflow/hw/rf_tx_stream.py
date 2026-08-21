@@ -86,7 +86,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
-from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.reverse_stream import (
     MAX_IN_FLIGHT,
@@ -771,3 +771,263 @@ class RfTxStream(FreeRunMod):
         neither is visible in the played data, and both are silent when violated.
         """
         self.loader.to_player.assert_clean()
+
+
+# ---------------------------------------------------------------------------
+# The circular player — the scheduler that used to be a host
+# ---------------------------------------------------------------------------
+
+
+#: Responses harvested per :class:`RfCircPlay` firing.  **Bounded and compile-time in the C++ twin**
+#: (rule 3), where it unrolls into that many ``read_nb`` calls.
+RESP_POLLS = MAX_IN_FLIGHT
+
+#: Commands :class:`RfCircPlay` keeps outstanding.  **Two, and it is derived rather than tuned.**
+#:
+#: The verdict for play *k* arrives when its LAST sample plays, at slot ``base + k*PERIOD + nsamp``.
+#: Command *k+1* must be loaded before slot ``base + (k+1)*PERIOD``.  So blocking on each response
+#: leaves a lead of ``PERIOD - nsamp`` slots: ample when ``PERIOD > nsamp + load time``, and
+#: **negative** at back-to-back replay (``PERIOD == nsamp``), where a blocking body underruns by
+#: construction.  Two covers both, and it is the configuration ``scratchpad/chain/``'s ``chain_c2``
+#: measured as the only non-wedging one.  ``max_in_flight`` bounds it from the other side: the loader
+#: refuses with :data:`TX_NO_SLOT` rather than accepting a command it cannot remember.
+LEAD = 2
+
+
+@dataclass
+class RfCircPlay(FreeRunMod):
+    """Replay a fixed waveform on a fixed period, forever.  **The scheduler, in fabric.**
+
+    Stage 1's testbench problem was that this behaviour is *reactive*: it issues ``start_now``, waits
+    for the ``TxResp`` to learn where the waveform landed, and schedules every later play at
+    ``samp_start + k*PERIOD``.  A stimulus that depends on the DUT's own output cannot be written
+    into a vector file before the run.
+
+    **It moved into the DUT for a design reason, not a tooling one.**  A reactive BFM was perfectly
+    possible — ``XsiSimObj`` is a cycle-accurate FSM interface and ``AxiMmReadSlave`` already reacts
+    to the DUT — but no practical host could keep up: a scheduler issuing a command every ``period``
+    samples at hundreds of MSa/s is fabric work.  Putting it in fabric also avoids a second model,
+    which is the dual-modelling trap this arc has paid for repeatedly.
+
+    The testbench's whole job becomes: push ``nsamp`` words once.  That is ``AxisMaster`` with an
+    ``in_bundle`` — the BFM that already exists, doing the one thing it is good at.
+
+    **A two-port BRAM would be simpler, and that is the point.**  For this behaviour alone, a modulo
+    counter and a memory would do it — no command, no response, no scheduling.  But Example 1 exists
+    to exercise the TX path, so it has to *go through* the TX path: ``TxCmd`` in, in-band payload
+    behind it, one ``TxResp`` per command, ``start_now`` resolved by the player.  A simpler
+    implementation would be a better product and a worse test.
+
+    **The private array is not the BRAM this redesign removed.**  That was a BRAM *shared between two
+    tasks*, which has no handshake, which forced the out-of-band progress channel, whose
+    data-dependent spin is what Vitis will not pipeline.  This one is local storage inside a single
+    task: nothing else reads it, there is no channel, no progress pointer, no ``MARGIN``, no spin.
+    """
+
+    bitwidth: HwParam[int] = SAMP_BW
+    #: Samples in one play.
+    nsamp: HwParam[int] = 64
+    #: Slots between successive play **starts**.  ``== nsamp`` is back-to-back replay.
+    period: HwParam[int] = 64
+    lead: HwParam[int] = LEAD
+    resp_polls: HwParam[int] = RESP_POLLS
+    clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.bitwidth)
+        self.wave_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_wave_in", bitwidth=w,
+                                     has_tlast=True)
+        self.cmd_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_cmd_out", bitwidth=w,
+                                      has_tlast=True)
+        self.samp_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_samp_out", bitwidth=w,
+                                       has_tlast=True)
+        self.resp_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_resp_in", bitwidth=w,
+                                     has_tlast=True)
+        for ep in (self.wave_in, self.cmd_out, self.samp_out, self.resp_in):
+            self.add_endpoint(ep)
+
+        self.state = "LOAD"
+        self.wave = None
+        #: Where play 0 actually landed — learned from the ``start_now`` response and from nothing
+        #: else.  Every later slot is arithmetic on this one.
+        self.base = 0
+        self.k = 0
+        self.tid = 0
+        self.outstanding = 0
+        #: Commands answered ``TX_TRANSMITTED`` / ``TX_TOO_LATE`` / ``TX_NO_SLOT``.
+        self.n_played = 0
+        self.n_late = 0
+        self.n_no_slot = 0
+        #: Waveforms accepted, including the first.  A reload returns to ``FIRST``.
+        self.n_reloads = 0
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("rf_circ_play_task", "rf_circ_play_task.h",
+                          ("wave_in", "cmd_out", "samp_out", "resp_in"),
+                          template_args=(int(self.bitwidth), int(self.nsamp), int(self.period),
+                                         int(self.lead), int(self.resp_polls), IDX_BW))
+
+    @sim_only
+    def count(self, name: str) -> None:
+        setattr(self, name, getattr(self, name) + 1)
+
+    # -- the body ---------------------------------------------------------------------------------
+
+    def run_iter(self) -> ProcessGen[None]:
+        """One pass of the C body's ``while (1)``: LOAD, then FIRST, then REPEAT forever."""
+        if self.state == "LOAD":
+            self.wave = yield from self.wave_in.get(nwords_max=int(self.nsamp))
+            self.count("n_reloads")
+            self.state = "FIRST"
+
+        elif self.state == "FIRST":
+            # start_now: the PLAYER assigns the slots and the response reports where they went.
+            # This is the only way to learn "now" -- and the reason there is no zero-length probe
+            # command, which would never resolve and would leak a pending slot forever.
+            yield from self._issue(start_now=True, samp_start=0)
+            r = yield from self.resp_in.get(TxResp)   # blocking HERE is correct: nothing else to do
+            # THE TRAIN STARTS AT k = LEAD, NOT k = 1, and that is forced rather than chosen.  The
+            # response for the start_now window arrives when its LAST sample has played -- i.e. at
+            # slot `base + nsamp`, which at back-to-back replay (period == nsamp) is exactly slot
+            # `base + 1*period`.  Play 1 is therefore ALREADY GONE at the moment the scheduler first
+            # learns where play 0 landed, and issuing it produces a guaranteed TX_TOO_LATE.
+            #
+            # Measured before it was fixed: plays alternated played/late forever -- n_played 21,
+            # n_late 20 -- because every second command was aimed at a slot that had just passed.
+            # `lead` is the right constant because it was derived from the same relationship: it is
+            # how many periods of work the scheduler keeps in flight, so it is also how far ahead
+            # the first schedulable slot is.
+            self.base, self.k, self.state = int(r.samp_start), int(self.lead), "REPEAT"
+            self.count("n_played" if int(r.status) == TX_TRANSMITTED else "n_late")
+
+        else:                                          # REPEAT
+            # A replacement waveform, checked WITHOUT blocking: a blocking check would stall the
+            # schedule waiting for a waveform that may never come.
+            new = yield from self.wave_in.get_nb(nwords_max=int(self.nsamp))
+            if new is not None:
+                # BACK TO FIRST, not REPEAT.  It must re-learn "now" with start_now, because the old
+                # `base` describes a schedule the new waveform was never part of.  Continuing the
+                # old k sequence would place the first new play at a slot chosen for the old one --
+                # which is the "recovery on the original grid" property, applied in the one case
+                # where the original grid is the WRONG answer.
+                self.wave, self.state = new, "FIRST"
+                self.count("n_reloads")
+                return
+            got = yield from self.poll_resp()
+            if self.outstanding < int(self.lead):
+                yield from self._issue(start_now=False,
+                                       samp_start=self.base + self.k * int(self.period))
+                self.outstanding += 1
+                self.k += 1
+            elif not got:
+                # NOTHING HAPPENED THIS PASS: `lead` commands are already out and no response has
+                # come back.  The C body's `while (1)` spins on real cycles here; `get_nb` advances
+                # no simulated time, so a pysim twin that just returned would be a ZERO-TIME
+                # INFINITE LOOP -- SimPy would re-enter forever at one timestamp and the run would
+                # never end.  Measured, not reasoned about: it hung.
+                #
+                # One fabric cycle is the honest charge, and it is what the loader's NO_CMD poll
+                # already pays for the same reason.
+                yield self.timeout(self.clk.period)
+
+    def poll_resp(self) -> ProcessGen[int]:
+        """Up to :attr:`resp_polls` responses.  **BOUNDED** — never drain-to-empty (rule 3).
+
+        Deliberately NOT called ``harvest``.  :meth:`TxLoader.harvest` pops the *pending FIFO* and
+        emits a ``TxResp`` — it maintains a correspondence.  This has no FIFO and no correspondence:
+        it counts responses and frees slots.  Same shape, different job, and one name for both would
+        send a reader looking for a FIFO that is not there.
+        """
+        got = 0
+        for _ in range(int(self.resp_polls)):
+            r = yield from self.resp_in.get_nb(TxResp)
+            if r is None:
+                break
+            got += 1
+            # The C twin decrements without a guard, because the loader guarantees one response per
+            # accepted command; if it underflowed, that guarantee had already broken and a counter is
+            # the wrong place to find out.  pysim is where an invariant is cheap to check, so it is
+            # checked here.
+            assert self.outstanding > 0, (
+                f"{self.name}: a TxResp arrived with nothing outstanding — the loader's "
+                f"one-response-per-accepted-command guarantee has broken")
+            self.outstanding -= 1
+            st = int(r.status)
+            self.count("n_played" if st == TX_TRANSMITTED
+                       else ("n_no_slot" if st == TX_NO_SLOT else "n_late"))
+        return got
+
+    def _issue(self, *, start_now: bool, samp_start: int) -> ProcessGen[None]:
+        """One ``TxCmd``, then its payload in-band behind it.  Both writes blocking, and correct:
+        on TX a stall costs the producer time and loses nothing."""
+        c = TxCmd()
+        c.tid = int(self.tid) & 0xFFFF
+        c.samp_start = int(samp_start) % (1 << IDX_BW)
+        c.start_now = int(bool(start_now))
+        c.nsamp = int(self.nsamp)
+        yield from self.cmd_out.write(c)
+        yield from self.samp_out.write(np.asarray(self.wave, dtype=np.uint64))
+        self.tid += 1
+
+    @property
+    def counters(self) -> dict[str, Any]:
+        return {"n_played": self.n_played, "n_late": self.n_late, "n_no_slot": self.n_no_slot,
+                "n_reloads": self.n_reloads, "outstanding": self.outstanding, "base": self.base,
+                "k": self.k}
+
+
+@dataclass
+class RfRepeatPlay(FreeRunMod):
+    """:class:`RfCircPlay` + :class:`RfTxStream` — the whole transmitter, scheduler included.
+
+    Two boundary ports: a waveform in, samples out.  Everything between them is the design.
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_repeat_play"
+
+    bitwidth: HwParam[int] = SAMP_BW
+    samp_per_word: HwParam[int] = 1
+    nsamp: HwParam[int] = 64
+    period: HwParam[int] = 64
+    blk_samp: HwParam[int] = 64
+    max_in_flight: HwParam[int] = MAX_IN_FLIGHT
+    lead: HwParam[int] = LEAD
+    fwd_depth: int = 0
+    slot_period: float | None = None
+    clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.bitwidth)
+        self.sched = RfCircPlay(sim=self.sim, name=f"{self.name}_sched", bitwidth=w,
+                                nsamp=int(self.nsamp), period=int(self.period),
+                                lead=int(self.lead), clk=self.clk)
+        self.tx = RfTxStream(sim=self.sim, name=f"{self.name}_tx", bitwidth=w,
+                             samp_per_word=int(self.samp_per_word), blk_samp=int(self.blk_samp),
+                             max_in_flight=int(self.max_in_flight), fwd_depth=int(self.fwd_depth),
+                             slot_period=self.slot_period, clk=self.clk)
+        self.add_comp(self.sched)
+        self.add_comp(self.tx)
+
+        # The three channels that used to be testbench wires.  `cmd` and `samp` are deep enough for
+        # `lead` commands in flight; `resp` for the responses those produce.
+        depth = int(self.nsamp) * (int(self.lead) + 1)
+        for nm, master, slave, d in (
+                ("cmd", self.sched.cmd_out, self.tx.cmd_in, 4 * (int(self.lead) + 1)),
+                ("samp", self.sched.samp_out, self.tx.samp_in, depth),
+                ("resp", self.tx.resp_out, self.sched.resp_in, 4 * (int(self.lead) + 1))):
+            ifc = StreamIF(name=f"{self.name}_{nm}", sim=self.sim, clk=self.clk, bitwidth=w,
+                           depth=d)
+            ifc.bind("master", master)
+            ifc.bind("slave", slave)
+            self.add_if(ifc)
+            setattr(self, f"{nm}_if", ifc)
+
+        self.boundary = ["wave_in", "samp_out"]
+        self.wave_in = self.sched.wave_in
+        self.samp_out = self.tx.samp_out
+
+    @property
+    def counters(self) -> dict[str, Any]:
+        return {**self.tx.counters, **{f"sched_{k}": v for k, v in self.sched.counters.items()}}

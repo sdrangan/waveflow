@@ -63,6 +63,7 @@ from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noq
 from waveflow.hw.rf_samp_buf import IDX_BW, pack_samples  # noqa: E402
 from waveflow.hw.rf_sample_if import RFSampIF  # noqa: E402
 from waveflow.hw.rf_tx_stream import (  # noqa: E402
+    LEAD,
     SAMP_BW,
     TX_MISALIGNED,
     TX_NO_SLOT,
@@ -70,20 +71,24 @@ from waveflow.hw.rf_tx_stream import (  # noqa: E402
     TX_TOO_LATE,
     TX_TRANSMITTED,
     TX_ZERO_LEN,
+    RfRepeatPlay,
     RfTxStream,
     TxCmd,
     TxResp,
 )
+from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.simulation.rf_tb import RfDataSink  # noqa: E402
 from waveflow.simulation.simobj import ProcessGen  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
+from waveflow.simulation.stream_tb import StreamDriver  # noqa: E402
 
 __all__ = [
     "BLK_SAMP", "MAX_IN_FLIGHT", "NREPEAT", "NSAMP", "N_BLK", "PERIOD", "SAMP_BASE", "SAMP_BW",
     "START_LEAD", "FIRST_PLAY_BLK", "first_play_offset",
     "SAMP_RATE", "TX_MISALIGNED", "TX_NO_SLOT", "TX_STREAM_SCHEMA_CLASSES", "TX_TOO_LATE",
-    "TX_TRANSMITTED", "TX_ZERO_LEN", "RepeatPlayHost", "RfRepeatPlayTB", "RfTxStream", "TxCmd",
-    "TxResp", "played_samples", "responses", "run_pysim", "waveform",
+    "TX_TRANSMITTED", "TX_ZERO_LEN", "LEAD", "RepeatPlayHost", "RfCircPlayTB", "RfRepeatPlay",
+    "RfRepeatPlayTB", "RfTxStream", "TxCmd", "TxResp", "played_samples", "responses",
+    "run_circ_pysim", "run_pysim", "waveform", "write_wave_scenario",
 ]
 
 # ---------------------------------------------------------------------------
@@ -503,3 +508,127 @@ def first_play_offset(played: np.ndarray, wave: np.ndarray | None = None) -> int
         if np.array_equal(played[i:i + n], w[:n]):
             return i
     return -1
+
+
+# ---------------------------------------------------------------------------
+# The circular-player graph — the host is now IN the DUT
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RfCircPlayTB(FreeRunMod):
+    """:class:`~waveflow.hw.rf_tx_stream.RfRepeatPlay` + a converter + a one-shot waveform source.
+
+    **The testbench does one thing: push ``NSAMP`` words once.**  That is
+    :class:`~waveflow.simulation.stream_tb.StreamDriver` with an ``in_bundle`` — the same file-driven
+    BFM the XSI harness uses — so the two backends provably start from identical bytes.
+
+    Everything that used to be :class:`RepeatPlayHost` is inside the DUT now.  What that costs is
+    worth stating: the fault injections that drove Stage 1's assertions 2 and 3 (*a window aimed into
+    the past*, *a starved host*) were **testbench** behaviours, and a testbench that only pushes a
+    waveform cannot express them.  They keep their coverage from :class:`RfRepeatPlayTB`, which
+    drives the *same* loader and player from pysim — a different stimulus for one design, not a
+    second model of one behaviour.
+    """
+
+    potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
+
+    nsamp: int = NSAMP
+    period: int = PERIOD
+    blk_samp: int = BLK_SAMP
+    n_blk: int = N_BLK
+    samp_rate: float = SAMP_RATE
+    axis_freq: float = RFSOC4X2_CLK_HZ
+    nbits: int = SAMP_BW
+    samp_per_word: int = 1
+    max_in_flight: int = MAX_IN_FLIGHT
+    lead: int = LEAD
+    #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
+    n_cycles: int = 60000
+    axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from examples.rf_loopback.rfdc import Rfdc
+
+        self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=float(self.axis_freq))
+        self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
+        self.slot_period = 1.0 / float(self.samp_rate)
+
+        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1,
+                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+        w = self.rfdc.axis_bitwidth
+        self.dut = RfRepeatPlay(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
+                                samp_per_word=int(self.samp_per_word), nsamp=int(self.nsamp),
+                                period=int(self.period), blk_samp=int(self.blk_samp),
+                                max_in_flight=int(self.max_in_flight), lead=int(self.lead),
+                                slot_period=self.slot_period, clk=self.axis_clk)
+        self.wave_drv = StreamDriver(sim=self.sim, name=f"{self.name}_wave_drv", bitwidth=w,
+                                     in_bundle="vectors/wave", has_tlast=True)
+        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim)
+        for c in (self.dut, self.rfdc, self.wave_drv, self.sink):
+            self.add_comp(c)
+
+        self.dac_if = RFSampIF(name=f"{self.name}_dac_if", sim=self.sim, samp_clk=self.samp_clk,
+                               n_ch=1, blksize=int(self.blk_samp), n_blk=int(self.n_blk))
+        self.dac_if.bind("tx", self.rfdc.tx_rf)
+        self.dac_if.bind("rx", self.sink.rf_ep)
+        self.add_if(self.dac_if)
+        self.dut.tx.player.tx_edge = self.dac_if
+
+        wave_axis = StreamIF(name=f"{self.name}_wave_axis", sim=self.sim, clk=self.axis_clk,
+                             bitwidth=w, depth=4 * int(self.nsamp))
+        wave_axis.bind("master", self.wave_drv.stream_ep)
+        wave_axis.bind("slave", self.dut.wave_in)
+        self.add_if(wave_axis)
+
+        self.dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
+                                 bitwidth=w, depth=4 * int(self.blk_samp))
+        self.dac_axis.bind("master", self.dut.samp_out)
+        self.dac_axis.bind("slave", self.rfdc.tx_stream)
+        self.add_if(self.dac_axis)
+
+    @property
+    def blk_period(self) -> float:
+        return int(self.blk_samp) / float(self.samp_rate)
+
+    @property
+    def run_until(self) -> float:
+        return (int(self.n_blk) + 2) * self.blk_period
+
+
+def write_wave_scenario(root, nsamp: int = NSAMP) -> None:
+    """Materialize ``<root>/vectors/wave`` — the ONE burst both backends play.
+
+    One writer, so the RTL run and the pysim golden cannot start from different bytes.
+    """
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    write_burst_bundle([waveform(int(nsamp))], Path(root) / "vectors" / "wave")
+
+
+def run_circ_pysim(root=None, **kw) -> RfCircPlayTB:
+    """Build the circular-player graph, run it to the metronome's horizon, return the testbench."""
+    import tempfile
+
+    tb = RfCircPlayTB(name="ctb", sim=Simulation(), **kw)
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(root or tmp)
+        write_wave_scenario(base, nsamp=int(tb.nsamp))
+        tb.wave_drv.root = base
+        sim = tb.sim
+        for obj in sim._sim_objs:
+            obj.pre_sim()
+        for obj in sim._sim_objs:
+            proc = obj.run_proc()
+            if proc is not None:
+                sim.env.process(proc)
+        try:
+            sim.env.run(until=tb.run_until)
+        except Exception:
+            for obj in sim._sim_objs:
+                obj.error_cleanup()
+            raise
+        for obj in sim._sim_objs:
+            obj.post_sim()
+    return tb

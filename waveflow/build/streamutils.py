@@ -211,11 +211,13 @@ class RfTxStreamStep(Buildable):
         return {
             "rf_tx_loader_task": self._output_dir / "rf_tx_loader_task.h",
             "rf_tx_player_task": self._output_dir / "rf_tx_player_task.h",
+            "rf_circ_play_task": self._output_dir / "rf_circ_play_task.h",
         }
 
     def generate(self, key: str, config: BuildConfig) -> str:
         names = {"rf_tx_loader_task": "rf_tx_loader_task.h",
-                 "rf_tx_player_task": "rf_tx_player_task.h"}
+                 "rf_tx_player_task": "rf_tx_player_task.h",
+                 "rf_circ_play_task": "rf_circ_play_task.h"}
         if key not in names:
             raise KeyError(f"Unknown RfTxStreamStep output key: {key!r}")
         src_path = _SRC_DIR / names[key]

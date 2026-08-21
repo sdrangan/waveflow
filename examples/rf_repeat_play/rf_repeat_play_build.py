@@ -38,19 +38,21 @@ from waveflow.build.streamutils import (  # noqa: E402
     StreamUtilsStep,
 )
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
-from waveflow.hw.rf_tx_stream import RfTxStream  # noqa: E402
+from waveflow.hw.rf_tx_stream import RfRepeatPlay  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 
 from examples.rf_repeat_play.rf_repeat_play import (  # noqa: E402
     BLK_SAMP,
     MAX_IN_FLIGHT,
+    NSAMP,
+    PERIOD,
     SAMP_BW,
     TX_STREAM_SCHEMA_CLASSES,
 )
-from waveflow.hw.rf_tx_stream import TAG_BW  # noqa: E402
+from waveflow.hw.rf_tx_stream import LEAD, TAG_BW  # noqa: E402
 
 #: The generated kernel's name — read off ``RfTxStream.cpp_kernel_name``, never restated.
-TOP = "rf_tx_stream"
+TOP = "rf_repeat_play"
 INCLUDE_DIR = "include"
 GEN = GEN_DIR
 
@@ -77,7 +79,8 @@ SOLUTION_CONFIG = ("config_rtl -reset state",)
 def elab_params(samp_per_word: int = SYNTH_SAMP_PER_WORD) -> dict:
     """The elaboration parameters.  ``bitwidth`` is derived so the two cannot disagree."""
     return {"bitwidth": SAMP_BW * int(samp_per_word), "samp_per_word": int(samp_per_word),
-            "blk_samp": BLK_SAMP, "max_in_flight": MAX_IN_FLIGHT}
+            "nsamp": NSAMP, "period": PERIOD, "blk_samp": BLK_SAMP,
+            "max_in_flight": MAX_IN_FLIGHT, "lead": LEAD}
 
 
 def generate(out_dir: Path = HERE, samp_per_word: int = SYNTH_SAMP_PER_WORD) -> None:
@@ -99,7 +102,7 @@ def generate(out_dir: Path = HERE, samp_per_word: int = SYNTH_SAMP_PER_WORD) -> 
     if failed:
         raise RuntimeError(f"gen-include failed: {failed}")
 
-    comp = elaborate(RfTxStream, dict(elab), name=TOP)
+    comp = elaborate(RfRepeatPlay, dict(elab), name=TOP)
     spec = composite_top_spec(comp, width=word_bw)
     gen = out_dir / GEN
     gen.mkdir(parents=True, exist_ok=True)
