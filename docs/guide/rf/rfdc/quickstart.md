@@ -4,8 +4,8 @@ parent: Rfdc
 grand_parent: RF converters
 nav_order: 1
 audience: python
-api: [Rfdc, RFSampIF, StreamIF, Clock, axis_bitwidth, samp_per_word, nbits]
-summary: "What to write when a design needs an RF conversion path. The complete wiring for a receive path in one block — one Rfdc, one RFSampIF on the sample side, one ordinary StreamIF on the fabric side — then the four numbers you have to decide, the one that is derived for you, and what you can do with the AXI-Stream that comes out: consume it directly, or put a sample buffer behind it."
+api: [Rfdc, RfdcSampWord, Rfsoc4x2SampWord, RFSampIF, StreamIF, Clock, axis_bitwidth]
+summary: "What to write when a design needs an RF conversion path. The complete wiring for a receive path in one block — one Rfdc, one RFSampIF on the sample side, one ordinary StreamIF on the fabric side — then the three numbers you have to decide, the word type that carries the rest, the width that is derived for you, and what you can do with the AXI-Stream that comes out: consume it directly, or put a sample buffer behind it."
 ---
 
 # Adding an RF path
@@ -18,12 +18,13 @@ to write.
 ```python
 from waveflow.hw.rf_sample_if import RFSampIF
 from waveflow.hw.interface import StreamIF
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 from waveflow.simulation.clock import Clock
 
 samp_clk = Clock(freq=256e6)      # the converter's sample rate
 axis_clk = Clock(freq=250e6)      # your fabric clock — a different domain
 
-rfdc = Rfdc(name="rfdc", sim=sim, nbits=16, samp_per_word=4,
+rfdc = Rfdc(name="rfdc", sim=sim, word=Rfsoc4x2SampWord.specialize(samp_per_word=4),
             full_scale=1.0, t0_rx=0.0, t0_tx=0.0)
 
 # --- the RF side: where samples come from -------------------------------
@@ -42,14 +43,20 @@ adc_axis.bind("slave", my_dut.s_in)
 That is the whole thing. Transmit is the mirror: bind `my_dut.s_out` to `rfdc.tx_stream`, and
 `rfdc.tx_rf` to whatever consumes samples.
 
-## The four numbers you decide
+## The three numbers you decide
 
 | | what it is | how to pick it |
 |---|---|---|
-| `nbits` | bits per sample on the wire | the converter's — 16 for an RFSoC AXI-Stream slot |
-| `samp_per_word` | samples in one AXI-Stream beat | see below; it and `nbits` fix the bus width |
+| `samp_per_word` | samples in one AXI-Stream beat | see below — the arithmetic decides it |
 | `samp_clk` freq | the converter's sample rate | the hardware's |
 | `axis_clk` freq | your fabric clock | yours |
+
+Everything else about the sample layout — how many bits the converter *resolves*, how wide the slot
+each sample rides in is, real or I/Q, and the two packing rules a serializer cannot know — is carried
+by the **word type**, and a board preset already states it:
+`Rfsoc4x2SampWord.specialize(samp_per_word=4)` is **14 effective bits in a 16-bit slot**, which is
+what an RFSoC 4x2's converters are. See
+[the sample geometry is one type](./converter.md#the-sample-geometry-is-one-type).
 
 **`samp_per_word` is the one that needs thought**, and the arithmetic decides it rather than taste:
 
@@ -64,12 +71,12 @@ would.
 ## The one you do not decide
 
 ```python
-rfdc.axis_bitwidth        # samp_per_word × nbits  (× 2 for I/Q)
+rfdc.axis_bitwidth        # word.samp_per_word × word.bits_per_samp_pack  (× 2 for I/Q)
 ```
 
-**Read it off the converter; never restate it.** At `nbits=16, samp_per_word=4` that is a 64-bit
-beat carrying four samples. Your logic is built against this width, and taking it from the `Rfdc`
-means the two cannot disagree.
+**Read it off the converter; never restate it.** At four 16-bit slots to a beat that is a 64-bit beat
+carrying four samples. Your logic is built against this width, and taking it from the `Rfdc` — which
+in turn takes it from its word type — means the three cannot disagree.
 
 You also never tell the `Rfdc` its sample rate. It *reads* it from the `RFSampIF`'s clock when you
 bind. Each quantity is declared once, where it physically belongs.

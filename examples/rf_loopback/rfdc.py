@@ -26,12 +26,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from waveflow.hw.fixpoint import FixedField, from_real, to_real
+from waveflow.hw.arrayutils import array, write_array
+from waveflow.hw.fixpoint import from_real, to_real
 from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
+from waveflow.hw.rfdc_samp_word import RfdcSampWord
 from waveflow.simulation.simobj import ProcessGen
-from waveflow.utils.fixputils import OMode, QMode
 
 
 @dataclass
@@ -56,15 +57,23 @@ class Rfdc(HwModule):
     n_rx: HwParam[int] = 1
     #: RF transmit (DAC) channels.  Stage 1: 1.
     n_tx: HwParam[int] = 1
-    #: Converter resolution in bits — the width of one sample on the wire.
-    nbits: HwParam[int] = 16
-    #: ``0`` = real samples, ``1`` = interleaved I/Q (doubles the bits per sample slot).  Stage 1
-    #: implements real only.
-    iq_mode: HwParam[int] = 0
-    #: Samples per AXIS word — the **structural** integer, because a sample cannot straddle a slot.
-    #: Port width is ``samp_per_word * nbits`` (x2 for interleaved I/Q).  There is deliberately no
-    #: ``spc``: everything else at this boundary is a *rate ratio*, derived and possibly fractional.
-    samp_per_word: HwParam[int] = 4
+
+    # -- the packing convention, as one type -----------------------------------------------------
+    #: **The AXIS word layout**, and the only place this converter's sample geometry is stated.
+    #:
+    #: It replaces the three loose parameters ``nbits`` / ``samp_per_word`` / ``iq_mode`` that used
+    #: to live here, and there is deliberately **no convenience path back**: keeping either name
+    #: beside the type would be a second source of truth for the same geometry, which is exactly how
+    #: ``nbits`` came to mean both the converter's resolution *and* its slot width.  A design that
+    #: wants a different geometry specializes a word type — ``Rfsoc4x2SampWord.specialize(
+    #: samp_per_word=4)`` for this project's board — and the converter reads everything off it.
+    #:
+    #: A plain field rather than a :class:`~waveflow.hw.hw_module.HwParam`, and that is a mechanical
+    #: fact rather than a judgement: ``HwModule.__post_init__`` wraps every ``HwParam`` value in
+    #: ``HwParamValue(int(value))``, so a *type*-valued parameter cannot be one.  Nothing is lost —
+    #: an ``Rfdc`` declares no ``kernel_task``, so none of its parameters ever reached a template
+    #: argument; they were build-time structure for the **models**, which read them here.
+    word: type[RfdcSampWord] = RfdcSampWord.specialize(samp_per_word=4)
 
     # -- init-time knobs -------------------------------------------------------------------------
     #: The amplitude reference quantization is relative to: a sample of ``+full_scale`` maps to the
@@ -124,11 +133,18 @@ class Rfdc(HwModule):
         # underruns to report.  A path with zero channels is simply absent: no rate check (pre_sim),
         # no process (run_proc), no BFM model (bfm_model).  Its endpoints still EXIST, unbound, which
         # costs nothing and keeps the endpoint set a property of the class rather than of a build.
-        if int(self.iq_mode) != 0:
+        if not (isinstance(self.word, type) and issubclass(self.word, RfdcSampWord)):
+            raise TypeError(
+                f"Rfdc.word must be an RfdcSampWord subclass — the packing convention as a type, "
+                f"not a width. Got {self.word!r}. Build one with RfdcSampWord.specialize(...) or a "
+                f"board preset such as Rfsoc4x2SampWord.specialize(samp_per_word=4).")
+        if self.word.iq_mode:
             raise NotImplementedError(
-                f"Rfdc stage 1 implements real samples only (iq_mode=0), got {int(self.iq_mode)}. "
-                f"Interleaved I/Q doubles the bits per sample slot and needs the complex bundle "
-                f"format, which is stage 2/4 work.")
+                f"Rfdc stage 1 implements real samples only (iq_mode=0), got a word declaring "
+                f"interleaved I/Q ({self.word.describe()}). Interleaved I/Q doubles the bits per "
+                f"sample slot and needs the complex bundle format, which is stage 2/4 work. The "
+                f"WORD type can already express it — iq_order is declared and tested there — so "
+                f"what is missing is the converter's two halves, not the packing rule.")
         if not self.full_scale or float(self.full_scale) <= 0:
             raise ValueError(
                 f"Rfdc.full_scale must be a positive amplitude reference, got {self.full_scale!r}. "
@@ -137,14 +153,15 @@ class Rfdc(HwModule):
         w = self.axis_bitwidth
         if w > 64:
             raise ValueError(
-                f"Rfdc: AXIS word is samp_per_word * nbits = {int(self.samp_per_word)} * "
-                f"{int(self.nbits)} = {w} bits, wider than the 64-bit stream word.")
+                f"Rfdc: the AXIS word is {self.word.describe()}, wider than the 64-bit stream word.")
 
-        #: The element type one sample is quantized to: ``ap_fixed<nbits, 1>`` over [-1, 1), rounding
-        #: and **saturating** — a converter clips, it does not wrap.  Integer-backed, so it is
-        #: bit-exact with the Vitis type rather than a float approximation of it.
-        self.SampType = FixedField.specialize(int(self.nbits), 1, signed=True,
-                                              q_mode=QMode.AP_RND, o_mode=OMode.AP_SAT)
+        #: The element type one sample is quantized to — read off the word type, which is the only
+        #: place the converter's *effective* resolution is stated.  ``ap_fixed<bits_per_samp, 1>``
+        #: over [-1, 1), rounding and **saturating** (a converter clips, it does not wrap), and
+        #: integer-backed so it is bit-exact with the Vitis type rather than a float approximation
+        #: of it.  It is deliberately NOT derived from the word width: a 14-bit converter on a
+        #: 16-bit bus quantizes to 14.
+        self.SampType = self.word.samp_type()
 
         self.rx_rf = RFSampIFRx(sim=self.sim, name=f"{self.name}_rx_rf")
         self.rx_stream = StreamIFMaster(sim=self.sim, name=f"{self.name}_rx_stream",
@@ -169,26 +186,17 @@ class Rfdc(HwModule):
 
     @property
     def axis_bitwidth(self) -> int:
-        """AXIS word width in bits: ``samp_per_word * nbits``, doubled for interleaved I/Q.
+        """AXIS word width in bits — **read off** :attr:`word`, never restated here.
 
-        **``samp_per_word`` counts SAMPLES, and what a sample is depends on :attr:`iq_mode`** — real
-        values when it is 0, complex (I,Q) pairs when it is 1.  A complex sample occupies two ``nbits``
-        slots, so the same ``samp_per_word`` needs twice the bus:
+        The same single-source discipline ``samp_rate`` follows: the quantity is declared once, on
+        the object it is a property of, and the converter reads it.  A second expression here could
+        disagree with the type the serializers are handed, and the disagreement would be silent.
 
-        ==========  =======================  =========================================
-        ``iq_mode`` one beat carries         at ``samp_per_word=4``, ``nbits=16``
-        ==========  =======================  =========================================
-        0           4 **real** samples       64-bit word
-        1           4 **complex** samples    128-bit word — over the 64-bit ceiling
-        ==========  =======================  =========================================
-
-        So an I/Q design fits the same bus by halving ``samp_per_word``: ``samp_per_word=2``,
-        ``nbits=16``, ``iq_mode=1`` is two complex samples in 64 bits.  Same information density
-        either way; the parameter just counts what the design thinks in.
-
-        See ``docs/guide/rf/rfdc/axis_side.md``.
+        The arithmetic lives on the word type: ``samp_per_word * bits_per_samp_pack``, doubled for
+        interleaved I/Q, because a complex sample occupies two slots.  So an I/Q design fits the
+        same 64-bit bus by **halving** ``samp_per_word``.  See ``docs/guide/rf/rfdc/axis_side.md``.
         """
-        return int(self.samp_per_word) * int(self.nbits) * (2 if int(self.iq_mode) else 1)
+        return int(self.word.bitwidth)
 
     # -- bind-time: read the rate, push the epoch ------------------------------------------------
 
@@ -251,20 +259,20 @@ class Rfdc(HwModule):
                 raise RuntimeError(
                     f"Rfdc '{self.name}': the {path} AXIS endpoint has no bound interface/clock.")
             f_axis = float(ep.interface.clk.freq)
-            cap = int(self.samp_per_word) * f_axis
+            cap = int(self.word.samp_per_word) * f_axis
             if rate > cap:
                 raise ValueError(
                     f"Rfdc '{self.name}': {path} sample rate {rate:g} Hz exceeds what the AXIS port "
-                    f"can carry — samp_per_word * f_axis = {int(self.samp_per_word)} * {f_axis:g} = "
+                    f"can carry — samp_per_word * f_axis = {int(self.word.samp_per_word)} * {f_axis:g} = "
                     f"{cap:g} samples/s. Raise samp_per_word, widen the port, or lower the rate.")
-        if int(self.n_rx) > 0 and int(self.rx_blksize) % int(self.samp_per_word):
+        if int(self.n_rx) > 0 and int(self.rx_blksize) % int(self.word.samp_per_word):
             raise ValueError(
                 f"Rfdc '{self.name}': ADC blksize {int(self.rx_blksize)} is not a multiple of "
-                f"samp_per_word {int(self.samp_per_word)}; a sample cannot straddle a word.")
-        if int(self.n_tx) > 0 and int(self.tx_blksize) % int(self.samp_per_word):
+                f"samp_per_word {int(self.word.samp_per_word)}; a sample cannot straddle a word.")
+        if int(self.n_tx) > 0 and int(self.tx_blksize) % int(self.word.samp_per_word):
             raise ValueError(
                 f"Rfdc '{self.name}': DAC blksize {int(self.tx_blksize)} is not a multiple of "
-                f"samp_per_word {int(self.samp_per_word)}.")
+                f"samp_per_word {int(self.word.samp_per_word)}.")
 
     # -- the XSI realization ---------------------------------------------------------------------
 
@@ -291,18 +299,26 @@ class Rfdc(HwModule):
         design fixes twice — and the one that could disagree.  Fractional by nature: 256/(4*300) MHz
         is 0.2133, which no integer expresses, and it is the ``RateTick`` accumulator's input.
         """
-        return float(samp_rate) / (int(self.samp_per_word) * self.f_axis(ep))
+        return float(samp_rate) / (int(self.word.samp_per_word) * self.f_axis(ep))
 
     def _fmt_literal(self) -> str:
-        """``RfdcFormat{nbits, samp_per_word, full_scale}`` as a C++ **literal**.
+        """``RfdcFormat{bits_per_samp, samp_per_word, full_scale, bits_per_samp_pack,
+        justify_shift}`` as a C++ **literal**.
+
+        Five fields, and the last two are the effective/container split reaching the twin: a
+        ``RfdcFormat`` that carried one width could only model a part whose resolution equals its
+        slot width.  ``RfdcFormat`` is **aggregate-initialized** from this string, so the order here
+        is the struct's declaration order and the two must not drift — the appended-not-interleaved
+        shape in ``xsi_rfdc_samp.h`` is what keeps that cheap to check.
 
         A literal and not an identifier, deliberately: the harness promotes any bare identifier in
         ``extra_args`` to a ``Harness(...)`` parameter typed ``const std::vector<uint64_t>&``, and an
         ``RfdcFormat`` is not that.  Recorded as a trap in ``plans/adc_model.md`` before it could
         bite; this is the shape that avoids it with no generator change.
         """
-        return (f"RfdcFormat{{{int(self.nbits)}, {int(self.samp_per_word)}, "
-                f"{float(self.full_scale)!r}}}")
+        return (f"RfdcFormat{{{int(self.word.bits_per_samp)}, {int(self.word.samp_per_word)}, "
+                f"{float(self.full_scale)!r}, {int(self.word.bits_per_samp_pack)}, "
+                f"{int(self.word.justify_shift())}}}")
 
     def bfm_model(self):
         """**Two** models, one per data path, each spanning the cut.
@@ -377,19 +393,36 @@ class Rfdc(HwModule):
           gives it.  Being 4.7x too fast is exactly what hid the loss.
         """
         fs = float(self.full_scale)
-        word_rate = float(self.rx_samp_rate) / int(self.samp_per_word)
+        word_rate = float(self.rx_samp_rate) / int(self.word.samp_per_word)
         while True:
             blk = yield from self.rx_rf.get()
             samples = np.asarray(blk.data, dtype=np.float64)[0]     # n_rx == 1 (stage 1)
-            quantized = from_real(samples / fs, self.SampType)
             self.n_adc_blk += 1
-            yield from self.rx_stream.offer(quantized, word_rate=word_rate)
+            yield from self.rx_stream.offer(self._pack(samples / fs), word_rate=word_rate)
 
     def _dac_proc(self) -> ProcessGen[None]:
         """One AXIS burst in → unpack → dequantize → RF block out."""
         fs = float(self.full_scale)
         while True:
-            quantized = yield from self.tx_stream.get(self.SampType, count=int(self.tx_blksize))
-            samples = to_real(quantized) * fs
+            slots = yield from self.tx_stream.get(self.word.slot_type(),
+                                                  count=int(self.tx_blksize))
             self.n_dac_blk += 1
-            yield from self.tx_rf.put(samples.reshape(1, -1))
+            yield from self.tx_rf.put((self._unpack(slots) * fs).reshape(1, -1))
+
+    # -- quantize/justify/pack, and its inverse ---------------------------------------------------
+    #
+    # TWO steps, and they are different questions.  Quantization is the CONVERTER's, at
+    # ``bits_per_samp``; the slot layout is the BUS's, at ``bits_per_samp_pack``.  What joins them is
+    # the justification shift, which is the one rule the serializers cannot know — the word type owns
+    # it (:meth:`~waveflow.hw.rfdc_samp_word.RfdcSampWord.to_slots`) and this module never open-codes
+    # a mask or a stride.  Word<->slot goes through ``write_array``/``read_array`` exactly as before.
+
+    def _pack(self, normalized: np.ndarray):
+        """Normalized reals in [-1, 1) → the AXIS words one block becomes."""
+        stored = from_real(normalized, self.SampType)
+        return write_array(self.word.to_slots(stored), elem_type=self.word.slot_type(),
+                           word_bw=self.axis_bitwidth)
+
+    def _unpack(self, slots) -> np.ndarray:
+        """Container slots → normalized reals — the exact inverse of :meth:`_pack` on the grid."""
+        return to_real(array(self.SampType, self.word.from_slots(slots)))

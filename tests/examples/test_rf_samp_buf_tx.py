@@ -43,6 +43,7 @@ from examples.rf_samp_buf_tx.rf_samp_buf_tx import (
 )
 from waveflow.hw.rf_samp_buf import BUF_DEPTH, unpack_samples
 from waveflow.hw.rf_samp_buf_tx import RfSampBufLoader, RfSampBufPlayer, RfSampBufTx
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord as WORD
 from waveflow.simulation.simulation import Simulation
 
 #: Samples of the primed window the gate checks.  The two OK commands place 1024 samples from
@@ -175,7 +176,8 @@ def test_a_window_that_is_not_a_whole_number_of_words_is_refused():
     """
     for spw, want_status in ((1, RF_SAMP_BUF_OK), (2, RF_SAMP_BUF_OK),
                              (4, RF_SAMP_BUF_MISALIGNED)):
-        tb = run_pysim(tb=RfSampBufTxTB(name=f"al{spw}", sim=Simulation(), samp_per_word=spw))
+        tb = run_pysim(tb=RfSampBufTxTB(name=f"al{spw}", sim=Simulation(),
+                                        word=WORD.specialize(samp_per_word=spw)))
         got = {t: s for t, s, _n in responses(tb)}
         assert got[4] == want_status, (
             f"at samp_per_word={spw} command 4 (nsamp=6) came back {got[4]}, expected {want_status}")
@@ -189,7 +191,8 @@ def test_a_window_that_is_not_a_whole_number_of_words_is_refused():
 @pytest.fixture(scope="module")
 def tb_by_width() -> dict:
     """One run per word geometry.  Same commands, same ramp, same played samples."""
-    return {spw: run_pysim(tb=RfSampBufTxTB(name=f"w{spw}", sim=Simulation(), samp_per_word=spw))
+    return {spw: run_pysim(tb=RfSampBufTxTB(name=f"w{spw}", sim=Simulation(),
+                                            word=WORD.specialize(samp_per_word=spw)))
             for spw in (1, 2, 4)}
 
 

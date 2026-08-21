@@ -58,12 +58,14 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
 
 from examples.rf_loopback.rfdc import Rfdc  # noqa: E402
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 
 __all__ = [
     "BUF_DEPTH", "HORIZON_MARGIN", "IDX_BW", "RF_SAMP_BUF_MISALIGNED", "RF_SAMP_BUF_OK",
     "RF_SAMP_BUF_TOO_LATE", "TX_SCHEMA_CLASSES", "RfSampBufLoader", "RfSampBufPlayer",
     "RfSampBufTx", "TxCmd", "TxResp", "pack_samples", "sdiff", "unpack_samples",
-    "GATE_COMMANDS", "LATE_TIDS", "PRIMED_AT", "SAMP_BASE", "SAMP_BW", "TX_BUF_DEPTH",
+    "CODE_BW", "GATE_COMMANDS", "LATE_TIDS", "PRIMED_AT", "SAMP_BASE", "SAMP_BW", "SAMP_STEP",
+    "TX_BUF_DEPTH",
     "XSI_BLKSIZE",
     "XSI_NBLK", "XSI_NSAMP",
     "RfSampBufTxTB", "command_frame", "expected_responses", "find_loaded_run",
@@ -86,9 +88,21 @@ __all__ = [
 #: does not merely reduce margin; it makes the design not work.
 TX_BUF_DEPTH = 2048
 
-#: Sample width in bits.  A *sample* is always 16 bits here; ``samp_per_word`` changes how many ride
-#: one AXIS word, not how wide one is.
-SAMP_BW = 16
+#: Slot width in bits.  A *sample* always rides a 16-bit AXIS slot here; ``samp_per_word`` changes
+#: how many of them ride one word, not how wide one is.  **Read off the board's word type**, which
+#: is where "a ZU48DR slot is 16 bits" is now stated once.
+SAMP_BW = int(Rfsoc4x2SampWord.bits_per_samp_pack)
+#: Effective converter bits — the code space a sample value lives in, which is NOT the slot width.
+CODE_BW = int(Rfsoc4x2SampWord.bits_per_samp)
+
+#: The gap between adjacent converter codes, **as a slot value**.  The ZU48DR resolves 14 of a slot's
+#: 16 bits, and the model's (declared, still-unconfirmed) ``justify`` puts them at the top, so the two
+#: low bits of a slot are not the converter's to set: reachable values step by 4.
+#:
+#: A ramp stepping by 1 stopped round-tripping the moment ``bits_per_samp`` and ``bits_per_samp_pack``
+#: became two numbers -- three of every four values would round away, and this example's golden would
+#: be measuring the quantizer instead of the design.  Read off the word type so it follows the part.
+SAMP_STEP = 1 << Rfsoc4x2SampWord.justify_shift()
 
 #: The gate scenario: 8 DAC blocks of 256 samples = 2048 sample periods of playout against a
 #: 1024-word buffer, so the play pointer laps the buffer and the circular wrap is exercised rather
@@ -104,8 +118,14 @@ SAMP_BASE = 1000
 
 
 def ramp_samples(nsamp: int = XSI_NSAMP, base: int = SAMP_BASE) -> np.ndarray:
-    """The sample values a command carries: ``base + idx`` at sample index ``idx``."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
+    """The sample values a command carries: converter code ``base + idx`` at sample index ``idx``,
+    expressed as the **slot** value that carries it — ``(base + idx) * SAMP_STEP``.
+
+    Still a ramp, so a played word still names the slot it came from; the scale factor is the
+    justification, and it is the one thing about this example that 14-in-16 changed.
+    """
+    codes = (np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << CODE_BW)
+    return ((codes * SAMP_STEP) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 #: Sample index the first command targets.  **Not zero, and the reason is the design**: the player
@@ -209,9 +229,11 @@ class RfSampBufTxTB(FreeRunMod):
     #: NOT a free parameter: see :meth:`check_rate`.
     samp_rate: float = 64e6
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = SAMP_BW
-    #: Samples per AXIS word.  **1 is the gated configuration.**
-    samp_per_word: int = 1
+    #: **The converter's packing convention**, as one type — samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  Replaces the ``nbits`` /
+    #: ``samp_per_word`` pair, one of which meant two things.  ``samp_per_word = 1`` is the **gated
+    #: configuration.**
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=1)
     depth: int = TX_BUF_DEPTH
     horizon_margin: int = HORIZON_MARGIN
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
@@ -240,18 +262,18 @@ class RfSampBufTxTB(FreeRunMod):
         self.blk_period = int(self.blksize) / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1,
-                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+                         word=self.word)
         w = self.rfdc.axis_bitwidth
         self.dut = RfSampBufTx(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                               samp_per_word=int(self.samp_per_word), depth=int(self.depth),
+                               samp_per_word=int(self.word.samp_per_word), depth=int(self.depth),
                                horizon_margin=int(self.horizon_margin),
                                # pysim's quantum on the converter edge is a BLOCK: Rfdc's DAC
                                # process takes one blksize burst per event.  A modelling shape only
                                # -- the rate is charged per word either way.
-                               blk_words=int(self.blksize) // int(self.samp_per_word),
+                               blk_words=int(self.blksize) // int(self.word.samp_per_word),
                                # The metronome, handed over directly: pysim cannot deliver it
                                # through the wire.  See RfSampBufPlayer.dac_word_rate.
-                               dac_word_rate=float(self.samp_rate) / int(self.samp_per_word),
+                               dac_word_rate=float(self.samp_rate) / int(self.word.samp_per_word),
                                clk=self.axis_clk)
         #: Fraction of the player's capacity this scenario asks for — checked, not assumed.
         self.rate_util = self.check_rate()
@@ -313,7 +335,7 @@ def run_pysim(root=None, tb: "RfSampBufTxTB | None" = None, cmds=GATE_COMMANDS) 
     tb = tb or RfSampBufTxTB(name="tb", sim=Simulation())
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
-        write_scenario(base, samp_per_word=int(tb.samp_per_word), cmds=cmds)
+        write_scenario(base, samp_per_word=int(tb.word.samp_per_word), cmds=cmds)
         for part in (tb.cmd_drv, tb.sink, tb.resp_sink):
             part.root = base
         tb.sim.run_sim()

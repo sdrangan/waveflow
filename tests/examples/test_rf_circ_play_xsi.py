@@ -28,7 +28,6 @@ import pytest
 from examples.rf_repeat_play.rf_repeat_play import (
     LEAD,
     NSAMP,
-    SAMP_BASE,
     SAMP_BW,
     waveform,
 )
@@ -202,7 +201,10 @@ class TestTheRepeatPhaseIsExact:
     def test_the_play_starts_are_exactly_one_period_apart(self, played):
         """Read off the data rather than from a counter: the waveform is a ramp from ``SAMP_BASE``,
         so every occurrence of that value **is** a play start, and their spacing is the schedule."""
-        starts = np.nonzero(played == SAMP_BASE)[0]
+        # ``waveform()[0]``, not ``SAMP_BASE``: a sample VALUE is the slot the converter puts a code
+        # in, and on a 14-in-16 part those differ by the justification.  The waveform is the only
+        # thing that knows the mapping, so the marker comes from it.
+        starts = np.nonzero(played == waveform()[0])[0]
         assert starts.size > 200, f"only {starts.size} play starts in the run"
         assert starts[0] == WANT_LEAD_IN
         assert starts[1] - starts[0] == LEAD * NSAMP, (
@@ -222,8 +224,15 @@ class TestTheRepeatPhaseIsExact:
         """
         train = played[WANT_TRAIN_START:].astype(np.int64)
         diffs = set(np.diff(train).tolist())
-        assert diffs == {1, -(NSAMP - 1)}, (
-            f"the steady-region differences are {sorted(diffs)}, not {{1, {-(NSAMP - 1)}}}. "
+        # DERIVED from the waveform, not written down.  A tiled ramp steps by whatever its own
+        # consecutive samples differ by and wraps by whatever its last-to-first differ by; those were
+        # 1 and -63 while a sample value WAS its index, and they are 4 and -252 now that a value is
+        # the SLOT a 14-bit code sits in.  Reading them off `waveform()` states the claim -- "no
+        # sample lost or repeated" -- instead of a scale factor, so it survives the next such change.
+        w = waveform().astype(np.int64)
+        want = {int(w[1] - w[0]), int(w[0] - w[NSAMP - 1])}
+        assert diffs == want, (
+            f"the steady-region differences are {sorted(diffs)}, not {sorted(want)}. "
             f"Anything else is a lost or repeated sample.")
 
     def test_the_train_is_the_waveform_tiled_bit_exactly(self, played):

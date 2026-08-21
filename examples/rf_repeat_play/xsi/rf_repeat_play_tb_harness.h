@@ -40,7 +40,7 @@ struct Harness {
       : sim(rf_repeat_play_ports::DESIGN_DLL, wdb),
         xsi_tb_dac_if(2),
         wave_in(sim.dut(), rf_repeat_play_ports::wave_in, {}),
-        samp_out(sim.dut(), rf_repeat_play_ports::samp_out, xsi_tb_dac_if, RfdcFormat{16, 1, 1.0}, 0.256, 64),
+        samp_out(sim.dut(), rf_repeat_play_ports::samp_out, xsi_tb_dac_if, RfdcFormat{14, 1, 1.0, 16, 2}, 0.256, 64),
         xsi_tb_dac_if_rx(xsi_tb_dac_if)
     {
         // Every TB-driven input the models above do not themselves drive.  Absent

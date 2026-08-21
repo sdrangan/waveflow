@@ -35,6 +35,7 @@ from examples.rf_samp_buf_rx.rf_samp_buf_rx import (
     captured_words,
     command_bursts,
     expected_capture,
+    SAMP_STEP,
     ramp_samples,
     responses,
     run_pysim,
@@ -47,6 +48,7 @@ from waveflow.hw.rf_samp_buf import (
     samp_type,
     unpack_samples,
 )
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord as WORD
 from waveflow.simulation.simulation import Simulation
 
 
@@ -107,7 +109,12 @@ def test_the_straddling_window_is_contiguous_across_the_boundary(tb):
     seg = got[-nsamp:]
     ramp = ramp_samples()
     assert np.array_equal(seg, ramp[start:start + nsamp])
-    assert np.all(np.diff(seg.astype(np.int64)) == 1), "the seam is where a straddling capture breaks"
+    # ``SAMP_STEP``, not 1: a slot carries a converter CODE, and on a 14-in-16 part the code sits
+    # justified inside it, so consecutive codes are SAMP_STEP apart on the wire.  Asserting the step
+    # rather than the literal 1 keeps the contiguity claim and adds one: the justification survived
+    # the whole path, converter to buffer to sink.
+    assert np.all(np.diff(seg.astype(np.int64)) == SAMP_STEP), (
+        "the seam is where a straddling capture breaks")
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +225,7 @@ def tb_by_width() -> dict:
     out = {}
     for spw in (1, 2, 4):
         out[spw] = run_pysim(tb=RfSampBufRxTB(name=f"tb{spw}", sim=Simulation(),
-                                              samp_per_word=spw))
+                                              word=WORD.specialize(samp_per_word=spw)))
     return out
 
 
@@ -309,7 +316,7 @@ def test_a_window_that_is_not_a_whole_number_of_words_is_refused():
     real work and is deliberately not done, so the constraint is stated in band by a status code.
     """
     cmds = ((1, 3801, 8), (2, 3800, 7), (3, 3800, 8))     # misaligned start, misaligned len, legal
-    tb = RfSampBufRxTB(name="mis", sim=Simulation(), samp_per_word=4)
+    tb = RfSampBufRxTB(name="mis", sim=Simulation(), word=WORD.specialize(samp_per_word=4))
     run_pysim(tb=tb, cmds=cmds)
     got = responses(tb)
     assert [(t, s) for t, s, _n in got] == [(1, RF_SAMP_BUF_MISALIGNED),

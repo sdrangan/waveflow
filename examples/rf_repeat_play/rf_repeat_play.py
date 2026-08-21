@@ -56,6 +56,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 
 from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ  # noqa: E402
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
 from waveflow.hw.hw_module import HwModule  # noqa: E402
@@ -83,7 +84,8 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver  # noqa: E402
 
 __all__ = [
-    "BLK_SAMP", "MAX_IN_FLIGHT", "NREPEAT", "NSAMP", "N_BLK", "PERIOD", "SAMP_BASE", "SAMP_BW",
+    "BLK_SAMP", "CODE_BW", "MAX_IN_FLIGHT", "NREPEAT", "NSAMP", "N_BLK", "PERIOD", "SAMP_BASE",
+    "SAMP_BW", "SAMP_STEP",
     "START_LEAD", "FIRST_PLAY_BLK", "first_play_offset",
     "SAMP_RATE", "TX_MISALIGNED", "TX_NO_SLOT", "TX_STREAM_SCHEMA_CLASSES", "TX_TOO_LATE",
     "TX_TRANSMITTED", "TX_ZERO_LEN", "LEAD", "RepeatPlayHost", "RfCircPlayTB", "RfRepeatPlay",
@@ -166,9 +168,27 @@ FIRST_PLAY_BLK = 1
 N_BLK = FIRST_PLAY_BLK + NREPEAT
 
 
+#: Effective converter bits — the code space a sample value lives in, which is NOT the slot width
+#: (``SAMP_BW``, imported above, is the 16-bit AXIS slot and is unchanged).
+CODE_BW = int(Rfsoc4x2SampWord.bits_per_samp)
+
+#: The gap between adjacent converter codes, **as a slot value**.  The ZU48DR resolves 14 of a slot's
+#: 16 bits, and the model's (declared, still-unconfirmed) ``justify`` puts them at the top, so the two
+#: low bits of a slot are not the converter's to set: reachable values step by 4.  A waveform stepping
+#: by 1 stopped round-tripping the moment ``bits_per_samp`` and ``bits_per_samp_pack`` became two
+#: numbers.
+SAMP_STEP = 1 << Rfsoc4x2SampWord.justify_shift()
+
+
 def waveform(nsamp: int = NSAMP, base: int = SAMP_BASE) -> np.ndarray:
-    """The one waveform, replayed every period.  ``base + i`` at position *i* within the play."""
-    return ((np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << SAMP_BW)).astype(np.uint64)
+    """The one waveform, replayed every period: converter code ``base + i`` at position *i*,
+    expressed as the **slot** value that carries it — ``(base + i) * SAMP_STEP``.
+
+    Still a ramp, so a played sample still names its position within the play; the scale factor is
+    the justification.
+    """
+    codes = (np.arange(int(nsamp), dtype=np.int64) + int(base)) % (1 << CODE_BW)
+    return ((codes * SAMP_STEP) % (1 << SAMP_BW)).astype(np.uint64)
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +370,11 @@ class RfRepeatPlayTB(FreeRunMod):
     n_blk: int = N_BLK
     samp_rate: float = SAMP_RATE
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = SAMP_BW
-    samp_per_word: int = 1
+    #: **The converter's packing convention**, as one type — samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  Replaces the ``nbits`` /
+    #: ``samp_per_word`` pair, one of which meant two things.  Everything downstream (the DUT's word
+    #: width, the block-to-word arithmetic) is read off it, never restated.
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=1)
     max_in_flight: int = MAX_IN_FLIGHT
     start_lead: int = START_LEAD
     prime_now: int = 1
@@ -372,17 +395,18 @@ class RfRepeatPlayTB(FreeRunMod):
         self.slot_period = 1.0 / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1,
-                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+                         word=self.word)
         w = self.rfdc.axis_bitwidth
         self.dut = RfTxStream(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                              samp_per_word=int(self.samp_per_word),
+                              samp_per_word=int(self.word.samp_per_word),
                               blk_samp=int(self.blk_samp), max_in_flight=int(self.max_in_flight),
                               slot_period=self.slot_period, clk=self.axis_clk)
         self.host = RepeatPlayHost(
             name=f"{self.name}_host", sim=self.sim, nsamp=int(self.nsamp),
             period=int(self.period), nrepeat=int(self.nrepeat),
             max_in_flight=int(self.max_in_flight), start_lead=int(self.start_lead),
-            prime_now=int(self.prime_now), bitwidth=w, samp_per_word=int(self.samp_per_word),
+            prime_now=int(self.prime_now), bitwidth=w,
+            samp_per_word=int(self.word.samp_per_word),
             overrun_in_flight=bool(self.overrun_in_flight), late_tid=self.late_tid,
             starve_from=self.starve_from, starve_plays=int(self.starve_plays),
             probe_zero_len=bool(self.probe_zero_len))
@@ -539,8 +563,11 @@ class RfCircPlayTB(FreeRunMod):
     n_blk: int = N_BLK
     samp_rate: float = SAMP_RATE
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = SAMP_BW
-    samp_per_word: int = 1
+    #: **The converter's packing convention**, as one type — samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  Replaces the ``nbits`` /
+    #: ``samp_per_word`` pair, one of which meant two things.  Everything downstream (the DUT's word
+    #: width, the block-to-word arithmetic) is read off it, never restated.
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=1)
     max_in_flight: int = MAX_IN_FLIGHT
     lead: int = LEAD
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
@@ -556,10 +583,10 @@ class RfCircPlayTB(FreeRunMod):
         self.slot_period = 1.0 / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1,
-                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+                         word=self.word)
         w = self.rfdc.axis_bitwidth
         self.dut = RfRepeatPlay(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                                samp_per_word=int(self.samp_per_word), nsamp=int(self.nsamp),
+                                samp_per_word=int(self.word.samp_per_word), nsamp=int(self.nsamp),
                                 period=int(self.period), blk_samp=int(self.blk_samp),
                                 max_in_flight=int(self.max_in_flight), lead=int(self.lead),
                                 slot_period=self.slot_period, clk=self.axis_clk)

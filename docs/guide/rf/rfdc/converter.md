@@ -4,8 +4,8 @@ parent: Rfdc
 grand_parent: RF converters
 nav_order: 2
 audience: python
-api: [Rfdc, RFSampIFRx, RFSampIFTx, StreamIFMaster, StreamIFSlave, FixedField, axis_bitwidth]
-summary: "How to create an Rfdc: the full parameter list and which kind each parameter is, the four endpoints and which two cross the cut, what the constructor refuses and why, and the bit-exact quantization the model does. The how-to page — the contracts it implies are in the design rules."
+api: [Rfdc, RfdcSampWord, Rfsoc4x2SampWord, RFSampIFRx, RFSampIFTx, StreamIFMaster, StreamIFSlave, FixedField, axis_bitwidth]
+summary: "How to create an Rfdc: the word type that carries its sample geometry, the full parameter list and which kind each parameter is, the four endpoints and which two cross the cut, what the constructor refuses and why, and the bit-exact quantization the model does. The how-to page — the contracts it implies are in the design rules."
 ---
 
 # Instantiating the converter
@@ -15,12 +15,37 @@ two blocks: the TX and RX sample counters must hold a fixed relation, and that i
 converter*, which is also what lets the two grids' time origins have exactly one owner.
 
 ```python
-rfdc = Rfdc(name="rfdc", sim=sim, nbits=16, samp_per_word=4, full_scale=1.0,
-            t0_rx=0.0, t0_tx=0.0)
+rfdc = Rfdc(name="rfdc", sim=sim, word=Rfsoc4x2SampWord.specialize(samp_per_word=4),
+            full_scale=1.0, t0_rx=0.0, t0_tx=0.0)
 ```
 
 That is the whole call. Everything else it needs — the sample rate, the block size — it *reads* off
 the interfaces you bind it to.
+
+## The sample geometry is one type
+
+`word` is a [`RfdcSampWord`](../../../../waveflow/hw/rfdc_samp_word.py) subclass, and it is the only
+place this converter's sample geometry is stated. It replaced three loose parameters — `nbits`,
+`samp_per_word`, `iq_mode` — and there is deliberately **no convenience path back**: keeping either
+name beside the type would be a second source of truth for the same geometry.
+
+| field | what it fixes |
+|---|---|
+| `samp_per_word` | samples one AXIS beat carries (complex ones when `iq_mode`) |
+| `bits_per_samp` | **effective** bits — what the converter resolves, and the quantizer's precision |
+| `bits_per_samp_pack` | **container** bits — the slot one sample occupies on the bus |
+| `iq_mode` | real samples or interleaved I/Q — a statement about *packing*, so it lives here |
+| `justify` | where the effective bits sit inside the container slot |
+| `iq_order` | which of I and Q takes the lower slot |
+
+The last two are rules **a serializer cannot know**; `justify`'s default is an assumption awaiting a
+lab measurement, and [the fabric-side page](./axis_side.md#justify) says so at length.
+
+A board preset is an ordinary subclass restating only what the board fixes, so
+`Rfsoc4x2SampWord.specialize(samp_per_word=4)` keeps the board's sample geometry and asks only for
+the beat width the design wants. **The 4x2 preset is 14-in-16** — 14 effective bits in a 16-bit slot
+— which is what a ZU48DR actually is; see
+[effective vs container](./axis_side.md#effective-vs-container) for what that changed.
 
 ## The four endpoints
 
@@ -44,22 +69,24 @@ to report.
 | parameter | kind | default | what it does |
 |---|---|---|---|
 | `n_rx`, `n_tx` | `HwParam[int]` | 1 | RF channels per direction on the AXIS side |
-| `nbits` | `HwParam[int]` | 16 | converter resolution — the width of one sample on the wire |
-| `iq_mode` | `HwParam[int]` | 0 | `0` real, `1` interleaved I/Q (doubles the bits per sample slot) |
-| `samp_per_word` | `HwParam[int]` | 4 | samples per AXIS word — the **structural** integer |
+| `word` | plain field | 4 × 16-bit | the sample geometry, as a type — see above |
 | `full_scale` | plain field | 1.0 | the amplitude reference quantization is relative to |
 | `t0_rx`, `t0_tx` | plain field | 0.0 | when each tile's sample counter starts |
 
-**The `HwParam` rows set the word layout synthesized logic is built against.** `samp_per_word` is on
-that list because a sample cannot straddle a slot: port width is `samp_per_word · nbits` (×2 for
-interleaved I/Q), and `rfdc.axis_bitwidth` is the number to hand your DUT.
+**`word` is a plain field for a mechanical reason, not a judgement.** `HwModule.__post_init__` wraps
+every `HwParam` value in `HwParamValue(int(value))`, so a *type*-valued parameter cannot be one.
+Nothing is lost: an `Rfdc` declares no `kernel_task`, so none of its parameters ever reached a
+template argument — they were build-time structure for the **models**, which read them off the word.
+
+`rfdc.axis_bitwidth` is the number to hand your DUT, and it is *read* off the word rather than
+restated: `samp_per_word · bits_per_samp_pack`, ×2 for interleaved I/Q.
 
 **`samp_rate` is deliberately not a parameter.** It lives on the RF interface's clock and the
 converter reads it at bind; `t0` travels the other way and is *pushed* onto the interface. Each
 quantity is declared once, where it physically belongs. Two declarations that can disagree is the bug
 both directions exist to avoid.
 
-**There is no `spc`.** `samp_per_word` is the structural integer; everything else at this boundary is
+**There is no `spc`.** `word.samp_per_word` is the structural integer; everything else at this boundary is
 a rate *ratio* — derived, and generally fractional. See
 [connecting the fabric side](./axis_side.md#there-is-no-spc).
 
@@ -77,15 +104,16 @@ Each of these is refused loudly at construction rather than reported later as a 
 | condition | why it raises |
 |---|---|
 | `n_rx > 1` or `n_tx > 1` | whether >1 channel is one AXIS port per channel or one wide port is an open question; it decides how many BFM duals a testbench needs, so it is not settled by default |
-| `iq_mode != 0` | interleaved I/Q needs the complex bundle format |
+| `word` is not an `RfdcSampWord` | it is a type, not a width — a bare `64` is the mistake this catches |
+| `word.iq_mode` | interleaved I/Q needs the complex bundle format. The **word** can already say it, and `iq_order` is tested there; what is missing is the converter's two halves |
 | `full_scale <= 0` | see the note above |
-| `samp_per_word · nbits > 64` | wider than the stream word |
+| `word.bitwidth > 64` | wider than the stream word |
 
 `n_rx = 0` (or `n_tx = 0`) is **not** an error — that is a receive-only or transmit-only tile, and it
 is the configuration a capture design uses.
 
 One more check happens later, at `pre_sim`, because it needs the bound clocks:
-`samp_rate <= samp_per_word · f_axis`. That is the **port's** capacity and not your design's — see
+`samp_rate <= word.samp_per_word · f_axis`. That is the **port's** capacity and not your design's — see
 [rule 4](./rules.md#4-port-capacity-is-not-design-capacity).
 
 ## Bit-exact quantization
@@ -94,13 +122,23 @@ One more check happens later, at `pre_sim`, because it needs the bound clocks:
 hardware will. So the converter quantizes through the integer-backed `FixedField`:
 
 ```python
-self.SampType = FixedField.specialize(nbits, 1, signed=True,
-                                      q_mode=QMode.AP_RND, o_mode=OMode.AP_SAT)
+self.SampType = self.word.samp_type()     # ap_fixed<bits_per_samp, 1, AP_RND, AP_SAT>
 ```
 
-Quantization is `ap_fixed<nbits,1>` with `AP_RND` + `AP_SAT`: `floor(x/full_scale · 2^(nbits-1) +
-0.5)`, clamped. `AP_RND` is round-half-**up**, not half-even and not half-away — `-0.5` stored units
-rounds to `0`. A converter clips; it does not wrap.
+Quantization is `ap_fixed<bits_per_samp,1>` with `AP_RND` + `AP_SAT`:
+`floor(x/full_scale · 2^(bits_per_samp-1) + 0.5)`, clamped. `AP_RND` is round-half-**up**, not
+half-even and not half-away — `-0.5` stored units rounds to `0`. A converter clips; it does not wrap.
+
+**The width is `bits_per_samp`, the effective count — never the container.** A 14-bit converter on a
+16-bit bus quantizes to 14, and reading the slot width here would make the model's quantization noise
+four times finer than the hardware's. That is the defect the word type exists to fix; it was latent
+while a single `nbits` meant both numbers, and on the 4x2 preset it is now fixed rather than merely
+expressible.
+
+Between the quantizer and the bus sits one more step, and it is the only bit manipulation the
+converter does: the stored value is **justified** into its container slot. Word↔slot layout still
+goes through the [generated array serializers](../../vectorization/); the shift is the rule they
+cannot know, and the word type owns it.
 
 The other half of the contract, [packing](./axis_side.md#the-packing-contract), is a property of the
 port rather than of the converter, and lives on the fabric-side page.
@@ -113,6 +151,6 @@ quantize → pack → real RTL → unpack → dequantize → Python comes back *
 ## Next
 
 - [Connecting the RF side](./rf_side.md) — the interface, the sources and sinks, and `t0`.
-- [Connecting the fabric side](./axis_side.md) — packing, `samp_per_word`, and the rate check.
+- [Connecting the fabric side](./axis_side.md) — packing, the word type, and the rate check.
 
 **Source of truth:** `examples/rf_loopback/rfdc.py`, `tests/examples/test_rf_loopback.py`.

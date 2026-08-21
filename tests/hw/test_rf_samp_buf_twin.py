@@ -25,6 +25,7 @@ from examples.rf_samp_buf_rx.rf_samp_buf_rx import RfSampBufRxTB, run_pysim
 from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ, composite_top_spec
 from waveflow.build.elaborate import elaborate
 from waveflow.hw.rf_samp_buf import IDX_BW, RfSampBufIngress, RfSampBufRx
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord as WORD
 from waveflow.simulation.simulation import Simulation
 
 #: The elaboration the RTL gate uses — one sample per word.
@@ -165,8 +166,8 @@ def test_widening_the_word_removes_the_loss():
     Same converter, same scenario — only the geometry changes, and the loss goes away because the
     ingress now absorbs 2 samples per cycle instead of 0.5.
     """
-    assert _dropped_at(OVER_RATE, samp_per_word=1) > 0
-    assert _dropped_at(OVER_RATE, samp_per_word=4) == 0
+    assert _dropped_at(OVER_RATE, word=WORD.specialize(samp_per_word=1)) > 0
+    assert _dropped_at(OVER_RATE, word=WORD.specialize(samp_per_word=4)) == 0
 
 
 def test_the_refusal_message_no_longer_claims_pysim_is_blind():

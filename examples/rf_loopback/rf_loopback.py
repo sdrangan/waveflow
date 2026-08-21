@@ -41,6 +41,7 @@ from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 
 from examples.rf_loopback.rfdc import Rfdc
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord
 
 
 def blk_array(bitwidth: int, nwords: int) -> type:
@@ -203,8 +204,9 @@ class RfSampPassThrough(FreeRunMod):
     #: DUT out of a testbench walk.
     cpp_kernel_name: ClassVar[str | None] = "rf_pass_through"
 
-    #: AXIS word width in bits — ``samp_per_word * nbits`` at the converter.  Read off the
-    #: :class:`~examples.rf_loopback.rfdc.Rfdc` when the testbench builds the graph.
+    #: AXIS word width in bits — the converter's :attr:`~examples.rf_loopback.rfdc.Rfdc.
+    #: axis_bitwidth`, read off it when the testbench builds the graph.  The width follows from the
+    #: converter's :class:`~waveflow.hw.rfdc_samp_word.RfdcSampWord`; nothing here restates it.
     bitwidth: HwParam[int] = 64
     #: Words in one block's burst — ``blksize / samp_per_word``.  Also the internal FIFO's depth:
     #: the ingress must be able to hand off a whole block without waiting on the block stage.
@@ -310,8 +312,12 @@ class RfLoopbackTB(FreeRunMod):
     samp_rate: float = 256e6
     #: AXIS / fabric clock.
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = 16
-    samp_per_word: int = 4
+    #: **The converter's packing convention**, as one type: samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  It replaces the ``nbits`` /
+    #: ``samp_per_word`` pair this testbench used to declare — one of which meant two things.  The
+    #: preset names the board this design targets, so a change to what an RFSoC 4x2 converter *is*
+    #: lands here through the type rather than through a number copied into five examples.
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=4)
     full_scale: float = 1.0
     #: The tiles' epoch — pushed to **both** RF interfaces at bind, so the ADC and DAC grids are
     #: aligned.  That is what MTS gives you, and it is deliberately *not* where the loop's one-block
@@ -334,11 +340,11 @@ class RfLoopbackTB(FreeRunMod):
 
         #: Seconds per block on both RF grids — ``blksize / samp_rate``.
         self.blk_period = int(self.blksize) / float(self.samp_rate)
-        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, nbits=int(self.nbits),
-                         samp_per_word=int(self.samp_per_word), full_scale=float(self.full_scale),
+        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, word=self.word,
+                         full_scale=float(self.full_scale),
                          t0_rx=float(self.t0), t0_tx=float(self.t0))
         w = self.rfdc.axis_bitwidth
-        self.nwords_blk = int(self.blksize) // int(self.samp_per_word)
+        self.nwords_blk = int(self.blksize) // int(self.word.samp_per_word)
 
         self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
                                      nwords_blk=self.nwords_blk, clk=self.axis_clk)
@@ -440,7 +446,7 @@ class RfLoopbackSim:
 
     def _grid_blocks(self) -> list:
         """Random samples drawn **exactly on the converter's quantization grid** —
-        ``m / 2^(nbits-1) * full_scale`` for integer ``m``.
+        ``m / 2^(bits_per_samp-1) * full_scale`` for integer ``m``.
 
         A clean loopback is then *bit*-identical to the input rather than "close", which is what
         makes the packing check strict: a tolerance would hide a packing bug, and packing is what
@@ -451,7 +457,10 @@ class RfLoopbackSim:
         no-op, so rounding and saturation are never exercised.  That is what the sine is for.
         """
         tb = self.tb
-        nb = int(tb.nbits)
+        # The **effective** width, not the slot width: the grid a converter's output lands on is
+        # set by what it resolves.  Reading the container here would put the samples between grid
+        # points on a 14-in-16 part and quietly turn this strict check into a rounding test.
+        nb = int(tb.word.bits_per_samp)
         fs = float(tb.full_scale)
         rng = np.random.default_rng(self.seed)
         lo, hi = -(1 << (nb - 1)), (1 << (nb - 1)) - 1
