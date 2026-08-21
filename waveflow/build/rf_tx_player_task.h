@@ -46,17 +46,65 @@
 // and already counted, at the moment it came due.  Counting it again would double-report one event.
 // The old design's separate too_late counter is redundant under a cumulative status.
 //
+// THE SHAPE IS `while (1)` + `#pragma HLS PIPELINE II=1`, AND THAT IS THE WHOLE THROUGHPUT STORY.
+//
+// The first build of this body had no loop at all -- one slot per firing, letting the hls::task
+// runtime re-fire it, which is what rf_samp_buf_player_task.h does.  That is measurably the wrong
+// shape.  plans/witness/task_loop/ measured both, in RTL:
+//
+//   ply_1  (per-firing)   3.000 cycles/word   399 boundary gaps of 3 cycles, one per firing
+//   ply_w  (`while (1)`)  1.000 cycles/word   no gaps at all
+//
+// The per-firing body pays a fixed re-entry cost on EVERY word; the loop pays it once.  At
+// samp_per_word = 4 and 250 MHz that is the difference between a 333 MSPS design ceiling and the
+// port's own 1000 MSPS.  A body that stops reading for 3 cycles per word also drops converter words
+// at high rates -- see the witness's boundary-loss arithmetic -- while a loop never stops.
+//
+// A `while (1)` BODY REPORTS NO LATENCY AND `TripCount = inf`.  That is correct, not a failure: an
+// unbounded body has no cycles-per-firing to report, and `fire_cycles = latency + 1` is meaningless
+// for it.  Its throughput is measured AT RTL.  Reading csynth's silence as a bad number is how the
+// first pass talked itself into refuting a target it had never measured.
+//
+// IT REACHES II=1 AND IT DOES NOT CLOSE AT 4.0 ns.  Measured: `PipelineII = 1`, depth 4, estimated
+// Fmax 206.95 MHz against the RF arc's 250.  This is a REAL result and it is new -- the witness's
+// `ply_w` body was a BRAM read and a stream write with no decision in it, so it had no such path.
+// The recurrence, quoted from `HLS 200-1016`:
+//
+//     slot --> sub (h.wr - slot) --> icmp --> and --> phi --> phi --> phi --> fwd_read ENABLE
+//     0.853 + 0.853 + 0.287 + 0.476 + 0.476 + 0.427 + 1.460 = 4.8 ns
+//
+// i.e. **whether to read a new sample this cycle depends on whether the held one was consumed,
+// which depends on the compare against `slot`**.  That is a genuine loop-carried dependency, not a
+// coding accident, and shortening the compare only bought 3 MHz (204.00 -> 206.95: writing the
+// three-way test as a raw signed difference removes one `select` level, which is kept because it is
+// also clearer).
+//
+// THE FIX, IDENTIFIED AND NOT BUILT: a two-deep skid.  Read into `h_next` whenever `h_next` is free
+// -- a condition that does NOT involve the compare -- and let the compare only move `h_next` into
+// `h`.  The read enable then depends on last cycle's shift, one level of logic, and the compare
+// falls out of the recurrence.  That is micro-architecture work and it belongs to Stage 3, where the
+// ceiling is the deliverable; Stage 1's job was to build the specified shape and measure it.
+//
+// What it means for the ceiling meanwhile: 1 cycle/word at 207 MHz is 207 MSa/s per sample-per-word,
+// against the per-firing shape's 3 cycles/word at 250 MHz = 83.3.  **2.5x, measured**, and the gap
+// to the port's 250 is a timing problem with a known fix rather than a throughput one.
+//
 // THE RESET TRAP APPLIES TO THIS BODY.  It WRITES (a filler) before it has read anything blocking,
 // and an empty output FIFO always has room — so without a reset its state advances once per reset
 // cycle, and the XSI harness holds reset 16 cycles.  A slot counter that comes out of reset at 16
 // puts every window 16 slots late, for reasons that look nothing like the cause.  pysim cannot see
 // this at all: SimPy has no reset.
 //
-// MEASURED 2026-08-20, Vitis HLS 2025.1: THE PRAGMAS BELOW DID NOT TAKE.  csynth reported
-// "WARNING: [RTGEN 206-101] Register '<name>' is power-on initialization" for every one of them.
-// What closes the trap is `config_rtl -reset state` at the SOLUTION level (see
-// examples/rf_repeat_play/rf_repeat_play_build.py), which takes all 12 registers across both bodies
-// to zero warnings and costs nothing -- the payload loop still schedules at II=1.  They are kept
+// AND `while (1)` DOES NOT MAKE THAT WORSE -- measured, because plans/witness/task_loop/ left
+// "`while (1)` under reset" as an open question and this is the first body in a position to answer
+// it.  See examples/rf_repeat_play/rf_repeat_play_build.py for the numbers.  The shape of the
+// question does change: a per-firing body re-enters its FSM every firing, so its state advances once
+// per firing during reset, whereas a looped body enters once and its state lives in pipeline
+// registers.  What closes it is the same thing either way.
+//
+// MEASURED 2026-08-20, Vitis HLS 2025.1: THE `#pragma HLS reset` LINES BELOW DID NOT TAKE.  csynth
+// reported "WARNING: [RTGEN 206-101] Register '<name>' is power-on initialization" for every one of
+// them.  What closes the trap is `config_rtl -reset state` at the SOLUTION level.  They are kept
 // here because they state the intent at the point it applies, and because a future Vitis may honour
 // them; a build that relies on them ALONE is relying on nothing.
 #include "hls_stream.h"
@@ -113,35 +161,50 @@ static void rf_tx_player_task(hls::stream<TaggedSamp>& fwd, hls::stream<ap_uint<
     // scope trace will not match a simulation, and that is a declared difference rather than a bug.
     const ap_uint<W> filler = 0;
 
-    if (!held && fwd.read_nb(h)) {
-        held = true;
-    }
+    while (1) {
+#pragma HLS PIPELINE II=1
+        if (!held && fwd.read_nb(h)) {
+            held = true;
+        }
 
-    bool resolved = false;
-    ap_uint<2> verdict = RF_TX_PLAYED;
+        bool resolved = false;
+        ap_uint<2> verdict = RF_TX_PLAYED;
+        bool stale = false;
 
-    // `now` means "the next available slot", and the PLAYER assigns it because the player is the
-    // only thing that knows where slot is.  Consecutive `now` samples land on consecutive slots for
-    // free: one sample is consumed per slot, so no base register is needed and there is no
-    // START_NOW_LEAD to derive.  A constant you cannot derive is usually a design smell.
-    ap_int<IDX_W> cmp = 0;
-    if (held && !h.now) {
-        cmp = rf_tx_time_compare<IDX_W>(h.wr, slot);
-    }
+        // `now` means "the next available slot", and the PLAYER assigns it because the player is
+        // the only thing that knows where slot is.  Consecutive `now` samples land on consecutive
+        // slots for free: one sample is consumed per slot, so no base register is needed and there
+        // is no START_NOW_LEAD to derive.  A constant you cannot derive is usually a design smell.
+        // THE COMPARE IS ON THE CRITICAL PATH, so it is written as a raw signed difference and its
+        // sign/zero tested directly, rather than as a `select` feeding a compare.  Measured (Vitis
+        // 2025.1): the `select` between "compare" and "0 because now" cost 0.357 ns *inside* the
+        // recurrence that gates the FIFO read enable.  Same three-way answer, one less level.
+        ap_int<IDX_W> d = rf_tx_time_compare<IDX_W>(h.wr, slot);
+        bool cmp_after = !h.now && (d > 0);        // AFTER
+        bool cmp_before = !h.now && (d < 0);       // BEFORE; anything else is AT
 
-    if (!held) {                                   // nothing loaded: the slot is filled anyway
-        samp_out.write(filler);
-        n_underrun = n_underrun + 1;
-    } else if (cmp > 0) {                          // AFTER — not due yet; keep holding it
-        samp_out.write(filler);
-        n_underrun = n_underrun + 1;
-    } else if (cmp < 0) {                          // BEFORE — its slot has gone; discard, no emit
-        held = false;
-        resolved = h.request_status;
-        verdict = RF_TX_MISSED;
-        // NO write and NO slot++ on this path: the sample is stale, and the slot it missed was
-        // already filled and already counted when it came due.  Falling through to slot++ here
-        // would skip a live slot to bury a dead one.
+        if (!held) {                               // nothing loaded: the slot is filled anyway
+            samp_out.write(filler);
+            n_underrun = n_underrun + 1;
+        } else if (cmp_after) {                    // AFTER — not due yet; keep holding it
+            samp_out.write(filler);
+            n_underrun = n_underrun + 1;
+        } else if (cmp_before) {                   // BEFORE — its slot has gone; discard, no emit
+            held = false;
+            resolved = h.request_status;
+            verdict = RF_TX_MISSED;
+            // NO write and NO slot++ on this path: the sample is stale, and the slot it missed was
+            // already filled and already counted when it came due.  Advancing the slot here would
+            // skip a live one to bury a dead one.
+            stale = true;
+        } else {                                   // AT — this is its slot (or `now`)
+            samp_out.write(h.samp);
+            played_through = slot;
+            held = false;
+            resolved = h.request_status;
+            verdict = RF_TX_PLAYED;
+        }
+
         if (resolved) {
             TxStatus s;
             s.slot = slot;
@@ -152,26 +215,14 @@ static void rf_tx_player_task(hls::stream<TaggedSamp>& fwd, hls::stream<ap_uint<
                 n_status_dropped = n_status_dropped + 1;
             }
         }
-        return;
-    } else {                                       // AT — this is its slot
-        samp_out.write(h.samp);
-        played_through = slot;
-        held = false;
-        resolved = h.request_status;
-        verdict = RF_TX_PLAYED;
-    }
-
-    if (resolved) {
-        TxStatus s;
-        s.slot = slot;
-        s.verdict = verdict;
-        s.played_through = played_through;
-        s.n_underrun = n_underrun;
-        if (!status_out.write_nb(s)) {
-            n_status_dropped = n_status_dropped + 1;
+        // ONE exit test, at the bottom, rather than a `continue` in the middle.  Same behaviour --
+        // a stale sample costs no slot -- but the status write above is then shared by both paths
+        // instead of duplicated, and there is one place where `slot` advances.  A duplicated status
+        // write is how the two paths drift.
+        if (!stale) {
+            slot = slot + 1;
         }
     }
-    slot = slot + 1;
 }
 
 #endif  // WAVEFLOW_RF_TX_PLAYER_TASK_H

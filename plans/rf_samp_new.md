@@ -903,6 +903,244 @@ class TxPlayer(FreeRunMod):
 and the extractor's implicit-capture rule exists precisely to force that to be said out loud rather
 than baked silently into a body.
 
+### The circular player — the host moves into the DUT
+
+Stage 1 hit a testbench problem: the repeat scheduler is **reactive** — it issues `start_now`, waits
+for the `TxResp` to learn where the waveform landed, and schedules every later play at
+`samp_start + k * PERIOD`. A stimulus that depends on the DUT's own output cannot be written into a
+vector file before the run.
+
+**The infrastructure was never the obstacle.** `XsiSimObj` is a cycle-accurate FSM interface —
+`sample()` exists so a BFM can read kernel outputs and decide — and `AxiMmReadSlave` already reacts
+to the DUT. What is file-driven is `AxisMaster` specifically: it plays a `std::vector<uint64_t>`
+loaded in `pre_sim` and takes nothing from the DUT but `TREADY`. A reactive host would be a new
+`XsiSimObj` declared through `bfm_model()`, exactly as `RfdcAdcMaster` already is. Perhaps a hundred
+lines, no framework change.
+
+**We move it into the DUT anyway, and for a design reason rather than a tooling one:** no practical
+host could keep up. A scheduler that must issue a command every `PERIOD` samples at hundreds of
+MSa/s is fabric work. Putting it in fabric also avoids a second model — a reactive BFM and the pysim
+host would be two implementations of one behaviour that must agree, which is the dual-modelling trap
+this arc has paid for repeatedly.
+
+> **The general rule, so the next case does not re-litigate it:**
+>
+> | the host's behaviour | do this |
+> |---|---|
+> | trivial, or genuinely belongs in fabric | **move it into the DUT** — no second model at all |
+> | non-trivial but must stay a host | **reactive BFM** via `bfm_model()`, accepting dual modelling |
+> | known before the run | **a vector file** — which is what capture-replay is |
+>
+> The methodology's real limit is narrower than "reactive hosts cannot be tested". It is
+> **"a reactive host costs you a second model."**
+
+#### Shape
+
+```
+TB (file-driven, ONE-SHOT)              DUT
+  waveform ─▶ wave_in ─▶ circular_player ─▶ TxCmd + payload ─▶ loader ─▶ player ─▶ samp_out
+                              ▲                                   │
+                              └──────────── TxResp ───────────────┘
+```
+
+The testbench's whole job is to push `NSAMP` words once. That is `AxisMaster` with an `in_bundle` —
+**the BFM that already exists**, doing the one thing it is good at.
+
+#### A two-port BRAM would be simpler — and that is the point
+
+For *this behaviour alone*, it would. The PS writes a waveform into port A, the player reads port B
+at `slot % NSAMP`, and there is no command, no response, no `outstanding`, no scheduling at all — a
+modulo counter and a memory. If the goal were "replay a waveform forever", that is the design.
+
+The goal is not that. **Example 1 exists to exercise the TX path, so it has to go through the TX
+path**: `TxCmd` in, in-band payload behind it, one `TxResp` per command, `start_now` resolved by the
+player, `MAX_IN_FLIGHT` bounding the pipe. A simpler implementation would be a better *product* and
+a worse *test*.
+
+Worth writing down because the alternative is genuinely more elegant, and someone reading this later
+will otherwise wonder why a repeat player needs acknowledgements.
+
+#### The private array is not the BRAM we removed
+
+`circular_player_task` holds the waveform in a local array, and that is not a regression. The problem
+this redesign exists to solve was never *"a BRAM"* — it was **a BRAM shared between two tasks**, which
+has no handshake, which forced the out-of-band progress channel, whose data-dependent spin is what
+Vitis will not pipeline.
+
+A private array inside one task is local storage. Nothing else reads it, there is no channel, no
+progress pointer, no `MARGIN`, and no spin. It lowers to a BRAM with no dataflow semantics attached.
+
+#### How far it runs ahead
+
+The verdict for play *k* arrives when its **last sample plays**, at slot
+`base + k*PERIOD + NSAMP`. Command *k+1* must be loaded before slot `base + (k+1)*PERIOD`. So
+blocking on each response leaves a lead of `PERIOD - NSAMP` slots:
+
+- **`PERIOD > NSAMP + load time`** — `LEAD = 1` is enough, and the body can simply block on the
+  response. Simplest, and correct.
+- **`PERIOD ≈ NSAMP`** (back-to-back replay) — a blocking body underruns *by construction*. It must
+  keep `LEAD >= 2` outstanding, harvesting non-blockingly.
+
+**Use `LEAD = 2`.** It covers both, it is the configuration the SOB sandbox measured as the only
+non-wedging one (`scratchpad/chain/`, `chain_c2`), and `MAX_IN_FLIGHT` already bounds it — the loader
+refuses with `TX_NO_SLOT` rather than accepting a command it cannot remember.
+
+#### HLS — hand-written (`waveflow/build/rf_circ_play_task.h`)
+
+Not extractable: a `while (1)`, a private array, a non-blocking reload check. Declared by
+`kernel_task()` on the Python module, shipped by the same build step as the other TX bodies.
+
+```c
+template <int W, int NSAMP, int PERIOD, int LEAD, int IDX_W>
+static void rf_circ_play_task(hls::stream<ap_uint<W> >& wave_in,    // one-shot injection
+                              hls::stream<TxCmdW>&      cmd_out,
+                              hls::stream<ap_uint<W> >& samp_out,   // in-band, behind the command
+                              hls::stream<TxRespW>&     resp_in) {
+    static ap_uint<W>     wave[NSAMP];
+#pragma HLS bind_storage variable=wave type=RAM_2P impl=bram
+    static PlayState      state       = LOAD;
+    static ap_uint<IDX_W> base        = 0;    // where play 0 actually landed
+    static ap_uint<IDX_W> k           = 0;    // which repeat
+    static ap_uint<16>    tid         = 0;
+    static ap_uint<8>     outstanding = 0;
+    static ap_uint<IDX_W> n_played = 0, n_late = 0, n_no_slot = 0;
+
+    while (1) {
+        if (state == LOAD) {
+            for (int i = 0; i < NSAMP; i++) {
+#pragma HLS PIPELINE II=1
+                wave[i] = wave_in.read();          // blocking: nothing is playing yet
+            }
+            state = FIRST;
+        }
+
+        else if (state == FIRST) {
+            // start_now: the PLAYER assigns the slots, and the response reports where they went.
+            // This is the only way to learn "now" -- see the zero-length-probe trap below.
+            issue(tid++, /*start_now=*/1, /*samp_start=*/0);
+            TxResp r = read_resp(resp_in);         // blocking HERE is correct: nothing else to do
+            base  = r.samp_start;
+            k     = 1;
+            state = REPEAT;
+        }
+
+        else /* REPEAT */ {
+            // A replacement waveform, checked WITHOUT blocking -- a blocking check would stall the
+            // schedule waiting for a waveform that may never come.
+            if (!wave_in.empty()) { state = LOAD; continue; }
+
+            poll_resp_nb<POLLS>(resp_in, outstanding, n_played, n_late);   // BOUNDED (rule 3)
+
+            if (outstanding < LEAD) {
+                issue(tid++, /*start_now=*/0, /*samp_start=*/base + k * PERIOD);
+                outstanding++;
+                k++;
+            }
+        }
+    }
+}
+```
+
+`issue()` writes the `TxCmd` then streams `NSAMP` payload words from `wave[]` in a counted II=1 loop.
+Both writes are **blocking, and that is correct** — on TX a stall costs the producer time and loses
+nothing, which is the whole reason this side uses an ack channel rather than credit.
+
+`poll_resp_nb()` is just the bounded poll from rule 3 — nothing more:
+
+```c
+template <int N>
+static void poll_resp_nb(hls::stream<TxRespW>& resp_in, ap_uint<8>& outstanding,
+                         ap_uint<IDX_W>& n_played, ap_uint<IDX_W>& n_late) {
+#pragma HLS INLINE
+    for (int i = 0; i < N; i++) {          // FIXED trip count; unrolls
+        TxResp r;
+        if (!read_resp_nb(resp_in, r)) break;
+        outstanding--;                     // one response per command, so this cannot underflow
+        if (r.status == TRANSMITTED) n_played++; else n_late++;
+    }
+}
+```
+
+**Deliberately NOT called `harvest`.** `TxLoader::harvest` pops the *pending FIFO* and emits a
+`TxResp` — it maintains a correspondence. This has no FIFO and no correspondence: it counts
+responses and frees slots. Same shape, different job, and one name for both would send a reader
+looking for a FIFO that is not there.
+
+`outstanding--` is safe without a guard because the loader guarantees **one response per accepted
+command**; if it ever underflowed, that guarantee had already broken and the counter is the wrong
+place to find out. The pysim twin should assert it anyway — pysim is where an invariant is cheap to
+check.
+
+#### Python model
+
+The pysim twin is the same state machine. It needs no rate model — every write is blocking and the
+pacing comes from the converter's own back-pressure chain (`put` blocks on a bounded `_buf` →
+`_dac_proc` stalls → the AXIS write stalls).
+
+```python
+@dataclass
+class RfCircPlay(FreeRunMod):
+    """Replay a fixed waveform on a fixed period, forever.  The scheduler that used to be a host."""
+
+    nsamp:  HwParam[int] = 64
+    period: HwParam[int] = 256      # slots between successive play STARTS
+    lead:   HwParam[int] = 2        # commands kept outstanding; >= 2 if period ~= nsamp
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.state, self.wave, self.base, self.k, self.tid, self.outstanding = "LOAD", None, 0, 0, 0, 0
+
+    def run_iter(self):
+        if self.state == "LOAD":
+            self.wave = yield from self.wave_in.get(count=int(self.nsamp))   # blocking; nothing plays
+            self.state = "FIRST"
+
+        elif self.state == "FIRST":
+            yield from self._issue(start_now=True, samp_start=0)
+            r = yield from self.resp_in.get(TxResp)      # blocking is correct: nothing else to do
+            self.base, self.k, self.state = int(r.samp_start), 1, "REPEAT"
+            self.count_played()
+
+        else:                                            # REPEAT
+            new = yield from self.wave_in.get_nb(count=int(self.nsamp))   # non-blocking reload
+            if new is not None:
+                self.wave, self.state = new, "FIRST"     # a new waveform re-learns "now"
+                return
+            yield from self._poll_resp()                 # bounded; frees outstanding slots
+            if self.outstanding < int(self.lead):
+                yield from self._issue(start_now=False,
+                                       samp_start=self.base + self.k * int(self.period))
+                self.outstanding += 1
+                self.k += 1
+
+    def _poll_resp(self, n=POLLS):
+        """Up to *n* responses.  BOUNDED — never drain-to-empty (rule 3)."""
+        for _ in range(n):
+            r = yield from self.resp_in.get_nb(TxResp)
+            if r is None:
+                break
+            assert self.outstanding > 0, "a response with no outstanding command: the loader's "                                          "one-per-command guarantee has broken"
+            self.outstanding -= 1
+            self.count_played() if r.status == TRANSMITTED else self.count_late()
+
+    def _issue(self, *, start_now, samp_start):
+        yield from self.cmd_out.write(TxCmd(tid=self.tid, start_now=start_now,
+                                            samp_start=samp_start, nsamp=int(self.nsamp)))
+        yield from self.samp_out.write(self.wave)        # in-band payload, behind the command
+        self.tid += 1
+```
+
+**A replacement waveform returns to `FIRST`, not `REPEAT`.** It must re-learn "now" with `start_now`,
+because the old `base` describes a schedule the new waveform was never part of. Continuing the old
+`k` sequence would place the first new play at a slot chosen for the old one — which is exactly the
+"recovery on the original grid" property Stage 1 asserts, applied in the one case where the original
+grid is the *wrong* answer.
+
+#### Counters
+
+`n_played`, `n_late` (a `TxResp` of `TX_TOO_LATE`), `n_no_slot`, `n_reloads`. `n_late` and
+`n_no_slot` are what Stage 1's assertions 2 and 3 drive off zero.
+
 ### Fidelity — two limits to declare, not discover
 
 **1. pysim cannot see a partially-late block.** The edge either has a block or it does not; the RTL
@@ -995,6 +1233,17 @@ Plus the `can_write_frame()` → `write_frame()` contract asserted rather than t
 
 ### Stage 1 — Example 1: the repeat player (TX only)  ✅ pysim + csynth; ⛔ no RTL gate
 
+> **RESOLVED 2026-08-20 — the scheduler moves into the DUT.** Stage 1 could not reach an RTL gate
+> because the repeat scheduler is reactive and the testbench is file-driven. It is now
+> `rf_circ_play_task` **inside** the design (see *The circular player* under Transmitter), and the
+> testbench does one thing: push `NSAMP` words once through the `AxisMaster` that already exists.
+> Not a workaround — no practical host could issue a command every `PERIOD` samples at these rates.
+>
+> **The other RTL blocker still stands:** `derive_internal_edges` has no case for `AckedStreamIF`.
+> Resolution agreed: it lowers as **two ordinary `StreamIF` edges** — in hardware there is no acked
+> stream, only two FIFOs — via an endpoint that declares its own physical expansion
+> (`physical_endpoints()`), so no walker has to know which kind it is holding.
+
 **`examples/rf_repeat_play`.** The host loads a waveform of `nsamp` samples and replays it forever on
 a fixed period. TX path only, so nothing in the RX half can confuse a diagnosis.
 
@@ -1037,13 +1286,21 @@ survives a gap.
 > | loader payload loop | **`PipelineII = 1`** | `RfSampBufLoader`'s 2 — **the claim, confirmed** |
 > | loader harvest loop | `PipelineII = 3` | bounded at `POLLS = 4` per firing |
 > | loader body | latency 8 .. 65563, **bounded** | `RfSampBufLoader`'s `undef` |
-> | player body | latency 2 → `fire_cycles = 3` | `RfSampBufPlayer`'s 3 — **unchanged** |
+> | player body | *see below — the first build measured the wrong shape* | |
 >
-> **Stage 3's target is wrong as written.** "It should now be 1 cycle/word everywhere" holds for the
-> *loader* and not for the *player*, which comes out at the same 3 the BRAM design has. The ceiling
-> is the `max` over stages, so it is **3**, and the rate bound is `samp_per_word * f_axis / 3` —
-> 83.3 MSa/s at 250 MHz and one sample per word, not the port's 1 GSa/s. Re-derive rather than
-> assume: the loader was the stage that was broken, and the loader is the stage that got fixed.
+> > **RETRACTED (second pass).** The first build of the player had **no loop at all** — a per-firing
+> > body where this file specifies `while (1)` with `#pragma HLS PIPELINE II=1`. Its measured
+> > `latency 2 → fire_cycles 3` reproduces `plans/witness/task_loop/`'s **`ply_1`** exactly (3.000
+> > cycles/word, RTL), which is the shape this design deliberately moved away from. The witness
+> > measured the specified shape too — **`ply_w` at 1.000 cycles/word** — so *"Stage 3's target is
+> > wrong"* and the 83.3 MSa/s ceiling **did not follow from the evidence** and are withdrawn.
+> >
+> > A body with no reported latency is not a body with a bad one. `while (1)` reports
+> > `TripCount = inf` and no latency, which is correct for an unbounded body; its throughput is
+> > measured **at RTL**, never derived from csynth.
+> >
+> > The lesson worth keeping: `fire_cycles = latency + 1` is only meaningful for a **per-firing**
+> > body. Applying it to a body that was supposed to loop measures the mistake, not the design.
 >
 > **The harvest loop's `II = 3` is not the `break`.** `HLS 200-880` names the carried dependence:
 > successive AXI-Stream port writes on `resp_out`, because a `TxResp` is three words on a 16-bit
@@ -1143,16 +1400,15 @@ Also here, because this is the first example with a real RX consumer:
 The pattern-B loop rebuilt on `CreditStreamIF` / `AckedStreamIF`, with the ceiling recomputed as
 `max` over stages.
 
-> **The "1 cycle/word everywhere" target was refuted by Stage 1 and needs re-deriving.** The
-> *loader* reaches II=1, measured. The *player* comes out at `fire_cycles = 3` — the same as the BRAM
-> player's — so the `max` over stages is 3 and the ceiling is `samp_per_word * f_axis / 3`, not
-> `samp_per_word * f_axis`. See *What Stage 1 measured* above.
+> **The target stands.** Stage 1 briefly reported it refuted; that reading was withdrawn — it had
+> measured a player built without the `while (1)` this file specifies, which is
+> `plans/witness/task_loop/`'s `ply_1` (3.000 cycles/word) rather than its `ply_w` (**1.000**). See
+> the retraction under *Stage 1* above.
 >
 > The gate is still the right shape: if the ceiling is not what the per-stage measurements predict,
-> one of the new stages has an inner loop that should not be there, and the witness harness
-> (`plans/witness/task_loop/`) is how to find it. What changed is the number it is compared against —
-> and the interesting question this raises is whether the *player* can be made cheaper at all, since
-> nothing about the streaming redesign touched it.
+> one of the new stages has an inner loop that should not be there — or is missing one it should
+> have, which is the failure Stage 1 actually found — and the witness harness is how to tell those
+> apart.
 
 ### Stage 4 — retire or keep
 

@@ -40,6 +40,27 @@ def _require_dir() -> None:
                     f"examples/rf_repeat_play/rf_repeat_play_build.py --through csynth")
 
 
+def _sole_loop_ii(module: str) -> int | None:
+    """The achieved II of a module's one loop, found by structure rather than by name.
+
+    Vitis puts the **source line number** in a loop's XML tag (``VITIS_LOOP_164_1``), so naming one
+    literally makes a comment added above it rename the thing this gate measures.  These bodies have
+    exactly one loop each, so "the only child of SummaryOfLoopLatency" identifies it without a name —
+    and the count is asserted, because "the only one" stops being true silently.
+    """
+    import xml.etree.ElementTree as ET
+
+    p = _report_file(module)
+    if not p.is_file():
+        return None
+    summary = ET.parse(p).getroot().find("PerformanceEstimates/SummaryOfLoopLatency")
+    if summary is None:
+        return None
+    loops = list(summary)
+    assert len(loops) == 1, f"{module} has {len(loops)} loops, not 1: {[e.tag for e in loops]}"
+    return int(loops[0].findtext("PipelineII"))
+
+
 def _loop(stem_glob: str, loop_name_prefix: str) -> tuple[str, str]:
     """Find the synthesized sub-module for a pipelined loop, by prefix.
 
@@ -96,32 +117,66 @@ class TestThePayloadLoopIsOneCyclePerWord:
             f"data-dependent entered its trip count.")
 
 
-class TestThePlayerCostsWhatItCosts:
-    """A cost is **measured**, never inherited — and this one refutes a plan target."""
+class TestThePlayerIsALoopAndTheLoopIsWhatMatters:
+    """The player is `while (1)` + `PIPELINE II=1`, which is what the plan specifies.
 
-    def test_the_player_body_is_bounded_at_three_cycles_per_firing(self):
-        """``fire_cycles = latency + 1 = 3``, i.e. **3 cycles per slot** at one sample per word.
+    **The first pass built it without a loop and drew a conclusion from the difference.** A
+    per-firing body reports `latency 2 -> fire_cycles 3`, which is
+    ``plans/witness/task_loop/``'s ``ply_1`` exactly — 3.000 cycles/word in RTL — and that is the
+    shape this design deliberately moved away from. The witness measured the specified shape too:
+    ``ply_w`` at **1.000**. So this file pins the loop, not a firing cost.
+    """
 
-        The plan's Stage 3 expects "1 cycle/word everywhere".  The loader now reaches it; this body
-        does not, and it is the same 3 the BRAM player measures — so the streaming redesign improves
-        the *loader* (2 -> 1) and leaves the player where it was.  The ceiling is the ``max`` over
-        stages, so it is still 3, and Stage 3's target needs re-deriving rather than assuming.
+    def test_the_player_is_an_unbounded_loop_at_ii_1(self):
+        """``TripCount = inf``, no latency, ``PipelineII = 1``.
 
-        The consequence is a real rate bound: ``samp_per_word * f_axis / 3``, which is 83.3 MSa/s at
-        250 MHz and one sample per word.  ``examples/rf_repeat_play`` runs at 64 MSa/s — under it,
-        and the example's rate was chosen before this was measured.
+        **No reported latency is the correct answer here, not a missing one.** An unbounded body has
+        no cycles-per-firing, and ``fire_cycles = latency + 1`` is meaningless for it — applying that
+        formula to a body that was supposed to loop measures the mistake rather than the design.
+        Throughput for this shape is measured at RTL; see the XSI gate.
         """
         _require_dir()
         if not _report_file(PLAYER).is_file():
             pytest.skip(f"no report for {PLAYER} in {REPORT} — re-run csynth")
-        got = module_latency(REPORT, PLAYER)
-        if got is None:
-            pytest.skip(f"{PLAYER}: the report says <Latency>undef</Latency>, so the build that "
-                        f"wrote it left this body unbounded — a stale or foreign artifact, not a "
-                        f"measurement of this checkout")
-        assert int(got["latency_max"]) == 2, (
-            f"the player reports latency {got['latency_max']}, not 2. fire_cycles = latency + 1, so "
-            f"this moves the design's rate ceiling — re-derive it rather than adjusting the number.")
+        assert module_latency(REPORT, PLAYER) is None, (
+            "the player reports a bounded latency, so it is NOT a while (1) body any more. That is "
+            "the ply_1 shape, measured at 3.000 cycles/word against ply_w's 1.000 — a 3x throughput "
+            "regression that csynth reports as a *more* informative number, which is what makes it "
+            "easy to accept by mistake.")
+        xml = _report_file(PLAYER).read_text(encoding="utf-8")
+        assert "<TripCount>inf</TripCount>" in xml, "an unbounded loop trips forever, by definition"
+        assert _sole_loop_ii(PLAYER) == 1, (
+            "the player loop must schedule at II=1 — one slot per cycle is the whole point of the "
+            "loop, and the DAC's own TREADY is what actually paces it")
+
+    def test_the_player_does_not_close_at_the_arcs_clock_and_the_reason_is_recorded(self):
+        """**A real finding, and new**: II=1 yes, 4.0 ns no.
+
+        Measured estimated Fmax ~207 MHz against the RF arc's 250. The recurrence, from
+        ``HLS 200-1016``: ``slot -> sub(h.wr - slot) -> icmp -> and -> phi x3 -> fwd_read enable``,
+        i.e. *whether to read a new sample this cycle depends on whether the held one was consumed,
+        which depends on the compare against ``slot``*. That is loop-carried, not a coding accident,
+        and the witness could not have found it — its ``ply_w`` body has no decision in it at all.
+
+        The identified fix is a two-deep skid (read into ``h_next`` on a condition that does not
+        involve the compare); it is not built, and it belongs to Stage 3 where the ceiling is the
+        deliverable. Asserted rather than left in a log so that **closing it is a visible change**
+        rather than a number nobody re-reads.
+        """
+        _require_dir()
+        rpt = REPORT / "csynth.rpt"
+        if not rpt.is_file():
+            pytest.skip(f"no csynth.rpt in {REPORT}")
+        text = rpt.read_text(encoding="utf-8", errors="replace")
+        row = [ln for ln in text.splitlines() if "rf_tx_player_task" in ln and "|" in ln]
+        assert row, "no player row in the summary table"
+        assert "Timing" in row[0], (
+            f"the player now MEETS timing at 4.0 ns: {row[0].strip()}. If that is the skid buffer "
+            f"landing, delete this test and put the closed number in the ceiling table — it is the "
+            f"good outcome, and it should not pass silently.")
+
+class TestTheLoaderBodyIsStillPerFiring:
+    """One command per firing — bounded, unlike the player, and that difference is deliberate."""
 
     def test_the_loader_body_is_bounded_but_data_dependent(self):
         """Bounded, and dominated by the payload loop it wraps.
