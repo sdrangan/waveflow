@@ -179,6 +179,10 @@ class CreditStreamMasterIF(InterfaceEndpoint):
 
     type_name = 'credit_stream_master_if'
 
+    def physical_endpoints(self):
+        """Two streams, forward then reverse — there is no credit-stream object in C++."""
+        return [self.fwd_ep, self.crd_ep]
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFMaster(
@@ -312,6 +316,9 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
 
     type_name = 'credit_stream_slave_if'
 
+    def physical_endpoints(self):
+        return [self.fwd_ep, self.crd_ep]
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFSlave(
@@ -382,6 +389,10 @@ class CreditStreamIF(Interface):
     crd_if: StreamIF = field(init=False)
 
     type_name = 'credit_stream_if'
+
+    def physical_interfaces(self):
+        """Two ordinary streams.  Nothing here lowers to a new kind of edge."""
+        return [self.fwd_if, self.crd_if]
 
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')
@@ -515,6 +526,11 @@ class AckedStreamMasterIF(InterfaceEndpoint):
     ack_ep: StreamIFSlave = field(init=False)
 
     type_name = 'acked_stream_master_if'
+
+    def physical_endpoints(self):
+        """Two streams, forward then ack.  **This order is the C++ argument order** — a task body
+        taking this endpoint takes ``(fwd, ack)`` adjacent, in that sequence."""
+        return [self.fwd_ep, self.ack_ep]
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -680,6 +696,9 @@ class AckedStreamSlaveIF(InterfaceEndpoint):
 
     type_name = 'acked_stream_slave_if'
 
+    def physical_endpoints(self):
+        return [self.fwd_ep, self.ack_ep]
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFSlave(
@@ -791,6 +810,10 @@ class AckedStreamIF(Interface):
     ack_if: StreamIF = field(init=False)
 
     type_name = 'acked_stream_if'
+
+    def physical_interfaces(self):
+        """Two ordinary streams.  In hardware there is no acked stream — there are two FIFOs."""
+        return [self.fwd_if, self.ack_if]
 
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')

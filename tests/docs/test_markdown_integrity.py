@@ -217,9 +217,17 @@ def _slug(heading: str) -> str:
 
 
 def _heading_anchors(text: str) -> set[str]:
-    """Every anchor a page's headings define."""
+    """Every anchor a page's headings define.
+
+    **A heading inside a blockquote is still a heading.**  The repo writes callout boxes as
+    ``> ### Warning ...`` (``plans/mcp_fir.md``, ``plans/adc_model.md``,
+    ``docs/examples/interleaver/pytiming.md``), and GitHub renders those as ``<h3>`` inside a
+    ``<blockquote>`` and anchors them like any other.  An extractor anchored at ``^#`` sees none of
+    them and reports every link into one as dead — which is a false positive, and a check with false
+    positives gets suppressed, after which it protects nothing.
+    """
     out = set()
-    for h in re.findall(r"^#{1,6}\s+(.*?)\s*$", text, re.M):
+    for h in re.findall(r"^(?:>\s*)*#{1,6}\s+(.*?)\s*$", text, re.M):
         explicit = _EXPLICIT_ID.search(h)
         if explicit:
             out.add(explicit.group(1).lower())

@@ -183,6 +183,49 @@ class RfSampBufStep(Buildable):
         return src_path.read_text(encoding="utf-8")
 
 
+class RfTxStreamStep(Buildable):
+    """Copy the streaming transmitter's two hand-written ``hls::task`` bodies.
+
+    The same mechanism as :class:`RfSampBufStep` and for the same reason: these are **framework**
+    (``waveflow/hw/rf_tx_stream.py``), not example code, so they ship from ``waveflow/build/`` and
+    each example gets a copy beside the top Vitis compiles.
+
+    **A separate step from** :class:`RfSampBufStep`, not an addition to it.  The two designs are
+    alternatives — a circular buffer with a progress channel, or a stream with an ack — and a build
+    that wanted one would otherwise be handed both vocabularies, whose status codes deliberately
+    differ (``RF_TX_TOO_LATE`` here is a *deadline*; ``RF_SAMP_BUF_TOO_LATE`` there is a *slot that
+    already played out of a buffer*).  Shipping them together would put two encodings of "too late"
+    in one include directory, which is exactly the confusion the split naming avoids.
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {
+            "rf_tx_loader_task": self._output_dir / "rf_tx_loader_task.h",
+            "rf_tx_player_task": self._output_dir / "rf_tx_player_task.h",
+            "rf_circ_play_task": self._output_dir / "rf_circ_play_task.h",
+        }
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        names = {"rf_tx_loader_task": "rf_tx_loader_task.h",
+                 "rf_tx_player_task": "rf_tx_player_task.h",
+                 "rf_circ_play_task": "rf_circ_play_task.h"}
+        if key not in names:
+            raise KeyError(f"Unknown RfTxStreamStep output key: {key!r}")
+        src_path = _SRC_DIR / names[key]
+        if not src_path.exists():
+            raise FileNotFoundError(f"RfTxStream source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")
+
+
 class MemStreamStep(Buildable):
     """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
     output directory.

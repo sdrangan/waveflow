@@ -49,12 +49,44 @@ BOUNDED_BODIES = [
 
 
 def _require(report_dir: Path, module: str):
-    """The measured latency, or a loud skip — never a silent pass."""
+    """The measured latency, or a loud skip — never a silent pass.
+
+    **A report is build output, not source.**  Everything under ``*_proj/`` is gitignored
+    (``.gitignore``), so which build produced the file on disk is decided by whatever csynth ran
+    last in this working tree — possibly on another branch, against sources this checkout does not
+    contain.  That makes three states, not two, and only one of them is a finding:
+
+    ===========================  ===========================================================
+    report says                  meaning
+    ===========================  ===========================================================
+    absent                       not built here — skip (this file always did)
+    ``<Latency>undef</Latency>``  the body that was built is **unbounded**, so there is no
+                                 ``latency + 1`` to derive — **no measurement**, so skip
+    a number                     a measurement of *something*, and comparable — assert
+    ===========================  ===========================================================
+
+    ``undef`` used to fail.  It fails on ``main`` itself whenever a branch that pipelines these
+    bodies has run csynth here (a pipelined body reports ``PipelineII`` and ``undef`` latency), which
+    is a failure ``main``'s sources cannot cause and cannot fix.  A stale report is the *absence* of
+    a measurement, and the absence of a measurement is a skip.
+
+    What this gives up, said plainly: if the committed source really did become unbounded, this file
+    now skips where it used to fail.  That case is still caught — by
+    :func:`test_the_loader_declares_no_per_firing_cost_because_csynth_cannot_bound_it`, which asserts
+    the *opposite* direction from the same reports — and a skip on a gate is loud here because these
+    tests are never expected to skip in a tree that just built the example.
+    """
     if not report_dir.is_dir():
         pytest.skip(f"no csynth report dir at {report_dir} — run the example's build --through csynth")
-    got = module_latency(report_dir, module)
-    if got is None and not (report_dir / f"{module}_csynth.xml").is_file():
+    if not (report_dir / f"{module}_csynth.xml").is_file():
         pytest.skip(f"no report for {module} in {report_dir} — re-run csynth")
+    got = module_latency(report_dir, module)
+    if got is None:
+        pytest.skip(
+            f"{module}: the report in {report_dir} says <Latency>undef</Latency>, so the build that "
+            f"wrote it left this body unbounded and there is no cycles-per-firing to compare "
+            f"against. That is a stale or foreign artifact, not a measurement of this checkout — "
+            f"re-run the example's build --through csynth to make this row mean something.")
     return got
 
 
@@ -67,11 +99,7 @@ def test_the_declared_firing_cost_is_the_one_csynth_measured(label, report_dir, 
     costs.  If this fails the declaration is a guess again — correct the constant from the report,
     never the other way round.
     """
-    got = _require(report_dir, module)
-    assert got is not None, (
-        f"{label}: csynth could not bound {module} (latency 'undef'), so it has no cycles-per-firing "
-        f"to declare — but {declared} is declared for it. See the loader test below for what to do "
-        f"instead.")
+    got = _require(report_dir, module)          # skips on absent OR unusable — see _require
     measured = int(got["latency_max"]) + 1
     assert declared == measured, (
         f"{label}: declares fire_cycles={declared}, but {module} reports latency "
@@ -87,7 +115,7 @@ def test_the_calibration_is_anchored_on_the_rx_ingress():
     a wrong calibration and a wrong declaration are different repairs.
     """
     got = _require(RX_REPORT, "rf_samp_buf_ingress_task_16_1_1024_16_s")
-    assert got is not None and got["latency_max"] == 1, (
+    assert got["latency_max"] == 1, (
         f"the RX ingress no longer reports latency 1 ({got}); the calibration this whole file rests "
         f"on was derived from that value together with its RTL corroboration (58.6% accepted at "
         f"256 MSa/s == 0.5/0.853), so both need re-deriving before any other row is trusted")

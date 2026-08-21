@@ -470,3 +470,56 @@ class ExtractBurstsStep(BuildStep):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return {"timing_events": out_path}
+
+
+def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
+                  include_dir: str = "include") -> str | None:
+    """``None`` if *top*'s synthesized RTL is at least as new as everything it was built from,
+    otherwise a sentence naming the offending source.
+
+    **Why this exists, twice over.**  ``<example>/<top>_proj/`` is gitignored *build output*, so
+    which build produced the files on disk is decided by whatever ran csynth last in this working
+    tree â€” possibly on another branch, against sources this checkout does not contain.  Two separate
+    gates have already reported that as a *behaviour change*:
+
+    * ``test_rf_samp_buf_fire_cycles`` read ``<Latency>undef</Latency>`` from a branch that
+      pipelined the bodies and failed three ways on ``main``;
+    * three XSI gates reported off-by-one cycle counts (4211 vs 4210, 15442 vs 15441) against RTL
+      dated three days earlier, and rebuilding each example restored its recorded number exactly.
+
+    Both times the number was right and the *artifact* was wrong, and a cycle gate that says "this is
+    a real behaviour change, re-record it" when it is looking at somebody else's RTL is worse than no
+    gate â€” it invites exactly the one edit that must never be made on a whim.
+
+    ``git checkout`` stamps a checked-out file with the checkout time, so a branch switch makes the
+    sources newer than any RTL built before it: the case that actually bit is the case this catches.
+
+    Deliberately a **predicate**, not an assertion or a rebuild.  A gate decides for itself whether
+    to skip; rebuilding here would hide a 40-second csynth inside a test fixture, and a helper that
+    silently runs the toolchain is its own kind of surprise.
+    """
+    from pathlib import Path
+
+    root = Path(example_root)
+    rtl_dir = root / f"{top}_proj" / "solution1" / "syn" / "verilog"
+    if not rtl_dir.is_dir():
+        return None                      # absent is the caller's business, not staleness
+    rtl = [p for p in rtl_dir.glob("*.v")]
+    if not rtl:
+        return None
+    newest_rtl = max(p.stat().st_mtime for p in rtl)
+
+    sources: list = []
+    gen = root / gen_dir / f"{top}.cpp"
+    if gen.is_file():
+        sources.append(gen)
+    inc = root / include_dir
+    if inc.is_dir():
+        sources += [p for p in inc.iterdir() if p.suffix in (".h", ".hpp", ".cpp")]
+    for src in sources:
+        if src.stat().st_mtime > newest_rtl + 1.0:     # 1 s slack: filesystem timestamp grain
+            return (f"{src.relative_to(root)} is newer than the newest RTL in "
+                    f"{rtl_dir.relative_to(root)} â€” the synthesized design on disk is not this "
+                    f"checkout's. Re-run the example's build --through csynth. Do NOT re-record a "
+                    f"cycle count against RTL you did not produce.")
+    return None

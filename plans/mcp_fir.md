@@ -251,7 +251,7 @@ agent must be able to ask "do you actually know?"
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 16 | 2 | 32 | serial | 61.2 | 1.0 | 32 | 21840 | 118 | ✓ | 1.9 | 47 |
 | 8 | 2 | 32 | unroll | 38.4 | 4.0 | 64 | — | — | — | 2.1 | — |
-| 12 | 2 | 32 | unroll | — | 2.0 | 64* | — | — | — | — | — |
+| 12 | 2 | 32 | unroll | — | 2.0 | 64\* | — | — | — | — | — |
 
 `get_perf_hist` / `get_resource_hist` / `get_timing_hist` force the agent to join three tables in
 context, and that join is exactly where models fabricate rows. Nulls mark un-run rungs; `*` marks a

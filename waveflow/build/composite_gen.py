@@ -527,9 +527,19 @@ class StreamEdge:
     master_ep: object
     slave_ep: object
     depth: int | None = None
+    #: The channel's OWN word width, when it differs from the design's boundary word.
+    #:
+    #: Every composite before this one had a single width throughout, so ``decl(width)`` took the
+    #: design's and that was right by coincidence rather than by rule.  An internal channel's width
+    #: is a property of the **channel** — ``StreamIF`` already stores it, checked against both
+    #: endpoints at bind — and a design whose internal edge is wider than its ports (a tagged sample
+    #: on a 16-bit sample port) would otherwise have its tag silently truncated by the generated top.
+    #: ``None`` keeps the old behaviour exactly.
+    bitwidth: int | None = None
 
     def decl(self, width: int) -> str:
-        line = f"hls_thread_local hls::stream<ap_uint<{width}> > {self.name};"
+        w = width if self.bitwidth is None else int(self.bitwidth)
+        line = f"hls_thread_local hls::stream<ap_uint<{w}> > {self.name};"
         if self.depth is not None and self.depth != DEFAULT_STREAM_DEPTH:
             # The HLS default IS DEFAULT_STREAM_DEPTH, so emitting a pragma for it would only churn
             # the generated C++ (and force a re-csynth) for identical RTL.  Emit only a non-default.
@@ -667,7 +677,11 @@ def derive_internal_edges(comp) -> list:
     from waveflow.hw.interface import StreamIF, StreamOfBlocksIF
 
     edges: list = []
-    for iface in comp.interfaces.values():
+    # EXPAND FIRST, THEN DISPATCH.  A composite interface is not a new kind of edge to add a case
+    # for -- an AckedStreamIF is two FIFOs that a module wants to talk about as one thing, and in
+    # C++ there is no acked stream at all.  `physical_interfaces()` returns `[self]` for everything
+    # else, so this loop is unchanged for every interface that was already lowering.
+    for iface in [phys for i in comp.interfaces.values() for phys in i.physical_interfaces()]:
         name = _edge_name(comp, iface)
         master = iface.endpoints.get("master")
         slave = iface.endpoints.get("slave")
@@ -700,7 +714,8 @@ def derive_internal_edges(comp) -> list:
             if getattr(iface, "framed", False):
                 edges.append(FramedEdge(name, master, slave, depth=depth))
             else:
-                edges.append(StreamEdge(name, master, slave, depth=depth))
+                edges.append(StreamEdge(name, master, slave, depth=depth,
+                                        bitwidth=getattr(iface, "bitwidth", None)))
         else:
             raise LoweringError(
                 f"derive_internal_edges: no edge lowering for interface type "
@@ -759,10 +774,17 @@ def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     Order is significant — :func:`bundle_map` assigns ``gmem`` bundles in boundary order — and it is
     the walk order (children in ``add_comp`` order, ports in ``add_endpoint`` order).
     """
-    internal = {id(ep) for iface in _all_interfaces(comp)
-                for ep in iface.endpoints.values() if ep is not None}
-    eps = [ep for child in kernel_tasks(comp)
-           for ep in child.endpoints.values() if id(ep) not in internal]
+    # Both sides are taken in PHYSICAL terms, and they have to be the same terms or a composite
+    # endpoint would look unwired: `child.endpoints` holds the composite (`to_player`), while the
+    # interface holds it too -- but the *ports* the top needs are its two streams.  Expanding both
+    # keeps the "bound to an internal interface" test an identity comparison, which is what makes it
+    # cheap and exact.  `physical_endpoints()` is `[self]` for everything that is not a composite.
+    internal = {id(phys) for iface in _all_interfaces(comp)
+                for ep in iface.endpoints.values() if ep is not None
+                for phys in ep.physical_endpoints()}
+    eps = [phys for child in kernel_tasks(comp)
+           for ep in child.endpoints.values()
+           for phys in ep.physical_endpoints() if id(phys) not in internal]
 
     if len(names) != len(eps):
         got = ", ".join(getattr(e, "name", "?") for e in eps)
@@ -912,7 +934,10 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
     elif isinstance(edge, FramedEdge):
         kind, payload = "framed", width
     else:
-        kind, payload = "stream", width
+        # The channel's own width when it has one -- see StreamEdge.bitwidth.  This number is read
+        # back by the VCD tooling to split a trace, so it has to be the width the RTL net actually
+        # is, not the width the design's ports happen to be.
+        kind, payload = "stream", (width if edge.bitwidth is None else int(edge.bitwidth))
     return IntChannel(
         decl=edge.decl(width),
         name=edge.name,
@@ -1005,14 +1030,19 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         kt = _kernel_task_of(sub, comp)
         args: list[str] = []
         for attr in kt.signature:
-            ep = getattr(sub, attr)
-            arg = ep_arg.get(id(ep))
-            if arg is None:
-                raise LoweringError(
-                    f"composite_top_spec: {type(sub).__name__}.{attr} is not wired to any internal "
-                    f"edge or boundary port of {type(comp).__name__} — cannot resolve its task arg")
-            args.append(arg)
-            ep_task[id(ep)] = len(tasks)
+            # A composite endpoint occupies ONE name in the signature and SEVERAL arguments in the
+            # C++, spliced in here in `physical_endpoints()` order.  That is why a hand-written body
+            # must keep such a pair adjacent: the alternative is a second naming scheme
+            # (`"to_player.ack"`) that only this resolver would understand.
+            for phys in getattr(sub, attr).physical_endpoints():
+                arg = ep_arg.get(id(phys))
+                if arg is None:
+                    raise LoweringError(
+                        f"composite_top_spec: {type(sub).__name__}.{attr} (physical channel "
+                        f"{getattr(phys, 'name', '?')!r}) is not wired to any internal edge or "
+                        f"boundary port of {type(comp).__name__} — cannot resolve its task arg")
+                args.append(arg)
+                ep_task[id(phys)] = len(tasks)
         tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header))
 
     channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
@@ -2509,9 +2539,21 @@ def tcl_target(config) -> tuple[str, float]:
 
 
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
-               part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS) -> str:
+               part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
+               solution_config: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
+
+    *solution_config* are extra tcl lines emitted after ``create_clock`` and before
+    ``csynth_design`` — solution-level settings that change the RTL rather than the schedule.  The
+    one this exists for is ``config_rtl -reset state``: an ``hls::task`` that writes before it reads
+    advances its state during reset, and ``#pragma HLS reset`` **in the body does not close it**
+    (measured, Vitis 2025.1 — csynth still reports every state register as "power-on
+    initialization"), whereas the solution-level setting does.
+
+    **Opt-in, and deliberately not the default.**  Turning it on globally would add reset logic to
+    every generated top, and several of those are gated on exact RTL cycle counts — so the safe
+    change is the one a build asks for.  See ``examples/rf_repeat_play``.
 
     *extra_sources* are additional ``.cpp`` paths (relative to the example root) to add to the
     project.  A self-contained hand-written task body needs none; a **generated** body whose
@@ -2522,6 +2564,7 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     drive them from the selected platform; the defaults reproduce the historical TCL byte-for-byte."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
+    cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\
 set part {{{part}}}
 set cf "-I{INCLUDE_DIR}"
@@ -2532,7 +2575,7 @@ add_files {GEN_DIR}/{top_name}.cpp -cflags $cf
 {extra}open_solution -reset "solution1"
 set_part $part
 create_clock -period {period}
-if {{[catch {{csynth_design}} res]}} {{ puts "WAVEFLOW_ERROR: csynth"; puts $res; exit 1 }}
+{cfg}if {{[catch {{csynth_design}} res]}} {{ puts "WAVEFLOW_ERROR: csynth"; puts $res; exit 1 }}
 puts "WAVEFLOW_CSYNTH_OK"
 exit 0
 """

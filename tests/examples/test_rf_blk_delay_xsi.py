@@ -43,7 +43,7 @@ from examples.rf_blk_delay.rf_blk_delay import (
 )
 from examples.rf_blk_delay.rf_blk_delay_build import RTL_FILES, TOP, WRAPPER
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 from waveflow.hw.rf_samp_buf import RF_SAMP_BUF_OK, RxResp
 from waveflow.hw.rf_samp_buf_tx import TxResp
 
@@ -113,6 +113,10 @@ def run() -> tuple[dict[str, int], str]:
     _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
     proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
     _require(proj.is_dir(), f"no csynth RTL at {proj} — run rf_blk_delay_build.py --through csynth")
+    # SECOND INSTANCE OF THIS CLASS: `*_proj/` is gitignored build output, and a gate that
+    # compares a cycle count against RTL it did not produce reports "a real behaviour change"
+    # when the truth is a stale artifact. See rtl_staleness().
+    _require(rtl_staleness(ROOT, 'rf_blk_delay') is None, rtl_staleness(ROOT, 'rf_blk_delay') or "")
     for f in RTL_FILES:
         _require((xsi / f).is_file(), f"{xsi / f} — run rf_blk_delay_build.py --through codegen_dut")
 
