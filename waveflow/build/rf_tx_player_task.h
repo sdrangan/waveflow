@@ -133,9 +133,12 @@ static ap_int<IDX_W> rf_tx_time_compare(ap_uint<IDX_W> a, ap_uint<IDX_W> b) {
 /// @tparam IDX_W  width of the SLOT counter and of every TxCmd/TxResp/TxStatus index field.
 ///                Deliberately independent of W: widening the word must not move where a slot
 ///                counter wraps.
-template <int W, int SPW, int IDX_W>
-static void rf_tx_player_task(hls::stream<TaggedSamp>& fwd, hls::stream<ap_uint<W> >& samp_out,
-                              hls::stream<TxStatus>& status_out) {
+/// @tparam TAG_W  width of the two INTERNAL channels -- see rf_tx_loader_task.h.  `fwd` is ONE
+///                endpoint on the Python module and TWO channels here, spliced in adjacent.
+template <int W, int TAG_W, int SPW, int IDX_W>
+static void rf_tx_player_task(hls::stream<ap_uint<TAG_W> >& fwd,
+                              hls::stream<ap_uint<TAG_W> >& status_out,
+                              hls::stream<ap_uint<W> >& samp_out) {
     // The slot counter.  Free-running from 0, exactly as the hardware is: the DAC's grid starts when
     // the tile does, whether or not anything has been loaded.
     static ap_uint<IDX_W> slot = 0;
@@ -163,7 +166,9 @@ static void rf_tx_player_task(hls::stream<TaggedSamp>& fwd, hls::stream<ap_uint<
 
     while (1) {
 #pragma HLS PIPELINE II=1
-        if (!held && fwd.read_nb(h)) {
+        ap_uint<TAG_W> hw;
+        if (!held && fwd.read_nb(hw)) {
+            h = TaggedSamp::unpack_from_uint(hw.range(TaggedSamp::bitwidth - 1, 0));
             held = true;
         }
 
@@ -211,7 +216,9 @@ static void rf_tx_player_task(hls::stream<TaggedSamp>& fwd, hls::stream<ap_uint<
             s.verdict = verdict;
             s.played_through = played_through;
             s.n_underrun = n_underrun;
-            if (!status_out.write_nb(s)) {
+            ap_uint<TAG_W> sw = 0;
+            sw.range(TxStatus::bitwidth - 1, 0) = TxStatus::pack_to_uint(s);
+            if (!status_out.write_nb(sw)) {
                 n_status_dropped = n_status_dropped + 1;
             }
         }

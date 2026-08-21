@@ -77,12 +77,25 @@
 /// @tparam POLLS   statuses harvested per firing.  BOUNDED and compile-time: this unrolls into POLLS
 ///                 read_nb calls.  `while (got)` is the data-dependent trip count that costs the old
 ///                 design its II.
+/// @tparam TAG_W   width of the two INTERNAL channels, in bits.  They carry `TaggedSamp` and
+///                 `TxStatus` **packed into one word each** by the generated `pack_to_uint` /
+///                 `unpack_from_uint`, rather than as struct-typed FIFOs.  Two reasons, and the
+///                 second is the one that matters: a word channel is what
+///                 `composite_gen`'s `StreamEdge` already lowers, so no new edge kind is needed;
+///                 and it is **exactly what the pysim twin puts on the wire**, so the two backends
+///                 carry identical bits rather than two representations that must be kept in step.
 /// @tparam IDX_W   width of the slot counter and of every TxCmd/TxResp/TxStatus index field.
-template <int W, int SPW, int MAXIF, int POLLS, int IDX_W>
+template <int W, int TAG_W, int SPW, int MAXIF, int POLLS, int IDX_W>
+/// ARGUMENT ORDER IS PART OF THE CONTRACT.  `to_player` is ONE endpoint on the Python module
+/// (an AckedStreamMasterIF) and TWO channels here, and the composite generator splices them in
+/// **adjacent, in physical_endpoints() order** at the position that endpoint's name occupies in
+/// `kernel_task().signature`.  So the forward and status streams sit together rather than at
+/// positions 3 and 5 as an earlier draft had them: the alternative is a second naming scheme
+/// (`"to_player.ack"`) that only the resolver would understand.
 static void rf_tx_loader_task(hls::stream<ap_uint<W> >& cmd_in, hls::stream<ap_uint<W> >& samp_in,
-                              hls::stream<TaggedSamp>& to_player,
-                              hls::stream<ap_uint<W> >& resp_out,
-                              hls::stream<TxStatus>& status_in) {
+                              hls::stream<ap_uint<TAG_W> >& to_player,
+                              hls::stream<ap_uint<TAG_W> >& status_in,
+                              hls::stream<ap_uint<W> >& resp_out) {
     // The pending FIFO — a ring, held as parallel arrays rather than an array of structs so a
     // nested struct cannot be copied by value into the task's interface (which DCEs the kernel; see
     // reference-hls-hook-csynth-gotchas).
@@ -114,10 +127,11 @@ static void rf_tx_loader_task(hls::stream<ap_uint<W> >& cmd_in, hls::stream<ap_u
     // unconditional — there is no id to match and nothing to test.
     for (int i = 0; i < POLLS; i = i + 1) {
 #pragma HLS PIPELINE II=1
-        TxStatus st;
-        if (!status_in.read_nb(st)) {
+        ap_uint<TAG_W> stw;
+        if (!status_in.read_nb(stw)) {
             break;                          // a data-dependent EXIT on a COUNTED loop: II=1, measured
         }
+        TxStatus st = TxStatus::unpack_from_uint(stw.range(TxStatus::bitwidth - 1, 0));
         if (pd_count == 0) {
             continue;                       // unreachable while the contract holds; never silent
         }
@@ -214,7 +228,9 @@ static void rf_tx_loader_task(hls::stream<ap_uint<W> >& cmd_in, hls::stream<ap_u
             // reverse rate by construction — the structural half of the saturation rule.
             t.request_status = (ap_uint<1>)(k == (ap_uint<IDX_W>)(c.nsamp - 1));
             t.samp = x.range((j + 1) * (W / SPW) - 1, j * (W / SPW));
-            to_player.write(t);             // BLOCKING is correct: stalling is our problem
+            ap_uint<TAG_W> tw = 0;
+            tw.range(TaggedSamp::bitwidth - 1, 0) = TaggedSamp::pack_to_uint(t);
+            to_player.write(tw);            // BLOCKING is correct: stalling is our problem
         }
     }
 }

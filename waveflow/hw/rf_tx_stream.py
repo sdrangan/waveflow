@@ -345,9 +345,12 @@ class TxLoader(FreeRunMod):
         it is a fact about the C++ and not about the Python — so it is stated here and
         :meth:`run_iter` stays the pysim golden beside it.
         """
+        # `to_player` appears ONCE.  It is one endpoint and two channels, and the composite
+        # generator splices both in here, adjacent, in physical_endpoints() order -- which is why
+        # the C++ takes (fwd, status) together rather than at positions 3 and 5.
         return KernelTask("rf_tx_loader_task", "rf_tx_loader_task.h",
-                          ("cmd_in", "samp_in", "to_player", "resp_out", "to_player"),
-                          template_args=(int(self.bitwidth), int(self.samp_per_word),
+                          ("cmd_in", "samp_in", "to_player", "resp_out"),
+                          template_args=(int(self.bitwidth), TAG_BW, int(self.samp_per_word),
                                          int(self.max_in_flight), int(self.status_polls), IDX_BW))
 
     # -- counters, marked as instrumentation ----------------------------------------------------
@@ -560,8 +563,9 @@ class TxPlayer(FreeRunMod):
     def kernel_task(self) -> KernelTask:
         """The hand-written body this module hands over — see :meth:`TxLoader.kernel_task`."""
         return KernelTask("rf_tx_player_task", "rf_tx_player_task.h",
-                          ("fwd", "samp_out", "fwd"),
-                          template_args=(int(self.bitwidth), int(self.samp_per_word), IDX_BW))
+                          ("fwd", "samp_out"),
+                          template_args=(int(self.bitwidth), TAG_BW, int(self.samp_per_word),
+                                         IDX_BW))
 
     @property
     def blk_period(self) -> float:

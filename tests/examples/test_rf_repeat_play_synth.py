@@ -18,16 +18,16 @@ from pathlib import Path
 
 import pytest
 
-from waveflow.utils.csynthparse import loop_pipeline_ii, module_latency
+from waveflow.utils.csynthparse import module_latency
 
 _EX = Path(__file__).resolve().parents[2] / "examples"
-REPORT = _EX / "rf_repeat_play" / "rf_tx_stream_tasks_proj" / "solution1" / "syn" / "report"
+REPORT = _EX / "rf_repeat_play" / "rf_tx_stream_proj" / "solution1" / "syn" / "report"
 
 #: The synthesized module names carry their template arguments, so they name the **gated geometry** —
-#: ``<W=16, SPW=1, MAXIF=4, POLLS=4, IDX_W=16>`` for the loader and ``<W=16, SPW=1, IDX_W=16>`` for
-#: the player.  A change in geometry changes these names, which is the intended kind of loud.
-LOADER = "rf_tx_loader_task_16_1_4_4_16_s"
-PLAYER = "rf_tx_player_task_16_1_16_s"
+#: ``<W=16, TAG_W=64, SPW=1, MAXIF=4, POLLS=4, IDX_W=16>`` for the loader and
+#: ``<W=16, TAG_W=64, SPW=1, IDX_W=16>`` for the player.  A change in geometry changes these names, which is the intended kind of loud.
+LOADER = "rf_tx_loader_task_16_64_1_4_4_16_s"
+PLAYER = "rf_tx_player_task_16_64_1_16_s"
 
 
 def _report_file(stem: str) -> Path:
@@ -61,22 +61,20 @@ def _sole_loop_ii(module: str) -> int | None:
     return int(loops[0].findtext("PipelineII"))
 
 
-def _loop(stem_glob: str, loop_name_prefix: str) -> tuple[str, str]:
-    """Find the synthesized sub-module for a pipelined loop, by prefix.
+def _pipeline_module(suffix: str) -> str:
+    """The loader's Nth pipelined-loop sub-module, found by suffix.
 
-    Vitis names it ``<parent>_Pipeline_VITIS_LOOP_<line>_<n>``, and **the line number is in the
-    name** — so a comment added above the loop renames the module.  Matching on the prefix rather
-    than the full name keeps this gate measuring the loop instead of the header's line count.
+    Vitis names these two different ways depending on solution settings — this build has seen both
+    ``..._Pipeline_VITIS_LOOP_201_2`` (the source line number in the name) and ``..._Pipeline_2``
+    (after ``config_rtl -reset state``).  Matching on the trailing index is what survives both, and
+    the count is asserted so "the only one" cannot stop being true silently.
     """
     _require_dir()
-    hits = sorted(REPORT.glob(f"{stem_glob}_csynth.xml"))
+    hits = sorted(REPORT.glob(f"{LOADER[:-2]}_Pipeline_*{suffix}_csynth.xml"))
     if not hits:
-        pytest.skip(f"no report matching {stem_glob} in {REPORT} — re-run csynth")
-    if len(hits) != 1:
-        pytest.fail(f"{stem_glob} matched {len(hits)} modules: {[h.name for h in hits]}")
-    mod = hits[0].name[: -len("_csynth.xml")]
-    loop = mod[mod.index(loop_name_prefix):]
-    return mod, loop
+        pytest.skip(f"no loader pipeline module ending {suffix} in {REPORT} — re-run csynth")
+    assert len(hits) == 1, f"{suffix} matched {len(hits)}: {[h.name for h in hits]}"
+    return hits[0].name[: -len("_csynth.xml")]
 
 
 class TestThePayloadLoopIsOneCyclePerWord:
@@ -90,8 +88,7 @@ class TestThePayloadLoopIsOneCyclePerWord:
         write is blocking and correct, so there is no spin and no inner loop at all — and this is
         the number that says so.
         """
-        mod, loop = _loop(f"{LOADER[:-2]}_Pipeline_VITIS_LOOP_*_2", "VITIS_LOOP_")
-        ii = loop_pipeline_ii(REPORT, mod, loop)
+        ii = _sole_loop_ii(_pipeline_module("2"))
         assert ii == 1, (
             f"the payload loop achieves II={ii}, not 1. Correct the DESIGN from the report; a "
             f"per-word cost taken from the target rather than the achieved II would be optimistic "
@@ -109,8 +106,7 @@ class TestThePayloadLoopIsOneCyclePerWord:
         The cost is bounded either way: at most ``POLLS = 4`` iterations per firing, and only when
         statuses are actually waiting.
         """
-        mod, loop = _loop(f"{LOADER[:-2]}_Pipeline_VITIS_LOOP_*_1", "VITIS_LOOP_")
-        ii = loop_pipeline_ii(REPORT, mod, loop)
+        ii = _sole_loop_ii(_pipeline_module("1"))
         assert ii == 3, (
             f"the harvest loop achieves II={ii}, not the recorded 3. If it improved, the response "
             f"write got cheaper and the note above needs re-deriving; if it worsened, something "
@@ -236,15 +232,19 @@ class TestCsynthOkIsNotEvidence:
                 f"the {task} task module is absent from {sorted(mods)} — a DCE'd task still "
                 f"reports csynth OK")
 
-        # The forward channel carries a TaggedSamp: wr(16) + now(1) + request_status(1) + samp(16)
-        # = 34 bits.  Its WIDTH is the evidence the tag survived — a 16-bit FIFO here would mean the
-        # samples went through and the schedule did not.
-        assert any("fifo_w34_" in m for m in mods), (
-            f"no 34-bit forward FIFO in {sorted(mods)}: the tag travels WITH the sample, so a "
-            f"narrower channel means the slot, the now bit or the status request was optimised "
-            f"away — and the design would still play samples, at the wrong times, silently")
+        # The two internal channels are 64-bit -- a TaggedSamp (34 bits) and a TxStatus (50)
+        # PACKED INTO A WORD each by the generated pack_to_uint, which is exactly what the pysim twin
+        # puts on those wires.  The WIDTH is the evidence the tag survived: a 16-bit FIFO here would
+        # mean the samples went through and the schedule did not, and the design would still play
+        # samples -- at the wrong times, silently.
+        #
+        # It is also the evidence that AckedStreamIF lowered as TWO edges rather than one: the two
+        # FIFOs have the same width and different depths, so they are distinguishable only by depth.
+        assert any("fifo_w64_d320_" in m for m in mods), (
+            f"no depth-320 forward FIFO in {sorted(mods)}: the AckedStreamIF's forward half did not "
+            f"lower")
         # The ack channel carries a TxStatus, sized at MAX_IN_FLIGHT.  The depth IS the sizing rule:
         # one status per accepted window means it can never need more, and a shallower one would let
         # a status drop, which mis-pairs every later tid.
-        assert any(f"_d{MAX_IN_FLIGHT}_" in m and "fifo_w50_" in m for m in mods), (
+        assert any(f"_d{MAX_IN_FLIGHT}_" in m and "fifo_w64_" in m for m in mods), (
             f"no depth-{MAX_IN_FLIGHT} status FIFO in {sorted(mods)}")

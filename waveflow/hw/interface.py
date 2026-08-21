@@ -207,6 +207,27 @@ class InterfaceEndpoint(SimObj):
         """
         interface.bind(ep_name, self)
 
+    def physical_endpoints(self) -> "list[InterfaceEndpoint]":
+        """The endpoints this one **is, in hardware** — ``[self]`` for all but a composite.
+
+        A composite endpoint bundles several physical channels behind one name: an
+        :class:`~waveflow.hw.reverse_stream.AckedStreamMasterIF` is a forward stream *and* an ack
+        stream, and in C++ there is no acked-stream object at all — there are two ``hls::stream``
+        arguments.  So every walker that turns endpoints into ports, task arguments or edges asks for
+        this expansion instead of assuming one endpoint is one channel.
+
+        **The default is ``[self]``, which is the point.**  Nothing that is not a composite changes,
+        so the expansion surfaces only on the paths that actually need it rather than through a sweep
+        of every call site.
+
+        Order is the C++ argument order, and it is therefore part of the endpoint's contract: a
+        composite endpoint's channels appear **adjacent** in a
+        :class:`~waveflow.hw.mem_stream.KernelTask` signature, spliced in at the position its
+        attribute name occupies.  A hand-written body whose two channels are not adjacent should be
+        reordered rather than described with a second naming scheme.
+        """
+        return [self]
+
     def as_dir(self, direction: str) -> "InterfaceEndpoint | CapabilityView":
         """Return a capability view of this endpoint restricted to *direction*.
 
@@ -264,6 +285,21 @@ class Interface(SimObj):
 
         self.endpoints[ep_name] = endpoint
         endpoint.interface = self
+
+    def physical_interfaces(self) -> "list[Interface]":
+        """The interfaces this one **is, in hardware** — ``[self]`` for all but a composite.
+
+        The edge-side twin of :meth:`InterfaceEndpoint.physical_endpoints`, and it exists for the
+        same reason: an :class:`~waveflow.hw.reverse_stream.AckedStreamIF` is not a new kind of FIFO,
+        it is **two** FIFOs that a module wants to talk about as one thing.  So
+        :func:`~waveflow.build.composite_gen.derive_internal_edges` expands before it dispatches, and
+        gains no case for the composite — there is nothing to lower, only two ordinary streams.
+
+        Keeping the composite *registered* is deliberate even though it lowers to nothing: it holds
+        the pending FIFO and the bind-time depth check, and a module's structure should say that
+        those two streams belong together.
+        """
+        return [self]
 
     # -- realization hook ---------------------------------------------------------------------
     #
