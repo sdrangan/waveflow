@@ -160,7 +160,7 @@ def test_firblock_rank_correlations_match_the_documented_estimator(fir_validatio
 
 
 def test_sampling_page_metronome_table_is_recomputed():
-    """``guide/rf/python/sampling.md``'s table is the page's load-bearing claim: a relative ``timeout``
+    """``guide/rf/rfdc/sampling.md``'s table is the page's load-bearing claim: a relative ``timeout``
     loop slips and the absolute grid does not.  It is quoted as a *demonstrated* result, so the
     demonstration is re-run here and the page's cells matched against it.
     """
@@ -171,7 +171,7 @@ def test_sampling_page_metronome_table_is_recomputed():
     from waveflow.simulation.simulation import Simulation
     from tests.hw.test_rf_sample_if import TracingRFSampIF, _feeder
 
-    text = _page("guide/rf/python/sampling.md")
+    text = _page("guide/rf/rfdc/sampling.md")
     n, period, body = 6, 1.0, 0.1
 
     # (a) the rejected scheduler, run.
@@ -471,7 +471,7 @@ def test_the_rtl_page_reports_the_hook_findings_the_code_actually_produces():
 
 
 # ---------------------------------------------------------------------------
-# guide/rf/python/rules.md — the measurement behind each rule
+# guide/rf/rfdc/rules.md — the measurement behind each rule
 # ---------------------------------------------------------------------------
 #
 # The rules page states each law with one sentence of evidence.  That sentence is the whole reason a
@@ -495,7 +495,7 @@ def test_rule_1_quotes_the_recorded_rtl_loss():
     from tests.examples.test_rf_loopback_xsi import (WANT_ADC_DROPPED_IS_STRUCTURAL,
                                                      WANT_ADC_WORDS)
 
-    text = _page("guide/rf/python/rules.md")
+    text = _page("guide/rf/rfdc/rules.md")
     assert WANT_ADC_DROPPED_IS_STRUCTURAL, (
         "the gate no longer expects pattern A to drop; rule 1's evidence rests on it, and if the "
         "pass-through has genuinely been fixed this page needs rewriting rather than re-numbering")
@@ -532,7 +532,7 @@ def test_the_converter_parameter_split_matches_the_class():
         f"Rfdc's HwParam set changed to {sorted(hw)}; both parameter tables need updating")
     assert "full_scale" in plain, "full_scale is now a parameter type the pages do not describe"
 
-    for page in ("examples/rf_loopback/build.md", "guide/rf/python/converter.md"):
+    for page in ("examples/rf_loopback/build.md", "guide/rf/rfdc/converter.md"):
         text = _page(page)
         assert "`full_scale` is *not* a `DynParam`" in text \
             or "`full_scale` is not a `DynParam`" in text, (
@@ -551,7 +551,7 @@ def test_rule_4_quotes_the_capture_designs_measured_shortfall():
     from waveflow.hw.rf_samp_buf import RfSampBufIngress
     from tests.examples.test_rf_samp_buf_rx_xsi import WANT_ADC_WORDS
 
-    text = _page("guide/rf/python/rules.md")
+    text = _page("guide/rf/rfdc/rules.md")
     # The "**2** cycles" on the page is HISTORY -- the ingress that lost 1695 of 4096 -- and it is
     # checked for presence, not against the live constant.  The ingress is 1 today, and pinning the
     # historical figure to the current attribute is what would make the page rewrite its own past.
@@ -593,7 +593,7 @@ def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
     dropped = int(tb.adc_axis.dropped)
     assert dropped > 0, "the paced twin no longer sees the loss; both pages claim it does"
 
-    for page in ("guide/rf/python/capture.md", "guide/rf/python/rules.md"):
+    for page in ("guide/rf/rfdc/rules.md",):   # capture.md retired with the BRAM design
         text = _page(page)
         assert f"**{dropped} of 4096**" in text, (
             f"{page} quotes a pysim drop count that is not the one the model produces ({dropped})")
@@ -621,7 +621,7 @@ def test_rule_6_quotes_a_case_where_index_agrees_and_arrival_does_not():
     from examples.rf_blk_delay.rf_blk_delay import BLKSIZE, DELAY_BLOCKS
     from tests.examples.test_rf_blk_delay_xsi import RTL_GRID_SKEW
 
-    text = _page("guide/rf/python/rules.md")
+    text = _page("guide/rf/rfdc/rules.md")
     pysim_delay = DELAY_BLOCKS * BLKSIZE
     assert RTL_GRID_SKEW > 0, (
         "the backends now agree on arrival position too; rule 6's evidence needs rewriting again "
@@ -701,7 +701,7 @@ def test_the_pages_still_contain_tables_to_check():
     assert "rank correlation" in _page("examples/firblock/resource_fit.md")
     # The RF pages' claims live in tables, a counter dict and two pycon blocks; prose would make
     # every one of them vacuous.
-    assert "| absolute grid |" in _page("guide/rf/python/sampling.md")
+    assert "| absolute grid |" in _page("guide/rf/rfdc/sampling.md")
     run = _page("examples/rf_loopback/run.md")
     assert "'underrun':" in run
     assert "| leading flat blocks at the sink |" in run

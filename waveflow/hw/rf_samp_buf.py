@@ -256,7 +256,7 @@ class RfSampBufIngress(FreeRunMod):
     #: Getting this wrong is not theoretical: at 256 MSPS on a 300 MHz fabric with one sample per
     #: word, the first RTL run of this design dropped **1695 of 4096 samples** (58.6% accepted =
     #: 0.5/0.853, exactly the ratio the old 2 predicts) while pysim reported none — the documented
-    #: block-granularity blind spot (``docs/guide/rf/python/fidelity.md``), because a pysim ingress
+    #: block-granularity blind spot (``docs/guide/rf/rfdc/fidelity.md``), because a pysim ingress
     #: consumes a whole burst per firing and never meets the per-word rate at all.
     #: :meth:`RfSampBufRx.check_rate` turns that into a refusal at build time.
     cycles_per_word: ClassVar[int] = 1

@@ -70,7 +70,7 @@ The absolute grid, and why it is not a detail
 happens to be, so everything the body yielded for is **added** to the period and never given back;
 the error is proportional to the firing index, which is fatal for a converter rather than merely
 untidy.  The same reasoning, and the same bug, are recorded on
-:class:`~waveflow.hw.rf_samp_buf_tx.RfSampBufPlayer` and in ``docs/guide/rf/python/sampling.md``.
+:class:`~waveflow.hw.rf_samp_buf_tx.RfSampBufPlayer` and in ``docs/guide/rf/rfdc/sampling.md``.
 
 It is also what Stage 1's third assertion measures: a design that recovered from a starvation gap by
 re-basing its schedule on the gap would still look periodic, and would be wrong.

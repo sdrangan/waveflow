@@ -1,10 +1,10 @@
 ---
-title: Python
+title: Rfdc
 parent: RF converters
 nav_order: 1
 has_children: true
 audience: python
-summary: "The Python model of an RF design: wire a converter up, connect its two sides, understand the block-sampling model underneath, add a capture buffer, follow the design rules — and know what block-level modelling cannot tell you."
+summary: "The converter itself: what Rfdc models, how to instantiate and wire it, its two sides — a block-rate sample channel on the RF domain and an ordinary AXI-Stream on the fabric — the block-sampling model underneath, and what that model cannot tell you."
 ---
 
 # RF converters — the Python model
@@ -20,7 +20,6 @@ The order is **do → understand → limits**, which is not the order any of it 
 | 3 | [Connecting the RF side](./rf_side.md) | `RFSampIF`, sources and sinks, `t0` |
 | 4 | [Connecting the fabric side](./axis_side.md) | packing, `samp_per_word`, and the rate check |
 | 5 | [Block sampling](./sampling.md) | the model you have been using: the block, the metronome, the grid |
-| 6 | [The capture buffer](./capture.md) | the first RF block that does something |
 | 7 | [The design rules](./rules.md) | seven things that make a design wrong if you break them |
 | 8 | [The fidelity boundary](./fidelity.md) | what this modelling can and cannot tell you |
 

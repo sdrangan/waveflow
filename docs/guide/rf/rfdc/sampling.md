@@ -1,6 +1,6 @@
 ---
 title: Block sampling
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 5
 audience: python
@@ -180,7 +180,6 @@ frequency-dependent one, which is a filter in the transport layer by accident.
 
 ## Next
 
-- [The capture buffer](./capture.md) — the first RF block that does something, and the page that
   needs the sample grid.
 - [RF loopback](../../../examples/rf_loopback/) — the worked example: a converter, a pass-through, and
   the loss gate.

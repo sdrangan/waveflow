@@ -100,13 +100,13 @@ from `check` rather than something a module says about itself. The RF loopback e
 
 Two arcs, and they are in the order you need them.
 
-**[Python](./python/)** — do it, then understand it, then learn what it cannot tell you. Start at the
-[quickstart](./python/quickstart.md); it is the shortest path to samples flowing. The
-[design rules](./python/rules.md) are the page to read before writing code of your own — seven things
+**[Python](./rfdc/)** — do it, then understand it, then learn what it cannot tell you. Start at the
+[quickstart](./rfdc/quickstart.md); it is the shortest path to samples flowing. The
+[design rules](./rfdc/rules.md) are the page to read before writing code of your own — seven things
 that make a design wrong if you break them.
 
 **XSI** — what changes at RTL. Not written yet; the Python arc's
-[fidelity boundary](./python/fidelity.md) ends by saying exactly what needs it, which is the honest
+[fidelity boundary](./rfdc/fidelity.md) ends by saying exactly what needs it, which is the honest
 argument for that section existing.
 
 ## See also

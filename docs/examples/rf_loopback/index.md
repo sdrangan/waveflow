@@ -49,7 +49,7 @@ pytest tests/examples/test_rf_loopback.py tests/hw/test_rf_sample_if.py
 
 ## Learning objectives
 
-- Model an RF sample channel as an [**interface** that owns a metronome](../../guide/rf/python/sampling.md)
+- Model an RF sample channel as an [**interface** that owns a metronome](../../guide/rf/rfdc/sampling.md)
   — a clock, a block cadence, a buffer, and loss counters living on the edge rather than in a node.
 - Model a **data converter** as a module carrying both directions, with `HwParam` structure
   (resolution, samples per word) separated from plain init-time knobs (the amplitude reference, the

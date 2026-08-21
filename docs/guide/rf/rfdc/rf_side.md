@@ -1,6 +1,6 @@
 ---
 title: Connecting the RF side
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 3
 audience: python

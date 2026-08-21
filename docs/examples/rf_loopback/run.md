@@ -63,7 +63,7 @@ The second term of that latency is the ADC's own hop, and it is the one that sur
 cannot emit samples it has not collected, so a block exists at its grid tick and is transmitted
 across the *following* period. That hop was invisible while the ADC's burst was charged at the fabric
 clock rather than at `samp_rate / samp_per_word`, and appeared the moment it was paced honestly. It
-is the same quantity the [fidelity contract](../../guide/rf/python/fidelity.md) states as *no dependency
+is the same quantity the [fidelity contract](../../guide/rf/rfdc/fidelity.md) states as *no dependency
 shorter than `2 × blksize` — one block per converter hop*.
 
 ## 6. The deliberate faults

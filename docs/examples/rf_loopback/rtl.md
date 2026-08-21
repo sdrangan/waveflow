@@ -163,13 +163,13 @@ went from dropping 72 words to dropping none. Both numbers live in
 > block stage still finishes a block's write before the next read, and once the DAC paces that write
 > there is nowhere to put what arrives meanwhile. No FIFO depth removes it — the stall is structural
 > to reading a whole block before writing one. That is the case
-> [pattern B](../../guide/rf/python/rules.md) answers, and `examples/rf_blk_delay` drops **zero** on
+> [pattern B](../../guide/rf/rfdc/rules.md) answers, and `examples/rf_blk_delay` drops **zero** on
 > the same converters. Do not quote 62 as a design constant; it depends on the model's input-FIFO
 > depth, and the gate asserts only the sign.
 
 ## See also
 
-- [The fidelity boundary](../../guide/rf/python/fidelity.md) — why that 72-word loss was invisible in pysim,
+- [The fidelity boundary](../../guide/rf/rfdc/fidelity.md) — why that 72-word loss was invisible in pysim,
   and still would be.
 - [Overriding a free-running body](../../guide/comp_codegen/freerunning_override.md) — the
   `kernel_task()` hook.

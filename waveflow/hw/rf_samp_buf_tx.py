@@ -433,7 +433,7 @@ class RfSampBufPlayer(FreeRunMod):
     #: In RTL this task is paced by ``TREADY``: it writes a word, the 2-deep boundary port fills, and
     #: it waits for the DAC to take one.  **pysim has no such back-pressure for a burst write.**
     #: ``StreamIF`` routes intra-burst overflow to an unbounded counter rather than blocking — which
-    #: is deliberate (``docs/guide/rf/python/fidelity.md``) but means no queue depth can throttle this
+    #: is deliberate (``docs/guide/rf/rfdc/fidelity.md``) but means no queue depth can throttle this
     #: task.  Measured three ways: with the DAC-facing port unbounded, at 2 words deep, and at a whole
     #: block deep, the player emitted a block every 3.4 us at **every** sample rate — the fabric's
     #: rate, never the converter's.
@@ -557,7 +557,7 @@ class RfSampBufPlayer(FreeRunMod):
         #
         # ON AN ABSOLUTE GRID, not a relative timeout, and for exactly the reason
         # ``RFSampIF`` schedules its metronome that way (see
-        # ``docs/guide/rf/python/sampling.md#absolute-grid``): a relative wait restarts from wherever
+        # ``docs/guide/rf/rfdc/sampling.md#absolute-grid``): a relative wait restarts from wherever
         # ``now`` happens to be when the body finishes, so everything the body yielded for is ADDED to
         # the period and never given back.  Here that is the interface's own transfer time for the
         # burst just written -- 64 words at 250 MHz is a quarter of a block period -- which made the

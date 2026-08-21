@@ -16,7 +16,7 @@ summary: "Which sample buffer a design should use, decided by one checkable ques
 
 **First: you may not need one.** An `Rfdc` gives you an ordinary AXI-Stream, and consuming it
 directly is the right answer for anything that processes samples as they arrive — a filter, a
-detector, a decimator. See [adding an RF path](./python/quickstart.md). A buffer is what you add when
+detector, a decimator. See [adding an RF path](./rfdc/quickstart.md). A buffer is what you add when
 you need to *hold* samples rather than pass them through.
 
 If you do need one, there are two, and they are not a fast one and a slow one or an old one and a new
@@ -59,11 +59,11 @@ Overlap buys two things nothing else can:
 
 And it costs a reverse channel, because the writer must learn something the forward path cannot tell
 it — either *"is there room?"* (credit) or *"what became of what I sent?"* (an ack). Which of the two
-depends on the direction; see [Reverse channels](./python/rules.md) for the rule that selects them.
+depends on the direction; see [Reverse channels](./rfdc/rules.md) for the rule that selects them.
 
 Once that channel exists, so does everything that can go wrong with it: headroom to size, a rate
 contract to satisfy, counters that must be checked rather than assumed. Those are what the
-[design rules](./python/rules.md) are about, and none of them apply to `RfShotBuf`.
+[design rules](./rfdc/rules.md) are about, and none of them apply to `RfShotBuf`.
 
 ## Side by side
 
@@ -117,9 +117,9 @@ context, the continuous buffer is the wrong buffer, and that is not a limitation
 
 ## Next
 
-- The design rules — [seven things that make a converter design wrong](./python/rules.md), all of
+- The design rules — [seven things that make a converter design wrong](./rfdc/rules.md), all of
   which apply to `RfStreamBuf` and most of which are vacuous for `RfShotBuf`.
-- What the model cannot tell you — [the fidelity boundary](./python/fidelity.md).
+- What the model cannot tell you — [the fidelity boundary](./rfdc/fidelity.md).
 - The converter itself — [what `Rfdc` emulates](./index.md), which is the same either way.
 
 The per-buffer pages (`rfshotbuf/`, `rfstreambuf/`) are not written yet; they will carry the

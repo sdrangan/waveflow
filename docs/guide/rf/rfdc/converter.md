@@ -1,6 +1,6 @@
 ---
 title: Instantiating the converter
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 2
 audience: python

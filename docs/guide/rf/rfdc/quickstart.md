@@ -1,6 +1,6 @@
 ---
 title: Adding an RF path
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 1
 audience: python

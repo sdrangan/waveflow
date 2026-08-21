@@ -1,6 +1,6 @@
 ---
 title: Connecting the fabric side
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 4
 audience: python

@@ -1,6 +1,6 @@
 ---
 title: The fidelity boundary
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 8
 audience: python

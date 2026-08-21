@@ -186,7 +186,7 @@ class Rfdc(HwModule):
         ``nbits=16``, ``iq_mode=1`` is two complex samples in 64 bits.  Same information density
         either way; the parameter just counts what the design thinks in.
 
-        See ``docs/guide/rf/python/axis_side.md``.
+        See ``docs/guide/rf/rfdc/axis_side.md``.
         """
         return int(self.samp_per_word) * int(self.nbits) * (2 if int(self.iq_mode) else 1)
 

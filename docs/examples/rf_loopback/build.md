@@ -47,7 +47,7 @@ Four endpoints, in two pairs:
 The two stream endpoints are the ones that would **cross the [cut](../../guide/flows/modules.md#the-cut)**
 in an RTL build; the two RF endpoints stay behavioural on both sides of it.
 
-With the metronome living in the [interface](../../guide/rf/python/sampling.md#the-metronome-lives-in-the-edge),
+With the metronome living in the [interface](../../guide/rf/rfdc/sampling.md#the-metronome-lives-in-the-edge),
 the converter is **reactive on the RF side**: it has no timer of its own and simply responds to block
 arrivals.
 
@@ -55,7 +55,7 @@ arrivals.
 
 | parameter | binding | why |
 |---|---|---|
-| `n_rx`, `n_tx`, `nbits`, `iq_mode` | `HwParam` | they set the word layout synthesized logic is built *against* — see [what `iq_mode` means](../../guide/rf/python/axis_side.md#iq-mode) for real vs complex |
+| `n_rx`, `n_tx`, `nbits`, `iq_mode` | `HwParam` | they set the word layout synthesized logic is built *against* — see [what `iq_mode` means](../../guide/rf/rfdc/axis_side.md#iq-mode) for real vs complex |
 | `samp_per_word` | `HwParam`, **integer** | port width is `samp_per_word · nbits`; a sample cannot straddle a slot |
 | `full_scale`, `t0_rx`, `t0_tx` | plain init-time fields | one artifact serves every value |
 
@@ -170,7 +170,7 @@ on both sides of it.
 **No `depth=` on the AXIS edges**, and that is a correction rather than an omission. These become the
 DUT's top-level ports, and a top-level argument cannot carry a FIFO depth: Vitis ignores the pragma
 (`HLS 214-387`) and the RTL gets the default of 2. `composite_top_spec` now refuses the declaration
-outright — see [the fidelity boundary](../../guide/rf/python/fidelity.md#the-resolution-limit).
+outright — see [the fidelity boundary](../../guide/rf/rfdc/fidelity.md#the-resolution-limit).
 
 ### Graph and procedure are separate objects
 

@@ -1,6 +1,6 @@
 ---
 title: The design rules
-parent: Python
+parent: Rfdc
 grand_parent: RF converters
 nav_order: 7
 audience: python
@@ -193,10 +193,10 @@ converter has to be a task plus an internal channel. There is no number you can 
 
 | rule | page |
 |---|---|
-| 1, 2, 3 | [The fidelity boundary](./fidelity.md#what-fixing-it-took), [the capture buffer](./capture.md#which-task-may-block--the-asymmetry-that-is-the-design) |
-| 4 | [Connecting the fabric side](./axis_side.md#the-rate-check-and-what-it-does-not-cover), [the capture buffer](./capture.md) |
+| 1, 2, 3 | [The fidelity boundary](./fidelity.md#what-fixing-it-took) |
+| 4 | [Connecting the fabric side](./axis_side.md#the-rate-check-and-what-it-does-not-cover) |
 | 5 | [Connecting the RF side](./rf_side.md#reading-the-counters), [block sampling](./sampling.md#the-counters-are-the-contract) |
-| 6 | [Block sampling](./sampling.md#t0-is-the-synchronization-primitive), [the capture buffer](./capture.md#four-cases-one-loop) |
+| 6 | [Block sampling](./sampling.md#t0-is-the-synchronization-primitive) |
 | 7 | [Connecting the fabric side](./axis_side.md#do-not-declare-a-depth-on-these-interfaces) |
 
 The full diagnoses live in `plans/adc_model.md` and `plans/behavioral_edges.md`. This page keeps one
