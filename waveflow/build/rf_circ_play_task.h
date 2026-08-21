@@ -30,14 +30,30 @@
 // nothing else reads it, there is no channel, no progress pointer, no MARGIN and no spin.  It lowers
 // to a BRAM with no dataflow semantics attached.
 //
-// LEAD = 2, DERIVED RATHER THAN TUNED.  The verdict for play k arrives when its LAST sample plays,
-// at slot `base + k*PERIOD + NSAMP`; command k+1 must be loaded before slot `base + (k+1)*PERIOD`.
-// Blocking on each response therefore leaves a lead of `PERIOD - NSAMP` slots -- ample when
-// PERIOD > NSAMP + load time, and NEGATIVE at back-to-back replay (PERIOD == NSAMP), where a
-// blocking body underruns by construction.  Two covers both, and it is the configuration
-// scratchpad/chain's `chain_c2` measured as the only non-wedging one.  MAX_IN_FLIGHT bounds it from
-// the other side: the loader refuses with TX_NO_SLOT rather than accepting a command it cannot
-// remember.
+// THE SIZING RULE, DERIVED AND THEN MEASURED.
+//
+//     LEAD  >=  ceil( (T_load + NSAMP - 1) / PERIOD )
+//
+// where T_load is the latency from *the response that frees a slot* to *the last payload word of
+// the command it releases*, in DAC slots.  The window available for that work is
+// `LEAD*PERIOD - NSAMP + 1` slots: the response for play k arrives when its last sample plays, at
+// slot `base + k*PERIOD + NSAMP - 1`, and the command it releases (play k+LEAD) is due at slot
+// `base + (k+LEAD)*PERIOD`.
+//
+// MEASURED at RTL (2026-08-21, VCD of the internal channels, xczu48dr @ 250 MHz, 64 MSa/s):
+//
+//     response -> last payload word   74 cycles median (18.9 slots), 150 worst (38.4 slots)
+//     window at LEAD = 2              65 slots (254 cycles)
+//     margin                          3.43x median, 1.69x worst
+//     minimum LEAD from the measured T_load   ceil((18.9 + 63)/64) = 2
+//
+// So LEAD = 2 is not a round number that happened to work: it is the SMALLEST value this geometry
+// admits, and the measurement says so.  At LEAD = 1 the window is `PERIOD - NSAMP + 1` = ONE slot
+// against a need of ~19 -- short by a factor of 19, which is why back-to-back replay cannot be
+// served by a scheduler that blocks on each response.
+//
+// The framing overhead does NOT eat the slack at LEAD = 2; that hypothesis was checked and refuted
+// with the numbers above.  What DID look like slack exhaustion was the `k = 1` bug below.
 //
 // THE RESET TRAP APPLIES.  This body WRITES (a command) before it has read anything blocking on the
 // FIRST path.  `#pragma HLS reset` in the body does not close it under Vitis 2025.1 -- measured;
@@ -122,7 +138,23 @@ static void rf_circ_play_task(hls::stream<ap_uint<W> >& wave_in,
             TxResp r;
             r.read_stream<W>(resp_in);             // blocking HERE is correct: nothing else to do
             base = r.samp_start;
-            k = 1;
+            // THE TRAIN STARTS AT k = LEAD, NOT k = 1, and it is forced rather than chosen.  The
+            // response for the start_now window arrives when its LAST sample plays -- i.e. at slot
+            // `base + NSAMP`, which at back-to-back replay (PERIOD == NSAMP) IS slot
+            // `base + 1*PERIOD`.  Play 1 is therefore ALREADY DUE at the moment this task first
+            // learns where play 0 landed, and the command for it cannot be loaded until after that.
+            //
+            // MEASURED at RTL with `k = 1` (the value this line held until 2026-08-21): play 1's
+            // first EIGHT samples arrived after their slots had gone, took the player's BEFORE path,
+            // and were discarded -- 8 zero-filled DAC slots, then the window resumed mid-waveform at
+            // position 8.  Every later play was then exactly PERIOD apart, so it read as a constant
+            // phase error rather than as the one-off it is.
+            //
+            // `LEAD` is the right constant because it was derived from the same relationship: it is
+            // how many periods of work this task keeps in flight, so it is also how far ahead the
+            // first schedulable slot is.  The Python twin has always had it; this line was the
+            // divergence.
+            k = LEAD;
             if (r.status == RF_TX_TRANSMITTED) n_played = n_played + 1; else n_late = n_late + 1;
             state = RF_CIRC_REPEAT;
         }

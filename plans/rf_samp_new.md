@@ -981,9 +981,36 @@ blocking on each response leaves a lead of `PERIOD - NSAMP` slots:
 - **`PERIOD ≈ NSAMP`** (back-to-back replay) — a blocking body underruns *by construction*. It must
   keep `LEAD >= 2` outstanding, harvesting non-blockingly.
 
-**Use `LEAD = 2`.** It covers both, it is the configuration the SOB sandbox measured as the only
-non-wedging one (`scratchpad/chain/`, `chain_c2`), and `MAX_IN_FLIGHT` already bounds it — the loader
-refuses with `TX_NO_SLOT` rather than accepting a command it cannot remember.
+**Use `LEAD = 2`** — and it is the smallest value the geometry admits rather than a round number.
+The rule, derived and then measured:
+
+```
+LEAD  >=  ceil( (T_load + NSAMP - 1) / PERIOD )
+```
+
+`T_load` is the latency from *the response that frees a slot* to *the last payload word of the
+command it releases*, in DAC slots. The window for that work is `LEAD*PERIOD - NSAMP + 1` slots: the
+response for play *k* arrives when its last sample plays, at slot `base + k*PERIOD + NSAMP - 1`, and
+the command it releases (play *k+LEAD*) is due at slot `base + (k+LEAD)*PERIOD`.
+
+**Measured at RTL** (2026-08-21, VCD of the internal channels, `xczu48dr` @ 250 MHz, 64 MSa/s,
+`NSAMP = PERIOD = 64`):
+
+| quantity | measured |
+|---|---|
+| response → last payload word (`T_load`) | **74 cycles median = 18.9 slots**; 150 worst = 38.4 |
+| window at `LEAD = 2` | **65 slots** (254 cycles) |
+| margin | **3.43× median, 1.69× worst** |
+| minimum `LEAD` from the measurement | `ceil((18.9 + 63)/64)` = **2** |
+
+At `LEAD = 1` the window is `PERIOD - NSAMP + 1` = **one slot** against a need of ~19 — short by a
+factor of 19, which is why back-to-back replay cannot be served by a scheduler that blocks on each
+response. `MAX_IN_FLIGHT` bounds `LEAD` from the other side: the loader refuses with `TX_NO_SLOT`
+rather than accepting a command it cannot remember.
+
+> **The framing overhead does not eat the slack at `LEAD = 2`** — 3.4× margin, measured. That was
+> the first hypothesis for the repeat-phase defect and it is refuted; the cause was a twin
+> divergence (see *Stage 1*).
 
 #### HLS — hand-written (`waveflow/build/rf_circ_play_task.h`)
 
@@ -1386,14 +1413,42 @@ survives a gap.
 > plays alternated played/late forever (21 / 20).  And an idle `REPEAT` pass must charge a fabric
 > cycle, or the pysim twin is a zero-time infinite loop; it hung.
 >
-> **The RTL gate runs.**  15296 samples, the `start_now` window bit-exact at slot 24, and **two**
-> zero runs in the whole playout — the lead-in and the `LEAD` hole — then 15200 consecutive fed
-> slots.  Not yet established: the repeats are not at the phase the schedule names (they resume at
-> `1008`, and the steady-region differences are `{1, -63, 2}` where a clean ramp tiling is
-> `{1, -63}` — the `2` is a skipped sample).  Pinned as an open defect in
-> `tests/examples/test_rf_circ_play_xsi.py` rather than asserted around.  Candidates: the player's
-> slot granularity against a block-granular twin (explains an offset, not a skip), or the `BEFORE`
-> path discarding a stale sample without advancing the slot.
+> **The RTL gate runs, and the phase is exact.**  15296 samples; the `start_now` window bit-exact at
+> slot 24; **two** zero runs in the whole playout — the 24-slot lead-in and a `LEAD` hole of exactly
+> one `PERIOD` — then **15144 consecutive samples that are the waveform tiled bit-exactly**, every
+> play start exactly `PERIOD` apart.
+>
+> #### The repeat-phase defect, root-caused (2026-08-21)
+>
+> The first RTL run showed repeats resuming at `1008` and a `+2` in the difference histogram, pinned
+> as an open defect.  **Cause: the two twins were running different schedules.**
+> `rf_circ_play_task.h` started its train at `k = 1` where the Python twin started at `k = LEAD` —
+> the `k = LEAD` fix was applied to pysim when it was found and **never propagated to the HLS body**.
+>
+> The arithmetic was the way in, and it separated the symptoms rather than confirming a guess:
+> **one** `+2` in 15200 samples, against an **8**-sample offset. Not the 8-and-8 that would have made
+> them one arithmetic phenomenon — but one *cause* with two shapes:
+>
+> - play 1 was due at slot `base + PERIOD`, and its command could not be issued until the response
+>   for play 0 arrived at slot `base + NSAMP - 1` — at `PERIOD == NSAMP`, the same instant;
+> - by the time its samples reached the player, `slot` had passed them.  Positions 0–7 took the
+>   **`BEFORE`** path and were discarded: **8 zero-filled DAC slots**, then the window resumed
+>   mid-waveform at position 8.  One further sample was lost during the catch-up — the `+2`.
+> - every play after that was exactly `PERIOD` apart, which is what made a one-off scheduling bug
+>   read as a constant phase error.
+>
+> **Which of the three loss paths:** the **player** discarded them (`BEFORE`), not the loader and not
+> the converter.  **And the counters could not have told us**: a `TxStatus` is emitted only for the
+> sample carrying `request_status`, which is the **last** of a window, so a window that loses nine
+> leading samples and delivers its last one on time reports `TX_TRANSMITTED`.  `n_late` reads zero.
+> That is this file's stated design ("the RTL verdict already answers *did the last sample make it?*
+> — not *did the whole frame?*") and the consequence is worth naming: **partial window loss is
+> invisible to `n_late` in both backends.**  What catches it is the playout, which is why the gate
+> asserts samples and not counters.
+>
+> **The framing-overhead hypothesis was checked and refuted** — see the measurement under *How far it
+> runs ahead*: 3.43× margin at `LEAD = 2`.  A slack shortfall would have drifted; the spacing was
+> already exactly `PERIOD` for 237 consecutive plays *before* the fix.
 >
 > **What moving the host into the DUT cost**: the fault injections behind assertions 2 and 3 (a
 > window aimed into the past, a starved host) were *testbench* behaviours, and a testbench that only

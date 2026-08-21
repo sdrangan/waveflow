@@ -5,11 +5,16 @@ testbench is file-driven. Moving the scheduler into the DUT removed that blocker
 pushes ``NSAMP`` words once, from the ``AxisMaster`` that already exists — and this file is what that
 bought.
 
-**What is asserted here, and what is not.**  The run completes, the ``start_now`` window plays
-bit-exact, and the converter does not starve after the startup transient. The *phase* of the repeats
-does **not** match the schedule exactly, and that is recorded as an open finding rather than
-asserted around — see :class:`TestTheRepeatPhaseIsNotYetBitExact`. Weakening a property until it
-passes is how a gate stops being one.
+**The phase is exact, and that is the point of the whole example.**  The platform's headline use is
+channel sounding, where the exactly-known repeat phase *is* the measurement — a drifting phase is a
+drifting delay estimate, so "approximately periodic" would not be usable for the thing this exists to
+do.  So the strong assertion is the one made: from the first scheduled play onward the stream is the
+waveform **tiled bit-exactly**, 15144 consecutive samples, with no gap and no skipped sample.
+
+An earlier revision of this file pinned two symptoms as an open defect — repeats resuming at 1008 and
+a ``+2`` in the difference histogram. Both are gone, and their cause is recorded in
+``rf_circ_play_task.h``: the HLS body started its train at ``k = 1`` where the Python twin started at
+``k = LEAD``. The twins were running different schedules.
 """
 from __future__ import annotations
 
@@ -20,7 +25,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.rf_repeat_play.rf_repeat_play import NSAMP, SAMP_BW, waveform
+from examples.rf_repeat_play.rf_repeat_play import (
+    LEAD,
+    NSAMP,
+    SAMP_BASE,
+    SAMP_BW,
+    waveform,
+)
 from examples.rf_repeat_play.rf_repeat_play_build import TOP, generate_tb
 from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
@@ -38,9 +49,22 @@ WANT_TOTAL_SAMPLES = 15296
 WANT_LEAD_IN = 24
 
 #: Zero runs in the whole playout.  **Two, and only two**: the lead-in above, and the ``LEAD`` hole
-#: that a deferred response makes unavoidable.  This is the strong steady-state property — after
-#: those, the converter is fed for 15200 consecutive samples with no gap at all.
+#: that a deferred response makes unavoidable.  After those, the converter is fed for 15144
+#: consecutive samples with no gap at all.
 WANT_ZERO_RUNS = 2
+
+#: Length of the startup hole, in slots.  **Exactly one PERIOD**, and that number is derived rather
+#: than measured-and-accepted: the train starts at ``k = LEAD``, so the plays at ``k = 1 .. LEAD-1``
+#: are never issued, and at ``LEAD = 2`` that is one skipped play.
+#:
+#: It read **8** before the ``k = LEAD`` fix, which is what a *partially* discarded window looks
+#: like — the leading samples of an over-due play taking the player's ``BEFORE`` path — and is the
+#: symptom that made a scheduling bug read as a phase error.
+WANT_HOLE = 64
+
+#: Where the scheduled train begins, and the length that is then fed without interruption.
+WANT_TRAIN_START = 152
+WANT_TRAIN_LEN = 15144
 
 
 def _require(cond: bool, why: str) -> None:
@@ -147,51 +171,100 @@ class TestTheDesignPlaysAtRtl:
             f"the converter starved {len(runs)} times, not {WANT_ZERO_RUNS}: {runs[:6]}. Runs after "
             f"the second are steady-state underruns.")
         assert runs[0][0] == 0 and runs[0][1] == WANT_LEAD_IN
-        assert runs[1][1] <= NSAMP, (
-            f"the startup hole is {runs[1][1]} slots — it must be under one play, because a "
-            f"deferred response costs at most the periods LEAD covers")
+        assert runs[1][1] == WANT_HOLE, (
+            f"the startup hole is {runs[1][1]} slots, not {WANT_HOLE}. Exactly one PERIOD is what "
+            f"starting the train at k = LEAD costs; anything SHORTER means a window was partly "
+            f"discarded rather than never issued, which is what the k = 1 defect looked like.")
         last = runs[1][0] + runs[1][1]
-        assert played[last:].size == 15200
+        assert last == WANT_TRAIN_START
+        assert played[last:].size == WANT_TRAIN_LEN
         assert played[last:].all(), "not one idle slot after the startup hole"
 
 
 @pytest.mark.xsi
-class TestTheRepeatPhaseIsNotYetBitExact:
-    """**An open finding, asserted as the defect it is rather than tidied away.**
+class TestTheRepeatPhaseIsExact:
+    """**The property the platform's headline use depends on.**
 
-    pysim says the schedule holds exactly: every play lands at ``base + k*PERIOD`` and every block
-    carries the waveform at the right phase. RTL says it very nearly does — the converter is fed
-    continuously and the values are the waveform's — but the repeats after the startup hole are
-    **not** at the phase the schedule names, and at least one sample is skipped.
+    Channel sounding measures delay by the phase of a known repeating waveform. A phase that drifts —
+    or that is merely *approximately* periodic — is a delay estimate that drifts, so "the values are
+    right and it never starves" is not enough. What has to hold is that play *k* starts at exactly
+    ``base + k*PERIOD``, for every *k*, with no sample lost anywhere in between.
 
-    Measured: the ramp's differences over the steady region are ``{1, -63}`` for a clean tiling, and
-    the run shows a **2** as well — one value stepped over. The repeats also resume at ``1008``
-    rather than ``1000``.
-
-    Two candidate causes, neither confirmed:
-
-    * the **player's slot granularity** against a block-granular pysim twin — the plan declares this
-      as fidelity limit 1, and it explains a phase *offset* but not a skipped sample;
-    * the player's ``BEFORE`` path, which discards a stale sample **without advancing the slot**. If
-      the loader and player disagree by one about which slot a window starts on, that path fires once
-      per repeat and eats exactly one sample.
-
-    This test pins the defect so it cannot regress unnoticed and so **fixing it is a visible
-    change**. It does not assert the property is met, because it is not.
+    Asserted three ways, because each catches something the others do not: the **spacing** of the
+    play starts (a scheduling error), the **difference histogram** (a lost sample anywhere), and a
+    **bit-exact tiling** (both, plus any value corruption).
     """
 
-    def test_the_steady_repeats_show_one_skipped_sample_per_wrap(self, played):
-        runs = _zero_runs(played)
-        steady = played[runs[1][0] + runs[1][1]:].astype(np.int64)
-        diffs = set(np.diff(steady).tolist())
-        assert diffs == {1, -63, 2}, (
-            f"the steady-region differences are {sorted(diffs)}. A clean tiling of a ramp is "
-            f"{{1, -63}}; the extra 2 is a skipped sample. If this is now {{1, -63}} the defect is "
-            f"FIXED — delete this test and assert the phase in TestTheDesignPlaysAtRtl instead.")
+    def test_the_play_starts_are_exactly_one_period_apart(self, played):
+        """Read off the data rather than from a counter: the waveform is a ramp from ``SAMP_BASE``,
+        so every occurrence of that value **is** a play start, and their spacing is the schedule."""
+        starts = np.nonzero(played == SAMP_BASE)[0]
+        assert starts.size > 200, f"only {starts.size} play starts in the run"
+        assert starts[0] == WANT_LEAD_IN
+        assert starts[1] - starts[0] == LEAD * NSAMP, (
+            f"the train begins {starts[1] - starts[0]} slots after the start_now window, not "
+            f"{LEAD * NSAMP}. The train starts at k = LEAD, so the first scheduled play is LEAD "
+            f"periods out — see the k = LEAD note in rf_circ_play_task.h.")
+        spacings = set(np.diff(starts[1:]).tolist())
+        assert spacings == {NSAMP}, (
+            f"consecutive plays are {sorted(spacings)} slots apart, not exactly {NSAMP}. Any value "
+            f"but one means the phase moves, and a moving phase is a moving delay estimate.")
 
-    def test_the_repeats_do_not_resume_at_the_scheduled_phase(self, played):
-        runs = _zero_runs(played)
-        steady = played[runs[1][0] + runs[1][1]:]
-        assert int(steady[0]) != int(waveform()[0]), (
-            "the repeats now resume at the waveform's first sample, which is the scheduled phase — "
-            "the defect this test records is fixed, so assert the phase properly and remove this")
+    def test_not_one_sample_is_lost_in_the_whole_steady_run(self, played):
+        """The difference histogram of a ramp tiled at period ``NSAMP`` is exactly ``{+1, -(NSAMP-1)}``.
+
+        A ``+2`` is a skipped sample — which is how the ``k = 1`` defect showed itself, a single one
+        left over from the leading samples of an over-due window. Nothing else can produce one.
+        """
+        train = played[WANT_TRAIN_START:].astype(np.int64)
+        diffs = set(np.diff(train).tolist())
+        assert diffs == {1, -(NSAMP - 1)}, (
+            f"the steady-region differences are {sorted(diffs)}, not {{1, {-(NSAMP - 1)}}}. "
+            f"Anything else is a lost or repeated sample.")
+
+    def test_the_train_is_the_waveform_tiled_bit_exactly(self, played):
+        """The whole claim in one comparison, at the far side of the converter.
+
+        15144 consecutive samples, every one equal to ``waveform()[i % NSAMP]``. It covers the
+        scheduler's private array, the command path, the in-band payload, the loader's tagging, the
+        player's three-way compare and the converter's own unpack — and it is the assertion that
+        would fail first if any of them slipped by a single slot.
+        """
+        train = played[WANT_TRAIN_START:]
+        assert train.size == WANT_TRAIN_LEN, (
+            f"{train.size} samples after the train start, not {WANT_TRAIN_LEN}")
+        want = waveform()[np.arange(train.size) % NSAMP]
+        bad = np.nonzero(train != want)[0]
+        assert bad.size == 0, (
+            f"{bad.size} of {train.size} samples differ from the tiled waveform; first at "
+            f"index {WANT_TRAIN_START + int(bad[0])}: got {int(train[bad[0]])}, "
+            f"want {int(want[bad[0]])}")
+
+
+@pytest.mark.xsi
+class TestWhatTheCountersDoAndDoNotSee:
+    """**A declared limit, recorded because the defect above exposed it.**
+
+    While the ``k = 1`` bug was live, play 1 lost **nine** of its 64 samples — eight never emitted,
+    one skipped — and the design's own ``n_late`` would still have read **zero**. That is not a
+    counter lying. A ``TxStatus`` is emitted only for the sample carrying ``request_status``, which
+    the loader sets on the **last** sample of a window, so the verdict answers *"did the last sample
+    make it?"* and not *"did the whole window?"*. The last sample of play 1 was on time.
+
+    ``plans/rf_samp_new.md`` states this ("the RTL verdict already answers 'did the last sample
+    make it?' — not 'did the whole frame?'"), and the consequence is worth pinning: **partial window
+    loss is invisible to ``n_late`` in both backends.** What catches it is the playout itself, which
+    is why the assertions above are made against the samples and not against a counter.
+    """
+
+    def test_the_playout_is_the_evidence_not_the_counters(self, played):
+        """A structural check, not a measurement: the gate must not rest on a counter that cannot
+        see the failure it is supposed to catch."""
+        src = (Path(__file__).resolve().parents[2]
+               / "waveflow" / "build" / "rf_tx_loader_task.h").read_text(encoding="utf-8")
+        assert "t.request_status = (ap_uint<1>)(k == (ap_uint<IDX_W>)(c.nsamp - 1));" in src, (
+            "the loader no longer marks exactly the LAST sample of a window. If marking changed, "
+            "the scope of the TxResp verdict changed with it, and this file's reliance on the "
+            "played samples rather than on n_late needs re-deriving.")
+        assert played[WANT_TRAIN_START:].all(), (
+            "the played stream is the only thing that sees a partially-lost window")
