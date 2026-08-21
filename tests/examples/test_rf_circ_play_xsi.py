@@ -34,7 +34,7 @@ from examples.rf_repeat_play.rf_repeat_play import (
 )
 from examples.rf_repeat_play.rf_repeat_play_build import TOP, generate_tb
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_repeat_play"
 TB = f"{TOP}_bfm_tb"
@@ -113,6 +113,10 @@ def played() -> np.ndarray:
     proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
     _require(proj.is_dir(),
              f"no csynth RTL at {proj} — run rf_repeat_play_build.py --through csynth")
+    # SECOND INSTANCE OF THIS CLASS: `*_proj/` is gitignored build output, and a gate that
+    # compares a cycle count against RTL it did not produce reports "a real behaviour change"
+    # when the truth is a stale artifact. See rtl_staleness().
+    _require(rtl_staleness(ROOT, 'rf_repeat_play') is None, rtl_staleness(ROOT, 'rf_repeat_play') or "")
 
     # Regenerate the file list FROM THE RTL ON DISK; never trust a committed `.f`.  A stale one names
     # files that may no longer be this design, and xsim would elaborate them and PASS.
