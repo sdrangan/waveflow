@@ -47,6 +47,7 @@ from waveflow.hw.rf_samp_buf import (
     samp_type,
     unpack_samples,
 )
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord as WORD
 from waveflow.simulation.simulation import Simulation
 
 
@@ -218,7 +219,7 @@ def tb_by_width() -> dict:
     out = {}
     for spw in (1, 2, 4):
         out[spw] = run_pysim(tb=RfSampBufRxTB(name=f"tb{spw}", sim=Simulation(),
-                                              samp_per_word=spw))
+                                              word=WORD.specialize(samp_per_word=spw)))
     return out
 
 
@@ -309,7 +310,7 @@ def test_a_window_that_is_not_a_whole_number_of_words_is_refused():
     real work and is deliberately not done, so the constraint is stated in band by a status code.
     """
     cmds = ((1, 3801, 8), (2, 3800, 7), (3, 3800, 8))     # misaligned start, misaligned len, legal
-    tb = RfSampBufRxTB(name="mis", sim=Simulation(), samp_per_word=4)
+    tb = RfSampBufRxTB(name="mis", sim=Simulation(), word=WORD.specialize(samp_per_word=4))
     run_pysim(tb=tb, cmds=cmds)
     got = responses(tb)
     assert [(t, s) for t, s, _n in got] == [(1, RF_SAMP_BUF_MISALIGNED),

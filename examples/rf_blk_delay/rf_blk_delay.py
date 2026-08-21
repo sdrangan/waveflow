@@ -69,6 +69,7 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamSink  # noqa: E402
 
 from examples.rf_loopback.rfdc import Rfdc  # noqa: E402
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Geometry — the RFSoC 4x2, and every number here is forced by something
@@ -467,8 +468,11 @@ class RfBlkDelayTB(FreeRunMod):
     blksize: int = BLKSIZE
     samp_rate: float = SAMP_RATE
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = SAMP_BW
-    samp_per_word: int = SAMP_PER_WORD
+    #: **The converter's packing convention**, as one type — samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  Replaces the ``nbits`` /
+    #: ``samp_per_word`` pair, one of which meant two things.  Everything downstream (the DUT's word
+    #: width, the block-to-word arithmetic) is read off it, never restated.
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=SAMP_PER_WORD)
     delay_blocks: int = DELAY_BLOCKS
     rx_depth: int = RX_DEPTH
     tx_depth: int = TX_DEPTH
@@ -499,9 +503,9 @@ class RfBlkDelayTB(FreeRunMod):
         self.blk_period = int(self.blksize) / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=1,
-                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+                         word=self.word)
         w = self.rfdc.axis_bitwidth
-        spw = int(self.samp_per_word)
+        spw = int(self.word.samp_per_word)
 
         #: **The design under test, as one module.**  The testbench instantiates the same class the
         #: synthesis flow elaborates, so the pysim golden and the RTL gate cannot be running different

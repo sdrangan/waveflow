@@ -51,6 +51,7 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
 
 from examples.rf_loopback.rfdc import Rfdc  # noqa: E402
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 
 # Re-exported so a reader of this example does not have to know which names are framework and which
 # are the scenario's -- the import above is the statement about where each one lives.
@@ -179,10 +180,13 @@ class RfSampBufRxTB(FreeRunMod):
     #: NOT a free parameter: see :meth:`check_rate`, which refuses a rate this design cannot take.
     samp_rate: float = 64e6
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = SAMP_BW
-    #: Samples per AXIS word.  **1 is the gated configuration** — the recorded RTL cycle count is for
+    #: **The converter's packing convention**, as one type — samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  Replaces the ``nbits`` /
+    #: ``samp_per_word`` pair, one of which meant two things.
+    #:
+    #: ``samp_per_word = 1`` is the **gated configuration** — the recorded RTL cycle count is for
     #: that geometry.  Larger values are the throughput lever, and are exercised in pysim.
-    samp_per_word: int = 1
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=1)
     depth: int = BUF_DEPTH
     horizon_margin: int = HORIZON_MARGIN
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
@@ -213,10 +217,10 @@ class RfSampBufRxTB(FreeRunMod):
         self.blk_period = int(self.blksize) / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=0,
-                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+                         word=self.word)
         w = self.rfdc.axis_bitwidth
         self.dut = RfSampBufRx(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                               samp_per_word=int(self.samp_per_word), depth=int(self.depth),
+                               samp_per_word=int(self.word.samp_per_word), depth=int(self.depth),
                                horizon_margin=int(self.horizon_margin), clk=self.axis_clk)
         #: Fraction of the ingress's capacity this scenario asks for — checked, not assumed.
         self.rate_util = self.check_rate()
@@ -304,7 +308,7 @@ def run_pysim(root=None, tb: "RfSampBufRxTB | None" = None, cmds=None) -> "RfSam
     tb = tb or RfSampBufRxTB(name="tb", sim=Simulation())
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
-        write_scenario(base, samp_per_word=int(tb.samp_per_word), cmds=cmds)
+        write_scenario(base, samp_per_word=int(tb.word.samp_per_word), cmds=cmds)
         for part in (tb.source, tb.cmd_drv, tb.out_sink, tb.resp_sink):
             part.root = base
         tb.sim.run_sim()
@@ -328,7 +332,7 @@ def captured_samples(tb: "RfSampBufRxTB") -> np.ndarray:
     raw = captured_words(tb)
     if raw.size == 0:
         return raw
-    return unpack_samples(raw, tb.rfdc.axis_bitwidth, int(tb.samp_per_word))
+    return unpack_samples(raw, tb.rfdc.axis_bitwidth, int(tb.word.samp_per_word))
 
 
 def responses(tb: "RfSampBufRxTB") -> list[tuple[int, int, int]]:

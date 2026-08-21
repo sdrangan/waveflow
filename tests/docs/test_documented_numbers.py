@@ -528,9 +528,16 @@ def test_the_converter_parameter_split_matches_the_class():
 
     hw = {n for n, a in Rfdc.__annotations__.items() if "HwParam" in str(a)}
     plain = set(Rfdc.__annotations__) - hw
-    assert hw == {"n_rx", "n_tx", "nbits", "iq_mode", "samp_per_word"}, (
+    assert hw == {"n_rx", "n_tx"}, (
         f"Rfdc's HwParam set changed to {sorted(hw)}; both parameter tables need updating")
     assert "full_scale" in plain, "full_scale is now a parameter type the pages do not describe"
+    # `word` is plain for a MECHANICAL reason, and the pages have to say which: HwModule wraps every
+    # HwParam value in `HwParamValue(int(value))`, so a type-valued parameter cannot be one.
+    assert "word" in plain
+    for page in ("examples/rf_loopback/build.md", "guide/rf/rfdc/converter.md"):
+        assert "HwParamValue" in _page(page), (
+            f"{page} must say WHY `word` is not an HwParam — 'it is a type' is the symptom, "
+            f"`HwParamValue(int(value))` is the reason")
 
     for page in ("examples/rf_loopback/build.md", "guide/rf/rfdc/converter.md"):
         text = _page(page)

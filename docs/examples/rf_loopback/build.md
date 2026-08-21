@@ -31,8 +31,8 @@ synchronization: the TX and RX sample counters have to hold a fixed relation, an
 single owner.
 
 ```python
-rfdc = Rfdc(name="rfdc", sim=sim, nbits=16, samp_per_word=4, full_scale=1.0,
-            t0_rx=0.0, t0_tx=blk_period)
+rfdc = Rfdc(name="rfdc", sim=sim, word=Rfsoc4x2SampWord.specialize(samp_per_word=4),
+            full_scale=1.0, t0_rx=0.0, t0_tx=blk_period)
 ```
 
 Four endpoints, in two pairs:
@@ -55,17 +55,23 @@ arrivals.
 
 | parameter | binding | why |
 |---|---|---|
-| `n_rx`, `n_tx`, `nbits`, `iq_mode` | `HwParam` | they set the word layout synthesized logic is built *against* — see [what `iq_mode` means](../../guide/rf/rfdc/axis_side.md#iq-mode) for real vs complex |
-| `samp_per_word` | `HwParam`, **integer** | port width is `samp_per_word · nbits`; a sample cannot straddle a slot |
+| `n_rx`, `n_tx` | `HwParam` | RF channels per direction on the AXIS side |
+| `word` | plain field, a **type** | the whole sample geometry — samples per beat, effective bits, container bits, `iq_mode`, and the two packing rules a serializer cannot know |
 | `full_scale`, `t0_rx`, `t0_tx` | plain init-time fields | one artifact serves every value |
+
+**`word` is a plain field for a mechanical reason.** `HwModule.__post_init__` wraps every `HwParam`
+value in `HwParamValue(int(value))`, so a type-valued parameter cannot be one. Nothing is lost: an
+`Rfdc` declares no `kernel_task`, so none of its parameters ever reached a template argument — they
+were build-time structure for the **models**, which read them off the word. See
+[what `iq_mode` means](../../guide/rf/rfdc/axis_side.md#iq-mode) for real vs complex.
 
 `samp_rate` is deliberately **not** on this list. It lives on the RF interface's clock and the
 converter *reads* it at bind; `t0` travels the other way and is *pushed*. Two declarations that can
 disagree is the bug both directions exist to avoid.
 
-There is also no `spc`. `samp_per_word` is the structural integer; everything else at this boundary
-is a rate ratio — derived, and generally fractional. The Python model needs neither conversion,
-because it works in seconds.
+There is also no `spc`. `word.samp_per_word` is the structural integer; everything else at this
+boundary is a rate ratio — derived, and generally fractional. The Python model needs neither
+conversion, because it works in seconds.
 
 > **`full_scale` is *not* a `DynParam`, and the reason is worth knowing.** `DynParam` does not mean
 > "binds at init"; it means **emitted as a member assignment** — `<model>.<field> = <expr>;`. This
@@ -78,24 +84,26 @@ because it works in seconds.
 
 "Evaluate the effect of bit widths in Python" only means anything if the Python does what the
 hardware will. So quantization is the integer-backed
-[`FixedField`](../../guide/schema/) — `ap_fixed<nbits, 1>` over `[-1, 1)`, rounding and
+[`FixedField`](../../guide/schema/) — `ap_fixed<bits_per_samp, 1>` over `[-1, 1)`, rounding and
 **saturating**, because a converter clips rather than wraps — and sample↔word packing goes through
 the [generated array serializers](../../guide/vectorization/), never a hand-rolled `.range()`:
 
 **You do not write this** — the `Rfdc` does it, on both paths. On the way in it quantizes each real
 sample to a stored integer and packs `samp_per_word` of them into a beat; on the way out it unpacks
-and dequantizes. The arithmetic is:
+and dequantizes. Writing `b` for the word's `bits_per_samp` — the **effective** width, never the
+container — the arithmetic is:
 
 ```
-stored = clamp( floor( x / full_scale * 2^(nbits-1) + 0.5 ),  -2^(nbits-1),  2^(nbits-1) - 1 )
-    x' = stored / 2^(nbits-1) * full_scale
+stored = clamp( floor( x / full_scale * 2^(b-1) + 0.5 ),  -2^(b-1),  2^(b-1) - 1 )
+    x' = stored / 2^(b-1) * full_scale
 ```
 
 `floor(· + 0.5)` is round-half-**up** (AP_RND — *not* round-half-away-from-zero, which disagrees on
 negative ties), and the clamp is the saturation (AP_SAT): a converter clips, it does not wrap. The
 dequantization is exact, because the scale is a power of two.
 
-At `nbits=16, samp_per_word=4` that is four samples per 64-bit AXI-Stream beat. The gate runs
+At 16 effective bits in a 16-bit slot, four to a beat, that is four samples per 64-bit AXI-Stream
+beat. The gate runs
 `(8, 8)`, `(16, 4)`, `(12, 4)` and `(16, 2)` — including a non-power-of-two width — because the bugs
 hand-rolled packing produces hide at exactly the awkward widths.
 
@@ -117,7 +125,7 @@ self.sink = RfDataSink(name="sink", sim=sim, out_bundle="vectors/rf_out", depth=
 `RfLoopbackSim(waveform=...)` takes `"grid"` or `"sine"`, and the difference is not cosmetic.
 
 **`"grid"`** draws random samples **exactly on the converter's quantization grid** —
-`m / 2^(nbits-1) · full_scale` for integer `m`. A clean loopback is then *bit*-identical to the
+`m / 2^(bits_per_samp-1) · full_scale` for integer `m`. A clean loopback is then *bit*-identical to the
 input rather than close, which is what makes the packing check strict: a tolerance would hide a
 packing bug, and packing is what this waveform exists to test. What it deliberately does **not**
 test is quantization: on-grid samples make `from_real` a no-op, so rounding and saturation are never

@@ -58,6 +58,7 @@ from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
 
 from examples.rf_loopback.rfdc import Rfdc  # noqa: E402
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 
 __all__ = [
     "BUF_DEPTH", "HORIZON_MARGIN", "IDX_BW", "RF_SAMP_BUF_MISALIGNED", "RF_SAMP_BUF_OK",
@@ -209,9 +210,11 @@ class RfSampBufTxTB(FreeRunMod):
     #: NOT a free parameter: see :meth:`check_rate`.
     samp_rate: float = 64e6
     axis_freq: float = RFSOC4X2_CLK_HZ
-    nbits: int = SAMP_BW
-    #: Samples per AXIS word.  **1 is the gated configuration.**
-    samp_per_word: int = 1
+    #: **The converter's packing convention**, as one type — samples per beat, effective bits,
+    #: container bits, and the two rules a serializer cannot know.  Replaces the ``nbits`` /
+    #: ``samp_per_word`` pair, one of which meant two things.  ``samp_per_word = 1`` is the **gated
+    #: configuration.**
+    word: type[RfdcSampWord] = Rfsoc4x2SampWord.specialize(samp_per_word=1)
     depth: int = TX_BUF_DEPTH
     horizon_margin: int = HORIZON_MARGIN
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
@@ -240,18 +243,18 @@ class RfSampBufTxTB(FreeRunMod):
         self.blk_period = int(self.blksize) / float(self.samp_rate)
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1,
-                         nbits=int(self.nbits), samp_per_word=int(self.samp_per_word))
+                         word=self.word)
         w = self.rfdc.axis_bitwidth
         self.dut = RfSampBufTx(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                               samp_per_word=int(self.samp_per_word), depth=int(self.depth),
+                               samp_per_word=int(self.word.samp_per_word), depth=int(self.depth),
                                horizon_margin=int(self.horizon_margin),
                                # pysim's quantum on the converter edge is a BLOCK: Rfdc's DAC
                                # process takes one blksize burst per event.  A modelling shape only
                                # -- the rate is charged per word either way.
-                               blk_words=int(self.blksize) // int(self.samp_per_word),
+                               blk_words=int(self.blksize) // int(self.word.samp_per_word),
                                # The metronome, handed over directly: pysim cannot deliver it
                                # through the wire.  See RfSampBufPlayer.dac_word_rate.
-                               dac_word_rate=float(self.samp_rate) / int(self.samp_per_word),
+                               dac_word_rate=float(self.samp_rate) / int(self.word.samp_per_word),
                                clk=self.axis_clk)
         #: Fraction of the player's capacity this scenario asks for — checked, not assumed.
         self.rate_util = self.check_rate()
@@ -313,7 +316,7 @@ def run_pysim(root=None, tb: "RfSampBufTxTB | None" = None, cmds=GATE_COMMANDS) 
     tb = tb or RfSampBufTxTB(name="tb", sim=Simulation())
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
-        write_scenario(base, samp_per_word=int(tb.samp_per_word), cmds=cmds)
+        write_scenario(base, samp_per_word=int(tb.word.samp_per_word), cmds=cmds)
         for part in (tb.cmd_drv, tb.sink, tb.resp_sink):
             part.root = base
         tb.sim.run_sim()

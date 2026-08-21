@@ -191,7 +191,7 @@ def test_words_per_cycle_is_derived_not_declared():
 
     tb = make_xsi_tb()
     got = tb.rfdc.words_per_cycle(tb.rfdc.rx_stream, tb.rfdc.rx_samp_rate)
-    assert got == pytest.approx(tb.samp_rate / (tb.samp_per_word * tb.axis_freq))
+    assert got == pytest.approx(tb.samp_rate / (tb.word.samp_per_word * tb.axis_freq))
     assert 0.0 < got < 1.0, "a ratio above 1 would mean the port cannot carry the rate"
 
 

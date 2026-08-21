@@ -27,6 +27,7 @@ from waveflow.simulation.simulation import Simulation
 
 from examples.rf_loopback.rf_loopback import RfLoopbackSim, RfLoopbackTB, RfSampPassThrough
 from examples.rf_loopback.rfdc import Rfdc
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord as WORD
 
 
 # --------------------------------------------------------------------------------------------
@@ -73,8 +74,12 @@ class TestLoopback:
         # 64 MSa/s per sample-per-word -> utilisation 0.256 at every geometry, comfortably inside
         # the pass-through's one-block budget.
         samp_rate = 64e6 * samp_per_word
-        sim = RfLoopbackSim(n_src_blk=4, nbits=nbits, samp_per_word=samp_per_word, blksize=64,
-                            samp_rate=samp_rate)
+        # A geometry is a WORD, and here effective == container: the sweep is about packing, and
+        # a separated effective width is the next commit's subject, tested where it belongs.
+        sim = RfLoopbackSim(n_src_blk=4, blksize=64, samp_rate=samp_rate,
+                            word=RfdcSampWord.specialize(samp_per_word=samp_per_word,
+                                                         bits_per_samp=nbits,
+                                                         bits_per_samp_pack=nbits))
         sim.run()
         sim.check()
 
@@ -84,8 +89,9 @@ class TestLoopback:
         sim.check()
 
     def test_the_axis_word_is_samp_per_word_times_nbits(self):
-        tb = RfLoopbackTB(name="w", sim=Simulation(), nbits=12, samp_per_word=4, blksize=64,
-                          n_blk=1)
+        tb = RfLoopbackTB(name="w", sim=Simulation(), blksize=64, n_blk=1,
+                          word=RfdcSampWord.specialize(samp_per_word=4, bits_per_samp=12,
+                                                       bits_per_samp_pack=12))
         assert tb.rfdc.axis_bitwidth == 48
         assert tb.dut.s_in.bitwidth == 48
         assert tb.nwords_blk == 16                      # blksize / samp_per_word
@@ -311,13 +317,14 @@ class TestRfdcGuards:
 
     def test_a_sample_rate_the_axis_port_cannot_carry_fails_loud(self):
         """A rate ratio above 1 is a design error, not something to simulate."""
-        sim = RfLoopbackSim(n_src_blk=2, blksize=64, samp_rate=1.6e9, samp_per_word=4,
+        sim = RfLoopbackSim(n_src_blk=2, blksize=64, samp_rate=1.6e9,
+                            word=WORD.specialize(samp_per_word=4),
                             axis_freq=300e6)            # 1.6e9 > 4 * 300e6
         with pytest.raises(ValueError, match="exceeds what the AXIS port can carry"):
             sim.run()
 
     def test_a_blksize_that_splits_a_sample_across_words_fails_loud(self):
-        sim = RfLoopbackSim(n_src_blk=2, blksize=66, samp_per_word=4)
+        sim = RfLoopbackSim(n_src_blk=2, blksize=66, word=WORD.specialize(samp_per_word=4))
         with pytest.raises(ValueError, match="not a multiple of samp_per_word"):
             sim.run()
 
@@ -326,8 +333,21 @@ class TestRfdcGuards:
             Rfdc(name="r", sim=Simulation(), n_rx=2)
 
     def test_interleaved_iq_is_refused_at_stage_1(self):
+        """The WORD can already say "interleaved"; the CONVERTER still cannot do it.
+
+        That split is the point of moving ``iq_mode`` onto the type: the packing rule is stated and
+        tested (see ``tests/hw/test_rfdc_samp_word.py``) while the converter's two halves — the
+        complex RF bundle format and the real-only conformance twin — remain the open work, and the
+        refusal says which is which.
+        """
         with pytest.raises(NotImplementedError, match="real samples only"):
-            Rfdc(name="r", sim=Simulation(), iq_mode=1)
+            Rfdc(name="r", sim=Simulation(), word=RfdcSampWord.specialize(samp_per_word=2,
+                                                                          iq_mode=True))
+
+    def test_a_word_that_is_not_a_word_type_is_refused(self):
+        """``word`` is a type, not a width; handing it a width is the mistake this catches."""
+        with pytest.raises(TypeError, match="must be an RfdcSampWord subclass"):
+            Rfdc(name="r", sim=Simulation(), word=64)
 
     def test_a_zero_full_scale_is_refused_because_it_is_also_falsy(self):
         with pytest.raises(ValueError, match="positive amplitude reference"):
