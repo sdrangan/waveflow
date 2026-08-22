@@ -136,7 +136,7 @@ class RfdcSampWord(IntField):
         """
         spw = int(cls.samp_per_word if samp_per_word is None else samp_per_word)
         eff = int(cls.bits_per_samp if bits_per_samp is None else bits_per_samp)
-        pack = int(cls.bits_per_samp_pack if bits_per_samp_pack is None else bits_per_samp_pack)
+        cont = int(cls.bits_per_samp_pack if bits_per_samp_pack is None else bits_per_samp_pack)
         iq = bool(cls.iq_mode if iq_mode is None else iq_mode)
         just = str(cls.justify if justify is None else justify)
         order = str(cls.iq_order if iq_order is None else iq_order)
@@ -147,9 +147,9 @@ class RfdcSampWord(IntField):
             raise ValueError(
                 f"bits_per_samp must be at least 2 (a signed sample needs a sign bit and a "
                 f"magnitude bit), got {eff}.")
-        if pack < eff:
+        if cont < eff:
             raise ValueError(
-                f"bits_per_samp_pack={pack} is narrower than bits_per_samp={eff}: the container "
+                f"bits_per_samp_pack={cont} is narrower than bits_per_samp={eff}: the container "
                 f"cannot be smaller than what it contains. bits_per_samp is what the converter "
                 f"RESOLVES; bits_per_samp_pack is the slot it rides in.")
         if just not in JUSTIFY:
@@ -159,23 +159,23 @@ class RfdcSampWord(IntField):
 
         overrides = cls.validate_specialize_kwargs(kwargs)
         override_items = tuple(sorted(overrides.items()))
-        key = (cls, spw, eff, pack, iq, just, order, override_items)
+        key = (cls, spw, eff, cont, iq, just, order, override_items)
         cached = cls._specializations.get(key)
         if cached is not None:
             return cached
 
-        bw = spw * pack * (2 if iq else 1)
-        subclass_name = (f"RfdcSampWord{spw}x{eff}" + (f"in{pack}" if pack != eff else "")
+        bw = spw * cont * (2 if iq else 1)
+        subclass_name = (f"RfdcSampWord{spw}x{eff}" + (f"in{cont}" if cont != eff else "")
                          + ("_iq" if iq else ""))
         attrs = cls.merge_specialize_attrs(
             {
-                "samp_per_word": spw, "bits_per_samp": eff, "bits_per_samp_pack": pack,
+                "samp_per_word": spw, "bits_per_samp": eff, "bits_per_samp_pack": cont,
                 "iq_mode": iq, "justify": just, "iq_order": order,
                 "bitwidth": bw, "signed": False, "cpp_type": f"ap_uint<{bw}>",
                 "__module__": cls.__module__,
                 "__doc__": (
                     f"{spw} {'complex' if iq else 'real'} sample(s) per beat, {eff} effective bits "
-                    f"in a {pack}-bit slot, {just}-justified: a {bw}-bit word."),
+                    f"in a {cont}-bit slot, {just}-justified: a {bw}-bit word."),
             },
             overrides,
         )
@@ -291,10 +291,10 @@ class RfdcSampWord(IntField):
     def describe(cls) -> str:
         """One line naming every rule this word fixes — for error messages and docs."""
         kind = "complex" if cls.iq_mode else "real"
-        pack = (f"{cls.bits_per_samp}-in-{cls.bits_per_samp_pack} ({cls.justify}-justified)"
-                if cls.bits_per_samp != cls.bits_per_samp_pack else f"{cls.bits_per_samp}-bit")
+        layout = (f"{cls.bits_per_samp}-in-{cls.bits_per_samp_pack} ({cls.justify}-justified)"
+                  if cls.bits_per_samp != cls.bits_per_samp_pack else f"{cls.bits_per_samp}-bit")
         order = f", {cls.iq_order}" if cls.iq_mode else ""
-        return (f"{cls.samp_per_word} {kind} sample(s)/beat, {pack}{order} "
+        return (f"{cls.samp_per_word} {kind} sample(s)/beat, {layout}{order} "
                 f"-> {cls.bitwidth}-bit word")
 
 
@@ -322,3 +322,231 @@ class Rfsoc4x2SampWord(RfdcSampWord):
 
     bits_per_samp: ClassVar[int] = 14
     bits_per_samp_pack: ClassVar[int] = 16
+
+
+# ------------------------------------------------------------------------------------------------
+# The public conversion pair
+# ------------------------------------------------------------------------------------------------
+#
+# Before these, turning samples into words meant composing three calls with two easily-swapped type
+# arguments::
+#
+#     words = write_array(W.to_slots(from_real(x, W.samp_type())),
+#                         elem_type=W.slot_type(), word_bw=W.bitwidth)
+#
+# That recipe is correct — and it is exactly the ``get_pipelined`` / ``write_pipelined`` failure
+# mode: correct usage that is silent-if-wrong and undiscoverable.  ``samp_type()`` where
+# ``slot_type()`` belongs is the effective-vs-container confusion this module exists to prevent, and
+# it lays the samples out at the wrong stride — a different word, no exception.  So the composition
+# gets a name, and the two type arguments stop being the caller's to get right.
+#
+# ``write_array`` / ``read_array`` are imported inside the functions rather than at module scope:
+# ``arrayutils`` pulls in ``waveflow.build``, and a schema type should not drag the build stack into
+# every import of itself.  Same reason ``rf_samp_buf.pack_samples`` does it.
+
+
+def _as_word_type(word_type: Any, fn: str) -> type[RfdcSampWord]:
+    """The one argument both functions share, checked once and with the fix in the message."""
+    if not (isinstance(word_type, type) and issubclass(word_type, RfdcSampWord)):
+        raise TypeError(
+            f"{fn}() takes the WORD TYPE as its first argument — the packing convention, not a "
+            f"width. Got {word_type!r}. Build one with RfdcSampWord.specialize(...) or a board "
+            f"preset such as Rfsoc4x2SampWord.specialize(samp_per_word=4).")
+    return word_type
+
+
+def _chunks_per_word(word_type: type[RfdcSampWord]) -> int:
+    """``uint64`` chunks one word occupies — ``1`` up to 64 bits, ``ceil(bitwidth / 64)`` above."""
+    return -(-int(word_type.bitwidth) // 64)
+
+
+def _word_row_shape(word_type: type[RfdcSampWord], n_words: int) -> tuple[int, ...]:
+    """The shape one channel's packed words occupy: ``(n_words,)``, or ``(n_words, k)`` over 64 bits.
+
+    The wide case is not something invented here — it is the ``(n, k)`` little-endian ``uint64``
+    convention the serializers already use and the rest of Waveflow already reads.  It is spelled out
+    in one place so the two functions cannot decide it differently.
+    """
+    if int(word_type.bitwidth) <= 64:
+        return (int(n_words),)
+    return (int(n_words), _chunks_per_word(word_type))
+
+
+def pack(word_type: type[RfdcSampWord], samps: Any) -> np.ndarray:
+    """Stored sample **integers** ``(n_ch, n_samp)`` -> packed AXIS words ``(n_ch, n_words)``.
+
+    The inverse of :func:`unpack`, exactly: nothing is padded, truncated or rounded here, so
+    ``unpack(W, pack(W, x))`` returns ``x``.
+
+    Parameters
+    ----------
+    word_type
+        The :class:`RfdcSampWord` subclass this stream is packed to.  **Explicit on both sides of
+        the pair** — see :func:`unpack`, where it cannot be inferred, and so is not inferred here
+        either.
+    samps
+        A 2-D ``(n_ch, n_samp)`` array of **stored integers**, channel-major, or a ``DataArray`` over
+        them.  Complex when ``word_type.iq_mode``, with integral real and imaginary parts.
+
+    Integers, not fixed-point
+    -------------------------
+    A real-valued input would make this function **lossy** — quantization happening inside a call
+    whose name says formatting — and the one place quantization must not hide is a function the
+    caller believes is bit-shuffling.  The two questions stay in two calls::
+
+        stored = from_real(x, Word.samp_type())   # quantize — the CONVERTER's question,
+                                                  #            at bits_per_samp
+        words  = pack(Word, stored)               # lay out   — the BUS's question, lossless
+
+    So a float array is refused rather than quantized, and the message names the missing call.  The
+    caller therefore knows the amplitude scale, which is right: ``full_scale`` is a property of the
+    converter (:class:`~examples.rf_loopback.rfdc.Rfdc`), not of the word.
+
+    Channel-major, per channel
+    --------------------------
+    ``(n_ch, n_samp)`` because the RF side is already ``(n_ch, blksize)``; the other order puts a
+    transpose at every boundary crossing.  Each channel is packed **independently** into its own row
+    of words, which deliberately declines to answer the open "one AXIS port per channel, or one wide
+    interleaved port?" question in ``plans/adc_model.md``: interleaving these rows afterwards is a
+    separate step, while de-interleaving a committed layout is not.
+
+    Raises
+    ------
+    ValueError
+        If ``n_samp`` is not a whole number of words.  **Never padded** — that refusal is what makes
+        ``n_samp = n_words * samp_per_word`` exact on the way back, so :func:`unpack` needs no length
+        argument.  Also if a value does not fit ``bits_per_samp``: an over-range sample would shift
+        into its neighbour's slot and corrupt it silently.
+    TypeError
+        If the samples are not stored integers, or their realness disagrees with ``iq_mode``.
+    """
+    from waveflow.hw.arrayutils import write_array
+
+    W = _as_word_type(word_type, "pack")
+    arr = np.asarray(getattr(samps, "val", samps))
+
+    if arr.ndim != 2:
+        raise ValueError(
+            f"pack() takes a 2-D (n_ch, n_samp) channel-major array, got shape {arr.shape}. One "
+            f"channel is (1, n_samp) — reshape(1, -1) — not (n_samp,): the shape is part of the "
+            f"contract, so that pack and unpack are inverses in shape as well as in value.")
+    n_ch, n_samp = int(arr.shape[0]), int(arr.shape[1])
+
+    spw = int(W.samp_per_word)
+    if n_samp % spw:
+        raise ValueError(
+            f"pack(): {n_samp} samples is not a whole number of {spw}-sample words for "
+            f"{W.describe()}. A sample cannot straddle a beat, and this pads nothing — the refusal "
+            f"is what makes the sample count exact on the way back through unpack().")
+    n_words = n_samp // spw
+
+    parts: tuple[np.ndarray, ...]
+    if np.iscomplexobj(arr):
+        if not W.iq_mode:
+            raise TypeError(
+                f"pack(): {W.__name__} is a real-sample word (iq_mode=False) but the samples are "
+                f"complex. Specialize with iq_mode=True, or carry I and Q as two real channels.")
+        parts = (arr.real, arr.imag)
+        for part in parts:
+            if part.size and not np.all(part == np.rint(part)):
+                raise TypeError(
+                    f"pack() takes STORED INTEGERS; these complex samples have non-integral parts. "
+                    f"Quantize first — from_real(x, {W.__name__}.samp_type()) on each of I and Q — "
+                    f"then pack. Quantizing here would make a formatting call lossy.")
+    else:
+        if W.iq_mode:
+            raise TypeError(
+                f"pack(): {W.__name__} carries interleaved I/Q (iq_mode=True), so it takes a "
+                f"COMPLEX sample array; got dtype {arr.dtype}. Pass i + 1j * q, in stored integers.")
+        if not np.issubdtype(arr.dtype, np.integer):
+            raise TypeError(
+                f"pack() takes STORED INTEGERS, got dtype {arr.dtype}. Quantizing here would make a "
+                f"formatting call lossy, so it is a separate step: "
+                f"stored = from_real(x, {W.__name__}.samp_type()), then pack({W.__name__}, stored).")
+        parts = (arr,)
+
+    lo, hi = -(1 << (int(W.bits_per_samp) - 1)), (1 << (int(W.bits_per_samp) - 1)) - 1
+    for part in parts:
+        if part.size and (part.min() < lo or part.max() > hi):
+            raise ValueError(
+                f"pack(): a stored sample is outside the {int(W.bits_per_samp)}-bit range "
+                f"[{lo}, {hi}] that {W.__name__} resolves (saw [{part.min():g}, {part.max():g}]). "
+                f"An over-range value shifts into the next slot and corrupts it silently. "
+                f"from_real() saturates into range; a hand-built array has to as well.")
+
+    out = np.zeros((n_ch,) + _word_row_shape(W, n_words), dtype=np.uint64)
+    slot_type, word_bw = W.slot_type(), int(W.bitwidth)
+    for ch in range(n_ch):
+        if not n_words:
+            continue
+        if W.iq_mode:
+            slots = W.iq_interleave(np.rint(arr[ch].real).astype(np.int64),
+                                    np.rint(arr[ch].imag).astype(np.int64))
+        else:
+            slots = np.asarray(arr[ch], dtype=np.int64).ravel()
+        # to_slots is the justification rule — the ONE thing a serializer cannot know.  The
+        # word<->slot step is the serializer's, never a .range() written here.
+        words = np.asarray(write_array(W.to_slots(slots), elem_type=slot_type, word_bw=word_bw))
+        if words.shape[0] != n_words:  # pragma: no cover — the geometry makes this unreachable
+            raise AssertionError(
+                f"pack(): {W.describe()} packed {n_samp} samples into {words.shape[0]} words, "
+                f"expected {n_words}.")
+        out[ch] = words.reshape(_word_row_shape(W, n_words))
+    return out
+
+
+def unpack(word_type: type[RfdcSampWord], samp_words: Any) -> np.ndarray:
+    """Packed AXIS words ``(n_ch, n_words)`` -> stored sample integers ``(n_ch, n_samp)``.
+
+    The exact inverse of :func:`pack`, and it needs no length argument: ``pack`` refuses a sample
+    count that is not a whole number of words, so ``n_samp = n_words * samp_per_word`` always.
+
+    Returns ``int64`` samples, or ``complex128`` ones with integral parts when
+    ``word_type.iq_mode``.  Turn them back into amplitudes the way they were quantized —
+    ``to_real(array(Word.samp_type(), stored))`` — which is the two-questions-two-calls split
+    :func:`pack` describes, run backwards.
+
+    Why the type is an argument
+    ---------------------------
+    ``unpack(samp_words)`` cannot work.  Packed words are a bare ``uint64`` array and a stream
+    ``get()`` hands you exactly that — no container, no ``element_type``, nothing a convention could
+    be recovered from.  Returning a ``DataArray[Word]`` from :func:`pack` would let this infer the
+    type for arrays that came from :func:`pack`, and never for the ones that came off a wire, which
+    is the case that matters.  Symmetry beats the shorter signature.
+    """
+    from waveflow.hw.arrayutils import read_array
+
+    W = _as_word_type(word_type, "unpack")
+    arr = np.asarray(getattr(samp_words, "val", samp_words))
+
+    want_ndim = 2 if int(W.bitwidth) <= 64 else 3
+    if arr.ndim != want_ndim:
+        wide = "" if want_ndim == 2 else (
+            f", the trailing axis being the {_chunks_per_word(W)} little-endian uint64 chunks a "
+            f"{int(W.bitwidth)}-bit word occupies")
+        raise ValueError(
+            f"unpack() takes the {want_ndim}-D (n_ch, n_words"
+            f"{'' if want_ndim == 2 else ', k'}) array pack() returns{wide}; got shape "
+            f"{arr.shape} for {W.describe()}. One channel is (1, n_words) — reshape(1, -1) — not "
+            f"(n_words,).")
+    if want_ndim == 3 and int(arr.shape[2]) != _chunks_per_word(W):
+        raise ValueError(
+            f"unpack(): {W.describe()} occupies {_chunks_per_word(W)} uint64 chunks per word, but "
+            f"the array carries {int(arr.shape[2])}.")
+
+    n_ch, n_words = int(arr.shape[0]), int(arr.shape[1])
+    n_samp = n_words * int(W.samp_per_word)
+    out = np.zeros((n_ch, n_samp), dtype=np.complex128 if W.iq_mode else np.int64)
+    slot_type, word_bw = W.slot_type(), int(W.bitwidth)
+    for ch in range(n_ch):
+        if not n_words:
+            continue
+        slots = read_array(arr[ch], elem_type=slot_type, word_bw=word_bw,
+                           shape=n_words * W.slots_per_word())
+        stored = W.from_slots(slots)
+        if W.iq_mode:
+            i, q = W.iq_deinterleave(stored)
+            out[ch] = i + 1j * q
+        else:
+            out[ch] = stored
+    return out

@@ -99,13 +99,89 @@ The choice of `uint64` follows from `Word.bitwidth`. A word wider than 64 bits i
 `(n, k)` little-endian `uint64` rows rather than refused — the same
 [wide-word convention](../../interface/overview.md) the rest of Waveflow uses.
 
-**In practice you rarely build this array yourself.** The conversion helpers below return one, and
-the converter's stream endpoints produce and consume them. Reach for `DataArray` when you need a
-*declared* block — a buffer's schema, a bundle written to disk — rather than a value in flight.
+**In practice you rarely build this array yourself.** Reach for `DataArray` when you need a
+*declared* block — a buffer's schema, a bundle written to disk. A block of words *in flight* is a
+plain numpy array: it is what `pack` below hands back, and what a stream `get()` hands you.
 
-## Conversion methods
+## Converting samples to words and back
 
-[I think before we walk through the details for how the packing is done, we should just give the user python methods to pack and unpack arrays of (nsamp, nch) samples to RfdcSampWord arrays.  I assume we have them.  The following section is likely not needed by most users, since the packing and unpacking are already handled.]
+Two functions, and they are exact inverses:
+
+```python
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord, pack, unpack
+
+Word  = Rfsoc4x2SampWord.specialize(samp_per_word=4)
+words = pack(Word, stored)      # (n_ch, n_samp) integers -> (n_ch, n_words) uint64
+stored = unpack(Word, words)    # and back, exactly
+```
+
+You should not need anything else on this page to move samples across the converter's fabric side.
+Everything below it is the *why* — the conventions these two implement — and it is there for the
+reader checking the model against PG269, not for the one packing a block.
+
+### The shape is `(n_ch, n_samp)`
+
+**Channel-major**, matching the `(n_ch, blksize)` blocks the [RF side](./rf_side.md) already carries,
+so there is no transpose at the boundary. One channel is `(1, n_samp)`, not `(n_samp,)` — a 1-D array
+is refused rather than promoted, so the pair is an inverse in shape as well as in value.
+
+Each channel is packed **independently** into its own row of words, and **row `ch` is what port
+`ch` carries** — the converter presents one AXI-Stream port per channel, so a channel-major array is
+exactly a per-port array. (This shape was chosen before that was settled, on the grounds that
+interleaving rows afterwards is a separate step while de-interleaving a committed layout is not. It
+turned out to be the committed answer; see `plans/adc_model.md`.)
+
+### It takes integers, and that is the interesting part
+
+`pack` takes **stored integers** — what quantization produced — and refuses a float array. Two
+questions, two calls, and they are different questions:
+
+```python
+stored = from_real(x, Word.samp_type())   # quantize — the CONVERTER's question, at bits_per_samp
+words  = pack(Word, stored)               # lay out  — the BUS's question, and lossless
+```
+
+A real-valued input would make `pack` **lossy**: quantization happening inside a call whose name says
+formatting. That is the one place it must not hide, and it is the
+[effective-vs-container confusion](#effective-vs-container) in another hat — so the refusal is the
+feature, and the error message names the call you are missing.
+
+Turning words back into amplitudes is the same split run backwards:
+
+```python
+x = to_real(array(Word.samp_type(), unpack(Word, words)))
+```
+
+The caller therefore knows the amplitude scale. That is right: `full_scale` is a property of the
+[converter](./converter.md), not of the word.
+
+### What it refuses
+
+| | |
+|---|---|
+| `n_samp` not a multiple of `samp_per_word` | **refused, never padded** — the same choice `Rfdc` makes about a non-integer rate |
+| a float sample array | refused; quantize first (above) |
+| a sample outside `bits_per_samp` | refused — an over-range value shifts into its neighbour's slot and corrupts it silently |
+| complex samples into a real word, or the reverse | refused; `iq_mode` is a property of the word |
+
+The first refusal is what buys the second function its signature: because `n_samp` is always a whole
+number of words, `n_samp = n_words × samp_per_word` on the way back, and `unpack` needs no length
+argument.
+
+### I/Q and wide words
+
+When `iq_mode` is set, `pack` takes a **complex** array of integer-valued samples and routes through
+the [slot order](#iq-order) below; `unpack` returns complex. When `Word.bitwidth` exceeds 64 the word
+arrays gain the trailing axis of the `(n, k)` wide-word convention — `(n_ch, n_words, k)` — rather
+than the word being refused.
+
+### The type is an argument on both sides
+
+`unpack(words)` cannot work. Packed words are a bare `uint64` array, and a stream `get()` hands you
+exactly that: no container, no `element_type`, nothing a convention could be recovered from. Having
+`pack` return a `DataArray[Word]` would let `unpack` infer the type for arrays that came from `pack`
+— and never for the ones that came off a wire, which is the case that matters. Symmetry beats the
+shorter signature.
 
 ## Slot order: oldest sample, lowest bits {#slot-order}
 
