@@ -6,6 +6,46 @@
 which answers the "what kind is the RFDC block?" question this plan was parked behind. Stage 2 below
 now depends on `plans/behavioral_edges.md`.
 
+---
+
+## Next session starts here — `pack` / `unpack`
+
+**The task:** build the sample-conversion pair specified in
+[`pack` / `unpack` — the sample-array conversion pair](#pack--unpack--the-sample-array-conversion-pair)
+below. That section is self-contained: it carries the signatures, the shape convention, the refusals,
+the integer rationale, and the measurements behind each. Read it before anything else in this file.
+
+**Scope, in order:**
+
+1. `pack(word_type, samps)` / `unpack(word_type, samp_words)` as module-level functions or
+   `RfdcSampWord` classmethods — either is fine, pick one and be consistent.
+2. Make `Rfdc._pack` / `_unpack` delegate, so there is one implementation. Their current signatures
+   are **not** inverses (`_pack` is reals→words, `_unpack` is slots→reals); expect to change the
+   `_dac_proc` call site, not just the body.
+3. Tests at `samp_per_word >= 2` — see the trap below.
+4. Docs: `docs/guide/rf/rfdc/word.md` has a `## Conversion methods` placeholder waiting for this,
+   and its `## Arrays of words` section already promises "the conversion helpers below return one."
+
+**Not in scope:** the `RfShotBuf` / `RfStreamBuf` logic-side port. That is designed in the section
+after this one and gated on a csynth that has not been run.
+
+### Traps this specific work will hit
+
+- **The venv is a sibling: `../pysilicon-venv`.** A bare `pytest` reports "0 failed" because nothing
+  ran. Use `../pysilicon-venv/Scripts/python.exe -m pytest`.
+- **Wide-word and array machinery already exists — do not rebuild it.** `Words` handles > 64 bits as
+  `(n, k)` little-endian `uint64` rows, and a `DataArray` over a numpy-backed field **is** an
+  `ndarray` (`.val`), not a list. Both have been missed by a fresh session before.
+- **Never hand-roll word↔element packing.** Go through `write_array` / `read_array`; the bug hides at
+  `samp_per_word == 1`, where slot order is unobservable and every test passes.
+- **Write the tests at two or more samples per word.** Slot order and `iq_order` are both invisible at
+  one, which is why `iq_order`'s existing test is pinned at two and nowhere else.
+- **`examples/` is an installed package** — re-install after packaging edits.
+- **Baseline is 6 non-vitis failures + 1 vitis.** A full run prints no summary line; do not read the
+  absence of one as success.
+- **`justify` is UNCONFIRMED.** Default `"left"`, on the board bring-up list. `pack` must route
+  through `justify_shift()` rather than assuming a value, so a lab answer stays a one-field change.
+
 Many applications, especially in wireless, connect to an ADC block like the RFDC in AMD/Xilinx RFSoC
 parts. This is a plan for extending Waveflow to develop systems with ADCs.
 
@@ -310,6 +350,134 @@ becomes a property of the format.
 width follows from the type, and `iq_interleave` / `iq_deinterleave` state the slot order and are
 tested at two samples per word. What remains for `iq_mode = 1` is the two blockers above — both
 about the converter's halves, neither about packing.
+
+### `pack` / `unpack` — the sample-array conversion pair
+
+**Status: DESIGNED, not built.** 2026-08-22. Everything below marked *measured* was verified against
+the installed tree on that date; everything marked *decision* is a choice this plan is making, not a
+fact about the code.
+
+#### The gap this closes
+
+There is **no public way to turn samples into words.** What exists:
+
+| what | where | why it is not the thing |
+|---|---|---|
+| `to_slots()` / `from_slots()` | `RfdcSampWord` | justification shift only — its own docstring says "a justification rule, **not word packing**" |
+| `_pack()` / `_unpack()` | `Rfdc` | **private**, on the converter rather than the word, and not inverses in signature: `_pack` is reals→words, `_unpack` is *slots*→reals |
+| `write_array()` / `read_array()` | `waveflow.hw.arrayutils` | generic; needs `slot_type()` and `word_bw` supplied correctly |
+
+Today a user composes three calls with two easily-swapped type arguments:
+
+```python
+words = write_array(W.to_slots(from_real(x, W.samp_type())),
+                    elem_type=W.slot_type(), word_bw=W.bitwidth)
+```
+
+*Measured:* this round-trips to 2.4e-05 against a 1.2e-04 LSB, so the recipe is correct. It is also
+exactly the `get_pipelined` / `write_pipelined` failure mode — correct usage that is silent-if-wrong
+and undiscoverable — and `samp_type()` vs `slot_type()` is the effective-vs-container confusion the
+word type exists to prevent.
+
+#### The contract
+
+```python
+samp_words = pack(word_type, samps)        # (n_ch, n_samp) int -> (n_ch, n_words) uint64
+samps      = unpack(word_type, samp_words) # the exact inverse
+```
+
+- **The type is explicit on both sides.** `unpack(samp_words)` cannot work: packed words are a bare
+  `uint64` ndarray and a stream `get()` hands you exactly that — no container, no `element_type`.
+  Returning a `DataArray[Word]` would let `unpack` recover the type, but only when the array came
+  from `pack`, never when it came off a stream. Symmetry beats the shorter signature.
+- **Channel-major `(n_ch, n_samp)`** — *decision*, and it reverses the first sketch. The RF side is
+  already `(n_ch, blksize)`; the other order puts a transpose at every boundary crossing.
+- **Refuse `n_samp % samp_per_word`, never pad** — matching `Rfdc` refusing a non-integer rate rather
+  than rounding. That refusal is what makes `n_samp = n_words * samp_per_word` exact on the way back,
+  so `unpack` needs no length argument.
+- **Complex when `iq_mode`** — `pack` takes a complex integer array and routes through the existing
+  `iq_interleave` / `iq_deinterleave`, which already state the slot order and are tested at two
+  samples per word.
+- `Rfdc._pack` / `_unpack` **delegate** to these, so there is one implementation.
+
+#### It presupposes an open question — take the non-committal branch
+
+`pack`'s return shape *is* an answer to the `n_rx`/`n_tx` > 1 question in **Open questions** below.
+`Rfdc.__post_init__` currently refuses `n_ch > 1` on the AXIS side precisely because "one AXIS port
+per channel or one wide port" decides how many BFM duals a testbench needs.
+
+- `(n_ch, n_words)`, each channel packed independently → **one port per channel**
+- a single interleaved `(n_words,)` → **one wide port**
+
+*Decision:* per-channel `(n_ch, n_words)`. Interleaving afterwards is a separate step; de-interleaving
+a committed layout is not. This declines to prejudge the RTL question rather than settling it.
+
+#### Integers, not fixed-point
+
+*Decision*, and the reason is stronger than "the logic tracks the binary point":
+
+> **Integers make `pack` and `unpack` exact inverses.** A fixed-point input would make `pack` *lossy* —
+> quantization happening inside a call whose name says formatting.
+
+That is the effective-vs-container confusion in another hat: the one place quantization must not hide
+is a function the caller believes is bit-shuffling. Keep the two questions in two functions, which is
+what the code already does internally:
+
+```python
+stored = from_real(x, Word.samp_type())   # quantize — the CONVERTER's question, at bits_per_samp
+words  = pack(Word, stored)               # lay out  — the BUS's question, lossless
+```
+
+It also matches `slot_type()` being an `IntField` and the hardware carrying `ap_int`. The accepted
+cost is that the caller knows the scale — which is fine, because `full_scale` already lives on `Rfdc`
+rather than on the word.
+
+### The logic-side interface for `RfShotBuf` / `RfStreamBuf`
+
+Three candidates were considered for what a buffer presents to the user's logic:
+
+| | interface | verdict |
+|---|---|---|
+| 1 | the `RfdcSampWord` itself | **rejected** — the logic would have to know justification, and the user would write the HLS conversion |
+| 2 | `ap_uint<W>` of **densely packed effective-width samples** (no inter-sample padding) | **chosen** |
+| 3 | one `ap_int<bits_per_samp>` per beat | **rejected** — a per-sample port caps throughput at `f_axis`, which is the entire reason packing exists |
+
+#### Why 2 is cheaper than it looks — *measured*
+
+**The standard integer serializer already emits exactly this format.** A 14-bit element packs at
+14-bit stride — slot 3 lands at bit 42 — densely, with no padding. So the generated `array_utils`
+already read and write it, and **codegen writes the conversion, not the user**. That removes the real
+objection to option 1.
+
+Reproduce:
+
+```python
+from waveflow.hw.dataschema import IntField
+from waveflow.hw.arrayutils import write_array
+import numpy as np
+E14 = IntField.specialize(bitwidth=14, signed=True)
+write_array(np.arange(1, 6, dtype=np.int64), elem_type=E14, word_bw=56)  # -> 2 words
+write_array(np.arange(1, 6, dtype=np.int64), elem_type=E14, word_bw=64)  # -> 2 words
+```
+
+#### Take 64 bits, not 56 — *measured*
+
+`W = samp_per_word * bits_per_samp * q` gives 56 for the 4x2. But **the serializer never straddles a
+word boundary**: it puts `floor(W / bits_per_samp)` elements in a word and starts a new one. So
+dense-14 in a **64-bit** word carries the same 4 samples as tight-56, at the same word count and
+therefore the same throughput, with 8 bits idle.
+
+Since 64 is also exactly the RFDC word width at 4x16, the buffer's job becomes a **pure re-layout
+inside one width** rather than a width conversion, and the port stays byte-aligned in case it ever
+crosses the cut as AXIS. The tighter packing buys nothing.
+
+#### The caveat that must be gated, not assumed
+
+**When `bits_per_samp == bits_per_samp_pack` the re-layout is the identity** — which is every
+configuration in the repo except the 4x2 preset. The path is therefore *unexercised*, and "shift and
+mask per slot holds II=1" is a prediction. Given the loader-hoist reversal (commit `a2f93e0`, where
+RTL played 0xFFFF for 9984 samples while every counter reported success), this must be gated on a
+csynth before anything is designed around it.
 
 ### There is no `spc` — there are two derived rate conversions
 
@@ -1263,3 +1431,5 @@ Alignment and latency stay separate quantities: alignment is *when a grid ticks*
 - `n_rx`/`n_tx` > 1: one AXIS port per channel or one wide port? The real RFDC's answer depends on tile
   configuration, and it determines how many duals the testbench needs. *(This is the AXIS side only —
   the RF side is settled: one interface, `(n_ch, blksize)`.)*
+  **`pack` / `unpack` touches this** — its return shape is an answer. The contract above takes the
+  non-committal branch (per-channel arrays) so that building it does not settle the question.
