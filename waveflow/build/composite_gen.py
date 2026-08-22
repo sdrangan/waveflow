@@ -115,6 +115,15 @@ class BfmModel:
       by its own kind** (:func:`_resolve_model_binding`): an endpoint facing a DUT boundary port
       contributes ``sim.dut(), <ports_ns>::<port>``; an endpoint on a behavioral edge contributes
       that edge's channel variable.
+
+      An entry may also be a **tuple of attribute names — a port group**, which resolves to ONE
+      constructor argument: ``sim.dut(), {<ns>::<a>, <ns>::<b>}``, a braced list the C++ model takes
+      as an array of port prefixes.  That is what a model spanning a *variable* number of like ports
+      needs — an ``n_ch`` converter presents one AXIS port per channel and one model owns them all,
+      because the RF edge behind them carries every channel in one block.  A group of **one** renders
+      as the bare port name, so a design whose shape did not change generates the C++ it always did.
+      Every member of a group must resolve the same way; mixing a boundary port and a channel into
+      one argument is refused.
     * ``extra_args`` — literal C++ expressions appended after the resolved ports, e.g. the words an
       ``AxisMaster`` presents or the arena an ``AxiMmReadSlave`` serves.  They name things the
       hand-written half of the testbench declares.
@@ -135,7 +144,7 @@ class BfmModel:
     which is every design that existed before this generalization.
     """
     cls: str
-    ports: tuple[str, ...] = ()
+    ports: tuple[str | tuple[str, ...], ...] = ()
     extra_args: tuple[str, ...] = ()
     shared: str | None = None
 
@@ -1448,10 +1457,10 @@ def resolve_bfm_model(mod, crossing=None):
 
     # Coverage is the UNION over every declared model: what matters is that no crossing endpoint is
     # left undriven, not which of a module's objects drives it.
-    covered = {id(_bfm_port_endpoint(mod, a)) for bm in models for a in bm.ports}
+    covered = {id(_bfm_port_endpoint(mod, a)) for bm in models for a in _bfm_port_attrs(bm)}
     uncovered = sorted(a for a, ep in cross.items() if id(ep) not in covered)
     if uncovered:
-        declared = ", ".join(f"{bm.cls}{list(bm.ports)}" for bm in models)
+        declared = ", ".join(f"{bm.cls}{list(_bfm_port_attrs(bm))}" for bm in models)
         raise LoweringError(
             f"{name}.bfm_model() ({declared}) leaves {uncovered} "
             f"uncovered. Every endpoint that CROSSES the cut needs a model, or the port is a wire "
@@ -1464,7 +1473,7 @@ def resolve_bfm_model(mod, crossing=None):
     # The dual is asked per endpoint, against the class of the model that actually spans it — with
     # several models the question "which class faces this port?" has a different answer per port,
     # which is the whole reason several exist.
-    cls_of_ep = {id(_bfm_port_endpoint(mod, a)): bm.cls for bm in models for a in bm.ports}
+    cls_of_ep = {id(_bfm_port_endpoint(mod, a)): bm.cls for bm in models for a in _bfm_port_attrs(bm)}
     for attr, ep in cross.items():
         for facing in _facing_kinds(ep, mod, attr):
             bfm_dual_class(facing, cls_of_ep.get(id(ep)))
@@ -1697,25 +1706,69 @@ def _resolve_model_binding(part, bm: BfmModel, ports_ns: str, boundary_of: dict,
     binds: list[str] = []
     prefix = ""
     channel: str | None = None
-    for attr in bm.ports:
-        ep = _bfm_port_endpoint(part, attr)
-        if id(ep) in boundary_of:
-            bname, bport = boundary_of[id(ep)]
-            binds += ["sim.dut()", f"{ports_ns}::{bname}"]
-            prefix = prefix or bport.xsi_prefix
-        elif id(ep) in channel_of:
-            chan = channel_of[id(ep)]
-            binds.append(chan)
-            channel = channel or chan
-        else:
+    for entry in bm.ports:
+        group = entry if isinstance(entry, tuple) else (entry,)
+        if not group:
             raise LoweringError(
-                f"{type(part).__name__}.bfm_model() model {bm.cls!r} names port {attr!r}, but that "
-                f"endpoint is neither wired to a DUT boundary port nor bound to a behavioral edge — "
-                f"so there is nothing for the model to bind there. Either wire it, or drop it from "
-                f"this model's ports: a constructor argument the graph cannot supply is not "
-                f"something the generator may guess."
+                f"{type(part).__name__}.bfm_model() model {bm.cls!r} names an EMPTY port group. A "
+                f"group is one constructor argument, and an argument with no ports in it is not "
+                f"something the generator may invent — drop the entry, or name the ports.")
+        kinds = set()
+        names: list[str] = []
+        for attr in group:
+            ep = _bfm_port_endpoint(part, attr)
+            if id(ep) in boundary_of:
+                bname, bport = boundary_of[id(ep)]
+                kinds.add("boundary")
+                names.append(f"{ports_ns}::{bname}")
+                prefix = prefix or bport.xsi_prefix
+            elif id(ep) in channel_of:
+                chan = channel_of[id(ep)]
+                kinds.add("channel")
+                names.append(chan)
+                channel = channel or chan
+            else:
+                raise LoweringError(
+                    f"{type(part).__name__}.bfm_model() model {bm.cls!r} names port {attr!r}, but "
+                    f"that endpoint is neither wired to a DUT boundary port nor bound to a "
+                    f"behavioral edge — so there is nothing for the model to bind there. Either wire "
+                    f"it, or drop it from this model's ports: a constructor argument the graph "
+                    f"cannot supply is not something the generator may guess."
+                )
+        if len(kinds) != 1:
+            raise LoweringError(
+                f"{type(part).__name__}.bfm_model() model {bm.cls!r} groups {list(group)} into one "
+                f"constructor argument, but they do not all resolve the same way ({sorted(kinds)}). "
+                f"A group is a homogeneous array of like ports; a boundary port and a behavioral "
+                f"edge are two different C++ arguments and cannot be braced together."
             )
+        if kinds == {"channel"}:
+            # A channel is already one argument, and there is no C++ shape for a braced list of
+            # channel references -- the models that take several take them as separate parameters.
+            if len(names) != 1:
+                raise LoweringError(
+                    f"{type(part).__name__}.bfm_model() model {bm.cls!r} groups {list(group)}, but "
+                    f"they are behavioral edges. Only DUT boundary ports group: a channel is passed "
+                    f"by reference and there is no braced form for a list of them.")
+            binds.append(names[0])
+        elif len(names) == 1:
+            # A group of one IS the bare argument.  Keeping it unbraced is what makes an n_ch = 1
+            # design generate exactly the C++ it generated before groups existed.
+            binds += ["sim.dut()", names[0]]
+        else:
+            binds += ["sim.dut()", "{" + ", ".join(names) + "}"]
     return tuple(binds), prefix, channel
+
+
+def _bfm_port_attrs(bm: BfmModel) -> tuple[str, ...]:
+    """*bm*'s port attribute names, **flattened** — groups are a rendering shape, not a surface.
+
+    Everything that asks "which endpoints does this model span?" (coverage, dual resolution, the
+    claimed set) wants the ports themselves; only :func:`_resolve_model_binding` cares that some of
+    them share one constructor argument.
+    """
+    return tuple(a for entry in bm.ports
+                 for a in (entry if isinstance(entry, tuple) else (entry,)))
 
 
 def _bfm_port_endpoint(part, attr: str):
@@ -1998,7 +2051,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         if c is dut or not declares_hook(c, "bfm_model"):
             continue
         for i, bm in enumerate(bfm_models(c)):
-            for attr in bm.ports:
+            for attr in _bfm_port_attrs(bm):
                 ep = _bfm_port_endpoint(c, attr)
                 owner[id(ep)] = c
                 model_of_ep[id(ep)] = (c, bm, (id(c), i))
@@ -2080,7 +2133,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, prefix or port.xsi_prefix,
                               bm.extra_args, dyn, channel=chan, binds=binds))
         emitted.add(key)
-        claimed_eps.update(id(_bfm_port_endpoint(part, a)) for a in bm.ports)
+        claimed_eps.update(id(_bfm_port_endpoint(part, a)) for a in _bfm_port_attrs(bm))
 
     channels, peer_models = _emit_behavioral_edges(edges, model_of_ep, claimed_eps, dyn_of)
     models.extend(peer_models)

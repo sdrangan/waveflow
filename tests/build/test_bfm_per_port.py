@@ -363,9 +363,14 @@ class TestEmittedCtorMatchesTheHeader:
     ])
     def test_arity_and_order(self, cls, port, chan, n_extra):
         params = _ctor_params(cls)
-        # The header's shape: a Dut, a port prefix, the RF channel, then the model's own config.
+        # The header's shape: a Dut, the AXIS port LIST, the RF channel, then the model's own config.
+        #
+        # `AxisPortList` and not `const char*` since the converter became a tile: one model spans
+        # every AXIS port of its direction, because the RF edge behind them carries every channel in
+        # one block and n_ch models cannot each own it.  A bare port name still binds -- the list is
+        # implicitly constructible from one -- which is why the arity is unchanged.
         assert params[0] == "Dut&"
-        assert params[1] == "const char*"
+        assert params[1] == "AxisPortList"
         assert params[2] == "RfChannel&"
         assert len(params) == 3 + n_extra
 
