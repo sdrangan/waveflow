@@ -2,7 +2,7 @@
 title: The sample word
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 4
+nav_order: 2
 audience: python
 api: [RfdcSampWord, samp_per_word, bits_per_samp, bits_per_samp_pack, justify, iq_order, iq_mode]
 summary: "Why a converter hands the fabric several samples at a time — the clock ratio makes it unavoidable — and the convention that says which sample lands where. Slot order, the difference between the bits a converter resolves and the bits its slot occupies, where those effective bits sit inside the container, and which of I and Q comes first. All of it is one type, RfdcSampWord, because the rules are AMD's rather than Waveflow's and belong somewhere a reader can see them."
@@ -10,7 +10,10 @@ summary: "Why a converter hands the fabric several samples at a time — the clo
 
 # The sample word
 
-## Why converters pack at all
+Before we describe how to instantiate
+an `RfDc` converter, we have to describe how its samples are formatted on the AXI-Stream.  This format is used as an argument in the constructor of `Rfdc`.  This page describes the format options as well as methods to pack and unpack data from that format.
+
+## Sample Packing
 
 A converter and a fabric run at rates that are nowhere near each other. An RFSoC ADC samples at
 **one to five giga-samples per second**; the logic behind it runs at **250 to 500 MHz**. That is an
@@ -30,9 +33,9 @@ once you have accepted that there must be more than one.
 The number has to come out whole, because a sample cannot straddle a beat. `Rfdc` refuses a
 configuration where it does not, rather than rounding.
 
-## One beat is one `RfdcSampWord`
+## Describing Packing Formats with `RfdcSampWord`
 
-The arrangement is a **type**, not a handful of parameters:
+In Waveflow, the packing format used by the converter is described by  a **type**, not a handful of parameters.  The base type is `RfdcSampWord`.  An example creation of a type is as follows:
 
 ```python
 from waveflow.hw.rfdc_samp_word import RfdcSampWord
@@ -42,12 +45,67 @@ Word.bitwidth        # 64  = 4 × 16
 Word.samp_type       # FixedField, 14 bits — the QUANTIZER
 ```
 
+**Anything you omit is inherited from the class you called `specialize` on** — which is what makes
+a board preset an ordinary subclass rather than a factory.
+
+| parameter | what it fixes | default |
+|---|---|---|
+| `samp_per_word` | samples one beat carries — **complex** ones when `iq_mode` | `1` |
+| `bits_per_samp` | **effective** bits: what the converter resolves, and the quantizer's precision | `16` |
+| `bits_per_samp_pack` | **container** bits: the slot one sample occupies on the bus | `16` |
+| `iq_mode` | real samples, or interleaved I/Q | `False` |
+| `justify` | where the effective bits sit inside the slot — `"left"` or `"right"` | `"left"` ⚠ |
+| `iq_order` | which of I and Q takes the lower slot | `"i_low"` |
+
+⚠ `justify`'s default is [an assumption awaiting a lab measurement](#justify), not a measurement.
+
+Everything else is **derived** — read it, never restate it:
+
+| | is | for |
+|---|---|---|
+| `bitwidth` | `samp_per_word × bits_per_samp_pack`, doubled for I/Q | the AXI-Stream width |
+| `samp_type()` | `FixedField` at `bits_per_samp`, rounding and saturating | quantizing a sample |
+| `slot_type()` | signed `IntField` at `bits_per_samp_pack` | what the serializers see |
+| `slots_per_word()` | `samp_per_word`, doubled for I/Q | slots in one beat |
+| `justify_shift()` | `bits_per_samp_pack - bits_per_samp` when left-justified, else `0` | the one rule below |
+
+These are the converter's *entire* sample geometry: [`Rfdc`](./converter.md) reads them off the type
+and declares none of them itself.
+
 `Rfdc` takes the word type and **reads** its geometry off it. You never restate the width; there is
 one place it can be wrong.
 
 It is a type rather than three loose numbers for a reason worth stating: **these rules are AMD's, not
 Waveflow's.** A different converter family packs differently, and naming the vendor makes that
 coupling visible instead of implying the layout is universal.
+
+## Arrays of words
+
+A block of words is an ordinary `DataArray` over the word type — the reason `RfdcSampWord` subclasses
+`IntField` rather than inventing a container:
+
+```python
+from waveflow.hw.dataschema import DataArray
+
+Block = DataArray.specialize(element_type=Word, max_shape=(64,))
+blk = Block()
+blk.val            # ndarray, dtype uint64, shape (64,)  — 64 beats = 256 samples
+```
+
+`blk.val` is a **numpy array**, not a list of field objects: a `DataArray` over a numpy-backed
+element *is* an `ndarray`. Index it, slice it, and hand it to numpy directly.
+
+The choice of `uint64` follows from `Word.bitwidth`. A word wider than 64 bits is stored as
+`(n, k)` little-endian `uint64` rows rather than refused — the same
+[wide-word convention](../../interface/overview.md) the rest of Waveflow uses.
+
+**In practice you rarely build this array yourself.** The conversion helpers below return one, and
+the converter's stream endpoints produce and consume them. Reach for `DataArray` when you need a
+*declared* block — a buffer's schema, a bundle written to disk — rather than a value in flight.
+
+## Conversion methods
+
+[I think before we walk through the details for how the packing is done, we should just give the user python methods to pack and unpack arrays of (nsamp, nch) samples to RfdcSampWord arrays.  I assume we have them.  The following section is likely not needed by most users, since the packing and unpacking are already handled.]
 
 ## Slot order: oldest sample, lowest bits {#slot-order}
 
@@ -137,8 +195,9 @@ Which of I and Q takes the **lower** slot. Like slot order, it is **invisible at
 
 ## Next
 
+- [Instantiating the converter](./converter.md) — where this type becomes `Rfdc`'s first argument,
+  and the rest of the parameter list.
 - [Connecting the fabric side](./axis_side.md) — the rates, the check the converter performs, and
   what that check does *not* cover.
-- [Instantiating the converter](./converter.md) — the full parameter list.
 
 **Source of truth:** `waveflow/hw/rfdc_samp_word.py`, `tests/hw/test_rfdc_samp_word.py`.

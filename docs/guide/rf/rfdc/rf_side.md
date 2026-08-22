@@ -2,7 +2,7 @@
 title: Connecting the RF side
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 3
+nav_order: 4
 audience: python
 api: [RFSampIF, RFSampIFTx, RFSampIFRx, RfDataSource, RfDataSink, set_t0, samp_time, counters, assert_clean]
 summary: "Wiring the converter's sample side: one RFSampIF per direction, what each of its parameters means, the file-backed source and sink that stand in for the RF environment, and t0 — pushed by the converter, read back as the thing that makes alignment a derived assertion rather than a scheduling coincidence."

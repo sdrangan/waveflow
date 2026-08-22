@@ -2,7 +2,7 @@
 title: Instantiating the converter
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 2
+nav_order: 3
 audience: python
 api: [Rfdc, RfdcSampWord, Rfsoc4x2SampWord, RFSampIFRx, RFSampIFTx, StreamIFMaster, StreamIFSlave, FixedField, axis_bitwidth]
 summary: "How to create an Rfdc: the word type that carries its sample geometry, the full parameter list and which kind each parameter is, the four endpoints and which two cross the cut, what the constructor refuses and why, and the bit-exact quantization the model does. The how-to page — the contracts it implies are in the design rules."
@@ -24,28 +24,19 @@ the interfaces you bind it to.
 
 ## The sample geometry is one type
 
-`word` is a [`RfdcSampWord`](../../../../waveflow/hw/rfdc_samp_word.py) subclass, and it is the only
+`word` is the [`RfdcSampWord`](./word.md) subclass built on the previous page, and it is the only
 place this converter's sample geometry is stated. It replaced three loose parameters — `nbits`,
 `samp_per_word`, `iq_mode` — and there is deliberately **no convenience path back**: keeping either
 name beside the type would be a second source of truth for the same geometry.
 
-| field | what it fixes |
-|---|---|
-| `samp_per_word` | samples one AXIS beat carries (complex ones when `iq_mode`) |
-| `bits_per_samp` | **effective** bits — what the converter resolves, and the quantizer's precision |
-| `bits_per_samp_pack` | **container** bits — the slot one sample occupies on the bus |
-| `iq_mode` | real samples or interleaved I/Q — a statement about *packing*, so it lives here |
-| `justify` | where the effective bits sit inside the container slot |
-| `iq_order` | which of I and Q takes the lower slot |
+`Rfdc` *reads* `bitwidth`, `samp_per_word` and `bits_per_samp` off the type. You never restate any
+of them, so there is one place each can be wrong.
 
-The last two are rules **a serializer cannot know**; `justify`'s default is an assumption awaiting a
-lab measurement, and [the sample-word page](./word.md#justify) says so at length.
-
-A board preset is an ordinary subclass restating only what the board fixes, so
-`Rfsoc4x2SampWord.specialize(samp_per_word=4)` keeps the board's sample geometry and asks only for
-the beat width the design wants. **The 4x2 preset is 14-in-16** — 14 effective bits in a 16-bit slot
-— which is what a ZU48DR actually is; see
-[effective vs container](./word.md#effective-vs-container) for what that changed.
+`Rfsoc4x2SampWord.specialize(samp_per_word=4)` is the board preset — **14-in-16**, 14 effective bits
+in a 16-bit slot, which is what a ZU48DR actually is — asking only for the beat width the design
+wants. Two of the fields it carries are rules **a serializer cannot know**, and one of those,
+[`justify`](./word.md#justify), is an assumption awaiting a lab measurement rather than a
+measurement.
 
 ## The four endpoints
 
