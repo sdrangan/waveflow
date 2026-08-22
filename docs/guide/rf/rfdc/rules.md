@@ -194,7 +194,7 @@ converter has to be a task plus an internal channel. There is no number you can 
 | rule | page |
 |---|---|
 | 1, 2, 3 | [The fidelity boundary](./fidelity.md#what-fixing-it-took) |
-| 4 | [Connecting the fabric side](./axis_side.md#the-rate-check-and-what-it-does-not-cover) |
+| 4 | [Connecting the fabric side](./axis_side.md#the-check-it-cannot-perform-for-you) |
 | 5 | [Connecting the RF side](./rf_side.md#reading-the-counters), [block sampling](./sampling.md#the-counters-are-the-contract) |
 | 6 | [Block sampling](./sampling.md#t0-is-the-synchronization-primitive) |
 | 7 | [Connecting the fabric side](./axis_side.md#do-not-declare-a-depth-on-these-interfaces) |

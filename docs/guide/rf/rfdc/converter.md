@@ -39,13 +39,13 @@ name beside the type would be a second source of truth for the same geometry.
 | `iq_order` | which of I and Q takes the lower slot |
 
 The last two are rules **a serializer cannot know**; `justify`'s default is an assumption awaiting a
-lab measurement, and [the fabric-side page](./axis_side.md#justify) says so at length.
+lab measurement, and [the sample-word page](./word.md#justify) says so at length.
 
 A board preset is an ordinary subclass restating only what the board fixes, so
 `Rfsoc4x2SampWord.specialize(samp_per_word=4)` keeps the board's sample geometry and asks only for
 the beat width the design wants. **The 4x2 preset is 14-in-16** — 14 effective bits in a 16-bit slot
 — which is what a ZU48DR actually is; see
-[effective vs container](./axis_side.md#effective-vs-container) for what that changed.
+[effective vs container](./word.md#effective-vs-container) for what that changed.
 
 ## The four endpoints
 
@@ -88,7 +88,7 @@ both directions exist to avoid.
 
 **There is no `spc`.** `word.samp_per_word` is the structural integer; everything else at this boundary is
 a rate *ratio* — derived, and generally fractional. See
-[connecting the fabric side](./axis_side.md#there-is-no-spc).
+[connecting the fabric side](./axis_side.md#there-is-no-samples-per-cycle-parameter).
 
 > **`full_scale` is not a `DynParam`, and the distinction is finer than it looks.** `DynParam` does
 > not mean "binds at init"; it means **emitted as a member assignment** — `<model>.<field> = <expr>;`.
@@ -140,8 +140,8 @@ converter does: the stored value is **justified** into its container slot. Word�
 goes through the [generated array serializers](../../vectorization/); the shift is the rule they
 cannot know, and the word type owns it.
 
-The other half of the contract, [packing](./axis_side.md#the-packing-contract), is a property of the
-port rather than of the converter, and lives on the fabric-side page.
+The other half of the contract, [slot order](./word.md#slot-order), is a property of the word
+rather than of the converter, and lives on the sample-word page.
 
 Both are checked against their C++ twins by
 [a conformance test](../../../../tests/build/test_xsi_rfdc_samp.py) rather than against a re-reading

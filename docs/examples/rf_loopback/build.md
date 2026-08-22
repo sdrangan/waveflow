@@ -63,7 +63,7 @@ arrivals.
 value in `HwParamValue(int(value))`, so a type-valued parameter cannot be one. Nothing is lost: an
 `Rfdc` declares no `kernel_task`, so none of its parameters ever reached a template argument — they
 were build-time structure for the **models**, which read them off the word. See
-[what `iq_mode` means](../../guide/rf/rfdc/axis_side.md#iq-mode) for real vs complex.
+[what `iq_mode` means](../../guide/rf/rfdc/word.md#iq-mode) for real vs complex.
 
 `samp_rate` is deliberately **not** on this list. It lives on the RF interface's clock and the
 converter *reads* it at bind; `t0` travels the other way and is *pushed*. Two declarations that can

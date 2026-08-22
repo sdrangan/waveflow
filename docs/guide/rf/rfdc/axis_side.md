@@ -2,10 +2,10 @@
 title: Connecting the fabric side
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 4
+nav_order: 5
 audience: python
-api: [StreamIF, StreamIFMaster, StreamIFSlave, RfdcSampWord, Rfsoc4x2SampWord, axis_bitwidth, words_per_cycle]
-summary: "Wiring the converter to your logic: an ordinary AXI-Stream whose width follows from the RfdcSampWord type, the packing contract that decides which sample lands in which slot, the effective-vs-container bit split and the UNCONFIRMED justify default, why there is no spc but two derived rate ratios instead, the rate check the converter performs at pre_sim, and why a boundary port's depth declaration is silently discarded."
+api: [StreamIF, StreamIFMaster, StreamIFSlave, axis_bitwidth, RfdcSampWord, words_per_cycle]
+summary: "Wiring the converter to your logic: an ordinary AXI-Stream at the word type's width, why there is no samples-per-cycle parameter but two derived and generally fractional ratios instead, the rate check the converter performs at pre_sim and the larger one it cannot perform for you, and why a depth declared on a boundary port is silently discarded."
 ---
 
 # Connecting the fabric side
@@ -22,138 +22,20 @@ adc_axis.bind("slave", dut.s_in)
 Your DSP block connects to a converter the same way it connects to anything else. There is no
 parallel world to learn.
 
-## The word width
+## The width comes from the word type
 
 ```python
-rfdc.axis_bitwidth      # word.samp_per_word * word.bits_per_samp_pack   (x2 for interleaved I/Q)
+rfdc.axis_bitwidth        # read it; never restate it
 ```
 
-Read it off the converter rather than restating it -- and the converter in turn reads it off its
-[`word` type](./converter.md#the-sample-geometry-is-one-type). At four 16-bit slots to a beat that is
-a 64-bit word carrying four samples, and 64 bits is the ceiling the constructor enforces.
+It is `samp_per_word × bits_per_samp_pack` (× 2 for I/Q), and it belongs to the
+[sample word](./word.md) — which is also where the packing convention, the effective-vs-container
+distinction and `justify` live. This page is about everything *else* at the boundary.
 
-`samp_per_word` is an **integer** because a sample cannot straddle a slot. It is the one structural
-number at this boundary.
+## There is no samples-per-cycle parameter
 
-## Effective bits and container bits are two numbers {#effective-vs-container}
-
-The slot a sample rides in is not always as wide as the sample. Those are the word type's
-`bits_per_samp_pack` and `bits_per_samp`:
-
-| field | what it is | what it decides |
-|---|---|---|
-| `bits_per_samp` | **effective** -- what the converter resolves | the quantizer's precision, and hence the model's quantization noise |
-| `bits_per_samp_pack` | **container** -- the slot on the bus | the word width, and the packing arithmetic |
-
-They coincide on a part whose resolution happens to equal its slot width, and they are two numbers on
-one that does not. A single parameter meaning both is a latent defect: matching it to the *bus* makes
-the quantizer finer than the hardware and understates the one effect this model exists to reproduce
-bit-exactly, while matching it to the *converter* makes the word too narrow to carry.
-
-**The RFSoC 4x2 is the part that does not.** `Rfsoc4x2SampWord` is **14-in-16**: the ZU48DR's
-converters resolve 14 bits and the AXI-Stream carries each in a 16-bit slot. Until 2026-08-21 the
-examples said `nbits = 16` — chosen to match the bus, which silently made the model's quantization
-step four times smaller than the hardware's. Correcting it changes numbers on purpose:
-
-| | before | after |
-|---|---|---|
-| quantizer | `ap_fixed<16, 1, AP_RND, AP_SAT>` | `ap_fixed<14, 1, AP_RND, AP_SAT>` |
-| quantization step | `2^-15` of full scale | `2^-13` of full scale |
-| AXIS word at 4 samples/beat | 64 bits | **64 bits** — unchanged |
-
-The word width does not move, because a 14-in-16 slot is still a 16-bit slot. Neither do any cycle
-counts: this is a change to the *values* on the wire, not to how many beats carry them.
-
-## `justify` -- declared, and **not yet confirmed** {#justify}
-
-When the two widths differ, something has to say where inside the container the effective bits sit.
-That is `justify`:
-
-| value | layout |
-|---|---|
-| `"left"` (default) | MSB-aligned -- the effective bits occupy the high end, the low bits are zero |
-| `"right"` | LSB-aligned -- the effective bits occupy the low end, sign-extended into the high bits |
-
-> **The default is an assumption, not a measurement.** Which one AMD's RFDC uses is a **PG269
-> question nobody on this project has answered**; it sits on the board bring-up log beside the
-> `TVALID` question and **will be settled in the lab**. `"left"` is the default because MSB alignment
-> makes full scale the same integer whatever the converter's resolution, so PL logic need not be
-> re-scaled per part -- a reason to *expect* it, not evidence that it is so.
->
-> It is a declared field precisely so the model **states** an answer that hardware can contradict,
-> instead of assuming one silently. When the bench says otherwise, one field changes.
-
-`justify` is a no-op whenever `bits_per_samp == bits_per_samp_pack`. That was every configuration in
-the repository until the 4x2 preset became 14-in-16; it is now the setting that decides where four of
-every sixteen bit patterns land, so **this is the first place its value has an observable
-consequence** — and the first place a lab measurement could contradict the model.
-
-A visible consequence of `"left"`: the converter cannot set the low two bits of a slot, so the slot
-values it produces step by 4. The ramp examples' signals step by `SAMP_STEP` for exactly that reason
-— a ramp stepping by 1 stopped surviving the converter the moment the two widths differed.
-
-## `iq_order` -- invisible at one sample per word {#iq-order}
-
-Which of I and Q takes the **lower** (earlier, less significant) slot. `"i_low"` is the default.
-
-This is the standing trap in this repo wearing a new hat: at `samp_per_word == 1` slot order is
-unobservable, so a wrong answer passes every test written at that width. It is therefore pinned by a
-test at **two** samples per word, in `tests/hw/test_rfdc_samp_word.py`, and nowhere else.
-
-## Real and I/Q: what `iq_mode` means {#iq-mode}
-
-A wireless design wants **complex** samples, so this is the parameter to get straight early.
-
-**`samp_per_word` counts samples, and `iq_mode` says what a sample *is*.** Both live on the word
-type, because both are statements about *packing*:
-
-| `iq_mode` | a sample is | one beat carries | word width |
-|---|---|---|---|
-| `False` | a **real** value | `samp_per_word` real samples | `samp_per_word × bits_per_samp_pack` |
-| `True` | a **complex** (I,Q) pair | `samp_per_word` complex samples | `samp_per_word × bits_per_samp_pack × 2` |
-
-A complex sample occupies two slots — I and Q, ordered by [`iq_order`](#iq-order) — so the same
-`samp_per_word` needs twice the bus. Worked through at 16-bit slots:
-
-| configuration | carries | width | |
-|---|---|---|---|
-| `samp_per_word=4, iq_mode=False` | 4 real samples | 64 bits | ✔ |
-| `samp_per_word=4, iq_mode=True` | 4 complex samples | **128 bits** | ✘ over the 64-bit ceiling |
-| `samp_per_word=2, iq_mode=True` | 2 complex samples | 64 bits | ✔ |
-
-So an I/Q design fits the same bus by **halving `samp_per_word`**. The information density is
-identical either way — two complex samples in 64 bits — and the parameter simply counts what the
-design thinks in. If a configuration is refused for width, that arithmetic is why.
-
-**`iq_mode = True` is not implemented yet -- by the *converter*.** The **word type** already
-expresses it, and `iq_order` is stated and tested there; what is missing is the converter's two
-halves. The constructor refuses it rather than half-supporting it:
-
-```
-NotImplementedError: Rfdc stage 1 implements real samples only (iq_mode=0) ...
-```
-
-Two things are missing, and both are real work rather than a flag: the RF-side bundle format is
-float64 and needs a manifest field to carry complex, and the quantizer's conformance twin covers real
-`FixedField` only. Until they land, a complex design models I and Q as two real channels
-(`n_ch = 2`) — which is what the hardware carries anyway, so the difference is bookkeeping in the
-model rather than bits on the wire.
-
-## The packing contract
-
-Samples are packed **time-ascending from the LSBs**, each in a fixed `bits_per_samp_pack` slot — the
-**oldest** sample in the **least** significant slot. At 8-bit slots, the samples `[0, 64, -64, -128]`
-pack to `0x80c04000`.
-
-Do not hand-roll this. Packing goes through the
-[generated array serializers](../../vectorization/), never a `.range()` you wrote, and the reason is
-that `samp_per_word == 1` hides slot-order bugs entirely — order is unobservable with one sample per
-word — so a bug you introduce at four samples per word will pass every test you thought to run at one.
-
-## There is no `spc`
-
-`samp_per_word` is the structural integer. Everything else at this boundary is a **ratio**, derived
-and generally fractional:
+`samp_per_word` is the one structural integer here. Everything else is a **ratio** — derived, and
+generally fractional:
 
 | boundary | conversion | lives in |
 |---|---|---|
@@ -162,48 +44,64 @@ and generally fractional:
 
 **Derived, never declared.** Both terms already exist: `samp_rate` on the RF interface's clock,
 `f_axis` on the AXIS interface's clock. The converter *reads* both rather than restating either, so
-there is no third statement that could disagree. At 256 MSa/s into 300 MHz with four samples per word
-that is `0.2133…` words per cycle — a number no integer expresses, which is why the model carries a
-fractional-credit accumulator rather than a count.
+there is no third statement that could disagree with them.
 
-The second conversion turns out **not to need its own object**. The block cadence follows from the
-word rate: the ADC pulls a block when it has consumed the previous one's words, so the RF grid
-emerges from `words_per_cycle` and the channel's depth bounds how far the source may run ahead. One
-mechanism, one place.
+At 256 MSa/s into 300 MHz with four samples per word that is `0.2133…` words per cycle — a number no
+integer expresses, which is why the model carries a fractional-credit accumulator rather than a
+count. **That is the reason there is no `spc` parameter**: any integer you wrote down would be wrong.
 
-## The rate check, and what it does not cover
+The second conversion needs no object of its own. The block cadence follows from the word rate — the
+ADC pulls a block once it has consumed the previous one's words — so the RF grid emerges from
+`words_per_cycle`, and the channel's depth bounds how far the source may run ahead. One mechanism,
+one place.
 
-At `pre_sim` — once the clocks are bound and it can see both rates — the converter refuses
+## The check the converter performs
+
+At `pre_sim`, once both clocks are bound and it can see both rates, the converter refuses
 
 ```
-samp_rate > word.samp_per_word * f_axis
+samp_rate > word.samp_per_word × f_axis
 ```
 
 with the arithmetic in the message. That is the **port's** capacity: one word per fabric cycle, times
 the samples in a word.
 
-**Your design is usually slower than its port**, and nothing in the converter knows that. A stage
-that fires every two cycles absorbs half a sample per cycle at one sample per word, whatever the port
-could have carried. Divide by the consuming task's `fire_cycles` and check the result yourself; that
-is [rule 4](./rules.md#4-port-capacity-is-not-design-capacity), and skipping it cost a real design
-1695 of 4096 samples.
+## The check it cannot perform for you
+
+**Your design is almost always slower than its port, and nothing in the converter knows that.**
+
+A stage that fires every two cycles absorbs half a sample per cycle at one sample per word, whatever
+the port could have carried. The number that matters is:
+
+```
+design capacity  =  samp_per_word × f_axis / cycles_per_word
+```
+
+Divide by the consuming stage's cost and check the result yourself. This is
+[rule 4](./rules.md#4-port-capacity-is-not-design-capacity), and skipping it cost a real design
+**1695 of 4096 samples** — a run that produced well-formed output and lost 41% of it.
+
+The converter cannot do this check because it cannot see inside your logic. It knows what the port
+can carry; only you know what you will do with it.
 
 ## Do not declare a depth on these interfaces
 
 A `StreamIF` that becomes a **top-level port** cannot carry a FIFO depth. Vitis ignores the pragma
 (`HLS 214-387`) — in one placement, silently — and the RTL gets the default of 2 whatever the Python
-says. `composite_top_spec` now refuses the declaration outright, because a depth that is silently 2
-is worse than no depth: the number in the Python reads like a fact.
+says. `composite_top_spec` refuses the declaration outright, because a depth that is silently 2 is
+worse than no depth: the number in the Python *reads like a fact*.
 
-An **internal** channel's depth *is* emitted and *is* physical. That asymmetry is not a footnote; it
-is why an elastic buffer in front of a converter has to be a task plus an internal channel rather
-than a bigger number on the port. See [rule 7](./rules.md#7-internal-depth-is-physical-a-boundary-ports-is-not).
+An **internal** channel's depth **is** emitted and **is** physical. That asymmetry is not a footnote —
+it is why an elastic buffer in front of a converter has to be a task plus an internal channel rather
+than a bigger number on the port. See
+[rule 7](./rules.md#7-internal-depth-is-physical-a-boundary-ports-is-not).
 
 ## Next
 
+- [The sample word](./word.md) — why converters pack, and the convention that says which sample
+  lands where.
 - [Block sampling](./sampling.md) — the model underneath both sides.
 - [The design rules](./rules.md) — including the two this page hands off to.
 
-**Source of truth:** `waveflow/hw/rfdc_samp_word.py`, `examples/rf_loopback/rfdc.py`,
-`waveflow/build/xsi/xsi_rfdc.h`, `tests/build/test_xsi_rfdc_samp.py`,
-`tests/hw/test_rfdc_samp_word.py`.
+**Source of truth:** `examples/rf_loopback/rfdc.py`, `waveflow/build/xsi/xsi_rfdc.h`,
+`tests/build/test_xsi_rfdc_samp.py`.
