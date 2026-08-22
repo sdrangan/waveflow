@@ -12,10 +12,14 @@ This is the worked example for the [RF converter guide](../../guide/rf/). It is 
 that has a converter in it:
 
 ```
-RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_stream --StreamIF--> RfSampPassThrough
-                                                                              |
-RfDataSink   <--RFSampIF-- Rfdc.tx_rf | Rfdc.tx_stream <--StreamIF------------+
+RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --StreamIF--> RfSampPassThrough
+                                                                                 |
+RfDataSink   <--RFSampIF-- Rfdc.tx_rf | Rfdc.tx_streams[0] <--StreamIF-----------+
 ```
+
+(`rx_streams[0]` because an `Rfdc` is a *tile*: one AXIS port per channel, and this graph has one
+channel. `RfLoopbackTB(n_ch=2)` is the same five nodes with two ports per direction and two DUT
+lanes — see [the tile](../../guide/rf/rfdc/converter.md#the-endpoints).)
 
 Five nodes, four edges, and no signal processing anywhere. That is on purpose. Every other example
 in this collection is about what a kernel *computes*; this one is about the **boundary** the samples

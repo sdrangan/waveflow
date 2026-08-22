@@ -218,8 +218,16 @@ def copy_fixed_task_bodies(root_dir: Path) -> None:
         shutil.copyfile(src, dst / name)
 
 
-def generate_dut(out_dir: Path = HERE) -> Path:
-    """Generate the task body, the ``ap_ctrl_none`` top, its csynth TCL and the XSI port map."""
+def generate_dut(out_dir: Path = HERE, dut_cls: type = RfSampPassThrough,
+                 top: str = TOP) -> Path:
+    """Generate the task body, the ``ap_ctrl_none`` top, its csynth TCL and the XSI port map.
+
+    *dut_cls* / *top* are arguments because the DUT has a **top per channel count**: a two-channel
+    pass-through has four AXIS ports where the one-channel one has two, so it is a different RTL
+    module with a project and a ports header of its own (see
+    :class:`~examples.rf_loopback.rf_loopback.RfSampPassThrough2Ch`).  Everything below is the same
+    for both — same body, same TCL shape — which is the point of parameterizing rather than forking.
+    """
     from waveflow.build.elaborate import elaborate
     from waveflow.build.hwgen import task_files_to_str
 
@@ -240,8 +248,8 @@ def generate_dut(out_dir: Path = HERE) -> Path:
             continue
         (inc / name).write_text(content, encoding="utf-8")
 
-    comp = elaborate(RfSampPassThrough, {"bitwidth": XSI_WORD_BW, "nwords_blk": XSI_NWORDS_BLK},
-                     name=TOP)
+    comp = elaborate(dut_cls, {"bitwidth": XSI_WORD_BW, "nwords_blk": XSI_NWORDS_BLK},
+                     name=top)
     spec = composite_top_spec(comp, width=XSI_WORD_BW)
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")

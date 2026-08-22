@@ -571,10 +571,10 @@ class RfBlkDelayTB(FreeRunMod):
 
         # Only the DESIGN's boundary is wired here — the three channels inside the loop belong to the
         # loop and are wired by it.  What crosses this line is what would cross it on the board.
-        self.adc_axis = wire("adc_axis", self.rfdc.rx_stream, self.loop.s_in)
+        self.adc_axis = wire("adc_axis", self.rfdc.rx_streams[0], self.loop.s_in)
         wire("rxresp_axis", self.loop.rx_resp, self.rxresp_sink.stream_ep)
         wire("txresp_axis", self.loop.tx_resp, self.txresp_sink.stream_ep)
-        self.dac_axis = wire("dac_axis", self.loop.s_out, self.rfdc.tx_stream)
+        self.dac_axis = wire("dac_axis", self.loop.s_out, self.rfdc.tx_streams[0])
 
 
 def write_scenario(root) -> None:

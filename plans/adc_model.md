@@ -8,28 +8,221 @@ now depends on `plans/behavioral_edges.md`.
 
 ---
 
-## Next session starts here — `pack` / `unpack`
+## Next session starts here — Stage A
 
-**The task:** build the sample-conversion pair specified in
+**Point a fresh session at one stage, not at this file.** Each stage below is self-contained: a
+goal, an ordered scope, a gate that says when it is done, and an explicit not-in-scope. The design
+they implement is settled in *Channels, ports, and where I/Q lives*; a session should **read that
+section and not re-litigate it**.
+
+```
+claude "Read plans/adc_model.md, section 'Stage B — the complex RF bundle format', and build it."
+```
+
+**Stage A is BUILT (2026-08-22)** — see its section below for what it cost and what the RTL run
+taught. B and C are independent of each other. D needs both.
+
+```
+A (tile, real)  ── DONE ──────────────────────► gate: 2-channel rf_loopback, XSI 15751
+B (complex bundle) ──┐
+C (complex twin)   ──┴──► D (iq_mode = 1) ────► gate: I/Q loopback
+```
+
+### Decisions a session must not re-open
+
+Settled above, and each was argued at length. Re-deriving them is the failure mode this list exists
+to prevent:
+
+- **`n_ch = n_rx = n_tx`**, in both `iq_mode` settings. One channel, one AXIS port, always.
+- **Separate ports, not one wide port.** Complex-ness is a property of the **word**, not of the port
+  structure.
+- **`pack` / `unpack` are done and need no change** — including the complex path. Row `ch` is port
+  `ch`. Do not write a second packer.
+- **`iq_mode = 0` means everything is real** — `Rfdc`, `RfShotBuf`, `RfStreamBuf` alike — and the I/Q
+  mapping lives outside the converter.
+- **One BFM model per direction spanning that direction's AXIS ports plus the single RF edge**, not
+  one model per port. The RF edge carries every channel in one block. *(Built: a `BfmModel.ports`
+  entry may be a tuple — a port group — resolving to one `AxisPortList` constructor argument.)*
+
+### Stage A — the tile — **BUILT 2026-08-22**
+
+**Goal:** lift the `n_ch > 1` refusal. `Rfdc` presents `n_rx` AXIS master ports and `n_tx` AXIS slave
+ports, one per channel, real samples only. **Done, all four steps, and both halves of the gate pass.**
+
+**What was built, against the scope as written:**
+
+1. **Endpoints became lists** — `rx_streams` / `tx_streams`, plus the indexed *attributes*
+   `rx_stream_0 ..`, which are not a convenience: `BfmModel.ports` names endpoints by attribute
+   (`getattr(part, attr)`) and `rx_streams[0]` is not an attribute name. Indexed at `n_ch = 1` too,
+   as recommended. The call sites are 9, not 28 — every RF example binds one converter port per
+   direction.
+2. **`_adc_proc` / `_dac_proc` are per-port**, and the correction the plan did not name: the ports
+   must be driven **concurrently** (`env.process` per port + `all_of`), not in a `for` loop. A loop
+   puts the channels end to end in time — channel 1 starting only after channel 0's whole block went
+   out — which invents a rate violation on every channel but the first. `_pack` / `_unpack` lost
+   their `reshape(1, -1)` / `[0]` and now work on the whole `(n_ch, ·)` array.
+3. **`bfm_model()` returns one model per direction**, and this needed a small *generator* change as
+   well as the C++ one. A `BfmModel.ports` entry may now be a **tuple — a port group** — resolving to
+   ONE constructor argument, `sim.dut(), {ns::a, ns::b}`. The C++ models take an `AxisPortList`,
+   implicitly constructible from a single `const char*`; **a group of one renders unbraced**, which
+   is what makes the answer to the cost question below "nothing".
+4. **The `n_ch > 1` refusal is gone**, with nothing in its place. What *was* added is a different
+   check: `on_rf_bind` refuses an RF edge whose `n_ch` disagrees with `n_rx` / `n_tx`. Those are one
+   number stated twice, and the disagreement would otherwise surface as a shape error inside `pack`
+   — or not at all, when the smaller divides the larger. The `iq_mode` refusal is untouched.
+
+**The cost question, answered: the rename is Python-side only.** `render_tb_harness` regenerates
+`examples/rf_loopback/xsi/rf_loopback_tb_harness.h` **byte-identically**, and every committed RF
+workspace still compiles (`g++ -fsyntax-only` against the new `xsi_rfdc.h`). No RTL was re-synthesized
+for the one-channel path and no existing XSI cycle count moved. Only `xsi_rfdc.h`'s committed copies
+were refreshed, which the workspace-copies gate polices.
+
+**Gate — both halves:**
+
+- **pysim**, `tests/examples/test_rf_loopback.py::TestTheTile`: a two-channel loopback byte-identical
+  at the bundle level, `underrun == 0` / `overrun == 0` on the ADC edge and the *same* declared
+  2-block transient on the DAC edge as at one channel — which is the result, because a model that
+  serialized the channels would have cost more. Plus the check one channel cannot make: the two rows
+  carry different data and are compared **row by row**, so a swap fails rather than passing on
+  symmetry.
+- **RTL**, `tests/examples/test_rf_loopback_xsi.py::test_the_two_channel_tile_runs_at_rtl_as_two_independent_lanes`:
+  `ADC_N_CH == DAC_N_CH == 2` (one model reporting how many ports it bound — two objects would mean
+  the group did not resolve and the RF edge had two owners); **62 words dropped per lane, the
+  one-channel number unchanged**, which is the independence claim; the block accounting identical to
+  the one-channel gate (64 emitted / 58 zero-filled / 63 at the sink); and the cycle count recorded
+  the way 1072 was — **`SINK_LAST_BLOCK_CYCLE = 15751`**.
+
+**Two things the RTL run taught, worth keeping:**
+
+- **The DAC's block grid is per ROW, not per block.** `blk_rate_` was `words_per_cycle *
+  samp_per_word / blk_samples`, and `blk_samples` is `n_ch * blksize`. `words_per_cycle` is *one
+  port's* rate and every port runs it concurrently, so at `n_ch = 2` that grid was half as fast as
+  the converter. It read correctly for as long as there was only ever one channel, where the two are
+  the same number — the identical block accounting above is the check on the fix.
+- **A block is all-or-nothing across channels.** The rows of one block are the same instant on `n_ch`
+  converters of one tile, so a block assembled from a full row and a short one would claim samples
+  that were never played together. `emit_on_grid_` zero-fills the whole block if any channel is
+  short.
+
+**The DUT is a top per channel count**, and that is what kept the cost at zero: `RfSampPassThrough`
+gained `n_ch` (independent ingress + block stage + FIFO per lane) and `RfSampPassThrough2Ch` is a
+subclass whose only content is `cpp_kernel_name = "rf_pass_through_2ch"`. Its boundary port names are
+suffixed only at `n_ch > 1` — the **opposite** call from the converter's endpoints, deliberately,
+because these are RTL port names: renaming them re-synthesizes a design that did not change and
+re-runs every gate that names them.
+
+The consequence worth knowing before Stage D or any second multi-channel DUT: **a DUT's boundary port
+names are a function of `n_ch`**, so growing a design from one channel to two is never an *in-place*
+change — `s_in` becomes `s_in_0` / `s_in_1`. It is contained here only because the two-channel design
+is a top of its own with its own project and its own gate. A design that wanted to be re-cut between
+channel counts under one name would have to suffix from one, and pay the re-synthesis once.
+
+**Not in scope, and still open:** `iq_mode`, the RF bundle format, the twin.
+
+### Stage B — the complex RF bundle format
+
+**Goal:** `RFSampIF` and the on-disk bundle carry **complex** `(n_ch, blksize)` blocks.
+
+The first of the two blockers `Rfdc.__post_init__`'s `iq_mode` refusal already names. Today the
+bundle is one `float64` per `UINT64` word with **no manifest field for complex**, which is why the
+format cannot express an I/Q block rather than merely not having one.
+
+**Scope:** a manifest field naming the element kind; `write_rf_bundle` / `read_rf_bundle`;
+`RfDataSource` / `RfDataSink`.
+
+**Gate:** a complex bundle round-trips byte-identically, **and every existing real bundle reads back
+unchanged** — a format change that rewrites the real path silently is the failure to avoid.
+
+**Not in scope:** `Rfdc` accepting `iq_mode`; that is Stage D.
+
+### Stage C — the conformance twin for complex
+
+**Goal:** the quantizer's conformance twin covers complex, so "bit-exact" means the same thing for
+I/Q that it means for real today. The second named blocker.
+
+**Gate:** the existing real twin gate, extended to complex, still passing on real.
+
+### Stage D — `iq_mode = 1` end to end
+
+**Depends on B and C.** **Goal:** lift the `iq_mode` refusal.
+
+**Scope:** the complex paths through `_adc_proc` / `_dac_proc` (the conversion itself is done — see
+the decisions list); the interleave rule reaching `RfdcFormat` and the XSI twin.
+
+**Gate:** an I/Q loopback, byte-identical, at `samp_per_word = 2` on the 64-bit bus — the geometry
+that keeps a complex word at 64 bits on the 4x2.
+
+**Free on this board:** the Waveflow port is **bit-identical** to a quad-tile RFDC's, so no
+de-interleaver is owed at lowering. See *What it costs to lower — on this board, nothing*.
+
+### Not stages — the bring-up log
+
+Lab questions, in the order they are most likely to be wrong. None is code; each is a one-field
+change when answered:
+
+1. **`iq_order`** — evidence points at `q_low`, the declared default is `i_low`.
+2. **`justify`** — declared `left`, unconfirmed.
+3. **`TVALID` on the RF-DAC** — whether Gen 3 honours it.
+4. **PG269 confirmation** of the quad-tile interleaved layout the model now rests on.
+
+### Traps, carried forward
+
+- **The venv is a sibling: `../pysilicon-venv`.** A bare `pytest` reports "0 failed" because nothing
+  ran. Use `../pysilicon-venv/Scripts/python.exe -m pytest`.
+- **Baseline is 6 non-vitis failures** (`test_dataschema_poly` + 5 in `tests/poly/test_timing_analysis.py`)
+  **+ 1 vitis.** A full run prints no summary line; do not read the absence of one as success.
+- **`-m xsi` has a baseline failure too, and it is easy to mistake for your own.**
+  `tests/examples/test_fir_block_xsi.py::test_rtl_matches_golden_across_reload_and_carry` fails with
+  `block 0 word 0: 0x00000000 != golden 0x0dab0666` — the RTL dumps a zero arena. **Pre-existing**,
+  confirmed against a clean tree in `plans/design_cut.md`, which records the count as *14 tests, 13
+  passed, 1 failed*. Match the error string before concluding anything; a different one is yours.
+- **Piping pytest through `tail` reports `tail`'s exit code.** `-m xsi` output is long enough to
+  invite it, and `exited with code 0` on a run with a FAILED line is how that looks. Redirect to a
+  file and read the summary.
+- **XSI gates compile the COMMITTED `xsi/` copies**, and the staleness guard can skip silently
+  (Vitis alternates `Pipeline_VITIS_LOOP_N` / `Pipeline_N` module names) — see
+  `plans/xsi_tb_codegen.md`.
+- **`examples/` is an installed package** — re-install after packaging edits.
+- **Never hand-roll word↔element packing.** Everything needed exists; the bug hides at
+  `samp_per_word == 1`, and every new test belongs at two or more.
+
+---
+
+## `pack` / `unpack` — BUILT 2026-08-22
+
+The pair specified in
 [`pack` / `unpack` — the sample-array conversion pair](#pack--unpack--the-sample-array-conversion-pair)
-below. That section is self-contained: it carries the signatures, the shape convention, the refusals,
-the integer rationale, and the measurements behind each. Read it before anything else in this file.
+below is built, as **module-level functions** in `waveflow/hw/rfdc_samp_word.py` — the form the
+contract there is written in, so the type stays an argument on both sides rather than a receiver on
+one.
 
-**Scope, in order:**
+What landed, against the four scope items:
 
-1. `pack(word_type, samps)` / `unpack(word_type, samp_words)` as module-level functions or
-   `RfdcSampWord` classmethods — either is fine, pick one and be consistent.
-2. Make `Rfdc._pack` / `_unpack` delegate, so there is one implementation. Their current signatures
-   are **not** inverses (`_pack` is reals→words, `_unpack` is slots→reals); expect to change the
-   `_dac_proc` call site, not just the body.
-3. Tests at `samp_per_word >= 2` — see the trap below.
-4. Docs: `docs/guide/rf/rfdc/word.md` has a `## Conversion methods` placeholder waiting for this,
-   and its `## Arrays of words` section already promises "the conversion helpers below return one."
+1. `pack(word_type, samps)` / `unpack(word_type, samp_words)`. Channel-major `(n_ch, n_samp)`,
+   stored integers in, `(n_ch, n_words)` `uint64` out — `(n_ch, n_words, k)` over 64 bits, on the
+   wide-word convention that already existed. Every refusal the design called for is a refusal:
+   a sample count that is not a whole number of words, a float array (with the missing `from_real`
+   named in the message), a value outside `bits_per_samp`, and complex/real disagreeing with
+   `iq_mode`. Packing routes through `to_slots` → `write_array`, so `justify` is read, never assumed.
+2. `Rfdc._pack` / `_unpack` delegate. They are now **inverses in signature** — words on both sides —
+   which meant changing `_dac_proc` to take raw words off the stream rather than asking it to
+   deserialize slots. What is left in the converter is the shape adapter and the quantizer: it works
+   one channel at a time in normalized reals, and `full_scale` is its own.
+3. Tests: `tests/hw/test_rfdc_samp_word.py::TestPackUnpack`, **every one at
+   `samp_per_word >= 2`**, plus `tests/examples/test_rf_loopback.py::TestTheConverterDelegates`,
+   which checks the converter's private pair *against* the public one rather than independently.
+4. Docs: `docs/guide/rf/rfdc/word.md` § *Converting samples to words and back*. Its *Arrays of words*
+   section promised the helpers return a `DataArray`; they return a plain `uint64` array, which is
+   what a stream `get()` hands you, and the page now says so.
 
-**Not in scope:** the `RfShotBuf` / `RfStreamBuf` logic-side port. That is designed in the section
-after this one and gated on a csynth that has not been run.
+One thing fixed in passing: `test_the_default_is_left_and_is_flagged_unconfirmed_in_the_docstring`
+was reading `axis_side.md` for the `justify` warning, which moved to `word.md` when the sample word
+was split into its own page. It now reads the page it means. That was one of the standing failures.
 
-### Traps this specific work will hit
+**Still not built:** the `RfShotBuf` / `RfStreamBuf` logic-side port, designed in the section after
+the pair's and gated on a csynth that has not been run.
+
+### Traps recorded from that work
 
 - **The venv is a sibling: `../pysilicon-venv`.** A bare `pytest` reports "0 failed" because nothing
   ran. Use `../pysilicon-venv/Scripts/python.exe -m pytest`.
@@ -40,11 +233,17 @@ after this one and gated on a csynth that has not been run.
   `samp_per_word == 1`, where slot order is unobservable and every test passes.
 - **Write the tests at two or more samples per word.** Slot order and `iq_order` are both invisible at
   one, which is why `iq_order`'s existing test is pinned at two and nowhere else.
+- **`specialize` had a local named `pack`**, and `describe` one too — both renamed, because a
+  module-level `pack` now exists and a later edit calling it inside either method would silently get
+  an integer.
 - **`examples/` is an installed package** — re-install after packaging edits.
 - **Baseline is 6 non-vitis failures + 1 vitis.** A full run prints no summary line; do not read the
   absence of one as success.
-- **`justify` is UNCONFIRMED.** Default `"left"`, on the board bring-up list. `pack` must route
-  through `justify_shift()` rather than assuming a value, so a lab answer stays a one-field change.
+- **`justify` is UNCONFIRMED.** Default `"left"`, on the board bring-up list. `pack` routes through
+  `justify_shift()` rather than assuming a value, and a test asserts the two alignments produce
+  *different* words, so a lab answer stays a one-field change.
+
+---
 
 Many applications, especially in wireless, connect to an ADC block like the RFDC in AMD/Xilinx RFSoC
 parts. This is a plan for extending Waveflow to develop systems with ADCs.
@@ -235,6 +434,202 @@ bind** — the same single-source discipline as `StreamIF.depth`. Two declaratio
 > **Trap on the `DynParam` rows.** `discover_dyn_params` skips **falsy** values, so `0.0` and `False`
 > emit *nothing* and silently take the C++ default. Sentinel them or fix the predicate first.
 
+### Channels, ports, and where I/Q lives
+
+**Agreed 2026-08-22, nothing built.** How many AXIS ports an `Rfdc` presents, what one of them
+carries, and who maps I/Q to real. It resolves two of the entries under **Open questions** below,
+which is why it is recorded here rather than there.
+
+The IP's own shape comes first, because the eventual Vivado lowering has to hit it — but the model
+deliberately does **not** mirror it.
+
+The RFDC presents **one AXI4-Stream port per enabled datapath**, named `m<tile><block>_axis` /
+`s<tile><block>_axis` — they are ports of the IP, not something a design instantiates one at a time.
+The mixer question is settled: in an I/Q mode the block's **digital mixer + NCO** does the I/Q ↔ real
+mapping, which is why `iq_mode = 1` puts the DUC/DDC inside `Rfdc`.
+
+**How I and Q reach the fabric depends on the tile architecture, not on the mode** — and an earlier
+draft of this section got this wrong, asserting two ports as though it followed from the mode:
+
+| tile architecture | I/Q on the wire | as quoted |
+|---|---|---|
+| **dual-tile** (Gen 1, ZCU111-class) | **two ports** — I on one, Q on the next | `m00_axis_tdata` = `{I3, I2, I1, I0}`, `m01_axis_tdata` = `{Q3, Q2, Q1, Q0}` |
+| **quad-tile** (Gen 3, **ZU48DR / RFSoC 4x2**) | **one port, interleaved** | *"all data bits on the same bus"* — `{I1, Q1, I0, Q0}` |
+
+**This project's board is the second row.** The ZU48DR is a quad-ADC-tile Gen 3 part, so on the
+RFSoC 4x2 an I/Q datapath is **one port carrying interleaved I/Q** — exactly what
+`RfdcSampWord.iq_mode` already emits.
+
+*Evidence, not measurement:* the two quoted layouts are from the CASPER RFSoC tutorial's RFDC page
+and the quad-tile classification from the RFSoC data sheet overview (DS889), both read 2026-08-22 —
+**not** from PG269 read directly, which remains the standing caveat for everything in *What the real
+RFDC does that this model does not*. The board bring-up log should confirm it against PG269's
+AXI4-Stream data-format tables for the exact tile configuration in use.
+
+#### The model carries complex-ness as a **type**, so the port count never varies
+
+**Resolved 2026-08-22, and it supersedes an earlier draft of this section.** That draft read the
+mode table literally: two IP streams for an internal DUC means two model ports, therefore `n_rx` /
+`n_tx` do double duty (AXIS ports vs RF channels), therefore declare a datapath mode and derive the
+port count from it. **That is the wrong lift.** It mirrors the IP's *wiring* into the model, and
+makes every consumer downstream — the buffers, the BFM, the user's logic — learn a port-pairing rule
+in order to say "complex".
+
+The convention instead:
+
+| | `iq_mode = 0` — DUC done **after** the RFDC | `iq_mode = 1` — DUC done **inside** the RFDC |
+|---|---|---|
+| what everything sees | **real** data: `Rfdc`, `RfShotBuf`, `RfStreamBuf` alike | **complex** data, all the way through |
+| RF block | `(n_ch, n_samp)` real | `(n_ch, n_samp)` **complex** |
+| one AXIS word | `samp_per_word` real samples | `samp_per_word` **complex** samples, I/Q **interleaved** |
+| AXIS ports | `n_ch` | `n_ch` |
+| where I/Q mapping lives | **outside** — on the RF side of `Rfdc`, and **before** `RfShotBuf` / `RfStreamBuf` on the logic side | inside the converter, which is what the real block's mixer does |
+
+**`n_ch = n_rx` (or `n_tx`) in both modes.** One channel, one port, always. The variation the mode
+table describes is absorbed into *what a word carries*, which is exactly what `RfdcSampWord` already
+is: `iq_mode` doubles `bitwidth` because a complex sample occupies two slots, and `iq_order` says
+which of I and Q takes the lower one. So the thing that changes between the two modes is a **type**,
+not a port count, and no parameter comes to mean two things.
+
+That also disposes of the double-duty defect rather than fixing it: it never arises, because the
+model never had to state a port count separate from the channel count.
+
+#### It **promotes** `iq_mode` — this is what it was for
+
+The earlier draft concluded that two ports per I/Q pair would make `RfdcSampWord.iq_mode` "not the
+default way I/Q is expressed". Under this convention the opposite is true: interleaved I/Q **is** how
+a converter in DUC mode is modelled, which is the configuration `iq_mode` was built for.
+`plans/circ_buf_fac.md` records both branches — *"I and Q are interleaved (or carried on separate
+streams) according to the tile's digital-mixer / data-format settings"* — and this picks
+**interleaved** as the model's representation, whichever one the wire uses.
+
+Two things fall out, and both are already true today:
+
+- **`pack` / `unpack` need no change.** `pack(W, x)` with `W.iq_mode` takes a complex `(n_ch, n_samp)`
+  array and returns `(n_ch, n_words)` — row `ch` is port `ch`, exactly as in the real case. Verified
+  at the 4x2 geometry: `Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True)` is a 64-bit word
+  and the round trip is exact.
+- **An I/Q design halves `samp_per_word`** to stay on the same bus — 2 complex samples per beat where
+  a real design carries 4. That is arithmetic the word type already does, and
+  `docs/guide/rf/rfdc/word.md` already says it.
+
+What is still missing for `iq_mode = 1` is what `Rfdc.__post_init__`'s refusal already names, and
+neither piece is about packing:
+
+1. the **RF-side bundle format** — `float64` per word, with no manifest field for complex;
+2. the **conformance twin**, which covers real `FixedField` only.
+
+#### And it settles where the DDC/DUC lives
+
+**Inside `Rfdc`** — the other entry under **Open questions**. The I/Q ↔ real mapping in `iq_mode = 1`
+is precisely what the mode table says the block does, and modelling it anywhere else would put a
+mixer between the converter and its own port. The "a separate block is easier to make bit-exact"
+argument survives as an *implementation* choice about the mixer, not as a question about where the
+boundary is.
+
+The mirror case is the reason `iq_mode = 0` is stated as strongly as it is above: with the DUC
+**after** the converter, `Rfdc` has no business knowing that two of its real channels are an I/Q pair.
+That mapping belongs to a block on the RF side, and on the logic side to something ahead of the
+buffers — which keeps both realizations of the converter real-valued and unaware.
+
+#### What it costs to lower — on this board, nothing
+
+A previous draft recorded a deviation here: that in `iq_mode = 1` the Waveflow port would carry one
+interleaved stream where the IP takes two real ones, so lowering would need a **de-interleaver**, and
+*"packed identically to the real RFDC"* under **Interface endpoints** would no longer hold.
+
+**On a quad-tile part that cost does not exist.** The IP already interleaves I and Q on one bus, so
+the Waveflow port is **bit-identical** and the convention above is not a modelling convenience at all
+— it is what the hardware does. `iq_mode = 0` was never affected either way.
+
+The de-interleaver is only owed on a **dual-tile** (Gen 1) part, where the IP splits I and Q across
+two ports. That is a lowering-time concern for a board this project does not target, and it belongs
+with the rest of the Flow-3 work rather than in the model. Recorded so that a future dual-tile port
+finds the note instead of the surprise.
+
+#### The Waveflow `Rfdc` is a **tile**, and it presents one AXIS port per stream
+
+**Decided 2026-08-22.** This is the unit question, and it is separate from the mode table above.
+
+**One Waveflow `Rfdc` represents `n_ch` physical RFDC datapaths**, not one. Lowering to Vivado
+expands a single Waveflow block into `n_ch` RFDC blocks; nothing about that lowering exists yet, but
+it is the shape the model is built for, and it is why the module is named after the *tile* rather
+than after a converter.
+
+The two sides are asymmetric on purpose, and each takes the form its consumer wants:
+
+| side | shape | why |
+|---|---|---|
+| **RF** | one `RFSampIF` carrying `(n_ch, blksize)` | the RF environment and the user's logic both want the channels **together** — a block is a block, and splitting it gives `n_ch` events per block period against the whole point of block-LT |
+| **AXIS** | **`n_rx` separate master ports, `n_tx` separate slave ports** | that is what the IP presents, and one port per stream is what keeps the DUT's ports identical across all three realizations |
+
+**Separate ports, not one wide port.** A wide interleaved port would have to be de-interleaved by the
+user's logic — moving a vendor packing rule into every design that touches a converter — and it is
+not what the hardware does. This closes the `n_rx`/`n_tx` > 1 entry under **Open questions**.
+
+**`pack` / `unpack` already match this, and it is the reason the shape argument came out the way it
+did.** `pack` returns `(n_ch, n_words)`: **row `ch` is what port `ch` carries**, so the ADC path
+offers row `ch` to `rx_stream[ch]` and the DAC path gathers `tx_stream[ch]` into row `ch`. A
+channel-major array is exactly a per-port array. The interleaved `(n_samp, n_ch)` layout would have
+been right only for the one-wide-port answer, which is now rejected.
+
+##### What `n_rx` / `n_tx` count — settled
+
+**RF channels, and AXIS ports, because they are the same number in both modes.** See *The model
+carries complex-ness as a type* above: `iq_mode` changes what a word holds, never how many ports
+there are, so "presents `n_rx` and `n_tx` AXIS ports" is unconditionally true and no derived port
+count is needed.
+
+##### What building it actually costs — **measured, 2026-08-22**
+
+Estimated here before *Stage A — the tile* built it; what it actually cost is recorded there. The
+estimate held on every line but one.
+
+- **Endpoints become indexed** — `rx_stream_0 .. rx_stream_{n-1}`, likewise `tx_stream_*`. The RF
+  endpoints stay single. *Built indexed at `n_ch = 1` too; the generated C++ is unchanged, so no
+  example was affected — see the rendering rule on the next line.*
+- **One BFM model spans all the AXIS ports plus the one RF edge** — *not* one model per port. The RF
+  edge carries every channel in one block, so `n_ch` independent models cannot each own it.
+  `BfmModel.ports` is already an ordered tuple whose entries **each resolve by their own kind**
+  (`waveflow/build/composite_gen.py`), so a model spanning `n` boundary ports plus one behavioral
+  edge needs no new mechanism on the Python side — but the C++ model must take a port array rather
+  than a single pin group. *Built as a **port group**: a `ports` entry may be a tuple, resolving to
+  one `sim.dut(), {ns::a, ns::b}` argument that the C++ takes as an `AxisPortList`. A group of one
+  renders **unbraced**, which is why every one-channel harness regenerates byte-identically.*
+- **The `n_ch > 1` refusal in `__post_init__` lifts** with nothing to replace it — there is no mode /
+  port-count agreement to check, because the counts are one number. The `iq_mode = 1` refusal is
+  *separate* and stays until its two blockers above are cleared. *Built. What was added instead is a
+  bind-time check that the RF edge's `n_ch` equals `n_rx`/`n_tx` — one number stated twice.*
+- `_adc_proc` / `_dac_proc` become per-port loops over the rows `pack` / `unpack` already produce.
+  **This is the line the estimate got wrong**: a *loop* is exactly what they must not be. The ports
+  have to be driven **concurrently**, or channel 1 waits for channel 0's whole block and the model
+  invents a rate violation on every channel but the first.
+
+#### What is not confirmed
+
+The mode table is the **convention this project is adopting**, and its shape comes from how the IP is
+described, not from PG269 read directly — the same standing caveat as *What the real RFDC does that
+this model does not* below. Specifically unconfirmed and belonging on the board bring-up log beside
+`justify` and the `TVALID` question:
+
+- **`iq_order` may be wrong, and there is now evidence against the default.** The quad-tile layout
+  is quoted as `{I1, Q1, I0, Q0}`; read in the same convention as the real case (`{I3, I2, I1, I0}`,
+  oldest in the least-significant slot) that puts **Q in the lower slot** — i.e. `q_low`, where
+  `RfdcSampWord.iq_order` defaults to `i_low`. This is an inference from brace notation in a
+  community source, **not** a measurement, so the default is not being changed on it. But it is now
+  the *most likely to be wrong* of the declared fields, and it is cheap to settle: `iq_order` is one
+  field and the test at two samples per word already pins whichever value is declared. Put it at the
+  top of the bring-up list, above `justify`.
+- the **port naming and numbering** (`m<tile><block>_axis` / `s<tile><block>_axis`), and whether an
+  I/Q datapath consumes two block indices on a quad tile;
+- confirmation from **PG269's AXI4-Stream data-format tables** that the ZU48DR configuration this
+  project uses is the interleaved one — the tile-architecture split above is the claim everything
+  else now rests on.
+
+Adopt the convention; declare the answers; let the lab contradict them. That is the same discipline
+`justify` is already under, and it is why the mode is a declared field rather than an assumption
+buried in a port count.
+
 ### `RfdcSampWord` — the packing convention as a type
 
 **Built 2026-08-21** — `waveflow/hw/rfdc_samp_word.py`, in two commits: the type with today's
@@ -353,9 +748,11 @@ about the converter's halves, neither about packing.
 
 ### `pack` / `unpack` — the sample-array conversion pair
 
-**Status: DESIGNED, not built.** 2026-08-22. Everything below marked *measured* was verified against
-the installed tree on that date; everything marked *decision* is a choice this plan is making, not a
-fact about the code.
+**Status: BUILT 2026-08-22** — `pack` / `unpack` in `waveflow/hw/rfdc_samp_word.py`, as
+module-level functions. Everything below marked *measured* was verified against the installed tree on
+that date; everything marked *decision* is a choice this plan made, and every one of them is what the
+code does. The section is kept as written because it is the argument for the contract, not a record
+of intent.
 
 #### The gap this closes
 
@@ -1426,10 +1823,20 @@ Alignment and latency stay separate quantities: alignment is *when a grid ticks*
   **Answered for real `float64` at stage 1** (see deviation 4): one burst per block, one `float64`
   per UINT64 word, through the sanctioned array serializers. Still open for **complex** and
   fixed-point vectors, which need a manifest field rather than a convention.
-- Where does the DDC/DUC live — inside `Rfdc` (matching the real IP's digital mixer) or as a separate
-  modelled block? The real IP has it; a separate block is easier to make bit-exact.
-- `n_rx`/`n_tx` > 1: one AXIS port per channel or one wide port? The real RFDC's answer depends on tile
-  configuration, and it determines how many duals the testbench needs. *(This is the AXIS side only —
-  the RF side is settled: one interface, `(n_ch, blksize)`.)*
-  **`pack` / `unpack` touches this** — its return shape is an answer. The contract above takes the
-  non-committal branch (per-channel arrays) so that building it does not settle the question.
+- ~~Where does the DDC/DUC live — inside `Rfdc` (matching the real IP's digital mixer) or as a
+  separate modelled block?~~ **Answered 2026-08-22: inside `Rfdc`** — see *Channels, ports, and where
+  I/Q lives*, which also records the mirror case: with the DUC **after** the converter
+  (`iq_mode = 0`) the mapping belongs outside, and `Rfdc` stays real-valued and unaware. The I/Q ↔ real mapping is what the block does; "a separate block is easier to make
+  bit-exact" survives as an implementation choice about the mixer, not as a question about the
+  boundary.
+- ~~`n_rx`/`n_tx` > 1: one AXIS port per channel or one wide port?~~ **Answered 2026-08-22: one
+  separate AXIS port per channel**, `n_ch` of them, in **both** `iq_mode` settings — see *Channels,
+  ports, and where I/Q lives*. Not one wide port, and not two ports per I/Q pair: complex-ness is a
+  property of the **word**, so the port count never varies. What remains open is not the shape but
+  the **bring-up facts** listed there (port numbering, which of I/Q is the lower slot, which tile
+  configurations interleave on the wire). *(The RF side was always settled: one interface,
+  `(n_ch, blksize)`.)*
+  **`pack` / `unpack` already match this** — per-channel rows *are* one stream per port, in the real
+  and the complex case alike, so the conversion pair needs no change at all.
+  **BUILT 2026-08-22** (*Stage A — the tile*): `Rfdc` presents them, a two-channel `rf_loopback` is
+  byte-identical in pysim and runs at RTL as two independent lanes.

@@ -27,7 +27,19 @@
 // The sample arithmetic — quantize, pack, and their inverses — is in xsi_rfdc_samp.h, which has no
 // Vivado dependency and is gated bit-exactly against Python's FixedField and schema serializer by
 // tests/build/test_xsi_rfdc_samp.py.  Everything below is pin driving and accounting.
+//
+// ONE MODEL PER DIRECTION, N PORTS
+//
+// A Waveflow `Rfdc` is a TILE: it presents one AXI-Stream port per channel on the fabric side, and
+// ONE RF edge carrying every channel of that direction in one `(n_ch, blksize)` block.  That
+// asymmetry is why these models take a PORT LIST rather than a single pin group -- n_ch independent
+// models could not each own the one edge behind them.
+//
+// Row `ch` of the RF block is what port `ch` carries, matching `pack`/`unpack` on the Python side:
+// a channel-major block IS a per-port array, so neither side transposes anything.
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -40,77 +52,148 @@
 
 namespace wfbfm {
 
+/// The AXIS ports one converter model spans, in channel order.
+///
+/// Implicitly constructible from a single `const char*` so a one-channel converter's generated
+/// constructor call is EXACTLY what it was before port lists existed -- `s_in(sim.dut(),
+/// ports::s_in, chan, fmt, rate)` -- and from a braced list for the general case.  That is not a
+/// convenience: the generator renders a group of one unbraced for precisely this reason, so adding
+/// channels to the model never churned the harnesses of designs that have one.
+struct AxisPortList {
+    AxisPortList(const char* one) : names(1, one) {}                       // NOLINT: implicit
+    AxisPortList(std::initializer_list<const char*> l) : names(l) {}       // NOLINT: implicit
+    std::vector<const char*> names;
+    std::size_t size() const { return names.size(); }
+};
+
 // ---------------------------------------------------------------------------
 // ADC: RF blocks in, AXI-Stream master out.
 // ---------------------------------------------------------------------------
 
 class RfdcAdcMaster : public XsiSimObj {
 public:
-    /// *rf_in* is the RF-side edge; *prefix* the DUT's AXIS slave port this masters into.
+    /// *rf_in* is the RF-side edge; *ports* the DUT's AXIS slave ports this masters into, ONE PER
+    /// CHANNEL and in channel order.  A bare `const char*` is a one-channel list.
     /// *words_per_cycle* is derived, never declared: `samp_rate / (samp_per_word * f_axis)`.
-    RfdcAdcMaster(Dut& dut, const char* prefix, RfChannel& rf_in,
+    RfdcAdcMaster(Dut& dut, AxisPortList ports, RfChannel& rf_in,
                   const RfdcFormat& fmt, double words_per_cycle)
-        : d_(dut), rf_(rf_in), fmt_(fmt), rate_(words_per_cycle),
-          tvalid_(dut.port((std::string(prefix) + "_TVALID").c_str())),
-          tready_(dut.port((std::string(prefix) + "_TREADY").c_str())),
-          tdata_(dut.port((std::string(prefix) + "_TDATA").c_str())),
-          tlast_(dut.port_opt((std::string(prefix) + "_TLAST").c_str())) {}
+        : d_(dut), rf_(rf_in), fmt_(fmt), rate_(words_per_cycle) {
+        for (std::size_t i = 0; i < ports.names.size(); ++i) {
+            const std::string p(ports.names[i]);
+            Ch c;
+            c.tvalid = dut.port((p + "_TVALID").c_str());
+            c.tready = dut.port((p + "_TREADY").c_str());
+            c.tdata  = dut.port((p + "_TDATA").c_str());
+            c.tlast  = dut.port_opt((p + "_TLAST").c_str());
+            ch_.push_back(c);
+        }
+        words_.resize(ch_.size());
+        words_sent_ch.assign(ch_.size(), 0);
+        dropped_ch.assign(ch_.size(), 0);
+    }
 
     void sample() override {
-        beat_ = have_ && d_.get1(tready_);          // a transfer happens iff VALID && READY
+        // A transfer happens iff VALID && READY -- per port, because one channel's consumer being
+        // ready says nothing about another's.
+        for (std::size_t i = 0; i < ch_.size(); ++i)
+            ch_[i].beat = ch_[i].have && d_.get1(ch_[i].tready);
     }
 
     void update() override {
         ++cycle_;
-        if (beat_) { ++words_sent; ++wpos_; have_ = false; }
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            if (ch_[i].beat) {
+                ++words_sent;
+                ++words_sent_ch[i];
+                ++ch_[i].wpos;
+                ch_[i].have = false;
+            }
+        }
 
         if (rate_.tick()) {
-            if (have_) {
-                // The fabric did not take the previous word and the next one is already due.  A real
-                // converter does not wait -- that word is gone.
-                ++dropped;
-                last_drop_cycle = cycle_;
-                have_ = false;
-                ++wpos_;
+            for (std::size_t i = 0; i < ch_.size(); ++i) {
+                if (ch_[i].have) {
+                    // The fabric did not take the previous word and the next one is already due.  A
+                    // real converter does not wait -- that word is gone.
+                    ++dropped;
+                    ++dropped_ch[i];
+                    last_drop_cycle = cycle_;
+                    ch_[i].have = false;
+                    ++ch_[i].wpos;
+                }
             }
-            if (wpos_ >= words_.size()) refill_();
-            if (wpos_ < words_.size()) { word_ = words_[wpos_]; have_ = true; }
+            // Every channel retires the word it was presenting in the same word period -- by a beat
+            // or by a drop, never both and never neither -- so the positions stay equal and channel
+            // 0's is the block's.  Refilling on one channel's exhaustion is refilling on all.
+            if (ch_[0].wpos >= nwords_) refill_();
+            if (ch_[0].wpos < nwords_) {
+                for (std::size_t i = 0; i < ch_.size(); ++i) {
+                    ch_[i].word = words_[i][ch_[i].wpos];
+                    ch_[i].have = true;
+                }
+            }
         }
     }
 
     void drive() override {
-        d_.put1(tvalid_, have_ ? 1u : 0u);
-        if (have_) d_.putW(tdata_, word_);
-        if (tlast_ >= 0) d_.put1(tlast_, (have_ && wpos_ + 1 == words_.size()) ? 1u : 0u);
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            const Ch& c = ch_[i];
+            d_.put1(c.tvalid, c.have ? 1u : 0u);
+            if (c.have) d_.putW(c.tdata, c.word);
+            if (c.tlast >= 0) d_.put1(c.tlast, (c.have && c.wpos + 1 == nwords_) ? 1u : 0u);
+        }
     }
 
-    /// Words the fabric accepted.
+    /// Words the fabric accepted, summed over channels.
     std::uint64_t words_sent = 0;
-    /// Words the fabric was not ready for, which the converter therefore **discarded**.  A real ADC
-    /// drops; it cannot stall.  Expected to be zero in any design whose fabric keeps up.
+    /// Words the fabric was not ready for, which the converter therefore **discarded**, summed over
+    /// channels.  A real ADC drops; it cannot stall.  Expected to be zero in any design whose fabric
+    /// keeps up.
     std::uint64_t dropped = 0;
     std::uint64_t last_drop_cycle = 0;
+    /// The same two, per channel.  The sums answer "did this converter lose anything"; these answer
+    /// "which port's consumer is the one that cannot keep up", which a sum cannot.
+    std::vector<std::uint64_t> words_sent_ch;
+    std::vector<std::uint64_t> dropped_ch;
+    /// AXIS ports this model masters -- the tile's receive channel count.
+    std::size_t n_ch() const { return ch_.size(); }
 
 private:
+    /// Pull one `(n_ch, blksize)` block off the edge and pack it, ROW PER PORT.
+    ///
+    /// The block arrives channel-major and flat, which is the same convention Python's `pack`
+    /// returns: row `ch` is what port `ch` carries, so this is a stride, not a transpose.
     void refill_() {
         RfBlockMsg blk;
         if (!rf_.pop(blk)) return;                     // starved: the channel counts it, not us
-        words_.resize(blk.data.size() / fmt_.samp_per_word);
-        rfdc_pack(blk.data.data(), (int)blk.data.size(), fmt_, words_.data());
-        wpos_ = 0;
+        const std::size_t per_ch = blk.data.size() / ch_.size();
+        nwords_ = per_ch / (std::size_t)fmt_.samp_per_word;
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            words_[i].resize(nwords_);
+            rfdc_pack(blk.data.data() + i * per_ch, (int)per_ch, fmt_, words_[i].data());
+            ch_[i].wpos = 0;
+        }
     }
+
+    /// One AXIS port, and the beat it is presenting.
+    struct Ch {
+        int tvalid = -1, tready = -1, tdata = -1, tlast = -1;
+        std::size_t   wpos = 0;
+        std::uint64_t word = 0;
+        bool          have = false;
+        bool          beat = false;
+    };
 
     Dut&       d_;
     RfChannel& rf_;
     RfdcFormat fmt_;
     RateTick   rate_;
-    int tvalid_, tready_, tdata_, tlast_;
-    std::vector<std::uint64_t> words_;
-    std::size_t   wpos_  = 0;
-    std::uint64_t word_  = 0;
-    bool          have_  = false;
-    bool          beat_  = false;
-    std::uint64_t cycle_ = 0;
+    std::vector<Ch> ch_;
+    std::vector<std::vector<std::uint64_t> > words_;
+    /// Words one channel's row of the current block occupies.  ONE number, not one per channel: the
+    /// rows of a block are the same length by construction.
+    std::size_t   nwords_ = 0;
+    std::uint64_t cycle_  = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -119,19 +202,34 @@ private:
 
 class RfdcDacSlave : public XsiSimObj {
 public:
-    /// *rf_out* is the RF-side edge; *prefix* the DUT's AXIS master port this answers.
+    /// *rf_out* is the RF-side edge; *ports* the DUT's AXIS master ports this answers, ONE PER
+    /// CHANNEL and in channel order.  A bare `const char*` is a one-channel list.
     /// *blk_samples* is `n_ch * blksize` — one block's worth, the unit the RF edge moves.
-    RfdcDacSlave(Dut& dut, const char* prefix, RfChannel& rf_out,
+    RfdcDacSlave(Dut& dut, AxisPortList ports, RfChannel& rf_out,
                  const RfdcFormat& fmt, double words_per_cycle, std::size_t blk_samples)
         : d_(dut), rf_(rf_out), fmt_(fmt), rate_(words_per_cycle),
-          // The BLOCK grid, derived from the word rate rather than declared: one block is
-          // blk_samples/samp_per_word words, so blocks/cycle = words/cycle / words-per-block.  A DAC
-          // plays continuously and the grid is what it plays ON -- see emit_on_grid_().
-          blk_rate_(words_per_cycle * double(fmt.samp_per_word) / double(blk_samples)),
-          blk_(blk_samples),
-          tvalid_(dut.port((std::string(prefix) + "_TVALID").c_str())),
-          tready_(dut.port((std::string(prefix) + "_TREADY").c_str())),
-          tdata_(dut.port((std::string(prefix) + "_TDATA").c_str())) {}
+          blk_(blk_samples) {
+        for (std::size_t i = 0; i < ports.names.size(); ++i) {
+            const std::string p(ports.names[i]);
+            Ch c;
+            c.tvalid = dut.port((p + "_TVALID").c_str());
+            c.tready = dut.port((p + "_TREADY").c_str());
+            c.tdata  = dut.port((p + "_TDATA").c_str());
+            ch_.push_back(c);
+        }
+        per_ch_ = blk_ / ch_.size();
+        underrun_ch.assign(ch_.size(), 0);
+        words_recv_ch.assign(ch_.size(), 0);
+        // The BLOCK grid, derived from the word rate rather than declared: one CHANNEL's row of a
+        // block is per_ch_/samp_per_word words, so blocks/cycle = words/cycle / words-per-row.  A DAC
+        // plays continuously and the grid is what it plays ON -- see emit_on_grid_().
+        //
+        // Per ROW, not per block: `words_per_cycle` is one port's rate and every port runs it
+        // concurrently, so dividing the whole `(n_ch, blksize)` block's word count into a
+        // single-port rate would make the grid n_ch times too slow.  It read that way while there
+        // was only ever one channel, where the two are the same number.
+        blk_rate_ = RateTick(words_per_cycle * double(fmt.samp_per_word) / double(per_ch_));
+    }
 
     void sample() override {
         // TREADY is the DAC's METRONOME, and withholding it is the whole point.
@@ -153,47 +251,65 @@ public:
         // every 4, "a word was due and no beat landed this cycle" counted the beat pattern of two
         // unrelated periods -- 10000 of 60000 cycles on a run that was bit-exact end to end.  Held to
         // the grid, the counter measures starvation again, which is what it is for.
-        ready_ = (pending_ < cap_);
-        beat_ = ready_ && d_.get1(tvalid_);
-        if (beat_) word_ = d_.getW(tdata_);
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            Ch& c = ch_[i];
+            c.ready = (c.pending < cap_);
+            c.beat = c.ready && d_.get1(c.tvalid);
+            if (c.beat) c.word = d_.getW(c.tdata);
+        }
     }
 
     void update() override {
         ++cycle_;
-        if (beat_) {
-            ++words_recv;
-            ++pending_;
-            std::int64_t slot[64];
-            rfdc_unpack_word(word_, fmt_, slot);
-            for (int k = 0; k < fmt_.samp_per_word; ++k)
-                samples_.push_back(rfdc_dequantize(slot[k], fmt_));
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            Ch& c = ch_[i];
+            if (c.beat) {
+                ++words_recv;
+                ++words_recv_ch[i];
+                ++c.pending;
+                std::int64_t slot[64];
+                rfdc_unpack_word(c.word, fmt_, slot);
+                for (int k = 0; k < fmt_.samp_per_word; ++k)
+                    c.samples.push_back(rfdc_dequantize(slot[k], fmt_));
+            }
         }
         // A DAC plays on its GRID, not when its buffer happens to fill.
         if (blk_rate_.tick()) emit_on_grid_();
         if (rate_.tick()) {
-            // One word period has elapsed: the tile consumes a word if it has one.
-            if (pending_ > 0) {
-                --pending_;
-            } else {
-                // A word was due and the FIFO was empty.  There is no protocol signal for this;
-                // the analog output glitches and THIS COUNTER is the only evidence.
-                ++underrun;
-                last_underrun_cycle = cycle_;
+            // One word period has elapsed: each tile consumes a word if it has one.
+            for (std::size_t i = 0; i < ch_.size(); ++i) {
+                if (ch_[i].pending > 0) {
+                    --ch_[i].pending;
+                } else {
+                    // A word was due and the FIFO was empty.  There is no protocol signal for this;
+                    // the analog output glitches and THIS COUNTER is the only evidence.
+                    ++underrun;
+                    ++underrun_ch[i];
+                    last_underrun_cycle = cycle_;
+                }
             }
         }
     }
 
-    void drive() override { d_.put1(tready_, ready_ ? 1u : 0u); }
+    void drive() override {
+        for (std::size_t i = 0; i < ch_.size(); ++i)
+            d_.put1(ch_[i].tready, ch_[i].ready ? 1u : 0u);
+    }
 
-    /// Words taken off the fabric.
+    /// Words taken off the fabric, summed over channels.
     std::uint64_t words_recv = 0;
-    /// Cycles where a beat was due and none came — underflow.  Compare against the pipeline's
-    /// **declared** startup transient, never against zero: a DAC fed through a pipeline must
-    /// underrun until data reaches it.
+    /// Cycles where a beat was due and none came — underflow — summed over channels.  Compare
+    /// against the pipeline's **declared** startup transient, never against zero: a DAC fed through
+    /// a pipeline must underrun until data reaches it.
     std::uint64_t underrun = 0;
     std::uint64_t last_underrun_cycle = 0;
+    /// The same two, per channel: which port is starving, which a sum cannot say.
+    std::vector<std::uint64_t> underrun_ch;
+    std::vector<std::uint64_t> words_recv_ch;
     /// Blocks pushed onto the RF edge.
     std::uint64_t blocks_out = 0;
+    /// AXIS ports this model answers — the tile's transmit channel count.
+    std::size_t n_ch() const { return ch_.size(); }
 
     /// Blocks the grid emitted with nothing to play, so a ZERO block went out.  The direct
     /// analogue of pysim's ``RFSampIF.underrun``, and the same physics: there is no protocol signal
@@ -213,12 +329,25 @@ private:
     /// clock does not wait for the fabric.  pysim's `RFSampIF` metronome had it right all along --
     /// the grid is the physics, and the startup zero-fill it produces is a real converter behaviour,
     /// not "a pysim-side artifact" as an earlier session concluded from this model's silence.
+    /// A block is ALL OR NOTHING across the channels, and that is physics rather than convenience:
+    /// the rows of one block are the same instant on n_ch converters of one tile, so a block
+    /// assembled from a full row and a short one would claim samples that were never played
+    /// together.  If any channel is short, the whole block is the zero-fill.
     void emit_on_grid_() {
         RfBlockMsg blk;
         blk.idx = ++blocks_out;
-        if (samples_.size() >= blk_) {
-            blk.data.assign(samples_.begin(), samples_.begin() + (std::ptrdiff_t)blk_);
-            samples_.erase(samples_.begin(), samples_.begin() + (std::ptrdiff_t)blk_);
+        bool complete = true;
+        for (std::size_t i = 0; i < ch_.size(); ++i)
+            if (ch_[i].samples.size() < per_ch_) complete = false;
+        if (complete) {
+            blk.data.reserve(blk_);
+            for (std::size_t i = 0; i < ch_.size(); ++i) {
+                // Channel-major and flat: row i is what port i played, which is the layout the
+                // Python side's `(n_ch, blksize)` block and `unpack` already agree on.
+                std::vector<double>& s = ch_[i].samples;
+                blk.data.insert(blk.data.end(), s.begin(), s.begin() + (std::ptrdiff_t)per_ch_);
+                s.erase(s.begin(), s.begin() + (std::ptrdiff_t)per_ch_);
+            }
         } else {
             blk.data.assign(blk_, 0.0);                // underflow: deterministic, visible, counted
             ++blocks_zero_filled;
@@ -227,22 +356,31 @@ private:
         rf_.push(blk);                                 // full => the channel counts the drop
     }
 
+    /// One AXIS port, the beat it is taking, and the samples it has not yet played.
+    ///
+    /// `pending` is words accepted but not yet consumed by the tile — the IP's AXIS input FIFO —
+    /// and it is PER PORT because each port has its own.
+    struct Ch {
+        int tvalid = -1, tready = -1, tdata = -1;
+        std::vector<double> samples;
+        std::size_t   pending = 0;
+        std::uint64_t word    = 0;
+        bool          beat    = false;
+        bool          ready   = true;
+    };
+
     Dut&       d_;
     RfChannel& rf_;
     RfdcFormat fmt_;
     RateTick   rate_;
     RateTick   blk_rate_;
+    /// Samples in one whole `(n_ch, blksize)` block, and in one channel's row of it.
     std::size_t blk_;
-    int tvalid_, tready_, tdata_;
-    std::vector<double> samples_;
-    std::uint64_t word_  = 0;
-    bool          beat_  = false;
-    bool          ready_ = true;
+    std::size_t per_ch_ = 0;
+    std::vector<Ch> ch_;
     std::uint64_t cycle_ = 0;
-
-    /// Words accepted but not yet consumed by the tile — the IP's AXIS input FIFO.
-    std::size_t pending_ = 0;
-    /// Its depth.  **2, the AXI-Stream boundary depth Vitis gives a port**, not a tunable: a deeper
+    /// The depth of one port's input FIFO (`Ch::pending`).  **2, the AXI-Stream boundary depth
+    /// Vitis gives a port**, not a tunable: a deeper
     /// one lets the fabric run further ahead of the converter and is exactly the fiction this model
     /// used to tell with an infinite one.  Small enough that the player is held to the grid within a
     /// couple of words, which is what makes the play pointer track real time.

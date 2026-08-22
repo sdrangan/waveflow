@@ -40,6 +40,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +57,8 @@ from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_loopback"
 XSI = ROOT / "xsi"
 PROJ = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
+#: The two-channel DUT's RTL — a separate top, so the one-channel project is untouched by it.
+PROJ_2CH = ROOT / "rf_pass_through_2ch_proj" / "solution1" / "syn" / "verilog"
 
 #: What the ADC produces, and what the fabric actually takes.  8 blocks x 64 words.
 WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
@@ -197,7 +200,7 @@ def test_words_per_cycle_is_derived_not_declared():
     from examples.rf_loopback.rf_loopback_xsi import make_xsi_tb
 
     tb = make_xsi_tb()
-    got = tb.rfdc.words_per_cycle(tb.rfdc.rx_stream, tb.rfdc.rx_samp_rate)
+    got = tb.rfdc.words_per_cycle(tb.rfdc.rx_streams[0], tb.rfdc.rx_samp_rate)
     assert got == pytest.approx(tb.samp_rate / (tb.word.samp_per_word * tb.axis_freq))
     assert 0.0 < got < 1.0, "a ratio above 1 would mean the port cannot carry the rate"
 
@@ -370,3 +373,144 @@ def test_the_two_backends_disagree_about_loss_and_this_records_how():
     # "the answer"; the run length is a testbench constant on both sides.
     assert len(sim.captured) == XSI_NBLK
     assert len(rtl) == WANT_SINK_BLOCKS > len(sim.captured)
+
+
+# ---------------------------------------------------------------------------
+# The TILE at RTL — Stage A's gate (plans/adc_model.md, "Stage A — the tile")
+# ---------------------------------------------------------------------------
+#
+# The same loopback with TWO converter channels, through a two-channel RTL top.  What needs RTL to
+# state at all is the lowering: **one BFM model per direction spanning BOTH AXIS ports plus the RF
+# edge**, because the edge carries every channel in one block and n_ch models cannot each own it.
+# The byte-identical claim is pysim's and is gated in tests/examples/test_rf_loopback.py::TestTheTile
+# — this design drops at the boundary (pattern A), so the RTL run cannot make it and does not try.
+
+#: Words one lane's ADC produces — the same 512 the one-channel gate accounts for, per channel.
+WANT_2CH_ADC_WORDS_PER_CH = XSI_NBLK * (XSI_BLKSIZE // 4)
+
+#: Words each lane drops, and it is **62 — the one-channel number, unchanged**.
+#:
+#: That equality is the result, not the value.  The lanes are independent (separate ingress, separate
+#: block stage, separate FIFO), so each should behave exactly as the one-channel design does; a
+#: number that differed would mean they are coupled somewhere they should not be — through the
+#: converter model's shared rate accumulator, most plausibly, which is the one thing they really do
+#: share.  See ``WANT_ADC_DROPPED_IS_STRUCTURAL`` for why the loss exists at all and why 62 is a
+#: property of the model's 2-word input FIFO rather than of silicon.
+WANT_2CH_ADC_DROPPED_PER_CH = 62
+
+#: Samples at the head of the first data block that survive **before the first dropped word bites**,
+#: on both lanes.  Measured, and pattern A's cost again rather than a target: three words at four
+#: samples each. It is asserted because it is the same on both lanes, which is the claim — a lane
+#: that lost differently would be a lane that is not independent.
+WANT_2CH_LEAD_SAMPLES = 12
+
+#: Cycle the last block reached the sink — recorded the way 1072 was, and the same kind of number:
+#: a measured property of THIS design at THIS rate, which changes only if the design or the rate
+#: does. The one-channel run's equivalent is not this number and is not meant to be; what is
+#: meaningful across the two is the block accounting below, which IS identical.
+WANT_2CH_SINK_LAST_BLOCK_CYCLE = 15751
+
+
+@pytest.mark.xsi
+def test_the_two_channel_tile_runs_at_rtl_as_two_independent_lanes():
+    """THE Stage-A RTL gate: one converter, two AXIS ports per direction, two lanes of real Verilog.
+
+    Three claims, and only the first needs two channels to be sayable at all:
+
+    1. **One model per direction.** ``ADC_N_CH == 2`` is the C++ model reporting how many ports it
+       bound — two objects here would mean the port group did not resolve and the RF edge had two
+       owners.
+    2. **The lanes are independent and identical.** Every per-lane counter matches the other lane's,
+       and matches the one-channel design's.
+    3. **The block accounting is unchanged.** 64 grid periods, 58 zero-filled, 63 at the sink — the
+       one-channel gate's constants exactly. That is the check on the DAC's block grid being derived
+       from one channel's ROW rather than from the whole block: dividing by ``n_ch * blksize`` would
+       have halved the grid rate and every one of these numbers would be different.
+    """
+    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
+    _require(PROJ_2CH.is_dir(),
+             f"no csynth RTL at {PROJ_2CH} — run rf_loopback_xsi.py's 2-channel build")
+
+    from waveflow.build.composite_gen import render_rtl_f
+    from examples.rf_loopback.rf_loopback_xsi import (
+        OUT_BUNDLE_2CH,
+        TOP_2CH,
+        XSI_NCH,
+        generate_tb_2ch,
+        make_sim_2ch,
+    )
+
+    generate_tb_2ch(ROOT)
+    (XSI / f"rtl_{TOP_2CH}.f").write_text(render_rtl_f(TOP_2CH, ROOT), encoding="utf-8")
+    shutil.rmtree(XSI / "xsim.dir" / TOP_2CH, ignore_errors=True)
+    shutil.rmtree(XSI / OUT_BUNDLE_2CH, ignore_errors=True)   # never pass on last run's output
+
+    r = subprocess.run(xsi_runner_cmd(TOP_2CH, "rf_loopback_2ch_counters"), cwd=str(XSI),
+                       capture_output=True, text=True, timeout=1800)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert "XSI_EXITCODE=0" in out, f"the 2-channel loopback did not complete cleanly:\n{out[-3000:]}"
+    counters = {k: int(v) for k, v in re.findall(r"^(\w+)=(\d+)$", out, re.M)
+                if k not in ("XSI_EXITCODE",)}
+
+    # --- 1) ONE model per direction, spanning both ports ----------------------------------------
+    assert counters["ADC_N_CH"] == counters["DAC_N_CH"] == XSI_NCH, (
+        f"the converter models bound {counters['ADC_N_CH']}/{counters['DAC_N_CH']} AXIS ports, "
+        f"expected {XSI_NCH} each. One model spans every port of its direction, because the RF edge "
+        f"behind them carries every channel in one block: {counters}")
+
+    # --- 2) The lanes are independent, and each is the one-channel design ------------------------
+    for ch in range(XSI_NCH):
+        sent, dropped = counters[f"ADC_WORDS_SENT_{ch}"], counters[f"ADC_DROPPED_{ch}"]
+        assert sent + dropped == WANT_2CH_ADC_WORDS_PER_CH, (
+            f"lane {ch} should account for every one of {WANT_2CH_ADC_WORDS_PER_CH} words: "
+            f"{counters}")
+        assert dropped == WANT_2CH_ADC_DROPPED_PER_CH, (
+            f"lane {ch} dropped {dropped} words, the one-channel design drops "
+            f"{WANT_2CH_ADC_DROPPED_PER_CH}. A DIFFERENT number means the lanes are coupled "
+            f"somewhere they should not be — the converter model's rate accumulator is the one "
+            f"thing they really share.")
+    assert counters["ADC_DROPPED"] == XSI_NCH * WANT_2CH_ADC_DROPPED_PER_CH
+    assert counters["ADC_WORDS_SENT"] == sum(counters[f"ADC_WORDS_SENT_{ch}"]
+                                             for ch in range(XSI_NCH))
+    assert counters["DAC_WORDS_RECV_0"] == counters["DAC_WORDS_RECV_1"]
+    assert counters["DAC_UNDERRUN_0"] == counters["DAC_UNDERRUN_1"]
+
+    # --- 3) The block accounting is the one-channel gate's, unchanged ----------------------------
+    assert counters["DAC_BLOCKS_OUT"] == WANT_DAC_BLOCKS_OUT
+    assert counters["DAC_BLOCKS_ZERO_FILLED"] == WANT_DAC_ZERO_FILLED
+    assert counters["SINK_BLOCKS_IN"] == WANT_SINK_BLOCKS
+    assert counters["ADC_CHAN_DROPPED"] == 0 and counters["DAC_CHAN_DROPPED"] == 0
+    assert counters["SRC_BLOCKS_OUT"] == XSI_NBLK
+    assert counters["ADC_CHAN_TRANSFERRED"] == XSI_NBLK
+    assert counters["SINK_LAST_BLOCK_CYCLE"] == WANT_2CH_SINK_LAST_BLOCK_CYCLE, (
+        f"the last block reached the sink at cycle {counters['SINK_LAST_BLOCK_CYCLE']}, gate "
+        f"expects {WANT_2CH_SINK_LAST_BLOCK_CYCLE}. That is a real behaviour change: either a "
+        f"regression or an improvement worth re-recording.")
+
+    # --- 4) Each lane carried ITS OWN samples -----------------------------------------------------
+    from waveflow.simulation.rf_tb import read_rf_bundle
+
+    got = read_rf_bundle(XSI / OUT_BUNDLE_2CH, XSI_NCH, XSI_BLKSIZE)
+    assert got, "the run dumped no RF output bundle"
+    assert got[0].shape == (XSI_NCH, XSI_BLKSIZE)
+    sim = make_sim_2ch()
+    with tempfile.TemporaryDirectory() as scratch:
+        sim.write_scenario(scratch)                 # the same writer the harness's vectors came from
+
+    data = [b for b in got if np.any(b)]
+    assert len(data) == WANT_DATA_BLOCKS_OUT, (
+        f"{len(data)} of {len(got)} grid periods carried data, gate expects "
+        f"{WANT_DATA_BLOCKS_OUT} — the one-channel number, for the same pattern-A reason")
+
+    first, sent = data[0], sim.sent[0]
+    n = WANT_2CH_LEAD_SAMPLES
+    for ch in range(XSI_NCH):
+        assert np.array_equal(first[ch][:n], sent[ch][:n]), (
+            f"lane {ch}'s first {n} samples are not what was played into it")
+        assert int(np.argmax(first[ch] != sent[ch])) == n, (
+            f"lane {ch} diverges at a different sample than lane 0 does; the lanes drop identically "
+            f"or they are not independent")
+    # ...and the lanes are not crossed, which one channel cannot check at all: the two rows carry
+    # different draws, so a swap would fail here even though the totals would not move.
+    assert not np.array_equal(sent[0], sent[1]), "the scenario must be asymmetric to say anything"
+    assert not np.array_equal(first[0], sent[1][:XSI_BLKSIZE])

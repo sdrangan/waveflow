@@ -5,7 +5,7 @@ an example should be — a graph that wires it to a real converter, a scenario t
 case it claims to handle, and a predicted golden:
 
     StreamDriver --StreamIF--> s_in (TxCmd, then its payload IN-BAND)
-    RfSampBufTx.s_out --StreamIF--> Rfdc.tx_stream | Rfdc.tx_rf --RFSampIF--> RfDataSink
+    RfSampBufTx.s_out --StreamIF--> Rfdc.tx_streams[0] | Rfdc.tx_rf --RFSampIF--> RfDataSink
     RfSampBufTx.s_resp --StreamIF--> StreamSink
 
 **The converter is really here**, not a stand-in sink, because the one thing this design exists to
@@ -308,7 +308,7 @@ class RfSampBufTxTB(FreeRunMod):
         self.dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
                                  bitwidth=w)
         self.dac_axis.bind("master", self.dut.s_out)
-        self.dac_axis.bind("slave", self.rfdc.tx_stream)
+        self.dac_axis.bind("slave", self.rfdc.tx_streams[0])
         self.add_if(self.dac_axis)
 
         resp_axis = StreamIF(name=f"{self.name}_resp_axis", sim=self.sim, clk=self.axis_clk,

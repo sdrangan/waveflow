@@ -21,13 +21,14 @@ import numpy as np
 import pytest
 
 from waveflow.build.codegen_check import check
+from waveflow.hw.arrayutils import array
 from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, write_rf_bundle
 from waveflow.hw.fixpoint import from_real, to_real
 from waveflow.simulation.simulation import Simulation
 
 from examples.rf_loopback.rf_loopback import RfLoopbackSim, RfLoopbackTB, RfSampPassThrough
 from examples.rf_loopback.rfdc import Rfdc
-from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord as WORD
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord as WORD, pack, unpack
 
 
 # --------------------------------------------------------------------------------------------
@@ -112,6 +113,139 @@ class TestLoopback:
         # ...and the loop still costs whole block indices, carried where they belong: one per
         # converter hop plus the DUT's own.
         assert tb.loop_blk_latency == 2
+
+
+# --------------------------------------------------------------------------------------------
+# The tile — Stage A's gate (plans/adc_model.md, "Stage A — the tile")
+# --------------------------------------------------------------------------------------------
+
+class TestTheTile:
+    """``Rfdc`` presents one AXIS port per channel, and a two-channel loopback is byte-identical.
+
+    The claim that needs a *second* channel is not "does it still work" — it is that **row ``ch`` of
+    the block is port ``ch``** all the way through: quantize, pack, offer, relay, take, unpack,
+    dequantize, and out to the bundle. One channel cannot state that at all, because every wrong
+    answer (a transpose, a swap, a broadcast) agrees with the right one when there is only one row.
+
+    So the scenarios here are deliberately **asymmetric across channels** — different random draws in
+    the grid waveform, different harmonics in the sine — and the checks below are the ones that fail
+    on a swap rather than passing on symmetry.
+    """
+
+    def test_the_converter_presents_one_axis_port_per_channel(self):
+        rfdc = Rfdc(name="tile", sim=Simulation(), n_rx=2, n_tx=3)
+        assert len(rfdc.rx_streams) == 2 and len(rfdc.tx_streams) == 3
+        # The list and the indexed attributes are two views of ONE set of objects -- BfmModel.ports
+        # names endpoints by attribute, and `rx_streams[0]` is not an attribute name.
+        assert rfdc.rx_stream_0 is rfdc.rx_streams[0]
+        assert rfdc.tx_stream_2 is rfdc.tx_streams[2]
+        # ...and every one of them is on the module's surface, or nothing could resolve it.
+        registered = {id(e) for e in rfdc.endpoints.values()}
+        assert all(id(e) in registered for e in (*rfdc.rx_streams, *rfdc.tx_streams))
+        # Indexed even at one channel: one spelling, no special case for the count everybody tests.
+        assert Rfdc(name="one", sim=Simulation()).rx_stream_0 is not None
+
+    def test_a_two_channel_loopback_is_byte_identical_with_no_loss(self):
+        """Stage A's gate: both channels through, both edges clean, the same declared transient."""
+        sim = RfLoopbackSim(n_src_blk=8, n_ch=2)
+        sim.run()
+        tb = sim.check()                        # data, counters, block counts and alignment
+        assert tb.rfdc.n_rx == 2 and tb.rfdc.n_tx == 2
+        assert tb.adc_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
+                                        "underrun": 0, "overrun": 0}
+        # The SAME transient as at one channel, and that is the result: the lanes run concurrently,
+        # so a second channel costs block indices only if the model serialized them -- which is
+        # exactly the mistake a `for` loop over `offer()` would have made.
+        assert tb.dac_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
+                                        "underrun": 2, "overrun": 0}
+        assert tb.dac_if.last_underrun_idx == 2
+        blk_bytes = 2 * tb.blksize * 8          # n_ch=2, float64
+        assert sim._out_bytes[2 * blk_bytes:] == sim._in_bytes[:-2 * blk_bytes]
+
+    def test_the_two_channels_carry_different_data_and_do_not_get_swapped(self):
+        """The check one channel cannot make.
+
+        Every block is compared row by row against the row that was sent, so a swapped pair fails
+        here even though it would be byte-identical in total.
+        """
+        sim = RfLoopbackSim(n_src_blk=6, n_ch=2, blksize=64)
+        sim.run()
+        tb = sim.check()
+        lat = int(tb.loop_blk_latency)
+        for k in range(lat, 6):
+            sent, got = sim.sent[k - lat], sim.captured[k]
+            assert got.shape == (2, 64)
+            assert not np.array_equal(sent[0], sent[1]), "the scenario must be asymmetric"
+            assert np.array_equal(got[0], sent[0]), f"block {k} channel 0"
+            assert np.array_equal(got[1], sent[1]), f"block {k} channel 1"
+            # ...and the swap really would be caught: the rows are not interchangeable.
+            assert not np.array_equal(got[0], sent[1])
+
+    def test_a_two_channel_sine_exercises_the_quantizer_on_both_lanes(self):
+        """Different harmonics per lane, so neither channel's golden is the other's."""
+        sim = RfLoopbackSim(n_src_blk=8, n_ch=2, waveform="sine")
+        tb = sim.run()
+        lat = int(tb.loop_blk_latency)
+        tb.adc_if.assert_clean()
+        tb.dac_if.assert_clean(startup_blocks=lat)
+        fs = float(tb.full_scale)
+        for k in range(lat, 8):
+            want = to_real(from_real(np.asarray(sim.sent[k - lat]) / fs, tb.rfdc.SampType)) * fs
+            assert np.array_equal(sim.captured[k], want), f"block {k}"
+
+    def test_the_two_channel_dut_is_a_top_of_its_own(self):
+        """A second channel is a different RTL module, so it gets a different name.
+
+        That is what keeps ``rf_pass_through`` — its project, its ports header and every cycle count
+        recorded against them — untouched by this stage.
+        """
+        from examples.rf_loopback.rf_loopback import RfSampPassThrough2Ch
+
+        one = RfSampPassThrough(name="one", sim=Simulation())
+        two = RfSampPassThrough2Ch(name="two", sim=Simulation())
+        assert one.cpp_kernel_name == "rf_pass_through"
+        assert two.cpp_kernel_name == "rf_pass_through_2ch"
+        # Unsuffixed at one channel: these are RTL port names, and renaming them re-synthesizes a
+        # design that did not change.
+        def names(mod):
+            return [e[0] if isinstance(e, tuple) else e for e in mod.boundary]
+
+        assert names(one) == ["s_in", "s_out"]
+        assert names(two) == ["s_in_0", "s_out_0", "s_in_1", "s_out_1"]
+        assert check(RfSampPassThrough2Ch, "composite_kernel")[0]
+
+    def test_the_two_channel_graph_lowers_to_one_model_per_direction(self):
+        """One model spanning BOTH AXIS ports plus the RF edge — not one model per port.
+
+        Forced rather than chosen: the RF edge carries every channel in one block, so ``n_ch``
+        independent models cannot each own it. The AXIS ports are therefore a port *group*, one
+        constructor argument, and the C++ model takes an ``AxisPortList``.
+        """
+        from waveflow.build.composite_gen import tb_top_spec
+
+        tb = RfLoopbackTB(name="two_ch_tb", sim=Simulation(), n_ch=2, blksize=64, n_blk=2)
+        by = {m.cls: m for m in tb_top_spec(tb).models}
+        ns = "rf_pass_through_2ch_ports"
+        assert by["RfdcAdcMaster"].binds == (
+            "sim.dut()", f"{{{ns}::s_in_0, {ns}::s_in_1}}", "two_ch_tb_adc_if")
+        assert by["RfdcDacSlave"].binds == (
+            "sim.dut()", f"{{{ns}::s_out_0, {ns}::s_out_1}}", "two_ch_tb_dac_if")
+        # blk_samples is the WHOLE block -- n_ch * blksize -- because that is the unit the RF edge
+        # moves; the model divides it by its own port count.
+        assert by["RfdcDacSlave"].args[-1] == str(2 * 64)
+
+    def test_one_channel_still_renders_a_bare_port_name(self):
+        """A group of one is the bare argument, so a one-channel harness is unchanged.
+
+        Not cosmetic: every committed RF testbench names a single converter port, and rendering the
+        braced form would restate all of them for a design whose shape did not change.
+        """
+        from waveflow.build.composite_gen import tb_top_spec
+
+        tb = RfLoopbackTB(name="one_ch_tb", sim=Simulation(), blksize=64, n_blk=2)
+        by = {m.cls: m for m in tb_top_spec(tb).models}
+        assert by["RfdcAdcMaster"].binds == (
+            "sim.dut()", "rf_pass_through_ports::s_in", "one_ch_tb_adc_if")
 
 
 # --------------------------------------------------------------------------------------------
@@ -328,9 +462,22 @@ class TestRfdcGuards:
         with pytest.raises(ValueError, match="not a multiple of samp_per_word"):
             sim.run()
 
-    def test_multichannel_axis_is_refused_and_names_the_open_question(self):
-        with pytest.raises(NotImplementedError, match="open question"):
-            Rfdc(name="r", sim=Simulation(), n_rx=2)
+    def test_the_channel_count_is_one_number_and_the_edge_must_agree(self):
+        """``n_rx`` and the RF edge's ``n_ch`` are the same quantity stated twice.
+
+        Row ``ch`` of the block is what port ``ch`` carries, so a disagreement is not a mismatch to
+        broadcast over — it is one of the two declarations being wrong. Caught at bind, where both
+        numbers are first in the same room, rather than as a shape error inside ``pack``.
+        """
+        from waveflow.hw.rf_sample_if import RFSampIF
+        from waveflow.hw.clock import Clock
+
+        sim = Simulation()
+        rfdc = Rfdc(name="r", sim=sim, n_rx=2, n_tx=2)
+        iface = RFSampIF(name="edge", sim=sim, samp_clk=Clock(name="c", freq=1e6),
+                         n_ch=1, blksize=8, n_blk=1)
+        with pytest.raises(ValueError, match="carries 1 channel"):
+            iface.bind("rx", rfdc.rx_rf)
 
     def test_interleaved_iq_is_refused_at_stage_1(self):
         """The WORD can already say "interleaved"; the CONVERTER still cannot do it.
@@ -396,3 +543,39 @@ class TestRfdcGuards:
         # A module that over-declares its latency fails the same gate.
         with pytest.raises(AssertionError, match="declared startup transient is 3"):
             tb.dac_if.assert_clean(startup_blocks=3)
+
+
+class TestTheConverterDelegates:
+    """``Rfdc._pack`` / ``_unpack`` must be the same implementation, not a second one.
+
+    Two implementations of a packing convention is how the convention comes to mean two things —
+    which is the defect ``RfdcSampWord`` was built to end.  So the converter's private pair is
+    checked *against* the public one rather than independently.
+    """
+
+    def test_the_converters_pair_agrees_with_the_public_one(self):
+        """At **two channels**, because that is where a per-channel adapter could still be hiding.
+
+        The pair used to ``reshape(1, -1)`` on the way in and index ``[0]`` on the way out — a
+        one-channel wrapper around a channel-major function, which agrees with the public pair for
+        exactly the shape it was written for.  Checking the whole ``(n_ch, n_samp)`` array is what
+        makes "the same implementation" mean the same thing at any channel count.
+        """
+        W = WORD.specialize(samp_per_word=4)
+        rfdc = Rfdc(name="rfdc_pack_delegation", sim=Simulation(), n_rx=2, n_tx=2, word=W,
+                    full_scale=1.0)
+        x = np.array([[0.0, 0.25, -0.25, 0.75, -0.75, 0.5, -0.5, 0.125],
+                      [0.125, -0.5, 0.5, -0.75, 0.75, -0.25, 0.25, 0.0]])
+
+        words = np.asarray(rfdc._pack(x))
+        stored = np.asarray(from_real(x, W.samp_type()), dtype=np.int64)
+        assert words.shape == (2, 2)                      # (n_ch, n_samp / samp_per_word)
+        assert np.array_equal(words, pack(W, stored))
+
+        # ...and its inverse takes WORDS, which is what a DAC is handed.  Before this pair the two
+        # were not inverses in signature at all: _pack produced words while _unpack consumed slots.
+        assert np.array_equal(unpack(W, words), stored)
+        assert np.allclose(rfdc._unpack(words), to_real(array(W.samp_type(), stored)))
+        # Row ch is port ch: the two channels carry DIFFERENT samples here, so a transpose or a
+        # swapped row fails rather than passing on symmetry.
+        assert not np.array_equal(words[0], words[1])

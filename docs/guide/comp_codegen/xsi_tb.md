@@ -83,11 +83,17 @@ object — and two facts turned out not to be per-*module*:
 - **The constructor shape is per port.** Each port is resolved *by its own kind*: an endpoint facing
   a DUT boundary port contributes `sim.dut(), <ns>::<port>`; an endpoint on a
   [behavioral edge](../interface/behavioral.md) contributes that edge's channel variable.
+- **A `ports` entry may be a tuple — a port group** — which resolves to a **single** constructor
+  argument, `sim.dut(), {<ns>::<a>, <ns>::<b>}`. That is what a model spanning a *variable* number of
+  like ports needs: an `n_ch` converter presents one AXIS port per channel and one model owns them
+  all, because the RF edge behind them carries every channel in one block. Every member of a group
+  must resolve the same way, and a group of **one** renders as the bare port name — so a design whose
+  shape did not change generates the C++ it always did.
 
 ```python
 def bfm_model(self):
-    return (BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf"), extra_args=(...)),
-            BfmModel("RfdcDacSlave",  ports=("tx_stream", "tx_rf"), extra_args=(...)))
+    return (BfmModel("RfdcAdcMaster", ports=(("rx_stream_0", "rx_stream_1"), "rx_rf"), extra_args=(...)),
+            BfmModel("RfdcDacSlave",  ports=(("tx_stream_0", "tx_stream_1"), "tx_rf"), extra_args=(...)))
 ```
 
 Each of those is **one object spanning the cut** — RTL pins on the fabric side, a channel on the RF

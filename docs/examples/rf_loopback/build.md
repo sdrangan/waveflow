@@ -35,13 +35,13 @@ rfdc = Rfdc(name="rfdc", sim=sim, word=Rfsoc4x2SampWord.specialize(samp_per_word
             full_scale=1.0, t0_rx=0.0, t0_tx=blk_period)
 ```
 
-Four endpoints, in two pairs:
+Endpoints, in two pairs — one RF interface per direction, one AXIS port **per channel**:
 
 | endpoint | type | direction |
 |---|---|---|
-| `rx_rf` | `RFSampIFRx` | ADC path — RF blocks in from the environment |
-| `rx_stream` | `StreamIFMaster` | ADC path — AXI-Stream words out to the fabric |
-| `tx_stream` | `StreamIFSlave` | DAC path — AXI-Stream words in from the fabric |
+| `rx_rf` | `RFSampIFRx` | ADC path — RF blocks in from the environment, every channel in one block |
+| `rx_stream_0 ..` | `StreamIFMaster` | ADC path — AXI-Stream words out to the fabric, one port per channel |
+| `tx_stream_0 ..` | `StreamIFSlave` | DAC path — AXI-Stream words in from the fabric, one port per channel |
 | `tx_rf` | `RFSampIFTx` | DAC path — RF blocks out to the environment |
 
 The two stream endpoints are the ones that would **cross the [cut](../../guide/flows/modules.md#the-cut)**
@@ -169,8 +169,8 @@ adc_if.bind("rx", self.rfdc.rx_rf)
 | edge | type | domain |
 |---|---|---|
 | source → `rfdc.rx_rf` | `RFSampIF` | RF — blocks of real samples, on the sample clock |
-| `rfdc.rx_stream` → DUT | `StreamIF` | fabric — an **ordinary** AXI-Stream |
-| DUT → `rfdc.tx_stream` | `StreamIF` | fabric — an ordinary AXI-Stream |
+| `rfdc.rx_streams[ch]` → DUT | `StreamIF` | fabric — an **ordinary** AXI-Stream, one per channel |
+| DUT → `rfdc.tx_streams[ch]` | `StreamIF` | fabric — an ordinary AXI-Stream |
 | `rfdc.tx_rf` → sink | `RFSampIF` | RF |
 
 Only the `StreamIF` pair would cross the cut in an RTL build; the `RFSampIF` pair stays behavioural

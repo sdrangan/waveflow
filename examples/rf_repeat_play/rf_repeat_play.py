@@ -3,7 +3,7 @@
 A host loads a waveform of ``NSAMP`` samples and replays it forever on a fixed period, through
 :class:`~waveflow.hw.rf_tx_stream.RfTxStream` into a real converter::
 
-    RepeatPlayHost --TxCmd--> loader                         player --> Rfdc.tx_stream
+    RepeatPlayHost --TxCmd--> loader                         player --> Rfdc.tx_streams[0]
                    --samples-> loader --AckedStreamIF--> player
                    <--TxResp-- loader <---- TxStatus ---- player
                                                   Rfdc.tx_rf --RFSampIF--> RfDataSink
@@ -442,7 +442,7 @@ class RfRepeatPlayTB(FreeRunMod):
         self.dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
                                  bitwidth=w, depth=4 * int(self.blk_samp))
         self.dac_axis.bind("master", self.dut.samp_out)
-        self.dac_axis.bind("slave", self.rfdc.tx_stream)
+        self.dac_axis.bind("slave", self.rfdc.tx_streams[0])
         self.add_if(self.dac_axis)
 
     @property
@@ -615,7 +615,7 @@ class RfCircPlayTB(FreeRunMod):
         self.dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
                                  bitwidth=w, depth=4 * int(self.blk_samp))
         self.dac_axis.bind("master", self.dut.samp_out)
-        self.dac_axis.bind("slave", self.rfdc.tx_stream)
+        self.dac_axis.bind("slave", self.rfdc.tx_streams[0])
         self.add_if(self.dac_axis)
 
     @property

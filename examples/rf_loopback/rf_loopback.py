@@ -178,14 +178,20 @@ class RfSampBlockRelay(FreeRunMod):
 
 @dataclass
 class RfSampPassThrough(FreeRunMod):
-    """The digital logic: one AXIS burst in, the same burst out — as **two overlapped tasks**.
+    """The digital logic: one AXIS burst in, the same burst out — as **two overlapped tasks**, per
+    converter channel.
 
     ::
 
-        s_in --> [RfSampIngress] --blk_fifo (depth = nwords_blk)--> [RfSampBlockRelay] --> s_out
+        s_in_i --> [RfSampIngress] --blk_fifo_i (depth = nwords_blk)--> [RfSampBlockRelay] --> s_out_i
 
     A free-running module, because that is what the fabric between two converter ports is — it has no
     host to start it and re-fires on each arriving block.
+
+    **`n_ch` independent lanes**, one per converter channel, because that is what the converter
+    presents: an ``Rfdc`` is a tile with one AXIS port per channel, so this is one pipeline per port.
+    Sharing a stage between two channels would couple their back-pressure and make one channel's
+    stall the other's drop, which is not what a tile's channels do to each other.
 
     **Why it is not one task.**  It was, and it lost samples.  A single body that reads a whole block
     and only then writes it leaves ``TREADY`` low for the entire write, and an ADC does not wait: 72
@@ -211,6 +217,13 @@ class RfSampPassThrough(FreeRunMod):
     #: Words in one block's burst — ``blksize / samp_per_word``.  Also the internal FIFO's depth:
     #: the ingress must be able to hand off a whole block without waiting on the block stage.
     nwords_blk: HwParam[int] = 64
+    #: Converter channels this DUT sits between — one independent ingress + block stage per channel,
+    #: and therefore one AXIS port pair per channel, matching the ``Rfdc`` it is wired to.
+    #:
+    #: The lanes are **independent**, which is the honest model of a tile's channels here: a
+    #: pass-through has nothing to say across them, and sharing a stage between two converter
+    #: channels would couple their back-pressure and make one channel's stall the other's drop.
+    n_ch: HwParam[int] = 1
     #: **Block latency**: how many RF block periods pass before this module's output for a given
     #: input block is available downstream.
     #:
@@ -246,38 +259,76 @@ class RfSampPassThrough(FreeRunMod):
                 f"refused here rather than reported later as an underrun.")
         w = int(self.bitwidth)
         nw = int(self.nwords_blk)
+        n = int(self.n_ch)
+        if n < 1:
+            raise ValueError(
+                f"{type(self).__name__} '{self.name}': n_ch must be >= 1, got {n}. A DUT between two "
+                f"converter ports with no channels has nothing to relay.")
 
         # --- sub-components (add_comp; insertion order == codegen task order) ---
-        self.ingress = RfSampIngress(name=f"{self.name}_ingress", sim=self.sim, bitwidth=w)
-        self.relay = RfSampBlockRelay(name=f"{self.name}_relay", sim=self.sim, bitwidth=w,
-                                      nwords_blk=nw)
-        for c in (self.ingress, self.relay):
-            self.add_comp(c)
+        #
+        # Per channel and in channel order: ingress_i, relay_i.  add_comp order IS task order in the
+        # generated top, and it is also the order derive_boundary walks, which is why the boundary
+        # names below interleave in/out rather than listing all the inputs first.
+        self.ingresses = [RfSampIngress(name=f"{self.name}_ingress{self._sfx(i)}", sim=self.sim,
+                                        bitwidth=w) for i in range(n)]
+        self.relays = [RfSampBlockRelay(name=f"{self.name}_relay{self._sfx(i)}", sim=self.sim,
+                                        bitwidth=w, nwords_blk=nw) for i in range(n)]
+        for i in range(n):
+            self.add_comp(self.ingresses[i])
+            self.add_comp(self.relays[i])
 
-        # --- the internal channel: the elastic buffer, one block deep -------------------------
+        # --- the internal channels: one elastic buffer per lane, one block deep ----------------
         # Depth is single-source here in the way it is NOT at a boundary port: pysim reads it as the
         # slave's queue_size and codegen emits `#pragma HLS STREAM depth=` for it, because this
         # channel is inside the top.  One block is what the ingress must be able to hand off while
         # the relay is busy writing the previous one.
-        self._blk_if = StreamIF(name=f"{self.name}_blk_fifo", sim=self.sim, clk=self.clk,
-                                bitwidth=w, depth=nw)
-        self._blk_if.bind("master", self.ingress.w_out)
-        self._blk_if.bind("slave", self.relay.blk_in)
-        self.add_if(self._blk_if)
+        self._blk_ifs = []
+        for i in range(n):
+            blk_if = StreamIF(name=f"{self.name}_blk_fifo{self._sfx(i)}", sim=self.sim, clk=self.clk,
+                              bitwidth=w, depth=nw)
+            blk_if.bind("master", self.ingresses[i].w_out)
+            blk_if.bind("slave", self.relays[i].blk_in)
+            self.add_if(blk_if)
+            self._blk_ifs.append(blk_if)
 
         # Boundary port NAMES only — the endpoints and their order are the unwired child ports in
         # add_comp x add_endpoint order, and the endpoint's TYPE gives the direction.  The names must
         # be stated because the top's ports keep the names the converters bind to.
-        self.boundary = ["s_in", "s_out"]
+        #
+        # UNSUFFIXED AT ONE CHANNEL, and that is the opposite call from the one `Rfdc` makes for its
+        # endpoints — deliberately, because these are RTL PORT NAMES.  The converter's endpoint names
+        # are Python-side and cost nothing to index; renaming these re-synthesizes the design and
+        # re-runs every gate that names them, for a design that did not change.  See `_sfx`.
+        self.boundary = [nm for i in range(n)
+                         for nm in (f"s_in{self._sfx(i)}", f"s_out{self._sfx(i)}")]
 
         # convenience refs for the testbenches (the boundary endpoints live on the children)
-        self.s_in = self.ingress.s_in
-        self.s_out = self.relay.s_out
+        self.s_ins = [c.s_in for c in self.ingresses]
+        self.s_outs = [c.s_out for c in self.relays]
+        #: Channel 0, for the one-channel testbenches that predate the lane list.
+        self.ingress, self.relay = self.ingresses[0], self.relays[0]
+        self.s_in, self.s_out = self.s_ins[0], self.s_outs[0]
+
+    def _sfx(self, i: int) -> str:
+        """``""`` at one channel, ``"_i"`` beyond — see the boundary-name note in ``__post_init__``."""
+        return "" if int(self.n_ch) == 1 else f"_{int(i)}"
 
     @property
     def n_blk(self) -> int:
-        """Blocks relayed end to end — the block stage's count, which is the composite's."""
-        return int(self.relay.n_blk)
+        """Blocks relayed end to end — the block stages' count, which is the composite's.
+
+        **Every lane, and they must agree.**  The lanes are independent, so a per-lane count that
+        diverges is a real result (one channel's consumer fell behind) and reporting the first
+        lane's number would hide it.
+        """
+        counts = {int(r.n_blk) for r in self.relays}
+        if len(counts) != 1:
+            raise AssertionError(
+                f"{type(self).__name__} '{self.name}': the lanes relayed different block counts "
+                f"{[int(r.n_blk) for r in self.relays]} — the channels of one tile carry the same "
+                f"blocks, so a divergence is loss on one of them, not a summary to average.")
+        return counts.pop()
 
     @property
     def blk_words(self) -> type:
@@ -286,14 +337,34 @@ class RfSampPassThrough(FreeRunMod):
 
 
 @dataclass
+class RfSampPassThrough2Ch(RfSampPassThrough):
+    """The same design at **two** channels, under its own top name.
+
+    A subclass rather than a parameter of the top's name, because a generated top's identity is a
+    ClassVar and it should be: a two-channel pass-through has four AXIS ports where the one-channel
+    one has two, so it is a different RTL module and it needs a different project, a different ports
+    header and a gate of its own.  Naming it here is what keeps ``rf_pass_through`` — the RTL, the
+    ``_ports.h``, and every cycle count recorded against them — untouched by the arrival of a second
+    channel.
+
+    Nothing else differs.  The lanes are independent (see :class:`RfSampPassThrough`), so this class
+    adds no behaviour at all; it exists to give a build a name.
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_pass_through_2ch"
+
+    n_ch: HwParam[int] = 2
+
+
+@dataclass
 class RfLoopbackTB(FreeRunMod):
     """The testbench as a component **graph**: five nodes and four edges, no procedure.
 
     ::
 
-        RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_stream --StreamIF--> RfSampPassThrough
+        RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --StreamIF--> RfSampPassThrough
                                                                                     |
-        RfDataSink   <--RFSampIF-- Rfdc.tx_rf | Rfdc.tx_stream <--StreamIF-----------+
+        RfDataSink   <--RFSampIF-- Rfdc.tx_rf | Rfdc.tx_streams[0] <--StreamIF-----------+
 
     Two of the edges are :class:`~waveflow.hw.rf_sample_if.RFSampIF` (the RF domain, one per
     direction) and two are ``StreamIF`` (the PL domain).  Only the ``StreamIF`` pair would cross the
@@ -306,6 +377,10 @@ class RfLoopbackTB(FreeRunMod):
 
     #: Blocks the RF grid runs for, on each direction's interface.
     n_blk: int = 8
+    #: Converter channels, on **both** directions — ``n_rx = n_tx = n_ch``, which is what a tile is.
+    #: Each channel gets its own AXIS port pair and its own DUT lane; the RF side stays one interface
+    #: per direction carrying every channel's row of one ``(n_ch, blksize)`` block.
+    n_ch: int = 1
     #: Samples per channel per block.  The fidelity/speed knob: this is what one SimPy event carries.
     blksize: int = 256
     #: RF sample rate in Hz (lives on the RF interfaces' clock; the converter reads it at bind).
@@ -331,6 +406,12 @@ class RfLoopbackTB(FreeRunMod):
     sink_stall_after: int | None = None
     #: Receiver queue depth at the sink, in blocks.
     sink_depth: int = 2
+    #: Where the RF environment's blocks come from and go to, relative to the run root.  Fields
+    #: rather than constants because two testbenches share one XSI workspace: the one-channel and
+    #: two-channel graphs would otherwise write the same ``vectors/rf_in``, and whichever generated
+    #: last would silently hand its scenario to the other.
+    in_bundle: str = "vectors/rf_in"
+    out_bundle: str = "vectors/rf_out"
     axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
 
     def __post_init__(self) -> None:
@@ -340,14 +421,26 @@ class RfLoopbackTB(FreeRunMod):
 
         #: Seconds per block on both RF grids — ``blksize / samp_rate``.
         self.blk_period = int(self.blksize) / float(self.samp_rate)
+        n_ch = int(self.n_ch)
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, word=self.word,
+                         n_rx=n_ch, n_tx=n_ch,
                          full_scale=float(self.full_scale),
                          t0_rx=float(self.t0), t0_tx=float(self.t0))
         w = self.rfdc.axis_bitwidth
         self.nwords_blk = int(self.blksize) // int(self.word.samp_per_word)
 
-        self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
-                                     nwords_blk=self.nwords_blk, clk=self.axis_clk)
+        # The DUT CLASS follows the channel count, because the generated top does.  A two-channel
+        # pass-through has four AXIS ports where a one-channel one has two, so it is a different
+        # RTL top with a different name -- and giving it one is what keeps the one-channel
+        # `rf_pass_through` project, its ports header and every gate that names them untouched.
+        dut_cls = RfSampPassThrough if n_ch == 1 else RfSampPassThrough2Ch
+        if n_ch not in (1, 2):
+            raise NotImplementedError(
+                f"RfLoopbackTB: this example carries a synthesizable DUT top per channel count and "
+                f"has {1, 2}, not {n_ch}. The CONVERTER is general -- n_ch is only bounded here "
+                f"because each count is a separate RTL top that has to be synthesized and gated.")
+        self.dut = dut_cls(name=f"{self.name}_dut", sim=self.sim, bitwidth=w, n_ch=n_ch,
+                           nwords_blk=self.nwords_blk, clk=self.axis_clk)
         #: Block latency of the wired path from the ADC edge to the DAC edge — **summed from what the
         #: modules on that path declare**, not inferred.  A general graph would need loop detection;
         #: a design that states its latency does not.  This is the DAC edge's entitled startup
@@ -360,9 +453,11 @@ class RfLoopbackTB(FreeRunMod):
         #: transfer was paced by the converter's own rate.  It is the same quantity the fidelity
         #: contract states as "no dependency shorter than 2*blksize — one block per converter hop".
         self.loop_blk_latency = 1 + int(self.dut.blk_latency)
-        self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in",
+        self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim,
+                                   in_bundle=str(self.in_bundle),
                                    start_delay=float(self.src_start_delay))
-        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim, out_bundle="vectors/rf_out",
+        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim,
+                               out_bundle=str(self.out_bundle),
                                depth=int(self.sink_depth), stall_after=self.sink_stall_after)
 
         for c in (self.dut, self.rfdc, self.source, self.sink):
@@ -370,13 +465,13 @@ class RfLoopbackTB(FreeRunMod):
 
         # --- the RF domain: one interface per direction, each owning its own metronome ---------
         self.adc_if = RFSampIF(name=f"{self.name}_adc_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=1, blksize=int(self.blksize), n_blk=int(self.n_blk))
+                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk))
         self.adc_if.bind("tx", self.source.rf_ep)
         self.adc_if.bind("rx", self.rfdc.rx_rf)
         self.add_if(self.adc_if)
 
         self.dac_if = RFSampIF(name=f"{self.name}_dac_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=1, blksize=int(self.blksize), n_blk=int(self.n_blk))
+                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk))
         self.dac_if.bind("tx", self.rfdc.tx_rf)
         self.dac_if.bind("rx", self.sink.rf_ep)
         self.add_if(self.dac_if)
@@ -388,17 +483,25 @@ class RfLoopbackTB(FreeRunMod):
         # here made pysim model a 128-word queue the hardware does not have, which is one of the
         # three reasons pysim could not see the ADC dropping words.  `composite_top_spec` now refuses
         # the declaration outright, so this cannot come back by accident.
-        adc_axis = StreamIF(name=f"{self.name}_adc_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w)
-        adc_axis.bind("master", self.rfdc.rx_stream)
-        adc_axis.bind("slave", self.dut.s_in)
-        self.add_if(adc_axis)
+        # One AXIS pair per channel.  Row ch of the RF block is what port ch carries, so the wiring
+        # is index-for-index and nothing here has to know the packing convention.
+        self.adc_axis = []
+        self.dac_axis = []
+        for i in range(n_ch):
+            sfx = self.dut._sfx(i)
+            adc_axis = StreamIF(name=f"{self.name}_adc_axis{sfx}", sim=self.sim, clk=self.axis_clk,
+                                bitwidth=w)
+            adc_axis.bind("master", self.rfdc.rx_streams[i])
+            adc_axis.bind("slave", self.dut.s_ins[i])
+            self.add_if(adc_axis)
+            self.adc_axis.append(adc_axis)
 
-        dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w)
-        dac_axis.bind("master", self.dut.s_out)
-        dac_axis.bind("slave", self.rfdc.tx_stream)
-        self.add_if(dac_axis)
+            dac_axis = StreamIF(name=f"{self.name}_dac_axis{sfx}", sim=self.sim, clk=self.axis_clk,
+                                bitwidth=w)
+            dac_axis.bind("master", self.dut.s_outs[i])
+            dac_axis.bind("slave", self.rfdc.tx_streams[i])
+            self.add_if(dac_axis)
+            self.dac_axis.append(dac_axis)
 
 
 class RfLoopbackSim:
@@ -440,7 +543,7 @@ class RfLoopbackSim:
         root = Path(root)
         self.root = root
         self.sent = (self._sine_blocks() if self.waveform == "sine" else self._grid_blocks())
-        write_rf_bundle(self.sent, root / "vectors" / "rf_in")
+        write_rf_bundle(self.sent, root / tb.in_bundle)
         tb.source.root = root
         tb.sink.root = root
 
@@ -464,7 +567,7 @@ class RfLoopbackSim:
         fs = float(tb.full_scale)
         rng = np.random.default_rng(self.seed)
         lo, hi = -(1 << (nb - 1)), (1 << (nb - 1)) - 1
-        return [rng.integers(lo, hi + 1, size=(1, int(tb.blksize))).astype(np.float64)
+        return [rng.integers(lo, hi + 1, size=(int(tb.n_ch), int(tb.blksize))).astype(np.float64)
                 / float(1 << (nb - 1)) * fs
                 for _ in range(self.n_src_blk)]
 
@@ -490,9 +593,15 @@ class RfLoopbackSim:
         t0 = t[n // 4]
         t1 = t[3 * n // 4]
         amp = 0.9 * float(tb.full_scale)          # near full scale, so rounding is exercised
-        x = np.where((t >= t0) & (t < t1),
-                     amp * np.sin(2.0 * np.pi * self.sine_freq * (t - t0)), 0.0)
-        return [x[i * int(tb.blksize):(i + 1) * int(tb.blksize)].reshape(1, -1)
+        # A DIFFERENT TONE PER CHANNEL, and that is a gate rather than decoration: channels carrying
+        # the same waveform make a channel swap invisible, and a swap is exactly the failure a
+        # per-port fan-out can have.  Harmonics of the base tone keep every row inside the window and
+        # on the same amplitude scale.
+        rows = [np.where((t >= t0) & (t < t1),
+                         amp * np.sin(2.0 * np.pi * self.sine_freq * (ch + 1) * (t - t0)), 0.0)
+                for ch in range(int(tb.n_ch))]
+        x = np.stack(rows)                                        # (n_ch, n)
+        return [x[:, i * int(tb.blksize):(i + 1) * int(tb.blksize)]
                 for i in range(self.n_src_blk)]
 
     # -- run and check ---------------------------------------------------------------------------
@@ -506,9 +615,10 @@ class RfLoopbackSim:
         with tempfile.TemporaryDirectory() as _root:
             self.write_scenario(_root)
             self.tb.sim.run_sim()
-            self._captured = read_rf_bundle(Path(_root) / "vectors" / "rf_out", 1, self.tb.blksize)
-            self._in_bytes = (Path(_root) / "vectors" / "rf_in" / "words.bin").read_bytes()
-            self._out_bytes = (Path(_root) / "vectors" / "rf_out" / "words.bin").read_bytes()
+            self._captured = read_rf_bundle(Path(_root) / self.tb.out_bundle,
+                                            self.tb.n_ch, self.tb.blksize)
+            self._in_bytes = (Path(_root) / self.tb.in_bundle / "words.bin").read_bytes()
+            self._out_bytes = (Path(_root) / self.tb.out_bundle / "words.bin").read_bytes()
         return self.tb
 
     @property
@@ -552,7 +662,7 @@ class RfLoopbackSim:
                 f"DAC block {k} != ADC block {k - n_lat} after the loopback")
 
         # The same claim at the byte level, on the bundles both backends will share from stage 2.
-        blk_bytes = int(tb.blksize) * 8          # n_ch=1, float64
+        blk_bytes = int(tb.n_ch) * int(tb.blksize) * 8          # one block, float64
         assert self._out_bytes[n_lat * blk_bytes:] == self._in_bytes[:len(self._out_bytes)
                                                                      - n_lat * blk_bytes], (
             f"the sink's bundle is not byte-identical to the source's once shifted by the declared "

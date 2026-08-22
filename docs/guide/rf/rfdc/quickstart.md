@@ -36,12 +36,18 @@ adc_if.bind("rx", rfdc.rx_rf)
 # --- the fabric side: an ORDINARY AXI-Stream ----------------------------
 adc_axis = StreamIF(name="adc_axis", sim=sim, clk=axis_clk,
                     bitwidth=rfdc.axis_bitwidth)
-adc_axis.bind("master", rfdc.rx_stream)
+adc_axis.bind("master", rfdc.rx_streams[0])   # one AXIS port per channel
 adc_axis.bind("slave", my_dut.s_in)
 ```
 
-That is the whole thing. Transmit is the mirror: bind `my_dut.s_out` to `rfdc.tx_stream`, and
+That is the whole thing. Transmit is the mirror: bind `my_dut.s_out` to `rfdc.tx_streams[0]`, and
 `rfdc.tx_rf` to whatever consumes samples.
+
+**Why the `[0]`.** An `Rfdc` is a *tile*: it presents `n_rx` AXIS master ports and `n_tx` slave
+ports, one per channel, while the RF side stays one interface per direction carrying every channel's
+row of a block. At `n_rx = 1` there is exactly one port and it is `rx_streams[0]` — indexed even
+here, so there is one spelling rather than a special case nobody tests. See
+[the endpoints](./converter.md#the-endpoints).
 
 ## The three numbers you decide
 
@@ -94,8 +100,8 @@ bind. Each quantity is declared once, where it physically belongs.
 
 ## What you have now, and three things to do with it
 
-Out of `rfdc.rx_stream` comes an **ordinary AXI-Stream**, `samp_per_word` samples per beat, oldest
-sample in the least-significant slot.
+Out of each `rfdc.rx_streams[ch]` comes an **ordinary AXI-Stream**, `samp_per_word` samples per
+beat, oldest sample in the least-significant slot.
 
 **1. Consume it directly.** Perfectly normal, and the right answer for anything that processes
 samples as they arrive — a filter, a detector, a decimator. No buffer, nothing extra to build. Most

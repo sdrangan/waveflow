@@ -25,7 +25,7 @@ In Waveflow, the python class for the converter is `Rfdc` and represents  **one 
 | side | endpoints | carries | clock |
 |---|---|---|---|
 | **RF** | `rx_rf`, `tx_rf` — `RFSampIF` | **blocks** of samples | `samp_clk`, up to GSa/s |
-| **fabric** | `rx_stream`, `tx_stream` — `StreamIF` | **words** on AXI-Stream | `axis_clk`, a few hundred MHz |
+| **fabric** | `rx_stream_0..`, `tx_stream_0..` — `StreamIF`, **one per channel** | **words** on AXI-Stream | `axis_clk`, a few hundred MHz |
 
 Two facts fall out of that picture, and they set the order of everything below.
 

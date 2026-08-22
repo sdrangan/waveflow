@@ -38,18 +38,40 @@ wants. Two of the fields it carries are rules **a serializer cannot know**, and 
 [`justify`](./word.md#justify), is an assumption awaiting a lab measurement rather than a
 measurement.
 
-## The four endpoints
+## The endpoints — one RF interface per direction, one AXIS port per channel {#the-endpoints}
 
 | path | RF side | fabric side |
 |---|---|---|
-| **ADC** | `rx_rf` — `RFSampIFRx`, blocks in from the environment | `rx_stream` — `StreamIFMaster`, AXI-Stream out to the PL |
-| **DAC** | `tx_rf` — `RFSampIFTx`, blocks out to the environment | `tx_stream` — `StreamIFSlave`, AXI-Stream in from the PL |
+| **ADC** | `rx_rf` — `RFSampIFRx`, one interface carrying every receive channel's row of a block | `rx_stream_0 .. rx_stream_{n_rx-1}` — `StreamIFMaster`, one AXI-Stream out to the PL **per channel** |
+| **DAC** | `tx_rf` — `RFSampIFTx`, likewise for transmit | `tx_stream_0 .. tx_stream_{n_tx-1}` — `StreamIFSlave`, one in from the PL per channel |
+
+`rfdc.rx_streams` / `rfdc.tx_streams` are the same objects as a list, in channel order — so wiring is
+`rfdc.rx_streams[ch]`. The indexed attributes exist because a `BfmModel` names endpoints by
+*attribute*, and a subscript is not an attribute name.
+
+**An `Rfdc` is a tile.** One of them stands for `n_rx` receive and `n_tx` transmit datapaths, and the
+two sides deliberately take different shapes, each the one its consumer wants:
+
+- the **RF** side wants the channels *together* — a block is a block, and splitting it per channel
+  would give `n_ch` events per block period against the whole point of block-LT;
+- the **AXIS** side wants them *apart* — that is what the IP presents, and one port per stream is
+  what keeps your DUT's ports identical across pysim, XSI and a bitstream.
+
+A single wide interleaved port was considered and rejected: it would move a vendor packing rule into
+every design that touches a converter.
+
+Row `ch` of what [`pack`](./word.md) returns is what port `ch` carries, so a channel-major array
+*is* a per-port array and nothing at this boundary transposes anything.
+
+**Indexed even at one channel.** `rx_stream` without a suffix would be a second spelling that exists
+only at `n_ch == 1`, so every consumer would carry the special case — and the one-channel path would
+be the only one anybody tested.
 
 The stream endpoints **cross the [cut](../../flows/modules.md#the-cut)**; the RF endpoints do not.
 That split is the whole shape of the thing: it is why the converter's C++ realization is what it is,
 and why an `RFSampIF` has no RTL counterpart to write.
 
-The four endpoints exist whether or not a path is used. A receive-only design sets `n_tx=0` and the
+The endpoints exist whether or not a path is used. A receive-only design sets `n_tx=0` and the
 DAC endpoints simply stay unbound — no rate check, no process, no model — which costs nothing and
 keeps the endpoint set a property of the class rather than of a particular build. Wiring a fake DAC
 in to satisfy the model would put a metronome in the design that nothing feeds, inventing underruns
@@ -59,7 +81,7 @@ to report.
 
 | parameter | kind | default | what it does |
 |---|---|---|---|
-| `n_rx`, `n_tx` | `HwParam[int]` | 1 | RF channels per direction on the AXIS side |
+| `n_rx`, `n_tx` | `HwParam[int]` | 1 | RF channels per direction — **and AXIS ports**, because they are the same number in both `iq_mode` settings |
 | `word` | plain field | 4 × 16-bit | the sample geometry, as a type — see above |
 | `full_scale` | plain field | 1.0 | the amplitude reference quantization is relative to |
 | `t0_rx`, `t0_tx` | plain field | 0.0 | when each tile's sample counter starts |
@@ -94,14 +116,16 @@ Each of these is refused loudly at construction rather than reported later as a 
 
 | condition | why it raises |
 |---|---|
-| `n_rx > 1` or `n_tx > 1` | whether >1 channel is one AXIS port per channel or one wide port is an open question; it decides how many BFM duals a testbench needs, so it is not settled by default |
 | `word` is not an `RfdcSampWord` | it is a type, not a width — a bare `64` is the mistake this catches |
 | `word.iq_mode` | interleaved I/Q needs the complex bundle format. The **word** can already say it, and `iq_order` is tested there; what is missing is the converter's two halves |
 | `full_scale <= 0` | see the note above |
 | `word.bitwidth > 64` | wider than the stream word |
 
 `n_rx = 0` (or `n_tx = 0`) is **not** an error — that is a receive-only or transmit-only tile, and it
-is the configuration a capture design uses.
+is the configuration a capture design uses. Neither is `n_rx > 1`: the count is one number with one
+meaning, so there is no mode/port-count agreement left to check. What *is* checked, at bind, is that
+the RF interface's `n_ch` equals it — the same quantity stated twice, and a disagreement is one of
+the two declarations being wrong rather than something to broadcast over.
 
 One more check happens later, at `pre_sim`, because it needs the bound clocks:
 `samp_rate <= word.samp_per_word · f_axis`. That is the **port's** capacity and not your design's — see

@@ -5,7 +5,7 @@ framework and lives in :mod:`waveflow.hw.rf_samp_buf`; what is left here is what
 be — a graph that wires it to a real converter, a scenario that exercises every case it claims to
 handle, and a predicted golden:
 
-    RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_stream --StreamIF--> RfSampBufRx
+    RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --StreamIF--> RfSampBufRx
     StreamDriver --StreamIF--> s_cmd                          s_out --StreamIF--> StreamSink
                                                               s_resp --StreamIF--> StreamSink
 
@@ -266,7 +266,7 @@ class RfSampBufRxTB(FreeRunMod):
         # inside the design -- and here it is the BRAM itself.
         self.adc_axis = StreamIF(name=f"{self.name}_adc_axis", sim=self.sim, clk=self.axis_clk,
                                  bitwidth=w)
-        self.adc_axis.bind("master", self.rfdc.rx_stream)
+        self.adc_axis.bind("master", self.rfdc.rx_streams[0])
         self.adc_axis.bind("slave", self.dut.s_in)
         self.add_if(self.adc_axis)
 

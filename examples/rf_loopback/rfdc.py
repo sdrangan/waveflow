@@ -14,11 +14,24 @@ owner (see :meth:`on_rf_bind`).
 :class:`~waveflow.hw.rf_sample_if.RFSampIF`, so this module has no timer of its own: it responds to
 block arrivals on the ADC path and to word arrivals on the DAC path.
 
-Stage 1 scope (``plans/adc_model.md``): real-valued samples, one RF channel per direction on the
-AXIS side.  ``n_rx``/``n_tx`` > 1 is an **open question** (one AXIS port per channel or one wide
-port — the real IP's answer depends on tile configuration, and it determines how many BFM duals a
-testbench needs), so it is refused loudly rather than settled by a throwaway choice here.  The RF
-side is already general: one interface, ``(n_ch, blksize)``.
+**A tile, not a converter.**  One ``Rfdc`` represents ``n_rx`` receive and ``n_tx`` transmit
+datapaths, and the two sides take the shape their consumer wants (``plans/adc_model.md``, *The
+Waveflow Rfdc is a tile*):
+
+- **RF side** — *one* :class:`~waveflow.hw.rf_sample_if.RFSampIF` per direction, carrying every
+  channel of that direction in one ``(n_ch, blksize)`` block.  Splitting it per channel would give
+  ``n_ch`` events per block period against the whole point of block-LT.
+- **AXIS side** — ``n_rx`` master ports and ``n_tx`` slave ports, one per channel, because that is
+  what the IP presents and one port per stream is what keeps the DUT's ports identical across all
+  three realizations.  A single wide interleaved port was rejected: it would move a vendor packing
+  rule into every design that touches a converter.
+
+``pack`` / ``unpack`` already speak that shape — they return ``(n_ch, n_words)``, so **row ``ch`` is
+what port ``ch`` carries** and a channel-major array *is* a per-port array.
+
+Real-valued samples only: ``iq_mode = 1`` is still refused, and the refusal names its two blockers.
+Complex-ness is a property of the **word**, never of the port count — see
+:class:`~waveflow.hw.rfdc_samp_word.RfdcSampWord`.
 """
 from __future__ import annotations
 
@@ -26,12 +39,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from waveflow.hw.arrayutils import array, write_array
+from waveflow.hw.arrayutils import array
 from waveflow.hw.fixpoint import from_real, to_real
 from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
-from waveflow.hw.rfdc_samp_word import RfdcSampWord
+from waveflow.hw.rfdc_samp_word import RfdcSampWord, pack, unpack
 from waveflow.simulation.simobj import ProcessGen
 
 
@@ -42,20 +55,37 @@ class Rfdc(HwModule):
 
     Endpoints
     ---------
-    ``rx_rf`` / ``rx_stream``
-        The **ADC** path — RF blocks in from the environment, AXIS words out to the PL.
-    ``tx_stream`` / ``tx_rf``
-        The **DAC** path — AXIS words in from the PL, RF blocks out to the environment.
+    ``rx_rf`` / ``rx_stream_0 .. rx_stream_{n_rx-1}``
+        The **ADC** path — one RF interface carrying every receive channel's block, and one AXIS
+        master port per channel out to the PL.
+    ``tx_stream_0 .. tx_stream_{n_tx-1}`` / ``tx_rf``
+        The **DAC** path — one AXIS slave port per channel in from the PL, one RF interface out to
+        the environment.
 
-    The two AXIS endpoints **cross the cut** and take BFM duals in stage 2; the two RF endpoints do
-    not cross it, so they need no dual — but they exist in both backends, which is what
-    ``plans/behavioral_edges.md`` is for.
+    :attr:`rx_streams` and :attr:`tx_streams` are the same objects as a list, in channel order; the
+    indexed attributes exist because ``BfmModel.ports`` names endpoints by **attribute**, and a
+    subscript is not an attribute name.
+
+    **Indexed even at one channel**, deliberately.  ``rx_stream`` (unsuffixed) would be a second
+    spelling that exists only at ``n_ch == 1``, so every consumer would carry the special case and
+    the one-channel path would be the only one anybody tested.  One name, one shape.
+
+    The AXIS endpoints **cross the cut** and take BFM duals; the two RF endpoints do not cross it, so
+    they need no dual — but they exist in both backends, which is what ``plans/behavioral_edges.md``
+    is for.
     """
 
     # -- build-time structure: what the synthesized logic is built against -----------------------
-    #: RF receive (ADC) channels.  Stage 1: 1.
+    #
+    # These count **RF channels, and AXIS ports, because they are the same number** — in both
+    # ``iq_mode`` settings.  ``iq_mode`` changes what a word holds, never how many ports there are
+    # (``plans/adc_model.md``, *The model carries complex-ness as a type*), so neither name ever
+    # comes to mean two things and there is no derived port count to keep in step.
+    #
+    #: RF receive (ADC) channels — and the number of AXIS master ports.  ``0`` is a real
+    #: configuration: a playout design has no receiver (see :meth:`_active_paths`).
     n_rx: HwParam[int] = 1
-    #: RF transmit (DAC) channels.  Stage 1: 1.
+    #: RF transmit (DAC) channels — and the number of AXIS slave ports.
     n_tx: HwParam[int] = 1
 
     # -- the packing convention, as one type -----------------------------------------------------
@@ -111,20 +141,21 @@ class Rfdc(HwModule):
     #: Set it non-zero only to model a tile deliberately started late, or a measured MTS residual.
     t0_tx: float = 0.0
 
-    # A converter declares neither ``kernel_task()`` nor ``bfm_model()`` at stage 1, so it is a
-    # pysim-only node and ``check`` says so — the base's empty ``potential_targets`` is already that
-    # statement, and restating it here would only be a second place to keep in step.  Stage 2 adds
-    # ``bfm_model()`` naming ``RfdcAdcMaster`` / ``RfdcDacSlave``.
+    # A converter declares no ``kernel_task()`` — there is no RTL for it, and ``check`` says so
+    # through the base's empty ``potential_targets`` rather than through a restatement here.  It DOES
+    # declare ``bfm_model()``: one model per data path, each spanning the cut (see below).
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if int(self.n_rx) > 1 or int(self.n_tx) > 1:
-            raise NotImplementedError(
-                f"Rfdc stage 1 supports at most one channel per direction on the AXIS side (got "
-                f"n_rx={int(self.n_rx)}, n_tx={int(self.n_tx)}). Whether >1 channel is one AXIS port "
-                f"per channel or one wide port is an open question in plans/adc_model.md — it decides "
-                f"how many BFM duals a testbench needs, so it is not settled here. The RF side is "
-                f"already general: one RFSampIF carrying (n_ch, blksize).")
+        # There is deliberately NO n_ch > 1 refusal here, and nothing replaced the one that was.
+        # It existed because "how many AXIS ports does n_rx mean?" was open; the answer -- one port
+        # per channel, complex-ness carried by the WORD -- makes n_rx a single number with a single
+        # meaning, so there is no mode/port-count agreement left to check.  The iq_mode refusal below
+        # is a different question and stays.
+        if int(self.n_rx) < 0 or int(self.n_tx) < 0:
+            raise ValueError(
+                f"Rfdc: channel counts are non-negative (got n_rx={int(self.n_rx)}, "
+                f"n_tx={int(self.n_tx)}).")
         if int(self.n_rx) < 1 and int(self.n_tx) < 1:
             raise ValueError("Rfdc: a tile with neither an ADC nor a DAC path converts nothing.")
         # ZERO is a real configuration, and distinct from the >1 question above: an RX capture design
@@ -140,9 +171,11 @@ class Rfdc(HwModule):
                 f"board preset such as Rfsoc4x2SampWord.specialize(samp_per_word=4).")
         if self.word.iq_mode:
             raise NotImplementedError(
-                f"Rfdc stage 1 implements real samples only (iq_mode=0), got a word declaring "
+                f"Rfdc implements real samples only (iq_mode=0), got a word declaring "
                 f"interleaved I/Q ({self.word.describe()}). Interleaved I/Q doubles the bits per "
-                f"sample slot and needs the complex bundle format, which is stage 2/4 work. The "
+                f"sample slot and needs two things this converter has not got: the COMPLEX RF "
+                f"bundle format and a conformance twin that covers complex (plans/adc_model.md "
+                f"stages B and C; D is this refusal). The "
                 f"WORD type can already express it — iq_order is declared and tested there — so "
                 f"what is missing is the converter's two halves, not the packing rule.")
         if not self.full_scale or float(self.full_scale) <= 0:
@@ -163,13 +196,29 @@ class Rfdc(HwModule):
         #: 16-bit bus quantizes to 14.
         self.SampType = self.word.samp_type()
 
+        # One RF endpoint per direction, carrying every channel of that direction; one AXIS endpoint
+        # per channel.  The asymmetry is the point -- see the class docstring.
         self.rx_rf = RFSampIFRx(sim=self.sim, name=f"{self.name}_rx_rf")
-        self.rx_stream = StreamIFMaster(sim=self.sim, name=f"{self.name}_rx_stream",
-                                        bitwidth=w, has_tlast=True)
-        self.tx_stream = StreamIFSlave(sim=self.sim, name=f"{self.name}_tx_stream",
-                                       bitwidth=w, has_tlast=True)
         self.tx_rf = RFSampIFTx(sim=self.sim, name=f"{self.name}_tx_rf")
-        for ep in (self.rx_rf, self.rx_stream, self.tx_stream, self.tx_rf):
+        #: The ADC path's AXIS master ports, in channel order.  Row ``ch`` of what :func:`pack`
+        #: returns is what ``rx_streams[ch]`` carries.
+        self.rx_streams = [
+            StreamIFMaster(sim=self.sim, name=f"{self.name}_rx_stream_{i}", bitwidth=w,
+                           has_tlast=True)
+            for i in range(int(self.n_rx))]
+        #: The DAC path's AXIS slave ports, in channel order.
+        self.tx_streams = [
+            StreamIFSlave(sim=self.sim, name=f"{self.name}_tx_stream_{i}", bitwidth=w,
+                          has_tlast=True)
+            for i in range(int(self.n_tx))]
+        # The indexed ATTRIBUTES are not a convenience: `BfmModel.ports` names a model's constructor
+        # arguments by attribute name (`getattr(part, attr)`), and `rx_streams[0]` is not one.  So the
+        # list and the attributes are two views of the same objects, and both are registered once.
+        for i, ep in enumerate(self.rx_streams):
+            setattr(self, f"rx_stream_{i}", ep)
+        for i, ep in enumerate(self.tx_streams):
+            setattr(self, f"tx_stream_{i}", ep)
+        for ep in (self.rx_rf, *self.rx_streams, *self.tx_streams, self.tx_rf):
             self.add_endpoint(ep)
 
         # Read off the RF interfaces at bind (see on_rf_bind); None until then.
@@ -216,6 +265,18 @@ class Rfdc(HwModule):
         """
         iface.set_t0(self.t0_rx if ep_name == 'rx' else self.t0_tx, owner=self)
 
+        # The one number stated twice, so it is checked once.  `n_ch` on the edge and `n_rx`/`n_tx`
+        # here are the SAME count -- the RF block's rows are the AXIS ports -- and a disagreement
+        # would show up as a shape error deep inside `pack`, or worse, not at all when the smaller
+        # of the two happens to divide the larger.
+        want = int(self.n_rx) if ep_name == 'rx' else int(self.n_tx)
+        if int(iface.n_ch) != want:
+            side = 'n_rx' if ep_name == 'rx' else 'n_tx'
+            raise ValueError(
+                f"Rfdc '{self.name}': {iface.name} carries {int(iface.n_ch)} channel(s) but this "
+                f"tile declares {side}={want}. They are one number -- row ch of the RF block is what "
+                f"AXIS port ch carries -- so one of the two is wrong.")
+
         if ep_name == 'rx':
             self.rx_samp_rate = iface.samp_rate
             self.rx_blksize = int(iface.blksize)
@@ -224,7 +285,10 @@ class Rfdc(HwModule):
             self.tx_blksize = int(iface.blksize)
 
     def _active_paths(self):
-        """The converter paths this tile actually has: ``[(name, samp_rate, axis endpoint), ...]``.
+        """The converter paths this tile actually has: ``[(name, samp_rate, axis endpoints), ...]``.
+
+        The third element is the path's **whole port list**, one entry per channel, because a path is
+        the unit every consumer here works in: one rate check per port, one BFM model per path.
 
         **A tile may be ADC-only or DAC-only**, and that is a real configuration rather than a
         convenience: an RX capture design (``plans/adc_model.md`` staging item 3) has no transmitter,
@@ -237,9 +301,9 @@ class Rfdc(HwModule):
         """
         paths = []
         if int(self.n_rx) > 0:
-            paths.append(('ADC', self.rx_samp_rate, self.rx_stream))
+            paths.append(('ADC', self.rx_samp_rate, self.rx_streams))
         if int(self.n_tx) > 0:
-            paths.append(('DAC', self.tx_samp_rate, self.tx_stream))
+            paths.append(('DAC', self.tx_samp_rate, self.tx_streams))
         return paths
 
     def pre_sim(self) -> None:
@@ -250,21 +314,27 @@ class Rfdc(HwModule):
         loud.  (The *fractional* part of that ratio is the credit accumulator the C++ model needs;
         the Python model needs neither conversion — it works in seconds.)
         """
-        for path, rate, ep in self._active_paths():
+        for path, rate, eps in self._active_paths():
             if rate is None:
                 raise RuntimeError(
                     f"Rfdc '{self.name}': the {path} RF endpoint was never bound to an RFSampIF, so "
                     f"there is no sample rate to check against the AXIS clock.")
-            if ep.interface is None or ep.interface.clk is None:
-                raise RuntimeError(
-                    f"Rfdc '{self.name}': the {path} AXIS endpoint has no bound interface/clock.")
-            f_axis = float(ep.interface.clk.freq)
-            cap = int(self.word.samp_per_word) * f_axis
-            if rate > cap:
-                raise ValueError(
-                    f"Rfdc '{self.name}': {path} sample rate {rate:g} Hz exceeds what the AXIS port "
-                    f"can carry — samp_per_word * f_axis = {int(self.word.samp_per_word)} * {f_axis:g} = "
-                    f"{cap:g} samples/s. Raise samp_per_word, widen the port, or lower the rate.")
+            # PER PORT, not once for the path: each channel has its own AXIS interface and nothing
+            # forces them onto one clock, so a rate that fits channel 0's fabric says nothing about
+            # channel 1's.  One check each is the only honest reading.
+            for ch, ep in enumerate(eps):
+                if ep.interface is None or ep.interface.clk is None:
+                    raise RuntimeError(
+                        f"Rfdc '{self.name}': the {path} AXIS endpoint for channel {ch} "
+                        f"({ep.name}) has no bound interface/clock.")
+                f_axis = float(ep.interface.clk.freq)
+                cap = int(self.word.samp_per_word) * f_axis
+                if rate > cap:
+                    raise ValueError(
+                        f"Rfdc '{self.name}': {path} channel {ch} sample rate {rate:g} Hz exceeds "
+                        f"what the AXIS port can carry — samp_per_word * f_axis = "
+                        f"{int(self.word.samp_per_word)} * {f_axis:g} = {cap:g} samples/s. Raise "
+                        f"samp_per_word, widen the port, or lower the rate.")
         if int(self.n_rx) > 0 and int(self.rx_blksize) % int(self.word.samp_per_word):
             raise ValueError(
                 f"Rfdc '{self.name}': ADC blksize {int(self.rx_blksize)} is not a multiple of "
@@ -321,20 +391,29 @@ class Rfdc(HwModule):
                 f"{int(self.word.justify_shift())}}}")
 
     def bfm_model(self):
-        """**Two** models, one per data path, each spanning the cut.
+        """**Two** models, one per data path, each spanning the cut — and each spanning *every* AXIS
+        port of its direction.
 
         The ADC path is one object binding RTL pins on the fabric side and the RF channel on the
         other — which is what a converter *is*, rather than a boundary model glued to a separate
         channel peer.  Port order is constructor order, and it is ``xsi_rfdc.h``'s:
-        ``(Dut&, const char*, RfChannel&, const RfdcFormat&, double [, size_t])``.
+        ``(Dut&, AxisPortList, RfChannel&, const RfdcFormat&, double [, size_t])``.
+
+        **One model per direction, not one per channel**, and that is forced rather than chosen: the
+        RF edge carries every channel in one block, so ``n_ch`` independent models cannot each own
+        it.  The AXIS ports of a direction are therefore a **group** — a single ``BfmModel.ports``
+        entry that is a tuple — which resolves to one ``AxisPortList`` constructor argument.  At one
+        channel that renders exactly as it always did (a bare port name), so a one-channel design's
+        generated harness is unchanged.
 
         This is the first real consumer of per-port ``BfmModel`` resolution
-        (``plans/adc_model.md``): ``rx_stream`` resolves to ``sim.dut(), <ns>::<port>`` because its
-        peer is a DUT boundary port, and ``rx_rf`` to a channel variable because its peer is not.
+        (``plans/adc_model.md``): the AXIS group resolves to ``sim.dut(), <ns>::<port>...`` because
+        its peers are DUT boundary ports, and ``rx_rf`` to a channel variable because its peer is
+        not.
         """
         from waveflow.build.composite_gen import BfmModel
 
-        for name, rate, _ep in self._active_paths():
+        for name, rate, _eps in self._active_paths():
             if rate is None:
                 raise RuntimeError(
                     f"Rfdc '{self.name}': the {name} RF endpoint was never bound, so the sample rate "
@@ -342,11 +421,12 @@ class Rfdc(HwModule):
                     f"before generating.")
         models = []
         if int(self.n_rx) > 0:
-            adc_rate = self.words_per_cycle(self.rx_stream, self.rx_samp_rate)
-            models.append(BfmModel("RfdcAdcMaster", ports=("rx_stream", "rx_rf"),
+            adc_rate = self.words_per_cycle(self.rx_streams[0], self.rx_samp_rate)
+            group = tuple(f"rx_stream_{i}" for i in range(int(self.n_rx)))
+            models.append(BfmModel("RfdcAdcMaster", ports=(group, "rx_rf"),
                                    extra_args=(self._fmt_literal(), repr(adc_rate))))
         if int(self.n_tx) > 0:
-            dac_rate = self.words_per_cycle(self.tx_stream, self.tx_samp_rate)
+            dac_rate = self.words_per_cycle(self.tx_streams[0], self.tx_samp_rate)
             # blk_samples is n_ch * blksize -- one block's worth, the unit the RF edge moves.  The
             # DAC needs it to know when a block is complete; the ADC learns it from the block it is
             # handed.
@@ -357,7 +437,8 @@ class Rfdc(HwModule):
             # accessor raised "not bound to an RFSampIF".  The DAC path's channel count is a property
             # of the DAC's own edge, so that is where it comes from.
             blk_samples = int(self.tx_rf.n_ch) * int(self.tx_blksize)
-            models.append(BfmModel("RfdcDacSlave", ports=("tx_stream", "tx_rf"),
+            group = tuple(f"tx_stream_{i}" for i in range(int(self.n_tx)))
+            models.append(BfmModel("RfdcDacSlave", ports=(group, "tx_rf"),
                                    extra_args=(self._fmt_literal(), repr(dac_rate),
                                                str(blk_samples))))
         return tuple(models)
@@ -396,33 +477,67 @@ class Rfdc(HwModule):
         word_rate = float(self.rx_samp_rate) / int(self.word.samp_per_word)
         while True:
             blk = yield from self.rx_rf.get()
-            samples = np.asarray(blk.data, dtype=np.float64)[0]     # n_rx == 1 (stage 1)
+            samples = np.asarray(blk.data, dtype=np.float64)        # (n_rx, blksize)
             self.n_adc_blk += 1
-            yield from self.rx_stream.offer(self._pack(samples / fs), word_rate=word_rate)
+            words = self._pack(samples / fs)                        # (n_rx, n_words)
+            # CONCURRENTLY, one process per port.  Offering the rows in a `for` loop would put the
+            # channels end to end in time -- channel 1 starting only after channel 0's whole block
+            # had gone out -- which is not what n_ch converters wired to n_ch ports do, and would
+            # invent a rate violation on every channel but the first.
+            sends = [self.env.process(ep.offer(words[ch], word_rate=word_rate))
+                     for ch, ep in enumerate(self.rx_streams)]
+            yield self.env.all_of(sends)
 
     def _dac_proc(self) -> ProcessGen[None]:
-        """One AXIS burst in → unpack → dequantize → RF block out."""
-        fs = float(self.full_scale)
-        while True:
-            slots = yield from self.tx_stream.get(self.word.slot_type(),
-                                                  count=int(self.tx_blksize))
-            self.n_dac_blk += 1
-            yield from self.tx_rf.put((self._unpack(slots) * fs).reshape(1, -1))
+        """One AXIS burst in → unpack → dequantize → RF block out.
 
-    # -- quantize/justify/pack, and its inverse ---------------------------------------------------
+        The burst is taken as **raw words**, which is what a DAC is handed: whatever
+        :meth:`_unpack` needs to know about their layout it reads off :attr:`word`, and asking the
+        stream to deserialize slots for us would have made the pair asymmetric — ``_pack`` producing
+        words while ``_unpack`` consumed slots is precisely how the two stopped being inverses.
+        """
+        fs = float(self.full_scale)
+        n_words = int(self.tx_blksize) // int(self.word.samp_per_word)
+        while True:
+            # Concurrently, for the mirror of the reason the ADC path fans out: the n_tx ports are
+            # fed by n_tx independent producers, and reading them one after another would make each
+            # channel wait for its predecessor's whole block.
+            gets = [self.env.process(ep.get(nwords_max=n_words)) for ep in self.tx_streams]
+            yield self.env.all_of(gets)
+            rows = [np.asarray(getattr(g.value, "val", g.value)).reshape(-1) for g in gets]
+            short = [(ch, r.size) for ch, r in enumerate(rows) if r.size != n_words]
+            if short:
+                raise RuntimeError(
+                    f"Rfdc '{self.name}': DAC channel(s) {short} delivered a partial block; every "
+                    f"port carries {n_words} words per block period. A converter's channels are one "
+                    f"tile, so they cannot be assembled out of bursts of different lengths.")
+            self.n_dac_blk += 1
+            yield from self.tx_rf.put(self._unpack(np.stack(rows)) * fs)
+
+    # -- quantize, then lay out -- and the inverse ------------------------------------------------
     #
     # TWO steps, and they are different questions.  Quantization is the CONVERTER's, at
-    # ``bits_per_samp``; the slot layout is the BUS's, at ``bits_per_samp_pack``.  What joins them is
-    # the justification shift, which is the one rule the serializers cannot know — the word type owns
-    # it (:meth:`~waveflow.hw.rfdc_samp_word.RfdcSampWord.to_slots`) and this module never open-codes
-    # a mask or a stride.  Word<->slot goes through ``write_array``/``read_array`` exactly as before.
+    # ``bits_per_samp``; the slot layout is the BUS's, at ``bits_per_samp_pack``.  Only the first is
+    # this module's: the second is
+    # :func:`~waveflow.hw.rfdc_samp_word.pack` / :func:`~waveflow.hw.rfdc_samp_word.unpack`, which
+    # own the justification shift, the slot order and the serializer calls.  What is left here is
+    # the amplitude reference, and that is right -- ``full_scale`` is a property of the converter,
+    # not of the word.
+    #
+    # These two stay because the converter works in *normalized reals* rather than stored integers.
+    # They are the quantizer and nothing else: there is one implementation of the packing and it is
+    # not here.
+    #
+    # Both work on the WHOLE (n_ch, .) array in one call, which is the shape `pack` / `unpack` were
+    # built for.  They used to `reshape(1, -1)` on the way in and index `[0]` on the way out -- a
+    # one-channel adapter around a channel-major pair, which is exactly the code a tile does not
+    # need.
 
     def _pack(self, normalized: np.ndarray):
-        """Normalized reals in [-1, 1) → the AXIS words one block becomes."""
-        stored = from_real(normalized, self.SampType)
-        return write_array(self.word.to_slots(stored), elem_type=self.word.slot_type(),
-                           word_bw=self.axis_bitwidth)
+        """Normalized reals in [-1, 1), ``(n_ch, n_samp)`` → AXIS words, ``(n_ch, n_words)``."""
+        stored = np.asarray(from_real(normalized, self.SampType), dtype=np.int64)
+        return pack(self.word, stored)
 
-    def _unpack(self, slots) -> np.ndarray:
-        """Container slots → normalized reals — the exact inverse of :meth:`_pack` on the grid."""
-        return to_real(array(self.SampType, self.word.from_slots(slots)))
+    def _unpack(self, samp_words) -> np.ndarray:
+        """AXIS words ``(n_ch, n_words)`` → normalized reals — the exact inverse of :meth:`_pack`."""
+        return to_real(array(self.SampType, unpack(self.word, np.asarray(samp_words))))

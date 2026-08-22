@@ -15,12 +15,16 @@ wired exactly as any other:
 
 ```python
 adc_axis = StreamIF(name="adc_axis", sim=sim, clk=axis_clk, bitwidth=rfdc.axis_bitwidth)
-adc_axis.bind("master", rfdc.rx_stream)
+adc_axis.bind("master", rfdc.rx_streams[0])
 adc_axis.bind("slave", dut.s_in)
 ```
 
 Your DSP block connects to a converter the same way it connects to anything else. There is no
 parallel world to learn.
+
+**One of these per channel.** `rfdc.rx_streams` / `rfdc.tx_streams` hold one endpoint per RF
+channel, and row `ch` of a block is what port `ch` carries — so an `n_ch`-channel converter is
+`n_ch` ordinary streams, not one wide one. Everything on this page is per port.
 
 ## The width comes from the word type
 
