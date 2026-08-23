@@ -197,3 +197,80 @@ int main() {{
 }}
 """, tmp_path)
     assert "OK gap first=2" in out
+
+
+# ---------------------------------------------------------------------------
+# The element kind — Stage B's cross-language half
+# ---------------------------------------------------------------------------
+
+def _run_cpp_expect_exit(body: str, tmp_path: Path, code: int) -> str:
+    """Compile and run *body*, expecting it to **abort** with exit status *code*.
+
+    A separate runner because :func:`_run_cpp` asserts success — and the behaviour under test here is
+    the process refusing to continue, which cannot be reported through a return value: the models
+    have no way to say "I cannot read this" other than not running.
+    """
+    src = tmp_path / "rfblk_refuse.cpp"
+    src.write_text(_PRELUDE + body, encoding="utf-8")
+    exe = tmp_path / "rfblk_refuse.exe"
+    subprocess.run([_GXX, "-std=c++17", "-Wall", "-Wextra", f"-I{_XSI_SRC}", str(src), "-o", str(exe)],
+                   check=True, capture_output=True, text=True)
+    r = subprocess.run([str(exe)], check=False, capture_output=True, text=True)
+    assert r.returncode == code, (
+        f"expected exit {code}, got {r.returncode}:\n{r.stdout}\n{r.stderr}")
+    return r.stderr
+
+
+def test_the_cpp_source_refuses_a_complex_bundle_rather_than_misreading_it(tmp_path):
+    """These models carry **real** samples, and a complex bundle is not a corrupt real one.
+
+    It is twice as many perfectly plausible samples, so every counter in the run would agree with
+    itself and the answer would simply be wrong. The manifest field is what makes the refusal
+    possible at all — without it the two kinds are the same bytes.
+
+    Lifting this is stage D's job; until then the honest behaviour is to stop.
+    """
+    write_rf_bundle([np.zeros((1, 4), dtype=np.complex128)], tmp_path / "rf_in")
+    err = _run_cpp_expect_exit(f"""
+int main() {{
+    RfChannel ch(2);
+    RfFileSource src(ch, 4);
+    src.in_bundle = "{(tmp_path / 'rf_in').as_posix()}";
+    src.pre_sim();                      // must not return
+    std::printf("READ IT ANYWAY\\n");
+    return 0;
+}}
+""", tmp_path, 5)
+    assert "complex128" in err and "REAL samples" in err
+
+
+def test_the_cpp_source_still_reads_a_real_bundle_and_one_with_no_field(tmp_path):
+    """The compatibility half: the manifest key is additive, and its absence means real.
+
+    ``RfFileSink`` writes the four fixed manifest fields and nothing else, so bundles produced by the
+    C++ side itself carry no element key — reading one back has to keep working.
+    """
+    import json
+
+    from waveflow.utils.burst_io import META_NAME
+
+    blocks = [np.array([[1.0, 2.0, 3.0, 4.0]])]
+    write_rf_bundle(blocks, tmp_path / "declared")
+    write_rf_bundle(blocks, tmp_path / "silent")
+    meta = json.loads((tmp_path / "silent" / META_NAME).read_text(encoding="utf-8"))
+    del meta["rf_element"]
+    (tmp_path / "silent" / META_NAME).write_text(json.dumps(meta), encoding="utf-8")
+
+    for name in ("declared", "silent"):
+        out = _run_cpp(f"""
+int main() {{
+    RfChannel ch(2);
+    RfFileSource src(ch, 4);
+    src.in_bundle = "{(tmp_path / name).as_posix()}";
+    src.pre_sim();
+    CHECK(src.samples() == 4, "sample count");
+    std::printf("OK %zu\\n", src.samples());
+    return 0;
+}}
+""", tmp_path)
+        assert "OK 4" in out, name

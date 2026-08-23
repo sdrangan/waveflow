@@ -444,6 +444,271 @@ class TestRfBundle:
 
 
 # --------------------------------------------------------------------------------------------
+# The complex bundle — Stage B's gate (plans/adc_model.md, "Stage B")
+# --------------------------------------------------------------------------------------------
+
+class TestComplexRfBundle:
+    """The format can now **say** whether a sample is real or complex.
+
+    Both halves of the gate live here: a complex bundle round-trips byte-identically, and every
+    existing real bundle reads back unchanged. The second is the one that matters — a format change
+    that silently rewrites the real path is the failure to avoid, and the two kinds are
+    indistinguishable as bytes, so nothing but the manifest can tell them apart.
+    """
+
+    def test_a_complex_bundle_round_trips_exactly(self, tmp_path):
+        blocks = [np.array([[1.5 - 0.25j, -0.5 + 3.75j, 0.0 + 0.0j, 2.0 - 1.0j]]),
+                  np.array([[-1.0 + 0.125j, 2.5 - 2.5j, 0.75 + 0.5j, -0.125 - 4.0j]])]
+        write_rf_bundle(blocks, tmp_path / "b")
+        got = read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4, complex_samp=True)
+        assert len(got) == 2
+        assert all(g.dtype == np.complex128 for g in got)
+        assert all(np.array_equal(a, b) for a, b in zip(blocks, got))
+
+    def test_a_complex_bundle_is_two_words_per_sample_re_then_im(self, tmp_path):
+        """The layout, stated once and checked rather than left to the round trip.
+
+        A round trip passes under *any* self-consistent layout, including a planar one or a swapped
+        pair — so the words themselves are read back and compared to the components in order.
+        """
+        from waveflow.utils.burst_io import read_burst_bundle
+
+        blk = np.array([[1.0 + 2.0j, 3.0 + 4.0j]])
+        write_rf_bundle([blk], tmp_path / "b")
+        words = read_burst_bundle(tmp_path / "b")[0]
+        assert words.size == 4, "two float64 components per complex sample"
+        assert np.array_equal(words.view(np.float64), np.array([1.0, 2.0, 3.0, 4.0])), \
+            "(re, im) adjacent, in that order — see _split_complex"
+
+    def test_multichannel_complex_keeps_row_ch_as_channel_ch(self, tmp_path):
+        blk = np.arange(6.0).reshape(2, 3) + 1j * np.arange(10.0, 16.0).reshape(2, 3)
+        write_rf_bundle([blk], tmp_path / "b")
+        got = read_rf_bundle(tmp_path / "b", n_ch=2, blksize=3, complex_samp=True)[0]
+        assert np.array_equal(got, blk)
+        assert not np.array_equal(got[0], got[1]), "the rows must differ or a swap is invisible"
+
+    def test_the_manifest_names_the_element_kind(self, tmp_path):
+        from waveflow.simulation.rf_tb import (
+            RF_ELEMENT_COMPLEX,
+            RF_ELEMENT_KEY,
+            RF_ELEMENT_REAL,
+        )
+        from waveflow.utils.burst_io import read_burst_meta
+
+        write_rf_bundle([np.zeros((1, 4))], tmp_path / "re")
+        write_rf_bundle([np.zeros((1, 4), dtype=np.complex128)], tmp_path / "im")
+        assert read_burst_meta(tmp_path / "re")[RF_ELEMENT_KEY] == RF_ELEMENT_REAL
+        assert read_burst_meta(tmp_path / "im")[RF_ELEMENT_KEY] == RF_ELEMENT_COMPLEX
+
+    def test_reading_a_complex_bundle_as_real_is_refused(self, tmp_path):
+        """The failure the field exists to prevent — and it is NOT caught by the length check.
+
+        At half the ``blksize`` a complex bundle has exactly the word count a real read expects, so
+        without the manifest it decodes into a plausible block of interleaved nonsense. The manifest
+        is checked first, so both spellings of the mistake stop.
+        """
+        write_rf_bundle([np.zeros((1, 4), dtype=np.complex128)], tmp_path / "b")
+        with pytest.raises(ValueError, match="declares rf_element"):
+            read_rf_bundle(tmp_path / "b", n_ch=1, blksize=8)          # the plausible-length case
+        with pytest.raises(ValueError, match="declares rf_element"):
+            read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4)
+
+    def test_reading_a_real_bundle_as_complex_is_refused(self, tmp_path):
+        write_rf_bundle([np.zeros((1, 4))], tmp_path / "b")
+        with pytest.raises(ValueError, match="declares rf_element"):
+            read_rf_bundle(tmp_path / "b", n_ch=1, blksize=2, complex_samp=True)
+
+    def test_a_bundle_with_no_manifest_field_is_read_as_real(self, tmp_path):
+        """The compatibility rule, and it is load-bearing.
+
+        Bundles written before the field existed — and every bundle the C++ ``RfFileSink`` writes,
+        which emits the four fixed manifest fields and nothing else — carry one ``float64`` per word.
+        A missing field is therefore *real*, not *unknown*.
+        """
+        import json
+
+        from waveflow.utils.burst_io import META_NAME
+
+        blocks = [np.array([[1.5, -0.25, 0.0, 3.75]])]
+        write_rf_bundle(blocks, tmp_path / "b")
+        meta = json.loads((tmp_path / "b" / META_NAME).read_text(encoding="utf-8"))
+        del meta["rf_element"]                                   # a bundle from before the field
+        (tmp_path / "b" / META_NAME).write_text(json.dumps(meta), encoding="utf-8")
+        got = read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4)
+        assert np.array_equal(got[0], blocks[0])
+
+    def test_the_real_path_is_byte_for_byte_what_it_was(self, tmp_path):
+        """The other half of the gate: the binaries of a real bundle did not move.
+
+        Only ``meta.json`` gained a key. ``words.bin`` and ``bounds.bin`` are what every existing
+        gate compares — including the loopback's file-to-file byte check and the XSI runs — so this
+        is the assertion that says the format change did not rewrite the real path.
+        """
+        from waveflow.utils.burst_io import BOUNDS_NAME, WORDS_NAME
+
+        blocks = [np.arange(8.0).reshape(2, 4), np.arange(8.0, 16.0).reshape(2, 4)]
+        write_rf_bundle(blocks, tmp_path / "b")
+        # What the format has always written: one float64 per uint64 word, row-major per block.
+        want = np.concatenate([b.ravel() for b in blocks]).astype(np.float64)
+        got = np.fromfile(tmp_path / "b" / WORDS_NAME, dtype="<u8").view(np.float64)
+        assert np.array_equal(got, want)
+        assert np.array_equal(np.fromfile(tmp_path / "b" / BOUNDS_NAME, dtype="<u8"),
+                              np.array([8, 16], dtype=np.uint64))
+
+    def test_a_mixed_list_of_blocks_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="mix of real and complex"):
+            write_rf_bundle([np.zeros((1, 2)), np.zeros((1, 2), dtype=np.complex128)],
+                            tmp_path / "b")
+
+    def test_a_stated_kind_that_contradicts_the_blocks_is_refused(self, tmp_path):
+        """A caller may state the kind — for the empty case — but never against the data."""
+        with pytest.raises(ValueError, match="but the blocks are"):
+            write_rf_bundle([np.zeros((1, 2))], tmp_path / "b", complex_samp=True)
+
+    def test_an_empty_capture_still_declares_its_kind(self, tmp_path):
+        """Inference has nothing to read here, which is exactly why the parameter exists.
+
+        A sink that recorded nothing on a complex edge must still write a complex bundle, or the
+        file claims a kind its edge does not have.
+        """
+        from waveflow.simulation.rf_tb import RF_ELEMENT_COMPLEX, RF_ELEMENT_KEY
+        from waveflow.utils.burst_io import read_burst_meta
+
+        write_rf_bundle([], tmp_path / "b", complex_samp=True)
+        assert read_burst_meta(tmp_path / "b")[RF_ELEMENT_KEY] == RF_ELEMENT_COMPLEX
+        assert read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4, complex_samp=True) == []
+
+
+class TestTheEdgeDeclaresTheElementKind:
+    """``RFSampIF.complex_samp`` — what a block on this edge *is*, declared where ``n_ch`` is.
+
+    The source and sink read it through the endpoint rather than carrying a copy, exactly as they
+    read ``n_ch`` and ``blksize``; the bundle states it in its manifest; and the two are checked
+    against each other on every read.
+    """
+
+    def _edge(self, complex_samp: bool, n_ch: int = 1, blksize: int = 4):
+        from waveflow.hw.clock import Clock
+        from waveflow.hw.rf_sample_if import RFSampIF
+
+        sim = Simulation()
+        return sim, RFSampIF(name="e", sim=sim, samp_clk=Clock(name="c", freq=1e6), n_ch=n_ch,
+                             blksize=blksize, n_blk=2, complex_samp=complex_samp)
+
+    def test_the_endpoints_read_it_off_the_interface(self):
+        from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
+
+        sim, iface = self._edge(True)
+        tx, rx = RFSampIFTx(sim=sim, name="t"), RFSampIFRx(sim=sim, name="r")
+        iface.bind("tx", tx)
+        iface.bind("rx", rx)
+        assert tx.complex_samp is True and rx.complex_samp is True
+        assert iface.block_dtype == np.complex128
+
+    def test_a_real_edge_refuses_a_complex_block_rather_than_dropping_q(self):
+        sim, iface = self._edge(False)
+        with pytest.raises(TypeError, match="discard Q"):
+            list(iface.put(np.zeros((1, 4), dtype=np.complex128)))
+
+    def test_a_complex_edge_widens_a_real_block(self):
+        """The allowed direction: a real signal is a complex one with Q = 0."""
+        sim, iface = self._edge(True)
+        list(iface.put(np.ones((1, 4))))
+        assert iface.n_buffered == 1
+
+    def test_the_underrun_zero_fill_is_complex_on_a_complex_edge(self):
+        """A consumer never has to branch on whether a block happened to be real."""
+        from waveflow.hw.rf_sample_if import RFSampIFRx, RFSampIFTx
+
+        sim, iface = self._edge(True)
+        iface.bind("tx", RFSampIFTx(sim=sim, name="t"))
+        rx = RFSampIFRx(sim=sim, name="r")
+        iface.bind("rx", rx)
+        got = []
+        rx.deliver = lambda blk: (got.append(blk) or True)   # noqa: E731 — capture, always accepts
+        list(iface._drain_one(1))
+        assert got and got[0].data.dtype == np.complex128 and not np.any(got[0].data)
+
+    def test_the_source_reads_the_kind_off_the_edge_and_checks_the_file(self, tmp_path):
+        """The two declarations meet here, and disagreeing is an error rather than a reframe."""
+        from waveflow.hw.rf_sample_if import RFSampIFRx
+
+        sim, iface = self._edge(True)
+        src = RfDataSource(name="src", sim=sim, in_bundle="b", root=tmp_path)
+        iface.bind("tx", src.rf_ep)
+        iface.bind("rx", RFSampIFRx(sim=sim, name="r"))
+
+        write_rf_bundle([np.zeros((1, 4), dtype=np.complex128)], tmp_path / "b")
+        src.pre_sim()
+        assert src.blocks[0].dtype == np.complex128
+
+        write_rf_bundle([np.zeros((1, 8))], tmp_path / "b")      # same words, real
+        with pytest.raises(ValueError, match="declares rf_element"):
+            src.pre_sim()
+
+    def test_the_converter_refuses_an_edge_whose_kind_its_word_disagrees_with(self):
+        """The pair that spans the converter: the RF block's kind and the AXIS word's ``iq_mode``.
+
+        Only one of the four combinations is buildable today — both real — because ``Rfdc`` still
+        refuses ``iq_mode = 1``. The check is written against the *agreement*, so lifting that
+        refusal (stage D) needs nothing here.
+        """
+        sim, iface = self._edge(True)
+        rfdc = Rfdc(name="r", sim=sim)                # real word
+        with pytest.raises(ValueError, match="carries complex samples but the AXIS word"):
+            iface.bind("rx", rfdc.rx_rf)
+
+        # ...and the mirror, so the check is on the AGREEMENT and not on "the edge is complex".
+        _, real_edge = self._edge(False)
+        real_edge.bind("rx", Rfdc(name="r2", sim=sim).rx_rf)      # both real: fine
+
+    @pytest.mark.parametrize("complex_samp", [False, True])
+    def test_a_run_over_the_edge_is_a_file_to_file_byte_comparison(self, tmp_path, complex_samp):
+        """**Stage B's gate, end to end**: source → RFSampIF → sink, byte-identical.
+
+        The function-level round trip in :class:`TestComplexRfBundle` says the codec is invertible.
+        This says the *participants* carry the kind: the source reads it off the edge, the edge
+        moves ``complex128`` blocks and zero-fills in kind, and the sink writes a bundle that
+        declares what it wrote. No converter — ``Rfdc`` still refuses ``iq_mode`` (stage D), and the
+        edge is the thing under test here.
+
+        Parameterized over both kinds on purpose: the real case is the *other* half of the gate, and
+        running the identical code path proves the complex support did not fork it.
+        """
+        from waveflow.hw.clock import Clock
+        from waveflow.hw.rf_sample_if import RFSampIF
+        from waveflow.utils.burst_io import BOUNDS_NAME, META_NAME, WORDS_NAME
+
+        n_blk, n_ch, blksize = 4, 2, 8
+        rng = np.random.default_rng(0xB)
+        blocks = [rng.standard_normal((n_ch, blksize)) for _ in range(n_blk)]
+        if complex_samp:
+            blocks = [b + 1j * rng.standard_normal((n_ch, blksize)) for b in blocks]
+        write_rf_bundle(blocks, tmp_path / "in")
+
+        sim = Simulation()
+        src = RfDataSource(name="src", sim=sim, in_bundle="in", root=tmp_path)
+        snk = RfDataSink(name="snk", sim=sim, out_bundle="out", root=tmp_path, depth=n_blk + 1)
+        iface = RFSampIF(name="e", sim=sim, samp_clk=Clock(name="c", freq=1e6), n_ch=n_ch,
+                         blksize=blksize, n_blk=n_blk, complex_samp=complex_samp)
+        iface.bind("tx", src.rf_ep)
+        iface.bind("rx", snk.rf_ep)
+        sim.run_sim()          # NOT sim.add_obj: a SimObj registers itself from its `sim=` argument
+
+        iface.assert_clean()
+        assert len(snk.blocks) == n_blk
+        for k, (want, got) in enumerate(zip(blocks, snk.blocks)):
+            assert got.dtype == (np.complex128 if complex_samp else np.float64)
+            assert np.array_equal(got, want), f"block {k}"
+
+        # The bundles: identical binaries AND an identical manifest, so the kind survived the trip
+        # rather than being re-inferred at the far end from data that happened to look right.
+        for member in (WORDS_NAME, BOUNDS_NAME, META_NAME):
+            assert (tmp_path / "out" / member).read_bytes() == \
+                   (tmp_path / "in" / member).read_bytes(), member
+
+
+# --------------------------------------------------------------------------------------------
 # The converter's own guards
 # --------------------------------------------------------------------------------------------
 

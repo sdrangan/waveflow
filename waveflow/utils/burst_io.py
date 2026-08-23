@@ -10,7 +10,10 @@ call-signature change.  A bundle currently holds:
   the reader slice directly, and the final entry doubles as a total-length check.
 - **``meta.json``**  — a small manifest: ``word_bytes``, ``n_bursts``, ``n_words``.  It makes the
   word width *data* rather than an implicit convention, so a mismatch is caught rather than silently
-  truncating (a 32-bit store would truncate a 64-bit stream's ``src|dst<<32`` to ``src``).
+  truncating (a 32-bit store would truncate a 64-bit stream's ``src|dst<<32`` to ``src``).  A caller
+  may add its **own** keys through ``write_burst_bundle(..., extra=...)`` and read them back with
+  :func:`read_burst_meta`; nothing here interprets them, which is how a caller's format gets declared
+  without this module learning about it.
 
 Both the pysim ``StreamDriver`` and the generated XSI harness read the *same* bundle, so one on-disk
 source of vectors drives both — and the boundaries (where ``TLAST`` is asserted) are data the
@@ -45,7 +48,7 @@ BOUNDS_NAME = "bounds.bin"
 META_NAME = "meta.json"
 
 
-def write_burst_bundle(word_arrays: list, bundle_dir: str | Path) -> Path:
+def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | None = None) -> Path:
     """Write a list of word bursts to a bundle directory.
 
     Parameters
@@ -55,6 +58,17 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path) -> Path:
     bundle_dir : path
         The bundle directory.  Created (with parents) as needed; its ``words.bin`` / ``bounds.bin`` /
         ``meta.json`` members are written.
+    extra : dict, optional
+        Additional manifest entries, merged into ``meta.json`` beside the four this module owns.
+        **Pass-through, not interpretation**: nothing here knows what they mean, which is what keeps
+        this module schema-blind while still giving a *caller's* format somewhere to be declared
+        rather than conventional. The RF bundle uses it to name its element kind
+        (:func:`waveflow.simulation.rf_tb.write_rf_bundle`) — before that field existed, a bundle of
+        `float64` samples and a bundle of interleaved complex ones were the same bytes with a
+        different meaning, which is a format that cannot say what it holds.
+
+        The four keys below are this module's and cannot be overridden; a collision is refused
+        rather than silently won by one side.
 
     Returns
     -------
@@ -80,8 +94,31 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path) -> Path:
         "n_bursts": int(len(arrs)),
         "n_words": int(words.size),
     }
+    clash = sorted(set(extra or {}) & set(meta))
+    if clash:
+        raise ValueError(
+            f"bundle {d}: extra manifest keys {clash} collide with the ones write_burst_bundle owns "
+            f"({sorted(meta)}). Those four describe the binaries and are checked against them on "
+            f"read; a caller redefining one would make the check test the caller's claim instead.")
+    meta.update(extra or {})
     (d / META_NAME).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return d
+
+
+def read_burst_meta(bundle_dir: str | Path) -> dict:
+    """The bundle's ``meta.json`` as a dict — ``{}`` when there is none.
+
+    An **absent manifest is not an error**, and that is what makes the field a compatible addition:
+    bundles written before a key existed, and bundles written by the C++ side (which emits the four
+    fixed fields and nothing else), simply do not carry it. A reader that needs one therefore has to
+    say what a missing value means — see
+    :func:`~waveflow.simulation.rf_tb.read_rf_bundle`, where missing means *real*, the one kind that
+    existed before the key did.
+    """
+    p = Path(bundle_dir) / META_NAME
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def read_burst_bundle(bundle_dir: str | Path) -> list[np.ndarray]:

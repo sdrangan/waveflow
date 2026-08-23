@@ -22,7 +22,14 @@
 // one float64 sample bit-reinterpreted into a uint64.  Reinterpreted, not converted — the words are
 // IEEE-754 bit patterns, so a `memcpy` is the whole of the decoding and there is no rounding step to
 // disagree about.
+//
+// REAL SAMPLES ONLY, and now CHECKED.  Python's bundle can also be complex (two float64 components
+// per sample), and the two are indistinguishable as bytes — so `RfFileSource` reads the manifest's
+// element kind and aborts on a complex one rather than playing it back as twice as many real
+// samples.  See rf_require_real_bundle().
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -57,6 +64,33 @@ inline std::uint64_t rf_sample_to_word(double d) {
     return w;
 }
 
+/// The manifest key and value naming an RF bundle's element kind — the C++ half of
+/// waveflow.simulation.rf_tb's RF_ELEMENT_KEY / RF_ELEMENT_REAL.
+static const char* const RF_ELEMENT_KEY  = "rf_element";
+static const char* const RF_ELEMENT_REAL = "float64";
+
+/// Abort unless *dir* is a REAL bundle.  An absent key means real — because THIS side still writes
+/// bundles without it: `BurstBundle::write` emits four keys and `rf_element` is not one of them.
+/// That default is a contract with a live writer, not support for old files (no bundle is committed
+/// in this repo); removing it as legacy cruft breaks the RF XSI gates immediately.
+///
+/// **This refusal is the whole point of the manifest field.**  A complex bundle carries two float64
+/// components per sample, so read as real it is not corrupt and not short: it is a block of twice as
+/// many plausible samples, and every counter in the run would agree with itself. The models here
+/// carry real samples only (`RfBlockMsg::data` is `std::vector<double>`), so the honest answer is to
+/// stop rather than to produce one.  Lifting it is stage D's job, not a TODO here.
+inline void rf_require_real_bundle(const std::string& dir) {
+    const std::string kind = BurstBundle::read_meta_str(dir, RF_ELEMENT_KEY, RF_ELEMENT_REAL);
+    if (kind != RF_ELEMENT_REAL) {
+        std::fprintf(stderr,
+            "FATAL: RF bundle '%s' declares %s=\"%s\"; these models carry REAL samples "
+            "only.\nA complex bundle read as real is not an error -- it is twice as many "
+            "plausible samples -- so this stops instead.\n",
+            dir.c_str(), RF_ELEMENT_KEY, kind.c_str());
+        std::exit(5);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // RfFileSource — plays an RF bundle into the channel.
 // ---------------------------------------------------------------------------
@@ -82,6 +116,7 @@ public:
 
     void pre_sim() override {
         if (in_bundle.empty()) return;
+        rf_require_real_bundle(in_bundle);
         const std::vector<std::uint64_t> w = BurstBundle::read_words(in_bundle);
         samples_.resize(w.size());
         for (std::size_t i = 0; i < w.size(); ++i) samples_[i] = rf_word_to_sample(w[i]);

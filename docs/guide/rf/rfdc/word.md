@@ -259,10 +259,16 @@ parameter counts what the design thinks in.
 `iq_mode` lives on the **word**, not on the converter, because it is a statement about packing — it
 is what makes `bitwidth` follow from the type rather than from a flag elsewhere.
 
-**`iq_mode = True` is not implemented yet.** The converter refuses it rather than half-supporting it:
-the RF-side bundle format is float64 with no manifest field for complex, and the quantizer's
-conformance twin covers real `FixedField` only. Until then, model I and Q as two real channels
-(`n_ch = 2`) — which is what the hardware carries anyway.
+**`iq_mode = True` is not implemented yet.** The converter refuses it rather than half-supporting
+it, and the refusal names what is missing. **One of the two blockers is now cleared**: the RF-side
+bundle carries complex blocks and says so in its manifest, and `RFSampIF` declares whether its blocks
+are complex — see [the RF side](./rf_side.md#real-or-complex-blocks). What remains is the quantizer's
+**conformance twin**, which covers real `FixedField` only. Until that lands, model I and Q as two
+real channels (`n_ch = 2`) — which is what the hardware carries anyway.
+
+A converter checks the two declarations against each other at bind: an `RFSampIF` carrying complex
+blocks and a word whose `iq_mode` is `False` are the same fact seen from either side of the
+converter, so a disagreement is refused rather than cast away.
 
 ### `iq_order` {#iq-order}
 

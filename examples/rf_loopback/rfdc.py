@@ -277,6 +277,23 @@ class Rfdc(HwModule):
                 f"tile declares {side}={want}. They are one number -- row ch of the RF block is what "
                 f"AXIS port ch carries -- so one of the two is wrong.")
 
+        # The OTHER pair that has to agree, and this one spans the converter rather than living on
+        # one side of it: `complex_samp` says what a block on the RF side holds, `word.iq_mode` says
+        # how a complex sample is laid out inside an AXIS beat.  A converter is exactly the thing
+        # that has to hold them in step, so it is the thing that checks them.
+        #
+        # Today only one of the four combinations is buildable -- both false -- because the word can
+        # express interleaved I/Q while the converter cannot yet convert it (see __post_init__).  The
+        # check is written against the agreement rather than against that refusal, so lifting the
+        # refusal in stage D needs nothing here.
+        if bool(iface.complex_samp) != bool(self.word.iq_mode):
+            raise ValueError(
+                f"Rfdc '{self.name}': {iface.name} carries "
+                f"{'complex' if iface.complex_samp else 'real'} samples but the AXIS word is "
+                f"{self.word.describe()} (iq_mode={bool(self.word.iq_mode)}). A converter cannot "
+                f"take complex blocks off the RF side and emit real beats, or the reverse -- the two "
+                f"declarations are the same fact seen from either side of it.")
+
         if ep_name == 'rx':
             self.rx_samp_rate = iface.samp_rate
             self.rx_blksize = int(iface.blksize)

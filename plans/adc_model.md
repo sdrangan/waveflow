@@ -16,16 +16,16 @@ they implement is settled in *Channels, ports, and where I/Q lives*; a session s
 section and not re-litigate it**.
 
 ```
-claude "Read plans/adc_model.md, section 'Stage B — the complex RF bundle format', and build it."
+claude "Read plans/adc_model.md, section 'Stage C — the conformance twin for complex', and build it."
 ```
 
-**Stage A is BUILT (2026-08-22)** — see its section below for what it cost and what the RTL run
-taught. B and C are independent of each other. D needs both.
+**Stages A and B are BUILT (2026-08-22)** — see their sections below for what each cost and what
+building it taught. C is the last thing D waits on.
 
 ```
-A (tile, real)  ── DONE ──────────────────────► gate: 2-channel rf_loopback, XSI 15751
-B (complex bundle) ──┐
-C (complex twin)   ──┴──► D (iq_mode = 1) ────► gate: I/Q loopback
+A (tile, real)     ── DONE ───────────────────► gate: 2-channel rf_loopback, XSI 15751
+B (complex bundle) ── DONE ──┐                  gate: complex round-trip, real path byte-identical
+C (complex twin)   ──────────┴► D (iq_mode=1) ► gate: I/Q loopback
 ```
 
 ### Decisions a session must not re-open
@@ -119,21 +119,80 @@ channel counts under one name would have to suffix from one, and pay the re-synt
 
 **Not in scope, and still open:** `iq_mode`, the RF bundle format, the twin.
 
-### Stage B — the complex RF bundle format
+### Stage B — the complex RF bundle format — **BUILT 2026-08-22**
 
-**Goal:** `RFSampIF` and the on-disk bundle carry **complex** `(n_ch, blksize)` blocks.
+**Goal:** `RFSampIF` and the on-disk bundle carry **complex** `(n_ch, blksize)` blocks. **Done.**
+The first of the two blockers `Rfdc.__post_init__`'s `iq_mode` refusal names is cleared; the twin
+(stage C) is not.
 
-The first of the two blockers `Rfdc.__post_init__`'s `iq_mode` refusal already names. Today the
-bundle is one `float64` per `UINT64` word with **no manifest field for complex**, which is why the
-format cannot express an I/Q block rather than merely not having one.
+**What was built:**
 
-**Scope:** a manifest field naming the element kind; `write_rf_bundle` / `read_rf_bundle`;
-`RfDataSource` / `RfDataSink`.
+- **The manifest field** — `rf_element`, `"float64"` or `"complex128"`. It rides in `meta.json`
+  through a new **pass-through** parameter, `write_burst_bundle(..., extra=...)` plus
+  `read_burst_meta()`, so `burst_io` stays schema-blind: it carries the key and never interprets it.
+  A key colliding with the four `burst_io` owns is refused. Named after the numpy **dtype**, not
+  "real"/"complex", because the next kind this format needs is fixed-point — a new *value*, not a
+  new key.
+- **The layout** — a real sample is one `float64` word; a complex sample is **two**, `(re, im)`
+  adjacent, row-major over `(n_ch, blksize)`. Interleaved rather than planar, matching the AXIS
+  word's I/Q adjacency, so there is one convention for "where is Q relative to I" and not two.
+  **`iq_order` does not apply**: that is a bit-slot rule inside a packed word, and there is no
+  packing here — which also means a lab correction to `iq_order` cannot silently re-mean files on
+  disk.
+- **`RFSampIF.complex_samp`** — the edge declares what a sample *is*, beside `n_ch` and `blksize`,
+  and the peers read it through their endpoint. `block_dtype` is the one place the dtype is derived,
+  so the underrun zero-fill is complex on a complex edge and no consumer branches on the data.
+  A real edge **refuses** a complex block (casting would drop Q silently); a complex edge **widens**
+  a real one, which is the direction that loses nothing.
+- **`Rfdc` checks the pair that spans it** at bind: the edge's `complex_samp` must agree with
+  `word.iq_mode`. Written against the agreement, not against the `iq_mode` refusal, so stage D needs
+  nothing here.
+- **The C++ `RfFileSource` refuses a complex bundle** (`rf_require_real_bundle`, on a minimal
+  `BurstBundle::read_meta_str`). Not scope creep — it is the difference between "not implemented"
+  and a wrong answer: those models hold `std::vector<double>`, and a complex bundle read as real is
+  not corrupt, it is twice as many perfectly plausible samples with every counter agreeing.
 
-**Gate:** a complex bundle round-trips byte-identically, **and every existing real bundle reads back
-unchanged** — a format change that rewrites the real path silently is the failure to avoid.
+**Gate — both halves, and a third:**
 
-**Not in scope:** `Rfdc` accepting `iq_mode`; that is Stage D.
+- complex round-trips exactly, at one and two channels, with the **word layout checked directly**
+  rather than only through the round trip (a round trip passes under any self-consistent layout,
+  including a swapped pair);
+- **the real path is byte-for-byte what it was** — `words.bin` and `bounds.bin` unchanged, only
+  `meta.json` gained a key — and a bundle with no key still reads as real, on the Python *and* the
+  C++ side. That second reading is load-bearing: it is what every pre-existing bundle and every
+  bundle `RfFileSink` writes looks like;
+- **end to end**: source → `RFSampIF` → sink, parameterized over both kinds, asserting the output
+  bundle's `words.bin` / `bounds.bin` / `meta.json` are byte-identical to the input's. Running the
+  identical path for real is what says the complex support did not fork it.
+
+**The direction of the read is the design decision worth keeping.** `read_rf_bundle` takes the
+caller's expectation and **checks** it against the manifest rather than using the manifest to decide
+how to decode. At half the `blksize` a complex bundle has exactly the word count a real read expects,
+so a decoder that trusted the file would hand back a plausible block of interleaved nonsense; a
+checker refuses. The write side is the mirror — the kind is *inferred from the data*, because there
+the data is the truth, with an optional stated value for the one case inference cannot serve (an
+**empty** capture, which has no dtype to read).
+
+#### The absent-key default is a live contract, and its docstrings said otherwise
+
+Corrected the same day, because the wrong reading invites a cleanup that breaks the RF XSI gates.
+
+"A bundle with no `rf_element` is real" reads like backward compatibility. It is not: **no bundle is
+committed anywhere in this repo** (`git ls-files` finds no `words.bin` / `bounds.bin` / `meta.json`),
+so there is no legacy data and never was. The default exists because `BurstBundle::write` in
+`xsi_bundle.h` emits exactly four keys — `format`, `word_bytes`, `n_bursts`, `n_words` — and
+`rf_element` is not among them. **Every bundle the C++ `RfFileSink` writes today lacks the key**, and
+Python reads those back in the gates. Delete the default as legacy support and the RF XSI gates fail
+the same day.
+
+**The clean end state, and it is now cheap:** teach the C++ writer to emit the key, and make a
+missing one an **error** rather than a default. With no bundles on disk there is no migration — it is
+one `fprintf` and one branch. Deliberately *not* folded into Stage B, because it changes what the C++
+side writes and therefore wants its own gate; do it at the head of Stage D, where the C++ RF models
+are being opened anyway.
+
+**Not in scope, and still open:** `Rfdc` accepting `iq_mode` (stage D), and the complex conformance
+twin (stage C).
 
 ### Stage C — the conformance twin for complex
 
@@ -1821,8 +1880,10 @@ Alignment and latency stay separate quantities: alignment is *when a grid ticks*
 
 - ~~Bundle format for RF-domain complex/float vectors (the existing format is UINT64 words).~~
   **Answered for real `float64` at stage 1** (see deviation 4): one burst per block, one `float64`
-  per UINT64 word, through the sanctioned array serializers. Still open for **complex** and
-  fixed-point vectors, which need a manifest field rather than a convention.
+  per UINT64 word, through the sanctioned array serializers. **Answered for complex 2026-08-22**
+  (*Stage B*): the manifest field `rf_element` names the element kind, and a complex sample is two
+  `float64` words, `(re, im)` adjacent. Still open for **fixed-point**, which the field is shaped to
+  take as a new value rather than a new key.
 - ~~Where does the DDC/DUC live — inside `Rfdc` (matching the real IP's digital mixer) or as a
   separate modelled block?~~ **Answered 2026-08-22: inside `Rfdc`** — see *Channels, ports, and where
   I/Q lives*, which also records the mirror case: with the DUC **after** the converter

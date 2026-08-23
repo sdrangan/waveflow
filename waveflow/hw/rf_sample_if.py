@@ -110,6 +110,11 @@ class RFSampIFTx(InterfaceEndpoint):
         return self._iface().blksize
 
     @property
+    def complex_samp(self) -> bool:
+        """Whether one sample is complex — read from the bound interface, never restated."""
+        return bool(self._iface().complex_samp)
+
+    @property
     def samp_rate(self) -> float:
         """Sample rate in Hz — read from the bound interface's clock."""
         return self._iface().samp_rate
@@ -173,6 +178,11 @@ class RFSampIFRx(InterfaceEndpoint):
         return self._iface().blksize
 
     @property
+    def complex_samp(self) -> bool:
+        """Whether one sample is complex — read from the bound interface, never restated."""
+        return bool(self._iface().complex_samp)
+
+    @property
     def samp_rate(self) -> float:
         """Sample rate in Hz — read from the bound interface's clock."""
         return self._iface().samp_rate
@@ -205,6 +215,22 @@ class RFSampIF(Interface):
     #: Samples per channel per block — the fidelity/speed knob.  Smaller resolves finer timing;
     #: larger runs faster and vectorizes better.
     blksize: int = 1024
+    #: Whether one sample is **complex** (baseband I/Q) rather than real.
+    #:
+    #: A property of the **edge**, declared here for the same reason ``n_ch`` and ``blksize`` are:
+    #: it says what a block *is*, every node on the edge has to agree about it, and a node carrying
+    #: its own copy would be a second declaration that could disagree.  The peers read it through
+    #: :attr:`RFSampIFTx.complex_samp`; the bundle on disk states it in its manifest, and
+    #: :func:`~waveflow.simulation.rf_tb.read_rf_bundle` checks the two against each other.
+    #:
+    #: It is **not** the same field as ``RfdcSampWord.iq_mode``, and the distinction is the one
+    #: ``plans/adc_model.md`` draws in *The model carries complex-ness as a type*: this says what a
+    #: block on the RF side holds, that says how a complex sample is laid out inside an AXIS beat.
+    #: A converter is the thing that has to hold them in step, and ``Rfdc`` checks it at bind.
+    #:
+    #: The blocks are ``complex128``; the zero-fill an underrun emits is complex zeros, so a
+    #: consumer never has to branch on whether a block was real.
+    complex_samp: bool = False
     #: Producer-side buffer depth in **blocks**; :meth:`put` yields when it is full.
     depth: int = DEFAULT_RF_DEPTH
     #: Number of block periods the metronome runs, or ``None`` for unbounded (which then needs an
@@ -320,6 +346,15 @@ class RFSampIF(Interface):
 
     # -- the producer side -----------------------------------------------------------------------
 
+    @property
+    def block_dtype(self):
+        """The dtype one block carries — ``complex128`` or ``float64``.
+
+        One place, read by :meth:`put`, by the zero-fill in :meth:`_drain_one`, and by whoever builds
+        a block for this edge. A consumer that branched on ``iscomplexobj`` of what it happened to
+        receive would be reading the *data* where it should be reading the *declaration*."""
+        return np.complex128 if self.complex_samp else np.float64
+
     def put(self, block) -> ProcessGen[None]:
         """Buffer one ``(n_ch, blksize)`` block, yielding while the buffer is full."""
         arr = np.asarray(block)
@@ -328,7 +363,16 @@ class RFSampIF(Interface):
             raise ValueError(
                 f"RFSampIF '{self.name}': a block must be exactly {want} "
                 f"(all channels of the tile, one block period), got {arr.shape}")
-        yield self._buf.put(np.array(arr, copy=True))
+        # REFUSED, not cast. Handing complex samples to a real edge would drop the imaginary part
+        # silently -- numpy's `astype` warns and carries on -- and half a signal that still has the
+        # right shape is the failure this edge exists to make impossible. The reverse (real data on a
+        # complex edge) IS a widening and is allowed: a real signal is a complex one with Q = 0.
+        if np.iscomplexobj(arr) and not self.complex_samp:
+            raise TypeError(
+                f"RFSampIF '{self.name}' declares complex_samp=False but was handed a complex "
+                f"block. Casting would discard Q silently. Either declare the edge complex or send "
+                f"real samples.")
+        yield self._buf.put(np.array(arr, dtype=self.block_dtype, copy=True))
 
     @property
     def n_buffered(self) -> int:
@@ -380,7 +424,7 @@ class RFSampIF(Interface):
         else:
             # Underflow. Zero-fill is deterministic and visible in the RF output; the COUNTER is what
             # anyone is actually allowed to rely on.
-            block = np.zeros((int(self.n_ch), int(self.blksize)), dtype=float)
+            block = np.zeros((int(self.n_ch), int(self.blksize)), dtype=self.block_dtype)
             self.underrun += 1
             self.last_underrun_idx = k
         self.blocks_sent += 1

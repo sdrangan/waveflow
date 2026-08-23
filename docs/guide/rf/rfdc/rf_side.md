@@ -85,6 +85,50 @@ loopback a **file-to-file byte comparison** rather than an array comparison in m
 The two fault knobs are there because a counter that has never counted is not evidence that it works.
 Use them; see [rule 5](./rules.md#5-the-counters-are-the-contract).
 
+## Real or complex blocks {#real-or-complex-blocks}
+
+An `RFSampIF` declares what one sample **is**:
+
+```python
+adc_if = RFSampIF(..., n_ch=2, blksize=256, complex_samp=True)    # baseband I/Q
+```
+
+`complex_samp` lives on the **edge**, beside `n_ch` and `blksize`, for the same reason they do: it
+says what a block is, every node on the edge has to agree about it, and a node carrying its own copy
+would be a second declaration that could disagree. The source and the sink *read* it through their
+endpoint; blocks are `complex128`, and the zero-fill an underrun emits is complex zeros, so a
+consumer never branches on whether a block happened to be real.
+
+A real edge **refuses** a complex block rather than casting it — dropping Q silently while keeping
+the shape is exactly the failure this edge exists to prevent. The reverse is a widening and is
+allowed: a real signal is a complex one with Q = 0.
+
+### The bundle says which
+
+One burst per block, one `float64` **component** per 64-bit word. A real sample is one word; a
+complex sample is two, `(re, im)` adjacent. Those two are indistinguishable as bytes — an
+*n*-sample complex block and a *2n*-sample real block are the same words — so the kind is a
+**manifest field**, `rf_element`, and not a convention:
+
+```json
+{ "format": "waveflow.burst_bundle/1", "word_bytes": 8, "n_bursts": 4,
+  "n_words": 128, "rf_element": "complex128" }
+```
+
+`read_rf_bundle` **checks** that field against what the caller expected rather than using it to
+interpret the bytes. That direction matters: at half the `blksize` a complex bundle has exactly the
+word count a real read expects, so without the check it decodes into a plausible block of
+interleaved nonsense.
+
+A bundle with no `rf_element` is **real** — that is what every bundle written before the field
+existed holds, and what the C++ `RfFileSink` still writes. The C++ `RfFileSource` reads the field and
+**aborts** on a complex bundle: those models carry real samples only, and playing one back as twice
+as many real samples would be a wrong answer rather than an error.
+
+`iq_order` does *not* apply here. That field says which of I and Q takes the lower **bit slot** of a
+packed AXIS word; the bundle stores two whole `float64` components, and `re` is first. Keeping the
+two rules apart is what stops a lab correction to `iq_order` silently re-meaning every file on disk.
+
 ## `t0`, and why alignment is derived
 
 Sample *n* occurs at `t0 + n / samp_rate`, on every channel. Two numbers define the entire grid, so

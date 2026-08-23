@@ -117,7 +117,7 @@ Each of these is refused loudly at construction rather than reported later as a 
 | condition | why it raises |
 |---|---|
 | `word` is not an `RfdcSampWord` | it is a type, not a width — a bare `64` is the mistake this catches |
-| `word.iq_mode` | interleaved I/Q needs the complex bundle format. The **word** can already say it, and `iq_order` is tested there; what is missing is the converter's two halves |
+| `word.iq_mode` | the **word** can already say "interleaved I/Q", and the RF bundle can now carry complex blocks ([the RF side](./rf_side.md#real-or-complex-blocks)); what is still missing is the quantizer's complex conformance twin |
 | `full_scale <= 0` | see the note above |
 | `word.bitwidth > 64` | wider than the stream word |
 
@@ -126,6 +126,11 @@ is the configuration a capture design uses. Neither is `n_rx > 1`: the count is 
 meaning, so there is no mode/port-count agreement left to check. What *is* checked, at bind, is that
 the RF interface's `n_ch` equals it — the same quantity stated twice, and a disagreement is one of
 the two declarations being wrong rather than something to broadcast over.
+
+The bind-time check has a second half, and it is the one that spans the converter: the RF edge's
+`complex_samp` must agree with `word.iq_mode`. What a block on the RF side holds and how a complex
+sample sits inside an AXIS beat are the same fact seen from either side, and the converter is the
+only object that sees both.
 
 One more check happens later, at `pre_sim`, because it needs the bound clocks:
 `samp_rate <= word.samp_per_word · f_axis`. That is the **port's** capacity and not your design's — see
