@@ -194,12 +194,42 @@ are being opened anyway.
 **Not in scope, and still open:** `Rfdc` accepting `iq_mode` (stage D), and the complex conformance
 twin (stage C).
 
-### Stage C — the conformance twin for complex
+### Stage C — the RFDC C++ sample twin, for interleaved I/Q
 
-**Goal:** the quantizer's conformance twin covers complex, so "bit-exact" means the same thing for
-I/Q that it means for real today. The second named blocker.
+**Scoped down 2026-08-22, after reading what already exists.** An earlier draft said "the quantizer's
+conformance twin covers complex" and left it there, which would have sent a session to rebuild
+something already built.
 
-**Gate:** the existing real twin gate, extended to complex, still passing on real.
+**What is NOT the blocker.** `ComplexField` bit-exactness against Vitis is **already gated** —
+`tests/examples/test_complex_conformance.py` (`-m vitis`) runs round-trip plus cmult / cadd / csub /
+conj across fixed, int and float inners and asserts zero LSB disagreement against
+`std::complex<ap_fixed>`. The *quantizer* half of "bit-exact for complex" is done. Do not rebuild it.
+
+**What is.** The **RFDC's own C++ sample twin**, `waveflow/build/xsi/xsi_rfdc_samp.h`, is real-only
+and says so at `RfdcFormat::word_bits()`: *"Real samples only for now; interleaved I/Q doubles this."*
+`RfdcFormat` carries no `iq_mode` / `iq_order`, and `tests/build/test_xsi_rfdc_samp.py` has **zero**
+complex coverage — its `_FORMATS` matrix is `(eff, pack, spw, justify)` and nothing else.
+
+**Goal:** the C++ twin packs and unpacks interleaved I/Q words **bit-identically to Python's
+`pack` / `unpack` at `iq_mode = True`**.
+
+**Scope, in order:**
+
+1. `RfdcFormat` gains `iq_mode` and `iq_order`, and `word_bits()` doubles for I/Q. Note `Rfdc._fmt_literal`
+   emits this struct as an **aggregate initializer**, so field order is the struct's declaration
+   order and the two must not drift — append, do not interleave.
+2. The pack / unpack halves honour the slot order, and `Rfdc._fmt_literal` grows the two fields.
+3. `_FORMATS` gains I/Q rows **at `samp_per_word >= 2`** — the order is invisible at one, which is
+   why `iq_order` is pinned at two on the Python side and nowhere else.
+
+**Gate:** `test_xsi_rfdc_samp.py`'s existing three assertions (quantization, packed words match the
+schema serializer, unpack inverts Python packing) passing on I/Q rows **and still passing on every
+real row**. The C++ and Python answers must agree bit for bit, which is what makes Stage D's loopback
+meaningful rather than self-consistent.
+
+**Watch:** `iq_order`'s declared default is `i_low` and the bring-up log has **evidence against it**.
+Write the twin so the value is read from `RfdcFormat`, never assumed, so a lab correction stays the
+one-field change it is on the Python side.
 
 ### Stage D — `iq_mode = 1` end to end
 
