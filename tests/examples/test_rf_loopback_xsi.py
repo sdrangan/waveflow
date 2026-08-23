@@ -185,13 +185,14 @@ def test_the_converter_is_two_models_each_spanning_the_cut():
     # RfdcFormat is a LITERAL, never a bare identifier: an identifier would be promoted to a
     # Harness(...) parameter typed const std::vector<uint64_t>&, which an RfdcFormat is not.
     #
-    # FIVE fields since 2026-08-21, and the last two are the effective/container split reaching the
-    # C++ twin: 14 effective bits, 4 per beat, full scale 1.0, a 16-bit container, justified left by
-    # 2.  It used to read `RfdcFormat{16, 4, 1.0}` -- one width doing both jobs, which is the defect
-    # RfdcSampWord exists to fix.  Field ORDER is a contract here (the struct is aggregate-
-    # initialized from this string) and is checked against the C++ in tests/build/
-    # test_xsi_rfdc_samp.py::test_the_format_literal_rfdc_emits_reads_back_field_for_field.
-    assert adc.args[0] == "RfdcFormat{14, 4, 1.0, 16, 2}"
+    # SEVEN fields since 2026-08-22: 14 effective bits, 4 per beat, full scale 1.0, a 16-bit
+    # container, justified left by 2, and the two I/Q rules.  It used to read `RfdcFormat{16, 4, 1.0}`
+    # -- one width doing both jobs, which is the defect RfdcSampWord exists to fix.  The I/Q pair is
+    # emitted BY NAME, so a generated harness says what was assumed rather than carrying a 0 or 1 in
+    # a position that can be transposed without failing to compile.  Field ORDER is a contract here
+    # (the struct is aggregate-initialized from this string) and is checked against the C++ in
+    # tests/build/test_xsi_rfdc_samp.py::test_the_format_literal_rfdc_emits_reads_back_field_for_field.
+    assert adc.args[0] == "RfdcFormat{14, 4, 1.0, 16, 2, RFDC_REAL, RFDC_I_LOW}"
     assert not adc.args[0].isidentifier()
 
 

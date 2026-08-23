@@ -42,8 +42,8 @@ struct Harness {
       : sim(rf_pass_through_ports::DESIGN_DLL, wdb),
         xsi_tb_adc_if(2),
         xsi_tb_dac_if(2),
-        s_in(sim.dut(), rf_pass_through_ports::s_in, xsi_tb_adc_if, RfdcFormat{14, 4, 1.0, 16, 2}, 0.256),
-        s_out(sim.dut(), rf_pass_through_ports::s_out, xsi_tb_dac_if, RfdcFormat{14, 4, 1.0, 16, 2}, 0.256, 256),
+        s_in(sim.dut(), rf_pass_through_ports::s_in, xsi_tb_adc_if, RfdcFormat{14, 4, 1.0, 16, 2, RFDC_REAL, RFDC_I_LOW}, 0.256),
+        s_out(sim.dut(), rf_pass_through_ports::s_out, xsi_tb_dac_if, RfdcFormat{14, 4, 1.0, 16, 2, RFDC_REAL, RFDC_I_LOW}, 0.256, 256),
         xsi_tb_adc_if_tx(xsi_tb_adc_if, 256),
         xsi_tb_dac_if_rx(xsi_tb_dac_if)
     {

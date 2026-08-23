@@ -390,22 +390,33 @@ class Rfdc(HwModule):
 
     def _fmt_literal(self) -> str:
         """``RfdcFormat{bits_per_samp, samp_per_word, full_scale, bits_per_samp_pack,
-        justify_shift}`` as a C++ **literal**.
+        justify_shift, iq_mode, iq_order}`` as a C++ **literal**.
 
-        Five fields, and the last two are the effective/container split reaching the twin: a
-        ``RfdcFormat`` that carried one width could only model a part whose resolution equals its
-        slot width.  ``RfdcFormat`` is **aggregate-initialized** from this string, so the order here
-        is the struct's declaration order and the two must not drift — the appended-not-interleaved
-        shape in ``xsi_rfdc_samp.h`` is what keeps that cheap to check.
+        **Seven fields**, and every one after ``full_scale`` is a rule the C++ twin cannot derive:
+        the effective/container split (a ``RfdcFormat`` carrying one width could only model a part
+        whose resolution equals its slot width), and the two I/Q rules.  ``RfdcFormat`` is
+        **aggregate-initialized** from this string, so the order here is the struct's declaration
+        order and the two must not drift — the appended-not-interleaved shape in ``xsi_rfdc_samp.h``
+        is what keeps that cheap to check, and
+        ``test_the_format_literal_rfdc_emits_reads_back_field_for_field`` is what checks it.
+
+        The two I/Q fields are emitted as **named C++ constants** rather than ``0`` / ``1``.  A bare
+        integer in the sixth or seventh position is exactly the kind of value that can be transposed
+        without failing to compile, and ``iq_order`` is the field this project most expects the lab
+        to correct — a generated line reading ``RFDC_Q_LOW`` says what was assumed, where a ``1``
+        does not.  They are inside the braces, so the argument as a whole is still not an identifier
+        and the harness's promotion rule (below) does not see them.
 
         A literal and not an identifier, deliberately: the harness promotes any bare identifier in
         ``extra_args`` to a ``Harness(...)`` parameter typed ``const std::vector<uint64_t>&``, and an
         ``RfdcFormat`` is not that.  Recorded as a trap in ``plans/adc_model.md`` before it could
         bite; this is the shape that avoids it with no generator change.
         """
+        iq_mode = "RFDC_IQ" if self.word.iq_mode else "RFDC_REAL"
+        iq_order = "RFDC_I_LOW" if self.word.iq_order == "i_low" else "RFDC_Q_LOW"
         return (f"RfdcFormat{{{int(self.word.bits_per_samp)}, {int(self.word.samp_per_word)}, "
                 f"{float(self.full_scale)!r}, {int(self.word.bits_per_samp_pack)}, "
-                f"{int(self.word.justify_shift())}}}")
+                f"{int(self.word.justify_shift())}, {iq_mode}, {iq_order}}}")
 
     def bfm_model(self):
         """**Two** models, one per data path, each spanning the cut — and each spanning *every* AXIS

@@ -16,16 +16,17 @@ they implement is settled in *Channels, ports, and where I/Q lives*; a session s
 section and not re-litigate it**.
 
 ```
-claude "Read plans/adc_model.md, section 'Stage C — the conformance twin for complex', and build it."
+claude "Read plans/adc_model.md, section 'Stage D — iq_mode = 1 end to end', and build it."
 ```
 
-**Stages A and B are BUILT (2026-08-22)** — see their sections below for what each cost and what
-building it taught. C is the last thing D waits on.
+**Stages A, B and C are BUILT (2026-08-22)** — see their sections below for what each cost and what
+building it taught. **D is all that is left**, and its section says exactly what the two C++ models
+still owe.
 
 ```
 A (tile, real)     ── DONE ───────────────────► gate: 2-channel rf_loopback, XSI 15751
 B (complex bundle) ── DONE ──┐                  gate: complex round-trip, real path byte-identical
-C (complex twin)   ──────────┴► D (iq_mode=1) ► gate: I/Q loopback
+C (I/Q C++ twin)   ── DONE ──┴► D (iq_mode=1) ► gate: I/Q loopback
 ```
 
 ### Decisions a session must not re-open
@@ -194,49 +195,94 @@ are being opened anyway.
 **Not in scope, and still open:** `Rfdc` accepting `iq_mode` (stage D), and the complex conformance
 twin (stage C).
 
-### Stage C — the RFDC C++ sample twin, for interleaved I/Q
+### Stage C — the RFDC C++ sample twin, for interleaved I/Q — **BUILT 2026-08-22**
 
-**Scoped down 2026-08-22, after reading what already exists.** An earlier draft said "the quantizer's
-conformance twin covers complex" and left it there, which would have sent a session to rebuild
-something already built.
+**Scoped down 2026-08-22, after reading what already exists**, and then built. An earlier draft said
+"the quantizer's conformance twin covers complex" and left it there, which would have sent a session
+to rebuild something already built.
 
-**What is NOT the blocker.** `ComplexField` bit-exactness against Vitis is **already gated** —
-`tests/examples/test_complex_conformance.py` (`-m vitis`) runs round-trip plus cmult / cadd / csub /
-conj across fixed, int and float inners and asserts zero LSB disagreement against
-`std::complex<ap_fixed>`. The *quantizer* half of "bit-exact for complex" is done. Do not rebuild it.
+**What was NOT the blocker, and was not touched.** `ComplexField` bit-exactness against Vitis is
+**already gated** — `tests/examples/test_complex_conformance.py` (`-m vitis`) runs round-trip plus
+cmult / cadd / csub / conj across fixed, int and float inners and asserts zero LSB disagreement
+against `std::complex<ap_fixed>`. The *quantizer* half of "bit-exact for complex" was done.
 
-**What is.** The **RFDC's own C++ sample twin**, `waveflow/build/xsi/xsi_rfdc_samp.h`, is real-only
-and says so at `RfdcFormat::word_bits()`: *"Real samples only for now; interleaved I/Q doubles this."*
-`RfdcFormat` carries no `iq_mode` / `iq_order`, and `tests/build/test_xsi_rfdc_samp.py` has **zero**
-complex coverage — its `_FORMATS` matrix is `(eff, pack, spw, justify)` and nothing else.
+**What was.** `waveflow/build/xsi/xsi_rfdc_samp.h` was real-only and said so at `word_bits()`;
+`RfdcFormat` carried no `iq_mode` / `iq_order`; `tests/build/test_xsi_rfdc_samp.py` had zero complex
+coverage.
 
-**Goal:** the C++ twin packs and unpacks interleaved I/Q words **bit-identically to Python's
-`pack` / `unpack` at `iq_mode = True`**.
+**What was built, against the scope as written:**
 
-**Scope, in order:**
+1. **`RfdcFormat` gained `iq_mode` and `iq_order`**, appended, with named constants — `RFDC_REAL` /
+   `RFDC_IQ`, `RFDC_I_LOW` / `RFDC_Q_LOW`. `word_bits()` now derives from a new `slots_per_word()`
+   (`samp_per_word`, doubled for I/Q) rather than from `samp_per_word` directly.
+2. **The pack / unpack halves run to `slots_per_word()`**, and that is the shape decision worth
+   keeping: *a slot is a slot*. `rfdc_pack_word` / `rfdc_unpack_word` never learn about complex-ness
+   — they lay out slots. All I/Q adds is **one swap**, `rfdc_iq_swap`, which is **its own inverse**
+   (interleaving and de-interleaving a pair are the same operation) and a no-op at `i_low`. So there
+   is one implementation of the layout rule and one of the order rule, rather than two half-copies
+   of each.
+3. **`_FORMATS` gained six I/Q rows**, five at `samp_per_word >= 2` as the scope says, plus one at
+   1 — that last one is there for the *other* standing trap (a packer that treats a word as a single
+   sample), not for the order, and at one complex sample a beat still holds two slots. Every I/Q row
+   lands at ≤ 64 bits, the geometries a design would really use.
+4. **`Rfdc._fmt_literal` grew to seven fields**, emitting the I/Q pair **by name**. A bare `1` in
+   the sixth or seventh position of an aggregate initializer can be transposed without failing to
+   compile, and `iq_order` is the field this project most expects the lab to correct — a generated
+   harness line reading `RFDC_Q_LOW` says what was assumed.
 
-1. `RfdcFormat` gains `iq_mode` and `iq_order`, and `word_bits()` doubles for I/Q. Note `Rfdc._fmt_literal`
-   emits this struct as an **aggregate initializer**, so field order is the struct's declaration
-   order and the two must not drift — append, do not interleave.
-2. The pack / unpack halves honour the slot order, and `Rfdc._fmt_literal` grows the two fields.
-3. `_FORMATS` gains I/Q rows **at `samp_per_word >= 2`** — the order is invisible at one, which is
-   why `iq_order` is pinned at two on the Python side and nowhere else.
+**The `n` argument counts COMPONENTS, not samples.** `rfdc_pack(samples, n, ...)` takes `(re, im)`
+adjacent doubles for I/Q, which is not a new convention: it is what the RF bundle already stores a
+complex block in (stage B) and therefore what `RfBlockMsg::data` carries. `n / slots_per_word()` is
+the word count in both modes, so one expression serves both.
 
-**Gate:** `test_xsi_rfdc_samp.py`'s existing three assertions (quantization, packed words match the
-schema serializer, unpack inverts Python packing) passing on I/Q rows **and still passing on every
-real row**. The C++ and Python answers must agree bit for bit, which is what makes Stage D's loopback
-meaningful rather than self-consistent.
+**Gate — the three existing assertions on I/Q rows and still on every real row, plus two new ones
+that the existing three could not make:**
 
-**Watch:** `iq_order`'s declared default is `i_low` and the bring-up log has **evidence against it**.
-Write the twin so the value is read from `RfdcFormat`, never assumed, so a lab correction stays the
-one-field change it is on the Python side.
+- `test_the_word_width_agrees_with_the_python_type` — `word_bits()` against `RfdcSampWord.bitwidth`.
+  The packing tests size their buffers from `slots_per_word()`, so a `word_bits()` that forgot to
+  double would pass all of them.
+- `test_the_two_slot_orders_really_differ` — **the guard on the guard.** Every other assertion
+  compares C++ to Python for *one* declared order, and each would still agree with itself if the C++
+  ignored `iq_order` entirely.
+
+**Both were confirmed load-bearing by mutation**, not by inspection: disabling `rfdc_iq_swap` fails
+8 assertions (every `q_low` row plus the order guard); making `word_bits()` forget to double fails
+the width test, the literal test and the order guard.
+
+**The expectations come from `pack`**, not from a re-composition of `to_slots` + `write_array`. The
+gate's helper used to spell those steps out, which was fine while the only rule was justification;
+with the interleave inside `pack` it would have been comparing C++ against a *second* Python
+transcription instead of against the one `Rfdc._pack` calls.
+
+**Not in scope, and left for Stage D:** the two C++ *models* in `xsi_rfdc.h` are still real-only, and
+that is now the only thing between here and an I/Q loopback. Specifically: `RfdcAdcMaster::refill_`
+sizes its word buffer with `samp_per_word` where it should use `slots_per_word()`, and
+`RfdcDacSlave::update` pushes `samp_per_word` samples per beat and would need to de-interleave into
+`(re, im)`. Both are unreachable today — `Rfdc` refuses `iq_mode` — so they were left rather than
+half-changed, and this note is the record that they are known.
 
 ### Stage D — `iq_mode = 1` end to end
 
-**Depends on B and C.** **Goal:** lift the `iq_mode` refusal.
+**B and C are DONE**, so this is the only stage left. **Goal:** lift the `iq_mode` refusal.
 
-**Scope:** the complex paths through `_adc_proc` / `_dac_proc` (the conversion itself is done — see
-the decisions list); the interleave rule reaching `RfdcFormat` and the XSI twin.
+**Scope, and it is now short because everything under the converter is built:**
+
+1. **The complex paths through `_adc_proc` / `_dac_proc`.** The conversion itself is done — `pack` /
+   `unpack` handle `iq_mode` at any channel count (see the decisions list) — so what changes is the
+   dtype the two processes carry and the `full_scale` scaling of a complex array.
+2. **The two C++ models in `xsi_rfdc.h`**, which stage C deliberately left real-only rather than
+   half-changing. Exactly two places:
+   - `RfdcAdcMaster::refill_` sizes `nwords_` with `fmt_.samp_per_word`; it wants
+     `fmt_.slots_per_word()`. Behaviour-identical for real, so it can go in first.
+   - `RfdcDacSlave::update` unpacks a beat and pushes `fmt_.samp_per_word` doubles; with I/Q a beat
+     yields `slots_per_word()` components in `(re, im)`-adjacent order, and `blk_` / `per_ch_` are
+     counted in **samples**, so the block accounting has to say which unit it means.
+3. **The `rf_element` cleanup at the head of this stage** — teach `BurstBundle::write` to emit the
+   key and make a missing one an error. See *The absent-key default is a live contract*; it belongs
+   here because the C++ RF models are being opened anyway, and there are no bundles on disk to
+   migrate.
+4. **`Rfdc.__post_init__`'s refusal comes out**, and the bind-time `complex_samp` vs `iq_mode` check
+   stays — it is written against the agreement, not against the refusal.
 
 **Gate:** an I/Q loopback, byte-identical, at `samp_per_word = 2` on the 64-bit bus — the geometry
 that keeps a complex word at 64 bits on the 4x2.
@@ -249,7 +295,10 @@ de-interleaver is owed at lowering. See *What it costs to lower — on this boar
 Lab questions, in the order they are most likely to be wrong. None is code; each is a one-field
 change when answered:
 
-1. **`iq_order`** — evidence points at `q_low`, the declared default is `i_low`.
+1. **`iq_order`** — evidence points at `q_low`, the declared default is `i_low`. **Both sides now
+   read the field** rather than assuming (`RfdcSampWord.iq_order`, `RfdcFormat::iq_order`), and the
+   generated harness carries it **by name**, so flipping it is one field and a regenerate — and any
+   testbench already says which order it assumed.
 2. **`justify`** — declared `left`, unconfirmed.
 3. **`TVALID` on the RF-DAC** — whether Gen 3 honours it.
 4. **PG269 confirmation** of the quad-tile interleaved layout the model now rests on.
