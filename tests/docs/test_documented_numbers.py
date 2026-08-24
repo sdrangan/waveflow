@@ -642,7 +642,7 @@ def test_rule_6_quotes_a_case_where_index_agrees_and_arrival_does_not():
 
 
 def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():
-    """``guide/rf/index.md`` grounds its "300 MHz fabric" premise in three measured Fmax figures.
+    """``guide/rf/rfdc/axis_side.md`` grounds its 250 MHz premise in three measured Fmax figures.
 
     A premise is only worth writing against if it is reachable, so the page says which part reaches
     it and by how much — and those numbers are recomputed here from each solution's own
@@ -661,7 +661,7 @@ def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():
     if not all(r.is_dir() for r in reports.values()):
         pytest.skip("the RF examples are not all built here — run each build --through csynth")
 
-    text = _page("guide/rf/index.md")
+    text = _page("guide/rf/rfdc/axis_side.md")
     for label, rep in reports.items():
         got = synth_target(rep)
         assert got and got["fmax_mhz"], f"{label}: no timing estimate in {rep}"
@@ -670,7 +670,8 @@ def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():
         # buffer, 547 on the loopback DUT".  Match the number near its label rather than the whole
         # sentence, so a rephrasing does not fail while a wrong figure still does.
         assert any(str(q) in text for q in (quoted, quoted - 1, quoted + 1, quoted - 2, quoted + 2)), (
-            f"guide/rf/index.md quotes no Fmax near {quoted} MHz for the {label}, which is what "
+            f"guide/rf/rfdc/axis_side.md quotes no Fmax near {quoted} MHz for the {label}, which "
+            f"is what "
             f"{rep} reports ({got['fmax_mhz']:.2f} MHz)")
         # Against the TARGET the run itself records, not a literal 300.  The examples target 250 MHz
         # (4.0 ns) and the playout buffer fell to 282 when its bodies were pipelined to II=1 -- an
@@ -678,7 +679,7 @@ def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():
         # closes with margin; a hard-coded 300 would have failed a design that meets its own clock.
         target_mhz = 1000.0 / got["target_period_ns"]
         assert got["fmax_mhz"] >= target_mhz, (
-            f"{label} no longer closes the 300 MHz the page claims ({got['fmax_mhz']:.1f} MHz)")
+            f"{label} no longer closes the {target_mhz:.0f} MHz it targets ({got['fmax_mhz']:.1f} MHz)")
 
 
 def test_the_rf_guide_names_the_part_its_examples_target():
@@ -690,8 +691,9 @@ def test_the_rf_guide_names_the_part_its_examples_target():
         pytest.skip("rf_samp_buf_rx is not built here — run its build --through csynth")
     got = synth_target(rep)
     assert got is not None
-    assert got["part"] in _page("guide/rf/index.md"), (
-        f"guide/rf/index.md does not name {got['part']}, which is what the RF examples are built for")
+    assert got["part"] in _page("guide/rf/rfdc/axis_side.md"), (
+        f"guide/rf/rfdc/axis_side.md does not name {got['part']}, which is what the RF examples "
+        f"are built for")
 
 
 # ---------------------------------------------------------------------------

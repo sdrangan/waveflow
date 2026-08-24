@@ -2,7 +2,7 @@
 title: Adding an RF path
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 1
+nav_order: 3
 audience: python
 api: [Rfdc, RfdcSampWord, Rfsoc4x2SampWord, RFSampIF, StreamIF, Clock, axis_bitwidth]
 summary: "What to write when a design needs an RF conversion path. The complete wiring for a receive path in one block — one Rfdc, one RFSampIF on the sample side, one ordinary StreamIF on the fabric side — then the three numbers you have to decide, the word type that carries the rest, the width that is derived for you, and what you can do with the AXI-Stream that comes out: consume it directly, or put a sample buffer behind it."
@@ -43,9 +43,9 @@ adc_axis.bind("slave", my_dut.s_in)
 That is the whole thing. Transmit is the mirror: bind `my_dut.s_out` to `rfdc.tx_streams[0]`, and
 `rfdc.tx_rf` to whatever consumes samples.
 
-**Why the `[0]`.** An `Rfdc` is a *tile*: it presents `n_rx` AXIS master ports and `n_tx` slave
-ports, one per channel, while the RF side stays one interface per direction carrying every channel's
-row of a block. At `n_rx = 1` there is exactly one port and it is `rx_streams[0]` — indexed even
+**Why the `[0]`.** An `Rfdc` stands for `n_rx` + `n_tx` datapaths, so it presents `n_rx` AXIS master
+ports and `n_tx` slave ports, one per channel, while the RF side stays one interface per direction
+carrying every channel's row of a block. At `n_rx = 1` there is exactly one port and it is `rx_streams[0]` — indexed even
 here, so there is one spelling rather than a special case nobody tests. See
 [the endpoints](./converter.md#the-endpoints).
 

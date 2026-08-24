@@ -2,7 +2,7 @@
 title: Instantiating the converter
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 3
+nav_order: 5
 audience: python
 api: [Rfdc, RfdcSampWord, Rfsoc4x2SampWord, RFSampIFRx, RFSampIFTx, StreamIFMaster, StreamIFSlave, FixedField, axis_bitwidth]
 summary: "How to create an Rfdc: the word type that carries its sample geometry, the full parameter list and which kind each parameter is, the four endpoints and which two cross the cut, what the constructor refuses and why, and the bit-exact quantization the model does. The how-to page — the contracts it implies are in the design rules."
@@ -42,15 +42,20 @@ measurement.
 
 | path | RF side | fabric side |
 |---|---|---|
-| **ADC** | `rx_rf` — `RFSampIFRx`, one interface carrying every receive channel's row of a block | `rx_stream_0 .. rx_stream_{n_rx-1}` — `StreamIFMaster`, one AXI-Stream out to the PL **per channel** |
-| **DAC** | `tx_rf` — `RFSampIFTx`, likewise for transmit | `tx_stream_0 .. tx_stream_{n_tx-1}` — `StreamIFSlave`, one in from the PL per channel |
+| **ADC** | `rx_rf` — `RFSampIFRx`, one interface carrying every receive channel's row of a block | `rx_streams[i]` — `StreamIFMaster`, one AXI-Stream out to the PL **per channel** |
+| **DAC** | `tx_rf` — `RFSampIFTx`, likewise for transmit | `tx_streams[i]` — `StreamIFSlave`, one in from the PL per channel |
 
-`rfdc.rx_streams` / `rfdc.tx_streams` are the same objects as a list, in channel order — so wiring is
-`rfdc.rx_streams[ch]`. The indexed attributes exist because a `BfmModel` names endpoints by
-*attribute*, and a subscript is not an attribute name.
+Each endpoint is **also** an attribute — `rx_stream_0 .. rx_stream_{n_rx-1}`, likewise for `tx` —
+and both spellings reach the same objects. Wire with the list (`rfdc.rx_streams[ch]`); the indexed
+attributes exist because a `BfmModel` names endpoints by *attribute*, and a subscript is not an
+attribute name.
 
-**An `Rfdc` is a tile.** One of them stands for `n_rx` receive and `n_tx` transmit datapaths, and the
-two sides deliberately take different shapes, each the one its consumer wants:
+**An `Rfdc` is a group of datapaths, not a converter — and not a *tile* either.** One of them stands
+for `n_rx` receive and `n_tx` transmit datapaths. AMD's *tile* is a group of **same-direction**
+converters (four in a Quad RF-ADC tile, two in a Dual) sharing a clock and power-up, and ADC and DAC
+tiles are distinct — so an `Rfdc` spans two of them. It borrows the tile only for the **epoch**:
+`t0_rx` and `t0_tx` are each a tile's sample counter starting. Its two sides deliberately take
+different shapes, each the one its consumer wants:
 
 - the **RF** side wants the channels *together* — a block is a block, and splitting it per channel
   would give `n_ch` events per block period against the whole point of block-LT;
@@ -126,10 +131,18 @@ meaning, so there is no mode/port-count agreement left to check. What *is* check
 the RF interface's `n_ch` equals it — the same quantity stated twice, and a disagreement is one of
 the two declarations being wrong rather than something to broadcast over.
 
-The bind-time check has a second half, and it is the one that spans the converter: the RF edge's
-`complex_samp` must agree with `word.iq_mode`. What a block on the RF side holds and how a complex
-sample sits inside an AXIS beat are the same fact seen from either side, and the converter is the
-only object that sees both.
+The bind-time check has a second half, and it is the one that spans the converter:
+
+```
+word.iq_mode  ⇒  complex_samp
+```
+
+An **implication, not an equality**. The two flags ask different questions — `iq_mode` is about bus
+packing, `complex_samp` about how the RF environment represents a signal — and what ties them is that
+the converter performs no I/Q mapping and so **can never create a Q**. A complex word needs a complex
+edge; a real word is fine on either, which is the configuration you have whenever the DUC/DDC lives
+in the RF domain rather than in the converter. See [real and I/Q](./iqmode.md#the-two-flags)
+for the four rows and the guard on the mixed one.
 
 One more check happens later, at `pre_sim`, because it needs the bound clocks:
 `samp_rate <= word.samp_per_word · f_axis`. That is the **port's** capacity and not your design's — see

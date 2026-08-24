@@ -2,7 +2,7 @@
 title: Block sampling
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 6
+nav_order: 8
 audience: python
 api: [RFSampIF, RFSampIFTx, RFSampIFRx, RfBlock, set_t0, samp_time, assert_clean, counters]
 summary: "The model underneath the wiring pages: one SimPy event carries one (n_ch, blksize) block of samples, the block duration is the timing, and NumPy is the function. Covers blksize as the fidelity/speed knob; why the metronome lives in the interface rather than in a node; why it schedules on an absolute grid and a relative timeout loop demonstrably slips; t0 and the sample grid; and the underrun/overrun asymmetry the counters exist to record."

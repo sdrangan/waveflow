@@ -2,7 +2,7 @@
 title: The design rules
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 7
+nav_order: 9
 audience: python
 api: [RFSampIF, StreamIF, offer, dropped, assert_clean, fire_cycles, blk_latency, RxCmd]
 summary: "Seven rules for a design that talks to a converter. Rules 1-4 make a design correct: never stall the ingress, two tasks are not automatically overlap, the buffer has to exist somewhere, and the port's capacity is not your design's. Rules 5-7 make it checkable: the counters are the contract, timestamps come from the sample index, and only an internal channel's depth is real. Each is stated with the one measurement that paid for it."

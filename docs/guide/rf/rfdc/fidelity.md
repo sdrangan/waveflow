@@ -2,7 +2,7 @@
 title: The fidelity boundary
 parent: Rfdc
 grand_parent: RF converters
-nav_order: 8
+nav_order: 10
 audience: python
 api: [RFSampIF, StreamIF, offer, dropped, blk_latency, loop_blk_latency]
 summary: "What block-level modelling can and cannot tell you. The contract has three conditions — behaviour depends only on sample timestamps, no dependency shorter than two blocks, and the DUT never stalls its input — and only the third is mechanically checkable. It now is, in pysim, as `dropped == 0`. The page also says plainly where that check stops seeing: a consumer that stalls inside a block period is below the model's resolution, demonstrated by a design where RTL loses 72 words and pysim reports none."

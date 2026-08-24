@@ -2,6 +2,8 @@
 % ../rfdc/index.md under "## Interfaces".
 %
 % The claim: ONE module carries BOTH directions, and the two sides are different kinds of port.
+% Drawn at ONE channel, so the fabric ports are rx_streams[0] / tx_streams[0]; how they multiply
+% is rf_channels.tex's claim, not this one.
 % Your logic is on the left because that is the side you write; the RF environment is on the right
 % because it is the side you do not.  RX flows right-to-left and TX left-to-right, which is why the
 % converter cannot be two blocks: the two grids share a time origin that belongs to the module.
@@ -55,11 +57,11 @@
 % --- RX: environment -> ADC -> your logic (right to left) ----------------------------------------
 \draw[ln] (env.west |- adc) -- node[lbl, above] {\texttt{rx\_rf}}
                                node[sub, below] {blocks} (adc.east);
-\draw[ln] (adc.west) -- node[lbl, above] {\texttt{rx\_stream}}
+\draw[ln] (adc.west) -- node[lbl, above] {\texttt{rx\_streams[0]}}
                         node[sub, below] {words} (dut.east |- adc);
 
 % --- TX: your logic -> DAC -> environment (left to right) ----------------------------------------
-\draw[ln] (dut.east |- dac) -- node[lbl, above] {\texttt{tx\_stream}}
+\draw[ln] (dut.east |- dac) -- node[lbl, above] {\texttt{tx\_streams[0]}}
                                node[sub, below] {words} (dac.west);
 \draw[ln] (dac.east) -- node[lbl, above] {\texttt{tx\_rf}}
                         node[sub, below] {blocks} (env.west |- dac);
