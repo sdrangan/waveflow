@@ -1247,7 +1247,12 @@ continuously filling the buffer; Data Capture takes an `RxCmd` to capture from a
 - **Make the in-band variant primary.** Data streaming in-band *after* the `TxCmd` is precisely the
   `mem_copy` / interleaver shape (framed command, then forwarded payload) and is XSI-proven. The
   two-port-BRAM version with the PS writing port A is a **block-diagram** structure (Block Memory
-  Generator + AXI BRAM Controller), not an HLS interface: Waveflow has no BRAM-port endpoint type and
+  Generator + AXI BRAM Controller), not an HLS interface. **Half of this is stale as of 2026-08-24:**
+  a BRAM-port endpoint type now exists (`waveflow/hw/bram.py`, XSI-gated by `examples/bram_toy`), so
+  two HLS tasks CAN share a true-dual-port memory, in BOTH backends (numpy storage in pysim, real
+  Verilog beside the kernel in XSI). What is missing is only an **accessor kind that is the host** —
+  and in `guide/memory`'s taxonomy that is category 4 (AXI-MM, outside the top, modelled), not a
+  BRAM question at all. Only the PS-writes-port-A assembly remains Flow 3. See `plans/rf_shot_buf.md`. Originally: Waveflow has no BRAM-port endpoint type and
   Flow 3 is not built. Keep it as the Flow-3 note.
 - **`data_addr` is not blocked.** `m_axi` coexists with an `ap_ctrl_none` `hls::task` top — see the
   generated `mem_copy.cpp`, carrying `m_axi ... offset=slave` alongside `ap_ctrl_none`. What to verify
