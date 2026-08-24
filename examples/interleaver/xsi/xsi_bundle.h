@@ -34,13 +34,14 @@ struct BurstBundle {
     /// A deliberately minimal scan, not a JSON parser: it finds `"key"`, the next `:`, and the
     /// quoted token after it.  The manifest is machine-written by one function
     /// (waveflow.utils.burst_io.write_burst_bundle) with no nesting and no escapes, so a parser
-    /// would be code to maintain against a format that cannot grow those shapes.  Anything it
-    /// cannot read comes back as *dflt*, which is what an absent key means anyway.
+    /// would be code to maintain against a format that cannot grow those shapes.
     ///
     /// It exists so a reader can REFUSE a bundle it would otherwise misread.  The RF bundle's
     /// element kind is the case: real and complex blocks are the same bytes at different lengths,
     /// so without the manifest a complex bundle read as real is not an error — it is a plausible
-    /// wrong answer, which is worse.
+    /// wrong answer, which is worse.  Callers that need the key pass an empty *dflt* and treat the
+    /// empty result as "this bundle does not say", which is now itself an error rather than a
+    /// default — see rf_require_bundle_kind().
     static std::string read_meta_str(const std::string& dir, const std::string& key,
                                      const std::string& dflt = std::string()) {
         FILE* f = std::fopen((dir + "/meta.json").c_str(), "rb");
@@ -65,9 +66,20 @@ struct BurstBundle {
 
     /// Write words + bounds + a minimal meta.json into *dir* (which must already exist).  Matches
     /// what waveflow.utils.burst_io.write_burst_bundle produces, so read_burst_bundle validates it.
+    ///
+    /// *extra_key* / *extra_val* add ONE string entry to the manifest beside the four this struct
+    /// owns.  **Pass-through, not interpretation** — the mirror of Python's
+    /// `write_burst_bundle(..., extra=...)`, and for the same reason: this file knows nothing about
+    /// RF, streams or memory arenas, and a writer that special-cased one of them here would be the
+    /// place every future format learns about every other.
+    ///
+    /// It is a single pair rather than a map because there is exactly one such key today
+    /// (`rf_element`), and a map would be machinery sized for a caller that does not exist.  A
+    /// second key is a signature change, which is the right amount of friction for adding one.
     static void write(const std::string& dir,
                       const std::vector<uint64_t>& words,
-                      const std::vector<uint64_t>& bounds) {
+                      const std::vector<uint64_t>& bounds,
+                      const char* extra_key = 0, const char* extra_val = 0) {
         mkdirs(dir);
         write_u64(dir + "/words.bin", words);
         write_u64(dir + "/bounds.bin", bounds);
@@ -76,8 +88,10 @@ struct BurstBundle {
         if (!f) die(meta);
         std::fprintf(f,
             "{\n  \"format\": \"waveflow.burst_bundle/1\",\n  \"word_bytes\": 8,\n"
-            "  \"n_bursts\": %zu,\n  \"n_words\": %zu\n}\n",
+            "  \"n_bursts\": %zu,\n  \"n_words\": %zu",
             bounds.size(), words.size());
+        if (extra_key && extra_val) std::fprintf(f, ",\n  \"%s\": \"%s\"", extra_key, extra_val);
+        std::fprintf(f, "\n}\n");
         std::fclose(f);
     }
 

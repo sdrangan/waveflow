@@ -45,6 +45,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 
 from examples.rf_loopback.rf_loopback import RfLoopbackSim, RfLoopbackTB  # noqa: E402
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord  # noqa: E402
 
 #: The DUT's top — shared with the DUT-alone gate; this testbench brings its own harness only.
 TOP = "rf_pass_through"
@@ -198,6 +199,87 @@ def generate_tb_2ch(out_dir: Path = HERE, n_cycles: int = XSI_N_CYCLES) -> None:
           f"({XSI_NBLK} blocks x {XSI_NCH} x {XSI_BLKSIZE} samples)")
 
 
+# ---------------------------------------------------------------------------
+# INTERLEAVED I/Q at RTL — Stage D's gate
+# ---------------------------------------------------------------------------
+#
+# ``plans/adc_model.md``, *Stage D*.  The same five-node graph, with the converter in ``iq_mode``:
+# complex blocks on the RF side, `(re, im)` adjacent in the bundle, and 2 complex samples in each
+# 64-bit beat.
+#
+# **The DUT is `rf_pass_through`, unchanged and not re-synthesized.**  That is the result, not a
+# convenience: complex-ness is a property of the WORD, and a word is a bag of bits to the fabric.
+# The RTL between the two converter ports relays 64-bit beats and has no opinion about what they
+# carry — which is exactly the claim *Channels, ports, and where I/Q lives* makes when it says an
+# I/Q design stays on the same bus by halving `samp_per_word`.  If this needed a different top,
+# something would have leaked the sample geometry into the fabric.
+
+#: Namespace / file stem for the I/Q testbench.  It shares ``rf_pass_through``'s RTL and ports
+#: header with the one-channel real testbench; only the harness, the main and the vectors differ.
+TB_NS_IQ = "rf_loopback_iq_tb"
+
+#: The 4x2's I/Q geometry: 2 complex samples a beat, 14-in-16, a 64-bit word.
+XSI_IQ_WORD = Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True)
+
+#: **Half** the real testbench's rate, and the reason is the DUT rather than I/Q: this
+#: pass-through reads a whole block before it writes one, so it occupies the boundary for twice its
+#: utilisation, and at 256 MSa/s with ``samp_per_word = 2`` that exceeds a block period.  Same
+#: scaling the width sweep in ``tests/examples/test_rf_loopback.py`` already applies, and it keeps
+#: the geometry under test packing rather than a timing accident.
+XSI_IQ_SAMP_RATE = 128e6
+
+#: Its own vectors: three testbenches share one ``xsi/`` workspace and must not overwrite each
+#: other's scenario.
+IN_BUNDLE_IQ = "vectors/rf_in_iq"
+OUT_BUNDLE_IQ = "vectors/rf_out_iq"
+
+
+def _iq_kwargs(n_blk: int, blksize: int) -> dict:
+    """The knobs both the graph and the procedure need, in one place so they cannot drift."""
+    return dict(n_blk=n_blk, blksize=blksize, word=XSI_IQ_WORD, samp_rate=XSI_IQ_SAMP_RATE,
+                in_bundle=IN_BUNDLE_IQ, out_bundle=OUT_BUNDLE_IQ)
+
+
+def make_xsi_tb_iq(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopbackTB:
+    """The I/Q graph the XSI testbench is generated from."""
+    return RfLoopbackTB(name="xsi_tb_iq", sim=Simulation(), **_iq_kwargs(n_blk, blksize))
+
+
+def make_sim_iq(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopbackSim:
+    """The pysim procedure over the I/Q scenario — the single source of its vectors."""
+    kw = _iq_kwargs(n_blk, blksize)
+    kw.pop("n_blk")
+    return RfLoopbackSim(n_src_blk=n_blk, name="xsi_tb_iq", **kw)
+
+
+def generate_tb_iq(out_dir: Path = HERE, n_cycles: int = XSI_N_CYCLES) -> None:
+    """Generate the I/Q harness + main, and write its complex scenario bundle.
+
+    No DUT generation: this testbench drives ``rf_pass_through``, the RTL the real one-channel
+    loopback already built.
+    """
+    from waveflow.build.streamutils import XsiHarnessStep
+
+    lib = BuildDag()
+    lib.add(XsiHarnessStep(output_dir="xsi"))
+    results = lib.run(BuildConfig(root_dir=out_dir, params={}), force=True)
+    failed = [n for n, r in results.items() if not r.success]
+    if failed:
+        raise RuntimeError(f"XSI library copy failed: {failed}")
+
+    spec = tb_top_spec(make_xsi_tb_iq())
+    xsi = out_dir / "xsi"
+    xsi.mkdir(parents=True, exist_ok=True)
+    (xsi / f"{TB_NS_IQ}_harness.h").write_text(render_tb_harness(spec, ns=TB_NS_IQ),
+                                               encoding="utf-8")
+    (xsi / f"{TB_NS_IQ}_bfm_tb.cpp").write_text(
+        render_tb_main(spec, n_cycles, ns=TB_NS_IQ, harness_header=f"{TB_NS_IQ}_harness.h",
+                       wdb=f"{TB_NS_IQ}.wdb"), encoding="utf-8")
+    make_sim_iq().write_scenario(xsi)
+    print(f"generated I/Q TB xsi/{TB_NS_IQ}_harness.h + xsi/{TB_NS_IQ}_bfm_tb.cpp "
+          f"({XSI_NBLK} blocks x {XSI_BLKSIZE} complex samples)")
+
+
 # The golden lives in tests/examples/test_rf_loopback_xsi.py, not here.
 #
 # It was drafted here first, asserting the pysim shape: a leading `blk_latency` zero block, then the
@@ -333,6 +415,46 @@ class CSynth2ChStep(BuildStep):
         return {"report_dir_2ch": config.root_dir / f"{TOP_2CH}_proj" / "solution1"}
 
 
+@dataclass(kw_only=True)
+class PySimIQStep(BuildStep):
+    description = "Run the INTERLEAVED-I/Q RfLoopbackTB pysim golden — Stage D's byte-identical gate."
+    consumes = ["rf_loopback_source"]
+    produces: ClassVar[dict] = {"loopback_pysim_iq": Path("results/rf_loopback_iq_pysim.json")}
+    params: ClassVar[dict] = {}
+
+    def run(self, config: BuildConfig, **_) -> dict:
+        import json
+
+        sim = make_sim_iq()
+        sim.run()
+        sim.check()
+        out = config.root_dir / "results" / "rf_loopback_iq_pysim.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "blocks": XSI_NBLK, "blksize": XSI_BLKSIZE, "word": XSI_IQ_WORD.describe(),
+            "samp_rate": XSI_IQ_SAMP_RATE,
+            "adc": sim.tb.adc_if.counters(), "dac": sim.tb.dac_if.counters(),
+        }, indent=2), encoding="utf-8")
+        return {"loopback_pysim_iq": out}
+
+
+@dataclass(kw_only=True)
+class CodegenTbIQStep(BuildStep):
+    """Lower the I/Q testbench.  **No DUT step**: it drives ``rf_pass_through``, the RTL the real
+    one-channel loopback already built, because a word is a bag of bits to the fabric."""
+
+    description = "Lower the interleaved-I/Q RfLoopbackTB to its XSI harness + main + vectors."
+    consumes = ["rf_loopback_source"]
+    produces: ClassVar[dict] = {"loopback_iq_harness": Path(f"xsi/{TB_NS_IQ}_harness.h"),
+                                "loopback_iq_main": Path(f"xsi/{TB_NS_IQ}_bfm_tb.cpp")}
+    params: ClassVar[dict] = {}
+
+    def run(self, config: BuildConfig, **_) -> dict:
+        generate_tb_iq(config.root_dir)
+        return {"loopback_iq_harness": config.root_dir / "xsi" / f"{TB_NS_IQ}_harness.h",
+                "loopback_iq_main": config.root_dir / "xsi" / f"{TB_NS_IQ}_bfm_tb.cpp"}
+
+
 def build_rf_loopback_dag() -> BuildDag:
     dag = BuildDag()
     dag.add(SourceStep(artifact="rf_loopback_source", path=HERE / "rf_loopback.py"))
@@ -343,6 +465,9 @@ def build_rf_loopback_dag() -> BuildDag:
     dag.add(CodegenDut2ChStep(name="codegen_dut_2ch"))
     dag.add(CodegenTb2ChStep(name="codegen_tb_2ch"))
     dag.add(CSynth2ChStep(name="csynth_2ch"))
+    # Interleaved I/Q: the same graph and the same RTL, with a complex word.
+    dag.add(PySimIQStep(name="pysim_iq"))
+    dag.add(CodegenTbIQStep(name="codegen_tb_iq"))
     return dag
 
 

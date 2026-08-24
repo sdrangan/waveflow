@@ -259,23 +259,21 @@ parameter counts what the design thinks in.
 `iq_mode` lives on the **word**, not on the converter, because it is a statement about packing — it
 is what makes `bitwidth` follow from the type rather than from a flag elsewhere.
 
-**`iq_mode = True` is not implemented on the converter yet**, and the refusal names what is
-missing. Everything *under* it now is:
+**`iq_mode = True` works end to end**, in pysim and at RTL. Hand the converter a complex word and
+its RF blocks become `complex128`, its beats carry interleaved I/Q, and the port count does not move:
 
-- the RF-side bundle carries complex blocks and says so in its manifest, and `RFSampIF` declares
-  whether its blocks are complex — see [the RF side](./rf_side.md#real-or-complex-blocks);
-- `pack` / `unpack` have always handled `iq_mode`, at any channel count;
-- the **C++ sample twin** packs and unpacks interleaved I/Q bit-identically to `pack` / `unpack`, in
-  both slot orders and at both justifications — so "bit-exact" means the same thing for I/Q that it
-  means for real (`tests/build/test_xsi_rfdc_samp.py`).
+```python
+word = Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True)   # a 64-bit word, as before
+```
 
-What is left is the converter itself: the complex paths through its ADC and DAC processes, and its
-two C++ models. Until that lands, model I and Q as two real channels (`n_ch = 2`) — which is what
-the hardware carries anyway.
+The one thing the converter insists on is that the RF edge agrees: an `RFSampIF` carrying complex
+blocks and a word whose `iq_mode` is `False` are the same fact seen from either side, so a
+disagreement is refused at bind rather than cast away. In practice you state the word and let the
+edge follow — see [the RF side](./rf_side.md#real-or-complex-blocks).
 
-A converter checks the two declarations against each other at bind: an `RFSampIF` carrying complex
-blocks and a word whose `iq_mode` is `False` are the same fact seen from either side of the
-converter, so a disagreement is refused rather than cast away.
+Modelling I and Q as **two real channels** (`n_ch = 2`) remains perfectly valid, and it is what
+`iq_mode = 0` means: the mapping lives outside the converter then, which is where it belongs when
+the DUC/DDC does.
 
 ### `iq_order` {#iq-order}
 

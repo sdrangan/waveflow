@@ -31,13 +31,19 @@ bytes — an ``n``-sample complex block and a ``2n``-sample real block are the s
 kind is a **manifest field**, :data:`RF_ELEMENT_KEY`, and not a convention.  Before it existed the
 format could not *express* an I/Q block rather than merely not having one.
 
-A bundle with no such field is **real**, and that default is a **live contract, not backward
-compatibility** — the distinction matters because the second reading invites a cleanup that breaks
-the RF XSI gates.  Nothing in this repo is a legacy bundle: no bundle is committed, every one is
-written at run time.  The default exists because ``BurstBundle::write`` in ``xsi_bundle.h`` emits
-exactly four keys and ``rf_element`` is not among them, so **every bundle the C++ ``RfFileSink``
-writes today lacks it** and Python reads those back.  Fixed-point RF vectors remain open, and the
-field is named after the numpy dtype so that they are a new value rather than a new key.
+**Both writers declare it and both readers require it** — :func:`write_rf_bundle` and the C++
+``RfFileSink``, :func:`read_rf_bundle` and the C++ ``rf_require_bundle_kind``.  A bundle that does
+not say is an **error**, not a default.
+
+It was a default for one day, and the reason is worth keeping because the wrong reading of it
+invites a cleanup that breaks the RF XSI gates.  It was never backward compatibility: nothing in
+this repo is a legacy bundle — none is committed, every one is written at run time.  It existed
+because ``BurstBundle::write`` emitted exactly four keys and ``rf_element`` was not among them, so
+every bundle the C++ ``RfFileSink`` produced lacked it and Python read those back.  Teaching that
+writer the key is what made the default removable, and the two had to move together.
+
+Fixed-point RF vectors remain open, and the field is named after the numpy dtype so that they are a
+new value rather than a new key.
 """
 from __future__ import annotations
 
@@ -170,21 +176,25 @@ def read_rf_bundle(bundle_dir: str | Path, n_ch: int, blksize: int,
     (caught) *or*, at half the ``blksize``, a plausible block of interleaved nonsense (not caught).
     The file says what it is; the caller says what it expected; a disagreement is an error.
 
-    **A bundle with no** :data:`RF_ELEMENT_KEY` **is real** — a contract with a *current* writer,
-    not a concession to old files.  The C++ ``RfFileSink`` emits no such key (``BurstBundle::write``
-    writes four, and this is not one), so every bundle it produces relies on this default and the RF
-    XSI gates read them back through here.  Deleting it as legacy support breaks those gates the
-    same day.
-
-    The clean end state is to teach the C++ writer to emit the key and make a missing one an
-    **error**; with no committed bundles anywhere there is no migration to do.  That is a deliberate
-    follow-up rather than a fix folded in here — see ``plans/adc_model.md``.
+    **A bundle that does not say is an error too**, and that is a change from when the field
+    arrived.  It was read as *real* then — a contract with a *current* writer rather than a
+    concession to old files: the C++ ``RfFileSink`` emitted four manifest keys and this was not one,
+    so every bundle it produced relied on the default and the RF XSI gates read them back through
+    here.  ``BurstBundle::write`` declares the key now, so the default has nothing left to serve, and
+    keeping it would mean a bundle from some *third* writer got misread in silence rather than
+    refused.  There was never any legacy data: no bundle is committed anywhere in this repo.
     """
     n_ch, blksize = int(n_ch), int(blksize)
     complex_samp = bool(complex_samp)
 
-    declared = read_burst_meta(bundle_dir).get(RF_ELEMENT_KEY, RF_ELEMENT_REAL)
+    declared = read_burst_meta(bundle_dir).get(RF_ELEMENT_KEY)
     want = rf_element(complex_samp)
+    if declared is None:
+        raise ValueError(
+            f"RF bundle {bundle_dir} has no {RF_ELEMENT_KEY!r} in its manifest, so it does not say "
+            f"whether its samples are real or complex — and the two are the same bytes at different "
+            f"lengths, so there is nothing safe to assume. Write it with write_rf_bundle() or the "
+            f"C++ RfFileSink, both of which declare the kind.")
     if declared != want:
         raise ValueError(
             f"RF bundle {bundle_dir} declares {RF_ELEMENT_KEY}={declared!r} but the reader expects "
@@ -265,13 +275,20 @@ class RfDataSource(HwModule):
         assignment and the model loads in ``pre_sim`` — the same on-disk bundle this node reads in
         pysim, so both play the identical bytes.  Bundle I/O on the **node**, never the edge.
 
-        ``blk_samples`` is read off the bound interface rather than restated, exactly as
-        :meth:`pre_sim` reads it.
+        Both extra arguments are read off the bound interface rather than restated, exactly as
+        :meth:`pre_sim` reads them.
+
+        The first is one block in **components**, not samples: ``RfBlockMsg::data`` is a
+        ``vector<double>`` and a complex sample is two of them, so a complex edge's block is twice as
+        many doubles.  The second is the element kind, which the C++ model **checks** against the
+        bundle rather than reading from it — the same direction :func:`read_rf_bundle` takes.
         """
         from waveflow.build.composite_gen import BfmModel
 
+        comps = (int(self.rf_ep.n_ch) * int(self.rf_ep.blksize)
+                 * (2 if self.rf_ep.complex_samp else 1))
         return BfmModel("RfFileSource", ports=("rf_ep",),
-                        extra_args=(str(int(self.rf_ep.n_ch) * int(self.rf_ep.blksize)),))
+                        extra_args=(str(comps), "1" if self.rf_ep.complex_samp else "0"))
 
 
 @dataclass
@@ -329,10 +346,15 @@ class RfDataSink(HwModule):
         ``post_sim`` — the same format :class:`RfDataSource` reads, so a loopback is a file-to-file
         byte comparison in either backend.
 
+        It takes the element kind, and for the reason :meth:`post_sim` states it too: a sink cannot
+        infer what it captured — a block is doubles either way, and an empty capture has nothing to
+        infer from at all.
+
         No ``stall_after`` counterpart: that is pysim fault injection, and the C++ sink always
         drains. A stalling sink would make the channel's drop counter measure the *model* rather
         than the design.
         """
         from waveflow.build.composite_gen import BfmModel
 
-        return BfmModel("RfFileSink", ports=("rf_ep",))
+        return BfmModel("RfFileSink", ports=("rf_ep",),
+                        extra_args=("1" if self.rf_ep.complex_samp else "0",))

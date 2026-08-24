@@ -45,7 +45,7 @@ struct Harness {
         s_cmd(sim.dut(), rf_samp_buf_rx_ports::s_cmd, {}),
         s_out(sim.dut(), rf_samp_buf_rx_ports::s_out),
         s_resp(sim.dut(), rf_samp_buf_rx_ports::s_resp),
-        xsi_tb_adc_if_tx(xsi_tb_adc_if, 256)
+        xsi_tb_adc_if_tx(xsi_tb_adc_if, 256, 0)
     {
         // Every TB-driven input the models above do not themselves drive.  Absent
         // names are skipped; an undriven input is X, and X on a handshake hangs.

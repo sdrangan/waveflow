@@ -515,3 +515,145 @@ def test_the_two_channel_tile_runs_at_rtl_as_two_independent_lanes():
     # different draws, so a swap would fail here even though the totals would not move.
     assert not np.array_equal(sent[0], sent[1]), "the scenario must be asymmetric to say anything"
     assert not np.array_equal(first[0], sent[1][:XSI_BLKSIZE])
+
+
+# ---------------------------------------------------------------------------
+# INTERLEAVED I/Q at RTL — Stage D's gate (plans/adc_model.md, "Stage D")
+# ---------------------------------------------------------------------------
+#
+# The same five-node graph with the converter in ``iq_mode``: complex blocks on the RF side, 2
+# complex samples in each 64-bit beat.
+#
+# **The DUT is ``rf_pass_through``, unchanged and not re-synthesized**, and that is the result rather
+# than a shortcut. Complex-ness is a property of the WORD; a word is a bag of bits to the fabric. If
+# an I/Q loopback had needed a different top, something would have leaked the sample geometry into
+# the RTL between the converter ports.
+
+#: Words one I/Q run produces: 8 blocks x (256 complex samples / 2 per beat).  Note it is **half**
+#: the real run's 512-per-block arithmetic per sample and the same per beat — the geometry that keeps
+#: a complex word at 64 bits.
+WANT_IQ_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 2)
+
+#: Data blocks that survive, of ``XSI_NBLK`` — 6, the same as the real run, and for the same
+#: pattern-A reason: this pass-through reads a whole block before it writes one.  The rate is halved
+#: for the I/Q run (see ``XSI_IQ_SAMP_RATE``) so the utilisation matches, which is why the number
+#: matches too.
+WANT_IQ_DATA_BLOCKS_OUT = 6
+
+#: Complex samples at the head of the first data block that survive before the first dropped word
+#: bites — **3 beats x 2 complex samples**.  Measured, and pattern A's cost rather than a target; the
+#: real run's equivalent is 12 real samples, which is the same three beats.
+WANT_IQ_LEAD_SAMPLES = 6
+
+#: Blocks the DAC's grid emits, how many carry no data, and how many reach the sink.  Half the real
+#: run's 64/58/63 because the sample rate is halved and the grid is derived from it — the DAC plays
+#: on its own clock, so a fixed cycle budget buys half as many block periods.
+WANT_IQ_DAC_BLOCKS_OUT = 32
+WANT_IQ_DAC_ZERO_FILLED = 26
+WANT_IQ_SINK_BLOCKS = 31
+
+#: Cycle the last block reached the sink — recorded the way 1072 was.
+WANT_IQ_SINK_LAST_BLOCK_CYCLE = 15501
+
+
+@pytest.mark.xsi
+def test_interleaved_iq_runs_at_rtl_through_the_unchanged_real_dut():
+    """**Stage D's RTL gate.** Complex blocks through real Verilog, both components intact.
+
+    Four claims, and the first is the one that needed RTL to say at all:
+
+    1. **The I/Q rules reached the C++ models.** The converter models report the format they were
+       built with, so an ``iq_mode`` that quietly defaulted is visible here rather than only in the
+       data. ``word_bits() == 64`` is the geometry claim: a complex word on the same bus.
+    2. **The DUT is the real one-channel ``rf_pass_through``**, not re-synthesized and not a variant.
+    3. **Both components survive**, checked separately against a scenario that drew them
+       independently — a converter that dropped Q would return blocks of the right shape and length.
+    4. **The accounting is the real run's**, at matched utilisation.
+    """
+    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
+    _require(PROJ.is_dir(), f"no csynth RTL at {PROJ} — run rf_dut_build.py --through csynth")
+
+    from waveflow.build.composite_gen import render_rtl_f
+    from examples.rf_loopback.rf_loopback_xsi import (
+        OUT_BUNDLE_IQ,
+        XSI_IQ_WORD,
+        generate_tb_iq,
+        make_sim_iq,
+    )
+
+    generate_tb_iq(ROOT)
+    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
+    shutil.rmtree(XSI / OUT_BUNDLE_IQ, ignore_errors=True)   # never pass on last run's output
+
+    r = subprocess.run(xsi_runner_cmd(TOP, "rf_loopback_iq_counters"), cwd=str(XSI),
+                       capture_output=True, text=True, timeout=1800)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert "XSI_EXITCODE=0" in out, f"the I/Q loopback did not complete cleanly:\n{out[-3000:]}"
+    counters = {k: int(v) for k, v in re.findall(r"^(\w+)=(\d+)$", out, re.M)
+                if k not in ("XSI_EXITCODE",)}
+
+    # --- 1) The I/Q rules reached the models --------------------------------------------------
+    assert counters["FMT_IQ_MODE"] == 1, (
+        f"the converter models were built real: {counters}. An iq_mode that defaults is invisible "
+        f"in the data until a Q goes missing, which is why the format is printed and asserted.")
+    assert counters["FMT_IQ_ORDER"] == 0, "i_low, the declared default (see the bring-up log)"
+    assert counters["FMT_SLOTS_PER_WORD"] == 4, "2 complex samples, two slots each"
+    assert counters["FMT_WORD_BITS"] == int(XSI_IQ_WORD.bitwidth) == 64, (
+        "the geometry claim: an I/Q design fits the same 64-bit bus by halving samp_per_word")
+
+    # --- 2) ...through the DUT the REAL loopback already synthesized --------------------------
+    assert (PROJ / f"{TOP}.v").is_file(), (
+        f"this gate drives {TOP}, the one-channel real loopback's RTL. That it needs no top of its "
+        f"own is the point: the fabric between two converter ports relays 64-bit beats and has no "
+        f"opinion about what they carry.")
+
+    # --- 3) Both components survive, and neither is the other ---------------------------------
+    from waveflow.simulation.rf_tb import read_rf_bundle
+
+    from waveflow.simulation.rf_tb import RF_ELEMENT_COMPLEX, RF_ELEMENT_KEY
+    from waveflow.utils.burst_io import read_burst_meta
+
+    # The manifest field, cross-language and end to end: the C++ sink wrote this bundle and Python
+    # reads it back with a reader that REQUIRES the key. Before the writer emitted it a missing key
+    # was read as real -- which for a complex capture is not an error, just twice as many plausible
+    # samples.
+    assert read_burst_meta(XSI / OUT_BUNDLE_IQ)[RF_ELEMENT_KEY] == RF_ELEMENT_COMPLEX
+    got = read_rf_bundle(XSI / OUT_BUNDLE_IQ, 1, XSI_BLKSIZE, complex_samp=True)
+    assert got and all(b.dtype == np.complex128 for b in got)
+    assert len(got) == WANT_IQ_SINK_BLOCKS
+
+    sim = make_sim_iq()
+    with tempfile.TemporaryDirectory() as scratch:
+        sim.write_scenario(scratch)              # the writer the harness's vectors came from
+
+    data = [b for b in got if np.any(b)]
+    assert len(data) == WANT_IQ_DATA_BLOCKS_OUT, (
+        f"{len(data)} of {len(got)} grid periods carried data, gate expects "
+        f"{WANT_IQ_DATA_BLOCKS_OUT} — the real run's number, for the same pattern-A reason")
+
+    first, sent = data[0][0], sim.sent[0][0]
+    n = WANT_IQ_LEAD_SAMPLES
+    assert np.array_equal(first[:n].real, sent[:n].real), "I"
+    assert np.array_equal(first[:n].imag, sent[:n].imag), "Q"
+    assert np.any(sent[:n].imag), "the scenario must carry a non-trivial Q"
+    assert not np.array_equal(sent[:n].real, sent[:n].imag), "I and Q must differ, or a swap hides"
+    # The two components diverge at the SAME sample, which is what says a whole beat was lost rather
+    # than one component of it -- a de-interleave that slipped by one would fail here.
+    assert int(np.argmax(first != sent)) == n
+
+    # --- 4) The accounting -------------------------------------------------------------------
+    assert counters["ADC_WORDS_SENT"] + counters["ADC_DROPPED"] == WANT_IQ_ADC_WORDS
+    assert counters["ADC_DROPPED"] > 0, (
+        "this design is expected to drop -- see WANT_ADC_DROPPED_IS_STRUCTURAL. A zero would mean "
+        "the converter model stopped back-pressuring, not that I/Q fixed pattern A.")
+    assert counters["DAC_BLOCKS_OUT"] == WANT_IQ_DAC_BLOCKS_OUT
+    assert (counters["DAC_BLOCKS_ZERO_FILLED"]
+            == counters["DAC_BLOCKS_OUT"] - WANT_IQ_DATA_BLOCKS_OUT == WANT_IQ_DAC_ZERO_FILLED)
+    assert counters["SINK_BLOCKS_IN"] == WANT_IQ_SINK_BLOCKS
+    assert counters["ADC_CHAN_DROPPED"] == 0 and counters["DAC_CHAN_DROPPED"] == 0
+    assert counters["SRC_BLOCKS_OUT"] == XSI_NBLK
+    assert counters["SINK_LAST_BLOCK_CYCLE"] == WANT_IQ_SINK_LAST_BLOCK_CYCLE, (
+        f"the last block reached the sink at cycle {counters['SINK_LAST_BLOCK_CYCLE']}, gate "
+        f"expects {WANT_IQ_SINK_LAST_BLOCK_CYCLE}. That is a real behaviour change: either a "
+        f"regression or an improvement worth re-recording.")

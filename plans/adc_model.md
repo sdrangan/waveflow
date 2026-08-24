@@ -15,19 +15,19 @@ goal, an ordered scope, a gate that says when it is done, and an explicit not-in
 they implement is settled in *Channels, ports, and where I/Q lives*; a session should **read that
 section and not re-litigate it**.
 
-```
-claude "Read plans/adc_model.md, section 'Stage D — iq_mode = 1 end to end', and build it."
-```
-
-**Stages A, B and C are BUILT (2026-08-22)** — see their sections below for what each cost and what
-building it taught. **D is all that is left**, and its section says exactly what the two C++ models
-still owe.
+**Stages A–D are all BUILT** (A–C 2026-08-22, D 2026-08-23) — this arc is **closed**. Each section
+below records what it cost and what building it taught; a session arriving here wants a *new* plan,
+not this one.
 
 ```
-A (tile, real)     ── DONE ───────────────────► gate: 2-channel rf_loopback, XSI 15751
-B (complex bundle) ── DONE ──┐                  gate: complex round-trip, real path byte-identical
-C (I/Q C++ twin)   ── DONE ──┴► D (iq_mode=1) ► gate: I/Q loopback
+A (tile, real)     ── DONE ───► gate: 2-channel rf_loopback, XSI 15751
+B (complex bundle) ── DONE ───► gate: complex round-trip, real path byte-identical
+C (I/Q C++ twin)   ── DONE ───► gate: C++ packs I/Q bit-identically to Python
+D (iq_mode = 1)    ── DONE ───► gate: I/Q loopback byte-identical, XSI 15501
 ```
+
+**What is left is not code.** The *bring-up log* below is four lab questions, each a one-field
+change when answered; `iq_order` is the one with evidence against its declared default.
 
 ### Decisions a session must not re-open
 
@@ -192,8 +192,10 @@ one `fprintf` and one branch. Deliberately *not* folded into Stage B, because it
 side writes and therefore wants its own gate; do it at the head of Stage D, where the C++ RF models
 are being opened anyway.
 
-**Not in scope, and still open:** `Rfdc` accepting `iq_mode` (stage D), and the complex conformance
-twin (stage C).
+**Done 2026-08-23, at the head of Stage D**, exactly as scoped: `BurstBundle::write` takes an
+optional manifest pair, `RfFileSink` supplies `rf_element`, and a missing key is now an error on both
+sides.  It kept its own gate (`tests/build/test_xsi_rf_block.py`), and the migration really was
+nothing — there were no bundles on disk.
 
 ### Stage C — the RFDC C++ sample twin, for interleaved I/Q — **BUILT 2026-08-22**
 
@@ -261,34 +263,73 @@ sizes its word buffer with `samp_per_word` where it should use `slots_per_word()
 `(re, im)`. Both are unreachable today — `Rfdc` refuses `iq_mode` — so they were left rather than
 half-changed, and this note is the record that they are known.
 
-### Stage D — `iq_mode = 1` end to end
+### Stage D — `iq_mode = 1` end to end — **BUILT 2026-08-23**
 
-**B and C are DONE**, so this is the only stage left. **Goal:** lift the `iq_mode` refusal.
+**The refusal is gone.** A converter takes an interleaved-I/Q word, its RF blocks are `complex128`,
+and an I/Q loopback is byte-identical in pysim and runs at RTL. The arc A–D is closed.
 
-**Scope, and it is now short because everything under the converter is built:**
+**What was built, in the order the scope listed it:**
 
-1. **The complex paths through `_adc_proc` / `_dac_proc`.** The conversion itself is done — `pack` /
-   `unpack` handle `iq_mode` at any channel count (see the decisions list) — so what changes is the
-   dtype the two processes carry and the `full_scale` scaling of a complex array.
-2. **The two C++ models in `xsi_rfdc.h`**, which stage C deliberately left real-only rather than
-   half-changing. Exactly two places:
-   - `RfdcAdcMaster::refill_` sizes `nwords_` with `fmt_.samp_per_word`; it wants
-     `fmt_.slots_per_word()`. Behaviour-identical for real, so it can go in first.
-   - `RfdcDacSlave::update` unpacks a beat and pushes `fmt_.samp_per_word` doubles; with I/Q a beat
-     yields `slots_per_word()` components in `(re, im)`-adjacent order, and `blk_` / `per_ch_` are
-     counted in **samples**, so the block accounting has to say which unit it means.
-3. **The `rf_element` cleanup at the head of this stage** — teach `BurstBundle::write` to emit the
-   key and make a missing one an error. See *The absent-key default is a live contract*; it belongs
-   here because the C++ RF models are being opened anyway, and there are no bundles on disk to
-   migrate.
-4. **`Rfdc.__post_init__`'s refusal comes out**, and the bind-time `complex_samp` vs `iq_mode` check
-   stays — it is written against the agreement, not against the refusal.
+0. **The `rf_element` cleanup first**, as its own step and its own gate — see *The absent-key default
+   is a live contract*. `BurstBundle::write` grew an optional `(key, value)` manifest pair, the
+   mirror of Python's `write_burst_bundle(..., extra=...)` and for the same reason: `xsi_bundle.h`
+   knows nothing about RF, and a writer that special-cased one format there is where every future
+   format learns about every other. **A single pair, not a map** — there is one such key today, and
+   a second is a signature change, which is the right amount of friction. `RfFileSink` supplies it;
+   both readers then require it, and a bundle that does not say is an error on both sides.
+1. **The complex paths through `_adc_proc` / `_dac_proc`.** Two real changes, and one of them is a
+   deletion: `_adc_proc` stopped coercing the block to `float64` (`np.asarray(blk.data,
+   dtype=np.float64)` would have dropped Q **silently**, leaving a block of the right shape carrying
+   half a signal). `_pack` / `_unpack` quantize I and Q **separately and identically** — they are two
+   real values of one converter, and `from_real` on a complex array is worse than wrong, since
+   `quantize_real` casts to `float64` with no error at all.
+2. **The two C++ models**, exactly where the scope said. `RfdcAdcMaster::refill_` now sizes with
+   `slots_per_word()`. `RfdcDacSlave::update` goes through **`rfdc_unpack`** rather than a local
+   unpack-then-dequantize loop — that function is the twin gated bit-exactly against Python and it is
+   where the I/Q slot order lives, so re-spelling its two steps here is precisely how a "twin" comes
+   to disagree with the thing it twins.
+3. **The unit is COMPONENTS, and it is now named.** `RfdcDacSlave`'s `blk_samples` became
+   `blk_comps`; `RfFileSource` likewise. `RfBlockMsg::data` was always a `vector<double>`, and a
+   complex sample is two of them — the whole of what I/Q changes in the block accounting is which
+   unit it counts, so the parameters say so. The ratio `blk_rate_` is built from is unchanged in
+   value because both its terms double.
+4. **`RFSampIF.complex_samp` is derived, never declared twice.** `RfLoopbackTB` states the word and
+   the edge kind follows from `word.iq_mode`; `Rfdc.on_rf_bind` refuses a disagreement, so a
+   testbench that stated both could only state them identically or fail.
 
-**Gate:** an I/Q loopback, byte-identical, at `samp_per_word = 2` on the 64-bit bus — the geometry
-that keeps a complex word at 64 bits on the 4x2.
+**Gate — both halves:**
+
+- **pysim**, `tests/examples/test_rf_loopback.py::TestIQLoopback`: byte-identical at the bundle
+  level, `underrun == 0` / `overrun == 0` on the ADC edge and the *same* declared 2-block transient
+  as a real loopback — I/Q changes what a word holds, not what a loop through the RF grids costs.
+  Both components are compared **separately** against scenarios that draw them independently (grid)
+  or as an analytic tone (sine), because a converter that dropped Q returns blocks of the right
+  shape and length. Also at two channels, so the two generalizations compose.
+- **RTL**, `test_rf_loopback_xsi.py::test_interleaved_iq_runs_at_rtl_through_the_unchanged_real_dut`:
+  the models report the format they were *built* with (`FMT_IQ_MODE=1`, `slots_per_word()=4`,
+  `word_bits()=64`), so an `iq_mode` that quietly defaulted is visible before the data is; the
+  leading 6 complex samples of the first data block are exact on **both** components and diverge at
+  the same sample; the accounting matches the real run at matched utilisation; and the cycle count is
+  recorded the way 1072 was — **`SINK_LAST_BLOCK_CYCLE = 15501`**.
+
+**The DUT is `rf_pass_through`, unchanged and not re-synthesized**, and that is the headline result
+rather than a shortcut. Complex-ness is a property of the *word*; a word is a bag of bits to the
+fabric. If an I/Q loopback had needed a top of its own, something would have leaked the sample
+geometry into the RTL between the converter ports — which is exactly what *Channels, ports, and where
+I/Q lives* claims cannot happen, now measured rather than argued.
+
+**One rate note, and it is about the DUT rather than about I/Q.** The I/Q gates run at 128 MSa/s, half
+the real examples'. `RfSampPassThrough` reads a whole block before it writes one, so it occupies the
+boundary for twice its utilisation; at 256 MSa/s with `samp_per_word = 2` that exceeds a block period
+and the DAC edge underruns a third time. It is the same pattern-A cost the width sweep already scales
+its rate to avoid, and scaling here keeps these gates measuring **packing**.
 
 **Free on this board:** the Waveflow port is **bit-identical** to a quad-tile RFDC's, so no
 de-interleaver is owed at lowering. See *What it costs to lower — on this board, nothing*.
+
+**What the lab still owes**, unchanged by any of this: `iq_order` (evidence points at `q_low`, the
+declared default is `i_low`), `justify`, `TVALID` on the RF-DAC, and PG269 confirmation. Every one is
+a one-field change, and a generated harness now says which value it assumed.
 
 ### Not stages — the bring-up log
 

@@ -120,10 +120,14 @@ interpret the bytes. That direction matters: at half the `blksize` a complex bun
 word count a real read expects, so without the check it decodes into a plausible block of
 interleaved nonsense.
 
-A bundle with no `rf_element` is **real** — that is what every bundle written before the field
-existed holds, and what the C++ `RfFileSink` still writes. The C++ `RfFileSource` reads the field and
-**aborts** on a complex bundle: those models carry real samples only, and playing one back as twice
-as many real samples would be a wrong answer rather than an error.
+A bundle with **no** `rf_element` is an **error**, not a default. Both writers declare it —
+`write_rf_bundle` and the C++ `RfFileSink` — and both readers require it, so a bundle that does not
+say is one no writer in this project produced. (It *was* read as real for a day, while the C++ writer
+still emitted four manifest keys and this was not one of them. That was a contract with a live
+writer, never backward compatibility: no bundle is committed anywhere in this repo.)
+
+The C++ side works the same way round: `RfFileSource` and `RfFileSink` are each told what their edge
+carries and **check** it against the file, rather than reading the kind off it.
 
 `iq_order` does *not* apply here. That field says which of I and Q takes the lower **bit slot** of a
 packed AXIS word; the bundle stores two whole `float64` components, and `re` is first. Keeping the

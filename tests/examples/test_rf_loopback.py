@@ -249,6 +249,161 @@ class TestTheTile:
 
 
 # --------------------------------------------------------------------------------------------
+# Interleaved I/Q — Stage D's gate (plans/adc_model.md, "Stage D")
+# --------------------------------------------------------------------------------------------
+
+#: The 4x2's I/Q geometry: **2 complex samples a beat, 14-in-16, a 64-bit word.** An I/Q design
+#: stays on the same bus as a real one by halving ``samp_per_word``, and this is that arithmetic
+#: applied to the board this project targets.
+IQ_WORD = WORD.specialize(samp_per_word=2, iq_mode=True)
+
+#: 128 MSa/s — **half** the real examples' 256, and the reason is the DUT rather than I/Q.
+#:
+#: ``RfSampPassThrough`` reads a whole block before it writes one, so it occupies the boundary for
+#: *twice* its utilisation ``samp_rate / (samp_per_word * f_axis)`` — and it declares
+#: ``blk_latency = 1``, which only holds while that stays under one block period. At 256 MSa/s and
+#: ``samp_per_word = 2`` the utilisation is 0.512, the read-then-write costs 1.02 block periods, and
+#: the DAC edge underruns a third time. That is the *same* pattern-A cost
+#: :func:`TestLoopback.test_bit_widths_round_trip_exactly` already scales its rate to avoid; halving
+#: here keeps the geometry under test **packing**, which is what these gates are for.
+IQ_SAMP_RATE = 128e6
+
+
+class TestIQLoopback:
+    """``iq_mode = 1`` end to end: complex blocks in, complex blocks out, byte-identical.
+
+    Everything under the converter was built first and gated separately — ``pack`` / ``unpack``
+    (which never needed a change), the complex bundle format, and the C++ sample twin. What this
+    class gates is the converter itself: that a complex block survives quantize → pack → AXIS →
+    fabric → unpack → dequantize with both components intact and in the right order.
+
+    **The scenarios draw I and Q independently** (or, for the sine, as an analytic tone), so a
+    dropped, duplicated or swapped component fails rather than passing on symmetry. That matters
+    more here than anywhere else in this file: a complex block whose Q was silently discarded still
+    has the right shape and the right length.
+    """
+
+    def _sim(self, **kw):
+        kw.setdefault("word", IQ_WORD)
+        kw.setdefault("samp_rate", IQ_SAMP_RATE)
+        return RfLoopbackSim(**kw)
+
+    def test_the_geometry_is_a_64_bit_bus(self):
+        """The claim the gate rests on: I/Q costs no wider a port, only half the samples a beat."""
+        tb = self._sim(n_src_blk=2, blksize=64).tb
+        assert tb.rfdc.axis_bitwidth == 64
+        assert tb.rfdc.axis_bitwidth == WORD.specialize(samp_per_word=4).bitwidth, \
+            "the real 4-sample word and the complex 2-sample word are the same bus"
+        assert tb.dut.s_in.bitwidth == 64
+
+    def test_the_edge_kind_is_derived_from_the_word_not_declared_twice(self):
+        """The testbench states the geometry once. ``complex_samp`` follows from ``iq_mode``."""
+        tb = self._sim(n_src_blk=2, blksize=64).tb
+        assert tb.adc_if.complex_samp is True and tb.dac_if.complex_samp is True
+        assert tb.adc_if.block_dtype == np.complex128
+        # ...and the real testbenches are untouched by that derivation.
+        real = RfLoopbackSim(n_src_blk=2, blksize=64).tb
+        assert real.adc_if.complex_samp is False
+
+    def test_an_iq_loopback_is_byte_identical_with_no_loss(self):
+        """**Stage D's gate.** Complex blocks through the whole chain, exact, counters as declared."""
+        sim = self._sim(n_src_blk=8)
+        sim.run()
+        tb = sim.check()                       # data, counters, block counts and alignment
+        assert tb.adc_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
+                                        "underrun": 0, "overrun": 0}
+        # The SAME two-block transient a real loopback has: I/Q changes what a word holds, not how
+        # many block periods a loop through the RF grids costs.
+        assert tb.dac_if.counters() == {"blocks_sent": 8, "blocks_delivered": 8,
+                                        "underrun": 2, "overrun": 0}
+        assert all(b.dtype == np.complex128 for b in sim.captured)
+        # 16 bytes a sample on disk, not 8 -- two float64 components.
+        blk_bytes = tb.blksize * 16
+        assert sim._out_bytes[2 * blk_bytes:] == sim._in_bytes[:-2 * blk_bytes]
+
+    def test_both_components_survive_and_neither_is_the_other(self):
+        """The check a real loopback cannot make, and the one a shape check would miss.
+
+        A converter that dropped Q, or that packed Q where I belongs, still returns blocks of the
+        right shape and length. So the two components are compared **separately**, against a
+        scenario that drew them independently.
+        """
+        sim = self._sim(n_src_blk=6, blksize=64)
+        sim.run()
+        tb = sim.check()
+        lat = int(tb.loop_blk_latency)
+        for k in range(lat, 6):
+            sent, got = sim.sent[k - lat], sim.captured[k]
+            assert np.array_equal(got.real, sent.real), f"block {k}: I"
+            assert np.array_equal(got.imag, sent.imag), f"block {k}: Q"
+            assert np.any(got.imag), "the scenario must have a non-trivial Q"
+            assert not np.array_equal(sent.real, sent.imag), "I and Q must differ, or a swap hides"
+
+    def test_the_slot_order_is_the_one_the_word_declares(self):
+        """``iq_order`` reaches the wire, and the two orders are not the same word.
+
+        The declared default is ``i_low`` and the bring-up log has evidence for ``q_low``, so the
+        thing that has to be true is that the field is *load-bearing* — flipping it changes the
+        beats. Both orders must still round-trip, because the converter packs and unpacks under one
+        declaration either way.
+        """
+        stored = np.array([[3 + 5j, -7 - 2j]], dtype=np.complex128)
+        words = {}
+        for order in ("i_low", "q_low"):
+            W = IQ_WORD.specialize(iq_order=order)
+            words[order] = int(pack(W, stored)[0][0])
+            assert np.array_equal(unpack(W, pack(W, stored)), stored), order
+        assert words["i_low"] != words["q_low"], "iq_order does not reach the packed word"
+
+    def test_the_sine_loopback_is_exact_against_the_quantized_input(self):
+        """An analytic tone — ``cos + j sin`` — so the quantizer runs on a real I/Q signal.
+
+        The grid waveform makes ``from_real`` a no-op on both components; this one rounds and (near
+        full scale) saturates each of them, which is the path a complex converter must get right
+        twice.
+        """
+        sim = self._sim(n_src_blk=8, waveform="sine")
+        tb = sim.run()
+        lat = int(tb.loop_blk_latency)
+        tb.adc_if.assert_clean()
+        tb.dac_if.assert_clean(startup_blocks=lat)
+        fs = float(tb.full_scale)
+        for k in range(lat, 8):
+            x = np.asarray(sim.sent[k - lat]) / fs
+            want = (to_real(from_real(x.real, tb.rfdc.SampType))
+                    + 1j * to_real(from_real(x.imag, tb.rfdc.SampType))) * fs
+            assert np.array_equal(sim.captured[k], want), f"block {k}"
+
+    def test_a_two_channel_iq_tile_is_byte_identical(self):
+        """The two generalizations compose: ``n_ch`` ports, each carrying complex beats."""
+        sim = self._sim(n_src_blk=6, n_ch=2, blksize=64)
+        sim.run()
+        tb = sim.check()
+        assert tb.rfdc.n_rx == 2 and tb.rfdc.axis_bitwidth == 64
+        assert all(b.shape == (2, 64) and b.dtype == np.complex128 for b in sim.captured)
+        lat = int(tb.loop_blk_latency)
+        for k in range(lat, 6):
+            got, sent = sim.captured[k], sim.sent[k - lat]
+            assert np.array_equal(got, sent), f"block {k}"
+            assert not np.array_equal(got[0], got[1]), "the rows must differ, or a swap hides"
+
+    def test_a_complex_edge_under_a_real_word_is_refused(self):
+        """The pair that spans the converter, from the other side.
+
+        The refusal on ``iq_mode`` is gone; this one replaced it, and it is the one that is actually
+        about a disagreement rather than about a missing feature.
+        """
+        from waveflow.hw.clock import Clock
+        from waveflow.hw.rf_sample_if import RFSampIF
+
+        sim = Simulation()
+        iface = RFSampIF(name="e", sim=sim, samp_clk=Clock(name="c", freq=1e6), n_ch=1,
+                         blksize=8, n_blk=1, complex_samp=False)
+        with pytest.raises(ValueError, match="carries real samples but the AXIS word"):
+            iface.bind("rx", Rfdc(name="r", sim=sim, word=IQ_WORD).rx_rf)
+
+
+# --------------------------------------------------------------------------------------------
 # Gate 3 — the counters, non-vacuous
 # --------------------------------------------------------------------------------------------
 
@@ -518,24 +673,29 @@ class TestComplexRfBundle:
         with pytest.raises(ValueError, match="declares rf_element"):
             read_rf_bundle(tmp_path / "b", n_ch=1, blksize=2, complex_samp=True)
 
-    def test_a_bundle_with_no_manifest_field_is_read_as_real(self, tmp_path):
-        """The compatibility rule, and it is load-bearing.
+    def test_a_bundle_that_does_not_say_is_refused(self, tmp_path):
+        """A missing ``rf_element`` is an **error**, not a default — and that is a change.
 
-        Bundles written before the field existed — and every bundle the C++ ``RfFileSink`` writes,
-        which emits the four fixed manifest fields and nothing else — carry one ``float64`` per word.
-        A missing field is therefore *real*, not *unknown*.
+        It was read as *real* for exactly as long as the C++ ``RfFileSink`` emitted no such key: a
+        contract with a live writer, never backward compatibility, since no bundle is committed
+        anywhere in this repo. Now that ``BurstBundle::write`` declares the kind, the default has
+        nothing left to serve, and keeping it would mean a bundle from some *third* writer got
+        misread in silence.
         """
         import json
 
         from waveflow.utils.burst_io import META_NAME
 
-        blocks = [np.array([[1.5, -0.25, 0.0, 3.75]])]
-        write_rf_bundle(blocks, tmp_path / "b")
+        write_rf_bundle([np.array([[1.5, -0.25, 0.0, 3.75]])], tmp_path / "b")
         meta = json.loads((tmp_path / "b" / META_NAME).read_text(encoding="utf-8"))
-        del meta["rf_element"]                                   # a bundle from before the field
+        del meta["rf_element"]
         (tmp_path / "b" / META_NAME).write_text(json.dumps(meta), encoding="utf-8")
-        got = read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4)
-        assert np.array_equal(got[0], blocks[0])
+        with pytest.raises(ValueError, match="does not say"):
+            read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4)
+        # ...and a bundle with no manifest at all, which is the same silence by a different route.
+        (tmp_path / "b" / META_NAME).unlink()
+        with pytest.raises(ValueError, match="does not say"):
+            read_rf_bundle(tmp_path / "b", n_ch=1, blksize=4)
 
     def test_the_real_path_is_byte_for_byte_what_it_was(self, tmp_path):
         """The other half of the gate: the binaries of a real bundle did not move.
@@ -744,17 +904,22 @@ class TestRfdcGuards:
         with pytest.raises(ValueError, match="carries 1 channel"):
             iface.bind("rx", rfdc.rx_rf)
 
-    def test_interleaved_iq_is_refused_at_stage_1(self):
-        """The WORD can already say "interleaved"; the CONVERTER still cannot do it.
+    def test_an_interleaved_iq_word_is_accepted_and_carries_its_geometry(self):
+        """The refusal is **gone** — and what replaced it is not another refusal.
 
-        That split is the point of moving ``iq_mode`` onto the type: the packing rule is stated and
-        tested (see ``tests/hw/test_rfdc_samp_word.py``) while the converter's two halves — the
-        complex RF bundle format and the real-only conformance twin — remain the open work, and the
-        refusal says which is which.
+        The converter takes an I/Q word now; what it still insists on is that the RF edge agrees
+        about complex-ness, which is checked at bind rather than at construction because that is
+        where the second declaration first exists (see
+        :meth:`~examples.rf_loopback.rfdc.Rfdc.on_rf_bind`).
+
+        The geometry is the one that matters on this board: 2 complex samples a beat, 14-in-16, a
+        64-bit word — an I/Q design stays on the same bus by halving ``samp_per_word``.
         """
-        with pytest.raises(NotImplementedError, match="real samples only"):
-            Rfdc(name="r", sim=Simulation(), word=RfdcSampWord.specialize(samp_per_word=2,
-                                                                          iq_mode=True))
+        W = WORD.specialize(samp_per_word=2, iq_mode=True)
+        rfdc = Rfdc(name="r", sim=Simulation(), word=W)
+        assert rfdc.axis_bitwidth == 64
+        assert int(rfdc.SampType.bitwidth) == 14               # the CONVERTER's resolution
+        assert W.slots_per_word() == 4                         # two samples, two slots each
 
     def test_a_word_that_is_not_a_word_type_is_refused(self):
         """``word`` is a type, not a width; handing it a width is the mistake this catches."""

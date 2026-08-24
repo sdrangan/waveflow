@@ -29,9 +29,13 @@ Waveflow Rfdc is a tile*):
 ``pack`` / ``unpack`` already speak that shape — they return ``(n_ch, n_words)``, so **row ``ch`` is
 what port ``ch`` carries** and a channel-major array *is* a per-port array.
 
-Real-valued samples only: ``iq_mode = 1`` is still refused, and the refusal names its two blockers.
-Complex-ness is a property of the **word**, never of the port count — see
-:class:`~waveflow.hw.rfdc_samp_word.RfdcSampWord`.
+**Real or complex**, and which one is a property of the **word**, never of the port count — see
+:class:`~waveflow.hw.rfdc_samp_word.RfdcSampWord`.  With ``iq_mode`` a beat carries ``samp_per_word``
+*complex* samples in twice as many slots, the RF blocks are ``complex128``, and the port count does
+not move; an I/Q design stays on the same bus by halving ``samp_per_word``.  The one thing this
+module checks about it is that the two declarations agree — the RF edge's ``complex_samp`` and the
+word's ``iq_mode`` are the same fact seen from either side of the converter (see
+:meth:`on_rf_bind`).
 """
 from __future__ import annotations
 
@@ -150,8 +154,9 @@ class Rfdc(HwModule):
         # There is deliberately NO n_ch > 1 refusal here, and nothing replaced the one that was.
         # It existed because "how many AXIS ports does n_rx mean?" was open; the answer -- one port
         # per channel, complex-ness carried by the WORD -- makes n_rx a single number with a single
-        # meaning, so there is no mode/port-count agreement left to check.  The iq_mode refusal below
-        # is a different question and stays.
+        # meaning, so there is no mode/port-count agreement left to check.  There is no iq_mode
+        # refusal either, since 2026-08-23: what used to stand in for one is now a real check, in
+        # on_rf_bind, that the RF edge and the word agree about complex-ness.
         if int(self.n_rx) < 0 or int(self.n_tx) < 0:
             raise ValueError(
                 f"Rfdc: channel counts are non-negative (got n_rx={int(self.n_rx)}, "
@@ -169,15 +174,6 @@ class Rfdc(HwModule):
                 f"Rfdc.word must be an RfdcSampWord subclass — the packing convention as a type, "
                 f"not a width. Got {self.word!r}. Build one with RfdcSampWord.specialize(...) or a "
                 f"board preset such as Rfsoc4x2SampWord.specialize(samp_per_word=4).")
-        if self.word.iq_mode:
-            raise NotImplementedError(
-                f"Rfdc implements real samples only (iq_mode=0), got a word declaring "
-                f"interleaved I/Q ({self.word.describe()}). Interleaved I/Q doubles the bits per "
-                f"sample slot and needs two things this converter has not got: the COMPLEX RF "
-                f"bundle format and a conformance twin that covers complex (plans/adc_model.md "
-                f"stages B and C; D is this refusal). The "
-                f"WORD type can already express it — iq_order is declared and tested there — so "
-                f"what is missing is the converter's two halves, not the packing rule.")
         if not self.full_scale or float(self.full_scale) <= 0:
             raise ValueError(
                 f"Rfdc.full_scale must be a positive amplitude reference, got {self.full_scale!r}. "
@@ -455,20 +451,23 @@ class Rfdc(HwModule):
                                    extra_args=(self._fmt_literal(), repr(adc_rate))))
         if int(self.n_tx) > 0:
             dac_rate = self.words_per_cycle(self.tx_streams[0], self.tx_samp_rate)
-            # blk_samples is n_ch * blksize -- one block's worth, the unit the RF edge moves.  The
-            # DAC needs it to know when a block is complete; the ADC learns it from the block it is
-            # handed.
+            # blk_comps is one block's worth -- the unit the RF edge moves.  The DAC needs it to
+            # know when a block is complete; the ADC learns it from the block it is handed.
             #
             # Read off tx_rf, not rx_rf.  It used to read the RX edge, which is the same number
             # whenever both paths exist -- and unbound when they do not.  A DAC-ONLY tile (n_rx=0,
             # the natural shape for a playout design) therefore could not be lowered at all: the
             # accessor raised "not bound to an RFSampIF".  The DAC path's channel count is a property
             # of the DAC's own edge, so that is where it comes from.
-            blk_samples = int(self.tx_rf.n_ch) * int(self.tx_blksize)
+            # COMPONENTS, not samples: `RfBlockMsg::data` is a vector<double> and a complex sample
+            # is two of them.  The model divides this by its own port count, so it is the whole
+            # block's worth.
+            blk_comps = (int(self.tx_rf.n_ch) * int(self.tx_blksize)
+                         * (2 if self.word.iq_mode else 1))
             group = tuple(f"tx_stream_{i}" for i in range(int(self.n_tx)))
             models.append(BfmModel("RfdcDacSlave", ports=(group, "tx_rf"),
                                    extra_args=(self._fmt_literal(), repr(dac_rate),
-                                               str(blk_samples))))
+                                               str(blk_comps))))
         return tuple(models)
 
     # -- the two conversion paths ----------------------------------------------------------------
@@ -505,7 +504,11 @@ class Rfdc(HwModule):
         word_rate = float(self.rx_samp_rate) / int(self.word.samp_per_word)
         while True:
             blk = yield from self.rx_rf.get()
-            samples = np.asarray(blk.data, dtype=np.float64)        # (n_rx, blksize)
+            # NO dtype coercion.  The edge decides what a block is (RFSampIF.complex_samp) and
+            # `dtype=np.float64` here would silently drop Q on a complex one -- a block of the right
+            # shape carrying half a signal, which is the failure mode this whole path is built to
+            # make impossible.
+            samples = np.asarray(blk.data)                          # (n_rx, blksize)
             self.n_adc_blk += 1
             words = self._pack(samples / fs)                        # (n_rx, n_words)
             # CONCURRENTLY, one process per port.  Offering the rows in a `for` loop would put the
@@ -562,10 +565,28 @@ class Rfdc(HwModule):
     # need.
 
     def _pack(self, normalized: np.ndarray):
-        """Normalized reals in [-1, 1), ``(n_ch, n_samp)`` → AXIS words, ``(n_ch, n_words)``."""
-        stored = np.asarray(from_real(normalized, self.SampType), dtype=np.int64)
+        """Normalized samples in [-1, 1), ``(n_ch, n_samp)`` → AXIS words, ``(n_ch, n_words)``.
+
+        **I and Q are quantized separately and identically** when the word is complex: they are two
+        real values of the same converter, not a complex type with a rule of its own.  Going through
+        ``from_real`` on a complex array would be worse than wrong — ``quantize_real`` casts to
+        ``float64`` and Q would vanish with no error at all.
+        """
+        if self.word.iq_mode:
+            stored = (np.asarray(from_real(normalized.real, self.SampType), dtype=np.int64)
+                      + 1j * np.asarray(from_real(normalized.imag, self.SampType), dtype=np.int64))
+        else:
+            stored = np.asarray(from_real(normalized, self.SampType), dtype=np.int64)
         return pack(self.word, stored)
 
     def _unpack(self, samp_words) -> np.ndarray:
-        """AXIS words ``(n_ch, n_words)`` → normalized reals — the exact inverse of :meth:`_pack`."""
-        return to_real(array(self.SampType, unpack(self.word, np.asarray(samp_words))))
+        """AXIS words ``(n_ch, n_words)`` → normalized samples — the exact inverse of :meth:`_pack`.
+
+        ``unpack`` returns complex stored integers for a complex word, so the dequantization is the
+        mirror of the quantization above: each component through the same ``SampType``.
+        """
+        stored = unpack(self.word, np.asarray(samp_words))
+        if self.word.iq_mode:
+            return (to_real(array(self.SampType, stored.real.astype(np.int64)))
+                    + 1j * to_real(array(self.SampType, stored.imag.astype(np.int64))))
+        return to_real(array(self.SampType, stored))

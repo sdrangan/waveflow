@@ -221,56 +221,193 @@ def _run_cpp_expect_exit(body: str, tmp_path: Path, code: int) -> str:
     return r.stderr
 
 
-def test_the_cpp_source_refuses_a_complex_bundle_rather_than_misreading_it(tmp_path):
-    """These models carry **real** samples, and a complex bundle is not a corrupt real one.
+@pytest.mark.parametrize("bundle_is_complex,model_is_complex",
+                         [(True, 0), (False, 1)], ids=["complex_as_real", "real_as_complex"])
+def test_the_cpp_source_refuses_a_bundle_of_the_other_kind(bundle_is_complex, model_is_complex,
+                                                           tmp_path):
+    """The kind is **checked**, not obeyed — in both directions.
 
-    It is twice as many perfectly plausible samples, so every counter in the run would agree with
-    itself and the answer would simply be wrong. The manifest field is what makes the refusal
-    possible at all — without it the two kinds are the same bytes.
+    Read the wrong way round, a bundle is not corrupt and not short: a complex one read as real is
+    twice as many perfectly plausible samples, and a real one read as complex is half as many. Every
+    counter in the run would agree with itself and the answer would simply be wrong. The manifest
+    field is what makes the refusal possible at all — without it the two kinds are the same bytes.
 
-    Lifting this is stage D's job; until then the honest behaviour is to stop.
+    Both directions matter now that the models can be built for either: before stage D the second
+    case could not arise, because there was no complex model to build.
     """
-    write_rf_bundle([np.zeros((1, 4), dtype=np.complex128)], tmp_path / "rf_in")
+    blocks = [np.zeros((1, 4), dtype=np.complex128 if bundle_is_complex else np.float64)]
+    write_rf_bundle(blocks, tmp_path / "rf_in")
     err = _run_cpp_expect_exit(f"""
 int main() {{
     RfChannel ch(2);
-    RfFileSource src(ch, 4);
+    RfFileSource src(ch, 4, {model_is_complex});
     src.in_bundle = "{(tmp_path / 'rf_in').as_posix()}";
     src.pre_sim();                      // must not return
     std::printf("READ IT ANYWAY\\n");
     return 0;
 }}
 """, tmp_path, 5)
-    assert "complex128" in err and "REAL samples" in err
+    assert "declares rf_element" in err and "built for" in err
 
 
-def test_the_cpp_source_still_reads_a_real_bundle_and_one_with_no_field(tmp_path):
-    """The compatibility half: the manifest key is additive, and its absence means real.
+def test_the_cpp_source_plays_a_complex_bundle_when_it_is_built_for_one(tmp_path):
+    """Stage D's half of the C++ side: nothing between the file and the channel interprets a pair.
 
-    ``RfFileSink`` writes the four fixed manifest fields and nothing else, so bundles produced by the
-    C++ side itself carry no element key — reading one back has to keep working.
+    A complex block is `(re, im)`-adjacent doubles, so the source slices exactly as it does for real
+    data — it just slices twice as many per block. That is why complex support cost one constructor
+    argument here and no branch at all.
     """
-    import json
+    blocks = [np.array([[1.0 + 2.0j, 3.0 - 4.0j]]), np.array([[-5.0 + 6.0j, 7.0 + 8.0j]])]
+    in_dir = tmp_path / "rf_in"
+    write_rf_bundle(blocks, in_dir)
 
-    from waveflow.utils.burst_io import META_NAME
+    out = _run_cpp(f"""
+int main() {{
+    RfChannel ch(4);
+    RfFileSource src(ch, 4, 1);          // 2 complex samples per block == 4 components
+    src.in_bundle = "{in_dir.as_posix()}";
+    src.pre_sim();
+    CHECK(src.samples() == 8, "component count");
+    MiniHarness h;
+    h.participants_.push_back(&ch);
+    h.participants_.push_back(&src);
+    for (int c = 0; c < 6; ++c) h.cycle();
+    RfBlockMsg blk;
+    CHECK(ch.pop(blk), "no block");
+    CHECK(blk.data.size() == 4, "block components");
+    std::printf("OK %g %g %g %g\\n", blk.data[0], blk.data[1], blk.data[2], blk.data[3]);
+    return 0;
+}}
+""", tmp_path)
+    # (re, im) adjacent, in order -- the layout Python wrote, read back unchanged.
+    assert "OK 1 2 3 -4" in out
 
-    blocks = [np.array([[1.0, 2.0, 3.0, 4.0]])]
-    write_rf_bundle(blocks, tmp_path / "declared")
-    write_rf_bundle(blocks, tmp_path / "silent")
-    meta = json.loads((tmp_path / "silent" / META_NAME).read_text(encoding="utf-8"))
-    del meta["rf_element"]
-    (tmp_path / "silent" / META_NAME).write_text(json.dumps(meta), encoding="utf-8")
 
-    for name in ("declared", "silent"):
-        out = _run_cpp(f"""
+def test_the_cpp_source_reads_a_bundle_that_declares_itself_real(tmp_path):
+    """The ordinary case, and it is now the *only* case: the bundle says what it holds."""
+    write_rf_bundle([np.array([[1.0, 2.0, 3.0, 4.0]])], tmp_path / "declared")
+    out = _run_cpp(f"""
 int main() {{
     RfChannel ch(2);
     RfFileSource src(ch, 4);
-    src.in_bundle = "{(tmp_path / name).as_posix()}";
+    src.in_bundle = "{(tmp_path / 'declared').as_posix()}";
     src.pre_sim();
     CHECK(src.samples() == 4, "sample count");
     std::printf("OK %zu\\n", src.samples());
     return 0;
 }}
 """, tmp_path)
-        assert "OK 4" in out, name
+    assert "OK 4" in out
+
+
+def test_the_cpp_source_refuses_a_bundle_that_does_not_say(tmp_path):
+    """A missing ``rf_element`` is an **error** on this side too — the mirror of Python's refusal.
+
+    It was a *default* meaning "real" until ``BurstBundle::write`` learned to emit the key, and the
+    reason is worth keeping: that default was a contract with a live writer (this one), not backward
+    compatibility. No bundle is committed anywhere in this repo, so there was never legacy data —
+    which is exactly why removing the default cost no migration.
+    """
+    import json
+
+    from waveflow.utils.burst_io import META_NAME
+
+    write_rf_bundle([np.array([[1.0, 2.0, 3.0, 4.0]])], tmp_path / "silent")
+    meta = json.loads((tmp_path / "silent" / META_NAME).read_text(encoding="utf-8"))
+    del meta["rf_element"]
+    (tmp_path / "silent" / META_NAME).write_text(json.dumps(meta), encoding="utf-8")
+
+    err = _run_cpp_expect_exit(f"""
+int main() {{
+    RfChannel ch(2);
+    RfFileSource src(ch, 4);
+    src.in_bundle = "{(tmp_path / 'silent').as_posix()}";
+    src.pre_sim();                      // must not return
+    std::printf("READ IT ANYWAY\\n");
+    return 0;
+}}
+""", tmp_path, 5)
+    assert "no rf_element" in err
+
+
+def test_the_cpp_sink_declares_the_element_kind_and_python_reads_it_back(tmp_path):
+    """**The gate for the writer half**, and the reason the default could be removed at all.
+
+    ``RfFileSink`` now passes ``rf_element`` through ``BurstBundle::write``, so a bundle produced
+    entirely by the C++ side is readable by a Python reader that *requires* the key. Before this the
+    two halves disagreed: C++ wrote four manifest fields, Python defaulted the fifth, and the default
+    was the only thing holding the RF XSI gates up.
+
+    Checked at both ends — the manifest text, and a real ``read_rf_bundle`` — because the first alone
+    would pass on a key spelled differently from the one Python looks for.
+    """
+    import json
+
+    from waveflow.simulation.rf_tb import RF_ELEMENT_KEY, RF_ELEMENT_REAL
+    from waveflow.utils.burst_io import META_NAME
+
+    blocks = [np.array([[1.0, -2.0]]), np.array([[3.5, -4.25]])]
+    in_dir, out_dir = tmp_path / "rf_in", tmp_path / "rf_out"
+    write_rf_bundle(blocks, in_dir)
+
+    out = _run_cpp(f"""
+int main() {{
+    RfChannel ch(4);
+    RfFileSource src(ch, 2);
+    RfFileSink   snk(ch);
+    src.in_bundle  = "{in_dir.as_posix()}";
+    snk.out_bundle = "{out_dir.as_posix()}";
+    MiniHarness h;
+    h.participants_.push_back(&ch);
+    h.participants_.push_back(&src);
+    h.participants_.push_back(&snk);
+    h.pre_sim();
+    for (int c = 0; c < 12; ++c) h.cycle();
+    h.post_sim();
+    std::printf("OK %llu\\n", (unsigned long long)snk.blocks_in);
+    return 0;
+}}
+""", tmp_path)
+    assert "OK 2" in out
+
+    meta = json.loads((out_dir / META_NAME).read_text(encoding="utf-8"))
+    assert meta[RF_ELEMENT_KEY] == RF_ELEMENT_REAL, meta
+    # ...and the four keys BurstBundle owns are still there and still describe the binaries, which is
+    # what read_burst_bundle validates -- the new key is an addition, not a rewrite.
+    assert meta["format"] == "waveflow.burst_bundle/1"
+    assert meta["n_bursts"] == 2 and meta["n_words"] == 4
+
+    got = read_rf_bundle(out_dir, n_ch=1, blksize=2)      # no default to fall back on
+    assert len(got) == 2
+    for a, b in zip(blocks, got):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_the_extra_manifest_pair_is_optional_and_the_rest_is_unchanged(tmp_path):
+    """``BurstBundle::write`` stays schema-blind: no key unless a caller supplies one.
+
+    That is what keeps the stream and memory-arena bundles — which are not RF and have no element
+    kind — from claiming one. The C++ writer mirrors Python's ``write_burst_bundle(..., extra=...)``
+    pass-through rather than learning what ``rf_element`` means.
+    """
+    import json
+
+    from waveflow.utils.burst_io import META_NAME, read_burst_bundle
+
+    plain, tagged = tmp_path / "plain", tmp_path / "tagged"
+    _run_cpp(f"""
+int main() {{
+    std::vector<uint64_t> w; w.push_back(7); w.push_back(9);
+    std::vector<uint64_t> b; b.push_back(2);
+    BurstBundle::write("{plain.as_posix()}", w, b);
+    BurstBundle::write("{tagged.as_posix()}", w, b, "some_key", "some_value");
+    std::printf("OK\\n");
+    return 0;
+}}
+""", tmp_path)
+
+    assert "some_key" not in json.loads((plain / META_NAME).read_text(encoding="utf-8"))
+    assert json.loads((tagged / META_NAME).read_text(encoding="utf-8"))["some_key"] == "some_value"
+    # Both are still valid burst bundles: read_burst_bundle checks the manifest against the binaries.
+    for d in (plain, tagged):
+        assert [list(x) for x in read_burst_bundle(d)] == [[7, 9]]

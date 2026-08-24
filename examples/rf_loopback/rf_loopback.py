@@ -464,14 +464,20 @@ class RfLoopbackTB(FreeRunMod):
             self.add_comp(c)
 
         # --- the RF domain: one interface per direction, each owning its own metronome ---------
+        # `complex_samp` is DERIVED from the word, never declared beside it.  The two are the same
+        # fact seen from either side of the converter, and `Rfdc.on_rf_bind` refuses a disagreement
+        # -- so a testbench that stated both could only ever state them identically or fail.
+        cplx = bool(self.word.iq_mode)
         self.adc_if = RFSampIF(name=f"{self.name}_adc_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk))
+                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk),
+                               complex_samp=cplx)
         self.adc_if.bind("tx", self.source.rf_ep)
         self.adc_if.bind("rx", self.rfdc.rx_rf)
         self.add_if(self.adc_if)
 
         self.dac_if = RFSampIF(name=f"{self.name}_dac_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk))
+                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk),
+                               complex_samp=cplx)
         self.dac_if.bind("tx", self.rfdc.tx_rf)
         self.dac_if.bind("rx", self.sink.rf_ep)
         self.add_if(self.dac_if)
@@ -567,9 +573,16 @@ class RfLoopbackSim:
         fs = float(tb.full_scale)
         rng = np.random.default_rng(self.seed)
         lo, hi = -(1 << (nb - 1)), (1 << (nb - 1)) - 1
-        return [rng.integers(lo, hi + 1, size=(int(tb.n_ch), int(tb.blksize))).astype(np.float64)
-                / float(1 << (nb - 1)) * fs
-                for _ in range(self.n_src_blk)]
+        def draw():
+            return (rng.integers(lo, hi + 1, size=(int(tb.n_ch), int(tb.blksize))).astype(np.float64)
+                    / float(1 << (nb - 1)) * fs)
+
+        # I and Q are drawn INDEPENDENTLY, so a swapped or dropped component is visible.  Both land
+        # on the same grid, because a converter quantizes them identically -- they are two real
+        # values of one converter, not a complex type with a rule of its own.
+        if tb.word.iq_mode:
+            return [draw() + 1j * draw() for _ in range(self.n_src_blk)]
+        return [draw() for _ in range(self.n_src_blk)]
 
     def _sine_blocks(self) -> list:
         """A windowed sinusoid: ``w(t | t0, t1) * sin(2*pi*f*(t - t0))``, zero outside the window.
@@ -597,10 +610,18 @@ class RfLoopbackSim:
         # the same waveform make a channel swap invisible, and a swap is exactly the failure a
         # per-port fan-out can have.  Harmonics of the base tone keep every row inside the window and
         # on the same amplitude scale.
-        rows = [np.where((t >= t0) & (t < t1),
-                         amp * np.sin(2.0 * np.pi * self.sine_freq * (ch + 1) * (t - t0)), 0.0)
-                for ch in range(int(tb.n_ch))]
+        def tone(ch, quad):
+            # A complex tone is the analytic one -- cos + j*sin -- not two independent reals: it is
+            # what a real I/Q datapath actually carries, so the plots and the quantizer see a signal
+            # rather than a pair of unrelated ones.  `quad` selects sin (I) or cos (Q).
+            f = self.sine_freq * (ch + 1)
+            wave = np.cos if quad else np.sin
+            return np.where((t >= t0) & (t < t1), amp * wave(2.0 * np.pi * f * (t - t0)), 0.0)
+
+        rows = [tone(ch, False) for ch in range(int(tb.n_ch))]
         x = np.stack(rows)                                        # (n_ch, n)
+        if tb.word.iq_mode:
+            x = x + 1j * np.stack([tone(ch, True) for ch in range(int(tb.n_ch))])
         return [x[:, i * int(tb.blksize):(i + 1) * int(tb.blksize)]
                 for i in range(self.n_src_blk)]
 
@@ -616,7 +637,8 @@ class RfLoopbackSim:
             self.write_scenario(_root)
             self.tb.sim.run_sim()
             self._captured = read_rf_bundle(Path(_root) / self.tb.out_bundle,
-                                            self.tb.n_ch, self.tb.blksize)
+                                            self.tb.n_ch, self.tb.blksize,
+                                            complex_samp=bool(self.tb.word.iq_mode))
             self._in_bytes = (Path(_root) / self.tb.in_bundle / "words.bin").read_bytes()
             self._out_bytes = (Path(_root) / self.tb.out_bundle / "words.bin").read_bytes()
         return self.tb
@@ -662,7 +684,8 @@ class RfLoopbackSim:
                 f"DAC block {k} != ADC block {k - n_lat} after the loopback")
 
         # The same claim at the byte level, on the bundles both backends will share from stage 2.
-        blk_bytes = int(tb.n_ch) * int(tb.blksize) * 8          # one block, float64
+        # One block on disk: one float64 per COMPONENT, and a complex sample is two of them.
+        blk_bytes = int(tb.n_ch) * int(tb.blksize) * 8 * (2 if tb.word.iq_mode else 1)
         assert self._out_bytes[n_lat * blk_bytes:] == self._in_bytes[:len(self._out_bytes)
                                                                      - n_lat * blk_bytes], (
             f"the sink's bundle is not byte-identical to the source's once shifted by the declared "

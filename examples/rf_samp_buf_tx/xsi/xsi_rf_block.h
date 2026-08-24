@@ -19,14 +19,18 @@
 // machinery at all.  Same split Python already has (StreamDriver/StreamSink vs StreamIF.depth).
 //
 // THE BUNDLE FORMAT is the one waveflow/simulation/rf_tb.py writes: one burst per block, each word
-// one float64 sample bit-reinterpreted into a uint64.  Reinterpreted, not converted — the words are
-// IEEE-754 bit patterns, so a `memcpy` is the whole of the decoding and there is no rounding step to
-// disagree about.
+// one float64 COMPONENT bit-reinterpreted into a uint64.  Reinterpreted, not converted — the words
+// are IEEE-754 bit patterns, so a `memcpy` is the whole of the decoding and there is no rounding
+// step to disagree about.
 //
-// REAL SAMPLES ONLY, and now CHECKED.  Python's bundle can also be complex (two float64 components
-// per sample), and the two are indistinguishable as bytes — so `RfFileSource` reads the manifest's
-// element kind and aborts on a complex one rather than playing it back as twice as many real
-// samples.  See rf_require_real_bundle().
+// REAL OR COMPLEX, and the bundle SAYS WHICH.  A real sample is one component; a complex one is two,
+// `(re, im)` adjacent — indistinguishable as bytes, which is why the kind is a manifest field and
+// why both models take it as an argument and CHECK it rather than reading it off the file.  See
+// rf_require_bundle_kind().
+//
+// Nothing between those two ends interprets a pair: `RfBlockMsg::data` is a `vector<double>`, the
+// channel moves doubles, and the source slices them.  That is why complex support costs one
+// constructor argument at each end and no branch in between.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -64,29 +68,49 @@ inline std::uint64_t rf_sample_to_word(double d) {
     return w;
 }
 
-/// The manifest key and value naming an RF bundle's element kind — the C++ half of
-/// waveflow.simulation.rf_tb's RF_ELEMENT_KEY / RF_ELEMENT_REAL.
-static const char* const RF_ELEMENT_KEY  = "rf_element";
-static const char* const RF_ELEMENT_REAL = "float64";
+/// The manifest key and its two values — the C++ half of waveflow.simulation.rf_tb's
+/// RF_ELEMENT_KEY / RF_ELEMENT_REAL / RF_ELEMENT_COMPLEX.
+static const char* const RF_ELEMENT_KEY     = "rf_element";
+static const char* const RF_ELEMENT_REAL    = "float64";
+static const char* const RF_ELEMENT_COMPLEX = "complex128";
 
-/// Abort unless *dir* is a REAL bundle.  An absent key means real — because THIS side still writes
-/// bundles without it: `BurstBundle::write` emits four keys and `rf_element` is not one of them.
-/// That default is a contract with a live writer, not support for old files (no bundle is committed
-/// in this repo); removing it as legacy cruft breaks the RF XSI gates immediately.
+/// The value a bundle of *complex_samp* blocks declares.
+inline const char* rf_element(int complex_samp) {
+    return complex_samp ? RF_ELEMENT_COMPLEX : RF_ELEMENT_REAL;
+}
+
+/// Abort unless *dir* declares the kind the caller expects — and **a bundle that does not say is an
+/// error**, not a default.
 ///
-/// **This refusal is the whole point of the manifest field.**  A complex bundle carries two float64
-/// components per sample, so read as real it is not corrupt and not short: it is a block of twice as
-/// many plausible samples, and every counter in the run would agree with itself. The models here
-/// carry real samples only (`RfBlockMsg::data` is `std::vector<double>`), so the honest answer is to
-/// stop rather than to produce one.  Lifting it is stage D's job, not a TODO here.
-inline void rf_require_real_bundle(const std::string& dir) {
-    const std::string kind = BurstBundle::read_meta_str(dir, RF_ELEMENT_KEY, RF_ELEMENT_REAL);
-    if (kind != RF_ELEMENT_REAL) {
+/// **Checked, not obeyed**, which is the same direction Python's `read_rf_bundle` takes and for the
+/// same reason: the two kinds differ only in how many doubles a sample takes, so a reader that let
+/// the file decide would silently reframe every block.  The caller knows what its edge carries; the
+/// file says what it holds; a disagreement is an error.
+///
+/// The absent case *was* a default meaning real, and the reason is worth keeping: `BurstBundle::write`
+/// emitted four keys and `rf_element` was not among them, so every bundle `RfFileSink` produced
+/// lacked it and Python read those back in the gates.  That made "absent means real" a contract with
+/// a live writer rather than support for old files — no bundle is committed in this repo, so there
+/// was never any legacy data.  Once the writer emitted the key the default had nothing left to
+/// serve, and keeping it would have meant a bundle from some *third* writer being misread in silence.
+inline void rf_require_bundle_kind(const std::string& dir, int complex_samp) {
+    const std::string want = rf_element(complex_samp);
+    const std::string kind = BurstBundle::read_meta_str(dir, RF_ELEMENT_KEY);
+    if (kind.empty()) {
         std::fprintf(stderr,
-            "FATAL: RF bundle '%s' declares %s=\"%s\"; these models carry REAL samples "
-            "only.\nA complex bundle read as real is not an error -- it is twice as many "
-            "plausible samples -- so this stops instead.\n",
-            dir.c_str(), RF_ELEMENT_KEY, kind.c_str());
+            "FATAL: RF bundle '%s' has no %s in its meta.json, so it does not say whether its "
+            "samples are real or complex.\nThe two are the same bytes at different lengths, so "
+            "there is nothing safe to assume. Rewrite it with a writer that declares the kind "
+            "(waveflow.simulation.rf_tb.write_rf_bundle, or RfFileSink).\n",
+            dir.c_str(), RF_ELEMENT_KEY);
+        std::exit(5);
+    }
+    if (kind != want) {
+        std::fprintf(stderr,
+            "FATAL: RF bundle '%s' declares %s=\"%s\" but this model was built for \"%s\".\n"
+            "A complex bundle read as real is not an error -- it is twice as many plausible "
+            "samples -- so this stops instead.\n",
+            dir.c_str(), RF_ELEMENT_KEY, kind.c_str(), want.c_str());
         std::exit(5);
     }
 }
@@ -106,9 +130,15 @@ inline void rf_require_real_bundle(const std::string& dir) {
 /// design.
 class RfFileSource : public XsiSimObj {
 public:
-    /// *blk_samples* is `n_ch * blksize` — one block's worth, the unit the edge moves.
-    RfFileSource(RfChannel& out, std::size_t blk_samples)
-        : ch_(out), blk_(blk_samples) {}
+    /// *blk_comps* is one block's worth in **components** — `n_ch * blksize` doubles for real
+    /// blocks, twice that for complex ones, because `RfBlockMsg::data` is a `vector<double>` and a
+    /// complex sample is two of them.  *complex_samp* is what this source's EDGE carries, and it is
+    /// checked against the bundle rather than read from it (see rf_require_bundle_kind).
+    ///
+    /// Slicing is the same either way: this model moves doubles and never interprets a pair, which
+    /// is why interleaved I/Q costs it exactly one argument.
+    RfFileSource(RfChannel& out, std::size_t blk_comps, int complex_samp = 0)
+        : ch_(out), blk_(blk_comps), complex_(complex_samp) {}
 
     //: Set by the generated harness from the Python DynParam; loaded in pre_sim, like every other
     //: file-backed participant.
@@ -116,7 +146,7 @@ public:
 
     void pre_sim() override {
         if (in_bundle.empty()) return;
-        rf_require_real_bundle(in_bundle);
+        rf_require_bundle_kind(in_bundle, complex_);
         const std::vector<std::uint64_t> w = BurstBundle::read_words(in_bundle);
         samples_.resize(w.size());
         for (std::size_t i = 0; i < w.size(); ++i) samples_[i] = rf_word_to_sample(w[i]);
@@ -141,6 +171,7 @@ public:
 private:
     RfChannel&          ch_;
     std::size_t         blk_;
+    int                 complex_ = 0;
     std::vector<double> samples_;
     std::size_t         pos_ = 0;
 };
@@ -155,7 +186,12 @@ private:
 /// comparison**, exactly as it is in pysim.
 class RfFileSink : public XsiSimObj {
 public:
-    explicit RfFileSink(RfChannel& in) : ch_(in) {}
+    /// *complex_samp* is what this sink's EDGE carries, and it is what the written bundle DECLARES.
+    /// A sink cannot infer it: a captured block is doubles either way, and an empty capture has
+    /// nothing to infer from at all — the same reason Python's `RfDataSink` states it rather than
+    /// letting `write_rf_bundle` guess.
+    explicit RfFileSink(RfChannel& in, int complex_samp = 0)
+        : ch_(in), complex_(complex_samp) {}
 
     //: Emitted by the harness from the Python DynParam.  Empty writes nothing.
     std::string out_bundle;
@@ -174,7 +210,11 @@ public:
     }
 
     void post_sim() override {
-        if (!out_bundle.empty()) BurstBundle::write(out_bundle, words_, bounds_);
+        // The kind is DECLARED, not left to the reader -- and saying it is what lets
+        // rf_require_bundle_kind() and Python's read_rf_bundle() treat a silent bundle as an error
+        // rather than a guess.
+        if (!out_bundle.empty())
+            BurstBundle::write(out_bundle, words_, bounds_, RF_ELEMENT_KEY, rf_element(complex_));
     }
 
     /// Blocks taken off the edge.
@@ -190,6 +230,7 @@ public:
 
 private:
     RfChannel&                 ch_;
+    int                        complex_ = 0;
     std::vector<std::uint64_t> words_, bounds_, idx_;
     std::uint64_t              cycle_ = 0;
 };

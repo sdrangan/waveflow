@@ -108,12 +108,11 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | 
 def read_burst_meta(bundle_dir: str | Path) -> dict:
     """The bundle's ``meta.json`` as a dict — ``{}`` when there is none.
 
-    An **absent manifest is not an error**, and that is what makes the field a compatible addition:
-    bundles written before a key existed, and bundles written by the C++ side (which emits the four
-    fixed fields and nothing else), simply do not carry it. A reader that needs one therefore has to
-    say what a missing value means — see
-    :func:`~waveflow.simulation.rf_tb.read_rf_bundle`, where missing means *real*, the one kind that
-    existed before the key did.
+    An **absent manifest is not an error here**, because this module owns no key a caller must
+    supply: it reports what the file holds, and what a missing value means is the caller's to decide.
+    :func:`~waveflow.simulation.rf_tb.read_rf_bundle` is the caller that decides, and for it a
+    missing ``rf_element`` is an **error** — real and complex blocks are the same bytes at different
+    lengths, so there is nothing safe to assume.
     """
     p = Path(bundle_dir) / META_NAME
     if not p.exists():

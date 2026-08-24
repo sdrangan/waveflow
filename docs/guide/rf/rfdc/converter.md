@@ -117,7 +117,6 @@ Each of these is refused loudly at construction rather than reported later as a 
 | condition | why it raises |
 |---|---|
 | `word` is not an `RfdcSampWord` | it is a type, not a width — a bare `64` is the mistake this catches |
-| `word.iq_mode` | the **word**, the RF bundle and the C++ sample twin all handle interleaved I/Q now; what is still missing is the converter's own complex paths and its two C++ models |
 | `full_scale <= 0` | see the note above |
 | `word.bitwidth > 64` | wider than the stream word |
 

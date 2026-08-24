@@ -157,17 +157,27 @@ public:
     std::vector<std::uint64_t> dropped_ch;
     /// AXIS ports this model masters -- the tile's receive channel count.
     std::size_t n_ch() const { return ch_.size(); }
+    /// The sample format it was built with.  Exposed so a testbench can ASSERT what reached the
+    /// model rather than what the generator was asked for -- an I/Q rule that quietly defaulted
+    /// would otherwise be invisible until the data came back wrong.
+    const RfdcFormat& fmt() const { return fmt_; }
 
 private:
-    /// Pull one `(n_ch, blksize)` block off the edge and pack it, ROW PER PORT.
+    /// Pull one block off the edge and pack it, ROW PER PORT.
     ///
     /// The block arrives channel-major and flat, which is the same convention Python's `pack`
     /// returns: row `ch` is what port `ch` carries, so this is a stride, not a transpose.
+    ///
+    /// **`blk.data` counts COMPONENTS, not samples** — one double each, and two per sample when the
+    /// format is interleaved I/Q, `(re, im)` adjacent.  That is the unit `RfBlockMsg` has always
+    /// carried (it is a `vector<double>`) and the unit the RF bundle stores, so nothing converts
+    /// here; what the I/Q case changes is only that `slots_per_word()` components make a word where
+    /// `samp_per_word` samples did.  The two are the same number for real data.
     void refill_() {
         RfBlockMsg blk;
         if (!rf_.pop(blk)) return;                     // starved: the channel counts it, not us
         const std::size_t per_ch = blk.data.size() / ch_.size();
-        nwords_ = per_ch / (std::size_t)fmt_.samp_per_word;
+        nwords_ = per_ch / (std::size_t)fmt_.slots_per_word();
         for (std::size_t i = 0; i < ch_.size(); ++i) {
             words_[i].resize(nwords_);
             rfdc_pack(blk.data.data() + i * per_ch, (int)per_ch, fmt_, words_[i].data());
@@ -204,11 +214,15 @@ class RfdcDacSlave : public XsiSimObj {
 public:
     /// *rf_out* is the RF-side edge; *ports* the DUT's AXIS master ports this answers, ONE PER
     /// CHANNEL and in channel order.  A bare `const char*` is a one-channel list.
-    /// *blk_samples* is `n_ch * blksize` — one block's worth, the unit the RF edge moves.
+    ///
+    /// *blk_comps* is one block's worth in **components** — `n_ch * blksize` for real data and
+    /// twice that for interleaved I/Q, because `RfBlockMsg::data` is a `vector<double>` and a
+    /// complex sample is two of them.  It was named `blk_samples` while only real data existed,
+    /// where the two are the same number; naming the unit is the whole of what I/Q changes here.
     RfdcDacSlave(Dut& dut, AxisPortList ports, RfChannel& rf_out,
-                 const RfdcFormat& fmt, double words_per_cycle, std::size_t blk_samples)
+                 const RfdcFormat& fmt, double words_per_cycle, std::size_t blk_comps)
         : d_(dut), rf_(rf_out), fmt_(fmt), rate_(words_per_cycle),
-          blk_(blk_samples) {
+          blk_(blk_comps) {
         for (std::size_t i = 0; i < ports.names.size(); ++i) {
             const std::string p(ports.names[i]);
             Ch c;
@@ -221,14 +235,18 @@ public:
         underrun_ch.assign(ch_.size(), 0);
         words_recv_ch.assign(ch_.size(), 0);
         // The BLOCK grid, derived from the word rate rather than declared: one CHANNEL's row of a
-        // block is per_ch_/samp_per_word words, so blocks/cycle = words/cycle / words-per-row.  A DAC
-        // plays continuously and the grid is what it plays ON -- see emit_on_grid_().
+        // block is per_ch_/slots_per_word() words, so blocks/cycle = words/cycle / words-per-row.  A
+        // DAC plays continuously and the grid is what it plays ON -- see emit_on_grid_().
         //
         // Per ROW, not per block: `words_per_cycle` is one port's rate and every port runs it
-        // concurrently, so dividing the whole `(n_ch, blksize)` block's word count into a
-        // single-port rate would make the grid n_ch times too slow.  It read that way while there
-        // was only ever one channel, where the two are the same number.
-        blk_rate_ = RateTick(words_per_cycle * double(fmt.samp_per_word) / double(per_ch_));
+        // concurrently, so dividing the whole block's word count into a single-port rate would make
+        // the grid n_ch times too slow.  It read that way while there was only ever one channel,
+        // where the two are the same number.
+        //
+        // COMPONENTS over SLOTS, and the ratio is what makes I/Q free here: both terms double, so a
+        // complex block plays on exactly the grid its real twin does at half the samp_per_word --
+        // which is the arithmetic that keeps an I/Q design on the same 64-bit bus.
+        blk_rate_ = RateTick(words_per_cycle * double(fmt.slots_per_word()) / double(per_ch_));
     }
 
     void sample() override {
@@ -267,10 +285,15 @@ public:
                 ++words_recv;
                 ++words_recv_ch[i];
                 ++c.pending;
-                std::int64_t slot[64];
-                rfdc_unpack_word(c.word, fmt_, slot);
-                for (int k = 0; k < fmt_.samp_per_word; ++k)
-                    c.samples.push_back(rfdc_dequantize(slot[k], fmt_));
+                // Through `rfdc_unpack`, not a hand-rolled unpack-then-dequantize loop.  That
+                // function is the twin gated bit-exactly against Python (tests/build/
+                // test_xsi_rfdc_samp.py) and it is where the I/Q slot order lives; re-spelling its
+                // two steps here is how this model would come to disagree with the thing it is
+                // supposed to be a twin of.  It writes slots_per_word() COMPONENTS, `(re, im)`
+                // adjacent for I/Q, which is the unit `samples` has always been in.
+                double comp[RFDC_MAX_SLOTS];
+                rfdc_unpack(&c.word, 1, fmt_, comp);
+                for (int k = 0; k < fmt_.slots_per_word(); ++k) c.samples.push_back(comp[k]);
             }
         }
         // A DAC plays on its GRID, not when its buffer happens to fill.
@@ -333,6 +356,10 @@ private:
     /// the rows of one block are the same instant on n_ch converters of one tile, so a block
     /// assembled from a full row and a short one would claim samples that were never played
     /// together.  If any channel is short, the whole block is the zero-fill.
+    ///
+    /// Everything here counts COMPONENTS, so the I/Q case needs no branch: a zero-filled complex
+    /// block is `blk_` zero doubles, which reads back as complex zeros because the components come
+    /// in `(re, im)` pairs.
     void emit_on_grid_() {
         RfBlockMsg blk;
         blk.idx = ++blocks_out;
@@ -374,7 +401,9 @@ private:
     RfdcFormat fmt_;
     RateTick   rate_;
     RateTick   blk_rate_;
-    /// Samples in one whole `(n_ch, blksize)` block, and in one channel's row of it.
+    /// COMPONENTS in one whole block, and in one channel's row of it — doubles, so two per sample
+    /// under interleaved I/Q.  See the constructor: naming the unit is the whole of what I/Q changes
+    /// in this model's accounting.
     std::size_t blk_;
     std::size_t per_ch_ = 0;
     std::vector<Ch> ch_;
