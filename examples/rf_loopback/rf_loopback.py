@@ -189,7 +189,7 @@ class RfSampPassThrough(FreeRunMod):
     host to start it and re-fires on each arriving block.
 
     **`n_ch` independent lanes**, one per converter channel, because that is what the converter
-    presents: an ``Rfdc`` is a tile with one AXIS port per channel, so this is one pipeline per port.
+    presents: an ``Rfdc`` has one AXIS port per channel, so this is one pipeline per port.
     Sharing a stage between two channels would couple their back-pressure and make one channel's
     stall the other's drop, which is not what a tile's channels do to each other.
 

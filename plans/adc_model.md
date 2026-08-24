@@ -645,6 +645,59 @@ and the quad-tile classification from the RFSoC data sheet overview (DS889), bot
 RFDC does that this model does not*. The board bring-up log should confirm it against PG269's
 AXI4-Stream data-format tables for the exact tile configuration in use.
 
+#### The RF environment is complex baseband, which is why there is no mixer
+
+**Recorded 2026-08-23**, after the mode table above was read as implying one.
+
+Every signal on the RF side is modelled in **complex baseband**, including one that is physically a
+real passband waveform — a real passband signal *is* its complex envelope, and the envelope is what
+the model carries. That single convention disposes of the DDC/DUC as a piece of DSP:
+
+- **I/Q → real** and **I/Q → I/Q** are *indistinguishable from the RF side.* Both present **one
+  complex baseband channel**. Whether the quadrature mixing happens on-chip (the RFDC's NCO) or in
+  an external analog modulator fed by two real DACs is a fact about the analog domain *past the
+  model's boundary*.
+- So the "mixer" the mode table attributes to the block is, in this representation, `(a, b) -> a + ib`
+  — forming a complex number, not multiplying by a carrier. **No NCO, no complex multiply, and no
+  equivalence obligation**: nothing here has to be proven bit-exact against a C++ twin, because there
+  is no arithmetic to prove.
+
+An earlier draft of this file read the mode table literally and concluded `Rfdc` needed a third
+configuration — complex on the AXIS side, real on the RF side — with a mixer between them. **There is
+no such configuration.** The RF side of an upconverting path is complex, and the sample kind is
+therefore the same on both sides of the converter.
+
+**The rule is `word.iq_mode` ⇒ `complex_samp` — an IMPLICATION, not an equality.** An earlier draft
+of this section said equality, and that was still too strong: the two are genuinely different
+questions (`iq_mode` is bus packing, `complex_samp` is signal representation), and what ties them is
+that **the converter performs no I/Q mapping and so can never create a Q.** A complex word needs a
+complex edge; a real word is fine on either. Four rows:
+
+| `iq_mode` | `complex_samp` | |
+|---|---|---|
+| `0` | `0` | real baseband end to end — every example in the repo today |
+| `0` | `1` | the DUC/DDC is in the **RF domain**, outside the converter |
+| `1` | `1` | the DUC/DDC is in the **converter** |
+| `1` | `0` | **refused** — the beats carry a Q and the edge has nowhere to put it |
+
+Equality forbade row 2, which is a real configuration — and one the edge itself already allowed, since
+`RFSampIF.put()` widens a real block onto a complex edge. The converter was **stricter than the
+interface it guards**.
+
+Row 2 is lossless *while the edge's content really is real* (`x + j0`, because the conversion happened
+elsewhere), and `Rfdc.rf_samples()` **asserts that** rather than assuming it: a live Q there would
+hand the fabric a block of the right shape holding half a signal. The user-facing statement of all of
+this is `docs/guide/rf/rfdc/channels.md`.
+
+**Where the pairing lives, when it is needed.** A design that drives an external quadrature modulator
+from two *real* DAC channels needs `(a, b) -> a + ib` somewhere, and that somewhere is a **separate
+pysim-only RF block**, outside the converter — the same discipline that keeps gain and multipath in
+`Channel` rather than in the edge. It preserves `n_ch = n_rx = n_tx` on the converter, keeps its two
+sides symmetric, and is a handful of lines. **It does not exist yet**; nothing has needed it.
+
+**When is an RF edge real, then?** When the signal genuinely is: a direct-sampled real waveform with
+no upconversion, which is every example in the repo today.
+
 #### The model carries complex-ness as a **type**, so the port count never varies
 
 **Resolved 2026-08-22, and it supersedes an earlier draft of this section.** That draft read the
@@ -726,14 +779,26 @@ two ports. That is a lowering-time concern for a board this project does not tar
 with the rest of the Flow-3 work rather than in the model. Recorded so that a future dual-tile port
 finds the note instead of the surprise.
 
-#### The Waveflow `Rfdc` is a **tile**, and it presents one AXIS port per stream
+#### What one `Rfdc` stands for, and it presents one AXIS port per stream
 
-**Decided 2026-08-22.** This is the unit question, and it is separate from the mode table above.
+**Decided 2026-08-22; the word "tile" corrected 2026-08-24.** This is the unit question, and it is
+separate from the mode table above.
 
-**One Waveflow `Rfdc` represents `n_ch` physical RFDC datapaths**, not one. Lowering to Vivado
-expands a single Waveflow block into `n_ch` RFDC blocks; nothing about that lowering exists yet, but
-it is the shape the model is built for, and it is why the module is named after the *tile* rather
-than after a converter.
+**One Waveflow `Rfdc` represents `n_rx` RF-ADC datapaths and `n_tx` RF-DAC datapaths**, not one
+converter. Lowering to Vivado expands a single Waveflow block into that many converter blocks;
+nothing about that lowering exists yet, but it is the shape the model is built for.
+
+**It is not a *tile*, and an earlier draft of this section said it was.** In PG269 a tile is a group
+of **same-direction** converters sharing a clock and a power-up sequence — a Quad RF-ADC tile holds
+**four** RF-ADCs (two pairs, each pair configurable for I/Q), a Dual holds two — and RF-ADC and
+RF-DAC tiles are separate. So one ADC is not a tile, and an `Rfdc` carrying both directions is not
+one either: it spans an ADC tile and a DAC tile, and `n_rx` need not be a whole tile's worth. This
+file already knew that where it mattered — `t0_rx` / `t0_tx` exist as **two** numbers precisely
+because *"ADC and DAC are separate tiles on an RFSoC — they run at different sample rates and are
+started separately"* — so the naming contradicted the model's own design.
+
+The single-direction uses of the word elsewhere (a tile's channels riding one `RFSampIF`, `t0` as a
+tile property, MTS as multi-**tile** synchronization) are **correct** and were left alone.
 
 The two sides are asymmetric on purpose, and each takes the form its consumer wants:
 

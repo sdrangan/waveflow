@@ -14,9 +14,14 @@ owner (see :meth:`on_rf_bind`).
 :class:`~waveflow.hw.rf_sample_if.RFSampIF`, so this module has no timer of its own: it responds to
 block arrivals on the ADC path and to word arrivals on the DAC path.
 
-**A tile, not a converter.**  One ``Rfdc`` represents ``n_rx`` receive and ``n_tx`` transmit
-datapaths, and the two sides take the shape their consumer wants (``plans/adc_model.md``, *The
-Waveflow Rfdc is a tile*):
+**A group of datapaths, not a converter** -- and deliberately not called a *tile*: AMD's tile is a
+group of SAME-DIRECTION converters (four in a Quad RF-ADC tile, two in a Dual) sharing a clock and a
+power-up sequence, and RF-ADC and RF-DAC tiles are distinct, so one ``Rfdc`` spans two of them.  What
+it borrows from the tile is the epoch -- :attr:`t0_rx` and :attr:`t0_tx` are each *a tile's* sample
+counter starting, which is why they are two numbers.
+
+One ``Rfdc`` represents ``n_rx`` receive and ``n_tx`` transmit datapaths, and the two sides take the
+shape their consumer wants (``plans/adc_model.md``, *What one Rfdc stands for*):
 
 - **RF side** — *one* :class:`~waveflow.hw.rf_sample_if.RFSampIF` per direction, carrying every
   channel of that direction in one ``(n_ch, blksize)`` block.  Splitting it per channel would give
@@ -59,7 +64,7 @@ class Rfdc(HwModule):
 
     Endpoints
     ---------
-    ``rx_rf`` / ``rx_stream_0 .. rx_stream_{n_rx-1}``
+    ``rx_rf`` / ``rx_streams[i]``
         The **ADC** path — one RF interface carrying every receive channel's block, and one AXIS
         master port per channel out to the PL.
     ``tx_stream_0 .. tx_stream_{n_tx-1}`` / ``tx_rf``
@@ -282,13 +287,34 @@ class Rfdc(HwModule):
         # express interleaved I/Q while the converter cannot yet convert it (see __post_init__).  The
         # check is written against the agreement rather than against that refusal, so lifting the
         # refusal in stage D needs nothing here.
-        if bool(iface.complex_samp) != bool(self.word.iq_mode):
+        # An IMPLICATION, not an equality, and the difference is a real configuration:
+        #
+        #     word.iq_mode  =>  iface.complex_samp
+        #
+        # `iq_mode` is about BUS PACKING (how many slots a beat spends per sample); `complex_samp` is
+        # about SIGNAL REPRESENTATION (whether the RF environment models this signal as a complex
+        # baseband envelope).  Different questions, so equality was too strong.  What is true is that
+        # this module performs no I/Q mapping and therefore **can never create a Q** -- so a complex
+        # word needs a complex edge, while a real word is fine on either:
+        #
+        #   (0, 0)  real baseband end to end -- every example in this repo today
+        #   (0, 1)  the DUC/DDC is in the RF domain, OUTSIDE the converter: the edge is complex-TYPED
+        #           because the environment is uniformly complex baseband, and its content is real
+        #           (`x + j0`) because the conversion happened elsewhere
+        #   (1, 1)  the DUC/DDC is in the converter -- interleaved I/Q beats, complex blocks
+        #   (1, 0)  refused here: the converter would have to drop Q
+        #
+        # This is the same rule `RFSampIF.put()` already applies one level down (it refuses a complex
+        # block on a real edge and WIDENS a real block on a complex one); an equality check here was
+        # stricter than the interface it guards.  See docs/guide/rf/rfdc/channels.md.
+        if bool(self.word.iq_mode) and not bool(iface.complex_samp):
             raise ValueError(
-                f"Rfdc '{self.name}': {iface.name} carries "
-                f"{'complex' if iface.complex_samp else 'real'} samples but the AXIS word is "
-                f"{self.word.describe()} (iq_mode={bool(self.word.iq_mode)}). A converter cannot "
-                f"take complex blocks off the RF side and emit real beats, or the reverse -- the two "
-                f"declarations are the same fact seen from either side of it.")
+                f"Rfdc '{self.name}': the AXIS word is {self.word.describe()} "
+                f"(iq_mode=True) but {iface.name} carries REAL samples. The converter would have to "
+                f"drop Q -- a block of the right shape carrying half a signal. Declare the edge "
+                f"complex_samp=True, or use a real word. (The reverse, a real word on a complex "
+                f"edge, is allowed: that is a real signal in a complex-baseband environment, and it "
+                f"means the DUC/DDC lives in the RF domain rather than in the converter.)")
 
         if ep_name == 'rx':
             self.rx_samp_rate = iface.samp_rate
@@ -482,6 +508,37 @@ class Rfdc(HwModule):
         if int(self.n_rx) > 0:
             yield from self._adc_proc()
 
+    def rf_samples(self, data, blk_idx: int | None = None) -> np.ndarray:
+        """The samples of an RF block, in the kind this converter's word can carry.
+
+        Handles the one row where the two sides legitimately differ — ``(iq_mode=0,
+        complex_samp=1)``, a real converter on a complex-baseband edge, which is what you have
+        whenever the DUC/DDC lives in the **RF domain** rather than in the converter. The edge is
+        complex-*typed* because the RF environment is uniformly complex baseband; its content is real
+        because the conversion happened elsewhere. Taking the real part is then **exact**.
+
+        That "then" is the point, and it is checked rather than assumed. A non-zero Q on such an edge
+        is not a representation detail — a real converter cannot carry it, and dropping it would hand
+        the fabric a block of the right shape and length holding half a signal. That is the failure
+        this whole path is built to make impossible, and it would otherwise arrive here by a side
+        door.
+
+        (No coercion in the other direction: an ``iq_mode`` word over a real edge is refused at bind,
+        in :meth:`on_rf_bind`, because nothing downstream could invent the Q.)
+        """
+        arr = np.asarray(data)
+        if not np.iscomplexobj(arr) or self.word.iq_mode:
+            return arr
+        if np.any(arr.imag):
+            where = "" if blk_idx is None else f"block {blk_idx} on {self.rx_rf.name} "
+            raise ValueError(
+                f"Rfdc '{self.name}': {where}carries a non-zero Q, but the AXIS word is real "
+                f"({self.word.describe()}). A real converter cannot represent it, and taking the "
+                f"real part would discard half the signal silently. Either the DDC that should have "
+                f"run upstream in the RF domain is missing, or this converter wants an "
+                f"iq_mode=True word.")
+        return arr.real
+
     def _adc_proc(self) -> ProcessGen[None]:
         """RF block in → quantize → pack → one AXIS burst out.
 
@@ -508,7 +565,7 @@ class Rfdc(HwModule):
             # `dtype=np.float64` here would silently drop Q on a complex one -- a block of the right
             # shape carrying half a signal, which is the failure mode this whole path is built to
             # make impossible.
-            samples = np.asarray(blk.data)                          # (n_rx, blksize)
+            samples = self.rf_samples(blk.data, blk.idx)            # (n_rx, blksize)
             self.n_adc_blk += 1
             words = self._pack(samples / fs)                        # (n_rx, n_words)
             # CONCURRENTLY, one process per port.  Offering the rows in a `for` loop would put the

@@ -387,11 +387,12 @@ class TestIQLoopback:
             assert np.array_equal(got, sent), f"block {k}"
             assert not np.array_equal(got[0], got[1]), "the rows must differ, or a swap hides"
 
-    def test_a_complex_edge_under_a_real_word_is_refused(self):
-        """The pair that spans the converter, from the other side.
+    def test_a_real_edge_under_an_iq_word_is_refused(self):
+        """The one illegal row, ``(1, 0)``: an interleaved-I/Q word over a **real** edge.
 
-        The refusal on ``iq_mode`` is gone; this one replaced it, and it is the one that is actually
-        about a disagreement rather than about a missing feature.
+        Named for what it builds — an earlier name said "a complex edge under a real word", which is
+        the ``(0, 1)`` row and is now **legal**.  This is the direction that cannot work: the beats
+        carry a Q and the edge has nowhere to put it.
         """
         from waveflow.hw.clock import Clock
         from waveflow.hw.rf_sample_if import RFSampIF
@@ -399,7 +400,7 @@ class TestIQLoopback:
         sim = Simulation()
         iface = RFSampIF(name="e", sim=sim, samp_clk=Clock(name="c", freq=1e6), n_ch=1,
                          blksize=8, n_blk=1, complex_samp=False)
-        with pytest.raises(ValueError, match="carries real samples but the AXIS word"):
+        with pytest.raises(ValueError, match="carries REAL samples"):
             iface.bind("rx", Rfdc(name="r", sim=sim, word=IQ_WORD).rx_rf)
 
 
@@ -806,21 +807,54 @@ class TestTheEdgeDeclaresTheElementKind:
         with pytest.raises(ValueError, match="declares rf_element"):
             src.pre_sim()
 
-    def test_the_converter_refuses_an_edge_whose_kind_its_word_disagrees_with(self):
-        """The pair that spans the converter: the RF block's kind and the AXIS word's ``iq_mode``.
+    def test_the_rule_spanning_the_converter_is_an_implication_not_an_equality(self):
+        """``word.iq_mode`` ⇒ ``complex_samp`` — three of the four combinations are legal.
 
-        Only one of the four combinations is buildable today — both real — because ``Rfdc`` still
-        refuses ``iq_mode = 1``. The check is written against the *agreement*, so lifting that
-        refusal (stage D) needs nothing here.
+        The two flags ask **different questions**: ``iq_mode`` is about bus packing, ``complex_samp``
+        about how the RF environment represents a signal.  What ties them is that the converter
+        performs no I/Q mapping and so **can never create a Q** — a complex word needs a complex
+        edge, but a real word is fine on either.
+
+        An earlier version of this test asserted *equality*, which forbade the ``(0, 1)`` row: a real
+        converter on a complex-baseband edge, which is what you have whenever the DUC/DDC lives in
+        the RF domain rather than in the converter.  That is a real configuration, and the edge
+        itself already allowed it — ``RFSampIF.put()`` widens a real block onto a complex edge — so
+        the converter was stricter than the interface it guards.
         """
-        sim, iface = self._edge(True)
-        rfdc = Rfdc(name="r", sim=sim)                # real word
-        with pytest.raises(ValueError, match="carries complex samples but the AXIS word"):
-            iface.bind("rx", rfdc.rx_rf)
+        sim, cplx = self._edge(True)
+        # (0, 1): real word, complex edge.  LEGAL -- the conversion happened elsewhere in the RF
+        # domain, and the edge is complex-typed because the environment uniformly is.
+        cplx.bind("rx", Rfdc(name="r_real_on_cplx", sim=sim).rx_rf)
 
-        # ...and the mirror, so the check is on the AGREEMENT and not on "the edge is complex".
+        # (0, 0): real word, real edge.  Every example in the repo today.
         _, real_edge = self._edge(False)
-        real_edge.bind("rx", Rfdc(name="r2", sim=sim).rx_rf)      # both real: fine
+        real_edge.bind("rx", Rfdc(name="r_real_on_real", sim=sim).rx_rf)
+
+        # (1, 1) is covered by the whole of TestIQLoopback; (1, 0) by the test below.
+
+    def test_a_complex_typed_edge_carrying_a_real_q_is_fine_but_a_live_q_is_refused(self):
+        """The ``(0, 1)`` row is lossless **while the content really is real**, and that is asserted.
+
+        Complex-*typed* with real content (``x + j0``) is the whole point of the row: the DDC ran
+        upstream, and the type is complex only because the RF environment is uniformly complex
+        baseband.  Taking the real part is then exact.  A non-zero Q on that edge is a different
+        thing — a real converter cannot represent it, and dropping it would be a block of the right
+        shape carrying half a signal, which is the failure mode this path exists to prevent.
+        """
+        rfdc = Rfdc(name="r", sim=Simulation())                    # a REAL word
+        real_content = np.array([[0.25 + 0j, -0.25 + 0j, 0.5 + 0j, -0.5 + 0j]])
+        got = rfdc.rf_samples(real_content)
+        assert not np.iscomplexobj(got), "x + j0 reduces to x, exactly"
+        assert np.array_equal(got, real_content.real)
+
+        live_q = real_content.copy()
+        live_q[0, 2] += 0.125j
+        with pytest.raises(ValueError, match="non-zero Q"):
+            rfdc.rf_samples(live_q, blk_idx=1)
+
+        # ...and a complex word passes a complex block through untouched -- the (1, 1) row.
+        assert np.iscomplexobj(Rfdc(name="r2", sim=Simulation(), word=IQ_WORD)
+                               .rf_samples(live_q))
 
     @pytest.mark.parametrize("complex_samp", [False, True])
     def test_a_run_over_the_edge_is_a_file_to_file_byte_comparison(self, tmp_path, complex_samp):
