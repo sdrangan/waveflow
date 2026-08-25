@@ -89,12 +89,12 @@ def test_the_shot_survives_real_rtl_byte_for_byte():
     out = (r.stdout or "") + (r.stderr or "")
     assert "XSI_EXITCODE=0" in out, f"rf_shot_buf XSI run did not complete cleanly:\n{out[-3000:]}"
 
-    # The memory's own assertion, and here it means something specific: the whole design claim is
-    # that the reader and the writer are NEVER live at the same time, so a clean log is the RTL half
-    # of what ShotPhase asserts in pysim.
-    assert "read-during-write collision" not in out, (
-        f"the memory's read-during-write assertion fired — the loader and the reader were live at "
-        f"the same time, which is the one thing a shot buffer is not allowed to do.\n{out[-3000:]}")
+    # NOTE (2026-08-25): a `read-during-write collision` assertion used to be checked here
+    # against this stream.  It could never fire: `out` is run.bat's stdout/stderr, and the
+    # XSI flow DISCARDS RTL text output -- `bram_t2p.v`'s $error reaches no channel this
+    # test can read (measured four ways, see plans/bram_simple.md).  It was removed rather
+    # than left reading as positive evidence.  The condition is to be gated from the VCD
+    # trace instead; until that lands it is checked NOWHERE, which is what was already true.
 
     check_xsi_outputs(XSI, NWORD, WANT_CYCLES)
 

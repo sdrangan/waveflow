@@ -71,12 +71,12 @@ def test_bram_toy_xsi_reproduces_the_witness():
     out = (r.stdout or "") + (r.stderr or "")
     assert "XSI_EXITCODE=0" in out, f"bram_toy XSI run did not complete cleanly:\n{out[-3000:]}"
 
-    # The memory's own assertion. `bram_t2p.v` $errors when the reader touches the address the
-    # writer is writing that cycle, so a clean log is positive evidence that "rd trails wr" held --
-    # the design invariant, checked by the hand-written RTL and by nothing else.
-    assert "read-during-write collision" not in out, (
-        f"the memory's read-during-write assertion fired: the reader is not trailing the writer.\n"
-        f"{out[-3000:]}")
+    # NOTE (2026-08-25): a `read-during-write collision` assertion used to be checked here
+    # against this stream.  It could never fire: `out` is run.bat's stdout/stderr, and the
+    # XSI flow DISCARDS RTL text output -- `bram_t2p.v`'s $error reaches no channel this
+    # test can read (measured four ways, see plans/bram_simple.md).  It was removed rather
+    # than left reading as positive evidence.  The condition is to be gated from the VCD
+    # trace instead; until that lands it is checked NOWHERE, which is what was already true.
 
     check_xsi_outputs(xsi, WANT_CYCLES)
 
