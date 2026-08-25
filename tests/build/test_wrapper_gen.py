@@ -6,7 +6,7 @@ Two claims are worth separating, because only the first is cheap:
   *boundary port* of the kernel and the join happens in the wrapper.  That is structural and is
   checked here, in milliseconds.
 * **The design works** — the elaborated wrapper returns the witness's five values.  Nothing static
-  can say that; it is ``tests/examples/test_bram_toy_xsi.py``, and it needs Vivado.
+  can say that; it is ``tests/examples/test_bram_simple_xsi.py``, and it needs Vivado.
 
 The wrapper's shape is gated against ``plans/witness/t2p_bram/rx_top.v``, which was hand-written and
 simulated: same instantiation, same A-half wiring, same B-half tie-offs.
@@ -30,14 +30,14 @@ from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
 from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
 
-from examples.bram_toy.bram_toy import DEPTH, FILL, WORD_BW, BramToy, BramToyTB
+from examples.bram_simple.bram_simple import DEPTH, WORD_BW, BramSimple, BramSimpleTB
 
 WITNESS = Path(__file__).resolve().parents[2] / "plans" / "witness" / "t2p_bram"
-_ELAB = {"bitwidth": WORD_BW, "depth": DEPTH, "fill": FILL}
+_ELAB = {"bitwidth": WORD_BW, "depth": DEPTH}
 
 
 def _dut():
-    return elaborate(BramToy, dict(_ELAB), name="bram_toy")
+    return elaborate(BramSimple, dict(_ELAB), name="bram_simple")
 
 
 def _spec():
@@ -56,7 +56,8 @@ def test_a_bram_port_becomes_a_boundary_port_with_no_change_to_derive_boundary()
     it one."""
     comp = _dut()
     names = [n for n, _ep in comp.boundary]
-    assert names == ["rx_str", "buf_w", "addr_str", "out_str", "buf_r"]
+    assert names == ["cmd_w", "data_w", "buf_w", "resp_w",
+                     "cmd_r", "buf_r", "data_r", "resp_r"]
     kinds = {n: type(ep).__name__ for n, ep in comp.boundary}
     assert kinds["buf_w"] == "BramIFMaster" and kinds["buf_r"] == "BramIFMaster"
 
@@ -75,7 +76,7 @@ def test_the_memory_is_not_a_task():
     nothing asks a memory for a ``kernel_task()`` it does not have."""
     comp = _dut()
     assert [type(m).__name__ for m in comp.rtl_mods.values()] == ["T2pBram"]
-    assert [type(c).__name__ for c in comp.ordered_subcomps] == ["BramWrite", "BramRead"]
+    assert [type(c).__name__ for c in comp.ordered_subcomps] == ["BramWriteCmd", "BramReadCmd"]
     assert all(type(c).__name__ != "T2pBram" for c in comp.sub_comps.values())
 
 
@@ -84,7 +85,7 @@ def test_the_kernel_carries_the_bram_ports_with_a_sized_array_and_the_memorys_la
     bram = [p for p in spec.ports if p.kind == "bram"]
     assert [p.name for p in bram] == ["buf_w", "buf_r"]
     for p in bram:
-        assert p.decl == f"ap_uint<16> {p.name}[1024]", "sized array, never a pointer"
+        assert p.decl == f"ap_uint<64> {p.name}[1024]", "sized array, never a pointer"
         assert p.pragmas == (
             f"#pragma HLS INTERFACE mode=bram port={p.name} storage_type=ram_1wnr latency=1",)
     # The 1 in `latency=1` is the memory's, read from its Verilog -- not a number in any Python file.
@@ -140,23 +141,23 @@ def test_the_a_half_reaches_the_memory_and_the_b_half_is_tied_off():
     assert len(w.mems) == 1
     mem = w.mems[0]
     assert (mem.module, mem.inst, mem.clock) == ("bram_t2p", "mem", "clk")
-    assert mem.params == (("DW", 16), ("AW", 10)), "the witness's #(.DW(16), .AW(10))"
+    assert mem.params == (("DW", 64), ("AW", 10)), "1024 words at the gated 64-bit width"
 
     conns = dict(mem.conns)
     # The write accessor drives port A, the read accessor port B -- one memory, two logical ports.
-    # The data path goes straight through; the ADDRESS does not, and the `>> 1` is the whole of the
+    # The data path goes straight through; the ADDRESS does not, and the `>> 3` is the whole of the
     # 2026-08-24 correction: Vitis addresses a bram port in BYTES (the generated RTL contains
-    # `Addr_A_local = Addr_A_orig << 32'd1` for a 16-bit array) and bram_t2p indexes WORDS, so
+    # `Addr_A_local = Addr_A_orig << 32'd3` for a 64-bit array) and bram_t2p indexes WORDS, so
     # joining them straight through scales every address by the element's byte width and aliases
-    # everything past `depth / (W/8)` onto a live word, silently.  bram_toy could not see it -- it
-    # fills 256 of 1024 words, so the scaled addresses never wrap -- and examples/rf_shot_buf at 64
-    # bits got the second half of its shot back twice.
-    assert conns["a_addr"] == "buf_w_addr_a >> 1" and conns["a_din"] == "buf_w_din_a"
-    assert conns["b_addr"] == "buf_r_addr_a >> 1" and conns["b_dout"] == "buf_r_dout_a"
+    # everything past `depth / (W/8)` onto a live word, silently.  The retired bram_toy could not see
+    # it: 256 of 1024 words at SIXTEEN bits never wrap.  This example is gated at 64 for exactly that
+    # reason -- 256 words reach byte address 2040, so word 128 onward aliases immediately.
+    assert conns["a_addr"] == "buf_w_addr_a >> 3" and conns["a_din"] == "buf_w_din_a"
+    assert conns["b_addr"] == "buf_r_addr_a >> 3" and conns["b_dout"] == "buf_r_dout_a"
     # The memory takes a write ENABLE; Vitis drives a byte-lane MASK, one bit per byte of the word.
     assert conns["a_we"] == "|buf_w_we_a"
-    assert dict(w.tieoffs) == {"buf_w_dout_b": "16'd0", "buf_r_dout_b": "16'd0"}
-    assert dict(w.wires)["buf_w_we_a"] == 2, (
+    assert dict(w.tieoffs) == {"buf_w_dout_b": "64'd0", "buf_r_dout_b": "64'd0"}
+    assert dict(w.wires)["buf_w_we_a"] == 8, (
         "the WEN wire is as wide as Vitis drives it -- one bit per byte -- not the hard-coded 2 that "
         "happened to be right only at 16 bits")
 
@@ -254,32 +255,32 @@ def test_the_wrappers_pins_are_axi_stream_and_nothing_else():
     comp, spec = _spec()
     w = wrapper_spec(comp, spec)
     names = [n for n, _d, _w in w.ports]
-    assert names == ["ap_clk", "ap_rst_n",
-                     "rx_str_TDATA", "rx_str_TVALID", "rx_str_TREADY",
-                     "addr_str_TDATA", "addr_str_TVALID", "addr_str_TREADY",
-                     "out_str_TDATA", "out_str_TVALID", "out_str_TREADY"]
+    assert names == ["ap_clk", "ap_rst_n"] + [
+        f"{port}_{sig}"
+        for port in ("cmd_w", "data_w", "resp_w", "cmd_r", "data_r", "resp_r")
+        for sig in ("TDATA", "TVALID", "TREADY")]
     assert not any("buf" in n for n in names)
 
 
 def test_the_rendered_wrapper_is_verilog_the_witness_would_recognize():
     comp, spec = _spec()
     text = render_wrapper(wrapper_spec(comp, spec))
-    assert "module bram_toy_top (" in text
-    assert "bram_toy kernel (" in text
-    assert "bram_t2p #(.DW(16), .AW(10)) mem (" in text
-    assert "assign buf_w_dout_b = 16'd0;" in text
+    assert "module bram_simple_top (" in text
+    assert "bram_simple kernel (" in text
+    assert "bram_t2p #(.DW(64), .AW(10)) mem (" in text
+    assert "assign buf_w_dout_b = 64'd0;" in text
     assert text.count(".buf_w_") == 14 and text.count(".buf_r_") == 14
 
 
 def test_the_committed_wrapper_matches_what_the_generator_emits():
     """The committed artifact is a build output, and a build output nobody checks drifts."""
-    from examples.bram_toy.bram_toy_build import wrapper_text
+    from examples.bram_simple.bram_simple_build import wrapper_text
 
-    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_toy" / "xsi" /
-                 "bram_toy_top.v")
+    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_simple" / "xsi" /
+                 "bram_simple_top.v")
     assert committed.read_text(encoding="utf-8").replace("\r\n", "\n") == wrapper_text(), (
-        "examples/bram_toy/xsi/bram_toy_top.v has drifted — regenerate it "
-        "(bram_toy_build.py --through codegen_dut)")
+        "examples/bram_simple/xsi/bram_simple_top.v has drifted — regenerate it "
+        "(bram_simple_build.py --through codegen_dut)")
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +289,11 @@ def test_the_committed_wrapper_matches_what_the_generator_emits():
 
 def test_the_ports_header_names_the_wrapper_and_hides_the_bram_ports():
     _comp, spec = _spec()
-    assert spec.rtl_top == wrapper_name("bram_toy") == "bram_toy_top"
-    assert spec.elab_top == "bram_toy_top"
+    assert spec.rtl_top == wrapper_name("bram_simple") == "bram_simple_top"
+    assert spec.elab_top == "bram_simple_top"
     h = render_ports_h(spec)
-    assert 'TOP        = "bram_toy_top"' in h
-    assert 'xsim.dir/bram_toy_top/xsimk' in h
+    assert 'TOP        = "bram_simple_top"' in h
+    assert 'xsim.dir/bram_simple_top/xsimk' in h
     assert "buf_w" not in h and "buf_r" not in h, (
         "a bram port is not a pin on the elaborated design — a testbench binding to it would be "
         "driving a wire that does not exist on the module it loaded")
@@ -312,8 +313,9 @@ def test_the_testbench_has_a_model_per_pin_and_none_for_the_memory():
     """If a memory ever needed a BFM, the wrapper would be the thing that is wrong."""
     from waveflow.simulation.simulation import Simulation
 
-    spec = tb_top_spec(BramToyTB(name="tb", sim=Simulation()))
-    assert [m.cls for m in spec.models] == ["AxisMaster", "AxisMaster", "AxisSlave"]
+    spec = tb_top_spec(BramSimpleTB(name="tb", sim=Simulation()))
+    assert [m.cls for m in spec.models] == ["AxisMaster", "AxisMaster", "AxisSlave",
+                                            "AxisMaster", "AxisSlave", "AxisSlave"]
     assert not any("Bram" in m.cls or "Mem" in m.cls for m in spec.models)
 
 
@@ -382,12 +384,13 @@ def test_a_verilog_keyword_instance_name_is_refused_by_name():
 
 
 def test_render_rtl_f_appends_the_wrappers_own_sources_last():
-    root = Path(__file__).resolve().parents[2] / "examples" / "bram_toy"
-    if not (root / "bram_toy_proj" / "solution1" / "syn" / "verilog").is_dir():
-        pytest.skip("no csynth RTL for bram_toy")
+    root = Path(__file__).resolve().parents[2] / "examples" / "bram_simple"
+    if not (root / "bram_simple_proj" / "solution1" / "syn" / "verilog").is_dir():
+        pytest.skip("no csynth RTL for bram_simple")
     from waveflow.build.composite_gen import render_rtl_f
 
-    lines = render_rtl_f("bram_toy", root, extra=("bram_t2p.v", "bram_toy_top.v")).splitlines()
-    assert lines[-2:] == ["bram_t2p.v", "bram_toy_top.v"]
-    assert all(ln.startswith("../bram_toy_proj/") for ln in lines[:-2])
+    lines = render_rtl_f("bram_simple", root,
+                         extra=("bram_t2p.v", "bram_simple_top.v")).splitlines()
+    assert lines[-2:] == ["bram_t2p.v", "bram_simple_top.v"]
+    assert all(ln.startswith("../bram_simple_proj/") for ln in lines[:-2])
     assert len(lines) >= 6, "a .f naming only the top does not elaborate — all csynth files are needed"

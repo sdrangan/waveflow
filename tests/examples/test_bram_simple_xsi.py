@@ -14,7 +14,8 @@ number an untraced run recorded.
 Four things are checked here that pysim cannot check:
 
 * the **values** through real Verilog, at 64-bit words where the byte/word address convention is
-  actually exercised — ``bram_toy``'s 16-bit geometry never wraps and is green either way;
+  actually exercised — the retired ``bram_toy``'s 16-bit geometry never wrapped and was green
+  either way;
 * an **exact cycle count**, not a bound;
 * the **overlap**, which is a claim about *when*: phase 2's write must be live inside phase 2's
   read.  Their address ranges are disjoint, so the words come back identical whether the two
@@ -177,7 +178,7 @@ def test_the_witness_survives_real_rtl_at_a_width_that_wraps(runs):
 
     At 64-bit words a design addressing 256 of 1024 words is past ``depth / (W/8) = 128``, so a
     wrapper that did not undo Vitis's byte scaling would return the second half of the ramp twice —
-    which is exactly what ``examples/rf_shot_buf`` found and what ``bram_toy`` could not.
+    which is exactly what ``examples/rf_shot_buf`` found and what the retired ``bram_toy`` could not.
 
     That this passes on a **traced** run is also the evidence that tracing is free: the dumper is a
     second elaborated top, so the cycle count is the number an untraced run produced.

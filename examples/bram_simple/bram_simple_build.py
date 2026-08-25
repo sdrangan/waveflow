@@ -40,7 +40,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
 from waveflow.build.elaborate import elaborate  # noqa: E402
 from waveflow.build.wrapper_gen import bram_hazard_manifest  # noqa: E402
 from waveflow.build.rtl_steps import GenRtlStep, GenWrapperStep  # noqa: E402
-from waveflow.build.trace_steps import AddVcdTopStep  # noqa: E402
+from waveflow.build.trace_steps import AddVcdTopStep, RtlSimStep  # noqa: E402
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep, XsiHarnessStep  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
@@ -52,7 +52,12 @@ from examples.bram_simple.bram_simple import (  # noqa: E402
     BramSimple,
     BramSimpleTB,
     Scenario,
+    scenario_zero,
     write_scenario,
+)
+from examples.bram_simple.bram_simple_figures import (  # noqa: E402
+    ActivityFiguresStep,
+    SyncDocsFiguresStep,
 )
 
 #: The generated kernel's name, and the wrapper's.  The wrapper is what a simulator elaborates.
@@ -320,6 +325,16 @@ class CSynthStep(BuildStep):
         return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
 
 
+def _write_scenario_zero(xsi_dir: Path, _config) -> None:
+    """Materialize scenario zero's bundles before a traced run.
+
+    The scenario is an **input** to the run, and the RTL gate leaves the *collision* vectors on disk
+    behind it — so a trace step that did not write its own would render figures of whichever run went
+    last.  That is the same stale-input failure ``RtlSimStep``'s own docstring records.
+    """
+    write_scenario(xsi_dir, scenario_zero())
+
+
 def build_bram_simple_dag() -> BuildDag:
     dag = BuildDag()
     dag.add(SourceStep(artifact="bram_simple_source", path=HERE / "bram_simple.py"))
@@ -327,6 +342,14 @@ def build_bram_simple_dag() -> BuildDag:
     dag.add(CodegenDutStep(name="codegen_dut"))
     dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
+    # The trace rung, and the two figures that read it.  Both are on-demand: `--through rtl_trace`
+    # produces the waveform, `--through activity_figures` renders into results/ (gitignored), and
+    # `--through sync_docs_figures` promotes them into docs/ as committed assets — so a docs figure
+    # only changes when you mean it to.
+    dag.add(RtlSimStep(name="rtl_trace", top=WRAPPER, tb=f"{TOP}_bfm_tb",
+                       prepare=_write_scenario_zero))
+    dag.add(ActivityFiguresStep(name="activity_figures"))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
     return dag
 
 

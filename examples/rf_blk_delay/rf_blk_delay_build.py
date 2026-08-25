@@ -17,7 +17,7 @@ hierarchy — so the generator flattens it (``composite_gen.kernel_tasks``) into
 six channels, and the wrapper instantiates both buffers' memories.  Nothing here says any of that;
 it is the same three-line build the flat examples have, which is the property worth having.
 
-As with ``bram_toy``, what a simulator elaborates is the **wrapper** (``rf_blk_delay_top``), not the
+As with ``bram_simple``, what a simulator elaborates is the **wrapper** (``rf_blk_delay_top``), not the
 kernel: the memories are inside it, which is why the testbench sees only AXI-Stream.
 """
 from __future__ import annotations

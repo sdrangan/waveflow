@@ -225,7 +225,7 @@ class RfShotBufLoad(FreeRunMod):
         """The pysim twin: one firing is one shot, which is one iteration of the C++ outer loop.
 
         ``get(nwords_max=1)`` per word, and the scenario must therefore write **one word per burst**
-        — the trap ``examples/bram_toy`` spells out: a pysim slave dequeues a whole burst per ``get``
+        — the trap ``examples/bram_simple`` spells out: a pysim slave dequeues a whole burst per ``get``
         and truncation *discards* the rest, so a single 256-word burst would be one pysim firing
         against 256 RTL firings and the two backends would be running different designs.
         """
@@ -246,7 +246,7 @@ class RfShotBufRead(FreeRunMod):
 
         while (1) { rdy_in.read(); for (i = 0; i < NW; i++) s_out.write(buf_r[i]); }
 
-    **There is no address stream.**  ``examples/bram_toy``'s reader answers addresses it is told,
+    **There is no command stream.**  ``examples/bram_simple``'s reader answers a ``(rp, nwords)`` command,
     which makes it a witness for the memory rather than a buffer; a shot buffer plays a *contiguous*
     shot, so the address is the loop index and the only thing that crosses the boundary is the
     payload.  That is the whole of the simplification the shot design claims over the streaming one,

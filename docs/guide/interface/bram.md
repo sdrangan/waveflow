@@ -159,14 +159,84 @@ writer and the reader command lengths that differ by one word.
 carried through the wrapper and readable in both backends by construction. That is a `BramIF`
 interface change and is [tracked in `plans/rtl_module.md`](../../../plans/rtl_module.md), not done.*
 
+## The addressing convention {#the-addressing-convention}
+
+This binds anyone who uses a `BramIF` at all, and until 2026-08-24 one half of it was wrong in every
+BRAM design in the tree.
+
+**Vitis addresses a `mode=bram` port in bytes.** The generated task RTL literally contains
+
+```verilog
+assign buf_r_Addr_A_local = buf_r_Addr_A_orig << 32'd3;   // a 64-bit array
+```
+
+`<< 1` for a 16-bit array, `<< 2` for 32, `<< 3` for 64 — one shift per `log2(bytes per word)`. A
+word-addressed memory like `T2pBram`, which indexes `mem[addr[AW-1:0]]`, needs that undone, and
+**the wrapper is where the two conventions meet**:
+
+```verilog
+bram_t2p #(.DW(64), .AW(10)) mem (
+    .a_addr(buf_w_addr_a >> 3),
+    .a_we(|buf_w_we_a),
+    ...
+```
+
+**The WEN is a byte-enable vector, not an enable.** Vitis drives one bit per *byte* of the word — 8
+bits at 64, 2 at 16 — and the memory takes a single write enable, so the wrapper reduces it with `|`.
+Before the fix that wire was hard-coded two bits wide, which is correct only for a 16-bit word; at 64
+the kernel's 8-bit WEN was being truncated into it. `xelab` reported a bit-length warning and nothing
+read it.
+
+The shift is derived once, in
+[`_bram_addr_shift`](https://github.com/sdrangan/waveflow/tree/main/waveflow/build/wrapper_gen.py),
+and a width whose scaling is not a shift is **refused rather than guessed** — because the failure mode
+of guessing is an address wrong by a factor, aliasing high words onto low ones with no tool saying
+anything.
+
+### Why nobody noticed
+
+**The scaling is consistent.** A design that writes and reads through the same scaled address
+round-trips perfectly — right up to the point where its memory wraps. Only `depth / (W/8)` distinct
+words are reachable; everything above that aliases onto a live word, silently.
+
+So a design that never addresses past that point is green whether or not the wrapper undoes anything.
+The retired `bram_toy` filled 256 of 1024 words at **16 bits** — byte addresses 0…510, no wrap — and
+stayed green straight through the defect. It took a *wider* design to expose it:
+`examples/rf_shot_buf` at 64 bits wrote 256 words into 1024 and got the second half of its shot back
+twice.
+
+| word width | shift | words reachable in a 1024-word memory |
+|---|---|---|
+| 16 bits | `>> 1` | 512 |
+| 32 bits | `>> 2` | 256 |
+| 64 bits | `>> 3` | **128** |
+
+**Choose a gated geometry that wraps.** If your example addresses fewer words than `depth / (W/8)`,
+it is not testing this convention — it is only testing that it is self-consistent.
+[`examples/bram_simple`](../../examples/bram_simple/) is gated at 64 bits with 256 of 1024 words for
+exactly that reason: word 128 onward aliases immediately if anything here is wrong.
+
+### The guard is a measurement, not a belief
+
+`test_the_wrapper_undoes_the_shift_vitis_actually_emits` greps the RTL Vitis actually produced for
+the shift it emitted and checks the wrapper against **that** number. If Vitis ever changes the
+convention, the test fails with the two numbers side by side rather than a design quietly
+mis-addressing its memory again.
+
+**And a range check will not save you.** A `(pointer, count)` bounds check — like the one
+`examples/bram_simple` performs — is in **words**, the caller's units. The scaling defect lives
+*below* it, in the wrapper: a command reading words 0…255 of a 1024-word memory passes the range
+check and still aliases. Two different failures, two different guards.
+
 ## Sequencing belongs in the design
 
-`examples/bram_toy` is the worked example, and it makes the point by having had to solve it. Its
-writer emits one "buffer ready" token on an ordinary internal stream; its reader waits for that token
-once, then serves addresses. The witness this example reproduces got the same ordering from its
-*testbench* (drive all 256 samples, then the addresses) — which a concurrent BFM harness cannot do,
-because both drivers push from cycle 0. If your reader must not overtake your writer, say so with a
-channel; do not rely on a testbench's habits.
+[`examples/bram_simple`](../../examples/bram_simple/) is the worked example, and it makes the point by
+having had to solve it. Its writer emits one token on an ordinary internal stream after its first
+completed command; its reader waits for that token once, then serves commands. The witness this
+example reproduces got the same ordering from its *testbench* (drive all 256 samples, then the
+addresses) — which a concurrent BFM harness cannot do, because both drivers push from cycle 0. If
+your reader must not overtake your writer, say so with a channel; do not rely on a testbench's
+habits.
 
 ## See also
 
@@ -174,4 +244,6 @@ channel; do not rely on a testbench's habits.
   declares, the port-name chain, and the latency single-source rule.
 - [Free-running composite](../comp_codegen/freerunning_composite.md) — where the wrapper fits, and
   what `csynth` does *not* count.
+- [Shared memory between two modules](../../examples/bram_simple/) — the worked example: two tasks,
+  one memory, the wrapper, and the hazard scan that replaced the unheard `$error`.
 - [Memory](../memory/) — the other storage categories, and which of them the tool chooses for you.

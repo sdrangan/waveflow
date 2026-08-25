@@ -28,11 +28,11 @@ A **ramp rather than a constant**, deliberately: the likeliest failure is a read
 between the kernel's ``latency=`` pragma and the memory's published ``READ_LATENCY``, which shifts
 every value by one and would sail through a constant check.
 
-The geometry wraps, and that is what ``bram_toy`` could not do
+The geometry wraps, and that is what the retired ``bram_toy`` could not do
 --------------------------------------------------------------
 The gated configuration is **64-bit words**.  Vitis byte-addresses a ``mode=bram`` port, so the
 wrapper has to undo a ``>> 3`` at 64 bits; a design that never addresses past ``depth / (W/8)``
-round-trips perfectly whether or not the wrapper undoes anything.  ``examples/bram_toy`` fills 256 of
+round-trips perfectly whether or not the wrapper undoes anything.  The retired ``bram_toy`` filled 256 of
 1024 words at 16 bits — byte addresses 0…510, no wrap — and stayed green through the defect that had
 every BRAM design in the repo mis-addressed (``fix(build): the BRAM wrapper fed a BYTE address to a
 word-addressed memory``, 2026-08-24).  At 64 bits the same 256 words reach byte address 2040 in a
@@ -104,7 +104,7 @@ __all__ = ["ADDRS", "BASE", "DEPTH", "EXPECTED", "FILL", "SENTINEL_BASE", "ST_OK
 #: **The gated word width, and it is 64 for one reason**: Vitis's byte-address scaling is ``>> 3``
 #: there, and 256 words of a 1024-word memory reach byte address 2040 — past the wrap.  A wrapper
 #: that does not undo the scaling aliases at word 128, immediately and visibly.  At 16 bits the same
-#: scenario is green either way, which is the whole lesson of ``bram_toy``'s failure to be a witness.
+#: scenario is green either way, which is the whole lesson of ``bram_toy``'s failure as a witness.
 WORD_BW = 64
 
 #: Words in the memory.  A power of two: the Verilog indexes ``mem[addr[AW-1:0]]``, so anything else
@@ -171,7 +171,7 @@ class BramWriteCmd(FreeRunMod):
     streams in step, which is what makes the refusal *recoverable* rather than merely reported.
 
     The task body is **hand-written** (``src/bram_write_cmd_task.h``) for the reason
-    ``bram_toy``'s and ``MemRStream``'s are: it owns a ``bram`` array parameter, which the extractor
+    ``MemRStream``'s is: it owns a ``bram`` array parameter, which the extractor
     has no vocabulary for.  :meth:`run_iter` is the pysim golden, not the source of the C++.
     """
 

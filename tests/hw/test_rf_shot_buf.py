@@ -100,7 +100,7 @@ def test_the_memory_wires_are_rtl_interfaces_not_channels():
 
     A ``BramIF`` in the ``add_if`` registry would make the kernel's memory ports disappear into an
     ``hls::stream`` that does not exist — the walks that derive channels and boundary ports read that
-    registry.  ``bram_toy`` states it; this checks it for the shot buffer.
+    registry.  ``bram_simple`` states it; this checks it for the shot buffer.
     """
     b = _buf()
     assert len(b.rtl_ifs) == 2, "one BramIF per accessor, both in add_rtl_if"

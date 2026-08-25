@@ -214,15 +214,16 @@ backends is exactly `read_latency`, and the throughputs match. **DONE 2026-08-25
 `docs/examples/shared_mem/` already uses — it is the closest analogue, being the other memory
 example:
 
-| # | page | what it covers |
-|---|---|---|
-| 1 | `index.md` | the learning objectives, and what the example is for |
-| 2 | `overview.md` | what a BRAM is here, and the topology — the `aximm.md` role in `shared_mem` |
-| 3 | `python.md` | the Python model, and **how** the read-path delay is added (objective 4's code) |
-| 4 | `pysim.md` | running it, generating test vectors, recording the timing |
-| 5 | `codegen.md` | producing the RTL — the kernel, `bram_t2p.v`, and the wrapper that joins them |
-| 6 | `rtlsim.md` | running XSI and producing the trace |
-| 7 | `timing.md` | **reading** the trace: the activity diagram, and the comparison back to pysim |
+* `index.md` — the learning objectives, and what the example is for
+* `overview.md` — what a BRAM is here, and the topology (the `aximm.md` role in `shared_mem`)
+* `python.md` — the Python model, and **how** the read-path delay is added (objective 4's code)
+* `pysim.md` — running it, generating test vectors, recording the timing
+* `codegen.md` — producing the RTL: the kernel, `bram_t2p.v`, and the wrapper that joins them
+* `rtlsim.md` — running XSI and producing the trace
+* `timing.md` — **reading** the trace: the activity diagram, and the comparison back to pysim
+
+(Bulleted, not numbered: `rfdc/index.md`'s numbered table went stale twice because adding a page
+meant renumbering.)
 
 The `python.md` / `timing.md` split follows what `shared_mem` and `memcpy` already do — the model
 page shows the code, the timing page reads the run. Both of those `timing.md`s also cover **how the
@@ -392,6 +393,65 @@ memory charges and a bus does not.
 * `docs/guide/comp_codegen/rtl_module.md` — *"nothing traces or times a wrapped design yet"* is no
   longer true. The first one did **not** need the scope prefix: what it reads are the wrapper's own
   wires.
+
+---
+
+## Stage 4 is closed — 2026-08-25
+
+`docs/examples/bram_simple/` ships as seven pages, `bram_toy` is retired, and the addressing
+convention is written down in the interface guide where it binds everyone using `BramIF`.
+
+### Two things the plan had wrong, corrected rather than absorbed
+
+**The collision lands on words 128…135, not 128…136.** `collision_scenario()` writes `(128, 8)`, so
+the range is `[128, 136)` — eight distinct words, and the measured hazards are on exactly those. The
+count, 24, is right.
+
+**The page list was a numbered table**, which is the shape this repo has already been bitten by
+twice. It is a bullet list now, and so is the one on `index.md`.
+
+### What is measured, and where each number came from
+
+| claim | measured |
+|---|---|
+| kernel `BRAM_18K` | **0** — from `csynth.xml`, while the memory beside it is **4** RAMB18 by geometry |
+| payload beats in vs memory writes | **332** vs **324** — the eight missing writes are the refused command, visible in the waveform |
+| read enables vs words returned | **80** vs **73** — seven commands return data, each presenting one address past its range as the pipeline drains |
+| VCD cycle index vs the sinks' | **+15**, on every one of the 73 words: the harness holds 16 reset edges, and the sinks count 1-based from the first post-reset cycle |
+| collision scenario | **24** hazards on words 128…135 |
+| scenario zero | **0** hazards |
+| measured read latency | **{1}** — the unique offset explaining every read |
+| pysim first word, model off → on | **+1** cycle; cadence **1** word/cycle either way, matching RTL |
+
+The `+15` is worth carrying forward: a reader comparing the figure's cycle 401 against the gate's 386
+would otherwise think something was wrong.
+
+### The retirement, and what it cost
+
+`examples/bram_toy` and `tests/examples/test_bram_toy_xsi.py` are gone. Nothing it asserted was lost:
+
+* the witness's five values at RTL — now gated at 64 bits, where the addressing convention can
+  actually fail, rather than at 16 where it cannot;
+* the `mode=bram` port list, and the no-PIPO-gating check — both present in
+  `test_bram_simple_xsi.py`;
+* `test_the_expected_values_are_the_witness_s` — present in `test_bram_simple.py`.
+
+`tests/build/test_wrapper_gen.py` was repointed from `BramToy` to `BramSimple`. Every assertion kept
+its shape; the numbers moved with the geometry, and two got **stronger** — the WEN wire is checked at
+8 bits rather than the 2 that happened to be right only at 16, and the address shift at `>> 3` rather
+than `>> 1`.
+
+Test counts move accordingly, and all of it is the retirement:
+
+* dev loop **3085 → 3082**: −1 for `bram_toy`'s one unmarked test, −2 for its two parametrized cases
+  in `test_xsi_workspace_copies.py` (which enumerates `examples/*/xsi`).
+* `-m xsi` **65 → 62**: `bram_toy`'s three xsi-marked tests.
+
+### How the pages are checked
+
+Every fenced block on the seven pages is either **executed** and its output compared against the
+block below it, or verified to be a **verbatim excerpt** of a named source file (modulo comment
+elision). No block on any page is prose about code.
 
 ---
 

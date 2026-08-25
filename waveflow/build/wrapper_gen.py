@@ -36,7 +36,7 @@ count Vitis actually drives (it was hard-coded at 2, correct only for a 16-bit w
 
 It went unnoticed because the scaling is *consistent*: a design that writes and reads through the
 same scaled address round-trips perfectly right up to the point where the memory wraps.
-``examples/bram_toy`` fills 256 of 1024 words at 16 bits — byte addresses 0…510, no wrap — and is
+The retired ``bram_toy`` filled 256 of 1024 words at 16 bits — byte addresses 0…510, no wrap — and was
 therefore green either way, which is what a witness cannot prove and a wider design immediately can:
 ``examples/rf_shot_buf`` at 64 bits wrote 256 words into 1024 and got the second half back twice.
 :func:`~waveflow.build.wrapper_gen.render_wrapper`'s output is now checked against the *actual*
@@ -114,7 +114,7 @@ class WrapperSpec:
     Answerable rather than only renderable, exactly as :class:`~waveflow.build.composite_gen.TopSpec`
     is: a test can ask *"is the A half wired and the B half tied off?"* without parsing Verilog.
     """
-    name: str                                     # the wrapper module, e.g. "bram_toy_top"
+    name: str                                     # the wrapper module, e.g. "bram_simple_top"
     kernel: str                                   # the kernel module it instantiates
     ports: tuple[tuple[str, str, int], ...]       # (port, direction, width) in declaration order
     mems: tuple[MemInst, ...] = ()

@@ -4,7 +4,7 @@ What xsim elaborates is the **wrapper** (``rf_shot_buf_top``): the kernel plus i
 ``bram_t2p`` memory, so the ``.f``, the snapshot and the shared library are named for it while
 csynth's project keeps the kernel's name.
 
-**This gate found something a witness could not.**  ``examples/bram_toy`` proved the ``mode=bram``
+**This gate found something a witness could not.**  The retired ``bram_toy`` proved the ``mode=bram``
 path at 16 bits and 256 of 1024 words; the first run of *this* design, at 64 bits and 256 of 1024
 words, returned the second half of the shot **twice**.  The cause was the address convention: the
 kernel's ``Addr_A`` is a **byte** address (``Addr_A_orig << 32'd3`` for a 64-bit array) and

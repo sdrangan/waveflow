@@ -155,6 +155,18 @@ def port_samples(vcd_path: str | Path, manifest: dict, side: str,
     return scan.port(mems[0], side)
 
 
+def sampled(vcd_path: str | Path, manifest: dict, *names: str) -> dict[str, np.ndarray]:
+    """Named nets of the wrapper's scope, sampled once per clock cycle.
+
+    The general escape hatch beside :func:`port_samples`: a wrapped design's *other* wires — the
+    AXI-Stream handshakes at its pins — are in the same scope and on the same grid, and a figure or a
+    timing check usually wants both. Names are **bare** (``"data_r_TVALID"``), and one that is not in
+    the dump raises rather than coming back missing.
+    """
+    scan = _Scan(vcd_path, manifest)
+    return {n: scan.signal(n) for n in names}
+
+
 def find_read_during_write(vcd_path: str | Path, manifest: dict) -> list[Hazard]:
     """Every cycle of *vcd_path* where a memory in *manifest* is read and written at one address.
 

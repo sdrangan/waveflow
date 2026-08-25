@@ -210,7 +210,7 @@ class _RelayoutTask(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         """One word per firing — the pysim twin of a ``while (1) { … }`` body at II=1.
 
-        One word per burst in the scenario, for ``bram_toy``'s reason: a pysim slave dequeues a whole
+        One word per burst in the scenario, for ``bram_simple``'s reason: a pysim slave dequeues a whole
         burst per ``get`` and ``nwords_max`` *discards* the remainder, so a multi-word burst would be
         one pysim firing against many RTL firings.
         """

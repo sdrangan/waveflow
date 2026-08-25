@@ -12,7 +12,7 @@ diagnose:
 The RTL rung — the same four cases through real Verilog, bit-exact against the pysim golden — is the
 ``-m xsi`` gate in ``tests/examples/test_rf_samp_buf_rx_xsi.py``.
 
-As with ``bram_toy``, what a simulator elaborates is the **wrapper** (``rf_samp_buf_rx_top``), not
+As with ``bram_simple``, what a simulator elaborates is the **wrapper** (``rf_samp_buf_rx_top``), not
 the kernel: the memory is inside it, which is why the testbench sees only AXI-Stream.
 """
 from __future__ import annotations

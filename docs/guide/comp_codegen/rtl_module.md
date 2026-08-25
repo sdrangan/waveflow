@@ -184,7 +184,8 @@ This page is the *declaration*. Two more pieces turn it into a design, and both 
   instantiating the kernel plus its memories and joining them, and that module is what a simulator
   elaborates. See [Free-running composite](./freerunning_composite.md#when-the-composite-is-not-the-whole-design-the-wrapper).
 
-`examples/bram_toy` is the worked design, gated at RTL against the witness's own values.
+[`examples/bram_simple`](../../examples/bram_simple/) is the worked design, gated at RTL
+against the witness's own values.
 
 `trace_manifest` derives net names in *the top's own scope*, so with a wrapper as the elaborated top
 the **kernel's** internals sit one level deeper and are still out of reach. The first consumer to
