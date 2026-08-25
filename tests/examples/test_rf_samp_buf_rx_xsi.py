@@ -164,18 +164,13 @@ def test_the_converter_never_had_a_sample_refused(run):
         f"{c.get('ADC_LAST_DROP_CYCLE')}) — the ingress stalled:\n{out[-2000:]}")
 
 
-@pytest.mark.xsi
-def test_the_memorys_read_during_write_assertion_never_fired(run):
-    """``rd`` trailed ``wr`` for the whole run — checked by the hand-written memory, not by us.
-
-    This is the horizon logic's real gate. If the capture ever read the address the ingress was
-    writing that cycle, the data would be whatever the BRAM's read-during-write mode happens to be
-    and nothing else in the flow would notice.
-    """
-    _c, out = run
-    assert "read-during-write collision" not in out, (
-        f"bram_t2p's assertion fired — the capture read the address being written:\n{out[-3000:]}")
-
+# REMOVED 2026-08-25: `test_the_memorys_read_during_write_assertion_never_fired` asserted that
+# "read-during-write collision" was absent from the run's stdout.  It could never fire --
+# the XSI flow discards RTL text output, so `bram_t2p.v`'s $error reaches no channel a test
+# can read (measured four ways, see plans/bram_simple.md).  The whole test body was that one
+# assertion, so the test went with it rather than stand as evidence it never had.  The
+# condition is to be gated from the VCD trace; until then it is checked nowhere, which is
+# what was already the case.
 
 @pytest.mark.xsi
 def test_the_completion_cycle_is_the_recorded_one(run):
