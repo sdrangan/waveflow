@@ -24,6 +24,24 @@ half — it instantiates the kernel, instantiates each memory the graph declares
 true-dual-port pair* per ``bram`` interface, so one kernel-side memory port presents four physical
 ports.  The witness wires the **A half of each interface** and ties the B halves off, and that is
 what this emitter does: two interfaces, two memory ports, four halves, of which two are used.
+
+**Two conventions have to be reconciled here, and until 2026-08-24 one of them was not.**  The
+kernel's ``Addr_A`` is a **byte** address — the generated RTL literally contains
+``Addr_A_local = Addr_A_orig << 32'd3`` for a 64-bit array — while a word-addressed memory like
+:class:`~waveflow.hw.bram.T2pBram` indexes ``mem[addr[AW-1:0]]``.  Joining them straight through
+scales every address by the element's byte width, so a memory of ``N`` words is reachable only at
+``N / (W/8)`` distinct locations and **everything above that aliases onto a live word, silently**.
+That is what :func:`_bram_addr_shift` undoes, and the same pass widens the ``WEN`` wire to the byte
+count Vitis actually drives (it was hard-coded at 2, correct only for a 16-bit word).
+
+It went unnoticed because the scaling is *consistent*: a design that writes and reads through the
+same scaled address round-trips perfectly right up to the point where the memory wraps.
+``examples/bram_toy`` fills 256 of 1024 words at 16 bits — byte addresses 0…510, no wrap — and is
+therefore green either way, which is what a witness cannot prove and a wider design immediately can:
+``examples/rf_shot_buf`` at 64 bits wrote 256 words into 1024 and got the second half back twice.
+:func:`~waveflow.build.wrapper_gen.render_wrapper`'s output is now checked against the *actual*
+generated RTL by ``tests/examples/test_rf_shot_buf_xsi.py``, so the shift is a measurement of what
+Vitis emits rather than a belief about it.
 """
 from __future__ import annotations
 
@@ -48,6 +66,34 @@ _AXIS_SIGS = {
 _ROLE_TO_VITIS = {"addr": "Addr", "en": "EN", "din": "Din", "dout": "Dout", "we": "WEN"}
 
 
+def _bram_addr_shift(width: int) -> int:
+    """Bits the kernel's ``Addr_A`` is scaled up by — ``log2(width / 8)``.
+
+    Vitis addresses a ``mode=bram`` port in **bytes**: the generated task RTL contains
+    ``Addr_A_local = Addr_A_orig << 32'd3`` for a 64-bit array, ``<< 1`` for a 16-bit one.  A
+    word-addressed memory needs that undone, and the wrapper is where the two conventions meet.
+
+    **Refused rather than guessed** for a width that is not a power-of-two byte count.  The scaling
+    for such a width is not something this module knows, and the failure mode of guessing it is the
+    one that motivated the function: an address that is wrong by a factor, aliasing high words onto
+    low ones with no tool saying anything and a design that round-trips perfectly until it wraps.
+    """
+    w = int(width)
+    if w < 8 or w % 8:
+        raise LoweringError(
+            f"a bram port {w} bits wide is not a whole number of bytes, and Vitis's byte-address "
+            f"scaling for such a width is not something this emitter knows. Widen the port to a "
+            f"byte multiple, or teach _bram_addr_shift the rule and gate it against real RTL.")
+    nbytes = w // 8
+    shift = nbytes.bit_length() - 1
+    if (1 << shift) != nbytes:
+        raise LoweringError(
+            f"a bram port {w} bits wide is {nbytes} bytes, which is not a power of two; Vitis's "
+            f"address scaling is a SHIFT, so this emitter cannot express it. Use a power-of-two "
+            f"byte width.")
+    return shift
+
+
 @dataclass(frozen=True)
 class MemInst:
     """One hand-written RTL module instantiated in the wrapper."""
@@ -55,7 +101,9 @@ class MemInst:
     module: str                            # Verilog module name, e.g. "bram_t2p"
     params: tuple[tuple[str, int], ...]    # #(.DW(16), .AW(10))
     clock: str                             # the module's clock port
-    #: ``(memory port, wrapper wire)`` pairs, in declaration order.
+    #: ``(memory port, expression)`` pairs, in declaration order.  Usually a bare wrapper wire; for
+    #: the address and the write enable it is the adaptation between the kernel's convention and the
+    #: memory's — see :func:`_bram_addr_shift` and the module docstring.
     conns: tuple[tuple[str, str], ...]
 
 
@@ -166,6 +214,7 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
                 f"would read zeros forever and nothing would say so. Wire it with add_rtl_if.")
         mem, pmap = joined[id(ep)]
         sigs = bram_port_signals(p.name)
+        shift = _bram_addr_shift(p.width)
         for role, mem_port in sorted(pmap.items()):
             vitis = _ROLE_TO_VITIS.get(role)
             if vitis is None:
@@ -173,11 +222,24 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
                     f"{type(mem).__name__}.rtl_module() maps the role {role!r}, which has no "
                     f"kernel-side signal. Known roles: {sorted(_ROLE_TO_VITIS)}.")
             wire = f"{p.name}_{role}_a"
-            width = p.width if role in ("din", "dout") else (32 if role == "addr" else
-                                                             2 if role == "we" else 1)
+            # The WEN wire is as wide as Vitis drives it -- one bit per BYTE of the word.  It was
+            # hard-coded at 2, which is right only at 16 bits; at 64 the kernel's 8-bit WEN was
+            # being truncated into it, which xelab reported as a bit-length warning and nothing
+            # else read.
+            width = p.width if role in ("din", "dout") else (
+                32 if role == "addr" else max(1, p.width // 8) if role == "we" else 1)
             wires.append((wire, width))
             kconns.append((sigs[f"{vitis}_A"], wire))
-            mem_conns.setdefault(id(mem), []).append((mem_port, wire))
+            # The two conventions, reconciled at the join.  See the module docstring: the kernel's
+            # address is in BYTES and the memory's is in WORDS, and a byte-lane mask is not a write
+            # enable.  Expressions rather than extra wires, so the wrapper stays readable and every
+            # net still carries the name of the kernel signal it comes from.
+            expr = wire
+            if role == "addr" and shift:
+                expr = f"{wire} >> {shift}"
+            elif role == "we":
+                expr = f"|{wire}"
+            mem_conns.setdefault(id(mem), []).append((mem_port, expr))
         # The B half.  Vitis emits it whether or not the kernel uses it, so it must be connected or
         # left explicitly dangling -- and its Dout is an INPUT to the kernel, which must be driven or
         # the elaboration carries an undriven net into the design.

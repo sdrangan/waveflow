@@ -144,9 +144,40 @@ def test_the_a_half_reaches_the_memory_and_the_b_half_is_tied_off():
 
     conns = dict(mem.conns)
     # The write accessor drives port A, the read accessor port B -- one memory, two logical ports.
-    assert conns["a_addr"] == "buf_w_addr_a" and conns["a_din"] == "buf_w_din_a"
-    assert conns["b_addr"] == "buf_r_addr_a" and conns["b_dout"] == "buf_r_dout_a"
+    # The data path goes straight through; the ADDRESS does not, and the `>> 1` is the whole of the
+    # 2026-08-24 correction: Vitis addresses a bram port in BYTES (the generated RTL contains
+    # `Addr_A_local = Addr_A_orig << 32'd1` for a 16-bit array) and bram_t2p indexes WORDS, so
+    # joining them straight through scales every address by the element's byte width and aliases
+    # everything past `depth / (W/8)` onto a live word, silently.  bram_toy could not see it -- it
+    # fills 256 of 1024 words, so the scaled addresses never wrap -- and examples/rf_shot_buf at 64
+    # bits got the second half of its shot back twice.
+    assert conns["a_addr"] == "buf_w_addr_a >> 1" and conns["a_din"] == "buf_w_din_a"
+    assert conns["b_addr"] == "buf_r_addr_a >> 1" and conns["b_dout"] == "buf_r_dout_a"
+    # The memory takes a write ENABLE; Vitis drives a byte-lane MASK, one bit per byte of the word.
+    assert conns["a_we"] == "|buf_w_we_a"
     assert dict(w.tieoffs) == {"buf_w_dout_b": "16'd0", "buf_r_dout_b": "16'd0"}
+    assert dict(w.wires)["buf_w_we_a"] == 2, (
+        "the WEN wire is as wide as Vitis drives it -- one bit per byte -- not the hard-coded 2 that "
+        "happened to be right only at 16 bits")
+
+
+@pytest.mark.parametrize("width, shift", [(8, 0), (16, 1), (32, 2), (64, 3), (128, 4)])
+def test_the_byte_address_shift_is_log2_of_the_byte_width(width, shift):
+    """``_bram_addr_shift`` is the single statement of Vitis's scaling, and it is checked against the
+    real RTL by ``tests/examples/test_rf_shot_buf_xsi.py`` — here only that the arithmetic is what it
+    claims."""
+    from waveflow.build.wrapper_gen import _bram_addr_shift
+    assert _bram_addr_shift(width) == shift
+
+
+@pytest.mark.parametrize("width", [4, 12, 24, 48])
+def test_a_width_whose_scaling_is_not_a_shift_is_refused(width):
+    """Refused rather than guessed: an address wrong by a factor aliases in silence, which is exactly
+    the failure the shift exists to prevent."""
+    from waveflow.build.hwcodegen import LoweringError
+    from waveflow.build.wrapper_gen import _bram_addr_shift
+    with pytest.raises(LoweringError):
+        _bram_addr_shift(width)
 
 
 def test_the_wrappers_pins_are_axi_stream_and_nothing_else():

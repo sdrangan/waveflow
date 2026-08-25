@@ -87,16 +87,16 @@ module rf_samp_buf_rx_top (
 
     bram_t2p #(.DW(16), .AW(10)) mem (
         .clk(ap_clk),
-        .a_addr(buf_w_addr_a),
+        .a_addr(buf_w_addr_a >> 1),
         .a_din(buf_w_din_a),
         .a_dout(buf_w_dout_a),
         .a_en(buf_w_en_a),
-        .a_we(buf_w_we_a),
-        .b_addr(buf_r_addr_a),
+        .a_we(|buf_w_we_a),
+        .b_addr(buf_r_addr_a >> 1),
         .b_din(buf_r_din_a),
         .b_dout(buf_r_dout_a),
         .b_en(buf_r_en_a),
-        .b_we(buf_r_we_a)
+        .b_we(|buf_r_we_a)
     );
 
     // The B half of each bram interface: Vitis emits a full A/B pair whether or

@@ -31,25 +31,25 @@ module rf_blk_delay_top (
     wire [63:0] rx_buf_w_din_a;
     wire [63:0] rx_buf_w_dout_a;
     wire rx_buf_w_en_a;
-    wire [1:0] rx_buf_w_we_a;
+    wire [7:0] rx_buf_w_we_a;
     wire [63:0] rx_buf_w_dout_b;
     wire [31:0] rx_buf_r_addr_a;
     wire [63:0] rx_buf_r_din_a;
     wire [63:0] rx_buf_r_dout_a;
     wire rx_buf_r_en_a;
-    wire [1:0] rx_buf_r_we_a;
+    wire [7:0] rx_buf_r_we_a;
     wire [63:0] rx_buf_r_dout_b;
     wire [31:0] tx_buf_w_addr_a;
     wire [63:0] tx_buf_w_din_a;
     wire [63:0] tx_buf_w_dout_a;
     wire tx_buf_w_en_a;
-    wire [1:0] tx_buf_w_we_a;
+    wire [7:0] tx_buf_w_we_a;
     wire [63:0] tx_buf_w_dout_b;
     wire [31:0] tx_buf_r_addr_a;
     wire [63:0] tx_buf_r_din_a;
     wire [63:0] tx_buf_r_dout_a;
     wire tx_buf_r_en_a;
-    wire [1:0] tx_buf_r_we_a;
+    wire [7:0] tx_buf_r_we_a;
     wire [63:0] tx_buf_r_dout_b;
 
     rf_blk_delay kernel (
@@ -127,30 +127,30 @@ module rf_blk_delay_top (
 
     bram_t2p #(.DW(64), .AW(10)) _codegen_rx_mem (
         .clk(ap_clk),
-        .a_addr(rx_buf_w_addr_a),
+        .a_addr(rx_buf_w_addr_a >> 3),
         .a_din(rx_buf_w_din_a),
         .a_dout(rx_buf_w_dout_a),
         .a_en(rx_buf_w_en_a),
-        .a_we(rx_buf_w_we_a),
-        .b_addr(rx_buf_r_addr_a),
+        .a_we(|rx_buf_w_we_a),
+        .b_addr(rx_buf_r_addr_a >> 3),
         .b_din(rx_buf_r_din_a),
         .b_dout(rx_buf_r_dout_a),
         .b_en(rx_buf_r_en_a),
-        .b_we(rx_buf_r_we_a)
+        .b_we(|rx_buf_r_we_a)
     );
 
     bram_t2p #(.DW(64), .AW(11)) _codegen_tx_mem (
         .clk(ap_clk),
-        .a_addr(tx_buf_w_addr_a),
+        .a_addr(tx_buf_w_addr_a >> 3),
         .a_din(tx_buf_w_din_a),
         .a_dout(tx_buf_w_dout_a),
         .a_en(tx_buf_w_en_a),
-        .a_we(tx_buf_w_we_a),
-        .b_addr(tx_buf_r_addr_a),
+        .a_we(|tx_buf_w_we_a),
+        .b_addr(tx_buf_r_addr_a >> 3),
         .b_din(tx_buf_r_din_a),
         .b_dout(tx_buf_r_dout_a),
         .b_en(tx_buf_r_en_a),
-        .b_we(tx_buf_r_we_a)
+        .b_we(|tx_buf_r_we_a)
     );
 
     // The B half of each bram interface: Vitis emits a full A/B pair whether or

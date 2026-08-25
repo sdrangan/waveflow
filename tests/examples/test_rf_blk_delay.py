@@ -338,8 +338,13 @@ def _relay_loop_module() -> str:
     hard-coded name does not fail when that happens — it stops matching, and the test *skips*, which
     reads as a pass in a summary line. Found by glob, with exactly-one asserted, so a rename is
     invisible and a genuinely missing report is loud.
+
+    **The glob has to cover both spellings**, and that is not hypothetical: Vitis alternates between
+    ``_Pipeline_VITIS_LOOP_<line>_<n>`` and a bare ``_Pipeline_<n>`` (2025.1 emitted the latter for
+    this body on 2026-08-24), and a pattern matching only the first skips silently — exactly the
+    failure this docstring says it exists to prevent, one spelling short.
     """
-    hits = sorted(REPORT_DIR.glob(f"{BLK_DELAY_MOD}_Pipeline_VITIS_LOOP_*_csynth.xml"))
+    hits = sorted(REPORT_DIR.glob(f"{BLK_DELAY_MOD}_Pipeline_*_csynth.xml"))
     if not hits:
         pytest.skip(f"no csynth reports under {REPORT_DIR} — run rf_blk_delay_build.py "
                     f"--through csynth")
