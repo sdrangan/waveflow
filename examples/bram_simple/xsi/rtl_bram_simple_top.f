@@ -1,0 +1,10 @@
+../bram_simple_proj/solution1/syn/verilog/bram_simple.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_bram_read_cmd_task_64_1024_Pipeline_read_payload.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_bram_read_cmd_task_64_1024_s.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_bram_write_cmd_task_64_1024_Pipeline_write_payload.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_bram_write_cmd_task_64_1024_s.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_fifo_w64_d1_S.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_flow_control_loop_pipe_sequential_init.v
+../bram_simple_proj/solution1/syn/verilog/bram_simple_regslice_both.v
+bram_t2p.v
+bram_simple_top.v

@@ -247,6 +247,64 @@ vector, and a design that never wraps will not notice if any of that is wrong. T
 **Retire `bram_toy` into this**, rather than keeping two. Two examples would mean maintaining the
 witness inside a design nobody reads.
 
+## Stage 2 is BLOCKED on its negative gate — measured 2026-08-25
+
+Stage 1 passed and is committed.  Stage 2's **positive** gates all pass and are measured:
+csynth clean, `write_payload` and `read_payload` both **II=1** read from the csynth XML, the witness's
+five values bit-exact through real Verilog at 64-bit words, last read word at cycle **386**, the
+overlap proved from arrival cycles (the phase-2 write's response lands at 366, inside the reader's
+313…376 window), and the reader's 64-word burst arriving one word per cycle with no gap.
+
+Its **negative** gate cannot be met as written, and the reason is not the design.
+
+### The collision happens; the `$error` cannot be seen
+
+`collision_scenario()` was built and **measured with a temporary `$fwrite` probe inside a scratch
+copy of `bram_t2p.v`**: 24 events where `a_en && |a_we && b_en && a_addr == b_addr`, with the
+relative address offset swept from −8 to +9 across the run.  So `bram_t2p.v`'s `$error` fired
+24 times.  Nothing observed it.
+
+**In this XSI flow (Vivado 2025.1, `xelab -dll` + the C++ loader) RTL text output is discarded.**
+Measured four ways:
+
+* `$display` in an `always` block — ~900 lines' worth — reaches neither stdout nor any file;
+* an `initial $display` at time 0 — the same;
+* `s_xsi_setup_info::logFileName`, relative and absolute, produces **no file**.  It does change the
+  kernel's invocation (`xsim.dir/<top>/xsimkernel.log` shows `-nolog` become `-log <name>`), and
+  still nothing is written;
+* an `$fwrite` to a file the Verilog opens itself **does** work — which is how the collision above
+  was counted, and which is what proves the RTL is executing the code that would have printed.
+
+### What this costs elsewhere
+
+Two existing gates assert a string that **cannot appear**, and both read as positive evidence today:
+
+```python
+assert "read-during-write collision" not in out          # test_bram_toy_xsi.py
+assert "read-during-write collision" not in out          # test_rf_shot_buf_xsi.py
+```
+
+`docs/guide/interface/bram.md` also presents the memory's `$error` as the guard that makes a
+hand-written memory *more* verifiable than an emulated one.  That argument survives — the assertion
+is real and it fires — but the sentence should say where the firing can be read, and today the answer
+is "nowhere".
+
+### The decision, which is not mine to take
+
+Three ways to give the assertion an observation channel, each with a different blast radius:
+
+1. **`$fopen`/`$fwrite` in `bram_t2p.v`** beside the `$error`.  Measured to work.  Costs: the memory
+   stops being byte-for-byte the witness's file, every design instantiating it writes a file, and a
+   framework RTL artifact grows testbench machinery.
+2. **Detect the condition in Python from a VCD**, using `run.bat <top> <tb> trace` and the existing
+   trace tooling, reading the memory's `a_en`/`a_we`/`a_addr`/`b_en`/`b_addr`.  Costs: the gate then
+   checks the *condition* rather than the RTL's own assertion, and the `$error` stays decorative.
+3. **Leave it**, and delete the two vacuous asserts so nothing claims evidence it does not have.
+
+Whichever is chosen, the two existing asserts should not stay as they are.
+
+---
+
 ## Traps, carried forward
 
 - **The venv is a sibling: `../pysilicon-venv`.**
@@ -259,3 +317,14 @@ witness inside a design nobody reads.
 - **`mode=bram` on an unsized pointer degrades to an `ap_vld` scalar silently.** Assert the port list.
 - **Vitis alternates `_Pipeline_VITIS_LOOP_<line>_<n>` and a bare `_Pipeline_<n>`.** A glob matching
   one spelling skips silently; it has cost time twice.
+- **A task's submodules are named for the TASK FUNCTION, not the top.** `bram_simple`'s report
+  entries are `bram_write_cmd_task_64_1024_Pipeline_write_payload`, with no `bram_simple_` prefix —
+  even though the RTL *file* on disk carries one.  A `_require` on a name with the prefix skips, and
+  a skip on a gate this expensive reads as a pass.
+- **Address overlap is NOT a collision.**  Two II=1 sweeps over the same range are parallel lines in
+  (cycle, address) and never meet unless they start in the same cycle.  Making them meet needs a
+  relative phase that *moves* — which is why `collision_scenario()` gives the writer and the reader
+  command lengths that differ by one word.
+- **Reading never-written memory is not a check.**  pysim returns 0 from a zeroed numpy array; the
+  RTL returns `X` (`0xFFFF_FFFF_FFFF_FFFF` once packed), because `bram_t2p.v`'s `mem` has no initial
+  value.  Write a sentinel first.
