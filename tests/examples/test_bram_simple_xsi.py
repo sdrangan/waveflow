@@ -29,9 +29,12 @@ Three things are checked here that pysim cannot check:
    stdout nor a file, and setting ``s_xsi_setup_info::logFileName`` produces no log at all.  Measured
    three ways, including an ``initial $display`` that never appeared.
 
-   That also means the ``assert "read-during-write collision" not in out`` lines in
-   ``test_bram_toy_xsi.py`` and ``test_rf_shot_buf_xsi.py`` are checking for a string that cannot
-   appear.  Adding a fourth of them here would make this file agree with them and prove nothing.
+   That also meant the ``assert "read-during-write collision" not in out`` lines elsewhere were
+   checking for a string that cannot appear.  There were **five**, not two — `bram_toy`,
+   `rf_shot_buf`, `rf_blk_delay`, `rf_samp_buf_rx` and `rf_samp_buf_tx` — and all five were removed
+   on ``main`` (``test(xsi): remove five checks that could never fail``).  No sixth was added here.
+   The replacement is to gate the **condition** from the VCD trace; see ``plans/bram_simple.md``
+   § *DECIDED 2026-08-25*.
 """
 from __future__ import annotations
 

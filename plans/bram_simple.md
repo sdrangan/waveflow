@@ -316,8 +316,10 @@ looked; option 2 is chosen on its own merits rather than by default.
    (`examples/shared_mem/vcd/dump.vcd`). Detect `a_en && |a_we && b_en && a_addr == b_addr` in Python.
    It checks the same fact the `$error` checks, touches no RTL, and **composes with Stage 3**, which
    needs the trace anyway.
-2. **Delete all five vacuous asserts** — not only the two in this example's neighbourhood. They are
-   misleading today and every one of them reads as positive evidence.
+2. ~~Delete all five vacuous asserts.~~ **DONE on `main`, 2026-08-25** —
+   `test(xsi): remove five checks that could never fail`. Three of them were whole test functions
+   whose entire body was the dead assertion; two were embedded and lost only the assertion. `-m xsi`
+   went 57 → 54, 0 skipped. **Do not look for them; they are gone.**
 3. **Correct `docs/guide/interface/bram.md`.** It presents the `$error` as *the* guard. The honest
    statement: the assertion is real and it fires, but **in the XSI flow nothing can read it**, so a
    user whose design collides gets no warning from that path. That is the finding here, and it is
