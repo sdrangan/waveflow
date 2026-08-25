@@ -1,8 +1,8 @@
 # `RfShotBuf` — the finite sample buffer
 
-**Status: DESIGNED HERE, NOTHING BUILT.** Started 2026-08-24. This file owns `RfShotBuf` — the
-**finite** sample buffer, its examples, and its documentation. The streaming buffer is
-`plans/rf_samp_new.md`; the converter is `plans/adc_model.md`.
+**Status: STAGE A BUILT AND RTL-GATED (2026-08-24). Stages B–E open.** Started 2026-08-24. This
+file owns `RfShotBuf` — the **finite** sample buffer, its examples, and its documentation. The
+streaming buffer is `plans/rf_samp_new.md`; the converter is `plans/adc_model.md`.
 
 It exists as a separate plan rather than a section of `rf_samp_new.md` deliberately. That file is
 ~1200 lines of machinery — credit and ack channels, `time_compare`, the half-wrap contract, the
@@ -12,12 +12,13 @@ problem it does not have.
 
 ---
 
-## Next session starts here — Stage A
+## Next session starts here — Stage B
 
 ```
-claude "Read plans/rf_shot_buf.md, section 'Stage A — the buffer primitive', and build it.
-        The design it implements is 'What RfShotBuf is' in the same file, and the
-        decisions list is settled — do not re-open it."
+claude "Read plans/rf_shot_buf.md, sections 'Stage A — what it measured' and
+        'Stage B — TX: play a stored waveform', and build Stage B.
+        Stage A is built and RTL-gated; do not rebuild RfShotBuf, RfRelayout or
+        their examples. The decisions list is settled — do not re-open it."
 ```
 
 Stages run in order; each has its own gate. A is the primitive, B and C are the two directions, D is
@@ -223,7 +224,12 @@ serializer never straddles a word boundary, so dense-14 in a 64-bit word carries
 at the same word count, byte-aligned, with 8 bits idle. 64 is also exactly the RFDC word width at
 4×16, which makes the buffer's job a **pure re-layout inside one width**.
 
-### The caveat, and it is a Stage A gate
+### The caveat, and it is a Stage A gate — **MEASURED 2026-08-24: II = 1, both directions**
+
+`examples/rf_relayout` csynths and XSI-runs the pair at 14-in-16 (shift 2). Both bodies reach an
+achieved `PipelineII` of **1**, and the RTL is bit-exact and gapless at one word per cycle. See
+*Stage A — what it measured*. The paragraph below is kept because it is why the gate exists, and
+because the identity trap it names is still live for any *other* configuration.
 
 **When `bits_per_samp == bits_per_samp_pack` the re-layout is the identity** — which is every
 configuration in this repo except the 4x2 preset. So the path is **unexercised**, and "shift and mask
@@ -284,7 +290,7 @@ issues commands and reads verdicts needs **both DMA directions** — MM2S for th
 S2MM for the response. That is a real consequence of the verdict and should not be discovered in
 Vivado.
 
-## Stage A — the buffer primitive
+## Stage A — the buffer primitive  *(DONE — see* Stage A — what it measured *below)*
 
 **Goal:** `RfShotBuf` in `waveflow/hw/`, as framework rather than an example — the discipline
 `RfSampBuf` already follows. A BRAM, a writer task, a reader task, and nothing between them.
@@ -307,6 +313,84 @@ dense-packed port actually reaches. See *The logic-side port*. A prediction here
 loader-hoist mistake a second time.
 
 **Not in scope:** the converter, the RF grid, any command format.
+
+## Stage A — what it measured
+
+**Built and RTL-gated 2026-08-24.**  Two designs, two csynths, two XSI gates, and one defect found
+that had nothing to do with the shot buffer.
+
+| what | where |
+|---|---|
+| the buffer | `waveflow/hw/rf_shot_buf.py` — `RfShotBufLoad`, `RfShotBufRead`, `RfShotBuf`, `ShotPhase` |
+| the re-layout | `waveflow/hw/rf_relayout.py` — `RfRelayoutToDense`, `RfRelayoutToSlots`, `RfRelayout`, `to_dense` / `to_slots` |
+| the C++ bodies | `waveflow/build/rf_shot_buf_{load,read}_task.h`, `rf_relayout_to_{dense,slots}_task.h`, shipped by `RfShotBufStep` |
+| the gates | `examples/rf_shot_buf` (XSI **520**), `examples/rf_relayout` (XSI **68**) |
+
+### The numbers, measured
+
+| body | achieved `PipelineII` | note |
+|---|---|---|
+| `rf_shot_buf_load_task` (`load_shot`) | **1** | counted inner loop, `while (1)` outer |
+| `rf_shot_buf_read_task` (`play_shot`) | **1** | ditto |
+| `rf_relayout_to_dense_task` | **1** | **14-in-16 — the prediction, confirmed** |
+| `rf_relayout_to_slots_task` | **1** | ditto |
+
+XSI, exact and recorded: `rf_shot_buf` completes at cycle **520** (256 words loaded, one `rdy`
+token, 256 words played back to back in cycles 265..520 — one word per cycle with no gap, so the
+II=1 report is visible end to end rather than only in a report). `rf_relayout` completes at cycle
+**68** (64 words in cycles 5..68, likewise gapless through *both* conversions and the channel
+between them). Neither number is inherited from `RfSampBuf`; both are from a run.
+
+**"Shift and mask per slot holds II=1" is now a measurement.** It was a prediction because every
+configuration in this repo but the 4x2 preset has `bits_per_samp == bits_per_samp_pack`, which makes
+the conversion the identity. `examples/rf_relayout` is built on `Rfsoc4x2SampWord` (shift 2) and
+`RfRelayout.is_identity` is asserted `False` by the gate *and* refused at elaboration, so the
+measurement cannot silently degrade back into measuring a pair of wires.
+
+**Why the shot buffer's loops flatten where the streaming buffer's do not.** `RfSampBufCapture` and
+`RfSampBufLoader` are pinned at 2 cycles/word by an inner data-dependent spin Vitis cannot flatten
+(`HLS 200-960`). A shot buffer has nothing to wait for mid-shot — the other side is not live — so the
+wait does not exist. The concurrency argument, expressed as a loop shape rather than as prose.
+
+### The defect Stage A found — Vitis addresses a `bram` port in BYTES
+
+**The first RTL run returned the second half of the shot twice**, and the cause was not in this
+design. Vitis emits `Addr_A_local = Addr_A_orig << 32'd3` for a 64-bit `mode=bram` array — a **byte**
+address — while `bram_t2p.v` indexes `mem[a_addr[AW-1:0]]` as a **word** index. The generated wrapper
+joined them straight through, so every address was scaled by the element's byte width and everything
+past `depth / (W/8)` aliased onto a live word.
+
+**Silent, and consistent enough to hide.** A design that writes and reads through the same scaled
+address round-trips perfectly right up to the point where the memory wraps. `examples/bram_toy`
+fills 256 of 1024 words at 16 bits — byte addresses 0…510, no wrap — so it was green either way,
+which is exactly what a witness cannot prove. `examples/rf_blk_delay` has been running its 1024-word
+64-bit buffers in 128 distinct locations.
+
+Fixed in `waveflow/build/wrapper_gen.py` (`_bram_addr_shift`), which also widens the `WEN` wire to
+the byte count Vitis actually drives — it was hard-coded at 2, right only at 16 bits, and the 8-bit
+mask was being truncated into it. `bram_t2p.v` is untouched: the wrapper exists to reconcile the two
+conventions, so that is where the reconciliation belongs. `tests/examples/test_rf_shot_buf_xsi.py`
+checks the shift against **the RTL Vitis emitted**, not against a belief about it.
+
+All five wrappers were regenerated and the whole `-m xsi` suite re-run: **57 tests, 0 skipped, 1
+failure** — `test_fir_block_xsi`, pre-existing and unrelated. No recorded cycle count moved, which is
+what a pure addressing change should do.
+
+### Two deviations from the plan's Stage A sketch, both deliberate
+
+* **`depth` is in WORDS, not samples.** The memory's unit is the word, its address wrap is a mask, and
+  `RfSampBufRx.depth` already means words — two classes in one repo whose `depth` meant different
+  units would be the `nbits` defect again. Samples are `nsamp_held` / `nsamp_shot`.
+* **The word type is read at construction, not carried.** `RfShotBuf.for_word(word, …)` derives the
+  integers; the class cannot hold the type, because `HwModule.__post_init__` wraps every `HwParam` in
+  `HwParamValue(int(value))`. That answers the *Open question* "carry it or read it off the
+  converter": **read it**, and the classmethod is the single place it is read.
+
+### What Stage A deliberately did not do
+
+No converter, no RF grid, no command format — the load length is build-time structure (`nword`), the
+same discipline the commands will follow. There is no response yet either: *The response is not
+optional* is a Stage B obligation, and Stage A has no command for one to answer.
 
 ## Stage B — TX: play a stored waveform
 
@@ -404,9 +488,12 @@ reason `rf_loopback` is kept as the pattern-A case study. Their retirement belon
   `mm_bus.json` each. Until both are fitted, any transfer time this design predicts is right for at
   most one of them, and the failure mode is a plausible number rather than an error. Decide whether
   Stage B gates on a calibration or states the numbers as uncalibrated.
-- **Does `RfShotBuf` carry the word type, or read it off the converter at bind?** `Rfdc` reads
-  `samp_rate` off the clock and pushes `t0`, and the same single-source discipline should decide this.
-  Read, almost certainly — but state it rather than letting it happen.
+- ~~**Does `RfShotBuf` carry the word type, or read it off the converter at bind?**~~ **ANSWERED
+  2026-08-24: it reads it.** `RfShotBuf.for_word(word, …)` derives `bitwidth` and `samp_per_word` and
+  the class keeps neither the type nor a second copy of the rules. It *cannot* carry the type in any
+  case — `HwModule.__post_init__` wraps every `HwParam` in `HwParamValue(int(value))` — so the
+  single-source discipline and the mechanism agree. `RfRelayout.for_word` does the same for the three
+  integers the conversion needs.
 
 ## Traps, carried forward
 
@@ -416,9 +503,22 @@ reason `rf_loopback` is kept as the pattern-A case study. Their retirement belon
   **+1 vitis**, and **`-m xsi` has its own**: `test_fir_block_xsi` fails with
   `block 0 word 0: 0x00000000 != golden 0x0dab0666`, pre-existing. **0 skipped is the number to
   check** — the soft-skip path masks a missing csynth. Piping pytest through `tail` reports *tail's*
-  exit code.
+  exit code. *(`-m xsi` is **57** tests after Stage A, up from 49.)*
+- **The `rtl_staleness` guard skips on an mtime, not a diff.** Regenerating `gen/<top>.cpp` — even to
+  byte-identical content, even only to refresh a wrapper — makes it newer than the RTL and **silently
+  skips every gate for that example**. Re-run `--through csynth` after any `codegen_dut --force`, and
+  read the skip count.
 - **XSI gates compile the COMMITTED `xsi/` copies**; keep them in step with `waveflow/build/xsi/`.
 - **A `BramIF` goes in `add_rtl_if`, never `add_if`.**
+- **Vitis addresses a `bram` port in BYTES** (`Addr_A_orig << 32'd3` at 64 bits); the memory indexes
+  words. The wrapper undoes it (`_bram_addr_shift`). Found by Stage A after `bram_toy` had been green
+  for a fortnight — the scaling is *consistent*, so a design round-trips perfectly until its memory
+  wraps. Never take "the values came back right" as evidence that the addressing is right; write past
+  `depth / (W/8)` words, or check the shift against the emitted RTL.
+- **Label a loop you intend to assert on.** Vitis names an unlabelled loop `VITIS_LOOP_<line>_1`, so a
+  comment edit renames its report entry and a hard-coded lookup then misses — and a test that skips
+  on a miss reads as a pass. The shot-buffer bodies carry `load_shot:` / `play_shot:`; the gates also
+  discover the entry rather than spelling it out.
 - **`mode=bram` on an unsized pointer degrades to an `ap_vld` scalar silently** — a clean csynth
   against a memory that is not there. Assert the port list, as `bram_toy` does.
 - **Costs are measured, never inherited.** Every cycle count in this plan is to be recorded from a

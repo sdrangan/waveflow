@@ -226,6 +226,63 @@ class RfTxStreamStep(Buildable):
         return src_path.read_text(encoding="utf-8")
 
 
+class RfShotBufStep(Buildable):
+    """Copy the **finite** sample buffer's hand-written task bodies, and its logic-side re-layout.
+
+    The same mechanism as :class:`RfSampBufStep` and for the same reason:
+    :mod:`waveflow.hw.rf_shot_buf` and :mod:`waveflow.hw.rf_relayout` are **framework**, so their
+    ``hls::task`` bodies ship from ``waveflow/build/`` and each example gets a copy beside the top
+    Vitis compiles.
+
+    **A separate step from** :class:`RfSampBufStep`, deliberately.  ``plans/rf_shot_buf.md`` opens by
+    saying why the two designs are separate plans rather than two halves of one: every line of the
+    streaming buffer's machinery — credit, ack, progress, ``MARGIN``, the horizon — exists to
+    arbitrate between a live reader and a live writer, and the shot buffer has no such pair.  Handing
+    a shot-buffer build the streaming vocabulary would put two answers to "how does the reader know
+    where the writer is?" in one include directory, when the shot buffer's answer is *there is
+    nothing to know*.
+
+    **All four bodies together**, though, because the buffer and the re-layout are one interface: the
+    logic-side port carries densely-packed samples precisely so the buffer can own the converter's
+    packing, and a build that copied the buffer without the conversion would have a port whose format
+    nothing could produce.  Two unused headers cost nothing — Vitis compiles what the top includes.
+
+    The two re-layout bodies ``#include`` the generated ``rf_slot_elem_array_utils.h`` /
+    ``rf_dense_elem_array_utils.h`` by plain name, so an
+    :class:`~waveflow.hw.arrayutils.ArrayUtilsStep` for
+    :func:`~waveflow.hw.rf_relayout.slot_elem_type` and
+    :func:`~waveflow.hw.rf_relayout.dense_elem_type` must write into the **same** *output_dir*.
+
+    Parameters
+    ----------
+    output_dir : str | Path
+        Directory path **relative to** ``BuildConfig.root_dir`` where the task headers are written.
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {name: self._output_dir / f"{name}.h" for name in self._SRC}
+
+    _SRC = ("rf_shot_buf_load_task", "rf_shot_buf_read_task",
+            "rf_relayout_to_dense_task", "rf_relayout_to_slots_task")
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        if key not in self._SRC:
+            raise KeyError(f"Unknown RfShotBufStep output key: {key!r}")
+        src_path = _SRC_DIR / f"{key}.h"
+        if not src_path.exists():
+            raise FileNotFoundError(f"RfShotBuf source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")
+
+
 class MemStreamStep(Buildable):
     """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
     output directory.
