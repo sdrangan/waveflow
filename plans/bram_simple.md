@@ -202,7 +202,9 @@ leaving the consumer waiting on a stream that has gone quiet.
 
 **Stage 2 — the wrapping geometry and the overlap phase.** A 64-bit configuration that wraps, and
 phase 2's disjoint-range overlap. **Gate:** csynth, XSI, an exact cycle count, and a deliberate
-negative — a *non*-disjoint overlap must trip `bram_t2p.v`'s `$error`, asserted rather than assumed.
+negative — a *non*-disjoint overlap must be **detected in the VCD trace**, asserted rather than
+assumed. (The gate was first written against `bram_t2p.v`'s `$error`; that is unobservable in this
+flow — see *DECIDED 2026-08-25*.)
 
 **Stage 3 — timing in the Python model.** Objective 4. **Gate:** the first-word offset between
 backends is exactly `read_latency`, and the throughputs match.
@@ -289,19 +291,51 @@ hand-written memory *more* verifiable than an emulated one.  That argument survi
 is real and it fires — but the sentence should say where the firing can be read, and today the answer
 is "nowhere".
 
-### The decision, which is not mine to take
+### DECIDED 2026-08-25 — gate the condition from the VCD, and correct what the guide claims
 
-Three ways to give the assertion an observation channel, each with a different blast radius:
+**Option 2, plus a correction that is larger than the gate.** Two facts found while deciding change
+the shape of the choice:
 
-1. **`$fopen`/`$fwrite` in `bram_t2p.v`** beside the `$error`.  Measured to work.  Costs: the memory
-   stops being byte-for-byte the witness's file, every design instantiating it writes a file, and a
-   framework RTL artifact grows testbench machinery.
-2. **Detect the condition in Python from a VCD**, using `run.bat <top> <tb> trace` and the existing
-   trace tooling, reading the memory's `a_en`/`a_we`/`a_addr`/`b_en`/`b_addr`.  Costs: the gate then
-   checks the *condition* rather than the RTL's own assertion, and the `$error` stays decorative.
-3. **Leave it**, and delete the two vacuous asserts so nothing claims evidence it does not have.
+**It is FIVE vacuous asserts, not two.** `assert "read-during-write collision" not in out` appears in
+`test_bram_toy_xsi.py`, `test_rf_blk_delay_xsi.py`, `test_rf_samp_buf_rx_xsi.py`,
+`test_rf_samp_buf_tx_xsi.py` and `test_rf_shot_buf_xsi.py` — five shipped XSI gates asserting the
+absence of a string that **cannot appear**. That is this repo's own *"a check that silently stops
+checking is worse than no check, because the green tick is then evidence of nothing"*, five times, and
+it is live on `main`.
 
-Whichever is chosen, the two existing asserts should not stay as they are.
+**And the byte-for-byte-from-the-witness property already does not hold.**
+`waveflow/build/rtl/bram_t2p.v` is 43 lines to `plans/witness/t2p_bram/bram_t2p.v`'s 35 — it gained
+the `localparam READ_LATENCY = 1` block that is the single source for the kernel's pragma. The
+property was already traded once, for a good reason. So that objection to option 1 is weaker than it
+looked; option 2 is chosen on its own merits rather than by default.
+
+**What to build:**
+
+1. **Gate the CONDITION from the trace.** `run.bat` already dumps `<top>_trace.vcd`,
+   `waveflow/utils/vcd.py` exists, and there is committed-VCD precedent
+   (`examples/shared_mem/vcd/dump.vcd`). Detect `a_en && |a_we && b_en && a_addr == b_addr` in Python.
+   It checks the same fact the `$error` checks, touches no RTL, and **composes with Stage 3**, which
+   needs the trace anyway.
+2. **Delete all five vacuous asserts** — not only the two in this example's neighbourhood. They are
+   misleading today and every one of them reads as positive evidence.
+3. **Correct `docs/guide/interface/bram.md`.** It presents the `$error` as *the* guard. The honest
+   statement: the assertion is real and it fires, but **in the XSI flow nothing can read it**, so a
+   user whose design collides gets no warning from that path. That is the finding here, and it is
+   bigger than a test — the protection the guide promises does not exist in the flow this repo runs.
+
+**Not option 3.** Deleting the asserts without replacing the check leaves both the gap and the
+overclaiming guide.
+
+### Deferred, deliberately: making the guard observable by construction
+
+If user-facing protection matters — and it probably does — the durable fix is neither a print nor a
+trace scan but a **sticky `collision` output on the memory**, exposed through the wrapper and readable
+in *both* backends by construction. That is a real interface change with a blast radius across
+`BramIF`, `wrapper_gen` and every existing wrapper, so it belongs to **`plans/rtl_module.md`** as its
+own decision. Do not smuggle it into this stage.
+
+Recorded here because the reasoning is fresh: what makes the current guard weak is not that it is an
+assertion, it is that its only channel is text output — and one of the two backends discards text.
 
 ---
 
