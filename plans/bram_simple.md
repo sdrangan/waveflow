@@ -211,14 +211,26 @@ backends is exactly `read_latency`, and the throughputs match.
 `docs/examples/shared_mem/` already uses — it is the closest analogue, being the other memory
 example:
 
-| page | what it covers |
-|---|---|
-| `index.md` | the learning objectives, and what the example is for |
-| `overview.md` | what a BRAM is here, and the topology — the `aximm.md` role in `shared_mem` |
-| `python.md` | the Python model, including the read-path timing (objective 4) |
-| `pysim.md` | running it, generating test vectors, recording the timing |
-| `codegen.md` | producing the RTL — the kernel, `bram_t2p.v`, and the wrapper that joins them |
-| `rtlsim.md` | running XSI, the activity diagram, and the comparison back to pysim |
+| # | page | what it covers |
+|---|---|---|
+| 1 | `index.md` | the learning objectives, and what the example is for |
+| 2 | `overview.md` | what a BRAM is here, and the topology — the `aximm.md` role in `shared_mem` |
+| 3 | `python.md` | the Python model, and **how** the read-path delay is added (objective 4's code) |
+| 4 | `pysim.md` | running it, generating test vectors, recording the timing |
+| 5 | `codegen.md` | producing the RTL — the kernel, `bram_t2p.v`, and the wrapper that joins them |
+| 6 | `rtlsim.md` | running XSI and producing the trace |
+| 7 | `timing.md` | **reading** the trace: the activity diagram, and the comparison back to pysim |
+
+The `python.md` / `timing.md` split follows what `shared_mem` and `memcpy` already do — the model
+page shows the code, the timing page reads the run. Both of those `timing.md`s also cover **how the
+figures are committed and refreshed**, which this one needs too, since the activity diagram is a
+generated artifact.
+
+**`timing.md` has a sharper job here than in the examples it copies.** `memcpy`'s ends with a section
+titled *"And the pysim matches — for free."* This one cannot say that, and the reason is objective 4:
+the throughputs match for free, and the **first word does not** — it is off by exactly
+`READ_LATENCY` unless the model pays it. Draw the contrast explicitly; a reader arriving from
+`memcpy` will expect the free match and should be told why a memory is different from a bus.
 
 **Mermaid for the topology.** It is enabled site-wide (`_config.yml`: `mermaid: version: 10.9.1`,
 client-side from a CDN, no build plugin) and already used on ten pages — `memcpy`, `interleaver`,
@@ -226,10 +238,6 @@ client-side from a CDN, no build plugin) and already used on ten pages — `memc
 **committed TikZ→SVG for claims** (the structural assertions in `guide/rf/figures/`, whose README
 argues that a generated artifact cannot drift from what it describes). A topology sketch is the first
 kind.
-
-**Consider a separate `timing.md`.** Both `shared_mem` and `memcpy` keep one rather than folding
-timing into `python.md` and `rtlsim.md`, and objective 4 — the read latency that is invisible in
-throughput and visible in latency — is more than a paragraph.
 
 **And the addressing convention into `docs/guide/interface/bram.md`**, which is written down nowhere
 today: Vitis byte-addresses a `mode=bram` port, the wrapper undoes it, the WEN is a byte-enable
