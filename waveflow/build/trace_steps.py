@@ -131,13 +131,19 @@ class AddVcdTopStep(BuildStep):
     comp_class: type
     source_artifact: str
     output_dir: str = "xsi"
+    #: The module xsim actually elaborates, when that is NOT the kernel.  A design whose memory lives
+    #: beside the kernel is elaborated as its WRAPPER (``bram_simple_top``), and both the dumper's
+    #: file name and the scope it names have to follow: `run.bat` picks ``vcd_dumper_%TOP%.v``, and a
+    #: ``$dumpvars`` naming a scope that is not part of this elaboration is a hard error.  Left
+    #: ``None`` for the ordinary case, where the kernel is the top.
+    top: str | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
         # The top name is a property of the CLASS, so no elaborate() here -- `produces` is read at
         # DAG-construction time and should not pay for a build.  It is also independent of the bus
         # width, which is why this step takes no width at all.
-        self._top = cpp_kernel_name(self.comp_class)
+        self._top = self.top or cpp_kernel_name(self.comp_class)
 
     @property
     def consumes(self) -> list:  # type: ignore[override]

@@ -270,6 +270,69 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
                        tieoffs=tuple(tieoffs))
 
 
+def bram_hazard_manifest(comp, spec) -> dict:
+    """The nets a read-during-write collision is **visible on**, named by the emitter that made them.
+
+    ``bram_t2p.v`` asserts the invariant itself::
+
+        if (a_en && |a_we && b_en && (a_addr[AW-1:0] == b_addr[AW-1:0]))
+            $error("bram_t2p: read-during-write collision at addr %0d", a_addr[AW-1:0]);
+
+    and in the XSI flow **nothing can read that** — RTL text output reaches neither stdout nor a log
+    (``plans/bram_simple.md``, *DECIDED 2026-08-25*).  So the condition is checked from the waveform
+    instead, and this is the half that must not be guessed: *which net* carries each term.  Same
+    argument as :meth:`~waveflow.build.composite_gen.TopSpec.trace_manifest` — codegen chose these
+    names, so binding is exact, and a name that has moved fails loudly rather than matching nothing.
+
+    The wires are the **wrapper's**, not the memory's, because a level-1 ``$dumpvars`` of the
+    elaborated top sees the wrapper's own scope.  That is also why ``addr_shift`` is here: the
+    wrapper hands the memory ``buf_w_addr_a >> 3``, so the byte→word conversion is part of reading
+    the waveform correctly, exactly as it is part of driving the memory correctly.
+
+    Returns ``{"top": <wrapper module>, "clock": "ap_clk", "memories": [...]}`` with one entry per
+    memory that has **both** a write accessor and a read accessor — a memory only one side touches
+    cannot have the hazard, and saying so is better than emitting an entry whose condition can never
+    be true.
+
+    Raises
+    ------
+    LoweringError
+        If a connection expression is not one this reader understands.  The emitter writes exactly
+        three shapes (a bare wire, ``wire >> N``, ``|wire``); anything else means the vocabulary grew
+        and the scan would silently bind to the wrong thing.
+    """
+    from waveflow.build.composite_gen import wrapper_name
+
+    ep_of_port = {name: ep for name, ep in (_unpack(e) for e in comp.boundary)}
+    # memory identity -> {access: {role: wire}}, plus the geometry the memory itself indexes with.
+    per_mem: dict[int, dict] = {}
+    for iface in comp.rtl_ifs.values():
+        master, slave = iface.endpoints.get("master"), iface.endpoints.get("slave")
+        if master is None or slave is None:
+            continue
+        port = next((n for n, ep in ep_of_port.items() if ep is master), None)
+        if port is None:
+            raise LoweringError(
+                f"{type(comp).__name__}: the accessor end of rtl interface {iface.name!r} is not a "
+                f"boundary port of the kernel, so no wrapper wire carries it and the hazard cannot "
+                f"be read off a waveform.")
+        mem = slave.comp
+        entry = per_mem.setdefault(id(mem), {"inst": _inst_name(comp, mem),
+                                             "module": resolve_rtl_module(mem).module,
+                                             "addr_bits": int(mem.addr_bits)})
+        entry[str(slave.access)] = {
+            "en": f"{port}_en_a",
+            "we": f"{port}_we_a",
+            "addr": f"{port}_addr_a",
+            "dout": f"{port}_dout_a",
+            "addr_shift": _bram_addr_shift(int(master.bitwidth)),
+        }
+
+    memories = [m for m in per_mem.values() if "write" in m and "read" in m]
+    return {"version": 1, "top": wrapper_name(spec.top_name), "clock": "ap_clk",
+            "memories": memories}
+
+
 def _unpack(entry) -> tuple[str, object]:
     from waveflow.build.composite_gen import _unpack_boundary
     return _unpack_boundary(entry)

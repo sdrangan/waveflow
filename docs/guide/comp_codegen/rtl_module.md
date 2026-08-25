@@ -186,9 +186,15 @@ This page is the *declaration*. Two more pieces turn it into a design, and both 
 
 `examples/bram_toy` is the worked design, gated at RTL against the witness's own values.
 
-One thing genuinely absent: `trace_manifest` derives net names in *the top's own scope*, so with a
-wrapper as the elaborated top the kernel's internals sit one level deeper. Nothing traces or times a
-wrapped design yet, so no consumer has needed the scope prefix — the first one will.
+`trace_manifest` derives net names in *the top's own scope*, so with a wrapper as the elaborated top
+the **kernel's** internals sit one level deeper and are still out of reach. The first consumer to
+trace a wrapped design — `examples/bram_simple`, which detects read-during-write collisions in the
+waveform because [the memory's `$error` cannot be heard](../interface/bram.md#the-error-fires-and-in-this-flow-nothing-can-hear-it)
+— turned out **not** to need the prefix: what it reads are the wrapper's *own* wires, the ones
+joining the kernel's `bram` ports to the memory, and those are exactly what a level-1 `$dumpvars` of
+the wrapper captures. They are named by
+[`bram_hazard_manifest`](../../../waveflow/build/wrapper_gen.py), the wrapper's counterpart to
+`trace_manifest`. Reaching *inside* the kernel from a wrapped top is still unbuilt.
 
 ## See also
 

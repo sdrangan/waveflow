@@ -18,6 +18,7 @@ kernel's name.  One artifact keeps the name it has; the new one is visibly the o
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -37,7 +38,9 @@ from waveflow.build.composite_gen import (  # noqa: E402
     tb_top_spec,
 )
 from waveflow.build.elaborate import elaborate  # noqa: E402
+from waveflow.build.wrapper_gen import bram_hazard_manifest  # noqa: E402
 from waveflow.build.rtl_steps import GenRtlStep, GenWrapperStep  # noqa: E402
+from waveflow.build.trace_steps import AddVcdTopStep  # noqa: E402
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep, XsiHarnessStep  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
@@ -76,6 +79,11 @@ _ELAB = {"bitwidth": WORD_BW, "depth": DEPTH}
 PART = "xc7z020clg484-1"
 PERIOD_NS = 10
 
+#: Where the hazard manifest lands — the nets a read-during-write collision is visible on.  Emitted
+#: beside the wrapper because it names the **wrapper's** wires, and read back by
+#: :func:`waveflow.utils.bram_hazard.find_read_during_write` after a traced run.
+HAZARD_JSON = f"xsi/{TOP}_hazard.json"
+
 
 def copy_fixed_task_bodies(root_dir: Path) -> None:
     import shutil
@@ -100,6 +108,9 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     copy_fixed_task_bodies(out_dir)
 
     inner = BuildDag()
+    # The dumper step consumes the design source (it is derived from the class), so the inner DAG
+    # needs the same source node the outer one has.
+    inner.add(SourceStep(artifact="bram_simple_source", path=HERE / "bram_simple.py"))
     # Framework headers the generated top includes unconditionally.  This design uses neither a
     # stream utility nor the memory manager, but the include is emitted for every free-running top
     # and a missing file is a csynth error, not a warning.
@@ -111,6 +122,12 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     inner.add(GenRtlStep(name="place_memory", comp_class=_memory_class(), output_dir="xsi"))
     inner.add(GenWrapperStep(name="wrapper", comp_class=BramSimple, elab_params=dict(_ELAB),
                              width=WORD_BW, output_dir="xsi"))
+    # The $dumpvars second top, named for the WRAPPER rather than the kernel: that is what xsim
+    # elaborates here, `run.bat` picks `vcd_dumper_%TOP%.v`, and a $dumpvars naming a scope outside
+    # this elaboration is a hard error.  Level 1 of the wrapper is exactly the right depth -- the
+    # memory's address, enable and write-enable wires are declared in the wrapper's own scope.
+    inner.add(AddVcdTopStep(name="vcd_dumper", comp_class=BramSimple,
+                            source_artifact="bram_simple_source", top=WRAPPER, output_dir="xsi"))
     results = inner.run(config, force=True)
     failed = [n for n, r in results.items() if not r.success]
     if failed:
@@ -127,9 +144,22 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     xsi = out_dir / "xsi"
     xsi.mkdir(parents=True, exist_ok=True)
     (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
+    (out_dir / HAZARD_JSON).write_text(json.dumps(bram_hazard_manifest(comp, spec), indent=2),
+                                       encoding="utf-8")
     print(f"generated DUT {cpp.name} + {spec.top_name}.tcl + xsi/{spec.top_name}_ports.h "
-          f"+ xsi/{WRAPPER}.v (elaborated top: {spec.elab_top})")
+          f"+ xsi/{WRAPPER}.v + {HAZARD_JSON} (elaborated top: {spec.elab_top})")
     return cpp
+
+
+def hazard_manifest() -> dict:
+    """The nets a read-during-write collision is visible on, for the gated configuration.
+
+    Derived from the same elaborated graph the wrapper is, so the scan cannot be looking at nets the
+    wrapper does not drive — which is the failure that would make an empty scan read as "no
+    collisions".
+    """
+    comp = elaborate(BramSimple, dict(_ELAB), name=TOP)
+    return bram_hazard_manifest(comp, composite_top_spec(comp, width=WORD_BW))
 
 
 def _memory_class():
@@ -229,7 +259,9 @@ class CodegenDutStep(BuildStep):
                                 "run_tcl": Path(f"{TOP}.tcl"),
                                 "dut_ports": Path(f"xsi/{TOP}_ports.h"),
                                 "wrapper_v": Path(f"xsi/{WRAPPER}.v"),
-                                "memory_v": Path("xsi/bram_t2p.v")}
+                                "memory_v": Path("xsi/bram_t2p.v"),
+                                "vcd_dumper": Path(f"xsi/vcd_dumper_{WRAPPER}.v"),
+                                "hazard_manifest": Path(HAZARD_JSON)}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
@@ -239,7 +271,9 @@ class CodegenDutStep(BuildStep):
                 "run_tcl": root / f"{TOP}.tcl",
                 "dut_ports": root / "xsi" / f"{TOP}_ports.h",
                 "wrapper_v": root / "xsi" / f"{WRAPPER}.v",
-                "memory_v": root / "xsi" / "bram_t2p.v"}
+                "memory_v": root / "xsi" / "bram_t2p.v",
+                "vcd_dumper": root / "xsi" / f"vcd_dumper_{WRAPPER}.v",
+                "hazard_manifest": root / HAZARD_JSON}
 
 
 @dataclass(kw_only=True)

@@ -171,6 +171,51 @@ def test_the_read_latency_is_read_from_the_memory_not_declared():
         "the second authorship site the framework's raising property exists to prevent.")
 
 
+def test_modelling_the_read_latency_costs_exactly_read_latency():
+    """Stage 3 / objective 4, and the whole claim is a **difference**.
+
+    ``mem_read`` is a plain method, and the absence of the ``yield`` is the interface stating that no
+    simulated time passes — deliberately, because a BRAM answer is deterministic, unarbitrated and
+    one cycle, so a discrete-event model of it would add a timestep and no fidelity.  What that
+    leaves out is not throughput but **when the first answer appears**.
+
+    So the model is run both ways and the two are subtracted.  Turning it on must move the first
+    returned word by exactly ``read_latency`` cycles and by nothing else — and ``read_latency`` is
+    the memory's published number, reached through the bound ``BramIF``, not a literal.
+    """
+    sc = scenario_zero()
+    off = run_pysim(sc=sc, model_read_latency=False)
+    on = run_pysim(sc=sc, model_read_latency=True)
+    lat = int(on.dut.rd.buf_r.read_latency)
+
+    first_off, first_on = int(off.data_r_snk.cycles[0]), int(on.data_r_snk.cycles[0])
+    assert first_on - first_off == lat, (
+        f"modelling the read path moved the first word by {first_on - first_off} cycles, but the "
+        f"memory publishes READ_LATENCY = {lat}. The model must pay what the memory charges — no "
+        f"more, which would be invention, and no less, which is the omission RTL exposes.")
+    assert len(off.data_r_snk.cycles) == len(on.data_r_snk.cycles), (
+        "modelling a latency changed how many words came back; it is a delay, not a behaviour")
+
+
+def test_the_read_latency_is_a_fill_and_not_a_per_word_cost():
+    """The half of objective 4 a first-word check cannot see: the **cadence** must not move.
+
+    A pipelined reader still answers one word per cycle whatever the memory's latency is — the
+    pipeline hides it.  A model that paid the latency per *word* instead of per *command* would match
+    RTL on the first word and be 64 cycles late by the end of a 64-word read, which is the opposite
+    error and just as invisible to a value check.
+    """
+    sc = scenario_zero()
+    a, b = sc.cadence_read
+    for modelled in (False, True):
+        cycles = np.asarray(run_pysim(sc=sc, model_read_latency=modelled).data_r_snk.cycles)
+        deltas = sorted(set(np.diff(cycles[a:b]).tolist()))
+        assert deltas == [1], (
+            f"with model_read_latency={modelled} the 64-word read arrives with word-to-word gaps "
+            f"{deltas}, not [1]. The latency is a pipeline FILL, paid once per command; a per-word "
+            f"cost would show up here and nowhere else.")
+
+
 def test_the_collision_scenario_is_not_disjoint_by_construction():
     """The negative scenario's *premise*, checked without a simulator.
 

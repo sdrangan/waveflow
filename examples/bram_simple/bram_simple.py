@@ -91,7 +91,8 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 
-__all__ = ["ADDRS", "BASE", "DEPTH", "EXPECTED", "FILL", "ST_OK", "ST_OUT_OF_RANGE", "WORD_BW",
+__all__ = ["ADDRS", "BASE", "DEPTH", "EXPECTED", "FILL", "SENTINEL_BASE", "ST_OK",
+           "ST_OUT_OF_RANGE", "WORD_BW",
            "XSI_N_CYCLES", "BramReadCmd", "BramSimple", "BramSimpleTB", "BramWriteCmd",
            "Scenario", "check_outputs", "check_xsi_outputs", "collision_scenario", "run_pysim",
            "scenario_zero", "write_scenario"]
@@ -121,6 +122,12 @@ FILL = 256
 BASE = 100
 ADDRS = (0, 1, 7, 255, 128)
 EXPECTED = tuple(a + BASE for a in ADDRS)          # 100, 101, 107, 355, 228
+
+#: First word of the **sentinel** a legal write puts at the top of the memory before the refused one
+#: aims at it.  Reading never-written memory is not a check: pysim returns 0 from a zeroed numpy
+#: array and the RTL returns ``X``, because ``bram_t2p.v``'s ``mem`` has no initial value.  Distinct
+#: from :data:`BASE` so a sentinel word can never be mistaken for a ramp word.
+SENTINEL_BASE = 500
 
 #: The two response statuses, and there are only two — see the module docstring.  Mirrored in
 #: ``src/bram_cmd_status.h``; ``test_bram_simple.py`` checks the two spellings against each other,
@@ -524,7 +531,7 @@ def scenario_zero(depth: int = DEPTH, fill: int = FILL) -> Scenario:
     """
     d, f = int(depth), int(fill)
     bad_wp, bad_n = d - 4, 8                    # 1020 + 8 > 1024 -- refused
-    sentinel = ramp(4, base=500)                # a KNOWN value at 1020..1023, so the refusal is
+    sentinel = ramp(4, base=SENTINEL_BASE)      # a KNOWN value at 1020..1023, so the refusal is
     phase2 = ramp(64, base=7000)                # checkable against something other than "unwritten"
 
     cmd_w = [0, f, bad_wp, len(sentinel), bad_wp, bad_n, 64, len(phase2)]

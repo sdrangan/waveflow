@@ -170,6 +170,75 @@ def test_the_byte_address_shift_is_log2_of_the_byte_width(width, shift):
     assert _bram_addr_shift(width) == shift
 
 
+def test_the_hazard_manifest_names_wires_the_wrapper_actually_declares():
+    """The scan that replaced the memory's unheard ``$error`` must bind to real nets.
+
+    ``bram_hazard_manifest`` names which wrapper wire carries each term of
+    ``a_en && |a_we && b_en && a_addr == b_addr``, so a waveform scan can check the condition the
+    ``$error`` checks — necessary because the XSI flow discards RTL text output entirely
+    (``plans/bram_simple.md`` § *DECIDED 2026-08-25*).
+
+    The failure this closes is specific and quiet: a manifest naming a net the wrapper does not drive
+    makes every scan come back **empty**, which is indistinguishable from a design with no
+    collisions.  So every name is checked against the wrapper's own wire list, which is the emitter's
+    output rather than a second copy of the naming rule.
+    """
+    from waveflow.build.wrapper_gen import bram_hazard_manifest
+
+    comp, spec = _spec()
+    man = bram_hazard_manifest(comp, spec)
+    wspec = wrapper_spec(comp, spec)
+    declared = {name for name, _w in wspec.wires}
+
+    assert man["top"] == wspec.name, "the scan must name the module xsim elaborates, not the kernel"
+    assert len(man["memories"]) == 1
+    mem = man["memories"][0]
+    assert mem["inst"] in {m.inst for m in wspec.mems}
+    assert mem["addr_bits"] == comp.mem.addr_bits
+    for side in ("write", "read"):
+        for role in ("en", "we", "addr", "dout"):
+            assert mem[side][role] in declared, (
+                f"the hazard manifest names {mem[side][role]!r} for the {side} port's {role}, but "
+                f"the wrapper declares no such wire. A scan bound to a net that does not exist "
+                f"returns nothing, and nothing reads as 'no collisions'.")
+
+
+def test_the_hazard_manifest_carries_the_byte_to_word_shift():
+    """A scan reading the raw wires is reading **byte** addresses.
+
+    Two byte addresses compare equal exactly when their word addresses do, so the hazard itself
+    survives the confusion — but the reported address would be wrong by a factor and the mask to
+    ``AW`` bits would be applied in the wrong units, which is the same byte/word conflation that had
+    every BRAM design in the repo mis-addressed until 2026-08-24.
+    """
+    from waveflow.build.wrapper_gen import _bram_addr_shift, bram_hazard_manifest
+
+    comp, spec = _spec()
+    mem = bram_hazard_manifest(comp, spec)["memories"][0]
+    assert mem["write"]["addr_shift"] == mem["read"]["addr_shift"] == _bram_addr_shift(WORD_BW)
+
+
+def test_a_memory_only_one_side_touches_gets_no_hazard_entry():
+    """A memory with no write accessor cannot have a read-during-write hazard.
+
+    Emitting an entry whose condition can never be true would give a scan something to report on that
+    is guaranteed empty — a permanently green check, which is the failure mode this whole replacement
+    exists to get away from.
+    """
+    from waveflow.build.wrapper_gen import bram_hazard_manifest
+
+    comp, spec = _spec()
+    man = bram_hazard_manifest(comp, spec)
+    assert [m["inst"] for m in man["memories"]] == [next(iter(wrapper_spec(comp, spec).mems)).inst]
+    # Drop the write interface and the memory must drop out of the manifest with it.  `rtl_ifs` is a
+    # collected VIEW, so the registration itself is what has to go; what is being tested is the
+    # manifest's rule, not the registry's.
+    reg = comp.__dict__["_rtl_ifs"]
+    for name in [n for n, i in reg.items() if i.endpoints["slave"].access == "write"]:
+        del reg[name]
+    assert bram_hazard_manifest(comp, spec)["memories"] == []
+
+
 @pytest.mark.parametrize("width", [4, 12, 24, 48])
 def test_a_width_whose_scaling_is_not_a_shift_is_refused(width):
     """Refused rather than guessed: an address wrong by a factor aliases in silence, which is exactly

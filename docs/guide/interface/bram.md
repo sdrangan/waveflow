@@ -101,17 +101,63 @@ no walk that emits `hls::task`s should ever meet it.
 |---|---|---|
 | storage | a numpy array on the memory module | the hand-written `.v` |
 | access | **untimed** — a plain method call | one cycle, from the memory's published `READ_LATENCY` |
-| ordering | whatever the graph does | the same, and the memory `$error`s if the reader touches the address being written |
+| ordering | whatever the graph does | the same, and the memory `$error`s if the reader touches the address being written — **but see below: in this flow nothing can hear it** |
 
 The access is untimed in pysim on purpose: a BRAM answer is deterministic, unarbitrated and
 one cycle, so a discrete-event model of it would add a timestep and no fidelity. Contrast
 [AXI-MM](./aximm.md), where the bus, the arbitration and the burst *are* the point of having a model.
 
-**The correctness argument is yours, and the memory helps you keep it.** `bram_t2p.v` `$error`s when
-port B reads the address port A is writing that cycle — for a circular buffer, *rd trails wr*.
-Nothing else would check it: if it fails, the data is whatever the BRAM's read-during-write mode
-happens to be, and no tool says a word. A hand-written memory is *more* verifiable than an emulated
-one.
+**The correctness argument is yours.** `bram_t2p.v` `$error`s when port B reads the address port A is
+writing that cycle — for a circular buffer, *rd trails wr*. Nothing else would check it: if it fails,
+the data is whatever the BRAM's read-during-write mode happens to be, and no tool says a word.
+
+## The `$error` fires, and in this flow nothing can hear it
+
+This page used to end the section above with *"a hand-written memory is more verifiable than an
+emulated one"*. The assertion is real and it does fire — but **you will not see it**, and a page that
+implies otherwise is promising protection that does not exist.
+
+Measured on Vivado 2025.1 (`xelab -dll` plus the C++ loader, which is the XSI flow this repo runs):
+RTL text output is **discarded**. `$display` from an `always` block reaches neither stdout nor a
+file, an `initial $display` at time zero does not either, and a non-null
+`s_xsi_setup_info::logFileName` produces no log — although it does change the kernel's invocation
+from `-nolog` to `-log <name>`, visible in `xsim.dir/<top>/xsimkernel.log`. Only an `$fwrite` to a
+file the Verilog opens itself works, which is what proves the RTL really is executing the code that
+would have printed.
+
+The cost was concrete: five shipped XSI gates asserted `"read-during-write collision" not in out`,
+a string that could never appear, and each read as positive evidence. All five have been removed.
+
+**So check the condition, not the message.** A traced run (`run.bat <top> <tb> trace`) dumps
+`<top>_trace.vcd`, and the memory's address, enable and write-enable wires are declared in the
+*wrapper's* own scope — exactly what a level-1 `$dumpvars` captures:
+
+```python
+from waveflow.build.wrapper_gen import bram_hazard_manifest
+from waveflow.utils.bram_trace import find_read_during_write
+
+hazards = find_read_during_write("bram_simple_top_trace.vcd", bram_hazard_manifest(comp, spec))
+assert not hazards            # ...but see the next paragraph
+```
+
+`bram_hazard_manifest` names which net carries each term rather than matching by substring, for the
+reason [the trace manifest](../comp_codegen/rtl_module.md) exists at all: codegen chose
+those names, so binding is exact and a name that has moved fails loudly.
+
+**An empty scan is not a passing gate on its own.** No collisions is what a correct design looks
+like, and *also* what a renamed net, a dump that never ran, or a scan bound to the wrong scope look
+like. Pair it with a scenario that deliberately collides and assert that one is *not* empty —
+`tests/examples/test_bram_simple_xsi.py` does exactly this, and
+`examples/bram_simple`'s `collision_scenario()` is the deliberate half.
+
+**Address overlap alone will not produce a collision.** Two `II=1` sweeps over the same range are
+parallel lines in (cycle, address): they never meet unless they happen to start in the same cycle.
+Making them meet needs a relative phase that *moves* — which is why `collision_scenario()` gives the
+writer and the reader command lengths that differ by one word.
+
+*The durable fix is neither a print nor a trace scan but a sticky `collision` output on the memory,
+carried through the wrapper and readable in both backends by construction. That is a `BramIF`
+interface change and is [tracked in `plans/rtl_module.md`](../../../plans/rtl_module.md), not done.*
 
 ## Sequencing belongs in the design
 

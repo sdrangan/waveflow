@@ -207,7 +207,8 @@ assumed. (The gate was first written against `bram_t2p.v`'s `$error`; that is un
 flow — see *DECIDED 2026-08-25*.)
 
 **Stage 3 — timing in the Python model.** Objective 4. **Gate:** the first-word offset between
-backends is exactly `read_latency`, and the throughputs match.
+backends is exactly `read_latency`, and the throughputs match. **DONE 2026-08-25** — see
+*Stages 2 and 3 are closed*.
 
 **Stage 4 — the docs.** `docs/examples/bram_simple/`, as a **page set**, on the shape
 `docs/examples/shared_mem/` already uses — it is the closest analogue, being the other memory
@@ -249,7 +250,7 @@ vector, and a design that never wraps will not notice if any of that is wrong. T
 **Retire `bram_toy` into this**, rather than keeping two. Two examples would mean maintaining the
 witness inside a design nobody reads.
 
-## Stage 2 is BLOCKED on its negative gate — measured 2026-08-25
+## Stage 2 WAS blocked on its negative gate — measured 2026-08-25
 
 Stage 1 passed and is committed.  Stage 2's **positive** gates all pass and are measured:
 csynth clean, `write_payload` and `read_payload` both **II=1** read from the csynth XML, the witness's
@@ -341,6 +342,59 @@ assertion, it is that its only channel is text output — and one of the two bac
 
 ---
 
+## Stages 2 and 3 are closed — measured 2026-08-25
+
+**Stage 2's negative gate is built and fires**, by the route *DECIDED* below: the condition is read
+out of the VCD instead of the `$error` being heard.
+
+| | measured |
+|---|---|
+| `collision_scenario` | **24** read-during-write collisions, all on words 128…136 |
+| scenario zero | **0** — the deliberate overlap really is disjoint in every cycle |
+| tracing's cost | **none**: the traced run still ends at cycle **386**, the untraced number |
+
+The 24 is the same count a temporary `$fwrite` probe inside `bram_t2p.v` counted before any of this
+existed, which is the cross-check that the scan detects the events the `$error` fires on.
+
+**It is a PAIR, not a check.** An empty scan is what a correct design, a renamed net, a dump that
+never ran and a wrong scope all look like. So the clean run means something only because the dirty
+run is asserted dirty in the same file, through the same scan.
+
+**Stage 3 is done, and the number is measured twice from opposite directions.**
+
+| | measured |
+|---|---|
+| RTL, off the memory's own pins | the answer appears at **exactly one** offset — 1 cycle — fitting all 77 reads; no other offset fits more than 4 |
+| pysim, model off → on | the first returned word moves by **1** cycle, and by nothing else |
+| cadence, both backends | **1** word per cycle, in the 64-word read, with and without the model |
+
+The RTL half is not "the pragma agrees with the Verilog" — that is two files agreeing. It asks the
+waveform at what distance from the address the answer appears, and requires the answer to be a
+*single* offset. Single is only decidable because the payload is a **ramp**; a constant would make
+every offset fit, which is the same failure the ramp prevents in the value check.
+
+**What the two backends teach, and it is the sharp end of objective 4:** the throughputs match for
+free and the **first word does not**. `docs/examples/memcpy`'s timing page can end with *"And the
+pysim matches — for free"*; this one cannot, and the reason is one cycle of pipeline fill that a
+memory charges and a bus does not.
+
+### What was built
+
+* `bram_hazard_manifest()` in `waveflow/build/wrapper_gen.py` — which wrapper wire carries each term
+  of the memory's predicate, named by the emitter that made them rather than matched by substring.
+* `waveflow/utils/bram_trace.py` — `find_read_during_write()`, `port_samples()`,
+  `measured_read_latency()`. The last returns a **set** of offsets on purpose: one is the number,
+  several means the scenario cannot tell them apart, none is a defect.
+* `AddVcdTopStep` grew an optional `top`, because a wrapped design elaborates its **wrapper** and
+  both the dumper's file name and the scope it names have to follow.
+* `docs/guide/interface/bram.md` — the correction. The `$error` is real and fires and **cannot be
+  heard**; the page said the opposite by implication.
+* `docs/guide/comp_codegen/rtl_module.md` — *"nothing traces or times a wrapped design yet"* is no
+  longer true. The first one did **not** need the scope prefix: what it reads are the wrapper's own
+  wires.
+
+---
+
 ## Traps, carried forward
 
 - **The venv is a sibling: `../pysilicon-venv`.**
@@ -361,6 +415,16 @@ assertion, it is that its only channel is text output — and one of the two bac
   (cycle, address) and never meet unless they start in the same cycle.  Making them meet needs a
   relative phase that *moves* — which is why `collision_scenario()` gives the writer and the reader
   command lengths that differ by one word.
+- **A wrapped design's VCD dumper must be named for the WRAPPER.**  `run.bat` picks
+  `vcd_dumper_%TOP%.v` and `$dumpvars` naming a scope outside this elaboration is a hard error, so
+  `AddVcdTopStep(comp_class=...)` alone emits a dumper for the *kernel* — wrong file name, wrong
+  scope, and the run produces no trace at all.  Pass `top=`.
+- **A traced XSI run costs no cycles.**  The dumper is a second elaborated top, so the XSI top and
+  every BFM port number are untouched; the traced run ends at the same 386.  Gate on the trace
+  freely.
+- **An empty hazard scan proves nothing on its own.**  It is what a correct design, a renamed net, a
+  dump that never ran and a wrong `$dumpvars` scope all produce.  Always pair it with a scenario
+  asserted to be dirty.
 - **Reading never-written memory is not a check.**  pysim returns 0 from a zeroed numpy array; the
   RTL returns `X` (`0xFFFF_FFFF_FFFF_FFFF` once packed), because `bram_t2p.v`'s `mem` has no initial
   value.  Write a sentinel first.
