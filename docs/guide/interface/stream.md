@@ -3,17 +3,17 @@ title: Stream Interfaces
 parent: Interfaces
 nav_order: 2
 audience: python
-api: [StreamIF, StreamIFMaster, StreamIFSlave, CrossBarIF, CrossBarIFInput, CrossBarIFOutput, SimObj, Simulation]
-summary: "Unidirectional stream interfaces in the SimPy model — point-to-point StreamIF (write/rx_proc), the CrossBarIF switching fabric, and pipelined get/write timing, with a runnable two-SimObj producer→consumer toy."
+api: [StreamIF, StreamIFMaster, StreamIFSlave, SimObj, Simulation]
+summary: "The point-to-point StreamIF and the four ways to move data over one — a raw word, n raw words, a typed array, or a schema — each with the in-kernel HLS call it corresponds to. Then the cases those four do not cover: a producer that cannot be back-pressured, pipelined get/write timing, and a runnable producer→consumer toy."
 ---
 
 # Stream Interfaces
 
-Stream interfaces model **unidirectional data bursts** from one component to another. They correspond to AXI4-Stream and Vitis HLS stream bus protocols. Two interface classes are available: `StreamIF` for point-to-point connections and `CrossBarIF` for n-input × m-output switching fabrics.
+Stream interfaces model **unidirectional data bursts** from one component to another. They correspond to AXI4-Stream and Vitis HLS stream bus protocols. This page is about the point-to-point `StreamIF`; the n-input × m-output switching fabric is [CrossBarIF](./crossbar.md).
 
 ## Point-to-point: StreamIF
 
-`StreamIF` connects one master endpoint to one slave endpoint. The master calls `write(words)` to push a burst; the slave receives it via an `rx_proc` callback after the modelled latency.
+`StreamIF` connects one master endpoint to one slave endpoint. The master calls `write()` to push a burst; the slave either pulls it with `get()` or receives it via an `rx_proc` callback, after the modelled latency.
 
 ### Classes
 
@@ -22,6 +22,57 @@ Stream interfaces model **unidirectional data bursts** from one component to ano
 | `StreamIF` | Interface | `clk`, `bitwidth`, `latency_init` |
 | `StreamIFMaster` | Master endpoint | `bitwidth` |
 | `StreamIFSlave` | Slave endpoint | `bitwidth`, `rx_proc`, `queue_size` |
+
+### The four ways to move data
+
+Almost everything you do with a stream is one of these four, and **both directions are one method** —
+`write()` on the master, `get()` on the slave. What changes is the argument.
+
+| what you are moving | master | slave |
+|---|---|---|
+| **one raw word** | `write(np.array([x], dtype=np.uint64))` | `words = yield from get(nwords_max=1)` |
+| **n raw words** | `write(words)` | `words = yield from get(nwords_max=n)` — or `get()` for a whole burst |
+| **an array** of a schema element | `write(array(Float32, xs))` | `arr = yield from get(Float32, count=n)` |
+| **a schema** (a command, header, response) | `write(cmd)` | `cmd = yield from get(FirCmd)` |
+
+Both block: the master waits for room, the slave waits for data. That is the AXI-Stream contract, and
+it is what lets a graph of tasks compose without anyone counting.
+
+**The last two rows are the same call.** `write()` serializes *any* `DataSchema` instance at the
+interface's `bitwidth`, and a `DataArray` is one — so you hand it the object, never a list of words.
+On the read side, `get(Schema)` derives the word count from `Schema.nwords_per_inst(bitwidth)`, and
+`get(Schema, count=n)` returns a `DataArray`.
+
+```python
+yield from self.s_out.write(cmd)          # a schema instance, serialized for you
+cmd = yield from self.s_in.get(FirCmd)    # one call, deserialized for you
+```
+
+> **Do not take a structured message apart a word at a time.** A command, header or response is a
+> [`DataList`](../vectorization/); declare it once and let `get(Schema)` read it. Pulling `n` words
+> with `n` calls re-authors the field layout in a second place — and if the schema carries an
+> `include_filename`, that second place silently disagrees with the **generated C++ header the kernel
+> compiles against**. `examples/stream_inband/poly.py` is the worked form.
+
+#### The same four in HLS
+
+Every row has a kernel-side twin, so a hook and its Python model can be read against each other. The
+in-kernel calls are collected in the
+[kernel transfer reference](../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel):
+
+| tier | Python | HLS |
+|---|---|---|
+| one raw word | `get(nwords_max=1)` / `write([x])` | `s.read()` / `s.write(x)` |
+| n raw words | `get(nwords_max=n)` | a counted loop over `s.read()` |
+| an array | `get(Elem, count=n)` | `au::read_stream_lane<W>(s, out, n)` / `write_stream_lane<W>(src, s, n)` |
+| a schema | `get(Schema)` / `write(obj)` | `Schema::read_stream<W>(s)` / `obj.write_stream<W>(s)` — from the header the schema generates |
+
+`au` is the generated `<element>_array_utils` namespace. On a **framed** or **AXI4-Stream** port the
+array row becomes `read_framed_stream_lane` / `read_axi4_stream_lane` (and their writes), which carry
+`TLAST`; see [array utils](../vectorization/hls/arrayutils.md#the-three-framings--all-three-now-covered).
+
+The rest of this section is what these four do not cover: a producer that cannot wait, and a consumer
+whose processing time you want modelled.
 
 ### Latency model
 
@@ -168,59 +219,15 @@ sim.run_sim()
 
 The `Consumer.run_proc()` must delegate to `ep.run_proc()` so the slave's receive loop is active during simulation. `Simulation.run_sim()` calls each `SimObj.run_proc()` automatically, so this pattern wires together correctly.
 
-This is a complete, runnable two-[`SimObj`](../sim/simobj.md) simulation — a `Producer` (master) and a `Consumer` (slave) bound over one `StreamIF`, no `HwModule` — and it is the same shape as the toys on the other interface pages. The `yield` / `run_proc` / `ProcessGen` mechanics it relies on are explained in [Process generators](../sim/procgen.md). A `CrossBarIF` variant is the same idea with port-indexed endpoints (`in_0` / `out_0`) — see below.
+This is a complete, runnable two-[`SimObj`](../sim/simobj.md) simulation — a `Producer` (master) and a `Consumer` (slave) bound over one `StreamIF`, no `HwModule` — and it is the same shape as the toys on the other interface pages. The `yield` / `run_proc` / `ProcessGen` mechanics it relies on are explained in [Process generators](../sim/procgen.md). A [`CrossBarIF`](./crossbar.md) variant is the same idea with port-indexed endpoints (`in_0` / `out_0`).
 
 ---
 
-## Crossbar: CrossBarIF
+## Crossbar: several producers, several consumers
 
-`CrossBarIF` routes bursts from `nports_in` input ports to `nports_out` output ports via a configurable routing function.
-
-### Classes
-
-| Class | Role | Key parameters |
-|---|---|---|
-| `CrossBarIF` | Interface | `clk`, `bitwidth`, `latency_init`, `nports_in`, `nports_out`, `route_fn` |
-| `CrossBarIFInput` | Input (master) endpoint | `bitwidth` |
-| `CrossBarIFOutput` | Output (slave) endpoint | `bitwidth`, `rx_proc`, `queue_size` |
-
-Endpoint names follow the pattern `in_0`, `in_1`, …, `out_0`, `out_1`, …
-
-### Routing function
-
-The `route_fn(words, port_in) -> port_out` callable maps each burst to an output port. If not provided, the default is `port_out = port_in % nports_out`.
-
-```python
-def route_by_first_word(words: Words, port_in: int) -> int:
-    return int(words[0]) % nports_out
-```
-
-### Example: 2×2 crossbar
-
-```python
-from waveflow.hw.interface import CrossBarIF, CrossBarIFInput, CrossBarIFOutput
-
-xbar = CrossBarIF(
-    sim=sim,
-    clk=clk,
-    nports_in=2,
-    nports_out=2,
-    bitwidth=32,
-    latency_init=2.0,
-    route_fn=route_by_first_word,
-)
-
-xbar.bind("in_0",  src0.input_ep)
-xbar.bind("in_1",  src1.input_ep)
-xbar.bind("out_0", sink0.output_ep)
-xbar.bind("out_1", sink1.output_ep)
-```
-
-The crossbar's `write(words, port_in)` is called internally by `CrossBarIFInput.write(words)` — callers only need the input endpoint's `write` method.
-
-Each `CrossBarIFOutput` endpoint has the same `run_proc()` loop as `StreamIFSlave` and must be started before transfers are sent.
-
----
+A `StreamIF` is point-to-point. For an n-input x m-output switching fabric, see
+[Crossbar Interfaces](./crossbar.md) — the routing function and a runnable 2x2 example. What you can
+move over it is the same four things as above.
 
 ## Common patterns
 
@@ -266,7 +273,6 @@ def rx_proc(self, words: Words) -> ProcessGen:
 from waveflow.hw.interface import (
     StreamIF, StreamIFMaster, StreamIFSlave,
     StreamGetPipelinedStmt, StreamWritePipelinedStmt,
-    CrossBarIF, CrossBarIFInput, CrossBarIFOutput,
     Words,
 )
 from waveflow.hw.clock import Clock

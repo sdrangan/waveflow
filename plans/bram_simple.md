@@ -78,6 +78,50 @@ Two free-running tasks over one true-dual-port memory, now **command-driven**:
   half-written.
 - **`ReadTask`** takes `(rp, nwords)`, streams the words back, and answers **one `ReadResp`**.
 
+### The four messages, and they are `DataList`s
+
+**Confirmed 2026-08-26.** Four messages, each a `DataList` with an `include_filename` so the Python
+and the generated C++ header share one field layout:
+
+| message | fields |
+|---|---|
+| `WriteCmd`  | `tid`, `nsamp`, `waddr` |
+| `WriteResp` | `tid`, `status` |
+| `ReadCmd`   | `tid`, `nsamp`, `raddr` |
+| `ReadResp`  | `tid`, `status` |
+
+**`status` is an `EnumField`, never a hand-coded integer.** An `IntEnum` plus
+`EnumField.specialize(enum_type=..., bitwidth=...)`, exactly as `examples/fir_block/fir_block.py`
+does with `FirOp` / `FirOpField`. A bare `1` in a response is a number nothing can name; a member is
+one the header, the model and the test all spell the same way.
+
+`tid` on all four is what makes a response usable from a second thread — a host correlates a reply to
+the command it issued instead of inferring from ordering. It is the same reason `rf_tx_stream.TxResp`
+carries one.
+
+#### Read them with `get(Schema)` — this is not a style note
+
+> **A command is read in ONE call.** `cmd = yield from self.cmd_w.get(WriteCmd)`.
+> **Never** `wp = yield from _word(...)` then `n = yield from _word(...)`.
+
+This is a **recurring** failure, called out by the user on 2026-08-25: *"Claude always ignores
+DataLists and always ignores in-built serialization. If you tell it to use a DataList it may use it.
+But it will always manually unpack it."* Stage 1 of this very plan did exactly that, because the plan
+said "takes `(wp, nwords)`" in prose and never named the mechanism.
+
+Two things that make it worse than untidy:
+
+- The schema's `include_filename` **generates the C++ header**. Hand-unpacking authors the field
+  layout a second time, in a place nothing checks against the first — the same defect as hand-rolled
+  element packing, one level up.
+- **Declaring the `DataList` is not enough.** The reported pattern is declaring it and then unpacking
+  by hand anyway. Check the read side.
+
+**Watch the vectors, because they can force the anti-pattern.** Stage 1 wrote scenario vectors *one
+word per burst*, and since a pysim slave dequeues a whole burst per `get` and discards the remainder,
+that framing made word-at-a-time the only thing that worked. **A command is one burst.** If the
+vectors disagree, fix the vectors.
+
 ### Both commands answer, and `ReadResp` is not there for symmetry
 
 A `WriteResp` is obvious — a write has no return path, so a **short payload otherwise completes

@@ -77,6 +77,13 @@ A hook is the C++ realization of a Python transfer interface. The
 | `ArrayTransferIFMaster(element_type=Float32).write(elements)` | `float32_array_utils::write_axi4_stream_lane<W>(src, s, tlast, n)` (looped over the burst) |
 | `ArrayTransferIFSlave(element_type=Float32).get(count=n)` | `float32_array_utils::read_axi4_stream_lane<W>(s, dst, n, tl)` (looped) |
 | an array resident in memory | `float32_array_utils::read_array_slice<W>(mem, out)` |
+| `StreamIFMaster.write(obj)` where `obj` is a `DataList` | `obj.write_stream<W>(s)` — from the header the schema generates |
+| `StreamIFSlave.get(Schema)` | `Schema c; c.read_stream<W>(s);` — **one call, never `n` × `s.read()`** |
+| `StreamIFSlave.get(Elem, count=n)` | `elem_array_utils::read_stream_lane<W>(s, dst, n)` |
+
+**The plain-`StreamIF` schema rows are the ones people miss.** A command read as `n` separate
+`s.read()` calls authors the field layout a second time, in the one place nothing checks it against
+the generated header — see [streams](../interface/stream.md#the-four-ways-to-move-data).
 
 `ArrayUtilsStep` generates these for any `DataSchema` element type, so a transfer parameterized on a
 composite `DataList` gets analogous helpers.
