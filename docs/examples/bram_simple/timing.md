@@ -23,7 +23,7 @@ than inferring it from the streams at the boundary.
 Reading it left to right: the payload arrives, the write port is busy for 256 cycles, and **both read
 lanes are empty the entire time**. That emptiness is the arming token doing its job — the reader is
 blocked on `go` until the writer's first command completes. Then the answers start, and from roughly
-cycle 315 the write and read lanes are busy *together*.
+cycle 320 the write and read lanes are busy *together*.
 
 The event counts say the same thing more precisely, and one of them is a surprise:
 
@@ -38,10 +38,10 @@ for label, ev, _colour in ll:
 ```
 
 ```
-data_w  (payload in)        332 beats   first  17  last 377
-buf_w   (memory write)      324 beats   first  23  last 378
-buf_r   (memory read)        80 beats   first 286  last 400
-data_r  (payload out)        73 beats   first 288  last 401
+data_w  (payload in)        332 beats   first  17  last 380
+buf_w   (memory write)      324 beats   first  23  last 381
+buf_r   (memory read)        80 beats   first 287  last 408
+data_r  (payload out)        73 beats   first 289  last 409
 ```
 
 **332 payload words in, 324 memory writes.** The eight missing writes are the refused command: its
@@ -80,7 +80,7 @@ print("words:", len(vcd_beats), len(sink),
 words: 73 73 | offset: [15]
 ```
 
-Exactly 15 on every one of the 73 words. The gate's `386` and the figure's `401` are the same
+Exactly 15 on every one of the 73 words. The gate's `394` and the figure's `409` are the same
 instant.
 
 ## The overlap, beat by beat
@@ -93,7 +93,7 @@ it is meant to show.
 
 Three things are legible here that the whole-run view flattens:
 
-- Around cycle 300 there is a group of `data_w` beats with **no** `buf_w` beat beneath them. That is
+- Around cycle 305 there is a group of `data_w` beats with **no** `buf_w` beat beneath them. That is
   the refused write, discarding its payload.
 - Each single-word read is a *pair* of `buf_r` hairlines: the address it was asked for, and the one
   the pipeline presents behind it.
@@ -106,22 +106,27 @@ disjoint, so the returned words are identical whether the two overlapped or ran 
 ```python
 import numpy as np
 from pathlib import Path
-from examples.bram_simple.bram_simple import scenario_zero
+from examples.bram_simple.bram_simple import WriteResp, resp_words, scenario_zero
 
 sc = scenario_zero()
 xsi = Path("examples/bram_simple/xsi")
 data = np.fromfile(xsi / "vectors" / "data_r" / "cycles.bin", dtype="<u8")
 resp_w = np.fromfile(xsi / "vectors" / "resp_w" / "cycles.bin", dtype="<u8")
 lo, hi = sc.overlap_read
-when = int(resp_w[sc.overlap_write_resp])
+when = int(resp_w[resp_words(WriteResp, sc.overlap_write_resp + 1) - 1])
 print(f"read window [{int(data[lo])}, {int(data[hi - 1])}], phase-2 write done at {when}")
 print("overlapped:", int(data[lo]) <= when <= int(data[hi - 1]))
 ```
 
 ```
-read window [313, 376], phase-2 write done at 366
+read window [320, 383], phase-2 write done at 370
 overlapped: True
 ```
+
+A sink timestamps every **word**, and a response is two of them — so the index goes through
+`resp_words`, which asks the schema, rather than through a `2`. The response grew from one word to
+two the day it gained a `tid`; a literal would not have noticed, and the index would have quietly
+pointed into the middle of a message.
 
 ## The hazard that cannot be heard {#the-hazard-that-cannot-be-heard}
 
@@ -174,8 +179,8 @@ that differ by one word:
 from examples.bram_simple.bram_simple import collision_scenario
 
 sc = collision_scenario()
-w = [tuple(sc.cmd_w[i:i + 2]) for i in range(2, len(sc.cmd_w), 2)]
-r = [tuple(sc.cmd_r[i:i + 2]) for i in range(0, len(sc.cmd_r), 2)]
+w = [(int(c.waddr), int(c.nsamp)) for c in sc.cmd_w[1:]]
+r = [(int(c.raddr), int(c.nsamp)) for c in sc.cmd_r]
 print("writes:", w[0], "x", len(w), " reads:", r[0], "x", len(r))
 print("ranges overlap:", max(w[0][0], r[0][0]) < min(w[0][0] + w[0][1], r[0][0] + r[0][1]))
 print("lengths differ:", w[0][1] != r[0][1])

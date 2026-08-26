@@ -24,10 +24,14 @@ from examples.bram_simple.bram_simple import (
     ADDRS,
     DEPTH,
     EXPECTED,
-    ST_OK,
-    ST_OUT_OF_RANGE,
+    SCHEMA_CLASSES,
     WORD_BW,
     BramSimple,
+    BramStatus,
+    ReadCmd,
+    ReadResp,
+    WriteCmd,
+    WriteResp,
     captured,
     check_outputs,
     collision_scenario,
@@ -37,6 +41,20 @@ from examples.bram_simple.bram_simple import (
 
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "examples" / "bram_simple" / "src"
+INCLUDE = REPO / "examples" / "bram_simple" / "include"
+
+
+def _responses(words, schema):
+    """Captured response words -> ``[(tid, BramStatus), ...]``, through the schema.
+
+    The test reads a response exactly the way the design does. Slicing the words by hand here would
+    reintroduce, in the checker, the very hand-unpacking the design was changed to remove."""
+    per = schema.nwords_per_inst(WORD_BW)
+    raw = np.asarray(words, dtype=np.uint64).ravel()
+    assert raw.size % per == 0, f"{raw.size} words is not a whole number of {schema.__name__}"
+    return [(int(o.tid), BramStatus(int(o.status)))
+            for o in (schema().deserialize(raw[i:i + per], word_bw=WORD_BW)
+                      for i in range(0, raw.size, per))]
 
 
 @pytest.fixture(scope="module")
@@ -77,9 +95,16 @@ def test_a_write_that_leaves_the_memory_is_refused_whole(zero):
     RTL returns ``X``.  A legal write puts a known value there first.
     """
     sc, _tb, (resp_w, data_r, resp_r) = zero
-    assert list(resp_w) == [ST_OK, ST_OK, ST_OUT_OF_RANGE, ST_OK], (
-        f"the write responses are {list(resp_w)}; the third command writes 8 words at {DEPTH - 4} "
+    got = _responses(resp_w, WriteResp)
+    assert [st for _tid, st in got] == [BramStatus.OK, BramStatus.OK,
+                                        BramStatus.OUT_OF_RANGE, BramStatus.OK], (
+        f"the write responses are {got}; the third command writes 8 words at {DEPTH - 4} "
         f"of a {DEPTH}-word memory and must be refused.")
+    assert [tid for tid, _st in got] == [int(c.tid) for c in sc.cmd_w], (
+        f"the responses' tids are {[t for t, _ in got]} but the commands' are "
+        f"{[int(c.tid) for c in sc.cmd_w]}. `tid` is what lets a caller match a reply to the "
+        f"command it issued instead of inferring it from ordering — an echoed id that does not "
+        f"match is worse than none.")
     tail = np.asarray(data_r)[-4:]
     assert np.array_equal(tail, np.array([500, 501, 502, 503], dtype=np.uint64)), (
         f"words {DEPTH - 4}..{DEPTH - 1} read back as {tail.tolist()}, not the sentinel a legal "
@@ -96,22 +121,102 @@ def test_a_read_that_leaves_the_memory_is_refused_and_says_so(zero):
     the status channel must still answer.
     """
     sc, _tb, (resp_w, data_r, resp_r) = zero
-    assert list(resp_r) == [ST_OK] * 5 + [ST_OUT_OF_RANGE] + [ST_OK] * 2
+    got = _responses(resp_r, ReadResp)
+    assert [st for _tid, st in got] == ([BramStatus.OK] * 5 + [BramStatus.OUT_OF_RANGE]
+                                        + [BramStatus.OK] * 2)
+    assert [tid for tid, _st in got] == [int(c.tid) for c in sc.cmd_r]
     assert len(data_r) == len(sc.want_data_r), (
-        f"the reader returned {len(data_r)} words for {len(sc.cmd_r) // 2} commands; the refused "
+        f"the reader returned {len(data_r)} words for {len(sc.cmd_r)} commands; the refused "
         f"one must contribute NONE, and the only evidence it happened is on the response channel.")
 
 
-def test_the_status_codes_mean_the_same_thing_in_both_languages():
-    """The Python constants and the C++ macros, checked against each other.
+def test_the_status_is_a_generated_enum_not_a_number_anyone_typed():
+    """The status crosses into C++ as an ``enum class``, generated from the Python ``IntEnum``.
 
-    A status code that means one thing in ``bram_simple.py`` and another in ``bram_cmd_status.h`` is
-    a divergence no run would report: both backends answer, both are checked, and the numbers simply
-    disagree about which answer is which.
+    This replaces a check that compared two hand-written spellings — a Python constant against a C++
+    ``#define``. Two spellings is exactly the problem: they were free to disagree, and the test
+    existed only because they were. Now there is one declaration and the header is derived from it,
+    so what is worth checking is that the derivation *happened* and still names both members.
     """
-    text = (SRC / "bram_cmd_status.h").read_text(encoding="utf-8")
-    assert f"#define BRAM_CMD_ST_OK {ST_OK}" in text
-    assert f"#define BRAM_CMD_ST_OUT_OF_RANGE {ST_OUT_OF_RANGE}" in text
+    text = (INCLUDE / "bram_status.h").read_text(encoding="utf-8")
+    assert "enum class BramStatus {" in text, (
+        f"bram_status.h does not declare an enum — has DataSchemaStep stopped running for "
+        f"BramStatusField? Generated headers live in include/ and are a build product.")
+    for member in BramStatus:
+        assert f"{member.name} = {int(member)}," in text, (
+            f"BramStatus.{member.name} = {int(member)} is not in the generated header")
+    assert "BRAM_CMD_ST_" not in text, (
+        "the old hand-written status macros are back — a status that is a #define in one language "
+        "and a constant in the other is a number nothing can name, and two spellings free to "
+        "disagree")
+
+
+def test_every_message_generates_a_header_and_nothing_hand_writes_one():
+    """The four messages' ``include_filename``s, and the fact that ``src/`` holds none of them.
+
+    ``src/`` is what a human wrote; ``include/`` is what the build produced. A message layout
+    appearing in ``src/`` would be a second author for something that already has one.
+    """
+    hand_written = {f.name for f in SRC.glob("*.h")}
+    for cls in (WriteCmd, WriteResp, ReadCmd, ReadResp):
+        name = cls.include_filename
+        assert name, f"{cls.__name__} declares no include_filename, so it generates no header"
+        assert (INCLUDE / name).is_file(), f"{name} was not generated into include/"
+        assert name not in hand_written, (
+            f"{name} is hand-written in src/ AND generated into include/ — one of them is a second "
+            f"author for the field layout, which is the defect the schema exists to remove")
+    assert set(SCHEMA_CLASSES) >= {WriteCmd, WriteResp, ReadCmd, ReadResp}
+
+
+def test_neither_backend_takes_a_message_apart_by_hand():
+    """The specific failure this design was changed to remove, checked on **both** read sides.
+
+    Declaring the ``DataList`` is not enough: the reported pattern is declaring it and then unpacking
+    it word by word anyway. So this reads the two bodies and asserts the one-call idiom is there and
+    the word-at-a-time one is not.
+
+    The **payload** loops are exempt by construction — they are a data stream, not a message — and
+    the check is written against the command and response streams by name rather than against
+    ``read()`` in general, so it cannot be satisfied by deleting the payload loop.
+    """
+    py = (REPO / "examples" / "bram_simple" / "bram_simple.py").read_text(encoding="utf-8")
+    assert "yield from self.cmd_w.get(WriteCmd)" in py
+    assert "yield from self.cmd_r.get(ReadCmd)" in py
+    assert "yield from self.resp_w.write(resp)" in py
+    assert "yield from self.resp_r.write(resp)" in py
+    assert "_word(self.cmd_w)" not in py and "_word(self.cmd_r)" not in py, (
+        "a command is being pulled a word at a time in pysim — that re-authors the field layout the "
+        "generated C++ header comes from")
+
+    for body, cmd_cls in ((SRC / "bram_write_cmd_task.h", "WriteCmd"),
+                          (SRC / "bram_read_cmd_task.h", "ReadCmd")):
+        text = body.read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("//"))
+        assert f"{cmd_cls} c;" in code and "c.read_stream<W>(cmd);" in code, (
+            f"{body.name} does not read its command through the schema")
+        assert "r.write_stream<W>(resp);" in code, (
+            f"{body.name} does not write its response through the schema")
+        assert "cmd.read()" not in code, (
+            f"{body.name} still pulls command words with cmd.read() — the C++ half of the same "
+            f"defect, and the one the generated header cannot protect against")
+
+
+def test_the_messages_pin_the_stream_width():
+    """What the schemas cost, stated rather than discovered.
+
+    This design used to run at 16 bits as well as 64, and ``bram_simple`` was checked at both. It
+    cannot any more: an ``EnumField`` may not straddle a word, so a 64-bit ``status`` is unreadable
+    on a narrower stream — the schema **raises** rather than mis-framing it, which is the right
+    failure but is a failure.
+
+    What is still true, and is what this pins: one field per word at the design's own width, so a
+    command is exactly three words and a response exactly two. Those are the numbers the vectors and
+    the generated C++ both derive from, and nothing writes them down.
+    """
+    assert WriteCmd.nwords_per_inst(WORD_BW) == 3 and ReadCmd.nwords_per_inst(WORD_BW) == 3
+    assert WriteResp.nwords_per_inst(WORD_BW) == 2 and ReadResp.nwords_per_inst(WORD_BW) == 2
+    with pytest.raises(ValueError):
+        WriteResp.nwords_per_inst(16)
 
 
 def test_the_range_check_cannot_overflow_at_a_narrow_word():
@@ -121,22 +226,10 @@ def test_the_range_check_cannot_overflow_at_a_narrow_word():
     turns an out-of-range command into an accepted one at exactly the widths where a memory is most
     likely to be full.  Both terms of ``n <= N && p <= N - n`` are safe.
     """
-    code = [ln for ln in (SRC / "bram_cmd_status.h").read_text(encoding="utf-8").splitlines()
+    code = [ln for ln in (SRC / "bram_cmd_range.h").read_text(encoding="utf-8").splitlines()
             if not ln.lstrip().startswith("//")]
     ret = [ln for ln in code if ln.lstrip().startswith("return")]
     assert ret == ["    return (n <= (ap_uint<W>)N) && (p <= (ap_uint<W>)(N - n));"], ret
-
-
-def test_the_design_is_width_parametric_and_the_witness_survives_it():
-    """The same scenario at the witness's own 16-bit geometry.
-
-    Not the gated configuration — that is 64 bits, where the byte/word address convention is
-    actually exercised — but the design has to be the *same design* at both widths, and the ramp's
-    values (100…355) fit in 16 bits, so the witness's five numbers are the same answer either way.
-    """
-    sc = scenario_zero()
-    tb = run_pysim(sc=sc, bitwidth=16)
-    check_outputs(*captured(tb), sc=sc, where="pysim W=16: ")
 
 
 def test_the_memory_ports_stay_boundary_ports_of_the_kernel():
@@ -224,8 +317,8 @@ def test_the_collision_scenario_is_not_disjoint_by_construction():
     **cycle** is an RTL question and is measured there.  This pins the half that is arithmetic.
     """
     sc = collision_scenario()
-    wr = [(sc.cmd_w[i], sc.cmd_w[i + 1]) for i in range(2, len(sc.cmd_w), 2)]
-    rd = [(sc.cmd_r[i], sc.cmd_r[i + 1]) for i in range(0, len(sc.cmd_r), 2)]
+    wr = [(int(c.waddr), int(c.nsamp)) for c in sc.cmd_w[1:]]
+    rd = [(int(c.raddr), int(c.nsamp)) for c in sc.cmd_r]
     assert wr and rd
     for (wp, wn), (rp, rn) in zip(wr, rd):
         assert max(wp, rp) < min(wp + wn, rp + rn), (

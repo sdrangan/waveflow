@@ -499,6 +499,74 @@ elision). No block on any page is prose about code.
 
 ---
 
+## The four messages are BUILT — 2026-08-26
+
+All four are `DataList`s with an `include_filename`, `status` is an `EnumField` over `BramStatus`,
+and **neither backend unpacks by hand**. The read side of both:
+
+```python
+cmd = yield from self.cmd_w.get(WriteCmd)      # pysim
+```
+```cpp
+WriteCmd c;  c.read_stream<W>(cmd);            // the kernel
+```
+
+`tests/examples/test_bram_simple.py::test_neither_backend_takes_a_message_apart_by_hand` asserts both
+idioms are present and that `_word(self.cmd_w)` / `cmd.read()` are **not** — because declaring the
+schema and then unpacking it anyway is the reported failure, and a test that only checks the
+declaration would not have caught it.
+
+### The field width was not specified, and 64 is what makes the stated shapes true
+
+The plan gave field names, not widths. `Word64 = IntField.specialize(bitwidth=WORD_BW)` — one field
+per stream word — is what produces a **3-word command and a 2-word response**, which is what the
+brief stated twice. The named precedent (`FirOp` / `Word32`) was followed for the *mechanism*, not
+for the width.
+
+### What it cost, and it is a real cost
+
+**The 16-bit configuration is gone.** An `EnumField` may not straddle a word, so a 64-bit `status`
+cannot be carried on a narrower stream — the schema raises. `test_the_design_is_width_parametric_
+and_the_witness_survives_it` had no subject left and was **replaced** by
+`test_the_messages_pin_the_stream_width`, which pins what is now true (3 words / 2 words at 64) and
+records the loss by asserting the raise. Any field width above 16 would have done the same; only
+16-bit fields could have kept it, and those contradict both stated shapes.
+
+### Measured, before and after
+
+| | before | after |
+|---|---|---|
+| witness's five values | `100, 101, 107, 355, 228` | **unchanged**, both backends |
+| command on the wire | 2 words, hand-unpacked | **3 words**, `get(WriteCmd)` |
+| response on the wire | 1 word, a bare integer | **2 words**, `(tid, status)` |
+| `resp_w` / `resp_r` capture | 4 / 8 words | **8 / 16** words |
+| write / read payload loop II | 1 / 1 | **1 / 1** |
+| kernel LUT / FF | 954 / 535 | 993 / 537 |
+| XSI last read word | cycle 386 | **cycle 394** |
+
+**The +8 is accounted for**: eight read commands, one extra command word each. The returned values
+did not move; only when the last one arrived did. `WANT_CYCLES` was re-recorded with that arithmetic
+written down beside it.
+
+### Two shapes that had to move with it
+
+* **`write_scenario` reframes the commands.** A command is now **one burst** (`serialize` decides its
+  length), because `get(Schema)` asks for the whole message in one call and a pysim slave dequeues a
+  whole burst per call. The old one-word-per-burst framing would have forced word-at-a-time reads —
+  the vectors can force the anti-pattern, exactly as the plan warned.
+* **The payload is untouched: one word per burst.** It is a data stream, not a structured message,
+  and per-word framing is what keeps one pysim firing equal to one RTL firing.
+
+### An index that had to be converted rather than re-typed
+
+A sink timestamps every *word*, so `Scenario.overlap_write_resp` (a **response** index) now needs
+`resp_words(WriteResp, i + 1) - 1` to reach the arrival cycle. That helper goes through
+`nwords_per_inst`; a literal `2` would not have noticed the response growing a `tid`, and the index
+would have pointed into the middle of a message. It caught exactly that, once, in the XSI overlap
+gate.
+
+---
+
 ## Traps, carried forward
 
 - **The venv is a sibling: `../pysilicon-venv`.**
@@ -532,3 +600,11 @@ elision). No block on any page is prose about code.
 - **Reading never-written memory is not a check.**  pysim returns 0 from a zeroed numpy array; the
   RTL returns `X` (`0xFFFF_FFFF_FFFF_FFFF` once packed), because `bram_t2p.v`'s `mem` has no initial
   value.  Write a sentinel first.
+- **A message's word count is the schema's, and an index into a per-word array must be converted.**
+  A sink stamps every word; a response is `nwords_per_inst` of them.  Indexing a cycles array by
+  response number silently lands mid-message the moment the message grows a field.
+- **An `EnumField` may not straddle a word.**  A 64-bit status makes the design 64-bit-only, and the
+  schema raises rather than mis-framing — which is the right failure and still a lost configuration.
+- **The vectors can force the anti-pattern.**  One-word-per-burst framing makes word-at-a-time the
+  only thing that works, so a `DataList` declared over such vectors gets hand-unpacked no matter what
+  the plan says.  A command is ONE burst.

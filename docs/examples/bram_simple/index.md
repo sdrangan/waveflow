@@ -3,7 +3,7 @@ title: Shared memory between two modules
 parent: Examples
 nav_order: 9.5
 has_children: true
-summary: "Two free-running tasks over one true-dual-port memory that lives OUTSIDE the kernel, as hand-written Verilog joined by a generated wrapper — the structure Vitis leaves no alternative to. Command-driven: each side takes a (pointer, count) command and answers, because a write has no return path and a refused read is indistinguishable from a quiet stream. Reproduces a witness that ran before any of this infrastructure existed, at a width where the byte/word address convention can actually fail, and overlaps a write with a read on purpose."
+summary: "Two free-running tasks over one true-dual-port memory that lives OUTSIDE the kernel, as hand-written Verilog joined by a generated wrapper — the structure Vitis leaves no alternative to. Command-driven, over four DataList messages that generate the C++ headers the kernel compiles against: each side takes a (tid, nsamp, addr) command and answers with a (tid, status) response, because a write has no return path and a refused read is indistinguishable from a quiet stream. Reproduces a witness that ran before any of this infrastructure existed, at a width where the byte/word address convention can actually fail, and overlaps a write with a read on purpose."
 ---
 
 # Shared memory between two modules
@@ -39,9 +39,10 @@ In this example, we build the simplest example of two hardware modules sharing a
 
 **The nesting is the point.** The memory is *outside* the kernel and *inside* the wrapper, because a
 memory shared between two tasks has no expression inside a Vitis kernel at all — the
-[overview](overview.md) has the evidence. Each side takes a `(pointer, count)` command and answers
-it: a write has no return path of its own, and a refused read returns zero words, which on a stream
-is indistinguishable from "not yet".
+[overview](overview.md) has the evidence. Each side takes a `(tid, nsamp, addr)` command and answers
+with a `(tid, status)` response: a write has no return path of its own, and a refused read returns
+zero words, which on a stream is indistinguishable from "not yet". All four messages are declared
+once as schemas, and the C++ headers the kernel compiles against are generated from them.
 
 ## What you will learn
 

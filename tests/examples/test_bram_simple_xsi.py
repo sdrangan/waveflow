@@ -52,8 +52,10 @@ from examples.bram_simple.bram_simple import (
     DEPTH,
     FILL,
     SENTINEL_BASE,
+    WriteResp,
     check_xsi_outputs,
     collision_scenario,
+    resp_words,
     scenario_zero,
     write_scenario,
 )
@@ -80,13 +82,19 @@ VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
 TRACE_VCD = XSI / f"{WRAPPER}_trace.vcd"
 
-#: Time to last completion — the cycle the last word of the last read landed at the sink.  Recorded
-#: 2026-08-25 on the first green run.  Exact, not a bound: a cycle count that moves is either a
-#: regression or an improvement, and both deserve a human.
+#: Time to last completion — the cycle the last word of the last read landed at the sink.  Exact,
+#: not a bound: a cycle count that moves is either a regression or an improvement, and both deserve a
+#: human.
 #:
 #: The shape of it: the writer takes 256 cycles for the ramp before it can emit the token that arms
-#: the reader, so nothing can come back before ~cycle 266; the eight read commands then run to 386.
-WANT_CYCLES = 386
+#: the reader, so nothing can come back before ~cycle 266; the eight read commands then run to here.
+#:
+#: **Re-recorded 2026-08-26, from 386, and the +8 is accounted for**: the commands became
+#: :class:`~examples.bram_simple.bram_simple.WriteCmd` / ``ReadCmd`` messages, three words instead of
+#: the two the old hand-unpacked pair occupied, so the reader spends one extra cycle per command
+#: reading it — and it serves eight.  The returned VALUES did not move; only when the last one
+#: arrived did.
+WANT_CYCLES = 394
 
 #: The synthesized inner-loop modules, named for the **label** on each body's counted loop rather
 #: than for a source line.  Deliberate: Vitis names an unlabelled loop ``VITIS_LOOP_<line>_1``, so a
@@ -203,7 +211,10 @@ def test_the_write_and_the_read_really_were_live_at_the_same_time(runs):
     a, b = sc.overlap_read
     data = _cycles(runs, "data_r")
     lo, hi = int(data[a]), int(data[b - 1])
-    when = int(_cycles(runs, "resp_w")[sc.overlap_write_resp])
+    # A response is two words now, so its arrival is the cycle of its LAST word -- and the index is
+    # derived from the schema rather than written down, which is the same discipline the design reads
+    # its messages with.
+    when = int(_cycles(runs, "resp_w")[resp_words(WriteResp, sc.overlap_write_resp + 1) - 1])
     assert lo <= when <= hi, (
         f"the phase-2 write finished at cycle {when}, outside the reader's window [{lo}, {hi}]. The "
         f"two were never live at the same time, so this run says nothing about overlap — the data "

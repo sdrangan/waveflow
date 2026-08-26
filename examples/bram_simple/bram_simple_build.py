@@ -38,6 +38,7 @@ from waveflow.build.composite_gen import (  # noqa: E402
     tb_top_spec,
 )
 from waveflow.build.elaborate import elaborate  # noqa: E402
+from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.build.wrapper_gen import bram_hazard_manifest  # noqa: E402
 from waveflow.build.rtl_steps import GenRtlStep, GenWrapperStep  # noqa: E402
 from waveflow.build.trace_steps import AddVcdTopStep, RtlSimStep  # noqa: E402
@@ -47,6 +48,7 @@ from waveflow.toolchain import toolchain  # noqa: E402
 
 from examples.bram_simple.bram_simple import (  # noqa: E402
     DEPTH,
+    SCHEMA_CLASSES,
     WORD_BW,
     XSI_N_CYCLES,
     BramSimple,
@@ -65,10 +67,14 @@ TOP = "bram_simple"
 WRAPPER = f"{TOP}_top"
 INCLUDE_DIR = "include"
 
-#: Hand-written ``hls::task`` bodies (and the status header both share) copied verbatim from
-#: ``src/`` — the example-local twin of ``MemStreamStep``.  Kept OUT of ``include/`` in the source
-#: tree so nothing there is half-generated: everything in ``include/`` is a build product.
-FIXED_TASK_BODIES = ("bram_cmd_status.h", "bram_write_cmd_task.h", "bram_read_cmd_task.h")
+#: Hand-written ``hls::task`` bodies (and the range check both share) copied verbatim from ``src/``
+#: — the example-local twin of ``MemStreamStep``.  Kept OUT of ``include/`` in the source tree so
+#: nothing there is half-generated: everything in ``include/`` is a build product.
+#:
+#: The **message layouts are not here**.  Those are generated from the Python schemas by
+#: :class:`~waveflow.hw.dataschema.DataSchemaStep` (see :data:`SCHEMA_CLASSES`), which is what lets
+#: the task bodies say ``c.read_stream<W>(cmd)`` instead of restating the field order.
+FIXED_TASK_BODIES = ("bram_cmd_range.h", "bram_write_cmd_task.h", "bram_read_cmd_task.h")
 
 #: The RTL that must land in ``xsi/`` beside the ``.f`` naming it, in elaboration reading order: the
 #: memory, then the wrapper that instantiates it.
@@ -121,6 +127,11 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     # and a missing file is a csynth error, not a warning.
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
+    # The four messages' C++ headers, from the same Python declarations pysim reads through.  One
+    # author for every field layout on this design's boundary; `BramStatusField` is listed in its own
+    # right so the status reaches the kernel as a real `enum class`.
+    for cls in SCHEMA_CLASSES:
+        inner.add(DataSchemaStep(cls, word_bw_supported=[WORD_BW], include_dir=INCLUDE_DIR))
     inner.add(XsiHarnessStep(output_dir="xsi"))
     # The memory lands in xsi/ rather than rtl/: it is compiled by the same xvlog invocation as the
     # wrapper and the kernel's RTL, and the `.f` names it relative to the directory it lives in.
@@ -201,8 +212,8 @@ def generate_tb(out_dir: Path = HERE, n_cycles: int = XSI_N_CYCLES,
     (xsi / f"{TOP}_bfm_tb.cpp").write_text(render_tb_main(spec, int(n_cycles)), encoding="utf-8")
     written = write_scenario(xsi, sc)
     print(f"generated TB xsi/{TOP}_tb_harness.h + xsi/{TOP}_bfm_tb.cpp "
-          f"({written.label or 'scenario'}: {len(written.cmd_w) // 2} write + "
-          f"{len(written.cmd_r) // 2} read commands)")
+          f"({written.label or 'scenario'}: {len(written.cmd_w)} write + "
+          f"{len(written.cmd_r)} read commands)")
 
 
 def wrapper_text() -> str:
@@ -248,7 +259,7 @@ class PySimStep(BuildStep):
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({
             "bitwidth": WORD_BW, "depth": DEPTH,
-            "write_cmds": len(sc.cmd_w) // 2, "read_cmds": len(sc.cmd_r) // 2,
+            "write_cmds": len(sc.cmd_w), "read_cmds": len(sc.cmd_r),
             "resp_w": [int(v) for v in resp_w], "resp_r": [int(v) for v in resp_r],
             "data_r": [int(v) for v in data_r],
             "first_data_cycle": int(tb.data_r_snk.cycles[0]),

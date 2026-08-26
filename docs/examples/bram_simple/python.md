@@ -13,6 +13,90 @@ model has to pay a cost the hardware charges.
 
 Everything is in [`examples/bram_simple/bram_simple.py`](https://github.com/sdrangan/waveflow/tree/main/examples/bram_simple/bram_simple.py).
 
+## The four messages
+
+Everything on this design's boundary except the payload is a **message**, and each is a `DataList`
+declared once:
+
+| message | fields |
+|---|---|
+| `WriteCmd` | `tid`, `nsamp`, `waddr` |
+| `WriteResp` | `tid`, `status` |
+| `ReadCmd` | `tid`, `nsamp`, `raddr` |
+| `ReadResp` | `tid`, `status` |
+
+```python
+class WriteCmd(DataList):
+    include_filename: ClassVar[str | None] = "bram_write_cmd.h"
+    elements: ClassVar[dict] = {
+        "tid":   {"schema": Word64, "description": "transaction id, echoed on the response"},
+        "nsamp": {"schema": Word64, "description": "payload words this command carries"},
+        "waddr": {"schema": Word64, "description": "first word address written"},
+    }
+```
+
+`include_filename` is what makes this more than a convenience: the build **generates**
+`include/bram_write_cmd.h` from this declaration, and the kernel compiles against that header. There
+is one author for the field order and the widths, and both languages read it.
+
+**`status` is an `EnumField`, never a hand-coded integer.**
+
+```python
+class BramStatus(IntEnum):
+    OK = 0
+    OUT_OF_RANGE = 1
+
+
+BramStatusField = EnumField.specialize(enum_type=BramStatus, bitwidth=WORD_BW)
+```
+
+which reaches C++ as a real `enum class`, generated from the same declaration:
+
+```python
+from pathlib import Path
+
+text = Path("examples/bram_simple/include/bram_status.h").read_text(encoding="utf-8")
+print("\n".join(ln for ln in text.splitlines() if "enum class" in ln or "= " in ln))
+```
+
+```
+enum class BramStatus {
+    OK = 0,
+    OUT_OF_RANGE = 1,
+```
+
+A `1` in a response is a number nothing can name; `BramStatus.OUT_OF_RANGE` is one the header, the
+model and the test all spell the same way. (`FirOp` / `FirOpField` in
+[`examples/fir_block`](../firblock/) is the precedent.)
+
+**`tid` is what makes a response usable from a second thread.** A host correlates a reply to the
+command it issued instead of inferring it from ordering — the same reason the RF transmit stream's
+response carries one.
+
+### One field per word, and what that costs
+
+```python
+from examples.bram_simple.bram_simple import (
+    WORD_BW, ReadCmd, ReadResp, WriteCmd, WriteResp,
+)
+
+for cls in (WriteCmd, WriteResp, ReadCmd, ReadResp):
+    print(f"{cls.__name__:10s} {len(cls.elements)} fields -> "
+          f"{cls.nwords_per_inst(WORD_BW)} words at {WORD_BW} bits")
+```
+
+```
+WriteCmd   3 fields -> 3 words at 64 bits
+WriteResp  2 fields -> 2 words at 64 bits
+ReadCmd    3 fields -> 3 words at 64 bits
+ReadResp   2 fields -> 2 words at 64 bits
+```
+
+`Word64` is `IntField.specialize(bitwidth=WORD_BW)` — one field per stream word. It keeps the wire
+shape trivially readable off a waveform, and it lets `waddr` span any depth the memory could have.
+It also **pins the design to a 64-bit boundary**, because an `EnumField` may not straddle a word;
+[the simulation page](pysim.md#the-messages-pin-the-stream-width) has what that cost.
+
 ## The write task
 
 A `FreeRunMod` declares its endpoints in `__post_init__`. Four of the five here are ordinary streams;
@@ -39,25 +123,43 @@ arguments are load-bearing:
 The body is one command per firing:
 
 ```python
-wp = yield from _word(self.cmd_w)
-n = yield from _word(self.cmd_w)
+cmd = yield from self.cmd_w.get(WriteCmd)
+wp, n = int(cmd.waddr), int(cmd.nsamp)
 ok = n <= int(self.depth) and wp <= int(self.depth) - n
 for i in range(n):
     x = yield from _word(self.data_w)
     if ok:                                   # refused: consumed, then dropped on the floor
         self.buf_w.mem_write(wp + i, x)
-yield from self.resp_w.write(
-    np.array([ST_OK if ok else ST_OUT_OF_RANGE], dtype=np.uint64))
+resp = WriteResp()
+resp.tid = cmd.tid
+resp.status = BramStatus.OK if ok else BramStatus.OUT_OF_RANGE
+yield from self.resp_w.write(resp)
 ```
 
-Two details that are not style:
+**The command is read in one call, and the response written in one.** That is the whole point of
+declaring the schema, and it is the [fourth row of the four ways to move
+data](../../guide/interface/stream.md#the-four-ways-to-move-data): `get(WriteCmd)` derives the word
+count from `WriteCmd.nwords_per_inst(bitwidth)` and deserializes; `write(resp)` serializes. Neither
+end counts words.
+
+> **Declaring the `DataList` is not enough.** The failure this design was changed to remove is
+> declaring it and then unpacking it by hand anyway — `wp = yield from _word(...)` twice. That
+> re-authors the field layout in the one place nothing checks it against the **generated C++ header
+> the kernel compiles against**, which is the same defect as hand-rolled element packing, one level
+> up. Check the read side, in both backends.
+
+The **payload** is different and stays word-at-a-time. It is a data stream, not a structured message:
+there is no layout to agree about, and one word per burst is what keeps one pysim firing equal to one
+RTL firing.
+
+Two more details that are not style:
 
 - **`ok` is spelled `n <= N and wp <= N - n`, never `wp + n <= N`.** In the C++ twin the operands are
-  `ap_uint<W>`, and at 16 bits with a 1024-word memory the sum of two legal-looking values wraps —
-  turning an out-of-range command into an accepted one at exactly the widths where a memory is most
-  likely to be full. Neither term of the spelling used can overflow.
+  unsigned, and the sum of two legal-looking values wraps — turning an out-of-range command into an
+  accepted one at exactly the widths where a memory is most likely to be full. Neither term of the
+  spelling used can overflow.
 - **A refused command still consumes its payload.** The payload belongs to the command; leaving it in
-  the stream would shift every later command's data by `n` words and turn one caller error into a
+  the stream would shift every later command's data by `nsamp` words and turn one caller error into a
   corrupted run.
 
 `mem_write` is a **plain method call**, not a generator. That is the interface saying no simulated
@@ -71,8 +173,8 @@ The mirror image, plus the arming:
 if not self.armed:
     yield from _word(self.go_in)
     self.armed = True
-rp = yield from _word(self.cmd_r)
-n = yield from _word(self.cmd_r)
+cmd = yield from self.cmd_r.get(ReadCmd)
+rp, n = int(cmd.raddr), int(cmd.nsamp)
 ok = n <= int(self.depth) and rp <= int(self.depth) - n
 ```
 
@@ -143,6 +245,39 @@ print(comp.rd.buf_r.read_latency, comp.mem.read_latency)
 `model_read_latency` is a flag on the module rather than a constant, and it exists so the difference
 can be **measured** rather than asserted from a docstring. [Reading the trace](timing.md) subtracts
 the two runs.
+
+## The kernel reads the same messages the same way
+
+The hand-written task bodies are the C++ half of the four rows above, and they are worth reading
+beside the Python:
+
+```cpp
+    WriteCmd c;
+    c.read_stream<W>(cmd);
+    bool ok = bram_cmd_in_range<W, N>(c.waddr, c.nsamp);
+```
+
+```cpp
+    WriteResp r;
+    r.tid = c.tid;
+    r.status = ok ? BramStatus::OK : BramStatus::OUT_OF_RANGE;
+    r.write_stream<W>(resp);
+```
+
+`read_stream` and `write_stream` come from `bram_write_cmd.h` and `bram_write_resp.h` — the headers
+the schemas generate — so the kernel and the model cannot disagree about the layout. The
+[kernel transfer reference](../../guide/custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel)
+maps every Python call to its HLS twin:
+
+| Python | HLS |
+|---|---|
+| `get(Schema)` | `Schema c; c.read_stream<W>(s);` — **one call, never `n` × `s.read()`** |
+| `write(obj)` | `obj.write_stream<W>(s)` |
+| `get(nwords_max=1)` | `s.read()` — the payload, and only the payload |
+
+What is **not** generated is the range check. That is a piece of the design's *logic* rather than of
+its message layout, so it stays hand-written in `src/bram_cmd_range.h` — layout is the thing that must
+have exactly one author.
 
 ## The composite
 

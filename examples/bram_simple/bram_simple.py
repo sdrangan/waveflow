@@ -61,7 +61,7 @@ RF buffers, where a *circular* pointer is the whole point.)
 **Only two statuses exist**, and that is a scope decision rather than an oversight: a *legal* range
 whose payload arrives short is a third status this design has no scenario for, and inventing it
 before a scenario needs it would put an unexercised branch in a teaching example.  What
-:data:`ST_OUT_OF_RANGE` covers is the range refusal, and the refused write's payload is **consumed
+:attr:`BramStatus.OUT_OF_RANGE` covers is the range refusal, and the refused write's payload is **consumed
 and discarded** so the payload stream does not desynchronize behind it.
 
 Overlap is the point, and it is conventional rather than structural
@@ -76,12 +76,14 @@ structural: the design permits overlap, so keeping the ranges disjoint is the ca
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
 
 from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
+from waveflow.hw.dataschema import DataList, EnumField, IntField
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL, SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -91,11 +93,11 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 
-__all__ = ["ADDRS", "BASE", "DEPTH", "EXPECTED", "FILL", "SENTINEL_BASE", "ST_OK",
-           "ST_OUT_OF_RANGE", "WORD_BW",
-           "XSI_N_CYCLES", "BramReadCmd", "BramSimple", "BramSimpleTB", "BramWriteCmd",
-           "Scenario", "check_outputs", "check_xsi_outputs", "collision_scenario", "run_pysim",
-           "scenario_zero", "write_scenario"]
+__all__ = ["ADDRS", "BASE", "DEPTH", "EXPECTED", "FILL", "SCHEMA_CLASSES", "SENTINEL_BASE",
+           "WORD_BW", "XSI_N_CYCLES", "BramReadCmd", "BramSimple", "BramSimpleTB", "BramStatus",
+           "BramStatusField", "BramWriteCmd", "ReadCmd", "ReadResp", "Scenario", "Word64",
+           "WriteCmd", "WriteResp", "check_outputs", "check_xsi_outputs", "collision_scenario",
+           "resp_words", "run_pysim", "scenario_zero", "write_scenario"]
 
 # ---------------------------------------------------------------------------
 # Geometry
@@ -129,12 +131,114 @@ EXPECTED = tuple(a + BASE for a in ADDRS)          # 100, 101, 107, 355, 228
 #: from :data:`BASE` so a sentinel word can never be mistaken for a ramp word.
 SENTINEL_BASE = 500
 
-#: The two response statuses, and there are only two — see the module docstring.  Mirrored in
-#: ``src/bram_cmd_status.h``; ``test_bram_simple.py`` checks the two spellings against each other,
-#: because a status code that means one thing in Python and another in C++ is a divergence no run
-#: would report.
-ST_OK = 0
-ST_OUT_OF_RANGE = 1
+
+# ---------------------------------------------------------------------------
+# The four messages, and they are DataLists
+# ---------------------------------------------------------------------------
+#
+# Every field layout on this design's boundary is declared ONCE, here, and both backends read it
+# through the schema: pysim with ``get(WriteCmd)`` / ``write(resp)``, the kernel with
+# ``c.read_stream<W>(s)`` / ``r.write_stream<W>(s)`` out of the header ``include_filename``
+# generates.  Neither side takes a message apart a word at a time.
+#
+# That is not a style preference.  A command read as N separate ``s.read()`` calls authors the field
+# layout a second time, in the one place nothing checks it against the generated header -- the same
+# defect as hand-rolled element packing, one level up.  Stage 1 of this example did exactly that, and
+# this is the correction.  See docs/guide/interface/stream.md#the-four-ways-to-move-data.
+
+
+class BramStatus(IntEnum):
+    """What a command's response says happened.
+
+    An ``IntEnum`` rather than two module constants, because the point of the change is that no
+    number in a response is one nothing can name.  ``0`` in a capture is meaningless; ``BramStatus.OK``
+    is the same word spelled the same way by the schema, the generated C++ ``enum class``, the model
+    and the test.
+    """
+
+    OK = 0
+    OUT_OF_RANGE = 1
+
+
+#: The status field, and the reason it is listed in :data:`SCHEMA_CLASSES` in its own right: the
+#: opcode has to reach C++ as a real ``enum``, which is what lets a body compare against
+#: ``BramStatus::OUT_OF_RANGE`` rather than against a bare integer nothing checks.  ``FirOpField`` in
+#: ``examples/fir_block`` is the precedent.
+BramStatusField = EnumField.specialize(enum_type=BramStatus, bitwidth=WORD_BW)
+
+#: One field per **stream word**, at the design's own width.
+#:
+#: The choice is deliberate and it is what fixes the wire shapes: a command is three fields and
+#: therefore exactly three words, a response two and therefore two.  A narrower field would pack
+#: several per word and make the message shorter than its field count, which is harder to read off a
+#: waveform for no benefit here -- ``waddr`` has to span the memory's address range and ``tid`` is a
+#: host's to choose, so neither wants to be squeezed.
+#:
+#: It also **pins the design to a 64-bit boundary**: an ``EnumField`` may not straddle a word, so
+#: these messages cannot be carried on a narrower stream.  See
+#: ``test_the_messages_pin_the_stream_width``.
+Word64 = IntField.specialize(bitwidth=WORD_BW, signed=False)
+
+
+class WriteCmd(DataList):
+    """Write ``nsamp`` payload words starting at ``waddr``.
+
+    ``tid`` is what makes the response usable from a second thread: a host correlates a reply to the
+    command it issued instead of inferring it from ordering.  Same reason
+    :class:`~waveflow.hw.rf_tx_stream.TxResp` carries one.
+    """
+
+    include_filename: ClassVar[str | None] = "bram_write_cmd.h"
+    elements: ClassVar[dict] = {
+        "tid":   {"schema": Word64, "description": "transaction id, echoed on the response"},
+        "nsamp": {"schema": Word64, "description": "payload words this command carries"},
+        "waddr": {"schema": Word64, "description": "first word address written"},
+    }
+
+
+class WriteResp(DataList):
+    """One per :class:`WriteCmd`, and the whole reason the write side has an output at all.
+
+    A write has no return path: a command that does not fully land completes **silently** and leaves
+    the memory half-written.  This is the only channel that can say otherwise.
+    """
+
+    include_filename: ClassVar[str | None] = "bram_write_resp.h"
+    elements: ClassVar[dict] = {
+        "tid":    {"schema": Word64, "description": "the command's transaction id"},
+        "status": {"schema": BramStatusField, "description": "OK or OUT_OF_RANGE"},
+    }
+
+
+class ReadCmd(DataList):
+    """Return ``nsamp`` words starting at ``raddr``, on the data stream."""
+
+    include_filename: ClassVar[str | None] = "bram_read_cmd.h"
+    elements: ClassVar[dict] = {
+        "tid":   {"schema": Word64, "description": "transaction id, echoed on the response"},
+        "nsamp": {"schema": Word64, "description": "words to return"},
+        "raddr": {"schema": Word64, "description": "first word address read"},
+    }
+
+
+class ReadResp(DataList):
+    """One per :class:`ReadCmd`, and it is not there for symmetry.
+
+    A refused read returns **zero words**, and zero words is indistinguishable from *"not yet"* on a
+    stream: a consumer waiting for ``nsamp`` that will never arrive sees silence, not an error.  The
+    only channel that can report the refusal is one that answers whether or not there is data.
+    """
+
+    include_filename: ClassVar[str | None] = "bram_read_resp.h"
+    elements: ClassVar[dict] = {
+        "tid":    {"schema": Word64, "description": "the command's transaction id"},
+        "status": {"schema": BramStatusField, "description": "OK or OUT_OF_RANGE"},
+    }
+
+
+#: What the build emits C++ headers for.  ``BramStatusField`` is listed on its own so the status
+#: reaches the kernel as a real ``enum class`` rather than an integer literal.
+SCHEMA_CLASSES = [BramStatusField, WriteCmd, WriteResp, ReadCmd, ReadResp]
 
 #: A fixed run bound for the generated XSI main — a testbench constant, not a latency.  The sink
 #: timestamps the real completion, and ``WANT_CYCLES`` in the XSI test is that measurement.
@@ -162,7 +266,7 @@ class BramWriteCmd(FreeRunMod):
 
     The answer is the whole reason this task is not just a stream-to-memory relay: a write has no
     return path, so a command that does not fully land completes silently and leaves the memory
-    half-written.  :data:`ST_OUT_OF_RANGE` is the one refusal Stage 1 defines, and it is a **range**
+    half-written.  :attr:`BramStatus.OUT_OF_RANGE` is the one refusal this design defines, and it is a **range**
     check in words — ``wp + nwords > depth`` — refused whole rather than clipped or wrapped.
 
     **A refused command still consumes its payload.**  The payload belongs to the command; leaving
@@ -206,20 +310,26 @@ class BramWriteCmd(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one command — which is one iteration of the C++ body.
 
-        ``get(nwords_max=1)`` per word, so the scenario must write **one word per burst**: a pysim
-        slave dequeues a whole burst per ``get`` and truncation *discards* the remainder, so a
-        multi-word burst would be one pysim firing against several RTL firings and the two backends
-        would be running different designs.
+        **The command is read in one call, and the response written in one.**  ``get(WriteCmd)``
+        derives the word count from the schema and deserializes; ``write(resp)`` serializes.  Neither
+        end counts words, which is the point: the field layout is declared once and the generated C++
+        header the kernel compiles against comes from the same declaration.
+
+        The **payload** is different and stays word-at-a-time.  It is a data stream, not a structured
+        message, and one word per burst is what keeps one pysim firing equal to one RTL firing — a
+        pysim slave dequeues a whole burst per ``get`` and truncation *discards* the remainder.
         """
-        wp = yield from _word(self.cmd_w)
-        n = yield from _word(self.cmd_w)
+        cmd = yield from self.cmd_w.get(WriteCmd)
+        wp, n = int(cmd.waddr), int(cmd.nsamp)
         ok = n <= int(self.depth) and wp <= int(self.depth) - n
         for i in range(n):
             x = yield from _word(self.data_w)
             if ok:                                   # refused: consumed, then dropped on the floor
                 self.buf_w.mem_write(wp + i, x)
-        yield from self.resp_w.write(
-            np.array([ST_OK if ok else ST_OUT_OF_RANGE], dtype=np.uint64))
+        resp = WriteResp()
+        resp.tid = cmd.tid
+        resp.status = BramStatus.OK if ok else BramStatus.OUT_OF_RANGE
+        yield from self.resp_w.write(resp)
         if not self.announced:
             yield from self.go_out.write(np.array([1], dtype=np.uint64))
             self.announced = True
@@ -275,7 +385,7 @@ class BramReadCmd(FreeRunMod):
                           template_args=(int(self.bitwidth), int(self.depth)))
 
     def run_iter(self) -> ProcessGen[None]:
-        """One firing is one command.
+        """One firing is one command, read in one call with ``get(ReadCmd)``.
 
         The read path is where the two backends differ, and :attr:`model_read_latency` is objective
         4: ``mem_read`` is a **plain method**, and the absence of the ``yield`` is the interface
@@ -289,8 +399,8 @@ class BramReadCmd(FreeRunMod):
         if not self.armed:
             yield from _word(self.go_in)
             self.armed = True
-        rp = yield from _word(self.cmd_r)
-        n = yield from _word(self.cmd_r)
+        cmd = yield from self.cmd_r.get(ReadCmd)
+        rp, n = int(cmd.raddr), int(cmd.nsamp)
         ok = n <= int(self.depth) and rp <= int(self.depth) - n
         if ok and n:
             if self.model_read_latency:
@@ -302,8 +412,10 @@ class BramReadCmd(FreeRunMod):
             for i in range(n):
                 val = self.buf_r.mem_read(rp + i)
                 yield from self.data_r.write(np.array([val], dtype=np.uint64))
-        yield from self.resp_r.write(
-            np.array([ST_OK if ok else ST_OUT_OF_RANGE], dtype=np.uint64))
+        resp = ReadResp()
+        resp.tid = cmd.tid
+        resp.status = BramStatus.OK if ok else BramStatus.OUT_OF_RANGE
+        yield from self.resp_r.write(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -472,18 +584,29 @@ class Scenario:
     will eventually be checked against itself.
     """
 
-    cmd_w: tuple[int, ...]
+    #: The commands, as **message objects** rather than words.  Serializing them is
+    #: :func:`write_scenario`'s job and deserializing them is the design's; nothing in between counts
+    #: words, which is the whole point of declaring the schema.
+    cmd_w: tuple[WriteCmd, ...]
+    #: The payload, in **words**, because it is a data stream rather than a structured message.
     data_w: tuple[int, ...]
-    cmd_r: tuple[int, ...]
-    want_resp_w: tuple[int, ...]
+    cmd_r: tuple[ReadCmd, ...]
+    #: Expected responses, again as objects: a captured response is deserialized and compared field
+    #: by field, so a test failure names ``status`` rather than a word that changed.
+    want_resp_w: tuple[WriteResp, ...]
     want_data_r: tuple[int, ...]
-    want_resp_r: tuple[int, ...]
+    want_resp_r: tuple[ReadResp, ...]
     #: ``(start, stop)`` into ``data_r`` for the **overlapping** read, and the index into ``resp_w``
     #: of the write that must be live inside it.  Phase 2 is a claim about *when*, so it is checked
     #: with the two backends' arrival cycles rather than with their words — a read and a write whose
     #: address ranges are disjoint produce identical data whether they overlapped in time or ran one
     #: after the other, which is exactly why "it passed" is not evidence that anything overlapped.
     overlap_read: tuple[int, int] = (0, 0)
+    #: Index of the **response**, not of a word.  A sink timestamps every word and a response is
+    #: :func:`resp_words` of them, so a caller indexing an arrival-cycle array has to convert —
+    #: ``resp_words(WriteResp, i + 1) - 1`` is that response's last word.  Stated rather than stored
+    #: as a word index because the conversion is what changed when the response grew a ``tid``, and a
+    #: stored index would have silently pointed into the middle of a message.
     overlap_write_resp: int = -1
     #: ``(start, stop)`` into ``data_r`` for the read whose cadence is the throughput claim, and the
     #: index of the first data word overall (objective 4's first-word offset).
@@ -494,6 +617,42 @@ class Scenario:
 def ramp(n: int, base: int = BASE) -> list[int]:
     """``base + i`` — the witness's ramp, and the reason a shift by one is visible."""
     return [base + i for i in range(int(n))]
+
+
+def write_cmd(tid: int, nsamp: int, waddr: int) -> WriteCmd:
+    """A :class:`WriteCmd`, built by name so a scenario never states a field ORDER."""
+    c = WriteCmd()
+    c.tid, c.nsamp, c.waddr = int(tid), int(nsamp), int(waddr)
+    return c
+
+
+def read_cmd(tid: int, nsamp: int, raddr: int) -> ReadCmd:
+    c = ReadCmd()
+    c.tid, c.nsamp, c.raddr = int(tid), int(nsamp), int(raddr)
+    return c
+
+
+def write_resp(tid: int, status: BramStatus) -> WriteResp:
+    r = WriteResp()
+    r.tid, r.status = int(tid), status
+    return r
+
+
+def read_resp(tid: int, status: BramStatus) -> ReadResp:
+    r = ReadResp()
+    r.tid, r.status = int(tid), status
+    return r
+
+
+def resp_words(schema, n: int = 1, bitwidth: int = WORD_BW) -> int:
+    """Words ``n`` responses of *schema* occupy — never a literal.
+
+    A sink timestamps every **word**, so anything indexing an arrival-cycle array by *response* has
+    to go through this.  Writing the number down instead is the same re-authoring of the layout that
+    hand-unpacking is, just on the measurement side: the response grew from one word to two the day
+    it gained a ``tid``, and a literal would not have noticed.
+    """
+    return int(schema.nwords_per_inst(int(bitwidth))) * int(n)
 
 
 def scenario_zero(depth: int = DEPTH, fill: int = FILL) -> Scenario:
@@ -534,73 +693,115 @@ def scenario_zero(depth: int = DEPTH, fill: int = FILL) -> Scenario:
     sentinel = ramp(4, base=SENTINEL_BASE)      # a KNOWN value at 1020..1023, so the refusal is
     phase2 = ramp(64, base=7000)                # checkable against something other than "unwritten"
 
-    cmd_w = [0, f, bad_wp, len(sentinel), bad_wp, bad_n, 64, len(phase2)]
+    # `tid` is 1-based and simply counts the commands on each stream.  Any host scheme would do --
+    # what matters is that the response echoes it, so a reply can be matched to its command without
+    # relying on ordering.
+    writes = [write_cmd(1, f, 0),                          # the witness's ramp
+              write_cmd(2, len(sentinel), bad_wp),         # the sentinel
+              write_cmd(3, bad_n, bad_wp),                 # OUT OF RANGE: 1020 + 8 > 1024
+              write_cmd(4, len(phase2), 64)]               # phase 2, overlapping the read below
     data_w = ramp(f) + sentinel + ramp(bad_n, base=900) + phase2
-    cmd_r = ([v for a in ADDRS for v in (a, 1)]     # the witness's five one-word reads
-             + [bad_wp, bad_n]                      # refused read: no data, only a status
-             + [0, 64]                              # phase 2: overlaps the write of 64..127
-             + [bad_wp, len(sentinel)])             # the refused write left these words alone
+    reads = ([read_cmd(i + 1, 1, a) for i, a in enumerate(ADDRS)]   # the witness's five addresses
+             + [read_cmd(6, bad_n, bad_wp)]                # OUT OF RANGE: no data, only a status
+             + [read_cmd(7, 64, 0)]                        # phase 2: overlaps the write of 64..127
+             + [read_cmd(8, len(sentinel), bad_wp)])       # the refused write left these alone
     want_data_r = list(EXPECTED) + ramp(64) + sentinel
-    return Scenario(cmd_w=tuple(cmd_w), data_w=tuple(data_w), cmd_r=tuple(cmd_r),
-                    want_resp_w=(ST_OK, ST_OK, ST_OUT_OF_RANGE, ST_OK),
+    ok, bad = BramStatus.OK, BramStatus.OUT_OF_RANGE
+    return Scenario(cmd_w=tuple(writes), data_w=tuple(data_w), cmd_r=tuple(reads),
+                    want_resp_w=tuple(write_resp(c.tid, bad if i == 2 else ok)
+                                      for i, c in enumerate(writes)),
                     want_data_r=tuple(want_data_r),
-                    want_resp_r=(ST_OK,) * 5 + (ST_OUT_OF_RANGE,) + (ST_OK,) * 2,
+                    want_resp_r=tuple(read_resp(c.tid, bad if i == 5 else ok)
+                                      for i, c in enumerate(reads)),
                     overlap_read=(len(EXPECTED), len(EXPECTED) + 64),
                     overlap_write_resp=3,
                     cadence_read=(len(EXPECTED), len(EXPECTED) + 64),
                     label="scenario zero")
 
 
-def write_scenario(root, sc: Scenario | None = None) -> Scenario:
+def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) -> Scenario:
     """Materialize ``<root>/vectors/{cmd_w,data_w,cmd_r}`` — what both backends play.
 
-    **One word per burst**, and that is not a detail.  Each task consumes one word per ``get``, so a
-    multi-word burst would be one pysim firing against several RTL firings and the two backends would
-    be running different designs.  The XSI ``AxisMaster`` reads the flat ``words.bin`` and never sees
-    the burst bounds, so the stimulus it plays is byte-identical either way.
+    **The two framings on this page are different, and both are load-bearing.**
+
+    *A command is ONE burst.*  ``get(WriteCmd)`` asks for the schema's whole word count in a single
+    call, and a pysim slave dequeues a whole burst per call — so a command split across bursts would
+    be read a fragment at a time and the design would have to count words again.  The framing is
+    derived from the schema (``serialize`` decides the length), never stated here.
+
+    *The payload is ONE WORD PER BURST.*  It is a data stream rather than a structured message, and
+    per-word framing is what keeps one pysim firing equal to one RTL firing: truncation *discards*
+    the remainder of a burst, so a multi-word payload burst would be one pysim firing against several
+    RTL firings and the two backends would be running different designs.
+
+    The XSI ``AxisMaster`` reads the flat ``words.bin`` and never sees the burst bounds, so the
+    stimulus it plays is byte-identical either way — the framing is a **pysim** concern only.
     """
     from waveflow.utils.burst_io import write_burst_bundle
 
     sc = sc or scenario_zero()
     root = Path(root)
-    for name, words in (("cmd_w", sc.cmd_w), ("data_w", sc.data_w), ("cmd_r", sc.cmd_r)):
-        write_burst_bundle([np.array([x], dtype=np.uint64) for x in words],
+    bw = int(bitwidth)
+    for name, msgs in (("cmd_w", sc.cmd_w), ("cmd_r", sc.cmd_r)):
+        write_burst_bundle([np.asarray(m.serialize(word_bw=bw), dtype=np.uint64) for m in msgs],
                            root / "vectors" / name)
+    write_burst_bundle([np.array([x], dtype=np.uint64) for x in sc.data_w],
+                       root / "vectors" / "data_w")
     return sc
 
 
-def check_outputs(resp_w, data_r, resp_r, sc: Scenario | None = None, where: str = "") -> None:
+def check_outputs(resp_w, data_r, resp_r, sc: Scenario | None = None, where: str = "",
+                  bitwidth: int = WORD_BW) -> None:
     """The acceptance check, in one place because both backends make the same claim.
+
+    Responses are **deserialized and compared field by field**, so a failure names ``tid`` or
+    ``status`` rather than a word that changed — and a status is reported as ``BramStatus.OK``, which
+    is the point of the field being an enum.  The payload is compared as words, because that is what
+    it is.
 
     A shift by one is called out **by name**: it is what a read-latency mismatch between the kernel's
     ``latency=`` pragma and the memory's published ``READ_LATENCY`` produces, and the reason the
-    payload is a ramp.  An aliasing wrapper is called out too, because that is what this example's
-    geometry exists to expose.
+    payload is a ramp.
     """
     sc = sc or scenario_zero()
-    for got, want, name in ((resp_w, sc.want_resp_w, "resp_w"),
-                            (data_r, sc.want_data_r, "data_r"),
-                            (resp_r, sc.want_resp_r, "resp_r")):
-        g = np.asarray(got, dtype=np.uint64).ravel()
-        w = np.asarray(want, dtype=np.uint64).ravel()
-        if g.size != w.size:
+    bw = int(bitwidth)
+
+    for got, want, schema, name in ((resp_w, sc.want_resp_w, WriteResp, "resp_w"),
+                                    (resp_r, sc.want_resp_r, ReadResp, "resp_r")):
+        per = schema.nwords_per_inst(bw)
+        raw = np.asarray(got, dtype=np.uint64).ravel()
+        if raw.size != per * len(want):
             raise AssertionError(
-                f"{where}{name}: {g.size} words, expected {w.size}. On a RESPONSE channel that is a "
-                f"command that never answered; on the data channel it is a short or long read, "
-                f"which is the failure a quiet stream cannot report and the response exists for.\n"
-                f"  got  {g.tolist()}\n  want {w.tolist()}")
-        if np.array_equal(g, w):
-            continue
-        extra = ""
-        if name == "data_r" and (np.array_equal(g, w + 1) or np.array_equal(g, w - 1)):
-            extra = (" — every value is off by one, which is a READ-LATENCY MISMATCH between the "
-                     "kernel's latency= pragma and the memory's published READ_LATENCY, not a data "
-                     "error.")
-        bad = int(np.argmax(g != w))
+                f"{where}{name}: {raw.size} words = {raw.size / per:g} responses, expected "
+                f"{len(want)} ({per} words each). A missing response is a command that never "
+                f"answered; a partial one means the two ends disagree about the message layout, "
+                f"which is what reading through the schema exists to make impossible.")
+        for i, exp in enumerate(want):
+            obj = schema().deserialize(raw[i * per:(i + 1) * per], word_bw=bw)
+            if int(obj.tid) != int(exp.tid) or int(obj.status) != int(exp.status):
+                raise AssertionError(
+                    f"{where}{name}[{i}]: tid={int(obj.tid)} status={BramStatus(int(obj.status))!r}"
+                    f", expected tid={int(exp.tid)} status={BramStatus(int(exp.status))!r}")
+
+    g = np.asarray(data_r, dtype=np.uint64).ravel()
+    w = np.asarray(sc.want_data_r, dtype=np.uint64).ravel()
+    if g.size != w.size:
         raise AssertionError(
-            f"{where}{name} word {bad}: {int(g[bad])} != {int(w[bad])} "
-            f"({int((g != w).sum())} of {w.size} words differ){extra}\n"
+            f"{where}data_r: {g.size} words, expected {w.size}. A short or long read is the failure "
+            f"a quiet stream cannot report and the response exists for.\n"
             f"  got  {g.tolist()}\n  want {w.tolist()}")
+    if np.array_equal(g, w):
+        return
+    extra = ""
+    if np.array_equal(g, w + 1) or np.array_equal(g, w - 1):
+        extra = (" — every value is off by one, which is a READ-LATENCY MISMATCH between the "
+                 "kernel's latency= pragma and the memory's published READ_LATENCY, not a data "
+                 "error.")
+    bad = int(np.argmax(g != w))
+    raise AssertionError(
+        f"{where}data_r word {bad}: {int(g[bad])} != {int(w[bad])} "
+        f"({int((g != w).sum())} of {w.size} words differ){extra}\n"
+        f"  got  {g.tolist()}\n  want {w.tolist()}")
 
 
 def collision_scenario(depth: int = DEPTH, fill: int = FILL, rounds: int = 48,
@@ -626,15 +827,13 @@ def collision_scenario(depth: int = DEPTH, fill: int = FILL, rounds: int = 48,
     """
     d, f = int(depth), int(fill)
     base = f // 2                                   # inside the region the witness filled
-    cmd_w = [0, f]
+    writes = [write_cmd(1, f, 0)]
     data_w = ramp(f)
-    for _ in range(int(rounds)):
-        cmd_w += [base, int(lw)]
+    for k in range(int(rounds)):
+        writes.append(write_cmd(k + 2, int(lw), base))
         data_w += ramp(int(lw), base=7000)
-    cmd_r = []
-    for _ in range(int(rounds)):
-        cmd_r += [base, int(lr)]
-    return Scenario(cmd_w=tuple(cmd_w), data_w=tuple(data_w), cmd_r=tuple(cmd_r),
+    reads = [read_cmd(k + 1, int(lr), base) for k in range(int(rounds))]
+    return Scenario(cmd_w=tuple(writes), data_w=tuple(data_w), cmd_r=tuple(reads),
                     want_resp_w=(), want_data_r=(), want_resp_r=(),
                     label="collision (deliberate hazard)")
 

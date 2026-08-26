@@ -16,6 +16,42 @@ cd examples/bram_simple
 python bram_simple_build.py --through csynth
 ```
 
+## The messages' headers come first
+
+Before anything else, the build emits one C++ header per message schema, from the *same* Python
+declarations the model reads through:
+
+```python
+from examples.bram_simple.bram_simple import SCHEMA_CLASSES
+
+for cls in SCHEMA_CLASSES:
+    print(f"{cls.__name__:16s} -> include/{cls.include_filename}")
+```
+
+```
+BramStatusEnumField -> include/bram_status.h
+WriteCmd         -> include/bram_write_cmd.h
+WriteResp        -> include/bram_write_resp.h
+ReadCmd          -> include/bram_read_cmd.h
+ReadResp         -> include/bram_read_resp.h
+```
+
+Each carries the struct, `nwords<W>()`, and the `read_stream<W>` / `write_stream<W>` pair the task
+bodies use — so the field order and the widths have **one author**, and the kernel cannot disagree
+with the model about them. `BramStatusField` is listed in its own right so the status arrives as a
+real `enum class` rather than an integer literal:
+
+```cpp
+enum class BramStatus {
+    OK = 0,
+    OUT_OF_RANGE = 1,
+};
+```
+
+`src/` is what a human wrote and `include/` is what the build produced; no message layout appears in
+both. What *is* hand-written is the range check (`src/bram_cmd_range.h`) — that is the design's logic
+rather than its message layout, and layout is the thing that must have exactly one author.
+
 ## The kernel
 
 `render_top` walks the elaborated graph and emits a free-running `ap_ctrl_none` top. Every port,

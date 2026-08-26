@@ -64,9 +64,13 @@ interface — which the existing rule already makes boundary ports of the kernel
 
 ## The commands, and why both of them answer
 
-Each side takes a `(pointer, count)` command as **two words** on its command stream, and answers with
-one status word. That is more machinery than a buffer strictly needs, and both halves of it earn
-their keep:
+Each side takes a command and answers it. All four messages are `DataList` schemas — `WriteCmd`
+(`tid`, `nsamp`, `waddr`), `WriteResp` (`tid`, `status`), and their read-side twins — declared once
+in Python and **generating the C++ headers the kernel compiles against**. Neither backend takes one
+apart a word at a time; the [Python model](python.md#the-four-messages) has the code and the reason.
+
+At the design's 64-bit width that is three words in and two words back, and both halves of the
+exchange earn their keep:
 
 - A **write has no return path.** A command that does not fully land completes silently and leaves
   the memory half-written. `resp_w` is the only channel that can say otherwise.
@@ -75,10 +79,14 @@ their keep:
   stream that has gone quiet. So the channel that reports the refusal has to be one that answers
   whether or not there is data — which is exactly what the data stream cannot be.
 
-There are **two** statuses and no more: `ST_OK` and `ST_OUT_OF_RANGE`. A range that leaves the memory
+There are **two** statuses and no more, and they are an `IntEnum` behind an `EnumField` rather than
+two integers: `BramStatus.OK` and `BramStatus.OUT_OF_RANGE`. A range that leaves the memory
 (`p + n > depth`) is refused **whole** — not clipped, not wrapped — because a silent wrap hands back
 plausible data from the wrong place. A refused *write* still consumes its payload, so the data stream
 does not desynchronize behind it; the words are simply dropped.
+
+`tid` is echoed on every response, which is what lets a caller match a reply to the command it issued
+instead of inferring it from the order the replies arrive in.
 
 > A third status — a legal range whose payload arrives short — has no scenario here and is
 > deliberately absent. An unexercised branch in a teaching example is a branch the reader has to take

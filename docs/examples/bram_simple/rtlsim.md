@@ -99,7 +99,7 @@ print("last read word at cycle", int(cycles[-1]))
 ```
 
 ```
-last read word at cycle 386
+last read word at cycle 394
 ```
 
 ## Checking the run
@@ -111,16 +111,19 @@ dumped:
 from pathlib import Path
 from examples.bram_simple.bram_simple import check_xsi_outputs, scenario_zero
 
-check_xsi_outputs(Path("examples/bram_simple/xsi"), scenario_zero(), want_cycles=386)
-print("bit-exact against the pysim golden, and finished at 386")
+check_xsi_outputs(Path("examples/bram_simple/xsi"), scenario_zero(), want_cycles=394)
+print("bit-exact against the pysim golden, and finished at 394")
 ```
 
 ```
-bit-exact against the pysim golden, and finished at 386
+bit-exact against the pysim golden, and finished at 394
 ```
 
 The cycle count is **exact, not a bound**. A number that moves is either a regression or an
-improvement, and both deserve a human.
+improvement, and both deserve a human — and this one moved once, from **386**, when the commands
+became `WriteCmd` / `ReadCmd` messages. Three words instead of the two the old hand-unpacked pair
+occupied costs the reader one extra cycle per command, and it serves eight: `386 + 8 = 394`. The
+returned *values* did not move; only when the last one arrived did.
 
 ## The gate is more than the values
 

@@ -5,11 +5,21 @@
 // Its Python twin is `BramReadCmd.run_iter`, which is the pysim golden and NOT the source of this
 // file.
 //
+// THE MESSAGE IS READ IN ONE CALL:  ReadCmd c;  c.read_stream<W>(cmd);
+//
+// `bram_read_cmd.h` is GENERATED from the Python `ReadCmd` DataList.  Reading the fields with N
+// separate `cmd.read()` calls would state the field order and the widths a second time, in the one
+// place nothing checks them against that header -- and the two would then be free to disagree
+// silently.  The response goes out the same way, `r.write_stream<W>(resp)`.
+//
+// The PAYLOAD is written a word at a time, deliberately: it is a data stream rather than a
+// structured message, so there is no layout to agree about.
+//
 // WHY A READ ANSWERS AT ALL.  A refused read returns zero words, and zero words is
-// indistinguishable from "not yet" on a stream: a consumer waiting for `n` words that will never
+// indistinguishable from "not yet" on a stream: a consumer waiting for `nsamp` words that will never
 // arrive does not see an error, it sees a stream that has gone quiet.  So the only channel that can
 // report a refusal is one that answers whether or not there is data -- which is precisely what the
-// data stream cannot be.
+// data stream cannot be.  `tid` is echoed so the answer can be matched to its command.
 //
 // THE ARMING, AND WHY IT IS ONCE.
 //
@@ -35,9 +45,12 @@
 #include "hls_stream.h"
 #include <ap_int.h>
 
-#include "bram_cmd_status.h"
+#include "bram_cmd_range.h"
+#include "bram_read_cmd.h"
+#include "bram_read_resp.h"
+#include "bram_status.h"
 
-/// @tparam W  payload width in bits
+/// @tparam W  payload width in bits (see bram_write_cmd_task.h on why the schemas pin it)
 /// @tparam N  memory depth in words (the ARRAY SIZE -- see bram_write_cmd_task.h)
 template <int W, int N>
 void bram_read_cmd_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& go,
@@ -52,20 +65,23 @@ void bram_read_cmd_task(ap_uint<W> buf_r[N], hls::stream<ap_uint<W> >& go,
         armed = true;
     }
 
-    ap_uint<W> rp = cmd.read();
-    ap_uint<W> n = cmd.read();
-    bool ok = bram_cmd_in_range<W, N>(rp, n);
+    ReadCmd c;
+    c.read_stream<W>(cmd);
+    bool ok = bram_cmd_in_range<W, N>(c.raddr, c.nsamp);
 
     if (ok) {
     read_payload:
-        for (ap_uint<32> i = 0; i < n; i++) {
+        for (ap_uint<32> i = 0; i < c.nsamp; i++) {
 #pragma HLS PIPELINE II=1
 #pragma HLS LOOP_TRIPCOUNT min = 1 max = N
-            data.write(buf_r[rp + i]);
+            data.write(buf_r[c.raddr + i]);
         }
     }
 
-    resp.write((ap_uint<W>)(ok ? BRAM_CMD_ST_OK : BRAM_CMD_ST_OUT_OF_RANGE));
+    ReadResp r;
+    r.tid = c.tid;
+    r.status = ok ? BramStatus::OK : BramStatus::OUT_OF_RANGE;
+    r.write_stream<W>(resp);
 }
 
 #endif  // BRAM_SIMPLE_BRAM_READ_CMD_TASK_H
