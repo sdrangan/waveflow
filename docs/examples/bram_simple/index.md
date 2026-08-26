@@ -8,27 +8,40 @@ summary: "Two free-running tasks over one true-dual-port memory that lives OUTSI
 
 # Shared memory between two modules
 
-Two `hls::task` bodies sharing a buffer is the natural way to write a capture buffer, a scoreboard, a
-reorder queue. **Inside a Vitis kernel it has no expression**: a local array crossing two tasks
-becomes a synchronizing PIPO channel whose handshake stalls the writer, and one `bram` port used both
-ways is a hard error. The memory has to live *beside* the kernel, as hand-written Verilog, with a
-generated wrapper joining the two — and this example is the smallest complete design that does it.
+Sharing memory between concurrent tasks arises in a multitude of applications — capture buffers,
+scoreboards, and storage of intermediate values. As the [memory guide](../../guide/memory/) describes,
+there are three ways to share memory between hardware modules:
 
-The vehicle is deliberately **domain-free**. `BramIF` is used by every RF buffer in the tree, but a
-reader who wants "shared memory between two modules" for something else should not have to read an RF
-example to see it. What is here is a memory, a writer, a reader, and nothing else:
+- **External** memory, typically DDR, that exists on the board and reaches the programmable logic
+  over an AXI-MM interface.
+- A **ping-pong buffer** (PIPO), which transfers blocks with a synchronization mechanism built in.
+- A dedicated **BRAM** (Block RAM), instantiated in the top-level design in the programmable logic.
 
-```
-cmd_w  ──▶ ┌──────────────┐ ──buf_w──▶ ┌──────────┐
-data_w ──▶ │ BramWriteCmd │            │  T2pBram │   hand-written Verilog,
-resp_w ◀── └──────────────┘            │          │   BESIDE the kernel
-cmd_r  ──▶ ┌──────────────┐ ──buf_r──▶ │          │
-data_r ◀── │ BramReadCmd  │ ◀──────────└──────────┘
-resp_r ◀── └──────────────┘
-```
+This example demonstrates implementing, modelling and using a **BRAM**, where two hardware modules
+share one true-dual-port memory. For shared DDR see the [histogram example](../shared_mem/); for the
+ping-pong buffer, the [interleaver example](../interleaver/).
 
-The duplication with [`RfShotBuf`](../../guide/rf/) is a feature rather than a cost: seeing one
-primitive carry two unrelated designs is the point of having a primitive.
+## Why a dedicated BRAM?
+
+A BRAM can be given **dedicated** access to a small number of hardware modules. DDR usually has to be
+shared with other modules and with the PS, which can add substantial delay.
+
+A PIPO is also typically built from a two-port BRAM, but it comes with a synchronization mechanism
+you do not choose, and it requires one module to write a *different buffer segment* than another
+reads. A BRAM gives you the memory and leaves the correctness argument to you — which is the whole
+subject of this example.
+
+## A simple example
+
+In this example, we build the simplest example of two hardware modules sharing a BRAM.
+
+![Two tasks, BramWriteCmd and BramReadCmd, inside the bram_simple Vitis kernel; the bram_t2p memory beside the kernel but inside the bram_simple_top wrapper, reached over buf_w and buf_r bram ports; six streams on the left carrying commands, payload and responses.](figures/bram_simple_topology.svg)
+
+**The nesting is the point.** The memory is *outside* the kernel and *inside* the wrapper, because a
+memory shared between two tasks has no expression inside a Vitis kernel at all — the
+[overview](overview.md) has the evidence. Each side takes a `(pointer, count)` command and answers
+it: a write has no return path of its own, and a refused read returns zero words, which on a stream
+is indistinguishable from "not yet".
 
 ## What you will learn
 
@@ -44,6 +57,9 @@ primitive carry two unrelated designs is the point of having a primitive.
 - How to verify throughput and overlap from a timing diagram built out of the RTL trace.
 - How the two backends' timing compares — where they agree for free, and the one place they do not.
 
+Once you have this example, the same structure is what the
+[RF shot buffer](../../guide/rf/rfshotbuf/) is built on.
+
 ## The pages
 
 - [Overview](overview.md) — what a BRAM is here, why it cannot be inside the kernel, and the topology.
@@ -52,38 +68,6 @@ primitive carry two unrelated designs is the point of having a primitive.
 - [Code generation](codegen.md) — the kernel, `bram_t2p.v`, and the wrapper that joins them.
 - [RTL simulation](rtlsim.md) — running XSI, and producing the trace.
 - [Reading the trace](timing.md) — the activity diagram, the hazard scan, and the comparison to pysim.
-
-## Scenario zero is a witness, and its numbers are not ours
-
-`plans/witness/t2p_bram/` is four hand-written files — a kernel, a memory, a wrapper and a testbench —
-that were synthesized and simulated **before any of this infrastructure existed**. They wrote
-`buf[i] = i + 100` for 256 words, then read addresses `0, 1, 7, 255, 128`, and got back
-`100, 101, 107, 355, 228`.
-
-That is the only gate in this repo checking Waveflow against something built independently of
-Waveflow, and this example subsumes it: the witness is one `write(wp=0, nwords=256)` followed by five
-one-word reads. Both backends reproduce all five.
-
-A **ramp rather than a constant**, deliberately. The likeliest failure in a design like this is a
-read-latency mismatch between the kernel's `latency=` pragma and the memory's published
-`READ_LATENCY`, which shifts every returned value by one position — and sails through a constant
-check without a murmur.
-
-## Two things this example exists to say out loud
-
-**The geometry has to wrap.** The gated configuration is **64-bit** words. Vitis byte-addresses a
-`mode=bram` port, so a 1024-word memory at 64 bits is reachable at only 128 distinct addresses unless
-the wrapper undoes the scaling — and a design that never addresses past 128 round-trips perfectly
-either way. Its retired predecessor, `bram_toy`, filled 256 of 1024 words at *sixteen* bits and
-stayed green straight through a defect that had every BRAM design in the tree mis-addressed. At 64
-bits the same 256 words reach byte address 2040, and word 128 onward aliases immediately. The
-convention is written up in the [interface guide](../../guide/interface/bram.md#the-addressing-convention).
-
-**The memory's `$error` fires, and nothing in this flow can hear it.** `bram_t2p.v` asserts its own
-invariant — the reader must never touch the word the writer is writing — and in the XSI flow this
-repo runs, RTL text output is discarded entirely. So the hazard is detected in the **waveform**
-instead, and the gate is a *pair*: scenario zero must come back clean, and a scenario built to
-collide must come back dirty. [Reading the trace](timing.md) is where that is done.
 
 ## See also
 
