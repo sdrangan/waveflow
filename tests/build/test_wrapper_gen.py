@@ -28,7 +28,7 @@ from waveflow.build.composite_gen import (
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
-from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
+from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram, word_element
 
 from examples.bram_simple.bram_simple import DEPTH, WORD_BW, BramSimple, BramSimpleTB
 
@@ -327,7 +327,8 @@ def test_a_bram_port_with_no_memory_cannot_be_lowered():
     """An unbound accessor has no latency to emit, and inventing one is what shifts the ramp."""
     from waveflow.build.elaborate import ElabContext
 
-    ep = BramIFMaster(sim=ElabContext(), name="loose", bitwidth=16, depth=1024, access="read")
+    ep = BramIFMaster(sim=ElabContext(), name="loose", element_type=word_element(16),
+                      nelem=1024, access="read")
     with pytest.raises(ValueError, match="not bound to a BramIF"):
         _ = ep.read_latency
 
@@ -336,11 +337,32 @@ def test_a_geometry_mismatch_is_refused_at_bind_time():
     from waveflow.build.elaborate import ElabContext
 
     sim = ElabContext()
-    mem = T2pBram(sim=sim, name="m", dwidth=16, depth=1024)
-    small = BramIFMaster(sim=sim, name="small", bitwidth=16, depth=256, access="write")
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(16), nelem=1024)
+    small = BramIFMaster(sim=sim, name="small", element_type=word_element(16), nelem=256,
+                         access="write")
     iface = BramIF(name="bad", sim=sim)
     iface.bind(ep_name="master", endpoint=small)
     with pytest.raises(ValueError, match="256x16 but the memory port is 1024x16"):
+        iface.bind(ep_name="slave", endpoint=mem.wr_port)
+
+
+def test_an_element_mismatch_is_refused_at_bind_time():
+    """Same width, different type — the quieter half of the same aliasing class.
+
+    A geometry mismatch at least stops paying off past the smaller array.  Two 32-bit ports that
+    disagree about whether the 32 bits are a float or a word line up at every address and return a
+    correctly-shaped wrong number forever, so the element is checked alongside the extent."""
+    from waveflow.build.elaborate import ElabContext
+    from waveflow.hw.dataschema import FloatField
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(32), nelem=1024)
+    floats = BramIFMaster(sim=sim, name="f", element_type=FloatField.specialize(bitwidth=32),
+                          nelem=1024, access="write")
+    assert floats.bitwidth == mem.wr_port.bitwidth == 32, "the widths agree; only the meaning does not"
+    iface = BramIF(name="bad", sim=sim)
+    iface.bind(ep_name="master", endpoint=floats)
+    with pytest.raises(ValueError, match="accessor's element is"):
         iface.bind(ep_name="slave", endpoint=mem.wr_port)
 
 
@@ -348,8 +370,9 @@ def test_a_direction_mismatch_is_refused_at_bind_time():
     from waveflow.build.elaborate import ElabContext
 
     sim = ElabContext()
-    mem = T2pBram(sim=sim, name="m", dwidth=16, depth=1024)
-    reader = BramIFMaster(sim=sim, name="rd", bitwidth=16, depth=1024, access="read")
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(16), nelem=1024)
+    reader = BramIFMaster(sim=sim, name="rd", element_type=word_element(16), nelem=1024,
+                          access="read")
     iface = BramIF(name="bad", sim=sim)
     iface.bind(ep_name="master", endpoint=reader)
     with pytest.raises(ValueError, match="read-during-write collision"):

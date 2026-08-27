@@ -89,7 +89,8 @@ Four things to notice:
 
 - **`ap_uint<64> buf_w[1024]` is a sized array, never a pointer.** `mode=bram` on an unsized pointer
   silently degrades to an `ap_vld` scalar port: no warning, a clean `csynth`, and a design elaborated
-  against a memory that is not there. The size comes from `BramIFMaster.depth`.
+  against a memory that is not there. The size comes from `BramIFMaster.nelem`, and the element
+  type from `BramIFMaster.element_type` — `ap_uint<64>` is `Word64` spelled in C++.
 - **`latency=1` is the memory's own number.** It is emitted from `bram_t2p.v`'s
   `localparam READ_LATENCY = 1`, reached through the bound `BramIF` — so the pragma and the Verilog
   cannot be authored independently and therefore cannot desynchronize. Nothing in any Python file

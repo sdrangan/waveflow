@@ -28,8 +28,89 @@ from math import ceil
 
 import numpy as np
 
+from waveflow.hw.dataschema import DataSchema, IntField
 from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import Interface, InterfaceEndpoint
+
+
+# ---------------------------------------------------------------------------
+# The element — what one address holds
+# ---------------------------------------------------------------------------
+#
+# A BRAM port in RTL is `addr` + `din`/`dout` + `we`/`en`: uniform width, address-indexed.  That is
+# an ARRAY, definitionally, so an element type plus an element count describes exactly what the port
+# can express — and every other number (the bus width, the byte-address shift, the pysim storage
+# dtype) follows from it.  Declaring the width instead left three places free to disagree about what
+# a word MEANS while agreeing about how wide it is.  See ``plans/typed_transfer_codec.md`` S3c.
+
+
+def word_element(bitwidth: int) -> type[DataSchema]:
+    """The element type of a memory that holds **raw words** — an unsigned integer *bitwidth* wide.
+
+    Not ceremony, and not a placeholder for a "real" type: a sample buffer whose contents are packed
+    converter words genuinely has an unsigned word as its element, and saying so is what makes
+    :attr:`BramIFMaster.bitwidth` derivable instead of declared.  A design that knows more about its
+    contents (``Float32``, a flat ``DataList``) passes that type instead and gets a memory backed by
+    it.
+    """
+    return IntField.specialize(bitwidth=int(bitwidth), signed=False)
+
+
+#: The default element: the witness's 16-bit word.  A default at all (rather than a required
+#: argument) only because these are dataclasses whose other fields carry defaults; ``None`` is
+#: refused, so no port ever reaches codegen without an element.
+_DEFAULT_ELEMENT = word_element(16)
+
+
+def check_bram_element(element_type: type[DataSchema] | None, owner: str) -> int:
+    """Validate *element_type* as a BRAM port's element and return its bit width.
+
+    **Refused here, where the type is DECLARED**, rather than in the wrapper emitter that discovers
+    it.  The rule itself is not re-stated: this calls
+    :func:`~waveflow.build.wrapper_gen._bram_addr_shift`, the emitter that owns it, so there is no
+    second copy to drift.  What the declaration site adds is *when* — a 14-bit element (the RFdc
+    dense-14 sample) is a fact about the type, knowable the moment it is named, and discovering it
+    only at wrapper generation means a design that elaborates, simulates and csynths fine dies at the
+    last rung with a message about an emitter.
+    """
+    if element_type is None:
+        raise ValueError(
+            f"{owner}: a BRAM port must declare element_type. Its width, its byte-address scaling "
+            f"and its pysim storage all derive from the element, so there is no width to fall back "
+            f"on -- pass word_element(N) for a memory of raw N-bit words.")
+    from waveflow.build.hwcodegen import LoweringError
+    from waveflow.build.wrapper_gen import _bram_addr_shift
+
+    width = int(element_type().get_bitwidth())
+    try:
+        _bram_addr_shift(width)
+    except LoweringError as exc:
+        raise ValueError(
+            f"{owner}: {element_type.__name__} is {width} bits, which cannot be a BRAM element "
+            f"type. {exc} A dense 14-bit RFdc sample is the live case: pack it into a word "
+            f"(word_element(16), or a whole 64-bit RfdcSampWord) and unpack inside the kernel."
+        ) from exc
+    return width
+
+
+def _storage_dtype(element_type: type[DataSchema], owner: str) -> np.dtype:
+    """The numpy dtype one element is **stored as** in pysim.
+
+    The element's own dtype when it has one (``Float32`` -> ``float32``, so a float in the memory is
+    a float, not a packing of one).  A composite element has none, and then the storage is the
+    element's packed word — honest about what it is, and the reason a reference view over such a
+    memory is refused rather than silently copied (S3b).
+    """
+    dtype = element_type._numpy_elem_dtype()
+    if dtype is not None:
+        return np.dtype(dtype)
+    nbytes = int(element_type().get_bitwidth()) // 8
+    if nbytes not in (1, 2, 4, 8):
+        raise ValueError(
+            f"{owner}: {element_type.__name__} has no numpy dtype and packs to {nbytes} bytes, "
+            f"which numpy has no integer type for. pysim storage would have to truncate it "
+            f"silently -- exactly what a memory model must not do.")
+    return np.dtype(f"u{nbytes}")
 
 
 @dataclass
@@ -52,12 +133,13 @@ class BramIFMaster(InterfaceEndpoint):
     and what a true-dual-port memory's correctness argument rules out.
     """
 
-    #: Bits per word — the C++ array's element width.
-    bitwidth: int = 16
-    #: Words — the C++ array's **size**.  Not decoration: ``mode=bram`` on an unsized pointer
+    #: What one address holds — the C++ array's **element type**.  Everything the port needs in
+    #: bits is derived from it (see :attr:`bitwidth`); nothing restates it.
+    element_type: type[DataSchema] = _DEFAULT_ELEMENT
+    #: Elements — the C++ array's **size**.  Not decoration: ``mode=bram`` on an unsized pointer
     #: silently degrades to an ``ap_vld`` scalar port, so this number is what makes the pragma take
-    #: effect.
-    depth: int = 1024
+    #: effect.  One address holds one element, so it is also the memory's depth.
+    nelem: int = 1024
     #: What this accessor does through the port: ``"read"`` or ``"write"``.
     access: str = "read"
     type_name = 'bram_if_master'
@@ -73,6 +155,22 @@ class BramIFMaster(InterfaceEndpoint):
                 f"{self.access!r}. A port used BOTH ways is the structure Vitis refuses "
                 f"(HLS 200-976); the direction is declared, never inferred."
             )
+        check_bram_element(self.element_type, f"BramIFMaster '{self.name}'")
+        if int(self.nelem) <= 0:
+            raise ValueError(
+                f"BramIFMaster '{self.name}': nelem must be positive, got {self.nelem!r}.")
+
+    @property
+    def bitwidth(self) -> int:
+        """Bits on the wire — **derived** from :attr:`element_type`, never declared.
+
+        RTL is always bits, so the number does not disappear: ``bram_t2p.v`` stays parameterized by
+        ``DW`` and a ``float`` is 32 bits there.  What changes is authorship — the width is now a
+        consequence of what the memory holds, so a port and its memory cannot agree on 32 while
+        disagreeing about whether those 32 bits are a float or a packed pair.  The same shape
+        :class:`~waveflow.hw.interface.SobIFMaster` already uses.
+        """
+        return int(self.element_type().get_bitwidth())
 
     @property
     def read_latency(self) -> int:
@@ -105,16 +203,20 @@ class BramIFMaster(InterfaceEndpoint):
     # `self.buf_w.mem_write(i, x)`, not `yield from`, and the absence of the yield is the statement
     # that no simulated time passes.
 
-    def mem_write(self, addr: int, value: int) -> None:
-        """Write one word through this port (pysim).  Refused on a read port."""
+    def mem_write(self, addr: int, value) -> None:
+        """Write one **element** through this port (pysim).  Refused on a read port.
+
+        *value* is not coerced to ``int``: the memory is typed, so a ``Float32`` memory takes a
+        float and stores a float.  Over a word element type this is the same call it always was.
+        """
         if self.access != "write":
             raise ValueError(
                 f"BramIFMaster '{self.name}' declares access='read'; writing through it is the "
                 f"read-during-write hazard the memory's $error exists to catch.")
-        self._memory().store(int(addr), int(value))
+        self._memory().store(int(addr), value)
 
-    def mem_read(self, addr: int) -> int:
-        """Read one word through this port (pysim).  Refused on a write port."""
+    def mem_read(self, addr: int):
+        """Read one **element** through this port (pysim).  Refused on a write port."""
         if self.access != "read":
             raise ValueError(
                 f"BramIFMaster '{self.name}' declares access='write'; reading through it is not the "
@@ -144,13 +246,13 @@ class BramIFSlave(InterfaceEndpoint):
     One endpoint is one *port* of the memory, not the memory: :class:`T2pBram` carries two.
     """
 
-    #: Bits per word.  Named ``bitwidth`` like every other endpoint, so structural machinery that
-    #: reads a port's width (``boundary_signature``, the resource path) needs no special case.
-    bitwidth: int = 16
-    #: Words addressable through this port.  Part of the endpoint rather than only the module,
+    #: What one address holds.  The memory's element, not the port's opinion of it —
+    #: :meth:`BramIF.bind` refuses a bind where the two sides name different types.
+    element_type: type[DataSchema] = _DEFAULT_ELEMENT
+    #: Elements addressable through this port.  Part of the endpoint rather than only the module,
     #: because the kernel-side C++ parameter is a **sized** array and its size comes from here — an
     #: unsized pointer with ``mode=bram`` silently degrades to an ``ap_vld`` scalar port.
-    depth: int = 1024
+    nelem: int = 1024
     #: What the **accessor** does through this port: ``"read"`` or ``"write"``.
     access: str = "read"
     type_name = 'bram_if_slave'
@@ -167,6 +269,17 @@ class BramIFSlave(InterfaceEndpoint):
                 f"(HLS 200-976) and the one a true-dual-port memory's correctness argument rules "
                 f"out — the direction is declared, never inferred."
             )
+        check_bram_element(self.element_type, f"BramIFSlave '{self.name}'")
+        if int(self.nelem) <= 0:
+            raise ValueError(
+                f"BramIFSlave '{self.name}': nelem must be positive, got {self.nelem!r}.")
+
+    @property
+    def bitwidth(self) -> int:
+        """Bits per element — **derived** from :attr:`element_type`.  Named ``bitwidth`` like every
+        other endpoint, so structural machinery that reads a port's width (``boundary_signature``,
+        the resource path) still needs no special case."""
+        return int(self.element_type().get_bitwidth())
 
 
 @dataclass
@@ -208,10 +321,18 @@ class BramIF(Interface):
         m, s = self.endpoints.get("master"), self.endpoints.get("slave")
         if m is None or s is None:
             return
-        if (int(m.bitwidth), int(m.depth)) != (int(s.bitwidth), int(s.depth)):
+        if m.element_type is not s.element_type:
             raise ValueError(
-                f"BramIF '{self.name}': the accessor's array is {m.depth}x{m.bitwidth} but the "
-                f"memory port is {s.depth}x{s.bitwidth}. The C++ array size IS the port's address "
+                f"BramIF '{self.name}': the accessor's element is "
+                f"{m.element_type.__name__} but the memory's is {s.element_type.__name__}. Two "
+                f"types of the same width are the same aliasing bug as two different sizes, and a "
+                f"quieter one: nothing downstream would disagree, the addresses would line up, and "
+                f"every read would return a correctly-shaped wrong number."
+            )
+        if int(m.nelem) != int(s.nelem):
+            raise ValueError(
+                f"BramIF '{self.name}': the accessor's array is {m.nelem}x{m.bitwidth} but the "
+                f"memory port is {s.nelem}x{s.bitwidth}. The C++ array size IS the port's address "
                 f"range, so a disagreement is a silent aliasing bug at the first address past the "
                 f"smaller one."
             )
@@ -286,44 +407,61 @@ class T2pBram(HwModule):
     there.
     """
 
-    #: Bits per word.  16 in the witness.
-    dwidth: HwParam[int] = 16
-    #: Words.  1024 in the witness — exactly one RAMB18 at 16 bits wide.
-    depth: HwParam[int] = 1024
+    #: What one address holds.  A **plain field, not an** ``HwParam``: a type is not a build-time
+    #: integer knob, and the param machinery bakes values into artifacts by name.  The width the
+    #: Verilog is parameterized by is :attr:`dwidth`, derived from this.
+    element_type: type[DataSchema] = _DEFAULT_ELEMENT
+    #: Elements.  1024 in the witness — exactly one RAMB18 at 16 bits wide.  One address holds one
+    #: element, so this is the memory's depth; there is one name for it, not two.
+    nelem: HwParam[int] = 1024
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, d = int(self.dwidth), int(self.depth)
+        owner = f"{type(self).__name__} '{self.name}'"
+        check_bram_element(self.element_type, owner)
+        d = int(self.nelem)
         #: Port A — the accessor writes through it.
-        self.wr_port = BramIFSlave(sim=self.sim, name=f"{self.name}_wr", bitwidth=w, depth=d,
-                                   access="write")
+        self.wr_port = BramIFSlave(sim=self.sim, name=f"{self.name}_wr",
+                                   element_type=self.element_type, nelem=d, access="write")
         #: Port B — the accessor reads through it.
-        self.rd_port = BramIFSlave(sim=self.sim, name=f"{self.name}_rd", bitwidth=w, depth=d,
-                                   access="read")
+        self.rd_port = BramIFSlave(sim=self.sim, name=f"{self.name}_rd",
+                                   element_type=self.element_type, nelem=d, access="read")
         self.add_endpoint(self.wr_port)
         self.add_endpoint(self.rd_port)
-        #: The storage, for pysim.  Zeroed, like the RTL's uninitialized array is *not* — reading a
-        #: word that was never written gives 0 here and X (or stale data) there, which is why the
-        #: design, not the memory, is what has to guarantee "rd trails wr".
-        self.storage = np.zeros(d, dtype=np.uint64)
+        #: The storage, for pysim — ``nelem`` **elements**, in the element's own dtype rather than a
+        #: uniform word.  A ``Float32`` memory holds float32s here, not a packing of them, which is
+        #: what makes a stored value readable as itself and (later) referenceable in place; over a
+        #: word element it is the array it always was.  Zeroed, like the RTL's uninitialized array is
+        #: *not* — reading a word that was never written gives 0 here and X (or stale data) there,
+        #: which is why the design, not the memory, is what has to guarantee "rd trails wr".
+        self.storage = np.zeros(d, dtype=_storage_dtype(self.element_type, owner))
 
-    def store(self, addr: int, value: int) -> None:
+    def store(self, addr: int, value) -> None:
         """pysim write.  Refuses an out-of-range address rather than wrapping it, because the RTL
         wraps silently (``mem[addr[AW-1:0]]``) and a silent wrap is the bug this catches early."""
         self._check(addr)
-        self.storage[addr] = np.uint64(value)
+        self.storage[addr] = value
 
-    def load(self, addr: int) -> int:
-        """pysim read."""
+    def load(self, addr: int):
+        """pysim read — one element, in the element's own Python type."""
         self._check(addr)
-        return int(self.storage[addr])
+        return self.storage[addr].item()
 
     def _check(self, addr: int) -> None:
-        if not 0 <= int(addr) < int(self.depth):
+        if not 0 <= int(addr) < int(self.nelem):
             raise IndexError(
-                f"{type(self).__name__} '{self.name}': address {addr} is outside 0..{int(self.depth)-1}. "
+                f"{type(self).__name__} '{self.name}': address {addr} is outside 0..{int(self.nelem)-1}. "
                 f"The RTL would index mem[addr[AW-1:0]] and alias it onto a live word without a word "
                 f"of warning; pysim refuses instead.")
+
+    @property
+    def dwidth(self) -> int:
+        """``DW`` — bits per element, **derived** from :attr:`element_type`.
+
+        Keeps the Verilog's own name for the number the Verilog is parameterized by, so
+        :meth:`rtl_module` and :meth:`get_rm` read the same word the RTL does.
+        """
+        return int(self.element_type().get_bitwidth())
 
     @property
     def addr_bits(self) -> int:
@@ -334,11 +472,11 @@ class T2pBram(HwModule):
         on live data.  Refused rather than rounded up, because rounding up would quietly buy storage
         the caller did not ask for and still not make the wrap go away.
         """
-        d = int(self.depth)
+        d = int(self.nelem)
         aw = d.bit_length() - 1
         if d <= 0 or (1 << aw) != d:
             raise ValueError(
-                f"T2pBram depth must be a power of two (got {d}): the Verilog addresses "
+                f"T2pBram nelem must be a power of two (got {d}): the Verilog addresses "
                 f"mem[addr[AW-1:0]], so any other depth aliases high addresses onto low ones "
                 f"silently."
             )
@@ -407,7 +545,10 @@ class T2pBram(HwModule):
         return PriorResourceModel(
             name="T2pBram:geometry",
             platform=platform,
-            params_fn=lambda comp: {"depth": int(comp.depth), "dwidth": int(comp.dwidth)},
+            # The feature names stay ``depth``/``dwidth`` -- geometry vocabulary, and the key
+            # every stored measurement is already filed under.  They are sourced from the
+            # declaration now, not declared twice.
+            params_fn=lambda comp: {"depth": int(comp.nelem), "dwidth": int(comp.dwidth)},
             formulas={"bram": lambda f: ramb18_count(f["depth"], f["dwidth"]),
                       "uram": lambda f: 0},
         )

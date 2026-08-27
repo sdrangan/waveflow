@@ -44,7 +44,8 @@ def test_depth_is_in_words_and_samples_are_derived():
     assert b.depth == 1024
     assert b.nsamp_held == 4096
     assert b.nsamp_shot == 1024
-    assert b.mem.depth == 1024, "the memory is depth WORDS, so the two numbers are the same number"
+    assert b.mem.nelem == 1024, (
+        "the memory holds depth WORDS, so the two numbers are the same number")
 
 
 def test_the_word_type_is_read_off_the_converter_not_carried():

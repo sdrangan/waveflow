@@ -34,7 +34,7 @@ from waveflow.build.rtl_gen import (
     rtl_read_latency,
     verilog_module_ports,
 )
-from waveflow.hw.bram import BramIFSlave, T2pBram, ramb18_count
+from waveflow.hw.bram import BramIFSlave, T2pBram, ramb18_count, word_element
 from waveflow.hw.codegen_targets import (
     ALL_TARGETS,
     CUT_INDEPENDENT_TARGETS,
@@ -363,12 +363,38 @@ def test_t2p_bram_carries_a_write_port_and_a_read_port():
 
 def test_a_port_used_both_ways_is_refused_at_construction():
     with pytest.raises(ValueError, match="access must be"):
-        BramIFSlave(sim=ElabContext(), name="rw", bitwidth=16, depth=1024, access="rw")
+        BramIFSlave(sim=ElabContext(), name="rw", element_type=word_element(16), nelem=1024,
+                    access="rw")
 
 
 def test_a_non_power_of_two_depth_is_refused_rather_than_rounded():
     with pytest.raises(ValueError, match="power of two"):
-        elaborate(T2pBram, {"depth": 1000}).addr_bits
+        elaborate(T2pBram, {"nelem": 1000}).addr_bits
+
+
+def test_an_element_that_is_not_a_power_of_two_byte_count_is_refused_at_declaration():
+    """The 14-bit RFdc sample, refused where the TYPE is named — not at wrapper generation.
+
+    ``_bram_addr_shift`` cannot express Vitis's byte-address scaling for such a width, and that is a
+    fact about the type: knowable the moment it is written down, so a design carrying one should not
+    elaborate, simulate and csynth before dying at the last rung."""
+    with pytest.raises(ValueError, match="cannot be a BRAM element type"):
+        T2pBram(sim=ElabContext(), name="dense14", element_type=word_element(14))
+    with pytest.raises(ValueError, match="cannot be a BRAM element type"):
+        BramIFSlave(sim=ElabContext(), name="p24", element_type=word_element(24), access="read")
+
+
+def test_the_width_is_derived_from_the_element_and_the_storage_is_typed():
+    """``bitwidth`` is a consequence of what the memory holds, and pysim holds it as itself."""
+    import numpy as np
+    from waveflow.hw.dataschema import FloatField
+
+    mem = elaborate(T2pBram, {"element_type": FloatField.specialize(bitwidth=32), "nelem": 256})
+    assert mem.dwidth == 32 and mem.wr_port.bitwidth == 32
+    assert mem.storage.dtype == np.dtype("float32"), (
+        "a float memory holds floats, not a packing of them -- the precondition for a reference view")
+    mem.store(3, 1.5)
+    assert mem.load(3) == 1.5, "a float written is a float read, with no deserialize in between"
 
 
 def test_the_footprint_is_declared_from_geometry():
@@ -387,8 +413,8 @@ def test_the_footprint_is_declared_from_geometry():
 def test_the_declared_params_carry_the_geometry_to_the_instantiation():
     """Parameterizing is not generating: the file is copied, the numbers ride on the instance."""
     assert dict(elaborate(T2pBram).rtl_module().params) == {"DW": 16, "AW": 10}
-    assert dict(elaborate(T2pBram, {"dwidth": 32, "depth": 4096}).rtl_module().params) == {
-        "DW": 32, "AW": 12}
+    assert dict(elaborate(T2pBram, {"element_type": word_element(32), "nelem": 4096})
+                .rtl_module().params) == {"DW": 32, "AW": 12}
 
 
 def test_resolve_returns_the_descriptor_a_wrapper_emitter_will_need():

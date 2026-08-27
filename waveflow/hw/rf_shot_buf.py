@@ -62,7 +62,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
+from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram, word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -206,8 +206,8 @@ class RfShotBufLoad(FreeRunMod):
                 f"a shot is {nw} words but the buffer holds {d}: a shot longer than the memory is "
                 f"not a shot, it is a stream, and streaming is what waveflow.hw.rf_tx_stream is for")
         self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
-        self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w", bitwidth=w, depth=d,
-                                  access="write")
+        self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w",
+                                  element_type=word_element(w), nelem=d, access="write")
         self.rdy_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_rdy", bitwidth=w,
                                       has_tlast=True)
         for ep in (self.s_in, self.buf_w, self.rdy_out):
@@ -271,8 +271,8 @@ class RfShotBufRead(FreeRunMod):
                                     has_tlast=True)
         self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
                                     has_tlast=True)
-        self.buf_r = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_r", bitwidth=w, depth=d,
-                                  access="read")
+        self.buf_r = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_r",
+                                  element_type=word_element(w), nelem=d, access="read")
         for ep in (self.rdy_in, self.s_out, self.buf_r):
             self.add_endpoint(ep)
         self.phase = ShotPhase()
@@ -359,7 +359,8 @@ class RfShotBuf(FreeRunMod):
         # `mem`, not `buf`: the attribute name becomes the Verilog INSTANCE name and `buf` is a
         # primitive gate, which the wrapper emitter refuses by name rather than letting xvlog fail on
         # a syntax error that mentions no Python.
-        self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem", dwidth=w, depth=d)
+        self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem",
+                           element_type=word_element(w), nelem=d)
         self.add_rtl_mod(self.mem)
         w_if = BramIF(name=f"{self.name}_bufw_if", sim=self.sim)
         w_if.bind(ep_name="master", endpoint=self.load.buf_w)

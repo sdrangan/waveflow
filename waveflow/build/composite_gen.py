@@ -888,7 +888,7 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
                 f"_boundary_port: bram port {name!r} needs its endpoint — the array size and the "
                 f"latency come from the port and the memory it is wired to, never from a default."
             )
-        return _bram_port(name, int(ep.bitwidth), int(ep.depth), latency=int(ep.read_latency))
+        return _bram_port(name, int(ep.bitwidth), int(ep.nelem), latency=int(ep.read_latency))
     raise LoweringError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 

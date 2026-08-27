@@ -61,8 +61,9 @@ outside one.
 ## The shape
 
 ```python
-self.buf_w = BramIFMaster(bitwidth=16, depth=1024, access="write")   # on the accessor task
-self.mem   = T2pBram(dwidth=16, depth=1024)                          # the memory module
+W16 = word_element(16)                                              # a memory of raw 16-bit words
+self.buf_w = BramIFMaster(element_type=W16, nelem=1024, access="write")   # the accessor task
+self.mem   = T2pBram(element_type=W16, nelem=1024)                        # the memory module
 ...
 self.add_rtl_mod(self.mem)          # realized as hand-written Verilog beside the kernel
 w_if = BramIF(name="bufw_if", sim=self.sim)
@@ -76,8 +77,22 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
   `#pragma HLS INTERFACE mode=bram`; in RTL it is **fourteen** ports, an A/B pair of seven signals.
 * **`BramIFSlave`** is the memory's end. One endpoint is one *port* of the memory; a `T2pBram` has
   two.
+* **`element_type` + `nelem`** is the whole declaration, and everything in bits follows from it:
+  `bitwidth` is a property (`element_type().get_bitwidth()`), the wrapper's byte-address shift is
+  `log2(bitwidth/8)`, and the pysim memory is `np.zeros(nelem, dtype=<the element's dtype>)` — so a
+  `Float32` memory holds float32s rather than a packing of them. A port in RTL is `addr` + `din` /
+  `dout` + `we` / `en`: uniform width, address-indexed. That *is* an array, so an element plus a
+  count is exactly what the port can express, and one address holds one element — `nelem` is also
+  the memory's depth. Use `word_element(N)` when the contents really are raw words.
+* **An element that is not a power-of-two byte count is refused where it is declared**, not at
+  wrapper generation. Vitis scales a `mode=bram` address in *bytes* by a **shift**, so a 14-bit
+  element (the RFdc dense-14 sample) has no expressible scaling — pack it into a word first. Both
+  ends check it in `__post_init__`, citing the emitter (`_bram_addr_shift`) that owns the rule.
 * **`access`** (`"read"` / `"write"`) is declared on both ends and checked when they bind. A port
   used both ways is what Vitis refuses inside a kernel, and it is no safer outside one.
+* **The bind also checks the element**, not only the extent. Two 32-bit ports that disagree about
+  whether those bits are a float or a word line up at every address and return a correctly-shaped
+  wrong number forever — the quieter half of the aliasing class the size check already catches.
 
 ## `add_rtl_if`, not `add_if` — and that is the whole mechanism
 
