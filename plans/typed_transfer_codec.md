@@ -1,7 +1,8 @@
 # The typed-transfer codec — one adapter, every transport
 
-**Status:** S1 + S2 + S3c LANDED (2026-08-27); S3a / S4 proposed.  Steps 1 and 2 of the parent thread
-were already done before that (see *Already landed*); this file is step 3, the one with teeth.
+**Status:** S1 + S2 + S3c + S3a (Case 2) LANDED (2026-08-27); Cases 1 and 3, the partitioning gate
+and S4 proposed.  Steps 1 and 2 of the parent thread were already done before that (see *Already
+landed*); this file is step 3, the one with teeth.
 
 ## The complaint, stated precisely
 
@@ -183,7 +184,7 @@ left alone; fold them only if a `write_array` for streams ever earns its place.
 The payoff, and the answer to "does `BramIF` have vector operations" (today: no, only single-word
 `mem_read` / `mem_write`).  **This step is larger than a cleanup and is a capability decision.**
 
-#### S3a — pipelined vector ops on a BRAM port (the LT model)
+#### S3a — pipelined vector ops on a BRAM port (the LT model)  — **LANDED**
 
 **This section replaces an earlier draft that proposed `array_ref`, a zero-copy reference.  That
 draft was wrong about the requirement, and the correction is the important part of this plan.**
@@ -270,6 +271,55 @@ That is a change to the vectors both backends play, so it must be re-gated, not 
   change, and *that is the deliverable*: they should now come from a declared LT model instead of a
   hand-rolled timeout, and they can be compared against the XSI count as a real check rather than a
   coincidence.
+
+##### As built, and the two measurements (2026-08-27)
+
+`BramIFMaster.read_pipelined(element_type, count, addr) -> (data, tstart)` and
+`write_pipelined(data, addr, t_start)`.  Both are the stream's own model with the memory's number
+plugged in — deliberately, so there is no second anchoring convention:
+
+- **read** = `latency_init + nwords` cycles with `latency_init = READ_LATENCY`, and its `tstart` is
+  `now - (n-1)*period`, character for character `StreamIFSlave.get_pipelined`'s back-calculation.
+  Returns a `DataArray`, so it feeds `StreamIFMaster.write_pipelined` directly.
+- **write** = `n` cycles, anchored by `max(0, n*period + (t_start - now))` — `_push_to_endpoint`'s
+  clamp verbatim.
+- `BramIF` gained an **optional** `clk`.  The scalar `mem_read` / `mem_write` are untimed and need
+  none; a pipelined op refuses loudly without one, the same shape as `read_latency` refusing when
+  unbound.  Only `bram_simple`'s two `BramIF`s set it so far.
+- `T2pBram` gained `store_block` / `load_block`, range-checked over the **whole extent before any of
+  it lands**.  `load_block` returns a copy, and says so: a live view is Case 3.
+- `examples/bram_simple` has **no `for` in either `run_iter`** (asserted structurally, by `ast`, not
+  by grep — the docstrings talk about loops).  `model_read_latency` is gone; the flag existed only
+  because the fill was hand-written in the body.  `src/*.h` are **untouched** and keep their
+  `#pragma HLS PIPELINE II=1`.
+
+**Measurement 1 — the XSI cycle count did NOT move: 394, unchanged.**  The payload reframing takes
+`data_w` from 332 one-word bursts to 4 bursts of `[256, 4, 8, 64]`, so `bounds.bin` changes and the
+driver asserts TLAST 4 times instead of 332.  `words.bin` is byte-identical.  The DUT never inspects
+TLAST on the payload, and the evidence is stronger than the count alone: every SVG rendered from the
+**traced waveform** is byte-identical too, so the RTL run is the same run.
+
+**Measurement 2 — the pysim predictions moved, and by a term that can be named.**
+
+| | first_data_cycle | last_data_cycle |
+|---|---|---|
+| before (looped bodies) | 261 | 353 |
+| after (Case 2) | 263 | 361 |
+
+The delta is **+1 cycle per read command, cumulative** (verified per command by re-running the old
+bodies under monkeypatch: +2, +3, +4, +5, +6, +7, +8 across the seven data-returning reads).  Spans
+are unchanged — 63 cycles for the 64-word read, 3 for the 4-word one — so II=1 is intact and the
+extra cycle is not a rate change.  It is the memory->stream pipeline boundary: the old model charged
+`READ_LATENCY + n` (one hand-written fill, then n stream beats) and represented no memory-side
+transfer at all; the new one charges the memory's n beats AND the stream's n beats, overlapped by
+the anchor, which is `max(n, n) + 1`.  The `+1` is the one-cycle offset between "the memory
+delivered word k" and "the stream delivered word k" — a real stage the old model did not have.
+
+**A third change fell out of this, and it was a latent defect.**  `TimedStreamSink` stamped every
+word of a burst with the burst's *completion* cycle.  Invisible while every burst was one word;
+vectorizing made it report a 64-word read as sixty-four simultaneous arrivals, a cadence of 0 where
+the XSI `AxisSlave` measures 1.  It now back-calculates per word using `get_pipelined`'s convention,
+so the two ends of a channel agree about when a word moved.
 
 ##### `array_ref` is NOT replaced by this — see Case 3
 
@@ -440,6 +490,113 @@ Case 3: `array_ref` — no `get` prefix, because nothing is fetched.  Element-ty
 extent-bounded, so it is range-checked at the call.
 `mem_read` / `mem_write` stay for scalar access.
 
+### S5 — `access="readwrite"`, and the `storage_type` that makes it safe
+
+The step Case 3 needs before it has anything interesting to demonstrate, and the one that turns a
+number into a mechanism.
+
+#### S5a — the premise: the memory was never the restriction
+
+`waveflow/build/rtl/bram_t2p.v` is **symmetric**.  Both ports carry `din`, `we` *and* `dout`:
+
+```verilog
+if (a_en) begin  if (|a_we) mem[a_addr] <= a_din;  a_dout <= mem[a_addr];  end
+if (b_en) begin  if (|b_we) mem[b_addr] <= b_din;  b_dout <= mem[b_addr];  end
+```
+
+Either port can read or write on any cycle — that is what *true* dual-port means, as against
+*simple* dual-port (one write, one read).  The header comment "Port A is the write side, port B the
+read side" describes how `bram_simple` uses it, not what the module can do.  Vitis's own
+`RAM_T2P_BRAM_1R1W` message says the same thing: 1R1W is the **usage**, T2P is the memory.
+
+So `access` in ("read", "write") is **Waveflow's** restriction, not the hardware's.
+
+**And `bram.py`'s justification for it conflates two things.**  It cites
+`ERROR: [HLS 200-976] Cannot read as well as write over function parameter` as evidence that "a port
+used both ways is what Vitis refuses."  That error is the **dataflow checker** complaining about an
+argument crossing two `hls::task` bodies — one process writing what another reads.  It is not a
+prohibition on a bidirectional `mode=bram` port, and S3d already showed every bram port emits `Din`
+*and* `Dout` regardless of declared direction.  Fix that docstring as part of this step.
+
+#### S5b — MEASURED (2026-08-27, Vitis HLS 2025.1, xc7z020clg484-1)
+
+One free-running `hls::task` with a single `mode=bram` port, an opcode branch, and two loops: a
+write-only `buf[a+i] = data.read()` and an in-place `buf[a+i] = buf[a+i]*3+1`.  Csynthed twice,
+changing only `storage_type`:
+
+| `storage_type` | compute II | write II | the `_B` half of the pair | safe against the current wrapper |
+|---|---|---|---|---|
+| `ram_1wnr` — **what codegen emits today** | 1 | 1 | **DRIVEN** — live `Addr_B`, `EN_B`, `WEN_B` tied 0 | **NO — silently wrong** |
+| `ram_1p` | **2** | 1 | not declared at all | **yes** |
+
+Both csynth clean, so the first question is answered: **Vitis does accept one `mode=bram` port read
+and written inside one `hls::task` body.**
+
+The second answer is the important one.  Under `ram_1wnr` Vitis reaches II=1 on the in-place loop by
+**reading on port B and writing on port A** — and `bram_simple_top.v` wires only the A halves
+(`.a_addr(buf_w_addr_a >> 3)`, `.b_addr(buf_r_addr_a >> 3)`), so those reads would go to a dangling
+port.  X or stale data, a clean csynth, and nothing visible until RTL.
+
+**The shipped example is safe today, and that was checked rather than assumed**: every `_B` signal in
+the generated `bram_simple.v` is tied to a constant (`assign buf_r_Addr_B = 32'd0;` and so on),
+because a unidirectional port needs one access per cycle and Vitis only uses A.  The hazard appears
+*only* when a port becomes read-write.
+
+#### S5c — the invariant, and the derivation
+
+> **The wrapper wires ONE physical memory port per declared `bram` port, so the pragma must forbid
+> Vitis from using two.**
+
+Today that holds by accident of direction.  With `readwrite` it has to be enforced, which makes
+`storage_type` a derived property rather than a constant:
+
+```
+access="read" | "write"   ->  storage_type=ram_1wnr    (1 physical port, II=1)
+access="readwrite"        ->  storage_type=ram_1p      (pins Vitis to 1 port, II=2 in place)
+```
+
+`ram_1p` is *structurally* safe rather than safe-by-convention: it does not declare the `_B` half at
+all, so no wrapper can mis-wire it.
+
+**The alternative topology, deliberately not chosen here:** wire both halves of one declared port to
+both ports of the memory, giving II=1 in place — at the cost of consuming the entire true-dual-port
+memory, leaving nothing for a concurrent streaming reader.  That is a real option and it neighbours
+the partitioning question (both are "one declared port, N physical ports").  Revisit it there.
+
+#### S5d — the example: one design, two opcodes
+
+Rather than a second example — each one costs a full docs page set — `BramWriteCmd` becomes
+`BramWriteCompute`, taking a `WriteComputeCmd` whose `opcode` is `WRITE` or `COMPUTE`.  The opcode
+shape is already idiomatic here (`FirOp` is `LOAD_TAPS` / `FILTER`; `PolyCmdType` before it).
+
+This is *stronger* than two examples, not a compromise: the same memory, the same port and two
+opcodes put the cadence difference in **one** waveform, as a controlled experiment.
+
+- `WRITE`   — payload in, `write_pipelined` into the memory.  1 access/element, **II=1**.
+- `COMPUTE` — `array_ref` (Case 3), read-modify-write in place.  2 accesses/element, **II=2**.
+
+**The lesson is the mechanism, not the number.**  "In-place is II=2" is false in general.  "The
+wrapper gives you one physical port, so the pragma pins Vitis to one, so read-modify-write costs two
+cycles per element" is true and explains itself — and S5b's table is the evidence, including the
+`ram_1wnr` row showing what the fast-but-broken alternative actually emits.
+
+Gates for the example: pysim values, and an **XSI count that is a measurement** — a COMPUTE command
+is new RTL work, so the recorded number will change and the new one must be explained from the
+waveform, never by editing the expected constant.
+
+#### S5e — the rename, afterwards
+
+`bram_simple` is a poor name (`simple` says nothing), but the right name depends on what the example
+*ends up* being: after S5d it is no longer "two tasks streaming through a memory" but "a memory
+outside the kernel, reached three ways".  Name it then.  `bram_wrapper` is the one option to avoid —
+it names the plumbing rather than the lesson, and the wrapper is not unique to this example
+(`rf_shot_buf` and friends generate one too).
+
+Whenever it happens it touches the docs page set, the test files, the recorded XSI counts, the plan
+and the memory index — cheap now, expensive after the docs land, and **worst of all mid-draft**, so
+it must not collide with an in-progress `python.md`.
+
+
 ### S4 — `HwState` gets the same vocabulary
 
 The original open item — `HwState` has no access vocabulary at all today, so hooks hand-write
@@ -463,18 +620,23 @@ has proven the shape on a second storage class.
 
 **Next, in order:**
 
-1. **S3a — Case 2 on `BramIF`** (`read_pipelined` / `write_pipelined`) and `examples/bram_simple`
-   rewritten vectorized against it.  This is the priority: the example currently loops per element,
-   which opts out of the LT model that is a main motivation of the tool.  Re-gate pysim AND XSI --
-   the scenario reframing (one n-word burst instead of n one-word bursts) changes the vectors both
-   backends play, so the cycle count is a MEASUREMENT here, not a prediction.
-2. **Case 1 on `BramIF`** (`read_array` / `write_array` at 1 element/cycle/port).  Small once Case 2
-   exists -- it is the same LT model without the anchoring.
-3. **Case 3 on `BramIF`** (`array_ref`), with S3b's rule enforced: a view for every element type or
-   a declaration-time refusal, and `flags.writeable = False` on a read-port view.
-4. **The partitioning gate** (see the taxonomy section) -- answer it before any rate other than
-   1/cycle/port appears in a model.
-5. **S4 — Case 3 on `HwState`**, which is the merge the `add-state` arc left open.
+1. **S5 — `access="readwrite"` + the `storage_type` derivation.**  Framework, and its two csynth
+   measurements are already taken (S5b).  Comes first because Case 3 has nothing interesting to
+   demonstrate without it, and because today's `ram_1wnr` default would make a read-write port
+   *silently wrong* against the current wrapper.
+2. **Case 3 on `BramIF`** (`array_ref`), with S3b's rule enforced: a view for every element type or a
+   declaration-time refusal, and `flags.writeable = False` on a read-port view.
+3. **S5d — the `COMPUTE` opcode on the example.**  Needs 1 and 2.  The XSI count WILL change here
+   (a COMPUTE command is new RTL work) — explain the new number from the waveform, never by editing
+   the expected constant.
+4. **Case 1 on `BramIF`** (`read_array` / `write_array` at 1 element/cycle/port).  **Deliberately
+   last of the three cases: it has no caller.**  The taxonomy says it is essential and it is, but
+   "essential to the taxonomy" is not "build it now" — the same argument that correctly deferred
+   `array_ref` once already.  Build it when a design wants a staged copy.
+5. **The partitioning gate** — and revisit S5c's rejected two-halves-of-one-port topology alongside
+   it; both are "one declared port, N physical ports".
+6. **S4 — Case 3 on `HwState`**, the merge the `add-state` arc left open.
+7. **The rename** (S5e), once the example's subject has settled.
 
 **Docs deliverable, attached to step 1.**  The three-case table belongs in
 `docs/guide/interface/overview.md` as a core concept -- it cuts across every interface type, which is
