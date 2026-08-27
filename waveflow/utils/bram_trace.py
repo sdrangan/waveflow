@@ -12,6 +12,11 @@ Why the invariant is read from a waveform at all
     if (a_en && |a_we && b_en && (a_addr[AW-1:0] == b_addr[AW-1:0]))
         $error("bram_t2p: read-during-write collision at addr %0d", a_addr[AW-1:0]);
 
+**The condition is one-sided, and deliberately**: port A is the only one a design may write through
+(:class:`~waveflow.hw.bram.T2pBram` refuses a writing port B for exactly this reason), so "A writes
+while B touches" is the whole hazard.  A ``"readwrite"`` accessor is still the A side and is scanned
+as the write role.
+
 **and in the XSI flow nothing can read that.**  RTL text output reaches neither stdout nor a log
 file: ``$display`` from an ``always`` block, an ``initial $display``, and a non-null
 ``s_xsi_setup_info::logFileName`` were each measured to produce nothing, while an ``$fwrite`` to a

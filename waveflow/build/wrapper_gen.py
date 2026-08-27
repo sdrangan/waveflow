@@ -294,6 +294,12 @@ def bram_hazard_manifest(comp, spec) -> dict:
     cannot have the hazard, and saying so is better than emitting an entry whose condition can never
     be true.
 
+    A ``"readwrite"`` accessor fills the **write** role: it is the side that can drive ``we``, which
+    is the term the scan tests.  That is exact rather than approximate here because
+    :class:`~waveflow.hw.bram.T2pBram` refuses a writing port B, so the writer is always port A —
+    the same asymmetry ``bram_t2p.v``'s own ``$error`` is written with.  If that ever changes, this
+    mapping and that assertion have to change together.
+
     Raises
     ------
     LoweringError
@@ -320,7 +326,13 @@ def bram_hazard_manifest(comp, spec) -> dict:
         entry = per_mem.setdefault(id(mem), {"inst": _inst_name(comp, mem),
                                              "module": resolve_rtl_module(mem).module,
                                              "addr_bits": int(mem.addr_bits)})
-        entry[str(slave.access)] = {
+        role = "write" if str(slave.access) == "readwrite" else str(slave.access)
+        if role in entry:
+            raise LoweringError(
+                f"{type(comp).__name__}: memory {entry['inst']!r} has two accessors that both act "
+                f"as the {role!r} side, so the read-during-write scan cannot say which pair to "
+                f"compare. The waveform scan names exactly two roles.")
+        entry[role] = {
             "en": f"{port}_en_a",
             "we": f"{port}_we_a",
             "addr": f"{port}_addr_a",

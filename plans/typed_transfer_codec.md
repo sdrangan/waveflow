@@ -1,7 +1,7 @@
 # The typed-transfer codec — one adapter, every transport
 
-**Status:** S1 + S2 + S3c + S3a (Case 2) LANDED (2026-08-27); Cases 1 and 3, the partitioning gate
-and S4 proposed.  Steps 1 and 2 of the parent thread were already done before that (see *Already
+**Status:** S1 + S2 + S3c + S3a (Case 2) + S5 (`readwrite` + the `storage_type` derivation)
+LANDED (2026-08-27); Cases 1 and 3, S5d, the partitioning gate and S4 proposed.  Steps 1 and 2 of the parent thread were already done before that (see *Already
 landed*); this file is step 3, the one with teeth.
 
 ## The complaint, stated precisely
@@ -490,7 +490,7 @@ Case 3: `array_ref` — no `get` prefix, because nothing is fetched.  Element-ty
 extent-bounded, so it is range-checked at the call.
 `mem_read` / `mem_write` stay for scalar access.
 
-### S5 — `access="readwrite"`, and the `storage_type` that makes it safe
+### S5 — `access="readwrite"`, and the `storage_type` that makes it safe  — **LANDED**
 
 The step Case 3 needs before it has anything interesting to demonstrate, and the one that turns a
 number into a mechanism.
@@ -563,6 +563,42 @@ both ports of the memory, giving II=1 in place — at the cost of consuming the 
 memory, leaving nothing for a concurrent streaming reader.  That is a real option and it neighbours
 the partitioning question (both are "one declared port, N physical ports").  Revisit it there.
 
+#### S5c-built — as landed (2026-08-27)
+
+- `BRAM_ACCESS = ("read", "write", "readwrite")`; `check_bram_access` is the one validator.
+- `bram_storage_type(access)` in `waveflow/hw/bram.py` carries the invariant and S5b's table;
+  `BramIFMaster.storage_type` is the derived property, and `composite_gen._bram_port` takes it as an
+  argument instead of spelling a constant.
+- `mem_read` / `mem_write` / `read_pipelined` / `write_pipelined` share one `_check_access(want, op)`
+  — ``"readwrite"`` satisfies both directions.  Its message says *why* the refusal exists (a body
+  writing through a `"read"` port is a body whose pragma lets Vitis take a second physical port).
+- **`BramIF.bind` requires the two `access` declarations to be IDENTICAL, not merely compatible.**
+  Considered and rejected: a subset rule (accessor's use ⊆ memory port's capability), which would
+  allow a `"read"` accessor on a `"readwrite"` memory port.  Rejected because `BramIFSlave.access`
+  is documented as *what the accessor does through this port* — a restatement of one fact, not a
+  permission grant — so two differing statements are a disagreement whichever is broader, and an
+  over-broad memory-side claim is one nothing checks.
+- `T2pBram` gained `port_access: tuple[str, str] = ("write", "read")`, which is what makes
+  `readwrite` reachable at all: a `readwrite` accessor needs a memory port that says the same.
+
+**The `$error` was re-examined, and the conclusion is "still correct, and fenced":**
+
+`bram_t2p.v` asserts `a_en && |a_we && b_en && (a_addr == b_addr)` — *A writes while B touches the
+same address*.  That is **one-sided**, and symmetric hardware could produce the mirror case (B writes
+while A touches).  For every configuration this step permits it is still exactly right: with
+`port_access=("readwrite", "read")` the writer is still A, a port reading and writing across cycles
+is not a collision, and B never drives `we`.  The blind spot is a *writing port B*, so **that is
+refused at construction** rather than left to go wrong, with the reason named.
+
+Lifting the refusal is one line — `a_en && b_en && (a_addr == b_addr) && (|a_we || |b_we)`, strictly
+stronger and provably identical for every design that exists — but it edits `bram_t2p.v`, which is
+**copied into every example's `xsi/`**, so it moves tracked files in `bram_simple`, `rf_shot_buf`,
+`rf_samp_buf_rx`, `rf_samp_buf_tx` and `rf_blk_delay`.  It also has a Python twin
+(`bram_trace.find_read_during_write`, whose roles are named `write`/`read`) that must move with it.
+That is a change with its own diff to expect, not a rider on this one.  `bram_hazard_manifest` maps a
+`"readwrite"` accessor onto the **write** role — exact, because the writer is always A — and refuses
+loudly if two accessors ever claim the same role.
+
 #### S5d — the example: one design, two opcodes
 
 Rather than a second example — each one costs a full docs page set — `BramWriteCmd` becomes
@@ -620,8 +656,13 @@ has proven the shape on a second storage class.
 
 **Next, in order:**
 
-1. **S5 — `access="readwrite"` + the `storage_type` derivation.**  Framework, and its two csynth
-   measurements are already taken (S5b).  Comes first because Case 3 has nothing interesting to
+1. ~~**S5 — `access="readwrite"` + the `storage_type` derivation.**~~  **DONE** — see *S5c-built*.
+   Gates: `bram_simple` artifacts byte-identical (its ports are unidirectional, so its pragma is
+   still `ram_1wnr`), XSI 394 / 11-of-11 with `WANT_CYCLES` untouched, and a new
+   `tests/build/test_bram_readwrite_vitis.py` under `-m vitis` that csynths a read-write port and a
+   write-only control and greps the emitted Verilog: `ram_1p` declares **no** `_B` half, `ram_1wnr`
+   does.  Framework, and its two csynth measurements were already taken (S5b).  Came first because
+   Case 3 has nothing interesting to
    demonstrate without it, and because today's `ram_1wnr` default would make a read-write port
    *silently wrong* against the current wrapper.
 2. **Case 3 on `BramIF`** (`array_ref`), with S3b's rule enforced: a view for every element type or a

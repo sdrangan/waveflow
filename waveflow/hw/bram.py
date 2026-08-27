@@ -1,19 +1,27 @@
 """bram.py — on-chip memory shared **between** modules, realized as hand-written Verilog.
 
 The storage category that has no expression inside a Vitis kernel.  Vitis has no model of memory
-shared between processes: an array crossing two ``hls::task`` bodies becomes a synchronizing PIPO
-channel — silently, with a handshake that **stalls the writer** — and one ``bram`` port used both
-ways is refused outright::
+shared **between processes**: an array crossing two ``hls::task`` bodies becomes a synchronizing PIPO
+channel — silently, with a handshake that **stalls the writer** — and if one process writes what
+another reads, the dataflow checker refuses the whole thing::
 
     INFO:  [HLS 200-741] Implementing PIPO rx_buf_r_RAM_T2P_BRAM_1R1W using a single memory
     ERROR: [HLS 200-976] Argument 'buf_r' failed dataflow checking:
                          Cannot read as well as write over function parameter.
 
-That is not an oversight.  DATAFLOW's promise is that the parallel result equals the sequential C
-result, and a shared buffer with independent pointers has no sequential-C meaning at all — whether
-``buf[rd]`` sees the old value or the new one depends on *when*, which C does not express.  So the
-division is about **who owns the correctness argument**: for a channel the tool owns it and enforces
-it with handshakes; for a memory like this one the designer owns it, and the tool does not interfere.
+**Read that error for what it says.**  It is the *dataflow* checker objecting to an argument crossing
+two task bodies — one process writing what another reads.  It is **not** a prohibition on a
+bidirectional ``mode=bram`` port, and this module's docstrings used to cite it as though it were.
+One task reading and writing one ``bram`` port is accepted, and measured to be
+(``plans/typed_transfer_codec.md`` S5b); see :func:`bram_storage_type` for what that costs and why it
+is safe.
+
+The refusal is not an oversight either.  DATAFLOW's promise is that the parallel result equals the
+sequential C result, and a shared buffer with independent pointers has no sequential-C meaning at all
+— whether ``buf[rd]`` sees the old value or the new one depends on *when*, which C does not express.
+So the division is about **who owns the correctness argument**: for a channel the tool owns it and
+enforces it with handshakes; for a memory like this one the designer owns it, and the tool does not
+interfere.
 
 The consequence is this module.  The memory lives *beside* the kernel as pre-written Verilog
 (:meth:`~waveflow.hw.hw_module.HwModule.rtl_module`), the kernel reaches it through sized ``bram``
@@ -61,6 +69,54 @@ def word_element(bitwidth: int) -> type[DataSchema]:
 #: argument) only because these are dataclasses whose other fields carry defaults; ``None`` is
 #: refused, so no port ever reaches codegen without an element.
 _DEFAULT_ELEMENT = word_element(16)
+
+
+#: What an accessor may do through a BRAM port.  ``"readwrite"`` is the bidirectional one, and it
+#: costs a different ``storage_type`` — see :func:`bram_storage_type`.
+BRAM_ACCESS = ("read", "write", "readwrite")
+
+
+def check_bram_access(access: str, owner: str) -> str:
+    """Validate *access* and return it.  One vocabulary, checked in one place."""
+    if access not in BRAM_ACCESS:
+        raise ValueError(
+            f"{owner}: access must be one of {BRAM_ACCESS}, got {access!r}. The direction is "
+            f"declared, never inferred — a port whose direction is guessed from how a body happens "
+            f"to use it is a port whose storage_type can be wrong (see bram_storage_type).")
+    return access
+
+
+def bram_storage_type(access: str) -> str:
+    """The ``storage_type=`` a ``mode=bram`` port's pragma must carry, **derived from** *access*.
+
+    > **THE WRAPPER WIRES ONE PHYSICAL MEMORY PORT PER DECLARED BRAM PORT, SO THE PRAGMA MUST FORBID
+    > VITIS FROM USING TWO.**
+
+    That invariant used to hold by accident of direction: a unidirectional port needs one access per
+    cycle, so Vitis only ever used the ``_A`` half and the ``_B`` half came out tied to constants.
+    A read-write port breaks the accident, and it breaks it **silently** — measured
+    (``plans/typed_transfer_codec.md`` S5b, Vitis HLS 2025.1):
+
+    ==================  ==========  =========  ==================================  ===============
+    ``storage_type``    compute II  write II   the ``_B`` half of the pair         wrapper-safe
+    ==================  ==========  =========  ==================================  ===============
+    ``ram_1wnr``        1           1          **DRIVEN** — live ``Addr_B``/``EN_B``   **NO**
+    ``ram_1p``          2           1          not declared at all                 yes
+    ==================  ==========  =========  ==================================  ===============
+
+    Under ``ram_1wnr`` Vitis reaches II=1 on an in-place loop by **reading on port B while writing on
+    port A** — and the wrapper wires only the A halves, so those reads reach a dangling port.  X or
+    stale data, a clean ``csynth``, and nothing visible until RTL.  ``ram_1p`` does not declare the
+    ``_B`` half at all, which is why it is *structurally* safe rather than safe-by-convention: no
+    wrapper can mis-wire a port that is not there.
+
+    The II=2 is the honest price, and it is a consequence rather than a property of in-place work:
+    one physical port, two accesses per element.  (The alternative — wiring both halves of one
+    declared port to both ports of the memory, II=1 in place — consumes the whole true-dual-port
+    memory and leaves nothing for a concurrent reader.  It neighbours the array-partitioning
+    question and is deferred to it.)
+    """
+    return "ram_1p" if check_bram_access(access, "bram_storage_type") == "readwrite" else "ram_1wnr"
 
 
 def check_bram_element(element_type: type[DataSchema] | None, owner: str) -> int:
@@ -129,9 +185,11 @@ class BramIFMaster(InterfaceEndpoint):
     :meth:`BramIF.read_latency`.  A copy here is the second authorship site S1 exists to prevent: the
     two would be free to disagree, and a disagreement shifts every read by a cycle in silence.
 
-    :attr:`access` says what this end *does*, and it is declared rather than inferred for the same
-    reason it is on :class:`BramIFSlave`: a port used both ways is what Vitis refuses (HLS 200-976),
-    and what a true-dual-port memory's correctness argument rules out.
+    :attr:`access` says what this end *does* — ``"read"``, ``"write"`` or ``"readwrite"`` — and it is
+    declared rather than inferred because a **different pragma** follows from it: see
+    :attr:`storage_type`.  A direction guessed from how a body happens to index the array is a
+    ``storage_type`` that can be wrong, and wrong in the way that survives ``csynth`` and appears
+    only at RTL.
     """
 
     #: What one address holds — the C++ array's **element type**.  Everything the port needs in
@@ -141,7 +199,8 @@ class BramIFMaster(InterfaceEndpoint):
     #: silently degrades to an ``ap_vld`` scalar port, so this number is what makes the pragma take
     #: effect.  One address holds one element, so it is also the memory's depth.
     nelem: int = 1024
-    #: What this accessor does through the port: ``"read"`` or ``"write"``.
+    #: What this accessor does through the port: ``"read"``, ``"write"`` or ``"readwrite"``.
+    #: Decides :attr:`storage_type`.
     access: str = "read"
     type_name = 'bram_if_master'
 
@@ -150,12 +209,7 @@ class BramIFMaster(InterfaceEndpoint):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.access not in ("read", "write"):
-            raise ValueError(
-                f"BramIFMaster '{self.name}': access must be 'read' or 'write', got "
-                f"{self.access!r}. A port used BOTH ways is the structure Vitis refuses "
-                f"(HLS 200-976); the direction is declared, never inferred."
-            )
+        check_bram_access(self.access, f"BramIFMaster '{self.name}'")
         check_bram_element(self.element_type, f"BramIFMaster '{self.name}'")
         if int(self.nelem) <= 0:
             raise ValueError(
@@ -172,6 +226,16 @@ class BramIFMaster(InterfaceEndpoint):
         :class:`~waveflow.hw.interface.SobIFMaster` already uses.
         """
         return int(self.element_type().get_bitwidth())
+
+    @property
+    def storage_type(self) -> str:
+        """The pragma's ``storage_type=``, **derived** from :attr:`access` — never a constant.
+
+        See :func:`bram_storage_type` for the invariant and the measurement.  It lives here rather
+        than in the emitter because it is a property of the port, and because a constant in the
+        emitter is exactly what was silently wrong the moment ``access`` gained a third value.
+        """
+        return bram_storage_type(self.access)
 
     @property
     def read_latency(self) -> int:
@@ -210,18 +274,12 @@ class BramIFMaster(InterfaceEndpoint):
         *value* is not coerced to ``int``: the memory is typed, so a ``Float32`` memory takes a
         float and stores a float.  Over a word element type this is the same call it always was.
         """
-        if self.access != "write":
-            raise ValueError(
-                f"BramIFMaster '{self.name}' declares access='read'; writing through it is the "
-                f"read-during-write hazard the memory's $error exists to catch.")
+        self._check_access("write", "mem_write")
         self._memory().store(int(addr), value)
 
     def mem_read(self, addr: int):
         """Read one **element** through this port (pysim).  Refused on a write port."""
-        if self.access != "read":
-            raise ValueError(
-                f"BramIFMaster '{self.name}' declares access='write'; reading through it is not the "
-                f"direction this port was wired for.")
+        self._check_access("read", "mem_read")
         return self._memory().load(int(addr))
 
     # -- Case 2: pipelined vector access ------------------------------------------------------
@@ -255,10 +313,7 @@ class BramIFMaster(InterfaceEndpoint):
         """
         from waveflow.hw.arrayutils import array
 
-        if self.access != "read":
-            raise ValueError(
-                f"BramIFMaster '{self.name}' declares access='write'; reading through it is not the "
-                f"direction this port was wired for.")
+        self._check_access("read", "read_pipelined")
         self._check_element(element_type, "read_pipelined")
         n = int(count)
         period = 1.0 / float(self._clk().freq)
@@ -278,10 +333,7 @@ class BramIFMaster(InterfaceEndpoint):
         """
         from waveflow.hw.dataschema import DataArray
 
-        if self.access != "write":
-            raise ValueError(
-                f"BramIFMaster '{self.name}' declares access='read'; writing through it is the "
-                f"read-during-write hazard the memory's $error exists to catch.")
+        self._check_access("write", "write_pipelined")
         if isinstance(data, DataArray):
             self._check_element(type(data).element_type, "write_pipelined")
             values = data.val
@@ -294,6 +346,20 @@ class BramIFMaster(InterfaceEndpoint):
         if dly > 0:
             yield self.timeout(dly)
         self._memory().store_block(int(addr), values)
+
+    def _check_access(self, want: str, op: str) -> None:
+        """Refuse an operation this port did not declare it does.  ``"readwrite"`` permits both.
+
+        The refusal is not bookkeeping: what a port does decides its ``storage_type``
+        (:func:`bram_storage_type`), so a body that writes through a port declared ``"read"`` is a
+        body whose pragma lets Vitis use a second physical port the wrapper never wired.
+        """
+        if self.access != want and self.access != "readwrite":
+            raise ValueError(
+                f"BramIFMaster '{self.name}'.{op}: the port declares access={self.access!r}, so a "
+                f"{want} through it is not what it was wired for. Declare access='readwrite' if "
+                f"it genuinely does both — that is a real option now, and it changes the port's "
+                f"storage_type to ram_1p so the wrapper's single physical port stays sufficient.")
 
     def _check_element(self, element_type: type[DataSchema], op: str) -> None:
         """Refuse a transfer typed differently from the port it goes through.
@@ -332,10 +398,12 @@ class BramIFSlave(InterfaceEndpoint):
 
     Slave because the memory never initiates: the accessor drives the address, the enable and the
     write data, and the memory answers ``dout`` a fixed number of cycles later.  The direction that
-    *is* declared here is :attr:`access` — what the accessor does through this port — because a
-    true-dual-port memory's whole safety argument is that one side writes and the other reads.  A
-    port used both ways is exactly what Vitis refuses inside a kernel, and it is no safer outside
-    one; saying which is which makes the invariant checkable rather than remembered.
+    *is* declared here is :attr:`access` — what the accessor does through this port — because the
+    memory's safety argument is written in those terms: ``bram_t2p.v``'s ``$error`` fires when one
+    port writes the address the other is touching, and it can only be *written* if each port says
+    which it is.  Note that the memory itself is symmetric — both its ports carry ``din``, ``we``
+    **and** ``dout``, which is what *true* dual-port means — so this is a statement about how a
+    design uses the memory, never a limit the hardware imposes.
 
     One endpoint is one *port* of the memory, not the memory: :class:`T2pBram` carries two.
     """
@@ -347,7 +415,9 @@ class BramIFSlave(InterfaceEndpoint):
     #: because the kernel-side C++ parameter is a **sized** array and its size comes from here — an
     #: unsized pointer with ``mode=bram`` silently degrades to an ``ap_vld`` scalar port.
     nelem: int = 1024
-    #: What the **accessor** does through this port: ``"read"`` or ``"write"``.
+    #: What the **accessor** does through this port: ``"read"``, ``"write"`` or ``"readwrite"``.
+    #: A *restatement* of the accessor's own declaration, not a permission grant — which is why
+    #: :meth:`BramIF.bind` requires the two to be identical rather than merely compatible.
     access: str = "read"
     type_name = 'bram_if_slave'
 
@@ -356,13 +426,7 @@ class BramIFSlave(InterfaceEndpoint):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.access not in ("read", "write"):
-            raise ValueError(
-                f"BramIFSlave '{self.name}': access must be 'read' or 'write', got "
-                f"{self.access!r}. A port used BOTH ways is the structure Vitis refuses "
-                f"(HLS 200-976) and the one a true-dual-port memory's correctness argument rules "
-                f"out — the direction is declared, never inferred."
-            )
+        check_bram_access(self.access, f"BramIFSlave '{self.name}'")
         check_bram_element(self.element_type, f"BramIFSlave '{self.name}'")
         if int(self.nelem) <= 0:
             raise ValueError(
@@ -439,8 +503,12 @@ class BramIF(Interface):
         if m.access != s.access:
             raise ValueError(
                 f"BramIF '{self.name}': the accessor declares access={m.access!r} but the memory "
-                f"port declares {s.access!r}. One side writing while the other believes it reads is "
-                f"the read-during-write collision the memory's $error exists to catch."
+                f"port declares {s.access!r}. These are two statements of ONE fact — what happens "
+                f"through this port — so they are required to be identical rather than merely "
+                f"compatible: a memory port that says 'read' while a 'readwrite' accessor writes "
+                f"through it is the read-during-write collision the memory's $error exists to "
+                f"catch, and a memory port that claims more than the accessor does is a claim "
+                f"nothing checks. Declare the same thing on both ends."
             )
 
     @property
@@ -514,18 +582,38 @@ class T2pBram(HwModule):
     #: Elements.  1024 in the witness — exactly one RAMB18 at 16 bits wide.  One address holds one
     #: element, so this is the memory's depth; there is one name for it, not two.
     nelem: HwParam[int] = 1024
+    #: What the accessor does through each port, ``(port A, port B)``.  The default is the 1R1W usage
+    #: the witness has.  ``bram_t2p.v`` is symmetric — both ports carry ``din``, ``we`` *and*
+    #: ``dout`` — so this describes how a design **uses** the memory, never a limit the hardware
+    #: imposes; port A may also be ``"readwrite"``.
+    #:
+    #: **Port B may not write, and that is refused rather than left to go wrong.**  The ``$error``
+    #: in ``bram_t2p.v`` is written one-sided — *A writes while B touches the same address* — so a
+    #: writing B port would be invisible to the design's only real check.  Lifting the restriction
+    #: means making that assertion symmetric, which edits ``bram_t2p.v`` and therefore every
+    #: example's copied ``xsi/bram_t2p.v``; see ``plans/typed_transfer_codec.md`` S5.
+    port_access: tuple[str, str] = ("write", "read")
 
     def __post_init__(self) -> None:
         super().__post_init__()
         owner = f"{type(self).__name__} '{self.name}'"
         check_bram_element(self.element_type, owner)
+        a_access, b_access = (check_bram_access(x, f"{owner} port {side}")
+                              for x, side in zip(self.port_access, "AB"))
+        if b_access != "read":
+            raise ValueError(
+                f"{owner}: port_access={tuple(self.port_access)!r} lets port B write. bram_t2p.v's "
+                f"$error asserts 'A writes while B touches the same address' — one-sided — so a "
+                f"write on B is the read-during-write collision the memory would NOT catch. Put the "
+                f"writing port on A, or make that assertion symmetric first (one line, but it "
+                f"changes every example's copied xsi/bram_t2p.v).")
         d = int(self.nelem)
-        #: Port A — the accessor writes through it.
+        #: Port A — the accessor writes through it, and may read it too.
         self.wr_port = BramIFSlave(sim=self.sim, name=f"{self.name}_wr",
-                                   element_type=self.element_type, nelem=d, access="write")
+                                   element_type=self.element_type, nelem=d, access=a_access)
         #: Port B — the accessor reads through it.
         self.rd_port = BramIFSlave(sim=self.sim, name=f"{self.name}_rd",
-                                   element_type=self.element_type, nelem=d, access="read")
+                                   element_type=self.element_type, nelem=d, access=b_access)
         self.add_endpoint(self.wr_port)
         self.add_endpoint(self.rd_port)
         #: The storage, for pysim — ``nelem`` **elements**, in the element's own dtype rather than a

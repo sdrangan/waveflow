@@ -95,6 +95,11 @@ Four things to notice:
   `localparam READ_LATENCY = 1`, reached through the bound `BramIF` — so the pragma and the Verilog
   cannot be authored independently and therefore cannot desynchronize. Nothing in any Python file
   states it.
+- **`storage_type=ram_1wnr` is derived, not a constant.** These two ports are unidirectional, and
+  that is what `ram_1wnr` follows from; a port declared
+  [`access="readwrite"`](../../guide/interface/bram.md#accessreadwrite-and-the-storage_type-that-follows)
+  gets `ram_1p` instead, because the wrapper wires **one** physical memory port per declared `bram`
+  port and `ram_1wnr` would let Vitis take a second one.
 - **`go` is an `hls::stream` inside the kernel**, at depth 1, and does not appear in the signature.
   That is the `add_if` registry doing its job.
 - **The task bodies are includes.** They stay hand-written because they own a `bram` array parameter,

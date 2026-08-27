@@ -496,7 +496,7 @@ def wrapper_name(top_name: str) -> str:
     return f"{top_name}_top"
 
 
-def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
+def _bram_port(name: str, width: int, depth: int, *, latency: int, storage_type: str) -> ExtPort:
     """A ``mode=bram`` boundary port — the kernel's half of a memory that lives *outside* it.
 
     Two details here are load-bearing rather than stylistic, and both were measured
@@ -511,11 +511,16 @@ def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
       that disagrees with the memory's read latency shifts every value by a cycle — silently.  One
       number, two halves; see ``docs/guide/comp_codegen/rtl_module.md``.
 
-    ``storage_type=ram_1wnr`` is the witness's own spelling, kept verbatim: that combination is the
-    one that csynthed to real BRAM ports with both tasks free-running and no PIPO gating.
+    * **``storage_type`` is not authored here either.**  It is
+      :attr:`~waveflow.hw.bram.BramIFMaster.storage_type`, derived from the port's declared
+      ``access``, and it enforces the invariant that **the wrapper wires ONE physical memory port
+      per declared bram port, so the pragma must forbid Vitis from using two**.  A constant here
+      was correct only while every port was unidirectional — for a read-write port ``ram_1wnr``
+      lets Vitis reach II=1 by reading on port B while writing on port A, and the wrapper never
+      wired that B half.  See :func:`~waveflow.hw.bram.bram_storage_type` for the measurement.
     """
     return ExtPort(f"ap_uint<{width}> {name}[{depth}]",
-                   (f"#pragma HLS INTERFACE mode=bram port={name} storage_type=ram_1wnr "
+                   (f"#pragma HLS INTERFACE mode=bram port={name} storage_type={storage_type} "
                     f"latency={latency}",),
                    name=name, kind="bram", bundle=None, width=width)
 
@@ -888,7 +893,8 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
                 f"_boundary_port: bram port {name!r} needs its endpoint — the array size and the "
                 f"latency come from the port and the memory it is wired to, never from a default."
             )
-        return _bram_port(name, int(ep.bitwidth), int(ep.nelem), latency=int(ep.read_latency))
+        return _bram_port(name, int(ep.bitwidth), int(ep.nelem), latency=int(ep.read_latency),
+                          storage_type=str(ep.storage_type))
     raise LoweringError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 

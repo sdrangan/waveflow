@@ -38,12 +38,17 @@ like a circular buffer; the RTL is a synchronized ping-pong. The writer **stalls
 has not released a buffer — and a stage facing a converter, an ADC, or anything else that cannot wait
 may never stall.
 
-### One `bram` port written by one task and read by the other — **hard error**
+### One array written by one task and read by **another** — **hard error**
 
 ```
 ERROR: [HLS 200-976] Argument 'buf_r' failed dataflow checking:
                      Cannot read as well as write over function parameter.
 ```
+
+Read that message for what it says. It is the **dataflow checker** objecting to an argument crossing
+two task bodies — one process writing what another reads. It is *not* a prohibition on a
+bidirectional `mode=bram` port: one task reading and writing one port is accepted, and measured to
+be. See [`access="readwrite"`](#accessreadwrite-and-the-storage_type-that-follows) below.
 
 ### Why the tool is not being obtuse
 
@@ -88,8 +93,9 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
   wrapper generation. Vitis scales a `mode=bram` address in *bytes* by a **shift**, so a 14-bit
   element (the RFdc dense-14 sample) has no expressible scaling — pack it into a word first. Both
   ends check it in `__post_init__`, citing the emitter (`_bram_addr_shift`) that owns the rule.
-* **`access`** (`"read"` / `"write"`) is declared on both ends and checked when they bind. A port
-  used both ways is what Vitis refuses inside a kernel, and it is no safer outside one.
+* **`access`** (`"read"` / `"write"` / `"readwrite"`) is declared on both ends, and the two must be
+  **identical** — they are two statements of one fact, not a permission and a use. It decides the
+  port's `storage_type`; see below.
 * **Vector access is Case 2** ([the three access cases](overview.md#the-three-access-cases)):
   `read_pipelined(element_type, count, addr) -> (data, tstart)` and
   `write_pipelined(data, addr, t_start)`. The model has no free parameters — throughput is II=1, one
@@ -100,6 +106,58 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
 * **The bind also checks the element**, not only the extent. Two 32-bit ports that disagree about
   whether those bits are a float or a word line up at every address and return a correctly-shaped
   wrong number forever — the quieter half of the aliasing class the size check already catches.
+
+## `access="readwrite"`, and the `storage_type` that follows {#accessreadwrite-and-the-storage_type-that-follows}
+
+The memory was never the restriction. `bram_t2p.v` is **symmetric** — both ports carry `din`, `we`
+*and* `dout`, which is what *true* dual-port means, as against *simple* dual-port (one write, one
+read):
+
+```verilog
+if (a_en) begin  if (|a_we) mem[a_addr] <= a_din;  a_dout <= mem[a_addr];  end
+if (b_en) begin  if (|b_we) mem[b_addr] <= b_din;  b_dout <= mem[b_addr];  end
+```
+
+So a port that reads *and* writes is a real option, and `access="readwrite"` is how it is declared.
+It is not free, and the price is not where a first guess puts it:
+
+> **The wrapper wires ONE physical memory port per declared `bram` port, so the pragma must forbid
+> Vitis from using two.**
+
+That invariant used to hold **by accident of direction** — a unidirectional port needs one access
+per cycle, so Vitis only ever used the `_A` half. A read-write port breaks the accident, and it
+breaks it silently. Measured (Vitis HLS 2025.1, one task, one port, an in-place `buf[i] = buf[i]*3+1`
+loop):
+
+| `storage_type` | compute II | write II | the `_B` half of the pair | wrapper-safe |
+|---|---|---|---|---|
+| `ram_1wnr` | 1 | 1 | **DRIVEN** — live `Addr_B`, `EN_B`, `WEN_B` | **NO** |
+| `ram_1p` | **2** | 1 | not declared at all | yes |
+
+Under `ram_1wnr` Vitis reaches II=1 by **reading on port B while writing on port A** — and the
+wrapper wired only the A halves, so those reads reach a dangling port. X or stale data, a clean
+`csynth`, nothing visible until RTL.
+
+So `storage_type` is **derived from `access`**, never a constant in the emitter:
+
+```
+access="read" | "write"   ->  storage_type=ram_1wnr    (1 physical port, II=1)
+access="readwrite"        ->  storage_type=ram_1p      (pins Vitis to 1 port, II=2 in place)
+```
+
+`ram_1p` is *structurally* safe rather than safe-by-convention: it does not declare the `_B` half at
+all, so no wrapper can mis-wire it. `tests/build/test_bram_readwrite_vitis.py` asserts exactly that
+against the emitted Verilog, with a unidirectional port synthesized alongside as the control — so
+"no `_B` signals" is evidence of `ram_1p` rather than of an argument that was optimized away.
+
+**The lesson is the mechanism, not the number.** "In-place is II=2" is false in general. "The wrapper
+gives you one physical port, so the pragma pins Vitis to one, so read-modify-write costs two cycles
+per element" is true and explains itself.
+
+One restriction remains, and it is a *tooling* one rather than a hardware one: on a `T2pBram` only
+**port A** may write. The `$error` below is written one-sided — *A writes while B touches the same
+address* — so a writing port B would be invisible to the design's only real check. `T2pBram` refuses
+it at construction rather than letting it go wrong.
 
 ## `add_rtl_if`, not `add_if` — and that is the whole mechanism
 

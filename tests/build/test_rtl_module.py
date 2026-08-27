@@ -138,7 +138,7 @@ def test_the_read_during_write_assertion_survived_becoming_an_artifact():
 def test_pragma_latency_is_read_from_the_verilog_not_authored_beside_it():
     mem = elaborate(T2pBram)
     assert mem.read_latency == 1
-    port = _bram_port("buf_w", 16, 1024, latency=mem.read_latency)
+    port = _bram_port("buf_w", 16, 1024, latency=mem.read_latency, storage_type="ram_1wnr")
     assert "latency=1" in port.pragmas[0]
 
 
@@ -157,7 +157,8 @@ def test_changing_the_verilog_changes_the_pragma_and_nothing_else_can(tmp_path):
 
     rtl = RtlModule(module="bram_t2p", files=(str(lat2),))
     assert rtl_read_latency(rtl) == 2
-    assert "latency=2" in _bram_port("buf_w", 16, 1024, latency=rtl_read_latency(rtl)).pragmas[0]
+    assert "latency=2" in _bram_port("buf_w", 16, 1024, latency=rtl_read_latency(rtl),
+                                     storage_type="ram_1wnr").pragmas[0]
 
     mem = elaborate(T2pBram)
     assert not hasattr(type(mem).read_latency, "__set__") or isinstance(
@@ -194,7 +195,7 @@ def test_the_bram_pragma_is_emitted_against_a_sized_array_never_a_pointer():
     is the static half of "a pragma needs a check that it took effect".  The authoritative half is a
     csynth port list, and it belongs where a kernel actually carries a bram port (S4).
     """
-    port = _bram_port("buf_w", 16, 1024, latency=1)
+    port = _bram_port("buf_w", 16, 1024, latency=1, storage_type="ram_1wnr")
     assert port.decl == "ap_uint<16> buf_w[1024]"
     assert "*" not in port.decl, "an unsized pointer degrades to an ap_vld scalar port, silently"
     assert "mode=bram" in port.pragmas[0] and "port=buf_w" in port.pragmas[0]
@@ -403,7 +404,12 @@ def test_the_pipelined_ops_refuse_what_the_port_was_not_wired_for():
     """Case 2's three declaration-time refusals, none of them discoverable at RTL.
 
     A direction the port does not have, a clock it was never given, and an element it does not hold.
-    The last is the quiet one: same width, different meaning, and every address still lines up."""
+    The last is the quiet one: same width, different meaning, and every address still lines up.
+
+    The direction refusal is not bookkeeping: what a port does decides its ``storage_type``, so a
+    body writing through a port declared ``"read"`` is a body whose pragma lets Vitis take a second
+    physical port the wrapper never wired.  ``access="readwrite"`` is how a port that genuinely does
+    both says so — see :func:`~waveflow.hw.bram.bram_storage_type`."""
     from waveflow.hw.bram import BramIF, BramIFMaster
     from waveflow.hw.dataschema import FloatField
 
@@ -415,7 +421,7 @@ def test_the_pipelined_ops_refuse_what_the_port_was_not_wired_for():
     iface.bind(ep_name="master", endpoint=reader)
     iface.bind(ep_name="slave", endpoint=mem.rd_port)
 
-    with pytest.raises(ValueError, match="read-during-write hazard"):
+    with pytest.raises(ValueError, match="declares access='read'"):
         list(reader.write_pipelined(np.zeros(4, dtype=np.uint32), 0))
     with pytest.raises(ValueError, match="carries no clock"):
         list(reader.read_pipelined(word_element(32), 4, 0))
