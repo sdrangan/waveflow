@@ -62,6 +62,74 @@ attribute someone can set and be silently wrong about.
 
 The shape they share is a *protocol*, so it is reached by composition.
 
+## The three access cases — the organizing frame
+
+Every endpoint's access vocabulary falls into one of three cases, and the case is decided by
+**what physically happens and therefore what owns the time**.  All three are essential; they are not
+three spellings of one idea, and collapsing any of them models a cost the hardware does not have.
+
+| | Case 1 — timed transfer | Case 2 — pipelined overlap | Case 3 — in place |
+|---|---|---|---|
+| `StreamIF` | `get` / `write` (schema, array, raw words) | `get_pipelined` / `write_pipelined` | — no addressing |
+| `MMIF` | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
+| `BramIF` | `read/write_array` — 1 element/cycle/port | `read_pipelined` / `write_pipelined` | **`array_ref`** |
+| `HwState` | — already local | — | **`array_ref`** |
+
+### Case 1 — non-overlapping timed transfer
+
+Data physically moves into an internal structure.  The endpoint owns a latency model and the call
+elapses time.  This is what exists today on `StreamIF` and `MMIF`; `BramIF` needs it at **one
+element per cycle per port**.
+
+### Case 2 — pipelined overlap
+
+Two transfers that can proceed at once — reading one endpoint while writing another.  The `tstart`
+anchoring is the whole mechanism: `write_pipelined(data, t_start)` treats the burst as having begun
+at `t_start` and shortens the wait if that is in the past, so two anchored phases **overlap** and
+cost `max(a, b)` rather than `a + b`.  Already implemented for streams and m_axi.
+
+### Case 3 — in place, and it is UNIQUE to directly-addressable storage
+
+The case that makes `array_ref` necessary, and the reason is **timing, not copies**.
+
+A kernel computing against a BRAM does not transfer anything: in C++ it is `foo(&buf[addr], n)`, and
+the function reads and writes the memory through its port.  Modelling that as `read_array` +
+compute + `write_array` invents **two transfers that do not exist** and charges the design for them.
+That is a wrong number, not a cosmetic loss.
+
+Only directly-addressable storage has this case.  A stream has no addressing; every m_axi access is
+a bus transaction whether you want one or not.  `BramIF` and `HwState` are the two citizens — and
+that is what S4 was always reaching for: `HwState` is *pure* Case 3, with no transfer semantics at
+all, which is exactly why hooks hand-write indexing against it today.
+
+**The caller owns the timing**, because the cost is the compute loop's `II x n`, not a transfer.
+What the endpoint owes the caller is the *number* to compute from — its accesses per cycle — so the
+body multiplies a declared rate rather than a guessed one.
+
+Two things this forces on the design:
+
+- **A ref is directional, and enforced.**  `BramIFMaster.access` already says `"read"` or `"write"`
+  per port; a read-port ref is a read-only view.  numpy makes that real instead of advisory —
+  `flags.writeable = False` — so a stray write raises rather than silently reaching nothing.  This
+  is `mem_read` / `mem_write`'s existing refusal, generalized.
+- **Port contention is visible in the body's cost.**  `y[i] = f(x[i])` with both refs through the
+  **same** port is two accesses per element, II=2; through the two ports of a true-dual-port memory
+  it is II=1.  So a ref must be per-port (it is — `array_ref` lives on the master endpoint), and the
+  body's timing depends on which ports its refs came from.
+
+### Open, and gated before it is claimed: array partitioning
+
+Partitioning the *local destination* of a Case 1 read buys nothing — the port is the bottleneck.
+Partitioning the **port** (`ARRAY_PARTITION` on a `mode=bram` interface array) does work in Vitis,
+but it emits **N separate port pairs**, i.e. N physical memories in the wrapper.  That is a topology
+change, not a rate coefficient, and it lands on `wrapper_gen` and the hazard manifest.
+
+Treat it as its own gate, the same shape as S3d: does a partitioned `mode=bram` port emit N x 14
+signals, and can the wrapper instantiate N memories against them?  **Until that is measured, the
+BRAM rate is a flat 1 element/cycle/port and the model says so** rather than carrying a factor
+nobody has checked.
+
+
 ## The design
 
 ### S1 — `TypedCodecMixin`  — **LANDED**
@@ -110,26 +178,110 @@ three `isinstance(data, DataSchema) -> serialize` copies (`write` / `offer` / `w
 a *different* adapter (serialize-or-passthrough, no element type, no count) and were deliberately
 left alone; fold them only if a `write_array` for streams ever earns its place.
 
-### S3 — a typed `BramIF`, and the copy/reference split
+### S3 — a `BramIF` that offers all three access cases
 
 The payoff, and the answer to "does `BramIF` have vector operations" (today: no, only single-word
 `mem_read` / `mem_write`).  **This step is larger than a cleanup and is a capability decision.**
 
-#### S3a — the two access modes are different HARDWARE, so both stay
+#### S3a — pipelined vector ops on a BRAM port (the LT model)
 
-The first draft of this plan proposed `read_slice` / `write_slice` over a BRAM port.  That is the
-*copy* shape, and on reflection it is the less interesting half.  There are two lowerings, and an
-author should be choosing between them explicitly:
+**This section replaces an earlier draft that proposed `array_ref`, a zero-copy reference.  That
+draft was wrong about the requirement, and the correction is the important part of this plan.**
 
-| | what it is | costs | buys |
-|---|---|---|---|
-| `read_array` / `write_array` | stage a tile into a local array | the copy | access freedom — HLS can `ARRAY_PARTITION` the local for parallel reads |
-| `array_ref` | compute in place against the shared memory | nothing | — but you are port-bandwidth-bound: a true-dual-port BRAM is 2 accesses/cycle, so `x[i]` + `x[i-1]` is II=2 or a second port |
+The house pattern is *vectorized Python, looped HLS, timing carried by the LT model*.
+`examples/stream_inband` is the reference implementation — `PolyAccel.evaluate`:
 
-So `read_array` on a BRAM port is not a legacy concession to be removed; it is a second, legitimate
-lowering.  What is wrong today is that it is the *only* one, so the free option is unreachable.
+```python
+samp_in, tstart = yield from s_in.get_pipelined(Float32, count=cmd_hdr.nsamp)
+y = <numpy over the whole array>                       # no element loop anywhere
+t_out_start = tstart + self.proc_latency * self.clk.period
+yield self.timeout(proc_time)
+yield from m_out.write_pipelined(array(Float32, y), t_out_start)
+```
 
-#### S3b — a reference must never silently become a copy
+against a `poly_evaluate_impl.tpp` that is a `for (i = 0; i < nsamp; i += pf)` lane loop.  The Python
+never iterates elements.  That is the point of the tool: **a per-element loop in a pysim body is a
+defect, not a fidelity feature.**  Allowing vectorized operations with an LT model is a major
+motivation of Waveflow, and a design body that loops has opted out of it.
+
+`examples/bram_simple` currently loops on both paths and is the outlier to fix.
+
+##### What is missing
+
+Only the BRAM half.  The stream half already exists (`StreamIFSlave.get_pipelined`,
+`StreamIFMaster.write_pipelined`), and `MMIFMaster` has the m_axi twins.  Needed:
+
+```python
+BramIFMaster.read_pipelined(element_type, count, addr)   -> (data, tstart)
+BramIFMaster.write_pipelined(data, addr, t_start)        -> None
+```
+
+**The BRAM's LT model is the simplest one in the repo**, and every term is already published rather
+than invented:
+
+- **throughput** — II=1, one element per cycle. A true-dual-port memory is one access per cycle per
+  port, and `access` already says which port this is.
+- **fill** — `READ_LATENCY` cycles before the first read answer, reached through the bound `BramIF`
+  from the memory's Verilog `localparam`. It is a *pipeline fill*, paid once per transfer and not
+  per element.
+- **anchoring** — `write_pipelined(data, addr, t_start)` treats the burst as having started at
+  `t_start`, shortening the wait if that is in the past. So anchoring a memory write at the feeding
+  stream read's `tstart` makes the two phases **overlap**, and the cost is `max(read, write)` rather
+  than their sum. This is exactly `StreamIFMaster.write_pipelined`'s existing contract; nothing new
+  is needed for it.
+
+**The proof that this belongs on the interface** is already in `bram_simple`: `BramReadCmd.run_iter`
+hand-writes `yield self.timeout(self.buf_r.read_latency / self.clk.freq)` behind a
+`model_read_latency` flag. That is `read_pipelined`'s fill term, written out longhand in a design
+body because there was nowhere else to put it. It should move onto the endpoint and the flag should
+go with it.
+
+##### The target shape
+
+```python
+# write task — one vector in, one vector to memory, the two overlapping
+x, tstart = yield from self.data_w.get_pipelined(self.element_type, count=cmd.nsamp)
+if ok:
+    yield from self.buf_w.write_pipelined(x, cmd.waddr, tstart)
+
+# read task — the fill is the interface's, not the body's
+y, tstart = yield from self.buf_r.read_pipelined(self.element_type, cmd.nsamp, cmd.raddr)
+yield from self.data_r.write_pipelined(y, tstart)
+```
+
+No `for` in either.  The C++ tasks are **unchanged** — they keep their `#pragma HLS PIPELINE II=1`
+loops, exactly as `poly_evaluate_impl.tpp` keeps its lane loop.
+
+##### The honest complication: the scenario framing has to change with it
+
+`write_scenario` currently materializes the payload **one word per burst**
+(`[np.array([x]) for x in sc.data_w]`), and its docstring justifies that by "one pysim firing equals
+one RTL firing" — the rationale that this section retires.  A pysim slave dequeues one burst per
+`get`, so a vectorized `get_pipelined(..., count=n)` needs the payload written as **one burst of n
+words**.
+
+That is a change to the vectors both backends play, so it must be re-gated, not assumed:
+
+- The kernel does not care — `bram_write_cmd_task` reads a raw `hls::stream<ap_uint<W>>` `nsamp`
+  times and never inspects TLAST on the payload.  So the change is invisible to the DUT.
+- The **driver's** TLAST pattern changes (one assertion instead of `n`), and whether that moves the
+  XSI cycle count is a measurement, not a prediction.  **Measure it; do not assert it is unchanged.**
+- The pysim cycle predictions (`first_data_cycle` / `last_data_cycle` in the results JSON) will
+  change, and *that is the deliverable*: they should now come from a declared LT model instead of a
+  hand-rolled timeout, and they can be compared against the XSI count as a real check rather than a
+  coincidence.
+
+##### `array_ref` is NOT replaced by this — see Case 3
+
+S3a is Case 2.  It does not subsume `array_ref`, and an earlier revision of this plan wrongly said it
+did, on the grounds that pysim does not need zero copies.  That reasoning was about the wrong thing:
+pysim does not care about copies, but it does care about **time**, and an in-place computation
+performs no transfer.  Routing it through a Case 1 or Case 2 op would charge the design for two
+transfers that never happen.
+
+All three cases ship.  `array_ref` is specified under **Case 3** above and remains a requirement.
+
+#### S3b — a reference must never silently become a copy (Case 3's one hard rule)
 
 `_DirectBackedMMIFMaster` (`waveflow/hw/memory.py`) already has both families, and already gets this
 wrong — the worked example to design against.  `as_words()` returns a genuine numpy view
@@ -260,26 +412,33 @@ The gate sources are disposable; if S3 is built they should be re-landed as a re
 
 #### S3e — what S3 must NOT do
 
-- **No `*_pipelined` / `*_anchored` / `*_spanned` variants.**  Those are bus-occupancy models
-  (`BusTiming`, `num_trans`, the contention `Resource`s) and there is no bus here.  Offering them
-  would invite a caller to model something the hardware does not have.
+- ~~**No `*_pipelined` variants.**~~ **CORRECTED — this bullet was wrong.**  It confused two
+  different things.  The *m_axi* pipelined family (`*_anchored`, `*_spanned`, `BusTiming`,
+  `num_trans`) really is bus-occupancy modelling and really does not belong on a BRAM port — that
+  much stands.  But `read_pipelined` / `write_pipelined` are the **LT model of a pipelined loop**,
+  which a BRAM port has and which is the whole point of the tool.  See S3a: they are now the
+  requirement, not a thing to avoid.
 - **No acquire/commit scope.**  The tempting precedent is SOB's `acquire_write` / `commit_write`,
   but that lifecycle exists to enforce *exclusivity* (ping-pong, a producer/consumer handshake).
   `BramIF` deliberately refuses to arbitrate — `bram_simple`'s docs say keeping the ranges disjoint
   is the CALLER's job, and the read-during-write collision is a reachable outcome with a negative
   gate built around it.  A `with` scope would look like arbitration and provide none.  The bare
   reference is more honest **because it promises nothing**.
-- **Do not apply `array_ref` to `examples/bram_simple`'s `BramWriteCmd.run_iter`.**  Its
-  word-at-a-time loop is a line-for-line twin of the C++ `#pragma HLS PIPELINE II=1` body, and its
-  payload bundle is framed one word per burst so one pysim firing equals one RTL firing.  A slice
-  call cannot express that pacing.  If no *other* caller wants the reference form, S3a is not yet
-  earned — decide that before writing it.
+- ~~**Do not vectorize `bram_simple`'s loops.**~~ **CORRECTED — this was wrong too**, and for
+  the same reason.  It defended the word-at-a-time loop as a faithful twin of the `II=1` C++ body.
+  That is not how this repo models pipelined loops: `PolyAccel` is vectorized Python against a
+  looped `.tpp`, with the timing in the LT model.  `bram_simple` is the design that should be
+  vectorized FIRST, not exempted.
 
 #### S3f — naming
 
-`array_ref`, not `get_array_ref`: no `get` prefix, because nothing is fetched.  Element-typed and
-extent-bounded, so it is range-checked at the call and `Region`-shaped.  `mem_read` / `mem_write`
-stay for scalar access.
+Case 1: `read_array` / `write_array`, the names every other endpoint already uses.
+Case 2: `read_pipelined` / `write_pipelined`, matching the stream and m_axi families — a new name for
+the same concept would be the drift this plan exists to remove.  (The stream family spells its read
+side `get_pipelined`; the BRAM has no `get`, so `read_pipelined` is right there.)
+Case 3: `array_ref` — no `get` prefix, because nothing is fetched.  Element-typed and
+extent-bounded, so it is range-checked at the call.
+`mem_read` / `mem_write` stay for scalar access.
 
 ### S4 — `HwState` gets the same vocabulary
 
@@ -300,10 +459,30 @@ has proven the shape on a second storage class.
 
 ## Order
 
-S1 -> S2 (gated on byte-identical generated artifacts) -> S3c (typed `BramIF`; its two csynth
-gates are already MEASURED and green) -> decide whether S3a is earned -> S4.
+**Done:** S1 -> S2 (artifacts byte-identical) -> S3c (typed `BramIF`; csynth gates green).
 
-S1+S2 are a pure refactor and can land alone.  S3c is mechanical once `bitwidth` becomes derived,
-and the gates say the toolchain and the wrapper are both already ready for it.  S3a is the
-capability decision, and it is the one with a real caller-side cost -- do not start it without a
-caller that wants the reference form.
+**Next, in order:**
+
+1. **S3a — Case 2 on `BramIF`** (`read_pipelined` / `write_pipelined`) and `examples/bram_simple`
+   rewritten vectorized against it.  This is the priority: the example currently loops per element,
+   which opts out of the LT model that is a main motivation of the tool.  Re-gate pysim AND XSI --
+   the scenario reframing (one n-word burst instead of n one-word bursts) changes the vectors both
+   backends play, so the cycle count is a MEASUREMENT here, not a prediction.
+2. **Case 1 on `BramIF`** (`read_array` / `write_array` at 1 element/cycle/port).  Small once Case 2
+   exists -- it is the same LT model without the anchoring.
+3. **Case 3 on `BramIF`** (`array_ref`), with S3b's rule enforced: a view for every element type or
+   a declaration-time refusal, and `flags.writeable = False` on a read-port view.
+4. **The partitioning gate** (see the taxonomy section) -- answer it before any rate other than
+   1/cycle/port appears in a model.
+5. **S4 — Case 3 on `HwState`**, which is the merge the `add-state` arc left open.
+
+**Docs deliverable, attached to step 1.**  The three-case table belongs in
+`docs/guide/interface/overview.md` as a core concept -- it cuts across every interface type, which is
+what that section is for.  Write it **when Case 2 lands**, not before: two of its four rows
+(`StreamIF`, `MMIF`) are true today, but the `BramIF` row would be three cells of fiction and
+`HwState`'s one.  Fill each cell as its case ships.  `docs/guide/interface/bram.md` then links to it
+rather than restating it, and `docs/guide/memory/hwstate.md` picks it up at step 5.
+
+Independently of all of the above: **`_DirectBackedMMIFMaster.as_array` / `as_schema` are a live
+defect** (S3b) -- `as_*` names that silently return copies.  Fix in `memory.py` whenever convenient;
+it does not block anything here.
