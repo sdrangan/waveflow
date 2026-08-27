@@ -103,6 +103,14 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
   through the bound `BramIF` from the Verilog `localparam`, paid once per transfer rather than per
   element; and `t_start` is the same anchoring every other endpoint uses. `mem_read` / `mem_write`
   stay for scalar access.
+* **In-place access is Case 3**: `array_ref(addr, count)` returns a **live numpy view** of the
+  memory's storage — no transfer, no simulated time, and writes through it land in the memory. It
+  exists for *timing*: a kernel computing against a BRAM performs no transfer, so routing it through
+  a Case 1 or Case 2 op would charge the design for two that never happen. The caller owns the
+  timing and the port publishes the rate to compute it from (`accesses_per_cycle` is 1, and
+  `ii_for(2) == 2` is read-modify-write through one port). Two rules are enforced, not advised: a
+  `"read"` port's view is `flags.writeable = False`, and an element type with no native numpy dtype
+  is **refused** rather than quietly copied.
 * **The bind also checks the element**, not only the extent. Two 32-bit ports that disagree about
   whether those bits are a float or a word line up at every address and return a correctly-shaped
   wrong number forever — the quieter half of the aliasing class the size check already catches.

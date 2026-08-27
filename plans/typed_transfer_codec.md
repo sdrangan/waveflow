@@ -665,8 +665,11 @@ has proven the shape on a second storage class.
    Case 3 has nothing interesting to
    demonstrate without it, and because today's `ram_1wnr` default would make a read-write port
    *silently wrong* against the current wrapper.
-2. **Case 3 on `BramIF`** (`array_ref`), with S3b's rule enforced: a view for every element type or a
-   declaration-time refusal, and `flags.writeable = False` on a read-port view.
+2. ~~**Case 3 on `BramIF`** (`array_ref`)~~ **DONE** — see *S3b as built*.  S3b's rule is enforced
+   rather than documented, and gated by four tests: the view is live in **both** directions, a
+   composite element is refused, a read-port view raises on write, and an out-of-range extent is
+   refused.  `examples/bram_simple` calls none of it yet, so its artifacts and its XSI count (394)
+   are unmoved.
 3. **S5d — the `COMPUTE` opcode on the example.**  Needs 1 and 2.  The XSI count WILL change here
    (a COMPUTE command is new RTL work) — explain the new number from the waveform, never by editing
    the expected constant.

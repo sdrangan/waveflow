@@ -150,15 +150,62 @@ def check_bram_element(element_type: type[DataSchema] | None, owner: str) -> int
     return width
 
 
+def native_dtype(element_type: type[DataSchema]) -> np.dtype | None:
+    """The element's **own** numpy dtype, or ``None`` when it has none — S3b's line, drawn once.
+
+    ``None`` is the whole distinction Case 3 turns on.  An element with a native dtype is stored as
+    itself, so a slice of the memory *is* the elements and writes through it alias.  An element
+    without one is stored as its packed word, so anything element-typed has to deserialize — a fresh
+    object, and writes to it reach nothing.  Both :func:`_storage_dtype` and
+    :func:`check_array_ref_element` read this same call, so "what pysim stores" and "what may be
+    referenced" cannot drift apart.
+
+    ``getattr`` rather than a plain call, because ``_numpy_elem_dtype`` is declared on ``DataField``
+    and not on ``DataSchema``: a composite element type does not have the method at all, and
+    "absent" means exactly what "returned None" means.  Reaching for it directly raised
+    ``AttributeError`` from :func:`_storage_dtype` — so a composite-element memory could not even be
+    constructed, which is not the refusal anybody intended.
+    """
+    hook = getattr(element_type, "_numpy_elem_dtype", None)
+    return hook() if hook is not None else None
+
+
+def check_array_ref_element(element_type: type[DataSchema], owner: str) -> np.dtype:
+    """Refuse an element that cannot be **referenced**, and return the dtype that can.
+
+    Case 3's one hard rule (S3b), and the failure it prevents is in the tree already:
+    ``_DirectBackedMMIFMaster.as_words()`` returns a genuine numpy view, but its ``as_array()`` goes
+    through ``arrayutils.read_array``, which does ``array_obj = array_cls(); deserialize(...)`` —
+    **a fresh object, unconditionally**.  So an ``as_*`` method silently degrades from a view to a
+    copy the moment typed elements are asked for, and every write to what it returns reaches
+    nothing.  A reference API that is a view for some element types and a copy for others is worse
+    than no reference API, so this refuses instead.
+
+    The verdict depends only on the **declared** element type — nothing about a call, a binding or a
+    run — which is what makes it answerable before anything runs; see
+    :attr:`BramIFMaster.supports_array_ref`.  Case 1's copying ``read_array`` / ``write_array``
+    stay available for every element type, and are the answer for a composite one.
+    """
+    dtype = native_dtype(element_type)
+    if dtype is None:
+        raise ValueError(
+            f"{owner}: {element_type.__name__} has no native numpy dtype, so it is stored as its "
+            f"PACKED WORD and a reference to it cannot be a reference to the elements. Referencing "
+            f"would have to deserialize into a fresh object, and every write to that object would "
+            f"reach nothing — silently. Use the copying read_array / write_array for a composite "
+            f"element, or declare an element type that has a dtype.")
+    return np.dtype(dtype)
+
+
 def _storage_dtype(element_type: type[DataSchema], owner: str) -> np.dtype:
     """The numpy dtype one element is **stored as** in pysim.
 
     The element's own dtype when it has one (``Float32`` -> ``float32``, so a float in the memory is
     a float, not a packing of one).  A composite element has none, and then the storage is the
     element's packed word — honest about what it is, and the reason a reference view over such a
-    memory is refused rather than silently copied (S3b).
+    memory is refused rather than silently copied (S3b, :func:`check_array_ref_element`).
     """
-    dtype = element_type._numpy_elem_dtype()
+    dtype = native_dtype(element_type)
     if dtype is not None:
         return np.dtype(dtype)
     nbytes = int(element_type().get_bitwidth()) // 8
@@ -281,6 +328,90 @@ class BramIFMaster(InterfaceEndpoint):
         """Read one **element** through this port (pysim).  Refused on a write port."""
         self._check_access("read", "mem_read")
         return self._memory().load(int(addr))
+
+    # -- Case 3: in place, and the reason is TIMING rather than copies -------------------------
+    #
+    # A kernel computing against a BRAM transfers nothing: in C++ it is `foo(&buf[addr], n)`, and the
+    # function reads and writes the memory through its port.  Modelling that as read_array + compute
+    # + write_array would invent TWO transfers that do not exist and charge the design for them --
+    # a wrong number, not a cosmetic loss.  So `array_ref` elapses no simulated time, and (like
+    # mem_read / mem_write above) the absence of the `yield` is the statement that says so.
+    #
+    # THE CALLER OWNS THE TIMING, because the cost is the compute loop's II x n rather than a
+    # transfer.  What this endpoint owes the caller is the number to compute from --
+    # `accesses_per_cycle`, and `ii_for()` over it -- so a body multiplies a declared rate instead of
+    # a guessed one.
+
+    @property
+    def supports_array_ref(self) -> bool:
+        """Whether :meth:`array_ref` is available on this port — a fact about the **declaration**.
+
+        It depends only on :attr:`element_type`, so a design can be checked for it before anything
+        runs, which is what "refused at declaration time, not at the call site" means here.  The
+        port stays perfectly usable without it: Case 1's copying ops serve every element type.
+        """
+        return native_dtype(self.element_type) is not None
+
+    @property
+    def accesses_per_cycle(self) -> int:
+        """Element accesses this port can serve per cycle — **1**, and flat on purpose.
+
+        A true-dual-port memory is one access per cycle *per port*, and a declared ``bram`` port is
+        one physical port (that is the invariant :func:`bram_storage_type` enforces).  So the number
+        is 1 and the interesting arithmetic is the body's: see :meth:`ii_for`.
+
+        It is flat until the array-partitioning question is **measured**.  ``ARRAY_PARTITION`` on a
+        ``mode=bram`` interface array does work in Vitis, but it emits N separate port pairs — N
+        physical memories in the wrapper — which is a topology change rather than a rate
+        coefficient.  Until that is gated, carrying a factor nobody has checked would be the kind of
+        invented number this endpoint exists to avoid.
+        """
+        return 1
+
+    def ii_for(self, accesses_per_element: int) -> int:
+        """The initiation interval a loop doing *accesses_per_element* accesses through **this port**
+        achieves — arithmetic over :attr:`accesses_per_cycle`, not a second source for it.
+
+        Port contention is the whole content: ``y[i] = f(x[i])`` with both references through the
+        *same* port is 2 accesses per element and therefore II=2; through the two ports of a
+        true-dual-port memory it is 1 each and II=1.  Which is why a reference is per-port — it comes
+        off the master endpoint — and why a body's timing depends on which ports its references came
+        from.
+
+        **Measured, not asserted** (S5b): a read-modify-write loop over one ``ram_1p`` port csynths
+        at II=2, and the write-only loop beside it at II=1.
+        """
+        n = int(accesses_per_element)
+        if n < 1:
+            raise ValueError(
+                f"BramIFMaster '{self.name}'.ii_for: a loop touching this port does at least one "
+                f"access per element, got {accesses_per_element!r}.")
+        return -(-n // self.accesses_per_cycle)          # ceil, at one access/cycle/port
+
+    def array_ref(self, addr: int, count: int) -> np.ndarray:
+        """A **live view** of elements ``[addr, addr+count)`` — no transfer, and no simulated time.
+
+        Element-typed (the view's dtype is :attr:`element_type`'s own — nothing is passed, because
+        the storage already has a type) and extent-bounded, so it is range-checked here the way
+        :meth:`mem_read` / :meth:`mem_write` already are.
+
+        **Directional, and enforced rather than advised.**  :attr:`access` already says what this
+        port does, so a ``"read"`` port hands back a view with ``flags.writeable = False`` and a
+        stray write *raises* instead of silently reaching nothing.  ``"write"`` and ``"readwrite"``
+        hand back a writable one.
+
+        The one asymmetry, stated rather than hidden: numpy has no write-only array, so a
+        ``"write"`` port's view cannot refuse *reads* the way :meth:`mem_read` does.  The direction
+        that can be enforced is.
+
+        Refused for an element type with no native numpy dtype — see
+        :func:`check_array_ref_element` for why a copy-in-disguise is worse than a refusal.
+        """
+        check_array_ref_element(self.element_type, f"BramIFMaster '{self.name}'.array_ref")
+        view = self._memory().block_ref(int(addr), int(count))
+        if self.access == "read":
+            view.flags.writeable = False
+        return view
 
     # -- Case 2: pipelined vector access ------------------------------------------------------
     #
@@ -655,6 +786,21 @@ class T2pBram(HwModule):
         """
         self._check_block(int(addr), int(count))
         return np.array(self.storage[int(addr):int(addr) + int(count)])
+
+    def block_ref(self, addr: int, count: int) -> np.ndarray:
+        """A **live numpy view** of elements ``[addr, addr+count)`` — the Case 3 primitive.
+
+        The counterpart to :meth:`load_block`, and the difference is the whole point: that one
+        copies because it models a transfer, this one aliases because nothing moved.  Writes through
+        the returned array land in :attr:`storage` itself.
+
+        Direction is **not** applied here — it belongs to the *port*, not the memory, and
+        :meth:`BramIFMaster.array_ref` is where a read-only port marks its view unwritable.  The
+        same range check as every other access: refused rather than wrapped, because the RTL wraps
+        silently.
+        """
+        self._check_block(int(addr), int(count))
+        return self.storage[int(addr):int(addr) + int(count)]
 
     def _check_block(self, addr: int, count: int) -> None:
         if count < 0 or addr < 0 or addr + count > int(self.nelem):

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -398,6 +399,126 @@ def test_the_width_is_derived_from_the_element_and_the_storage_is_typed():
         "a float memory holds floats, not a packing of them -- the precondition for a reference view")
     mem.store(3, 1.5)
     assert mem.load(3) == 1.5, "a float written is a float read, with no deserialize in between"
+
+
+# ---------------------------------------------------------------------------
+# Case 3 — array_ref: a live view, and the three refusals that keep it one
+# ---------------------------------------------------------------------------
+
+
+def _bound(access, element_type, nelem=32, port=None):
+    """A ``BramIFMaster`` wired to a ``T2pBram`` — the smallest graph an access needs."""
+    from waveflow.hw.bram import BramIF, BramIFMaster
+    from waveflow.hw.clock import Clock
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=element_type, nelem=nelem,
+                  port_access=("readwrite" if access == "readwrite" else "write", "read"))
+    ep = BramIFMaster(sim=sim, name="ep", element_type=element_type, nelem=nelem, access=access)
+    iface = BramIF(name="if", sim=sim, clk=Clock(freq=100e6))
+    iface.bind(ep_name="master", endpoint=ep)
+    iface.bind(ep_name="slave", endpoint=mem.rd_port if access == "read" else mem.wr_port)
+    return mem, ep
+
+
+def test_an_array_ref_is_live_in_both_directions():
+    """The whole claim, and it is the one a copy would silently fail.
+
+    A write through the reference must be visible to ``mem_read``, and a ``mem_write`` must be
+    visible through the reference — same storage, not two snapshots of it.  ``as_array`` on
+    ``_DirectBackedMMIFMaster`` passes a value check and fails this one, which is why this is the
+    test that exists.
+    """
+    from waveflow.hw.dataschema import FloatField
+
+    f32 = FloatField.specialize(bitwidth=32)
+    _mem, ep = _bound("readwrite", f32, nelem=64)
+
+    ref = ep.array_ref(8, 4)
+    assert ref.dtype == np.dtype("float32"), (
+        "the view is element-typed from the port's own declaration -- a uint64 word view over a "
+        "float memory would be a reinterpretation, not a reference")
+
+    ref[:] = [1.5, 2.5, 3.5, 4.5]
+    assert [ep.mem_read(8 + k) for k in range(4)] == [1.5, 2.5, 3.5, 4.5], (
+        "writes through the reference did not reach the memory -- the reference is a copy")
+
+    ep.mem_write(9, 99.0)
+    assert ref.tolist() == [1.5, 99.0, 3.5, 4.5], (
+        "a write to the memory was not visible through the reference -- the reference is a stale "
+        "copy, which is the half a one-way check would miss")
+
+
+def test_an_element_with_no_numpy_dtype_is_refused_rather_than_copied():
+    """S3b's hard rule, and the failure it is written against is in the tree.
+
+    ``_DirectBackedMMIFMaster.as_words()`` returns a genuine view but ``as_array()`` goes through
+    ``arrayutils.read_array``, which builds a fresh object unconditionally — so an ``as_*`` name
+    degrades to a copy the moment typed elements are asked for, and writes reach nothing.  A
+    reference API that is a view for some element types and a copy for others is worse than none.
+
+    The verdict is a fact about the **declaration**, so it is answerable before anything runs
+    (:attr:`supports_array_ref`) -- and the port stays usable, because Case 1's copying ops serve
+    every element type.
+    """
+    from waveflow.hw.bram import native_dtype
+    from waveflow.hw.dataschema import DataList, IntField
+
+    class _Rec(DataList):
+        elements: ClassVar[dict] = {"a": {"schema": IntField.specialize(bitwidth=32, signed=False)},
+                                    "b": {"schema": IntField.specialize(bitwidth=32, signed=False)}}
+
+    assert native_dtype(_Rec) is None and int(_Rec().get_bitwidth()) == 64, (
+        "the fixture must be a legal 64-bit BRAM element that simply has no dtype")
+    mem, ep = _bound("write", _Rec, nelem=64)
+    assert mem.storage.dtype == np.dtype("uint64"), (
+        "a composite element is stored as its PACKED WORD -- which is exactly why referencing it "
+        "would have to deserialize, and why it is refused")
+    assert ep.supports_array_ref is False
+    with pytest.raises(ValueError, match="no native numpy dtype"):
+        ep.array_ref(0, 4)
+
+
+def test_a_read_port_hands_back_a_view_that_cannot_be_written():
+    """Direction is already declared, so it is enforced rather than advised.
+
+    ``flags.writeable = False`` makes numpy raise; the alternative — a writable view off a read
+    port — is a write that reaches the pysim array while the hardware port has no write path, i.e.
+    a model that disagrees with the design and says nothing.
+    """
+    _mem, rd = _bound("read", word_element(64))
+    ref = rd.array_ref(0, 4)
+    assert ref.flags.writeable is False
+    with pytest.raises(ValueError, match="read-only"):
+        ref[0] = 1
+
+    _mem2, wr = _bound("write", word_element(64))
+    assert wr.array_ref(0, 4).flags.writeable is True, (
+        "a write port's view must be writable -- that is the direction it declares")
+
+
+def test_an_array_ref_past_the_end_is_refused_at_the_call():
+    """Extent-bounded, and refused rather than clipped: the RTL indexes ``mem[addr[AW-1:0]]`` and
+    would alias the overhang onto live words with nothing said."""
+    _mem, ep = _bound("readwrite", word_element(64), nelem=32)
+    with pytest.raises(IndexError, match=r"\[30, 38\) is outside"):
+        ep.array_ref(30, 8)
+    assert ep.array_ref(24, 8).shape == (8,), "the last legal extent must still be reachable"
+
+
+def test_the_port_publishes_the_rate_a_body_computes_its_timing_from():
+    """Case 3's caller owns the timing, so the endpoint owes it a **declared** number.
+
+    One access per cycle per port, flat until the array-partitioning question is measured.  The II
+    arithmetic over it is what S5b measured: a read-modify-write loop through ONE port csynths at
+    II=2, the write-only loop beside it at II=1.
+    """
+    _mem, ep = _bound("readwrite", word_element(64))
+    assert ep.accesses_per_cycle == 1
+    assert ep.ii_for(1) == 1, "one access per element through one port is II=1 (the write loop)"
+    assert ep.ii_for(2) == 2, "read-modify-write through ONE port is 2 accesses/element -> II=2"
+    with pytest.raises(ValueError, match="at least one"):
+        ep.ii_for(0)
 
 
 def test_the_pipelined_ops_refuse_what_the_port_was_not_wired_for():

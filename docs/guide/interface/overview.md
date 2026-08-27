@@ -80,7 +80,7 @@ three are essential; collapsing any of them models a cost the hardware does not 
 |---|---|---|---|
 | [`StreamIF`](stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
 | [`MMIF`](aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
-| [`BramIF`](bram.md) | *not built* — see below | `read_pipelined` / `write_pipelined` | *not built* — see below |
+| [`BramIF`](bram.md) | *not built* — see below | `read_pipelined` / `write_pipelined` | **`array_ref`** |
 | `HwState` | — already local | — | *not built* |
 
 **Case 1 — non-overlapping timed transfer.** Data physically moves into an internal structure. The
@@ -105,6 +105,27 @@ reading and writing the memory through its port. Modelling that as a read, a com
 invents two transfers that do not exist and charges the design for them. A stream has no addressing
 and every `m_axi` access is a bus transaction, so `BramIF` and `HwState` are the only two citizens.
 
+```python
+x = self.buf.array_ref(addr, n)      # a LIVE view -- nothing moved, no simulated time passed
+x[:] = x * 3 + 1                     # in place, through one port
+yield self.timeout(n * self.buf.ii_for(2) / self.clk.freq)   # 2 accesses/element -> II=2
+```
+
+Nothing there elapses time on its own, and that is the point: **the caller owns the timing**,
+because the cost is the compute loop's `II x n` rather than a transfer. What the endpoint owes is
+the *number* to compute from — `accesses_per_cycle`, and `ii_for()` over it — so the body multiplies
+a declared rate instead of a guessed one.
+
+Two things follow, and both are enforced rather than documented:
+
+* **A reference is directional.** `access` already says what the port does, so a `"read"` port's
+  view comes back with `flags.writeable = False` and a stray write *raises* instead of silently
+  reaching nothing.
+* **A reference must never silently become a copy.** `array_ref` is available exactly when the
+  element type has a native numpy dtype, and refused otherwise — a composite element is stored as
+  its packed word, so referencing it would have to deserialize into a fresh object. The copying
+  Case 1 ops are the answer for that element type.
+
 **Vectorized Python, looped HLS, timing carried by the model.** These cases are what make that work:
 a design body moves whole vectors and the interface supplies the cycles, while the generated C++
 keeps its `#pragma HLS PIPELINE II=1` loop. A per-element `for` in a pysim body is a defect rather
@@ -112,6 +133,7 @@ than a fidelity feature — it opts the design out of the model. `examples/strea
 `PolyAccel` is the reference, and `examples/bram_simple` is the same shape over a memory.
 
 Cells marked *not built* are filled as each case ships; see `plans/typed_transfer_codec.md`.
+(`BramIF`'s Case 1 has no caller yet, which is why it is deliberately last.)
 
 ### SimPy integration
 
