@@ -7,16 +7,24 @@ has_children: false
 
 # Python model
 
-The [overview](overview.md) covered *why* the memory is outside the kernel. This page writes the
-Python that says *how*: two tasks, the memory, the interfaces between them, and the one place the
-model has to pay a cost the hardware charges.
+The code for the BRAM kernel is in [`examples/bram_simple\`](../../examples/bram_simple).  We begin with the python model defined in [`examples/bram_simple/bram_simple.py`](../../examples/bram_simple/bram_simple.py).
 
-Everything is in [`examples/bram_simple/bram_simple.py`](https://github.com/sdrangan/waveflow/tree/main/examples/bram_simple/bram_simple.py).
+## Read and Write Transactions
 
-## The four messages
+The BRAM simple kernel exposes read and write transactions for an internal BRAM memory.
+Both transactions use a standard command response protocol:
 
-Everything on this design's boundary except the payload is a **message**, and each is a `DataList`
-declared once:
+- **Write transaction**:
+    - The calling module [is "calling module" the correct term?] sends a `WriteCmd` message with ... [describe the message] on streawm ..
+    - The calling module  then sends data ...
+    - The kernel responds with 
+
+- **Read transaction**:
+   [Give a similar description]
+
+## Messages
+
+The command response protocol thus requires four messages:
 
 | message | fields |
 |---|---|
@@ -24,6 +32,8 @@ declared once:
 | `WriteResp` | `tid`, `status` |
 | `ReadCmd` | `tid`, `nsamp`, `raddr` |
 | `ReadResp` | `tid`, `status` |
+
+As usual, the messages are defined as [`DataList` data schemas](../../guide/schema/python/datalists.md).   For example, the `WriteCmd` and `WriteResp` are given by:
 
 ```python
 class WriteCmd(DataList):
@@ -33,94 +43,45 @@ class WriteCmd(DataList):
         "nsamp": {"schema": Word64, "description": "payload words this command carries"},
         "waddr": {"schema": Word64, "description": "first word address written"},
     }
+
+class WriteResp(DataList):
+    [Give the Write resp]
 ```
 
-`include_filename` is what makes this more than a convenience: the build **generates**
-`include/bram_write_cmd.h` from this declaration, and the kernel compiles against that header. There
-is one author for the field order and the widths, and both languages read it.
-
-**`status` is an `EnumField`, never a hand-coded integer.**
+The `include_filename` indicates the location of the generated include file that will be discussed in the [codegen section](./codegen.md). The `WriteResp` includes a `status` field given by an `EnumField` indicating if the write address is valid:
 
 ```python
 class BramStatus(IntEnum):
     OK = 0
     OUT_OF_RANGE = 1
 
-
 BramStatusField = EnumField.specialize(enum_type=BramStatus, bitwidth=WORD_BW)
 ```
 
-which reaches C++ as a real `enum class`, generated from the same declaration:
-
-```python
-from pathlib import Path
-
-text = Path("examples/bram_simple/include/bram_status.h").read_text(encoding="utf-8")
-print("\n".join(ln for ln in text.splitlines() if "enum class" in ln or "= " in ln))
-```
-
-```
-enum class BramStatus {
-    OK = 0,
-    OUT_OF_RANGE = 1,
-```
-
-A `1` in a response is a number nothing can name; `BramStatus.OUT_OF_RANGE` is one the header, the
-model and the test all spell the same way. (`FirOp` / `FirOpField` in
-[`examples/fir_block`](../firblock/) is the precedent.)
-
-**`tid` is what makes a response usable from a second thread.** A host correlates a reply to the
+The `tid` is what makes a response usable from a second thread. A host correlates a reply to the
 command it issued instead of inferring it from ordering — the same reason the RF transmit stream's
 response carries one.
 
-### One field per word, and what that costs
+The read command and response are similar.
+
+## Modules
+
+As shown in the diagram in the [introduction](./index.md), the BRAM simple kernel is composed of three `HwModule` classes:  The BRAM itself, a `BramWriteCmd` that processes the write transactions; and a `BramReadCmd` the processes the read transactions.  
+
+The `BramWriteCmd` uses standard stream interfaces for the command, response and data along with a [`BramIFMaster`](../../guide/interface/bram.md) interface for the BRAM:
 
 ```python
-from examples.bram_simple.bram_simple import (
-    WORD_BW, ReadCmd, ReadResp, WriteCmd, WriteResp,
-)
-
-for cls in (WriteCmd, WriteResp, ReadCmd, ReadResp):
-    print(f"{cls.__name__:10s} {len(cls.elements)} fields -> "
-          f"{cls.nwords_per_inst(WORD_BW)} words at {WORD_BW} bits")
+class BramWriteCmd(FreeRunMod):
+    def __post__init(self):
+        self.cmd_w = StreamIFSlave(sim=self.sim, name=f"{self.name}_cmd", bitwidth=w)
+        self.data_w = StreamIFSlave(sim=self.sim, name=f"{self.name}_data", bitwidth=w)
+        self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w", bitwidth=w, depth=d,
+                                access="write")
+        self.resp_w = StreamIFMaster(sim=self.sim, name=f"{self.name}_resp", bitwidth=w)
+        self.go_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_go", bitwidth=w)
 ```
 
-```
-WriteCmd   3 fields -> 3 words at 64 bits
-WriteResp  2 fields -> 2 words at 64 bits
-ReadCmd    3 fields -> 3 words at 64 bits
-ReadResp   2 fields -> 2 words at 64 bits
-```
-
-`Word64` is `IntField.specialize(bitwidth=WORD_BW)` — one field per stream word. It keeps the wire
-shape trivially readable off a waveform, and it lets `waddr` span any depth the memory could have.
-It also **pins the design to a 64-bit boundary**, because an `EnumField` may not straddle a word;
-[the simulation page](pysim.md#the-messages-pin-the-stream-width) has what that cost.
-
-## The write task
-
-A `FreeRunMod` declares its endpoints in `__post_init__`. Four of the five here are ordinary streams;
-the fifth is the memory port.
-
-```python
-self.cmd_w = StreamIFSlave(sim=self.sim, name=f"{self.name}_cmd", bitwidth=w)
-self.data_w = StreamIFSlave(sim=self.sim, name=f"{self.name}_data", bitwidth=w)
-self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w", bitwidth=w, depth=d,
-                          access="write")
-self.resp_w = StreamIFMaster(sim=self.sim, name=f"{self.name}_resp", bitwidth=w)
-self.go_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_go", bitwidth=w)
-```
-
-`BramIFMaster` is the **accessor's** end — a task's window onto storage it does not own. Two of its
-arguments are load-bearing:
-
-- **`depth`** becomes the C++ array's *size*. `mode=bram` on an unsized pointer degrades to an
-  `ap_vld` scalar port **silently**: no warning, a clean `csynth`, and a design elaborated against a
-  memory that is not there. The size is what makes the pragma take effect.
-- **`access`** is declared, never inferred, and is checked when the interface binds. A port used both
-  ways is what Vitis refuses inside a kernel, and it is no safer outside one.
-
-The body is one command per firing:
+The body for 
 
 ```python
 cmd = yield from self.cmd_w.get(WriteCmd)
@@ -362,3 +323,19 @@ early.
 - [BRAM — memory between modules](../../guide/interface/bram.md) — the interface reference.
 - [A module realized as Verilog](../../guide/comp_codegen/rtl_module.md) — `rtl_module()`, and the
   latency single-source rule this page relies on.
+
+
+===
+
+Text to delete:
+
+[This is gibberish.  Some internal rambling about some weird error, I guess?  If useful, add it to detail notes in codeegn]
+
+`BramIFMaster` is the **accessor's** end — a task's window onto storage it does not own. Two of its
+arguments are load-bearing:
+
+- **`depth`** becomes the C++ array's *size*. `mode=bram` on an unsized pointer degrades to an
+  `ap_vld` scalar port **silently**: no warning, a clean `csynth`, and a design elaborated against a
+  memory that is not there. The size is what makes the pragma take effect.
+- **`access`** is declared, never inferred, and is checked when the interface binds. A port used both
+  ways is what Vitis refuses inside a kernel, and it is no safer outside one.
