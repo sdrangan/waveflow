@@ -90,6 +90,13 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
   ends check it in `__post_init__`, citing the emitter (`_bram_addr_shift`) that owns the rule.
 * **`access`** (`"read"` / `"write"`) is declared on both ends and checked when they bind. A port
   used both ways is what Vitis refuses inside a kernel, and it is no safer outside one.
+* **Vector access is Case 2** ([the three access cases](overview.md#the-three-access-cases)):
+  `read_pipelined(element_type, count, addr) -> (data, tstart)` and
+  `write_pipelined(data, addr, t_start)`. The model has no free parameters — throughput is II=1, one
+  element per cycle per port; the read's fill is the memory's published `READ_LATENCY`, reached
+  through the bound `BramIF` from the Verilog `localparam`, paid once per transfer rather than per
+  element; and `t_start` is the same anchoring every other endpoint uses. `mem_read` / `mem_write`
+  stay for scalar access.
 * **The bind also checks the element**, not only the extent. Two 32-bit ports that disagree about
   whether those bits are a float or a word line up at every address and return a correctly-shaped
   wrong number forever — the quieter half of the aliasing class the size check already catches.

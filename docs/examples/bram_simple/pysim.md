@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory() as tmp:
 ```
 cmd_w     4 bursts, [3] word(s) each
 cmd_r     8 bursts, [3] word(s) each
-data_w  332 bursts, [1] word(s) each
+data_w    4 bursts, [4, 8, 64, 256] word(s) each
 ```
 
 **A command is one burst.** `get(WriteCmd)` asks for the schema's whole word count in a single call,
@@ -112,13 +112,23 @@ and a pysim slave dequeues a whole burst per call — so a command split across 
 fragment at a time and the design would be back to counting words. Three is the schema's number, not
 one written down here: `write_scenario` calls `serialize`, and the length is whatever that returns.
 
-**The payload is one word per burst.** It is a data stream rather than a structured message, and
-per-word framing is what keeps one pysim firing equal to one RTL firing: truncation *discards* the
-remainder of a burst, so a multi-word payload burst would be one pysim firing against several RTL
-firings and the two backends would be running different designs.
+**A payload is one burst too** — its command's `nsamp` words. The four lengths above are the four
+write commands' `nsamp`, and nothing in `write_scenario` states them: the framing comes from the
+message it belongs to, the same way a command's comes from its schema. `get_pipelined(count=nsamp)`
+reads it in one call, because a pysim slave dequeues a whole burst per call and truncation
+*discards* the remainder.
 
-The XSI `AxisMaster` reads the flat `words.bin` and never sees the burst bounds, so the stimulus it
-plays is byte-identical either way — the framing is a **pysim** concern only.
+This replaced a one-word-per-burst framing whose stated reason was "one pysim firing equals one RTL
+firing" — the rationale for the per-element loops the design used to have. It is retired, along with
+the loops: a pysim body that reads a word at a time is not a faithful twin of an `II=1` C++ loop, it
+is a design that has opted out of the LT model. See [the three access cases](../../guide/interface/overview.md#the-three-access-cases).
+
+**The framing is not purely a pysim concern, and it was measured rather than assumed.** `words.bin`
+is byte-identical — the same words in the same order — but `bounds.bin` is not, and both backends
+read it, so the XSI `AxisMaster` now asserts `TLAST` once per command instead of once per word. The
+DUT does not care: `bram_write_cmd_task` reads a raw `hls::stream` `nsamp` times and never inspects
+`TLAST` on the payload. The RTL cycle count is unchanged at **394**, and so is every figure rendered
+from the traced waveform.
 
 ## Running it, and what comes back
 
@@ -232,9 +242,9 @@ print("write responses at", [int(c) for c in tb.resp_w_snk.cycles])
 ```
 
 ```
-first data word at cycle 261 - last at 353
+first data word at cycle 263 - last at 361
 the 64-word read arrives with word-to-word gaps [1]
-write responses at [258, 258, 262, 262, 270, 270, 334, 334]
+write responses at [258, 259, 262, 263, 269, 270, 334, 335]
 ```
 
 Two things are already visible:

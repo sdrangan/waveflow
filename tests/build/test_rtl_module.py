@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from waveflow.build.codegen_check import check
@@ -35,6 +36,7 @@ from waveflow.build.rtl_gen import (
     verilog_module_ports,
 )
 from waveflow.hw.bram import BramIFSlave, T2pBram, ramb18_count, word_element
+from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import (
     ALL_TARGETS,
     CUT_INDEPENDENT_TARGETS,
@@ -395,6 +397,48 @@ def test_the_width_is_derived_from_the_element_and_the_storage_is_typed():
         "a float memory holds floats, not a packing of them -- the precondition for a reference view")
     mem.store(3, 1.5)
     assert mem.load(3) == 1.5, "a float written is a float read, with no deserialize in between"
+
+
+def test_the_pipelined_ops_refuse_what_the_port_was_not_wired_for():
+    """Case 2's three declaration-time refusals, none of them discoverable at RTL.
+
+    A direction the port does not have, a clock it was never given, and an element it does not hold.
+    The last is the quiet one: same width, different meaning, and every address still lines up."""
+    from waveflow.hw.bram import BramIF, BramIFMaster
+    from waveflow.hw.dataschema import FloatField
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(32), nelem=1024)
+    reader = BramIFMaster(sim=sim, name="rd", element_type=word_element(32), nelem=1024,
+                          access="read")
+    iface = BramIF(name="r_if", sim=sim)                     # no clk: the untimed ops need none
+    iface.bind(ep_name="master", endpoint=reader)
+    iface.bind(ep_name="slave", endpoint=mem.rd_port)
+
+    with pytest.raises(ValueError, match="read-during-write hazard"):
+        list(reader.write_pipelined(np.zeros(4, dtype=np.uint32), 0))
+    with pytest.raises(ValueError, match="carries no clock"):
+        list(reader.read_pipelined(word_element(32), 4, 0))
+    iface.clk = Clock(freq=100e6)
+    with pytest.raises(ValueError, match="the port's element is"):
+        list(reader.read_pipelined(FloatField.specialize(bitwidth=32), 4, 0))
+
+
+def test_a_pipelined_transfer_cannot_run_off_the_end_of_the_memory():
+    """The extent is checked BEFORE any of it lands: a half-written refused block is worse than a
+    refused one, and the RTL would alias the overhang onto live words in silence."""
+    from waveflow.hw.bram import BramIF, BramIFMaster
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(64), nelem=16)
+    wr = BramIFMaster(sim=sim, name="wr", element_type=word_element(64), nelem=16, access="write")
+    iface = BramIF(name="w_if", sim=sim, clk=Clock(freq=100e6))
+    iface.bind(ep_name="master", endpoint=wr)
+    iface.bind(ep_name="slave", endpoint=mem.wr_port)
+
+    with pytest.raises(IndexError, match=r"\[12, 20\) is outside"):
+        list(wr.write_pipelined(np.arange(8, dtype=np.uint64), 12))
+    assert not mem.storage.any(), "a refused extent must not have written its head"
 
 
 def test_the_footprint_is_declared_from_geometry():

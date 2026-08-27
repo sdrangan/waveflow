@@ -246,11 +246,11 @@ XSI_N_CYCLES = 4000
 
 
 def _word(ep) -> ProcessGen[int]:
-    """Take exactly one word off a stream — the pysim unit of every one of these bodies.
+    """Take exactly one word off a stream — the **token** reader.
 
-    ``nwords_max=1`` against a scenario written **one word per burst**: a pysim slave dequeues a
-    whole burst per ``get`` and truncation *discards* the remainder, so any other framing would make
-    one pysim firing stand for several RTL firings.
+    What is left after the payload paths were vectorized: ``go`` really is one word, once, and
+    ``nwords_max=1`` says so.  It is not a general stream idiom — a data path that reads one word at
+    a time in Python has opted out of the LT model (``plans/typed_transfer_codec.md``, Case 2).
     """
     words = yield from ep.get(nwords_max=1)
     return int(np.asarray(words).ravel()[0])
@@ -310,22 +310,29 @@ class BramWriteCmd(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one command — which is one iteration of the C++ body.
 
-        **The command is read in one call, and the response written in one.**  ``get(WriteCmd)``
-        derives the word count from the schema and deserializes; ``write(resp)`` serializes.  Neither
-        end counts words, which is the point: the field layout is declared once and the generated C++
-        header the kernel compiles against comes from the same declaration.
+        **Nothing here iterates elements**, and that is the point.  The command is read in one call
+        and the response written in one (``get(WriteCmd)`` derives the word count from the schema and
+        deserializes; ``write(resp)`` serializes) — and now the payload is too: one
+        ``get_pipelined`` for the whole vector, one ``write_pipelined`` into the memory.  A
+        per-element ``for`` in a pysim body opts out of the LT model that is the tool's reason to
+        exist; the C++ keeps its ``#pragma HLS PIPELINE II=1`` loop, exactly as
+        ``poly_evaluate_impl.tpp`` keeps its lane loop.
 
-        The **payload** is different and stays word-at-a-time.  It is a data stream, not a structured
-        message, and one word per burst is what keeps one pysim firing equal to one RTL firing — a
-        pysim slave dequeues a whole burst per ``get`` and truncation *discards* the remainder.
+        **The two phases overlap because the write is anchored.**  ``get_pipelined`` hands back the
+        cycle the payload's *first* word arrived, and passing that as the memory write's ``t_start``
+        says the writing began then — so the pair costs ``max(stream, memory)`` rather than their
+        sum, which is what a task that writes a word as it receives it actually does.
+
+        A refused command **still consumes its payload**, which is why the get is outside the ``if``:
+        leaving it in the stream would shift every later command's data.
         """
         cmd = yield from self.cmd_w.get(WriteCmd)
         wp, n = int(cmd.waddr), int(cmd.nsamp)
         ok = n <= int(self.depth) and wp <= int(self.depth) - n
-        for i in range(n):
-            x = yield from _word(self.data_w)
+        if n:
+            x, tstart = yield from self.data_w.get_pipelined(self.buf_w.element_type, count=n)
             if ok:                                   # refused: consumed, then dropped on the floor
-                self.buf_w.mem_write(wp + i, x)
+                yield from self.buf_w.write_pipelined(x, wp, tstart)
         resp = WriteResp()
         resp.tid = cmd.tid
         resp.status = BramStatus.OK if ok else BramStatus.OUT_OF_RANGE
@@ -355,12 +362,6 @@ class BramReadCmd(FreeRunMod):
 
     bitwidth: HwParam[int] = WORD_BW
     depth: HwParam[int] = DEPTH
-    #: Model the memory's read latency in pysim (Stage 3 / learning objective 4).  The number itself
-    #: is never written down here — it is read from ``self.buf_r.read_latency``, which resolves
-    #: through the bound :class:`~waveflow.hw.bram.BramIF` to the memory's published
-    #: ``READ_LATENCY``.  ``False`` is the *un*-modelled backend, kept so the difference between the
-    #: two can be **measured** rather than asserted from a docstring.
-    model_read_latency: bool = True
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -385,16 +386,18 @@ class BramReadCmd(FreeRunMod):
                           template_args=(int(self.bitwidth), int(self.depth)))
 
     def run_iter(self) -> ProcessGen[None]:
-        """One firing is one command, read in one call with ``get(ReadCmd)``.
+        """One firing is one command, read in one call with ``get(ReadCmd)`` — and **no element loop**.
 
-        The read path is where the two backends differ, and :attr:`model_read_latency` is objective
-        4: ``mem_read`` is a **plain method**, and the absence of the ``yield`` is the interface
-        stating that no simulated time passes — deliberately, because a BRAM answer is deterministic,
-        unarbitrated and one cycle, so a discrete-event model of it would add a timestep and no
-        fidelity.  What that leaves out is not throughput (a pipelined reader still answers one word
-        per cycle) but **when the first answer appears**, which at RTL is ``READ_LATENCY`` cycles
-        after the address.  Paying it once per command, outside the per-word loop, is exactly that:
-        a pipeline fill, not a per-word cost.
+        The read path is objective 4, and the whole of it is now on the interface.  ``read_pipelined``
+        publishes the model: ``READ_LATENCY`` cycles of **fill**, then one element per cycle, with the
+        latency reached through the bound :class:`~waveflow.hw.bram.BramIF` from the memory's Verilog
+        ``localparam``.  A body that wrote ``yield self.timeout(1)`` would be inventing the number the
+        framework exists to derive — which is exactly what this body used to do, one line of it,
+        behind a flag.  The fill is paid once per command because it *is* a pipeline fill; a
+        pipelined reader still answers one word per cycle whatever the memory's latency.
+
+        ``tstart`` is when the memory's **first** word came back, and handing it to the stream's
+        ``write_pipelined`` overlaps the two phases instead of queuing one behind the other.
         """
         if not self.armed:
             yield from _word(self.go_in)
@@ -403,15 +406,8 @@ class BramReadCmd(FreeRunMod):
         rp, n = int(cmd.raddr), int(cmd.nsamp)
         ok = n <= int(self.depth) and rp <= int(self.depth) - n
         if ok and n:
-            if self.model_read_latency:
-                # The number is NEVER written down here.  `BramIFMaster.read_latency` raises when
-                # unbound, precisely so a latency that cannot be traced to a memory's published value
-                # never reaches a model -- a student writing `yield self.timeout(1)` is doing the
-                # thing the framework refuses to do.
-                yield self.timeout(int(self.buf_r.read_latency) / float(self.clk.freq))
-            for i in range(n):
-                val = self.buf_r.mem_read(rp + i)
-                yield from self.data_r.write(np.array([val], dtype=np.uint64))
+            y, tstart = yield from self.buf_r.read_pipelined(self.buf_r.element_type, n, rp)
+            yield from self.data_r.write_pipelined(y, tstart)
         resp = ReadResp()
         resp.tid = cmd.tid
         resp.status = BramStatus.OK if ok else BramStatus.OUT_OF_RANGE
@@ -444,7 +440,6 @@ class BramSimple(FreeRunMod):
 
     bitwidth: HwParam[int] = WORD_BW
     depth: HwParam[int] = DEPTH
-    model_read_latency: bool = True
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -453,7 +448,7 @@ class BramSimple(FreeRunMod):
         self.wr = BramWriteCmd(sim=self.sim, name=f"{self.name}_wr", bitwidth=w, depth=d,
                                clk=self.clk)
         self.rd = BramReadCmd(sim=self.sim, name=f"{self.name}_rd", bitwidth=w, depth=d,
-                              model_read_latency=bool(self.model_read_latency), clk=self.clk)
+                              clk=self.clk)
         self.add_comp(self.wr)
         self.add_comp(self.rd)
 
@@ -471,11 +466,13 @@ class BramSimple(FreeRunMod):
         self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem",
                            element_type=word_element(w), nelem=d)
         self.add_rtl_mod(self.mem)
-        w_if = BramIF(name=f"{self.name}_bufw_if", sim=self.sim)
+        # `clk` is what makes the ports' pipelined ops (Case 2) measurable in cycles; the scalar
+        # mem_read / mem_write need none, which is why the field is optional on BramIF.
+        w_if = BramIF(name=f"{self.name}_bufw_if", sim=self.sim, clk=self.clk)
         w_if.bind(ep_name="master", endpoint=self.wr.buf_w)
         w_if.bind(ep_name="slave", endpoint=self.mem.wr_port)
         self.add_rtl_if(w_if)
-        r_if = BramIF(name=f"{self.name}_bufr_if", sim=self.sim)
+        r_if = BramIF(name=f"{self.name}_bufr_if", sim=self.sim, clk=self.clk)
         r_if.bind(ep_name="master", endpoint=self.rd.buf_r)
         r_if.bind(ep_name="slave", endpoint=self.mem.rd_port)
         self.add_rtl_if(r_if)
@@ -504,7 +501,6 @@ class BramSimpleTB(FreeRunMod):
     bitwidth: int = WORD_BW
     depth: int = DEPTH
     n_cycles: int = XSI_N_CYCLES
-    model_read_latency: bool = True
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -512,7 +508,7 @@ class BramSimpleTB(FreeRunMod):
         w = int(self.bitwidth)
         self.dut = BramSimple(sim=self.sim, name=f"{self.name}_dut", bitwidth=w,
                               depth=int(self.depth),
-                              model_read_latency=bool(self.model_read_latency), clk=self.clk)
+                              clk=self.clk)
         # has_tlast=True on the participants because the DUT's stream endpoints declare it (it is
         # StreamIFSlave/Master's default) and StreamIF refuses a mismatch.  It is pysim framing
         # only: the generated top carries plain `hls::stream<ap_uint<W> >` ports and the generic
@@ -566,9 +562,22 @@ class TimedStreamSink(StreamSink):
         self.cycles: list[int] = []
 
     def rx_proc(self, words):
+        """Stamp every word in the burst with **its own** arrival cycle.
+
+        A burst is n beats at II=1, not one event: it completes at ``now``, so word k of n arrived
+        ``(n-1-k)`` cycles earlier.  That is ``StreamIFSlave.get_pipelined``'s back-calculation,
+        applied at the sink — the same convention, so the two ends of a channel agree about when a
+        word moved.
+
+        Stamping the whole burst with the completion cycle was invisible while every burst here was
+        one word; vectorizing the design (``plans/typed_transfer_codec.md``, Case 2) made it visible,
+        and it would have reported a 64-word read as sixty-four simultaneous arrivals — a cadence of
+        0 where the XSI ``AxisSlave``, which timestamps each beat as it takes it, measures 1.
+        """
         clk = self.stream_ep.interface.clk
-        cyc = int(round(self.now * float(clk.freq)))
-        self.cycles.extend([cyc] * int(np.asarray(words).size))
+        end = int(round(self.now * float(clk.freq)))
+        n = int(np.asarray(words).size)
+        self.cycles.extend(end - (n - 1 - k) for k in range(n))
         return (yield from super().rx_proc(words))
 
 
@@ -723,20 +732,29 @@ def scenario_zero(depth: int = DEPTH, fill: int = FILL) -> Scenario:
 def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) -> Scenario:
     """Materialize ``<root>/vectors/{cmd_w,data_w,cmd_r}`` — what both backends play.
 
-    **The two framings on this page are different, and both are load-bearing.**
+    **One burst is one message**, on all three streams, and the burst length always comes from the
+    thing being sent rather than from a convention stated here: a command's from its schema
+    (``serialize`` decides the length), a payload's from the ``nsamp`` of the command it belongs to.
 
     *A command is ONE burst.*  ``get(WriteCmd)`` asks for the schema's whole word count in a single
     call, and a pysim slave dequeues a whole burst per call — so a command split across bursts would
-    be read a fragment at a time and the design would have to count words again.  The framing is
-    derived from the schema (``serialize`` decides the length), never stated here.
+    be read a fragment at a time and the design would have to count words again.
 
-    *The payload is ONE WORD PER BURST.*  It is a data stream rather than a structured message, and
-    per-word framing is what keeps one pysim firing equal to one RTL firing: truncation *discards*
-    the remainder of a burst, so a multi-word payload burst would be one pysim firing against several
-    RTL firings and the two backends would be running different designs.
+    *A payload is ONE BURST OF ITS COMMAND'S ``nsamp`` WORDS.*  This replaces a one-word-per-burst
+    framing whose stated reason was "one pysim firing equals one RTL firing".  That rationale is
+    retired with the per-element loops it justified: a pysim body that reads a word at a time is not
+    a faithful twin of an ``II=1`` C++ loop, it is a design that has opted out of the LT model — the
+    same relationship ``PolyAccel`` has to ``poly_evaluate_impl.tpp``, where vectorized Python stands
+    against a looped ``.tpp`` and the timing lives in the model.  ``get_pipelined(count=nsamp)``
+    needs the payload as one burst, because a pysim slave dequeues a whole burst per call and
+    truncation *discards* the remainder.
 
-    The XSI ``AxisMaster`` reads the flat ``words.bin`` and never sees the burst bounds, so the
-    stimulus it plays is byte-identical either way — the framing is a **pysim** concern only.
+    **This is a change to the vectors, so it was re-gated rather than assumed.**  ``words.bin`` is
+    byte-identical — the same words in the same order — but ``bounds.bin`` is not, and both backends
+    read it: the XSI ``AxisMaster`` asserts ``TLAST`` once per command now instead of once per word.
+    The DUT does not care (``bram_write_cmd_task`` reads a raw ``hls::stream`` ``nsamp`` times and
+    never inspects ``TLAST`` on the payload), which is why the measured cycle count is unmoved — see
+    ``tests/examples/test_bram_simple_xsi.py``.
     """
     from waveflow.utils.burst_io import write_burst_bundle
 
@@ -746,7 +764,14 @@ def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) ->
     for name, msgs in (("cmd_w", sc.cmd_w), ("cmd_r", sc.cmd_r)):
         write_burst_bundle([np.asarray(m.serialize(word_bw=bw), dtype=np.uint64) for m in msgs],
                            root / "vectors" / name)
-    write_burst_bundle([np.array([x], dtype=np.uint64) for x in sc.data_w],
+    words = np.asarray(sc.data_w, dtype=np.uint64)
+    ends = np.cumsum([int(c.nsamp) for c in sc.cmd_w])
+    if ends[-1] != words.size:
+        raise ValueError(
+            f"the scenario's write commands ask for {int(ends[-1])} payload words but data_w holds "
+            f"{words.size}. The payload is framed BY COMMAND now, so the two cannot drift: a "
+            f"mismatch would silently re-align every later command's data.")
+    write_burst_bundle([words[a:b] for a, b in zip([0, *ends[:-1]], ends)],
                        root / "vectors" / "data_w")
     return sc
 
@@ -844,7 +869,7 @@ def collision_scenario(depth: int = DEPTH, fill: int = FILL, rounds: int = 48,
 # ---------------------------------------------------------------------------
 
 def run_pysim(root=None, sc: Scenario | None = None, *, bitwidth: int = WORD_BW,
-              depth: int = DEPTH, model_read_latency: bool = True) -> BramSimpleTB:
+              depth: int = DEPTH) -> BramSimpleTB:
     """Run the graph in SimPy and return the testbench — the toolchain-free golden.
 
     Returns the TB rather than the words so a caller can also read the sinks' **arrival cycles**,
@@ -854,8 +879,7 @@ def run_pysim(root=None, sc: Scenario | None = None, *, bitwidth: int = WORD_BW,
 
     from waveflow.simulation.simulation import Simulation
 
-    tb = BramSimpleTB(name="tb", sim=Simulation(), bitwidth=int(bitwidth), depth=int(depth),
-                      model_read_latency=bool(model_read_latency))
+    tb = BramSimpleTB(name="tb", sim=Simulation(), bitwidth=int(bitwidth), depth=int(depth))
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(root or tmp)
         write_scenario(root, sc)

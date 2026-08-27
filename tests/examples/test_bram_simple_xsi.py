@@ -337,10 +337,16 @@ def test_the_two_backends_agree_on_rate_and_the_model_pays_the_fill(runs):
       model pays it, which is the difference between a memory and a bus and the reason this example's
       timing page cannot end the way ``memcpy``'s does (*"And the pysim matches — for free."*).
 
-    The second is measured here as the *cost of the model change*, not as an absolute agreement
-    between the two backends: pysim is a discrete-event model of the streams around the memory, not a
+    The second is measured as the *content of the model*, not as an absolute agreement between the
+    two backends: pysim is a discrete-event model of the streams around the memory, not a
     cycle-accurate model of the kernel, so its absolute cycle numbers are its own.  What must be
-    exact is the size of the correction.
+    exact is the term.
+
+    It used to be measured by running the model twice, with a ``model_read_latency`` flag on and off,
+    and subtracting.  The flag existed because the fill was hand-written in the design body; it is
+    now published by :meth:`~waveflow.hw.bram.BramIFMaster.read_pipelined`, so there is no "off" to
+    subtract from and the term is asserted where it lives instead — a transfer of *n* elements costs
+    ``READ_LATENCY + n`` cycles, the fill paid once.
     """
     from examples.bram_simple.bram_simple import run_pysim
 
@@ -348,18 +354,24 @@ def test_the_two_backends_agree_on_rate_and_the_model_pays_the_fill(runs):
     a, b = sc.cadence_read
     rtl = sorted(set(np.diff(_cycles(runs, "data_r")[a:b]).tolist()))
 
-    off = run_pysim(sc=sc, model_read_latency=False)
-    on = run_pysim(sc=sc, model_read_latency=True)
+    on = run_pysim(sc=sc)
     pysim = sorted(set(np.diff(np.asarray(on.data_r_snk.cycles)[a:b]).tolist()))
-    lat = int(on.dut.rd.buf_r.read_latency)
 
     assert pysim == rtl == [1], (
         f"the two backends disagree about RATE: RTL {rtl} cycles per word, pysim {pysim}. That is "
         f"the half that is supposed to match for free.")
-    moved = int(on.data_r_snk.cycles[0]) - int(off.data_r_snk.cycles[0])
-    assert moved == lat, (
-        f"the model's read-path delay moved the first word by {moved} cycles; the memory's measured "
-        f"and published latency is {lat}. This is the half that does NOT match for free.")
+
+    port = on.dut.rd.buf_r
+    env, n = port.env, b - a
+    lat, freq = int(port.read_latency), float(port.interface.clk.freq)
+    t0 = env.now
+    proc = env.process(port.read_pipelined(port.element_type, n, 0))   # the run is over; drive one more
+    env.run(until=proc)
+    elapsed = round((env.now - t0) * freq)
+    assert elapsed == lat + n, (
+        f"a {n}-element read cost {elapsed} cycles; the published model is READ_LATENCY + n = "
+        f"{lat} + {n}. This is the half that does NOT match for free, and it is the memory's own "
+        f"number -- never a literal in a body.")
 
 
 # ---------------------------------------------------------------------------

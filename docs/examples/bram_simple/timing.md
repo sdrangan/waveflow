@@ -255,27 +255,35 @@ from examples.bram_simple.bram_simple import run_pysim, scenario_zero
 sc = scenario_zero()
 lo, hi = sc.cadence_read
 rtl = np.fromfile(Path("examples/bram_simple/xsi/vectors/data_r/cycles.bin"), dtype="<u8")
-off = run_pysim(sc=sc, model_read_latency=False)
-on = run_pysim(sc=sc, model_read_latency=True)
+tb = run_pysim(sc=sc)
 
 def gaps(c):
     return sorted(set(np.diff(np.asarray(c)[lo:hi]).tolist()))
 
-print("cycles per word   RTL", gaps(rtl), " pysim", gaps(on.data_r_snk.cycles))
-print("first word moved by", int(on.data_r_snk.cycles[0]) - int(off.data_r_snk.cycles[0]),
-      "when the model pays; the memory charges",
-      int(on.dut.rd.buf_r.read_latency))
+port, n = tb.dut.rd.buf_r, hi - lo
+env, t0 = port.env, port.env.now                      # the run is over; drive one more read
+proc = env.process(port.read_pipelined(port.element_type, n, 0))
+env.run(until=proc)
+cost = round((env.now - t0) * float(port.interface.clk.freq))
+
+print("cycles per word   RTL", gaps(rtl), " pysim", gaps(tb.data_r_snk.cycles))
+print(f"a {n}-element read costs {cost} cycles = READ_LATENCY {int(port.read_latency)} + {n}")
 ```
 
 ```
 cycles per word   RTL [1]  pysim [1]
-first word moved by 1 when the model pays; the memory charges 1
+a 64-element read costs 65 cycles = READ_LATENCY 1 + 64
 ```
 
-The correction is measured as the **cost of the model change**, not as absolute agreement between the
-backends: pysim is a discrete-event model of the streams around the memory, not a cycle-accurate
-model of the kernel, so its absolute cycle numbers are its own. What has to be exact is the *size* of
-the correction.
+The fill is measured as the **content of the model**, not as absolute agreement between the backends:
+pysim is a discrete-event model of the streams around the memory, not a cycle-accurate model of the
+kernel, so its absolute cycle numbers are its own. What has to be exact is the *term*.
+
+This used to be a subtraction — run the design twice with a `model_read_latency` flag on and off, and
+check the difference was `READ_LATENCY`. The flag existed only because the fill was hand-written in
+the design body, `yield self.timeout(self.buf_r.read_latency / freq)`, with nowhere else to put it.
+It is [`BramIFMaster.read_pipelined`](../../guide/interface/bram.md)'s term now, so there is no "off"
+configuration to subtract from and the number is read where it lives.
 
 **Why a memory is different from a bus.** `mem_copy`'s free match comes from calibrated models of an
 `m_axi` bus and the mem-stream adaptors — components whose timing is a `(component, platform)`
@@ -294,14 +302,12 @@ from examples.bram_simple.bram_simple import run_pysim, scenario_zero
 
 sc = scenario_zero()
 lo, hi = sc.cadence_read
-for modelled in (False, True):
-    c = np.asarray(run_pysim(sc=sc, model_read_latency=modelled).data_r_snk.cycles)
-    print(modelled, sorted(set(np.diff(c[lo:hi]).tolist())))
+c = np.asarray(run_pysim(sc=sc).data_r_snk.cycles)
+print("word-to-word gaps through the 64-word read:", sorted(set(np.diff(c[lo:hi]).tolist())))
 ```
 
 ```
-False [1]
-True [1]
+word-to-word gaps through the 64-word read: [1]
 ```
 
 ## How the figures are committed and refreshed

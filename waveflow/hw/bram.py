@@ -28,6 +28,7 @@ from math import ceil
 
 import numpy as np
 
+from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataSchema, IntField
 from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import Interface, InterfaceEndpoint
@@ -223,6 +224,99 @@ class BramIFMaster(InterfaceEndpoint):
                 f"direction this port was wired for.")
         return self._memory().load(int(addr))
 
+    # -- Case 2: pipelined vector access ------------------------------------------------------
+    #
+    # The LT model for a BRAM port is the simplest in the repo, and every term is PUBLISHED rather
+    # than invented:
+    #
+    #   throughput  1 element per cycle per port -- a true-dual-port memory is one access per cycle
+    #               per port, and `access` already says which port this is.
+    #   fill        READ_LATENCY cycles before the first read answer, reached through the bound
+    #               BramIF from the memory's Verilog localparam.  A pipeline fill: paid ONCE per
+    #               transfer, not per element.  A write has none (address and data go together).
+    #   anchoring   `t_start` is `QueuedTransferIF._push_to_endpoint`'s convention, unchanged: the
+    #               burst is treated as having begun at `t_start` and the wait shortens if that is
+    #               in the past, so two anchored phases OVERLAP and cost max(a, b), not a + b.
+    #
+    # Which makes both ops the stream's own model with the memory's number plugged in: `read` is
+    # `latency_init + nwords` cycles with `latency_init = READ_LATENCY`, and its `tstart` is
+    # back-calculated exactly as `StreamIFSlave.get_pipelined` back-calculates its own.  There is no
+    # second anchoring convention here, deliberately.
+
+    def read_pipelined(self, element_type: type[DataSchema], count: int, addr: int):
+        """Read *count* elements from *addr*; return ``(data, tstart)``.  Refused on a write port.
+
+        *data* is a :class:`~waveflow.hw.dataschema.DataArray` of *element_type*, so it feeds
+        :meth:`~waveflow.hw.interface.StreamIFMaster.write_pipelined` directly.  *tstart* is when the
+        **first** element arrived, back-calculated from completion — the anchor a consumer passes on
+        so its own phase overlaps this one instead of queuing behind it.
+
+        The call elapses ``READ_LATENCY + count`` cycles: the fill, then one element per cycle.
+        """
+        from waveflow.hw.arrayutils import array
+
+        if self.access != "read":
+            raise ValueError(
+                f"BramIFMaster '{self.name}' declares access='write'; reading through it is not the "
+                f"direction this port was wired for.")
+        self._check_element(element_type, "read_pipelined")
+        n = int(count)
+        period = 1.0 / float(self._clk().freq)
+        yield self.timeout((int(self.read_latency) + n) * period)
+        values = self._memory().load_block(int(addr), n)
+        tstart = self.env.now - max(0, n - 1) * period
+        return array(element_type, values), tstart
+
+    def write_pipelined(self, data, addr: int, t_start: float | None = None):
+        """Write *data* to *addr*, the burst **anchored** at *t_start*.  Refused on a read port.
+
+        *data* is a ``DataArray`` of this port's element type, or a plain array of element values.
+        The call elapses ``count`` cycles (II=1, no fill), and with *t_start* in the past it elapses
+        less — that shortening is the overlap, and it is
+        :meth:`~waveflow.hw.interface.StreamIFMaster.write_pipelined`'s contract verbatim.
+        ``t_start=None`` is the ordinary blocking write.
+        """
+        from waveflow.hw.dataschema import DataArray
+
+        if self.access != "write":
+            raise ValueError(
+                f"BramIFMaster '{self.name}' declares access='read'; writing through it is the "
+                f"read-during-write hazard the memory's $error exists to catch.")
+        if isinstance(data, DataArray):
+            self._check_element(type(data).element_type, "write_pipelined")
+            values = data.val
+        else:
+            values = data
+        values = np.asarray(values).reshape(-1)
+        dly = values.shape[0] / float(self._clk().freq)
+        if t_start is not None:
+            dly = max(0.0, dly + (t_start - self.env.now))
+        if dly > 0:
+            yield self.timeout(dly)
+        self._memory().store_block(int(addr), values)
+
+    def _check_element(self, element_type: type[DataSchema], op: str) -> None:
+        """Refuse a transfer typed differently from the port it goes through.
+
+        The call-site half of :meth:`BramIF.bind`'s element check, and the same failure it prevents:
+        two types of one width line up at every address and hand back a correctly-shaped wrong
+        number, with nothing downstream in a position to notice."""
+        if element_type is not self.element_type:
+            raise ValueError(
+                f"BramIFMaster '{self.name}'.{op}: the transfer is typed "
+                f"{element_type.__name__} but the port's element is {self.element_type.__name__}. "
+                f"Same width or not, those are different numbers.")
+
+    def _clk(self):
+        iface = self.interface
+        clk = getattr(iface, "clk", None) if iface is not None else None
+        if clk is None:
+            raise ValueError(
+                f"BramIFMaster '{self.name}': a pipelined transfer is measured in CYCLES, and this "
+                f"port's BramIF carries no clock. Pass clk= when constructing the BramIF. (The "
+                f"untimed mem_read / mem_write need none, which is why it is optional.)")
+        return clk
+
     def _memory(self):
         iface = self.interface
         if iface is None:
@@ -302,6 +396,12 @@ class BramIF(Interface):
     memory is not an error any tool reports, it is just wrong at address 1024 — so a mismatch is
     refused here rather than discovered in a waveform.
     """
+
+    #: The clock the port pair is timed in — the accessor's, which the wrapper ties to the memory's.
+    #: **Optional**, because the scalar ``mem_read`` / ``mem_write`` are untimed and need none; a
+    #: pipelined transfer is measured in cycles and refuses loudly without it, the same shape as
+    #: :attr:`read_latency` refusing when unbound.
+    clk: "Clock | None" = None
 
     type_name = 'bram_if'
 
@@ -446,6 +546,34 @@ class T2pBram(HwModule):
         """pysim read — one element, in the element's own Python type."""
         self._check(addr)
         return self.storage[addr].item()
+
+    # The vector twins.  Not a convenience over `store`/`load` in a loop: a per-element loop is what
+    # the Case 2 ops exist to remove from design bodies, and it would be no better hidden inside the
+    # transport.  The range check is the same one, applied to the whole extent BEFORE any of it
+    # lands — a half-written refused block is worse than a refused one.
+
+    def store_block(self, addr: int, values) -> None:
+        """pysim write of a whole extent, starting at *addr*."""
+        arr = np.asarray(values).reshape(-1)
+        self._check_block(int(addr), int(arr.shape[0]))
+        self.storage[int(addr):int(addr) + int(arr.shape[0])] = arr
+
+    def load_block(self, addr: int, count: int) -> np.ndarray:
+        """pysim read of *count* elements starting at *addr*, as a copy in the element's dtype.
+
+        A **copy**, and deliberately: this is a transfer (Case 2), so the caller gets values that
+        have left the memory.  A live view over the same storage is Case 3's ``array_ref``, which is
+        a different operation with a different cost and is not built yet.
+        """
+        self._check_block(int(addr), int(count))
+        return np.array(self.storage[int(addr):int(addr) + int(count)])
+
+    def _check_block(self, addr: int, count: int) -> None:
+        if count < 0 or addr < 0 or addr + count > int(self.nelem):
+            raise IndexError(
+                f"{type(self).__name__} '{self.name}': the extent [{addr}, {addr + count}) is "
+                f"outside 0..{int(self.nelem)-1}. The RTL would index mem[addr[AW-1:0]] and alias "
+                f"the overhang onto live words without a word of warning; pysim refuses instead.")
 
     def _check(self, addr: int) -> None:
         if not 0 <= int(addr) < int(self.nelem):

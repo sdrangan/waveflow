@@ -15,10 +15,15 @@ reported rather than leaving the consumer waiting on a stream that has gone quie
 """
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+from waveflow.hw.bram import BramIFMaster
 
 from examples.bram_simple.bram_simple import (
     ADDRS,
@@ -26,8 +31,10 @@ from examples.bram_simple.bram_simple import (
     EXPECTED,
     SCHEMA_CLASSES,
     WORD_BW,
+    BramReadCmd,
     BramSimple,
     BramStatus,
+    BramWriteCmd,
     ReadCmd,
     ReadResp,
     WriteCmd,
@@ -252,61 +259,102 @@ def test_the_read_latency_is_read_from_the_memory_not_declared():
     :attr:`~waveflow.hw.bram.BramIFMaster.read_latency` **raises when unbound**, precisely so a
     latency that cannot be traced to a memory's published value never reaches a model.  A student
     writing ``yield self.timeout(1)`` with a hard-coded 1 is doing the thing the framework refuses to
-    do, so this checks that the example does not either.
+    do, so this checks that neither the example nor the interface does either.
+
+    The design body used to spell the fill out; it is
+    :meth:`~waveflow.hw.bram.BramIFMaster.read_pipelined`'s term now, which is why the check moved to
+    the interface — the point was never *where* the line was, it was that the number is read rather
+    than written.
     """
     from waveflow.build.elaborate import elaborate
 
     comp = elaborate(BramSimple, {"bitwidth": WORD_BW, "depth": DEPTH}, name="bram_simple")
     assert comp.rd.buf_r.read_latency == comp.mem.read_latency
-    body = (REPO / "examples" / "bram_simple" / "bram_simple.py").read_text(encoding="utf-8")
-    assert "yield self.timeout(int(self.buf_r.read_latency) / float(self.clk.freq))" in body, (
-        "the model's read-path delay must be READ from the bound memory. A hard-coded number is "
-        "the second authorship site the framework's raising property exists to prevent.")
+    for run_iter in (BramWriteCmd.run_iter, BramReadCmd.run_iter):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(run_iter)))     # parsed, not grepped
+        charged = [n for n in ast.walk(tree)
+                   if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "timeout"]
+        assert not charged, (
+            f"{run_iter.__qualname__} charges simulated time by hand. Timing belongs to the "
+            f"interfaces here: the memory's fill is read_pipelined's, the streams' is the "
+            f"channel's.")
+    port = inspect.getsource(BramIFMaster.read_pipelined)
+    assert "self.read_latency" in port, (
+        "read_pipelined's fill must be READ from the bound memory. A hard-coded number is the "
+        "second authorship site the framework's raising property exists to prevent.")
 
 
-def test_modelling_the_read_latency_costs_exactly_read_latency():
-    """Stage 3 / objective 4, and the whole claim is a **difference**.
+def test_the_read_costs_the_memorys_published_fill_plus_one_cycle_per_element():
+    """Stage 3 / objective 4, asserted where the model now LIVES.
 
-    ``mem_read`` is a plain method, and the absence of the ``yield`` is the interface stating that no
-    simulated time passes — deliberately, because a BRAM answer is deterministic, unarbitrated and
-    one cycle, so a discrete-event model of it would add a timestep and no fidelity.  What that
-    leaves out is not throughput but **when the first answer appears**.
+    It used to be a subtraction: run the design twice with a ``model_read_latency`` flag on and off
+    and check the difference was ``READ_LATENCY``.  The flag existed only because the fill was
+    hand-written in the design body — ``yield self.timeout(self.buf_r.read_latency / freq)`` — with
+    nowhere else to put it.  It is published by
+    :meth:`~waveflow.hw.bram.BramIFMaster.read_pipelined` now, so there is no "off" configuration to
+    subtract from and the term is checked directly: ``READ_LATENCY`` cycles of fill, then one element
+    per cycle.
 
-    So the model is run both ways and the two are subtracted.  Turning it on must move the first
-    returned word by exactly ``read_latency`` cycles and by nothing else — and ``read_latency`` is
-    the memory's published number, reached through the bound ``BramIF``, not a literal.
+    ``read_latency`` is still never a literal — it resolves through the bound
+    :class:`~waveflow.hw.bram.BramIF` to the memory's Verilog ``localparam``, and raises when
+    unbound, so a fill that cannot be traced to a memory's published number cannot reach a model.
     """
-    sc = scenario_zero()
-    off = run_pysim(sc=sc, model_read_latency=False)
-    on = run_pysim(sc=sc, model_read_latency=True)
-    lat = int(on.dut.rd.buf_r.read_latency)
+    tb = run_pysim(sc=scenario_zero())
+    port = tb.dut.rd.buf_r
+    env = port.env
+    lat, freq = int(port.read_latency), float(port.interface.clk.freq)
 
-    first_off, first_on = int(off.data_r_snk.cycles[0]), int(on.data_r_snk.cycles[0])
-    assert first_on - first_off == lat, (
-        f"modelling the read path moved the first word by {first_on - first_off} cycles, but the "
-        f"memory publishes READ_LATENCY = {lat}. The model must pay what the memory charges — no "
-        f"more, which would be invention, and no less, which is the omission RTL exposes.")
-    assert len(off.data_r_snk.cycles) == len(on.data_r_snk.cycles), (
-        "modelling a latency changed how many words came back; it is a delay, not a behaviour")
+    for n in (1, 4, 64):
+        t0 = env.now
+        proc = env.process(port.read_pipelined(port.element_type, n, 0))
+        env.run(until=proc)
+        elapsed = round((env.now - t0) * freq)
+        assert elapsed == lat + n, (
+            f"a {n}-element read cost {elapsed} cycles; the published model is READ_LATENCY + n = "
+            f"{lat} + {n}. Too few omits the fill RTL exposes; too many charges the fill per element "
+            f"instead of per transfer, which is the opposite error and just as invisible to a value "
+            f"check.")
 
 
 def test_the_read_latency_is_a_fill_and_not_a_per_word_cost():
-    """The half of objective 4 a first-word check cannot see: the **cadence** must not move.
+    """The half a first-word check cannot see: the **cadence** must not move.
 
-    A pipelined reader still answers one word per cycle whatever the memory's latency is — the
-    pipeline hides it.  A model that paid the latency per *word* instead of per *command* would match
-    RTL on the first word and be 64 cycles late by the end of a 64-word read, which is the opposite
-    error and just as invisible to a value check.
+    A pipelined reader answers one word per cycle whatever the memory's latency is — the pipeline
+    hides it.  A model that paid the latency per *word* instead of per *transfer* would match RTL on
+    the first word and be 64 cycles late by the end of a 64-word read.
     """
     sc = scenario_zero()
     a, b = sc.cadence_read
-    for modelled in (False, True):
-        cycles = np.asarray(run_pysim(sc=sc, model_read_latency=modelled).data_r_snk.cycles)
-        deltas = sorted(set(np.diff(cycles[a:b]).tolist()))
-        assert deltas == [1], (
-            f"with model_read_latency={modelled} the 64-word read arrives with word-to-word gaps "
-            f"{deltas}, not [1]. The latency is a pipeline FILL, paid once per command; a per-word "
-            f"cost would show up here and nowhere else.")
+    cycles = np.asarray(run_pysim(sc=sc).data_r_snk.cycles)
+    deltas = sorted(set(np.diff(cycles[a:b]).tolist()))
+    assert deltas == [1], (
+        f"the 64-word read arrives with word-to-word gaps {deltas}, not [1]. The latency is a "
+        f"pipeline FILL, paid once per command; a per-word cost would show up here and nowhere else.")
+
+
+def test_neither_design_body_iterates_elements():
+    """The house rule this example was the outlier to: **a per-element ``for`` in a pysim body is a
+    defect**, not a fidelity feature.
+
+    Vectorized Python against a looped C++ body, with the timing carried by the LT model, is what
+    ``examples/stream_inband``'s ``PolyAccel`` does against ``poly_evaluate_impl.tpp``.  The C++
+    ``src/`` bodies here keep their ``#pragma HLS PIPELINE II=1`` loops — the loop belongs in the
+    hardware, not in the model of it.
+    """
+    for body in (BramWriteCmd.run_iter, BramReadCmd.run_iter):
+        # Parsed, not grepped: the docstrings talk ABOUT loops, and a text search would read the
+        # prose explaining why there is none as evidence that there is one.
+        tree = ast.parse(textwrap.dedent(inspect.getsource(body)))
+        loops = [n for n in ast.walk(tree) if isinstance(n, (ast.For, ast.While, ast.comprehension))]
+        assert not loops, (
+            f"{body.__qualname__} iterates again. The payload paths move whole vectors: "
+            f"get_pipelined / write_pipelined on the stream, read_pipelined / write_pipelined on "
+            f"the BRAM port (plans/typed_transfer_codec.md, Case 2).")
+    for task, src in (("bram_write_cmd_task", (SRC / "bram_write_cmd_task.h").read_text()),
+                      ("bram_read_cmd_task", (SRC / "bram_read_cmd_task.h").read_text())):
+        assert "#pragma HLS PIPELINE II=1" in src, (
+            f"{task} lost its II=1 loop. Vectorizing the PYTHON is the point; the C++ keeps the "
+            f"loop, which is where a pipeline actually exists.")
 
 
 def test_the_collision_scenario_is_not_disjoint_by_construction():
