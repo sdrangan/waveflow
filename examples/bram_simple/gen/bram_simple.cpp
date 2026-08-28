@@ -7,7 +7,7 @@
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "memmgr.hpp"
-#include "bram_write_cmd_task.h"
+#include "bram_write_compute_task.h"
 #include "bram_read_cmd_task.h"
 
 void bram_simple(
@@ -22,7 +22,7 @@ void bram_simple(
 ) {
 #pragma HLS INTERFACE axis port=cmd_w
 #pragma HLS INTERFACE axis port=data_w
-#pragma HLS INTERFACE mode=bram port=buf_w storage_type=ram_1wnr latency=1
+#pragma HLS INTERFACE mode=bram port=buf_w storage_type=ram_1p latency=1
 #pragma HLS INTERFACE axis port=resp_w
 #pragma HLS INTERFACE axis port=cmd_r
 #pragma HLS INTERFACE mode=bram port=buf_r storage_type=ram_1wnr latency=1
@@ -31,6 +31,6 @@ void bram_simple(
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<ap_uint<64> > go;
     #pragma HLS STREAM variable=go depth=1
-    hls_thread_local hls::task t0(bram_write_cmd_task<64, 1024>, buf_w, cmd_w, data_w, resp_w, go);
+    hls_thread_local hls::task t0(bram_write_compute_task<64, 1024>, buf_w, cmd_w, data_w, resp_w, go);
     hls_thread_local hls::task t1(bram_read_cmd_task<64, 1024>, buf_r, go, cmd_r, data_r, resp_r);
 }

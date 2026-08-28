@@ -340,7 +340,7 @@ _BRAM_SIGS = ("Addr", "EN", "Din", "Dout", "WEN", "Clk", "Rst")
 _BRAM_HALVES = ("A", "B")
 
 
-def bram_port_signals(name: str) -> dict[str, str]:
+def bram_port_signals(name: str, halves: tuple[str, ...] = _BRAM_HALVES) -> dict[str, str]:
     """The RTL nets a ``mode=bram`` port named *name* lowers to: ``{'Addr_A': 'buf_w_Addr_A', ...}``.
 
     The third row of the same table :func:`_boundary_trace` already holds for AXIS and ``m_axi``, and
@@ -353,8 +353,23 @@ def bram_port_signals(name: str) -> dict[str, str]:
     written from Python at all.  Checked against the witness's ``rx_top.v``, whose kernel
     instantiation names all 28 nets of a two-interface design
     (``tests/build/test_rtl_module.py::test_derived_port_names_match_the_witness``).
+
+    *halves* is which of the pair Vitis actually declares — both for ``storage_type=ram_1wnr``, only
+    ``A`` for ``ram_1p`` (see :func:`~waveflow.hw.bram.bram_emits_b_half`).  Naming a half that does
+    not exist is an elaboration error in whatever consumes this, so the caller passes what the port
+    declares rather than this assuming a pair.
     """
-    return {f"{s}_{h}": f"{name}_{s}_{h}" for h in _BRAM_HALVES for s in _BRAM_SIGS}
+    return {f"{s}_{h}": f"{name}_{s}_{h}" for h in halves for s in _BRAM_SIGS}
+
+
+def _port_halves(p) -> tuple[str, ...]:
+    """Which halves of *p*'s bram pair exist, from the pragma the port itself carries."""
+    from waveflow.hw.bram import bram_emits_b_half
+
+    pragma = " ".join(p.pragmas)
+    storage = next((t.split("=", 1)[1] for t in pragma.split() if t.startswith("storage_type=")),
+                   "ram_1wnr")
+    return _BRAM_HALVES if bram_emits_b_half(storage) else ("A",)
 
 
 def _task_trace(task: TaskInst) -> dict:
@@ -410,8 +425,10 @@ def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
         elif p.kind == "bram":
             # One entry per port, unlike `m_axi`: a bram interface is never bundled with another
             # (each is its own memory port pair), so the port name IS the id.
+            # Only the halves the port actually emits: a trace manifest naming a net that is not
+            # in the design binds to nothing, and a scan that finds nothing reads as "no problem".
             entries.append({"id": p.name, "kind": "bram", "ports": [p.name],
-                            "signals": bram_port_signals(p.name)})
+                            "signals": bram_port_signals(p.name, _port_halves(p))})
         elif p.kind in ("maxi_read", "maxi_write"):
             bundle = p.bundle or p.name
             bundles.setdefault(bundle, set()).add(

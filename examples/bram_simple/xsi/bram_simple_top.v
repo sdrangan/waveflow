@@ -38,7 +38,6 @@ module bram_simple_top (
     wire [63:0] buf_w_dout_a;
     wire buf_w_en_a;
     wire [7:0] buf_w_we_a;
-    wire [63:0] buf_w_dout_b;
     wire [31:0] buf_r_addr_a;
     wire [63:0] buf_r_din_a;
     wire [63:0] buf_r_dout_a;
@@ -72,15 +71,8 @@ module bram_simple_top (
         .buf_w_Dout_A(buf_w_dout_a),
         .buf_w_EN_A(buf_w_en_a),
         .buf_w_WEN_A(buf_w_we_a),
-        .buf_w_Addr_B(),
-        .buf_w_EN_B(),
-        .buf_w_Din_B(),
-        .buf_w_WEN_B(),
-        .buf_w_Dout_B(buf_w_dout_b),
         .buf_w_Clk_A(),
-        .buf_w_Clk_B(),
         .buf_w_Rst_A(),
-        .buf_w_Rst_B(),
         .buf_r_Addr_A(buf_r_addr_a),
         .buf_r_Din_A(buf_r_din_a),
         .buf_r_Dout_A(buf_r_dout_a),
@@ -111,8 +103,8 @@ module bram_simple_top (
         .b_we(|buf_r_we_a)
     );
 
-    // The B half of each bram interface: Vitis emits a full A/B pair whether or
-    // not the kernel uses both, so its Dout INPUT must be driven.
-    assign buf_w_dout_b = 64'd0;
+    // The B half, for each bram interface that HAS one: `storage_type=ram_1wnr`
+    // emits a full A/B pair whether or not the kernel uses both, so its Dout INPUT
+    // must be driven.  A `ram_1p` port (a read-write one) declares no B half at all.
     assign buf_r_dout_b = 64'd0;
 endmodule

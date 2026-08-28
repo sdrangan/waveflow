@@ -1,8 +1,9 @@
 # The typed-transfer codec — one adapter, every transport
 
-**Status:** S1 + S2 + S3c + S3a (Case 2) + S5 (`readwrite` + the `storage_type` derivation)
-LANDED (2026-08-27); Cases 1 and 3, S5d, the partitioning gate and S4 proposed.  Steps 1 and 2 of the parent thread were already done before that (see *Already
-landed*); this file is step 3, the one with teeth.
+**Status:** S1 + S2 + S3c + S3a (Case 2) + S5 + S3b/Case 3 (`array_ref`) + S5d (the `COMPUTE`
+opcode) LANDED (2026-08-27); Case 1, the partitioning gate, S5e and S4 proposed.  Steps 1 and 2 of
+the parent thread were already done before that (see *Already landed*); this file is step 3, the one
+with teeth.
 
 ## The complaint, stated precisely
 
@@ -599,7 +600,7 @@ That is a change with its own diff to expect, not a rider on this one.  `bram_ha
 `"readwrite"` accessor onto the **write** role — exact, because the writer is always A — and refuses
 loudly if two accessors ever claim the same role.
 
-#### S5d — the example: one design, two opcodes
+#### S5d — the example: one design, two opcodes  — **LANDED**
 
 Rather than a second example — each one costs a full docs page set — `BramWriteCmd` becomes
 `BramWriteCompute`, taking a `WriteComputeCmd` whose `opcode` is `WRITE` or `COMPUTE`.  The opcode
@@ -619,6 +620,73 @@ cycles per element" is true and explains itself — and S5b's table is the evide
 Gates for the example: pysim values, and an **XSI count that is a measurement** — a COMPUTE command
 is new RTL work, so the recorded number will change and the new one must be explained from the
 waveform, never by editing the expected constant.
+
+##### As built (2026-08-27), and the three things that were nearly wrong
+
+`BramWriteCmd` -> `BramWriteCompute`, taking a `WriteComputeCmd` (four words now: the opcode is a
+field, so it is a word).  `BramOpField` is in `SCHEMA_CLASSES` in its own right, so the C++ compares
+`c.opcode == BramOp::WRITE` against a generated `enum class`.  `buf_w` is `access="readwrite"` and
+`T2pBram.port_access=("readwrite", "read")`; the emitted pragma moved to `storage_type=ram_1p` on
+that port and `buf_r` kept `ram_1wnr`.  `src/bram_write_cmd_task.h` -> `bram_write_compute_task.h`,
+extended with a `compute_inplace` loop; the `WRITE` branch is untouched.
+
+**1. The wrapper had to learn that `ram_1p` has no `_B` half — and this is a real bug S5 could not
+have caught.**  S5's csynth gate synthesized a read-write port but never *wrapped* one, and
+`wrapper_gen` connected all fourteen pins on the strength of a comment reading *"Vitis emits it
+whether or not the kernel uses it"* — true of `ram_1wnr`, false of `ram_1p`.  The design csynthed
+clean and then failed elaboration with `cannot find port 'buf_w_Dout_B'`.  Fixed at the declaration:
+`bram_emits_b_half(storage_type)` in `bram.py`, read by the wrapper and by
+`bram_port_signals(name, halves)` so a trace manifest cannot name nets that are not in the design
+either.  The emission ORDER is preserved for ports that do have a B half, so no other example's
+wrapper moved a byte.
+
+**2. Payload consumption is opcode-dependent, and `write_scenario` re-derives the split.**  A
+`COMPUTE` consumes no payload words.  The bundle is framed against the `WRITE` commands only, read
+off the opcodes rather than from how a scenario happened to build its `data_w`, and the total is
+checked against it — a payload framed against *every* command would hand each later `WRITE` the
+previous one's data, silently, from the first `COMPUTE` onwards.
+
+**3. The ORDER of both command streams is load-bearing, and the hazard scan caught the first draft.**
+The reader is much faster per command than the writer, so anything the writer must finish first has
+to be early for the writer and late for the reader.  Moving the sentinel write from second to fourth
+(to make room for the compute) pushed it into the reader's sentinel read: **four real
+read-during-write collisions at 1020…1023**, found by `test_scenario_zero_has_no_hazard` off the
+waveform, not by any value check — the values were still correct.  Scenario zero now reads: ramp,
+sentinel, phase-2 write, seed, compute, refused compute on the write side; and the reader gets a
+128-word spacing read of a stretch nothing rewrites, which buys the compute the room it needs.
+
+##### The measurements
+
+**csynth (gate 3), achieved II, from the report:** `write_payload` **1**, `compute_inplace` **2**,
+`read_payload` **1**.  An II=1 on the in-place loop would have meant Vitis found a second physical
+port, which is S5b's silent-breakage case; the test says so and refuses it in that direction too.
+
+**The waveform says the same thing, and better** — the same task writes 32 words at 512 and then
+rewrites *the same 32 words* in place, adjacent in time, through the same port:
+
+| burst | writes | cycles | per element |
+|---|---|---|---|
+| seed `WRITE` at 512 | 32 | 375…406 (32) | **1.00** |
+| `COMPUTE` at 512 | 32 | 418…480 (63) | **1.97** |
+
+**XSI: 394 -> 568**, and every cycle is accounted for from the trace.  Per read command:
+`274 | singles 274…306 | refused | 64 words 320…383 | 128 words 391…518 | 4 words 526…529 |
+32 words 537…568` — i.e. 8 cycles of per-command overhead, then one cycle per returned word.  The
+reader now returns **233** words against 73 and issues ten commands against eight:
+`160 extra words + 2 x 8 command overhead + 8 (the token arms later, because the command grew a
+word) ~= +174`.  **The COMPUTE's own 63 cycles cost the count nothing** — it runs at 418…480 while
+the reader is busy with its 128-word read at 391…518, which is two free-running tasks sharing a
+true-dual-port memory doing exactly what the design is for.
+
+##### Docs left stale, deliberately
+
+`codegen.md` was refreshed (its generated blocks are re-taken from the build).  The rest of the
+`docs/examples/bram_simple/` page set still describes the pre-opcode design — `overview.md`,
+`index.md` (and its topology SVG), `pysim.md`, `rtlsim.md`, `timing.md` name `WriteCmd` /
+`BramWriteCmd` and quote the old vectors and cycle numbers.  That is a measurement-heavy refresh of
+the same size as this step, and **S5e renames the example and touches every one of those pages**, so
+it belongs there rather than half-done here.  `python.md` is an in-progress draft on another branch
+and was not touched.
 
 #### S5e — the rename, afterwards
 
@@ -670,7 +738,8 @@ has proven the shape on a second storage class.
    composite element is refused, a read-port view raises on write, and an out-of-range extent is
    refused.  `examples/bram_simple` calls none of it yet, so its artifacts and its XSI count (394)
    are unmoved.
-3. **S5d — the `COMPUTE` opcode on the example.**  Needs 1 and 2.  The XSI count WILL change here
+3. ~~**S5d — the `COMPUTE` opcode on the example.**~~ **DONE** — see *S5d as built*: csynth II
+   1/2/1, waveform 1.00 vs 1.97 cycles/element, XSI 394 -> 568 accounted for.  The XSI count changed
    (a COMPUTE command is new RTL work) — explain the new number from the waveform, never by editing
    the expected constant.
 4. **Case 1 on `BramIF`** (`read_array` / `write_array` at 1 element/cycle/port).  **Deliberately

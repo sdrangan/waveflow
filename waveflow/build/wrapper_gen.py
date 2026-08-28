@@ -48,6 +48,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from waveflow.build.composite_gen import bram_port_signals, wrapper_name
+from waveflow.hw.bram import bram_emits_b_half
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.rtl_gen import resolve_rtl_module
 
@@ -213,7 +214,11 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
                 f"interface joins to a memory. The wrapper would leave it dangling — the kernel "
                 f"would read zeros forever and nothing would say so. Wire it with add_rtl_if.")
         mem, pmap = joined[id(ep)]
-        sigs = bram_port_signals(p.name)
+        # Which halves this port HAS, from the same declaration its pragma comes from.  A read-write
+        # port carries `storage_type=ram_1p`, which does not declare a `_B` half at all -- and a
+        # wrapper naming pins that are not there does not elaborate.
+        b_half = bram_emits_b_half(ep.storage_type)
+        sigs = bram_port_signals(p.name, ("A", "B") if b_half else ("A",))
         shift = _bram_addr_shift(p.width)
         for role, mem_port in sorted(pmap.items()):
             vitis = _ROLE_TO_VITIS.get(role)
@@ -240,18 +245,26 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
             elif role == "we":
                 expr = f"|{wire}"
             mem_conns.setdefault(id(mem), []).append((mem_port, expr))
-        # The B half.  Vitis emits it whether or not the kernel uses it, so it must be connected or
-        # left explicitly dangling -- and its Dout is an INPUT to the kernel, which must be driven or
-        # the elaboration carries an undriven net into the design.
-        for sig in ("Addr", "EN", "Din", "WEN"):
-            kconns.append((sigs[f"{sig}_B"], ""))          # unused kernel outputs: left open
-        tie = f"{p.name}_dout_b"
-        wires.append((tie, p.width))
-        tieoffs.append((tie, f"{p.width}'d0"))
-        kconns.append((sigs["Dout_B"], tie))
-        for sig in ("Clk", "Rst"):                          # both halves' clock/reset outputs
+        # The B half, WHEN THERE IS ONE.  Under `ram_1wnr` Vitis emits it whether or not the kernel
+        # uses it, so it must be connected or left explicitly dangling -- and its `Dout` is an INPUT
+        # to the kernel, which must be driven or the elaboration carries an undriven net into the
+        # design.  Under `ram_1p` it does not exist, and naming it is an xvlog error.
+        #
+        # That difference is the invariant working: the wrapper wires ONE physical memory port per
+        # declared bram port, and a read-write port's pragma is what stops Vitis from wanting two.
+        if b_half:
+            for sig in ("Addr", "EN", "Din", "WEN"):
+                kconns.append((sigs[f"{sig}_B"], ""))      # unused kernel outputs: left open
+            tie = f"{p.name}_dout_b"
+            wires.append((tie, p.width))
+            tieoffs.append((tie, f"{p.width}'d0"))
+            kconns.append((sigs["Dout_B"], tie))
+        # Emitted here, after the B block, so a port that HAS a B half produces byte-identical
+        # Verilog to before this branch existed -- the existing designs' wrappers must not move.
+        for sig in ("Clk", "Rst"):
             kconns.append((sigs[f"{sig}_A"], ""))
-            kconns.append((sigs[f"{sig}_B"], ""))
+            if b_half:
+                kconns.append((sigs[f"{sig}_B"], ""))
 
     mems: list[MemInst] = []
     for name, mem in comp.rtl_mods.items():
@@ -426,8 +439,9 @@ def render_wrapper(spec: WrapperSpec) -> str:
 
     if spec.tieoffs:
         lines.append("")
-        lines.append("    // The B half of each bram interface: Vitis emits a full A/B pair whether or")
-        lines.append("    // not the kernel uses both, so its Dout INPUT must be driven.")
+        lines.append("    // The B half, for each bram interface that HAS one: `storage_type=ram_1wnr`")
+        lines.append("    // emits a full A/B pair whether or not the kernel uses both, so its Dout INPUT")
+        lines.append("    // must be driven.  A `ram_1p` port (a read-write one) declares no B half at all.")
         for n, v in spec.tieoffs:
             lines.append(f"    assign {n} = {v};")
 

@@ -30,10 +30,11 @@ for cls in SCHEMA_CLASSES:
 
 ```
 BramStatusEnumField -> include/bram_status.h
-WriteCmd         -> include/bram_write_cmd.h
-WriteResp        -> include/bram_write_resp.h
-ReadCmd          -> include/bram_read_cmd.h
-ReadResp         -> include/bram_read_resp.h
+BramOpEnumField     -> include/bram_op.h
+WriteComputeCmd     -> include/bram_write_compute_cmd.h
+WriteResp           -> include/bram_write_resp.h
+ReadCmd             -> include/bram_read_cmd.h
+ReadResp            -> include/bram_read_resp.h
 ```
 
 Each carries the struct, `nwords<W>()`, and the `read_stream<W>` / `write_stream<W>` pair the task
@@ -71,7 +72,7 @@ void bram_simple(
 ) {
 #pragma HLS INTERFACE axis port=cmd_w
 #pragma HLS INTERFACE axis port=data_w
-#pragma HLS INTERFACE mode=bram port=buf_w storage_type=ram_1wnr latency=1
+#pragma HLS INTERFACE mode=bram port=buf_w storage_type=ram_1p latency=1
 #pragma HLS INTERFACE axis port=resp_w
 #pragma HLS INTERFACE axis port=cmd_r
 #pragma HLS INTERFACE mode=bram port=buf_r storage_type=ram_1wnr latency=1
@@ -80,7 +81,7 @@ void bram_simple(
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<ap_uint<64> > go;
     #pragma HLS STREAM variable=go depth=1
-    hls_thread_local hls::task t0(bram_write_cmd_task<64, 1024>, buf_w, cmd_w, data_w, resp_w, go);
+    hls_thread_local hls::task t0(bram_write_compute_task<64, 1024>, buf_w, cmd_w, data_w, resp_w, go);
     hls_thread_local hls::task t1(bram_read_cmd_task<64, 1024>, buf_r, go, cmd_r, data_r, resp_r);
 }
 ```
@@ -95,11 +96,19 @@ Four things to notice:
   `localparam READ_LATENCY = 1`, reached through the bound `BramIF` — so the pragma and the Verilog
   cannot be authored independently and therefore cannot desynchronize. Nothing in any Python file
   states it.
-- **`storage_type=ram_1wnr` is derived, not a constant.** These two ports are unidirectional, and
-  that is what `ram_1wnr` follows from; a port declared
+- **`storage_type` is derived, and the two ports differ.** `buf_r` is read-only and gets
+  `ram_1wnr`; `buf_w` is declared
   [`access="readwrite"`](../../guide/interface/bram.md#accessreadwrite-and-the-storage_type-that-follows)
-  gets `ram_1p` instead, because the wrapper wires **one** physical memory port per declared `bram`
-  port and `ram_1wnr` would let Vitis take a second one.
+  — the `COMPUTE` opcode reads the words it rewrites — and gets `ram_1p`. The wrapper wires **one**
+  physical memory port per declared `bram` port, and `ram_1wnr` would let Vitis take a second one it
+  never wired. The visible price is that the in-place loop schedules at **II=2**: one port, a read
+  and a write per element. That is the mechanism, not a limitation — see
+  `plans/typed_transfer_codec.md` S5b for the measurement.
+- **`ram_1p` changes the port list, and the wrapper follows.** A `ram_1wnr` port emits all fourteen
+  signals (an A/B pair of seven); `ram_1p` emits only the A half, so `bram_simple_top.v`
+  instantiates `buf_w` with seven pins and `buf_r` with fourteen. Naming a pin Vitis did not emit is
+  an xvlog error, which is why the wrapper asks the port's own `storage_type` rather than assuming a
+  pair.
 - **`go` is an `hls::stream` inside the kernel**, at depth 1, and does not appear in the signature.
   That is the `add_if` registry doing its job.
 - **The task bodies are includes.** They stay hand-written because they own a `bram` array parameter,

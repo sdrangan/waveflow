@@ -49,6 +49,8 @@ import pytest
 from examples.bram_simple.bram_simple import (
     ADDRS,
     BASE,
+    COMPUTE_ADDR,
+    COMPUTE_N,
     DEPTH,
     FILL,
     SENTINEL_BASE,
@@ -87,14 +89,27 @@ TRACE_VCD = XSI / f"{WRAPPER}_trace.vcd"
 #: human.
 #:
 #: The shape of it: the writer takes 256 cycles for the ramp before it can emit the token that arms
-#: the reader, so nothing can come back before ~cycle 266; the eight read commands then run to here.
+#: the reader, so nothing can come back before ~cycle 274; the ten read commands then run to here.
 #:
-#: **Re-recorded 2026-08-26, from 386, and the +8 is accounted for**: the commands became
-#: :class:`~examples.bram_simple.bram_simple.WriteCmd` / ``ReadCmd`` messages, three words instead of
-#: the two the old hand-unpacked pair occupied, so the reader spends one extra cycle per command
-#: reading it — and it serves eight.  The returned VALUES did not move; only when the last one
-#: arrived did.
-WANT_CYCLES = 394
+#: **Re-recorded 2026-08-27, from 394, and every cycle of the +174 is accounted for from the
+#: waveform** — the ``COMPUTE`` opcode landed (``plans/typed_transfer_codec.md`` S5d), which changed
+#: what the scenario plays as well as what the kernel does.  Measured, read command by read command,
+#: off ``bram_simple_top_trace.vcd``::
+#:
+#:     first word 274 | 5 singles 274..306 | refused (no data) | 64 words 320..383
+#:                    | 128 words 391..518 | 4 words 526..529  | 32 words 537..568
+#:
+#: which is **8 cycles of per-command overhead, then one cycle per returned word**, throughout.  The
+#: reader now returns **233** words against the old 73 (a 128-word spacing read and the 32-word read
+#: of the computed region), and issues ten commands against eight:
+#:
+#:     160 extra words + 2 extra commands x 8 + 8 (the token arms later, because a write/compute
+#:     command is four words now that the opcode is a field) ~= +174.
+#:
+#: **The COMPUTE's own 63 cycles cost this number nothing**, and that is worth reading twice: it runs
+#: at 418..480 while the reader is busy with its 128-word read at 391..518.  Two free-running tasks
+#: sharing a true-dual-port memory is the whole point of the design, and here it is in the waveform.
+WANT_CYCLES = 568
 
 #: The synthesized inner-loop modules, named for the **label** on each body's counted loop rather
 #: than for a source line.  Deliberate: Vitis names an unlabelled loop ``VITIS_LOOP_<line>_1``, so a
@@ -103,9 +118,13 @@ WANT_CYCLES = 394
 #: The names are the **task function's**, not the top's: Vitis names a task's submodule after the
 #: function it instantiates, so there is no ``bram_simple_`` prefix here even though the RTL file on
 #: disk carries one.
+#: module -> (loop label, achieved II).  The II is **part of the table** because the two write-side
+#: loops now differ, and that difference is the example's whole point: one access per element is
+#: II=1, and a read-modify-write through the same physical port is II=2.
 _LOOPS = {
-    "bram_write_cmd_task_64_1024_Pipeline_write_payload": "write_payload",
-    "bram_read_cmd_task_64_1024_Pipeline_read_payload": "read_payload",
+    "bram_write_compute_task_64_1024_Pipeline_write_payload": ("write_payload", 1),
+    "bram_write_compute_task_64_1024_Pipeline_compute_inplace": ("compute_inplace", 2),
+    "bram_read_cmd_task_64_1024_Pipeline_read_payload": ("read_payload", 1),
 }
 
 
@@ -379,34 +398,111 @@ def test_the_two_backends_agree_on_rate_and_the_model_pays_the_fill(runs):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.xsi
-def test_both_payload_loops_reach_ii_1():
-    """Cycles per word, **measured** from the csynth XML: the achieved ``PipelineII``.
+def test_each_loop_achieves_the_ii_its_port_allows():
+    """Cycles per element, **measured** from the csynth XML: the achieved ``PipelineII``.
 
     Achieved, not target — Vitis reports both and they differ whenever it missed.  The trip count is
-    a runtime ``nwords`` here, which is what makes this worth asserting: a data-dependent bound is
-    the shape Vitis most often refuses to flatten.
+    a runtime ``nsamp`` here, which is what makes this worth asserting: a data-dependent bound is the
+    shape Vitis most often refuses to flatten.
+
+    **The two write-side loops are the controlled experiment.**  Same task, same port, same memory:
+    ``write_payload`` touches each element once and reaches II=1; ``compute_inplace`` reads and
+    writes each element and reaches II=2.  The difference is not the arithmetic, it is the port —
+    ``buf_w`` is declared ``access="readwrite"``, which puts ``storage_type=ram_1p`` on its pragma,
+    and ``ram_1p`` gives the scheduler one physical port to spend.
+
+    **An II=1 here would be a BUG, not a windfall.**  It would mean Vitis found a second port —
+    which under ``ram_1wnr`` it does, by reading on port B while writing on port A — and the wrapper
+    wires only the A halves, so those reads would reach a dangling port: X or stale data, a clean
+    csynth, and nothing visible until RTL (``plans/typed_transfer_codec.md`` S5b).  So this asserts
+    the exact number rather than a bound in either direction.
     """
     from waveflow.utils.csynthparse import loop_pipeline_ii, module_loops
 
     _require(REPORT.is_dir(), f"no csynth report dir at {REPORT}")
-    for module, loop in _LOOPS.items():
+    for module, (loop, want_ii) in _LOOPS.items():
         _require((REPORT / f"{module}_csynth.xml").is_file(), f"no report for {module}")
         loops = module_loops(REPORT, module)
         assert loops == [loop], (
             f"{module} reports loops {loops}, expected exactly [{loop!r}]. A renamed entry means the "
             f"label was dropped; a second entry means the body grew a loop it did not have.")
-        assert loop_pipeline_ii(REPORT, module, loop) == 1, (
-            f"{module}.{loop} no longer achieves II=1 — one cycle per word is the throughput claim.")
+        got = loop_pipeline_ii(REPORT, module, loop)
+        assert got == want_ii, (
+            f"{module}.{loop} achieves II={got}, expected {want_ii}. Below the expected number on "
+            f"the in-place loop means Vitis took a SECOND physical port the wrapper does not wire — "
+            f"stop and check storage_type, do not accept it.")
 
 
 @pytest.mark.xsi
-def test_the_kernel_really_got_bram_ports():
+def test_the_compute_costs_two_cycles_per_element_and_the_write_costs_one(runs):
+    """**The payoff, measured on the waveform rather than taken from the report.**
+
+    ``test_each_loop_achieves_the_ii_its_port_allows`` reads the achieved II out of csynth's XML;
+    this watches the same two loops actually run.  They are a controlled experiment and the trace is
+    where it is visible: the same task writes 32 words at ``512`` and then rewrites the *same 32
+    words* in place, adjacent in time, through the *same* port.  Anything that differs between them
+    is the access shape and nothing else.
+
+    The number is a consequence, not a property of in-place work: ``buf_w`` is ``readwrite``, so its
+    pragma carries ``storage_type=ram_1p``, so Vitis has one physical port to spend, so a
+    read-modify-write costs two cycles per element.  Under ``ram_1wnr`` it would reach 1 — by using
+    a second port the wrapper does not wire.
+    """
+    from waveflow.utils.bram_trace import port_samples
+
+    w = port_samples(runs["zero_vcd"], runs["manifest"], "write")
+    we = np.nonzero(np.asarray(w.we) != 0)[0]
+    addr = np.asarray(w.addr)
+
+    # Group by contiguous write activity; a gap longer than the II is the turnaround between
+    # commands.  The threshold is 6: comfortably above II=2, well below the ~10-cycle gap a command
+    # boundary leaves.
+    groups, cur = [], [we[0]]
+    for c in we[1:]:
+        if c - cur[-1] <= 6:
+            cur.append(c)
+        else:
+            groups.append(cur)
+            cur = [c]
+    groups.append(cur)
+
+    n = COMPUTE_N
+    at_region = [g for g in groups if int(addr[g[0]]) == COMPUTE_ADDR and len(g) == n]
+    assert len(at_region) == 2, (
+        f"expected exactly two bursts of {n} writes at {COMPUTE_ADDR} — the seeding WRITE and the "
+        f"COMPUTE that rewrites it — but found {len(at_region)}")
+    seed_burst, compute_burst = at_region
+    seed_span = seed_burst[-1] - seed_burst[0] + 1
+    compute_span = compute_burst[-1] - compute_burst[0] + 1
+
+    assert seed_span == n, (
+        f"the seeding WRITE of {n} words took {seed_span} cycles, not {n}. One access per element "
+        f"through one port is II=1 and nothing about this step may move it.")
+    assert compute_span == 2 * n - 1, (
+        f"the COMPUTE of {n} elements took {compute_span} cycles; II=2 over {n} elements spans "
+        f"{2 * n - 1}. FEWER would mean Vitis found a second physical port — the wrapper wires only "
+        f"the A half, so those accesses reach nothing. Check storage_type before accepting it.")
+
+
+@pytest.mark.xsi
+def test_the_kernel_really_got_bram_ports_and_exactly_the_halves_it_declared():
     """``mode=bram`` on an unsized pointer degrades to an ``ap_vld`` scalar **silently**.
 
     No warning, no error, a clean csynth, and a design elaborated against a memory that is not there.
     So "csynth OK" is not evidence of anything; the port list is.  Checked against
     :func:`~waveflow.build.composite_gen.bram_port_signals`, which derived the names without ever
     seeing this RTL.
+
+    **The two ports differ, and the difference is the point.**  ``buf_r`` is read-only, carries
+    ``storage_type=ram_1wnr`` and gets all fourteen signals — the ``_B`` half comes out tied to
+    constants because a unidirectional body only ever uses ``_A``.  ``buf_w`` is ``readwrite``,
+    carries ``ram_1p``, and Vitis declares **no ``_B`` half at all**.
+
+    Both halves of that are asserted, in both directions.  A ``_B`` half appearing on ``buf_w``
+    would mean the pragma reverted to ``ram_1wnr``, and then Vitis is free to hit II=1 on the
+    in-place loop by reading on a port the wrapper does not wire — X or stale data, with nothing
+    visible until RTL (``plans/typed_transfer_codec.md`` S5b).  A ``_B`` half *missing* from
+    ``buf_r`` would mean the derivation had leaked onto a port that does not want it.
     """
     from waveflow.build.composite_gen import bram_port_signals
 
@@ -414,12 +510,18 @@ def test_the_kernel_really_got_bram_ports():
     _require(v.is_file(), f"no csynth RTL at {v}")
     text = v.read_text(encoding="utf-8")
     declared = set(re.findall(r"^\s*(?:input|output)\s+(?:\[[^\]]+\]\s*)?(\w+);", text, re.M))
-    for port in ("buf_w", "buf_r"):
-        missing = sorted(set(bram_port_signals(port).values()) - declared)
+
+    for port, halves in (("buf_w", ("A",)), ("buf_r", ("A", "B"))):
+        missing = sorted(set(bram_port_signals(port, halves).values()) - declared)
         assert not missing, (
             f"{TOP}.v does not declare {missing} for the bram port {port!r}. A `mode=bram` pragma "
             f"that did not take effect degrades the port to an ap_vld scalar SILENTLY — check that "
             f"the C++ parameter is a sized array, not a pointer.")
+    extra = sorted(n for n in declared if n.startswith("buf_w_") and n.endswith("_B"))
+    assert not extra, (
+        f"{TOP}.v declares {extra}: the read-write port grew a second physical port. That is "
+        f"`ram_1wnr` behaviour, and the wrapper wires only the A halves — stop and check "
+        f"storage_type rather than wiring the B half.")
     assert "buf_w_ap_vld" not in text and "buf_r_ap_vld" not in text
 
 
@@ -468,7 +570,7 @@ def test_both_tasks_are_free_running_with_no_pipo_gating():
     v = VERILOG / f"{TOP}.v"
     _require(v.is_file(), f"no csynth RTL at {v}")
     text = v.read_text(encoding="utf-8")
-    for task in ("bram_write_cmd_task_64_1024_U0", "bram_read_cmd_task_64_1024_U0"):
+    for task in ("bram_write_compute_task_64_1024_U0", "bram_read_cmd_task_64_1024_U0"):
         for pin in ("ap_start", "ap_continue"):
             assert f"assign {task}_{pin} = 1'b1;" in text, (
                 f"{task}.{pin} is not tied high — the tasks are being GATED, which is the PIPO "

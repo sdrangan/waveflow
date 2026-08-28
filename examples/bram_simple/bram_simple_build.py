@@ -74,7 +74,7 @@ INCLUDE_DIR = "include"
 #: The **message layouts are not here**.  Those are generated from the Python schemas by
 #: :class:`~waveflow.hw.dataschema.DataSchemaStep` (see :data:`SCHEMA_CLASSES`), which is what lets
 #: the task bodies say ``c.read_stream<W>(cmd)`` instead of restating the field order.
-FIXED_TASK_BODIES = ("bram_cmd_range.h", "bram_write_cmd_task.h", "bram_read_cmd_task.h")
+FIXED_TASK_BODIES = ("bram_cmd_range.h", "bram_write_compute_task.h", "bram_read_cmd_task.h")
 
 #: The RTL that must land in ``xsi/`` beside the ``.f`` naming it, in elaboration reading order: the
 #: memory, then the wrapper that instantiates it.

@@ -27,23 +27,31 @@ from waveflow.hw.bram import BramIFMaster
 
 from examples.bram_simple.bram_simple import (
     ADDRS,
+    COMPUTE_ADDR,
+    COMPUTE_BASE,
+    COMPUTE_N,
     DEPTH,
     EXPECTED,
     SCHEMA_CLASSES,
+    SENTINEL_BASE,
     WORD_BW,
+    BramOp,
     BramReadCmd,
     BramSimple,
     BramStatus,
-    BramWriteCmd,
+    BramWriteCompute,
     ReadCmd,
     ReadResp,
-    WriteCmd,
+    WriteComputeCmd,
     WriteResp,
     captured,
     check_outputs,
     collision_scenario,
+    computed,
+    ramp,
     run_pysim,
     scenario_zero,
+    write_scenario,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -90,6 +98,27 @@ def test_pysim_reproduces_the_witness(zero):
     assert np.array_equal(np.asarray(data_r)[:len(EXPECTED)], np.array(EXPECTED, dtype=np.uint64))
 
 
+def _read_slice(sc, *, raddr: int, nsamp: int) -> tuple[int, int]:
+    """Where the read of ``[raddr, raddr+nsamp)`` lands in the concatenated ``data_r``.
+
+    Located by **what it reads**, not by its ordinal or its ``tid``: both of those move whenever a
+    phase is inserted, and a stale one indexes somebody else's data rather than failing.
+
+    Derived by walking the commands, because a refused read contributes **zero** words and the
+    ordinal of a command is therefore not the ordinal of its data.  A literal slice worked only
+    while the read in question happened to be the last one — which stopped being true the moment a
+    phase was added after it, and would have failed by reading somebody else's data rather than by
+    saying so.
+    """
+    start = 0
+    for c in sc.cmd_r:
+        n = 0 if int(c.raddr) + int(c.nsamp) > DEPTH else int(c.nsamp)
+        if (int(c.raddr), int(c.nsamp)) == (int(raddr), int(nsamp)):
+            return start, start + n
+        start += n
+    raise AssertionError(f"no read of [{raddr}, {raddr + nsamp}) in {sc.label!r}")
+
+
 def test_a_write_that_leaves_the_memory_is_refused_whole(zero):
     """The ``WriteResp`` earning its keep.
 
@@ -103,16 +132,22 @@ def test_a_write_that_leaves_the_memory_is_refused_whole(zero):
     """
     sc, _tb, (resp_w, data_r, resp_r) = zero
     got = _responses(resp_w, WriteResp)
-    assert [st for _tid, st in got] == [BramStatus.OK, BramStatus.OK,
-                                        BramStatus.OUT_OF_RANGE, BramStatus.OK], (
-        f"the write responses are {got}; the third command writes 8 words at {DEPTH - 4} "
-        f"of a {DEPTH}-word memory and must be refused.")
+    # Derived from the commands rather than hand-counted: a scenario that grows an opcode or a
+    # phase must not need this list retyped, and a retyped list is where an expectation quietly
+    # stops describing the run.
+    want = [BramStatus.OUT_OF_RANGE if int(c.waddr) + int(c.nsamp) > DEPTH else BramStatus.OK
+            for c in sc.cmd_w]
+    assert [st for _tid, st in got] == want, (
+        f"the write/compute responses are {got}; every command whose range leaves the "
+        f"{DEPTH}-word memory must be refused, whichever opcode it carries.")
+    assert BramStatus.OUT_OF_RANGE in want, "the scenario must still exercise a refusal"
     assert [tid for tid, _st in got] == [int(c.tid) for c in sc.cmd_w], (
         f"the responses' tids are {[t for t, _ in got]} but the commands' are "
         f"{[int(c.tid) for c in sc.cmd_w]}. `tid` is what lets a caller match a reply to the "
         f"command it issued instead of inferring it from ordering — an echoed id that does not "
         f"match is worse than none.")
-    tail = np.asarray(data_r)[-4:]
+    lo, hi = _read_slice(sc, raddr=DEPTH - 4, nsamp=4)
+    tail = np.asarray(data_r)[lo:hi]
     assert np.array_equal(tail, np.array([500, 501, 502, 503], dtype=np.uint64)), (
         f"words {DEPTH - 4}..{DEPTH - 1} read back as {tail.tolist()}, not the sentinel a legal "
         f"write put there. The refused command applied its payload to the words that fit, which is "
@@ -129,8 +164,10 @@ def test_a_read_that_leaves_the_memory_is_refused_and_says_so(zero):
     """
     sc, _tb, (resp_w, data_r, resp_r) = zero
     got = _responses(resp_r, ReadResp)
-    assert [st for _tid, st in got] == ([BramStatus.OK] * 5 + [BramStatus.OUT_OF_RANGE]
-                                        + [BramStatus.OK] * 2)
+    want = [BramStatus.OUT_OF_RANGE if int(c.raddr) + int(c.nsamp) > DEPTH else BramStatus.OK
+            for c in sc.cmd_r]
+    assert [st for _tid, st in got] == want
+    assert BramStatus.OUT_OF_RANGE in want, "the scenario must still exercise a refused read"
     assert [tid for tid, _st in got] == [int(c.tid) for c in sc.cmd_r]
     assert len(data_r) == len(sc.want_data_r), (
         f"the reader returned {len(data_r)} words for {len(sc.cmd_r)} commands; the refused "
@@ -165,14 +202,14 @@ def test_every_message_generates_a_header_and_nothing_hand_writes_one():
     appearing in ``src/`` would be a second author for something that already has one.
     """
     hand_written = {f.name for f in SRC.glob("*.h")}
-    for cls in (WriteCmd, WriteResp, ReadCmd, ReadResp):
+    for cls in (WriteComputeCmd, WriteResp, ReadCmd, ReadResp):
         name = cls.include_filename
         assert name, f"{cls.__name__} declares no include_filename, so it generates no header"
         assert (INCLUDE / name).is_file(), f"{name} was not generated into include/"
         assert name not in hand_written, (
             f"{name} is hand-written in src/ AND generated into include/ — one of them is a second "
             f"author for the field layout, which is the defect the schema exists to remove")
-    assert set(SCHEMA_CLASSES) >= {WriteCmd, WriteResp, ReadCmd, ReadResp}
+    assert set(SCHEMA_CLASSES) >= {WriteComputeCmd, WriteResp, ReadCmd, ReadResp}
 
 
 def test_neither_backend_takes_a_message_apart_by_hand():
@@ -187,7 +224,7 @@ def test_neither_backend_takes_a_message_apart_by_hand():
     ``read()`` in general, so it cannot be satisfied by deleting the payload loop.
     """
     py = (REPO / "examples" / "bram_simple" / "bram_simple.py").read_text(encoding="utf-8")
-    assert "yield from self.cmd_w.get(WriteCmd)" in py
+    assert "yield from self.cmd_w.get(WriteComputeCmd)" in py
     assert "yield from self.cmd_r.get(ReadCmd)" in py
     assert "yield from self.resp_w.write(resp)" in py
     assert "yield from self.resp_r.write(resp)" in py
@@ -195,7 +232,7 @@ def test_neither_backend_takes_a_message_apart_by_hand():
         "a command is being pulled a word at a time in pysim — that re-authors the field layout the "
         "generated C++ header comes from")
 
-    for body, cmd_cls in ((SRC / "bram_write_cmd_task.h", "WriteCmd"),
+    for body, cmd_cls in ((SRC / "bram_write_compute_task.h", "WriteComputeCmd"),
                           (SRC / "bram_read_cmd_task.h", "ReadCmd")):
         text = body.read_text(encoding="utf-8")
         code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("//"))
@@ -217,10 +254,14 @@ def test_the_messages_pin_the_stream_width():
     failure but is a failure.
 
     What is still true, and is what this pins: one field per word at the design's own width, so a
-    command is exactly three words and a response exactly two. Those are the numbers the vectors and
-    the generated C++ both derive from, and nothing writes them down.
+    read command is exactly three words, a write/compute command four (it carries an opcode), and a
+    response two. Those are the numbers the vectors and the generated C++ both derive from, and
+    nothing writes them down.
     """
-    assert WriteCmd.nwords_per_inst(WORD_BW) == 3 and ReadCmd.nwords_per_inst(WORD_BW) == 3
+    assert WriteComputeCmd.nwords_per_inst(WORD_BW) == 4, (
+        "the opcode is a field and therefore a word -- if this is 3 the opcode was dropped, and if "
+        "it is 5 something else crept in")
+    assert ReadCmd.nwords_per_inst(WORD_BW) == 3
     assert WriteResp.nwords_per_inst(WORD_BW) == 2 and ReadResp.nwords_per_inst(WORD_BW) == 2
     with pytest.raises(ValueError):
         WriteResp.nwords_per_inst(16)
@@ -270,14 +311,25 @@ def test_the_read_latency_is_read_from_the_memory_not_declared():
 
     comp = elaborate(BramSimple, {"bitwidth": WORD_BW, "depth": DEPTH}, name="bram_simple")
     assert comp.rd.buf_r.read_latency == comp.mem.read_latency
-    for run_iter in (BramWriteCmd.run_iter, BramReadCmd.run_iter):
+    for run_iter in (BramWriteCompute.run_iter, BramReadCmd.run_iter):
         tree = ast.parse(textwrap.dedent(inspect.getsource(run_iter)))     # parsed, not grepped
         charged = [n for n in ast.walk(tree)
                    if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "timeout"]
-        assert not charged, (
-            f"{run_iter.__qualname__} charges simulated time by hand. Timing belongs to the "
-            f"interfaces here: the memory's fill is read_pipelined's, the streams' is the "
-            f"channel's.")
+        # A TRANSFER's time belongs to the interface -- the memory's fill is read_pipelined's, the
+        # streams' is the channel's.  Case 3 is the exception and it is a principled one: an
+        # in-place computation performs no transfer, so its cost is the compute loop's II x n and
+        # the CALLER owns it.  What must never be hand-written is the NUMBER, so every charge here
+        # has to be derived from the port's own declared rate.
+        for call in charged:
+            names = {n.attr for n in ast.walk(call) if isinstance(n, ast.Attribute)}
+            assert "ii_for" in names, (
+                f"{run_iter.__qualname__} charges simulated time from something other than the "
+                f"port's declared rate. A Case 3 loop may charge its own II x n -- through "
+                f"ii_for() -- but a transfer's time belongs to the interface, and a literal "
+                f"belongs nowhere.")
+            assert "read_latency" not in names, (
+                f"{run_iter.__qualname__} hand-writes the memory's fill again; that is "
+                f"read_pipelined's term.")
     port = inspect.getsource(BramIFMaster.read_pipelined)
     assert "self.read_latency" in port, (
         "read_pipelined's fill must be READ from the bound memory. A hard-coded number is the "
@@ -341,7 +393,7 @@ def test_neither_design_body_iterates_elements():
     ``src/`` bodies here keep their ``#pragma HLS PIPELINE II=1`` loops — the loop belongs in the
     hardware, not in the model of it.
     """
-    for body in (BramWriteCmd.run_iter, BramReadCmd.run_iter):
+    for body in (BramWriteCompute.run_iter, BramReadCmd.run_iter):
         # Parsed, not grepped: the docstrings talk ABOUT loops, and a text search would read the
         # prose explaining why there is none as evidence that there is one.
         tree = ast.parse(textwrap.dedent(inspect.getsource(body)))
@@ -350,11 +402,95 @@ def test_neither_design_body_iterates_elements():
             f"{body.__qualname__} iterates again. The payload paths move whole vectors: "
             f"get_pipelined / write_pipelined on the stream, read_pipelined / write_pipelined on "
             f"the BRAM port (plans/typed_transfer_codec.md, Case 2).")
-    for task, src in (("bram_write_cmd_task", (SRC / "bram_write_cmd_task.h").read_text()),
+    for task, src in (("bram_write_compute_task", (SRC / "bram_write_compute_task.h").read_text()),
                       ("bram_read_cmd_task", (SRC / "bram_read_cmd_task.h").read_text())):
         assert "#pragma HLS PIPELINE II=1" in src, (
             f"{task} lost its II=1 loop. Vectorizing the PYTHON is the point; the C++ keeps the "
             f"loop, which is where a pipeline actually exists.")
+
+
+def test_a_compute_rewrites_its_region_in_place_and_nothing_else():
+    """Gate 1's third claim: the ``COMPUTE`` region comes back as ``x*3 + 1``, element by element.
+
+    ``x*3 + 1`` rather than ``x + 1`` on purpose. The seed is a ramp, so ``x + 1`` over a window
+    shifted by one address still produces a correct-looking ramp — the check would pass with the
+    wrong words. Multiplying makes the expected values step by 3, which no shifted window of the
+    seed can produce.
+    """
+    sc = scenario_zero()
+    tb = run_pysim(sc=sc)
+    _rw, data_r, _rr = captured(tb)
+
+    seed = ramp(COMPUTE_N, base=COMPUTE_BASE)
+    lo, hi = sc.compute_read
+    got = [int(v) for v in data_r[lo:hi]]
+    assert got == computed(seed), (
+        f"the COMPUTE region read back {got[:4]}... but x*3+1 over the seed is "
+        f"{computed(seed)[:4]}...")
+
+    # And in place: the memory itself holds it, not merely the stream that reported it.
+    assert [int(tb.dut.mem.load(COMPUTE_ADDR + k)) for k in range(COMPUTE_N)] == computed(seed)
+    # Nothing outside the region moved -- the witness's ramp is still a ramp.
+    assert [int(tb.dut.mem.load(k)) for k in range(4)] == ramp(4), (
+        "a COMPUTE touched words outside [waddr, waddr+nsamp)")
+
+
+def test_a_compute_consumes_no_payload():
+    """The trap this step is most likely to fall into, checked from the vectors and from the model.
+
+    A ``WRITE`` consumes ``nsamp`` payload words; a ``COMPUTE`` consumes **none**. Framing the
+    payload stream against every command would hand each later ``WRITE`` the previous one's data —
+    silently, from the first ``COMPUTE`` onwards — and the design would still answer ``OK`` to
+    everything.
+    """
+    import tempfile
+
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    sc = scenario_zero()
+    writes = [c for c in sc.cmd_w if BramOp(int(c.opcode)) is BramOp.WRITE]
+    computes = [c for c in sc.cmd_w if BramOp(int(c.opcode)) is BramOp.COMPUTE]
+    assert computes, "scenario zero must exercise the COMPUTE opcode"
+    assert sum(int(c.nsamp) for c in writes) == len(sc.data_w), (
+        "data_w must hold exactly the WRITE commands' payload -- no more, and none for a COMPUTE")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        write_scenario(tmp, sc)
+        bursts = read_burst_bundle(Path(tmp) / "vectors" / "data_w")
+    assert [len(b) for b in bursts] == [int(c.nsamp) for c in writes], (
+        "the payload bundle is framed against the wrong commands; one burst per WRITE, in order")
+
+    # And the model agrees: the run left no payload word unconsumed.  Read off the DUT's own slave
+    # -- that is where a mis-framed stream strands words, and it is the buffer a later WRITE would
+    # have taken the wrong data from.
+    tb = run_pysim(sc=sc)
+    assert not tb.dut.wr.data_w.data_buffer.items, (
+        "payload words were left unconsumed -- a COMPUTE read some, or a WRITE did not")
+
+
+def test_a_refused_compute_is_answered_and_changes_nothing():
+    """The range refusal reaches both opcodes, and a refused COMPUTE must not write.
+
+    Its response path is the ``WRITE``'s, so the interesting half is the memory: the refused
+    ``COMPUTE`` aims at the words the sentinel occupies, and those must still read back as the
+    sentinel.
+    """
+    sc = scenario_zero()
+    refused = [c for c in sc.cmd_w
+               if BramOp(int(c.opcode)) is BramOp.COMPUTE
+               and int(c.waddr) + int(c.nsamp) > DEPTH]
+    assert len(refused) == 1, "scenario zero must carry exactly one out-of-range COMPUTE"
+
+    tb = run_pysim(sc=sc)
+    resp_w, _dr, _rr = captured(tb)
+    per = WriteResp.nwords_per_inst(WORD_BW)
+    idx = [i for i, c in enumerate(sc.cmd_w) if c is refused[0]][0]
+    got = WriteResp().deserialize(np.asarray(resp_w[idx * per:(idx + 1) * per]), word_bw=WORD_BW)
+    assert int(got.status) == BramStatus.OUT_OF_RANGE and int(got.tid) == int(refused[0].tid)
+
+    base = int(refused[0].waddr)
+    assert [int(tb.dut.mem.load(base + k)) for k in range(4)] == ramp(4, base=SENTINEL_BASE), (
+        "a refused COMPUTE modified the memory -- refused whole means refused, not clipped")
 
 
 def test_the_collision_scenario_is_not_disjoint_by_construction():

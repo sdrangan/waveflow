@@ -119,6 +119,22 @@ def bram_storage_type(access: str) -> str:
     return "ram_1p" if check_bram_access(access, "bram_storage_type") == "readwrite" else "ram_1wnr"
 
 
+def bram_emits_b_half(storage_type: str) -> bool:
+    """Whether Vitis declares the **second** (``_B``) half of a ``bram`` port pair.
+
+    A fact about ``storage_type``, so it lives beside :func:`bram_storage_type` rather than being
+    re-derived from ``access`` somewhere else.  ``ram_1wnr`` emits all fourteen signals whether or
+    not the kernel uses the second port — the B half comes out tied to constants for a
+    unidirectional body.  ``ram_1p`` does not declare it at all, which is exactly what makes it safe
+    against a wrapper that has one physical port to give.
+
+    **The wrapper has to ask.**  It connects the kernel's memory pins by name, and a name that is
+    not there is an elaboration error rather than a silent one — but only after csynth, so the
+    question belongs here where the answer is already known.
+    """
+    return str(storage_type) != "ram_1p"
+
+
 def check_bram_element(element_type: type[DataSchema] | None, owner: str) -> int:
     """Validate *element_type* as a BRAM port's element and return its bit width.
 

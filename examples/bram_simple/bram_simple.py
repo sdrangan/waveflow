@@ -7,7 +7,7 @@ worked example a reader who wants "shared memory between two modules" should be 
 knowing anything about RF::
 
     cmd_w  ─▶ ┌────────────┐ ──buf_w──▶ ┌──────────┐
-    data_w ─▶ │ BramWriteCmd│           │  T2pBram │   hand-written Verilog,
+    data_w ─▶ │BramWriteComp│           │  T2pBram │   hand-written Verilog,
     resp_w ◀─ └────────────┘            │          │   BESIDE the kernel
     cmd_r  ─▶ ┌────────────┐ ──buf_r──▶ │          │
     data_r ◀─ │ BramReadCmd │ ◀─────────└──────────┘
@@ -93,11 +93,13 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 
-__all__ = ["ADDRS", "BASE", "DEPTH", "EXPECTED", "FILL", "SCHEMA_CLASSES", "SENTINEL_BASE",
-           "WORD_BW", "XSI_N_CYCLES", "BramReadCmd", "BramSimple", "BramSimpleTB", "BramStatus",
-           "BramStatusField", "BramWriteCmd", "ReadCmd", "ReadResp", "Scenario", "Word64",
-           "WriteCmd", "WriteResp", "check_outputs", "check_xsi_outputs", "collision_scenario",
-           "resp_words", "run_pysim", "scenario_zero", "write_scenario"]
+__all__ = ["ADDRS", "BASE", "COMPUTE_ADDR", "COMPUTE_BASE", "COMPUTE_N", "DEPTH", "EXPECTED",
+           "FILL", "SCHEMA_CLASSES", "SENTINEL_BASE", "WORD_BW", "XSI_N_CYCLES", "BramOp",
+           "BramOpField", "BramReadCmd", "BramSimple", "BramSimpleTB", "BramStatus",
+           "BramStatusField", "BramWriteCompute", "ReadCmd", "ReadResp", "Scenario", "Word64",
+           "WriteComputeCmd", "WriteResp", "check_outputs", "check_xsi_outputs",
+           "collision_scenario", "compute_cmd", "computed", "resp_words", "run_pysim",
+           "scenario_zero", "write_scenario"]
 
 # ---------------------------------------------------------------------------
 # Geometry
@@ -125,6 +127,14 @@ BASE = 100
 ADDRS = (0, 1, 7, 255, 128)
 EXPECTED = tuple(a + BASE for a in ADDRS)          # 100, 101, 107, 355, 228
 
+#: The ``COMPUTE`` region: where it is, how long, and what is written there first.  It is
+#: **initialized by a WRITE before the COMPUTE runs**, because computing over never-written memory is
+#: not a check — pysim would read 0 from a zeroed numpy array and the RTL ``X``, and ``0*3+1`` is a
+#: perfectly plausible-looking 1.
+COMPUTE_ADDR = 512
+COMPUTE_N = 32
+COMPUTE_BASE = 300
+
 #: First word of the **sentinel** a legal write puts at the top of the memory before the refused one
 #: aims at it.  Reading never-written memory is not a check: pysim returns 0 from a zeroed numpy
 #: array and the RTL returns ``X``, because ``bram_t2p.v``'s ``mem`` has no initial value.  Distinct
@@ -137,7 +147,7 @@ SENTINEL_BASE = 500
 # ---------------------------------------------------------------------------
 #
 # Every field layout on this design's boundary is declared ONCE, here, and both backends read it
-# through the schema: pysim with ``get(WriteCmd)`` / ``write(resp)``, the kernel with
+# through the schema: pysim with ``get(WriteComputeCmd)`` / ``write(resp)``, the kernel with
 # ``c.read_stream<W>(s)`` / ``r.write_stream<W>(s)`` out of the header ``include_filename``
 # generates.  Neither side takes a message apart a word at a time.
 #
@@ -166,6 +176,34 @@ class BramStatus(IntEnum):
 #: ``examples/fir_block`` is the precedent.
 BramStatusField = EnumField.specialize(enum_type=BramStatus, bitwidth=WORD_BW)
 
+class BramOp(IntEnum):
+    """What a command on the write/compute stream asks for.
+
+    Two opcodes rather than two examples, and that is the stronger arrangement: the same memory, the
+    same port and one waveform put the two access shapes side by side as a **controlled experiment**.
+    A second example would put them in two runs, where any difference could be the design rather
+    than the access.
+
+    * :attr:`WRITE` — payload in, straight to memory.  One access per element, so **II=1**.
+    * :attr:`COMPUTE` — read-modify-write **in place**, no payload and no transfer.  Two accesses per
+      element through one physical port, so **II=2**.
+
+    The lesson is the mechanism and not the number: *"in place is II=2"* is false in general.
+    *"The wrapper wires one physical memory port, so the pragma pins Vitis to one, so
+    read-modify-write costs two cycles per element"* is true and explains itself — see
+    :func:`~waveflow.hw.bram.bram_storage_type`.
+    """
+
+    WRITE = 0
+    COMPUTE = 1
+
+
+#: The opcode field, listed in :data:`SCHEMA_CLASSES` in its own right for the same reason
+#: :data:`BramStatusField` is: it has to reach C++ as a real ``enum class`` so the task body compares
+#: against ``BramOp::COMPUTE`` rather than against a bare integer nothing checks.  ``FirOpField`` in
+#: ``examples/fir_block`` is the precedent.
+BramOpField = EnumField.specialize(enum_type=BramOp, bitwidth=WORD_BW)
+
 #: One field per **stream word**, at the design's own width.
 #:
 #: The choice is deliberate and it is what fixes the wire shapes: a command is three fields and
@@ -180,27 +218,42 @@ BramStatusField = EnumField.specialize(enum_type=BramStatus, bitwidth=WORD_BW)
 Word64 = IntField.specialize(bitwidth=WORD_BW, signed=False)
 
 
-class WriteCmd(DataList):
-    """Write ``nsamp`` payload words starting at ``waddr``.
+class WriteComputeCmd(DataList):
+    """Touch ``nsamp`` words starting at ``waddr`` — how is :attr:`BramOp`.
+
+    ``nsamp`` is an **extent in words** for both opcodes, but it costs different things: a
+    :attr:`BramOp.WRITE` consumes that many payload words off ``data_w``, and a
+    :attr:`BramOp.COMPUTE` consumes **none** — it reads the memory it is about to write.  That
+    asymmetry is the one a caller can get wrong silently, so it is stated on the field itself and
+    checked in :func:`write_scenario`.
 
     ``tid`` is what makes the response usable from a second thread: a host correlates a reply to the
     command it issued instead of inferring it from ordering.  Same reason
     :class:`~waveflow.hw.rf_tx_stream.TxResp` carries one.
     """
 
-    include_filename: ClassVar[str | None] = "bram_write_cmd.h"
+    include_filename: ClassVar[str | None] = "bram_write_compute_cmd.h"
     elements: ClassVar[dict] = {
-        "tid":   {"schema": Word64, "description": "transaction id, echoed on the response"},
-        "nsamp": {"schema": Word64, "description": "payload words this command carries"},
-        "waddr": {"schema": Word64, "description": "first word address written"},
+        "tid":    {"schema": Word64, "description": "transaction id, echoed on the response"},
+        "opcode": {"schema": BramOpField, "description": "WRITE (payload in) or COMPUTE (in place)"},
+        "nsamp":  {"schema": Word64,
+                   "description": "extent in words; payload words for WRITE, none for COMPUTE"},
+        "waddr":  {"schema": Word64, "description": "first word address touched"},
     }
 
 
 class WriteResp(DataList):
-    """One per :class:`WriteCmd`, and the whole reason the write side has an output at all.
+    """One per :class:`WriteComputeCmd` — **either opcode** — and the whole reason the mutating side
+    has an output at all.
 
-    A write has no return path: a command that does not fully land completes **silently** and leaves
-    the memory half-written.  This is the only channel that can say otherwise.
+    Neither opcode has a return path of its own: a command that does not fully land completes
+    **silently** and leaves the memory half-changed.  This is the only channel that can say
+    otherwise, and the range refusal reaches a ``COMPUTE`` exactly as it reaches a ``WRITE``.
+
+    The name is the *mutating side's* rather than the ``WRITE`` opcode's — ``resp_w`` and ``buf_w``
+    carry the same ``_w``.  Nothing about the message changed when the command gained an opcode, so
+    renaming it here would churn the generated header, the C++ body and the tests for no fact; it
+    belongs with the example-wide rename (``plans/typed_transfer_codec.md`` S5e).
     """
 
     include_filename: ClassVar[str | None] = "bram_write_resp.h"
@@ -236,9 +289,10 @@ class ReadResp(DataList):
     }
 
 
-#: What the build emits C++ headers for.  ``BramStatusField`` is listed on its own so the status
-#: reaches the kernel as a real ``enum class`` rather than an integer literal.
-SCHEMA_CLASSES = [BramStatusField, WriteCmd, WriteResp, ReadCmd, ReadResp]
+#: What the build emits C++ headers for.  ``BramStatusField`` and ``BramOpField`` are listed on
+#: their own so the status and the opcode reach the kernel as real ``enum class``es rather than as
+#: integer literals.
+SCHEMA_CLASSES = [BramStatusField, BramOpField, WriteComputeCmd, WriteResp, ReadCmd, ReadResp]
 
 #: A fixed run bound for the generated XSI main — a testbench constant, not a latency.  The sink
 #: timestamps the real completion, and ``WANT_CYCLES`` in the XSI test is that measurement.
@@ -261,25 +315,40 @@ def _word(ep) -> ProcessGen[int]:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class BramWriteCmd(FreeRunMod):
-    """Take ``(wp, nwords)`` plus ``nwords`` payload words, write them, and **answer**.
+class BramWriteCompute(FreeRunMod):
+    """One command per firing, **two opcodes**, one memory port — and the port is read-write.
 
-    The answer is the whole reason this task is not just a stream-to-memory relay: a write has no
-    return path, so a command that does not fully land completes silently and leaves the memory
-    half-written.  :attr:`BramStatus.OUT_OF_RANGE` is the one refusal this design defines, and it is a **range**
-    check in words — ``wp + nwords > depth`` — refused whole rather than clipped or wrapped.
+    :attr:`BramOp.WRITE` takes ``nsamp`` payload words and puts them at ``waddr``.
+    :attr:`BramOp.COMPUTE` takes **no payload** and rewrites ``[waddr, waddr+nsamp)`` in place as
+    ``x*3 + 1``.  The two exist together so the cadence difference is one waveform rather than two
+    runs (``plans/typed_transfer_codec.md`` S5d).
 
-    **A refused command still consumes its payload.**  The payload belongs to the command; leaving
-    it in the stream would shift every later command's data by ``nwords`` and turn one caller error
-    into a corrupted run.  Discarding it costs the same cycles as writing it and keeps the two
-    streams in step, which is what makes the refusal *recoverable* rather than merely reported.
+    **The port is ``access="readwrite"``, and everything follows from that.**  A port that reads and
+    writes gets ``storage_type=ram_1p`` instead of ``ram_1wnr``
+    (:func:`~waveflow.hw.bram.bram_storage_type`), because the wrapper wires **one** physical memory
+    port per declared ``bram`` port and ``ram_1wnr`` would let Vitis reach II=1 by using a second one
+    that is not wired — a clean csynth reading X or stale data. So the in-place loop costs
+    2 accesses/element through one port: **II=2**, which is the price and not a defect.
 
-    The task body is **hand-written** (``src/bram_write_cmd_task.h``) for the reason
-    ``MemRStream``'s is: it owns a ``bram`` array parameter, which the extractor
-    has no vocabulary for.  :meth:`run_iter` is the pysim golden, not the source of the C++.
+    **Payload consumption is opcode-dependent, and that is the trap.**  A refused ``WRITE`` still
+    consumes its payload — the payload belongs to the command, and leaving it would shift every
+    later command's data by ``nsamp`` and turn one caller error into a corrupted run.  A ``COMPUTE``
+    has no payload to consume at all, refused or not; consuming one would desynchronize the stream
+    just as badly in the other direction.
+
+    The answer is the whole reason this task is not a relay: neither opcode has a return path, so a
+    command that does not fully land completes silently and leaves the memory half-changed.
+    :attr:`BramStatus.OUT_OF_RANGE` is the one refusal this design defines — a **range** check in
+    words, ``wp + nsamp > depth``, refused whole rather than clipped — and it reaches a ``COMPUTE``
+    exactly as it reaches a ``WRITE``.
+
+    The task body is **hand-written** (``src/bram_write_compute_task.h``) for the reason
+    ``MemRStream``'s is: it owns a ``bram`` array parameter, which the extractor has no vocabulary
+    for — and ``array_ref`` has no HLS lowering, so the ``COMPUTE`` branch is hand-written too.
+    :meth:`run_iter` is the pysim golden, not the source of the C++.
     """
 
-    cpp_kernel_name: ClassVar[str | None] = "bram_write_cmd"
+    cpp_kernel_name: ClassVar[str | None] = "bram_write_compute"
 
     bitwidth: HwParam[int] = WORD_BW
     depth: HwParam[int] = DEPTH
@@ -292,8 +361,11 @@ class BramWriteCmd(FreeRunMod):
             raise ValueError(f"buffer depth must be a power of two (got {d}): the wrap is a mask")
         self.cmd_w = StreamIFSlave(sim=self.sim, name=f"{self.name}_cmd", bitwidth=w)
         self.data_w = StreamIFSlave(sim=self.sim, name=f"{self.name}_data", bitwidth=w)
+        # `readwrite`, because COMPUTE reads the words it rewrites.  That declaration is what moves
+        # the emitted pragma to `storage_type=ram_1p` and pins Vitis to the one physical port the
+        # wrapper actually wires -- see waveflow.hw.bram.bram_storage_type.
         self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w",
-                                  element_type=word_element(w), nelem=d, access="write")
+                                  element_type=word_element(w), nelem=d, access="readwrite")
         self.resp_w = StreamIFMaster(sim=self.sim, name=f"{self.name}_resp", bitwidth=w)
         self.go_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_go", bitwidth=w)
         for ep in (self.cmd_w, self.data_w, self.buf_w, self.resp_w, self.go_out):
@@ -303,7 +375,7 @@ class BramWriteCmd(FreeRunMod):
         self.announced = False
 
     def kernel_task(self) -> KernelTask:
-        return KernelTask(task_fn="bram_write_cmd_task", header="bram_write_cmd_task.h",
+        return KernelTask(task_fn="bram_write_compute_task", header="bram_write_compute_task.h",
                           signature=("buf_w", "cmd_w", "data_w", "resp_w", "go_out"),
                           template_args=(int(self.bitwidth), int(self.depth)))
 
@@ -311,9 +383,10 @@ class BramWriteCmd(FreeRunMod):
         """One firing is one command — which is one iteration of the C++ body.
 
         **Nothing here iterates elements**, and that is the point.  The command is read in one call
-        and the response written in one (``get(WriteCmd)`` derives the word count from the schema and
-        deserializes; ``write(resp)`` serializes) — and now the payload is too: one
-        ``get_pipelined`` for the whole vector, one ``write_pipelined`` into the memory.  A
+        and the response written in one (``get(WriteComputeCmd)`` derives the word count from the
+        schema and deserializes; ``write(resp)`` serializes); a ``WRITE``'s payload is one
+        ``get_pipelined`` for the whole vector and one ``write_pipelined`` into the memory; a
+        ``COMPUTE`` is one numpy expression over a live view.  A
         per-element ``for`` in a pysim body opts out of the LT model that is the tool's reason to
         exist; the C++ keeps its ``#pragma HLS PIPELINE II=1`` loop, exactly as
         ``poly_evaluate_impl.tpp`` keeps its lane loop.
@@ -323,16 +396,33 @@ class BramWriteCmd(FreeRunMod):
         says the writing began then — so the pair costs ``max(stream, memory)`` rather than their
         sum, which is what a task that writes a word as it receives it actually does.
 
-        A refused command **still consumes its payload**, which is why the get is outside the ``if``:
-        leaving it in the stream would shift every later command's data.
+        A refused ``WRITE`` **still consumes its payload**, which is why the get is outside the
+        ``if ok``: leaving it in the stream would shift every later command's data.  A ``COMPUTE``
+        reads no payload at all, refused or not — the ``if`` on the opcode is what keeps the two
+        streams in step, and getting it wrong desynchronizes everything behind it.
+
+        **The COMPUTE branch is Case 3, and it elapses time the caller charges.**  ``array_ref`` is
+        a live view: nothing is transferred, so nothing about it costs cycles by itself.  What costs
+        cycles is the loop, and its rate is the port's declared one —
+        ``ii_for(2)`` is 2 because a read-modify-write is two accesses per element through one
+        physical port.  Routing this through ``read_pipelined`` + compute + ``write_pipelined``
+        instead would invent two transfers that do not exist and charge for them.
         """
-        cmd = yield from self.cmd_w.get(WriteCmd)
-        wp, n = int(cmd.waddr), int(cmd.nsamp)
+        cmd = yield from self.cmd_w.get(WriteComputeCmd)
+        wp, n, op = int(cmd.waddr), int(cmd.nsamp), BramOp(int(cmd.opcode))
         ok = n <= int(self.depth) and wp <= int(self.depth) - n
-        if n:
-            x, tstart = yield from self.data_w.get_pipelined(self.buf_w.element_type, count=n)
-            if ok:                                   # refused: consumed, then dropped on the floor
-                yield from self.buf_w.write_pipelined(x, wp, tstart)
+        if op is BramOp.WRITE:
+            if n:
+                x, tstart = yield from self.data_w.get_pipelined(self.buf_w.element_type, count=n)
+                if ok:                               # refused: consumed, then dropped on the floor
+                    yield from self.buf_w.write_pipelined(x, wp, tstart)
+        elif ok and n:
+            # Case 3.  No `for`, and no transfer: `x` IS the memory, so `x*3 + 1` is the whole
+            # computation and the only cost is the loop the C++ body runs -- n elements at the
+            # port's own rate, which `ii_for` states rather than this body guessing it.
+            x = self.buf_w.array_ref(wp, n)
+            x[:] = x * 3 + 1
+            yield self.timeout(n * self.buf_w.ii_for(2) / float(self.clk.freq))
         resp = WriteResp()
         resp.tid = cmd.tid
         resp.status = BramStatus.OK if ok else BramStatus.OUT_OF_RANGE
@@ -445,7 +535,7 @@ class BramSimple(FreeRunMod):
     def __post_init__(self) -> None:
         super().__post_init__()
         w, d = int(self.bitwidth), int(self.depth)
-        self.wr = BramWriteCmd(sim=self.sim, name=f"{self.name}_wr", bitwidth=w, depth=d,
+        self.wr = BramWriteCompute(sim=self.sim, name=f"{self.name}_wr", bitwidth=w, depth=d,
                                clk=self.clk)
         self.rd = BramReadCmd(sim=self.sim, name=f"{self.name}_rd", bitwidth=w, depth=d,
                               clk=self.clk)
@@ -463,8 +553,13 @@ class BramSimple(FreeRunMod):
         # `mem`, not `buf`: an attribute name becomes the Verilog INSTANCE name and `buf` is a
         # primitive gate, which the wrapper emitter refuses by name rather than letting xvlog fail on
         # a syntax error that mentions no Python.
+        # Port A is `readwrite` because the accessor bound to it is -- BramIF.bind requires the two
+        # to be IDENTICAL, since they are two statements of one fact.  Port B stays read-only, which
+        # is not a preference: bram_t2p.v's $error is written one-sided (A writes while B touches),
+        # so a writing B port would be invisible to the design's only real check.
         self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem",
-                           element_type=word_element(w), nelem=d)
+                           element_type=word_element(w), nelem=d,
+                           port_access=("readwrite", "read"))
         self.add_rtl_mod(self.mem)
         # `clk` is what makes the ports' pipelined ops (Case 2) measurable in cycles; the scalar
         # mem_read / mem_write need none, which is why the field is optional on BramIF.
@@ -597,7 +692,7 @@ class Scenario:
     #: The commands, as **message objects** rather than words.  Serializing them is
     #: :func:`write_scenario`'s job and deserializing them is the design's; nothing in between counts
     #: words, which is the whole point of declaring the schema.
-    cmd_w: tuple[WriteCmd, ...]
+    cmd_w: tuple[WriteComputeCmd, ...]
     #: The payload, in **words**, because it is a data stream rather than a structured message.
     data_w: tuple[int, ...]
     cmd_r: tuple[ReadCmd, ...]
@@ -621,6 +716,10 @@ class Scenario:
     #: ``(start, stop)`` into ``data_r`` for the read whose cadence is the throughput claim, and the
     #: index of the first data word overall (objective 4's first-word offset).
     cadence_read: tuple[int, int] = (0, 0)
+    #: ``(start, stop)`` into ``data_r`` for the read of the region a ``COMPUTE`` rewrote.  The value
+    #: gate is element by element against ``x*3 + 1``, which is what makes a wrong ADDRESS visible:
+    #: over a ramp the expected values step by 3, so a shifted window cannot produce them.
+    compute_read: tuple[int, int] = (0, 0)
     label: str = ""
 
 
@@ -629,11 +728,29 @@ def ramp(n: int, base: int = BASE) -> list[int]:
     return [base + i for i in range(int(n))]
 
 
-def write_cmd(tid: int, nsamp: int, waddr: int) -> WriteCmd:
-    """A :class:`WriteCmd`, built by name so a scenario never states a field ORDER."""
-    c = WriteCmd()
-    c.tid, c.nsamp, c.waddr = int(tid), int(nsamp), int(waddr)
+def write_cmd(tid: int, nsamp: int, waddr: int) -> WriteComputeCmd:
+    """A ``WRITE`` :class:`WriteComputeCmd`, built by name so a scenario never states a field ORDER."""
+    c = WriteComputeCmd()
+    c.tid, c.opcode, c.nsamp, c.waddr = int(tid), BramOp.WRITE, int(nsamp), int(waddr)
     return c
+
+
+def compute_cmd(tid: int, nsamp: int, waddr: int) -> WriteComputeCmd:
+    """A ``COMPUTE`` :class:`WriteComputeCmd` — same fields, and **no payload** behind it."""
+    c = WriteComputeCmd()
+    c.tid, c.opcode, c.nsamp, c.waddr = int(tid), BramOp.COMPUTE, int(nsamp), int(waddr)
+    return c
+
+
+def computed(words) -> list[int]:
+    """What a ``COMPUTE`` leaves behind: ``x*3 + 1``, element by element.
+
+    Value-dependent on purpose.  ``x + 1`` would be satisfied by an address that is off by one — the
+    ramp is affine, so a shifted window still increments correctly — whereas ``x*3 + 1`` over a ramp
+    changes by 3 per element and cannot be produced by reading the wrong words.  It is also exactly
+    the expression the S5b csynth gate measured II=2 for.
+    """
+    return [int(w) * 3 + 1 for w in words]
 
 
 def read_cmd(tid: int, nsamp: int, raddr: int) -> ReadCmd:
@@ -689,6 +806,45 @@ def scenario_zero(depth: int = DEPTH, fill: int = FILL) -> Scenario:
     outstanding.  Disjoint ranges, so it is legal; ``bram_t2p.v``'s ``$error`` is what would say
     otherwise, and :func:`collision_scenario` is the same design driven into it on purpose.
 
+    Phase 3 — the **COMPUTE**, and it is the reason this example has two opcodes.  ``write(512, 32)``
+    puts a known ramp down, ``compute(512, 32)`` rewrites it in place as ``x*3 + 1``, and the
+    reader's last command reads it back.  A second ``COMPUTE`` is aimed out of range so the refusal
+    covers both opcodes, and it carries **no payload** — which is what the payload-alignment check in
+    :func:`write_scenario` exists to keep true.
+
+    **Why the COMPUTE cannot collide with the reader, and why the ORDER of both streams is load
+    bearing.**  Once the ``go`` token is spent the two tasks are concurrent and ordered only by their
+    own command streams, so a ``COMPUTE`` writing a region the reader is reading *is* a
+    read-during-write collision — the one ``bram_t2p.v``'s ``$error`` catches and
+    :func:`collision_scenario` provokes on purpose.
+
+    The asymmetry that decides every ordering here: **the reader is much faster per command than the
+    writer.**  A read command answers ``nsamp`` words and moves on; a write consumes ``nsamp``
+    payload words and a compute spends ``2 x nsamp`` cycles.  So anything the writer must finish
+    before the reader looks at it has to be **early for the writer and late for the reader**, with
+    enough reader work in between to cover the difference.  Three regions need that treatment and
+    each is placed for it:
+
+    1. **The sentinel** (``1020…1023``) is the writer's *second* command — four words, done almost
+       immediately after the token — and the reader's *ninth*.
+    2. **The compute region** (``512…543``) is the writer's *third and fourth*; the read of it is the
+       reader's *last*, behind roughly 200 cycles of other reads.  Nothing else in the run touches
+       that region, so the only thing the compute can race is that one read.
+    3. **Phase 2 is the opposite requirement** and is placed against it: the ``write(64, 64)`` must be
+       **live inside** the ``read(0, 64)``, so the write comes early — right after the sentinel,
+       before the compute's 64 cycles — and the read is the reader's first long one.  Disjoint
+       ranges make that legal.
+
+    The 128-word ``read(128, 256)`` exists to buy the spacing point 2 needs.  It re-reads a stretch
+    of the witness's ramp that nothing writes again, so it is hazard-free by construction, and it
+    costs the reader roughly twice what the compute costs the writer.
+
+    **And none of it is trusted.**  A read that overtook the compute would return the seed ramp
+    instead of ``x*3 + 1`` and fail the value gate loudly; a *partial* overtake would trip the
+    waveform hazard scan, which asserts scenario zero has **no** collisions against a positive
+    control that has them.  Both guards are live, and the second one is what caught the first draft
+    of this ordering.
+
     **The order of the commands is the only ordering this design has**, and that is a property worth
     meeting head-on.  There is exactly one token, spent once, arming the reader after the writer's
     first command; every later dependency is the *caller's* to arrange.  This scenario arranges the
@@ -702,30 +858,44 @@ def scenario_zero(depth: int = DEPTH, fill: int = FILL) -> Scenario:
     bad_wp, bad_n = d - 4, 8                    # 1020 + 8 > 1024 -- refused
     sentinel = ramp(4, base=SENTINEL_BASE)      # a KNOWN value at 1020..1023, so the refusal is
     phase2 = ramp(64, base=7000)                # checkable against something other than "unwritten"
+    seed = ramp(COMPUTE_N, base=COMPUTE_BASE)   # phase 3: what the COMPUTE rewrites in place
 
     # `tid` is 1-based and simply counts the commands on each stream.  Any host scheme would do --
     # what matters is that the response echoes it, so a reply can be matched to its command without
     # relying on ordering.
-    writes = [write_cmd(1, f, 0),                          # the witness's ramp
-              write_cmd(2, len(sentinel), bad_wp),         # the sentinel
-              write_cmd(3, bad_n, bad_wp),                 # OUT OF RANGE: 1020 + 8 > 1024
-              write_cmd(4, len(phase2), 64)]               # phase 2, overlapping the read below
-    data_w = ramp(f) + sentinel + ramp(bad_n, base=900) + phase2
+    #
+    tail_addr, tail_n = 128, 128                # a stretch of the ramp nothing writes again
+    # Order is load-bearing on BOTH streams -- see the docstring.  Early for the writer and late for
+    # the reader for everything the reader must not overtake; the reverse for phase 2, which must
+    # overlap on purpose and therefore goes BEFORE the compute's 64 cycles.
+    writes = [write_cmd(1, f, 0),                          # the witness's ramp; arms the reader
+              write_cmd(2, len(sentinel), bad_wp),         # the sentinel: 4 words, done at once
+              write_cmd(3, len(phase2), 64),               # phase 2, overlapping the read below
+              write_cmd(4, len(seed), COMPUTE_ADDR),       # phase 3: seed the compute region
+              compute_cmd(5, COMPUTE_N, COMPUTE_ADDR),     # phase 3: x*3+1 in place, NO payload
+              compute_cmd(6, bad_n, bad_wp)]               # OUT OF RANGE, and a COMPUTE: no payload
+    # Payload for the WRITEs only, in their order.  A COMPUTE contributes nothing, and
+    # `write_scenario` re-derives this split from the opcodes rather than trusting this line.
+    data_w = ramp(f) + sentinel + phase2 + seed
     reads = ([read_cmd(i + 1, 1, a) for i, a in enumerate(ADDRS)]   # the witness's five addresses
              + [read_cmd(6, bad_n, bad_wp)]                # OUT OF RANGE: no data, only a status
              + [read_cmd(7, 64, 0)]                        # phase 2: overlaps the write of 64..127
-             + [read_cmd(8, len(sentinel), bad_wp)])       # the refused write left these alone
-    want_data_r = list(EXPECTED) + ramp(64) + sentinel
+             + [read_cmd(8, tail_n, tail_addr)]            # spacing: the ramp's tail, hazard-free
+             + [read_cmd(9, len(sentinel), bad_wp)]        # the refused write left these alone
+             + [read_cmd(10, COMPUTE_N, COMPUTE_ADDR)])    # phase 3: what the COMPUTE left behind
+    want_data_r = (list(EXPECTED) + ramp(64) + ramp(tail_n, base=BASE + tail_addr)
+                   + sentinel + computed(seed))
     ok, bad = BramStatus.OK, BramStatus.OUT_OF_RANGE
     return Scenario(cmd_w=tuple(writes), data_w=tuple(data_w), cmd_r=tuple(reads),
-                    want_resp_w=tuple(write_resp(c.tid, bad if i == 2 else ok)
+                    want_resp_w=tuple(write_resp(c.tid, bad if i == 5 else ok)
                                       for i, c in enumerate(writes)),
                     want_data_r=tuple(want_data_r),
                     want_resp_r=tuple(read_resp(c.tid, bad if i == 5 else ok)
                                       for i, c in enumerate(reads)),
                     overlap_read=(len(EXPECTED), len(EXPECTED) + 64),
-                    overlap_write_resp=3,
+                    overlap_write_resp=2,
                     cadence_read=(len(EXPECTED), len(EXPECTED) + 64),
+                    compute_read=(len(want_data_r) - COMPUTE_N, len(want_data_r)),
                     label="scenario zero")
 
 
@@ -736,23 +906,30 @@ def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) ->
     thing being sent rather than from a convention stated here: a command's from its schema
     (``serialize`` decides the length), a payload's from the ``nsamp`` of the command it belongs to.
 
-    *A command is ONE burst.*  ``get(WriteCmd)`` asks for the schema's whole word count in a single
+    *A command is ONE burst.*  ``get(WriteComputeCmd)`` asks for the schema's whole word count in a
     call, and a pysim slave dequeues a whole burst per call — so a command split across bursts would
     be read a fragment at a time and the design would have to count words again.
 
-    *A payload is ONE BURST OF ITS COMMAND'S ``nsamp`` WORDS.*  This replaces a one-word-per-burst
-    framing whose stated reason was "one pysim firing equals one RTL firing".  That rationale is
-    retired with the per-element loops it justified: a pysim body that reads a word at a time is not
-    a faithful twin of an ``II=1`` C++ loop, it is a design that has opted out of the LT model — the
-    same relationship ``PolyAccel`` has to ``poly_evaluate_impl.tpp``, where vectorized Python stands
-    against a looped ``.tpp`` and the timing lives in the model.  ``get_pipelined(count=nsamp)``
-    needs the payload as one burst, because a pysim slave dequeues a whole burst per call and
-    truncation *discards* the remainder.
+    *A payload is ONE BURST OF ITS COMMAND'S ``nsamp`` WORDS — for a ``WRITE`` ONLY.*  A
+    :attr:`BramOp.COMPUTE` reads the memory it rewrites, so it consumes **no** payload words at all,
+    and its ``nsamp`` must not appear here.  That is the alignment nothing else would catch: a
+    payload stream framed against *every* command would hand each later ``WRITE`` the previous one's
+    data, silently, from the first ``COMPUTE`` onwards.  So the split is re-derived from the opcodes
+    below rather than taken from how a scenario happened to build its ``data_w``, and the total is
+    checked against it.
+
+    The one-burst framing itself replaced a one-word-per-burst one whose stated reason was "one pysim
+    firing equals one RTL firing".  That rationale is retired with the per-element loops it
+    justified: a pysim body that reads a word at a time is not a faithful twin of an ``II=1`` C++
+    loop, it is a design that has opted out of the LT model — the same relationship ``PolyAccel`` has
+    to ``poly_evaluate_impl.tpp``, where vectorized Python stands against a looped ``.tpp`` and the
+    timing lives in the model.  ``get_pipelined(count=nsamp)`` needs the payload as one burst,
+    because a pysim slave dequeues a whole burst per call and truncation *discards* the remainder.
 
     **This is a change to the vectors, so it was re-gated rather than assumed.**  ``words.bin`` is
     byte-identical — the same words in the same order — but ``bounds.bin`` is not, and both backends
     read it: the XSI ``AxisMaster`` asserts ``TLAST`` once per command now instead of once per word.
-    The DUT does not care (``bram_write_cmd_task`` reads a raw ``hls::stream`` ``nsamp`` times and
+    The DUT does not care (``bram_write_compute_task`` reads a raw ``hls::stream`` ``nsamp`` times and
     never inspects ``TLAST`` on the payload), which is why the measured cycle count is unmoved — see
     ``tests/examples/test_bram_simple_xsi.py``.
     """
@@ -765,12 +942,16 @@ def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) ->
         write_burst_bundle([np.asarray(m.serialize(word_bw=bw), dtype=np.uint64) for m in msgs],
                            root / "vectors" / name)
     words = np.asarray(sc.data_w, dtype=np.uint64)
-    ends = np.cumsum([int(c.nsamp) for c in sc.cmd_w])
-    if ends[-1] != words.size:
+    # WRITEs only.  Read the opcode rather than assuming every command carries payload -- a COMPUTE
+    # consumes none, and framing against it would hand every later WRITE the previous one's data.
+    nsamps = [int(c.nsamp) for c in sc.cmd_w if BramOp(int(c.opcode)) is BramOp.WRITE]
+    ends = np.cumsum(nsamps) if nsamps else np.zeros(0, dtype=np.int64)
+    total = int(ends[-1]) if ends.size else 0
+    if total != words.size:
         raise ValueError(
-            f"the scenario's write commands ask for {int(ends[-1])} payload words but data_w holds "
-            f"{words.size}. The payload is framed BY COMMAND now, so the two cannot drift: a "
-            f"mismatch would silently re-align every later command's data.")
+            f"the scenario's WRITE commands ask for {total} payload words but data_w holds "
+            f"{words.size}. The payload is framed BY COMMAND, and only a WRITE has one, so the two "
+            f"cannot drift: a mismatch would silently re-align every later command's data.")
     write_burst_bundle([words[a:b] for a, b in zip([0, *ends[:-1]], ends)],
                        root / "vectors" / "data_w")
     return sc
