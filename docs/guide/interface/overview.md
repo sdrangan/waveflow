@@ -130,10 +130,18 @@ Two things follow, and both are enforced rather than documented:
 a design body moves whole vectors and the interface supplies the cycles, while the generated C++
 keeps its `#pragma HLS PIPELINE II=1` loop. A per-element `for` in a pysim body is a defect rather
 than a fidelity feature — it opts the design out of the model. `examples/stream_inband`'s
-`PolyAccel` is the reference, and `examples/bram_simple` is the same shape over a memory.
+`PolyAccel` is the reference, and [`bram_access`](../../examples/bram_access/) is the same shape over
+a memory.
 
 Cells marked *not built* are filled as each case ships; see `plans/typed_transfer_codec.md`.
 (`BramIF`'s Case 1 has no caller yet, which is why it is deliberately last.)
+
+**All three cases in one design:** [A memory reached three ways](../../examples/bram_access/) is the
+worked example. `WRITE` is Case 1 into the memory, `COMPUTE` is Case 3 over it, `READ` is Case 2 out
+of it — and because `WRITE` and `COMPUTE` share one port on one task, the difference between moving a
+word and computing on it in place is
+[a measurement in one waveform](../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write)
+rather than an argument.
 
 ### SimPy integration
 

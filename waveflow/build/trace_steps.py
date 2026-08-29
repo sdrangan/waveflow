@@ -132,7 +132,7 @@ class AddVcdTopStep(BuildStep):
     source_artifact: str
     output_dir: str = "xsi"
     #: The module xsim actually elaborates, when that is NOT the kernel.  A design whose memory lives
-    #: beside the kernel is elaborated as its WRAPPER (``bram_simple_top``), and both the dumper's
+    #: beside the kernel is elaborated as its WRAPPER (``bram_access_top``), and both the dumper's
     #: file name and the scope it names have to follow: `run.bat` picks ``vcd_dumper_%TOP%.v``, and a
     #: ``$dumpvars`` naming a scope that is not part of this elaboration is a hard error.  Left
     #: ``None`` for the ordinary case, where the kernel is the top.

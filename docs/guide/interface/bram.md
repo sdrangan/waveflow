@@ -158,6 +158,11 @@ all, so no wrapper can mis-wire it. `tests/build/test_bram_readwrite_vitis.py` a
 against the emitted Verilog, with a unidirectional port synthesized alongside as the control — so
 "no `_B` signals" is evidence of `ram_1p` rather than of an argument that was optimized away.
 
+[A memory reached three ways](../../examples/bram_access/) runs the same experiment inside a real
+design, where the two access shapes go through one port seconds apart and
+[the waveform measures them](../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write):
+32 words written in 32 cycles, the same 32 recomputed in place in 63.
+
 **The lesson is the mechanism, not the number.** "In-place is II=2" is false in general. "The wrapper
 gives you one physical port, so the pragma pins Vitis to one, so read-modify-write costs two cycles
 per element" is true and explains itself.
@@ -224,7 +229,7 @@ a string that could never appear, and each read as positive evidence. All five h
 from waveflow.build.wrapper_gen import bram_hazard_manifest
 from waveflow.utils.bram_trace import find_read_during_write
 
-hazards = find_read_during_write("bram_simple_top_trace.vcd", bram_hazard_manifest(comp, spec))
+hazards = find_read_during_write("bram_access_top_trace.vcd", bram_hazard_manifest(comp, spec))
 assert not hazards            # ...but see the next paragraph
 ```
 
@@ -235,8 +240,8 @@ those names, so binding is exact and a name that has moved fails loudly.
 **An empty scan is not a passing gate on its own.** No collisions is what a correct design looks
 like, and *also* what a renamed net, a dump that never ran, or a scan bound to the wrong scope look
 like. Pair it with a scenario that deliberately collides and assert that one is *not* empty —
-`tests/examples/test_bram_simple_xsi.py` does exactly this, and
-`examples/bram_simple`'s `collision_scenario()` is the deliberate half.
+`tests/examples/test_bram_access_xsi.py` does exactly this, and
+`examples/bram_access`'s `collision_scenario()` is the deliberate half.
 
 **Address overlap alone will not produce a collision.** Two `II=1` sweeps over the same range are
 parallel lines in (cycle, address): they never meet unless they happen to start in the same cycle.
@@ -301,7 +306,7 @@ twice.
 
 **Choose a gated geometry that wraps.** If your example addresses fewer words than `depth / (W/8)`,
 it is not testing this convention — it is only testing that it is self-consistent.
-[`examples/bram_simple`](../../examples/bram_simple/) is gated at 64 bits with 256 of 1024 words for
+[`examples/bram_access`](../../examples/bram_access/) is gated at 64 bits with 256 of 1024 words for
 exactly that reason: word 128 onward aliases immediately if anything here is wrong.
 
 ### The guard is a measurement, not a belief
@@ -312,13 +317,13 @@ convention, the test fails with the two numbers side by side rather than a desig
 mis-addressing its memory again.
 
 **And a range check will not save you.** A `(pointer, count)` bounds check — like the one
-`examples/bram_simple` performs — is in **words**, the caller's units. The scaling defect lives
+`examples/bram_access` performs — is in **words**, the caller's units. The scaling defect lives
 *below* it, in the wrapper: a command reading words 0…255 of a 1024-word memory passes the range
 check and still aliases. Two different failures, two different guards.
 
 ## Sequencing belongs in the design
 
-[`examples/bram_simple`](../../examples/bram_simple/) is the worked example, and it makes the point by
+[`examples/bram_access`](../../examples/bram_access/) is the worked example, and it makes the point by
 having had to solve it. Its writer emits one token on an ordinary internal stream after its first
 completed command; its reader waits for that token once, then serves commands. The witness this
 example reproduces got the same ordering from its *testbench* (drive all 256 samples, then the
@@ -332,6 +337,7 @@ habits.
   declares, the port-name chain, and the latency single-source rule.
 - [Free-running composite](../comp_codegen/freerunning_composite.md) — where the wrapper fits, and
   what `csynth` does *not* count.
-- [Shared memory between two modules](../../examples/bram_simple/) — the worked example: two tasks,
-  one memory, the wrapper, and the hazard scan that replaced the unheard `$error`.
+- [A memory reached three ways](../../examples/bram_access/) — **the worked example**: two tasks and
+  one memory reached by `WRITE`, `COMPUTE` and `READ`, the wrapper that joins them, the hazard scan
+  that replaced the unheard `$error`, and the measured cost of a read-write port.
 - [Memory](../memory/) — the other storage categories, and which of them the tool chooses for you.

@@ -22,7 +22,7 @@ file: ``$display`` from an ``always`` block, an ``initial $display``, and a non-
 ``s_xsi_setup_info::logFileName`` were each measured to produce nothing, while an ``$fwrite`` to a
 file the Verilog opens itself works — which is what proves the RTL really is executing the code that
 would have printed.  The consequence was five shipped gates asserting the absence of a string that
-could never appear (``plans/bram_simple.md``, *DECIDED 2026-08-25*).
+could never appear (``plans/bram_access.md``, *DECIDED 2026-08-25*).
 
 So the **condition** is checked here instead, from the ``<top>_trace.vcd`` a traced XSI run dumps.
 That is a weaker thing than the assertion firing — a second implementation of the same predicate
@@ -189,7 +189,7 @@ def find_read_during_write(vcd_path: str | Path, manifest: dict) -> list[Hazard]
         a caller asserting emptiness must also run a scenario that is **not** empty — otherwise a
         scan that silently found nothing (a renamed net, a dump that never ran) is indistinguishable
         from a design that is correct.  The paired positive control belongs to the caller;
-        ``tests/examples/test_bram_simple_xsi.py`` is what one looks like.
+        ``tests/examples/test_bram_access_xsi.py`` is what one looks like.
 
     Raises
     ------

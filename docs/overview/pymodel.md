@@ -1,6 +1,7 @@
 ---
 title: "The Python model"
 parent: Overview
+grand_parent: Waveflow
 nav_order: 2
 ---
 

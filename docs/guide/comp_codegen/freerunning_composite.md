@@ -166,8 +166,8 @@ composite carries an on-chip memory shared by two of its tasks, because
 generated **wrapper**:
 
 ```
-bram_simple_top.v     the WRAPPER — instantiates the kernel + the memory, and joins them
-  bram_simple.v       the generated kernel (csynth's own name, kept)
+bram_access_top.v     the WRAPPER — instantiates the kernel + the memory, and joins them
+  bram_access.v       the generated kernel (csynth's own name, kept)
   bram_t2p.v          the hand-written memory
 ```
 
@@ -177,7 +177,7 @@ Three consequences worth having in mind before you build one:
 ports — the memory is internal and invisible to any testbench. That is what makes it the first
 boundary a resource estimate can be *defined* against.
 
-**`csynth` does not count what is outside the kernel.** The synthesis report for `bram_simple`
+**`csynth` does not count what is outside the kernel.** The synthesis report for `bram_access`
 reports **`BRAM_18K = 0`** while the memory beside it is four RAMB18s, because the memory is not in
 it. That is not a rounding error in an estimate; it
 is a whole category missing, and it is half the reason to have a wrapper. A structural block can

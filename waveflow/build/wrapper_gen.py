@@ -115,7 +115,7 @@ class WrapperSpec:
     Answerable rather than only renderable, exactly as :class:`~waveflow.build.composite_gen.TopSpec`
     is: a test can ask *"is the A half wired and the B half tied off?"* without parsing Verilog.
     """
-    name: str                                     # the wrapper module, e.g. "bram_simple_top"
+    name: str                                     # the wrapper module, e.g. "bram_access_top"
     kernel: str                                   # the kernel module it instantiates
     ports: tuple[tuple[str, str, int], ...]       # (port, direction, width) in declaration order
     mems: tuple[MemInst, ...] = ()
@@ -292,7 +292,7 @@ def bram_hazard_manifest(comp, spec) -> dict:
             $error("bram_t2p: read-during-write collision at addr %0d", a_addr[AW-1:0]);
 
     and in the XSI flow **nothing can read that** — RTL text output reaches neither stdout nor a log
-    (``plans/bram_simple.md``, *DECIDED 2026-08-25*).  So the condition is checked from the waveform
+    (``plans/bram_access.md``, *DECIDED 2026-08-25*).  So the condition is checked from the waveform
     instead, and this is the half that must not be guessed: *which net* carries each term.  Same
     argument as :meth:`~waveflow.build.composite_gen.TopSpec.trace_manifest` — codegen chose these
     names, so binding is exact, and a name that has moved fails loudly rather than matching nothing.

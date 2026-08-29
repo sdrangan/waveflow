@@ -1,6 +1,7 @@
 ---
 title: Build targets
 parent: Overview
+grand_parent: Waveflow
 nav_order: 4
 ---
 

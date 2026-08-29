@@ -1,6 +1,6 @@
 """The pure half of :mod:`waveflow.utils.bram_trace` — no VCD, no toolchain.
 
-The VCD-reading half is exercised by ``tests/examples/test_bram_simple_xsi.py``, which is the only
+The VCD-reading half is exercised by ``tests/examples/test_bram_access_xsi.py``, which is the only
 place it *can* be exercised honestly: a scan needs a real waveform with a real collision in it.  What
 is here is the arithmetic those gates rest on, pinned where it costs nothing to run.
 """

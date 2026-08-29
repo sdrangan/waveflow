@@ -503,7 +503,7 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
 
 
 def wrapper_name(top_name: str) -> str:
-    """The wrapper module's name for kernel *top_name* — ``bram_simple`` -> ``bram_simple_top``.
+    """The wrapper module's name for kernel *top_name* — ``bram_access`` -> ``bram_access_top``.
 
     One artifact keeps the name it has: csynth names the kernel, and renaming it to make room for the
     wrapper would make every report, every ``.f`` entry and every waveform scope disagree with the

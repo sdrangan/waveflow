@@ -347,7 +347,7 @@ def test_the_source_outlives_the_design_by_one_block_and_that_is_why_the_last_on
 # REMOVED 2026-08-25: `test_neither_memorys_read_during_write_assertion_fired` asserted that
 # "read-during-write collision" was absent from the run's stdout.  It could never fire --
 # the XSI flow discards RTL text output, so `bram_t2p.v`'s $error reaches no channel a test
-# can read (measured four ways, see plans/bram_simple.md).  The whole test body was that one
+# can read (measured four ways, see plans/bram_access.md).  The whole test body was that one
 # assertion, so the test went with it rather than stand as evidence it never had.  The
 # condition is to be gated from the VCD trace; until then it is checked nowhere, which is
 # what was already the case.

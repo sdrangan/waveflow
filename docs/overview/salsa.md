@@ -1,6 +1,7 @@
 ---
 title: "SALSA: the motivating system"
 parent: Overview
+grand_parent: Waveflow
 nav_order: 6
 ---
 

@@ -1,7 +1,8 @@
 # The typed-transfer codec — one adapter, every transport
 
 **Status:** S1 + S2 + S3c + S3a (Case 2) + S5 + S3b/Case 3 (`array_ref`) + S5d (the `COMPUTE`
-opcode) LANDED (2026-08-27); Case 1, the partitioning gate, S5e and S4 proposed.  Steps 1 and 2 of
+opcode) + S5e (the rename to `bram_access`, and the docs restructure) LANDED (2026-08-27/28);
+Case 1, the partitioning gate and S4 proposed.  Steps 1 and 2 of
 the parent thread were already done before that (see *Already landed*); this file is step 3, the one
 with teeth.
 
@@ -162,7 +163,7 @@ never sees the helper bodies.
 
 **Gate:** `git diff` on every generated `include/` and `gen/` artifact in `examples/` must be empty.
 This step is a refactor; if a header moves, something was not equivalent.  **Run 2026-08-27 over all
-seven artifact-producing examples (`bram_simple`, `interleaver`, `mem_copy`, `regmap`, `rf_loopback`,
+seven artifact-producing examples (`bram_access`, `interleaver`, `mem_copy`, `regmap`, `rf_loopback`,
 `rf_relayout`, `rf_shot_buf`) with `--force`: empty.  PASSED.**
 
 **As built, the mixin is FOUR methods, not three, and the fourth is a finding.**  `_unpack` and
@@ -206,7 +207,7 @@ never iterates elements.  That is the point of the tool: **a per-element loop in
 defect, not a fidelity feature.**  Allowing vectorized operations with an LT model is a major
 motivation of Waveflow, and a design body that loops has opted out of it.
 
-`examples/bram_simple` currently loops on both paths and is the outlier to fix.
+`examples/bram_access` currently loops on both paths and is the outlier to fix.
 
 ##### What is missing
 
@@ -232,7 +233,7 @@ than invented:
   than their sum. This is exactly `StreamIFMaster.write_pipelined`'s existing contract; nothing new
   is needed for it.
 
-**The proof that this belongs on the interface** is already in `bram_simple`: `BramReadCmd.run_iter`
+**The proof that this belongs on the interface** is already in `bram_access`: `BramReadCmd.run_iter`
 hand-writes `yield self.timeout(self.buf_r.read_latency / self.clk.freq)` behind a
 `model_read_latency` flag. That is `read_pipelined`'s fill term, written out longhand in a design
 body because there was nowhere else to put it. It should move onto the endpoint and the flag should
@@ -286,10 +287,10 @@ plugged in — deliberately, so there is no second anchoring convention:
   clamp verbatim.
 - `BramIF` gained an **optional** `clk`.  The scalar `mem_read` / `mem_write` are untimed and need
   none; a pipelined op refuses loudly without one, the same shape as `read_latency` refusing when
-  unbound.  Only `bram_simple`'s two `BramIF`s set it so far.
+  unbound.  Only `bram_access`'s two `BramIF`s set it so far.
 - `T2pBram` gained `store_block` / `load_block`, range-checked over the **whole extent before any of
   it lands**.  `load_block` returns a copy, and says so: a live view is Case 3.
-- `examples/bram_simple` has **no `for` in either `run_iter`** (asserted structurally, by `ast`, not
+- `examples/bram_access` has **no `for` in either `run_iter`** (asserted structurally, by `ast`, not
   by grep — the docstrings talk about loops).  `model_read_latency` is gone; the flag existed only
   because the fill was hand-written in the body.  `src/*.h` are **untouched** and keep their
   `#pragma HLS PIPELINE II=1`.
@@ -390,7 +391,7 @@ def bitwidth(self) -> int:
 
 which is exactly what `SobIFMaster` already does (`element_type` declared, `bitwidth` a derived
 property).  This follows an established pattern here rather than inventing one.  `ramb18_count`
-keeps working unchanged, and `examples/bram_simple` migrates as `elem_type=Word64` — same behaviour.
+keeps working unchanged, and `examples/bram_access` migrates as `elem_type=Word64` — same behaviour.
 
 **As built (2026-08-27).**  `BramIFMaster` / `BramIFSlave` / `T2pBram` declare `element_type` +
 `nelem`; `bitwidth` (and `T2pBram.dwidth`, the name the Verilog's `DW` is emitted from) are derived
@@ -406,7 +407,7 @@ properties.  Details worth knowing before S3a:
   `__init__`, and a class is hashable so the memo key is fine.
 - **`word_element(N)`** is the vocabulary for a memory that really does hold raw words; it is
   `IntField.specialize(N, signed=False)`, which caches, so both ends of a bind get the *same class
-  object* and the new element check is an identity comparison.  `bram_simple` and the three
+  object* and the new element check is an identity comparison.  `bram_access` and the three
   `rf_*_buf` framework modules migrated through it, keeping their `bitwidth` `HwParam` as the single
   width knob (at the default, `word_element(64) is Word64`).
 - **The bind checks the element as well as the extent**, and that is the quieter half of the same
@@ -423,13 +424,13 @@ properties.  Details worth knowing before S3a:
 
 **Gate (run 2026-08-27).**  Every example's tracked `gen/` + `include/` + `xsi/` artifact is
 **byte-identical** after the migration (`git diff` empty across all seven artifact-producing
-examples).  `-m xsi`: `bram_simple` 11/11, plus `rf_shot_buf` / `rf_samp_buf_rx` / `rf_samp_buf_tx` /
+examples).  `-m xsi`: `bram_access` 11/11, plus `rf_shot_buf` / `rf_samp_buf_rx` / `rf_samp_buf_tx` /
 `rf_blk_delay` 21/21 — every BRAM-backed design still gates at RTL with its recorded numbers.
 
 #### S3d — MEASURED: the csynth gates (2026-08-27, Vitis HLS 2025.1, xc7z020clg484-1)
 
 Three minimal free-running `ap_ctrl_none` + `hls::task` tops, each with two `mode=bram
-storage_type=ram_1wnr latency=1` ports, modelled on `gen/bram_simple.cpp`.  All three **csynth
+storage_type=ram_1wnr latency=1` ports, modelled on `gen/bram_access.cpp`.  All three **csynth
 clean**, and — the check that matters, because `mode=bram` on an unsized pointer degrades to an
 `ap_vld` scalar port in silence — all three emit the full **14-signal A/B pair** per port:
 
@@ -471,14 +472,14 @@ The gate sources are disposable; if S3 is built they should be re-landed as a re
   requirement, not a thing to avoid.
 - **No acquire/commit scope.**  The tempting precedent is SOB's `acquire_write` / `commit_write`,
   but that lifecycle exists to enforce *exclusivity* (ping-pong, a producer/consumer handshake).
-  `BramIF` deliberately refuses to arbitrate — `bram_simple`'s docs say keeping the ranges disjoint
+  `BramIF` deliberately refuses to arbitrate — `bram_access`'s docs say keeping the ranges disjoint
   is the CALLER's job, and the read-during-write collision is a reachable outcome with a negative
   gate built around it.  A `with` scope would look like arbitration and provide none.  The bare
   reference is more honest **because it promises nothing**.
-- ~~**Do not vectorize `bram_simple`'s loops.**~~ **CORRECTED — this was wrong too**, and for
+- ~~**Do not vectorize `bram_access`'s loops.**~~ **CORRECTED — this was wrong too**, and for
   the same reason.  It defended the word-at-a-time loop as a faithful twin of the `II=1` C++ body.
   That is not how this repo models pipelined loops: `PolyAccel` is vectorized Python against a
-  looped `.tpp`, with the timing in the LT model.  `bram_simple` is the design that should be
+  looped `.tpp`, with the timing in the LT model.  `bram_access` is the design that should be
   vectorized FIRST, not exempted.
 
 #### S3f — naming
@@ -507,7 +508,7 @@ if (b_en) begin  if (|b_we) mem[b_addr] <= b_din;  b_dout <= mem[b_addr];  end
 
 Either port can read or write on any cycle — that is what *true* dual-port means, as against
 *simple* dual-port (one write, one read).  The header comment "Port A is the write side, port B the
-read side" describes how `bram_simple` uses it, not what the module can do.  Vitis's own
+read side" describes how `bram_access` uses it, not what the module can do.  Vitis's own
 `RAM_T2P_BRAM_1R1W` message says the same thing: 1R1W is the **usage**, T2P is the memory.
 
 So `access` in ("read", "write") is **Waveflow's** restriction, not the hardware's.
@@ -534,12 +535,12 @@ Both csynth clean, so the first question is answered: **Vitis does accept one `m
 and written inside one `hls::task` body.**
 
 The second answer is the important one.  Under `ram_1wnr` Vitis reaches II=1 on the in-place loop by
-**reading on port B and writing on port A** — and `bram_simple_top.v` wires only the A halves
+**reading on port B and writing on port A** — and `bram_access_top.v` wires only the A halves
 (`.a_addr(buf_w_addr_a >> 3)`, `.b_addr(buf_r_addr_a >> 3)`), so those reads would go to a dangling
 port.  X or stale data, a clean csynth, and nothing visible until RTL.
 
 **The shipped example is safe today, and that was checked rather than assumed**: every `_B` signal in
-the generated `bram_simple.v` is tied to a constant (`assign buf_r_Addr_B = 32'd0;` and so on),
+the generated `bram_access.v` is tied to a constant (`assign buf_r_Addr_B = 32'd0;` and so on),
 because a unidirectional port needs one access per cycle and Vitis only uses A.  The hazard appears
 *only* when a port becomes read-write.
 
@@ -593,7 +594,7 @@ refused at construction** rather than left to go wrong, with the reason named.
 
 Lifting the refusal is one line — `a_en && b_en && (a_addr == b_addr) && (|a_we || |b_we)`, strictly
 stronger and provably identical for every design that exists — but it edits `bram_t2p.v`, which is
-**copied into every example's `xsi/`**, so it moves tracked files in `bram_simple`, `rf_shot_buf`,
+**copied into every example's `xsi/`**, so it moves tracked files in `bram_access`, `rf_shot_buf`,
 `rf_samp_buf_rx`, `rf_samp_buf_tx` and `rf_blk_delay`.  It also has a Python twin
 (`bram_trace.find_read_during_write`, whose roles are named `write`/`read`) that must move with it.
 That is a change with its own diff to expect, not a rider on this one.  `bram_hazard_manifest` maps a
@@ -678,27 +679,42 @@ word) ~= +174`.  **The COMPUTE's own 63 cycles cost the count nothing** — it r
 the reader is busy with its 128-word read at 391…518, which is two free-running tasks sharing a
 true-dual-port memory doing exactly what the design is for.
 
-##### Docs left stale, deliberately
+##### Docs left stale, deliberately — **resolved by S5e**
 
-`codegen.md` was refreshed (its generated blocks are re-taken from the build).  The rest of the
-`docs/examples/bram_simple/` page set still describes the pre-opcode design — `overview.md`,
-`index.md` (and its topology SVG), `pysim.md`, `rtlsim.md`, `timing.md` name `WriteCmd` /
-`BramWriteCmd` and quote the old vectors and cycle numbers.  That is a measurement-heavy refresh of
-the same size as this step, and **S5e renames the example and touches every one of those pages**, so
-it belongs there rather than half-done here.  `python.md` is an in-progress draft on another branch
-and was not touched.
+`codegen.md` was refreshed here (its generated blocks are re-taken from the build).  The rest of the
+page set still described the pre-opcode design and quoted the old vectors and cycle numbers.  That
+was a measurement-heavy refresh of the same size as this step, and S5e touched every one of those
+pages anyway, so it was done there.
 
-#### S5e — the rename, afterwards
+#### S5e — the rename, and the docs restructure  — **LANDED (2026-08-28)**
 
-`bram_simple` is a poor name (`simple` says nothing), but the right name depends on what the example
-*ends up* being: after S5d it is no longer "two tasks streaming through a memory" but "a memory
-outside the kernel, reached three ways".  Name it then.  `bram_wrapper` is the one option to avoid —
-it names the plumbing rather than the lesson, and the wrapper is not unique to this example
-(`rf_shot_buf` and friends generate one too).
+`bram_simple` was a poor name (`simple` says nothing), and the right name depended on what the
+example *ended up* being: after S5d it is no longer "two tasks streaming through a memory" but **a
+memory outside the kernel, reached three ways**.  Hence `bram_access`, which shares a word with the
+three-access-cases table in `guide/interface/overview.md`.  (`bram_wrapper` was the option to avoid:
+it names the plumbing rather than the lesson, and the wrapper is not unique to this example.)
 
-Whenever it happens it touches the docs page set, the test files, the recorded XSI counts, the plan
-and the memory index — cheap now, expensive after the docs land, and **worst of all mid-draft**, so
-it must not collide with an in-progress `python.md`.
+**The rename was done first and gated before any prose was written**, on the reasoning that a rename
+changes no logic: full build (pysim -> codegen_dut -> codegen_tb -> csynth) under the new name, and
+XSI still **568** with `WANT_CYCLES` untouched.  It reached further than the directory — the two
+tops, every artifact named for them, the `BramSimple` / `BramSimpleTB` classes, the plan file
+`plans/bram_simple.md`, the test modules, and the memory index.  The survivor a grep for
+`bram_simple` misses is the **TikZ source**, where the name is written `bram\_simple`.
+
+**`overview.md` is deleted.**  Five of its seven sections were already in
+`docs/guide/interface/bram.md` *with the context that makes them make sense* — "BRAM are outside the
+Vitis top-level" is the guide's *Why a shared memory cannot live inside a kernel*, the 64-bit
+geometry is its *addressing convention*, the `go` token is its *Sequencing belongs in the design*.
+Restating them in the example is what made them read as arcana.  The two sections that were genuinely
+example-specific moved rather than dropped: *The commands, and why both of them answer* into
+`python.md` (as three transactions, not two), and *Overlap is legal here* into `timing.md`, where
+there is now a measurement to attach it to.
+
+`python.md` was rebuilt on the **author's own** structure — transactions, schemas, task bodies, top
+level — extending their draft rather than replacing it; `pysim.md` / `rtlsim.md` / `timing.md` had
+every number re-taken from a build run in that session, and `timing.md` gained the in-place
+measurement.  The audience is now *someone who wants a memory in their design and needs an example*,
+not a findings log.
 
 
 ### S4 — `HwState` gets the same vocabulary
@@ -725,7 +741,7 @@ has proven the shape on a second storage class.
 **Next, in order:**
 
 1. ~~**S5 — `access="readwrite"` + the `storage_type` derivation.**~~  **DONE** — see *S5c-built*.
-   Gates: `bram_simple` artifacts byte-identical (its ports are unidirectional, so its pragma is
+   Gates: `bram_access` artifacts byte-identical (its ports are unidirectional, so its pragma is
    still `ram_1wnr`), XSI 394 / 11-of-11 with `WANT_CYCLES` untouched, and a new
    `tests/build/test_bram_readwrite_vitis.py` under `-m vitis` that csynths a read-write port and a
    write-only control and greps the emitted Verilog: `ram_1p` declares **no** `_B` half, `ram_1wnr`
@@ -736,7 +752,7 @@ has proven the shape on a second storage class.
 2. ~~**Case 3 on `BramIF`** (`array_ref`)~~ **DONE** — see *S3b as built*.  S3b's rule is enforced
    rather than documented, and gated by four tests: the view is live in **both** directions, a
    composite element is refused, a read-port view raises on write, and an out-of-range extent is
-   refused.  `examples/bram_simple` calls none of it yet, so its artifacts and its XSI count (394)
+   refused.  `examples/bram_access` calls none of it yet, so its artifacts and its XSI count (394)
    are unmoved.
 3. ~~**S5d — the `COMPUTE` opcode on the example.**~~ **DONE** — see *S5d as built*: csynth II
    1/2/1, waveform 1.00 vs 1.97 cycles/element, XSI 394 -> 568 accounted for.  The XSI count changed

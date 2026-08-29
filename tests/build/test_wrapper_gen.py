@@ -6,7 +6,7 @@ Two claims are worth separating, because only the first is cheap:
   *boundary port* of the kernel and the join happens in the wrapper.  That is structural and is
   checked here, in milliseconds.
 * **The design works** — the elaborated wrapper returns the witness's five values.  Nothing static
-  can say that; it is ``tests/examples/test_bram_simple_xsi.py``, and it needs Vivado.
+  can say that; it is ``tests/examples/test_bram_access_xsi.py``, and it needs Vivado.
 
 The wrapper's shape is gated against ``plans/witness/t2p_bram/rx_top.v``, which was hand-written and
 simulated: same instantiation, same A-half wiring, same B-half tie-offs.
@@ -30,14 +30,14 @@ from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
 from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram, word_element
 
-from examples.bram_simple.bram_simple import DEPTH, WORD_BW, BramSimple, BramSimpleTB
+from examples.bram_access.bram_access import DEPTH, WORD_BW, BramAccess, BramAccessTB
 
 WITNESS = Path(__file__).resolve().parents[2] / "plans" / "witness" / "t2p_bram"
 _ELAB = {"bitwidth": WORD_BW, "depth": DEPTH}
 
 
 def _dut():
-    return elaborate(BramSimple, dict(_ELAB), name="bram_simple")
+    return elaborate(BramAccess, dict(_ELAB), name="bram_access")
 
 
 def _spec():
@@ -197,7 +197,7 @@ def test_the_hazard_manifest_names_wires_the_wrapper_actually_declares():
     ``bram_hazard_manifest`` names which wrapper wire carries each term of
     ``a_en && |a_we && b_en && a_addr == b_addr``, so a waveform scan can check the condition the
     ``$error`` checks — necessary because the XSI flow discards RTL text output entirely
-    (``plans/bram_simple.md`` § *DECIDED 2026-08-25*).
+    (``plans/bram_access.md`` § *DECIDED 2026-08-25*).
 
     The failure this closes is specific and quiet: a manifest naming a net the wrapper does not drive
     makes every scan come back **empty**, which is indistinguishable from a design with no
@@ -289,8 +289,8 @@ def test_the_wrappers_pins_are_axi_stream_and_nothing_else():
 def test_the_rendered_wrapper_is_verilog_the_witness_would_recognize():
     comp, spec = _spec()
     text = render_wrapper(wrapper_spec(comp, spec))
-    assert "module bram_simple_top (" in text
-    assert "bram_simple kernel (" in text
+    assert "module bram_access_top (" in text
+    assert "bram_access kernel (" in text
     assert "bram_t2p #(.DW(64), .AW(10)) mem (" in text
     # Only the port that HAS a B half gets one tied off.  `buf_w` is read-write -> `ram_1p` -> seven
     # pins; `buf_r` is read-only -> `ram_1wnr` -> fourteen.
@@ -303,13 +303,13 @@ def test_the_rendered_wrapper_is_verilog_the_witness_would_recognize():
 
 def test_the_committed_wrapper_matches_what_the_generator_emits():
     """The committed artifact is a build output, and a build output nobody checks drifts."""
-    from examples.bram_simple.bram_simple_build import wrapper_text
+    from examples.bram_access.bram_access_build import wrapper_text
 
-    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_simple" / "xsi" /
-                 "bram_simple_top.v")
+    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_access" / "xsi" /
+                 "bram_access_top.v")
     assert committed.read_text(encoding="utf-8").replace("\r\n", "\n") == wrapper_text(), (
-        "examples/bram_simple/xsi/bram_simple_top.v has drifted — regenerate it "
-        "(bram_simple_build.py --through codegen_dut)")
+        "examples/bram_access/xsi/bram_access_top.v has drifted — regenerate it "
+        "(bram_access_build.py --through codegen_dut)")
 
 
 # ---------------------------------------------------------------------------
@@ -318,11 +318,11 @@ def test_the_committed_wrapper_matches_what_the_generator_emits():
 
 def test_the_ports_header_names_the_wrapper_and_hides_the_bram_ports():
     _comp, spec = _spec()
-    assert spec.rtl_top == wrapper_name("bram_simple") == "bram_simple_top"
-    assert spec.elab_top == "bram_simple_top"
+    assert spec.rtl_top == wrapper_name("bram_access") == "bram_access_top"
+    assert spec.elab_top == "bram_access_top"
     h = render_ports_h(spec)
-    assert 'TOP        = "bram_simple_top"' in h
-    assert 'xsim.dir/bram_simple_top/xsimk' in h
+    assert 'TOP        = "bram_access_top"' in h
+    assert 'xsim.dir/bram_access_top/xsimk' in h
     assert "buf_w" not in h and "buf_r" not in h, (
         "a bram port is not a pin on the elaborated design — a testbench binding to it would be "
         "driving a wire that does not exist on the module it loaded")
@@ -342,7 +342,7 @@ def test_the_testbench_has_a_model_per_pin_and_none_for_the_memory():
     """If a memory ever needed a BFM, the wrapper would be the thing that is wrong."""
     from waveflow.simulation.simulation import Simulation
 
-    spec = tb_top_spec(BramSimpleTB(name="tb", sim=Simulation()))
+    spec = tb_top_spec(BramAccessTB(name="tb", sim=Simulation()))
     assert [m.cls for m in spec.models] == ["AxisMaster", "AxisMaster", "AxisSlave",
                                             "AxisMaster", "AxisSlave", "AxisSlave"]
     assert not any("Bram" in m.cls or "Mem" in m.cls for m in spec.models)
@@ -436,13 +436,13 @@ def test_a_verilog_keyword_instance_name_is_refused_by_name():
 
 
 def test_render_rtl_f_appends_the_wrappers_own_sources_last():
-    root = Path(__file__).resolve().parents[2] / "examples" / "bram_simple"
-    if not (root / "bram_simple_proj" / "solution1" / "syn" / "verilog").is_dir():
-        pytest.skip("no csynth RTL for bram_simple")
+    root = Path(__file__).resolve().parents[2] / "examples" / "bram_access"
+    if not (root / "bram_access_proj" / "solution1" / "syn" / "verilog").is_dir():
+        pytest.skip("no csynth RTL for bram_access")
     from waveflow.build.composite_gen import render_rtl_f
 
-    lines = render_rtl_f("bram_simple", root,
-                         extra=("bram_t2p.v", "bram_simple_top.v")).splitlines()
-    assert lines[-2:] == ["bram_t2p.v", "bram_simple_top.v"]
-    assert all(ln.startswith("../bram_simple_proj/") for ln in lines[:-2])
+    lines = render_rtl_f("bram_access", root,
+                         extra=("bram_t2p.v", "bram_access_top.v")).splitlines()
+    assert lines[-2:] == ["bram_t2p.v", "bram_access_top.v"]
+    assert all(ln.startswith("../bram_access_proj/") for ln in lines[:-2])
     assert len(lines) >= 6, "a .f naming only the top does not elaborate — all csynth files are needed"

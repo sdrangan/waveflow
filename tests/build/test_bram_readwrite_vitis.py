@@ -61,7 +61,7 @@ DEPTH = 1024
 #: ``_A`` / ``_B`` greps below would match nothing and the gate would pass for the wrong reason.
 #:
 #: The task body, hand-written because it owns a ``bram`` array parameter — the same reason
-#: ``bram_simple``'s bodies are.  It is deliberately minimal and it is what makes the port genuinely
+#: ``bram_access``'s bodies are.  It is deliberately minimal and it is what makes the port genuinely
 #: read-write in C++: an in-place ``store[i] = store[i]*3 + 1`` reads and writes one array through one
 #: argument.  A pragma alone would not settle it — a body that never touches the array is DCE'd, and
 #: a DCE'd argument still reports ``csynth`` OK.
