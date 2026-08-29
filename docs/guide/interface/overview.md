@@ -70,6 +70,79 @@ transfer_time = (latency_init + nwords) / clk.freq   [seconds]
 
 The `latency_init` captures wire delay, arbitration overhead, and other fixed-cost cycles. Each additional word contributes one cycle (one beat on the bus).
 
+### The three access cases
+
+An endpoint's access vocabulary is not a menu of spellings. Every operation falls into one of three
+cases, and the case is decided by **what physically happens and therefore what owns the time**. All
+three are essential; collapsing any of them models a cost the hardware does not have.
+
+| | Case 1 — timed transfer | Case 2 — pipelined overlap | Case 3 — in place |
+|---|---|---|---|
+| [`StreamIF`](stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
+| [`MMIF`](aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
+| [`BramIF`](bram.md) | *not built* — see below | `read_pipelined` / `write_pipelined` | **`array_ref`** |
+| `HwState` | — already local | — | *not built* |
+
+**Case 1 — non-overlapping timed transfer.** Data physically moves into an internal structure. The
+endpoint owns a latency model and the call elapses time. This is the model described just above.
+
+**Case 2 — pipelined overlap.** Two transfers that can proceed at once — reading one endpoint while
+writing another. The `tstart` anchoring is the whole mechanism: a read hands back the cycle its
+*first* word arrived, and `write_pipelined(data, t_start)` treats the write as having begun then,
+shortening its wait if `t_start` is already past. So the two phases **overlap** and cost
+`max(a, b)` rather than `a + b`, which is what a task that emits a word as it receives one actually
+does. There is one anchoring convention and every endpoint uses it.
+
+```python
+x, tstart = yield from self.s_in.get_pipelined(Float32, count=n)
+y = <numpy over the whole array>              # no element loop anywhere
+yield from self.buf_w.write_pipelined(y, addr, tstart)
+```
+
+**Case 3 — in place.** Unique to directly-addressable storage, and the reason is **timing, not
+copies**. A kernel computing against a BRAM transfers nothing — in C++ it is `foo(&buf[addr], n)`,
+reading and writing the memory through its port. Modelling that as a read, a compute and a write
+invents two transfers that do not exist and charges the design for them. A stream has no addressing
+and every `m_axi` access is a bus transaction, so `BramIF` and `HwState` are the only two citizens.
+
+```python
+x = self.buf.array_ref(addr, n)      # a LIVE view -- nothing moved, no simulated time passed
+x[:] = x * 3 + 1                     # in place, through one port
+yield self.timeout(n * self.buf.ii_for(2) / self.clk.freq)   # 2 accesses/element -> II=2
+```
+
+Nothing there elapses time on its own, and that is the point: **the caller owns the timing**,
+because the cost is the compute loop's `II x n` rather than a transfer. What the endpoint owes is
+the *number* to compute from — `accesses_per_cycle`, and `ii_for()` over it — so the body multiplies
+a declared rate instead of a guessed one.
+
+Two things follow, and both are enforced rather than documented:
+
+* **A reference is directional.** `access` already says what the port does, so a `"read"` port's
+  view comes back with `flags.writeable = False` and a stray write *raises* instead of silently
+  reaching nothing.
+* **A reference must never silently become a copy.** `array_ref` is available exactly when the
+  element type has a native numpy dtype, and refused otherwise — a composite element is stored as
+  its packed word, so referencing it would have to deserialize into a fresh object. The copying
+  Case 1 ops are the answer for that element type.
+
+**Vectorized Python, looped HLS, timing carried by the model.** These cases are what make that work:
+a design body moves whole vectors and the interface supplies the cycles, while the generated C++
+keeps its `#pragma HLS PIPELINE II=1` loop. A per-element `for` in a pysim body is a defect rather
+than a fidelity feature — it opts the design out of the model. `examples/stream_inband`'s
+`PolyAccel` is the reference, and [`bram_access`](../../examples/bram_access/) is the same shape over
+a memory.
+
+Cells marked *not built* are filled as each case ships; see `plans/typed_transfer_codec.md`.
+(`BramIF`'s Case 1 has no caller yet, which is why it is deliberately last.)
+
+**All three cases in one design:** [A memory reached three ways](../../examples/bram_access/) is the
+worked example. `WRITE` is Case 1 into the memory, `COMPUTE` is Case 3 over it, `READ` is Case 2 out
+of it — and because `WRITE` and `COMPUTE` share one port on one task, the difference between moving a
+word and computing on it in place is
+[a measurement in one waveform](../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write)
+rather than an argument.
+
 ### SimPy integration
 
 Interface transactions are modelled as SimPy generator processes. Calling `write` or `read` on a master endpoint returns a generator; the caller must yield it to advance simulation time:

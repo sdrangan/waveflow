@@ -53,7 +53,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
+from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram, word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.dataschema import DataList
@@ -220,8 +220,8 @@ class RfSampBufLoader(FreeRunMod):
                 f"not give back")
         samp_type(w, spw)                       # refuses a sample that would straddle a slot
         self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
-        self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w", bitwidth=w, depth=d,
-                                  access="write")
+        self.buf_w = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_w",
+                                  element_type=word_element(w), nelem=d, access="write")
         self.rd_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_rd_in", bitwidth=w,
                                    has_tlast=True)
         self.wr_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_wr_out", bitwidth=w,
@@ -462,8 +462,8 @@ class RfSampBufPlayer(FreeRunMod):
                                    has_tlast=True)
         self.rd_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_rd_out", bitwidth=w,
                                      has_tlast=True)
-        self.buf_r = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_r", bitwidth=w, depth=d,
-                                  access="read")
+        self.buf_r = BramIFMaster(sim=self.sim, name=f"{self.name}_buf_r",
+                                  element_type=word_element(w), nelem=d, access="read")
         self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
                                     has_tlast=True)
         for ep in (self.wr_in, self.rd_out, self.buf_r, self.s_out):
@@ -635,7 +635,8 @@ class RfSampBufTx(FreeRunMod):
 
         # `mem`, not `buf`: the attribute name becomes the Verilog instance name and `buf` is a
         # primitive gate (the wrapper emitter refuses it by name).
-        self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem", dwidth=w, depth=d)
+        self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem",
+                           element_type=word_element(w), nelem=d)
         self.add_rtl_mod(self.mem)
         w_if = BramIF(name=f"{self.name}_bufw_if", sim=self.sim)
         w_if.bind(ep_name="master", endpoint=self.loader.buf_w)

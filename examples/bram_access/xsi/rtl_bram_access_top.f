@@ -1,0 +1,11 @@
+../bram_access_proj/solution1/syn/verilog/bram_access.v
+../bram_access_proj/solution1/syn/verilog/bram_access_bram_read_cmd_task_64_1024_Pipeline_read_payload.v
+../bram_access_proj/solution1/syn/verilog/bram_access_bram_read_cmd_task_64_1024_s.v
+../bram_access_proj/solution1/syn/verilog/bram_access_bram_write_compute_task_64_1024_Pipeline_compute_inplace.v
+../bram_access_proj/solution1/syn/verilog/bram_access_bram_write_compute_task_64_1024_Pipeline_write_payload.v
+../bram_access_proj/solution1/syn/verilog/bram_access_bram_write_compute_task_64_1024_s.v
+../bram_access_proj/solution1/syn/verilog/bram_access_fifo_w64_d1_S.v
+../bram_access_proj/solution1/syn/verilog/bram_access_flow_control_loop_pipe_sequential_init.v
+../bram_access_proj/solution1/syn/verilog/bram_access_regslice_both.v
+bram_t2p.v
+bram_access_top.v

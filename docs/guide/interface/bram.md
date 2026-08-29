@@ -38,12 +38,17 @@ like a circular buffer; the RTL is a synchronized ping-pong. The writer **stalls
 has not released a buffer — and a stage facing a converter, an ADC, or anything else that cannot wait
 may never stall.
 
-### One `bram` port written by one task and read by the other — **hard error**
+### One array written by one task and read by **another** — **hard error**
 
 ```
 ERROR: [HLS 200-976] Argument 'buf_r' failed dataflow checking:
                      Cannot read as well as write over function parameter.
 ```
+
+Read that message for what it says. It is the **dataflow checker** objecting to an argument crossing
+two task bodies — one process writing what another reads. It is *not* a prohibition on a
+bidirectional `mode=bram` port: one task reading and writing one port is accepted, and measured to
+be. See [`access="readwrite"`](#accessreadwrite-and-the-storage_type-that-follows) below.
 
 ### Why the tool is not being obtuse
 
@@ -61,8 +66,9 @@ outside one.
 ## The shape
 
 ```python
-self.buf_w = BramIFMaster(bitwidth=16, depth=1024, access="write")   # on the accessor task
-self.mem   = T2pBram(dwidth=16, depth=1024)                          # the memory module
+W16 = word_element(16)                                              # a memory of raw 16-bit words
+self.buf_w = BramIFMaster(element_type=W16, nelem=1024, access="write")   # the accessor task
+self.mem   = T2pBram(element_type=W16, nelem=1024)                        # the memory module
 ...
 self.add_rtl_mod(self.mem)          # realized as hand-written Verilog beside the kernel
 w_if = BramIF(name="bufw_if", sim=self.sim)
@@ -76,8 +82,95 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
   `#pragma HLS INTERFACE mode=bram`; in RTL it is **fourteen** ports, an A/B pair of seven signals.
 * **`BramIFSlave`** is the memory's end. One endpoint is one *port* of the memory; a `T2pBram` has
   two.
-* **`access`** (`"read"` / `"write"`) is declared on both ends and checked when they bind. A port
-  used both ways is what Vitis refuses inside a kernel, and it is no safer outside one.
+* **`element_type` + `nelem`** is the whole declaration, and everything in bits follows from it:
+  `bitwidth` is a property (`element_type().get_bitwidth()`), the wrapper's byte-address shift is
+  `log2(bitwidth/8)`, and the pysim memory is `np.zeros(nelem, dtype=<the element's dtype>)` — so a
+  `Float32` memory holds float32s rather than a packing of them. A port in RTL is `addr` + `din` /
+  `dout` + `we` / `en`: uniform width, address-indexed. That *is* an array, so an element plus a
+  count is exactly what the port can express, and one address holds one element — `nelem` is also
+  the memory's depth. Use `word_element(N)` when the contents really are raw words.
+* **An element that is not a power-of-two byte count is refused where it is declared**, not at
+  wrapper generation. Vitis scales a `mode=bram` address in *bytes* by a **shift**, so a 14-bit
+  element (the RFdc dense-14 sample) has no expressible scaling — pack it into a word first. Both
+  ends check it in `__post_init__`, citing the emitter (`_bram_addr_shift`) that owns the rule.
+* **`access`** (`"read"` / `"write"` / `"readwrite"`) is declared on both ends, and the two must be
+  **identical** — they are two statements of one fact, not a permission and a use. It decides the
+  port's `storage_type`; see below.
+* **Vector access is Case 2** ([the three access cases](overview.md#the-three-access-cases)):
+  `read_pipelined(element_type, count, addr) -> (data, tstart)` and
+  `write_pipelined(data, addr, t_start)`. The model has no free parameters — throughput is II=1, one
+  element per cycle per port; the read's fill is the memory's published `READ_LATENCY`, reached
+  through the bound `BramIF` from the Verilog `localparam`, paid once per transfer rather than per
+  element; and `t_start` is the same anchoring every other endpoint uses. `mem_read` / `mem_write`
+  stay for scalar access.
+* **In-place access is Case 3**: `array_ref(addr, count)` returns a **live numpy view** of the
+  memory's storage — no transfer, no simulated time, and writes through it land in the memory. It
+  exists for *timing*: a kernel computing against a BRAM performs no transfer, so routing it through
+  a Case 1 or Case 2 op would charge the design for two that never happen. The caller owns the
+  timing and the port publishes the rate to compute it from (`accesses_per_cycle` is 1, and
+  `ii_for(2) == 2` is read-modify-write through one port). Two rules are enforced, not advised: a
+  `"read"` port's view is `flags.writeable = False`, and an element type with no native numpy dtype
+  is **refused** rather than quietly copied.
+* **The bind also checks the element**, not only the extent. Two 32-bit ports that disagree about
+  whether those bits are a float or a word line up at every address and return a correctly-shaped
+  wrong number forever — the quieter half of the aliasing class the size check already catches.
+
+## `access="readwrite"`, and the `storage_type` that follows {#accessreadwrite-and-the-storage_type-that-follows}
+
+The memory was never the restriction. `bram_t2p.v` is **symmetric** — both ports carry `din`, `we`
+*and* `dout`, which is what *true* dual-port means, as against *simple* dual-port (one write, one
+read):
+
+```verilog
+if (a_en) begin  if (|a_we) mem[a_addr] <= a_din;  a_dout <= mem[a_addr];  end
+if (b_en) begin  if (|b_we) mem[b_addr] <= b_din;  b_dout <= mem[b_addr];  end
+```
+
+So a port that reads *and* writes is a real option, and `access="readwrite"` is how it is declared.
+It is not free, and the price is not where a first guess puts it:
+
+> **The wrapper wires ONE physical memory port per declared `bram` port, so the pragma must forbid
+> Vitis from using two.**
+
+That invariant used to hold **by accident of direction** — a unidirectional port needs one access
+per cycle, so Vitis only ever used the `_A` half. A read-write port breaks the accident, and it
+breaks it silently. Measured (Vitis HLS 2025.1, one task, one port, an in-place `buf[i] = buf[i]*3+1`
+loop):
+
+| `storage_type` | compute II | write II | the `_B` half of the pair | wrapper-safe |
+|---|---|---|---|---|
+| `ram_1wnr` | 1 | 1 | **DRIVEN** — live `Addr_B`, `EN_B`, `WEN_B` | **NO** |
+| `ram_1p` | **2** | 1 | not declared at all | yes |
+
+Under `ram_1wnr` Vitis reaches II=1 by **reading on port B while writing on port A** — and the
+wrapper wired only the A halves, so those reads reach a dangling port. X or stale data, a clean
+`csynth`, nothing visible until RTL.
+
+So `storage_type` is **derived from `access`**, never a constant in the emitter:
+
+```
+access="read" | "write"   ->  storage_type=ram_1wnr    (1 physical port, II=1)
+access="readwrite"        ->  storage_type=ram_1p      (pins Vitis to 1 port, II=2 in place)
+```
+
+`ram_1p` is *structurally* safe rather than safe-by-convention: it does not declare the `_B` half at
+all, so no wrapper can mis-wire it. `tests/build/test_bram_readwrite_vitis.py` asserts exactly that
+against the emitted Verilog, with a unidirectional port synthesized alongside as the control — so
+"no `_B` signals" is evidence of `ram_1p` rather than of an argument that was optimized away.
+
+[A memory reached three ways](../../examples/bram_access/) runs the same experiment inside a real
+design, where the two access shapes go through one port seconds apart and
+[the waveform measures them](../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write):
+32 words written in 32 cycles, the same 32 recomputed in place in 63.
+
+**The lesson is the mechanism, not the number.** "In-place is II=2" is false in general. "The wrapper
+gives you one physical port, so the pragma pins Vitis to one, so read-modify-write costs two cycles
+per element" is true and explains itself.
+
+One restriction remains, and it is a *tooling* one rather than a hardware one: on a `T2pBram` only
+**port A** may write. The `$error` below is written one-sided — *A writes while B touches the same
+address* — so a writing port B would be invisible to the design's only real check. `T2pBram` refuses
+it at construction rather than letting it go wrong.
 
 ## `add_rtl_if`, not `add_if` — and that is the whole mechanism
 
@@ -136,7 +229,7 @@ a string that could never appear, and each read as positive evidence. All five h
 from waveflow.build.wrapper_gen import bram_hazard_manifest
 from waveflow.utils.bram_trace import find_read_during_write
 
-hazards = find_read_during_write("bram_simple_top_trace.vcd", bram_hazard_manifest(comp, spec))
+hazards = find_read_during_write("bram_access_top_trace.vcd", bram_hazard_manifest(comp, spec))
 assert not hazards            # ...but see the next paragraph
 ```
 
@@ -147,8 +240,8 @@ those names, so binding is exact and a name that has moved fails loudly.
 **An empty scan is not a passing gate on its own.** No collisions is what a correct design looks
 like, and *also* what a renamed net, a dump that never ran, or a scan bound to the wrong scope look
 like. Pair it with a scenario that deliberately collides and assert that one is *not* empty —
-`tests/examples/test_bram_simple_xsi.py` does exactly this, and
-`examples/bram_simple`'s `collision_scenario()` is the deliberate half.
+`tests/examples/test_bram_access_xsi.py` does exactly this, and
+`examples/bram_access`'s `collision_scenario()` is the deliberate half.
 
 **Address overlap alone will not produce a collision.** Two `II=1` sweeps over the same range are
 parallel lines in (cycle, address): they never meet unless they happen to start in the same cycle.
@@ -213,7 +306,7 @@ twice.
 
 **Choose a gated geometry that wraps.** If your example addresses fewer words than `depth / (W/8)`,
 it is not testing this convention — it is only testing that it is self-consistent.
-[`examples/bram_simple`](../../examples/bram_simple/) is gated at 64 bits with 256 of 1024 words for
+[`examples/bram_access`](../../examples/bram_access/) is gated at 64 bits with 256 of 1024 words for
 exactly that reason: word 128 onward aliases immediately if anything here is wrong.
 
 ### The guard is a measurement, not a belief
@@ -224,13 +317,13 @@ convention, the test fails with the two numbers side by side rather than a desig
 mis-addressing its memory again.
 
 **And a range check will not save you.** A `(pointer, count)` bounds check — like the one
-`examples/bram_simple` performs — is in **words**, the caller's units. The scaling defect lives
+`examples/bram_access` performs — is in **words**, the caller's units. The scaling defect lives
 *below* it, in the wrapper: a command reading words 0…255 of a 1024-word memory passes the range
 check and still aliases. Two different failures, two different guards.
 
 ## Sequencing belongs in the design
 
-[`examples/bram_simple`](../../examples/bram_simple/) is the worked example, and it makes the point by
+[`examples/bram_access`](../../examples/bram_access/) is the worked example, and it makes the point by
 having had to solve it. Its writer emits one token on an ordinary internal stream after its first
 completed command; its reader waits for that token once, then serves commands. The witness this
 example reproduces got the same ordering from its *testbench* (drive all 256 samples, then the
@@ -244,6 +337,7 @@ habits.
   declares, the port-name chain, and the latency single-source rule.
 - [Free-running composite](../comp_codegen/freerunning_composite.md) — where the wrapper fits, and
   what `csynth` does *not* count.
-- [Shared memory between two modules](../../examples/bram_simple/) — the worked example: two tasks,
-  one memory, the wrapper, and the hazard scan that replaced the unheard `$error`.
+- [A memory reached three ways](../../examples/bram_access/) — **the worked example**: two tasks and
+  one memory reached by `WRITE`, `COMPUTE` and `READ`, the wrapper that joins them, the hazard scan
+  that replaced the unheard `$error`, and the measured cost of a read-write port.
 - [Memory](../memory/) — the other storage categories, and which of them the tool chooses for you.

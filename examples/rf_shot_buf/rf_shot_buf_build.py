@@ -11,7 +11,7 @@
 The RTL rung — the same shot through real Verilog, bit-exact against the pysim golden — is the
 ``-m xsi`` gate in ``tests/examples/test_rf_shot_buf_xsi.py``.
 
-As with ``bram_simple`` and ``rf_samp_buf_rx``, what a simulator elaborates is the **wrapper**
+As with ``bram_access`` and ``rf_samp_buf_rx``, what a simulator elaborates is the **wrapper**
 (``rf_shot_buf_top``), not the kernel: the memory is inside it, which is why the testbench sees only
 AXI-Stream and the BFM library needs no memory model.
 """

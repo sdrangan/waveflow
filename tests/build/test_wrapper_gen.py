@@ -6,7 +6,7 @@ Two claims are worth separating, because only the first is cheap:
   *boundary port* of the kernel and the join happens in the wrapper.  That is structural and is
   checked here, in milliseconds.
 * **The design works** — the elaborated wrapper returns the witness's five values.  Nothing static
-  can say that; it is ``tests/examples/test_bram_simple_xsi.py``, and it needs Vivado.
+  can say that; it is ``tests/examples/test_bram_access_xsi.py``, and it needs Vivado.
 
 The wrapper's shape is gated against ``plans/witness/t2p_bram/rx_top.v``, which was hand-written and
 simulated: same instantiation, same A-half wiring, same B-half tie-offs.
@@ -28,16 +28,16 @@ from waveflow.build.composite_gen import (
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
-from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram
+from waveflow.hw.bram import BramIF, BramIFMaster, T2pBram, word_element
 
-from examples.bram_simple.bram_simple import DEPTH, WORD_BW, BramSimple, BramSimpleTB
+from examples.bram_access.bram_access import DEPTH, WORD_BW, BramAccess, BramAccessTB
 
 WITNESS = Path(__file__).resolve().parents[2] / "plans" / "witness" / "t2p_bram"
 _ELAB = {"bitwidth": WORD_BW, "depth": DEPTH}
 
 
 def _dut():
-    return elaborate(BramSimple, dict(_ELAB), name="bram_simple")
+    return elaborate(BramAccess, dict(_ELAB), name="bram_access")
 
 
 def _spec():
@@ -76,7 +76,7 @@ def test_the_memory_is_not_a_task():
     nothing asks a memory for a ``kernel_task()`` it does not have."""
     comp = _dut()
     assert [type(m).__name__ for m in comp.rtl_mods.values()] == ["T2pBram"]
-    assert [type(c).__name__ for c in comp.ordered_subcomps] == ["BramWriteCmd", "BramReadCmd"]
+    assert [type(c).__name__ for c in comp.ordered_subcomps] == ["BramWriteCompute", "BramReadCmd"]
     assert all(type(c).__name__ != "T2pBram" for c in comp.sub_comps.values())
 
 
@@ -84,10 +84,17 @@ def test_the_kernel_carries_the_bram_ports_with_a_sized_array_and_the_memorys_la
     comp, spec = _spec()
     bram = [p for p in spec.ports if p.kind == "bram"]
     assert [p.name for p in bram] == ["buf_w", "buf_r"]
+    # `storage_type` is DERIVED from the port's declared `access`, so the two ports differ: `buf_w`
+    # is read-write (the COMPUTE opcode reads what it rewrites) and gets `ram_1p`, which does not
+    # declare a second physical port; `buf_r` is read-only and keeps `ram_1wnr`.  The wrapper wires
+    # ONE physical memory port per declared bram port, so a `ram_1wnr` read-write port would let
+    # Vitis take a second one that is not there -- see waveflow.hw.bram.bram_storage_type.
+    want_storage = {"buf_w": "ram_1p", "buf_r": "ram_1wnr"}
     for p in bram:
         assert p.decl == f"ap_uint<64> {p.name}[1024]", "sized array, never a pointer"
         assert p.pragmas == (
-            f"#pragma HLS INTERFACE mode=bram port={p.name} storage_type=ram_1wnr latency=1",)
+            f"#pragma HLS INTERFACE mode=bram port={p.name} "
+            f"storage_type={want_storage[p.name]} latency=1",)
     # The 1 in `latency=1` is the memory's, read from its Verilog -- not a number in any Python file.
     assert comp.mem.read_latency == 1
 
@@ -105,14 +112,21 @@ def _witness_kernel_conns() -> dict[str, str]:
 
 
 def test_the_wrapper_connects_every_bram_net_the_witness_does():
-    """Same 28 nets, and the same **electrical** shape.
+    """The same **electrical** shape as the witness, for every net the port actually has.
 
     One deliberate difference in spelling, recorded here rather than smoothed over: the witness
     declares wires for the B half and connects them to nothing (``.buf_w_Addr_B(bw_addr_b)``, with
     ``bw_addr_b`` never read); the emitter leaves those kernel *outputs* open
     (``.buf_w_Addr_B()``).  Both are "unused"; the emitter's form does not declare a wire nobody
-    reads.  What must match exactly is the part that carries data — the A half — and the B half's
-    ``Dout``, which is a kernel INPUT and so must be *driven* in both.
+    reads.  What must match exactly is the part that carries data — the A half — and, where there is
+    one, the B half's ``Dout``, which is a kernel INPUT and so must be *driven* in both.
+
+    **``buf_w`` has no B half any more, and that is the point rather than an omission.**  It is
+    declared ``access="readwrite"``, so its pragma is ``storage_type=ram_1p`` and Vitis emits seven
+    pins instead of fourteen.  A wrapper naming pins the kernel does not have fails elaboration —
+    which is exactly how this was found — so the emitter asks the port's own ``storage_type``.  The
+    witness predates all of that and had two unidirectional ports, so its B-half rows are compared
+    only where the port still has one.
     """
     comp, spec = _spec()
     w = wrapper_spec(comp, spec)
@@ -120,8 +134,12 @@ def test_the_wrapper_connects_every_bram_net_the_witness_does():
     witness = _witness_kernel_conns()
     ties = dict(w.tieoffs)
 
-    for port in ("buf_w", "buf_r"):
-        for sig, net in bram_port_signals(port).items():
+    for port, halves in (("buf_w", ("A",)), ("buf_r", ("A", "B"))):
+        # Nothing from a half the port does not declare may appear.
+        absent = [n for n in conns if n.startswith(f"{port}_") and n.endswith("_B")]
+        assert bool(absent) == ("B" in halves), (
+            f"{port}: the wrapper connects {absent} but the port declares halves {halves}")
+        for sig, net in bram_port_signals(port, halves).items():
             assert net in conns, f"the wrapper leaves {net} unconnected"
             theirs = witness[f"{port}_{sig}"]
             if sig in ("Clk_A", "Clk_B", "Rst_A", "Rst_B"):
@@ -156,7 +174,9 @@ def test_the_a_half_reaches_the_memory_and_the_b_half_is_tied_off():
     assert conns["b_addr"] == "buf_r_addr_a >> 3" and conns["b_dout"] == "buf_r_dout_a"
     # The memory takes a write ENABLE; Vitis drives a byte-lane MASK, one bit per byte of the word.
     assert conns["a_we"] == "|buf_w_we_a"
-    assert dict(w.tieoffs) == {"buf_w_dout_b": "64'd0", "buf_r_dout_b": "64'd0"}
+    # Only `buf_r` has a B half to tie off: `buf_w` is read-write, so its pragma is `ram_1p` and
+    # Vitis declares no second port pair for it at all.
+    assert dict(w.tieoffs) == {"buf_r_dout_b": "64'd0"}
     assert dict(w.wires)["buf_w_we_a"] == 8, (
         "the WEN wire is as wide as Vitis drives it -- one bit per byte -- not the hard-coded 2 that "
         "happened to be right only at 16 bits")
@@ -177,7 +197,7 @@ def test_the_hazard_manifest_names_wires_the_wrapper_actually_declares():
     ``bram_hazard_manifest`` names which wrapper wire carries each term of
     ``a_en && |a_we && b_en && a_addr == b_addr``, so a waveform scan can check the condition the
     ``$error`` checks — necessary because the XSI flow discards RTL text output entirely
-    (``plans/bram_simple.md`` § *DECIDED 2026-08-25*).
+    (``plans/bram_access.md`` § *DECIDED 2026-08-25*).
 
     The failure this closes is specific and quiet: a manifest naming a net the wrapper does not drive
     makes every scan come back **empty**, which is indistinguishable from a design with no
@@ -234,8 +254,12 @@ def test_a_memory_only_one_side_touches_gets_no_hazard_entry():
     # Drop the write interface and the memory must drop out of the manifest with it.  `rtl_ifs` is a
     # collected VIEW, so the registration itself is what has to go; what is being tested is the
     # manifest's rule, not the registry's.
+    # The writing side is `readwrite` now (the COMPUTE opcode reads what it rewrites); the manifest
+    # maps that onto the WRITE role, because it is the side that can drive `we` -- which is the term
+    # the scan tests.  Drop whichever interface plays that role and the memory drops out with it.
     reg = comp.__dict__["_rtl_ifs"]
-    for name in [n for n, i in reg.items() if i.endpoints["slave"].access == "write"]:
+    for name in [n for n, i in reg.items()
+                 if i.endpoints["slave"].access in ("write", "readwrite")]:
         del reg[name]
     assert bram_hazard_manifest(comp, spec)["memories"] == []
 
@@ -265,22 +289,27 @@ def test_the_wrappers_pins_are_axi_stream_and_nothing_else():
 def test_the_rendered_wrapper_is_verilog_the_witness_would_recognize():
     comp, spec = _spec()
     text = render_wrapper(wrapper_spec(comp, spec))
-    assert "module bram_simple_top (" in text
-    assert "bram_simple kernel (" in text
+    assert "module bram_access_top (" in text
+    assert "bram_access kernel (" in text
     assert "bram_t2p #(.DW(64), .AW(10)) mem (" in text
-    assert "assign buf_w_dout_b = 64'd0;" in text
-    assert text.count(".buf_w_") == 14 and text.count(".buf_r_") == 14
+    # Only the port that HAS a B half gets one tied off.  `buf_w` is read-write -> `ram_1p` -> seven
+    # pins; `buf_r` is read-only -> `ram_1wnr` -> fourteen.
+    assert "assign buf_r_dout_b = 64'd0;" in text
+    assert "buf_w_dout_b" not in text, (
+        "the wrapper tied off a B half on a ram_1p port -- Vitis does not emit one, and naming it "
+        "is an xvlog error rather than a harmless extra")
+    assert text.count(".buf_w_") == 7 and text.count(".buf_r_") == 14
 
 
 def test_the_committed_wrapper_matches_what_the_generator_emits():
     """The committed artifact is a build output, and a build output nobody checks drifts."""
-    from examples.bram_simple.bram_simple_build import wrapper_text
+    from examples.bram_access.bram_access_build import wrapper_text
 
-    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_simple" / "xsi" /
-                 "bram_simple_top.v")
+    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_access" / "xsi" /
+                 "bram_access_top.v")
     assert committed.read_text(encoding="utf-8").replace("\r\n", "\n") == wrapper_text(), (
-        "examples/bram_simple/xsi/bram_simple_top.v has drifted — regenerate it "
-        "(bram_simple_build.py --through codegen_dut)")
+        "examples/bram_access/xsi/bram_access_top.v has drifted — regenerate it "
+        "(bram_access_build.py --through codegen_dut)")
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +318,11 @@ def test_the_committed_wrapper_matches_what_the_generator_emits():
 
 def test_the_ports_header_names_the_wrapper_and_hides_the_bram_ports():
     _comp, spec = _spec()
-    assert spec.rtl_top == wrapper_name("bram_simple") == "bram_simple_top"
-    assert spec.elab_top == "bram_simple_top"
+    assert spec.rtl_top == wrapper_name("bram_access") == "bram_access_top"
+    assert spec.elab_top == "bram_access_top"
     h = render_ports_h(spec)
-    assert 'TOP        = "bram_simple_top"' in h
-    assert 'xsim.dir/bram_simple_top/xsimk' in h
+    assert 'TOP        = "bram_access_top"' in h
+    assert 'xsim.dir/bram_access_top/xsimk' in h
     assert "buf_w" not in h and "buf_r" not in h, (
         "a bram port is not a pin on the elaborated design — a testbench binding to it would be "
         "driving a wire that does not exist on the module it loaded")
@@ -313,7 +342,7 @@ def test_the_testbench_has_a_model_per_pin_and_none_for_the_memory():
     """If a memory ever needed a BFM, the wrapper would be the thing that is wrong."""
     from waveflow.simulation.simulation import Simulation
 
-    spec = tb_top_spec(BramSimpleTB(name="tb", sim=Simulation()))
+    spec = tb_top_spec(BramAccessTB(name="tb", sim=Simulation()))
     assert [m.cls for m in spec.models] == ["AxisMaster", "AxisMaster", "AxisSlave",
                                             "AxisMaster", "AxisSlave", "AxisSlave"]
     assert not any("Bram" in m.cls or "Mem" in m.cls for m in spec.models)
@@ -327,7 +356,8 @@ def test_a_bram_port_with_no_memory_cannot_be_lowered():
     """An unbound accessor has no latency to emit, and inventing one is what shifts the ramp."""
     from waveflow.build.elaborate import ElabContext
 
-    ep = BramIFMaster(sim=ElabContext(), name="loose", bitwidth=16, depth=1024, access="read")
+    ep = BramIFMaster(sim=ElabContext(), name="loose", element_type=word_element(16),
+                      nelem=1024, access="read")
     with pytest.raises(ValueError, match="not bound to a BramIF"):
         _ = ep.read_latency
 
@@ -336,11 +366,32 @@ def test_a_geometry_mismatch_is_refused_at_bind_time():
     from waveflow.build.elaborate import ElabContext
 
     sim = ElabContext()
-    mem = T2pBram(sim=sim, name="m", dwidth=16, depth=1024)
-    small = BramIFMaster(sim=sim, name="small", bitwidth=16, depth=256, access="write")
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(16), nelem=1024)
+    small = BramIFMaster(sim=sim, name="small", element_type=word_element(16), nelem=256,
+                         access="write")
     iface = BramIF(name="bad", sim=sim)
     iface.bind(ep_name="master", endpoint=small)
     with pytest.raises(ValueError, match="256x16 but the memory port is 1024x16"):
+        iface.bind(ep_name="slave", endpoint=mem.wr_port)
+
+
+def test_an_element_mismatch_is_refused_at_bind_time():
+    """Same width, different type — the quieter half of the same aliasing class.
+
+    A geometry mismatch at least stops paying off past the smaller array.  Two 32-bit ports that
+    disagree about whether the 32 bits are a float or a word line up at every address and return a
+    correctly-shaped wrong number forever, so the element is checked alongside the extent."""
+    from waveflow.build.elaborate import ElabContext
+    from waveflow.hw.dataschema import FloatField
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(32), nelem=1024)
+    floats = BramIFMaster(sim=sim, name="f", element_type=FloatField.specialize(bitwidth=32),
+                          nelem=1024, access="write")
+    assert floats.bitwidth == mem.wr_port.bitwidth == 32, "the widths agree; only the meaning does not"
+    iface = BramIF(name="bad", sim=sim)
+    iface.bind(ep_name="master", endpoint=floats)
+    with pytest.raises(ValueError, match="accessor's element is"):
         iface.bind(ep_name="slave", endpoint=mem.wr_port)
 
 
@@ -348,8 +399,9 @@ def test_a_direction_mismatch_is_refused_at_bind_time():
     from waveflow.build.elaborate import ElabContext
 
     sim = ElabContext()
-    mem = T2pBram(sim=sim, name="m", dwidth=16, depth=1024)
-    reader = BramIFMaster(sim=sim, name="rd", bitwidth=16, depth=1024, access="read")
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(16), nelem=1024)
+    reader = BramIFMaster(sim=sim, name="rd", element_type=word_element(16), nelem=1024,
+                          access="read")
     iface = BramIF(name="bad", sim=sim)
     iface.bind(ep_name="master", endpoint=reader)
     with pytest.raises(ValueError, match="read-during-write collision"):
@@ -384,13 +436,13 @@ def test_a_verilog_keyword_instance_name_is_refused_by_name():
 
 
 def test_render_rtl_f_appends_the_wrappers_own_sources_last():
-    root = Path(__file__).resolve().parents[2] / "examples" / "bram_simple"
-    if not (root / "bram_simple_proj" / "solution1" / "syn" / "verilog").is_dir():
-        pytest.skip("no csynth RTL for bram_simple")
+    root = Path(__file__).resolve().parents[2] / "examples" / "bram_access"
+    if not (root / "bram_access_proj" / "solution1" / "syn" / "verilog").is_dir():
+        pytest.skip("no csynth RTL for bram_access")
     from waveflow.build.composite_gen import render_rtl_f
 
-    lines = render_rtl_f("bram_simple", root,
-                         extra=("bram_t2p.v", "bram_simple_top.v")).splitlines()
-    assert lines[-2:] == ["bram_t2p.v", "bram_simple_top.v"]
-    assert all(ln.startswith("../bram_simple_proj/") for ln in lines[:-2])
+    lines = render_rtl_f("bram_access", root,
+                         extra=("bram_t2p.v", "bram_access_top.v")).splitlines()
+    assert lines[-2:] == ["bram_t2p.v", "bram_access_top.v"]
+    assert all(ln.startswith("../bram_access_proj/") for ln in lines[:-2])
     assert len(lines) >= 6, "a .f naming only the top does not elaborate — all csynth files are needed"

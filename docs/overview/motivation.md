@@ -1,6 +1,7 @@
 ---
 title: Motivation
 parent: Overview
+grand_parent: Waveflow
 nav_order: 1
 ---
 

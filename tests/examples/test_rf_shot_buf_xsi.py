@@ -92,7 +92,7 @@ def test_the_shot_survives_real_rtl_byte_for_byte():
     # NOTE (2026-08-25): a `read-during-write collision` assertion used to be checked here
     # against this stream.  It could never fire: `out` is run.bat's stdout/stderr, and the
     # XSI flow DISCARDS RTL text output -- `bram_t2p.v`'s $error reaches no channel this
-    # test can read (measured four ways, see plans/bram_simple.md).  It was removed rather
+    # test can read (measured four ways, see plans/bram_access.md).  It was removed rather
     # than left reading as positive evidence.  The condition is to be gated from the VCD
     # trace instead; until that lands it is checked NOWHERE, which is what was already true.
 

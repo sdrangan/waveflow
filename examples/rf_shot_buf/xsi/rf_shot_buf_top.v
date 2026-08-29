@@ -87,8 +87,9 @@ module rf_shot_buf_top (
         .b_we(|buf_r_we_a)
     );
 
-    // The B half of each bram interface: Vitis emits a full A/B pair whether or
-    // not the kernel uses both, so its Dout INPUT must be driven.
+    // The B half, for each bram interface that HAS one: `storage_type=ram_1wnr`
+    // emits a full A/B pair whether or not the kernel uses both, so its Dout INPUT
+    // must be driven.  A `ram_1p` port (a read-write one) declares no B half at all.
     assign buf_w_dout_b = 64'd0;
     assign buf_r_dout_b = 64'd0;
 endmodule

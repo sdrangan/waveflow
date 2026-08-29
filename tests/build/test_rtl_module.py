@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
+import numpy as np
 import pytest
 
 from waveflow.build.codegen_check import check
@@ -34,7 +36,8 @@ from waveflow.build.rtl_gen import (
     rtl_read_latency,
     verilog_module_ports,
 )
-from waveflow.hw.bram import BramIFSlave, T2pBram, ramb18_count
+from waveflow.hw.bram import BramIFSlave, T2pBram, ramb18_count, word_element
+from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import (
     ALL_TARGETS,
     CUT_INDEPENDENT_TARGETS,
@@ -136,7 +139,7 @@ def test_the_read_during_write_assertion_survived_becoming_an_artifact():
 def test_pragma_latency_is_read_from_the_verilog_not_authored_beside_it():
     mem = elaborate(T2pBram)
     assert mem.read_latency == 1
-    port = _bram_port("buf_w", 16, 1024, latency=mem.read_latency)
+    port = _bram_port("buf_w", 16, 1024, latency=mem.read_latency, storage_type="ram_1wnr")
     assert "latency=1" in port.pragmas[0]
 
 
@@ -155,7 +158,8 @@ def test_changing_the_verilog_changes_the_pragma_and_nothing_else_can(tmp_path):
 
     rtl = RtlModule(module="bram_t2p", files=(str(lat2),))
     assert rtl_read_latency(rtl) == 2
-    assert "latency=2" in _bram_port("buf_w", 16, 1024, latency=rtl_read_latency(rtl)).pragmas[0]
+    assert "latency=2" in _bram_port("buf_w", 16, 1024, latency=rtl_read_latency(rtl),
+                                     storage_type="ram_1wnr").pragmas[0]
 
     mem = elaborate(T2pBram)
     assert not hasattr(type(mem).read_latency, "__set__") or isinstance(
@@ -192,7 +196,7 @@ def test_the_bram_pragma_is_emitted_against_a_sized_array_never_a_pointer():
     is the static half of "a pragma needs a check that it took effect".  The authoritative half is a
     csynth port list, and it belongs where a kernel actually carries a bram port (S4).
     """
-    port = _bram_port("buf_w", 16, 1024, latency=1)
+    port = _bram_port("buf_w", 16, 1024, latency=1, storage_type="ram_1wnr")
     assert port.decl == "ap_uint<16> buf_w[1024]"
     assert "*" not in port.decl, "an unsized pointer degrades to an ap_vld scalar port, silently"
     assert "mode=bram" in port.pragmas[0] and "port=buf_w" in port.pragmas[0]
@@ -363,12 +367,205 @@ def test_t2p_bram_carries_a_write_port_and_a_read_port():
 
 def test_a_port_used_both_ways_is_refused_at_construction():
     with pytest.raises(ValueError, match="access must be"):
-        BramIFSlave(sim=ElabContext(), name="rw", bitwidth=16, depth=1024, access="rw")
+        BramIFSlave(sim=ElabContext(), name="rw", element_type=word_element(16), nelem=1024,
+                    access="rw")
 
 
 def test_a_non_power_of_two_depth_is_refused_rather_than_rounded():
     with pytest.raises(ValueError, match="power of two"):
-        elaborate(T2pBram, {"depth": 1000}).addr_bits
+        elaborate(T2pBram, {"nelem": 1000}).addr_bits
+
+
+def test_an_element_that_is_not_a_power_of_two_byte_count_is_refused_at_declaration():
+    """The 14-bit RFdc sample, refused where the TYPE is named — not at wrapper generation.
+
+    ``_bram_addr_shift`` cannot express Vitis's byte-address scaling for such a width, and that is a
+    fact about the type: knowable the moment it is written down, so a design carrying one should not
+    elaborate, simulate and csynth before dying at the last rung."""
+    with pytest.raises(ValueError, match="cannot be a BRAM element type"):
+        T2pBram(sim=ElabContext(), name="dense14", element_type=word_element(14))
+    with pytest.raises(ValueError, match="cannot be a BRAM element type"):
+        BramIFSlave(sim=ElabContext(), name="p24", element_type=word_element(24), access="read")
+
+
+def test_the_width_is_derived_from_the_element_and_the_storage_is_typed():
+    """``bitwidth`` is a consequence of what the memory holds, and pysim holds it as itself."""
+    import numpy as np
+    from waveflow.hw.dataschema import FloatField
+
+    mem = elaborate(T2pBram, {"element_type": FloatField.specialize(bitwidth=32), "nelem": 256})
+    assert mem.dwidth == 32 and mem.wr_port.bitwidth == 32
+    assert mem.storage.dtype == np.dtype("float32"), (
+        "a float memory holds floats, not a packing of them -- the precondition for a reference view")
+    mem.store(3, 1.5)
+    assert mem.load(3) == 1.5, "a float written is a float read, with no deserialize in between"
+
+
+# ---------------------------------------------------------------------------
+# Case 3 — array_ref: a live view, and the three refusals that keep it one
+# ---------------------------------------------------------------------------
+
+
+def _bound(access, element_type, nelem=32, port=None):
+    """A ``BramIFMaster`` wired to a ``T2pBram`` — the smallest graph an access needs."""
+    from waveflow.hw.bram import BramIF, BramIFMaster
+    from waveflow.hw.clock import Clock
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=element_type, nelem=nelem,
+                  port_access=("readwrite" if access == "readwrite" else "write", "read"))
+    ep = BramIFMaster(sim=sim, name="ep", element_type=element_type, nelem=nelem, access=access)
+    iface = BramIF(name="if", sim=sim, clk=Clock(freq=100e6))
+    iface.bind(ep_name="master", endpoint=ep)
+    iface.bind(ep_name="slave", endpoint=mem.rd_port if access == "read" else mem.wr_port)
+    return mem, ep
+
+
+def test_an_array_ref_is_live_in_both_directions():
+    """The whole claim, and it is the one a copy would silently fail.
+
+    A write through the reference must be visible to ``mem_read``, and a ``mem_write`` must be
+    visible through the reference — same storage, not two snapshots of it.  ``as_array`` on
+    ``_DirectBackedMMIFMaster`` passes a value check and fails this one, which is why this is the
+    test that exists.
+    """
+    from waveflow.hw.dataschema import FloatField
+
+    f32 = FloatField.specialize(bitwidth=32)
+    _mem, ep = _bound("readwrite", f32, nelem=64)
+
+    ref = ep.array_ref(8, 4)
+    assert ref.dtype == np.dtype("float32"), (
+        "the view is element-typed from the port's own declaration -- a uint64 word view over a "
+        "float memory would be a reinterpretation, not a reference")
+
+    ref[:] = [1.5, 2.5, 3.5, 4.5]
+    assert [ep.mem_read(8 + k) for k in range(4)] == [1.5, 2.5, 3.5, 4.5], (
+        "writes through the reference did not reach the memory -- the reference is a copy")
+
+    ep.mem_write(9, 99.0)
+    assert ref.tolist() == [1.5, 99.0, 3.5, 4.5], (
+        "a write to the memory was not visible through the reference -- the reference is a stale "
+        "copy, which is the half a one-way check would miss")
+
+
+def test_an_element_with_no_numpy_dtype_is_refused_rather_than_copied():
+    """S3b's hard rule, and the failure it is written against is in the tree.
+
+    ``_DirectBackedMMIFMaster.as_words()`` returns a genuine view but ``as_array()`` goes through
+    ``arrayutils.read_array``, which builds a fresh object unconditionally — so an ``as_*`` name
+    degrades to a copy the moment typed elements are asked for, and writes reach nothing.  A
+    reference API that is a view for some element types and a copy for others is worse than none.
+
+    The verdict is a fact about the **declaration**, so it is answerable before anything runs
+    (:attr:`supports_array_ref`) -- and the port stays usable, because Case 1's copying ops serve
+    every element type.
+    """
+    from waveflow.hw.bram import native_dtype
+    from waveflow.hw.dataschema import DataList, IntField
+
+    class _Rec(DataList):
+        elements: ClassVar[dict] = {"a": {"schema": IntField.specialize(bitwidth=32, signed=False)},
+                                    "b": {"schema": IntField.specialize(bitwidth=32, signed=False)}}
+
+    assert native_dtype(_Rec) is None and int(_Rec().get_bitwidth()) == 64, (
+        "the fixture must be a legal 64-bit BRAM element that simply has no dtype")
+    mem, ep = _bound("write", _Rec, nelem=64)
+    assert mem.storage.dtype == np.dtype("uint64"), (
+        "a composite element is stored as its PACKED WORD -- which is exactly why referencing it "
+        "would have to deserialize, and why it is refused")
+    assert ep.supports_array_ref is False
+    with pytest.raises(ValueError, match="no native numpy dtype"):
+        ep.array_ref(0, 4)
+
+
+def test_a_read_port_hands_back_a_view_that_cannot_be_written():
+    """Direction is already declared, so it is enforced rather than advised.
+
+    ``flags.writeable = False`` makes numpy raise; the alternative — a writable view off a read
+    port — is a write that reaches the pysim array while the hardware port has no write path, i.e.
+    a model that disagrees with the design and says nothing.
+    """
+    _mem, rd = _bound("read", word_element(64))
+    ref = rd.array_ref(0, 4)
+    assert ref.flags.writeable is False
+    with pytest.raises(ValueError, match="read-only"):
+        ref[0] = 1
+
+    _mem2, wr = _bound("write", word_element(64))
+    assert wr.array_ref(0, 4).flags.writeable is True, (
+        "a write port's view must be writable -- that is the direction it declares")
+
+
+def test_an_array_ref_past_the_end_is_refused_at_the_call():
+    """Extent-bounded, and refused rather than clipped: the RTL indexes ``mem[addr[AW-1:0]]`` and
+    would alias the overhang onto live words with nothing said."""
+    _mem, ep = _bound("readwrite", word_element(64), nelem=32)
+    with pytest.raises(IndexError, match=r"\[30, 38\) is outside"):
+        ep.array_ref(30, 8)
+    assert ep.array_ref(24, 8).shape == (8,), "the last legal extent must still be reachable"
+
+
+def test_the_port_publishes_the_rate_a_body_computes_its_timing_from():
+    """Case 3's caller owns the timing, so the endpoint owes it a **declared** number.
+
+    One access per cycle per port, flat until the array-partitioning question is measured.  The II
+    arithmetic over it is what S5b measured: a read-modify-write loop through ONE port csynths at
+    II=2, the write-only loop beside it at II=1.
+    """
+    _mem, ep = _bound("readwrite", word_element(64))
+    assert ep.accesses_per_cycle == 1
+    assert ep.ii_for(1) == 1, "one access per element through one port is II=1 (the write loop)"
+    assert ep.ii_for(2) == 2, "read-modify-write through ONE port is 2 accesses/element -> II=2"
+    with pytest.raises(ValueError, match="at least one"):
+        ep.ii_for(0)
+
+
+def test_the_pipelined_ops_refuse_what_the_port_was_not_wired_for():
+    """Case 2's three declaration-time refusals, none of them discoverable at RTL.
+
+    A direction the port does not have, a clock it was never given, and an element it does not hold.
+    The last is the quiet one: same width, different meaning, and every address still lines up.
+
+    The direction refusal is not bookkeeping: what a port does decides its ``storage_type``, so a
+    body writing through a port declared ``"read"`` is a body whose pragma lets Vitis take a second
+    physical port the wrapper never wired.  ``access="readwrite"`` is how a port that genuinely does
+    both says so — see :func:`~waveflow.hw.bram.bram_storage_type`."""
+    from waveflow.hw.bram import BramIF, BramIFMaster
+    from waveflow.hw.dataschema import FloatField
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(32), nelem=1024)
+    reader = BramIFMaster(sim=sim, name="rd", element_type=word_element(32), nelem=1024,
+                          access="read")
+    iface = BramIF(name="r_if", sim=sim)                     # no clk: the untimed ops need none
+    iface.bind(ep_name="master", endpoint=reader)
+    iface.bind(ep_name="slave", endpoint=mem.rd_port)
+
+    with pytest.raises(ValueError, match="declares access='read'"):
+        list(reader.write_pipelined(np.zeros(4, dtype=np.uint32), 0))
+    with pytest.raises(ValueError, match="carries no clock"):
+        list(reader.read_pipelined(word_element(32), 4, 0))
+    iface.clk = Clock(freq=100e6)
+    with pytest.raises(ValueError, match="the port's element is"):
+        list(reader.read_pipelined(FloatField.specialize(bitwidth=32), 4, 0))
+
+
+def test_a_pipelined_transfer_cannot_run_off_the_end_of_the_memory():
+    """The extent is checked BEFORE any of it lands: a half-written refused block is worse than a
+    refused one, and the RTL would alias the overhang onto live words in silence."""
+    from waveflow.hw.bram import BramIF, BramIFMaster
+
+    sim = ElabContext()
+    mem = T2pBram(sim=sim, name="m", element_type=word_element(64), nelem=16)
+    wr = BramIFMaster(sim=sim, name="wr", element_type=word_element(64), nelem=16, access="write")
+    iface = BramIF(name="w_if", sim=sim, clk=Clock(freq=100e6))
+    iface.bind(ep_name="master", endpoint=wr)
+    iface.bind(ep_name="slave", endpoint=mem.wr_port)
+
+    with pytest.raises(IndexError, match=r"\[12, 20\) is outside"):
+        list(wr.write_pipelined(np.arange(8, dtype=np.uint64), 12))
+    assert not mem.storage.any(), "a refused extent must not have written its head"
 
 
 def test_the_footprint_is_declared_from_geometry():
@@ -387,8 +584,8 @@ def test_the_footprint_is_declared_from_geometry():
 def test_the_declared_params_carry_the_geometry_to_the_instantiation():
     """Parameterizing is not generating: the file is copied, the numbers ride on the instance."""
     assert dict(elaborate(T2pBram).rtl_module().params) == {"DW": 16, "AW": 10}
-    assert dict(elaborate(T2pBram, {"dwidth": 32, "depth": 4096}).rtl_module().params) == {
-        "DW": 32, "AW": 12}
+    assert dict(elaborate(T2pBram, {"element_type": word_element(32), "nelem": 4096})
+                .rtl_module().params) == {"DW": 32, "AW": 12}
 
 
 def test_resolve_returns_the_descriptor_a_wrapper_emitter_will_need():

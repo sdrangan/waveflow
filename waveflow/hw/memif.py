@@ -63,7 +63,8 @@ import numpy as np
 import simpy
 
 from waveflow.hw.interface import (
-    InterfaceEndpoint, QueuedTransferIF, Words, _classify_port_dir, port_read, port_write,
+    InterfaceEndpoint, QueuedTransferIF, TypedCodecMixin, Words, _classify_port_dir,
+    port_read, port_write,
 )
 from waveflow.hw.hwstmt import MMArrayReadStmt, MMArrayWriteStmt, SynthCallStmt
 from waveflow.hw.synth import synthesizable
@@ -312,7 +313,7 @@ class BusTiming:
 
 
 @dataclass
-class MMIFMaster(InterfaceEndpoint):
+class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     """
     Master (initiator) endpoint for any MM interconnect.
 
@@ -446,9 +447,8 @@ class MMIFMaster(InterfaceEndpoint):
 
     def read_schema(self, schema_type: type, addr: int, word_bw: int = 32) -> ProcessGen[Any]:
         """Read and deserialize one *schema_type* instance from *addr*."""
-        nwords = schema_type.nwords_per_inst(word_bw)
-        words = yield from self.read(nwords, addr)
-        return schema_type().deserialize(words, word_bw=word_bw)
+        words = yield from self.read(self._typed_nwords(schema_type, word_bw=word_bw), addr)
+        return self._unpack(words, schema_type, word_bw=word_bw)
 
     @port_write
     @synthesizable(stmt_class=MMArrayWriteStmt)
@@ -480,23 +480,8 @@ class MMIFMaster(InterfaceEndpoint):
         runtime length (the static local buffer is sized at ``max``, written in
         ``[0, count)``); the dual of :meth:`read_array`'s *count*.
         """
-        words = self._pack_array_words(elements, element_type, word_bw, count=count)
+        words = self._pack(elements, element_type, count, word_bw=word_bw)
         yield from self.write(words, addr)
-
-    @staticmethod
-    def _pack_array_words(
-        elements: Any, element_type: type, word_bw: int, count: int | None = None,
-    ) -> Words:
-        """Pack *elements* into hardware words: the element type's vectorized
-        :meth:`DataSchema.to_words_numpy` fast path, else the canonical recursive
-        serializer.  Shared by :meth:`write_array` and :meth:`write_array_pipelined`."""
-        if count is not None:
-            elements = elements[:int(count)]
-        words = element_type.to_words_numpy(elements, word_bw)   # vectorized fast path
-        if words is None:                                        # canonical recursive pack
-            from waveflow.hw.arrayutils import write_array as _pack_array
-            words = _pack_array(elements, elem_type=element_type, word_bw=word_bw)
-        return words
 
     @port_read
     @synthesizable(stmt_class=MMArrayReadStmt)
@@ -524,13 +509,9 @@ class MMIFMaster(InterfaceEndpoint):
         :meth:`DataSchema.from_words_numpy`, falling back to the recursive
         deserializer otherwise.
         """
-        nwpe = element_type.nwords_per_inst(word_bw)
-        words = yield from self.read(nwpe * count, addr)
-        out = element_type.from_words_numpy(words, count, word_bw)   # vectorized fast path
-        if out is None:                                             # canonical recursive unpack
-            from waveflow.hw.arrayutils import read_array as _unpack_array
-            out = _unpack_array(words, element_type, word_bw, shape=count).val
-        return out
+        words = yield from self.read(
+            self._typed_nwords(element_type, count, word_bw=word_bw), addr)
+        return self._unpack_elems(words, element_type, count, word_bw=word_bw)
 
     # ------------------------------------------------------------------
     # Timed (AT) array transfers — sim-only timing capture
@@ -552,7 +533,7 @@ class MMIFMaster(InterfaceEndpoint):
         """Like :meth:`read_array`, returning ``(data, tstart, tend, nwords)`` where
         ``tstart`` / ``tend`` are the SimPy times bracketing the bus read and ``nwords`` is
         the number of words transferred."""
-        nwords = element_type.nwords_per_inst(word_bw) * count
+        nwords = self._typed_nwords(element_type, count, word_bw=word_bw)
         tstart = self.env.now
         data = yield from self.read_array(
             element_type, count, addr, max_count=max_count, word_bw=word_bw)
@@ -575,7 +556,7 @@ class MMIFMaster(InterfaceEndpoint):
 
         The read still blocks for the whole burst (the consumer needs all of it); *tstart*
         is the early pipeline-fill anchor for the next stage's overlap accounting."""
-        nwords = element_type.nwords_per_inst(word_bw) * count
+        nwords = self._typed_nwords(element_type, count, word_bw=word_bw)
         data = yield from self.read_array(
             element_type, count, addr, max_count=max_count, word_bw=word_bw)
         period = 1.0 / float(self.interface.clk.freq)
@@ -600,7 +581,7 @@ class MMIFMaster(InterfaceEndpoint):
         ``t_out_start + nwords*period`` (the wait shortens if the anchor is in the past) —
         this is what lets a producer's write overlap an earlier consumer's read.
         ``t_out_start=None`` preserves the ordinary blocking write (backward-compatible)."""
-        words = self._pack_array_words(elements, element_type, word_bw, count=count)
+        words = self._pack(elements, element_type, count, word_bw=word_bw)
         nwords = int(np.asarray(words).shape[0])
         tstart = self.env.now
         yield from self.write(words, addr, tstart=t_out_start)
@@ -621,16 +602,12 @@ class MMIFMaster(InterfaceEndpoint):
         """Read *count* elements through the interconnect's calibrated-occupancy path,
         returning ``(data, t0, t1)`` — the bus-visible span (see
         :meth:`AXIMMCrossBarIF.read_spanned`)."""
-        nwords = element_type.nwords_per_inst(word_bw) * count
+        nwords = self._typed_nwords(element_type, count, word_bw=word_bw)
         proc = self.process(self.interface.read_spanned(
             nwords, addr, self.master_port, t_out_start=t_out_start, num_trans=num_trans))
         yield proc
         words, t0, t1 = proc.value
-        out = element_type.from_words_numpy(words, count, word_bw)   # vectorized fast path
-        if out is None:                                             # canonical recursive unpack
-            from waveflow.hw.arrayutils import read_array as _unpack_array
-            out = _unpack_array(words, element_type, word_bw, shape=count).val
-        return out, t0, t1
+        return self._unpack_elems(words, element_type, count, word_bw=word_bw), t0, t1
 
     def write_spanned(
         self, elements: Any, element_type: type, addr: int,
@@ -640,7 +617,7 @@ class MMIFMaster(InterfaceEndpoint):
         """Write *elements* through the interconnect's calibrated-occupancy path,
         returning the bus-visible span ``(t0, t1)`` (see
         :meth:`AXIMMCrossBarIF.write_spanned`)."""
-        words = self._pack_array_words(elements, element_type, word_bw, count=count)
+        words = self._pack(elements, element_type, count, word_bw=word_bw)
         proc = self.process(self.interface.write_spanned(
             words, addr, self.master_port,
             t_out_start=t_out_start, num_trans=num_trans, min_span=min_span))
@@ -1409,8 +1386,17 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
 
     Unlike :class:`AXIMMCrossBarIF`, ``DirectMMIF`` does no address
     translation — the master's address is passed directly to the slave
-    callback as ``local_addr``.  This models a component wired directly
-    to a BRAM or local register file.
+    callback as ``local_addr``.  That is the whole delta between the two:
+    both are *interconnects*, and this one has a single slave to decode to.
+
+    **Not the way to reach on-chip memory shared between modules.**  A
+    ``DirectMMIF`` is a bus link and lowers like one; the accessor stays an
+    ``m_axi`` master.  A kernel port that must become a sized ``mode=bram``
+    array joined to a memory outside the kernel is
+    :class:`~waveflow.hw.bram.BramIF`, which is registered with ``add_rtl_if``
+    and keeps its master on the boundary.  What this class actually carries in
+    this repo is the AXI4-Lite control link and single-master links to a
+    :class:`~waveflow.hw.memory.MemoryMod`.
 
     Endpoint names
     --------------

@@ -7,7 +7,7 @@
 //
 // THERE IS NO ADDRESS STREAM, AND THAT IS THE SIMPLIFICATION.
 //
-// examples/bram_simple's reader answers a (rp, nwords) command, which makes it a witness for the memory
+// examples/bram_access's reader answers a (rp, nwords) command, which makes it a witness for the memory
 // rather than a buffer.  A shot buffer plays a CONTIGUOUS shot, so the address is the loop index and
 // the only thing crossing the boundary is payload.  Nothing on this wire arbitrates, because there
 // is nothing to arbitrate: the writer is not live while this runs.

@@ -102,7 +102,7 @@ def dense_golden(nword: int = NWORD, base: int = CODE_BASE) -> np.ndarray:
 
 
 def write_scenario(root, nword: int = NWORD) -> None:
-    """Materialize ``<root>/vectors/stim`` — one word per burst, for ``bram_simple``'s reason."""
+    """Materialize ``<root>/vectors/stim`` — one word per burst, for ``bram_access``'s reason."""
     from waveflow.utils.burst_io import write_burst_bundle
 
     write_burst_bundle([np.array([x], dtype=np.uint64) for x in stim_words(nword)],

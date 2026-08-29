@@ -340,7 +340,7 @@ _BRAM_SIGS = ("Addr", "EN", "Din", "Dout", "WEN", "Clk", "Rst")
 _BRAM_HALVES = ("A", "B")
 
 
-def bram_port_signals(name: str) -> dict[str, str]:
+def bram_port_signals(name: str, halves: tuple[str, ...] = _BRAM_HALVES) -> dict[str, str]:
     """The RTL nets a ``mode=bram`` port named *name* lowers to: ``{'Addr_A': 'buf_w_Addr_A', ...}``.
 
     The third row of the same table :func:`_boundary_trace` already holds for AXIS and ``m_axi``, and
@@ -353,8 +353,23 @@ def bram_port_signals(name: str) -> dict[str, str]:
     written from Python at all.  Checked against the witness's ``rx_top.v``, whose kernel
     instantiation names all 28 nets of a two-interface design
     (``tests/build/test_rtl_module.py::test_derived_port_names_match_the_witness``).
+
+    *halves* is which of the pair Vitis actually declares — both for ``storage_type=ram_1wnr``, only
+    ``A`` for ``ram_1p`` (see :func:`~waveflow.hw.bram.bram_emits_b_half`).  Naming a half that does
+    not exist is an elaboration error in whatever consumes this, so the caller passes what the port
+    declares rather than this assuming a pair.
     """
-    return {f"{s}_{h}": f"{name}_{s}_{h}" for h in _BRAM_HALVES for s in _BRAM_SIGS}
+    return {f"{s}_{h}": f"{name}_{s}_{h}" for h in halves for s in _BRAM_SIGS}
+
+
+def _port_halves(p) -> tuple[str, ...]:
+    """Which halves of *p*'s bram pair exist, from the pragma the port itself carries."""
+    from waveflow.hw.bram import bram_emits_b_half
+
+    pragma = " ".join(p.pragmas)
+    storage = next((t.split("=", 1)[1] for t in pragma.split() if t.startswith("storage_type=")),
+                   "ram_1wnr")
+    return _BRAM_HALVES if bram_emits_b_half(storage) else ("A",)
 
 
 def _task_trace(task: TaskInst) -> dict:
@@ -410,8 +425,10 @@ def _boundary_trace(ports: tuple[ExtPort, ...]) -> list[dict]:
         elif p.kind == "bram":
             # One entry per port, unlike `m_axi`: a bram interface is never bundled with another
             # (each is its own memory port pair), so the port name IS the id.
+            # Only the halves the port actually emits: a trace manifest naming a net that is not
+            # in the design binds to nothing, and a scan that finds nothing reads as "no problem".
             entries.append({"id": p.name, "kind": "bram", "ports": [p.name],
-                            "signals": bram_port_signals(p.name)})
+                            "signals": bram_port_signals(p.name, _port_halves(p))})
         elif p.kind in ("maxi_read", "maxi_write"):
             bundle = p.bundle or p.name
             bundles.setdefault(bundle, set()).add(
@@ -486,7 +503,7 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
 
 
 def wrapper_name(top_name: str) -> str:
-    """The wrapper module's name for kernel *top_name* — ``bram_simple`` -> ``bram_simple_top``.
+    """The wrapper module's name for kernel *top_name* — ``bram_access`` -> ``bram_access_top``.
 
     One artifact keeps the name it has: csynth names the kernel, and renaming it to make room for the
     wrapper would make every report, every ``.f`` entry and every waveform scope disagree with the
@@ -496,7 +513,7 @@ def wrapper_name(top_name: str) -> str:
     return f"{top_name}_top"
 
 
-def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
+def _bram_port(name: str, width: int, depth: int, *, latency: int, storage_type: str) -> ExtPort:
     """A ``mode=bram`` boundary port — the kernel's half of a memory that lives *outside* it.
 
     Two details here are load-bearing rather than stylistic, and both were measured
@@ -511,11 +528,16 @@ def _bram_port(name: str, width: int, depth: int, *, latency: int) -> ExtPort:
       that disagrees with the memory's read latency shifts every value by a cycle — silently.  One
       number, two halves; see ``docs/guide/comp_codegen/rtl_module.md``.
 
-    ``storage_type=ram_1wnr`` is the witness's own spelling, kept verbatim: that combination is the
-    one that csynthed to real BRAM ports with both tasks free-running and no PIPO gating.
+    * **``storage_type`` is not authored here either.**  It is
+      :attr:`~waveflow.hw.bram.BramIFMaster.storage_type`, derived from the port's declared
+      ``access``, and it enforces the invariant that **the wrapper wires ONE physical memory port
+      per declared bram port, so the pragma must forbid Vitis from using two**.  A constant here
+      was correct only while every port was unidirectional — for a read-write port ``ram_1wnr``
+      lets Vitis reach II=1 by reading on port B while writing on port A, and the wrapper never
+      wired that B half.  See :func:`~waveflow.hw.bram.bram_storage_type` for the measurement.
     """
     return ExtPort(f"ap_uint<{width}> {name}[{depth}]",
-                   (f"#pragma HLS INTERFACE mode=bram port={name} storage_type=ram_1wnr "
+                   (f"#pragma HLS INTERFACE mode=bram port={name} storage_type={storage_type} "
                     f"latency={latency}",),
                    name=name, kind="bram", bundle=None, width=width)
 
@@ -888,7 +910,8 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
                 f"_boundary_port: bram port {name!r} needs its endpoint — the array size and the "
                 f"latency come from the port and the memory it is wired to, never from a default."
             )
-        return _bram_port(name, int(ep.bitwidth), int(ep.depth), latency=int(ep.read_latency))
+        return _bram_port(name, int(ep.bitwidth), int(ep.nelem), latency=int(ep.read_latency),
+                          storage_type=str(ep.storage_type))
     raise LoweringError(f"composite_top_spec: unknown boundary kind {kind!r} for port {name!r}")
 
 

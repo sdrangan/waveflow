@@ -586,6 +586,85 @@ class QueuedTransferIF(Interface):
 
 
 # ---------------------------------------------------------------------------
+# The typed-transfer codec — one adapter, every transport
+# ---------------------------------------------------------------------------
+
+
+class TypedCodecMixin:
+    """The schema<->words adapter every transport endpoint needs, written once.
+
+    A typed transfer is always the same three steps: ask the schema how many words it costs,
+    move those words — **the only step that differs between transports** — and hand the words
+    back to the schema.  Written out per transport that arithmetic drifts:
+    :meth:`StreamIFSlave.get` and :meth:`~StreamIFSlave.get_pipelined` should differ in exactly
+    the one thing that actually differs between them (a back-calculated ``tstart``), not in four
+    lines of layout arithmetic apiece.
+
+    So an endpoint supplies only the fetch and mixes this in for the rest.  The layout itself is
+    never re-implemented here — these delegate to the canonical
+    :meth:`~waveflow.hw.dataschema.DataSchema.serialize` / ``deserialize`` and to
+    :mod:`waveflow.hw.arrayutils`, which have one author.
+
+    **None of these is a generator.**  No simulated time passes in any of them — the transfer
+    has already happened, or has not started — and the absence of a ``yield`` is the statement
+    that says so.  *word_bw* defaults to the endpoint's own ``bitwidth``; the m_axi side passes
+    it explicitly because there the packed width is a per-call argument, not a port property.
+
+    See ``plans/typed_transfer_codec.md``.
+    """
+
+    def _codec_word_bw(self, word_bw: int | None = None) -> int:
+        """The width these helpers pack at: *word_bw* if given, else this endpoint's."""
+        return int(self.bitwidth if word_bw is None else word_bw)
+
+    def _typed_nwords(self, schema_type, count=None, *, word_bw=None) -> int:
+        """Words one transfer of *schema_type* costs — *count* instances if given."""
+        nwords = schema_type.nwords_per_inst(self._codec_word_bw(word_bw))
+        return nwords * int(count) if count is not None else nwords
+
+    def _unpack(self, raw_words, schema_type, count=None, *, word_bw=None):
+        """Words -> a *schema_type* instance, or a ``DataArray`` of *count* of them.
+
+        The canonical deserializers, never a hand-rolled field walk: the layout has one author
+        (the Python schema) and this is the same code the m_axi side reaches through.
+        """
+        bw = self._codec_word_bw(word_bw)
+        if count is not None:
+            from waveflow.hw.arrayutils import read_array
+            return read_array(raw_words, elem_type=schema_type, word_bw=bw, shape=int(count))
+        return schema_type().deserialize(raw_words, word_bw=bw)
+
+    def _unpack_elems(self, raw_words, element_type, count, *, word_bw=None):
+        """Words -> *count* element **values** as a plain array — the element-valued twin of
+        :meth:`_unpack`.
+
+        A second name rather than a flag on :meth:`_unpack`, because the two genuinely return
+        different things and always have: a stream ``get`` hands back a
+        :class:`~waveflow.hw.dataschema.DataArray`, an ``m_axi`` ``read_array`` hands back the
+        bare ``np.ndarray`` its callers index.  Takes the element type's vectorized
+        :meth:`~waveflow.hw.dataschema.DataSchema.from_words_numpy` when it has one.
+        """
+        bw = self._codec_word_bw(word_bw)
+        out = element_type.from_words_numpy(raw_words, int(count), bw)   # vectorized fast path
+        if out is None:                                                  # canonical recursive
+            out = self._unpack(raw_words, element_type, int(count), word_bw=bw).val
+        return out
+
+    def _pack(self, elements, element_type, count=None, *, word_bw=None) -> Words:
+        """Elements -> hardware words: the element type's vectorized
+        :meth:`~waveflow.hw.dataschema.DataSchema.to_words_numpy` fast path, else the canonical
+        recursive serializer.  *count* — when given — selects the first *count* elements first."""
+        bw = self._codec_word_bw(word_bw)
+        if count is not None:
+            elements = elements[:int(count)]
+        words = element_type.to_words_numpy(elements, bw)        # vectorized fast path
+        if words is None:                                        # canonical recursive pack
+            from waveflow.hw.arrayutils import write_array as _pack_array
+            words = _pack_array(elements, elem_type=element_type, word_bw=bw)
+        return words
+
+
+# ---------------------------------------------------------------------------
 # Stream HwStmt subclasses (endpoint-owned; live alongside the endpoint)
 # ---------------------------------------------------------------------------
 
@@ -837,7 +916,7 @@ class StreamIF(QueuedTransferIF):
 
 
 @dataclass
-class StreamIFSlave(QueuedTransferIFSlave):
+class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
     """
     A stream slave (RX) endpoint that is realized as a function call.
     """
@@ -846,6 +925,10 @@ class StreamIFSlave(QueuedTransferIFSlave):
     """Whether this stream carries a TLAST signal (True) or not (False)."""
 
     type_name = 'stream_if_slave'
+
+    # The typed adapter — `_typed_nwords` / `_unpack` — lives on TypedCodecMixin, shared with the
+    # m_axi master.  So `get` and `get_pipelined` below differ in exactly one thing: the pipelined
+    # one also back-calculates a start time.
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -882,21 +965,10 @@ class StreamIFSlave(QueuedTransferIFSlave):
                 )
             return (yield from super().get(nwords_max=nwords_max))
 
-        # Typed path — compute nwords from the schema.
-        nwords = schema_type.nwords_per_inst(self.bitwidth)
-        if count is not None:
-            nwords = nwords * int(count)
-        raw_words = yield from super().get(nwords_max=nwords)
-
-        if count is not None:
-            from waveflow.hw.arrayutils import array, read_array
-            data = read_array(
-                raw_words, elem_type=schema_type,
-                word_bw=self.bitwidth, shape=int(count),
-            )
-            return data
-
-        return schema_type().deserialize(raw_words, word_bw=self.bitwidth)
+        # Typed path — the schema says how many words, and the schema unpacks them.
+        raw_words = yield from super().get(
+            nwords_max=self._typed_nwords(schema_type, count))
+        return self._unpack(raw_words, schema_type, count)
 
     @port_read
     def get_nb(self, schema_type=None, count=None, *, nwords_max=None):
@@ -935,17 +1007,10 @@ class StreamIFSlave(QueuedTransferIFSlave):
 
             tstart = env.now - (nwords_transferred - 1) * clk.period
         """
-        nwords = schema_type.nwords_per_inst(self.bitwidth)
-        if count is not None:
-            nwords *= int(count)
-        raw_words = yield from super().get(nwords_max=nwords)
+        raw_words = yield from super().get(
+            nwords_max=self._typed_nwords(schema_type, count))
         tstart = self.env.now - (raw_words.shape[0] - 1) * self.interface.clk.period
-        if count is not None:
-            from waveflow.hw.arrayutils import read_array
-            data = read_array(raw_words, elem_type=schema_type,
-                              word_bw=self.bitwidth, shape=int(count))
-            return data, tstart
-        return schema_type().deserialize(raw_words, word_bw=self.bitwidth), tstart
+        return self._unpack(raw_words, schema_type, count), tstart
 
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamDrainStmt)
     def drain(self):
@@ -978,7 +1043,7 @@ class StreamIFSlave(QueuedTransferIFSlave):
 
 
 @dataclass
-class StreamIFMaster(QueuedTransferIFMaster):
+class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
     """
     A stream master (TX) endpoint that provides a write function.
     """
