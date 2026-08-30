@@ -22,6 +22,11 @@ summary: "How each declared endpoint on an HwModule is realized as a Vitis HLS p
 
 ## Concept
 
+> This page is organized **per kind** — stream, m_axi, regmap, bram. Where those kinds come from,
+> and the fact that the XSI testbench reads the *same* vocabulary to pick its BFM models, is
+> [Endpoint kinds](endpoint_kinds.md).
+
+
 A generated kernel's argument list and its `#pragma HLS INTERFACE` block are derived directly from
 the component's declared endpoints by
 [`kernel_signature(comp)`](../../../waveflow/build/hwgen.py). Each endpoint type maps to a specific
