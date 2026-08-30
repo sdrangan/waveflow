@@ -310,7 +310,8 @@ class MemRStream(FreeRunMod):
         # m_mem is the sole read owner, and the TYPE says so: a stray write is an AttributeError in
         # the model and a compile error in the generated C++ (const pointer + #pragma HLS stable),
         # both derived from this one declaration rather than restated in a codegen table.
-        # See plans/endpoint_types_not_tags.md.
+        # See InterfaceEndpoint's boundary-kind contract in waveflow/hw/interface.py.
+        # (plans/endpoint_types_not_tags.md argued it; completed and deleted in cd6a1ed.)
         self.m_mem = MMIFReadMaster(
             name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
         # In-band mode relays OPAQUE bursts, which is only defined on a packet-delimited stream.

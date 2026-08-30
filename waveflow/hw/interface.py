@@ -40,7 +40,7 @@ env.process(adder_proc(words))
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Generator
+from typing import TYPE_CHECKING, Callable, ClassVar, Generator
 import simpy
 
 import numpy as np
@@ -174,6 +174,40 @@ class CapabilityView:
 class InterfaceEndpoint(SimObj):
     """
     Base class for a concrete endpoint owned by a component.
+
+    **The boundary-kind contract.**  An endpoint that becomes a port on the generated kernel
+    declares which kind of port, as a class attribute::
+
+        class StreamIFSlave(...):
+            boundary_kind: ClassVar[str] = "axis_in"
+
+    ``waveflow.build.composite_gen.kind_of_endpoint`` is a *lookup* of that attribute, so the
+    endpoint owns what it IS and ``build/`` owns what is DONE with it — which C++ class drives the
+    port from outside stays a fact about the testbench library (``BFM_DUALS``), not about the
+    endpoint.
+
+    Three states, and they mean different things:
+
+    * **a kind string** — this endpoint is a boundary port of that kind;
+    * **``None``** — declared, and the type UNDER-SPECIFIES the port.  A bare
+      :class:`~waveflow.hw.memif.MMIFMaster` is legal hardware but does not say whether its pointer
+      is ``const``, so lowering refuses rather than guessing;
+    * **not declared at all** (the default, which is why this base sets nothing) — the endpoint is
+      not a kernel boundary port.  A ``BramIFSlave`` is the far end of a wrapper wire, a
+      ``SobIFMaster`` is internal to a kernel; neither has a boundary kind to give.
+
+    **Why an attribute and not an ``isinstance`` chain.**  The chain this replaced had a silent
+    ordering dependency: ``RegMapMMIFSlave`` had to be tested before ``MMIFSlave`` and
+    ``MMIFReadMaster`` before ``MMIFMaster``, subclass before base.  Reorder two lines and an
+    ``axilite_slave`` lowers as ``mm_slave`` with **no error at all**.  Inheritance resolves that by
+    construction: a subclass's own declaration wins, and a subclass that declares nothing inherits
+    the right answer.  The same call the codebase already makes for execution models and for
+    ``_DirectionalMMIFMaster.port_dir``.
+
+    **``boundary_kind``, not ``kind``.**  The same endpoint lowers differently by POSITION: a
+    ``StreamIFSlave`` is an ``axis_in`` port at a boundary and an ``hls::stream`` FIFO on an internal
+    edge.  Internal lowering is derived from the *interface* type in ``derive_internal_edges``, a
+    separate walk, and a bare ``kind`` would be read as covering both.
     """
 
     comp : HwModule | None = field(init=False)
@@ -921,6 +955,10 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
     A stream slave (RX) endpoint that is realized as a function call.
     """
 
+    #: An AXI4-Stream input port on the generated kernel.  See
+    #: :class:`InterfaceEndpoint` for the contract.
+    boundary_kind: ClassVar[str] = "axis_in"
+
     has_tlast: bool = True
     """Whether this stream carries a TLAST signal (True) or not (False)."""
 
@@ -1061,6 +1099,10 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
     """
     A stream master (TX) endpoint that provides a write function.
     """
+
+    #: An AXI4-Stream output port on the generated kernel.  See
+    #: :class:`InterfaceEndpoint` for the contract.
+    boundary_kind: ClassVar[str] = "axis_out"
 
     has_tlast: bool = True
     """Whether this stream carries a TLAST signal (True) or not (False)."""

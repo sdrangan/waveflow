@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil
+from typing import ClassVar
 
 import numpy as np
 
@@ -257,6 +258,15 @@ class BramIFMaster(InterfaceEndpoint):
     ``storage_type`` that can be wrong, and wrong in the way that survives ``csynth`` and appears
     only at RTL.
     """
+
+    #: A kernel-side BRAM port: a sized array parameter carrying ``mode=bram``, wired in the WRAPPER
+    #: to a memory that lives outside the kernel.  **One kind for both directions**, unlike m_axi:
+    #: the RTL port set is identical either way (Vitis emits the full A/B pair regardless), and what
+    #: differs is only which signals the body drives -- which :attr:`access` already says.  The
+    #: memory-side :class:`BramIFSlave` declares no kind on purpose: it is never a kernel boundary
+    #: port, only the far end of a wrapper wire.  See
+    #: :class:`~waveflow.hw.interface.InterfaceEndpoint`.
+    boundary_kind: ClassVar[str] = "bram"
 
     #: What one address holds — the C++ array's **element type**.  Everything the port needs in
     #: bits is derived from it (see :attr:`bitwidth`); nothing restates it.

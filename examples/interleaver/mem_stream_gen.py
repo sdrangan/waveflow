@@ -60,7 +60,9 @@ def top_spec_for(comp_class, width: int = DEFAULT_MEM_DW) -> TopSpec:
     graph walk a composite gets: a leaf declares its ports (``FreeRunMod.boundary``, ordered by
     ``kernel_task().signature``), their direction is their endpoint's type, and its one task is
     itself.  A standalone kernel really is *the 1-task degenerate case* — it just could not say so
-    while its ports lived here.  See ``plans/endpoint_types_not_tags.md``.
+    while its ports lived here.  The rationale lives on
+    :class:`~waveflow.hw.interface.InterfaceEndpoint` (the boundary-kind contract); the plan that
+    argued it, ``plans/endpoint_types_not_tags.md``, was completed and deleted in ``cd6a1ed``.
 
     Verified byte-identical against the table it replaced.
     """

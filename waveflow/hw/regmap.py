@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, ClassVar, Literal
 
 import numpy as np
 
@@ -597,6 +597,18 @@ class RegMapMMIFSlave(MMIFSlave):
     Wires ``rx_write_proc`` and ``rx_read_proc`` automatically; callers should
     not pass these kwargs.
     """
+
+    #: The AXI4-Lite control port Vitis creates for a host-activated kernel.  It has a real kind, so
+    #: a walk that meets one can SAY so -- ``_boundary_port`` still refuses to lower it (there is no
+    #: ``ap_ctrl_none`` top with an ``s_axilite`` port) and ``BFM_DUALS`` records that no model
+    #: drives it.  Naming the kind is what turns both refusals from "unknown endpoint type" into the
+    #: actual diagnosis.  See plans/design_cut.md S2/S7.
+    #:
+    #: **This declaration is the ordering hazard, resolved.**  In the ``isinstance`` chain this
+    #: replaced, the ``RegMapMMIFSlave`` test had to come before the ``MMIFSlave`` one; swapping two
+    #: lines made an ``axilite_slave`` lower silently as ``mm_slave``.  Here the subclass's own
+    #: declaration wins by inheritance, and there is no order to get wrong.
+    boundary_kind: ClassVar[str] = "axilite_slave"
 
     regmap: RegMap = field(kw_only=True)
 
