@@ -210,6 +210,52 @@ def test_the_registry_covers_every_kind_the_endpoint_vocabulary_produces():
         assert kind_of_endpoint(ep) in BFM_DUALS, f"{type(ep).__name__} has no BFM_DUALS row"
 
 
+def test_every_declared_boundary_kind_has_a_row():
+    """Stronger than the list above, and it is the check that caught `bram` missing.
+
+    The endpoint vocabulary is now DISCOVERABLE -- every kind is a `boundary_kind` class attribute
+    (Part 4) -- so this walks the classes rather than a hand-kept list of instances, which is the
+    only version that cannot go stale by omission.  `bram` was absent from BFM_DUALS while
+    `mm_slave` and `axilite_slave` recorded their holes as rows, so "which kinds have duals?" had
+    two answers: the table, and a `continue` in a walk 900 lines away.
+    """
+    from waveflow.build.composite_gen import BFM_DUALS
+    from waveflow.hw.bram import BramIFMaster
+    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+    from waveflow.hw.memif import MMIFReadMaster, MMIFSlave, MMIFWriteMaster
+    from waveflow.hw.regmap import RegMapMMIFSlave
+
+    declared = {cls.boundary_kind for cls in (
+        StreamIFSlave, StreamIFMaster, MMIFSlave, MMIFReadMaster, MMIFWriteMaster,
+        RegMapMMIFSlave, BramIFMaster)}
+    missing = sorted(declared - set(BFM_DUALS))
+    assert not missing, (
+        f"boundary kinds with no BFM_DUALS row: {missing}. A kind with no row is a KeyError "
+        f"waiting; record the hole as a row instead.")
+
+
+def test_the_two_kinds_of_no_model_are_told_apart():
+    """`model=None` means two different things, and a caller must be able to act on which.
+
+    `axilite_slave` is a HOLE -- the protocol and role are real, nothing implements them, and a DUT
+    with such a port cannot be XSI-lowered until something does.  `bram` needs no model AT ALL: its
+    counterpart is the wrapper, which joins the port to a memory compiled in beside the kernel, so
+    there is no second implementation for a BFM to be.  Collapsing them would report a design that
+    is fine as a missing feature, and a missing feature as a design that is fine.
+    """
+    import pytest
+    from waveflow.build.composite_gen import BFM_DUALS, bfm_dual_class
+    from waveflow.build.hwcodegen import LoweringError
+
+    assert BFM_DUALS["axilite_slave"].needs_model is True
+    assert BFM_DUALS["bram"].needs_model is False
+
+    with pytest.raises(LoweringError, match="known gap"):
+        bfm_dual_class("axilite_slave", None)
+    with pytest.raises(LoweringError, match="needs no BFM"):
+        bfm_dual_class("bram", None)
+
+
 # ==============================================================================================
 # The cut is an argument (design_cut S4)
 #

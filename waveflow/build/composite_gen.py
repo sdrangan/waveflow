@@ -1166,8 +1166,14 @@ class BfmDual:
     * ``protocol`` / ``role`` — the pair, spelled out.  They exist so a *missing* entry can be
       reported as "no BFM presents the **slave** role of **AXI4-Lite**" rather than as a ``KeyError``
       on a kind string.
-    * ``model`` — the C++ class in :mod:`waveflow.build.xsi`, or ``None`` for a **known gap**: the
-      protocol and role are real, and no model implements them yet.
+    * ``model`` — the C++ class in :mod:`waveflow.build.xsi`, or ``None`` when no model drives this
+      kind.  ``needs_model`` says which of the two ``None`` means.
+    * ``needs_model`` — whether a testbench port is owed here **at all**.  ``True`` with
+      ``model=None`` is a **known gap**: the protocol and role are real and nothing implements them
+      yet, so a DUT with such a port cannot be XSI-lowered and should hear that.  ``False`` is
+      **by design**: the port's counterpart is not a BFM, so there is nothing missing and nothing to
+      implement.  A single ``None`` could not carry both — *"needs a model, none exists"* and
+      *"needs no model at all"* are different answers, and only the first is a hole.
     * ``participant_declares`` — whether the *participant* picks the concrete class.
 
     On that last field, which is the one asymmetry in the table.  For AXI-Stream the role still fixes
@@ -1181,6 +1187,7 @@ class BfmDual:
     role: str
     model: str | None
     participant_declares: bool = False
+    needs_model: bool = True
 
 
 #: **The** protocol × role table: which BFM serves a DUT boundary port of each kind.
@@ -1206,6 +1213,17 @@ BFM_DUALS: dict[str, BfmDual] = {
     # here, as a row with no model, rather than in prose: "which duals exist" is one lookup, and the
     # hole is part of the answer.  Deferred to plans/design_cut.md S7.
     "axilite_slave": BfmDual("AXI4-Lite", "master", None),
+    # NOT A GAP — the only row where `model=None` means "none is owed".  A `mode=bram` port's
+    # counterpart is the WRAPPER, which joins it to a memory compiled into the simulation beside the
+    # kernel (`bram_t2p.v`, visible in `rtl_<top>.f`).  There is no second implementation for a BFM
+    # to be, which is the argument that a hand-written memory is *more* verifiable than an emulated
+    # one; if a BRAM port ever did need a model, the wrapper would be the thing that is wrong.
+    #
+    # The row exists because `bram` was ABSENT from this table while `mm_slave` and `axilite_slave`
+    # recorded their holes as rows -- so "which kinds have duals?" had two answers, one of them a
+    # `continue` in a walk 900 lines away.  Now every kind `kind_of_endpoint` can produce has a row,
+    # and the table says which of them are holes.
+    "bram":          BfmDual("BRAM", "wrapper-joined memory", None, needs_model=False),
 }
 
 
@@ -1223,6 +1241,12 @@ def bfm_dual_class(kind: str, declared: str | None) -> str:
             f"DUT port of that kind. Add a row to composite_gen.BFM_DUALS naming the protocol, the "
             f"role the testbench must present, and the model that implements it. Registered kinds: "
             f"{sorted(BFM_DUALS)}."
+        )
+    if dual.model is None and not dual.needs_model:
+        raise LoweringError(
+            f"boundary kind {kind!r} needs no BFM: its counterpart is the {dual.role}, not a model, "
+            f"so asking for one means a walk reached a port it should have skipped. This is not a "
+            f"gap in the BFM library — see composite_gen.BFM_DUALS."
         )
     if dual.model is None:
         raise LoweringError(
@@ -2131,6 +2155,10 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
             # synthesized scope, so there is nothing here for a testbench to drive and no BFM to look
             # up.  Skipping it is what keeps the BFM library untouched (plans/rtl_module.md S3) —
             # and if a memory ever DID need a model, the wrapper would be the thing that is wrong.
+            #
+            # The skip and the table now AGREE rather than being two answers to one question:
+            # `BFM_DUALS["bram"]` is a row with `needs_model=False`, so `bfm_dual_class` says the
+            # same thing this `continue` does if a walk ever reaches here anyway.
             continue
         port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
         part = pep = None
