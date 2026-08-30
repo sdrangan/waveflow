@@ -313,6 +313,12 @@ That mirrors the hardware, where a word write drives every writable bit of the w
 - **Read-only bits ignore writes rather than raising.** A packed word mixes `R` and writable bits, so writing `ap_start` cannot be an access violation just because read-only `ap_done` sits beside it. The hardware slave likewise decodes only the writable bits.
 - **Writing one field of a word holding *several writable* fields zeroes the others** — exactly as it would on the bus. A caller that needs to preserve a neighbour must compose the word itself. This does not bite the Vitis control word, where `ap_start` is the only writable bit.
 
+What this model does *not* reproduce — `RegAccess.COR`, `auto_restart`, interrupts, and the
+missing `control.h` conformance test — is listed on
+[Host launch lifecycle](../../comp_codegen/host_launch.md#not-yet-modelled), with the Vitis
+control block those limits are about.
+
+---
 
 ## Quick reference
 

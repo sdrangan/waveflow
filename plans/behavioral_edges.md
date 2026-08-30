@@ -192,7 +192,7 @@ behavioral edge inherits, so build it once as a reusable harness rather than per
 
 | page | status | what it says |
 |---|---|---|
-*(Written for S1–S3: `guide/interface/behavioral.md` (mechanism half only — the `RFSampIF` worked
+*(Written for S1–S3: `guide/custom_hooks/behavioral.md` (mechanism half only — the `RFSampIF` worked
 example needs its channel model, which is `adc_model` stage 2), the `guide/build/bfm.md` edit, the
 `guide/comp_codegen/xsi_tb.md` edit, and the one-line `guide/interface/index.md` entry the new page
 needs to be reachable. `overview.md` and the `custom_hooks/bfm_model.md` cross-reference are not yet
@@ -200,10 +200,10 @@ written.)*
 
 | `guide/interface/overview.md` | edit | The axis this adds: an interface is not only a *wiring* record — it may carry **behavior and state** (`StreamIF.depth` already does; a behavioral edge adds a `run_proc`). Name the two hooks side by side so `bfm_model()` (node) and `xsi_model()` (edge) are learned together. |
 | `guide/interface/index.md` | edit | One line in the section index pointing at the new page below. |
-| `guide/interface/behavioral.md` | **new** | The authoring page for a behavioral edge: when an edge deserves behavior *(rate conversion, buffering, loss accounting — not signal processing, see below)*; the `run_proc` half; the `xsi_model()` half; the queue phase discipline and why a direct call is wrong; the counter contract; the equivalence obligation and its gate. |
+| `guide/custom_hooks/behavioral.md` | **new** | The authoring page for a behavioral edge: when an edge deserves behavior *(rate conversion, buffering, loss accounting — not signal processing, see below)*; the `run_proc` half; the `xsi_model()` half; the queue phase discipline and why a direct call is wrong; the counter contract; the equivalence obligation and its gate. |
 | `guide/build/bfm.md` | edit | The model library page currently implies every model binds RTL pins. Add the channel: models may bind **each other**, `BlockChannel` is the primitive, and the write-in-`update` / read-in-next-`sample` rule is what makes it order-independent. |
 | `guide/comp_codegen/xsi_tb.md` | edit | `tb_top_spec` now has **two walks** — the DUT boundary (one model per port) and non-boundary edges (one channel per edge). State which walk claims which interface, and that an interface reaching neither is an error. |
-| `guide/custom_hooks/bfm_model.md` | edit | A cross-reference: this page teaches node models; `guide/interface/behavioral.md` teaches edge models; the `XsiSimObj` phases and the equivalence obligation are shared. |
+| `guide/custom_hooks/bfm_model.md` | edit | A cross-reference: this page teaches node models; `guide/custom_hooks/behavioral.md` teaches edge models; the `XsiSimObj` phases and the equivalence obligation are shared. |
 
 **A line the authoring page must carry**, because it is the boundary that keeps this feature small:
 
@@ -233,7 +233,7 @@ modelling anything, and a page that documents it is documenting a wish.
   `xsi_simobj.h` split bought.
 - S4's equivalence harness is the deliverable that makes every later edge cheap to trust. **Not
   built.** Until it is, "the two realizations agree on the counters" is asserted by reading both, and
-  `guide/interface/behavioral.md` says so rather than implying the gate exists.
+  `guide/custom_hooks/behavioral.md` says so rather than implying the gate exists.
 
 ## Not in scope
 
@@ -253,7 +253,7 @@ modelling anything, and a page that documents it is documenting a wish.
   would be a monitor node attached to it.
 - ~~Ordering when two behavioral edges are chained…~~ **Stated and measured.** One hop = exactly one
   cycle, pinned by `test_one_hop_costs_exactly_one_cycle`, quoted in
-  `guide/interface/behavioral.md` and `guide/build/bfm.md`, and re-derived from the C++ by
+  `guide/custom_hooks/behavioral.md` and `guide/build/bfm.md`, and re-derived from the C++ by
   `tests/docs/test_documented_numbers.py` so the figure cannot rot. An N-hop chain adds N cycles that
   pysim does not have.
 

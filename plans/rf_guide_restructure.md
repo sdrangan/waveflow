@@ -171,7 +171,7 @@ Three reasons, in the order they convinced me.
 
 **1. The lowering is already documented, and not here.** `python/converter.md` states the two-model
 split and why one declaration cannot express it. `guide/comp_codegen/xsi_tb.md` owns per-port model
-resolution; `guide/interface/behavioral.md` owns the channel; `guide/comp_codegen/rtl_module.md` owns
+resolution; `guide/custom_hooks/behavioral.md` owns the channel; `guide/comp_codegen/rtl_module.md` owns
 the wrapper. A four-page `xsi/` would restate all of that under an RF heading, which is the second
 copy that rots — and this pass just found four claims that rotted for exactly that reason.
 

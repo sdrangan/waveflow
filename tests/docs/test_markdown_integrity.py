@@ -291,3 +291,55 @@ def test_relative_links_resolve(md_files):
                 if not (tgt.is_file() or tgt.is_dir()):
                     broken.append(f"{_rel(p)}:{i} -> {rel}")
     assert not broken, "relative links point at files that do not exist:\n  " + "\n  ".join(broken)
+
+
+#: Front-matter keys this file cares about.  A hand-rolled reader rather than a YAML dependency:
+#: the values wanted are all one-line scalars, and a page whose front matter does not parse is
+#: already caught by :func:`test_frontmatter_starts_on_line_one`.
+_FM_KEY = re.compile(r"^(title|parent|grand_parent):\s*(.*?)\s*$")
+
+
+def _front_matter(p: Path) -> dict[str, str]:
+    lines = _lines(p)
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fm = {}
+    for ln in lines[1:]:
+        if ln.strip() == "---":
+            break
+        m = _FM_KEY.match(ln)
+        if m:
+            fm[m.group(1)] = m.group(2).strip("\"'")
+    return fm
+
+
+def test_no_child_binds_to_an_ambiguous_parent_title(md_files):
+    """Just the Docs resolves ``parent:`` by matching the **title string**, not the path.
+
+    So two pages sharing a title are indistinguishable to the nav, and a child naming that title as
+    its ``parent:`` binds to whichever one the theme happens to pick.  This repo shipped exactly that:
+    two pages titled ``Overview`` with seven children between them.
+
+    The dangerous property is that the symptom appears only when the *set of candidates changes* — a
+    page renamed, a page added, a section re-foldered — so the mis-binding lands in a commit that
+    looks unrelated to it.  ``grand_parent:`` disambiguates, and three titles currently rely on that
+    (``HLS``, ``Overview``, ``Python``).  This asserts every child of an ambiguous title keeps it.
+    """
+    pages = {p: _front_matter(p) for p in md_files if _rel(p).startswith("docs/")}
+    pages = {p: fm for p, fm in pages.items() if fm.get("title")}
+
+    holders: dict[str, list[Path]] = {}
+    for p, fm in pages.items():
+        holders.setdefault(fm["title"], []).append(p)
+
+    used_as_parent = {fm["parent"] for fm in pages.values() if fm.get("parent")}
+    ambiguous = {t for t, ps in holders.items() if len(ps) > 1} & used_as_parent
+
+    unguarded = []
+    for p, fm in sorted(pages.items()):
+        if fm.get("parent") in ambiguous and not fm.get("grand_parent"):
+            held = ", ".join(sorted(_rel(h) for h in holders[fm["parent"]]))
+            unguarded.append(f"{_rel(p)} (parent: {fm['parent']!r} — held by {held})")
+    assert not unguarded, (
+        "a child names a title held by more than one page and does not say which one:\n  "
+        + "\n  ".join(unguarded))
