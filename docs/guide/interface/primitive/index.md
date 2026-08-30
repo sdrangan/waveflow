@@ -71,18 +71,17 @@ three are essential; collapsing any of them models a cost the hardware does not 
 |---|---|---|---|
 | [`StreamIF`](stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
 | [`MMIF`](aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
-| [`BramIF`](bram.md) | *not built* — see below | `read_pipelined` / `write_pipelined` | **`array_ref`** |
+| [`BramIF`](bram.md) | *not built* | `read_pipelined` / `write_pipelined` | **`array_ref`** |
 | `HwState` | — already local | — | *not built* |
 
-**a non-overlapping transfer — non-overlapping timed transfer.** Data physically moves into an internal structure. The
-endpoint owns a latency model and the call elapses time. This is the model described just above.
+**Non-overlapping transfer.** Data physically moves into an internal structure, and the call elapses
+the whole of it — nothing downstream starts until it finishes. The model is
+[block timing](../../timing_model/block.md).
 
-**Overlapping (pipelined) transfer.** Two transfers that can proceed at once — reading one endpoint while
-writing another. The `tstart` anchoring is the whole mechanism: a read hands back the cycle its
-*first* word arrived, and `write_pipelined(data, t_start)` treats the write as having begun then,
-shortening its wait if `t_start` is already past. So the two phases **overlap** and cost
-`max(a, b)` rather than `a + b`, which is what a task that emits a word as it receives one actually
-does. There is one anchoring convention and every endpoint uses it.
+**Overlapping (pipelined) transfer.** Two transfers proceed at once — reading one endpoint while
+writing another — so the pair costs `max(a, b)` rather than `a + b`. The model is
+[streaming timing](../../timing_model/streaming.md). Pipelined ops are **array** operations: the
+saving is proportional to the words moved, so there is no schema-only form.
 
 ```python
 x, tstart = yield from self.s_in.get_pipelined(Float32, count=n)
@@ -90,32 +89,30 @@ y = <numpy over the whole array>              # no element loop anywhere
 yield from self.buf_w.write_pipelined(y, addr, tstart)
 ```
 
-**In place.** Unique to directly-addressable storage, and the reason is **timing, not
-copies**. A kernel computing against a BRAM transfers nothing — in C++ it is `foo(&buf[addr], n)`,
-reading and writing the memory through its port. Modelling that as a read, a compute and a write
-invents two transfers that do not exist and charges the design for them. A stream has no addressing
-and every `m_axi` access is a bus transaction, so `BramIF` and `HwState` are the only two citizens.
+> ⚠️ **The overlap is yours to declare, and nothing checks it.** `tstart` is the whole mechanism: a
+> read hands back the cycle its *first* word arrived, and `write_pipelined(data, t_start)` treats the
+> write as having begun then, shortening its wait if `t_start` is already past. Anchor it correctly
+> and you get `max(a, b)`; anchor it wrongly and you get a number that is confidently wrong, because
+> **no gate compares your anchor against anything**. In [`bram_access`](../../../examples/bram_access/),
+> anchoring the memory write at the payload read's `tstart` is the entire reason a firing costs
+> `max(stream, memory)` — and adding that anchor moved the model's own predictions by a real cycle
+> per command. If you are unsure what to anchor to, read
+> [streaming timing](../../timing_model/streaming.md) before guessing.
+
+**In place.** Unique to directly-addressable storage, and the reason is **timing, not copies**. A
+kernel computing against a BRAM transfers nothing — in C++ it is `foo(&buf[addr], n)`, reading and
+writing the memory through its port. Modelling that as a read, a compute and a write invents two
+transfers that do not exist and charges the design for them. A stream has no addressing and every
+`m_axi` access is a bus transaction, so `BramIF` and `HwState` are the only two citizens.
 
 ```python
 x = self.buf.array_ref(addr, n)      # a LIVE view -- nothing moved, no simulated time passed
-x[:] = x * 3 + 1                     # in place, through one port
-yield self.timeout(n * self.buf.ii_for(2) / self.clk.freq)   # 2 accesses/element -> II=2
 ```
 
 Nothing there elapses time on its own, and that is the point: **the caller owns the timing**,
-because the cost is the compute loop's `II x n` rather than a transfer. What the endpoint owes is
-the *number* to compute from — `accesses_per_cycle`, and `ii_for()` over it — so the body multiplies
-a declared rate instead of a guessed one.
-
-Two things follow, and both are enforced rather than documented:
-
-* **A reference is directional.** `access` already says what the port does, so a `"read"` port's
-  view comes back with `flags.writeable = False` and a stray write *raises* instead of silently
-  reaching nothing.
-* **A reference must never silently become a copy.** `array_ref` is available exactly when the
-  element type has a native numpy dtype, and refused otherwise — a composite element is stored as
-  its packed word, so referencing it would have to deserialize into a fresh object. The copying
-  a non-overlapping transfer ops are the answer for that element type.
+because the cost is the compute loop's `II x n` rather than a transfer. The port publishes the
+rate to compute from, and enforces the two rules that keep a reference honest — see
+[`BramIF`](bram.md).
 
 **Vectorized Python, looped HLS, timing carried by the model.** These cases are what make that work:
 a design body moves whole vectors and the interface supplies the cycles, while the generated C++
@@ -125,12 +122,12 @@ than a fidelity feature — it opts the design out of the model. `examples/strea
 a memory.
 
 Cells marked *not built* are filled as each case ships; see `plans/typed_transfer_codec.md`.
-(`BramIF`'s a non-overlapping transfer has no caller yet, which is why it is deliberately last.)
+(`BramIF`'s non-overlapping transfer has no caller yet, which is why it is deliberately last.)
 
 **All three cases in one design:** [A memory reached three ways](../../../examples/bram_access/) is the
-worked example. `WRITE` is a non-overlapping transfer into the memory, `COMPUTE` is an in-place access over it, `READ` is an overlapping transfer out
-of it — and because `WRITE` and `COMPUTE` share one port on one task, the difference between moving a
-word and computing on it in place is
+worked example. `WRITE` is a non-overlapping transfer into the memory, `COMPUTE` is in place over it,
+`READ` is an overlapping transfer out of it — and because `WRITE` and `COMPUTE` share one port on one
+task, the difference between moving a word and computing on it in place is
 [a measurement in one waveform](../../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write)
 rather than an argument.
 
