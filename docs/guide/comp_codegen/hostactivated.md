@@ -178,5 +178,7 @@ difference is the protocol, and raw pins are still a handshake.
 - [Sequential (host-activated)](../flows/sequential.md) — the flow, its three gates, and the ladder
   from Python simulation to RTL co-simulation.
 - [Writing it in Python](../flows/sequential_python.md) — this same module, from the other side.
+- [Host launch lifecycle](./host_launch.md) — the Python side of `ap_ctrl_hs`: `VitisRegMap`, the
+  `ap_start` / `ap_done` handshake, and the `BoundRegMap` host surface this kernel is driven from.
 - [Endpoint interfaces](./interface.md) — the full endpoint → port table (streams and `m_axi` too).
 - [Module structure](./structure.md) — the contract, and which method is extracted for which kind.

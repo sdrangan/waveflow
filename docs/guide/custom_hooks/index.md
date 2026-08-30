@@ -73,6 +73,10 @@ with no data movement), then jump to the pattern that matches your operand.
 - [Complex — data-dependent addressing](./complex.md) — driving the `m_axi` port from the datapath (`read_array_lane` with a running pointer), and the two VMAC csynth gotchas.
 - [Memory command queue](./queue.md) — the advanced case: a hook that is the synthesizable half of a transport interface (the `queue_get` ring dequeue).
 - [Kernel transfer reference](./reference.md) — the in-kernel transfer-call cheat sheet (`read_array_lane` / `read_array_slice` / stream variants) and the Python↔C++ mapping table.
+- [Writing a BFM model](./bfm_model.md) — the `bfm_model()` hook: the C++ testbench model that drives a
+  boundary port from outside the DUT.
+- [Behavioral edges](./behavioral.md) — the edge twin of `bfm_model()`: an interface that carries
+  behavior and state (`xsi_model()`, `BlockChannel`, the queue phase discipline).
 
 ## See also
 

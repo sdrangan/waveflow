@@ -1,7 +1,8 @@
 ---
 title: Schema Transfer Interface
-parent: Interfaces
-nav_order: 6
+parent: Derived interfaces
+grand_parent: Interfaces
+nav_order: 1
 audience: python
 api: [SchemaTransferIF, SchemaTransferIFMaster, SchemaTransferIFSlave, PhysicalTransport, StreamTransport, SimObj, Simulation]
 summary: "The logical interface that carries serializable schema objects (DataList / DataUnion) over a transport — write(obj) / rx_proc, the layered transport model, and single- vs multi-type framing, with a runnable two-SimObj toy."
@@ -27,10 +28,10 @@ Physical layer:    StreamIFMaster               StreamIFSlave
 
 ## A minimal simulation
 
-Two raw [`SimObj`](../sim/simobj.md)s sending a schema object master→slave. Each transfer endpoint
+Two raw [`SimObj`](../../sim/simobj.md)s sending a schema object master→slave. Each transfer endpoint
 owns an internal `StreamIFMaster` / `StreamIFSlave` (`stream_ep`); you complete the physical link by
 binding those two `stream_ep`s over a `StreamIF`. No `HwModule`. (The `yield from` / `run_proc`
-mechanics are in [Process generators](../sim/procgen.md).)
+mechanics are in [Process generators](../../sim/procgen.md).)
 
 ```python
 from dataclasses import dataclass
@@ -96,7 +97,7 @@ print("consumer received:", consumer.received)
 
 Each `SensorPacket` the producer `write`s is serialized, carried over the stream, deserialized, and
 delivered to the consumer's `rx_proc` — `consumer.received` ends up `[(-10, 1), (25, 2)]`. See
-[SimObj](../sim/simobj.md) for the base object and lifecycle. The detailed single-type and
+[SimObj](../../sim/simobj.md) for the base object and lifecycle. The detailed single-type and
 multi-type (`DataUnion`) walkthroughs are below.
 
 ---
@@ -396,4 +397,4 @@ from waveflow.hw.schema_transfer_interface import (
 | Wire footprint (single type) | `MySchema.nwords_per_inst(32)` |
 | Wire footprint (DataUnion) | `MyDU.nwords_per_inst(32)` |
 
-See also: [`schema_transfer_demo.py`](../../../examples/interface/schema_transfer_demo.py) for a complete runnable example.
+See also: [`schema_transfer_demo.py`](../../../../examples/interface/schema_transfer_demo.py) for a complete runnable example.

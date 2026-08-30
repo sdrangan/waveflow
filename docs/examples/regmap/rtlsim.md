@@ -208,5 +208,5 @@ If all four show the expected results, this kernel passes the full cycle-approxi
 This is the last page in the Vitis Register Map walkthrough. For the broader framework references, see:
 
 - [Build System](../../guide/build/index.md) — the full BuildDag reference.
-- [Register Maps](../../guide/interface/regmap.md) — the underlying regmap abstractions.
+- [Register Maps](../../guide/interface/primitive/regmap.md) — the underlying regmap abstractions.
 - [Hardware modules](../../guide/flows/modules.md) — the component kinds (`HostActivated` → sequential, `FreeRunMod` → concurrent) and the flow each maps to.

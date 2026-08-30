@@ -62,7 +62,7 @@ stream's response carries one.
 The check is in **words**, the caller's units. The byte/word scaling defect lived *below* it, in the
 wrapper: a command reading words 0…255 of 1024 passes the range check and still aliases. Two
 different failures, two different guards — the range check is the caller's, and
-[the addressing convention](../../guide/interface/bram.md#the-addressing-convention) is the other's.
+[the addressing convention](../../guide/interface/primitive/bram.md#the-addressing-convention) is the other's.
 
 ## The messages
 
@@ -154,7 +154,7 @@ As shown in the diagram in the [introduction](./index.md), the kernel is compose
 plus the BRAM itself, which is not a task at all.
 
 `BramWriteCompute` uses standard stream interfaces for the command, response and data, along with a
-[`BramIFMaster`](../../guide/interface/bram.md) for the memory:
+[`BramIFMaster`](../../guide/interface/primitive/bram.md) for the memory:
 
 ```python
 class BramWriteCompute(FreeRunMod):
@@ -170,7 +170,7 @@ class BramWriteCompute(FreeRunMod):
 `access="readwrite"` is the whole of what makes `COMPUTE` possible, and it is not free: it puts
 `storage_type=ram_1p` on the port's pragma, which pins Vitis to **one** physical memory port — the
 one the wrapper actually wires. [The `access` / `storage_type`
-derivation](../../guide/interface/bram.md#accessreadwrite-and-the-storage_type-that-follows) has the
+derivation](../../guide/interface/primitive/bram.md#accessreadwrite-and-the-storage_type-that-follows) has the
 measurement.
 
 The body dispatches on the opcode:
@@ -200,7 +200,7 @@ out of the LT model that is the tool's reason to exist; the C++ keeps its
 things carry the work instead:
 
 - **The command is read in one call and the response written in one.** That is the
-  [fourth row of the four ways to move data](../../guide/interface/stream.md#the-four-ways-to-move-data):
+  [fourth row of the four ways to move data](../../guide/interface/primitive/stream.md#the-four-ways-to-move-data):
   `get(WriteComputeCmd)` derives the word count from `WriteComputeCmd.nwords_per_inst(bitwidth)` and
   deserializes; `write(resp)` serializes. Neither end counts words.
 - **The `WRITE` payload is one vector in and one vector out.** `get_pipelined` returns the whole
@@ -245,14 +245,14 @@ if ok and n:
 ```
 
 One token, consumed once, and then the reader is command-driven forever —
-[sequencing belongs in the design](../../guide/interface/bram.md#sequencing-belongs-in-the-design)
+[sequencing belongs in the design](../../guide/interface/primitive/bram.md#sequencing-belongs-in-the-design)
 explains why it is a token on an ordinary stream rather than a testbench's ordering.
 
 `read_pipelined` is where the read path's cost lives, and it is worth reading slowly. A scalar
 `BramIF` access is **untimed in pysim, on purpose**: a BRAM answer is deterministic, unarbitrated and
 one cycle, so a discrete-event model of it would add a SimPy timestep and no fidelity — `mem_read`
 and `mem_write` are plain methods rather than generators, and **the absence of the `yield` is the
-interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/aximm.md), where the
+interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/primitive/aximm.md), where the
 bus, the arbitration and the burst *are* the point of having a model.)
 
 What that leaves out is not throughput. At II=1 a pipelined reader still answers one word per cycle
@@ -367,7 +367,7 @@ self.add_rtl_if(w_if)
 ```
 
 `add_rtl_mod` and `add_rtl_if` are different registries from `add_comp` and `add_if`, and
-[that difference is the mechanism](../../guide/interface/bram.md#add_rtl_if-not-add_if--and-that-is-the-whole-mechanism):
+[that difference is the mechanism](../../guide/interface/primitive/bram.md#add_rtl_if-not-add_if--and-that-is-the-whole-mechanism):
 the walks that derive tasks and channels read the *other* two, so a memory is never asked for a
 `kernel_task()` it does not have, and the accessor's port never vanishes into a FIFO. The result is
 visible on the elaborated graph:
@@ -435,7 +435,7 @@ catching early.
 ## See also
 
 - [Python simulation](pysim.md) — running this model, and the scenario it runs.
-- [BRAM — memory between modules](../../guide/interface/bram.md) — the interface reference: why the
+- [BRAM — memory between modules](../../guide/interface/primitive/bram.md) — the interface reference: why the
   memory cannot live inside a kernel, the `access` / `storage_type` derivation, the addressing
   convention, and the `$error` nothing can hear.
 - [The three access cases](../../guide/interface/overview.md#the-three-access-cases) — the frame the

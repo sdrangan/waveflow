@@ -1,7 +1,8 @@
 ---
 title: Stream Interfaces
-parent: Interfaces
-nav_order: 2
+parent: Primitive interfaces
+grand_parent: Interfaces
+nav_order: 1
 audience: python
 api: [StreamIF, StreamIFMaster, StreamIFSlave, SimObj, Simulation]
 summary: "The point-to-point StreamIF and the four ways to move data over one — a raw word, n raw words, a typed array, or a schema — each with the in-kernel HLS call it corresponds to. Then the cases those four do not cover: a producer that cannot be back-pressured, pipelined get/write timing, and a runnable producer→consumer toy."
@@ -49,7 +50,7 @@ cmd = yield from self.s_in.get(FirCmd)    # one call, deserialized for you
 ```
 
 > **Do not take a structured message apart a word at a time.** A command, header or response is a
-> [`DataList`](../vectorization/); declare it once and let `get(Schema)` read it. Pulling `n` words
+> [`DataList`](../../vectorization/); declare it once and let `get(Schema)` read it. Pulling `n` words
 > with `n` calls re-authors the field layout in a second place — and if the schema carries an
 > `include_filename`, that second place silently disagrees with the **generated C++ header the kernel
 > compiles against**. `examples/stream_inband/poly.py` is the worked form.
@@ -58,7 +59,7 @@ cmd = yield from self.s_in.get(FirCmd)    # one call, deserialized for you
 
 Every row has a kernel-side twin, so a hook and its Python model can be read against each other. The
 in-kernel calls are collected in the
-[kernel transfer reference](../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel):
+[kernel transfer reference](../../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel):
 
 | tier | Python | HLS |
 |---|---|---|
@@ -69,7 +70,7 @@ in-kernel calls are collected in the
 
 `au` is the generated `<element>_array_utils` namespace. On a **framed** or **AXI4-Stream** port the
 array row becomes `read_framed_stream_lane` / `read_axi4_stream_lane` (and their writes), which carry
-`TLAST`; see [array utils](../vectorization/hls/arrayutils.md#the-three-framings--all-three-now-covered).
+`TLAST`; see [array utils](../../vectorization/hls/arrayutils.md#the-three-framings--all-three-now-covered).
 
 The rest of this section is what these four do not cover: a producer that cannot wait, and a consumer
 whose processing time you want modelled.
@@ -107,7 +108,7 @@ wire either way — "who is willing to wait" is a property of the producer, not 
 
 `dropped == 0` is therefore the mechanical form of *"this consumer never stalls its input"*, and it
 stays zero for every design whose producers call `write()`. It has a resolution limit worth knowing
-before you rely on it: see [the fidelity boundary](../rf/rfdc/fidelity.md#the-resolution-limit).
+before you rely on it: see [the fidelity boundary](../../rf/rfdc/fidelity.md#the-resolution-limit).
 
 ### Pipelined processing
 
@@ -219,7 +220,7 @@ sim.run_sim()
 
 The `Consumer.run_proc()` must delegate to `ep.run_proc()` so the slave's receive loop is active during simulation. `Simulation.run_sim()` calls each `SimObj.run_proc()` automatically, so this pattern wires together correctly.
 
-This is a complete, runnable two-[`SimObj`](../sim/simobj.md) simulation — a `Producer` (master) and a `Consumer` (slave) bound over one `StreamIF`, no `HwModule` — and it is the same shape as the toys on the other interface pages. The `yield` / `run_proc` / `ProcessGen` mechanics it relies on are explained in [Process generators](../sim/procgen.md). A [`CrossBarIF`](./crossbar.md) variant is the same idea with port-indexed endpoints (`in_0` / `out_0`).
+This is a complete, runnable two-[`SimObj`](../../sim/simobj.md) simulation — a `Producer` (master) and a `Consumer` (slave) bound over one `StreamIF`, no `HwModule` — and it is the same shape as the toys on the other interface pages. The `yield` / `run_proc` / `ProcessGen` mechanics it relies on are explained in [Process generators](../../sim/procgen.md). A [`CrossBarIF`](./crossbar.md) variant is the same idea with port-indexed endpoints (`in_0` / `out_0`).
 
 ---
 

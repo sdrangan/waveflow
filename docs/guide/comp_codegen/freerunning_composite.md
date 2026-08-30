@@ -161,7 +161,7 @@ A design needing two masters on one resource has to say so structurally.
 
 Everything above assumes the generated kernel *is* the design. It stops being true the moment a
 composite carries an on-chip memory shared by two of its tasks, because
-[that memory cannot live inside the kernel](../interface/bram.md). It is registered with
+[that memory cannot live inside the kernel](../interface/primitive/bram.md). It is registered with
 `add_rtl_mod` instead of `add_comp`, realized as hand-written Verilog, and joined to the tasks by a
 generated **wrapper**:
 

@@ -1,7 +1,8 @@
 ---
 title: AXI-MM Command Queue
-parent: Interfaces
-nav_order: 4.5
+parent: Derived interfaces
+grand_parent: Interfaces
+nav_order: 3
 audience: python
 api: [AXIMMQueue, AXIMMQueueLayout, MMIFMaster, AXIMMCrossBarIF, DirectMMIF]
 summary: "The in-memory command queue — AXIMMQueue, a host-driven ring buffer over an MMIFMaster (m_axi). The AXIMMQueueLayout (head/tail/capacity + data slots), the producer write / consumer get operations, and the loosely-timed poll-on-empty / backpressure-on-full timing model."
@@ -10,19 +11,19 @@ summary: "The in-memory command queue — AXIMMQueue, a host-driven ring buffer 
 # AXI-MM Command Queue
 
 The other interface pages move *data* off the control plane (memory-mapped reads
-in [MM Interfaces](./aximm.md)) or carry control *in band* on a stream. The
+in [MM Interfaces](../primitive/aximm.md)) or carry control *in band* on a stream. The
 **command queue** moves the control plane itself **into memory**: instead of the
 host pushing each command down a dedicated stream, it appends commands to a ring
 buffer in shared DRAM, and the accelerator dequeues them over its ordinary `m_axi`
 master. Control and data now share one memory bundle.
 
 This is the Python transactional model of that ring. `AXIMMQueue`
-([`waveflow/hw/aximm_queue.py`](../../../waveflow/hw/aximm_queue.py)) is **not a new
+([`waveflow/hw/aximm_queue.py`](../../../../waveflow/hw/aximm_queue.py)) is **not a new
 endpoint** — it is a thin proxy over an existing
-[`MMIFMaster`](./aximm.md): the producer and the consumer each bind one to the same
+[`MMIFMaster`](../primitive/aximm.md): the producer and the consumer each bind one to the same
 region of memory and talk through `write` / `get`. The synthesizable side (the
 consumer's `get` lowered to a hand-written ring-dequeue kernel) is documented in
-[Custom Hooks → Memory command queue](../custom_hooks/queue.md).
+[Custom Hooks → Memory command queue](../../custom_hooks/queue.md).
 
 ## What the queue is
 
@@ -45,7 +46,7 @@ addresses — `head_addr`, `tail_addr`, `capacity_addr`, `data_base`, and
 the usable depth is `capacity - 1` (one slot distinguishes full from empty).
 
 Contrast this with the stream command path of the
-[shared-memory histogram](../../examples/shared_mem/) example, where the command
+[shared-memory histogram](../../../examples/shared_mem/) example, where the command
 rides a dedicated AXI4-Stream: there the control channel is a separate port; here it
 is just another region of the same memory, and ordering between producer and
 consumer is mediated entirely by the two pointers.
@@ -87,7 +88,7 @@ while True:
 ## Timing model
 
 The queue inherits the **loosely-timed** model of its underlying `m_axi` master
-(see [MM Interfaces](./aximm.md) and [Polling Overhead](./poll.md)). A `get`
+(see [MM Interfaces](../primitive/aximm.md) and [Polling Overhead](../../timing_model/poll.md)). A `get`
 reads `(head, tail)` and, when non-empty, one data slot — each a timed transaction
 on the shared bus.
 
@@ -95,7 +96,7 @@ Two cases need the polling model:
 
 - **Empty ring (`head == tail`).** The consumer must wait for the producer to
   advance `tail`. Rather than step every cycle, it uses the
-  [`poll_until`](./poll.md) loosely-timed model: a bandwidth-steal (`ov`) derating
+  [`poll_until`](../../timing_model/poll.md) loosely-timed model: a bandwidth-steal (`ov`) derating
   on the shared bus plus a deterministic discovery-latency delay. The default poll
   interval is configurable per queue (`poll_interval`, in cycles).
 - **Full ring.** The producer's `write` blocks (host backpressure) until the
@@ -107,14 +108,14 @@ timing primitive, only a new *use* of `m_axi` plus `poll_until`.
 
 ## Vehicles
 
-- [`examples/interface/aximm_queue_demo.py`](../../../examples/interface/aximm_queue_demo.py)
+- [`examples/interface/aximm_queue_demo.py`](../../../../examples/interface/aximm_queue_demo.py)
   — the minimal producer/consumer demo over one `AXIMMCrossBarIF`.
-- The [VMAC example](../../examples/mmqueue/) — the worked use: a host enqueues
+- The [VMAC example](../../../examples/mmqueue/) — the worked use: a host enqueues
   `VmacCmd`s and a free-running accelerator dequeues and executes them.
 
 ## See also
 
-- [MM Interfaces](./aximm.md) — the `MMIFMaster` the queue is built on.
-- [Polling Overhead](./poll.md) — the `poll_until` model the empty-ring wait uses.
-- [Custom Hooks → Memory command queue](../custom_hooks/queue.md) — the
+- [MM Interfaces](../primitive/aximm.md) — the `MMIFMaster` the queue is built on.
+- [Polling Overhead](../../timing_model/poll.md) — the `poll_until` model the empty-ring wait uses.
+- [Custom Hooks → Memory command queue](../../custom_hooks/queue.md) — the
   synthesizable side: `AXIMMQueue.get` lowered to the ring-dequeue kernel hook.

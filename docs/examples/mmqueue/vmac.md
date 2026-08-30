@@ -69,7 +69,7 @@ What makes VMAC distinctive among the [examples](../) is that the host does **no
 push commands down a dedicated control stream. It appends them to a **ring buffer in
 the same shared memory** the operands live in, and a free-running accelerator
 dequeues them. That ring is the
-[AXI-MM command queue](../../guide/interface/mmqueue.md) interface; here it carries
+[AXI-MM command queue](../../guide/interface/derived/mmqueue.md) interface; here it carries
 `VmacCmd`s. Control and data share one interconnect.
 
 ## Roadmap

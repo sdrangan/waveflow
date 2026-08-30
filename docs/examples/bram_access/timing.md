@@ -113,7 +113,7 @@ Scenario zero runs the write side through three phases:
 Phase 2 is where "no hazard" stops being structural and becomes **conventional**. Compare
 [`RfShotBuf`](../../guide/rf/), whose entire safety argument is that the reader and the writer are
 *never* live at the same time; this design permits the overlap and hands the caller the obligation.
-[Sequencing belongs in the design](../../guide/interface/bram.md#sequencing-belongs-in-the-design)
+[Sequencing belongs in the design](../../guide/interface/primitive/bram.md#sequencing-belongs-in-the-design)
 is where the one piece of ordering it *does* own — the arming token — is argued.
 
 That overlap is asserted rather than admired, and in **cycles** — because the two ranges are
@@ -200,7 +200,7 @@ general. What is true is a chain, and every link of it is checkable:
 Under `ram_1wnr` the same loop reaches **II=1** — by reading on port B while writing on port A. That
 is faster and it is *wrong*: the wrapper wires only the A halves, so those reads reach a dangling
 port, and nothing says so until RTL. The
-[`access` / `storage_type` derivation](../../guide/interface/bram.md#accessreadwrite-and-the-storage_type-that-follows)
+[`access` / `storage_type` derivation](../../guide/interface/primitive/bram.md#accessreadwrite-and-the-storage_type-that-follows)
 is what makes the safe choice the one you get.
 
 ## The hazard that cannot be heard {#the-hazard-that-cannot-be-heard}
@@ -359,7 +359,7 @@ kernel, so its absolute cycle numbers are its own. What has to be exact is the *
 This used to be a subtraction — run the design twice with a `model_read_latency` flag on and off, and
 check the difference was `READ_LATENCY`. The flag existed only because the fill was hand-written in
 the design body, `yield self.timeout(self.buf_r.read_latency / freq)`, with nowhere else to put it.
-It is [`BramIFMaster.read_pipelined`](../../guide/interface/bram.md)'s term now, so there is no "off"
+It is [`BramIFMaster.read_pipelined`](../../guide/interface/primitive/bram.md)'s term now, so there is no "off"
 configuration to subtract from and the number is read where it lives.
 
 **Why a memory is different from a bus.** `mem_copy`'s free match comes from calibrated models of an
@@ -423,7 +423,7 @@ python bram_access_build.py --through sync_docs_figures --force-step rtl_trace
 ## See also
 
 - [Python simulation](pysim.md) — the same measurements from the Python side.
-- [BRAM — memory between modules](../../guide/interface/bram.md) — the interface, and the addressing
+- [BRAM — memory between modules](../../guide/interface/primitive/bram.md) — the interface, and the addressing
   convention the wrapper reconciles.
 - [`mem_copy`'s timing page](../memcpy/timing.md) — the free match, and the calibration behind it.
 - [Timing models](../../guide/timing_model/) — what a forward model is, and when a component needs

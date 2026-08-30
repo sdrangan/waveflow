@@ -25,7 +25,7 @@ Scenarios
      saturates the bus.  ``ov`` is clamped to 0.99 and one loud warning fires
      (decision D2): the model flags the exact mistake a coarse fixed poll hides.
 
-See ``plans/poll_until_lt_model.md`` and ``docs/guide/interface/poll.md``.
+See ``plans/poll_until_lt_model.md`` and ``docs/guide/timing_model/poll.md``.
 """
 from __future__ import annotations
 

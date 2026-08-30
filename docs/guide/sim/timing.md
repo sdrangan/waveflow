@@ -41,8 +41,8 @@ transfer_time = (latency_init + nwords) / clk.freq   [seconds]
 `latency_init` captures wire delay / arbitration; each word adds one beat. So `yield`ing a
 `master.write(words)` blocks the caller for `transfer_time` of simulated time. The per-interface
 parameters (`latency_init`, the FULL/LITE read/write formulas, `latency_per_word`) are documented
-with each interface — see [Overview](../interface/overview.md), [streams](../interface/stream.md),
-and [memory-mapped](../interface/aximm.md). This page only notes *that* interfaces are where transfer
+with each interface — see [Overview](../interface/overview.md), [streams](../interface/primitive/stream.md),
+and [memory-mapped](../interface/primitive/aximm.md). This page only notes *that* interfaces are where transfer
 time is charged.
 
 ## Components charge compute latency
@@ -75,7 +75,7 @@ on the same object are collected in `self.action_overlaps` (count via
 For a component that streams data through (rather than buffering a whole burst), the stream endpoints
 expose `get_pipelined` / `write_pipelined`, which carry the first-word arrival time and the
 component's initiation interval / latency (`proc_ii`, `proc_latency`, set to match HLS synthesis
-numbers). That mechanism is documented on the [stream interface](../interface/stream.md) page.
+numbers). That mechanism is documented on the [stream interface](../interface/primitive/stream.md) page.
 
 ## What this feeds
 

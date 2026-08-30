@@ -1,7 +1,8 @@
 ---
 title: BRAM — memory between modules
-parent: Interfaces
-nav_order: 3.5
+parent: Primitive interfaces
+grand_parent: Interfaces
+nav_order: 3
 audience: python
 applies_to: [BramIF, BramIFMaster, BramIFSlave, T2pBram]
 summary: "BramIF connects a kernel task to an on-chip memory that lives OUTSIDE the kernel, as hand-written Verilog joined by a generated wrapper. Explains why a memory shared between two tasks cannot live inside a Vitis kernel — with the PIPO and dataflow-check evidence — and why a BramIF is registered with add_rtl_if rather than add_if, which is what keeps the accessor's port a boundary port."
@@ -20,7 +21,7 @@ That is not a design preference. It is the only structure Vitis leaves available
 Two `hls::task` bodies sharing a buffer is the natural way to write a capture buffer, a scoreboard, a
 reorder queue. Two constructs look like they would express it. Both were measured — Vitis HLS 2025.1,
 `xczu48dr-ffvg1517-2-e`; the full experiment log is in
-[`plans/rtl_module.md`](../../../plans/rtl_module.md).
+[`plans/rtl_module.md`](../../../../plans/rtl_module.md).
 
 ### A local array shared between two tasks — **compiles, and means something else**
 
@@ -158,9 +159,9 @@ all, so no wrapper can mis-wire it. `tests/build/test_bram_readwrite_vitis.py` a
 against the emitted Verilog, with a unidirectional port synthesized alongside as the control — so
 "no `_B` signals" is evidence of `ram_1p` rather than of an argument that was optimized away.
 
-[A memory reached three ways](../../examples/bram_access/) runs the same experiment inside a real
+[A memory reached three ways](../../../examples/bram_access/) runs the same experiment inside a real
 design, where the two access shapes go through one port seconds apart and
-[the waveform measures them](../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write):
+[the waveform measures them](../../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write):
 32 words written in 32 cycles, the same 32 recomputed in place in 63.
 
 **The lesson is the mechanism, not the number.** "In-place is II=2" is false in general. "The wrapper
@@ -234,7 +235,7 @@ assert not hazards            # ...but see the next paragraph
 ```
 
 `bram_hazard_manifest` names which net carries each term rather than matching by substring, for the
-reason [the trace manifest](../comp_codegen/rtl_module.md) exists at all: codegen chose
+reason [the trace manifest](../../comp_codegen/rtl_module.md) exists at all: codegen chose
 those names, so binding is exact and a name that has moved fails loudly.
 
 **An empty scan is not a passing gate on its own.** No collisions is what a correct design looks
@@ -250,7 +251,7 @@ writer and the reader command lengths that differ by one word.
 
 *The durable fix is neither a print nor a trace scan but a sticky `collision` output on the memory,
 carried through the wrapper and readable in both backends by construction. That is a `BramIF`
-interface change and is [tracked in `plans/rtl_module.md`](../../../plans/rtl_module.md), not done.*
+interface change and is [tracked in `plans/rtl_module.md`](../../../../plans/rtl_module.md), not done.*
 
 ## The addressing convention {#the-addressing-convention}
 
@@ -306,7 +307,7 @@ twice.
 
 **Choose a gated geometry that wraps.** If your example addresses fewer words than `depth / (W/8)`,
 it is not testing this convention — it is only testing that it is self-consistent.
-[`examples/bram_access`](../../examples/bram_access/) is gated at 64 bits with 256 of 1024 words for
+[`examples/bram_access`](../../../examples/bram_access/) is gated at 64 bits with 256 of 1024 words for
 exactly that reason: word 128 onward aliases immediately if anything here is wrong.
 
 ### The guard is a measurement, not a belief
@@ -323,7 +324,7 @@ check and still aliases. Two different failures, two different guards.
 
 ## Sequencing belongs in the design
 
-[`examples/bram_access`](../../examples/bram_access/) is the worked example, and it makes the point by
+[`examples/bram_access`](../../../examples/bram_access/) is the worked example, and it makes the point by
 having had to solve it. Its writer emits one token on an ordinary internal stream after its first
 completed command; its reader waits for that token once, then serves commands. The witness this
 example reproduces got the same ordering from its *testbench* (drive all 256 samples, then the
@@ -333,11 +334,11 @@ habits.
 
 ## See also
 
-- [A module realized as Verilog](../comp_codegen/rtl_module.md) — the `rtl_module()` hook the memory
+- [A module realized as Verilog](../../comp_codegen/rtl_module.md) — the `rtl_module()` hook the memory
   declares, the port-name chain, and the latency single-source rule.
-- [Free-running composite](../comp_codegen/freerunning_composite.md) — where the wrapper fits, and
+- [Free-running composite](../../comp_codegen/freerunning_composite.md) — where the wrapper fits, and
   what `csynth` does *not* count.
-- [A memory reached three ways](../../examples/bram_access/) — **the worked example**: two tasks and
+- [A memory reached three ways](../../../examples/bram_access/) — **the worked example**: two tasks and
   one memory reached by `WRITE`, `COMPUTE` and `READ`, the wrapper that joins them, the hazard scan
   that replaced the unheard `$error`, and the measured cost of a read-write port.
-- [Memory](../memory/) — the other storage categories, and which of them the tool chooses for you.
+- [Memory](../../memory/) — the other storage categories, and which of them the tool chooses for you.

@@ -97,7 +97,7 @@ Job *n*'s coefficients are **not** staged while job *n−1* computes.
 
 That is what keeps the taps *state* rather than a *channel*. The moment two firings overlap, the taps
 stop being storage the module owns and become data handed between two components — which means a
-[stream-of-blocks](../../guide/interface/sob.md), a second component, and a lock protocol whose
+[stream-of-blocks](../../guide/interface/primitive/sob.md), a second component, and a lock protocol whose
 producer/consumer counts have to balance globally. A FIR gains very little from that overlap, and the
 analysis (including why a conditionally-acquired lock passes C-sim and hangs in RTL) is written up in
 `plans/add_state.md` rather than built.

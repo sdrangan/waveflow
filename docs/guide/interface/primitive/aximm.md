@@ -1,7 +1,8 @@
 ---
 title: MM Interfaces
-parent: Interfaces
-nav_order: 3
+parent: Primitive interfaces
+grand_parent: Interfaces
+nav_order: 2
 audience: python
 api: [MMIFMaster, MMIFSlave, AXIMMCrossBarIF, DirectMMIF, AXIMMProtocol, assign_address_ranges, SimObj, Simulation]
 summary: "Memory-mapped interfaces in the SimPy model — MMIFMaster/MMIFSlave endpoints, the AXIMMCrossBarIF (FULL/LITE, address routing) and DirectMMIF, and read/write/read_schema/read_array, with a runnable two-SimObj DirectMMIF toy."
@@ -122,10 +123,10 @@ over a hand-rolled byte-address helper whenever a component addresses a memory r
 
 ## A minimal simulation
 
-Two raw [`SimObj`](../sim/simobj.md)s over a point-to-point [`DirectMMIF`](#directmmif): a `Cpu` holding
+Two raw [`SimObj`](../../sim/simobj.md)s over a point-to-point [`DirectMMIF`](#directmmif): a `Cpu` holding
 the `MMIFMaster` writes a burst and reads it back, and a `MemBank` holding the `MMIFSlave` is a tiny
 word-addressed memory model. No `HwModule`. (The `yield from` / `run_proc` / `ProcessGen` mechanics
-are explained in [Process generators](../sim/procgen.md).)
+are explained in [Process generators](../../sim/procgen.md).)
 
 ```python
 from dataclasses import dataclass
@@ -195,7 +196,7 @@ sim.run_sim()
 through the slave's `rx_write_proc` / `rx_read_proc`. `DirectMMIF` is point-to-point, so no address
 ranges are needed; for the multi-slave **crossbar** you also call
 [`assign_address_ranges()`](#aximmcrossbarif) after `bind` (see the [full example](#full-example)
-below). See [SimObj](../sim/simobj.md) for the base object and lifecycle.
+below). See [SimObj](../../sim/simobj.md) for the base object and lifecycle.
 
 ## AXIMMCrossBarIF
 

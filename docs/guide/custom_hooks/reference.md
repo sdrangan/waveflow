@@ -70,7 +70,7 @@ A plain FIFO (no `TLAST`) uses `read_stream_lane<WORD_BW>(s, dst, n)` /
 ## Mapping the Python transfer interfaces to the kernel
 
 A hook is the C++ realization of a Python transfer interface. The
-[`ArrayTransferIF`](../interface/array_transfer.md) calls map to the generated array-utils methods:
+[`ArrayTransferIF`](../interface/derived/array_transfer.md) calls map to the generated array-utils methods:
 
 | Python (transactional model) | C++ (in the hook) |
 |---|---|
@@ -83,7 +83,7 @@ A hook is the C++ realization of a Python transfer interface. The
 
 **The plain-`StreamIF` schema rows are the ones people miss.** A command read as `n` separate
 `s.read()` calls authors the field layout a second time, in the one place nothing checks it against
-the generated header — see [streams](../interface/stream.md#the-four-ways-to-move-data).
+the generated header — see [streams](../interface/primitive/stream.md#the-four-ways-to-move-data).
 
 `ArrayUtilsStep` generates these for any `DataSchema` element type, so a transfer parameterized on a
 composite `DataList` gets analogous helpers.

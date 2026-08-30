@@ -84,7 +84,7 @@ therefore costs exactly one cycle that pysim does not have.
 (`xsi_simobj.h`, split out of `xsi_bfm.h` for exactly this) — an edge model binds models, never
 pins, so it needs no Vivado headers and is compiled *and run* under a plain `g++`
 (`tests/build/test_xsi_channel.py`). Authoring one is
-[Behavioral edges](../interface/behavioral.md).
+[Behavioral edges](../custom_hooks/behavioral.md).
 
 ### ...and one model may bind both {#spanning}
 

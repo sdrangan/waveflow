@@ -120,6 +120,7 @@ means when you write a [hook](../custom_hooks/).
 - [Module structure](./structure.md) — the frame all four targets share: one top-level function per module, which method is extracted for which kind, entry-is-extracted vs hook-is-not, and the **contract** for when a module lowers at all.
 - [Elaboration](./elaborate.md) — `elaborate(cls, params)`, the sim-free entry that builds a module purely to read its structure, and the param-purity contract that lets codegen be keyed by `(class, param-set)` instead of by an instance.
 - [Host-activated kernel in HLS](./hostactivated.md) — the `control_driven_kernel`: `ap_ctrl_hs`, the `s_axilite` register block, and `on_start` as the body.
+- [Host launch lifecycle](./host_launch.md) — the Python model of that handshake: `VitisRegMap`'s control block, the `ap_start` / `ap_done` cycle `VitisRegMapMMIFSlave` runs around `on_start`, and the `BoundRegMap` host surface.
 - [Endpoint interfaces](./interface.md) — how each declared endpoint (stream / m_axi / regmap) is realized as a Vitis port (`hls::stream` / `m_axi` / `s_axilite`) and how a slave endpoint's handler binds.
 - [Free-running kernel in HLS](./freerunning.md) — the `composite_kernel`, 1-task case: the task body that is one firing, the `ap_ctrl_none` top, and `KernelTask`.
 - [Overriding the generated task](./freerunning_override.md) — handing over a hand-written task body with `KernelTask`, for an `m_axi` owner or anything outside the extractor's vocabulary.

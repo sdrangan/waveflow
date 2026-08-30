@@ -702,7 +702,7 @@ tops, every artifact named for them, the `BramSimple` / `BramSimpleTB` classes, 
 `bram_simple` misses is the **TikZ source**, where the name is written `bram\_simple`.
 
 **`overview.md` is deleted.**  Five of its seven sections were already in
-`docs/guide/interface/bram.md` *with the context that makes them make sense* — "BRAM are outside the
+`docs/guide/interface/primitive/bram.md` *with the context that makes them make sense* — "BRAM are outside the
 Vitis top-level" is the guide's *Why a shared memory cannot live inside a kernel*, the 64-bit
 geometry is its *addressing convention*, the `go` token is its *Sequencing belongs in the design*.
 Restating them in the example is what made them read as arcana.  The two sections that were genuinely
@@ -771,7 +771,7 @@ has proven the shape on a second storage class.
 `docs/guide/interface/overview.md` as a core concept -- it cuts across every interface type, which is
 what that section is for.  Write it **when Case 2 lands**, not before: two of its four rows
 (`StreamIF`, `MMIF`) are true today, but the `BramIF` row would be three cells of fiction and
-`HwState`'s one.  Fill each cell as its case ships.  `docs/guide/interface/bram.md` then links to it
+`HwState`'s one.  Fill each cell as its case ships.  `docs/guide/interface/primitive/bram.md` then links to it
 rather than restating it, and `docs/guide/memory/hwstate.md` picks it up at step 5.
 
 Independently of all of the above: **`_DirectBackedMMIFMaster.as_array` / `as_schema` are a live

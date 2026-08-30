@@ -87,9 +87,9 @@ yield self.timeout(t_out_last - self.env.now)
 yield from m_out.write_pipelined(array(Float32, y), t_out_first)
 ```
 
-[`get_pipelined`](../interface/stream.md) returns the data **and** the first-word arrival time:
+[`get_pipelined`](../interface/primitive/stream.md) returns the data **and** the first-word arrival time:
 after it returns, `self.env.now` is `t_in_last` (the whole burst has arrived), and `t_in_first` is
-when the first word landed. [`write_pipelined`](../interface/stream.md) tags the outgoing stream
+when the first word landed. [`write_pipelined`](../interface/primitive/stream.md) tags the outgoing stream
 with `t_out_first` so the *next* component downstream sees a correctly-timed first word and can
 overlap against it in turn — that is how streaming composes across a pipeline of components.
 
@@ -122,6 +122,6 @@ This model is loosely timed, and it makes two deliberate approximations:
 - [Timing models for loops](./loops.md) — the `latency` / `ii` parameters this uses (separately here).
 - [Adding a timing model to a component](./insertion.md) — the general pattern; streaming is the
   overlapped variant.
-- [Stream Interfaces](../interface/stream.md) — `get_pipelined` / `write_pipelined` and the first-word-time mechanism.
+- [Stream Interfaces](../interface/primitive/stream.md) — `get_pipelined` / `write_pipelined` and the first-word-time mechanism.
 - Double-buffering (block-granularity overlap) is built by composing sub-components over a
-  [stream of blocks](../interface/sob.md), not a separate timing model.
+  [stream of blocks](../interface/primitive/sob.md), not a separate timing model.

@@ -11,7 +11,7 @@ summary: "The synthesizable side of the AXI-MM command queue: AXIMMQueue.get low
 
 This is the **advanced case**: a hook that is not a datapath at all but the
 **synthesizable half of a transport interface**. The
-[AXI-MM command queue](../interface/mmqueue.md) has a Python transactional model
+[AXI-MM command queue](../interface/derived/mmqueue.md) has a Python transactional model
 (`AXIMMQueue.write` / `get`); its synthesizable side is a hand-written ring-dequeue
 hook that *is* what `get` lowers to inside a kernel. Where the
 [block](./block.md) / [stream](./stream.md) / [complex](./complex.md) patterns are
@@ -78,7 +78,7 @@ The hook is the single-producer / single-consumer dequeue, in five steps:
    `m_axi` read.
 2. **Poll until non-empty.** While `tail == head` the ring is empty; the hook waits
    with `poll_until_ne(tail_word, head)` — the synthesizable analogue of the Python
-   [`poll_until`](../interface/poll.md) wait — re-reading `tail` until the producer
+   [`poll_until`](../timing_model/poll.md) wait — re-reading `tail` until the producer
    advances it.
 3. **Read one slot.** Read `EW` words at `slot(head)` **before** advancing the pointer
    (SPSC ordering: consume the data, then publish that the slot is free).
@@ -95,11 +95,11 @@ and sidestep the nested-struct csynth pitfall.
 
 ## See also
 
-- [AXI-MM Command Queue](../interface/mmqueue.md) — the Python `AXIMMQueue` model this
+- [AXI-MM Command Queue](../interface/derived/mmqueue.md) — the Python `AXIMMQueue` model this
   hook is the synthesizable half of.
 - [VMAC code generation](../../examples/mmqueue/codegen.md) — the generated top that
   calls `queue_get`, and the worked end-to-end example.
 - [Writing a hook](./writing.md) / [Kernel transfer reference](./reference.md) — the
   general `.tpp` contract and the in-kernel transfer calls.
-- [Polling Overhead](../interface/poll.md) — the loosely-timed poll model behind the
+- [Polling Overhead](../timing_model/poll.md) — the loosely-timed poll model behind the
   empty-ring wait.

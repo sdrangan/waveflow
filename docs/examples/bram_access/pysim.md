@@ -322,7 +322,7 @@ Three things, and it is worth being explicit about them:
   the [trace page](timing.md#the-hazard-that-cannot-be-heard).
 - **Whether the addressing convention is right.** The byte/word scaling lives in the *wrapper*, which
   pysim does not have. A mis-addressed design passes here and fails at RTL — which is what happened,
-  and what [this example's 64-bit geometry](../../guide/interface/bram.md#the-addressing-convention)
+  and what [this example's 64-bit geometry](../../guide/interface/primitive/bram.md#the-addressing-convention)
   exists to expose.
 - **Whether `mode=bram` took effect.** An unsized pointer degrades to an `ap_vld` scalar port
   silently, and no Python run can see that. The port list can, and

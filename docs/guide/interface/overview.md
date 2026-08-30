@@ -233,12 +233,11 @@ base object and lifecycle.
 
 ## Available interface types
 
-| Interface | Module | Use case |
-|---|---|---|
-| `StreamIF` | `waveflow.hw.interface` | Unidirectional data stream (AXI4-Stream or HLS stream) |
-| `CrossBarIF` | `waveflow.hw.interface` | Port-indexed stream crossbar (n inputs × m outputs) |
-| `AXIMMCrossBarIF` | `waveflow.hw.aximm` | AXI memory-mapped crossbar; endpoints are `MMIFMaster` / `MMIFSlave` |
-| `DirectMMIF` | `waveflow.hw.aximm` | Point-to-point MM link (BRAM / local scratchpad) |
+The full list, in tiers, is the map on the [Interfaces](./) landing page — it is the one summary
+table for this section, so this page does not repeat it. In short: a **primitive** interface lowers
+to a real HLS construct ([primitive interfaces](./primitive/)), a **derived** one is a transaction
+pattern over a primitive ([derived interfaces](./derived/)), and a simulation-only one does not
+lower at all.
 
 ## Lifecycle
 
@@ -252,5 +251,5 @@ Interfaces participate in the standard SimPy three-phase lifecycle managed by `S
 
 ## Next steps
 
-- [Stream Interfaces](./stream.md) — unidirectional streaming with `StreamIF` and `CrossBarIF`
-- [MM Interfaces](./aximm.md) — memory-mapped read/write with `AXIMMCrossBarIF` and `DirectMMIF`
+- [Stream Interfaces](./primitive/stream.md) — unidirectional streaming with `StreamIF` and `CrossBarIF`
+- [MM Interfaces](./primitive/aximm.md) — memory-mapped read/write with `AXIMMCrossBarIF` and `DirectMMIF`

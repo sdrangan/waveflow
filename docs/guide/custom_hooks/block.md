@@ -26,7 +26,7 @@ worked example is [`examples/block_scale`](../../../examples/block_scale/block_s
 ## The split: movement in `run_proc`, math in the hook
 
 `run_proc` is the extractable kernel body. It does the data movement with
-[`read_array` / `write_array`](../interface/aximm.md) on the `m_axi` master, and
+[`read_array` / `write_array`](../interface/primitive/aximm.md) on the `m_axi` master, and
 delegates the math to the `compute` hook:
 
 ```python

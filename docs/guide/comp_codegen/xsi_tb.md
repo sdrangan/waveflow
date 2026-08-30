@@ -82,7 +82,7 @@ object — and two facts turned out not to be per-*module*:
   transmit port another.
 - **The constructor shape is per port.** Each port is resolved *by its own kind*: an endpoint facing
   a DUT boundary port contributes `sim.dut(), <ns>::<port>`; an endpoint on a
-  [behavioral edge](../interface/behavioral.md) contributes that edge's channel variable.
+  [behavioral edge](../custom_hooks/behavioral.md) contributes that edge's channel variable.
 - **A `ports` entry may be a tuple — a port group** — which resolves to a **single** constructor
   argument, `sim.dut(), {<ns>::<a>, <ns>::<b>}`. That is what a model spanning a *variable* number of
   like ports needs: an `n_ch` converter presents one AXIS port per channel and one model owns them
@@ -125,7 +125,7 @@ nothing can be claimed twice or missed:
 | the interface has | is | walk 1 or 2 | emits |
 |---|---|---|---|
 | at least one endpoint on the DUT boundary | a boundary edge | **1** | one BFM per DUT port |
-| neither endpoint on the DUT boundary | a [behavioral edge](../interface/behavioral.md) | **2** | one channel + its two peer models |
+| neither endpoint on the DUT boundary | a [behavioral edge](../custom_hooks/behavioral.md) | **2** | one channel + its two peer models |
 | an endpoint inside the DUT that is not a boundary port | a graph error | — | a refusal |
 | an endpoint on no testbench child at all | a graph error | — | a refusal |
 
@@ -140,7 +140,7 @@ Two consequences worth knowing before you hit them:
 - **A channel is declared before both of its peers** — in the member list, in the constructor's
   initializer list, and in the participant registration. All three, because declaration order *is*
   construction order and construction order is what puts the channel's `sample()` first. See
-  [Behavioral edges](../interface/behavioral.md#why-a-queue-and-not-a-direct-call).
+  [Behavioral edges](../custom_hooks/behavioral.md#why-a-queue-and-not-a-direct-call).
 - **A module cannot yet sit on both a boundary port and a behavioral edge.** `bfm_model()` names one
   C++ class for the whole module, and the two bindings have different constructor shapes
   (`(dut, prefix, …)` versus `(channel, …)`). It is refused with that sentence rather than emitted

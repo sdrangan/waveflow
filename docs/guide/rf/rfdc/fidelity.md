@@ -44,7 +44,7 @@ assert tb.dut.s_in.interface.dropped == 0
 
 It stays zero for every ordinary design, because an ordinary module calls `write()`, which *waits*.
 Only a producer that physically cannot wait calls
-[`offer()`](../../interface/stream.md), and only then can the number move. That asymmetry is deliberate:
+[`offer()`](../../interface/primitive/stream.md), and only then can the number move. That asymmetry is deliberate:
 "who is willing to wait" is a property of the **producer**, not of the wire — the same AXI-Stream
 carries both.
 

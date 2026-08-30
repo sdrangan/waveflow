@@ -54,7 +54,7 @@ def vmac_compute(self, cmd: VmacCmd, mem) -> ProcessGen[DataArray]:
 `vmac_compute` **owns memory access and timing**: it reads the operand regions over
 `mem`, calls `self.execute(...)` for the math, and writes `Y` back — recording each
 transaction for the timing model. The `mem` argument is the same in both worlds: an
-[`MMIFMaster`](../../guide/interface/aximm.md) in the SimPy simulation, an `m_axi`
+[`MMIFMaster`](../../guide/interface/primitive/aximm.md) in the SimPy simulation, an `m_axi`
 pointer in the C++ kernel. Its Python body is the **simulation** model only — the
 extractor does *not* lower it; codegen emits a call to the hand-written
 [`vmac_compute_impl.tpp`](./hook.md) instead. So the one method is bit-exact-checked

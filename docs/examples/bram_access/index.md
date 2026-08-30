@@ -21,7 +21,7 @@ This example demonstrates implementing, modelling and using a **BRAM**, where tw
 share one true-dual-port memory. For shared DDR see the [histogram example](../shared_mem/); for the
 ping-pong buffer, the [interleaver example](../interleaver/).
 
-The interface itself is documented in [BRAM — memory between modules](../../guide/interface/bram.md);
+The interface itself is documented in [BRAM — memory between modules](../../guide/interface/primitive/bram.md);
 this page set is the worked example that uses it.
 
 ## Why a dedicated BRAM?
@@ -55,7 +55,7 @@ argument, and it is why this example has two opcodes instead of two examples.
 
 **The nesting is the point.** The memory is *outside* the kernel and *inside* the wrapper, because a
 memory shared between two tasks has no expression inside a Vitis kernel at all —
-[the guide has the evidence](../../guide/interface/bram.md#why-a-shared-memory-cannot-live-inside-a-kernel),
+[the guide has the evidence](../../guide/interface/primitive/bram.md#why-a-shared-memory-cannot-live-inside-a-kernel),
 including the two things Vitis does instead when you try. Every transaction takes a command and
 answers with a `(tid, status)` response: a write has no return path of its own, and a refused read
 returns zero words, which on a stream is indistinguishable from "not yet". The messages are declared
@@ -91,7 +91,7 @@ Once you have this example, the same structure is what the
 
 ## See also
 
-- [BRAM — memory between modules](../../guide/interface/bram.md) — the interface, the evidence for
+- [BRAM — memory between modules](../../guide/interface/primitive/bram.md) — the interface, the evidence for
   why the memory cannot be inside a kernel, and the addressing convention.
 - [A module realized as Verilog](../../guide/comp_codegen/rtl_module.md) — the `rtl_module()` hook,
   the port-name chain, and the latency single-source rule.

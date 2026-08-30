@@ -313,7 +313,7 @@ The consumer. `plans/adc_model.md` staging item 3, now with a buffer that is exp
 | `guide/comp_codegen/rtl_module.md` | **written (S1)** | The third hook, beside `kernel_task()` and `bfm_model()`. The port-name contract, the latency single-source rule, and the conformance obligation. Also carries a "what is not here yet" section naming the wrapper, the wiring and XSI. |
 | `guide/flows/modules.md` | **edited (S1)** | The hook table is three rows, and the cut paragraph distinguishes "beside it in the same design" from "outside the design". |
 | `guide/flows/index.md` | **edited (S1)** | "Two targets that are not flows" — `xsi_bfm_model` and `rtl_module`. |
-| `guide/interface/bram.md` | **new** | `BramIF` and why a memory shared between processes cannot live inside a kernel — with the PIPO and dataflow-check evidence, because "Vitis won't let you" is unconvincing without it. |
+| `guide/interface/primitive/bram.md` | **new** | `BramIF` and why a memory shared between processes cannot live inside a kernel — with the PIPO and dataflow-check evidence, because "Vitis won't let you" is unconvincing without it. |
 | `guide/comp_codegen/freerunning_composite.md` | edit | The wrapper as the **design scope**, and that csynth of the kernel alone does not count memory outside it. |
 | `guide/flows/modules.md` | edit | One row: a module realized as RTL beside the kernel. |
 

@@ -177,7 +177,7 @@ outputs can testify that they agree.
 
 This page is the *declaration*. Two more pieces turn it into a design, and both exist:
 
-- **The wiring** — a [`BramIF`](../interface/bram.md) binds an accessor's port to a memory port, and
+- **The wiring** — a [`BramIF`](../interface/primitive/bram.md) binds an accessor's port to a memory port, and
   `add_rtl_if` (deliberately **not** `add_if`) is what keeps the accessor's port a boundary port of
   the kernel.
 - **The wrapper** — [`wrapper_gen`](../../../waveflow/build/wrapper_gen.py) emits a module
@@ -190,7 +190,7 @@ against the witness's own values.
 `trace_manifest` derives net names in *the top's own scope*, so with a wrapper as the elaborated top
 the **kernel's** internals sit one level deeper and are still out of reach. The first consumer to
 trace a wrapped design — `examples/bram_access`, which detects read-during-write collisions in the
-waveform because [the memory's `$error` cannot be heard](../interface/bram.md#the-error-fires-and-in-this-flow-nothing-can-hear-it)
+waveform because [the memory's `$error` cannot be heard](../interface/primitive/bram.md#the-error-fires-and-in-this-flow-nothing-can-hear-it)
 — turned out **not** to need the prefix: what it reads are the wrapper's *own* wires, the ones
 joining the kernel's `bram` ports to the memory, and those are exactly what a level-1 `$dumpvars` of
 the wrapper captures. They are named by
