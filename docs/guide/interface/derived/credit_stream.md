@@ -344,6 +344,6 @@ ordinary streams. In C++ there is no credit-stream object at all: it is *literal
 - [Acked Stream](./acked_stream.md) — the other reverse channel, and the question it answers instead.
 - [Stream Interfaces](../primitive/stream.md) — the primitive both sub-channels are, including
   `offer` and `get_nb`.
-- [The access vocabulary](../overview.md#the-access-vocabulary-three-verbs-three-meanings) — why
+- [The access vocabulary](../primitive/index.md#the-access-vocabulary-three-verbs-three-meanings) — why
   `offer` is not spelled `write_nb`.
 - `tests/hw/test_reverse_stream.py` — the behaviour on this page, pinned.

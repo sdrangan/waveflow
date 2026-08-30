@@ -97,17 +97,17 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
 * **`access`** (`"read"` / `"write"` / `"readwrite"`) is declared on both ends, and the two must be
   **identical** — they are two statements of one fact, not a permission and a use. It decides the
   port's `storage_type`; see below.
-* **Vector access is Case 2** ([the three access cases](../overview.md#the-three-access-cases)):
+* **Vector access is an overlapping transfer** ([the access cases](index.md#the-access-cases)):
   `read_pipelined(element_type, count, addr) -> (data, tstart)` and
   `write_pipelined(data, addr, t_start)`. The model has no free parameters — throughput is II=1, one
   element per cycle per port; the read's fill is the memory's published `READ_LATENCY`, reached
   through the bound `BramIF` from the Verilog `localparam`, paid once per transfer rather than per
   element; and `t_start` is the same anchoring every other endpoint uses. `read` / `write`
   stay for scalar access.
-* **In-place access is Case 3**: `array_ref(addr, count)` returns a **live numpy view** of the
+* **In-place access**: `array_ref(addr, count)` returns a **live numpy view** of the
   memory's storage — no transfer, no simulated time, and writes through it land in the memory. It
   exists for *timing*: a kernel computing against a BRAM performs no transfer, so routing it through
-  a Case 1 or Case 2 op would charge the design for two that never happen. The caller owns the
+  a transfer op would charge the design for two that never happen. The caller owns the
   timing and the port publishes the rate to compute it from (`accesses_per_cycle` is 1, and
   `ii_for(2) == 2` is read-modify-write through one port). Two rules are enforced, not advised: a
   `"read"` port's view is `flags.writeable = False`, and an element type with no native numpy dtype

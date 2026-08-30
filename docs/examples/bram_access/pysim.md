@@ -146,7 +146,7 @@ burst per call and truncation *discards* the remainder.
 This replaced a one-word-per-burst framing whose stated reason was "one pysim firing equals one RTL
 firing" — the rationale for the per-element loops the design used to have. It is retired, along with
 the loops: a pysim body that reads a word at a time is not a faithful twin of an `II=1` C++ loop, it
-is a design that has opted out of the LT model. See [the three access cases](../../guide/interface/overview.md#the-three-access-cases).
+is a design that has opted out of the LT model. See [the three access cases](../../guide/interface/primitive/index.md#the-access-cases).
 
 **The framing is not purely a pysim concern, and it was measured rather than assumed.** `words.bin`
 is byte-identical — the same words in the same order — but `bounds.bin` is not, and both backends

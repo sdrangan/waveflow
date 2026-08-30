@@ -377,7 +377,7 @@ a **sizing** claim and `n_orphan_status` a **correspondence** one, and neither i
 
 | | |
 |---|---|
-| `can_write_frame()` | is a pending slot free? A predicate, so no `_nb` suffix — see [the vocabulary](../overview.md#_nb-is-the-non-blocking-suffix-and-offer-is-the-deliberate-exemption) |
+| `can_write_frame()` | is a pending slot free? A predicate, so no `_nb` suffix — see [the vocabulary](../primitive/index.md#_nb-is-the-non-blocking-suffix-and-offer-is-the-deliberate-exemption) |
 | `write_frame(words, token)` | write one frame, marking the last item, and remember *token*. Raises with no free slot, and on an empty frame |
 | `harvest(n=MAX_IN_FLIGHT)` | take **up to** *n* statuses; returns `[(token, status), ...]`, oldest first |
 | `assert_clean()` | raise unless `n_status_dropped` and `n_orphan_status` are both zero |
@@ -421,6 +421,6 @@ sees two ordinary streams, and nothing in the generator is ack-aware.
 
 - [Credit Stream](./credit_stream.md) — the other reverse channel, and the question it answers instead.
 - [Stream Interfaces](../primitive/stream.md) — the primitive both sub-channels are.
-- [The access vocabulary](../overview.md#the-access-vocabulary-three-verbs-three-meanings) — where
+- [The access vocabulary](../primitive/index.md#the-access-vocabulary-three-verbs-three-meanings) — where
   `_nb` applies and where it deliberately does not.
 - `tests/hw/test_reverse_stream.py` — the behaviour on this page, pinned.
