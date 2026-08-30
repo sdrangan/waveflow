@@ -211,13 +211,23 @@ one collision (two pages titled `Overview`, seven children binding to the wrong 
   children lack `grand_parent` is a latent mis-binding, and the symptom only appears when the set of
   candidates changes.
 
-### One judgment call to settle BEFORE the move
+### `regmap.md` — SPLIT, decided
 
-`regmap.md` is 759 lines, the largest page in the section, and it is arguably more about the **host
-launch lifecycle** (`ap_start` / `ap_done`, `BoundRegMap`) than about an interface.  Filing it under
-`primitive/` is defensible — `axilite_slave` is a real boundary kind — but if the page is really
-*"how a host drives a kernel"*, it belongs near `comp_codegen/hostactivated.md` instead.  Decide
-before moving it, not after.
+759 lines covering two subjects, and the split is why the page never sat comfortably anywhere:
+
+- **The AXI-Lite interface** — `RegField` / `RegAccess`, the `RegMap` slave dispatch, `axilite_slave`
+  as a `kind_of_endpoint` boundary kind -> `interface/primitive/regmap.md`
+- **The host launch lifecycle** — `VitisRegMap`'s `ap_ctrl_hs` (`ap_start` / `ap_done`),
+  `BoundRegMap`'s host side -> beside `comp_codegen/hostactivated.md`
+
+This is the one part of the structural re-org that is **editorial, not mechanical**, so it is the one
+place a bad split can lose content.  Do it as its own commit, and diff the two new pages against the
+original to prove nothing was dropped.
+
+The alternatives were rejected for symmetric reasons: filing it whole under `primitive/` leaves the
+section's largest page mostly about a codegen lifecycle, and filing it whole under `comp_codegen`
+leaves `interface/primitive/` with a hole where `axilite_slave` should be and a tier-table row
+pointing at no page.
 
 
 ---
@@ -424,9 +434,27 @@ work.
 Steps 1–2 block everything downstream.  Steps 9–10 are new writing and can be scheduled
 independently of the rest.
 
-## Open question for the author
+## Answered: the three arcs were deliberate
 
-This plan assumes the three-arc structure (`interface` -> `comp_codegen` -> `custom_hooks`) was
-**deliberate**, inferred from folder layout and `audience` tags rather than from any stated
-principle — `guide/index.md` says only that the TOC is generated.  If the arcs emerged by accretion
-instead, the case for re-foldering gets stronger and Part 2 should be reopened before Part 3 lands.
+This plan originally flagged an open question — whether the
+`interface -> comp_codegen -> custom_hooks` structure was deliberate or emerged by accretion, since
+Part 2's "do not re-folder" argument depends on it.  **Settled from git history:**
+
+```
+7a581b1  docs: rename Synthesis -> Component Code Generation (Phase 6, Arc-3 codegen)
+266fb33  docs: new Custom Hooks section (Phase 7, finale) -- the hand-written codegen guide
+94728cf  docs: restructure comp_codegen (add conceptual on-ramp) + drop internal "Arc" naming
+```
+
+A numbered, phased reorganization — and `94728cf` **deliberately dropped the "Arc" naming** from
+user-facing text while keeping the structure.  So Part 2's argument holds: the arcs are real and
+re-foldering would fight them.
+
+**And this reframes the defect.**  The structure is sound; its *rationale was intentionally
+unstated*.  That is why reading along any one axis finds holes that are really material on another —
+nothing tells the reader the axes exist.  So add to the deliverables:
+
+> **`guide/index.md` states the three arcs** — model it (`interface`), generate it (`comp_codegen`),
+> hand-write it (`custom_hooks`) — in a short paragraph, without resurrecting the internal "Arc-N"
+> vocabulary that `94728cf` removed on purpose.  Every cross-axis link stub then has something to
+> point *at*, instead of each page re-explaining the relationship.
