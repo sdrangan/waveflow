@@ -89,7 +89,7 @@ class Demo(HwModule):
     def on_start(self) -> ProcessGen[None]:
         while True:
             self.log("waiting")
-            cmd: DemoCmdHdr = yield from self.s_in.get(DemoCmdHdr)
+            cmd: DemoCmdHdr = yield from self.s_in.get_schema(DemoCmdHdr)
             if cmd.cmd_type == DemoCmdType.END:
                 return
             err = yield from self.process(cmd)
@@ -215,7 +215,7 @@ def test_resolve_unresolved_name_raises():
 
         def run_proc(self) -> ProcessGen[None]:
             while True:
-                yield from self.s_in.get(NotARealClass)  # noqa: F821
+                yield from self.s_in.get_schema(NotARealClass)  # noqa: F821
 
     comp = _BadDemo(name="bad", sim=Simulation())
     tree = HwStmtExtractor(comp, method_name='run_proc').extract()
@@ -269,7 +269,7 @@ def test_regmap_get_output_typ_is_field_schema():
         def on_start(self) -> ProcessGen[None]:
             while True:
                 gain = self.regmap.get("gain")  # noqa: F841 — used by test
-                yield from self.s_in.get(DemoCmdHdr)
+                yield from self.s_in.get_schema(DemoCmdHdr)
                 return
 
     comp = _RegMapReadDemo(name="rmr", sim=Simulation())

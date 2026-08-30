@@ -224,8 +224,8 @@ def test_neither_backend_takes_a_message_apart_by_hand():
     ``read()`` in general, so it cannot be satisfied by deleting the payload loop.
     """
     py = (REPO / "examples" / "bram_access" / "bram_access.py").read_text(encoding="utf-8")
-    assert "yield from self.cmd_w.get(WriteComputeCmd)" in py
-    assert "yield from self.cmd_r.get(ReadCmd)" in py
+    assert "yield from self.cmd_w.get_schema(WriteComputeCmd)" in py
+    assert "yield from self.cmd_r.get_schema(ReadCmd)" in py
     assert "yield from self.resp_w.write(resp)" in py
     assert "yield from self.resp_r.write(resp)" in py
     assert "_word(self.cmd_w)" not in py and "_word(self.cmd_r)" not in py, (

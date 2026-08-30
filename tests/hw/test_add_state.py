@@ -62,7 +62,7 @@ class Accum(FreeRunMod):
         self.add_state(self.total)
 
     def run_iter(self) -> ProcessGen[None]:
-        x = yield from self.x_in.get(Vec)
+        x = yield from self.x_in.get_schema(Vec)
         y = self.accumulate(x, self.total)
         yield from self.y_out.write(y)
 
@@ -133,7 +133,7 @@ def test_undeclared_self_read_still_raises():
             self.gain = 2
 
         def run_iter(self) -> ProcessGen[None]:
-            x = yield from self.x_in.get(Vec)
+            x = yield from self.x_in.get_schema(Vec)
             y = self.scale(x, self.gain)
             yield from self.y_out.write(y)
 
@@ -157,7 +157,7 @@ def test_capture_error_points_at_add_state():
             self.gain = 2
 
         def run_iter(self) -> ProcessGen[None]:
-            x = yield from self.x_in.get(Vec)
+            x = yield from self.x_in.get_schema(Vec)
             y = self.scale(x, self.gain)
             yield from self.y_out.write(y)
 
@@ -343,7 +343,7 @@ def test_pysim_state_persists_across_firings():
         def run_proc(self) -> ProcessGen[None]:
             for _ in range(3):
                 yield from self.m_out.write(Vec(np.ones(4, dtype=np.float32)))
-                got = yield from self.s_in.get(Vec)
+                got = yield from self.s_in.get_schema(Vec)
                 self.seen.append(np.asarray(got.val).copy())
 
     sim = Simulation()

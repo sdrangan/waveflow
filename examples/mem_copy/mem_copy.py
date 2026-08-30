@@ -180,7 +180,7 @@ class Sequencer(FreeRunMod):
         ``s_done``.  The Sequencer is the ONLY schema-aware stage — the mem-streams relay opaquely — and
         it holds no cross-firing state (the ``tx_id`` comes from the command)."""
         w = int(self.mem_dwidth)
-        cmd: CopyCmd = yield from self.s_cmd.get(CopyCmd)
+        cmd: CopyCmd = yield from self.s_cmd.get_schema(CopyCmd)
         memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
         memw = MemWCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), fwd_bursts=1)
         resp = CopyResp(tx_id=int(cmd.tx_id))

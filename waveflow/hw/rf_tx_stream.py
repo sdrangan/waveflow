@@ -387,7 +387,7 @@ class TxLoader(FreeRunMod):
         """One pass of the C body's ``while (1)``: harvest, poll for a command, admit, load, drain.
 
         **The command read is non-blocking, and that is not a style choice.**  The plan's Python
-        sketch writes ``cmd = yield from self.cmd_in.get(TxCmd)`` — a *blocking* read — where its own
+        sketch writes ``cmd = yield from self.cmd_in.get_schema(TxCmd)`` — a *blocking* read — where its own
         C body writes ``if (cmd_in.read_nb(cmd))`` inside ``NO_CMD``.  The two are not equivalent:
         with responses deferred, a host that waits for ``TxResp`` before sending the next command and
         a loader that waits for the next command before harvesting are waiting for each other.  It
@@ -401,7 +401,7 @@ class TxLoader(FreeRunMod):
         """
         yield from self.harvest()
 
-        cmd = yield from self.cmd_in.get_nb(TxCmd)
+        cmd = yield from self.cmd_in.get_schema_nb(TxCmd)
         if cmd is None:
             yield self.timeout(self.clk.period)
             return
@@ -886,7 +886,7 @@ class RfCircPlay(FreeRunMod):
             # This is the only way to learn "now" -- and the reason there is no zero-length probe
             # command, which would never resolve and would leak a pending slot forever.
             yield from self._issue(start_now=True, samp_start=0)
-            r = yield from self.resp_in.get(TxResp)   # blocking HERE is correct: nothing else to do
+            r = yield from self.resp_in.get_schema(TxResp)   # blocking HERE is correct: nothing else to do
             # THE TRAIN STARTS AT k = LEAD, NOT k = 1, and that is forced rather than chosen.  The
             # response for the start_now window arrives when its LAST sample has played -- i.e. at
             # slot `base + nsamp`, which at back-to-back replay (period == nsamp) is exactly slot
@@ -941,7 +941,7 @@ class RfCircPlay(FreeRunMod):
         """
         got = 0
         for _ in range(int(self.resp_polls)):
-            r = yield from self.resp_in.get_nb(TxResp)
+            r = yield from self.resp_in.get_schema_nb(TxResp)
             if r is None:
                 break
             got += 1

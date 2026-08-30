@@ -426,8 +426,12 @@ class AXIMMQueue:
     ) -> ProcessGen[Any]:
         """Dequeue from the ring, blocking until the data is available.
 
-        Reuses the stream queue's signature exactly (decision 6;
-        :meth:`~waveflow.hw.interface.StreamIFSlave.get`).
+        **Decision 6 said this reuses** :meth:`~waveflow.hw.interface.StreamIFSlave.get`'s
+        signature exactly.  It no longer does: the stream split its three payload forms into
+        ``get`` / ``get_schema`` / ``get_array``, and the queue has not.  Every argument for that
+        split applies here too — one method returning ``Words``, an instance or a ``DataArray`` by
+        argument is what an extractor cannot match structurally — so this is unfinished work rather
+        than a considered difference.  ``test_aximm_queue.py`` carries the tripwire.
 
         Raw path (``schema_type=None``) returns a NumPy word array; pass exactly
         one of *count* (number of slots) or *nwords_max* (number of words, a

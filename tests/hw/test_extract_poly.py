@@ -401,7 +401,7 @@ def test_extract_poly_accel_on_start():
     body = tree.body.stmts
 
     # Expected (logging / _inc_job dropped via @sim_only):
-    #   0: cmd_hdr = yield from self.s_in.get(PolyCmdHdr)   → StreamGetStmt
+    #   0: cmd_hdr = yield from self.s_in.get_schema(PolyCmdHdr)   → StreamGetStmt
     #   1: if cmd_hdr.cmd_type == PolyCmdType.END: return    → CaseStmt(op='==')
     #   2: coeffs = self.regmap.get("coeffs")                → RegMapGetStmt
     #   3: err = yield from self.evaluate(...)              → FunctionStmt
@@ -436,7 +436,7 @@ def test_extract_poly_accel_no_implicit_capture_violation():
     class _BadPolyAccel(PolyAccel):
         def on_start(self):
             while True:
-                cmd_hdr = yield from self.s_in.get(PolyCmdHdr)
+                cmd_hdr = yield from self.s_in.get_schema(PolyCmdHdr)
                 # Implicit capture of plain field — should be rejected.
                 _ = self.proc_latency
                 if cmd_hdr.cmd_type == PolyCmdType.END:

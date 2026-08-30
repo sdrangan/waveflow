@@ -261,10 +261,10 @@ class VecMult(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing: ``[cmd | x | y]`` in, ``[z | resp]`` out.  The pysim golden."""
-        cmd = yield from self.s_in.get(VecCmd)
+        cmd = yield from self.s_in.get_schema(VecCmd)
         n = int(cmd.n)
-        x = yield from self.s_in.get(Samp, count=n)
-        y = yield from self.s_in.get(Samp, count=n)
+        x = yield from self.s_in.get_array(Samp, count=n)
+        y = yield from self.s_in.get_array(Samp, count=n)
         z = golden(np.asarray(x.val), np.asarray(y.val))
         yield from self.z_out.write(DataArray.specialize(Samp, max_shape=(n,), static=True)(z))
         yield from self.z_out.write(VecResp(tx_id=int(cmd.tx_id)))

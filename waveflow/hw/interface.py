@@ -703,11 +703,45 @@ class TypedCodecMixin:
 # ---------------------------------------------------------------------------
 
 class StreamGetStmt(SynthCallStmt):
-    """IR node produced by ``StreamIFSlave.get(...)`` calls."""
+    """IR node produced by ``StreamIFSlave.get()`` — the raw-word read.
+
+    Also the base of :class:`StreamGetSchemaStmt`, so a walker that wants *any* stream read still
+    writes one ``isinstance`` and the emitter keeps one branch.
+    """
 
     def __repr__(self) -> str:
         outs = ', '.join(v.name for v in self.outputs)
-        return f"StreamGetStmt(outputs=[{outs}])"
+        return f"{type(self).__name__}(outputs=[{outs}])"
+
+
+class StreamGetSchemaStmt(StreamGetStmt):
+    """IR node produced by ``StreamIFSlave.get_schema(T)`` — one instance of *T*.
+
+    **A subclass on purpose.**  This is the read the emitter has always lowered (``T out;
+    out.read_axi4_stream<W>(s)``), so subclassing keeps every existing ``isinstance(stmt,
+    StreamGetStmt)`` — in ``hwgen.to_cpp`` and in ``hwresolve._populate_output_types`` — matching
+    exactly the statements it matched before.  The generated C++ therefore cannot move, which is
+    what makes this rename a refactor rather than a change.
+    """
+
+
+class StreamGetArrayStmt(SynthCallStmt):
+    """IR node produced by ``StreamIFSlave.get_array(T, count=N)`` — *N* elements of *T*.
+
+    **NOT a** :class:`StreamGetStmt`, and that is the point of giving it a name.  Before the split,
+    ``get(T, count=N)`` produced a plain ``StreamGetStmt`` carrying ``count`` in ``kwargs`` — and
+    ``hwgen._emit_stream_get`` reads only ``inputs[0]``, so the count was **silently discarded** and
+    an eight-element read lowered to the same single-element C++ as ``get(T)``.  The two forms were
+    indistinguishable after lowering.
+
+    Latent rather than live: no shipped artifact reaches it (``vecmult`` is the only design that
+    writes the array form in an extracted body, and its task body is hand-written).  A distinct
+    class is what lets ``to_cpp`` refuse it by name instead of emitting a wrong answer.
+    """
+
+    def __repr__(self) -> str:
+        outs = ', '.join(v.name for v in self.outputs)
+        return f"StreamGetArrayStmt(outputs=[{outs}])"
 
 
 class StreamWriteStmt(SynthCallStmt):
@@ -971,45 +1005,82 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
 
+    # ----------------------------------------------------------------
+    # Reading: the VERB says what happens, the SUFFIX says what is moved
+    # ----------------------------------------------------------------
+    #
+    # `get` stays `get` and does NOT become `read`: a stream read is a destructive DEQUEUE and an
+    # addressed read is not.  That distinction is real and deliberate -- see the access vocabulary
+    # in `docs/guide/interface/overview.md`.
+    #
+    # What changed is the other dimension.  One method used to return three different types
+    # depending on its arguments -- `Words`, a schema instance, or a `DataArray` -- which is why
+    # `TypedCodecMixin` needed `_unpack` and `_unpack_elems` as separate methods in the first place.
+    # An `m_axi` port has always spelled these three as `read` / `read_schema` / `read_array`, and
+    # the stream already splits the *timing* dimension by name (`get` vs `get_pipelined`).
+    # Splitting one dimension by name and the other by argument was the actual inconsistency.
+    #
+    # It also cost the extractor a distinction it could not make.  It matches methods STRUCTURALLY,
+    # by name; it can see `get_array`, but telling `get(T)` from `get(T, count=N)` means reasoning
+    # about keyword arguments that the emitter then has to agree about -- and it did not.
+
     @port_read
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetStmt)
-    def get(self, schema_type=None, count=None, *, nwords_max=None):
-        """Pull the next burst from the buffer, optionally deserializing it.
+    def get(self, *, nwords_max=None):
+        """Pull the next burst as raw :class:`~waveflow.hw.dataschema.Words`.
 
-        Old (raw-word) calling convention — unchanged, used by non-HwModule
-        callers such as PolyTB::
+        ::
 
             words = yield from self.s_in.get()
             words = yield from self.s_in.get(nwords_max=N)
 
-        New synthesizable calling convention::
+        The burst boundary is ``TLAST``.  On a stream declared ``has_tlast=False`` there is no
+        boundary to find, so *nwords_max* is required rather than guessed.
 
-            cmd_hdr: PolyCmdHdr = yield from self.s_in.get(PolyCmdHdr)
-            samp_in: DataArray  = yield from self.s_in.get(Float32, count=N)
-
-        When *schema_type* is ``None`` the raw ``Words`` array is returned
-        (backward-compatible path).  When *schema_type* is provided, the word
-        count is derived from ``schema_type.nwords_per_inst(bitwidth)`` and the
-        result is deserialized before returning.  Supplying *count* returns a
-        :class:`~waveflow.hw.dataschema.DataArray` wrapping a NumPy array of
-        *count* elements.
+        For a typed read use :meth:`get_schema` (one instance) or :meth:`get_array` (*count* of
+        them).  Those were once this method's extra arguments; see the note above.
         """
-        if schema_type is None:
-            # Raw-word backward-compatible path.
-            if not self.has_tlast and nwords_max is None:
-                raise ValueError(
-                    f"StreamIFSlave '{self.name}' has has_tlast=False: "
-                    "nwords_max must be provided to specify the transfer length"
-                )
-            return (yield from super().get(nwords_max=nwords_max))
-
-        # Typed path — the schema says how many words, and the schema unpacks them.
-        raw_words = yield from super().get(
-            nwords_max=self._typed_nwords(schema_type, count))
-        return self._unpack(raw_words, schema_type, count)
+        if not self.has_tlast and nwords_max is None:
+            raise ValueError(
+                f"StreamIFSlave '{self.name}' has has_tlast=False: "
+                "nwords_max must be provided to specify the transfer length"
+            )
+        return (yield from super().get(nwords_max=nwords_max))
 
     @port_read
-    def get_nb(self, schema_type=None, count=None, *, nwords_max=None):
+    @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetSchemaStmt)
+    def get_schema(self, schema_type):
+        """Pull **one instance** of *schema_type*::
+
+            cmd_hdr: PolyCmdHdr = yield from self.s_in.get_schema(PolyCmdHdr)
+
+        The word count comes from ``schema_type.nwords_per_inst(bitwidth)`` — never from the
+        caller — and the schema's own deserializer unpacks them.  The ``m_axi`` twin is
+        :meth:`~waveflow.hw.memif.MMIFMaster.read_schema`.
+        """
+        raw_words = yield from super().get(nwords_max=self._typed_nwords(schema_type))
+        return self._unpack(raw_words, schema_type)
+
+    @port_read
+    @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetArrayStmt)
+    def get_array(self, element_type, count):
+        """Pull *count* elements of *element_type* as a
+        :class:`~waveflow.hw.dataschema.DataArray`::
+
+            samp_in = yield from self.s_in.get_array(Float32, count=N)
+
+        The ``m_axi`` twin is :meth:`~waveflow.hw.memif.MMIFMaster.read_array`.
+
+        *count* is required.  A zero-element read is not a shorter transfer, it is a different
+        question — and one this method has no answer for, since the burst it would consume has no
+        words in it.
+        """
+        raw_words = yield from super().get(
+            nwords_max=self._typed_nwords(element_type, count))
+        return self._unpack(raw_words, element_type, count)
+
+    @port_read
+    def get_nb(self, *, nwords_max=None):
         """Take a burst **if one is already buffered**, else return ``None`` — the non-blocking read.
 
         The read-side twin of :meth:`StreamIFMaster.offer`, and the pysim expression of HLS's
@@ -1029,11 +1100,33 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
         Implemented by delegating to :meth:`get` once the buffer is known to be non-empty, so the
         accounting (``ntx``/``nrx``, the queue bookkeeping) is the *same code* rather than a second
         copy of it that could drift.
+
+        **Two suffixes, two dimensions.**  The payload suffix comes first and the semantics suffix
+        last: :meth:`get_schema_nb` and :meth:`get_array_nb` are the typed twins, exactly as
+        :meth:`get_schema` and :meth:`get_array` are of :meth:`get`.  The non-blocking family splits
+        with the blocking one because leaving half of it dispatching on arguments would have kept
+        the inconsistency while claiming to have removed it.
         """
         if not self.data_buffer.items:
             return None
             yield  # unreachable: marks this a generator so `yield from` works on the empty path
-        return (yield from self.get(schema_type, count, nwords_max=nwords_max))
+        return (yield from self.get(nwords_max=nwords_max))
+
+    @port_read
+    def get_schema_nb(self, schema_type):
+        """One instance of *schema_type* if a burst is buffered, else ``None``.  Never blocks."""
+        if not self.data_buffer.items:
+            return None
+            yield  # unreachable: marks this a generator so `yield from` works on the empty path
+        return (yield from self.get_schema(schema_type))
+
+    @port_read
+    def get_array_nb(self, element_type, count):
+        """*count* elements of *element_type* if a burst is buffered, else ``None``.  Never blocks."""
+        if not self.data_buffer.items:
+            return None
+            yield  # unreachable: marks this a generator so `yield from` works on the empty path
+        return (yield from self.get_array(element_type, count))
 
     @port_read
     def get_pipelined(self, schema_type=None, count=None):

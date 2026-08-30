@@ -542,17 +542,35 @@ class TestTyped:
         expected = [(n, n + 1000) for n in range(6 * 3)]
         assert out == expected
 
-    def test_get_signature_matches_stream(self):
-        """The dequeue signature reuses StreamIFSlave.get exactly (decision 6)."""
+    def test_the_queue_has_not_split_its_payload_forms_and_the_stream_has(self):
+        """Decision 6 said the dequeue reuses ``StreamIFSlave.get``'s signature exactly.  **That
+        coupling is now broken, deliberately and on one side only**, and this records it.
+
+        The stream split its three payload forms into three names — ``get`` / ``get_schema`` /
+        ``get_array`` — because one method returning ``Words``, an instance, or a ``DataArray``
+        depending on its arguments is what the extractor cannot match structurally and what forced
+        ``_unpack`` and ``_unpack_elems`` apart.  Every one of those arguments applies to the queue
+        too; the queue simply was not in that change's scope.
+
+        So this is a **tripwire, not a blessing**.  It fails if the queue splits (finish the job:
+        delete this test and give the queue the same three names) and it fails if the stream
+        un-splits.  Either way somebody reads this docstring, which is the point — the alternative
+        was deleting the check and losing the record that the two ever agreed.
+        """
         q_params = inspect.signature(AXIMMQueue.get).parameters
-        s_params = inspect.signature(StreamIFSlave.get).parameters
-        # Every stream parameter (schema_type, count, nwords_max) is present with
-        # the same kind on the queue; the queue only adds poll_interval.
-        for name in ("schema_type", "count", "nwords_max"):
-            assert name in q_params, f"queue get is missing {name}"
-            assert q_params[name].kind == s_params[name].kind
-        assert set(s_params) - {"self"} <= set(q_params)
+        assert {"schema_type", "count", "nwords_max"} <= set(q_params), (
+            "the queue still dispatches its payload form on arguments")
         assert "poll_interval" in q_params
+
+        s_params = inspect.signature(StreamIFSlave.get).parameters
+        assert "schema_type" not in s_params and "count" not in s_params, (
+            "StreamIFSlave.get is raw-only now; if that changed, this divergence needs revisiting")
+        assert set(s_params) - {"self"} == {"nwords_max"}
+        for split in ("get_schema", "get_array", "get_schema_nb", "get_array_nb"):
+            assert hasattr(StreamIFSlave, split), f"the stream should have {split}"
+            assert not hasattr(AXIMMQueue, split), (
+                f"AXIMMQueue grew {split} — the two have converged again, so delete this test and "
+                f"the divergence note on AXIMMQueue.get")
 
     def test_typed_elem_words_mismatch_raises(self):
         """Typed access against a layout whose elem_words disagrees with the

@@ -276,7 +276,7 @@ class RepeatPlayHost(HwModule):
                 pack_samples(self.wave[:int(nsamp)], int(self.bitwidth), int(self.samp_per_word)))
 
     def take_resp(self) -> ProcessGen[tuple[int, int, int]]:
-        r = yield from self.resp_in.get(TxResp)
+        r = yield from self.resp_in.get_schema(TxResp)
         out = (int(r.tid), int(r.status), int(r.samp_start))
         self.resps.append(out)
         return out
@@ -284,7 +284,7 @@ class RepeatPlayHost(HwModule):
     def poll_resps(self) -> ProcessGen[None]:
         """Drain whatever has arrived, without waiting for anything that has not."""
         while True:
-            got = yield from self.resp_in.get_nb(TxResp)
+            got = yield from self.resp_in.get_schema_nb(TxResp)
             if got is None:
                 return
             self.resps.append((int(got.tid), int(got.status), int(got.samp_start)))

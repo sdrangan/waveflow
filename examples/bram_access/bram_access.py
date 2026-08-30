@@ -408,7 +408,7 @@ class BramWriteCompute(FreeRunMod):
         physical port.  Routing this through ``read_pipelined`` + compute + ``write_pipelined``
         instead would invent two transfers that do not exist and charge for them.
         """
-        cmd = yield from self.cmd_w.get(WriteComputeCmd)
+        cmd = yield from self.cmd_w.get_schema(WriteComputeCmd)
         wp, n, op = int(cmd.waddr), int(cmd.nsamp), BramOp(int(cmd.opcode))
         ok = n <= int(self.depth) and wp <= int(self.depth) - n
         if op is BramOp.WRITE:
@@ -492,7 +492,7 @@ class BramReadCmd(FreeRunMod):
         if not self.armed:
             yield from _word(self.go_in)
             self.armed = True
-        cmd = yield from self.cmd_r.get(ReadCmd)
+        cmd = yield from self.cmd_r.get_schema(ReadCmd)
         rp, n = int(cmd.raddr), int(cmd.nsamp)
         ok = n <= int(self.depth) and rp <= int(self.depth) - n
         if ok and n:

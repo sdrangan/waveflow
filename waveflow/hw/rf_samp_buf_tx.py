@@ -291,7 +291,7 @@ class RfSampBufLoader(FreeRunMod):
         lead_cap = self.usable_lead
         margin = int(self.horizon_margin)
 
-        cmd = yield from self.s_in.get(TxCmd)
+        cmd = yield from self.s_in.get_schema(TxCmd)
         idx = int(cmd.start)
         nsamp = int(cmd.nsamp)
         loaded = 0

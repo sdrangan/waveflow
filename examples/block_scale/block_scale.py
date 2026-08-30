@@ -137,7 +137,7 @@ class BlockScale(HwModule):
         into ``int32_array_utils::read_array_slice`` / ``write_array_slice``
         bursts over the resident ``[0, n)`` range; ``max_count`` gives each
         buffer its compile-time bound.  Only ``compute`` is hand-written."""
-        cmd = yield from self.s_in.get(BlockCmd)
+        cmd = yield from self.s_in.get_schema(BlockCmd)
         x = yield from self.m_mem.read_array(Int32, cmd.n, cmd.x_addr, max_count=self.max_n)
         y = yield from self.compute(x, cmd.n)
         yield from self.m_mem.write_array(y, Int32, cmd.y_addr, cmd.n, max_count=self.max_n)

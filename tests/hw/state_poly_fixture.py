@@ -81,7 +81,7 @@ class PolyStateAccel(HostActivated):
 
     def on_start(self) -> ProcessGen[None]:
         while True:
-            cmd_hdr: PolyCmdHdr = yield from self.s_in.get(PolyCmdHdr)
+            cmd_hdr: PolyCmdHdr = yield from self.s_in.get_schema(PolyCmdHdr)
             if cmd_hdr.cmd_type == PolyCmdType.END:
                 return
             err = yield from self.evaluate(cmd_hdr, self.s_in, self.m_out, self.coeffs)
@@ -104,7 +104,7 @@ class PolyStateAccel(HostActivated):
         resp_hdr.tx_id = cmd_hdr.tx_id
         yield from m_out.write(resp_hdr)
 
-        samp_in = yield from s_in.get(Float32, count=cmd_hdr.nsamp)
+        samp_in = yield from s_in.get_array(Float32, count=cmd_hdr.nsamp)
 
         y = np.zeros_like(samp_in, dtype=np.float32)
         power = np.ones_like(samp_in, dtype=np.float32)

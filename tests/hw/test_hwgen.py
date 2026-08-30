@@ -655,7 +655,7 @@ class _TmplComp(HwModule):
 
     def on_start(self) -> _ProcessGen[None]:
         while True:
-            cmd: DemoCmdHdr = yield from self.s_in.get(DemoCmdHdr)
+            cmd: DemoCmdHdr = yield from self.s_in.get_schema(DemoCmdHdr)
             if cmd.cmd_type == 0:
                 return
             yield from self.process(cmd, self.s_in)

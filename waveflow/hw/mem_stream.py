@@ -392,7 +392,7 @@ class MemRStream(FreeRunMod):
         if self.inband:
             yield from self._run_iter_inband()
             return
-        cmd = yield from self.s_cmd.get(self._cmd_cls)
+        cmd = yield from self.s_cmd.get_schema(self._cmd_cls)
         w0 = int(cmd.addr)
         nw = int(cmd.len)
         t_start = self.now
@@ -428,7 +428,7 @@ class MemRStream(FreeRunMod):
         are **never parsed** (they are the downstream stages' descriptor + response), so this component
         needs no buffer at all and serves any application.
         """
-        cmd = yield from self.s_cmd.get(MemRCmd)
+        cmd = yield from self.s_cmd.get_schema(MemRCmd)
         t_start = self.now
         # Relay each opaque burst whole, boundary included.  A countless get() returns the entire
         # burst -- the only read that does not require knowing the contents, which is exactly what
@@ -580,7 +580,7 @@ class MemWStream(FreeRunMod):
         if self.inband:
             yield from self._run_iter_inband()
             return
-        cmd = yield from self.s_cmd.get(self._cmd_cls)
+        cmd = yield from self.s_cmd.get_schema(self._cmd_cls)
         w0 = int(cmd.addr)
         nw = int(cmd.len)
         t_start = self.now
@@ -609,7 +609,7 @@ class MemWStream(FreeRunMod):
         never parses what it forwards — it constructs no completion of its own; the composite's
         sequencer framed the response.  ``max_fwd_words`` bounds the buffer.
         """
-        cmd = yield from self.s_in.get(MemWCmd)
+        cmd = yield from self.s_in.get_schema(MemWCmd)
         n_fwd = int(cmd.fwd_bursts)
         t_start = self.now
         # Buffer the opaque bursts to relay AFTER the write.  Whole-burst reads (the writer forwards
