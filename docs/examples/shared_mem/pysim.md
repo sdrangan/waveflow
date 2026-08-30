@@ -58,7 +58,7 @@ laid out: allocate the three regions, stage the inputs, **launch the kernel**, i
 the response, read the counts back.
 
 Note the order: the controller raises `ap_start` **before** sending the command. The kernel's
-[`on_start`](./python.md) then blocks on `s_in.get(...)` until the in-band command arrives. One master
+[`on_start`](./python.md) then blocks on `s_in.get_schema(...)` until the in-band command arrives. One master
 does both — which is the point of the [control-only regmap](./python.md#why-a-control-only-regmap): the
 same host that programs the memory base address also launches the kernel.
 

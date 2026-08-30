@@ -923,7 +923,7 @@ def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) ->
     justified: a pysim body that reads a word at a time is not a faithful twin of an ``II=1`` C++
     loop, it is a design that has opted out of the LT model — the same relationship ``PolyAccel`` has
     to ``poly_evaluate_impl.tpp``, where vectorized Python stands against a looped ``.tpp`` and the
-    timing lives in the model.  ``get_pipelined(count=nsamp)`` needs the payload as one burst,
+    timing lives in the model.  ``get_pipelined(elem, count=nsamp)`` needs the payload as one burst,
     because a pysim slave dequeues a whole burst per call and truncation *discards* the remainder.
 
     **This is a change to the vectors, so it was re-gated rather than assumed.**  ``words.bin`` is

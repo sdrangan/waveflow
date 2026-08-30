@@ -39,7 +39,7 @@ class StateAccum(FreeRunMod):
         self.add_state(self.total)
 
     def run_iter(self) -> ProcessGen[None]:
-        x = yield from self.s_in.get(Vec4)
+        x = yield from self.s_in.get_schema(Vec4)
         y = self.accumulate(x, self.total)        # a @synthesizable hook
         yield from self.m_out.write(y)
 ```

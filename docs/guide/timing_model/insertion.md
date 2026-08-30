@@ -27,7 +27,7 @@ class MyCompute(FreeRunMod):
         self.add_timing_model(self.tm)  # register it with the component (so the fitting tools find it)
 
     def run_iter(self):
-        cmd = yield from self.s_cmd.get(MyCmd)            # blocks until a command arrives
+        cmd = yield from self.s_cmd.get_schema(MyCmd)     # blocks until a command arrives
         x   = yield from self.m_mem.read(cmd.addr, cmd.n) # blocks on the read
 
         y = compute(x)                                    # the value — computed instantly in pysim

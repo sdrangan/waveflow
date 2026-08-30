@@ -362,7 +362,7 @@ sim.run_sim()
 > **Header + payload on one physical stream.** Each transfer endpoint owns its own `stream_ep`, so two
 > transfer slaves cannot share a single stream. For the "typed header first, then pull `nsamp`
 > samples from the *same* stream" pattern (the poly accelerator), use a single raw
-> [`StreamIFSlave`](../primitive/stream.md) and successive `get()` calls — `cmd = yield from s_in.get(PolyCmdHdr)`
+> [`StreamIFSlave`](../primitive/stream.md) and successive `get()` calls — `cmd = yield from s_in.get_schema(PolyCmdHdr)`
 > then `samp = yield from s_in.get_pipelined(Float32, count=cmd.nsamp)` — as
 > [`examples/stream_inband/poly.py`](../../../../examples/stream_inband/poly.py) does.
 

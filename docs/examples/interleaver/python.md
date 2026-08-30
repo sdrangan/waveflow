@@ -116,7 +116,7 @@ class IlComputeInband(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "il_compute"
 
     def run_iter(self) -> ProcessGen[None]:
-        desc = yield from self.desc_in.get(IlDesc)
+        desc = yield from self.desc_in.get_schema(IlDesc)
         n = int(desc.n)
         yield from self.desc_out.write(...desc...)          # forward the descriptor
         pblock = yield from self.p_blk.acquire_read()

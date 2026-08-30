@@ -46,7 +46,7 @@ On the read side, `get(Schema)` derives the word count from `Schema.nwords_per_i
 
 ```python
 yield from self.s_out.write(cmd)          # a schema instance, serialized for you
-cmd = yield from self.s_in.get(FirCmd)    # one call, deserialized for you
+cmd = yield from self.s_in.get_schema(FirCmd)   # one call, deserialized for you
 ```
 
 > **Do not take a structured message apart a word at a time.** A command, header or response is a
@@ -114,7 +114,9 @@ before you rely on it: see [the fidelity boundary](../../rf/rfdc/fidelity.md#the
 
 Use `get_pipelined` / `write_pipelined` when the component processes data as it streams through (rather than buffering the full burst first). These methods carry pipeline timing explicitly so the simulation reflects the latency and throughput of synthesized hardware.
 
-**`StreamIFSlave.get_pipelined(schema_type, count=N)`** returns `(data, tstart)`:
+**`StreamIFSlave.get_pipelined(element_type, count=N)`** returns `(data, tstart)`. Both
+arguments are required — a pipelined transfer is always an array transfer, so there is no
+schema-only form for a default to mean:
 
 - `data` — deserialized burst, identical to `get(schema_type, count=N)`
 - `tstart` — SimPy time when the **first** word of the burst arrived

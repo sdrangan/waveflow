@@ -107,8 +107,10 @@ making a read unconditional (a zero-length burst is a no-op) rather than guardin
 Beyond plain statements, the extractor recognizes a fixed vocabulary of **operations on endpoints** —
 each in a rigid call shape, because each maps to one IR node:
 
-- **Streams** — `yield from ep.get(Schema)`, `yield from ep.get(Schema, count=n)`, `yield from
-  ep.write(value)`
+- **Streams** — `yield from ep.get_schema(Schema)`, `yield from ep.write(value)`.
+  `get_array(Elem, count=n)` is **refused** here: a multi-element stream read is a lane loop,
+  with framing and pacing an extracted body does not express, so it belongs in a
+  [hook](../custom_hooks/stream.md)
 - **Register maps** — `self.regmap.get("field")`, `self.regmap.set("field", value)`
 - **Memory** — `read_array` / `write_array` on an `m_axi` master, which lower to burst reads and writes
 - **Hooks** — a call to any [`@synthesizable`](../custom_hooks/) method

@@ -323,7 +323,7 @@ class PolyAccel(HwModule):
     def on_start(self) -> ProcessGen[None]:
         """Kernel body — invoked by VitisRegMapMMIFSlave on host ap_start write."""
         while True:
-            cmd_hdr = yield from self.s_in.get(PolyCmdHdr)
+            cmd_hdr = yield from self.s_in.get_schema(PolyCmdHdr)
             err = yield from self.evaluate(cmd_hdr, self.s_in, self.m_out)
             if err != PolyError.NO_ERROR:
                 self.regmap.set("error",  err)

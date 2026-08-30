@@ -31,7 +31,7 @@ delegates the math to the `compute` hook:
 
 ```python
 def run_proc(self) -> ProcessGen[None]:
-    cmd = yield from self.s_in.get(BlockCmd)
+    cmd = yield from self.s_in.get_schema(BlockCmd)
     x = yield from self.m_mem.read_array(Int32, cmd.n, cmd.x_addr, max_count=self.max_n)
     y = yield from self.compute(x, cmd.n)              # the hook — pure compute
     yield from self.m_mem.write_array(y, Int32, cmd.y_addr, cmd.n, max_count=self.max_n)

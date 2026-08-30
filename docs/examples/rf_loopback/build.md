@@ -219,7 +219,7 @@ class RfSampIngress(FreeRunMod):        # never stops reading the boundary port
 
 class RfSampBlockRelay(FreeRunMod):     # allowed to be busy: it holds a block
     def run_iter(self):
-        blk = yield from self.blk_in.get(self.blk_words)
+        blk = yield from self.blk_in.get_schema(self.blk_words)
         self.count_burst()
         yield from self.s_out.write(blk)
 ```

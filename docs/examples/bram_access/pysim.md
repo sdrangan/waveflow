@@ -140,7 +140,7 @@ opcodes rather than from how a scenario happened to build its `data_w`, and chec
 payload framed against *every* command would hand each later `WRITE` the previous one's data,
 silently, from the first `COMPUTE` onwards, with every response still saying `OK`.
 
-`get_pipelined(count=nsamp)` reads a payload in one call, because a pysim slave dequeues a whole
+`get_pipelined(element_type, count=nsamp)` reads a payload in one call, because a pysim slave dequeues a whole
 burst per call and truncation *discards* the remainder.
 
 This replaced a one-word-per-burst framing whose stated reason was "one pysim firing equals one RTL

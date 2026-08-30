@@ -48,18 +48,31 @@ about "why is this method called that" is really a question about which dimensio
 | | stream | m_axi |
 |---|---|---|
 | raw words | `get()` | `read(nwords, addr)` |
-| one schema instance | `get(T)` | `read_schema(T, addr)` |
-| an array of `T` | `get(T, count=N)` | `read_array(T, N, addr)` |
+| one schema instance | `get_schema(T)` | `read_schema(T, addr)` |
+| an array of `T` | `get_array(T, count=N)` | `read_array(T, N, addr)` |
+
+The **verb** differs because the semantics do — a stream `get` is a destructive dequeue and an
+`m_axi` `read` is an addressed look, which is the distinction
+[the access vocabulary](#the-access-vocabulary-three-verbs-three-meanings) draws. The
+**suffix** is the same on both sides, because what is transferred is the same question either way.
 
 **When it happens relative to other work** — the access cases below: non-overlapping, overlapping,
 or in place.
 
-> **Why one spelling on a stream and three on an m_axi port?**  History, not design.
-> `StreamIFSlave.get`'s own docstring calls the raw form the *"old (raw-word) calling convention"*
-> and the typed form the *"new synthesizable calling convention"* — the typed path was added to the
-> existing method rather than given new names, so a stream dispatches on its arguments where an
-> m_axi port dispatches on the method. Nothing about a stream makes one method more natural; it is
-> the one place the vocabulary is inconsistent for no reason.
+> **The stream used to dispatch on arguments, and no longer does.** One `get` returned three
+> different types depending on how it was called — `Words`, an instance, or a `DataArray` — because
+> the typed path was added to the existing method rather than given names of its own. That was the
+> one place the vocabulary was inconsistent for no reason, and it cost more than tidiness: the
+> codegen extractor matches methods structurally, by name, so `get(T)` and `get(T, count=N)` were
+> indistinguishable to it and the array form silently lowered to a single-element read. The three
+> names above are what fixed it. The same split has **not** reached `AXIMMQueue.get`, which still
+> dispatches on its arguments; that is unfinished work rather than a considered difference.
+
+> **The pipelined forms take no payload suffix, and that is the one exception to the rule above.**
+> `get_pipelined(T, count=N)` — and `read_pipelined` / `write_pipelined` on the other endpoints —
+> are *always* array transfers, because the saving is proportional to the words moved. There is no
+> schema-only form for a suffix to distinguish them from, which is why `read_array_pipelined` lost
+> its `_array_` infix rather than the others gaining one.
 
 ## The access cases
 
@@ -157,6 +170,10 @@ carries the meaning above.
 
 A transfer that returns *"nothing available"* or *"no room"* instead of blocking carries `_nb`:
 `get_nb`, `read_nb`, `write_nb`, `write_resp_nb`, `read_frame_nb`.
+
+**Two suffixes stack, payload first and semantics last** — `get_schema_nb`, `get_array_nb`. The
+order is not arbitrary: the payload suffix says *what comes back*, so it belongs beside the verb it
+qualifies, and `_nb` says *when*, which is a property of the call rather than of the data.
 
 `StreamIFMaster.offer` does the same thing and keeps its own name, because the two exist for
 **opposite reasons** and the asymmetry is real:

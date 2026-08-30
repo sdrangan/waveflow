@@ -1129,19 +1129,36 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
         return (yield from self.get_array(element_type, count))
 
     @port_read
-    def get_pipelined(self, schema_type=None, count=None):
-        """Pull the next burst and return ``(data, tstart)`` where ``tstart``
-        is the SimPy time when the first word of the burst arrived.
+    def get_pipelined(self, element_type, count):
+        """Pull *count* elements and return ``(data, tstart)`` — *tstart* being the SimPy time the
+        **first** word of the burst arrived.
 
-        ``tstart`` is back-calculated from the completion time, assuming a
-        back-pressure-free II=1 input stream::
+        *tstart* is back-calculated from the completion time, assuming a back-pressure-free II=1
+        input stream::
 
             tstart = env.now - (nwords_transferred - 1) * clk.period
+
+        It is the anchor a downstream :meth:`StreamIFMaster.write_pipelined` passes on so the two
+        phases overlap and cost ``max(a, b)`` rather than ``a + b``.
+
+        **Both arguments are required, and the signature used to say otherwise.**  It was
+        ``get_pipelined(schema_type=None, count=None)``, which advertised two modes that did not
+        exist: ``get_pipelined()`` and ``get_pipelined(count=4)`` both died on
+        ``AttributeError: 'NoneType' object has no attribute 'nwords_per_inst'`` — a crash from
+        inside the codec, not a refusal, and one that names nothing a caller can act on.
+
+        **NO payload suffix here, deliberately.**  Every other typed read carries one
+        (:meth:`get_schema`, :meth:`get_array`) and this one does not, because a pipelined transfer
+        is *always* an array transfer: the saving is proportional to the words moved, so a
+        schema-only form would buy nothing and there is nothing for a suffix to distinguish it
+        from.  ``MMIFMaster.read_pipelined`` takes its count positionally for the same reason, and
+        R1 removed the ``_array_`` infix from its old name on exactly this argument.  Re-adding a
+        suffix here would undo that.
         """
         raw_words = yield from super().get(
-            nwords_max=self._typed_nwords(schema_type, count))
+            nwords_max=self._typed_nwords(element_type, count))
         tstart = self.env.now - (raw_words.shape[0] - 1) * self.interface.clk.period
-        return self._unpack(raw_words, schema_type, count), tstart
+        return self._unpack(raw_words, element_type, count), tstart
 
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamDrainStmt)
     def drain(self):
