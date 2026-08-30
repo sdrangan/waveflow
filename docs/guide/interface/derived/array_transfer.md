@@ -414,3 +414,17 @@ from waveflow.hw.schema_transfer_interface import (
 | Words per element | `element_type.nwords_per_inst(bitwidth)` |
 
 See also: [Schema Transfer Interface](schema_transfer.md) for the shared `PhysicalTransport` abstraction.
+
+---
+
+## How it lowers
+
+**It does not** — the same gap as [Schema Transfer](./schema_transfer.md), for the same reason and
+checkable the same way: `ArrayTransferIF` overrides neither `physical_endpoints()` nor
+`physical_interfaces()`, so it never decomposes into the primitives a codegen walk can lower, and
+`waveflow/build/` references it nowhere.
+
+The array serialization it uses *is* generated — see
+[raw arrays](../../vectorization/hls/arrayutils.md) and
+[the kernel transfer reference](../../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel).
+A synthesizable design moves the array over a `StreamIF` or an `m_axi` port directly.

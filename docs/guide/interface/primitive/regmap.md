@@ -349,3 +349,20 @@ The end-to-end walkthrough — declaring a `VitisRegMap`, running it in SimPy, g
 HLS kernel and validating the measured RTL timing — is the
 [Register Map example](../../../examples/regmap/), reached from
 [Host launch lifecycle](../../comp_codegen/host_launch.md#worked-example).
+
+---
+
+## How it lowers
+
+A `RegMapMMIFSlave` is an `axilite_slave` boundary port — its own kind, resolved ahead of
+`MMIFSlave` so a control port never lowers as a plain memory slave.
+
+- **HLS** — [Endpoint interfaces](../../comp_codegen/interface.md#regmap-slave--s_axilite--ap_ctrl)
+  for the `s_axilite` block, and [Host-activated kernel in HLS](../../comp_codegen/hostactivated.md)
+  for the top-level function it controls.
+- **The extraction** — [The synthesis extractor](../../comp_codegen/extractor.md), which turns
+  `regmap.get` / `set` into register access in the generated body.
+- **BFM / XSI — a known gap, recorded rather than discovered.** `BFM_DUALS` has an `axilite_slave`
+  row with **no model**: nothing in `waveflow/build/xsi/` masters an AXI4-Lite bus, so a regmap /
+  `HostActivated` DUT cannot be XSI-lowered at all today. The row exists so that arrives as a named
+  refusal instead of a `KeyError`.

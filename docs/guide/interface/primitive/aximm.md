@@ -419,3 +419,22 @@ from waveflow.hw.aximm import (
 | Write schema | `yield from master_ep.write_schema(obj, addr)` |
 | Read array | `arr = yield from master_ep.read_array(Float32, count=n, addr=DATA_ADDR)` |
 | Write array | `yield from master_ep.write_array(np_array, Float32, addr=DATA_ADDR)` |
+
+---
+
+## How it lowers
+
+An `MMIFReadMaster` is a `maxi_read` boundary port (`const T*` + `#pragma HLS stable`), an
+`MMIFWriteMaster` a `maxi_write` one (plain `T*`). A bare `MMIFMaster` is **refused** rather than
+guessed — the direction is the type. An `MMIFSlave` is `mm_slave`: a real kind, but never a kernel
+boundary port in this flow, because the kernel is always the master.
+
+- **HLS** — [Endpoint interfaces](../../comp_codegen/interface.md#m_axi-master--m_axi-pointer) for
+  the pointer and the bundle policy.
+- **Writing the body** — [Complex — data-dependent addressing](../../custom_hooks/complex.md), and
+  the [kernel transfer reference](../../custom_hooks/reference.md).
+- **BFM / XSI** — [The XSI testbench](../../comp_codegen/xsi_tb.md#participants-map-to-pre-written-models):
+  `maxi_read` gets an `AxiMmReadSlave`, `maxi_write` an `AxiMmWriteSlave` — the testbench supplies
+  the memory the kernel masters into. `mm_slave` is a `BFM_DUALS` row with **no model and none
+  planned**, recorded as a row so a design that needs one gets that sentence rather than a
+  `KeyError`.

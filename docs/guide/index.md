@@ -28,6 +28,15 @@ The same `StreamIF` appears in all three, which is why looking for "streams" in 
 finds a hole that is really material in another. A page states its own layer and links across, rather
 than restating a neighbour's — restating is what produces context-free arcana.
 
+One correction worth making early, because the natural assumption is wrong. *Generate it* covers
+**both** backends, and they are the **same dispatch**: `kind_of_endpoint` produces one vocabulary —
+`axis_in`, `axis_out`, `maxi_read`, `maxi_write`, `mm_slave`, `axilite_slave`, `bram` — and two
+tables consume it, the boundary-port emitter for HLS and `BFM_DUALS` for the XSI testbench. So the
+C++ model that drives a port from *outside* the kernel is as automatic as the port itself. What is
+hand-authored on the XSI side is the testbench **graph** — which drivers exist and what they play —
+not the per-port model. Every interface page's *How it lowers* section points into that one
+dispatch rather than describing it again.
+
 The table of contents below is in reading order, and every entry's summary is read from that
 section's own front matter — so the list is generated rather than maintained here, and cannot fall
 out of step with what it lists.

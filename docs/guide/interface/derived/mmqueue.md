@@ -113,6 +113,21 @@ timing primitive, only a new *use* of `m_axi` plus `poll_until`.
 - The [VMAC example](../../../examples/mmqueue/) — the worked use: a host enqueues
   `VmacCmd`s and a free-running accelerator dequeues and executes them.
 
+---
+
+## How it lowers
+
+An `AXIMMQueue` is a **protocol over an `MMIFMaster`**, not a channel of its own: what lowers is the
+`m_axi` port underneath it, plus a hand-written body that implements the ring discipline.
+
+- **HLS** — [Endpoint interfaces](../../comp_codegen/interface.md#m_axi-master--m_axi-pointer) for
+  the port; the ring itself is not generated.
+- **Writing the body** — [Memory command queue](../../custom_hooks/queue.md), the `queue_get`
+  dequeue. This is the advanced hook case: a hand-written body that *is* the synthesizable half of a
+  transport interface.
+- **BFM / XSI** — whatever the underlying `maxi_read` / `maxi_write` port gets; the queue has no
+  dual of its own because it is not a port.
+
 ## See also
 
 - [MM Interfaces](../primitive/aximm.md) — the `MMIFMaster` the queue is built on.

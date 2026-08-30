@@ -332,6 +332,24 @@ addresses) — which a concurrent BFM harness cannot do, because both drivers pu
 your reader must not overtake your writer, say so with a channel; do not rely on a testbench's
 habits.
 
+---
+
+## How it lowers
+
+A `BramIFMaster` is a `bram` boundary port: a sized array parameter carrying
+`#pragma HLS INTERFACE mode=bram`, one kind for both directions because Vitis emits the full A/B
+pair regardless. The memory-side `BramIFSlave` has no boundary kind at all — it is the far end of a
+wrapper wire, never a kernel port.
+
+- **HLS and the wrapper** — [Declaring an RTL module](../../comp_codegen/rtl_module.md), which is
+  where the memory is placed beside the kernel and joined to it.
+- **BFM / XSI — there is no BFM dual, and that is the design.** A BRAM port's counterpart is the
+  **wrapper**, which joins it to a memory compiled into the simulation beside the kernel
+  (`bram_t2p.v`, visible in `rtl_<top>.f`). `BFM_DUALS` carries a `bram` row whose `needs_model` is
+  `False` — "none is owed", as distinct from the `axilite_slave` row's "needed, none exists". There
+  is no second implementation for a model to be, which is the argument that a hand-written memory is
+  *more* verifiable than an emulated one.
+
 ## See also
 
 - [A module realized as Verilog](../../comp_codegen/rtl_module.md) — the `rtl_module()` hook the memory

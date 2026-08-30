@@ -398,3 +398,24 @@ from waveflow.hw.schema_transfer_interface import (
 | Wire footprint (DataUnion) | `MyDU.nwords_per_inst(32)` |
 
 See also: [`schema_transfer_demo.py`](../../../../examples/interface/schema_transfer_demo.py) for a complete runnable example.
+
+---
+
+## How it lowers
+
+**It does not, and that is a real gap rather than an omission from this page.**
+
+A derived interface reaches the generator by **decomposing**: `physical_endpoints()` and
+`physical_interfaces()` return the primitive channels it is built from, and the codegen walk lowers
+those. [`AckedStreamIF`](./acked_stream.md) does exactly this — it returns its two `StreamIF`s, and
+in C++ there is no acked-stream object at all, just two `hls::stream` arguments.
+
+`SchemaTransferIF` overrides **neither** method. So the walk sees one endpoint with no
+`boundary_kind` and refuses it, and `waveflow/build/` contains zero references to this interface.
+There is no HLS lowering and no BFM dual to describe.
+
+What *is* generated is the serialization underneath it: see
+[Serialization](../../schema/hls/serialization.md) for the C++ pack/unpack a schema produces, and
+[the kernel transfer reference](../../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel)
+for the calls a hand-written body makes instead. This interface is a **simulation** convenience
+today; a synthesizable design moves the same schema over a `StreamIF` directly.
