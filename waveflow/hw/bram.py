@@ -328,21 +328,31 @@ class BramIFMaster(InterfaceEndpoint):
     # whole point of having a model.)
     #
     # These are plain methods rather than generators for the same reason: a caller writes
-    # `self.buf_w.mem_write(i, x)`, not `yield from`, and the absence of the yield is the statement
+    # `self.buf_w.write(i, x)`, not `yield from`, and the absence of the yield is the statement
     # that no simulated time passes.
+    #
+    # **An addressed read is `read`.**  These were `mem_read` / `mem_write`; the `mem_` prefix
+    # distinguished nothing, because a `BramIFMaster` only ever addresses memory — there is no
+    # other kind of read on this port to tell it apart from.  `MMIFMaster.read` / `.write` are
+    # the same operation on the other addressed endpoint and already spell it this way.
+    #
+    # A stream keeps `get`, and that is not an oversight: a stream read is a destructive
+    # DEQUEUE and an addressed read is not.  Three verbs, three meanings — a `get` dequeues,
+    # a `read` looks at an address, an `acquire` takes a lease (`SobIFSlave`).  See
+    # `plans/interface_docs_and_naming.md` Part 3.
 
-    def mem_write(self, addr: int, value) -> None:
+    def write(self, addr: int, value) -> None:
         """Write one **element** through this port (pysim).  Refused on a read port.
 
         *value* is not coerced to ``int``: the memory is typed, so a ``Float32`` memory takes a
         float and stores a float.  Over a word element type this is the same call it always was.
         """
-        self._check_access("write", "mem_write")
+        self._check_access("write", "write")
         self._memory().store(int(addr), value)
 
-    def mem_read(self, addr: int):
+    def read(self, addr: int):
         """Read one **element** through this port (pysim).  Refused on a write port."""
-        self._check_access("read", "mem_read")
+        self._check_access("read", "read")
         return self._memory().load(int(addr))
 
     # -- Case 3: in place, and the reason is TIMING rather than copies -------------------------
@@ -351,7 +361,7 @@ class BramIFMaster(InterfaceEndpoint):
     # function reads and writes the memory through its port.  Modelling that as read_array + compute
     # + write_array would invent TWO transfers that do not exist and charge the design for them --
     # a wrong number, not a cosmetic loss.  So `array_ref` elapses no simulated time, and (like
-    # mem_read / mem_write above) the absence of the `yield` is the statement that says so.
+    # read / write above) the absence of the `yield` is the statement that says so.
     #
     # THE CALLER OWNS THE TIMING, because the cost is the compute loop's II x n rather than a
     # transfer.  What this endpoint owes the caller is the number to compute from --
@@ -409,7 +419,7 @@ class BramIFMaster(InterfaceEndpoint):
 
         Element-typed (the view's dtype is :attr:`element_type`'s own — nothing is passed, because
         the storage already has a type) and extent-bounded, so it is range-checked here the way
-        :meth:`mem_read` / :meth:`mem_write` already are.
+        :meth:`read` / :meth:`write` already are.
 
         **Directional, and enforced rather than advised.**  :attr:`access` already says what this
         port does, so a ``"read"`` port hands back a view with ``flags.writeable = False`` and a
@@ -417,7 +427,7 @@ class BramIFMaster(InterfaceEndpoint):
         hand back a writable one.
 
         The one asymmetry, stated rather than hidden: numpy has no write-only array, so a
-        ``"write"`` port's view cannot refuse *reads* the way :meth:`mem_read` does.  The direction
+        ``"write"`` port's view cannot refuse *reads* the way :meth:`read` does.  The direction
         that can be enforced is.
 
         Refused for an element type with no native numpy dtype — see
@@ -527,7 +537,7 @@ class BramIFMaster(InterfaceEndpoint):
             raise ValueError(
                 f"BramIFMaster '{self.name}': a pipelined transfer is measured in CYCLES, and this "
                 f"port's BramIF carries no clock. Pass clk= when constructing the BramIF. (The "
-                f"untimed mem_read / mem_write need none, which is why it is optional.)")
+                f"untimed read / write need none, which is why it is optional.)")
         return clk
 
     def _memory(self):
@@ -609,7 +619,7 @@ class BramIF(Interface):
     """
 
     #: The clock the port pair is timed in — the accessor's, which the wrapper ties to the memory's.
-    #: **Optional**, because the scalar ``mem_read`` / ``mem_write`` are untimed and need none; a
+    #: **Optional**, because the scalar ``read`` / ``write`` are untimed and need none; a
     #: pipelined transfer is measured in cycles and refuses loudly without it, the same shape as
     #: :attr:`read_latency` refusing when unbound.
     clk: "Clock | None" = None

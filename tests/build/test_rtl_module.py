@@ -424,7 +424,7 @@ def _bound(access, element_type, nelem=32, port=None):
 def test_an_array_ref_is_live_in_both_directions():
     """The whole claim, and it is the one a copy would silently fail.
 
-    A write through the reference must be visible to ``mem_read``, and a ``mem_write`` must be
+    A write through the reference must be visible to ``read``, and a ``write`` must be
     visible through the reference — same storage, not two snapshots of it.  ``as_array`` on
     ``_DirectBackedMMIFMaster`` passes a value check and fails this one, which is why this is the
     test that exists.
@@ -440,10 +440,10 @@ def test_an_array_ref_is_live_in_both_directions():
         "float memory would be a reinterpretation, not a reference")
 
     ref[:] = [1.5, 2.5, 3.5, 4.5]
-    assert [ep.mem_read(8 + k) for k in range(4)] == [1.5, 2.5, 3.5, 4.5], (
+    assert [ep.read(8 + k) for k in range(4)] == [1.5, 2.5, 3.5, 4.5], (
         "writes through the reference did not reach the memory -- the reference is a copy")
 
-    ep.mem_write(9, 99.0)
+    ep.write(9, 99.0)
     assert ref.tolist() == [1.5, 99.0, 3.5, 4.5], (
         "a write to the memory was not visible through the reference -- the reference is a stale "
         "copy, which is the half a one-way check would miss")

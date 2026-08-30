@@ -334,7 +334,7 @@ class RfSampBufLoader(FreeRunMod):
                 self.count_too_late()
                 continue                      # keep draining; the frame is still owed its words
 
-            self.buf_w.mem_write((idx // spw) & mask, int(x))
+            self.buf_w.write((idx // spw) & mask, int(x))
             loaded += spw
             idx = (idx + spw) % wrap
             self.wr = idx
@@ -541,7 +541,7 @@ class RfSampBufPlayer(FreeRunMod):
             if sdiff(self.rd, self.last_wr) >= 0:
                 self.count_underrun()
 
-            out[k] = self.buf_r.mem_read((self.rd // spw) & mask)
+            out[k] = self.buf_r.read((self.rd // spw) & mask)
             self.count_played()
             self.rd = (self.rd + spw) % wrap
             yield from self.rd_out.offer(np.array([self.rd], dtype=np.uint64))

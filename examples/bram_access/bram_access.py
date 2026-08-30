@@ -562,7 +562,7 @@ class BramAccess(FreeRunMod):
                            port_access=("readwrite", "read"))
         self.add_rtl_mod(self.mem)
         # `clk` is what makes the ports' pipelined ops (Case 2) measurable in cycles; the scalar
-        # mem_read / mem_write need none, which is why the field is optional on BramIF.
+        # read / write need none, which is why the field is optional on BramIF.
         w_if = BramIF(name=f"{self.name}_bufw_if", sim=self.sim, clk=self.clk)
         w_if.bind(ep_name="master", endpoint=self.wr.buf_w)
         w_if.bind(ep_name="slave", endpoint=self.mem.wr_port)
