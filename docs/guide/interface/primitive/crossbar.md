@@ -64,3 +64,15 @@ The crossbar's `write(words, port_in)` is called internally by `CrossBarIFInput.
 Each `CrossBarIFOutput` endpoint has the same `run_proc()` loop as `StreamIFSlave` and must be started before transfers are sent.
 
 ---
+
+---
+
+## How it lowers
+
+**Internal only**, like [stream-of-blocks](./sob.md): a `CrossBarIF` has no boundary kind and never
+becomes a port. It is the n × m stream fabric *inside* a design, and each of its edges lowers as the
+ordinary stream it is.
+
+- **HLS** — [Endpoint interfaces](../../comp_codegen/interface.md#stream-endpoints--axis) for the
+  per-edge lowering; there is no crossbar object in the generated C++.
+- **BFM / XSI — none.** Nothing here is a pin, so nothing here has a dual.

@@ -255,6 +255,21 @@ Compare this to the old word-granular SOBIF: `BitWidth=64, block_n=8` would forc
 numpy word arrays, adding marshaling overhead. With typed blocks, you get the hardware efficiency directly
 in Python.
 
+---
+
+## How it lowers
+
+**Internal only.** A `StreamOfBlocksIF` has no boundary kind, because it never becomes a port: it
+lowers to `hls::stream_of_blocks` *inside* a kernel, which is what makes it a primitive rather than
+something derived. That distinction is the middle tier on the [interfaces map](../).
+
+- **HLS** — [Free-running composites](../../comp_codegen/freerunning_composite.md#1-add_if-became-the-channels),
+  where the internal edges become channels; the `acquire` / `release` pair becomes the lock scope in
+  the task body.
+- **Writing the body** — [Block — load, compute, store](../../custom_hooks/block.md).
+- **BFM / XSI — none, and none possible.** An internal channel is not a pin on the elaborated
+  design, so there is nothing for a testbench to drive.
+
 ## See also
 
 - [Stream Interfaces](./stream.md) — the one-channel FIFO this contrasts with.

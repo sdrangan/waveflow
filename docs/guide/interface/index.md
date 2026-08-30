@@ -24,7 +24,7 @@ interface has a `kind_of_endpoint` kind, and if not, what it lowers to instead.
 |---|---|---|
 | **[Primitive, boundary](./primitive/)** | has a `kind_of_endpoint` kind — it becomes a port on the generated kernel | [`StreamIF`](./primitive/stream.md) · [`MMIF` / `DirectMMIF`](./primitive/aximm.md) · [`BramIF`](./primitive/bram.md) · [`RegMapMMIFSlave`](./primitive/regmap.md) |
 | **[Primitive, internal](./primitive/)** | lowers to a real HLS construct, but never to a boundary port | [`StreamOfBlocksIF`](./primitive/sob.md) → `hls::stream_of_blocks` · [`CrossBarIF`](./primitive/crossbar.md) → the n × m fabric |
-| **[Derived](./derived/)** | a transaction pattern over a primitive; no kind of its own | [`SchemaTransferIF`](./derived/schema_transfer.md) · [`ArrayTransferIF`](./derived/array_transfer.md) · [`AXIMMQueue`](./derived/mmqueue.md) · `CreditStreamIF` · `AckedStreamIF` |
+| **[Derived](./derived/)** | a transaction pattern over a primitive; no kind of its own | [`SchemaTransferIF`](./derived/schema_transfer.md) · [`ArrayTransferIF`](./derived/array_transfer.md) · [`AXIMMQueue`](./derived/mmqueue.md) · [`CreditStreamIF`](./derived/credit_stream.md) · [`AckedStreamIF`](./derived/acked_stream.md) |
 | **Simulation-only** | no lowering at all | [`RFSampIF`](../rf/rfdc/) — a domain-specific interface, documented with its domain |
 
 **Why the middle tier earns its place.** Without it, `StreamOfBlocksIF` looks derived — it has no
@@ -32,8 +32,11 @@ boundary kind — when it is really a primitive that only exists *inside* a kern
 internal is a column here and in [Primitive interfaces](./primitive/), not a third folder: it
 changes how a page reads about lowering and nothing else.
 
-`CreditStreamIF` and `AckedStreamIF` (`waveflow/hw/reverse_stream.py`) are listed because they are
-derived interfaces that exist in the tree; their pages are not yet written.
+**Derived does not mean unlowerable, and the tier alone does not say which.** What decides that is
+whether an interface **decomposes** — whether it hands the codegen walk the primitive channels
+underneath it. The two reverse channels do, and lower as two ordinary streams each; the two transfer
+interfaces do not, and do not lower at all. That split is the table on
+[Derived interfaces](./derived/).
 
 ## Not interfaces
 

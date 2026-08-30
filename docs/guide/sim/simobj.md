@@ -1,5 +1,6 @@
 ---
 title: SimObj
+snippets: run
 parent: Simulation
 nav_order: 1
 audience: python

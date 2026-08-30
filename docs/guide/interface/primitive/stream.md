@@ -287,3 +287,20 @@ from waveflow.hw.clock import Clock
 | Bind | `iface.bind("master", ep)` |
 | Write (from run_proc) | `yield self.process(ep.write(words))` |
 | Start slave loop | `yield from ep.run_proc()` |
+
+---
+
+## How it lowers
+
+A `StreamIFSlave` is an `axis_in` boundary port and a `StreamIFMaster` an `axis_out` one; on an
+*internal* edge the same pair is an `hls::stream` FIFO instead, derived from the interface type by a
+separate walk. This page is the Python model — see
+[the guide's three arcs](../../index.md#how-this-guide-is-organized) for why that split exists.
+
+- **HLS** — [Endpoint interfaces](../../comp_codegen/interface.md#stream-endpoints--axis) for the
+  port and its pragma; [Free-running composites](../../comp_codegen/freerunning_composite.md#1-add_if-became-the-channels)
+  for the internal-FIFO case.
+- **Writing the body** — [Stream — process as you read](../../custom_hooks/stream.md), the lane loop
+  over the port.
+- **BFM / XSI** — [The XSI testbench](../../comp_codegen/xsi_tb.md#two-walks): `axis_in` gets an
+  `AxisMaster`, `axis_out` an `AxisSlave`, from `BFM_DUALS`.

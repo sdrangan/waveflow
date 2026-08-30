@@ -143,6 +143,51 @@ word and computing on it in place is
 [a measurement in one waveform](../../examples/bram_access/timing.md#what-it-costs-to-read-a-word-you-are-about-to-write)
 rather than an argument.
 
+### The access vocabulary: three verbs, three meanings
+
+The three cases above say *what physically happens*. This says *what the verb is called*, and the
+point of the table is that the differences are **deliberate**. A reader meeting `get` on a stream
+beside `read` on an `m_axi` port naturally assumes one of them is a leftover; neither is.
+
+| Verb | Means | Where | What it costs the source |
+|---|---|---|---|
+| `get` | a **destructive dequeue** — the item is gone from the channel | `StreamIFSlave`, `CreditStreamSlaveIF` | the item; nobody else can read it |
+| `read` | an **addressed look**, non-destructive — read the same address twice and get the same answer | `MMIFMaster`, `BramIFMaster` | nothing; the storage is unchanged |
+| `acquire` | a **lease**, with a matching `release` | `SobIFMaster` (`acquire_write` / `commit_write`), `SobIFSlave` (`acquire_read` / `release_read`) | exclusive use of the block until it is released |
+
+So `get` is not an older spelling of `read`. A queue has no addresses to re-read and a memory has
+nothing to consume, and a lease is neither: it hands out a *region* for a while and takes it back.
+Rename any one of them to the others and the page stops being able to say which of the three a call
+does.
+
+The same distinction is why the pipelined forms are spelled the way they are:
+`StreamIFSlave.get_pipelined` beside `BramIFMaster.read_pipelined` and
+`MMIFMaster.read_pipelined` — one convergent `_pipelined` suffix, and the verb in front of it still
+carries the meaning above.
+
+#### `_nb` is the non-blocking suffix, and `offer` is the deliberate exemption
+
+A transfer that returns *"nothing available"* or *"no room"* instead of blocking carries `_nb`:
+`get_nb`, `read_nb`, `write_nb`, `write_resp_nb`, `read_frame_nb`.
+
+`StreamIFMaster.offer` does the same thing and keeps its own name, because the two exist for
+**opposite reasons** and the asymmetry is real:
+
+| | who declines to wait | what a refusal means |
+|---|---|---|
+| `get_nb` | a consumer that **must not** wait — one polling a progress channel, where empty means *"no news"*, not *"stop"* | try again later; nothing was lost |
+| `offer` | a producer that **physically cannot** wait — a data converter presents a beat whether or not the fabric is ready | the words that did not fit are **gone**, and `StreamIF.dropped` counts them |
+
+`_nb` says *the caller chose not to wait*, so a short answer is that caller's business to retry.
+`offer` says *the producer had no choice*, so there is no retry and the loss is a fact about the run
+rather than a return value. Filing both under one suffix would hide that.
+
+Two things that look like exceptions and are not. `can_write_frame` is a **predicate**, not a
+transfer — a predicate never blocks, so the suffix would carry no information; what it gates
+(`write_frame`) does block, and is correspondingly not `_nb`. And `poll_credit`, `offer_credit`,
+`harvest` and `send_status` on the [reverse channels](./derived/) are all non-blocking but named for
+*what they do*, because "non-blocking" is already implied by the channel they run on.
+
 ### SimPy integration
 
 Interface transactions are modelled as SimPy generator processes. Calling `write` or `read` on a master endpoint returns a generator; the caller must yield it to advance simulation time:
