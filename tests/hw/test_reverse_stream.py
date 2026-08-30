@@ -654,7 +654,7 @@ class TestTheTypedReadPath:
             assert m.written == 2, "two words, not one instance"
             assert m.avail == 5
 
-            got = yield from s.get(TwoWords)
+            got = yield from s.get_schema(TwoWords)
             assert (int(got.a), int(got.b)) == (11, 22)
             assert s.consumed == 2
             yield from m.poll_credit(1)

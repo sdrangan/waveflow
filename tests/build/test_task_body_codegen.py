@@ -70,7 +70,7 @@ class _HookSeq(FreeRunMod):
         return _Cmd(a=0, b=int(cmd.b))
 
     def run_iter(self) -> ProcessGen[None]:
-        cmd: _Cmd = yield from self.s_in.get(_Cmd)
+        cmd: _Cmd = yield from self.s_in.get_schema(_Cmd)
         a = self.make_a(cmd)
         yield from self.m_out.write(a)
         b = self.make_b(cmd)

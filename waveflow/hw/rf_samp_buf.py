@@ -484,7 +484,7 @@ class RfSampBufCapture(FreeRunMod):
         wrap = 1 << IDX_BW
         usable = self.usable_horizon
 
-        cmd = yield from self.s_cmd.get(RxCmd)
+        cmd = yield from self.s_cmd.get_schema(RxCmd)
         idx = int(cmd.start)
         sent = 0
         status = RF_SAMP_BUF_OK

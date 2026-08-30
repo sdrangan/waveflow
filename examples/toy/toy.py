@@ -56,7 +56,7 @@ class Square(FreeRunMod):
         self.add_endpoint(self.y_out)
 
     def run_iter(self) -> ProcessGen[None]:
-        x = yield from self.x_in.get(Vec)      # one n-vector
+        x = yield from self.x_in.get_schema(Vec)      # one n-vector
         y = self.square(x)
         yield from self.y_out.write(y)
 
@@ -82,7 +82,7 @@ class Double(FreeRunMod):
         self.add_endpoint(self.z_out)
 
     def run_iter(self) -> ProcessGen[None]:
-        x = yield from self.x_in.get(Vec)
+        x = yield from self.x_in.get_schema(Vec)
         yield from self.z_out.write(self.dbl(x))
 
     @synthesizable

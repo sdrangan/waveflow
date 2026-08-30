@@ -100,7 +100,7 @@ class Sequencer(FreeRunMod):
             self.add_endpoint(ep)
 
     def run_iter(self) -> ProcessGen[None]:
-        cmd = yield from self.s_cmd.get(CopyCmd)                       # one command
+        cmd = yield from self.s_cmd.get_schema(CopyCmd)                       # one command
         memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
         memw = MemWCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), fwd_bursts=1)
         resp = CopyResp(tx_id=int(cmd.tx_id))

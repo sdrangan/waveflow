@@ -81,7 +81,7 @@ Two details are load-bearing:
 ```python
 def run_iter(self) -> ProcessGen[None]:
     w = int(self.mem_dwidth)
-    cmd = yield from self.s_cmd.get(FirCmd)
+    cmd = yield from self.s_cmd.get_schema(FirCmd)
     self._mark_start()
     desc = FirDesc(op=int(cmd.op), n=int(cmd.n), dst_off=int(cmd.dst_off),
                    zero_state=int(cmd.zero_state), tx_id=int(cmd.tx_id))
@@ -109,7 +109,7 @@ dispatches, and frames the writer's stream:
 ```python
 def run_iter(self) -> ProcessGen[None]:
     w = int(self.mem_dwidth)
-    desc = yield from self.s_in.get(FirDesc)
+    desc = yield from self.s_in.get_schema(FirDesc)
     n = int(desc.n)
     nw = nwords(n, self.lw)          # the stream speaks WORDS; the descriptor carries SAMPLES
     data = yield from self.s_in.get(nwords_max=nw)

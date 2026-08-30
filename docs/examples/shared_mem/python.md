@@ -151,7 +151,7 @@ read the two inputs, compute, write the counts, respond.
 ```python
 # examples/shared_mem/hist.py — HistAccel.on_start
 def on_start(self) -> ProcessGen[None]:
-    cmd: HistCmd = yield from self.s_in.get(HistCmd)
+    cmd: HistCmd = yield from self.s_in.get_schema(HistCmd)
 
     status = yield from self.validate(cmd)
     if status != HistError.NO_ERROR:

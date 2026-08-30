@@ -138,7 +138,7 @@ class CmdRxInband(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
-        cmd = yield from self.s_cmd.get(InterleaverCmd)
+        cmd = yield from self.s_cmd.get_schema(InterleaverCmd)
         t0 = self.now
         n = int(cmd.n)
         nw = _nw_of(n, self.lw)                     # runtime word count
@@ -189,7 +189,7 @@ class IlLoadInband(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
-        desc = yield from self.s_in.get(IlDesc)          # descriptor (header)
+        desc = yield from self.s_in.get_schema(IlDesc)          # descriptor (header)
         t0 = self.now
         n = int(desc.n)
         nw = _nw_of(n, self.lw)
@@ -257,7 +257,7 @@ class IlComputeInband(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
-        desc = yield from self.desc_in.get(IlDesc)
+        desc = yield from self.desc_in.get_schema(IlDesc)
         n = int(desc.n)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         pblock = yield from self.p_blk.acquire_read()
@@ -307,7 +307,7 @@ class IlStoreInband(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
-        desc = yield from self.desc_in.get(IlDesc)
+        desc = yield from self.desc_in.get_schema(IlDesc)
         t0 = self.now
         n = int(desc.n)
         nw = _nw_of(n, self.lw)

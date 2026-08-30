@@ -424,7 +424,7 @@ class TestTheRefusalsAreReachable:
                 yield from drv_samp.write(
                     pack_samples(np.arange(npay * spw, dtype=np.uint64), w, spw))
             for _ in range(2):
-                r = yield from snk.get(TxResp)
+                r = yield from snk.get_schema(TxResp)
                 got.append((int(r.tid), int(r.status)))
 
         sim.env.process(host())

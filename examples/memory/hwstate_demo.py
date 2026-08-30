@@ -61,7 +61,7 @@ class RunningTotal(FreeRunMod):
         self.add_state(self.total)
 
     def run_iter(self) -> ProcessGen[None]:
-        x = yield from self.x_in.get(Pair)
+        x = yield from self.x_in.get_schema(Pair)
         # The hook's result is named before it is written.  Not stylistic: the extractor accepts a
         # fixed list of statement shapes, and a call nested inside write(...) is not one of them.
         y = self.accumulate(x, self.total)

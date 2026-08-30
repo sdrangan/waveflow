@@ -167,11 +167,11 @@ class RfSampBlockRelay(FreeRunMod):
         return blk_array(int(self.bitwidth), int(self.nwords_blk))
 
     def run_iter(self) -> ProcessGen[None]:
-        # The TYPED get, not the raw-word ``get(nwords_max=...)`` form.  That form is documented as
-        # the "old (raw-word) calling convention ... used by non-HwModule callers such as PolyTB",
-        # and the extractor has no rule for it — it reaches for the schema type that a raw get does
-        # not carry.  A synthesizable body uses the typed convention.
-        blk = yield from self.blk_in.get(self.blk_words)
+        # `get_schema`, not the raw-word `get(nwords_max=...)`.  The extractor has no rule for the
+        # raw form — it reaches for a schema type that a raw get does not carry — so a synthesizable
+        # body reads a typed one.  `blk_words` is a property returning the payload TYPE, which is
+        # why this reads as a lowercase argument and is nonetheless a typed read.
+        blk = yield from self.blk_in.get_schema(self.blk_words)
         self.count_burst()
         yield from self.s_out.write(blk)
 

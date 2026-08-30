@@ -60,7 +60,7 @@ class MovingAvg(HwModule):
     def run_proc(self) -> ProcessGen[None]:                # <- behavior
         xprev = 0.0
         while True:
-            x = yield from self.x_in.get(Samples)          # one block in
+            x = yield from self.x_in.get_schema(Samples)          # one block in
             xv = x.val
             y = 0.5 * (np.concatenate(([xprev], xv[:-1])) + xv)
             xprev = xv[-1]

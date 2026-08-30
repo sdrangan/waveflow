@@ -199,7 +199,7 @@ class Fill(HwModule):
         while True:
             block = yield from self.m_out.acquire_write()  # Fresh WordBlock instance
             for i in range(8):
-                word = yield from self.s_in.get(int)
+                word = yield from self.s_in.get_schema(int)
                 block[i] = word  # Direct typed element access
             yield from self.m_out.commit_write(block)
 

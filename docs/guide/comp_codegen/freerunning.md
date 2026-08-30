@@ -42,7 +42,7 @@ class Square(FreeRunMod):
         self.add_endpoint(self.y_out)
 
     def run_iter(self) -> ProcessGen[None]:
-        x = yield from self.x_in.get(Vec)      # one n-vector
+        x = yield from self.x_in.get_schema(Vec)      # one n-vector
         y = self.square(x)
         yield from self.y_out.write(y)
 
@@ -80,7 +80,7 @@ static void square_task(
 }
 ```
 
-The Python's three statements map across directly — `x_in.get(Vec)` became a declaration plus
+The Python's three statements map across directly — `x_in.get_schema(Vec)` became a declaration plus
 `read_stream`, the hook call became a call, `y_out.write(y)` became `write_stream`. What is
 interesting is what is *absent*.
 

@@ -329,21 +329,41 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
         #: Cumulative words consumed, masked at :attr:`ctr_bits` — exactly what goes on the wire.
         self.consumed = 0
 
-    def get(self, schema_type=None, count=None, *, nwords_max: int | None = None):
-        """Consume from the forward channel, then offer the **new cumulative total** back.
+    # Three readers, mirroring `StreamIFSlave`'s three, so this stays a drop-in for a plain stream
+    # slave — the credit offer is the only addition.  They split for the same reason the stream's
+    # did: one method returning `Words`, an instance, or a `DataArray` depending on its arguments.
+    # The credit accounting is identical in all three and lives in `_consume`, because what is
+    # credited is WORDS — `nwords_of` asks the serializer rather than counting instances, which is
+    # the difference that is invisible at one word per instance and wrong everywhere else.
 
-        Signature mirrors :meth:`waveflow.hw.interface.StreamIFSlave.get` so this is a drop-in for a
-        plain stream slave; the credit offer is the only addition.
+    def get(self, *, nwords_max: int | None = None):
+        """Consume a raw burst, then offer the **new cumulative total** back."""
+        data = yield from self.fwd_ep.get(nwords_max=nwords_max)
+        yield from self._consume(data)
+        return data
+
+    def get_schema(self, schema_type):
+        """Consume one instance of *schema_type*, then offer the new cumulative total back."""
+        data = yield from self.fwd_ep.get_schema(schema_type)
+        yield from self._consume(data)
+        return data
+
+    def get_array(self, element_type, count):
+        """Consume *count* elements of *element_type*, then offer the new cumulative total back."""
+        data = yield from self.fwd_ep.get_array(element_type, count)
+        yield from self._consume(data)
+        return data
+
+    def _consume(self, data) -> ProcessGen[None]:
+        """Charge *data* to the cumulative counter and offer it.
 
         The offer uses :meth:`~waveflow.hw.interface.StreamIFMaster.offer`, so a full reverse FIFO
         **discards** the value and counts it on the reverse interface.  That is rule 4 in the flesh:
         harmless while the reader outpaces the writer, and inverted the moment it does not.
         """
-        data = yield from self.fwd_ep.get(schema_type, count, nwords_max=nwords_max)
         n = nwords_of(data, self.bitwidth)
         self.consumed = (self.consumed + n) & ((1 << int(self.ctr_bits)) - 1)
         yield from self.offer_credit()
-        return data
 
     def offer_credit(self) -> ProcessGen[int]:
         """Offer the current cumulative total on the reverse channel.  Non-blocking; may be dropped.

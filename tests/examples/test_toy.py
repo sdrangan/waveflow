@@ -55,7 +55,7 @@ class VecDriver(HwModule):
         for v in self.vecs:
             yield from self.m_out.write(Vec(v))
         for _ in self.vecs:
-            y = yield from self.s_in.get(Vec)
+            y = yield from self.s_in.get_schema(Vec)
             self.received.append(np.asarray(y.val).copy())
 
 

@@ -372,7 +372,7 @@ class HistAccel(HostActivated):
         unconditional — when ``nbins == 1`` its runtime count is ``0`` (a no-op
         burst), avoiding a ``>`` branch the extractor can't lower.
         """
-        cmd: HistCmd = yield from self.s_in.get(HistCmd)
+        cmd: HistCmd = yield from self.s_in.get_schema(HistCmd)
 
         status = yield from self.validate(cmd)
         if status != HistError.NO_ERROR:

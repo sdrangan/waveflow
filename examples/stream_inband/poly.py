@@ -205,7 +205,7 @@ class PolyAccel(HostActivated):
         """Kernel body — invoked by VitisRegMapMMIFSlave on host ap_start write."""
         while True:
             self.logger.log(event='proc_begin', job=self._job)
-            cmd_hdr: PolyCmdHdr = yield from self.s_in.get(PolyCmdHdr)
+            cmd_hdr: PolyCmdHdr = yield from self.s_in.get_schema(PolyCmdHdr)
             if cmd_hdr.cmd_type == PolyCmdType.END:
                 self.logger.log(event='proc_end', job=self._job)
                 return

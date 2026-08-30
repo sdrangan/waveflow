@@ -50,7 +50,7 @@ class PolyAccel(HwModule):
     # 4. HOOK — the behavior, as plain Python over the typed values
     @synthesizable
     def evaluate(self, cmd_hdr, s_in, m_out, coeffs):
-        samp_in = yield from s_in.get(Float32, count=cmd_hdr.nsamp)
+        samp_in = yield from s_in.get_array(Float32, count=cmd_hdr.nsamp)
         y, power = np.zeros_like(samp_in), np.ones_like(samp_in)
         for c in coeffs.val:                # y = c0 + c1·x + c2·x² + ...
             y += c * power

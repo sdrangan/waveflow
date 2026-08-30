@@ -34,6 +34,7 @@ from waveflow.hw.hwstmt import (
 from waveflow.hw.aximm_queue import AXIMMQueueGetStmt
 from waveflow.hw.interface import (
     StreamDrainStmt,
+    StreamGetArrayStmt,
     StreamGetStmt,
     StreamWriteStmt,
 )
@@ -97,6 +98,8 @@ def to_cpp(stmt: HwStmt, ctx: CodegenCtx) -> str:
         return _emit_aximm_queue_get(stmt, ctx)
     if isinstance(stmt, PollUntilStmt):
         return _emit_poll_until(stmt, ctx)
+    if isinstance(stmt, StreamGetArrayStmt):
+        return _emit_stream_get_array(stmt, ctx)
     if isinstance(stmt, StreamGetStmt):
         return _emit_stream_get(stmt, ctx)
     if isinstance(stmt, StreamWriteStmt):
@@ -212,6 +215,30 @@ def _emit_stream_get(stmt: StreamGetStmt, ctx: CodegenCtx) -> str:
     return (
         f"{pad}{cpp_type} {out.name};\n"
         f"{pad}{out.name}.{reader}<{tmpl}>({stream_name});"
+    )
+
+
+def _emit_stream_get_array(stmt: StreamGetArrayStmt, ctx: CodegenCtx) -> str:
+    """``get_array(T, count=N)`` in an extracted body — REFUSED, loudly.
+
+    Before the payload split this produced a plain ``StreamGetStmt`` with ``count`` in ``kwargs``,
+    and :func:`_emit_stream_get` reads only ``inputs[0]`` — so the count was silently dropped and an
+    N-element read lowered to exactly the same single-element C++ as ``get_schema``.  Two different
+    transfers, one indistinguishable answer, no diagnostic.
+
+    Refusing is not a regression from that; it is the first time the difference is visible at all.
+    An array read over a stream is a lane loop with its own framing and pacing, which is a hook's
+    job — see ``docs/guide/custom_hooks/stream.md``.  Giving the statement its own class is what
+    makes this refusal possible, and is the reason the split earns its keep beyond tidiness.
+    """
+    from waveflow.build.hwcodegen import SynthesisError
+    ep = stmt.method.__self__  # type: ignore[attr-defined]
+    raise SynthesisError(
+        f"get_array() on stream '{getattr(ep, 'name', '?')}' cannot be lowered from an extracted "
+        f"body: a multi-element stream read is a lane loop, with framing and pacing an extracted "
+        f"body does not express. Write it as a @synthesizable hook (guide/custom_hooks/stream.md), "
+        f"or read one instance at a time with get_schema(). "
+        f"(Before the payload split this emitted a SINGLE-element read and discarded the count.)"
     )
 
 

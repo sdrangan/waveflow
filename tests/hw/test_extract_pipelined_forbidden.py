@@ -4,10 +4,18 @@ from __future__ import annotations
 import pytest
 
 from waveflow.build.hwcodegen import HwStmtExtractor, SynthesisError, extract_kernel
+from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_module import HwModule
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simulation import Simulation
+
+#: These bodies are never RUN — the extractor rejects a pipelined op by NAME, walking the AST —
+#: so the element type here only has to be nameable, not moved.  It is spelled out because the
+#: signature now requires it: the old default-None form was accepted at parse time and died at
+#: runtime on `'NoneType' object has no attribute 'nwords_per_inst'`, which is a crash rather
+#: than a refusal.  What these tests assert is unchanged: extraction refuses, and says 'hook'.
+Word = IntField.specialize(bitwidth=32, signed=False)
 
 
 def _make_stream_comp(run_proc_body_cls):
@@ -49,7 +57,7 @@ class _BaseStreamComp(HwModule):
 class _GetPipelinedInRunProc(_BaseStreamComp):
     def run_proc(self):
         while True:
-            data, tstart = yield from self.s_in.get_pipelined(count=4)
+            data, tstart = yield from self.s_in.get_pipelined(Word, count=4)
 
 
 def test_get_pipelined_in_run_proc_raises():
@@ -93,7 +101,7 @@ def test_write_pipelined_in_run_proc_raises():
 
 class _GetPipelinedInOnStart(_BaseStreamComp):
     def on_start(self):
-        data, tstart = yield from self.s_in.get_pipelined(count=4)
+        data, tstart = yield from self.s_in.get_pipelined(Word, count=4)
         return
 
 
@@ -130,7 +138,7 @@ def test_normal_get_extracts_cleanly():
 class _HookWithPipelined(_BaseStreamComp):
     @synthesizable
     def pipelined_evaluate(self, ep):
-        data, tstart = yield from ep.get_pipelined(count=4)
+        data, tstart = yield from ep.get_pipelined(Word, count=4)
         return data
 
     def run_proc(self):
