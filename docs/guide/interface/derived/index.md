@@ -4,7 +4,8 @@ parent: Interfaces
 nav_order: 3
 has_children: true
 audience: python
-summary: "The interfaces that are transaction patterns over a primitive rather than a construct of their own — the two reverse channels (credit and ack), a schema transfer, an array transfer, and the AXI-MM command queue. A derived interface has no kind_of_endpoint kind of its own; the ones that lower do so by DECOMPOSING into the primitives they are built from, and the ones that do not decompose do not lower at all."
+snippets: run
+summary: "The interfaces that are transaction patterns over a primitive rather than a construct of their own — the two reverse channels (credit and ack), a schema transfer, an array transfer, and the AXI-MM command queue. Each is built from primitives; what differs is how it hands you the primitive underneath — declared and wired automatically, or owned and bound by you."
 ---
 
 # Derived interfaces
@@ -16,24 +17,37 @@ The source already says so. `derive_internal_edges` describes an `AckedStreamIF`
 a module wants to talk about as one thing"*, which is the definition of derived: one name, one set of
 methods, and underneath it the primitives that actually reach the boundary.
 
-## Decomposing is what makes one lowerable
+## How a derived interface decomposes
 
-Being derived does not by itself say whether a design using the interface can be synthesized. What
-decides that is whether the interface **decomposes** — whether `physical_endpoints()` and
-`physical_interfaces()` hand the codegen walk the primitive channels underneath. And on that,
-the five pages here split cleanly in two:
+Every interface here is built from primitives, but they differ in **how they hand you the primitive
+underneath** — and that difference is worth knowing before you wire one up.
 
-| | decomposes? | lowers? |
-|---|---|---|
-| [Credit Stream](./credit_stream.md) | yes — two `StreamIF`s | **yes**, as two ordinary streams |
-| [Acked Stream](./acked_stream.md) | yes — two `StreamIF`s | **yes**, as two ordinary streams |
-| [AXI-MM Command Queue](./mmqueue.md) | it *is* an `MMIFMaster` protocol | the port lowers; the ring is a hand-written hook |
-| [Schema Transfer](./schema_transfer.md) | **no** | **no** — see the page |
-| [Array Transfer](./array_transfer.md) | **no** | **no** — see the page |
+| | how it composes |
+|---|---|
+| [Credit Stream](./credit_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
+| [Acked Stream](./acked_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
+| [AXI-MM Command Queue](./mmqueue.md) | a protocol *over* an `MMIFMaster` — the ring lives in the transactions, not in a new channel |
+| [Schema Transfer](./schema_transfer.md) | **owns** an inner `StreamIFMaster`; **you bind its `stream_ep`** to a real `StreamIF` |
+| [Array Transfer](./array_transfer.md) | **owns** an inner stream endpoint, bound the same way |
 
-The two reverse channels are the pattern worth copying: in C++ there is no credit-stream or
-acked-stream object at all, just a pair of `hls::stream` plus a couple of registers, so nothing new
-had to be shown to work.
+The two reverse channels declare their composition, so a walk over the design finds the underlying
+streams without help:
+
+```python
+from waveflow.hw.reverse_stream import CreditStreamIF, AckedStreamIF
+for cls in (CreditStreamIF, AckedStreamIF):
+    print(f"{cls.__name__:16s} {cls.physical_interfaces.__doc__.splitlines()[0]}")
+```
+
+```text
+CreditStreamIF   Two ordinary streams.  Nothing here lowers to a new kind of edge.
+AckedStreamIF    Two ordinary streams.  In hardware there is no acked stream — there are two FIFOs.
+```
+
+The two transfer interfaces compose just as really, but the seam is manual: the endpoint creates the
+inner `StreamIFMaster` and you complete the connection yourself. Nothing is lost by that — the
+stream you bind is an ordinary one — but it does mean the composition is not visible to a walk that
+only reads the interface.
 
 ## The two reverse channels
 
