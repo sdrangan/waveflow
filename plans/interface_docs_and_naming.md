@@ -146,6 +146,80 @@ never surfaced.
 has no boundary kind) when it is really a primitive that only exists inside a kernel — which is
 exactly why its docs are thin and stranded in `freerunning_composite.md`.
 
+## Part 2d — the target structure for `guide/interface/`
+
+Four of the thirteen pages are **not interface types at all**, which is why a flat list of "the
+interfaces" never quite worked:
+
+| page | what it actually is |
+|---|---|
+| `mmqueue.md` | `AXIMMQueue` — a ring-buffer **protocol** over `MMIFMaster`. **Derived**, by Part 2c's own test |
+| `poll.md` | a **timing model** — `poll_until`, the bandwidth-steal derating. Not an interface |
+| `behavioral.md` | an **authoring guide** for behavioral edges. Not an interface |
+| `crossbar.md` | genuinely an interface (`CrossBarIF`) — primitive-**internal**, like `sob` |
+
+### Target layout
+
+```
+guide/interface/
+  index.md              "Interfaces" — the tiered map, the ONE summary table
+  primitive/
+    index.md            "Primitive interfaces" — has a real HLS lowering
+    stream.md           axis_in / axis_out
+    aximm.md            maxi_read / maxi_write / mm_slave
+    bram.md             bram
+    regmap.md           axilite_slave  (a specialization of MMIF, but its own kind)
+    sob.md              INTERNAL -- hls::stream_of_blocks
+    crossbar.md         INTERNAL -- the n x m fabric
+  derived/
+    index.md            "Derived interfaces" — transactions over primitives
+    schema_transfer.md
+    array_transfer.md
+    mmqueue.md          <- moved in from the top level
+    credit_stream.md    NEW
+    acked_stream.md     NEW
+```
+
+**Two pages leave the section entirely:**
+
+- `poll.md` -> `guide/timing/`.  It is a timing model that happens to be reached through
+  `MMIFMaster`; filing it under Interfaces is what made the section look like it covered
+  everything m_axi.
+- `behavioral.md` -> `guide/custom_hooks/`, beside `bfm_model.md`.  Already flagged in Part 2.
+
+### Three decisions behind the shape
+
+- **The tier table lives in `index.md`, not a separate `primitive_overview.md`.**  `index.md` is
+  already the landing page and Just the Docs generates its TOC from front matter.  A second overview
+  page would duplicate it and drift — which is precisely what `bram_access/overview.md` did before it
+  was deleted.
+- **Boundary vs internal is a COLUMN, not a folder.**  `sob` and `crossbar` are primitives that only
+  exist inside a kernel.  That matters when reading about lowering; it does not justify a third
+  folder.  One column in the index table carries it.
+- **Subfolders are safe, because the precedent works** — `schema/{python,hls}` and
+  `vectorization/{python,hls}` already nest this deep.
+
+### The nav constraint, learned the hard way
+
+Just the Docs resolves `parent:` by **matching the title string**, and this repo has already shipped
+one collision (two pages titled `Overview`, seven children binding to the wrong one).  So:
+
+- the two new section titles must be **globally unique**: `Primitive interfaces` and
+  `Derived interfaces` — **never** bare `Primitive` / `Derived`
+- every child needs `grand_parent: Interfaces`
+- **re-run the duplicate-title audit afterwards.**  Any title used as a `parent:` value whose
+  children lack `grand_parent` is a latent mis-binding, and the symptom only appears when the set of
+  candidates changes.
+
+### One judgment call to settle BEFORE the move
+
+`regmap.md` is 759 lines, the largest page in the section, and it is arguably more about the **host
+launch lifecycle** (`ap_start` / `ap_done`, `BoundRegMap`) than about an interface.  Filing it under
+`primitive/` is defensible — `axilite_slave` is a real boundary kind — but if the page is really
+*"how a host drives a kernel"*, it belongs near `comp_codegen/hostactivated.md` instead.  Decide
+before moving it, not after.
+
+
 ---
 
 ## Part 3 — the naming convergence
@@ -331,9 +405,18 @@ work.
 3. **The vocabulary table** on `guide/interface/overview.md` — get vs read vs acquire, and `_nb`.
 4. **The four-tier presentation** (Part 2c) on the overview page, replacing the flat list.
 5. **The missing page**: the endpoint-kind vocabulary and the two tables that consume it (Part 2b).
-6. **Link stubs** on all 13 `guide/interface/*.md` pages.
+6. **Link stubs** on every `guide/interface/` page.
 7. **Move `schema/hls/serialization.md`** beside `comp_codegen/interface.md`.
-8. **Resolve `behavioral.md`** — move it to `custom_hooks/`, or declare it the bridge page.
+
+**The Part 2d re-org SPLITS across this ordering, and the split is the point:**
+
+- **Structural (independent of steps 1–2, can go FIRST):** the folder moves, the two relocations out
+  of the section, the `index.md` tier table, the front-matter/`grand_parent` rewiring, the
+  duplicate-title audit.  Moving a page does not document a method name, so nothing here is
+  invalidated by a rename.
+- **Prose (must wait for steps 1–2):** the link stubs, the vocabulary table, and above all the two
+  NEW pages.  `CreditStreamIF` and `AckedStreamIF` carry `write_nb` / `read_nb` / `read_frame_nb`,
+  which **R5 renames** — writing those pages first means writing them twice.
 9. **Write `CreditStreamIF` / `AckedStreamIF` docs** — the real gap, and the largest single piece of
    new writing here.
 10. **`SchemaTransferIF` / `ArrayTransferIF` lowering** section.
