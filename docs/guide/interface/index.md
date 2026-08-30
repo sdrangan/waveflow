@@ -37,7 +37,7 @@ derived interfaces that exist in the tree; their pages are not yet written.
 
 ## Not interfaces
 
-Two things that used to be filed here, and where they went:
+Three things that used to be filed here, and where they went:
 
 - **[Polling overhead](../timing_model/poll.md)** — `MMIFMaster.poll_until`, the bandwidth-steal
   derating and the discovery-latency delay. A loosely-timed **timing model** reached through an
@@ -45,6 +45,9 @@ Two things that used to be filed here, and where they went:
 - **[Behavioral edges](../custom_hooks/behavioral.md)** — the `xsi_model()` hook and the
   `BlockChannel` primitive. An **authoring guide**, so it sits beside
   [`bfm_model()`](../custom_hooks/bfm_model.md).
+- **[Register-map host launch](../comp_codegen/host_launch.md)** — `VitisRegMap`'s `ap_ctrl_hs`
+  lifecycle and the `BoundRegMap` host surface, split out of `regmap.md`. A **launch lifecycle**,
+  not a bus protocol, so it sits beside [the host-activated kernel](../comp_codegen/hostactivated.md).
 
 ## See also
 
