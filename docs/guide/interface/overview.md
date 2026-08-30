@@ -78,9 +78,9 @@ three are essential; collapsing any of them models a cost the hardware does not 
 
 | | Case 1 — timed transfer | Case 2 — pipelined overlap | Case 3 — in place |
 |---|---|---|---|
-| [`StreamIF`](stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
-| [`MMIF`](aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
-| [`BramIF`](bram.md) | *not built* — see below | `read_pipelined` / `write_pipelined` | **`array_ref`** |
+| [`StreamIF`](primitive/stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
+| [`MMIF`](primitive/aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
+| [`BramIF`](primitive/bram.md) | *not built* — see below | `read_pipelined` / `write_pipelined` | **`array_ref`** |
 | `HwState` | — already local | — | *not built* |
 
 **Case 1 — non-overlapping timed transfer.** Data physically moves into an internal structure. The

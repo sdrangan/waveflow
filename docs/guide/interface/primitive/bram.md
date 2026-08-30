@@ -97,7 +97,7 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
 * **`access`** (`"read"` / `"write"` / `"readwrite"`) is declared on both ends, and the two must be
   **identical** — they are two statements of one fact, not a permission and a use. It decides the
   port's `storage_type`; see below.
-* **Vector access is Case 2** ([the three access cases](overview.md#the-three-access-cases)):
+* **Vector access is Case 2** ([the three access cases](../overview.md#the-three-access-cases)):
   `read_pipelined(element_type, count, addr) -> (data, tstart)` and
   `write_pipelined(data, addr, t_start)`. The model has no free parameters — throughput is II=1, one
   element per cycle per port; the read's fill is the memory's published `READ_LATENCY`, reached
