@@ -521,8 +521,17 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     # (or pad to a calibrated schedule) without hand-bracketing env.now.  These are
     # sim-only (no stmt_class) — the timing is an AT-model concern, not synthesizable —
     # mirroring the stream get_pipelined / write_pipelined helpers.
+    #
+    # **One spelling for a pipelined transfer**, and this is where it was three.  These were
+    # `read_array_pipelined` / `write_array_pipelined`; the `_array_` infix carried no
+    # information, because every pipelined transfer moves an array — the scalar case has no
+    # pipeline to anchor.  So the name is `read_pipelined` / `write_pipelined` here, on
+    # `BramIFMaster`, and on `StreamIFMaster`, and the read side of a stream stays
+    # `get_pipelined` because a stream read is a destructive dequeue rather than an
+    # addressed look.  That last distinction is the one the naming earns; see
+    # `plans/interface_docs_and_naming.md` Part 3.
 
-    def read_array_pipelined(
+    def read_pipelined(
         self,
         element_type: type,
         count: int,
@@ -563,7 +572,7 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         tstart = self.env.now - max(0, nwords - 1) * period
         return data, tstart
 
-    def write_array_pipelined(
+    def write_pipelined(
         self,
         elements: Any,
         element_type: type,
@@ -785,7 +794,7 @@ class Region:
         """Read elements ``[i0, i1)`` (element coordinates) and return the deserialized array —
         the sim twin of ``read_array_slice<W>(mem, i0, i1, x)``.  The interconnect holds the
         slave's read channel for the transfer; fires :attr:`on_transfer`."""
-        data, t0, t1, nw = yield from self.master.read_array_pipelined(
+        data, t0, t1, nw = yield from self.master.read_pipelined(
             self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
         if self.on_transfer is not None:
             self.on_transfer("read", int(i0), nw, t0, t1)
@@ -799,7 +808,7 @@ class Region:
         ``write_array_slice``.  *element_type* defaults to the region's (pass it when the written
         elements differ, e.g. an output format whose addressing stride matches).  The
         interconnect holds the slave's write channel for the transfer; fires :attr:`on_transfer`."""
-        t0, t1, nw = yield from self.master.write_array_pipelined(
+        t0, t1, nw = yield from self.master.write_pipelined(
             elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
@@ -872,7 +881,7 @@ class Region:
         use_span = (has_model or min_span is not None) and hasattr(
             self.master.interface, "write_spanned")
         if not use_span:
-            t0, t1, _ = yield from self.master.write_array_pipelined(
+            t0, t1, _ = yield from self.master.write_pipelined(
                 elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
         else:
             t0, t1 = yield from self.master.write_spanned(
