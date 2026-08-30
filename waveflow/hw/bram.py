@@ -189,13 +189,16 @@ def native_dtype(element_type: type[DataSchema]) -> np.dtype | None:
 def check_array_ref_element(element_type: type[DataSchema], owner: str) -> np.dtype:
     """Refuse an element that cannot be **referenced**, and return the dtype that can.
 
-    Case 3's one hard rule (S3b), and the failure it prevents is in the tree already:
-    ``_DirectBackedMMIFMaster.as_words()`` returns a genuine numpy view, but its ``as_array()`` goes
-    through ``arrayutils.read_array``, which does ``array_obj = array_cls(); deserialize(...)`` —
-    **a fresh object, unconditionally**.  So an ``as_*`` method silently degrades from a view to a
-    copy the moment typed elements are asked for, and every write to what it returns reaches
-    nothing.  A reference API that is a view for some element types and a copy for others is worse
-    than no reference API, so this refuses instead.
+    Case 3's one hard rule (S3b), and the failure it prevents **was** in the tree —
+    ``_DirectBackedMMIFMaster`` had an ``as_words()`` that returned a genuine numpy view beside an
+    ``as_array()`` that went through ``arrayutils.read_array``, which does
+    ``array_obj = array_cls(); deserialize(...)`` — **a fresh object, unconditionally**.  So one
+    ``as_*`` family silently degraded from a view to a copy the moment typed elements were asked
+    for, and every write to what came back reached nothing.  A reference API that is a view for some
+    element types and a copy for others is worse than no reference API, so this refuses instead.
+
+    That endpoint now uses this gate too (R3: it has one ``array_ref``, not three ``as_*``), so the
+    rule is enforced on both Case 3 surfaces rather than on this one alone.
 
     The verdict depends only on the **declared** element type — nothing about a call, a binding or a
     run — which is what makes it answerable before anything runs; see

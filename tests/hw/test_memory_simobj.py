@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import numpy as np
 import numpy.testing as npt
+import pytest
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.memory import MemoryMod
@@ -280,3 +281,82 @@ def test_inline_direct_master_zero_latency():
     sim.run_sim()
     npt.assert_array_equal(drv.result, np.arange(4))
     assert times["elapsed"] == 0.0   # direct master ignores the latency knobs
+
+
+# ---------------------------------------------------------------------------
+# array_ref — Case 3 on the direct master (R3)
+# ---------------------------------------------------------------------------
+#
+# These replaced ``as_words`` / ``as_array`` / ``as_schema``, and the replacement fixed a live
+# defect: ``as_words()`` returned a genuine numpy view, but ``as_array()`` went through
+# ``arrayutils.read_array``, which builds a fresh object unconditionally — so the same ``as_*``
+# family silently degraded from a view to a copy the moment typed elements were asked for.  A
+# reference API that is a view for some element types and a copy for others is worse than none.
+
+def test_array_ref_is_live_in_both_directions():
+    """The whole claim of a reference, and the half a value check would pass anyway.
+
+    A write through the view must reach the memory, AND a write to the memory must be visible
+    through the view — same storage, not two snapshots of it.  ``as_array()`` passed the first
+    check by accident (it read the right values once) and failed this one.
+    """
+    from waveflow.hw.dataschema import FloatField
+
+    sim = Simulation()
+    mem = MemoryMod(name="mem", sim=sim, inline=True, word_size=32, nwords_tot=16,
+                    clk=Clock(freq=1.0))
+    f32 = FloatField.specialize(bitwidth=32)
+
+    ref = mem.m_mm.array_ref(f32)
+    assert ref.dtype == np.dtype("float32"), (
+        "the view is reinterpreted as the element type, not deserialized into a new object")
+
+    ref[2] = 1.5
+    words = mem.m_mm.array_ref()
+    assert words.dtype == np.uint32
+    assert words[2] == np.float32(1.5).view(np.uint32), (
+        "a write through the typed view did not reach the storage — the reference is a copy")
+
+    words[3] = np.float32(-2.5).view(np.uint32)
+    assert ref[3] == -2.5, (
+        "a write to the storage was not visible through the typed view — the reference is a "
+        "stale copy, which is the half a one-way check would miss")
+
+
+def test_array_ref_refuses_an_element_that_cannot_be_referenced():
+    """The rule that makes the fix a fix: a view for every element type, or a refusal.
+
+    A composite element has no native numpy dtype, so it is stored as its PACKED WORD and anything
+    element-typed would have to deserialize into a fresh object — which is exactly what
+    ``as_array()`` did, silently.  The verdict depends only on the declared type, so it is
+    answerable before anything runs.
+    """
+    from typing import ClassVar
+
+    from waveflow.hw.dataschema import DataList, IntField
+
+    class _Rec(DataList):
+        elements: ClassVar[dict] = {
+            "a": {"schema": IntField.specialize(bitwidth=32, signed=False)},
+            "b": {"schema": IntField.specialize(bitwidth=32, signed=False)},
+        }
+
+    sim = Simulation()
+    mem = MemoryMod(name="mem", sim=sim, inline=True, word_size=32, nwords_tot=16,
+                    clk=Clock(freq=1.0))
+
+    with pytest.raises(ValueError, match="no native numpy dtype"):
+        mem.m_mm.array_ref(_Rec)
+
+    # The port stays usable: the copying path serves every element type, and says that it copies.
+    assert mem.m_mm.array_ref().shape == (16,)
+
+
+def test_array_ref_refuses_a_non_inline_memory():
+    """``inline=False`` is the external-DDR shape — callers ``alloc()`` regions, so there is no
+    single pre-allocated block for a reference to be a reference to."""
+    sim = Simulation()
+    mem = MemoryMod(name="mem", sim=sim, inline=False, clk=Clock(freq=1.0))
+
+    with pytest.raises(RuntimeError, match="inline MemoryMod"):
+        mem.m_mm.array_ref()
