@@ -216,7 +216,7 @@ things carry the work instead:
 The `COMPUTE` branch is the one place a body charges its own time, and even there the **number** is
 not written down: `ii_for(2)` asks the port what two accesses per element cost, and the port answers
 2 because `ram_1p` gave it one physical port. See
-[the three access cases](../../guide/interface/overview.md#the-three-access-cases) for why in-place
+[the three access cases](../../guide/interface/primitive/index.md#the-access-cases) for why in-place
 work owns its timing while a transfer does not.
 
 Two more details that are not style:
@@ -438,7 +438,7 @@ catching early.
 - [BRAM — memory between modules](../../guide/interface/primitive/bram.md) — the interface reference: why the
   memory cannot live inside a kernel, the `access` / `storage_type` derivation, the addressing
   convention, and the `$error` nothing can hear.
-- [The three access cases](../../guide/interface/overview.md#the-three-access-cases) — the frame the
+- [The three access cases](../../guide/interface/primitive/index.md#the-access-cases) — the frame the
   three transactions sit in.
 - [A module realized as Verilog](../../guide/comp_codegen/rtl_module.md) — `rtl_module()`, and the
   latency single-source rule this page relies on.

@@ -38,7 +38,7 @@ subject of this example.
 
 Two hardware modules share one BRAM, and the memory is reached **three ways** — which is where the
 name comes from, and which lines up with
-[the three access cases](../../guide/interface/overview.md#the-three-access-cases) that every
+[the three access cases](../../guide/interface/primitive/index.md#the-access-cases) that every
 Waveflow interface is organised by:
 
 | transaction | access case | what it costs |
