@@ -216,6 +216,12 @@ class MMIFSlave(InterfaceEndpoint):
         ``protocol=AXIMMProtocol.LITE``.  Ignored for FULL and DirectMMIF.
     """
 
+    #: A plain AXI-MM slave -- a memory's bus-facing port.  Never a *kernel* boundary port in
+    #: this flow (the kernel is always the master), so ``_boundary_port`` still refuses to lower
+    #: it; but it is a real kind a participant presents, and naming it is what lets the BFM-dual
+    #: lookup answer for a ``MemoryMod``.  See :class:`~waveflow.hw.interface.InterfaceEndpoint`.
+    boundary_kind: ClassVar[str] = "mm_slave"
+
     bitwidth: int = 32
     rx_write_proc: RxWriteProc | None = None
     rx_read_proc:  RxReadProc  | None = None
@@ -328,6 +334,14 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     ``nwords``); it never wires contention by hand, and the master owns no channel or
     span model.
     """
+
+    #: **Declared, and deliberately under-specified.**  A bare ``m_axi`` master is legal hardware --
+    #: a read+write port lowers to a plain pointer with all channels -- but the type does not say
+    #: whether the pointer is ``const``, and guessing wrong emits a ``const`` for a port that is
+    #: written.  ``None`` is what makes ``kind_of_endpoint`` refuse rather than default; the
+    #: direction is declared by constructing an :class:`MMIFReadMaster` or :class:`MMIFWriteMaster`.
+    #: See :class:`~waveflow.hw.interface.InterfaceEndpoint` for the three states.
+    boundary_kind: ClassVar[str | None] = None
 
     bitwidth: int = 32
     master_port: int = field(init=False)
@@ -521,8 +535,17 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     # (or pad to a calibrated schedule) without hand-bracketing env.now.  These are
     # sim-only (no stmt_class) — the timing is an AT-model concern, not synthesizable —
     # mirroring the stream get_pipelined / write_pipelined helpers.
+    #
+    # **One spelling for a pipelined transfer**, and this is where it was three.  These were
+    # `read_array_pipelined` / `write_array_pipelined`; the `_array_` infix carried no
+    # information, because every pipelined transfer moves an array — the scalar case has no
+    # pipeline to anchor.  So the name is `read_pipelined` / `write_pipelined` here, on
+    # `BramIFMaster`, and on `StreamIFMaster`, and the read side of a stream stays
+    # `get_pipelined` because a stream read is a destructive dequeue rather than an
+    # addressed look.  That last distinction is the one the naming earns; see
+    # `plans/interface_docs_and_naming.md` Part 3.
 
-    def read_array_pipelined(
+    def read_pipelined(
         self,
         element_type: type,
         count: int,
@@ -563,7 +586,7 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         tstart = self.env.now - max(0, nwords - 1) * period
         return data, tstart
 
-    def write_array_pipelined(
+    def write_pipelined(
         self,
         elements: Any,
         element_type: type,
@@ -670,7 +693,10 @@ class _DirectionalMMIFMaster(MMIFMaster):
     declaration.  Declaring it on the type is the same call this codebase already made for execution
     models (``hw_freerun``: *"the execution model is declared by the class ... codegen never has to
     infer"*) and for codegen kinds (*"class states the kind, check() states the fitness"*).  A tag is
-    invisible to ``check()``; a type is not.  See ``plans/endpoint_types_not_tags.md``.
+    invisible to ``check()``; a type is not.  The same call is made for the boundary kind itself --
+    see :class:`~waveflow.hw.interface.InterfaceEndpoint`, where :attr:`MMIFMaster.boundary_kind`
+    is ``None`` for exactly the reason this class exists.  (The plan that argued it,
+    ``plans/endpoint_types_not_tags.md``, was completed and deleted in ``cd6a1ed``.)
 
     The restriction is **derived, not hand-listed**: the transaction methods are already tagged
     ``@port_read`` / ``@port_write``, so a wrong-direction call is refused by consulting the same
@@ -709,6 +735,7 @@ class MMIFReadMaster(_DirectionalMMIFMaster):
     in the Python model — the same claim, enforced at both levels, declared once.
     """
     port_dir: ClassVar[str] = 'R'
+    boundary_kind: ClassVar[str] = "maxi_read"
 
 
 class MMIFWriteMaster(_DirectionalMMIFMaster):
@@ -717,6 +744,7 @@ class MMIFWriteMaster(_DirectionalMMIFMaster):
     Lowers to a plain ``T* port`` (AW/W/B channels).
     """
     port_dir: ClassVar[str] = 'W'
+    boundary_kind: ClassVar[str] = "maxi_write"
 
 
 #: :meth:`Region.read_slice` / :meth:`Region.write_slice` after each transfer so a loosely-timed
@@ -785,7 +813,7 @@ class Region:
         """Read elements ``[i0, i1)`` (element coordinates) and return the deserialized array —
         the sim twin of ``read_array_slice<W>(mem, i0, i1, x)``.  The interconnect holds the
         slave's read channel for the transfer; fires :attr:`on_transfer`."""
-        data, t0, t1, nw = yield from self.master.read_array_pipelined(
+        data, t0, t1, nw = yield from self.master.read_pipelined(
             self.element_type, int(i1) - int(i0), self.byte_of(i0), word_bw=self.word_bw)
         if self.on_transfer is not None:
             self.on_transfer("read", int(i0), nw, t0, t1)
@@ -799,7 +827,7 @@ class Region:
         ``write_array_slice``.  *element_type* defaults to the region's (pass it when the written
         elements differ, e.g. an output format whose addressing stride matches).  The
         interconnect holds the slave's write channel for the transfer; fires :attr:`on_transfer`."""
-        t0, t1, nw = yield from self.master.write_array_pipelined(
+        t0, t1, nw = yield from self.master.write_pipelined(
             elements, element_type or self.element_type, self.byte_of(i0), word_bw=self.word_bw)
         if self.on_transfer is not None:
             self.on_transfer("write", int(i0), nw, t0, t1)
@@ -872,7 +900,7 @@ class Region:
         use_span = (has_model or min_span is not None) and hasattr(
             self.master.interface, "write_spanned")
         if not use_span:
-            t0, t1, _ = yield from self.master.write_array_pipelined(
+            t0, t1, _ = yield from self.master.write_pipelined(
                 elements, et, self.byte_of(i0), word_bw=self.word_bw, t_out_start=t_out_start)
         else:
             t0, t1 = yield from self.master.write_spanned(

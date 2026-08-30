@@ -40,7 +40,7 @@ env.process(adder_proc(words))
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Generator
+from typing import TYPE_CHECKING, Callable, ClassVar, Generator
 import simpy
 
 import numpy as np
@@ -174,6 +174,40 @@ class CapabilityView:
 class InterfaceEndpoint(SimObj):
     """
     Base class for a concrete endpoint owned by a component.
+
+    **The boundary-kind contract.**  An endpoint that becomes a port on the generated kernel
+    declares which kind of port, as a class attribute::
+
+        class StreamIFSlave(...):
+            boundary_kind: ClassVar[str] = "axis_in"
+
+    ``waveflow.build.composite_gen.kind_of_endpoint`` is a *lookup* of that attribute, so the
+    endpoint owns what it IS and ``build/`` owns what is DONE with it — which C++ class drives the
+    port from outside stays a fact about the testbench library (``BFM_DUALS``), not about the
+    endpoint.
+
+    Three states, and they mean different things:
+
+    * **a kind string** — this endpoint is a boundary port of that kind;
+    * **``None``** — declared, and the type UNDER-SPECIFIES the port.  A bare
+      :class:`~waveflow.hw.memif.MMIFMaster` is legal hardware but does not say whether its pointer
+      is ``const``, so lowering refuses rather than guessing;
+    * **not declared at all** (the default, which is why this base sets nothing) — the endpoint is
+      not a kernel boundary port.  A ``BramIFSlave`` is the far end of a wrapper wire, a
+      ``SobIFMaster`` is internal to a kernel; neither has a boundary kind to give.
+
+    **Why an attribute and not an ``isinstance`` chain.**  The chain this replaced had a silent
+    ordering dependency: ``RegMapMMIFSlave`` had to be tested before ``MMIFSlave`` and
+    ``MMIFReadMaster`` before ``MMIFMaster``, subclass before base.  Reorder two lines and an
+    ``axilite_slave`` lowers as ``mm_slave`` with **no error at all**.  Inheritance resolves that by
+    construction: a subclass's own declaration wins, and a subclass that declares nothing inherits
+    the right answer.  The same call the codebase already makes for execution models and for
+    ``_DirectionalMMIFMaster.port_dir``.
+
+    **``boundary_kind``, not ``kind``.**  The same endpoint lowers differently by POSITION: a
+    ``StreamIFSlave`` is an ``axis_in`` port at a boundary and an ``hls::stream`` FIFO on an internal
+    edge.  Internal lowering is derived from the *interface* type in ``derive_internal_edges``, a
+    separate walk, and a bare ``kind`` would be read as covering both.
     """
 
     comp : HwModule | None = field(init=False)
@@ -921,6 +955,10 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
     A stream slave (RX) endpoint that is realized as a function call.
     """
 
+    #: An AXI4-Stream input port on the generated kernel.  See
+    #: :class:`InterfaceEndpoint` for the contract.
+    boundary_kind: ClassVar[str] = "axis_in"
+
     has_tlast: bool = True
     """Whether this stream carries a TLAST signal (True) or not (False)."""
 
@@ -1018,27 +1056,41 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
         yield from super().get()
 
     # ----------------------------------------------------------------
-    # TB-mode blocking ops (codegen-only)
+    # The sequential-testbench vocabulary — SOURCE, not a simulation API
     # ----------------------------------------------------------------
     #
-    # ``pop`` and ``pop_array`` are the slave-side blocking dequeue
-    # primitives for ``HwTestbench.main()`` bodies.  They are recognized
-    # structurally by the TB extractor (``hwcodegen.py``) and lowered
-    # to ``streamutils::*`` / ``<elem>_array_utils::*`` calls; the
-    # Python implementations are not exercised in v1 (the SimPy testbench
-    # uses ``get`` instead).  They exist so the testbench source parses
-    # and so future SimPy-mode codegen has a binding to attach to.
+    # ``pop`` / ``pop_array`` (and ``push`` / ``push_array`` on the master) are the four verbs a
+    # ``SeqTB.main()`` body is WRITTEN IN.  That body is never executed in Python: it is parsed,
+    # and ``waveflow/build/hwcodegen.py`` matches these names structurally
+    # (``_TB_STREAM_POP_METHODS``) and lowers each call to ``streamutils::*`` /
+    # ``<elem>_array_utils::*`` C++.  ``examples/stream_inband/poly.py`` is the worked example.
+    #
+    # So the ``NotImplementedError`` is not a stub for missing work — it is the whole contract, and
+    # it fires only if someone calls one of these from a *running* SimPy process, where the answer
+    # is ``get`` / ``write``.  They are declared here rather than living only in a ``frozenset`` in
+    # ``build/`` because the endpoint is where the vocabulary its own testbenches speak belongs;
+    # deleting them would leave every ``SeqTB.main()`` naming attributes no class declares.
 
     def pop(self, value):
-        """TB-mode: dequeue one structured-schema instance from the stream."""
+        """Sequential-TB source: dequeue one structured-schema instance from the stream.
+
+        Lowered to C++ by the TB extractor.  Not callable from a SimPy process — see the note
+        above; a running consumer uses :meth:`get`.
+        """
         raise NotImplementedError(
-            "StreamIFSlave.pop is codegen-only in v1; use get() for sim."
+            "StreamIFSlave.pop is sequential-TB source, lowered to C++ by build/hwcodegen.py — it "
+            "has no SimPy implementation. Use get() from a running process."
         )
 
     def pop_array(self, value, *, count):
-        """TB-mode: dequeue ``count`` elements into the raw-storage array."""
+        """Sequential-TB source: dequeue ``count`` elements into the raw-storage array.
+
+        Lowered to C++ by the TB extractor.  Not callable from a SimPy process — see the note
+        above; a running consumer uses :meth:`get`.
+        """
         raise NotImplementedError(
-            "StreamIFSlave.pop_array is codegen-only in v1; use get() for sim."
+            "StreamIFSlave.pop_array is sequential-TB source, lowered to C++ by "
+            "build/hwcodegen.py — it has no SimPy implementation. Use get() from a running process."
         )
 
 
@@ -1047,6 +1099,10 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
     """
     A stream master (TX) endpoint that provides a write function.
     """
+
+    #: An AXI4-Stream output port on the generated kernel.  See
+    #: :class:`InterfaceEndpoint` for the contract.
+    boundary_kind: ClassVar[str] = "axis_out"
 
     has_tlast: bool = True
     """Whether this stream carries a TLAST signal (True) or not (False)."""
@@ -1095,6 +1151,16 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
         calling :meth:`write`, which stalls; that difference is a property of the producer, and this
         is where it is stated.
 
+        **Why this is not ``write_nb``.**  Every other non-blocking transfer in the repo carries the
+        ``_nb`` suffix — :meth:`StreamIFSlave.get_nb`, ``read_nb``, ``write_nb``,
+        ``read_frame_nb`` — and ``offer`` deliberately does not.  ``_nb`` says *the caller chose not
+        to wait*, so a ``None`` or a short count is that caller's business to retry.  ``offer`` says
+        *the producer cannot wait*: there is no retry, the words that did not fit are GONE, and
+        :attr:`StreamIF.dropped` counts them because losing them is a fact about the run rather than
+        a return value.  A shared suffix would file two different obligations under one word.  The
+        read-side asymmetry is real too and stated on :meth:`StreamIFSlave.get_nb`: ``offer`` is for
+        a producer that *cannot* wait, ``get_nb`` for a consumer that *must not*.
+
         *word_rate* is this producer's own rate in words per second, which paces the transfer. Pass
         it whenever the producer is not clocked by the fabric.
 
@@ -1137,20 +1203,31 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
         yield self.process(self.interface.write(raw_words, tstart=t_out_start))
 
     # ----------------------------------------------------------------
-    # TB-mode blocking ops (codegen-only) — see StreamIFSlave for the
-    # pop counterparts and the design rationale.
+    # The sequential-testbench vocabulary — SOURCE, not a simulation API.
+    # See StreamIFSlave for the pop counterparts and the full rationale.
     # ----------------------------------------------------------------
 
     def push(self, value):
-        """TB-mode: enqueue one structured-schema instance into the stream."""
+        """Sequential-TB source: enqueue one structured-schema instance into the stream.
+
+        Lowered to C++ by the TB extractor.  Not callable from a SimPy process; a running producer
+        uses :meth:`write`.
+        """
         raise NotImplementedError(
-            "StreamIFMaster.push is codegen-only in v1; use write() for sim."
+            "StreamIFMaster.push is sequential-TB source, lowered to C++ by build/hwcodegen.py — "
+            "it has no SimPy implementation. Use write() from a running process."
         )
 
     def push_array(self, value, *, count):
-        """TB-mode: enqueue ``count`` elements from the raw-storage array."""
+        """Sequential-TB source: enqueue ``count`` elements from the raw-storage array.
+
+        Lowered to C++ by the TB extractor.  Not callable from a SimPy process; a running producer
+        uses :meth:`write`.
+        """
         raise NotImplementedError(
-            "StreamIFMaster.push_array is codegen-only in v1; use write() for sim."
+            "StreamIFMaster.push_array is sequential-TB source, lowered to C++ by "
+            "build/hwcodegen.py — it has no SimPy implementation. Use write() from a running "
+            "process."
         )
 
 

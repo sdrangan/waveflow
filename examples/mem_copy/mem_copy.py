@@ -254,7 +254,9 @@ class MemCopy(FreeRunMod):
         # direction, and the gmem bundles are assigned by policy in this order (bundle_map) --
         # m_in -> gmem0, m_out -> gmem1.  The names must be stated because the children's local names
         # collide (both mem streams call their AXI port m_mem).
-        # See plans/endpoint_types_not_tags.md.
+        # The direction is the endpoint's TYPE -- see InterfaceEndpoint's boundary-kind contract
+        # in waveflow/hw/interface.py.  (plans/endpoint_types_not_tags.md argued it and was
+        # completed and deleted in cd6a1ed.)
         self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
         #: Command-struct headers the generated top #includes (single source with the pysim .get()).
         #: The framed FIFO decls also need streamutils_hls.h (for ``framed_word``), so the top

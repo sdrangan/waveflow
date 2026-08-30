@@ -30,7 +30,11 @@ models latency, and the one a kernel's `m_axi` reaches across.
 
 **`m_mm`** is a directly-backed master, **zero latency**, for the owner's own use. It models a
 component reading its *own* inline block — a local C array in HLS — so no bus or access delay
-applies. `m_mm.as_words()` / `as_array()` / `as_schema()` return direct views.
+applies. `m_mm.array_ref()` returns a direct view — the raw words, or, given an element type,
+the same storage reinterpreted as those elements. It is a **live view in both directions**, or
+a refusal: an element with no native numpy dtype is stored as its packed word, and referencing
+one would have to deserialize into a fresh object whose writes reach nothing. The copying
+`read_array` / `write_array` serve that case and say that they copy.
 
 The `inline` flag picks which story you are telling. `inline=True` pre-allocates the full capacity as
 one block and hands out direct views; `inline=False` is the external-DDR shape, where callers

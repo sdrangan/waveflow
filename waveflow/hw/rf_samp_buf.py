@@ -346,7 +346,7 @@ class RfSampBufIngress(FreeRunMod):
         spw = int(self.samp_per_word)
         wrap = 1 << IDX_BW
         for x in raw:
-            self.buf_w.mem_write((self.wr // spw) & mask, int(x))
+            self.buf_w.write((self.wr // spw) & mask, int(x))
             self.wr = (self.wr + spw) % wrap
 
         # THE RATE CONTRACT, made of time rather than of a comment.  One word per cycles_per_word
@@ -520,7 +520,7 @@ class RfSampBufCapture(FreeRunMod):
                 self.count_too_old()
                 break
 
-            val = self.buf_r.mem_read((idx // spw) & mask)
+            val = self.buf_r.read((idx // spw) & mask)
             yield from self.s_out.write(np.array([val], dtype=np.uint64))
             sent += spw
             idx = (idx + spw) % wrap

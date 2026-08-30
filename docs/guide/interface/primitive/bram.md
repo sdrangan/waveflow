@@ -97,12 +97,12 @@ self.add_rtl_if(w_if)               # a WRAPPER WIRE, not an internal channel
 * **`access`** (`"read"` / `"write"` / `"readwrite"`) is declared on both ends, and the two must be
   **identical** — they are two statements of one fact, not a permission and a use. It decides the
   port's `storage_type`; see below.
-* **Vector access is Case 2** ([the three access cases](overview.md#the-three-access-cases)):
+* **Vector access is Case 2** ([the three access cases](../overview.md#the-three-access-cases)):
   `read_pipelined(element_type, count, addr) -> (data, tstart)` and
   `write_pipelined(data, addr, t_start)`. The model has no free parameters — throughput is II=1, one
   element per cycle per port; the read's fill is the memory's published `READ_LATENCY`, reached
   through the bound `BramIF` from the Verilog `localparam`, paid once per transfer rather than per
-  element; and `t_start` is the same anchoring every other endpoint uses. `mem_read` / `mem_write`
+  element; and `t_start` is the same anchoring every other endpoint uses. `read` / `write`
   stay for scalar access.
 * **In-place access is Case 3**: `array_ref(addr, count)` returns a **live numpy view** of the
   memory's storage — no transfer, no simulated time, and writes through it land in the memory. It

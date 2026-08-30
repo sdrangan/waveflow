@@ -286,7 +286,16 @@ def test_relative_links_resolve(md_files):
             # purpose -- 419 such links, all of which resolve -- so a renamed module rots them
             # exactly the way a moved page rots a cross-page link, and silently for the same reason.
             # A directory target is legitimate: `[Resource Models](../resource_model/)`.
-            for rel in re.findall(r"\]\((\.\.?/[^)#\s]+)(?:#[^)]*)?\)", line):
+            #
+            # And a BARE target is legitimate too -- `[RTL simulation](rtlsim.md)`, a same-folder
+            # sibling, which this file's own examples use throughout.  It was NOT matched until now,
+            # and that hole cost four dead links: re-foldering guide/interface into primitive/ and
+            # derived/ rewrote every `./stream.md` and left `](stream.md)` in a table pointing at a
+            # page that had moved.  The guard stayed green while the links were dead, which is the
+            # exact failure this test was written against -- one form of it simply had no pattern.
+            for rel in re.findall(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", line):
+                if rel.startswith(("http://", "https://", "mailto:", "/")):
+                    continue                     # absolute: not ours to resolve
                 tgt = (p.parent / rel).resolve()
                 if not (tgt.is_file() or tgt.is_dir()):
                     broken.append(f"{_rel(p)}:{i} -> {rel}")

@@ -424,10 +424,10 @@ def _bound(access, element_type, nelem=32, port=None):
 def test_an_array_ref_is_live_in_both_directions():
     """The whole claim, and it is the one a copy would silently fail.
 
-    A write through the reference must be visible to ``mem_read``, and a ``mem_write`` must be
-    visible through the reference — same storage, not two snapshots of it.  ``as_array`` on
-    ``_DirectBackedMMIFMaster`` passes a value check and fails this one, which is why this is the
-    test that exists.
+    A write through the reference must be visible to ``read``, and a ``write`` must be
+    visible through the reference — same storage, not two snapshots of it.  The ``as_array`` this
+    was written against passed a value check and failed this one, which is why this is the test that
+    exists; R3 replaced it with an ``array_ref`` that passes both.
     """
     from waveflow.hw.dataschema import FloatField
 
@@ -440,22 +440,24 @@ def test_an_array_ref_is_live_in_both_directions():
         "float memory would be a reinterpretation, not a reference")
 
     ref[:] = [1.5, 2.5, 3.5, 4.5]
-    assert [ep.mem_read(8 + k) for k in range(4)] == [1.5, 2.5, 3.5, 4.5], (
+    assert [ep.read(8 + k) for k in range(4)] == [1.5, 2.5, 3.5, 4.5], (
         "writes through the reference did not reach the memory -- the reference is a copy")
 
-    ep.mem_write(9, 99.0)
+    ep.write(9, 99.0)
     assert ref.tolist() == [1.5, 99.0, 3.5, 4.5], (
         "a write to the memory was not visible through the reference -- the reference is a stale "
         "copy, which is the half a one-way check would miss")
 
 
 def test_an_element_with_no_numpy_dtype_is_refused_rather_than_copied():
-    """S3b's hard rule, and the failure it is written against is in the tree.
+    """S3b's hard rule, and the failure it was written against was real.
 
-    ``_DirectBackedMMIFMaster.as_words()`` returns a genuine view but ``as_array()`` goes through
-    ``arrayutils.read_array``, which builds a fresh object unconditionally — so an ``as_*`` name
-    degrades to a copy the moment typed elements are asked for, and writes reach nothing.  A
-    reference API that is a view for some element types and a copy for others is worse than none.
+    ``_DirectBackedMMIFMaster`` had an ``as_words()`` that returned a genuine view beside an
+    ``as_array()`` that went through ``arrayutils.read_array``, which builds a fresh object
+    unconditionally — so one ``as_*`` family degraded to a copy the moment typed elements were asked
+    for, and writes reached nothing.  A reference API that is a view for some element types and a
+    copy for others is worse than none.  R3 gave that endpoint one ``array_ref`` reading this same
+    gate; see ``tests/hw/test_memory_simobj.py``.
 
     The verdict is a fact about the **declaration**, so it is answerable before anything runs
     (:attr:`supports_array_ref`) -- and the port stays usable, because Case 1's copying ops serve

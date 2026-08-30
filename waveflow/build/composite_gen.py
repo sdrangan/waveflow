@@ -621,59 +621,65 @@ class SobEdge:
                 f"{self.depth}> {self.name};")
 
 
-def kind_of_endpoint(ep) -> str:
-    """The boundary kind an endpoint lowers to, **derived from its type**.
+#: Returned by :func:`_declared_boundary_kind` when the endpoint's class declares nothing at all.
+#: A distinct object rather than ``None``, because ``None`` is itself a DECLARATION -- "this type
+#: under-specifies its port" -- and the two refusals are different diagnoses.
+_KIND_NOT_DECLARED = object()
 
-    The direction is the type, not a tag beside it: a ``StreamIFSlave`` is an input, a
-    ``MMIFReadMaster`` is a ``const`` pointer.  Nothing infers, and nothing has to be told separately
-    — the same call this codebase already makes for execution models (``hw_freerun``: *"the execution
-    model is declared by the class ... codegen never has to infer"*).  See
-    ``plans/endpoint_types_not_tags.md``.
 
-    A bare :class:`~waveflow.hw.memif.MMIFMaster` is **refused**, not defaulted.  It is legal
-    hardware (a read+write ``m_axi`` lowers to a plain pointer with all channels), but it
-    under-specifies: guessing a direction here is exactly the side-channel this function exists to
-    delete, and guessing wrong emits a ``const`` pointer for a port that is written.
+def _declared_boundary_kind(ep):
+    """The endpoint class's ``boundary_kind``, or :data:`_KIND_NOT_DECLARED`.
+
+    Read off the **class**, not the instance: ``_DirectionalMMIFMaster`` intercepts instance
+    attribute access to police read/write capability, and a class-level read has nothing to do with
+    that machinery.
     """
-    from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
-    from waveflow.hw.memif import MMIFMaster, MMIFReadMaster, MMIFSlave, MMIFWriteMaster
-    from waveflow.hw.regmap import RegMapMMIFSlave
+    return getattr(type(ep), "boundary_kind", _KIND_NOT_DECLARED)
 
-    # A regmap slave is the AXI4-Lite control port Vitis creates for a host-activated kernel.  It has
-    # a real kind, so a walk that meets one can SAY so — `_boundary_port` still refuses to lower it
-    # (there is no ap_ctrl_none top with an s_axilite port) and `BFM_DUALS` records that no model
-    # drives it.  Naming the kind is what turns both refusals from "unknown endpoint type" into the
-    # actual diagnosis.  See plans/design_cut.md S2/S7.
-    if isinstance(ep, RegMapMMIFSlave):
-        return "axilite_slave"
-    # A plain AXI-MM slave — a memory's bus-facing port.  Never a *kernel* boundary port in this flow
-    # (the kernel is always the master), so `_boundary_port` still refuses it; but it is a real kind a
-    # participant presents, and naming it is what lets the BFM-dual lookup answer for a `MemoryMod`.
-    if isinstance(ep, MMIFSlave):
-        return "mm_slave"
-    if isinstance(ep, MMIFReadMaster):
-        return "maxi_read"
-    if isinstance(ep, MMIFWriteMaster):
-        return "maxi_write"
-    if isinstance(ep, MMIFMaster):
+
+def kind_of_endpoint(ep) -> str:
+    """The boundary kind an endpoint lowers to — a **lookup of** ``ep.boundary_kind``.
+
+    Endpoints own what they ARE; ``build/`` owns what is DONE with them.  The kind is declared as a
+    class attribute on the endpoint (see
+    :class:`~waveflow.hw.interface.InterfaceEndpoint` for the three-state contract), and this
+    function reads it and applies the one piece of real logic there is: the two refusals.
+
+    **This was an eight-branch ``isinstance`` chain, and the chain had a silent ordering
+    dependency.**  ``RegMapMMIFSlave`` had to be tested before ``MMIFSlave``, and ``MMIFReadMaster``
+    before ``MMIFMaster`` — subclass before base.  Reorder those lines and there is no error: an
+    ``axilite_slave`` quietly lowers as ``mm_slave``, and the first symptom is RTL that does not
+    match the design.  A class attribute has no such hazard, because inheritance resolves it: a
+    subclass's own declaration wins, and a subclass that declares nothing inherits the right answer.
+    Adding an endpoint type no longer means editing a chain in another package.
+
+    Two refusals, and they are different diagnoses:
+
+    * **not declared** — the endpoint is not a kernel boundary port at all (a ``BramIFSlave`` is the
+      far end of a wrapper wire; a ``SobIFMaster`` is internal to a kernel).
+    * **declared ``None``** — a bare :class:`~waveflow.hw.memif.MMIFMaster`.  It is legal hardware (a
+      read+write ``m_axi`` lowers to a plain pointer with all channels), but it under-specifies:
+      guessing a direction here is exactly the side-channel this design deletes, and guessing wrong
+      emits a ``const`` pointer for a port that is written.
+
+    ``BFM_DUALS`` and the port emitters stay in ``build/`` on purpose: *which C++ class drives this
+    port from outside* is a fact about the testbench library, not about the endpoint.  The endpoint
+    says ``axis_in``; the testbench decides that means ``AxisMaster``.
+    """
+    kind = _declared_boundary_kind(ep)
+    if kind is _KIND_NOT_DECLARED:
+        raise LoweringError(
+            f"no boundary kind for endpoint type {type(ep).__name__}: it declares no "
+            f"`boundary_kind`, so it is not a kernel boundary port. Declare one on the class if it "
+            f"should be."
+        )
+    if kind is None:
         raise LoweringError(
             f"{type(ep).__name__} '{getattr(ep, 'name', '?')}' does not declare a direction, so its "
             f"pointer cannot be lowered (const + stable, or plain?). Construct it as an "
             f"MMIFReadMaster or MMIFWriteMaster — the direction is the type."
         )
-    if isinstance(ep, StreamIFSlave):
-        return "axis_in"
-    if isinstance(ep, StreamIFMaster):
-        return "axis_out"
-    # A kernel-side BRAM port: a sized array parameter carrying `mode=bram`, wired in the WRAPPER to
-    # a memory that lives outside the kernel.  One kind for both directions, unlike m_axi: the RTL
-    # port set is identical either way (Vitis emits the full A/B pair regardless), and what differs
-    # is only which signals the body drives.  The memory-side `BramIFSlave` has no kind here on
-    # purpose -- it is never a kernel boundary port, only the far end of a wrapper wire.
-    from waveflow.hw.bram import BramIFMaster
-    if isinstance(ep, BramIFMaster):
-        return "bram"
-    raise LoweringError(f"no boundary kind for endpoint type {type(ep).__name__}")
+    return kind
 
 
 def _edge_name(comp, iface) -> str:
@@ -1160,8 +1166,14 @@ class BfmDual:
     * ``protocol`` / ``role`` — the pair, spelled out.  They exist so a *missing* entry can be
       reported as "no BFM presents the **slave** role of **AXI4-Lite**" rather than as a ``KeyError``
       on a kind string.
-    * ``model`` — the C++ class in :mod:`waveflow.build.xsi`, or ``None`` for a **known gap**: the
-      protocol and role are real, and no model implements them yet.
+    * ``model`` — the C++ class in :mod:`waveflow.build.xsi`, or ``None`` when no model drives this
+      kind.  ``needs_model`` says which of the two ``None`` means.
+    * ``needs_model`` — whether a testbench port is owed here **at all**.  ``True`` with
+      ``model=None`` is a **known gap**: the protocol and role are real and nothing implements them
+      yet, so a DUT with such a port cannot be XSI-lowered and should hear that.  ``False`` is
+      **by design**: the port's counterpart is not a BFM, so there is nothing missing and nothing to
+      implement.  A single ``None`` could not carry both — *"needs a model, none exists"* and
+      *"needs no model at all"* are different answers, and only the first is a hole.
     * ``participant_declares`` — whether the *participant* picks the concrete class.
 
     On that last field, which is the one asymmetry in the table.  For AXI-Stream the role still fixes
@@ -1175,6 +1187,7 @@ class BfmDual:
     role: str
     model: str | None
     participant_declares: bool = False
+    needs_model: bool = True
 
 
 #: **The** protocol × role table: which BFM serves a DUT boundary port of each kind.
@@ -1200,6 +1213,17 @@ BFM_DUALS: dict[str, BfmDual] = {
     # here, as a row with no model, rather than in prose: "which duals exist" is one lookup, and the
     # hole is part of the answer.  Deferred to plans/design_cut.md S7.
     "axilite_slave": BfmDual("AXI4-Lite", "master", None),
+    # NOT A GAP — the only row where `model=None` means "none is owed".  A `mode=bram` port's
+    # counterpart is the WRAPPER, which joins it to a memory compiled into the simulation beside the
+    # kernel (`bram_t2p.v`, visible in `rtl_<top>.f`).  There is no second implementation for a BFM
+    # to be, which is the argument that a hand-written memory is *more* verifiable than an emulated
+    # one; if a BRAM port ever did need a model, the wrapper would be the thing that is wrong.
+    #
+    # The row exists because `bram` was ABSENT from this table while `mm_slave` and `axilite_slave`
+    # recorded their holes as rows -- so "which kinds have duals?" had two answers, one of them a
+    # `continue` in a walk 900 lines away.  Now every kind `kind_of_endpoint` can produce has a row,
+    # and the table says which of them are holes.
+    "bram":          BfmDual("BRAM", "wrapper-joined memory", None, needs_model=False),
 }
 
 
@@ -1217,6 +1241,12 @@ def bfm_dual_class(kind: str, declared: str | None) -> str:
             f"DUT port of that kind. Add a row to composite_gen.BFM_DUALS naming the protocol, the "
             f"role the testbench must present, and the model that implements it. Registered kinds: "
             f"{sorted(BFM_DUALS)}."
+        )
+    if dual.model is None and not dual.needs_model:
+        raise LoweringError(
+            f"boundary kind {kind!r} needs no BFM: its counterpart is the {dual.role}, not a model, "
+            f"so asking for one means a walk reached a port it should have skipped. This is not a "
+            f"gap in the BFM library — see composite_gen.BFM_DUALS."
         )
     if dual.model is None:
         raise LoweringError(
@@ -2125,6 +2155,10 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
             # synthesized scope, so there is nothing here for a testbench to drive and no BFM to look
             # up.  Skipping it is what keeps the BFM library untouched (plans/rtl_module.md S3) —
             # and if a memory ever DID need a model, the wrapper would be the thing that is wrong.
+            #
+            # The skip and the table now AGREE rather than being two answers to one question:
+            # `BFM_DUALS["bram"]` is a row with `needs_model=False`, so `bfm_dual_class` says the
+            # same thing this `continue` does if a walk ever reaches here anyway.
             continue
         port = _boundary_port(name, kind, 0, bundle)      # width irrelevant: we want xsi_prefix
         part = pep = None

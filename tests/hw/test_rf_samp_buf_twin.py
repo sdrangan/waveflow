@@ -65,7 +65,7 @@ def _burst_granular_run_iter(self):
     spw = int(self.samp_per_word)
     wrap = 1 << IDX_BW
     for x in np.asarray(words).ravel():
-        self.buf_w.mem_write((self.wr // spw) & mask, int(x))
+        self.buf_w.write((self.wr // spw) & mask, int(x))
         self.wr = (self.wr + spw) % wrap
     yield from self.wr_out.offer(np.array([self.wr], dtype=np.uint64))
 

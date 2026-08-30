@@ -103,7 +103,9 @@ def rtl_port_mapping(ep) -> PortMapping:
 
     Dispatches on the endpoint *type*, the same call
     :func:`~waveflow.build.composite_gen.kind_of_endpoint` already makes for boundary kinds: the
-    protocol is the type, not a tag beside it (``plans/endpoint_types_not_tags.md``).
+    protocol is the type, not a tag beside it -- see
+    :class:`~waveflow.hw.interface.InterfaceEndpoint` for the contract.  (The plan that argued it,
+    ``plans/endpoint_types_not_tags.md``, was completed and deleted in ``cd6a1ed``.)
 
     The refusal is the point.  Looking the kind up in a dict would raise ``KeyError:
     <StreamIFSlave object>`` from inside a walk, which says nothing about what is wrong or what would

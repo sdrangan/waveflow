@@ -374,8 +374,8 @@ class _DirectBackedMMIFMaster:
     bypassing any AXI interface.  Used internally by MemoryMod.
 
     read() and write() are generator functions that yield no SimPy events
-    (zero simulation time).  as_words(), as_array(), as_schema() provide
-    zero-copy reference access to the pre-allocated inline block.
+    (zero simulation time).  array_ref() provides zero-copy reference access
+    to the pre-allocated inline block.
     """
 
     name: str
@@ -435,27 +435,42 @@ class _DirectBackedMMIFMaster:
     # Reference access (inline only — zero copy, zero sim time)
     # ------------------------------------------------------------------
 
-    def as_words(self) -> np.ndarray:
-        """Return a direct numpy view of the pre-allocated inline block."""
+    def array_ref(self, element_type: type[Any] | None = None) -> np.ndarray:
+        """A **live view** of the pre-allocated inline block — no transfer, no simulated time.
+
+        One name for a Case 3 reference, matching
+        :meth:`~waveflow.hw.bram.BramIFMaster.array_ref`, and one rule: **a view for every element
+        type, or a refusal at declaration time.**
+
+        *element_type* ``None`` gives the raw word view (the block as it is stored).  An element
+        type gives the same storage reinterpreted as those elements — a ``.view()``, so writes
+        through it reach the memory and a write to the memory is visible through it.
+
+        This method replaced ``as_words`` / ``as_array`` / ``as_schema``, and the replacement fixes
+        a real defect rather than tidying three names into one.  ``as_words()`` returned a genuine
+        numpy view, but ``as_array()`` went through :func:`~waveflow.hw.arrayutils.read_array`,
+        which does ``array_obj = array_cls(); deserialize(...)`` — **a fresh object,
+        unconditionally**.  So the same ``as_*`` family silently degraded from a view to a copy the
+        moment typed elements were asked for, and every write to what came back reached nothing.
+        ``as_schema()`` was a copy by construction for the same reason.
+
+        A reference API that is a view for some element types and a copy for others is worse than no
+        reference API, so this refuses instead: :func:`~waveflow.hw.bram.check_array_ref_element` is
+        the same gate ``BramIFMaster`` uses, and it answers from the **declared** element type
+        alone.  A composite element has no native dtype, is therefore stored as its packed word, and
+        is served by the copying :meth:`read_array` / :meth:`write_array` — which say that they copy.
+        """
         if self._mem is None or self._base_addr is None:
             raise RuntimeError(
-                "as_words() requires an inline MemoryMod with a pre-allocated block"
+                "array_ref() requires an inline MemoryMod with a pre-allocated block"
             )
-        return self._mem.segments[self._base_addr]
-
-    def as_array(self, elem_type: type) -> Any:
-        """Return a :class:`~waveflow.hw.dataschema.DataArray` view of the inline block."""
-        from waveflow.hw.arrayutils import read_array
-        words = self.as_words()
-        nwpe = elem_type.nwords_per_inst(self.bitwidth)
-        count = len(words) // nwpe
-        return read_array(words, elem_type, self.bitwidth, shape=count)
-
-    def as_schema(self, schema_type: type) -> Any:
-        """Return a schema instance deserialized from the inline block."""
-        nwords = schema_type.nwords_per_inst(self.bitwidth)
-        words = self.as_words()[:nwords]
-        return schema_type().deserialize(words, word_bw=self.bitwidth)
+        words = self._mem.segments[self._base_addr]
+        if element_type is None:
+            return words
+        from waveflow.hw.bram import check_array_ref_element
+        dtype = check_array_ref_element(
+            element_type, f"_DirectBackedMMIFMaster '{self.name}'.array_ref")
+        return words.view(dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -510,9 +525,8 @@ class MemoryMod(HwModule):
     delay applies.  The latency model is only on the ``s_mm`` path.
 
     When ``inline=True`` (default) the full ``nwords_tot`` capacity is
-    pre-allocated as one block; ``m_mm.as_words()`` / ``as_array()`` /
-    ``as_schema()`` return direct views (zero sim time, maps to a local C
-    array in HLS).
+    pre-allocated as one block; ``m_mm.array_ref()`` returns a direct view
+    (zero sim time, maps to a local C array in HLS).
 
     When ``inline=False`` external callers use ``alloc()`` / ``free()`` to
     carve out regions, then access them via their own wired ``MMIFMaster``.

@@ -122,7 +122,8 @@ def test_mem_copy_binding_matches_its_real_boundary():
 
 
 # ---------------------------------------------------------------------------
-# The direction is the TYPE, not a tag beside it (plans/endpoint_types_not_tags.md)
+# The direction is the TYPE, not a tag beside it -- InterfaceEndpoint's boundary-kind contract.
+# (plans/endpoint_types_not_tags.md argued it; completed and deleted in cd6a1ed.)
 # ---------------------------------------------------------------------------
 
 def test_kind_is_derived_from_the_endpoint_type():
@@ -268,3 +269,125 @@ def test_a_stated_bundle_that_contradicts_the_policy_fails_loudly():
     # Contradicts.
     with pytest.raises(ValueError, match="declares bundle .* but the assembler's policy"):
         bundle_map([("m_in", r, "maxi_read", "gmem1")])
+
+
+# ---------------------------------------------------------------------------
+# boundary_kind — the endpoint declares its kind, and inheritance resolves it
+# (plans/interface_docs_and_naming.md Part 4)
+# ---------------------------------------------------------------------------
+
+def _one_of_every_endpoint():
+    """Every endpoint class that has an opinion about being a boundary port, and what it must say.
+
+    ``None`` means DECLARED-but-under-specified (the ``MMIFMaster`` refusal); ``...`` means the
+    class declares nothing at all, so it is not a boundary port.  Both are refusals and they are
+    different diagnoses, which is why they are distinguished here rather than lumped as "raises".
+    """
+    from waveflow.hw.bram import BramIFMaster, BramIFSlave
+    from waveflow.hw.dataschema import IntField
+    from waveflow.hw.interface import (SobIFMaster, SobIFSlave, StreamIFMaster,
+                                       StreamIFSlave)
+    from waveflow.hw.memif import (MMIFMaster, MMIFReadMaster, MMIFSlave,
+                                   MMIFWriteMaster, _DirectionalMMIFMaster)
+    from waveflow.hw.regmap import (RegAccess, RegField, RegMap, RegMapMMIFSlave,
+                                    VitisRegMap, VitisRegMapMMIFSlave)
+    from waveflow.simulation.simulation import Simulation
+
+    sim = Simulation()
+    i32 = IntField.specialize(bitwidth=32, signed=True)
+    rm = RegMap({"x": RegField(i32, RegAccess.RW)})
+    vrm = VitisRegMap({"x": RegField(i32, RegAccess.RW)})
+
+    return [
+        # -- boundary ports, each declaring its own kind
+        (StreamIFSlave(name="a", sim=sim, bitwidth=64), "axis_in"),
+        (StreamIFMaster(name="b", sim=sim, bitwidth=64), "axis_out"),
+        (MMIFSlave(name="c", sim=sim, bitwidth=64), "mm_slave"),
+        (MMIFReadMaster(name="d", sim=sim, bitwidth=64), "maxi_read"),
+        (MMIFWriteMaster(name="e", sim=sim, bitwidth=64), "maxi_write"),
+        (BramIFMaster(name="f", sim=sim), "bram"),
+        # -- THE ORDERING HAZARD.  In the isinstance chain this replaced, RegMapMMIFSlave had to be
+        #    tested before MMIFSlave and MMIFReadMaster before MMIFMaster.  Swap two lines and an
+        #    axilite_slave lowered as mm_slave with no error.  Both subclass pairs are here.
+        (RegMapMMIFSlave(name="g", sim=sim, bitwidth=32, regmap=rm), "axilite_slave"),
+        (VitisRegMapMMIFSlave(name="h", sim=sim, bitwidth=32, regmap=vrm,
+                              on_start=lambda: None), "axilite_slave"),
+        # -- declared, and under-specified: the direction is the type, and this type does not say
+        (MMIFMaster(name="i", sim=sim, bitwidth=64), None),
+        (_DirectionalMMIFMaster(name="j", sim=sim, bitwidth=64), None),
+        # -- not boundary ports at all, and they declare nothing
+        (BramIFSlave(name="k", sim=sim), ...),
+        (SobIFMaster(name="l", sim=sim), ...),
+        (SobIFSlave(name="m", sim=sim), ...),
+    ]
+
+
+def test_every_endpoint_class_resolves_to_the_kind_it_declares():
+    """One case per endpoint class, subclasses included — the table the chain could not have.
+
+    ``kind_of_endpoint`` is now a lookup of ``ep.boundary_kind``, so the answer comes from the class
+    and inheritance resolves subclass-before-base by construction.  The two subclass pairs that the
+    old ``isinstance`` chain depended on the ORDER of its lines to get right are the point of this
+    test: ``RegMapMMIFSlave``/``VitisRegMapMMIFSlave`` under ``MMIFSlave``, and
+    ``MMIFReadMaster``/``MMIFWriteMaster``/``_DirectionalMMIFMaster`` under ``MMIFMaster``.
+    """
+    import pytest
+    from waveflow.build.composite_gen import kind_of_endpoint
+
+    for ep, expected in _one_of_every_endpoint():
+        name = type(ep).__name__
+        if expected is ...:
+            with pytest.raises(ValueError, match="no boundary kind for endpoint type"):
+                kind_of_endpoint(ep)
+        elif expected is None:
+            with pytest.raises(ValueError, match="does not declare a direction"):
+                kind_of_endpoint(ep)
+        else:
+            assert kind_of_endpoint(ep) == expected, f"{name} resolved to the wrong kind"
+
+
+def test_a_subclass_that_declares_nothing_inherits_its_base_kind():
+    """The property the isinstance chain did NOT have, stated on its own.
+
+    A new endpoint subclass is correct by default — it lowers like the thing it specializes — and a
+    subclass that means something else says so, once, on itself.  Neither outcome depends on where a
+    line sits in a chain in another package.
+    """
+    from waveflow.build.composite_gen import kind_of_endpoint
+    from waveflow.hw.interface import StreamIFSlave
+    from waveflow.simulation.simulation import Simulation
+
+    class _TaggedStreamSlave(StreamIFSlave):
+        """A specialization that changes behaviour, not port kind."""
+
+    class _NotReallyAStream(StreamIFSlave):
+        boundary_kind = "axis_out"
+
+    sim = Simulation()
+    assert kind_of_endpoint(_TaggedStreamSlave(name="a", sim=sim, bitwidth=64)) == "axis_in"
+    assert kind_of_endpoint(_NotReallyAStream(name="b", sim=sim, bitwidth=64)) == "axis_out"
+
+
+def test_the_two_refusals_are_different_diagnoses():
+    """``None`` and "not declared" both refuse, and a reader must be able to tell them apart.
+
+    ``None`` says *this type under-specifies its port* — the fix is to construct a directional
+    subclass.  Absence says *this is not a boundary port at all* — a ``BramIFSlave`` is the far end
+    of a wrapper wire, and there is nothing to fix.  A single message would send the second reader
+    looking for a direction that does not exist.
+    """
+    import pytest
+    from waveflow.build.composite_gen import kind_of_endpoint
+    from waveflow.hw.bram import BramIFSlave
+    from waveflow.hw.memif import MMIFMaster
+    from waveflow.simulation.simulation import Simulation
+
+    sim = Simulation()
+    with pytest.raises(ValueError) as under:
+        kind_of_endpoint(MMIFMaster(name="m", sim=sim, bitwidth=64))
+    with pytest.raises(ValueError) as absent:
+        kind_of_endpoint(BramIFSlave(name="b", sim=sim))
+
+    assert "MMIFReadMaster or MMIFWriteMaster" in str(under.value)
+    assert "is not a kernel boundary port" in str(absent.value)
+    assert "does not declare a direction" not in str(absent.value)

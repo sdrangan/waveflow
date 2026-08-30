@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil
+from typing import ClassVar
 
 import numpy as np
 
@@ -189,13 +190,16 @@ def native_dtype(element_type: type[DataSchema]) -> np.dtype | None:
 def check_array_ref_element(element_type: type[DataSchema], owner: str) -> np.dtype:
     """Refuse an element that cannot be **referenced**, and return the dtype that can.
 
-    Case 3's one hard rule (S3b), and the failure it prevents is in the tree already:
-    ``_DirectBackedMMIFMaster.as_words()`` returns a genuine numpy view, but its ``as_array()`` goes
-    through ``arrayutils.read_array``, which does ``array_obj = array_cls(); deserialize(...)`` —
-    **a fresh object, unconditionally**.  So an ``as_*`` method silently degrades from a view to a
-    copy the moment typed elements are asked for, and every write to what it returns reaches
-    nothing.  A reference API that is a view for some element types and a copy for others is worse
-    than no reference API, so this refuses instead.
+    Case 3's one hard rule (S3b), and the failure it prevents **was** in the tree —
+    ``_DirectBackedMMIFMaster`` had an ``as_words()`` that returned a genuine numpy view beside an
+    ``as_array()`` that went through ``arrayutils.read_array``, which does
+    ``array_obj = array_cls(); deserialize(...)`` — **a fresh object, unconditionally**.  So one
+    ``as_*`` family silently degraded from a view to a copy the moment typed elements were asked
+    for, and every write to what came back reached nothing.  A reference API that is a view for some
+    element types and a copy for others is worse than no reference API, so this refuses instead.
+
+    That endpoint now uses this gate too (R3: it has one ``array_ref``, not three ``as_*``), so the
+    rule is enforced on both Case 3 surfaces rather than on this one alone.
 
     The verdict depends only on the **declared** element type — nothing about a call, a binding or a
     run — which is what makes it answerable before anything runs; see
@@ -254,6 +258,15 @@ class BramIFMaster(InterfaceEndpoint):
     ``storage_type`` that can be wrong, and wrong in the way that survives ``csynth`` and appears
     only at RTL.
     """
+
+    #: A kernel-side BRAM port: a sized array parameter carrying ``mode=bram``, wired in the WRAPPER
+    #: to a memory that lives outside the kernel.  **One kind for both directions**, unlike m_axi:
+    #: the RTL port set is identical either way (Vitis emits the full A/B pair regardless), and what
+    #: differs is only which signals the body drives -- which :attr:`access` already says.  The
+    #: memory-side :class:`BramIFSlave` declares no kind on purpose: it is never a kernel boundary
+    #: port, only the far end of a wrapper wire.  See
+    #: :class:`~waveflow.hw.interface.InterfaceEndpoint`.
+    boundary_kind: ClassVar[str] = "bram"
 
     #: What one address holds — the C++ array's **element type**.  Everything the port needs in
     #: bits is derived from it (see :attr:`bitwidth`); nothing restates it.
@@ -328,21 +341,31 @@ class BramIFMaster(InterfaceEndpoint):
     # whole point of having a model.)
     #
     # These are plain methods rather than generators for the same reason: a caller writes
-    # `self.buf_w.mem_write(i, x)`, not `yield from`, and the absence of the yield is the statement
+    # `self.buf_w.write(i, x)`, not `yield from`, and the absence of the yield is the statement
     # that no simulated time passes.
+    #
+    # **An addressed read is `read`.**  These were `mem_read` / `mem_write`; the `mem_` prefix
+    # distinguished nothing, because a `BramIFMaster` only ever addresses memory — there is no
+    # other kind of read on this port to tell it apart from.  `MMIFMaster.read` / `.write` are
+    # the same operation on the other addressed endpoint and already spell it this way.
+    #
+    # A stream keeps `get`, and that is not an oversight: a stream read is a destructive
+    # DEQUEUE and an addressed read is not.  Three verbs, three meanings — a `get` dequeues,
+    # a `read` looks at an address, an `acquire` takes a lease (`SobIFSlave`).  See
+    # `plans/interface_docs_and_naming.md` Part 3.
 
-    def mem_write(self, addr: int, value) -> None:
+    def write(self, addr: int, value) -> None:
         """Write one **element** through this port (pysim).  Refused on a read port.
 
         *value* is not coerced to ``int``: the memory is typed, so a ``Float32`` memory takes a
         float and stores a float.  Over a word element type this is the same call it always was.
         """
-        self._check_access("write", "mem_write")
+        self._check_access("write", "write")
         self._memory().store(int(addr), value)
 
-    def mem_read(self, addr: int):
+    def read(self, addr: int):
         """Read one **element** through this port (pysim).  Refused on a write port."""
-        self._check_access("read", "mem_read")
+        self._check_access("read", "read")
         return self._memory().load(int(addr))
 
     # -- Case 3: in place, and the reason is TIMING rather than copies -------------------------
@@ -351,7 +374,7 @@ class BramIFMaster(InterfaceEndpoint):
     # function reads and writes the memory through its port.  Modelling that as read_array + compute
     # + write_array would invent TWO transfers that do not exist and charge the design for them --
     # a wrong number, not a cosmetic loss.  So `array_ref` elapses no simulated time, and (like
-    # mem_read / mem_write above) the absence of the `yield` is the statement that says so.
+    # read / write above) the absence of the `yield` is the statement that says so.
     #
     # THE CALLER OWNS THE TIMING, because the cost is the compute loop's II x n rather than a
     # transfer.  What this endpoint owes the caller is the number to compute from --
@@ -409,7 +432,7 @@ class BramIFMaster(InterfaceEndpoint):
 
         Element-typed (the view's dtype is :attr:`element_type`'s own — nothing is passed, because
         the storage already has a type) and extent-bounded, so it is range-checked here the way
-        :meth:`mem_read` / :meth:`mem_write` already are.
+        :meth:`read` / :meth:`write` already are.
 
         **Directional, and enforced rather than advised.**  :attr:`access` already says what this
         port does, so a ``"read"`` port hands back a view with ``flags.writeable = False`` and a
@@ -417,7 +440,7 @@ class BramIFMaster(InterfaceEndpoint):
         hand back a writable one.
 
         The one asymmetry, stated rather than hidden: numpy has no write-only array, so a
-        ``"write"`` port's view cannot refuse *reads* the way :meth:`mem_read` does.  The direction
+        ``"write"`` port's view cannot refuse *reads* the way :meth:`read` does.  The direction
         that can be enforced is.
 
         Refused for an element type with no native numpy dtype — see
@@ -527,7 +550,7 @@ class BramIFMaster(InterfaceEndpoint):
             raise ValueError(
                 f"BramIFMaster '{self.name}': a pipelined transfer is measured in CYCLES, and this "
                 f"port's BramIF carries no clock. Pass clk= when constructing the BramIF. (The "
-                f"untimed mem_read / mem_write need none, which is why it is optional.)")
+                f"untimed read / write need none, which is why it is optional.)")
         return clk
 
     def _memory(self):
@@ -609,7 +632,7 @@ class BramIF(Interface):
     """
 
     #: The clock the port pair is timed in — the accessor's, which the wrapper ties to the memory's.
-    #: **Optional**, because the scalar ``mem_read`` / ``mem_write`` are untimed and need none; a
+    #: **Optional**, because the scalar ``read`` / ``write`` are untimed and need none; a
     #: pipelined transfer is measured in cycles and refuses loudly without it, the same shape as
     #: :attr:`read_latency` refusing when unbound.
     clk: "Clock | None" = None

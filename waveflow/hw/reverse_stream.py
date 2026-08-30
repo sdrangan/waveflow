@@ -557,6 +557,13 @@ class AckedStreamMasterIF(InterfaceEndpoint):
         consumer's progress and deadlocking if the consumer never resolves — or accepts a frame it
         cannot remember, which breaks the token correspondence silently.  The contract is
         **check, then write**, and :meth:`write_frame` asserts it rather than trusting it.
+
+        **No ``_nb`` suffix, and that is the convention rather than an exception to it.**  ``_nb``
+        marks a *transfer* that returns "nothing available" or "no room" instead of blocking —
+        :meth:`AckedStreamSlaveIF.read_nb`, :meth:`read_frame_nb`,
+        :meth:`~waveflow.hw.interface.StreamIFSlave.get_nb`.  This moves nothing and answers a
+        question; a predicate never blocks, so the suffix would carry no information here.  What it
+        gates is :meth:`write_frame`, which *does* block, and which is therefore not ``_nb`` either.
         """
         return len(self._pending) < int(self.max_in_flight)
 

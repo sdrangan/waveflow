@@ -233,7 +233,7 @@ class RfShotBufLoad(FreeRunMod):
         for i in range(nw):
             words = yield from self.s_in.get(nwords_max=1)
             self.phase.begin_write()
-            self.buf_w.mem_write(i, int(np.asarray(words).ravel()[0]))
+            self.buf_w.write(i, int(np.asarray(words).ravel()[0]))
         self.phase.end_write()
         yield from self.rdy_out.write(np.array([1], dtype=np.uint64))
 
@@ -287,7 +287,7 @@ class RfShotBufRead(FreeRunMod):
         yield from self.rdy_in.get(nwords_max=1)
         for i in range(int(self.nword)):
             self.phase.begin_read()
-            val = self.buf_r.mem_read(i)
+            val = self.buf_r.read(i)
             yield from self.s_out.write(np.array([val], dtype=np.uint64))
         self.phase.end_read()
 

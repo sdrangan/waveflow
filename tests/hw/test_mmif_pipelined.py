@@ -1,7 +1,7 @@
 """Tests for the early-anchored pipelined memory transfers (the memory/Region mirror
 of StreamIF.write_pipelined / get_pipelined).
 
-Covers: MMIFMaster.write_array_pipelined(t_out_start=...), read_array_anchored,
+Covers: MMIFMaster.write_pipelined(t_out_start=...), read_array_anchored,
 Region.write_slice_pipelined / read_slice_pipelined, and — critically — that the
 t_out_start=None path is byte-for-byte the old blocking behaviour (backward compat).
 """
@@ -58,11 +58,11 @@ def test_write_anchor_overlaps_vs_blocking():
     def body(self):
         # advance to t=3, then write 10 words anchored at t=0 (in the past)
         yield self.timeout(3.0)
-        t0, t1, nw = yield from master.write_array_pipelined(
+        t0, t1, nw = yield from master.write_pipelined(
             data, I32, addr=0, t_out_start=0.0)
         res["anchored_end"] = self.now      # expect 0 + 10 = 10
         # blocking write of 10 words starting now (t=10)
-        t0b, t1b, nwb = yield from master.write_array_pipelined(data, I32, addr=64)
+        t0b, t1b, nwb = yield from master.write_pipelined(data, I32, addr=64)
         res["blocking_end"] = self.now      # expect 10 + 10 = 20
 
     sim.add_obj(_Driver(name="d", sim=sim, body=body))
@@ -79,7 +79,7 @@ def test_t_out_start_none_is_blocking():
 
     def body(self):
         yield self.timeout(5.0)
-        yield from master.write_array_pipelined(data, I32, addr=0)        # default None
+        yield from master.write_pipelined(data, I32, addr=0)        # default None
         res["end"] = self.now
         # data landed correctly
         got = mem.read_array(0, I32, count=8)
@@ -99,7 +99,7 @@ def test_read_anchored_returns_backcalc_tstart():
     res = {}
 
     def body(self):
-        yield from master.write_array_pipelined(data, I32, addr=0)
+        yield from master.write_pipelined(data, I32, addr=0)
         t_pre = self.now
         got, tstart = yield from master.read_array_anchored(I32, 10, addr=0)
         res.update(end=self.now, tstart=tstart, t_pre=t_pre, data=np.asarray(got))

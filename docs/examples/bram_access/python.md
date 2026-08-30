@@ -250,8 +250,8 @@ explains why it is a token on an ordinary stream rather than a testbench's order
 
 `read_pipelined` is where the read path's cost lives, and it is worth reading slowly. A scalar
 `BramIF` access is **untimed in pysim, on purpose**: a BRAM answer is deterministic, unarbitrated and
-one cycle, so a discrete-event model of it would add a SimPy timestep and no fidelity — `mem_read`
-and `mem_write` are plain methods rather than generators, and **the absence of the `yield` is the
+one cycle, so a discrete-event model of it would add a SimPy timestep and no fidelity — `read`
+and `write` are plain methods rather than generators, and **the absence of the `yield` is the
 interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/primitive/aximm.md), where the
 bus, the arbitration and the burst *are* the point of having a model.)
 
