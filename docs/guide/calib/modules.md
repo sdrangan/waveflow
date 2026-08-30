@@ -90,7 +90,7 @@ new work rather than a bug. Three failure modes are therefore errors rather than
 |---|---|
 | **Impure structure** — `ParamPurityError` | Raised by `elaborate`'s existing gate. If structure is not a function of the parameters, there is no well-defined key to compute. |
 | **An embedded object address** — `UnstableSignatureError` | A signature that reaches an object with the default `repr` embeds a memory address, so the digest would change every run. The digest is SHA-256 over a canonical serialization, never `hash()` (which is randomized per process for strings). |
-| **Unbound ports** — `UnboundModuleError` | A stream endpoint's `queue_size` is `None` until [`Interface.bind`](../interface/stream.md) supplies the channel depth, so the structure is not yet determined. |
+| **Unbound ports** — `UnboundModuleError` | A stream endpoint's `queue_size` is `None` until [`Interface.bind`](../interface/primitive/stream.md) supplies the channel depth, so the structure is not yet determined. |
 
 That last one deserves its own note, because it looks like pedantry and is not.
 

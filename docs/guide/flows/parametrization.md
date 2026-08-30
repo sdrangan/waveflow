@@ -35,7 +35,7 @@ on it decides the thing you actually care about: whether changing it means build
 | [`HwConst[T]`](#hwconstt--class-level-structural-constants) | class definition | fixed structurally |
 | [`HwParam[T]`](#hwparamt--per-instance-synthesis-parameters) | build / elaboration | **no** — distinct values are distinct artifacts (`mem_r_stream_32` vs `_64`) |
 | [`DynParam[T]`](#dynparam) | init / pre-sim | **yes** |
-| [regmap / `s_axilite`](../interface/regmap.md) | runtime, over AXI-Lite | **yes** — one bitstream serves every value |
+| [regmap / `s_axilite`](../interface/primitive/regmap.md) | runtime, over AXI-Lite | **yes** — one bitstream serves every value |
 
 `HwParam` is the one synthesizable code can take, and most of this page is about it. The bottom two
 rows are the same idea at different times: a value set on a *built* thing rather than baked into it.
@@ -114,7 +114,7 @@ The four declared today are all testbench-side configuration:
 > **The axis is binding time, not synthesizable-vs-not.** It is tempting to read `DynParam` as "the
 > marker for non-synthesized blocks" because every current user is a testbench model — but that is a
 > fact about what has been built, not about the marker. Its synthesizable cousin is a
-> [regmap / `s_axilite` register](../interface/regmap.md): also set on a finished artifact, just at
+> [regmap / `s_axilite` register](../interface/primitive/regmap.md): also set on a finished artifact, just at
 > runtime over a bus rather than at init in a C++ constructor.
 
 {: .warning }
@@ -138,7 +138,7 @@ Rules of thumb:
 - the value **sizes the hardware** → `HwParam`;
 - it is a **fixed structural fact of the class** → `HwConst`;
 - it **configures an already-built thing** → `DynParam`, or a
-  [regmap register](../interface/regmap.md) if that thing is synthesized.
+  [regmap register](../interface/primitive/regmap.md) if that thing is synthesized.
 
 ## `param_supports` — declaring kernel variants
 
@@ -167,12 +167,12 @@ generated — concrete top functions per key — is the realization page:
 - [Hardware modules](./modules.md) — where these fields are declared on the class.
 - [Module structure](../comp_codegen/structure.md) — the generated kernel these parameters shape.
 - [XSI testbenches](../comp_codegen/xsi_tb.md) — where `DynParam` assignments are emitted.
-- [Register maps](../interface/regmap.md) — the runtime binding site, for synthesized blocks.
+- [Register maps](../interface/primitive/regmap.md) — the runtime binding site, for synthesized blocks.
 
 ## Quick reference
 
 - One axis: **when does the value bind?** — class definition (`HwConst`), build (`HwParam`), init
-  (`DynParam`), runtime ([regmap](../interface/regmap.md)).
+  (`DynParam`), runtime ([regmap](../interface/primitive/regmap.md)).
 - `HwParam[T]` = per-instance synthesis knob; int-like in sim, wrapped `HwParamValue`, immutable after
   construction. **Distinct values mean distinct artifacts.** The only kind synthesizable code takes.
 - `HwConst[T]` = class-level fixed structural constant; a plain class attribute in sim.

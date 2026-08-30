@@ -151,7 +151,7 @@ the host reads back. The host never writes `y`.
 > a host may read it twice and see `1` both times. `gier`/`ier`/`isr` are plain
 > storage — there is no interrupt line in the simulation — and `auto_restart` /
 > `interrupt` are not modelled. See the
-> [Register Maps guide](../../guide/interface/regmap.md) for the full reference.
+> [Register Maps guide](../../guide/interface/primitive/regmap.md) for the full reference.
 
 ## The execution model
 

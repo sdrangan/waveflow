@@ -1,7 +1,8 @@
 ---
 title: Array Transfer Interface
-parent: Interfaces
-nav_order: 7
+parent: Derived interfaces
+grand_parent: Interfaces
+nav_order: 2
 audience: python
 api: [ArrayTransferIF, ArrayTransferIFMaster, ArrayTransferIFSlave, StreamTransport, SimObj, Simulation]
 summary: "The logical interface that carries a variable-length typed array over a transport — write(elements) with a numpy fast path, push (rx_proc) vs pull (get(count)) receive, and TLAST length validation, with a runnable two-SimObj toy."
@@ -39,10 +40,10 @@ Physical layer:    StreamIFMaster                    StreamIFSlave
 
 ## A minimal simulation
 
-Two raw [`SimObj`](../sim/simobj.md)s sending one variable-length array master→slave. Each transfer
+Two raw [`SimObj`](../../sim/simobj.md)s sending one variable-length array master→slave. Each transfer
 endpoint owns an internal `stream_ep`; bind those over a `StreamIF` to wire the physical link. No
 `HwModule`. (The `yield from` / `run_proc` mechanics are in
-[Process generators](../sim/procgen.md).)
+[Process generators](../../sim/procgen.md).)
 
 ```python
 from dataclasses import dataclass
@@ -108,7 +109,7 @@ print("consumer received:", consumer.received.tolist())
 
 The producer `write`s the three-element array as one burst; the slave infers the element count from
 the burst length and delivers the whole `np.ndarray[float32]` to `rx_proc`, so `consumer.received`
-is `[1.0, -2.5, 3.14]`. See [SimObj](../sim/simobj.md) for the base object and lifecycle; push- vs
+is `[1.0, -2.5, 3.14]`. See [SimObj](../../sim/simobj.md) for the base object and lifecycle; push- vs
 pull-mode receive is detailed below.
 
 ---
@@ -361,9 +362,9 @@ sim.run_sim()
 > **Header + payload on one physical stream.** Each transfer endpoint owns its own `stream_ep`, so two
 > transfer slaves cannot share a single stream. For the "typed header first, then pull `nsamp`
 > samples from the *same* stream" pattern (the poly accelerator), use a single raw
-> [`StreamIFSlave`](./stream.md) and successive `get()` calls — `cmd = yield from s_in.get(PolyCmdHdr)`
+> [`StreamIFSlave`](../primitive/stream.md) and successive `get()` calls — `cmd = yield from s_in.get(PolyCmdHdr)`
 > then `samp = yield from s_in.get_pipelined(Float32, count=cmd.nsamp)` — as
-> [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py) does.
+> [`examples/stream_inband/poly.py`](../../../../examples/stream_inband/poly.py) does.
 
 ---
 
@@ -372,7 +373,7 @@ sim.run_sim()
 The **synthesizable side** — the generated `<element>_array_utils` calls a kernel uses to move this
 transfer over an `m_axi` / stream port (`write_axi4_stream_lane` / `read_axi4_stream_lane`, or
 `read_array_slice` for a resident array) — is documented, with the Python→C++ mapping table, in
-[Custom Hooks: kernel transfer reference](../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel).
+[Custom Hooks: kernel transfer reference](../../custom_hooks/reference.md#mapping-the-python-transfer-interfaces-to-the-kernel).
 
 ---
 

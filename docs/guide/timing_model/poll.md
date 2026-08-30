@@ -1,7 +1,7 @@
 ---
 title: Polling Overhead
-parent: Interfaces
-nav_order: 4
+parent: Timing Models
+nav_order: 8.5
 audience: python
 api: [MMIFMaster, AXIMMCrossBarIF, DirectMMIF, MMIFSlave, PollCond, Eq, Ne, AXIMMQueue]
 summary: "The loosely-timed polling-overhead model — MMIFMaster.poll_until with a restricted PollCond, the per-bus bandwidth-steal (ov) derating and the deterministic discovery-latency delay, modeled in O(transactions) rather than by stepping every poll cycle."
@@ -14,7 +14,7 @@ A master that **polls** a memory word — a queue consumer watching a ring tail,
 1. **Bandwidth steal.** Every poll read consumes bus beats. A master polling every *N* cycles steals a `1/N` fraction of the bus's throughput from everyone else on it, whether or not the watched event has happened yet.
 2. **Discovery latency.** After the watched event becomes true, the poller does not see it until its *next* poll. On average that is half a poll interval of delay between the event and its discovery.
 
-Waveflow models **both** costs with [`MMIFMaster.poll_until`](./aximm.md), in **O(transactions)** — it never actually loops the simulation every poll cycle. This page describes the model and the design rationale behind it.
+Waveflow models **both** costs with [`MMIFMaster.poll_until`](../interface/primitive/aximm.md), in **O(transactions)** — it never actually loops the simulation every poll cycle. This page describes the model and the design rationale behind it.
 
 > This is the loosely-timed (LT) twin of a real hardware poll loop (the C++ ring-poll `while (head == tail) tail = gmem[...]`). `poll_until` is also `@synthesizable`: the same call lowers to that C++ poll loop — see [The synthesizable twin](#the-synthesizable-twin) below. Most of this page documents the **simulation** model; the timing parameters (`poll_interval`, `poll_beat_cost`, `discovery`) are loosely-timed concerns and have no hardware meaning.
 
@@ -183,6 +183,6 @@ This is one poll loop, not two: `AXIMMQueue.get`'s ring-dequeue hook (`aximm_que
 
 ## See also
 
-- [MM Interfaces](./aximm.md) — the `MMIFMaster` / `AXIMMCrossBarIF` endpoints and the FULL/LITE latency model `poll_until` plugs into.
-- [Overview](./overview.md) — the `Words` type and the SimPy transaction lifecycle.
+- [MM Interfaces](../interface/primitive/aximm.md) — the `MMIFMaster` / `AXIMMCrossBarIF` endpoints and the FULL/LITE latency model `poll_until` plugs into.
+- [Overview](../interface/overview.md) — the `Words` type and the SimPy transaction lifecycle.
 - [AXI-MM Command Queue example](../../examples/mmqueue/) — the ring-dequeue hook (`queue_get`) this poll primitive is shared with, and its cosim calibration.

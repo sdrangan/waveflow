@@ -27,7 +27,7 @@ The [`VmacHost`](../../../examples/vmac/vmac_host.py) and the `VmacAccel` are bo
 masters on an `AXIMMCrossBarIF`; a single `MemoryMod` is the slave holding the
 command **ring** (its `head`/`tail` pointers and slots) alongside the `A`, `B`, and
 `Y` data regions. Both sides reach the ring through an
-[`AXIMMQueue`](../../guide/interface/mmqueue.md) bound to that memory — the host as
+[`AXIMMQueue`](../../guide/interface/derived/mmqueue.md) bound to that memory — the host as
 producer (`write`), the accelerator as consumer (`get`). This mirrors the minimal
 [`examples/interface/aximm_queue_demo.py`](../../../examples/interface/aximm_queue_demo.py)
 demo, scaled up to a real datapath.
@@ -46,7 +46,7 @@ while True:
 ```
 
 Each `get` reads the ring pointers and one slot; when the ring is empty it
-[polls](../../guide/interface/poll.md) until the host advances `tail`. The host, for
+[polls](../../guide/timing_model/poll.md) until the host advances `tail`. The host, for
 its part, writes `A` and `B`, enqueues `anorm` and `abcorr` (both `inner_prod +
 reduce`) then `end`, barriers on the ring draining, reads both `Y` regions back, and
 computes `rho = abcorr / anorm` itself (the [host/host-side division](./vmac.md#the-motivating-computation)).

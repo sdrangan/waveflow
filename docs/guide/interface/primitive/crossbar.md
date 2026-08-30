@@ -1,7 +1,8 @@
 ---
 title: Crossbar Interfaces
-parent: Interfaces
-nav_order: 2.2
+parent: Primitive interfaces
+grand_parent: Interfaces
+nav_order: 6
 audience: python
 api: [CrossBarIF, CrossBarIFInput, CrossBarIFOutput]
 summary: "The n-input x m-output switching fabric — CrossBarIF, its routing function, and a runnable 2x2 example. Split out of the stream page, which is about the point-to-point StreamIF and the four ways to move data over one."

@@ -15,7 +15,7 @@ element-wise operations plus a reduce** — `scalar_mult` (`α·A`), `inner_prod
 drives it not over a control stream but through a **command queue in shared memory**:
 the host appends `VmacCmd`s to a ring buffer, and a free-running accelerator dequeues
 and executes them over a single `m_axi` master. This is the
-[command-queue interface](../../guide/interface/mmqueue.md) — control moved off the
+[command-queue interface](../../guide/interface/derived/mmqueue.md) — control moved off the
 stream and into memory — made concrete.
 
 ## The system

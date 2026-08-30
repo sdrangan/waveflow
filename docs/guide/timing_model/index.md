@@ -49,7 +49,7 @@ synthesized yet.
   overlaps the load and/or store, element by element.
 
 Double-buffering (ping-pong overlap) is no longer a separate timing model: it is built by composing
-**load / compute / store as concurrent sub-components over a [stream of blocks](../interface/sob.md)**,
+**load / compute / store as concurrent sub-components over a [stream of blocks](../interface/primitive/sob.md)**,
 and the compute sub-component is timed exactly like a [block](./block.md) process.
 
 ### Calibrating — the numbers
@@ -68,6 +68,9 @@ Two methods, and which one you want depends on how much of the cost the LT sim *
 - [The mem-stream residual](./memstream.md) — the reusable `MemRStream` / `MemWStream` control
   residual and the fixture that fits it. Ships calibrated, so a design on a known platform inherits
   it with no re-calibration.
+- [Polling Overhead](./poll.md) — the loosely-timed model for `MMIFMaster.poll_until`: the
+  bandwidth a poll loop steals from the bus it shares, and the discovery latency between the
+  watched event and the next poll. Reached through an interface, but it is a timing model.
 
 ### The two-level split: bus vs component {#the-two-level-split-bus-vs-component}
 

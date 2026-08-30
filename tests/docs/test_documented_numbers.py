@@ -398,7 +398,7 @@ def test_the_hop_latency_the_edge_pages_quote_is_the_one_the_channel_has():
 
     assert measured == 1, f"a channel hop now costs {measured} cycles, not 1"
     word = {1: "one", 2: "two", 3: "three"}[measured]
-    for page in ("guide/interface/behavioral.md", "guide/build/bfm.md"):
+    for page in ("guide/custom_hooks/behavioral.md", "guide/build/bfm.md"):
         text = _page(page)
         assert f"costs exactly {word} cycle" in text, (
             f"{page} no longer quotes the measured hop latency of {word} cycle")

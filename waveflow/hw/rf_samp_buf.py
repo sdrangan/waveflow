@@ -26,7 +26,7 @@ by nature — the ADC never pauses and a capture may run for a long time — and
 express a memory shared between two ``hls::task`` bodies: a local array becomes a synchronizing PIPO
 whose handshake *stalls the writer*, which is the one thing a converter-facing stage may never do.
 So the buffer is hand-written Verilog beside the kernel (:class:`~waveflow.hw.bram.T2pBram`), joined
-by a generated wrapper.  See ``docs/guide/interface/bram.md``.
+by a generated wrapper.  See ``docs/guide/interface/primitive/bram.md``.
 
 **The never-stall law applies to the ingress only.**  It is written on :class:`RfSampBufIngress` and
 deliberately *not* on :class:`RfSampBufCapture`: the capture may block for as long as it likes,

@@ -192,7 +192,7 @@ that walk the code.
 **There is no BRAM XSI object, and that is the stronger story.** No model in `waveflow/build/xsi/`
 mentions BRAM. In XSI the memory is **`bram_t2p.v` itself, compiled into the simulation** beside the
 synthesized kernel — visible in `rtl_<top>.f`. So there is no second implementation that could
-disagree with the first, which is `docs/guide/interface/bram.md`'s point that a hand-written memory is
+disagree with the first, which is `docs/guide/interface/primitive/bram.md`'s point that a hand-written memory is
 *more* verifiable than an emulated one. Expect "where is the BRAM BFM?" to be a reader's first
 question, and answer it on the page.
 
@@ -260,7 +260,7 @@ example:
 
 * `index.md` — the learning objectives, and what the example is for
 * ~~`overview.md`~~ — DELETED by S5e: five of its seven sections were already in
-  `docs/guide/interface/bram.md` with the context that made them make sense, and restating them
+  `docs/guide/interface/primitive/bram.md` with the context that made them make sense, and restating them
   in the example is what made them read as arcana. Its two example-specific sections moved to
   `python.md` (the transactions) and `timing.md` (the overlap).
 * `python.md` — the Python model, and **how** the read-path delay is added (objective 4's code)
@@ -290,7 +290,7 @@ client-side from a CDN, no build plugin) and already used on ten pages — `memc
 argues that a generated artifact cannot drift from what it describes). A topology sketch is the first
 kind.
 
-**And the addressing convention into `docs/guide/interface/bram.md`**, which is written down nowhere
+**And the addressing convention into `docs/guide/interface/primitive/bram.md`**, which is written down nowhere
 today: Vitis byte-addresses a `mode=bram` port, the wrapper undoes it, the WEN is a byte-enable
 vector, and a design that never wraps will not notice if any of that is wrong. That belongs in the
 *interface* guide rather than this example, because it binds anyone using `BramIF` at all.
@@ -335,7 +335,7 @@ assert "read-during-write collision" not in out          # test_bram_toy_xsi.py
 assert "read-during-write collision" not in out          # test_rf_shot_buf_xsi.py
 ```
 
-`docs/guide/interface/bram.md` also presents the memory's `$error` as the guard that makes a
+`docs/guide/interface/primitive/bram.md` also presents the memory's `$error` as the guard that makes a
 hand-written memory *more* verifiable than an emulated one.  That argument survives — the assertion
 is real and it fires — but the sentence should say where the firing can be read, and today the answer
 is "nowhere".
@@ -369,7 +369,7 @@ looked; option 2 is chosen on its own merits rather than by default.
    `test(xsi): remove five checks that could never fail`. Three of them were whole test functions
    whose entire body was the dead assertion; two were embedded and lost only the assertion. `-m xsi`
    went 57 → 54, 0 skipped. **Do not look for them; they are gone.**
-3. **Correct `docs/guide/interface/bram.md`.** It presents the `$error` as *the* guard. The honest
+3. **Correct `docs/guide/interface/primitive/bram.md`.** It presents the `$error` as *the* guard. The honest
    statement: the assertion is real and it fires, but **in the XSI flow nothing can read it**, so a
    user whose design collides gets no warning from that path. That is the finding here, and it is
    bigger than a test — the protection the guide promises does not exist in the flow this repo runs.
@@ -435,7 +435,7 @@ memory charges and a bus does not.
   several means the scenario cannot tell them apart, none is a defect.
 * `AddVcdTopStep` grew an optional `top`, because a wrapped design elaborates its **wrapper** and
   both the dumper's file name and the scope it names have to follow.
-* `docs/guide/interface/bram.md` — the correction. The `$error` is real and fires and **cannot be
+* `docs/guide/interface/primitive/bram.md` — the correction. The `$error` is real and fires and **cannot be
   heard**; the page said the opposite by implication.
 * `docs/guide/comp_codegen/rtl_module.md` — *"nothing traces or times a wrapped design yet"* is no
   longer true. The first one did **not** need the scope prefix: what it reads are the wrapper's own

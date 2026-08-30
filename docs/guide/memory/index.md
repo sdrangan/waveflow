@@ -20,16 +20,16 @@ that lives for one firing are the *same* category if only one module can see the
 |---|---|---|---|
 | 1 | local temporaries, one module | plain Python / plain C++ | Vitis, from the body |
 | 2 | persistent, one module | [`HwState`](./hwstate.md) | Vitis + directives |
-| 3 | **between modules, inside the top** | [`BramIF` + a memory module](../interface/bram.md) | **the designer — it is hand-written RTL** |
+| 3 | **between modules, inside the top** | [`BramIF` + a memory module](../interface/primitive/bram.md) | **the designer — it is hand-written RTL** |
 | 4 | outside the top | AXI-MM ([`MemoryMod`](./memorymod.md), [`MemMgr`](./memmgr.md)) | the platform |
-| 5 | channel storage | [`StreamIF.depth`](../interface/stream.md) | Vitis, from the pragma |
-| 6 | block handoff | [`stream_of_blocks`](../interface/sob.md) | Vitis — **implicitly, if you share an array between tasks** |
+| 5 | channel storage | [`StreamIF.depth`](../interface/primitive/stream.md) | Vitis, from the pragma |
+| 6 | block handoff | [`stream_of_blocks`](../interface/primitive/sob.md) | Vitis — **implicitly, if you share an array between tasks** |
 
 Categories 5 and 6 are the ones a reader is most likely to be surprised to find here, and both earned
 their place the hard way.
 
 **A FIFO is memory**, and it is the storage most designs have most of. `StreamIF.depth` lives under
-[Interfaces](../interface/stream.md) because a channel is how you *use* it — which is precisely why
+[Interfaces](../interface/primitive/stream.md) because a channel is how you *use* it — which is precisely why
 nobody noticed for a long time that **a boundary port's declared depth is silently discarded**
 (Vitis gives a top-level argument the default depth of 2 whatever you write). If you think of depth
 as memory, you ask where it is; if you think of it as a channel attribute, you do not.
@@ -44,7 +44,7 @@ INFO: [HLS 200-741] Implementing PIPO rx_buf_r_RAM_T2P_BRAM_1R1W using a single 
 
 That is a storage decision the tool made for you, in silence, and you should meet it here rather than
 in a netlist. It is also the reason category 3 exists at all — see
-[BRAM: memory between modules](../interface/bram.md).
+[BRAM: memory between modules](../interface/primitive/bram.md).
 
 ## Category 1 needs one sentence, or you will get it wrong
 
@@ -134,7 +134,7 @@ The name is shared with the C++ side on purpose: the generated testbench uses `M
 - [Streaming Memory Kernels](./memstream.md) — `MemRStream` / `MemWStream` / `MemCopy`.
 
 Category 3's own page is not written yet; until it is, [BRAM — memory between
-modules](../interface/bram.md) is the reference, with
+modules](../interface/primitive/bram.md) is the reference, with
 [A module realized as Verilog](../comp_codegen/rtl_module.md) for how the memory is declared.
 
 Underneath categories 3 and 4 sits `Memory`, the sparse byte container. It is a plain Python object,

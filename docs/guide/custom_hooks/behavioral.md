@@ -1,7 +1,7 @@
 ---
 title: Behavioral edges
-parent: Interfaces
-nav_order: 9
+parent: Custom Hooks
+nav_order: 5.5
 audience: python
 api: [Interface, xsi_model, ChannelModel, BlockChannel, RateTick, declares_hook, tb_top_spec]
 summary: "An interface is not only a wiring record — it may carry behavior and state. This page is the authoring guide for a behavioral edge: when an edge deserves behavior (rate, buffering, ordering, loss accounting — never signal processing), the run_proc half that makes it work in pysim, the xsi_model() half that gives it a C++ realization, the queue phase discipline that makes a model-to-model transfer independent of participant order, the counter contract, and the equivalence obligation the two halves owe each other."
@@ -15,7 +15,7 @@ property owned by the edge and read by both backends — pysim bounds its queue 
 `#pragma HLS STREAM depth=N`.
 
 A **behavioral edge** goes one step further: it has a `run_proc` of its own. It is still an
-[`Interface`](./overview.md), and an `Interface` is already a [`SimObj`](../sim/), so the Python half
+[`Interface`](../interface/overview.md), and an `Interface` is already a [`SimObj`](../sim/), so the Python half
 needs no new machinery at all. What was missing was the other half — a C++ realization — and that is
 what this page is about.
 
@@ -26,7 +26,7 @@ A **node** declares how it is realized; so does an **edge**. The two are exact p
 | | module (node) | interface (edge) |
 |---|---|---|
 | pysim | `run_proc` on a `HwModule` | `run_proc` on an `Interface` |
-| XSI | [`bfm_model()`](../custom_hooks/bfm_model.md) → an `XsiSimObj` bound to **RTL pins** | `xsi_model()` → an `XsiSimObj` bound to **two peer models** |
+| XSI | [`bfm_model()`](./bfm_model.md) → an `XsiSimObj` bound to **RTL pins** | `xsi_model()` → an `XsiSimObj` bound to **two peer models** |
 
 Both are optional, both are **declared and never derived**, and both are detected by identity rather
 than by `hasattr`:
@@ -195,7 +195,7 @@ is something you assert by reading both implementations, and this page is not ev
 - [BFM testbenches](../build/bfm.md#channels) — the model library, and the channel beside it.
 - [XSI testbench in HLS](../comp_codegen/xsi_tb.md#two-walks) — which of `tb_top_spec`'s two walks
   claims which interface.
-- [Writing a BFM model](../custom_hooks/bfm_model.md) — the node-side authoring page; the
+- [Writing a BFM model](./bfm_model.md) — the node-side authoring page; the
   `XsiSimObj` phases and the equivalence obligation are shared.
 
 **Source of truth:** `waveflow/hw/interface.py` (`xsi_model`),

@@ -1,7 +1,8 @@
 ---
 title: Stream-of-Blocks Interface
-parent: Interfaces
-nav_order: 2.5
+parent: Primitive interfaces
+grand_parent: Interfaces
+nav_order: 5
 audience: python
 api: [StreamOfBlocksIF, SobIFMaster, SobIFSlave, DataArray]
 summary: "What Stream-of-Blocks (SOB) is in isolation: a block-granular handoff (DataArray[T, N]) with acquire/commit/release semantics over a depth-2 ping-pong buffer. Unlike a FIFO, it has two control paths — a block-ready channel forward and a buffer-free channel backward — which is why it needs four calls, not put/get."
@@ -11,7 +12,7 @@ summary: "What Stream-of-Blocks (SOB) is in isolation: a block-granular handoff 
 
 `StreamOfBlocksIF` is the block counterpart to [`StreamIF`](./stream.md): instead of transferring one
 word at a time, it transfers **ownership of a whole block**. Its modeling pattern (with a worked
-example) is the [interleaver](../../examples/interleaver/); this page is the interface in isolation.
+example) is the [interleaver](../../../examples/interleaver/); this page is the interface in isolation.
 
 ## What it carries
 
@@ -150,7 +151,7 @@ The hardware realization is the **same two token channels** around `depth` share
 difference worth knowing: in pysim the ready queue carries the **block payload** (convenient for a
 discrete-event model), but in hardware the ready channel carries only a **token / valid** — the payload
 stays in the shared buffer RAM. That is the whole point of a ping-pong: you hand over *ownership*, not a
-copy, which is why the hand-off costs ~nothing in the [timing model](../timing/sob.md).
+copy, which is why the hand-off costs ~nothing in the [timing model](../../timing/sob.md).
 Vitis's `hls::stream_of_blocks` generates this handshake for you; whether the exact RTL uses FIFO
 primitives or equivalent counters/handshake logic is an implementation detail — the behavior is this
 two-way token exchange.
@@ -257,5 +258,5 @@ in Python.
 ## See also
 
 - [Stream Interfaces](./stream.md) — the one-channel FIFO this contrasts with.
-- [Free-running kernel in HLS](../comp_codegen/freerunning.md) — how a SOB edge lowers, the lock scopes, and the gather/scatter throughput asymmetry.
-- [Defining a component](../flows/modules.md) — where SOB endpoints are declared on components.
+- [Free-running kernel in HLS](../../comp_codegen/freerunning.md) — how a SOB edge lowers, the lock scopes, and the gather/scatter throughput asymmetry.
+- [Defining a component](../../flows/modules.md) — where SOB endpoints are declared on components.

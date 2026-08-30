@@ -339,7 +339,7 @@ class Interface(SimObj):
         raise NotImplementedError(
             f"{type(self).__name__} declares no xsi_model() hook, so it has no pre-written channel "
             f"model to place between two peer models. An edge whose endpoints both lie OUTSIDE the "
-            f"cut overrides xsi_model() to name one (see docs/guide/interface/behavioral.md); an "
+            f"cut overrides xsi_model() to name one (see docs/guide/custom_hooks/behavioral.md); an "
             f"edge that crosses the cut is a boundary port and takes a BFM dual instead."
         )
 

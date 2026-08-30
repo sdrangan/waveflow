@@ -20,7 +20,7 @@ extracted `run_proc` IR through the framework `kernel_to_cpp` path
 `m_axi`-only** kernel that:
 
 1. dequeues a `VmacCmd` from the in-memory ring — the synthesizable
-   [`AXIMMQueue.get`](../../guide/interface/mmqueue.md) lowered to the
+   [`AXIMMQueue.get`](../../guide/interface/derived/mmqueue.md) lowered to the
    [`queue_get` ring-dequeue hook](../../guide/custom_hooks/queue.md);
 2. stops if the command is `OpCode.end`;
 3. otherwise runs `vmac_compute` (the [hand-written datapath hook](./hook.md)) and

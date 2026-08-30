@@ -2,7 +2,7 @@
 
 ``plans/bram_access.md``.  Two free-running ``hls::task`` bodies share one true-dual-port memory that
 lives *beside* the kernel as hand-written Verilog; a generated wrapper joins them.  The mechanism is
-:mod:`waveflow.hw.bram` and is documented in ``docs/guide/interface/bram.md`` — what is here is the
+:mod:`waveflow.hw.bram` and is documented in ``docs/guide/interface/primitive/bram.md`` — what is here is the
 worked example a reader who wants "shared memory between two modules" should be able to read without
 knowing anything about RF::
 
@@ -154,7 +154,7 @@ SENTINEL_BASE = 500
 # That is not a style preference.  A command read as N separate ``s.read()`` calls authors the field
 # layout a second time, in the one place nothing checks it against the generated header -- the same
 # defect as hand-rolled element packing, one level up.  Stage 1 of this example did exactly that, and
-# this is the correction.  See docs/guide/interface/stream.md#the-four-ways-to-move-data.
+# this is the correction.  See docs/guide/interface/primitive/stream.md#the-four-ways-to-move-data.
 
 
 class BramStatus(IntEnum):
@@ -587,7 +587,7 @@ class BramAccessTB(FreeRunMod):
     model.  **There is no BRAM XSI object anywhere in this repo**, and that is the stronger story: in
     XSI the memory is ``bram_t2p.v`` itself, compiled into the simulation beside the synthesized
     kernel and named in ``rtl_bram_access_top.f``.  There is no second implementation that could
-    disagree with the first — which is ``docs/guide/interface/bram.md``'s point that a hand-written
+    disagree with the first — which is ``docs/guide/interface/primitive/bram.md``'s point that a hand-written
     memory is *more* verifiable than an emulated one.
     """
 

@@ -1,7 +1,8 @@
 ---
 title: Register Maps
-parent: Interfaces
-nav_order: 5
+parent: Primitive interfaces
+grand_parent: Interfaces
+nav_order: 4
 audience: python
 api: [RegMap, RegField, RegAccess, RegMapMMIFSlave, VitisRegMap, VitisRegMapMMIFSlave, BoundRegMap, SimObj, Simulation]
 summary: "AXI-Lite register maps in the SimPy model — RegField/RegAccess, the RegMap slave dispatch, the VitisRegMap ap_ctrl_hs (ap_start/ap_done) launch lifecycle, and the BoundRegMap host surface, with a runnable two-SimObj launch-then-poll toy."
@@ -26,12 +27,12 @@ The register map matches the model that Vitis HLS generates from `s_axilite` sca
 
 ## A minimal simulation
 
-Two raw [`SimObj`](../sim/simobj.md)s exercising the launch-then-poll lifecycle over a
+Two raw [`SimObj`](../../sim/simobj.md)s exercising the launch-then-poll lifecycle over a
 [`DirectMMIF`](./aximm.md#directmmif): a `Kernel` holding a `VitisRegMapMMIFSlave` runs its `on_start`
 when launched, and a `Host` holding an `MMIFMaster` writes the inputs, asserts `ap_start`, polls
 `ap_done`, and reads the result back. No `HwModule`. (`on_start` is the regmap-launched entry — see
-the [SimObj lifecycle](../sim/simobj.md#its-lifecycle); the `yield from` mechanics are in
-[Process generators](../sim/procgen.md).)
+the [SimObj lifecycle](../../sim/simobj.md#its-lifecycle); the `yield from` mechanics are in
+[Process generators](../../sim/procgen.md).)
 
 ```python
 from dataclasses import dataclass
@@ -113,7 +114,7 @@ sim.run_sim()
 `host.y` is `11` (`3*5 - 4`): the host's `set` writes land in the register fields, `start()` writes
 `ap_start` which launches `on_start`, the slave sets `ap_done` when it returns, and `poll_end` reads
 that back before the host fetches `y`. `bind_master` / `start` / `poll_end` are the host-side
-[`BoundRegMap`](#host-side-boundregmap) surface. See [SimObj](../sim/simobj.md) for the lifecycle.
+[`BoundRegMap`](#host-side-boundregmap) surface. See [SimObj](../../sim/simobj.md) for the lifecycle.
 
 ## Quick example
 
@@ -278,11 +279,11 @@ Kernel-side `RegMap.get()` / `RegMap.set()` run in-process on the component obje
 - `BoundRegMap.start()` (coroutine): convenience launch helper for `VitisRegMap` that writes `ap_start`.
 - `BoundRegMap.poll_end(field="ap_done", interval=…, max_polls=…)` (coroutine): polls a status field until it reads its completion value (default `ap_done == 1`), returns the read value, and raises after `max_polls`. The standard "wait for the kernel to finish" helper on a `VitisRegMap`.
 
-Source class: [`BoundRegMap`](../../../waveflow/hw/regmap.py).
+Source class: [`BoundRegMap`](../../../../waveflow/hw/regmap.py).
 
 ### Example (host-side testbench)
 
-From [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py), `PolyTB.run_proc`:
+From [`examples/stream_inband/poly.py`](../../../../examples/stream_inband/poly.py), `PolyTB.run_proc`:
 
 ```python
 rm = self._regmap().bind_master(self.m_lite, base_addr=self.base_addr)
@@ -756,4 +757,4 @@ from waveflow.hw.regmap import (
 
 ## Worked example
 
-For an end-to-end walkthrough that puts these abstractions to work — declaring a `VitisRegMap`, running it in SimPy, generating the Vitis HLS kernel, and validating the measured RTL timing against the Python model — see the [Register Map example](../../examples/regmap/) in the Examples section.
+For an end-to-end walkthrough that puts these abstractions to work — declaring a `VitisRegMap`, running it in SimPy, generating the Vitis HLS kernel, and validating the measured RTL timing against the Python model — see the [Register Map example](../../../examples/regmap/) in the Examples section.

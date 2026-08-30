@@ -98,7 +98,7 @@ Four things to notice:
   states it.
 - **`storage_type` is derived, and the two ports differ.** `buf_r` is read-only and gets
   `ram_1wnr`; `buf_w` is declared
-  [`access="readwrite"`](../../guide/interface/bram.md#accessreadwrite-and-the-storage_type-that-follows)
+  [`access="readwrite"`](../../guide/interface/primitive/bram.md#accessreadwrite-and-the-storage_type-that-follows)
   — the `COMPUTE` opcode reads the words it rewrites — and gets `ram_1p`. The wrapper wires **one**
   physical memory port per declared `bram` port, and `ram_1wnr` would let Vitis take a second one it
   never wired. The visible price is that the in-place loop schedules at **II=2**: one port, a read
@@ -205,7 +205,7 @@ except LoweringError:
 ```
 
 The full convention — including why a design that never wraps will not notice if any of this is
-wrong — is in [the interface guide](../../guide/interface/bram.md#the-addressing-convention).
+wrong — is in [the interface guide](../../guide/interface/primitive/bram.md#the-addressing-convention).
 
 The wrapper also has to deal with a **B half** it does not use. Vitis emits a full A/B pair per
 `bram` interface whether the kernel uses both or not, so its unused outputs are left open and its
