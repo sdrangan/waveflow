@@ -69,13 +69,11 @@ A plain FIFO (no `TLAST`) uses `read_stream_lane<WORD_BW>(s, dst, n)` /
 
 ## Mapping the Python transfer interfaces to the kernel
 
-A hook is the C++ realization of a Python transfer interface. The
-[`ArrayTransferIF`](../interface/derived/array_transfer.md) calls map to the generated array-utils methods:
+A hook is the C++ realization of a Python transfer call. Typed reads and writes on a
+[`StreamIF`](../interface/primitive/stream.md) map to the generated schema and array-utils methods:
 
 | Python (transactional model) | C++ (in the hook) |
 |---|---|
-| `ArrayTransferIFMaster(element_type=Float32).write(elements)` | `float32_array_utils::write_axi4_stream_lane<W>(src, s, tlast, n)` (looped over the burst) |
-| `ArrayTransferIFSlave(element_type=Float32).get(count=n)` | `float32_array_utils::read_axi4_stream_lane<W>(s, dst, n, tl)` (looped) |
 | an array resident in memory | `float32_array_utils::read_array_slice<W>(mem, out)` |
 | `StreamIFMaster.write(obj)` where `obj` is a `DataList` | `obj.write_stream<W>(s)` — from the header the schema generates |
 | `StreamIFSlave.get_schema(Schema)` | `Schema c; c.read_stream<W>(s);` — **one call, never `n` × `s.read()`** |

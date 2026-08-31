@@ -27,8 +27,6 @@ underneath** — and that difference is worth knowing before you wire one up.
 | [Credit Stream](./credit_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
 | [Acked Stream](./acked_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
 | [AXI-MM Command Queue](./mmqueue.md) | a protocol *over* an `MMIFMaster` — the ring lives in the transactions, not in a new channel |
-| [Schema Transfer](./schema_transfer.md) | **owns** an inner `StreamIFMaster`; **you bind its `stream_ep`** to a real `StreamIF` |
-| [Array Transfer](./array_transfer.md) | **owns** an inner stream endpoint, bound the same way |
 
 The two reverse channels declare their composition, so a walk over the design finds the underlying
 streams without help:
@@ -44,10 +42,8 @@ CreditStreamIF   Two ordinary streams.  Nothing here lowers to a new kind of edg
 AckedStreamIF    Two ordinary streams.  In hardware there is no acked stream — there are two FIFOs.
 ```
 
-The two transfer interfaces compose just as really, but the seam is manual: the endpoint creates the
-inner `StreamIFMaster` and you complete the connection yourself. Nothing is lost by that — the
-stream you bind is an ordinary one — but it does mean the composition is not visible to a walk that
-only reads the interface.
+The queue is the odd one: it is a protocol *over* an `MMIFMaster` rather than a new channel, so the
+ring lives in the transactions and there is nothing extra to bind.
 
 ## The two reverse channels
 
@@ -68,10 +64,6 @@ copies.
 
 ## Pages
 
-- [Schema Transfer Interface](./schema_transfer.md) — carrying serializable schema objects over a
-  transport.
-- [Array Transfer Interface](./array_transfer.md) — carrying a variable-length typed array over a
-  transport.
 - [AXI-MM Command Queue](./mmqueue.md) — the in-memory command ring (`AXIMMQueue`): control moved
   off the stream and into shared memory, over an `MMIFMaster`.
 - [Credit Stream](./credit_stream.md) — the receiver's reverse channel: cumulative words consumed,

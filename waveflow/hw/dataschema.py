@@ -384,7 +384,7 @@ class DataSchema(ABC):
 
     # -- vectorized numpy transfer hooks (the open/closed fast path) ------------
     # Array serializers (``MMIFMaster.read_array`` / ``write_array``,
-    # ``ArrayTransferIF``) call these to move a whole array of ``cls`` elements as one
+    # ``get_array`` / ``read_array``) call these to move a whole array of ``cls`` elements as one
     # numpy reinterpret instead of a per-element loop.  The default returns ``None`` —
     # "no vectorized path; fall back to the generic recursive (de)serializer."  A field
     # type opts in by overriding them (or, for scalar fields, just ``_numpy_elem_dtype``);

@@ -38,7 +38,7 @@ one?**
 | | | |
 |---|---|---|
 | **[Primitive](./primitive/)** | builds on no other interface — it is the module's direct connection to the outside | [`StreamIF`](./primitive/stream.md) · [`MMIF` / `DirectMMIF`](./primitive/aximm.md) · [`BramIF`](./primitive/bram.md) · [`RegMapMMIFSlave`](./primitive/regmap.md) · [`StreamOfBlocksIF`](./primitive/sob.md) · [`CrossBarIF`](./primitive/crossbar.md) · [`RFSampIF`](../rf/rfdc/) |
-| **[Derived](./derived/)** | built from one or more primitives, whose endpoints it owns and drives | [`CreditStreamIF`](./derived/credit_stream.md) · [`AckedStreamIF`](./derived/acked_stream.md) · [`SchemaTransferIF`](./derived/schema_transfer.md) · [`ArrayTransferIF`](./derived/array_transfer.md) · [`AXIMMQueue`](./derived/mmqueue.md) |
+| **[Derived](./derived/)** | built from one or more primitives, whose endpoints it owns and drives | [`CreditStreamIF`](./derived/credit_stream.md) · [`AckedStreamIF`](./derived/acked_stream.md) · [`AXIMMQueue`](./derived/mmqueue.md) |
 
 Primitives come first, because everything in the second row is written in terms of the first.
 

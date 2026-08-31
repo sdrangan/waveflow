@@ -23,16 +23,6 @@ from .dataunion import (
     SchemaRegistry,
     register_schema,
 )
-from .schema_transfer_interface import (
-    ArrayTransferIF,
-    ArrayTransferIFMaster,
-    ArrayTransferIFSlave,
-    PhysicalTransport,
-    SchemaTransferIF,
-    SchemaTransferIFMaster,
-    SchemaTransferIFSlave,
-    StreamTransport,
-)
 from .interface import (
     SobIFMaster,
     SobIFSlave,
@@ -88,14 +78,6 @@ __all__ = [
     "LengthField",
     "DataUnionHdr",
     "DataUnion",
-    "PhysicalTransport",
-    "StreamTransport",
-    "SchemaTransferIFMaster",
-    "SchemaTransferIFSlave",
-    "SchemaTransferIF",
-    "ArrayTransferIFMaster",
-    "ArrayTransferIFSlave",
-    "ArrayTransferIF",
     "SobIFMaster",
     "SobIFSlave",
     "StreamOfBlocksIF",
