@@ -50,13 +50,18 @@ def _w(*vals) -> np.ndarray:
     return np.array(vals, dtype=np.uint32)
 
 
+def _w64(*vals) -> np.ndarray:
+    """A raw word burst on a 64-bit forward channel."""
+    return np.array(vals, dtype=np.uint64)
+
+
 def _credit(depth=8, credit_depth=4, ctr_bits=CTR_BITS, resp_words=RESP_WORDS, bitwidth=32):
     sim = Simulation()
     m = CreditStreamMasterIF(name="m", sim=sim, bitwidth=bitwidth,
                              resp_words=resp_words, ctr_bits=ctr_bits)
     s = CreditStreamSlaveIF(name="s", sim=sim, bitwidth=bitwidth, ctr_bits=ctr_bits)
     iface = CreditStreamIF(name="c", sim=sim, clk=Clock(freq=FREQ), bitwidth=bitwidth,
-                           depth=depth, credit_depth=credit_depth)
+                           depth=depth, credit_depth=credit_depth, ctr_bits=ctr_bits)
     iface.bind("master", m)
     iface.bind("slave", s)
     return sim, iface, m, s
@@ -626,6 +631,83 @@ class TestWiringAndSizing:
         m = CreditStreamMasterIF(name="m", sim=sim, bitwidth=32)
         with pytest.raises(RuntimeError, match="not bound"):
             _ = m.avail
+
+
+class TestTheCreditChannelIsAsWideAsItsCounter:
+    """The reverse channel carries a counter, not data — so it is :data:`CTR_BITS` wide, not a word.
+
+    Built at the forward word width, a credit channel was four times wider than the number on it
+    *and* disagreed with the arithmetic: every difference was masked at 16 bits while the channel was
+    sized at 64.  Widening the data would then have widened the counter's channel without moving
+    where the counter wrapped, which is a disagreement rather than waste.
+    """
+
+    def test_the_credit_channel_does_not_track_the_data_width(self):
+        """Double the data width; the credit channel does not move.  **The headline assertion.**"""
+        _, narrow, _, _ = _credit(bitwidth=32)
+        _, wide, _, _ = _credit(bitwidth=64)
+
+        assert narrow.fwd_if.bitwidth == 32 and wide.fwd_if.bitwidth == 64, "the data width moved"
+        assert narrow.crd_if.bitwidth == wide.crd_if.bitwidth == CTR_BITS, (
+            "and the credit channel did not — it is the counter's width, in both")
+        assert wide.crd_if.bitwidth != wide.fwd_if.bitwidth, (
+            "the negative control: the two widths must actually be different here, or this test "
+            "would pass against the old behaviour")
+
+    def test_the_channel_is_the_width_the_arithmetic_masks_at(self):
+        """One number, read by both.  A separate field could disagree with ``ctr_bits``; a derived
+        property cannot, which is the whole reason it is derived."""
+        _, iface, m, s = _credit(bitwidth=64, ctr_bits=8)
+        assert iface.crd_bitwidth == m.crd_bitwidth == s.crd_bitwidth == 8
+        assert iface.crd_if.bitwidth == 8
+        assert m.crd_ep.bitwidth == s.crd_ep.bitwidth == 8
+        assert m.outstanding == udiff(m.written, m.acked, 8), "and it is the mask, not just a label"
+
+    def test_the_narrower_channel_moved_no_number(self):
+        """Rule 4's saturation, re-run on a **64-bit** design, and every count is the one the
+        32-bit run produced.
+
+        Depth is in words and a drop is counted in words, so narrowing the wire cannot move either.
+        That is a claim worth asserting rather than reasoning about: it is the one way this change
+        could have been silently wrong.
+        """
+        sim, iface, m, s = _credit(depth=16, credit_depth=4, bitwidth=64)
+        taken = []
+
+        def body():
+            for k in range(8):
+                assert (yield from m.write_nb(_w64(k))) is True
+            for _ in range(8):
+                yield from s.get(nwords_max=1)
+            assert m.crd_ep.nrx.level == m.crd_ep.nrx.capacity == 4
+            for _ in range(8):
+                if (yield from m.poll_credit(1)) == 0:
+                    break
+                taken.append(m.acked)
+
+        _run(sim, body)
+
+        assert iface.n_credit_dropped == 4, "the same four offers had nowhere to go"
+        assert taken == [1, 2, 3, 4], "the same oldest four, in the same order"
+        assert s.consumed == 8 and m.acked == 4 and m.outstanding == 4
+        assert m.avail == 16 - RESP_WORDS - 4
+
+    def test_a_counter_width_the_channel_was_not_built_for_is_refused(self):
+        """Both sides are checked against the **channel**, and the message names the counter.
+
+        The check has to run before the sub-interface bind: ``ctr_bits`` and the channel width are
+        one number now, so ``StreamIF.bind`` would otherwise reject this as a bare width mismatch —
+        true, and a worse thing to read.
+        """
+        for side, ctr in (("master", 8), ("slave", 4)):
+            sim = Simulation()
+            iface = CreditStreamIF(name="c", sim=sim, clk=Clock(freq=FREQ), bitwidth=32,
+                                   depth=8, ctr_bits=16)
+            ep = (CreditStreamMasterIF(name="m", sim=sim, bitwidth=32, ctr_bits=ctr)
+                  if side == "master"
+                  else CreditStreamSlaveIF(name="s", sim=sim, bitwidth=32, ctr_bits=ctr))
+            with pytest.raises(ValueError, match="counter widths differ"):
+                iface.bind(side, ep)
 
 
 class TestTheTypedReadPath:

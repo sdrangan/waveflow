@@ -68,6 +68,18 @@ A modular subtraction at the counter's width is *exact* whenever the true differ
 not, so a twin computing ``self.written - self.acked`` on unbounded ints agrees with RTL everywhere
 *except* at the boundary.  Every counter difference in this file goes through :func:`udiff`, and
 ``tests/hw/test_reverse_stream.py`` walks the counters **onto** the wrap rather than near it.
+
+A reverse channel is as wide as what it carries, not as wide as the forward one
+--------------------------------------------------------------------------------
+
+Neither reverse channel carries data, so neither is a word wide.  A credit value is a
+:data:`CTR_BITS`-wide counter and a status is whatever its :attr:`AckedStreamIF.status_type` says it
+is; both used to be built at the *forward* word width, which made the credit channel four times
+wider than the number travelling on it and left the ack channel with no declared width at all.
+
+The credit case was not merely wasteful, it was a **disagreement**: the model already computed every
+difference at ``ctr_bits`` while the channel was sized at ``bitwidth``, so the two disagreed about
+where a value wraps.  One number now settles both — see :attr:`CreditStreamIF.crd_bitwidth`.
 """
 from __future__ import annotations
 
@@ -175,7 +187,9 @@ class CreditStreamMasterIF(InterfaceEndpoint):
     be wired backwards by a caller — the one mistake that would look like a hang."""
 
     crd_ep: StreamIFSlave = field(init=False)
-    """The reverse (credit) **slave**: the data master is the credit *reader*."""
+    """The reverse (credit) **slave**: the data master is the credit *reader*.
+
+    Built at :attr:`crd_bitwidth`, **not** at :attr:`bitwidth` — see that property."""
 
     type_name = 'credit_stream_master_if'
 
@@ -183,12 +197,23 @@ class CreditStreamMasterIF(InterfaceEndpoint):
         """Two streams, forward then reverse — there is no credit-stream object in C++."""
         return [self.fwd_ep, self.crd_ep]
 
+    @property
+    def crd_bitwidth(self) -> int:
+        """Width of a **credit** word — :attr:`ctr_bits`, and derived rather than settable.
+
+        The one number the credit channel is about is the counter, so the channel is exactly as wide
+        as the counter.  A second field could disagree with :attr:`ctr_bits`, which is the very
+        disagreement this replaces: the accounting masked at 16 bits while the channel was built at
+        the forward word width, so widening the *data* silently widened the *counter's* channel
+        without moving where the counter wrapped."""
+        return int(self.ctr_bits)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFMaster(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
         self.crd_ep = StreamIFSlave(
-            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
+            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.crd_bitwidth, has_tlast=True)
         #: Cumulative words written to the forward channel, masked at :attr:`ctr_bits`.
         self.written = 0
         #: Cumulative words the consumer has told us it consumed.  A **lower bound** on the truth —
@@ -319,13 +344,20 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
     def physical_endpoints(self):
         return [self.fwd_ep, self.crd_ep]
 
+    @property
+    def crd_bitwidth(self) -> int:
+        """Width of a credit word — :attr:`ctr_bits`.  See
+        :attr:`CreditStreamMasterIF.crd_bitwidth`; the two sides read the same number off the same
+        field, which is why they cannot be built at different widths."""
+        return int(self.ctr_bits)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFSlave(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth,
             has_tlast=True, queue_size=self.queue_size)
         self.crd_ep = StreamIFMaster(
-            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
+            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.crd_bitwidth, has_tlast=True)
         #: Cumulative words consumed, masked at :attr:`ctr_bits` — exactly what goes on the wire.
         self.consumed = 0
 
@@ -371,7 +403,7 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
         Separate from :meth:`get` so a consumer that reads the forward channel some other way (a
         typed read, a drain) can still keep the credit channel honest without re-implementing it.
         """
-        word = np.array([self.consumed], dtype=_block_dtype(self.bitwidth))
+        word = np.array([self.consumed], dtype=_block_dtype(self.crd_bitwidth))
         return (yield from self.crd_ep.offer(word))
 
 
@@ -405,6 +437,13 @@ class CreditStreamIF(Interface):
     on this side — only a rate argument — so a consumer that ever acks per word needs the solicited
     treatment :class:`AckedStreamIF` has."""
 
+    ctr_bits: int = CTR_BITS
+    """Width of the credit counter, which is also the width of the credit **channel**.
+
+    Here as well as on the endpoints because :attr:`crd_if` is built in ``__post_init__``, before any
+    endpoint exists to read it from — the same reason :attr:`bitwidth` is stated three times.  All
+    three must agree, and :meth:`bind` refuses them when they do not."""
+
     fwd_if: StreamIF = field(init=False)
     crd_if: StreamIF = field(init=False)
 
@@ -413,6 +452,17 @@ class CreditStreamIF(Interface):
     def physical_interfaces(self):
         """Two ordinary streams.  Nothing here lowers to a new kind of edge."""
         return [self.fwd_if, self.crd_if]
+
+    @property
+    def crd_bitwidth(self) -> int:
+        """Width of the reverse channel — :attr:`ctr_bits`, **not** :attr:`bitwidth`.
+
+        Derived, so the channel and the arithmetic cannot disagree.  It is also what the generated
+        FIFO is built at: :meth:`physical_interfaces` hands :attr:`crd_if` to
+        :func:`~waveflow.build.composite_gen.derive_internal_edges`, which reads the width off the
+        ``StreamIF`` — so a credit channel that was 64 bits in pysim was 64 bits in RTL too, for a
+        16-bit number."""
+        return int(self.ctr_bits)
 
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')
@@ -426,7 +476,7 @@ class CreditStreamIF(Interface):
         self.fwd_if = StreamIF(name=f"{self.name}_fwd", sim=self.sim, clk=self.clk,
                                bitwidth=self.bitwidth, depth=int(self.depth))
         self.crd_if = StreamIF(name=f"{self.name}_crd", sim=self.sim, clk=self.clk,
-                               bitwidth=self.bitwidth, depth=int(self.credit_depth))
+                               bitwidth=self.crd_bitwidth, depth=int(self.credit_depth))
 
     @property
     def n_credit_dropped(self) -> int:
@@ -445,6 +495,15 @@ class CreditStreamIF(Interface):
         want = CreditStreamMasterIF if ep_name == 'master' else CreditStreamSlaveIF
         if not isinstance(endpoint, want):
             raise TypeError(f"'{ep_name}' side of CreditStreamIF must bind to {want.__name__}")
+        # BEFORE the sub-interface binds, because `StreamIF.bind` would otherwise reject the same
+        # mismatch as a bare width disagreement -- true, but naming the symptom rather than the
+        # cause.  The counter width and the channel width are one number now, so a wrong `ctr_bits`
+        # presents as a wrong channel width, and this is the message that says which it is.
+        if int(endpoint.ctr_bits) != int(self.ctr_bits):
+            raise ValueError(
+                f"counter widths differ across '{self.name}': the channel is built at "
+                f"{self.ctr_bits} bits and the '{ep_name}' endpoint masks at {endpoint.ctr_bits}.  "
+                f"The two must mask identically or they agree everywhere except at the wrap")
         if ep_name == 'master':
             self.fwd_if.bind('master', endpoint.fwd_ep)
             self.crd_if.bind('slave', endpoint.crd_ep)
@@ -455,15 +514,16 @@ class CreditStreamIF(Interface):
         self._check_bound()
 
     def _check_bound(self) -> None:
-        """Validate what only becomes checkable once both sides are present."""
+        """Validate what only becomes checkable once both sides are present.
+
+        The counter width is **not** checked here: it is checked in :meth:`bind` against the
+        interface's own :attr:`ctr_bits`, which both endpoints are compared to, and which has to
+        happen before the sub-interface bind rather than after it.  Two endpoints that each match the
+        channel match each other.
+        """
         m, s = self.endpoints['master'], self.endpoints['slave']
         if m is None or s is None:
             return
-        if m.ctr_bits != s.ctr_bits:
-            raise ValueError(
-                f"counter widths differ across '{self.name}': master {m.ctr_bits} bits, slave "
-                f"{s.ctr_bits}.  The two must mask identically or they agree everywhere except at "
-                f"the wrap")
         if int(self.depth) <= int(m.resp_words):
             raise ValueError(
                 f"CreditStreamIF '{self.name}': depth={self.depth} leaves no room for data once "
