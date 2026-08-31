@@ -156,19 +156,26 @@ A number that happened to match once is not.
 An `RfBlock` carries its **grid index** alongside its samples, and a command such as `RxCmd` names a
 window in **sample index** — the converter's running count, not a buffer address or a wall-clock time.
 
-Arrival time is backend-dependent; the sample index is not. `examples/rf_blk_delay` measures both at
-once. It asks for block *k* at sample index `k·256` and places it at `k·256 + 1024`, and both backends
-honour that exactly — every block, bit-exact. But *where the delayed sample lands in what the DAC
-played* is **1024** in pysim and **1020** at RTL: a fixed **4**-sample difference in start-up phase
-between the player's pointer and the converter's block grid. Neither is wrong. Anything derived from
-arrival inherits that 4; anything derived from the sample index does not, because sample *n* is at
-`t0 + n / samp_rate` in both.
+Arrival time is backend-dependent; the sample index is not.
 
-That gap was **64** until 2026-08-18 and is now one word — which makes the rule's point better than
-the larger number did. The skew is how far the player's pointer runs before the grid's first block
-boundary, so it shrank when the player went to one word per cycle and started filling the converter's
-input FIFO immediately. **A quantity derived from arrival moved by a factor of sixteen because an
-unrelated body was pipelined**; the index relation did not move at all.
+**The index half.** `examples/rf_blk_delay` asks for block *k* at sample index `k·256` and places it
+at `k·256 + 1024`, and both backends honour that exactly — every block, bit-exact. That relation has
+never moved, through four separate re-timings of the machinery underneath it.
+
+**The arrival half.** `examples/rf_loopback` runs the same five nodes in both backends and disagrees
+about when the first data block comes out.  The startup transient is
+**2** blocks in pysim and **1** at RTL.
+Neither is wrong, and the cause is not a bug in either — pysim paces the RF side on the *edge's*
+metronome and XSI paces it on the *source*, so the RTL ADC has its first block at *t = 0* and pysim's
+does not. A **1**-block difference in arrival, with every surviving block bit-identical.
+
+**Watch how unstable the arrival number is, and how stable the index one is.** `rf_blk_delay`'s own
+arrival skew was 64 samples, then 4, and is now 0 — moved once by pipelining an unrelated body and
+once by correcting a cycle of phase in the converter *model*. The loopback's transient was 1, then 2,
+and is 1 again, for two different reasons neither of which was the design. Meanwhile the index
+relation did not move at all, in any of it. **Anything derived from arrival inherits every one of
+those; anything derived from the sample index inherits none**, because sample *n* is at
+`t0 + n / samp_rate` in both backends by construction.
 
 The practical payoff is that a host can ask for *"100 samples around the event I timestamped"* and
 mean something exact. A drop then leaves a **visible gap** in the indices rather than silently
