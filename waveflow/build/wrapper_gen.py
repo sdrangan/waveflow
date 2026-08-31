@@ -61,20 +61,30 @@ _AXIS_SIGS = {
     "axis_out": (("TDATA", "output", True), ("TVALID", "output", False), ("TREADY", "input", False)),
 }
 
-#: The extra pin a **framed** AXIS port has, and only a framed one.  It travels in the same direction
-#: as TDATA (it is payload, not handshake), so it is derived from the kind's TDATA row rather than
-#: listed twice.  A port whose kernel type is ``ap_uint<W>`` has no such pin at all, and a wrapper
-#: that declared one would not elaborate — the kernel instance has no port to bind it to.
-_TLAST_SIG = "TLAST"
+#: The extra pins an ``ap_axis`` boundary port has, and only that kind.  Vitis emits the AXI4-Stream
+#: side channels for a ``streamutils::axi4s_word<W>`` port and none of them for an ``ap_uint<W>`` one,
+#: so a wrapper that declared them unconditionally would name pins the kernel instance does not have
+#: and would not elaborate.  Each entry is ``(signal, byte_wide)``: TLAST is one bit, TKEEP and TSTRB
+#: are one bit per BYTE of the payload.
+#:
+#: All three travel in the same direction as TDATA — they are payload and qualifiers, not handshake —
+#: so the direction is derived from the kind's TDATA row rather than written down a second time.
+_AXI4S_EXTRA = (("TKEEP", True), ("TSTRB", True), ("TLAST", False))
 
 
-def _axis_sigs(p) -> tuple[tuple[str, str, bool], ...]:
-    """The AXIS pins of boundary port *p*, TLAST included iff the port is framed."""
-    sigs = _AXIS_SIGS[p.kind]
-    if not getattr(p, "framed", False):
+def _axis_sigs(p) -> tuple[tuple[str, str, object], ...]:
+    """The AXIS pins of boundary port *p*, side channels included iff the port carries them.
+
+    The third element is the pin's WIDTH: ``True`` means the payload width (TDATA), ``False`` one
+    bit, and an ``int`` an explicit width — which is what the byte-granular TKEEP/TSTRB need.
+    """
+    sigs: tuple[tuple[str, str, object], ...] = _AXIS_SIGS[p.kind]
+    if not getattr(p, "axi4s", False):
         return sigs
     tdata_dir = next(d for sig, d, _w in sigs if sig == "TDATA")
-    return sigs + ((_TLAST_SIG, tdata_dir, False),)
+    nbytes = max(1, int(p.width) // 8)
+    return sigs + tuple((sig, tdata_dir, (nbytes if byte_wide else False))
+                        for sig, byte_wide in _AXI4S_EXTRA)
 
 #: The kernel-side role each memory-port role is wired to.  Mechanical, and it is the join the whole
 #: wrapper exists to make: the memory's ``din`` takes the kernel's ``Din``, and the memory's ``dout``
@@ -165,7 +175,9 @@ def _axis_ports(spec) -> list[tuple[str, str, int]]:
                 f"wrapped design needs its pass-through written and gated, not guessed."
             )
         for sig, direction, wide in sigs:
-            ports.append((f"{p.name}_{sig}", direction, p.width if wide else 1))
+            # `wide` is True (the payload width), False (one bit) or an explicit int.
+            ports.append((f"{p.name}_{sig}", direction,
+                          p.width if wide is True else (1 if wide is False else int(wide))))
     return ports
 
 

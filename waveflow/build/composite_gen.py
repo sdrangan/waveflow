@@ -57,12 +57,13 @@ class ExtPort:
     #: (``input [15:0] rx_str_TDATA``), and recovering a width by parsing ``ap_uint<W>`` back out of
     #: :attr:`decl` is the kind of second derivation that drifts.  0 where nothing needed it.
     width: int = 0
-    #: AXIS only: the port is a ``framed_word`` stream, so Vitis gives it a **TLAST pin**.  Kept
-    #: beside :attr:`kind` rather than folded into it because the direction and the framing are
-    #: independent questions and a kind vocabulary of four (``axis_in_framed``, ...) would have to be
-    #: spelled out in ``BFM_DUALS``, ``_boundary_trace`` and the wrapper's signal table, three places
-    #: that would then each need to know the product rather than the two factors.
-    framed: bool = False
+    #: AXIS only: the port carries the **AXI4-Stream side channels** (``ap_axis``), so Vitis gives it
+    #: TLAST — and TKEEP/TSTRB with it.  Kept beside :attr:`kind` rather than folded into it because
+    #: the direction and the side channels are independent questions, and a kind vocabulary of four
+    #: (``axis_in_full``, ...) would have to be spelled out in ``BFM_DUALS``, ``_boundary_trace`` and
+    #: the wrapper's signal table — three places that would then each need to know the product rather
+    #: than the two factors.
+    axi4s: bool = False
 
     @property
     def xsi_prefix(self) -> str:
@@ -485,25 +486,35 @@ def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
     return entry
 
 
-def _axis_port(name: str, width: int, kind: str = "axis_in", *, framed: bool = False) -> ExtPort:
+def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = False) -> ExtPort:
     """An AXIS boundary port.  *kind* (``axis_in``/``axis_out``) does not change the emitted C++ — a
     kernel's ``hls::stream&`` is the same either way — but it records the DIRECTION, which is what a
     testbench needs to know whether to model a master or a slave against it.
 
-    *framed* DOES change the C++, and it is the one thing that decides whether the port has a
-    **TLAST pin**.  A plain ``hls::stream<ap_uint<W> >`` argument gets TDATA/TVALID/TREADY and
-    nothing else; ``streamutils::framed_word<W>`` carries ``{data, last}``, so Vitis emits
-    ``<name>_TLAST`` beside them.  The pragma is identical either way — ``axis`` describes the
-    protocol, the C++ type describes the beat.
+    *axi4s* DOES change the C++, and it is the one thing that decides whether the port has a **TLAST
+    pin**.  The pragma is identical either way — ``axis`` describes the protocol; the **word type**
+    decides the pins:
 
-    It is off by default because a TLAST pin is not free: it is a wire someone has to connect in a
+    ==================================  ===========================================================
+    ``hls::stream<ap_uint<W> >``        TDATA/TVALID/TREADY, and nothing else
+    ``hls::stream<axi4s_word<W> >``     the above **plus TLAST**, TKEEP and TSTRB
+    ==================================  ===========================================================
+
+    ``streamutils::axi4s_word<W>`` is ``ap_axis<W,0,0,0>``, and it has to be that rather than the
+    plain ``{data, last}`` ``framed_word`` — **measured, 2026-08-31**.  A ``framed_word`` boundary
+    port compiles, and Vitis packs the whole struct into one wide TDATA: at ``W=64`` the port came
+    out ``[127:0] s_in_TDATA`` with no TLAST anywhere.  The side channels are a property of
+    ``ap_axis``, not of having a ``last`` member.  (``framed_word`` remains right for an INTERNAL
+    channel, where ``ap_axis`` is refused outright — HLS 214-208.)
+
+    It is off by default because those pins are not free: they are wires someone has to connect in a
     block diagram, and every design in this repo that does not read the frame boundary is better
-    without one.  See :attr:`waveflow.hw.interface.StreamIFSlave.boundary_tlast` for when to ask.
+    without them.  See :attr:`waveflow.hw.interface.StreamIFSlave.boundary_tlast` for when to ask.
     """
-    decl = (f"hls::stream<streamutils::framed_word<{width}> >& {name}" if framed
+    decl = (f"hls::stream<streamutils::axi4s_word<{width}> >& {name}" if axi4s
             else f"hls::stream<ap_uint<{width}> >& {name}")
     return ExtPort(decl, (f"#pragma HLS INTERFACE axis port={name}",),
-                   name=name, kind=kind, bundle=None, width=width, framed=framed)
+                   name=name, kind=kind, bundle=None, width=width, axi4s=axi4s)
 
 
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
@@ -928,7 +939,7 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
         # design.  `getattr` with a default keeps every non-stream endpoint (and any third-party
         # one) working unchanged rather than needing the attribute added to it.
         return _axis_port(name, width, kind=kind,
-                          framed=bool(getattr(ep, "boundary_tlast", False)))
+                          axi4s=bool(getattr(ep, "boundary_tlast", False)))
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
@@ -1146,10 +1157,10 @@ def render_top(spec: TopSpec) -> str:
     lines += [f'#include "{h}"' for h in includes]
     lines.append("#include <ap_int.h>")
     lines.append('#include "memmgr.hpp"')
-    # A framed boundary port's type IS streamutils::framed_word, so the header that defines it is
-    # not optional and is not the design's to remember: derived from the ports, like the pragmas.
+    # A side-channel boundary port's type IS streamutils::axi4s_word, so the header that defines it
+    # is not optional and is not the design's to remember: derived from the ports, like the pragmas.
     # (`extra_includes` may name it too; dict.fromkeys below is not applied here, so the guard is.)
-    if any(p.framed for p in spec.ports) and "streamutils_hls.h" not in spec.extra_includes:
+    if any(p.axi4s for p in spec.ports) and "streamutils_hls.h" not in spec.extra_includes:
         lines.append('#include "streamutils_hls.h"')
     lines += [f'#include "{h}"' for h in spec.extra_includes]   # e.g. hls_streamofblocks.h (SOBIF)
     lines += [f'#include "{h}"' for h in spec.cmd_headers]

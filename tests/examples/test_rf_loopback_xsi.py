@@ -90,8 +90,17 @@ WANT_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 4)
 #: asserts ``ADC_DROPPED == 0`` — structurally, because its ingress writes a BRAM and can never
 #: refuse.  See ``tests/examples/test_rf_blk_delay_xsi.py``.
 WANT_ADC_DROPPED_IS_STRUCTURAL = True
-#: Data blocks that survive the round trip, of ``XSI_NBLK``.  6 of 8, for the reason above.
-WANT_DATA_BLOCKS_OUT = 6
+#: Data blocks that survive the round trip, of ``XSI_NBLK``.  **7 of 8** — 6 until 2026-08-31.
+#:
+#: The extra block is the converter model getting a cycle more honest, not this design getting
+#: better: ``RfdcDacSlave`` used to judge each beat by a ``TREADY`` it had recomputed from an
+#: occupancy that had already advanced, rather than by the one it actually drove a cycle earlier, so
+#: it captured words a cycle early and back-pressured a cycle sooner than the wire did.  With the
+#: phase corrected the DAC stalls the fabric slightly less, this read-then-write relay spends
+#: slightly less time not reading, and one more block survives.  The number of *dropped* words is
+#: unchanged at 62 — which is the point: the loss is still structural (see
+#: :data:`WANT_ADC_DROPPED_IS_STRUCTURAL`), it just costs one block less at this depth.
+WANT_DATA_BLOCKS_OUT = 7
 #: Blocks the DAC's grid emits over the fixed ``n_cycles`` run, and how many reach the sink.
 #:
 #: 24/23, re-recorded 2026-08-18 when the RF fabric moved 300 -> 250 MHz.  Both are the SAME
@@ -123,16 +132,27 @@ WANT_DAC_BLOCKS_OUT = 64
 #: remainder.  24 - 8 = 16 at 250 MHz; it was 19 - 8 = 11 at 300 MHz, the same relation.  (Before
 #: the overlap fix it was 13 against 8 data blocks, because a block whose words went missing never
 #: reached the DAC's buffer whole and the grid played zeros in its place.)
-WANT_DAC_ZERO_FILLED = 58
+#:
+#: **58 -> 57 on 2026-08-31**, and it is the invariant rather than the number that is checked: the
+#: DAC emits ``DAC_BLOCKS_OUT`` blocks and exactly :data:`WANT_DATA_BLOCKS_OUT` of them carry data,
+#: so 64 - 7 = 57 falls straight out of the extra surviving block recorded there.
+WANT_DAC_ZERO_FILLED = 57
 #: Blocks of zero-fill before the first data block reaches the sink **at RTL**.
 #:
-#: **Two, re-recorded 2026-08-17** when ``RfdcDacSlave`` learned to withhold ``TREADY``.  It was one
-#: while the converter model accepted every word the instant it was offered; held to its own grid, the
-#: first data block arrives a grid period later, which is what a real DAC's input FIFO does.  pysim
-#: also shows two, for its own reason (it paces the RF side on the edge's metronome, XSI on the
-#: source) — the two backends now agree here by coincidence rather than by construction, so the
-#: divergence note is kept rather than deleted.
-RTL_STARTUP_BLOCKS = 2
+#: **One, re-recorded 2026-08-31.**  The history is worth keeping because the number has now been
+#: both values for opposite reasons:
+#:
+#: * it was **one** while ``RfdcDacSlave`` accepted every word the instant it was offered;
+#: * it became **two** on 2026-08-17 when the model learned to withhold ``TREADY`` and hold itself to
+#:   its own grid — a real DAC's input FIFO delays the first block by a period;
+#: * it is **one** again since the model stopped judging a beat by a ``TREADY`` it had recomputed
+#:   rather than by the one it drove.  That cost every capture a cycle, and a cycle at this grid is
+#:   enough to push the first data block past a period boundary.
+#:
+#: pysim shows two, for its own reason (it paces the RF side on the edge's metronome, XSI on the
+#: source), so the two backends no longer agree here — which is the divergence this note has always
+#: recorded rather than reconciled, now visible again.
+RTL_STARTUP_BLOCKS = 1
 
 
 def _require(cond: bool, why: str) -> None:
@@ -273,7 +293,7 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
     # word the instant it was offered: the fabric ran ahead of the converter and the data blocks came
     # out back to back.  Held to its own grid the converter tells the truth instead, and the truth is
     # that this pass-through **cannot sustain the DAC's rate**: measured, data blocks land at grid
-    # periods 2,3,4,5,7,... with zero-fill in the gaps.  It reads a whole block before it writes one,
+    # periods 1,3,4,5,6,8,9 with zero-fill in the gaps.  It reads a whole block before it writes one,
     # so it occupies the boundary for twice its utilisation -- the same arithmetic that made the
     # (16,2) width sweep underrun.
     #
@@ -359,20 +379,19 @@ def test_the_two_backends_disagree_about_loss_and_this_records_how():
         "pysim reports no ADC->fabric loss; note this was ALSO true of the store-and-forward design "
         "that lost 72 words at RTL, so it is not evidence that the design is correct")
 
-    # Startup transient: 2 blocks on BOTH backends -- and the agreement is NEW.
+    # Startup transient: 2 blocks in pysim, 1 at RTL -- THEY DISAGREE, and that is the record.
     #
-    # It was 2 in pysim against 1 at RTL, recorded here as a real divergence with a real cause: pysim
-    # paces the RF side on the edge metronome and XSI on the source, so the RTL ADC had its first
-    # block at t=0.  That cause has not gone away.  What changed is on the other side of the loop:
-    # `RfdcDacSlave` used to accept every word the instant it was offered, so the fabric ran ahead of
-    # the converter and the first data block arrived a grid period sooner than a real DAC would have
-    # taken it.  Held to its own grid (see xsi_rfdc.h), the RTL transient is 2 as well.
+    # The cause has never gone away: pysim paces the RF side on the edge metronome and XSI on the
+    # source, so the RTL ADC has its first block at t=0 and pysim's does not.  The number agreed for
+    # two weeks (2026-08-17 .. 08-31) only because a SECOND offset happened to cancel it -- the
+    # converter model judged each beat by a TREADY it had recomputed rather than by the one it drove,
+    # which cost every capture a cycle and pushed the first data block past a period boundary.  With
+    # that phase corrected the coincidence is gone and the real divergence is visible again.
     #
-    # So the two backends now agree here by ARITHMETIC COINCIDENCE, not by construction -- two
-    # unrelated offsets that happen to sum the same way.  Worth stating, because "they agree" is the
-    # kind of observation that quietly turns into "they model the same thing".
+    # Which is why the note said "by ARITHMETIC COINCIDENCE, not by construction" while they agreed.
+    # Two unrelated offsets that summed the same way, and then one of them moved.
     assert sim.tb.dac_if.counters()["underrun"] == int(sim.tb.loop_blk_latency) == 2
-    assert RTL_STARTUP_BLOCKS == 2
+    assert RTL_STARTUP_BLOCKS == 1
 
     # Blocks emitted: pysim's grid runs for n_blk periods, the RTL grid for the whole harness run,
     # because a DAC that plays continuously does not stop when the data does.  Neither number is
@@ -404,11 +423,17 @@ WANT_2CH_ADC_WORDS_PER_CH = XSI_NBLK * (XSI_BLKSIZE // 4)
 #: property of the model's 2-word input FIFO rather than of silicon.
 WANT_2CH_ADC_DROPPED_PER_CH = 62
 
-#: Samples at the head of the first data block that survive **before the first dropped word bites**,
-#: on both lanes.  Measured, and pattern A's cost again rather than a target: three words at four
-#: samples each. It is asserted because it is the same on both lanes, which is the claim — a lane
-#: that lost differently would be a lane that is not independent.
-WANT_2CH_LEAD_SAMPLES = 12
+#: Samples at the head of the first data block that survive, on both lanes.  **The WHOLE block since
+#: 2026-08-31** — it was 12 (three words at four samples each) while the converter model captured
+#: each beat a cycle early and therefore back-pressured a cycle sooner than the wire did.
+#:
+#: The loss did not go away and the dropped count did not move: what changed is *which* block pays
+#: for it.  The first block now survives intact and the drops land in the ones after it, which is
+#: also why one more block survives overall (:data:`WANT_DATA_BLOCKS_OUT`).
+#:
+#: It is asserted because it must be the same on both lanes, which is the claim — a lane that lost
+#: differently would be a lane that is not independent.
+WANT_2CH_LEAD_SAMPLES = XSI_BLKSIZE
 
 #: Cycle the last block reached the sink — recorded the way 1072 was, and the same kind of number:
 #: a measured property of THIS design at THIS rate, which changes only if the design or the rate
@@ -519,9 +544,12 @@ def test_the_two_channel_tile_runs_at_rtl_as_two_independent_lanes():
     for ch in range(XSI_NCH):
         assert np.array_equal(first[ch][:n], sent[ch][:n]), (
             f"lane {ch}'s first {n} samples are not what was played into it")
-        assert int(np.argmax(first[ch] != sent[ch])) == n, (
-            f"lane {ch} diverges at a different sample than lane 0 does; the lanes drop identically "
-            f"or they are not independent")
+        # `n` is the whole block now, so "where does it diverge" is "nowhere" -- and the LANES claim
+        # is still the point: both must survive to exactly the same depth, because a lane that lost
+        # differently would be a lane that is not independent.
+        assert int(np.count_nonzero(first[ch] != sent[ch])) == 0, (
+            f"lane {ch} diverges from what was played into it where lane 0 does not; the lanes drop "
+            f"identically or they are not independent")
     # ...and the lanes are not crossed, which one channel cannot check at all: the two rows carry
     # different draws, so a swap would fail here even though the totals would not move.
     assert not np.array_equal(sent[0], sent[1]), "the scenario must be asymmetric to say anything"
@@ -548,13 +576,23 @@ WANT_IQ_ADC_WORDS = XSI_NBLK * (XSI_BLKSIZE // 2)
 #: Data blocks that survive, of ``XSI_NBLK`` — 6, the same as the real run, and for the same
 #: pattern-A reason: this pass-through reads a whole block before it writes one.  The rate is halved
 #: for the I/Q run (see ``XSI_IQ_SAMP_RATE``) so the utilisation matches, which is why the number
-#: matches too.
+#: matched the real run's — **until 2026-08-31, when it stopped**.  The converter-model phase
+#: correction recorded on :data:`WANT_DATA_BLOCKS_OUT` bought the real run a seventh block and did
+#: not buy this one, so the two are now 7 and 6.
+#:
+#: That is a finding rather than a discrepancy to reconcile: matching utilisation makes the two runs
+#: cost the *same fraction* of the converter, and a cycle recovered at the boundary is worth a whole
+#: block only if it lands on the right side of a grid period.  The I/Q run's periods are twice as
+#: long, so the same cycle falls well inside one.  What both runs still share is the shape — the
+#: first block survives whole and the drops land behind it.
 WANT_IQ_DATA_BLOCKS_OUT = 6
 
-#: Complex samples at the head of the first data block that survive before the first dropped word
-#: bites — **3 beats x 2 complex samples**.  Measured, and pattern A's cost rather than a target; the
-#: real run's equivalent is 12 real samples, which is the same three beats.
-WANT_IQ_LEAD_SAMPLES = 6
+#: Complex samples at the head of the first data block that survive.  **The WHOLE block since
+#: 2026-08-31**, for the reason recorded on :data:`WANT_2CH_LEAD_SAMPLES`: the converter model used
+#: to capture each beat a cycle early and back-pressure a cycle sooner than the wire did, so the
+#: first block was clipped.  It was 6 — three beats at two complex samples each, the same three beats
+#: the real run lost as 12.
+WANT_IQ_LEAD_SAMPLES = XSI_BLKSIZE
 
 #: Blocks the DAC's grid emits, how many carry no data, and how many reach the sink.  Half the real
 #: run's 64/58/63 because the sample rate is halved and the grid is derived from it — the DAC plays
@@ -654,9 +692,10 @@ def test_interleaved_iq_runs_at_rtl_through_the_unchanged_real_dut():
     assert np.array_equal(first[:n].imag, sent[:n].imag), "Q"
     assert np.any(sent[:n].imag), "the scenario must carry a non-trivial Q"
     assert not np.array_equal(sent[:n].real, sent[:n].imag), "I and Q must differ, or a swap hides"
-    # The two components diverge at the SAME sample, which is what says a whole beat was lost rather
-    # than one component of it -- a de-interleave that slipped by one would fail here.
-    assert int(np.argmax(first != sent)) == n
+    # Neither component diverges anywhere in the block, and that is a STRONGER statement than the
+    # matched divergence index it replaces: a de-interleave that slipped by one would put I where Q
+    # belongs at every sample, so an exact whole-block match rules it out outright.
+    assert int(np.count_nonzero(first != sent)) == 0
 
     # --- 4) The accounting -------------------------------------------------------------------
     assert counters["ADC_WORDS_SENT"] + counters["ADC_DROPPED"] == WANT_IQ_ADC_WORDS

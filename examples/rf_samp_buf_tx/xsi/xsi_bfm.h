@@ -257,17 +257,25 @@ private:
 /// Presents a fixed word vector on an AXIS slave port of the kernel, one word per accepted beat,
 /// dropping TVALID once every word has gone out.
 ///
-/// TLAST IS DRIVEN WHEN THE KERNEL HAS THE PIN, AND FROM THE BUNDLE'S OWN BURST BOUNDS.
+/// THE SIDE CHANNELS ARE DRIVEN WHEN THE KERNEL HAS THEM, AND TLAST COMES FROM THE BUNDLE'S BOUNDS.
 ///
 /// `port_opt` returns -1 for a port that is not there, so a kernel whose boundary stream is a plain
 /// `hls::stream<ap_uint<W> >` (no TLAST pin — every free-running top before
 /// `StreamIFSlave.boundary_tlast` existed) is driven exactly as before and this costs it nothing.
-/// When the pin IS there the value comes from `bounds.bin`, which the burst bundle has always
-/// carried and this model used to discard: burst k is `words[bounds[k-1] : bounds[k]]`, so the last
-/// word of every burst is a TLAST beat.  That is what makes the two backends agree — the pysim
-/// StreamDriver's bursts and the RTL driver's TLASTs are the SAME bytes on disk, not two encodings
-/// of one intent.  With no bundle (a ctor word vector) the whole vector is one burst, which is what
-/// `BurstBundle::write_one` means and what a continuous stream is.
+///
+/// When the pins ARE there — the port is an `ap_axis`, which is what makes Vitis emit them — TLAST
+/// comes from `bounds.bin`, which the burst bundle has always carried and this model used to
+/// discard: burst k is `words[bounds[k-1] : bounds[k]]`, so the last word of every burst is a TLAST
+/// beat.  That is what makes the two backends agree — the pysim StreamDriver's bursts and the RTL
+/// driver's TLASTs are the SAME bytes on disk, not two encodings of one intent.  With no bundle (a
+/// ctor word vector) the whole vector is one burst, which is what `BurstBundle::write_one` means and
+/// what a continuous stream is.
+///
+/// TKEEP and TSTRB are held ALL-ONES, and that is not a placeholder.  `ap_axis` brings them whether
+/// a design reads them or not, an undriven kernel input is X, and X on a qualifier is the kind of
+/// thing that propagates into a comparison rather than into an error.  All-ones is "every byte of
+/// this beat is a real data byte", which is what a DMA drives for a contiguous transfer and the only
+/// thing this repo's designs ever mean.
 class AxisMaster : public XsiSimObj {
 public:
     AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words)
@@ -276,6 +284,8 @@ public:
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
         P_last  = d.port_opt((prefix + "_TLAST").c_str());
+        P_keep  = d.port_opt((prefix + "_TKEEP").c_str());
+        P_strb  = d.port_opt((prefix + "_TSTRB").c_str());
         one_burst();
         h_valid_ = words_.empty() ? 0u : 1u;
     }
@@ -305,6 +315,10 @@ public:
         d_.putW(P_data, (widx_ < (int)words_.size()) ? words_[widx_] : 0);
         d_.put1(P_valid, h_valid_);
         if (P_last >= 0) d_.put1(P_last, is_last(widx_));
+        // All-ones, sized by the port itself: putW writes the low bits of a 64-bit value and the
+        // pin is one bit per payload byte, so ~0 is right at every width this repo uses.
+        if (P_keep >= 0) d_.putW(P_keep, ~(uint64_t)0);
+        if (P_strb >= 0) d_.putW(P_strb, ~(uint64_t)0);
     }
 
     bool done() const { return widx_ >= (int)words_.size(); }
@@ -331,7 +345,7 @@ private:
     Dut& d_;
     std::vector<uint64_t> words_;
     std::vector<uint64_t> bounds_;
-    int P_data, P_valid, P_ready, P_last;
+    int P_data, P_valid, P_ready, P_last, P_keep, P_strb;
     int widx_ = 0;
     uint32_t h_valid_ = 0, ready_ = 0;
     bool beat_ = false;

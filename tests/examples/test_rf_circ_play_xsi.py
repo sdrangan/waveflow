@@ -9,7 +9,7 @@ bought.
 channel sounding, where the exactly-known repeat phase *is* the measurement — a drifting phase is a
 drifting delay estimate, so "approximately periodic" would not be usable for the thing this exists to
 do.  So the strong assertion is the one made: from the first scheduled play onward the stream is the
-waveform **tiled bit-exactly**, 15144 consecutive samples, with no gap and no skipped sample.
+waveform **tiled bit-exactly**, 15143 consecutive samples, with no gap and no skipped sample.
 
 An earlier revision of this file pinned two symptoms as an open defect — repeats resuming at 1008 and
 a ``+2`` in the difference histogram. Both are gone, and their cause is recorded in
@@ -45,11 +45,23 @@ WANT_TOTAL_SAMPLES = 15296
 #: Slots gone before the ``start_now`` window reaches the converter.  **Measured, then pinned**: the
 #: waveform must cross the wave port, the scheduler must issue a command, and the loader must stream
 #: 64 tagged samples.  A change here is a change in the design's startup latency and wants a human.
-WANT_LEAD_IN = 24
+#:
+#: **24 -> 25 on 2026-08-31, and the design did not move.**  ``RfdcDacSlave`` judged each beat by a
+#: TREADY it had recomputed from an occupancy that had already advanced, rather than by the TREADY it
+#: actually drove a cycle earlier, so it captured every word one cycle early — see the note on
+#: ``sample()`` in ``waveflow/build/xsi/xsi_rfdc.h``, where the disagreement was measured against a
+#: VCD.  Three constants in this file shifted by exactly one slot with the correction
+#: (:data:`WANT_TRAIN_START`, :data:`WANT_TRAIN_LEN` and this one) and **nothing else did**: the
+#: number of zero runs, the length of the hole, and every bit-exactness claim are unchanged, which is
+#: what says this was a phase and not a behaviour.
+WANT_LEAD_IN = 25
 
 #: Zero runs in the whole playout.  **Two, and only two**: the lead-in above, and the ``LEAD`` hole
-#: that a deferred response makes unavoidable.  After those, the converter is fed for 15144
+#: that a deferred response makes unavoidable.  After those, the converter is fed for 15143
 #: consecutive samples with no gap at all.
+#:
+#: This one did **not** move when the converter model's beat phase was corrected, and that is the
+#: point: a re-timing shifts where the runs are, and only a real regression adds one.
 WANT_ZERO_RUNS = 2
 
 #: Length of the startup hole, in slots.  **Exactly one PERIOD**, and that number is derived rather
@@ -62,8 +74,10 @@ WANT_ZERO_RUNS = 2
 WANT_HOLE = 64
 
 #: Where the scheduled train begins, and the length that is then fed without interruption.
-WANT_TRAIN_START = 152
-WANT_TRAIN_LEN = 15144
+#: Both shifted by one slot on 2026-08-31 with :data:`WANT_LEAD_IN`, for the reason recorded there —
+#: the train starts a slot later and is therefore a slot shorter within the same fixed run.
+WANT_TRAIN_START = 153
+WANT_TRAIN_LEN = 15143
 
 
 def _require(cond: bool, why: str) -> None:
@@ -167,7 +181,7 @@ class TestTheDesignPlaysAtRtl:
 
         A DAC consumes a word every sample period whether or not one is ready. Two zero runs in
         15296 samples — the lead-in and the ``LEAD`` hole — means that after startup the scheduler,
-        loader and player kept the converter fed for 15200 consecutive slots with no gap at all.
+        loader and player kept the converter fed for 15143 consecutive slots with no gap at all.
         A third run would be a steady-state underrun, which is the failure this whole arc is about.
         """
         runs = _zero_runs(played)
@@ -239,7 +253,7 @@ class TestTheRepeatPhaseIsExact:
     def test_the_train_is_the_waveform_tiled_bit_exactly(self, played):
         """The whole claim in one comparison, at the far side of the converter.
 
-        15144 consecutive samples, every one equal to ``waveform()[i % NSAMP]``. It covers the
+        15143 consecutive samples, every one equal to ``waveform()[i % NSAMP]``. It covers the
         scheduler's private array, the command path, the in-band payload, the loader's tagging, the
         player's three-way compare and the converter's own unpack — and it is the assertion that
         would fail first if any of them slipped by a single slot.

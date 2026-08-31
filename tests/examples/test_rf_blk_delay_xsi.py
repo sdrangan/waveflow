@@ -81,16 +81,21 @@ WANT_BLOCKS_RELAYED = SRC_NBLK
 
 #: Samples of start-up phase between the player's sample index and the DAC's block grid.
 #:
-#: **64 -> 4 on 2026-08-18, and 4 is one word** — the smallest this can be at ``samp_per_word = 4``.
-#: The skew is how far the player's pointer has run before the grid's first block boundary, so it is
-#: set by how fast the player fills the converter's 2-deep input FIFO relative to how fast the
-#: converter drains it.  At three cycles per word against a DAC taking 0.25 words/cycle the two were
-#: close and the phase was large; at one cycle per word the player fills the 2-deep FIFO essentially
-#: immediately and the phase collapses to a single word.
+#: **64 -> 4 on 2026-08-18, and 4 -> 0 on 2026-08-31.**  The design now delivers the delay it was
+#: asked for exactly, with no converter-edge phase left over at all.
 #:
-#: It is still a converter-edge property and not a delay error: the bit-exact comparison runs off
-#: this same measured shift and matches every relayed block.  pysim's skew is 0.
-RTL_GRID_SKEW = 4
+#: The remaining 4 was one word, and it was the CONVERTER MODEL rather than this design.
+#: ``RfdcDacSlave`` judged each beat by a TREADY it had recomputed from an occupancy that had already
+#: moved, instead of by the TREADY it actually drove a cycle earlier — so it captured a word one
+#: cycle before the RTL transferred it, and the whole played stream sat one word ahead of the grid.
+#: See the note on ``sample()`` in ``waveflow/build/xsi/xsi_rfdc.h``, where the disagreement was
+#: measured against a VCD.  Nothing in ``blk_delay_task.h`` or the graph around it changed.
+#:
+#: **Zero is a stronger claim than 4 was**, and it is worth saying why rather than just re-recording:
+#: the delay this design produces at RTL is now *identical* to the delay it produces in pysim, so the
+#: two backends agree on a timing property and not only on the samples.  The name and the check stay
+#: because a skew reappearing would still be a real finding.
+RTL_GRID_SKEW = 0
 
 #: Blocks the DAC pulled out of the fabric over the 60000-cycle run — 15000 words at 0.25 words per
 #: cycle, 64 words to a block.  A property of the run length and the converter's rate, not of the
@@ -279,16 +284,17 @@ def test_the_delay_the_rtl_produced_is_the_one_the_design_asked_for(run):
 
     * it is **constant**, not per-block — the bit-exact comparison above runs off this same measured
       shift and matches every relayed block, so no block is displaced relative to any other;
-    * it is a **quarter of a block**, well under the block granularity the design works in, which is
-      what makes it a phase offset between the player's sample index and the DAC's block grid rather
-      than a delay error;
-    * pysim cannot show it at all, because there the player's pointer and the ``RFSampIF`` grid are
-      started from one epoch.
+    * it is now **zero**, so the RTL evidence is simply "the right samples, in the right order,
+      exactly one delay late" — and it agrees with pysim, whose skew has always been zero.
 
-    So the RTL evidence is "the right samples, in the right order, one delay-worth late, to within the
-    converter's own start-up phase". **The evidence that the delay tracks the parameter is in pysim**,
-    where ``test_the_delay_is_what_was_asked_for_at_every_setting`` sweeps it — that sweep needs one
-    csynth per setting at RTL, which is not worth a gate.
+    It was 4 (one word) until 2026-08-31, and that word belonged to the converter MODEL: it judged a
+    beat by a TREADY it had recomputed rather than by the one it drove, and so captured each word a
+    cycle early.  Two of this file's constants moved with that correction and nothing in the design
+    did — see :data:`RTL_GRID_SKEW`.
+
+    **The evidence that the delay tracks the parameter is in pysim**, where
+    ``test_the_delay_is_what_was_asked_for_at_every_setting`` sweeps it — that sweep needs one csynth
+    per setting at RTL, which is not worth a gate.
 
     The skew is pinned exactly rather than tolerated, so a change in it has to be looked at.
     """

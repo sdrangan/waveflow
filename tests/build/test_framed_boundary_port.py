@@ -80,15 +80,22 @@ def test_an_unframed_port_is_a_plain_word_stream():
     ports = _spec(False).ports
     assert [p.decl for p in ports] == ["hls::stream<ap_uint<64> >& s_in",
                                        "hls::stream<ap_uint<64> >& s_out"]
-    assert not any(p.framed for p in ports)
+    assert not any(p.axi4s for p in ports)
 
 
-def test_a_framed_port_is_a_framed_word_stream():
-    """``framed_word`` carries ``{data, last}``, which is what gives the port its TLAST pin."""
+def test_a_framed_port_is_an_ap_axis_stream():
+    """``ap_axis``, not the plain ``{data, last}`` ``framed_word`` — and that is a MEASUREMENT.
+
+    A ``framed_word`` boundary port compiles, and Vitis packs the whole struct into one wide TDATA:
+    at ``W=64`` the port came out ``[127:0] s_in_TDATA`` with **no TLAST anywhere**, and the wrapper
+    then failed to elaborate against a pin that was never emitted.  The side channels are a property
+    of ``ap_axis``, not of having a ``last`` member.  ``framed_word`` stays right for an *internal*
+    channel, where ``ap_axis`` is refused outright (HLS 214-208).
+    """
     ports = _spec(True).ports
-    assert [p.decl for p in ports] == ["hls::stream<streamutils::framed_word<64> >& s_in",
-                                       "hls::stream<streamutils::framed_word<64> >& s_out"]
-    assert all(p.framed for p in ports)
+    assert [p.decl for p in ports] == ["hls::stream<streamutils::axi4s_word<64> >& s_in",
+                                       "hls::stream<streamutils::axi4s_word<64> >& s_out"]
+    assert all(p.axi4s for p in ports)
 
 
 def test_the_pragma_is_the_same_either_way():
@@ -119,12 +126,31 @@ def test_the_framed_top_includes_the_header_that_defines_framed_word():
 # The wrapper, which has to declare the same pins the kernel has
 # ---------------------------------------------------------------------------
 
-def test_the_wrapper_adds_tlast_only_for_a_framed_port():
+def test_the_wrapper_adds_the_side_channels_only_for_an_axi4s_port():
     """A wrapper naming a pin the kernel instance does not have does not elaborate — so this is not
-    a cosmetic difference, it is the difference between a design that runs and one that does not."""
-    unframed, framed = _spec(False).ports[0], _spec(True).ports[0]
-    assert [s for s, _d, _w in _axis_sigs(unframed)] == ["TDATA", "TVALID", "TREADY"]
-    assert [s for s, _d, _w in _axis_sigs(framed)] == ["TDATA", "TVALID", "TREADY", "TLAST"]
+    a cosmetic difference, it is the difference between a design that runs and one that does not.
+
+    All three side channels, not TLAST alone: ``ap_axis`` brings TKEEP and TSTRB with it whether the
+    design reads them or not, and a wrapper that passed only the pin it cared about would leave two
+    unbound on the kernel instance.
+    """
+    plain, full = _spec(False).ports[0], _spec(True).ports[0]
+    assert [s for s, _d, _w in _axis_sigs(plain)] == ["TDATA", "TVALID", "TREADY"]
+    assert [s for s, _d, _w in _axis_sigs(full)] == [
+        "TDATA", "TVALID", "TREADY", "TKEEP", "TSTRB", "TLAST"]
+
+
+def test_tkeep_and_tstrb_are_one_bit_per_byte():
+    """Byte-granular, per AXI4-Stream — a 64-bit payload has 8-bit qualifiers.
+
+    Pinned because the natural guess is "as wide as TDATA", and a wrapper wire of the wrong width is
+    the defect ``_bram_addr_shift`` was written for in the other direction: it elaborates, and the
+    truncation is silent.
+    """
+    widths = dict((s, w) for s, _d, w in _axis_sigs(_spec(True).ports[0]))
+    assert widths["TKEEP"] == 8 and widths["TSTRB"] == 8
+    assert widths["TLAST"] is False          # one bit
+    assert widths["TDATA"] is True           # the payload width
 
 
 def test_tlast_travels_with_tdata_not_with_the_handshake():
