@@ -1,6 +1,26 @@
 # The XSI staleness guard — and the silent-skip class it belongs to
 
-**Status:** proposed.
+**Status:** DONE (2026-08-31), three commits on `xsi-staleness-hash`.
+
+The reproduction held exactly as described: `rf_samp_buf_rx_build.py --force --through codegen_tb`
+left `git status` clean and turned that gate from **5 passed into 5 skipped**.  After S1 the same
+sequence -- run across every gate example -- leaves all **63 gates running**, and a source edited but
+not re-synthesized still skips, with the refusal message intact, even when made an hour *older* than
+the RTL (the case mtime calls clean).  No `WANT_CYCLES` was touched anywhere.
+
+What the plan did not anticipate:
+
+* `fir_block`'s `generate_tb` also calls `render_rtl_f`, at TB-generation time rather than after
+  csynth.  Stamping there would have recorded whatever is on disk now as the sources the existing
+  RTL was built from -- the guard signing off on a build it did not witness.  It passes
+  `stamp_sources=False`, as does every XSI gate (all of which re-render the `.f` from the RTL on
+  disk on purpose).  An AST assertion in `tests/build/test_rtl_digest.py` keeps that from drifting;
+  it found **nine** call sites a grep had missed.
+* Four more xsi files drive RTL unguarded -- `test_xsi_bfm`, `test_state_toy`, `test_trace`,
+  `test_trace_steps`.  Their examples' builds never call `render_rtl_f`, so csynth writes no stamp
+  and the guard would fall back to mtimes, and every one of those trees reads stale by mtime today.
+  They are recorded in `UNGUARDED_XSI_GATES` with that reason and two lints that keep the list
+  honest.  Extending the stamp to those build paths is the next step.
 
 A gate that skips looks like a gate that passed.  Three times in one arc a session reported a green
 XSI run having measured almost nothing, and each time it was caught by a human noticing a number was
