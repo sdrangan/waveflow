@@ -2552,7 +2552,8 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = ()) -> str:
+def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
+                 stamp_sources: bool = True) -> str:
     """Emit the ``xvlog`` file list (``rtl_<top>.f``) for *top*'s elaborated RTL.
 
     *extra* names further sources, **relative to the ``xsi/`` directory the ``.f`` lives in** and
@@ -2574,8 +2575,23 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = ()) -> str:
 
     *root* is the example directory holding ``<top>_proj/``; paths are emitted relative to the
     sibling ``xsi/`` directory the ``.f`` lives in.  Requires csynth to have run.
+
+    **The one shared post-csynth hook.**  Eleven example builds call this from their ``CSynthStep``
+    right after Vitis returns, which makes it the single place that knows "this RTL was just built,
+    and these were its sources".  So it also writes the source stamp
+    (:func:`~waveflow.build.rtl_digest.write_stamp`) that
+    :func:`~waveflow.build.trace_steps.rtl_staleness` compares against -- one hook, not fifteen.
+
+    ``stamp_sources=False`` is for the callers that re-render the ``.f`` **without** having run
+    csynth: every XSI gate does that, deliberately, because a committed ``.f`` naming a renamed
+    module plus a cached ``xsimk.dll`` is how a run goes green while proving nothing.  Such a caller
+    must not stamp -- a stamp written then would record today's sources against yesterday's RTL,
+    which is the guard quietly switching itself off.  ``tests/build/test_rtl_digest.py`` asserts
+    every call site under ``tests/`` passes it, so the next gate cannot forget.
     """
     from pathlib import Path
+
+    from waveflow.build.rtl_digest import write_stamp
 
     vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
     if not vdir.is_dir():
@@ -2585,6 +2601,8 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = ()) -> str:
     names = sorted(p.name for p in vdir.glob("*.v"))
     if not names:
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
+    if stamp_sources:
+        write_stamp(root, top_name)
     return ("".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
             + "".join(f"{e}\n" for e in extra))
 

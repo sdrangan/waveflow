@@ -116,7 +116,8 @@ def test_the_relayout_survives_real_rtl_byte_for_byte():
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(VERILOG.is_dir(), f"no csynth RTL at {VERILOG} — run rf_relayout_build.py --through csynth")
 
-    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP}.f").write_text(
+        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
         (XSI / stale).unlink(missing_ok=True)

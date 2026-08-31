@@ -74,7 +74,8 @@ def test_the_shot_survives_real_rtl_byte_for_byte():
     # 1) Regenerate the file list from the RTL actually on disk.  Never trust the committed .f: a
     # renamed module leaves it naming a file that no longer exists, and xvlog + a cached dll will
     # happily go green.
-    (XSI / f"rtl_{WRAPPER}.f").write_text(render_rtl_f(TOP, ROOT, extra=RTL_FILES), encoding="utf-8")
+    (XSI / f"rtl_{WRAPPER}.f").write_text(
+        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
 
     # 2) Force a clean elaboration of the WRAPPER, and clear the previous run's dump: a cached
     # snapshot plus a stale bundle is how a broken build passes on old output.

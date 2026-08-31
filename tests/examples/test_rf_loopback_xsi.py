@@ -233,7 +233,8 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
 
     # Regenerate the harness + scenario, and the file list from the RTL actually on disk.
     generate_tb(ROOT)
-    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP}.f").write_text(
+        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     shutil.rmtree(XSI / "vectors" / "rf_out", ignore_errors=True)   # never pass on last run's output
 
@@ -442,7 +443,8 @@ def test_the_two_channel_tile_runs_at_rtl_as_two_independent_lanes():
     )
 
     generate_tb_2ch(ROOT)
-    (XSI / f"rtl_{TOP_2CH}.f").write_text(render_rtl_f(TOP_2CH, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP_2CH}.f").write_text(
+        render_rtl_f(TOP_2CH, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP_2CH, ignore_errors=True)
     shutil.rmtree(XSI / OUT_BUNDLE_2CH, ignore_errors=True)   # never pass on last run's output
 
@@ -582,7 +584,8 @@ def test_interleaved_iq_runs_at_rtl_through_the_unchanged_real_dut():
     )
 
     generate_tb_iq(ROOT)
-    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP}.f").write_text(
+        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     shutil.rmtree(XSI / OUT_BUNDLE_IQ, ignore_errors=True)   # never pass on last run's output
 

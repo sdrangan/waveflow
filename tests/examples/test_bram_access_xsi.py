@@ -178,7 +178,8 @@ def runs(tmp_path_factory):
     # Regenerate the file list from the RTL actually on disk.  Never trust the committed .f: a
     # renamed module leaves it naming a file that no longer exists, and xvlog plus a cached dll will
     # happily go green.
-    (XSI / f"rtl_{WRAPPER}.f").write_text(render_rtl_f(TOP, ROOT, extra=RTL_FILES), encoding="utf-8")
+    (XSI / f"rtl_{WRAPPER}.f").write_text(
+        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
 
     tmp = tmp_path_factory.mktemp("bram_access_xsi")
     zero = scenario_zero()
