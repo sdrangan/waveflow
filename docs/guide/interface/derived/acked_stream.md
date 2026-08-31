@@ -10,8 +10,11 @@ summary: "AckedStreamIF — a forward stream plus a reverse status channel, so a
 
 # Acked Stream
 
+## Overview
+
 `AckedStreamIF` is a forward stream **plus a reverse status channel**. A producer marks an item, and
 some time later learns what became of it.
+
 
 ## Why you would use one
 
@@ -29,32 +32,11 @@ If your question is *"may I send?"* you want the [credit stream](./credit_stream
 | arrives | **before** the send | **after** the send |
 | who can know | the **channel** | only the **consumer** |
 
-## It creates its own streams, and wires them
-
-Nothing new appears in hardware — an acked stream is a forward FIFO and a reverse FIFO. **You do not
-supply them and you do not wire them.** The interface creates both `StreamIF`s when it is
-constructed, each endpoint creates its own pair of stream endpoints, and one `bind` per side connects
-all of it:
-
-```
-AckedStreamIF.__post_init__     creates  fwd_if, ack_if           (two StreamIFs)
-AckedStreamMasterIF             creates  fwd_ep (master), ack_ep (slave)
-AckedStreamSlaveIF              creates  fwd_ep (slave),  ack_ep (master)
-
-chan.bind("master", tx)     ->   fwd_if.bind("master", tx.fwd_ep)
-                                 ack_if.bind("slave",  tx.ack_ep)
-```
-
-So the two calls in the next section are the whole wiring. You never reach for `fwd_if` or `ack_ep`
-yourself — they are reachable (`chan.ack_if.depth` below) but they are not yours to connect.
-
-> Not every derived interface works this way. A [schema transfer](./schema_transfer.md) *owns* an
-> inner stream endpoint but leaves the binding to you — see
-> [Derived interfaces](./index.md) for which is which.
 
 ## Building one
 
-Three objects: a master endpoint, a slave endpoint, and the interface that binds them.
+To use the channel, you construct three objects: a master endpoint, a slave endpoint, and the interface that binds them.
+A simple example is as follows:
 
 ```python
 import numpy as np
@@ -70,16 +52,26 @@ rx = AckedStreamSlaveIF(name="rx", sim=sim, bitwidth=32, slot_period=4e-9)
 chan = AckedStreamIF(name="chan", sim=sim, clk=Clock(freq=250e6), bitwidth=32, depth=64)
 chan.bind("master", tx)
 chan.bind("slave", rx)
-
-print("ack depth:", chan.ack_if.depth, "| max in flight:", tx.max_in_flight)
 ```
 
-```text
-ack depth: 4 | max in flight: 4
-```
+The parameters are:
 
-`max_in_flight` is the number of unanswered frames allowed at once. `ack_depth` defaults to it, so
-the reverse channel can always hold one status per outstanding frame.
+| on | parameter | meaning |
+|---|---|---|
+| `AckedStreamIF` | `bitwidth` | word width, applied to **both** channels — the forward and the ack stream are built with the same width |
+| | `depth` | the **forward** queue depth (16 by default) |
+| | `ack_depth` | the reverse queue depth. `None` takes `max_in_flight`, so the ack channel can always hold one status per outstanding frame |
+| `AckedStreamMasterIF` | `max_in_flight` | how many unanswered frames may be outstanding at once |
+| `AckedStreamSlaveIF` | `slot_period` | seconds **per item** that `read_frame_nb()` charges for playout — a frame of *n* items costs `n * slot_period`. Only `read_frame_nb()` needs it; `read_nb()` does not |
+| | `queue_size` | optional bound on the consumer's own receive queue |
+
+There is **no `status_type`**: a status is a raw word today, not a typed field. Declaring one — so a
+status could be an `EnumField` and reach C++ as a real `enum class` the way
+[`BramStatus`](../../../examples/bram_access/python.md) does — is a real gap rather than a decision.
+
+Under the hood the channel holds two streams — `fwd_if` for the data and `ack_if` for the statuses.
+**You do not construct them and you do not bind them**; the interface and its endpoints build the
+whole thing, and the two `bind` calls above are the entire wiring.
 
 ## The methods
 
@@ -104,6 +96,24 @@ the reverse channel can always hold one status per outstanding frame.
 
 The **token never goes on the wire.** It is the caller's own handle, kept locally and handed back
 beside the status, so nothing has to carry a correlation id.
+
+## Usage
+
+The typical usage is:
+
+- Master optionally uses `can_write_frame()` to see if there is a slot free
+- Master uses `write_frame(words, token)`, where `words` is the serialized data and `token` is any
+  handle the caller wants back later — it never goes on the wire, so it need not be an integer.
+  **This does not block: it raises** when no slot is free. The contract is *check, then write*.
+- Slave reads the frame with `read_frame_nb()` 
+- Slave sends a response with `send_status(payload)` — `payload` **is** the status word. It is
+  non-blocking, and a full ack FIFO **discards** it and counts it in `n_status_dropped` (a sizing
+  violation, not a lost verdict).
+- The token is neither read by `read_frame_nb()` nor sent by `send_status()`. **Correlation is
+  positional**: one status per received frame, in the order the frames were read, and `harvest`
+  pairs them back oldest-first. That is why a dropped or unsolicited status is an error rather than
+  a nuisance — it shifts every later pairing.
+- Master uses `harvest(n)` to read `n`  `(token, status)` pairs. 
 
 ## An example
 
