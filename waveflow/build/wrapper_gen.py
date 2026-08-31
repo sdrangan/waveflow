@@ -61,6 +61,21 @@ _AXIS_SIGS = {
     "axis_out": (("TDATA", "output", True), ("TVALID", "output", False), ("TREADY", "input", False)),
 }
 
+#: The extra pin a **framed** AXIS port has, and only a framed one.  It travels in the same direction
+#: as TDATA (it is payload, not handshake), so it is derived from the kind's TDATA row rather than
+#: listed twice.  A port whose kernel type is ``ap_uint<W>`` has no such pin at all, and a wrapper
+#: that declared one would not elaborate — the kernel instance has no port to bind it to.
+_TLAST_SIG = "TLAST"
+
+
+def _axis_sigs(p) -> tuple[tuple[str, str, bool], ...]:
+    """The AXIS pins of boundary port *p*, TLAST included iff the port is framed."""
+    sigs = _AXIS_SIGS[p.kind]
+    if not getattr(p, "framed", False):
+        return sigs
+    tdata_dir = next(d for sig, d, _w in sigs if sig == "TDATA")
+    return sigs + ((_TLAST_SIG, tdata_dir, False),)
+
 #: The kernel-side role each memory-port role is wired to.  Mechanical, and it is the join the whole
 #: wrapper exists to make: the memory's ``din`` takes the kernel's ``Din``, and the memory's ``dout``
 #: drives the kernel's ``Dout``.
@@ -142,7 +157,7 @@ def _axis_ports(spec) -> list[tuple[str, str, int]]:
     """
     ports: list[tuple[str, str, int]] = [("ap_clk", "input", 1), ("ap_rst_n", "input", 1)]
     for p in spec.pin_ports:
-        sigs = _AXIS_SIGS.get(p.kind)
+        sigs = _axis_sigs(p) if p.kind in _AXIS_SIGS else None
         if sigs is None:
             raise LoweringError(
                 f"wrapper_spec: boundary port {p.name!r} is {p.kind!r}, which has no wrapper port "
@@ -201,7 +216,7 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
     mem_conns: dict[int, list[tuple[str, str]]] = {}
 
     for p in spec.pin_ports:                      # AXIS: straight through, same names
-        for sig, _dir, _wide in _AXIS_SIGS[p.kind]:
+        for sig, _dir, _wide in _axis_sigs(p):
             kconns.append((f"{p.name}_{sig}", f"{p.name}_{sig}"))
 
     bram_ports = [p for p in spec.ports if p.kind == "bram"]

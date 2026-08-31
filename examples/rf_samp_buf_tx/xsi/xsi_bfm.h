@@ -256,6 +256,18 @@ private:
 
 /// Presents a fixed word vector on an AXIS slave port of the kernel, one word per accepted beat,
 /// dropping TVALID once every word has gone out.
+///
+/// TLAST IS DRIVEN WHEN THE KERNEL HAS THE PIN, AND FROM THE BUNDLE'S OWN BURST BOUNDS.
+///
+/// `port_opt` returns -1 for a port that is not there, so a kernel whose boundary stream is a plain
+/// `hls::stream<ap_uint<W> >` (no TLAST pin — every free-running top before
+/// `StreamIFSlave.boundary_tlast` existed) is driven exactly as before and this costs it nothing.
+/// When the pin IS there the value comes from `bounds.bin`, which the burst bundle has always
+/// carried and this model used to discard: burst k is `words[bounds[k-1] : bounds[k]]`, so the last
+/// word of every burst is a TLAST beat.  That is what makes the two backends agree — the pysim
+/// StreamDriver's bursts and the RTL driver's TLASTs are the SAME bytes on disk, not two encodings
+/// of one intent.  With no bundle (a ctor word vector) the whole vector is one burst, which is what
+/// `BurstBundle::write_one` means and what a continuous stream is.
 class AxisMaster : public XsiSimObj {
 public:
     AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words)
@@ -263,6 +275,8 @@ public:
         P_data  = d.port((prefix + "_TDATA").c_str());
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
+        P_last  = d.port_opt((prefix + "_TLAST").c_str());
+        one_burst();
         h_valid_ = words_.empty() ? 0u : 1u;
     }
 
@@ -272,6 +286,8 @@ public:
     void pre_sim() override {
         if (in_bundle.empty()) return;
         words_ = BurstBundle::read_words(in_bundle);
+        bounds_ = BurstBundle::read_bounds(in_bundle);
+        if (bounds_.empty()) one_burst();
         widx_ = 0;
         h_valid_ = words_.empty() ? 0u : 1u;
     }
@@ -288,6 +304,7 @@ public:
     void drive() override {
         d_.putW(P_data, (widx_ < (int)words_.size()) ? words_[widx_] : 0);
         d_.put1(P_valid, h_valid_);
+        if (P_last >= 0) d_.put1(P_last, is_last(widx_));
     }
 
     bool done() const { return widx_ >= (int)words_.size(); }
@@ -295,9 +312,26 @@ public:
     int  total() const { return (int)words_.size(); }
 
 private:
+    /// One burst spanning every word — the ctor's vector, and the fallback for a bundle whose
+    /// bounds.bin is missing.  A continuous stream is a single frame, never a frameless one: with
+    /// no bound at all the last word would carry no TLAST and a kernel waiting for one would hang
+    /// at the very end of a run, which reads as a design deadlock rather than as a missing file.
+    void one_burst() { bounds_.assign(1, (uint64_t)words_.size()); }
+
+    /// Is word *i* the last of its burst?  Linear in the number of bursts and evaluated once per
+    /// cycle against a cursor that only moves forward, so it is O(1) amortised; a scan is the right
+    /// shape here because the bounds are cumulative and monotone.
+    uint32_t is_last(int i) const {
+        if (i < 0 || i >= (int)words_.size()) return 0u;
+        for (size_t k = 0; k < bounds_.size(); ++k)
+            if ((uint64_t)i + 1 == bounds_[k]) return 1u;
+        return 0u;
+    }
+
     Dut& d_;
     std::vector<uint64_t> words_;
-    int P_data, P_valid, P_ready;
+    std::vector<uint64_t> bounds_;
+    int P_data, P_valid, P_ready, P_last;
     int widx_ = 0;
     uint32_t h_valid_ = 0, ready_ = 0;
     bool beat_ = false;
@@ -310,11 +344,17 @@ public:
         P_data  = d.port((prefix + "_TDATA").c_str());
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
+        // -1 when the kernel's port is a plain ap_uint stream, which is most of them.  A framed
+        // output port has the pin, and then the frame bounds are recorded so the dumped bundle is
+        // readable as BURSTS by the same Python that reads the pysim sink's — see the note on
+        // AxisMaster.
+        P_last  = d.port_opt((prefix + "_TLAST").c_str());
     }
 
     void sample() override {
         valid_ = d_.get1(P_valid);
         data_  = d_.getW(P_data);
+        last_  = (P_last >= 0) ? d_.get1(P_last) : 0u;
         beat_  = (valid_ && h_ready_);
     }
 
@@ -328,7 +368,10 @@ public:
     /// four TBs printed a drain tail as if it were the design's latency.
     void update() override {
         ++cycle_;                                   // 1-based: this is the cycle now executing
-        if (beat_) { words_.push_back(data_); beat_cycles_.push_back(cycle_); }
+        if (beat_) {
+            words_.push_back(data_); beat_cycles_.push_back(cycle_);
+            if (P_last >= 0 && last_) bounds_.push_back((uint64_t)words_.size());
+        }
     }
 
     void drive() override { d_.put1(P_ready, h_ready_); }
@@ -337,7 +380,19 @@ public:
     //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
     std::string out_bundle;
     void post_sim() override {
-        if (!out_bundle.empty()) BurstBundle::write_capture(out_bundle, words_, beat_cycles_);
+        if (out_bundle.empty()) return;
+        // A framed port dumps the frames it actually asserted; an unframed one dumps one burst,
+        // which is what it is.  A framed port that ended mid-frame (words after the last TLAST)
+        // gets a closing bound so no word is dropped from the bundle -- a truncated capture is a
+        // finding for the checker, not something to hide by not writing the tail.
+        if (P_last >= 0) {
+            std::vector<uint64_t> b = bounds_;
+            if (b.empty() || b.back() != (uint64_t)words_.size())
+                b.push_back((uint64_t)words_.size());
+            BurstBundle::write_capture(out_bundle, words_, beat_cycles_, b);
+        } else {
+            BurstBundle::write_capture(out_bundle, words_, beat_cycles_);
+        }
     }
 
     const std::vector<uint64_t>& words() const { return words_; }
@@ -354,11 +409,12 @@ public:
 
 private:
     Dut& d_;
-    int P_data, P_valid, P_ready;
+    int P_data, P_valid, P_ready, P_last;
     std::vector<uint64_t> words_;
+    std::vector<uint64_t> bounds_;
     std::vector<long> beat_cycles_;
     long cycle_ = 0;
-    uint32_t h_ready_ = 1, valid_ = 0;
+    uint32_t h_ready_ = 1, valid_ = 0, last_ = 0;
     uint64_t data_ = 0;
     bool beat_ = false;
 };

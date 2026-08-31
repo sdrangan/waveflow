@@ -112,6 +112,21 @@ struct BurstBundle {
         write_u64(dir + "/cycles.bin", c);
     }
 
+    /// The same capture, but with the FRAME BOUNDS the DUT actually asserted (one entry per TLAST
+    /// beat) rather than a single burst spanning everything.
+    ///
+    /// A separate entry point rather than a defaulted argument: writing the true bounds is only
+    /// possible when the port HAS a TLAST pin, and a default would quietly turn "this stream is not
+    /// framed" into "this stream is one frame" — the same bytes, a different claim.  A caller that
+    /// has bounds passes them; a caller that has none says so by calling the other function.
+    static void write_capture(const std::string& dir, const std::vector<uint64_t>& words,
+                              const std::vector<long>& cycles,
+                              const std::vector<uint64_t>& bounds) {
+        write(dir, words, bounds);
+        std::vector<uint64_t> c(cycles.begin(), cycles.end());
+        write_u64(dir + "/cycles.bin", c);
+    }
+
 private:
     /// Create *dir* and any missing parents (like Python's write_burst_bundle), ignoring
     /// already-exists.  No std::filesystem — it does not link with the run.bat mingw.
