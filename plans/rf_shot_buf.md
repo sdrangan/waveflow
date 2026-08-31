@@ -1,7 +1,7 @@
 # `RfShotBuf` — the finite sample buffer
 
-**Status: STAGE A BUILT AND RTL-GATED (2026-08-24). Stages B–E open.** Started 2026-08-24. This
-file owns `RfShotBuf` — the **finite** sample buffer, its examples, and its documentation. The
+**Status: STAGES A AND B BUILT AND RTL-GATED (2026-08-31). Stages C-E open.** Started 2026-08-24.
+This file owns `RfShotBuf` — the **finite** sample buffer, its examples, and its documentation. The
 streaming buffer is `plans/rf_samp_new.md`; the converter is `plans/adc_model.md`.
 
 It exists as a separate plan rather than a section of `rf_samp_new.md` deliberately. That file is
@@ -12,65 +12,42 @@ problem it does not have.
 
 ---
 
-## Next session starts here — Stage B, the loader
+## Next session starts here — Stage C, the capture
 
-**State on 2026-08-31:** Stage A built and RTL-gated. Stage B's *commands* are built and committed
-on branch `rf-shot-tx-stage-b` (`waveflow/hw/rf_shot_tx.py` — `ShotTxHdr`, `ShotTxResp`, five
-verdict codes). **The transport was reversed to an in-band stream** — read the REVERSED note in
-*Where the payload comes from* before anything else. What is left is the loader, the player, the
-example and the gates.
+**State on 2026-08-31:** Stages A and B are built and RTL-gated. What is left of this plan is RX
+(Stage C), the teaching example (D) and the guide section (E).
 
 ```
-claude "Read plans/rf_shot_buf.md, sections 'Next session starts here', 'Where the
-        payload comes from' (the REVERSED note at the top), 'The commands', 'The
-        response is not optional', 'Stage A — what it measured' and 'Stage B — TX:
-        play a stored waveform'. Then build the rest of Stage B on branch
-        rf-shot-tx-stage-b, which is already checked out and holds the schemas.
+claude "Read plans/rf_shot_buf.md, sections 'Next session starts here', 'Stage A — what it
+        measured', 'Stage B — what it measured', and 'Stage C — RX: triggered capture, with
+        the past'. Then build Stage C.
 
-        Do NOT modify waveflow/hw/rf_shot_buf.py or rf_relayout.py or their
-        examples — Stage A is RTL-gated and this stage sits in front of it.
-        Do NOT re-open the transport: the payload is in-band on the stream,
-        examples/stream_inband's shape. The reasoning is in the plan.
+        Do NOT modify waveflow/hw/rf_shot_buf.py, rf_relayout.py or rf_shot_tx.py, or their
+        examples — all three are RTL-gated and Stage C sits beside them.
 
-        Build, in this order, committing each:
-        1. ShotTxLoad in waveflow/hw/rf_shot_tx.py — reads ShotTxHdr off the
-           stream, refuses SHOT_BUSY / SHOT_WRONG_LEN / SHOT_ZERO_LEN BEFORE
-           taking a payload word, forwards the payload to RfShotBufLoad.s_in,
-           and emits exactly one ShotTxResp. TLAST before nword words is
-           SHOT_SHORT, with nsamp_loaded carrying what actually landed.
-        2. Its hand-written hls::task body in waveflow/build/, shipped by the
-           same step that ships the Stage A bodies. Mind the reset trap: an
-           hls::task that WRITES before it READS counts during reset.
-        3. The player — nrepeat plays of the loaded shot on the converter grid,
-           through RfRelayoutToSlots into Rfdc.tx_streams[0].
-        4. examples/rf_shot_play — pysim, build via build/cli.py::run_dag_cli,
-           and a committed xsi/ workspace.
-        5. docs/examples/rf_shot_play/ — written AFTER the gates, from measured
-           numbers only.
+        Stage C chooses its OWN transport with capture evidence in hand: the m_axi case in
+        'Where the payload comes from' is RX-driven and was never overturned for RX.  TX went
+        in-band for reasons that do not transfer.
 
-        Gates, all of them: pysim round trip byte-identical; a short-load test
-        asserting SHOT_SHORT and nsamp_loaded (this is the response's reason for
-        existing); check(<composite>, 'composite_kernel') clean; csynth with the
-        achieved PipelineII recorded; and an XSI cycle count recorded the way 520
-        and 68 were. Compare the player's II against rf_tx_stream's — the shot
-        player has no ack to harvest, so anything short of II=1 is a defect the
-        streaming version already solved.
+        The gate is the assertion the streaming design CANNOT pass at all: a capture whose
+        window starts EARLIER than the trigger sample, byte-identical to what the source sent.
+        Plus the phase separation from Stage A holding under a trigger that arrives mid-write.
 
-        Costs are MEASURED, never inherited — do not quote Stage A's numbers or
-        RfSampBuf's. Publish NO transfer-time number: neither RFSoC DDR is
-        calibrated (waveflow/calib/platforms/ holds one entry), so state the
-        timing as uncalibrated and say why."
+        Costs are MEASURED.  Do not quote Stage A's 520/68 or Stage B's 292/192."
 ```
 
-**Traps that have cost this repo a day each, carried into this stage:**
+**Traps that have cost this repo a day each, carried forward:**
 
 * **The venv is a sibling: `../pysilicon-venv`.** A bare `pytest` reports "0 failed" because nothing
   ran. Use `../pysilicon-venv/Scripts/python.exe -m pytest`.
 * **`-m xsi` fails if a gate SKIPS.** The staleness guard hashes source content and `WANT_XSI_GATES`
-  pins the count — a session that measured nothing must not report success. Read the skip count.
-* **Never hand-unpack a `DataList`.** Use `get_schema` / the generated `<stem>_array_utils.h`; the
-  bug hides at `LW=1`.
-* **Baseline is 6 non-vitis failures + 1 vitis.** Anything beyond that is this branch's.
+  pins the count — now **76**. A session that measured nothing must not report success.
+* **Label every synthesized loop.** Vitis names an unlabelled loop `VITIS_LOOP_<line>_1` and nests
+  that name into its children, so a **comment edit renames the module** — and a gate that looks the II
+  up by name then misses and skips, which reads as a pass. This cost Stage B a rebuild.
+* **Never hand-unpack a `DataList`.** Use `get_schema` / the generated `<stem>_array_utils.h`; the bug
+  hides at `LW=1`.
+* **Baseline is 6 non-vitis failures + 1 vitis.** Anything beyond that is the branch's.
 
 Stages run in order; each has its own gate. A is the primitive, B and C are the two directions, D is
 the teaching example, E is the guide section.
@@ -190,6 +167,14 @@ kernel's memory ports disappear into a FIFO.
   *Where the payload comes from*. Decided 2026-08-24 as `m_axi` with an in-band address;
   **the transport was reversed to a plain stream on 2026-08-31** (the address argument survives
   unchanged, and a control register is still refused). The reversal is recorded in that section.
+  **This applies to TX only** — Stage C chooses its own, and the `m_axi` case below is RX-driven and
+  was never overturned for RX.
+- **The command port carries a real `TLAST` pin** (`FramedStreamIFSlave`). Built and gated at Stage B,
+  and it is what makes `SHOT_SHORT` a verdict instead of a hang. Not to be traded away for a tidier
+  block diagram: without it the C++ body cannot be written at all, and the two twins stop being twins.
+- **One response per header, in order.** Stage B's gates assert the *ordering*, because that is the
+  evidence the in-band frame stayed aligned — a refused header that left its payload on the wire shows
+  up as a response carrying somebody else's `tid`.
 
 ---
 
@@ -506,7 +491,7 @@ No converter, no RF grid, no command format — the load length is build-time st
 same discipline the commands will follow. There is no response yet either: *The response is not
 optional* is a Stage B obligation, and Stage A has no command for one to answer.
 
-## Stage B — TX: play a stored waveform
+## Stage B — TX: play a stored waveform  *(DONE — see* Stage B — what it measured *below)*
 
 **Goal:** load a waveform once, play it out on the converter's grid, repeat.
 
@@ -525,6 +510,134 @@ reach II=1 something is wrong that the streaming version already solved.
 
 **And a short-load test**, which is the response's reason for existing: send fewer beats than the
 command declared and assert the buffer says so, rather than playing a half-loaded waveform.
+
+## Stage B — what it measured
+
+**Built and RTL-gated 2026-08-31.**  Two new tasks, one composite, one example, two XSI runs, and
+**one defect found in a shared converter model that had nothing to do with this design.**
+
+| what | where |
+|---|---|
+| the commands | `waveflow/hw/rf_shot_tx.py` — `ShotTxHdr`, `ShotTxResp`, five verdicts |
+| the loader and the player | same file — `ShotTxLoad`, `ShotTxPlay`, and the `RfShotTx` composite |
+| the C++ bodies | `waveflow/build/shot_tx_{load,play}_task.h`, shipped by `RfShotBufStep` |
+| the framed boundary | `waveflow.hw.interface.FramedStream{Slave,Master}IF` + `composite_gen` / `wrapper_gen` |
+| the gates | `examples/rf_shot_play`, `tests/examples/test_rf_shot_play{,_xsi}.py` |
+| the pages | `docs/examples/rf_shot_play/` |
+
+### The numbers, measured
+
+Geometry: the 4x2 word at four 14-in-16 samples in a 64-bit beat; a 64-word (256-sample) shot in a
+256-word memory; three plays; 256 MSa/s, which is **0.256 words per fabric cycle** at 250 MHz.
+
+| body | achieved `PipelineII` |
+|---|---|
+| `shot_tx_load_task` (`take_shot`) | **1** |
+| `shot_tx_load_task` (`drain_tail`) | **1** |
+| `shot_tx_play_task` (`play_set_play_one`) | **1** |
+| `rf_shot_buf_load_task` / `rf_shot_buf_read_task` / `rf_relayout_to_slots_task` | **1** |
+
+**The player's II answers the plan's question**: `rf_tx_stream`'s player reaches II=1 while *also*
+keeping an absolute slot grid, harvesting an ack channel and returning a lateness verdict per window.
+The shot player reaches it with none of those. The simplification cost no throughput.
+
+XSI, exact and recorded, over a 900-cycle run:
+
+| | four-verdict run | short-transfer run |
+|---|---|---|
+| last verdict at cycle | **292** | **76** |
+| words the DAC took | **192** = 3 x 64 | **0** |
+| block periods played / zero-filled | 14 / **2** | 14 / **14** |
+| sample periods starved | 38 (of 230, so 192 fed) | 230 |
+
+Both backends measure the startup transient independently and get **2 blocks**; the playout is
+bit-exact in converter *codes* on both; and the short transfer answers `SHOT_SHORT` with
+`nsamp_loaded = 128` against a header declaring 1024, and plays nothing at all.
+
+**No transfer-time number is published.** Neither RFSoC DDR is calibrated —
+`waveflow/calib/platforms/` holds one entry and it is not this board — so how long a host takes to
+push a shot is *uncalibrated*, and that is what the pages say.
+
+### The framed boundary port, which did not exist and had to
+
+`plans/rf_shot_buf.md` asked for "`TLAST` before `nword` words is `SHOT_SHORT`". **No free-running
+composite in this repo had a TLAST pin.** Every boundary stream lowered to `hls::stream<ap_uint<W>>`
+— nine designs declaring `has_tlast=True` in Python against kernels with no such wire, which was
+invisible while nothing read a frame boundary.
+
+Without it the C++ body **could not be written**: a payload word and a header word are the same 64
+bits, so a short frame is a stall, and a hang is indistinguishable from a deadlock. The two twins
+would have been different designs, which is this arc's most expensive failure mode.
+
+* **`FramedStreamIFSlave` / `FramedStreamIFMaster`** are the opt-in, and a **subclass** rather than a
+  field — *measured*: a per-instance `boundary_tlast` moved every calibration key in the repo the
+  first time it was added, and `tests/calib/test_key_stability.py` said so. A `ClassVar` on a subclass
+  changes the signature of exactly the designs that ask for a pin.
+* **It has to be `ap_axis`, not the plain `{data, last}` `framed_word`** — also measured. A
+  `framed_word` boundary port compiles, and Vitis packs the whole struct into one wide `TDATA`: at
+  W=64 the port came out `[127:0] s_in_TDATA` with **no TLAST anywhere**, and the wrapper failed to
+  elaborate against a pin that was never emitted. The side channels are a property of `ap_axis`, not
+  of having a `last` member. (`framed_word` stays right for an *internal* channel, where `ap_axis` is
+  refused outright — `HLS 214-208`.)
+* The pragma is identical either way. **`axis` describes the protocol; the word type decides the
+  pins.**
+
+### The defect Stage B found — the converter model counted a beat it had not driven
+
+`RfdcDacSlave` recomputed `ready` from an occupancy that had already moved in the previous
+`update()`, then judged the handshake by *that* — while the wire the DUT was capturing still carried
+what `drive()` had put out a cycle earlier. So it captured every word one cycle before the RTL
+transferred it, and disagreed with the handshake wherever `TREADY` changed.
+
+**Measured:** the design put **192** beats on `samp_out` (`TVALID && TREADY` at rising edges in the
+VCD, every internal channel agreeing), and the model counted **191**. One word in 192 — and the worst
+possible shape of error, because the played waveform is bit-exact for 2.75 plays and then simply
+stops, which reads as a design that stalls.
+
+**Why here and not before.** The earlier converter gates feed the DAC in *bursts*, so `TREADY` is
+high nearly all the time. A shot player offers **continuously** at II=1, so `TREADY` toggles on
+almost every beat and the disagreement has somewhere to land.
+
+Fixing it re-timed four other gates by exactly one cycle, and every one moved toward the design:
+
+* `rf_blk_delay`'s grid skew **4 -> 0** — the RTL now produces exactly the 1024-sample delay it asked
+  for, agreeing with pysim on a *timing* property and not only on the samples;
+* `rf_loopback`'s startup transient **2 -> 1**, and one more block survives (**6 -> 7**); the first
+  data block now arrives whole instead of clipped at sample 12, on both lanes and in I/Q;
+* `rf_circ_play`'s lead-in **24 -> 25**, with the train start and length following. Its zero-run
+  count, its `LEAD` hole and every bit-exactness claim are **unchanged**, which is what says this was
+  a phase and not a behaviour.
+
+The one-channel loopback's note that its two backends agreed *"by ARITHMETIC COINCIDENCE, not by
+construction"* turns out to have been exactly right: the coincidence was this bug cancelling the
+edge-vs-source pacing difference. With it gone, `docs/guide/rf/rfdc/rules.md` rule 6 has its arrival
+evidence back — and `tests/docs/test_documented_numbers.py` is what noticed, by refusing a page whose
+evidence had quietly stopped differing.
+
+### Three decisions the plan did not fix, taken and stated
+
+* **`SHOT_END` is a fence, not a halt.** An `hls::task` has no loop to break — the runtime re-fires
+  the body forever and an `ap_ctrl_none` design has no `return` to reach. What `END` is worth is what
+  its *response* proves: headers are answered in order, so it says everything ahead of it has been
+  processed. `examples/stream_inband`'s `END` breaks a `HostActivated` `while (True)`; that is a
+  different execution model, and the schema comment saying otherwise was corrected.
+* **The composite instantiates the Stage A pair rather than nesting `RfShotBuf`.** Forced, not
+  preferred: `RfShotBuf` owns its `rdy` channel as an *internal* edge, so a composite using it whole
+  could put nothing on that wire — and the repeat is exactly a thing on that wire.
+* **The player is the LAST stage, after the re-layout.** A modelling constraint made structural: the
+  last stage is the one the converter back-pressures and therefore the one that must be paced in
+  pysim, and `RfRelayoutToSlots` writes one word per firing and is RTL-gated as it stands. At RTL the
+  order is immaterial — both are II=1 pass-throughs — which is what makes it free to choose.
+
+### What Stage B deliberately did not do
+
+**No two successful loads in one scenario, and that is the design rather than the testbench.** Once a
+shot is accepted the buffer is busy until its play-set finishes, and a file-driven driver pushes every
+frame back to back — so at most one load per stream can succeed and every later one is `SHOT_BUSY`. A
+host that wanted two would read its verdicts and wait, which a vector file cannot do. Hence two
+scenarios and two mains against **one** generated harness.
+
+No capture, no trigger, no history: that is Stage C, and it chooses its own transport.
 
 ## Stage C — RX: triggered capture, with the past
 
@@ -594,14 +707,22 @@ reason `rf_loopback` is kept as the pattern-A case study. Their retirement belon
   shape; a separate command is closer to what a real capture system does.
 - **Is the pre-trigger window bounded by the memory only, or by a declared `pre_samples`?** Declaring
   it is checkable at build time; leaving it free is more useful at run time.
-- **Two DDRs mean two bus calibrations, and neither exists.** The RFSoC 4x2 has PS DDR4 and PL DDR4
-  with different bandwidth and latency, and both are reachable from an `m_axi` master. Waveflow's bus
-  timing is a **calibrated platform property** (`project-two-level-calibration`: fit the platform
-  once, then only compute per accelerator), and `waveflow/calib/platforms/` currently holds exactly
-  one entry — `zynq7020_bfm_100mhz`. By that model **PL DDR and PS DDR are two platforms**, one
-  `mm_bus.json` each. Until both are fitted, any transfer time this design predicts is right for at
-  most one of them, and the failure mode is a plausible number rather than an error. Decide whether
-  Stage B gates on a calibration or states the numbers as uncalibrated.
+- ~~**Two DDRs mean two bus calibrations, and neither exists.**~~ **ANSWERED 2026-08-31 for TX: the
+  numbers are stated as UNCALIBRATED, and no transfer time is published at all.** The RFSoC 4x2 has
+  PS DDR4 and PL DDR4 with different bandwidth and latency, and both are reachable from an `m_axi`
+  master. Waveflow's bus timing is a **calibrated platform property**
+  (`project-two-level-calibration`: fit the platform once, then only compute per accelerator), and
+  `waveflow/calib/platforms/` holds exactly one entry — `zynq7020_bfm_100mhz`, which is not this
+  board. By that model **PL DDR and PS DDR are two platforms**, one `mm_bus.json` each.
+
+  Stage B did not gate on a calibration and did not estimate one either: every number on
+  `docs/examples/rf_shot_play/` is measured **downstream of the stream port**, where a cycle count
+  means something, and the pages say in as many words that the host-side transfer time is
+  uncalibrated. That is the honest answer while the fit does not exist, and it costs nothing — the
+  design's own claims (II, underrun, the verdicts) are all fabric-side.
+
+  **Still open for Stage C**, where it actually bites: a capture dump is large, its transfer time is
+  the thing a user cares about, and PL DDR is where the question stops being orthogonal.
 - ~~**Does `RfShotBuf` carry the word type, or read it off the converter at bind?**~~ **ANSWERED
   2026-08-24: it reads it.** `RfShotBuf.for_word(word, …)` derives `bitwidth` and `samp_per_word` and
   the class keeps neither the type nor a second copy of the rules. It *cannot* carry the type in any
@@ -614,14 +735,15 @@ reason `rf_loopback` is kept as the pattern-A case study. Their retirement belon
 - **The venv is a sibling: `../pysilicon-venv`.** A bare `pytest` reports "0 failed" because nothing
   ran.
 - **Baseline: 6 non-vitis failures** (`test_dataschema_poly` + 5 in `tests/poly/test_timing_analysis.py`),
-  **+1 vitis**, and **`-m xsi` has its own**: `test_fir_block_xsi` fails with
-  `block 0 word 0: 0x00000000 != golden 0x0dab0666`, pre-existing. **0 skipped is the number to
-  check** — the soft-skip path masks a missing csynth. Piping pytest through `tail` reports *tail's*
-  exit code. *(`-m xsi` is **57** tests after Stage A, up from 49.)*
-- **The `rtl_staleness` guard skips on an mtime, not a diff.** Regenerating `gen/<top>.cpp` — even to
-  byte-identical content, even only to refresh a wrapper — makes it newer than the RTL and **silently
-  skips every gate for that example**. Re-run `--through csynth` after any `codegen_dut --force`, and
-  read the skip count.
+  **+1 vitis**. **`-m xsi` is green**: 76 gates, 0 skipped, 0 failed as of 2026-08-31 (the
+  `test_fir_block_xsi` failure recorded here after Stage A is gone). `WANT_XSI_GATES` in
+  `tests/conftest.py` pins the count and the session gate FAILS on a skip, so "0 skipped" is checked
+  rather than eyeballed. Piping pytest through `tail` reports *tail's* exit code.
+- **The `rtl_staleness` guard hashes source CONTENT** (`waveflow/build/rtl_digest.py`), so a
+  `--force` regeneration to byte-identical bytes no longer skips a gate — the mtime version did, and
+  silently. The guard covers `gen/<top>.cpp` + `include/*`, and **not** `xsi/*`, so a change to the
+  BFM library does not stale a gate; keeping the committed copies in step is a separate check
+  (`tests/build/test_xsi_workspace_copies.py`).
 - **XSI gates compile the COMMITTED `xsi/` copies**; keep them in step with `waveflow/build/xsi/`.
 - **A `BramIF` goes in `add_rtl_if`, never `add_if`.**
 - **Vitis addresses a `bram` port in BYTES** (`Addr_A_orig << 32'd3` at 64 bits); the memory indexes
@@ -629,11 +751,27 @@ reason `rf_loopback` is kept as the pattern-A case study. Their retirement belon
   for a fortnight — the scaling is *consistent*, so a design round-trips perfectly until its memory
   wraps. Never take "the values came back right" as evidence that the addressing is right; write past
   `depth / (W/8)` words, or check the shift against the emitted RTL.
-- **Label a loop you intend to assert on.** Vitis names an unlabelled loop `VITIS_LOOP_<line>_1`, so a
-  comment edit renames its report entry and a hard-coded lookup then misses — and a test that skips
-  on a miss reads as a pass. The shot-buffer bodies carry `load_shot:` / `play_shot:`; the gates also
-  discover the entry rather than spelling it out.
+- **Label a loop you intend to assert on, and label its PARENT too.** Vitis names an unlabelled loop
+  `VITIS_LOOP_<line>_1` **and nests that name into its children**, so a comment edit renames the
+  synthesized module and a hard-coded lookup then misses — and a test that skips on a miss reads as a
+  pass. Stage B paid this twice in one sitting: the loader's loops moved when its header comment grew,
+  and the player's inner loop came out `..._Pipeline_VITIS_LOOP_61_1_play_one` because only the inner
+  one carried a label. The bodies now carry `take_shot:` / `drain_tail:` / `play_set:` / `play_one:`
+  beside Stage A's `load_shot:` / `play_shot:`; where a body cannot be relabelled (`rf_relayout`, which
+  is RTL-gated as it is), the gate spells out only the **module** and discovers the loop.
 - **`mode=bram` on an unsized pointer degrades to an `ap_vld` scalar silently** — a clean csynth
   against a memory that is not there. Assert the port list, as `bram_toy` does.
+- **A converter-model counter is not the wire.** Stage B's design put 192 beats on `samp_out` and
+  `RfdcDacSlave` reported 191, because the model judged each beat by a `TREADY` it had recomputed
+  rather than by the one it drove. **The VCD is the arbiter**: count `TVALID && TREADY` at rising
+  edges before believing a model counter that disagrees with a design's own internal channels. Fixed
+  2026-08-31; the lesson is the method, not the fix.
+- **A boundary port's TLAST comes from `ap_axis`, not from a `last` member.** A
+  `streamutils::framed_word` boundary port compiles and produces one double-width `TDATA` with no
+  TLAST pin at all. `framed_word` is for INTERNAL channels (Vitis refuses `ap_axis` there —
+  `HLS 214-208`); `axi4s_word` is for boundary ports. The pragma is the same either way.
+- **A new field on an endpoint moves every calibration key in the repo.** An endpoint's attribute set
+  is part of `structure_signature`. Stage B's `boundary_tlast` had to become a `ClassVar` on a
+  subclass for this reason; `tests/calib/test_key_stability.py` is what said so.
 - **Costs are measured, never inherited.** Every cycle count in this plan is to be recorded from a
   run, not carried over from `RfSampBuf`.
