@@ -203,6 +203,60 @@ class TestAbsentRtlIsNotStaleness:
         assert rtl_staleness(tmp_path, TOP) is None
 
 
+#: XSI gate files that drive real RTL and deliberately do **not** check staleness yet, each for the
+#: same measured reason: their example's build never calls ``render_rtl_f``, so csynth writes no
+#: source stamp, so the guard would fall back to mtimes -- and every one of these trees reads as
+#: stale by mtime today.  Adding the check now would make them skip constantly, which is the failure
+#: this whole change exists to remove.  Stamping those build paths is the next step, not this one.
+#:
+#: The list is here rather than nowhere so the hole is **visible**.  A gate quietly missing its guard
+#: is how five of the nine gate files came to be measuring against RTL they had not produced.
+UNGUARDED_XSI_GATES = {
+    "tests/build/test_trace_steps.py",
+    "tests/examples/test_state_toy.py",
+    "tests/examples/test_xsi_bfm.py",
+    "tests/utils/test_trace.py",
+}
+
+
+def _drives_rtl(text: str) -> bool:
+    """A file that launches the XSI runner is grading real RTL, and owes the question."""
+    return "xsi_runner_cmd" in text or "run.bat" in text
+
+
+def test_every_xsi_gate_that_drives_rtl_checks_staleness():
+    """Defect 3 of ``plans/xsi_staleness_and_silent_skips.md``, kept closed.
+
+    Nine gate files, four guarded, was the measurement that started this: the other five would
+    happily compare a cycle count against RTL from another branch and report the difference as a
+    behaviour change.  Nothing about a new gate file makes anyone add the check, so this asks.
+    """
+    missing = []
+    for path in sorted((REPO / "tests").rglob("test_*.py")):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(REPO).as_posix()
+        if "pytest.mark.xsi" not in text or not _drives_rtl(text):
+            continue
+        if "rtl_staleness" not in text and rel not in UNGUARDED_XSI_GATES:
+            missing.append(rel)
+    assert not missing, (
+        "these XSI gates drive real RTL without checking whether they produced it -- they will "
+        "report a stale artifact as a behaviour change; add "
+        "`_require(rtl_staleness(ROOT, TOP) is None, ...)`:\n  " + "\n  ".join(missing))
+
+
+def test_the_unguarded_list_names_only_files_that_exist_and_still_need_it():
+    """An exception list that outlives its exceptions is how a hole becomes permanent."""
+    stale = []
+    for rel in sorted(UNGUARDED_XSI_GATES):
+        path = REPO / rel
+        if not path.is_file():
+            stale.append(f"{rel} (no such file)")
+        elif "rtl_staleness" in path.read_text(encoding="utf-8"):
+            stale.append(f"{rel} (now guarded)")
+    assert not stale, ("UNGUARDED_XSI_GATES is out of date; remove:\n  " + "\n  ".join(stale))
+
+
 def _render_rtl_f_calls(path: Path) -> list[ast.Call]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     out = []

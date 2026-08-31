@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from examples.fir_block.fir_block_build import check_xsi_outputs, generate_tb
+from waveflow.build.trace_steps import rtl_staleness
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "fir_block"
 XSI = ROOT / "xsi"
@@ -36,6 +37,12 @@ def _require_toolchain() -> None:
         pytest.skip(f"no csynth RTL at {ROOT / 'fir_block_proj'} — run fir_block.tcl first")
     if not (XSI / "run.bat").exists():
         pytest.skip(f"no XSI workspace at {XSI}")
+    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
+    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
+    # rtl_staleness().
+    why = rtl_staleness(ROOT, "fir_block")
+    if why is not None:
+        pytest.skip(f"XSI gate prerequisite missing: {why}")
 
 
 def _run_xsi() -> subprocess.CompletedProcess:

@@ -69,7 +69,7 @@ from examples.bram_access.bram_access_build import (
     hazard_manifest,
 )
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 from waveflow.utils.bram_trace import (
     describe,
     find_read_during_write,
@@ -172,6 +172,10 @@ def runs(tmp_path_factory):
     """
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(VERILOG.is_dir(), f"no csynth RTL at {VERILOG} — run bram_access_build.py")
+    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
+    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
+    # rtl_staleness().
+    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
     for f in RTL_FILES + (f"vcd_dumper_{WRAPPER}.v",):
         _require((XSI / f).is_file(), f"{XSI / f} — run bram_access_build.py --through codegen_dut")
 
