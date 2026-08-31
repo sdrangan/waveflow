@@ -135,14 +135,59 @@ kernel's memory ports disappear into a FIFO.
   converter's packing; see *The logic-side port* below. Already decided and measured in
   `plans/adc_model.md`.
 - **There is always a response.** No `has_response` flag; see *The response is not optional*.
-- **The payload moves over `m_axi`, and the address arrives IN-BAND** — in the command, never in a
-  control register. See *Where the payload comes from*. Decided 2026-08-24.
+- **The command and payload arrive IN-BAND on the stream**, never in a control register. See
+  *Where the payload comes from*. Decided 2026-08-24 as `m_axi` with an in-band address;
+  **the transport was reversed to a plain stream on 2026-08-31** (the address argument survives
+  unchanged, and a control register is still refused). The reversal is recorded in that section.
 
 ---
 
 ## Where the payload comes from
 
-**Decided 2026-08-24: `m_axi`, with the address carried in the command.**
+> **REVERSED 2026-08-31 — the payload arrives IN-BAND on the stream, `examples/stream_inband`'s
+> shape: a header ahead of the samples, `TLAST` at the end.** The `m_axi` reasoning below is kept
+> because it is still the right answer to the question it was asked; what changed is a constraint
+> that was not on the table when it was asked. **This design is handed to a student to wire in
+> Vivado IPI by hand and drive from PYNQ**, and for that reader the two are not close:
+>
+> * **The port was already a stream.** `RfShotBufLoad.s_in` is a `StreamIFSlave` with
+>   `has_tlast=True`. The arena route inserts `MemRStream` — a burst engine — to feed a port that
+>   was streaming anyway. The shot version is Stage A plus a header and a verdict.
+> * **The short-load verdict becomes structural.** *The response is not optional* exists because a
+>   short transfer completes cleanly at the DMA. On a stream that is `TLAST` before `nword` words:
+>   the defect is visible **on the data path**, not inferred from a completion echo.
+> * **In Vivado it is one IP.** MM2S carries header and payload, S2MM carries the verdict — both
+>   channels of the same AXI DMA. The arena route needs the kernel's master wired to a PS HP port
+>   plus `pynq.allocate().physical_address` in the command, whose failure mode is a
+>   plausible-looking wrong address.
+>
+> **What was given up:** the kernel can no longer *fetch* — a resident waveform library in DDR,
+> switched by command with no host transfer, is an `m_axi` capability and pulse-to-pulse agility is
+> where it would matter. Nor can several modules share one arena without a DMA each. The escape
+> hatch is scatter-gather DMA with pre-built descriptors, which is **more** Vivado than the `m_axi`
+> it replaces.
+>
+> **What was NOT given up: the ceiling.** `m_axi` does not let a design exceed the buffer. Playing
+> past the shot means a producer refilling while a consumer drains — a live reader and a live
+> writer, which is what `rf_samp_new.md`'s credit/ack/margin machinery is for. Even the BRAM-less
+> version (burst from DDR straight at the converter) does not escape it: variable DDR latency
+> against a hard grid deadline forces a prefetch FIFO, and managing that FIFO's occupancy *is* a
+> streaming buffer. **The transport choice does not move `choosing.md`'s boundary — that boundary
+> is concurrency.** Say this on the Stage E page; it is the cleanest demonstration the guide has
+> that the two buffer classes are divided by concurrency and not by plumbing.
+>
+> **PL DDR vs PS DDR** (asked 2026-08-31): PS DDR via `pynq.allocate()` is the bring-up path. PL
+> DDR needs a DDR4 MIG in the PL, the DMA's MM2S wired to it, and something to get the waveform
+> *into* PL DDR first — normally a DMA from PS DDR, so two transfers to save nothing for a payload
+> bounded by the BRAM. PL DDR only starts to matter for Stage C capture dumps, which is also where
+> the unresolved two-platform calibration question lives.
+>
+> **RX is not decided by this.** TX-before-RX is a separate settled decision, and the `m_axi` case
+> below is RX-driven — it concedes *"TX is the weaker case."* Stage C chooses its own transport
+> with capture evidence in hand.
+
+**Decided 2026-08-24, and reversed for TX on 2026-08-31 — see the note above: `m_axi`, with the
+address carried in the command.**
 
 Both candidates reach a host equally well — in-band streaming through `pynq.lib.dma`, or `m_axi`
 against a buffer from `pynq.allocate()` whose `.physical_address` travels in the command. What
@@ -179,21 +224,39 @@ declared once on the module, and a command that restated it would be a second so
 disagree — the same discipline `Rfdc` follows by reading `samp_rate` off the clock rather than
 declaring its own.
 
-```python
-class TxCmd(DataList):          # include_filename = "rf_shot_tx_cmd.h"
-    tid       # transaction id, echoed on the response
-    src_addr  # where the samples are, in the m_axi arena
-    nsamp     # how many samples
+**Built 2026-08-31** in `waveflow/hw/rf_shot_tx.py`, in the in-band shape rather than the arena one
+— see the REVERSED note in *Where the payload comes from*. `src_addr` is gone: with the payload on
+the stream there is no address to carry.
 
-class TxResp(DataList):         # include_filename = "rf_shot_tx_resp.h"
-    tid       # echo
-    status    # the verdict -- see The response is not optional
+```python
+class ShotTxHdr(DataList):      # include_filename = "rf_shot_tx_hdr.h"
+    opcode    # SHOT_LOAD | SHOT_END  -- stream_inband's DATA/END, so the loop halts cleanly
+    tid       # transaction id, echoed on the response
+    nsamp     # samples the HOST believes it is sending (0 for END)
+    nrepeat   # times to play the shot once loaded (>= 1)
+
+class ShotTxResp(DataList):     # include_filename = "rf_shot_tx_resp.h"
+    tid            # echo
+    status         # SHOT_LOADED | SHORT | WRONG_LEN | BUSY | ZERO_LEN
+    nsamp_loaded   # what actually landed -- the number a DMA cannot produce
 ```
+
+Three choices in that block that the plan did not previously fix, each reversible:
+
+* **`opcode`** follows `examples/stream_inband`'s `DATA`/`END`. A free-running kernel with no way to
+  stop is one whose testbench can only end by timing out, and a timeout is indistinguishable from a
+  deadlock.
+* **`nrepeat` rides the header** rather than a token source in the composite. Stage A's
+  `RfShotBufRead` waits on one `rdy` token per firing and must not be modified, so the repeat has to
+  come from somewhere; on the header it is also a number the student can change from Python without
+  a rebuild.
+* **`nsamp_loaded` is on the response**, not just a status code, because the difference between it
+  and the header's `nsamp` is the whole diagnosis on a short load.
 
 Follow `rf_tx_stream.py`'s conventions: a `DataList` with an `include_filename`, `IdxField` elements,
 and a per-element `description` that reaches the generated header. Name the classes so they cannot be
 confused with the two `TxCmd`s that already exist (`rf_tx_stream.TxCmd` names a *schedule*,
-`rf_samp_buf_tx.TxCmd` names a *buffer window*, and this one names an *arena source*) — that file's
+`rf_samp_buf_tx.TxCmd` names a *buffer window*, and this one names a *stream transaction*) — that file's
 own docstring makes the point that they are alternatives, never layers.
 
 The RX pair is Stage C's, and its shape is not settled here: a capture command needs a *destination*
