@@ -253,6 +253,19 @@ class RfShotBufStep(Buildable):
     :func:`~waveflow.hw.rf_relayout.slot_elem_type` and
     :func:`~waveflow.hw.rf_relayout.dense_elem_type` must write into the **same** *output_dir*.
 
+    **Stage B's two bodies ship here too**, and that is the same judgement as the paragraph above
+    rather than a second one.  :mod:`waveflow.hw.rf_shot_tx` is the *command layer* for exactly this
+    buffer: ``shot_tx_load_task`` writes into ``rf_shot_buf_load_task``'s stream and
+    ``shot_tx_play_task`` sits on its ``rdy`` token, so a build that copied one without the other
+    would have a design with a hole in the middle of it.  They are not a second vocabulary the way
+    the streaming buffer's would be — there is one word for *shot* here, and five status codes that
+    only this buffer can produce.  ``shot_tx_load_task.h`` includes the generated
+    ``rf_shot_tx_hdr.h`` / ``rf_shot_tx_resp.h``, so a
+    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES` — **with** ``framed=True``, because the
+    boundary port is a ``framed_word`` stream and the plain ``read_stream`` methods will not bind to
+    one — must write into the same *output_dir*.
+
     Parameters
     ----------
     output_dir : str | Path
@@ -272,7 +285,8 @@ class RfShotBufStep(Buildable):
         return {name: self._output_dir / f"{name}.h" for name in self._SRC}
 
     _SRC = ("rf_shot_buf_load_task", "rf_shot_buf_read_task",
-            "rf_relayout_to_dense_task", "rf_relayout_to_slots_task")
+            "rf_relayout_to_dense_task", "rf_relayout_to_slots_task",
+            "shot_tx_load_task", "shot_tx_play_task")
 
     def generate(self, key: str, config: BuildConfig) -> str:
         if key not in self._SRC:
