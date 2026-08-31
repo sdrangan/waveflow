@@ -12,14 +12,65 @@ problem it does not have.
 
 ---
 
-## Next session starts here — Stage B
+## Next session starts here — Stage B, the loader
+
+**State on 2026-08-31:** Stage A built and RTL-gated. Stage B's *commands* are built and committed
+on branch `rf-shot-tx-stage-b` (`waveflow/hw/rf_shot_tx.py` — `ShotTxHdr`, `ShotTxResp`, five
+verdict codes). **The transport was reversed to an in-band stream** — read the REVERSED note in
+*Where the payload comes from* before anything else. What is left is the loader, the player, the
+example and the gates.
 
 ```
-claude "Read plans/rf_shot_buf.md, sections 'Stage A — what it measured' and
-        'Stage B — TX: play a stored waveform', and build Stage B.
-        Stage A is built and RTL-gated; do not rebuild RfShotBuf, RfRelayout or
-        their examples. The decisions list is settled — do not re-open it."
+claude "Read plans/rf_shot_buf.md, sections 'Next session starts here', 'Where the
+        payload comes from' (the REVERSED note at the top), 'The commands', 'The
+        response is not optional', 'Stage A — what it measured' and 'Stage B — TX:
+        play a stored waveform'. Then build the rest of Stage B on branch
+        rf-shot-tx-stage-b, which is already checked out and holds the schemas.
+
+        Do NOT modify waveflow/hw/rf_shot_buf.py or rf_relayout.py or their
+        examples — Stage A is RTL-gated and this stage sits in front of it.
+        Do NOT re-open the transport: the payload is in-band on the stream,
+        examples/stream_inband's shape. The reasoning is in the plan.
+
+        Build, in this order, committing each:
+        1. ShotTxLoad in waveflow/hw/rf_shot_tx.py — reads ShotTxHdr off the
+           stream, refuses SHOT_BUSY / SHOT_WRONG_LEN / SHOT_ZERO_LEN BEFORE
+           taking a payload word, forwards the payload to RfShotBufLoad.s_in,
+           and emits exactly one ShotTxResp. TLAST before nword words is
+           SHOT_SHORT, with nsamp_loaded carrying what actually landed.
+        2. Its hand-written hls::task body in waveflow/build/, shipped by the
+           same step that ships the Stage A bodies. Mind the reset trap: an
+           hls::task that WRITES before it READS counts during reset.
+        3. The player — nrepeat plays of the loaded shot on the converter grid,
+           through RfRelayoutToSlots into Rfdc.tx_streams[0].
+        4. examples/rf_shot_play — pysim, build via build/cli.py::run_dag_cli,
+           and a committed xsi/ workspace.
+        5. docs/examples/rf_shot_play/ — written AFTER the gates, from measured
+           numbers only.
+
+        Gates, all of them: pysim round trip byte-identical; a short-load test
+        asserting SHOT_SHORT and nsamp_loaded (this is the response's reason for
+        existing); check(<composite>, 'composite_kernel') clean; csynth with the
+        achieved PipelineII recorded; and an XSI cycle count recorded the way 520
+        and 68 were. Compare the player's II against rf_tx_stream's — the shot
+        player has no ack to harvest, so anything short of II=1 is a defect the
+        streaming version already solved.
+
+        Costs are MEASURED, never inherited — do not quote Stage A's numbers or
+        RfSampBuf's. Publish NO transfer-time number: neither RFSoC DDR is
+        calibrated (waveflow/calib/platforms/ holds one entry), so state the
+        timing as uncalibrated and say why."
 ```
+
+**Traps that have cost this repo a day each, carried into this stage:**
+
+* **The venv is a sibling: `../pysilicon-venv`.** A bare `pytest` reports "0 failed" because nothing
+  ran. Use `../pysilicon-venv/Scripts/python.exe -m pytest`.
+* **`-m xsi` fails if a gate SKIPS.** The staleness guard hashes source content and `WANT_XSI_GATES`
+  pins the count — a session that measured nothing must not report success. Read the skip count.
+* **Never hand-unpack a `DataList`.** Use `get_schema` / the generated `<stem>_array_utils.h`; the
+  bug hides at `LW=1`.
+* **Baseline is 6 non-vitis failures + 1 vitis.** Anything beyond that is this branch's.
 
 Stages run in order; each has its own gate. A is the primitive, B and C are the two directions, D is
 the teaching example, E is the guide section.
