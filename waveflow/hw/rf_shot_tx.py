@@ -408,9 +408,11 @@ class ShotTxPlay(FreeRunMod):
 
     It sits on **both** the token channel and the sample path, and needs both::
 
-        RfShotBufLoad --rdy--> ShotTxPlay --rdy--> RfShotBufRead --samp--> ShotTxPlay --> relayout
-                                    ^ rep                                       |
-                               ShotTxLoad <---------------- done ---------------+
+        RfShotBufLoad --rdy--> ShotTxPlay --rdy--> RfShotBufRead --> RfRelayoutToSlots
+                                   ^ rep                                     |
+                              ShotTxLoad <--- done --- ShotTxPlay <--- samp --+
+                                                            |
+                                                            +--> the converter
 
     **Why the repeat is not simply more tokens.**  ``RfShotBufRead`` plays one shot per ``rdy`` token
     and is RTL-gated as it stands, so the repeat has to come from something in front of it.  That
@@ -441,13 +443,44 @@ class ShotTxPlay(FreeRunMod):
     #: Words in one shot — the inner loop's trip count, and the same build-time number
     #: :class:`~waveflow.hw.rf_shot_buf.RfShotBufRead` emits per token.
     nword: HwParam[int] = SHOT_WORDS
+
+    # -- two modelling inputs, and neither is hardware -------------------------------------------
+    #
+    # Both exist because pysim's quantum on the converter edge is a *block*, and both are the same
+    # accommodation :class:`~waveflow.hw.rf_samp_buf_tx.RfSampBufPlayer` documents at length.  They
+    # are plain fields rather than HwParams deliberately: they reach no template argument, because
+    # the RTL body writes one word per beat and knows nothing about either.
+
+    #: Words per pysim output burst.  ``Rfdc``'s DAC process consumes a whole ``blksize``-sample
+    #: burst per event and refuses a partial one, so the twin must hand it exactly that.  ``1`` is
+    #: the honest default (one word, one write); a testbench wiring this to a converter sets it to
+    #: ``blksize // samp_per_word``.  Must divide :attr:`nword`, so a play is a whole number of
+    #: blocks and a play boundary lands on a block boundary.
+    blk_words: int = 1
+    #: **Words per second the DAC consumes** — ``samp_rate / samp_per_word`` — or ``None`` to run at
+    #: the fabric's rate alone.
+    #:
+    #: In RTL this task is paced by ``TREADY`` and needs nothing: it writes a word, the 2-deep
+    #: boundary port fills, and it waits for the converter to take one.  That back-pressure **is** the
+    #: whole scheduling story of the shot design, which is why the body has no grid arithmetic in it.
+    #: pysim has no such back-pressure for a burst write (``StreamIF`` routes intra-burst overflow to
+    #: a counter rather than blocking — see ``docs/guide/rf/rfdc/fidelity.md``), so the metronome has
+    #: to be handed over instead.  Left unset the playout runs at the fabric's rate, the converter is
+    #: never the bottleneck, and the one property this design claims — that it keeps a DAC fed — is
+    #: not being tested at all.
+    dac_word_rate: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, nw = int(self.bitwidth), int(self.nword)
+        w, nw, bw = int(self.bitwidth), int(self.nword), int(self.blk_words)
         if nw < 1:
             raise ValueError(f"a shot is {nw} words; there is nothing to play")
+        if bw < 1 or nw % bw:
+            raise ValueError(
+                f"blk_words={bw} does not divide a {nw}-word shot. pysim hands the converter one "
+                f"block per event, so a shot that is not a whole number of blocks would end "
+                f"mid-block and the next play would start inside one.")
         self.rep_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_rep", bitwidth=w,
                                     has_tlast=True)
         self.rdy_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_rdy_in", bitwidth=w,
@@ -468,6 +501,10 @@ class ShotTxPlay(FreeRunMod):
         #: ``n_plays * nword`` is a truncated play the sample data alone can hide.
         self.n_plays = 0
         self.n_words = 0
+        #: The pysim rate grid: when the first block went out, and how many have.  Sim-only, and
+        #: ``None`` until the first play-set starts (see :meth:`run_iter`).
+        self._t0: float | None = None
+        self._blocks = 0
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("shot_tx_play_task", "shot_tx_play_task.h",
@@ -477,21 +514,45 @@ class ShotTxPlay(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one play-set: the repeat count, the shot's token, then ``nrepeat`` plays.
 
-        One word per burst throughout, which is not a detail — a pysim slave dequeues a whole burst
-        per ``get`` and ``nwords_max`` *discards* the remainder, so a multi-word burst here would be
-        one pysim firing against ``nword`` RTL firings downstream and the two backends would be
-        running different designs (``examples/bram_access`` spells this out).
+        **Word-granular on the way in, block-shaped on the way out.**  ``samp_in`` is read one word
+        per ``get`` because that is what the stage upstream writes — a pysim slave dequeues a whole
+        burst per ``get`` and ``nwords_max`` *discards* the remainder, so a multi-word read here
+        would be one pysim firing against ``nword`` RTL firings and the two backends would be running
+        different designs (``examples/bram_access`` spells this out).  What is *shaped* is only the
+        handover to the converter: :attr:`blk_words` words go out as one burst, because pysim's
+        quantum on that edge is a block.
+
+        The rate is charged **per block on an absolute grid**, never as a relative timeout.  A
+        relative wait restarts from wherever ``now`` happens to be when the body finishes, so
+        everything the body yielded for is added to the period and never given back — the defect
+        ``RFSampIF``'s metronome exists to avoid, and the one that made ``rf_samp_buf_tx``'s player
+        slip a whole block every fourth firing.
         """
-        nw = int(self.nword)
+        nw, bw = int(self.nword), int(self.blk_words)
         rep = yield from self.rep_in.get(nwords_max=1)
         nrep = int(np.asarray(rep, dtype=np.uint64).ravel()[0])
         yield from self.rdy_in.get(nwords_max=1)          # the shot is in the memory
+        if self._t0 is None:
+            # The grid's origin: the instant the FIRST play-set started handing words over.  Set
+            # here rather than at construction, because a converter's grid begins when the design
+            # has something to put on it, and anchoring at t=0 would charge the load time twice.
+            self._t0 = self.now
         for _ in range(nrep):
             yield from self.rdy_out.write(np.array([1], dtype=np.uint64))
-            for _ in range(nw):
-                word = yield from self.samp_in.get(nwords_max=1)
-                yield from self.samp_out.write(np.asarray(word, dtype=np.uint64).ravel()[:1])
-                self.n_words += 1
+            for _ in range(nw // bw):
+                out = np.empty(bw, dtype=np.uint64)
+                for k in range(bw):
+                    word = yield from self.samp_in.get(nwords_max=1)
+                    out[k] = int(np.asarray(word, dtype=np.uint64).ravel()[0])
+                    self.n_words += 1
+                # Hand off FIRST, then charge: charging before the write would make every block
+                # arrive one period late, so the player and the converter would serialize rather
+                # than overlap.
+                yield from self.samp_out.write(out)
+                self._blocks += 1
+                if self.dac_word_rate:
+                    deadline = self._t0 + self._blocks * (bw / float(self.dac_word_rate))
+                    yield self.timeout(max(0.0, deadline - self.now))
             self.n_plays += 1
         yield from self.done_out.write(np.array([1], dtype=np.uint64))
 
@@ -506,14 +567,18 @@ class RfShotTx(FreeRunMod):
 
     Five ``hls::task``\ s and one memory beside them::
 
-        s_in ---> ShotTxLoad ---pay---> RfShotBufLoad ---> [ BRAM ] ---> RfShotBufRead
-                    | ^  |                    |                                |
-                 resp |  +---rep--> ShotTxPlay <---rdy------------+            | samp
-                    | +----done------- | ^ ------rdy------------------> (read) |
-                    v                  v |                                     |
-                 resp_out         RfRelayoutToSlots <----------- samp ---------+
-                                          |
-                                          v  samp_out --> Rfdc.tx_streams[0]
+        s_in --> ShotTxLoad --pay--> RfShotBufLoad --> [ BRAM ] --> RfShotBufRead
+                  |  |  ^                   |                            |
+             resp_out |  |                 rdy                          dense
+                      |  |                  v                            v
+                      | done            ShotTxPlay --rdy-------> RfRelayoutToSlots
+                      |  ^                  ^                            |
+                      +-rep-> ShotTxPlay <--samp---------------------- (slots)
+                                  |
+                                  +--> samp_out --> Rfdc.tx_streams[0]
+
+    (``ShotTxPlay`` appears twice only because the diagram is flat: it is one task, and it is the
+    task the converter back-pressures.)
 
     **The Stage A pair is instantiated, not nested**, and that is forced rather than preferred.
     :class:`~waveflow.hw.rf_shot_buf.RfShotBuf` owns its ``rdy`` channel as an *internal* edge, so a
@@ -524,13 +589,21 @@ class RfShotTx(FreeRunMod):
     of ``rf_shot_buf.py`` or ``rf_relayout.py`` changes, and the numbers those gates recorded still
     describe the same RTL.
 
-    **Why the relayout is the last stage and not the first.**  The buffer holds *dense* words — the
+    **Where the relayout goes, and why the player is last.**  The buffer holds *dense* words — the
     logic-side format, four 14-bit samples packed at 14-bit stride in a 64-bit beat — because that is
     what a host can write without knowing anything about justification (``plans/adc_model.md``
-    § *The logic-side interface*, option 2).  The converter wants slots.  Putting
-    :class:`~waveflow.hw.rf_relayout.RfRelayoutToSlots` between the player and the DAC is what lets
-    the buffer own the converter's packing: the converter's ``justify`` can change and nothing
-    upstream of this last stage moves.
+    § *The logic-side interface*, option 2).  The converter wants slots, so
+    :class:`~waveflow.hw.rf_relayout.RfRelayoutToSlots` sits between them and the buffer owns the
+    converter's packing: ``justify`` can change and nothing upstream of that stage moves.
+
+    It goes **before** the player rather than after, and that is a modelling constraint made
+    structural.  The last stage on this chain is the one the converter back-pressures, and it is
+    therefore the one that has to be paced in pysim — ``Rfdc``'s DAC process consumes a whole
+    ``blksize`` burst per event and refuses a partial one, while ``RfRelayoutToSlots`` writes one
+    word per firing and is RTL-gated as it stands.  Putting the player last is what lets
+    :attr:`ShotTxPlay.blk_words` shape that handover without touching Stage A.  At RTL the order is
+    immaterial (both stages are II=1 pass-throughs), which is what makes it free to choose on the
+    modelling side.
 
     **What is absent is the lesson.**  There is no credit channel, no ack, no progress pointer, no
     ``MARGIN``, no slot arithmetic and no lateness verdict — every mechanism ``plans/rf_samp_new.md``
@@ -556,6 +629,11 @@ class RfShotTx(FreeRunMod):
     #: identity**, which is every configuration in the repo but the 4x2 preset, so a build that leaves
     #: it at 0 is measuring a pair of wires.
     shift: HwParam[int] = 2
+    #: Words per pysim output burst on the converter-facing port, and the DAC's word rate — both
+    #: :class:`ShotTxPlay`'s modelling inputs, passed through.  See :attr:`ShotTxPlay.blk_words` and
+    #: :attr:`ShotTxPlay.dac_word_rate`; neither reaches the hardware.
+    blk_words: int = 1
+    dac_word_rate: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -574,12 +652,16 @@ class RfShotTx(FreeRunMod):
         self.buf_load = RfShotBufLoad(sim=self.sim, name=f"{self.name}_buf_load", bitwidth=w,
                                       depth=d, nword=nw, clk=self.clk)
         self.play = ShotTxPlay(sim=self.sim, name=f"{self.name}_play", bitwidth=w, nword=nw,
-                               clk=self.clk)
+                               blk_words=int(self.blk_words),
+                               dac_word_rate=self.dac_word_rate, clk=self.clk)
         self.buf_read = RfShotBufRead(sim=self.sim, name=f"{self.name}_buf_read", bitwidth=w,
                                       depth=d, nword=nw, clk=self.clk)
         self.relayout = RfRelayoutToSlots(sim=self.sim, name=f"{self.name}_to_slots", bitwidth=w,
                                           n_slot=spw, shift=sh, clk=self.clk)
-        for c in (self.load, self.buf_load, self.play, self.buf_read, self.relayout):
+        # add_comp order is emit order, and it is the DATA-FLOW order: command layer, buffer write,
+        # the token stage, buffer read, the converter's packing, and the player last because it is
+        # the stage the converter back-pressures.
+        for c in (self.load, self.buf_load, self.buf_read, self.relayout, self.play):
             self.add_comp(c)
 
         # -- the internal channels.  Each depth is a statement, not a default. -------------------
@@ -596,8 +678,8 @@ class RfShotTx(FreeRunMod):
                 ("rep", self.load.rep_out, self.play.rep_in, 1),
                 ("rdy_load", self.buf_load.rdy_out, self.play.rdy_in, 1),
                 ("rdy_play", self.play.rdy_out, self.buf_read.rdy_in, 1),
-                ("samp", self.buf_read.s_out, self.play.samp_in, 2),
-                ("dense", self.play.samp_out, self.relayout.s_in, 2),
+                ("dense", self.buf_read.s_out, self.relayout.s_in, 2),
+                ("samp", self.relayout.s_out, self.play.samp_in, 2),
                 ("done", self.play.done_out, self.load.done_in, 1)):
             ifc = StreamIF(name=f"{self.name}_{nm}_if", sim=self.sim, clk=self.clk, bitwidth=w,
                            depth=depth)
@@ -636,7 +718,7 @@ class RfShotTx(FreeRunMod):
         # Convenience refs for testbenches — the boundary endpoints live on the children.
         self.s_in = self.load.s_in
         self.resp_out = self.load.resp_out
-        self.samp_out = self.relayout.s_out
+        self.samp_out = self.play.samp_out
 
     # -- geometry, read off the graph rather than restated -------------------------------------
 
