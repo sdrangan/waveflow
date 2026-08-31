@@ -325,7 +325,11 @@ def generate_tb(out_dir: Path = HERE, program=None, blk: int | None = None, ntap
     # The xvlog file list, regenerated from the RTL that is actually on disk.  Never hand-maintain it:
     # a stale .f plus a cached xsimk.dll is how an XSI run goes green while proving nothing.
     if (out_dir / f"{TOP}_proj").is_dir():
-        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, out_dir), encoding="utf-8")
+        # stamp_sources=False: this runs at TB-GENERATION time, not after csynth.  Stamping
+        # here would record whatever sources are on disk now as the ones the existing RTL was
+        # built from -- the guard signing off on a build it did not witness.
+        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, out_dir, stamp_sources=False),
+                                         encoding="utf-8")
     else:
         print(f"  (no {TOP}_proj yet — run csynth, then regenerate to get rtl_{TOP}.f)")
     print(f"generated TB xsi/{TOP}_vectors.h + xsi/{TOP}_tb_harness.h + xsi/{TOP}_bfm_tb.cpp")

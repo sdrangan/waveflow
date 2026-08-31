@@ -6,9 +6,9 @@
 ../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_ingress_task_64_s.v
 ../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task.v
 ../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_2.v
-../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_2_Pipeline_1.v
-../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_2_Pipeline_2.v
+../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_2_Pipeline_VITIS_LOOP_184_1.v
+../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_2_Pipeline_VITIS_LOOP_258_1.v
 ../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_2_blk_RAM_AUTO_1R1W.v
-../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_Pipeline_1.v
-../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_Pipeline_2.v
+../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_Pipeline_VITIS_LOOP_184_1.v
+../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_Pipeline_VITIS_LOOP_258_1.v
 ../rf_pass_through_2ch_proj/solution1/syn/verilog/rf_pass_through_2ch_rf_samp_relay_task_blk_RAM_AUTO_1R1W.v

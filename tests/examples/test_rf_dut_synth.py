@@ -202,7 +202,7 @@ def test_the_rtl_file_list_matches_the_rtl_on_disk():
     if not PROJ.is_dir():
         pytest.skip(f"no csynth RTL at {PROJ}")
     committed = (ROOT / "xsi" / f"rtl_{TOP}.f").read_text(encoding="utf-8").replace("\r\n", "\n")
-    assert render_rtl_f(TOP, ROOT) == committed
+    assert render_rtl_f(TOP, ROOT, stamp_sources=False) == committed
 
 
 # ---------------------------------------------------------------------------

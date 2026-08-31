@@ -52,7 +52,7 @@ from examples.rf_loopback.rf_loopback_xsi import (
     XSI_NBLK,
     make_sim,
 )
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_loopback"
 XSI = ROOT / "xsi"
@@ -227,13 +227,18 @@ def test_rtl_loopback_first_block_is_bit_exact_and_the_loss_is_the_measured_one(
     """THE gate. Runs the counter main, which also dumps the sink's bundle in post_sim."""
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(PROJ.is_dir(), f"no csynth RTL at {PROJ} — run rf_dut_build.py --through csynth")
+    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
+    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
+    # rtl_staleness().
+    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
 
     from waveflow.build.composite_gen import render_rtl_f
     from examples.rf_loopback.rf_loopback_xsi import generate_tb
 
     # Regenerate the harness + scenario, and the file list from the RTL actually on disk.
     generate_tb(ROOT)
-    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP}.f").write_text(
+        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     shutil.rmtree(XSI / "vectors" / "rf_out", ignore_errors=True)   # never pass on last run's output
 
@@ -441,8 +446,14 @@ def test_the_two_channel_tile_runs_at_rtl_as_two_independent_lanes():
         make_sim_2ch,
     )
 
+    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
+    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
+    # rtl_staleness().  Below the import because TOP_2CH is defined in the module it names.
+    _require(rtl_staleness(ROOT, TOP_2CH) is None, rtl_staleness(ROOT, TOP_2CH) or "")
+
     generate_tb_2ch(ROOT)
-    (XSI / f"rtl_{TOP_2CH}.f").write_text(render_rtl_f(TOP_2CH, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP_2CH}.f").write_text(
+        render_rtl_f(TOP_2CH, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP_2CH, ignore_errors=True)
     shutil.rmtree(XSI / OUT_BUNDLE_2CH, ignore_errors=True)   # never pass on last run's output
 
@@ -572,6 +583,10 @@ def test_interleaved_iq_runs_at_rtl_through_the_unchanged_real_dut():
     """
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(PROJ.is_dir(), f"no csynth RTL at {PROJ} — run rf_dut_build.py --through csynth")
+    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
+    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
+    # rtl_staleness().
+    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
 
     from waveflow.build.composite_gen import render_rtl_f
     from examples.rf_loopback.rf_loopback_xsi import (
@@ -582,7 +597,8 @@ def test_interleaved_iq_runs_at_rtl_through_the_unchanged_real_dut():
     )
 
     generate_tb_iq(ROOT)
-    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    (XSI / f"rtl_{TOP}.f").write_text(
+        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     shutil.rmtree(XSI / OUT_BUNDLE_IQ, ignore_errors=True)   # never pass on last run's output
 

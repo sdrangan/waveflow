@@ -132,7 +132,8 @@ def run() -> tuple[dict[str, int], str]:
         _require((xsi / f).is_file(), f"{xsi / f} — run rf_blk_delay_build.py --through codegen_dut")
 
     # Regenerate the file list from the RTL actually on disk; never trust the committed .f.
-    (xsi / f"rtl_{WRAPPER}.f").write_text(render_rtl_f(TOP, ROOT, extra=RTL_FILES), encoding="utf-8")
+    (xsi / f"rtl_{WRAPPER}.f").write_text(
+        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
     # Force a clean elaboration of the WRAPPER: a cached snapshot proves nothing about this design.
     shutil.rmtree(xsi / "xsim.dir" / WRAPPER, ignore_errors=True)
     for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):

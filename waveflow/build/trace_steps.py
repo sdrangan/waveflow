@@ -480,12 +480,12 @@ class ExtractBurstsStep(BuildStep):
 
 def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
                   include_dir: str = "include") -> str | None:
-    """``None`` if *top*'s synthesized RTL is at least as new as everything it was built from,
-    otherwise a sentence naming the offending source.
+    """``None`` if *top*'s synthesized RTL was built from the sources now on disk, otherwise a
+    sentence naming the offending source.
 
     **Why this exists, twice over.**  ``<example>/<top>_proj/`` is gitignored *build output*, so
     which build produced the files on disk is decided by whatever ran csynth last in this working
-    tree â€” possibly on another branch, against sources this checkout does not contain.  Two separate
+    tree — possibly on another branch, against sources this checkout does not contain.  Two separate
     gates have already reported that as a *behaviour change*:
 
     * ``test_rf_samp_buf_fire_cycles`` read ``<Latency>undef</Latency>`` from a branch that
@@ -495,16 +495,31 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
 
     Both times the number was right and the *artifact* was wrong, and a cycle gate that says "this is
     a real behaviour change, re-record it" when it is looking at somebody else's RTL is worse than no
-    gate â€” it invites exactly the one edit that must never be made on a whim.
+    gate — it invites exactly the one edit that must never be made on a whim.
 
-    ``git checkout`` stamps a checked-out file with the checkout time, so a branch switch makes the
-    sources newer than any RTL built before it: the case that actually bit is the case this catches.
+    **How it answers.**  The question is "was this RTL built from *this* source", and the answer is a
+    content comparison against the stamp :func:`~waveflow.build.rtl_digest.write_stamp` wrote beside
+    the project at csynth time.  It used to be an mtime comparison, which is only a proxy and gets
+    two common cases backwards: a ``--force`` regeneration emitting **identical bytes**, and a
+    ``git checkout`` restoring identical content, both look stale by mtime and are not.  That is not
+    a cosmetic false alarm — it silently skipped every affected gate, so *proving the artifacts were
+    byte-identical* was what disabled the gates that prove the design still behaves.
+
+    A build tree with **no stamp** predates that change, and falls back to the old mtime comparison.
+    Never to "clean": a fix for silent skips must not introduce a silent pass.
 
     Deliberately a **predicate**, not an assertion or a rebuild.  A gate decides for itself whether
     to skip; rebuilding here would hide a 40-second csynth inside a test fixture, and a helper that
     silently runs the toolchain is its own kind of surprise.
     """
     from pathlib import Path
+
+    from waveflow.build.rtl_digest import (
+        first_mismatch,
+        read_stamp,
+        source_digests,
+        source_files,
+    )
 
     root = Path(example_root)
     rtl_dir = root / f"{top}_proj" / "solution1" / "syn" / "verilog"
@@ -513,19 +528,25 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     rtl = [p for p in rtl_dir.glob("*.v")]
     if not rtl:
         return None
-    newest_rtl = max(p.stat().st_mtime for p in rtl)
 
-    sources: list = []
-    gen = root / gen_dir / f"{top}.cpp"
-    if gen.is_file():
-        sources.append(gen)
-    inc = root / include_dir
-    if inc.is_dir():
-        sources += [p for p in inc.iterdir() if p.suffix in (".h", ".hpp", ".cpp")]
-    for src in sources:
+    tail = ("the synthesized design on disk is not this checkout's. Re-run the example's build "
+            "--through csynth. Do NOT re-record a cycle count against RTL you did not produce.")
+
+    recorded = read_stamp(root, top)
+    if recorded is not None:
+        current = source_digests(root, top, gen_dir=gen_dir, include_dir=include_dir)
+        miss = first_mismatch(recorded, current)
+        if miss is None:
+            return None
+        rel, verb = miss
+        return f"{rel} {verb} since '{top}' was synthesized — {tail}"
+
+    # No stamp: this project was built before the digest existed.  Fall back to the mtime proxy,
+    # which is what the guard was for years -- weaker, but never silently absent.
+    newest_rtl = max(p.stat().st_mtime for p in rtl)
+    for src in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir):
         if src.stat().st_mtime > newest_rtl + 1.0:     # 1 s slack: filesystem timestamp grain
-            return (f"{src.relative_to(root)} is newer than the newest RTL in "
-                    f"{rtl_dir.relative_to(root)} â€” the synthesized design on disk is not this "
-                    f"checkout's. Re-run the example's build --through csynth. Do NOT re-record a "
-                    f"cycle count against RTL you did not produce.")
+            return (f"{src.relative_to(root).as_posix()} is newer than the newest RTL in "
+                    f"{rtl_dir.relative_to(root).as_posix()} (no source stamp: this project "
+                    f"predates one, so this is the older mtime check) — {tail}")
     return None

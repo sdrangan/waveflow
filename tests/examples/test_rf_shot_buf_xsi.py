@@ -30,7 +30,7 @@ import pytest
 from examples.rf_shot_buf.rf_shot_buf import NWORD, check_xsi_outputs
 from examples.rf_shot_buf.rf_shot_buf_build import RTL_FILES, TOP, WRAPPER, generate_tb
 from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
+from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_buf"
 XSI = ROOT / "xsi"
@@ -68,13 +68,18 @@ def _require(cond: bool, why: str) -> None:
 def test_the_shot_survives_real_rtl_byte_for_byte():
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(VERILOG.is_dir(), f"no csynth RTL at {VERILOG} — run rf_shot_buf_build.py --through csynth")
+    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
+    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
+    # rtl_staleness().
+    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
     for f in RTL_FILES:
         _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_buf_build.py --through codegen_dut")
 
     # 1) Regenerate the file list from the RTL actually on disk.  Never trust the committed .f: a
     # renamed module leaves it naming a file that no longer exists, and xvlog + a cached dll will
     # happily go green.
-    (XSI / f"rtl_{WRAPPER}.f").write_text(render_rtl_f(TOP, ROOT, extra=RTL_FILES), encoding="utf-8")
+    (XSI / f"rtl_{WRAPPER}.f").write_text(
+        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
 
     # 2) Force a clean elaboration of the WRAPPER, and clear the previous run's dump: a cached
     # snapshot plus a stale bundle is how a broken build passes on old output.

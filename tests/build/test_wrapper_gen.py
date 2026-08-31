@@ -442,7 +442,8 @@ def test_render_rtl_f_appends_the_wrappers_own_sources_last():
     from waveflow.build.composite_gen import render_rtl_f
 
     lines = render_rtl_f("bram_access", root,
-                         extra=("bram_t2p.v", "bram_access_top.v")).splitlines()
+                         extra=("bram_t2p.v", "bram_access_top.v"),
+                         stamp_sources=False).splitlines()
     assert lines[-2:] == ["bram_t2p.v", "bram_access_top.v"]
     assert all(ln.startswith("../bram_access_proj/") for ln in lines[:-2])
     assert len(lines) >= 6, "a .f naming only the top does not elaborate — all csynth files are needed"

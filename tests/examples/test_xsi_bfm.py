@@ -158,7 +158,8 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
     # 1) Regenerate the xvlog file list from the RTL that is actually on disk.  Never trust the
     # committed .f: it is the half of this flow that silently drifts (a renamed module leaves it
     # naming a file that no longer exists, and xvlog + a cached dll will happily go green).
-    (xsi / f"rtl_{top}.f").write_text(render_rtl_f(top, root), encoding="utf-8")
+    (xsi / f"rtl_{top}.f").write_text(
+        render_rtl_f(top, root, stamp_sources=False), encoding="utf-8")
 
     # 2) Force a clean build.  A cached xsimk.dll is the other half: xelab would reuse RTL elaborated
     # from a previous design and the run would prove nothing about the current one.
@@ -217,7 +218,7 @@ def test_committed_rtl_f_matches_the_rtl_on_disk(top: str):
     _require(proj.is_dir(), f"no csynth RTL at {proj}")
     _require(top in _COMMITTED_F, f"no committed rtl_{top}.f")
 
-    assert render_rtl_f(top, root) == _COMMITTED_F[top], (
+    assert render_rtl_f(top, root, stamp_sources=False) == _COMMITTED_F[top], (
         f"rtl_{top}.f has drifted from the elaborated RTL -- regenerate it (render_rtl_f). "
         f"A renamed RTL module leaves the committed list naming a file that no longer exists."
     )
@@ -227,4 +228,4 @@ def test_render_rtl_f_refuses_when_there_is_no_rtl(tmp_path):
     """Fail loudly rather than emit an empty file list: an empty .f makes xvlog a no-op, and the
     stale-dll path then turns that into a green run.  (No xsi marker: pure logic, no toolchain.)"""
     with pytest.raises(FileNotFoundError, match="run csynth"):
-        render_rtl_f("nope", tmp_path)
+        render_rtl_f("nope", tmp_path, stamp_sources=False)

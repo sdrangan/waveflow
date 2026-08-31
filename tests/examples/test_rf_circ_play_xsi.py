@@ -119,7 +119,8 @@ def played() -> np.ndarray:
 
     # Regenerate the file list FROM THE RTL ON DISK; never trust a committed `.f`.  A stale one names
     # files that may no longer be this design, and xsim would elaborate them and PASS.
-    (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT), encoding="utf-8")
+    (xsi / f"rtl_{TOP}.f").write_text(
+        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
     # Force a clean elaboration: a cached snapshot proves nothing about this design.
     shutil.rmtree(xsi / "xsim.dir" / TOP, ignore_errors=True)
     for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
