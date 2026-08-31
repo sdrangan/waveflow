@@ -68,6 +68,18 @@ A modular subtraction at the counter's width is *exact* whenever the true differ
 not, so a twin computing ``self.written - self.acked`` on unbounded ints agrees with RTL everywhere
 *except* at the boundary.  Every counter difference in this file goes through :func:`udiff`, and
 ``tests/hw/test_reverse_stream.py`` walks the counters **onto** the wrap rather than near it.
+
+A reverse channel is as wide as what it carries, not as wide as the forward one
+--------------------------------------------------------------------------------
+
+Neither reverse channel carries data, so neither is a word wide.  A credit value is a
+:data:`CTR_BITS`-wide counter and a status is whatever its :attr:`AckedStreamIF.status_type` says it
+is; both used to be built at the *forward* word width, which made the credit channel four times
+wider than the number travelling on it and left the ack channel with no declared width at all.
+
+The credit case was not merely wasteful, it was a **disagreement**: the model already computed every
+difference at ``ctr_bits`` while the channel was sized at ``bitwidth``, so the two disagreed about
+where a value wraps.  One number now settles both — see :attr:`CreditStreamIF.crd_bitwidth`.
 """
 from __future__ import annotations
 
@@ -141,6 +153,36 @@ def nwords_of(data: Any, word_bw: int) -> int:
     return int(np.asarray(data).shape[0])
 
 
+def _status_name(status_type: type[DataSchema] | None) -> str:
+    """How a status type reads in an error message — ``"an untyped raw word"`` for ``None``."""
+    return "an untyped raw word" if status_type is None else status_type.__name__
+
+
+def status_bitwidth(status_type: type[DataSchema] | None, word_bw: int) -> int:
+    """Width of one **status** word: *status_type*'s packed width, or *word_bw* when untyped.
+
+    ``None`` is the untyped default and returns *word_bw* unchanged, which is what the ack channel
+    was always built at — so a caller who declares nothing gets the widths and the numbers they had.
+
+    A status must pack to **exactly one word**, and that is load-bearing rather than tidy:
+    :meth:`AckedStreamIF._check_bound` sizes the ack FIFO as ``depth >= max_in_flight``, in *words*,
+    on the strength of "one status per accepted frame".  A two-word status would make that guard off
+    by a factor of two and a dropped status mis-pairs every later token, silently.  A schema whose
+    own width does not pack to one word is refused here, where the reason can still be said.
+    """
+    if status_type is None:
+        return int(word_bw)
+    bw = int(status_type.get_bitwidth())
+    nwords = int(status_type.nwords_per_inst(bw))
+    if nwords != 1:
+        raise ValueError(
+            f"status_type {status_type.__name__} packs to {nwords} words at its own width of {bw} "
+            f"bits, expected 1.  The ack channel is sized 'one status per frame in flight' in "
+            f"WORDS, so a multi-word status would make that sizing guard wrong by exactly that "
+            f"factor — and an undersized ack channel mis-pairs every later token, silently.")
+    return bw
+
+
 # ---------------------------------------------------------------------------
 # CreditStreamIF — the receiver's channel
 # ---------------------------------------------------------------------------
@@ -175,7 +217,9 @@ class CreditStreamMasterIF(InterfaceEndpoint):
     be wired backwards by a caller — the one mistake that would look like a hang."""
 
     crd_ep: StreamIFSlave = field(init=False)
-    """The reverse (credit) **slave**: the data master is the credit *reader*."""
+    """The reverse (credit) **slave**: the data master is the credit *reader*.
+
+    Built at :attr:`crd_bitwidth`, **not** at :attr:`bitwidth` — see that property."""
 
     type_name = 'credit_stream_master_if'
 
@@ -183,12 +227,23 @@ class CreditStreamMasterIF(InterfaceEndpoint):
         """Two streams, forward then reverse — there is no credit-stream object in C++."""
         return [self.fwd_ep, self.crd_ep]
 
+    @property
+    def crd_bitwidth(self) -> int:
+        """Width of a **credit** word — :attr:`ctr_bits`, and derived rather than settable.
+
+        The one number the credit channel is about is the counter, so the channel is exactly as wide
+        as the counter.  A second field could disagree with :attr:`ctr_bits`, which is the very
+        disagreement this replaces: the accounting masked at 16 bits while the channel was built at
+        the forward word width, so widening the *data* silently widened the *counter's* channel
+        without moving where the counter wrapped."""
+        return int(self.ctr_bits)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFMaster(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
         self.crd_ep = StreamIFSlave(
-            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
+            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.crd_bitwidth, has_tlast=True)
         #: Cumulative words written to the forward channel, masked at :attr:`ctr_bits`.
         self.written = 0
         #: Cumulative words the consumer has told us it consumed.  A **lower bound** on the truth —
@@ -319,13 +374,20 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
     def physical_endpoints(self):
         return [self.fwd_ep, self.crd_ep]
 
+    @property
+    def crd_bitwidth(self) -> int:
+        """Width of a credit word — :attr:`ctr_bits`.  See
+        :attr:`CreditStreamMasterIF.crd_bitwidth`; the two sides read the same number off the same
+        field, which is why they cannot be built at different widths."""
+        return int(self.ctr_bits)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFSlave(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth,
             has_tlast=True, queue_size=self.queue_size)
         self.crd_ep = StreamIFMaster(
-            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
+            name=f"{self.name}_crd", sim=self.sim, bitwidth=self.crd_bitwidth, has_tlast=True)
         #: Cumulative words consumed, masked at :attr:`ctr_bits` — exactly what goes on the wire.
         self.consumed = 0
 
@@ -371,7 +433,7 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
         Separate from :meth:`get` so a consumer that reads the forward channel some other way (a
         typed read, a drain) can still keep the credit channel honest without re-implementing it.
         """
-        word = np.array([self.consumed], dtype=_block_dtype(self.bitwidth))
+        word = np.array([self.consumed], dtype=_block_dtype(self.crd_bitwidth))
         return (yield from self.crd_ep.offer(word))
 
 
@@ -405,6 +467,13 @@ class CreditStreamIF(Interface):
     on this side — only a rate argument — so a consumer that ever acks per word needs the solicited
     treatment :class:`AckedStreamIF` has."""
 
+    ctr_bits: int = CTR_BITS
+    """Width of the credit counter, which is also the width of the credit **channel**.
+
+    Here as well as on the endpoints because :attr:`crd_if` is built in ``__post_init__``, before any
+    endpoint exists to read it from — the same reason :attr:`bitwidth` is stated three times.  All
+    three must agree, and :meth:`bind` refuses them when they do not."""
+
     fwd_if: StreamIF = field(init=False)
     crd_if: StreamIF = field(init=False)
 
@@ -413,6 +482,17 @@ class CreditStreamIF(Interface):
     def physical_interfaces(self):
         """Two ordinary streams.  Nothing here lowers to a new kind of edge."""
         return [self.fwd_if, self.crd_if]
+
+    @property
+    def crd_bitwidth(self) -> int:
+        """Width of the reverse channel — :attr:`ctr_bits`, **not** :attr:`bitwidth`.
+
+        Derived, so the channel and the arithmetic cannot disagree.  It is also what the generated
+        FIFO is built at: :meth:`physical_interfaces` hands :attr:`crd_if` to
+        :func:`~waveflow.build.composite_gen.derive_internal_edges`, which reads the width off the
+        ``StreamIF`` — so a credit channel that was 64 bits in pysim was 64 bits in RTL too, for a
+        16-bit number."""
+        return int(self.ctr_bits)
 
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')
@@ -426,7 +506,7 @@ class CreditStreamIF(Interface):
         self.fwd_if = StreamIF(name=f"{self.name}_fwd", sim=self.sim, clk=self.clk,
                                bitwidth=self.bitwidth, depth=int(self.depth))
         self.crd_if = StreamIF(name=f"{self.name}_crd", sim=self.sim, clk=self.clk,
-                               bitwidth=self.bitwidth, depth=int(self.credit_depth))
+                               bitwidth=self.crd_bitwidth, depth=int(self.credit_depth))
 
     @property
     def n_credit_dropped(self) -> int:
@@ -445,6 +525,15 @@ class CreditStreamIF(Interface):
         want = CreditStreamMasterIF if ep_name == 'master' else CreditStreamSlaveIF
         if not isinstance(endpoint, want):
             raise TypeError(f"'{ep_name}' side of CreditStreamIF must bind to {want.__name__}")
+        # BEFORE the sub-interface binds, because `StreamIF.bind` would otherwise reject the same
+        # mismatch as a bare width disagreement -- true, but naming the symptom rather than the
+        # cause.  The counter width and the channel width are one number now, so a wrong `ctr_bits`
+        # presents as a wrong channel width, and this is the message that says which it is.
+        if int(endpoint.ctr_bits) != int(self.ctr_bits):
+            raise ValueError(
+                f"counter widths differ across '{self.name}': the channel is built at "
+                f"{self.ctr_bits} bits and the '{ep_name}' endpoint masks at {endpoint.ctr_bits}.  "
+                f"The two must mask identically or they agree everywhere except at the wrap")
         if ep_name == 'master':
             self.fwd_if.bind('master', endpoint.fwd_ep)
             self.crd_if.bind('slave', endpoint.crd_ep)
@@ -455,15 +544,16 @@ class CreditStreamIF(Interface):
         self._check_bound()
 
     def _check_bound(self) -> None:
-        """Validate what only becomes checkable once both sides are present."""
+        """Validate what only becomes checkable once both sides are present.
+
+        The counter width is **not** checked here: it is checked in :meth:`bind` against the
+        interface's own :attr:`ctr_bits`, which both endpoints are compared to, and which has to
+        happen before the sub-interface bind rather than after it.  Two endpoints that each match the
+        channel match each other.
+        """
         m, s = self.endpoints['master'], self.endpoints['slave']
         if m is None or s is None:
             return
-        if m.ctr_bits != s.ctr_bits:
-            raise ValueError(
-                f"counter widths differ across '{self.name}': master {m.ctr_bits} bits, slave "
-                f"{s.ctr_bits}.  The two must mask identically or they agree everywhere except at "
-                f"the wrap")
         if int(self.depth) <= int(m.resp_words):
             raise ValueError(
                 f"CreditStreamIF '{self.name}': depth={self.depth} leaves no room for data once "
@@ -542,6 +632,10 @@ class AckedStreamMasterIF(InterfaceEndpoint):
     """Frames that may be unresolved at once — the ``pending`` FIFO length.  The same number bounds
     the ack channel's depth, because a solicited status arrives at most one per accepted frame."""
 
+    status_type: type[DataSchema] | None = None
+    """What a status **is**.  ``None`` — the default — is an untyped raw word; see
+    :attr:`AckedStreamIF.status_type` for what declaring one buys and what it costs."""
+
     fwd_ep: StreamIFMaster = field(init=False)
     ack_ep: StreamIFSlave = field(init=False)
 
@@ -552,12 +646,21 @@ class AckedStreamMasterIF(InterfaceEndpoint):
         taking this endpoint takes ``(fwd, ack)`` adjacent, in that sequence."""
         return [self.fwd_ep, self.ack_ep]
 
+    @property
+    def ack_bitwidth(self) -> int:
+        """Width of one status word — :attr:`bitwidth` when untyped, else the declared schema's own.
+
+        Derived rather than settable, for the reason :attr:`CreditStreamMasterIF.crd_bitwidth` is: a
+        channel whose width can disagree with what travels on it is a disagreement waiting to be
+        found at the wrap."""
+        return status_bitwidth(self.status_type, self.bitwidth)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFMaster(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
         self.ack_ep = StreamIFSlave(
-            name=f"{self.name}_ack", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
+            name=f"{self.name}_ack", sim=self.sim, bitwidth=self.ack_bitwidth, has_tlast=True)
         self._word_type = marked_word_type(self.bitwidth)
         #: Tokens of frames written and not yet resolved, oldest first.  **The** ordering guarantee.
         self._pending: deque = deque()
@@ -653,13 +756,18 @@ class AckedStreamMasterIF(InterfaceEndpoint):
         Pairing is **positional** — the oldest pending token takes the oldest status.  Nothing is
         matched by id because nothing carries one; that is what the ordering guarantee buys, and
         what :attr:`n_status_dropped` protects.
+
+        The *status* half is an ``int`` on an untyped channel and a :attr:`status_type` **instance**
+        on a typed one — the same split :meth:`~waveflow.hw.interface.StreamIFSlave.get` and
+        :meth:`~waveflow.hw.interface.StreamIFSlave.get_schema` already draw.  A scalar field's value
+        is on its ``.val``; that is the read that compares a *name* rather than an integer.
         """
-        out: list[tuple[Any, int]] = []
+        out: list[tuple[Any, Any]] = []
         for _ in range(int(n)):
             got = yield from self.ack_ep.get_nb()
             if got is None:
                 break
-            status = int(np.asarray(got).reshape(-1)[-1])
+            status = self._decode_status(got)
             if not self._pending:
                 self.n_orphan_status += 1
                 continue
@@ -683,6 +791,17 @@ class AckedStreamMasterIF(InterfaceEndpoint):
                 f"{self.name}: {self.n_orphan_status} status word(s) arrived with no pending frame")
 
     # -- packing -------------------------------------------------------------------------------
+
+    def _decode_status(self, raw: Any) -> Any:
+        """One status off the wire: a raw ``int`` when untyped, a :attr:`status_type` instance else.
+
+        The untyped path takes the **last** word, exactly as it always did — a status is one word, so
+        the two agree, and keeping the same expression keeps the default bit-for-bit unchanged.
+        """
+        words = np.asarray(raw).reshape(-1)
+        if self.status_type is None:
+            return int(words[-1])
+        return self.status_type().deserialize(words, word_bw=self.ack_bitwidth)
 
     def _pack(self, payload: list[int], mark_last: bool) -> np.ndarray:
         """Pack *payload* into one word per item, marking the last if asked."""
@@ -718,6 +837,10 @@ class AckedStreamSlaveIF(InterfaceEndpoint):
 
     queue_size: int | None = None
 
+    status_type: type[DataSchema] | None = None
+    """What a status **is**.  ``None`` — the default — is an untyped raw word.  Must match the
+    master's and the interface's; see :attr:`AckedStreamIF.status_type`."""
+
     fwd_ep: StreamIFSlave = field(init=False)
     ack_ep: StreamIFMaster = field(init=False)
 
@@ -726,13 +849,19 @@ class AckedStreamSlaveIF(InterfaceEndpoint):
     def physical_endpoints(self):
         return [self.fwd_ep, self.ack_ep]
 
+    @property
+    def ack_bitwidth(self) -> int:
+        """Width of one status word.  See :attr:`AckedStreamMasterIF.ack_bitwidth`; both sides read
+        it off the same declaration, which is why they cannot be built at different widths."""
+        return status_bitwidth(self.status_type, self.bitwidth)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.fwd_ep = StreamIFSlave(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth,
             has_tlast=True, queue_size=self.queue_size)
         self.ack_ep = StreamIFMaster(
-            name=f"{self.name}_ack", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
+            name=f"{self.name}_ack", sim=self.sim, bitwidth=self.ack_bitwidth, has_tlast=True)
         self._word_type = marked_word_type(self.bitwidth)
         #: Items unpacked from the burst currently being read one at a time by :meth:`read_nb`.
         self._items: deque[MarkedRead] = deque()
@@ -756,16 +885,44 @@ class AckedStreamSlaveIF(InterfaceEndpoint):
                 return None
         return self._items.popleft()
 
-    def send_status(self, payload: int) -> ProcessGen[int]:
+    def send_status(self, payload: Any) -> ProcessGen[int]:
         """Emit one status.  Non-blocking (rule 2); **one per marked item**, never unsolicited.
 
         Uses :meth:`~waveflow.hw.interface.StreamIFMaster.offer`, so a full FIFO discards it and the
         interface counts it — see :attr:`AckedStreamMasterIF.n_status_dropped` for why that count is
-        a sizing violation rather than a lost verdict.
+        a sizing violation rather than a lost verdict.  **Narrowing the channel does not change
+        that**: what decides a drop is the queue's ``depth``, in words, and a status is one word at
+        every width.
+
+        *payload* is an ``int`` on an untyped channel.  On a typed one it is a
+        :attr:`status_type` instance, or any value that type accepts — so an ``EnumField`` status
+        takes its member directly, ``send_status(TxVerdict.MISSED)``, which is the point of
+        declaring one.
         """
         self.n_status += 1
-        word = np.array([int(payload)], dtype=_block_dtype(self.bitwidth))
-        return (yield from self.ack_ep.offer(word))
+        return (yield from self.ack_ep.offer(self._status_words(payload)))
+
+    def _status_words(self, payload: Any) -> np.ndarray:
+        """*payload* as the one word that goes on the wire.
+
+        The untyped path is the expression it always was — one ``int`` at the forward word width —
+        so an undeclared channel puts identical bits on an identically sized FIFO.
+        """
+        if self.status_type is None:
+            return np.array([int(payload)], dtype=_block_dtype(self.bitwidth))
+        if isinstance(payload, self.status_type):
+            inst = payload
+        else:
+            try:
+                inst = self.status_type(payload)
+            except Exception as exc:
+                raise TypeError(
+                    f"{type(self).__name__} '{self.name}': cannot send {payload!r} as a "
+                    f"{self.status_type.__name__}.  A typed ack channel takes an instance of its "
+                    f"status_type, or a value that type constructs from (an IntEnum member for an "
+                    f"EnumField, an int for an IntField); a composite status has to be built and "
+                    f"passed as an instance.") from exc
+        return np.asarray(inst.serialize(word_bw=self.ack_bitwidth))
 
     @sim_only
     def read_frame_nb(self) -> ProcessGen[list[MarkedRead] | None]:
@@ -833,6 +990,26 @@ class AckedStreamIF(Interface):
     **One number governs both** the pending FIFO and this depth, and :meth:`bind` refuses a channel
     where they disagree in the unsafe direction."""
 
+    status_type: type[DataSchema] | None = None
+    """What a status **is** — a declared schema field, or ``None`` for an untyped raw word.
+
+    ``None`` is the default and it is the behaviour this channel always had: the ack stream is built
+    at :attr:`bitwidth`, :meth:`AckedStreamSlaveIF.send_status` takes an ``int``, and
+    :meth:`AckedStreamMasterIF.harvest` returns one.  Nothing about an undeclared channel moves.
+
+    Declaring one buys two things, and the second is the one that matters.  The reverse FIFO narrows
+    to what a status actually needs — a two-bit verdict does not want a 64-bit channel, and
+    :func:`~waveflow.build.composite_gen.derive_internal_edges` builds the generated FIFO at exactly
+    this width.  And the status can be an :class:`~waveflow.hw.dataschema.EnumField`, which reaches
+    C++ as a real ``enum class``, so a body compares ``TxVerdict::MISSED`` instead of ``2``.  That is
+    the argument ``examples/bram_access`` already makes for ``BramStatusField``, and an ack channel
+    is where an unnamed integer status is most likely to be misread: it is the *only* thing the
+    reverse channel carries, and nothing else on the wire gives it context.
+
+    Stated here as well as on both endpoints because :attr:`ack_if` is built in ``__post_init__``,
+    before an endpoint exists to read it from — the same reason :attr:`bitwidth` is.  All three must
+    name the **same class**; :meth:`bind` refuses them when they do not."""
+
     fwd_if: StreamIF = field(init=False)
     ack_if: StreamIF = field(init=False)
 
@@ -841,6 +1018,12 @@ class AckedStreamIF(Interface):
     def physical_interfaces(self):
         """Two ordinary streams.  In hardware there is no acked stream — there are two FIFOs."""
         return [self.fwd_if, self.ack_if]
+
+    @property
+    def ack_bitwidth(self) -> int:
+        """Width of the reverse channel: :attr:`bitwidth` when untyped, the status schema's own when
+        declared.  Derived, so the channel and what travels on it cannot disagree."""
+        return status_bitwidth(self.status_type, self.bitwidth)
 
     def __post_init__(self) -> None:
         self.endpoint_names = ('master', 'slave')
@@ -851,7 +1034,7 @@ class AckedStreamIF(Interface):
                                bitwidth=self.bitwidth, depth=int(self.depth))
         ackd = int(self.ack_depth) if self.ack_depth is not None else int(MAX_IN_FLIGHT)
         self.ack_if = StreamIF(name=f"{self.name}_ack", sim=self.sim, clk=self.clk,
-                               bitwidth=self.bitwidth, depth=ackd)
+                               bitwidth=self.ack_bitwidth, depth=ackd)
 
     def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
         if ep_name not in ('master', 'slave'):
@@ -860,6 +1043,19 @@ class AckedStreamIF(Interface):
         want = AckedStreamMasterIF if ep_name == 'master' else AckedStreamSlaveIF
         if not isinstance(endpoint, want):
             raise TypeError(f"'{ep_name}' side of AckedStreamIF must bind to {want.__name__}")
+        # BEFORE the sub-interface bind, for the reason CreditStreamIF checks ctr_bits early: the
+        # status type IS the channel width now, so a disagreement would otherwise surface as a bare
+        # width mismatch that names neither side's declaration.  Identity, not equality -- two
+        # structurally identical schema classes are two layouts with two authors, and the
+        # specializations that matter here (`EnumField.specialize`) are cached, so the same
+        # declaration really is the same object.
+        if endpoint.status_type is not self.status_type:
+            raise ValueError(
+                f"status types differ across '{self.name}': the channel carries "
+                f"{_status_name(self.status_type)} and the '{ep_name}' endpoint "
+                f"{_status_name(endpoint.status_type)}.  A status is encoded by one side and "
+                f"decoded by the other, so the two must name the same schema or every verdict is "
+                f"read at the wrong layout")
         if ep_name == 'master':
             self.fwd_if.bind('master', endpoint.fwd_ep)
             self.ack_if.bind('slave', endpoint.ack_ep)
@@ -875,6 +1071,10 @@ class AckedStreamIF(Interface):
         ``depth >= max_in_flight`` on the ack channel is what makes a dropped status impossible, and
         a dropped status is not a lost verdict — it mis-pairs every later token.  Checked at bind
         because that is the last moment it is cheap and the first moment both numbers exist.
+
+        **The comparison is words against frames, and it is sound because a status is one word.**
+        Narrowing the channel does not touch it — ``depth`` is a word count either way — but a
+        *multi*-word status would, by exactly that factor, so :func:`status_bitwidth` refuses one.
         """
         m = self.endpoints['master']
         if m is None:

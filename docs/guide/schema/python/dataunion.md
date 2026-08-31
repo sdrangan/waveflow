@@ -208,7 +208,7 @@ async def run_proc(self):
 | `type[DataList]` subclass | None — payload only | Fixed size per schema |
 | `type[DataUnion]` subclass | `DataUnionHdr` (schema_id) | Padded to `max_payload_bw` |
 
-`SchemaTransferIF` is agnostic to which case applies — the master calls `obj.serialize(word_bw)` and the slave calls `schema_type().deserialize(words, word_bw)`.  Both `DataList` and `DataUnion` implement the same serialize/deserialize surface.
+A typed stream transfer is agnostic to which case applies — `write(obj)` calls `obj.serialize(word_bw)` and `get_schema(T)` calls `T().deserialize(words, word_bw)`.  Both `DataList` and `DataUnion` implement the same serialize/deserialize surface.
 
 ---
 

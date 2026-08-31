@@ -22,10 +22,6 @@ from waveflow.hw.interface import (
     port_write,
 )
 from waveflow.hw.memif import MMIFMaster
-from waveflow.hw.schema_transfer_interface import (
-    SchemaTransferIFMaster,
-    SchemaTransferIFSlave,
-)
 from waveflow.simulation.simulation import Simulation
 
 
@@ -216,17 +212,3 @@ def test_stream_master_write_view(sim):
         _ = r.write
 
 
-# ---------------------------------------------------------------------------
-# Schema transfer endpoints
-# ---------------------------------------------------------------------------
-
-def test_schema_transfer_endpoints(sim):
-    s = SchemaTransferIFSlave(sim=sim, schema_type=Word32, bitwidth=32)
-    assert s.as_dir('R').get is not None
-    with pytest.raises(AttributeError):
-        _ = s.as_dir('W').get
-
-    m = SchemaTransferIFMaster(sim=sim, bitwidth=32)
-    assert m.as_dir('W').write is not None
-    with pytest.raises(AttributeError):
-        _ = m.as_dir('R').write

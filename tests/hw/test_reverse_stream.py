@@ -25,7 +25,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from enum import IntEnum
+
 from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import DataList, EnumField, IntField
 from waveflow.hw.reverse_stream import (
     CTR_BITS,
     CTR_MASK,
@@ -37,6 +40,7 @@ from waveflow.hw.reverse_stream import (
     CreditStreamIF,
     CreditStreamMasterIF,
     CreditStreamSlaveIF,
+    status_bitwidth,
     udiff,
 )
 from waveflow.simulation.simulation import Simulation
@@ -45,9 +49,44 @@ FREQ = 250e6
 SLOT = 4e-9
 
 
+class TxVerdict(IntEnum):
+    """What became of a marked item.  An enum rather than an int precisely so a body can compare
+    ``MISSED`` and not ``1`` — the reason ``status_type`` exists at all."""
+
+    PLAYED = 0
+    MISSED = 1
+    STALE = 2
+
+
+#: A bare scalar status: the smallest thing worth declaring, and the one that reaches C++ as an
+#: ``enum class``.  Two bits wide, against a 32-bit forward channel.
+VerdictField = EnumField.specialize(enum_type=TxVerdict, bitwidth=2)
+
+
+class TxOutcome(DataList):
+    """A composite status: the verdict **and** the slot it is about, in one 16-bit beat."""
+
+    elements = {
+        "verdict": {"schema": VerdictField, "description": "PLAYED | MISSED | STALE"},
+        "slot": {"schema": IntField.specialize(bitwidth=14, signed=False),
+                 "description": "the slot this status is about"},
+    }
+
+
+def _outcome(verdict: TxVerdict, slot: int) -> TxOutcome:
+    o = TxOutcome()
+    o.verdict, o.slot = verdict, int(slot)
+    return o
+
+
 def _w(*vals) -> np.ndarray:
     """A raw word burst."""
     return np.array(vals, dtype=np.uint32)
+
+
+def _w64(*vals) -> np.ndarray:
+    """A raw word burst on a 64-bit forward channel."""
+    return np.array(vals, dtype=np.uint64)
 
 
 def _credit(depth=8, credit_depth=4, ctr_bits=CTR_BITS, resp_words=RESP_WORDS, bitwidth=32):
@@ -56,18 +95,21 @@ def _credit(depth=8, credit_depth=4, ctr_bits=CTR_BITS, resp_words=RESP_WORDS, b
                              resp_words=resp_words, ctr_bits=ctr_bits)
     s = CreditStreamSlaveIF(name="s", sim=sim, bitwidth=bitwidth, ctr_bits=ctr_bits)
     iface = CreditStreamIF(name="c", sim=sim, clk=Clock(freq=FREQ), bitwidth=bitwidth,
-                           depth=depth, credit_depth=credit_depth)
+                           depth=depth, credit_depth=credit_depth, ctr_bits=ctr_bits)
     iface.bind("master", m)
     iface.bind("slave", s)
     return sim, iface, m, s
 
 
-def _acked(depth=64, ack_depth=None, max_in_flight=MAX_IN_FLIGHT, slot_period=SLOT, bitwidth=32):
+def _acked(depth=64, ack_depth=None, max_in_flight=MAX_IN_FLIGHT, slot_period=SLOT, bitwidth=32,
+           status_type=None):
     sim = Simulation()
-    m = AckedStreamMasterIF(name="m", sim=sim, bitwidth=bitwidth, max_in_flight=max_in_flight)
-    s = AckedStreamSlaveIF(name="s", sim=sim, bitwidth=bitwidth, slot_period=slot_period)
+    m = AckedStreamMasterIF(name="m", sim=sim, bitwidth=bitwidth, max_in_flight=max_in_flight,
+                            status_type=status_type)
+    s = AckedStreamSlaveIF(name="s", sim=sim, bitwidth=bitwidth, slot_period=slot_period,
+                           status_type=status_type)
     iface = AckedStreamIF(name="a", sim=sim, clk=Clock(freq=FREQ), bitwidth=bitwidth,
-                          depth=depth, ack_depth=ack_depth)
+                          depth=depth, ack_depth=ack_depth, status_type=status_type)
     iface.bind("master", m)
     iface.bind("slave", s)
     return sim, iface, m, s
@@ -626,6 +668,308 @@ class TestWiringAndSizing:
         m = CreditStreamMasterIF(name="m", sim=sim, bitwidth=32)
         with pytest.raises(RuntimeError, match="not bound"):
             _ = m.avail
+
+
+class TestTheAckChannelCarriesADeclaredStatus:
+    """``status_type`` makes the status a schema field instead of a raw int.
+
+    Two payoffs, and the second is the one that matters: the reverse FIFO narrows to what a status
+    actually needs, **and** the status can be an ``EnumField`` that reaches C++ as a real
+    ``enum class``, so a body compares a NAME.  An ack channel is where an unnamed integer status is
+    most likely to be misread — it is the only thing on the reverse wire, and nothing beside it
+    gives it context.
+
+    The default is the whole of the compatibility claim, so it is tested first and hardest.
+    """
+
+    def test_the_default_construction_is_unchanged(self):
+        """No ``status_type`` — every width and every number is what it was.
+
+        Nothing in the repo declares one yet (``RfTxStream`` hand-rolls the pack), so this is not a
+        legacy path: it is the path everything shipped is on.
+        """
+        for bw in (32, 64):
+            _, iface, m, s = _acked(bitwidth=bw)
+            assert iface.ack_if.bitwidth == bw, "the ack channel is still a forward word wide"
+            assert iface.ack_bitwidth == m.ack_bitwidth == s.ack_bitwidth == bw
+            assert m.ack_ep.bitwidth == s.ack_ep.bitwidth == bw
+            assert iface.ack_if.depth == MAX_IN_FLIGHT, "and still sized by max_in_flight"
+
+        sim, iface, m, s = _acked()
+        resolved = []
+
+        def body():
+            yield from m.write_frame(_w(1, 2, 3), token="t")
+            fr = yield from s.read_frame_nb()
+            yield from s.send_status(fr[-1].item * 7)
+            resolved.extend((yield from m.harvest(2)))
+
+        _run(sim, body)
+
+        assert resolved == [("t", 21)], "an int went out and an int came back"
+        assert isinstance(resolved[0][1], int), (
+            "not a schema instance — an undeclared channel hands back the raw word it always did")
+        m.assert_clean()
+
+    def test_a_declared_status_narrows_the_reverse_fifo(self):
+        """16 bits of status on a 32-bit design, and the forward channel does not move.
+
+        The width is the schema's own, so there is no second knob to disagree with the layout — the
+        same reason ``crd_bitwidth`` is derived from ``ctr_bits``.
+        """
+        _, iface, m, s = _acked(bitwidth=32, status_type=TxOutcome)
+
+        assert TxOutcome.get_bitwidth() == 16, "the premise of this test"
+        assert iface.ack_if.bitwidth == 16 == iface.ack_bitwidth
+        assert m.ack_ep.bitwidth == s.ack_ep.bitwidth == 16
+        assert iface.fwd_if.bitwidth == 32, "the forward channel keeps the width it has"
+        assert iface.ack_if.bitwidth != iface.fwd_if.bitwidth, (
+            "the negative control: the two must actually differ, or this passes against the old "
+            "behaviour")
+
+        _, wide, _, _ = _acked(bitwidth=64, status_type=TxOutcome)
+        assert wide.ack_if.bitwidth == 16, "and it does not track the data width either"
+
+    def test_a_typed_status_round_trips(self):
+        """Every field out, every field back, on the narrowed channel.
+
+        A width that packs is not the same as a width that unpacks — asserting the *fields* rather
+        than the word is what separates the two.
+        """
+        sim, iface, m, s = _acked(max_in_flight=4, status_type=TxOutcome)
+        resolved = []
+
+        def body():
+            for f, tok in enumerate(["alpha", "beta"]):
+                yield from m.write_frame(_w(*range(f * 10, f * 10 + 3)), token=tok)
+            for f in range(2):
+                fr = yield from s.read_frame_nb()
+                for it in fr:
+                    if it.mark:
+                        yield from s.send_status(_outcome(TxVerdict.STALE, it.item))
+            resolved.extend((yield from m.harvest(4)))
+
+        _run(sim, body)
+
+        assert [tok for tok, _ in resolved] == ["alpha", "beta"], "positional pairing is unchanged"
+        for (_, got), slot in zip(resolved, (2, 12)):
+            assert isinstance(got, TxOutcome), "a typed channel hands back an instance"
+            assert got.verdict is TxVerdict.STALE
+            assert int(got.slot) == slot, "the second field survived the round trip too"
+        m.assert_clean()
+
+    def test_an_enum_status_reaches_the_producer_as_a_name(self):
+        """**The payoff.**  A bare ``EnumField`` status: the member goes in and the member comes back.
+
+        This is the ``BramStatusField`` argument applied to the ack channel — the field reaches C++
+        as an ``enum class``, so the body that reads this compares ``TxVerdict::MISSED`` rather than
+        ``1``.  Two bits on the wire, against a 32-bit forward channel.
+        """
+        sim, iface, m, s = _acked(max_in_flight=2, status_type=VerdictField)
+        assert iface.ack_if.bitwidth == 2, "a two-bit verdict does not want a 32-bit channel"
+        resolved = []
+
+        def body():
+            yield from m.write_frame(_w(1, 2), token="early")
+            yield from m.write_frame(_w(3, 4), token="late")
+            for verdict in (TxVerdict.PLAYED, TxVerdict.MISSED):
+                fr = yield from s.read_frame_nb()
+                assert fr[-1].mark
+                yield from s.send_status(verdict)      # the MEMBER, not an int
+            resolved.extend((yield from m.harvest(2)))
+
+        _run(sim, body)
+
+        assert [tok for tok, _ in resolved] == ["early", "late"]
+        assert [got.val for _, got in resolved] == [TxVerdict.PLAYED, TxVerdict.MISSED]
+        assert resolved[1][1].val is TxVerdict.MISSED, (
+            "the identity, not merely the integer — that is the whole difference a declared enum "
+            "makes to the body that reads it")
+        m.assert_clean()
+
+    def test_a_full_ack_fifo_still_discards_and_counts_it(self):
+        """VERIFIED, not reasoned about: narrowing the WIDTH does not change what a full FIFO does.
+
+        ``send_status`` uses ``offer``, so a saturated ack channel discards and counts in
+        ``n_status_dropped``.  What decides a drop is the queue's ``depth``, in words, and a status
+        is one word at every width — so the untyped 32-bit channel and the typed 2-bit one must
+        drop the *same* statuses.  Asserted side by side rather than argued.
+        """
+        counts = {}
+
+        for label, stype, payloads in (
+            ("untyped", None, [0, 1, 2, 3]),
+            ("typed", VerdictField, [TxVerdict.PLAYED] * 4),
+        ):
+            sim, iface, m, s = _acked(max_in_flight=2, ack_depth=2, status_type=stype)
+
+            def body(_s=s, _payloads=payloads):
+                for pay in _payloads:
+                    yield from _s.send_status(pay)
+
+            _run(sim, body)
+            counts[label] = (m.n_status_dropped, s.n_status, iface.ack_if.bitwidth)
+
+        assert counts["untyped"][0] == 2, (
+            "two of four statuses had nowhere to go — a drop test that never drops proves nothing")
+        assert counts["typed"][0] == counts["untyped"][0], (
+            "and the narrow channel dropped exactly the same two")
+        assert counts["typed"][1] == counts["untyped"][1] == 4, "both sent four"
+        assert counts["typed"][2] == 2 and counts["untyped"][2] == 32, (
+            "the negative control: the two runs really were at different widths")
+
+    def test_the_depth_guard_reads_words_against_frames_and_a_status_is_one_word(self):
+        """The ``ack_if.depth < max_in_flight`` guard is untouched by a typed channel.
+
+        It compares a **word** count against a **frame** count, which is sound only because a status
+        packs to exactly one word.  A narrower word does not move it; a *multi*-word status would,
+        by exactly that factor, which is why ``status_bitwidth`` refuses one.
+        """
+        sim = Simulation()
+        m = AckedStreamMasterIF(name="m", sim=sim, bitwidth=32, max_in_flight=8,
+                                status_type=TxOutcome)
+        iface = AckedStreamIF(name="a", sim=sim, clk=Clock(freq=FREQ), bitwidth=32,
+                              depth=64, ack_depth=4, status_type=TxOutcome)
+        with pytest.raises(ValueError, match="shallower than max_in_flight"):
+            iface.bind("master", m)
+
+        # ...and the guard is satisfiable at the narrowed width, so it is a gate rather than a wall.
+        _, ok, okm, _ = _acked(max_in_flight=4, ack_depth=4, status_type=TxOutcome)
+        assert ok.ack_if.depth == 4 == okm.max_in_flight
+        assert TxOutcome.nwords_per_inst(ok.ack_bitwidth) == 1, "the guard's premise, stated"
+
+    def test_a_multi_word_status_is_refused_where_the_reason_can_be_said(self):
+        """The guard on ``status_bitwidth`` itself.
+
+        No schema in the repo reaches it today — every one of them packs to a single word at its own
+        width — so it is exercised against a stub rather than pretended into a real design.  It
+        exists because the depth rule above is stated in words and would be wrong by the word count
+        if a status ever spanned two.
+        """
+        class TwoWordStatus:
+            @classmethod
+            def get_bitwidth(cls):
+                return 96
+
+            @classmethod
+            def nwords_per_inst(cls, word_bw):
+                return 2
+
+        assert status_bitwidth(None, 64) == 64, "the untyped path is the identity"
+        assert status_bitwidth(TxOutcome, 64) == 16, "and the typed one is the schema's own width"
+        with pytest.raises(ValueError, match="expected 1"):
+            status_bitwidth(TwoWordStatus, 64)
+
+    def test_a_status_type_the_channel_was_not_built_for_is_refused(self):
+        """Both sides are checked against the **channel**, and the message names both schemas.
+
+        The check runs before the sub-interface bind: the status type is the channel width now, so
+        ``StreamIF.bind`` would otherwise reject a mismatched declaration as a bare width
+        disagreement, naming neither side's schema.
+        """
+        for side, ep_status, chan_status in (
+            ("master", None, TxOutcome),
+            ("slave", VerdictField, TxOutcome),
+            ("master", TxOutcome, None),
+        ):
+            sim = Simulation()
+            iface = AckedStreamIF(name="a", sim=sim, clk=Clock(freq=FREQ), bitwidth=32,
+                                  depth=64, status_type=chan_status)
+            ep = (AckedStreamMasterIF(name="m", sim=sim, bitwidth=32, status_type=ep_status)
+                  if side == "master"
+                  else AckedStreamSlaveIF(name="s", sim=sim, bitwidth=32, slot_period=SLOT,
+                                          status_type=ep_status))
+            with pytest.raises(ValueError, match="status types differ"):
+                iface.bind(side, ep)
+
+    def test_a_payload_the_status_type_cannot_take_says_so(self):
+        """A composite status has to be built and passed as an instance; the error says that
+        rather than surfacing whatever the schema's constructor raised."""
+        sim, iface, m, s = _acked(max_in_flight=2, status_type=TxOutcome)
+
+        def body():
+            yield from m.write_frame(_w(1, 2), token="t")
+            with pytest.raises(TypeError, match="passed as an instance"):
+                yield from s.send_status(3)
+
+        _run(sim, body)
+
+
+class TestTheCreditChannelIsAsWideAsItsCounter:
+    """The reverse channel carries a counter, not data — so it is :data:`CTR_BITS` wide, not a word.
+
+    Built at the forward word width, a credit channel was four times wider than the number on it
+    *and* disagreed with the arithmetic: every difference was masked at 16 bits while the channel was
+    sized at 64.  Widening the data would then have widened the counter's channel without moving
+    where the counter wrapped, which is a disagreement rather than waste.
+    """
+
+    def test_the_credit_channel_does_not_track_the_data_width(self):
+        """Double the data width; the credit channel does not move.  **The headline assertion.**"""
+        _, narrow, _, _ = _credit(bitwidth=32)
+        _, wide, _, _ = _credit(bitwidth=64)
+
+        assert narrow.fwd_if.bitwidth == 32 and wide.fwd_if.bitwidth == 64, "the data width moved"
+        assert narrow.crd_if.bitwidth == wide.crd_if.bitwidth == CTR_BITS, (
+            "and the credit channel did not — it is the counter's width, in both")
+        assert wide.crd_if.bitwidth != wide.fwd_if.bitwidth, (
+            "the negative control: the two widths must actually be different here, or this test "
+            "would pass against the old behaviour")
+
+    def test_the_channel_is_the_width_the_arithmetic_masks_at(self):
+        """One number, read by both.  A separate field could disagree with ``ctr_bits``; a derived
+        property cannot, which is the whole reason it is derived."""
+        _, iface, m, s = _credit(bitwidth=64, ctr_bits=8)
+        assert iface.crd_bitwidth == m.crd_bitwidth == s.crd_bitwidth == 8
+        assert iface.crd_if.bitwidth == 8
+        assert m.crd_ep.bitwidth == s.crd_ep.bitwidth == 8
+        assert m.outstanding == udiff(m.written, m.acked, 8), "and it is the mask, not just a label"
+
+    def test_the_narrower_channel_moved_no_number(self):
+        """Rule 4's saturation, re-run on a **64-bit** design, and every count is the one the
+        32-bit run produced.
+
+        Depth is in words and a drop is counted in words, so narrowing the wire cannot move either.
+        That is a claim worth asserting rather than reasoning about: it is the one way this change
+        could have been silently wrong.
+        """
+        sim, iface, m, s = _credit(depth=16, credit_depth=4, bitwidth=64)
+        taken = []
+
+        def body():
+            for k in range(8):
+                assert (yield from m.write_nb(_w64(k))) is True
+            for _ in range(8):
+                yield from s.get(nwords_max=1)
+            assert m.crd_ep.nrx.level == m.crd_ep.nrx.capacity == 4
+            for _ in range(8):
+                if (yield from m.poll_credit(1)) == 0:
+                    break
+                taken.append(m.acked)
+
+        _run(sim, body)
+
+        assert iface.n_credit_dropped == 4, "the same four offers had nowhere to go"
+        assert taken == [1, 2, 3, 4], "the same oldest four, in the same order"
+        assert s.consumed == 8 and m.acked == 4 and m.outstanding == 4
+        assert m.avail == 16 - RESP_WORDS - 4
+
+    def test_a_counter_width_the_channel_was_not_built_for_is_refused(self):
+        """Both sides are checked against the **channel**, and the message names the counter.
+
+        The check has to run before the sub-interface bind: ``ctr_bits`` and the channel width are
+        one number now, so ``StreamIF.bind`` would otherwise reject this as a bare width mismatch —
+        true, and a worse thing to read.
+        """
+        for side, ctr in (("master", 8), ("slave", 4)):
+            sim = Simulation()
+            iface = CreditStreamIF(name="c", sim=sim, clk=Clock(freq=FREQ), bitwidth=32,
+                                   depth=8, ctr_bits=16)
+            ep = (CreditStreamMasterIF(name="m", sim=sim, bitwidth=32, ctr_bits=ctr)
+                  if side == "master"
+                  else CreditStreamSlaveIF(name="s", sim=sim, bitwidth=32, ctr_bits=ctr))
+            with pytest.raises(ValueError, match="counter widths differ"):
+                iface.bind(side, ep)
 
 
 class TestTheTypedReadPath:

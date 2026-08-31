@@ -123,8 +123,13 @@ elsewhere:
 - **It cuts the wrong joint.**  `kind_of_endpoint` is *shared*.  An `hls/` vs `xsi/` split implies
   two independent pipelines and would make the single dispatch harder to see, not easier.
 
-**What the section actually needs is one page that does not exist**: *the endpoint-kind vocabulary,
-and the two tables that consume it.*  That is worth more than any re-foldering.
+**What the section actually needed was one page that did not exist**: *the endpoint-kind vocabulary,
+and the two tables that consume it.*  **SHIPPED** as
+`docs/guide/comp_codegen/endpoint_kinds.md` — the seven kinds, the three states of
+`boundary_kind` (declared / declared-`None` / absent), the ordering hazard the `isinstance` chain
+carried, and `needs_model` as the thing that separates a *gap* from a *non-requirement*.  Its
+snippets are executable and opted into the doc-snippet harness, which caught a hand-written expected
+output on the first run.
 
 ## Part 2c — present interfaces in four tiers, not one list
 

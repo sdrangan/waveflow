@@ -2,28 +2,32 @@
 title: AXI-MM Command Queue
 parent: Derived interfaces
 grand_parent: Interfaces
-nav_order: 3
+nav_order: 5
 audience: python
 api: [AXIMMQueue, AXIMMQueueLayout, MMIFMaster, AXIMMCrossBarIF, DirectMMIF]
-summary: "The in-memory command queue — AXIMMQueue, a host-driven ring buffer over an MMIFMaster (m_axi). The AXIMMQueueLayout (head/tail/capacity + data slots), the producer write / consumer get operations, and the loosely-timed poll-on-empty / backpressure-on-full timing model."
+summary: "The in-memory command queue — AXIMMQueue, a host-driven ring buffer over an MMIFMaster. Documented because examples/vmac is built on it, but NOT the pattern to reach for first: a memory queue cannot notify, so the consumer must poll, and the polling costs bandwidth."
 ---
 
 # AXI-MM Command Queue
 
-The other interface pages move *data* off the control plane (memory-mapped reads
-in [MM Interfaces](../primitive/aximm.md)) or carry control *in band* on a stream. The
-**command queue** moves the control plane itself **into memory**: instead of the
-host pushing each command down a dedicated stream, it appends commands to a ring
-buffer in shared DRAM, and the accelerator dequeues them over its ordinary `m_axi`
-master. Control and data now share one memory bundle.
+The **command queue** moves the control plane into memory: instead of the host pushing each command
+down a dedicated stream, it appends to a ring buffer in shared DRAM and the accelerator dequeues over
+its ordinary `m_axi` master. Control and data share one memory bundle.
 
-This is the Python transactional model of that ring. `AXIMMQueue`
-([`waveflow/hw/aximm_queue.py`](../../../../waveflow/hw/aximm_queue.py)) is **not a new
-endpoint** — it is a thin proxy over an existing
-[`MMIFMaster`](../primitive/aximm.md): the producer and the consumer each bind one to the same
-region of memory and talk through `write` / `get`. The synthesizable side (the
-consumer's `get` lowered to a hand-written ring-dequeue kernel) is documented in
-[Custom Hooks → Memory command queue](../../custom_hooks/queue.md).
+`AXIMMQueue` is **not a new endpoint** — it is a thin proxy over an existing
+[`MMIFMaster`](../primitive/aximm.md). Producer and consumer each bind one to the same region and
+talk through `write` / `get`.
+
+{: .warning }
+> **This is not the pattern to reach for first.** A queue in memory gives the consumer no way to be
+> *told* that the head moved, so it must **poll** — and that polling costs real bandwidth, which is
+> why [`poll_until`](../../timing_model/poll.md) exists to charge for it. Prefer a stream, or the
+> [reverse channels](./index.md) when you need a producer to know about room or outcome without
+> polling for it.
+>
+> It is documented because it is **used**: [`examples/vmac`](../../../examples/) is built on it and
+> it has its own codegen lowering. If you are reading `vmac.py`, this is the page. If you are
+> choosing an interface for new work, start elsewhere.
 
 ## What the queue is
 
