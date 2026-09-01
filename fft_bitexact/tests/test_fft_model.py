@@ -50,11 +50,12 @@ def test_fft_is_bit_exact(g, v):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "v4 drives every input to +-full scale, so stage-1 sums land exactly on the I=4 accumulator "
-    "boundary (+-8) and the hardware's intermediate WRAPPING dominates the result. The model "
-    "returns the mathematically correct spectrum (zero outside k=0,8) while the library returns "
-    "large wrap artifacts (+-65536, -329472). Needs per-stage goldens to localise; the four "
-    "in-range vectors above are unaffected."))
+    "ONE value of 32 still differs (was 25 before per-stage tracing): y[4].re, where the library "
+    "gives -32.0 and the model gives 0. Per-stage tracing (cpp/dump_stages.cpp) confirms stage 1 "
+    "matches the hardware exactly, 0/16, and that the stage-2 group-0 products sum to zero -- yet "
+    "the library's bfly_out for that bin is -1048576. So an overflow occurs inside the stage-2 "
+    "adder tree that the modelled accumulator formats do not reproduce. Bin 0 of the same group "
+    "matches exactly, so the tree shape is right; it is the intermediate width that is not."))
 def test_fft_bit_exact_at_overflow_boundary(g):
     assert _run(g, 4) == (0, 0)
 
