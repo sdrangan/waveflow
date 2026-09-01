@@ -413,6 +413,63 @@ a reader holding a lock the writer needs means lost samples — and lost samples
 in exactly the way sub-block loss already was. The count is the design's to produce and the gate's to
 assert; the interface does not supply it.
 
+#### Enable-gating is CLOSED, and not for the reason you would guess
+
+**Do not re-attempt making the owner's memory port go quiet from C++.** It was tried at S1, it is in
+the shipped code, and it does not work.
+
+`shot_loop_play_task.h` already guards its read with a **register**, not an address comparison:
+
+```c
+static ap_uint<1> playing = 0;
+...
+samp_out.write(playing ? buf[BASE + rd + i] : (ap_uint<W>)SHOT_LOOP_FILLER);
+```
+
+`playing` changes once per handover and never per beat, so there is nothing data-dependent in the
+loop's trip count and **II=1 survives** — measured, not assumed. The pipelining cost everyone expects
+here is *not paid*, and the guard still fails: Vitis evaluates `buf[...]` unconditionally and muxes
+the filler in, so the read port stays enabled for the whole 34-cycle overlap. The positive control
+and the shipped design are identical on this net.
+
+So the finding is stronger than *"a per-access range check would break the pipeline"*:
+
+> **The cheapest conceivable guard — one register bit, no address arithmetic, no II cost — does not
+> produce a quiet memory port.** The obstacle is not pipelining. Vitis owns the port enable and
+> hoists the read out of the ternary.
+
+Two consequences for S2:
+
+1. **Disjoint regions are not merely the cheap option; they are the only one that does not fight the
+   tool.** If the writer and reader never share addresses, both ports staying live is *irrelevant*
+   rather than tolerated, and no enable needs gating.
+2. The two alternatives stay open but cost more than they look. **Gating `EN` in the wrapper** is the
+   natural place (the wrapper already owns the memory-port wiring — it is where the `>> 3` lives),
+   but the kernel must then *export* the holding bit as a port, which HLS makes awkward; it is a
+   `wrapper_gen` + codegen change, bounded but real. **A sticky `collision` output on the memory**
+   prevents nothing — it makes a violation *visible in both backends*, replacing a VCD scan that has
+   now twice failed to separate a clean design from a deliberately dirty one. That one is worth doing
+   on its own merits and belongs to `plans/rtl_module.md`, not here.
+
+#### One thing S2 must decide before it builds anything
+
+`plans/rf_shot_buf.md` Stage C wants **pre-trigger history**: fill circularly, stop on a trigger, read
+out a window that begins *before* the trigger fired. A circular fill spans the whole memory, which is
+in tension with a disjoint-region split, and the resolution changes what S2 is:
+
+* **Triggered one-shot** — write circularly, trigger, *stop writing*, hand the reader the whole
+  memory. Writer and reader are never live together, so this is S1's degenerate case (`region = all`)
+  and needs no second region at all. Pre-trigger history works because the writer already wrote it.
+  Samples arriving during read-out are lost, which for a one-shot capture is correct behaviour, not a
+  defect — but the drop counter must say so.
+* **Continuous capture** — writer fills `[256, 512)` while the reader drains `[0, 256)`, swap, repeat.
+  Nothing is dropped, and this is what the region parameter was built for. But a window is then at
+  most one region long and **cannot start before the region boundary**, so pre-trigger history is
+  bounded by the region rather than by the memory.
+
+These are different products. Pick one deliberately and say which on the page; do not discover the
+tension mid-build.
+
 ### S3 — many regions, many requesters
 
 Only if something demands it. Needs an allocator and a deadlock argument, and at that point this
