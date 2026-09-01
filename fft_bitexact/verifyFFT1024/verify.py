@@ -34,8 +34,8 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))          # repo root, so fft_bitexact/ imports
 
-from fft_bitexact.wf_fft.fft import NO_SCALING, fft_general    # noqa: E402
-from waveflow.utils import fixputils as fp                      # noqa: E402
+from fft_bitexact.wf_fft.fft import NO_SCALING, fft_general
+from waveflow.utils import fixputils as fp
 
 IN_W, IN_I = 16, 2        # must match src/fft_top.hpp
 TW_W, TW_I = 18, 2

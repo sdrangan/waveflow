@@ -11,13 +11,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from fft_bitexact.wf_fft.cxquant import (
+    complex_from_format,
+    complex_multiply,
+    cquantize,
+    product_format,
+)
 from waveflow.hw.dataschema import DataArray
 from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils
 from waveflow.utils.fixputils import Format, OMode, QMode
-
-from fft_bitexact.wf_fft.cxquant import (complex_from_format, complex_multiply, cquantize,
-                                         product_format)
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "cxops_d16_2_t18_2.json"
 

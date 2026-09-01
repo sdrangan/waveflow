@@ -11,9 +11,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from waveflow.utils import fixputils as fp
-
 from fft_bitexact.wf_fft.fft import GROW_TO_MAX_WIDTH, NO_SCALING, SCALE, fft16
+from waveflow.utils import fixputils as fp
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "fft_L16_R4_modes.json"
 MODES = [NO_SCALING, SCALE, GROW_TO_MAX_WIDTH]

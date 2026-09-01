@@ -28,6 +28,8 @@ So the whole transform loses precision in exactly one place, which is why ``L=16
 """
 from __future__ import annotations
 
+from functools import cache
+
 import numpy as np
 
 from waveflow.utils import fixputils as fp
@@ -107,7 +109,26 @@ def _stage_formats(f: Format, first: bool, mode: str) -> tuple[Format, Format, F
     return fprod, facc1, facc2
 
 
-def _dft4(vr: list, vi: list, f: Format, first: bool, mode: str) -> tuple[list, list, Format]:
+@cache
+def _exp_table(tw_w: int, tw_i: int) -> tuple[Format, tuple, tuple]:
+    """``ComplexExpTable`` -- the radix-R DFT constants ``W_R^k``, cached per format.
+
+    ``initComplexExpTable`` (``hls_ssr_fft_complex_exp_table.hpp:70-86``) fills
+    ``max(R, 16)`` entries with the same rounding cast the twiddle table uses.  For ``R = 4``
+    the values are exactly ``{1, -j, -1, +j}``, so the butterfly multiplies are lossless -- but
+    that is a consequence of the format, not a licence to hardcode it, which is what this
+    function previously did (it built the table at a fixed ``<18,2>`` and silently ignored the
+    caller's twiddle width).
+    """
+    ftw = exp_table_format(tw_w, tw_i)
+    ei = np.arange(16, dtype=np.float64)
+    return (ftw,
+            tuple(fp.quantize_real(np.cos(2.0 * np.pi * ei / R), ftw)),
+            tuple(fp.quantize_real(-np.sin(2.0 * np.pi * ei / R), ftw)))
+
+
+def _dft4(vr: list, vi: list, f: Format, first: bool, mode: str,
+          tw_w: int = 18, tw_i: int = 2) -> tuple[list, list, Format]:
     """One radix-4 butterfly.
 
     ``hls_ssr_fft_parallel_fft_kernel.hpp:104-180`` declares three types, so a radix-4 stage
@@ -117,10 +138,7 @@ def _dft4(vr: list, vi: list, f: Format, first: bool, mode: str) -> tuple[list, 
     Tree additions wrap at their OPERAND width and widen on assignment -- see ``fft16``.
     """
     fprod, facc1, facc2 = _stage_formats(f, first, mode)
-    ftw = exp_table_format(18, 2)
-    ei = np.arange(16, dtype=np.float64)
-    ex_r = fp.quantize_real(np.cos(2.0 * np.pi * ei / R), ftw)
-    ex_i = fp.quantize_real(-np.sin(2.0 * np.pi * ei / R), ftw)
+    ftw, ex_r, ex_i = _exp_table(tw_w, tw_i)
 
     out_r, out_i = [], []
     for i in range(R):
@@ -162,7 +180,8 @@ def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
     tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i)
 
     stage1 = {n2: _dft4([np.array([x_re[n2 + R * n1]]) for n1 in range(R)],
-                        [np.array([x_im[n2 + R * n1]]) for n1 in range(R)], fin, True, mode)
+                        [np.array([x_im[n2 + R * n1]]) for n1 in range(R)], fin, True, mode,
+                        tw_w, tw_i)
               for n2 in range(R)}
     f1 = stage1[0][2]                                   # (19,5)
 
@@ -179,7 +198,8 @@ def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
     fo = f1
     for k1 in range(R):
         orr, oii, fo = _dft4([rotated[(n2, k1)][0] for n2 in range(R)],
-                             [rotated[(n2, k1)][1] for n2 in range(R)], f1, False, mode)
+                             [rotated[(n2, k1)][1] for n2 in range(R)], f1, False, mode,
+                             tw_w, tw_i)
         for k2 in range(R):
             out_r[k1 + R * k2] = int(orr[k2][0])
             out_i[k1 + R * k2] = int(oii[k2][0])
@@ -242,7 +262,28 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
 
     Written iteratively over stages so each stage's declared formats can be applied in order.
     ``L=16`` is the two-stage case of this and gives identical results to :func:`fft16`.
+
+    **Scope, and why there are two entry points:**
+
+    ==================  ==========================  ==============================
+    function            lengths                     scaling modes
+    ==================  ==========================  ==============================
+    :func:`fft16`       ``L = 16`` only             all three, validated
+    :func:`fft_general` any ``L = 4^S``             ``NO_SCALING`` only
+    ==================  ==========================  ==============================
+
+    The split is not tidiness: the per-stage narrowing rule this function applies was measured
+    for ``NO_SCALING``, and the other two modes demonstrably break it.  Rather than return a
+    plausible-looking wrong answer, non-default modes raise.
     """
+    if mode != NO_SCALING:
+        raise NotImplementedError(
+            f"fft_general models {NO_SCALING} only; got {mode}.  The inter-stage and final "
+            "narrowing rules were measured for NO_SCALING at L=16/64/1024 and do NOT hold for "
+            "the other modes -- SCALE keeps the width fixed, so narrowing by a bit per stage is "
+            "wrong, and neither SCALE nor GROW_TO_MAX_WIDTH casts at the output.  Use fft16 for "
+            "all three modes at L=16; extending here needs SCALE/GROW goldens at L>16 first "
+            "(cpp/dump_modes.cpp handles any configuration).")
     n_stages = _log(length, R)
     fmts = stage_formats(in_w, in_i, n_stages, mode)
     ftw = exp_table_format(tw_w, tw_i)
@@ -255,9 +296,6 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
     # `blocks` are the independent sub-transforms at this level; each is a list of indices into
     # cur_*, in the order the sub-transform sees them.  Stage 1 has one block of the whole array.
     blocks = [list(range(length))]
-    out_pos = list(range(length))          # where each element of each block finally lands
-
-    pos = list(range(length))
     for s in range(n_stages):
         f_in, _ = fmts[s]
         sub_len = len(blocks[0])
@@ -274,7 +312,7 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
             for m in range(m_count):
                 vr = [cur_re[blk[m + p * m_count]] for p in range(R)]
                 vi = [cur_im[blk[m + p * m_count]] for p in range(R)]
-                orr, oii, g = _dft4(vr, vi, f_in, s == 0, mode)
+                orr, oii, g = _dft4(vr, vi, f_in, s == 0, mode, tw_w, tw_i)
                 for q in range(R):
                     if s == n_stages - 1:
                         rotated[(q, m)] = (orr[q], oii[q])

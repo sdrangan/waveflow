@@ -11,9 +11,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from waveflow.utils import fixputils as fp
-
 from fft_bitexact.wf_fft.fft import fft16
+from waveflow.utils import fixputils as fp
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "fft_L16_R4_noscale_natural.json"
 NAMES = {0: "ramp", 1: "pseudo-random", 2: "impulse", 3: "constant", 4: "alternating-extremes",

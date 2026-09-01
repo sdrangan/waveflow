@@ -26,7 +26,6 @@ from waveflow.hw.complexfield import ComplexField
 from waveflow.hw.complexfield import cquantize as _lib_cquantize
 from waveflow.hw.dataschema import DataArray
 from waveflow.hw.fixpoint import FixedField
-from waveflow.utils import complexutils as cx
 from waveflow.utils import fixputils
 from waveflow.utils.fixputils import Format
 

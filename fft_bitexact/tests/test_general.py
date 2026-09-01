@@ -12,9 +12,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from waveflow.utils import fixputils as fp
-
 from fft_bitexact.wf_fft.fft import fft16, fft_general, stage_formats
+from waveflow.utils import fixputils as fp
 
 GOLDEN_DIR = Path(__file__).resolve().parents[1] / "golden"
 
@@ -130,3 +129,35 @@ def test_narrowing_after_the_stage_would_be_wrong():
     finally:
         mod.fp.quantize = real
     assert calls["n"] > 0, "no requantization happened; the narrowing step has vanished"
+
+
+def test_fft_general_refuses_modes_it_has_not_modelled():
+    """Non-default scaling modes must raise, not return a plausible wrong answer.
+
+    The per-stage and final narrowing rules in ``fft_general`` were measured for
+    ``NO_SCALING``.  They are wrong for the other two -- ``SCALE`` keeps the width fixed, and
+    neither it nor ``GROW_TO_MAX_WIDTH`` casts at the output -- and before this guard existed
+    ``fft_general`` returned formats of (15,7) and (20,7) where the library declares (16,7) and
+    (21,7).  ``fft16`` covers all three modes at L=16.
+    """
+    from fft_bitexact.wf_fft.fft import GROW_TO_MAX_WIDTH, SCALE
+    x = np.zeros(16, dtype=np.int64)
+    for mode in (SCALE, GROW_TO_MAX_WIDTH):
+        with pytest.raises(NotImplementedError, match="NO_SCALING"):
+            fft_general(x, x, 16, 16, 2, mode=mode)
+
+
+def test_twiddle_width_reaches_the_radix_exp_table():
+    """``tw_w`` must reach the W_R table, not just the inter-stage one.
+
+    ``_dft4`` used to build its exp table at a hardcoded ``<18,2>``, so a caller passing a
+    different twiddle width got a silently mixed model.  At R=4 the values are +-1 and 0, so the
+    *stored* numbers scale with the format -- which is exactly what makes the omission invisible
+    unless checked.
+    """
+    from fft_bitexact.wf_fft.fft import _exp_table
+    f18, re18, _ = _exp_table(18, 2)
+    f12, re12, im12 = _exp_table(12, 2)
+    assert (f18.W, f12.W) == (18, 12)
+    assert re18[0] == 1 << 16 and re12[0] == 1 << 10, "W_4^0 must be 1.0 in each format"
+    assert im12[1] == -(1 << 10), "W_4^1 must be -j in the caller's format"

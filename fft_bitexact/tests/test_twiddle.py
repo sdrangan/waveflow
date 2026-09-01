@@ -15,12 +15,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from waveflow.utils import fixputils
+from fft_bitexact.wf_fft.twiddle import (
+    twiddle_bits,
+    twiddle_complex_type,
+    twiddle_ideal,
+    twiddle_table,
+)
 from waveflow.hw.fixpoint import FixedField
+from waveflow.utils import fixputils
 from waveflow.utils.fixputils import OMode, QMode
-
-from fft_bitexact.wf_fft.twiddle import (twiddle_bits, twiddle_complex_type,
-                                         twiddle_ideal, twiddle_table)
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "twiddle_L16_R4_W18_I2.json"
 
@@ -92,7 +95,7 @@ def test_negation_happens_before_quantization(golden):
     Under AP_RND (round half up, toward +inf) those are different operations.  Modelling it the wrong
     way round is a plausible mistake that this pins.
     """
-    g_re, g_im = _golden_arrays(golden)
+    _, g_im = _golden_arrays(golden)          # only the imaginary path is under test here
     ft = FixedField.specialize(18, 2, True, QMode.AP_RND, OMode.AP_SAT)
     i = np.arange(16, dtype=np.float64)
 
