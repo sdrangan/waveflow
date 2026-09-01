@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** PLAN (2026-09-01).  **S1 premise confirmed** — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1 DONE** (2026-09-01) — bit-exact on 8 cases.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -138,7 +138,36 @@ per-beat tree, and the model would be unpinned in exactly the dimension that mat
 
 ## Stages
 
-**S1 — the reduction tree.**  Model `dot_tree` alone for one row: fixed products in, one float
+**S1 — the reduction tree.**  ✅ **DONE — bit-exact, 32/32 rows over 8 cases.**
+
+The structure is not a tree.  `sum()` (`helpers/funcs/sum.hpp:104-118`) is three stages::
+
+    preProcess   BinarySum over each beat of ParEntries    -> one value per beat
+    padding      pad the beat count to a multiple of Delays
+    postProcess  per chunk of Delays beats: BinarySum (tree), then finalSum += (SEQUENTIAL)
+
+So it trees *within* a beat, trees *within* a chunk, and accumulates *across* chunks
+sequentially — three orders in one reduction.  `Delays` is `AdderDelay<T>` — **4 for float, 8 for
+double, 1 otherwise** (`helpers/utils/utils.hpp:91-109`) — the FP adder latency the design
+pipelines around.  Not a user knob, and it changes the answer.
+
+Measured against the real kernel, 32 rows:
+
+| model | rows wrong |
+|---|---|
+| **library structure** | **0** |
+| naive full binary tree | 7 |
+| `numpy.dot` | 16 |
+
+**Two traps this stage exposed, both about test data rather than code.**  A first attempt at
+`M=4, N=16` matched a full tree, a per-beat tree *and* the hardware simultaneously — the case was
+too small to discriminate.  And `numpy.dot` matched at `N=64` with simple data while differing at
+`N=16`: it is *unreliably* right, which is worse than reliably wrong, because a small suite
+blesses it.  `tools/gen_input.py` therefore searches for vectors on which the candidate models
+provably disagree, and the tests assert that both wrong models still fail — a gate that stops
+discriminating announces itself.
+
+**Original S1 text, for the record:**  Model `dot_tree` alone for one row: fixed products in, one float
 out, bit-exact.  Isolates the associativity question with nothing else in frame, exactly as the
 FFT's S1 isolated the twiddle table.  Deliverable: a C++ dumper, a checked-in golden, and a test
 asserting that **sequential summation gives a different answer** — if it does not, the case is too
