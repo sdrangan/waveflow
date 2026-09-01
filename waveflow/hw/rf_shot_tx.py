@@ -112,6 +112,22 @@ SHOT_LOAD = 0
 #: what a host needs before tearing a transfer down.  It is a quiescence probe, and a testbench that
 #: ended by timing out instead could not tell a finished run from a deadlocked one.
 SHOT_END = 1
+#: Load the samples that follow, then play them **until told otherwise** — the infinite-play flag.
+#:
+#: ``plans/t2p_lock_chan.md`` S1.  :data:`SHOT_LOAD` and this one differ in exactly one thing: when
+#: the design stops.  A ``SHOT_LOAD`` plays ``nrepeat`` times and goes quiet, which is why a second
+#: load arriving mid-play is :data:`SHOT_BUSY` — the memory is under a reader.  A ``SHOT_LOOP`` never
+#: goes quiet, so ``SHOT_BUSY`` would refuse every load forever; the design that accepts it hands the
+#: memory over instead, and ``nrepeat`` is not read.
+#:
+#: **It is an opcode rather than a bit on ``nrepeat``**, and not for tidiness: ``nrepeat == 0``
+#: already means something — it is what the loader sends for a shot it refused to call playable — so
+#: overloading it would make "play forever" and "never play" the same value on the wire.
+#:
+#: :class:`~waveflow.hw.rf_shot_tx.RfShotTx` does not implement it (a finite player has nothing to
+#: hand over); :class:`~waveflow.hw.rf_shot_loop.RfShotTxLoop` implements only it.  The code lives
+#: here because the *header* is one schema and a second vocabulary for one opcode would be worse.
+SHOT_LOOP = 2
 
 # ---------------------------------------------------------------------------
 # The verdict

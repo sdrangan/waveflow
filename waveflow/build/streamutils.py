@@ -266,6 +266,16 @@ class RfShotBufStep(Buildable):
     boundary port is a ``framed_word`` stream and the plain ``read_stream`` methods will not bind to
     one — must write into the same *output_dir*.
 
+    **The infinite-play pair ships here too**, and that is the same judgement again rather than a new
+    one.  :mod:`waveflow.hw.rf_shot_loop` is a *sibling* of ``rf_shot_tx`` — a different player, a
+    different loader, and no ``rdy`` / ``rep`` / ``done`` at all — but it speaks the same vocabulary:
+    one ``ShotTxHdr``, one ``ShotTxResp``, the same five status codes, and the same re-layout on the
+    way to the converter.  Shipping it separately would put one word for *shot* in two include
+    directories.  It also needs :class:`MemLockStep`'s ``mem_lock.h`` and a
+    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.locked_mem.LOCK_SCHEMA_CLASSES` in the same *output_dir*; those are the
+    lock's, not this design's, which is why they are a step of their own.
+
     Parameters
     ----------
     output_dir : str | Path
@@ -286,7 +296,8 @@ class RfShotBufStep(Buildable):
 
     _SRC = ("rf_shot_buf_load_task", "rf_shot_buf_read_task",
             "rf_relayout_to_dense_task", "rf_relayout_to_slots_task",
-            "shot_tx_load_task", "shot_tx_play_task")
+            "shot_tx_load_task", "shot_tx_play_task",
+            "shot_loop_load_task", "shot_loop_play_task")
 
     def generate(self, key: str, config: BuildConfig) -> str:
         if key not in self._SRC:

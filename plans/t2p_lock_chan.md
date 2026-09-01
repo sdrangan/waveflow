@@ -524,3 +524,71 @@ requester's `store_shot` (payload beat in, memory beat out, one pipeline, no loc
 owner's `play_chunk` (`buf[rd + i]` at a running static base).  The loop names are *discovered* from
 the report by label rather than spelled, because a spelled name stops matching on a comment edit and
 a gate that skipped on a miss would read as a pass.
+
+### Checkpoint 3 — infinite play, as a SIBLING of `RfShotTx` rather than a mode of it
+
+**`waveflow/hw/rf_shot_loop.py`: `ShotLoopLoad`, `ShotLoopPlay`, `RfShotTxLoop`.**  The plan says
+*"infinite play on `RfShotTx`"* and this does not modify `RfShotTx`.  The reason is that the two
+designs differ in what the player **is**: a finite player consumes a token, plays, and reports done,
+so the loader owning the memory is safe by construction; an infinite player never stops, so the
+memory has to be handed over.  That is a different task, a different loader and a different channel
+set — and `examples/rf_shot_play`'s measured gates (292 / 76, 192 words, 2 startup blocks) belong to
+the design that produced them.  A sibling keeps them valid and makes the loop design's numbers its
+own, exactly as `rf_shot_play` and `rf_repeat_play` are two designs answering one user story.
+
+**The flag is an opcode, `SHOT_LOOP = 2`, not a bit on `nrepeat`.**  `nrepeat == 0` already means
+something — it is what the loader sends for a shot it refused to call playable — so overloading it
+would put *play forever* and *never play* on the same value.  A `SHOT_LOAD` arriving at the loop
+design is **refused** (`SHOT_WRONG_LEN`), never reinterpreted: a command answered as something other
+than what it asked for is invisible, because the samples look perfect.
+
+**`SHOT_BUSY` is unreachable, and that is the whole capability.**  Under infinite play a design that
+answered `BUSY` would refuse every load forever.
+
+**Five tasks became three.**  No `rdy` token, no `rep` channel, no `done` token, no `ShotPhase`, and
+no `RfShotBufLoad` / `RfShotBufRead` pair: the loader writes the memory and the player reads it.
+What replaced all of it is two lock streams and one ordering rule.
+
+**The re-layout is LAST, and that moved a modelling field with it.**  The memory holds *dense* words,
+so the conversion to converter slots happens after the player — which makes the re-layout the stage
+the converter back-pressures.  pysim's quantum on that edge is a block, so `_RelayoutTask` gained
+`blk_words`, the same sim-only field `ShotTxPlay` already carries and for the same reason.  **The
+accommodation follows the port, not the class.**  Default 1: nothing that was already running moves.
+
+**A known twin divergence, recorded rather than hidden.**  The C++ loader acquires and *then* reads
+the payload beat by beat, because `buf[lo + i] = s_in.read()` at II=1 is one pipeline and there is no
+way to have it without owning the region first.  The pysim twin cannot: a pysim slave takes a whole
+burst per `get`, so the frame is in hand before there is anything to decide.  **The RTL holds the
+region for the whole transfer and pysim holds it for the write**, so the handover gap differs between
+the backends.  Both are measured; neither is inherited.
+
+**A short load CLOBBERS, and that is the first thing S2's second region fixes.**  With one region
+there is nowhere else to put an arriving waveform, so a transfer that ends early overwrites what was
+playing and the design plays the padded result.  `SHOT_SHORT` going back to the host is the whole
+warning there is.  `RfShotTx` can do better only because it has a phase in which the memory is idle.
+
+**MEASURED (pysim, 40 us at a 4 Mword/s DAC, `nword=16`, `blk_words=4`, `depth=64`):**
+
+| | value |
+|---|---|
+| blocks to the converter | **40** (4 words each; **no short burst, ever**) |
+| filler blocks | **3** — two at startup, **one** for the handover |
+| words out of the memory | **148** |
+| grants / releases | **2 / 2** |
+| grant wait | **238** and **221** fabric cycles at 250 MHz = **0.95 / 0.88 us** |
+| verdicts | `[(0, SHOT_LOADED, 64), (1, SHOT_LOADED, 64)]` |
+
+Identical for `base = 0` and `base = 48` (the region whose last element is the memory's last).
+
+**The grant wait confirms checkpoint 1's "seconds, not cycles" decision.**  `check_period` is 4
+*elements*, and the wait is ~238 fabric cycles — because this owner is paced by a DAC, so one element
+of its own work is a converter word-time and not a fabric cycle.  A bound expressed in cycles would
+have been wrong by two orders of magnitude, in the direction that passes.
+
+**Both dirty runs are in the gate by name.**  `test_a_player_that_grants_and_keeps_reading_raises`
+and `test_a_loader_writing_past_its_region_raises`.  The first one taught something the plan's
+wording does not quite say: once a body is one chunk per firing, *"granting while still in
+PLAY_MEM"* is not about instruction order **inside** the branch — a grant followed immediately by
+the state change is harmless, because no read happens in between.  The hazard is the state change
+**never happening**, so the next chunk reads a region the requester now owns.  The dirty player is
+the shipped one with that line missing.
