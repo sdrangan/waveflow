@@ -470,6 +470,18 @@ in tension with a disjoint-region split, and the resolution changes what S2 is:
 These are different products. Pick one deliberately and say which on the page; do not discover the
 tension mid-build.
 
+**DECIDED 2026-09-01: continuous capture.** S2 builds the two-region variant, because it is the one
+that exercises `[start, end)` at all — the triggered one-shot is `region = all` and would leave the
+interface exactly where S1 left it, unverified in the only dimension S2 exists to verify. The cost is
+accepted: a capture window is bounded by the region, so pre-trigger history cannot reach past the
+region boundary. Full-depth history stays available later as the `region = all` case with a trigger
+and a stop, reusing this stage's drop counter.
+
+**Check this before building anything.** S1's requester already acquires an arbitrary
+`[start, end)` while the owner holds the complement — which *is* two disjoint regions. It is
+plausible that `locked_mem.py` needs **no change at all** and S2 is a consumer plus its gates. Verify
+that first; if true, say so and do not manufacture interface work to fill the stage.
+
 ### S3 — many regions, many requesters
 
 Only if something demands it. Needs an allocator and a deadlock argument, and at that point this
