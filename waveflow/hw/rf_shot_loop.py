@@ -491,6 +491,18 @@ class RfShotTxLoop(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "rf_shot_tx_loop"
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
+    #: The player class this composite instantiates.  **A ClassVar, so it is changed by subclassing
+    #: and never by a caller** — which one a design has is structure, not configuration.
+    #:
+    #: It exists for exactly one reason, and it is a verification one.  The RTL check for the
+    #: collision this lock prevents is a VCD scan, and a scan that finds nothing is
+    #: indistinguishable from a scan bound to the wrong nets unless it is **paired with a run known
+    #: to collide** (``reference-xsi-discards-rtl-text``).  That dirty twin has to be *this* design
+    #: with one line changed — a separately written broken design would prove nothing about the
+    #: shipped one — and this is the seam that lets an example build it without copying the
+    #: composite.  See ``examples/rf_shot_loop``'s ``RfShotTxLoopDirty``.
+    player_cls: ClassVar[type] = ShotLoopPlay
+
     #: Word width in bits — one number for the host port, the memory, the player and the converter.
     bitwidth: HwParam[int] = WORD_BW
     #: Samples one word carries.
@@ -527,9 +539,9 @@ class RfShotTxLoop(FreeRunMod):
 
         self.load = ShotLoopLoad(sim=self.sim, name=f"{self.name}_load", bitwidth=w, depth=d,
                                  nword=nw, samp_per_word=spw, base=b, clk=self.clk)
-        self.play = ShotLoopPlay(sim=self.sim, name=f"{self.name}_play", bitwidth=w, depth=d,
-                                 nword=nw, base=b, blk_words=bw,
-                                 dac_word_rate=self.dac_word_rate, clk=self.clk)
+        self.play = type(self).player_cls(sim=self.sim, name=f"{self.name}_play", bitwidth=w,
+                                          depth=d, nword=nw, base=b, blk_words=bw,
+                                          dac_word_rate=self.dac_word_rate, clk=self.clk)
         # The re-layout is LAST, so it is the stage the converter back-pressures and therefore the
         # one that carries the block-shaped handover.  The accommodation follows the port.
         self.relayout = RfRelayoutToSlots(sim=self.sim, name=f"{self.name}_to_slots", bitwidth=w,

@@ -291,3 +291,16 @@ examples/rf_repeat_play/results/
 examples/rf_repeat_play/logs/
 examples/rf_repeat_play/dfx_runtime.txt
 examples/rf_repeat_play/xsi/vectors/
+
+# rf_shot_loop (plans/t2p_lock_chan.md S1): TWO csynth projects, because the RTL hazard scan needs a
+# positive control -- the same composite with the player's `playing = 0` removed.  Both are build
+# output.  Same treatment as rf_repeat_play: the generated top, the copied framework headers, the
+# logs and the vectors are all derivable from the two committed .py files, `src/` and one `pytest`.
+examples/rf_shot_loop/rf_shot_tx_loop_proj/
+examples/rf_shot_loop/rf_shot_tx_loop_dirty_proj/
+examples/rf_shot_loop/gen/
+examples/rf_shot_loop/include/
+examples/rf_shot_loop/results/
+examples/rf_shot_loop/logs/
+examples/rf_shot_loop/dfx_runtime.txt
+examples/rf_shot_loop/xsi/vectors/

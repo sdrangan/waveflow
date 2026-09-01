@@ -71,14 +71,41 @@ static inline void mem_lock_request(chan& cmd_out, ap_uint<8> opcode,
     c.write_stream<MEM_LOCK_W>(cmd_out);
 }
 
-/// Requester: BLOCK for the answer.  Returns the status and hands back the region that was granted.
+/// Requester: wait for the answer.  Returns the status and hands back the region that was granted.
 ///
-/// The GRANT's region, not the request's.  What the owner yielded is what may be touched, and
-/// believing the request instead would make a clamp invisible on this side -- S1 refuses to clamp,
-/// but a body written against the request would not notice if S2 ever did.
+/// THE WAIT IS A NON-BLOCKING POLL IN A LOOP, AND THAT IS NOT A STYLE CHOICE -- IT IS THE FIX FOR A
+/// DEADLOCK THAT COSTS NOTHING TO WRITE AND EVERYTHING TO DIAGNOSE.
+///
+/// The obvious body is `r.read_stream<MEM_LOCK_W>(resp_in)` -- one blocking read, right after
+/// mem_lock_request.  MEASURED at RTL (Vitis HLS 2025.1, 2026-09-01): it DEADLOCKS.  Vitis sees two
+/// operations on two DIFFERENT streams with no data dependency between them, so it is free to
+/// schedule them in ONE state -- and it does.  That state then stalls on the empty response FIFO,
+/// and a stalled state performs none of its writes, so THE REQUEST IS NEVER SENT.  In the waveform:
+/// the loader's `ap_CS_fsm` sits in state 1 forever, `lock_if_resp_blk_n` is low from cycle 30, and
+/// `lock_if_cmd_write` never asserts once.
+///
+/// A loop is a scheduling barrier: the request is committed in the state before it, and the poll
+/// cannot be hoisted above a write it is control-dependent on.  Nothing else in the protocol
+/// changes, and the cost is one state.
+///
+/// The OWNER has no such hazard and needs no such loop, which is worth knowing rather than copying:
+/// its write is guarded by its read's result (`if (mem_lock_poll(...)) { ... grant ... }`), so the
+/// two are genuinely data-dependent and Vitis cannot reorder them.
+///
+/// The GRANT's region is what comes back, not the request's.  What the owner yielded is what may be
+/// touched, and believing the request instead would make a clamp invisible on this side -- S1
+/// refuses to clamp, but a body written against the request would not notice if S2 ever did.
 static inline ap_uint<8> mem_lock_await(chan& resp_in, ap_uint<28>& lo, ap_uint<28>& hi) {
-    MemLockResp r;
-    r.read_stream<MEM_LOCK_W>(resp_in);
+    ap_uint<MEM_LOCK_W> w = 0;
+    bool got = false;
+    // LABELLED, like every other loop in this arc: Vitis names an unlabelled loop
+    // VITIS_LOOP_<line>_1 and nests that into its children, so a comment edit above renames the
+    // synthesized module -- and a gate looking a number up by name then MISSES and skips.
+await_grant:
+    while (!got) {
+        got = resp_in.read_nb(w);
+    }
+    MemLockResp r = MemLockResp::unpack_from_uint(w);
     lo = r.start_addr;
     hi = r.end_addr;
     return r.status;

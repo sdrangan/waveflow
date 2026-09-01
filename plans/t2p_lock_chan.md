@@ -592,3 +592,127 @@ PLAY_MEM"* is not about instruction order **inside** the branch — a grant foll
 the state change is harmless, because no read happens in between.  The hazard is the state change
 **never happening**, so the next chunk reads a region the requester now owns.  The dirty player is
 the shipped one with that line missing.
+
+### Checkpoint 4 — the RTL gate, and the defect it found before it could run
+
+**A REAL DEADLOCK, MEASURED AT RTL, AND IT IS THE INTERFACE'S AND NOT THE DESIGN'S.**
+
+The first XSI run of `rf_shot_tx_loop` produced 359 words of filler, consumed **two** words of the
+command stream and answered **no** header at all.  The full-depth VCD says why: the loader's
+`ap_CS_fsm` sits in state 1 for the whole run, `lock_if_resp_blk_n` goes low at cycle 30, and
+`lock_if_cmd_write` **never asserts once**.
+
+The cause is the shape of the requester's round trip, written the obvious way:
+
+```c
+    mem_lock_request(cmd_out, LOCK_ACQUIRE, BASE, BASE + NW);   // a write
+    ap_uint<8> st = mem_lock_await(resp_in, lo, hi);            // a BLOCKING read
+```
+
+Two operations, two **different** streams, and **no data dependency between them**.  Vitis is
+therefore free to schedule both in one state — and it does.  That state then stalls on the empty
+response FIFO, and a stalled state performs none of its writes, so the request is never sent and
+nothing will ever fill the FIFO it is waiting on.
+
+The fix is in `mem_lock.h` and it is one loop: `mem_lock_await` polls with `read_nb` instead of
+blocking.  A loop is a scheduling barrier — the request is committed in the state before it, and the
+poll cannot be hoisted above a write it is control-dependent on.
+
+**The owner has no such hazard and must not copy the fix.**  Its write is guarded by its read's
+result (`if (mem_lock_poll(...)) { ... grant ... }`), so the two really are data-dependent and Vitis
+cannot reorder them.  The asymmetry is worth stating: *a request/response round trip across two
+streams needs an explicit ordering barrier; a poll-then-answer does not.*
+
+**This is exactly the receipt the plan opened by asking for.**  `CreditStreamIF` is fully written and
+documented and has never had a consumer, so nothing has ever tried to satisfy its contract.  This
+defect is invisible in pysim (SimPy does not reorder), invisible in `check()`, invisible in `csynth`
+(it synthesizes cleanly and reports II=1 on every loop), and invisible in the C++ read: it appears
+only when real RTL runs.  An interface built ahead of its consumer would have shipped with it.
+
+#### The gate itself — `examples/rf_shot_loop` and `tests/examples/test_rf_shot_loop_xsi.py`
+
+**One scenario, not two, and that is the capability made structural.**  `rf_shot_play` needs two
+because once a shot is accepted its buffer is busy and at most one load per stream can succeed.  That
+constraint is exactly what the lock removes, so a single file-driven stream reaches every verdict
+**and** both loads:
+
+| tid | frame | verdict |
+|---|---|---|
+| 0 | a whole shot | `SHOT_LOADED` -> plays |
+| 1 | `nsamp` the design was not built for | `SHOT_WRONG_LEN` |
+| 2 | `nsamp == 0`, no payload | `SHOT_ZERO_LEN` |
+| 3 | a `SHOT_LOAD` — a *finite* play | `SHOT_WRONG_LEN` |
+| 4 | a second whole shot, mid-play | `SHOT_LOADED` -> **the waveform switches** |
+| 5 | `SHOT_END` — the fence | `SHOT_LOADED` |
+
+`tid` 1 and 2 sit between the two loads deliberately: their payloads have to be drained, which buys
+the first waveform airtime on the converter before the second arrives.
+
+**The region is `[192, 256)` — the top of the memory**, which is *"a region that wraps"* in the only
+sense the plan can mean (see checkpoint 1).  The gate reads the write port's own addresses off the
+waveform and asserts the writer touched exactly `192..255`: `base + offset` is the shape of the
+byte-versus-word bug, and a design that round-trips correctly can still be addressing the wrong
+elements.
+
+### MEASURED at RTL (Vitis HLS 2025.1, xczu48dr, 4 ns; xsim 2025.1; 1400 cycles)
+
+| | value |
+|---|---|
+| verdicts | all six, in order, **identical to the pysim golden** |
+| playout | `[filler 3 blk][A 2 blk][filler 2 blk][B 15 blk]` — **the handover is two blocks** |
+| bit-exactness | waveform A and B both exact against the loaded ramp, in converter codes |
+| words to the DAC | **359** at 0.256 words/cycle |
+| `DAC_BLOCKS_ZERO_FILLED` | **0** — the handover's silence is real beats, so the DAC is never starved |
+| `DAC_UNDERRUN` | **1**, at cycle **4** — before the pipeline has produced anything |
+| command stream | **262 / 262** words consumed |
+| last verdict | cycle **374** |
+| write addresses touched | exactly `192..255` |
+| achieved II | **1** on `take_shot`, `drain_tail`, `await_grant`, `play_chunk`, and the re-layout |
+| estimated Fmax | 367.34 MHz |
+
+The pysim run of the same scenario gives the same segments (`3 / 2 / 2 / rest`) and the same six
+verdicts, which is the twin comparison this arc exists to make.
+
+### The positive control, and the third thing it taught
+
+`RfShotTxLoopDirty` is the shipped composite reached through a new `player_cls` ClassVar, with the
+player's `playing = 0` removed — **one line**, so a difference is attributable to that line.  It gets
+its own top, wrapper, `$dumpvars` module, hazard manifest, Vitis project **and its own generated
+harness**, the last because a harness hardcodes `DESIGN_DLL`: a control driven by the shipped design's
+harness runs the shipped design, reports its numbers and finds no hazard.  That was hit on the way,
+and it is the single most convincing way for this gate to lie.
+
+**Then the cycle-exact predicate refused to distinguish them, and the reason is the plan's own.**
+MEASURED: the control puts both memory ports live on the region for **34 cycles** and
+`find_read_during_write` returns nothing — the reader is DAC-paced at one word in four while the
+writer runs at II=1, so the sweeps cross inside the reader's idle window (the diff steps
+`-1, -1, 5, 5, 11, 11, …` past zero).  That is `examples/bram_access`'s finding restated: *address
+overlap alone is not a collision*.  Aligning the two on purpose was tried and did not help; the phase
+is deterministic.
+
+**And the shipped design shows the same 34 cycles.**  Vitis reads the BRAM *unconditionally* at II=1
+and muxes in the filler, so the read port stays enabled while the player is yielded.  So:
+
+> **At S1 the region is enforced in pysim and NOT at RTL.**  What the lock buys in hardware is that
+> the data is not **used**; the memory still sees both ports live.
+
+The plan says exactly this under *A grant is not a fence at RTL* — this is its concrete, measured
+form, and it is worth reading before S2 makes the region load-bearing.
+
+So the pairing is made **on the samples**, which is where the difference is real and visible:
+
+| | shipped | control |
+|---|---|---|
+| non-filler runs in the playout | 4 segments, 2 gaps | **1** — it never goes quiet |
+| first sample | filler | **-1**, the uninitialised memory |
+| `check_switched` | passes | **raises** — the old waveform is spliced into the new |
+| both ports live on the region | 34 cycles | 34 cycles (*the same*, and that is the finding) |
+| `find_read_during_write` | 0 | 0 (*the predicate cannot see it*) |
+
+The gate asserts every row.  `find_read_during_write` stays, as the memory's own predicate and
+nothing stronger.
+
+**S2 has to decide this deliberately.**  If the region is to be correctness rather than
+documentation, either the player's read must be *conditional* in the RTL (which costs the
+speculative read the II=1 datapath is built on) or `bram_t2p.v`'s assertion has to become the
+enforcement — and that is the same one-sided-`$error` edit S2 already owns.
