@@ -210,10 +210,46 @@ overflow path, and it shows only at full scale.
 Tried, and did **not** fix it: applying overflow per adder-tree level rather than once; keeping
 the `W_4` rotation in exact integers so negating the most-negative value cannot wrap.
 
-Next step is what the original notes prescribed: **per-stage goldens**.  Instrument the C++ to
-dump each stage and compare stage by stage — end-to-end comparison cannot localise a wrap that
-happened two stages back.  Pinned by `test_fft_bit_exact_at_overflow_boundary`
-(`xfail(strict=True)`, so it announces itself the moment it starts passing).
+Pinned by `test_fft_bit_exact_at_overflow_boundary` (`xfail(strict=True)`, so it announces
+itself the moment it starts passing).
+
+#### Investigation so far — the butterfly's real shape, and why it has not closed
+
+`hls_ssr_fft_parallel_fft_kernel.hpp:60-89` gives the butterfly exactly::
+
+    typedef ButterflyTraits<isFirstStage, mode, T_bflyIn>::T_butterflyComplexRotatedType T_productType;
+    typedef ButterflyTraits<isFirstStage, mode, T_productType>::T_butterflyAccumType     stage_accum;
+    T_productType product_vector[R];
+    for j: complexMultiply(D0[j], local_rN_kernel[i][j], product_vector[j]);
+    AdderTreeClass<R>::createTreeLevel(product_vector, D0t[i]);       // D0t is stage_accum
+
+So the `W_R` rotation **is** a `complexMultiply`, into `T_butterflyComplexRotatedType` =
+`ap_fixed<W+1, I + (isFirstStage ? 1 : 0)>` — *not* the max/max `FFTMultiplicationTraits`
+product format.  And `AdderTreeClass<2>`'s base case assigns into the caller's `T_out`, so the
+last tree level does not pass through the accumulator type.
+
+Two models, neither right everywhere:
+
+| model | v0-v3 (in range) | v4 (extremes) |
+|---|---|---|
+| exact `W_R` rotation, accum `(W+2, I+2)` — **committed** | **0/32 each** | 25/32 |
+| source-faithful `complexMultiply` rotation, inter-stage `(dW=1, dI=2)` | 16, 24, 8, 0 | 13/32 |
+
+The second is the one the source text implies, and it is *worse* on every in-range vector while
+being better at the extremes.  The disagreement localises to the **inter-stage rotation
+format**: the committed model needs `(19,5)` to reach `(21,7)`, the source-faithful one needs
+`(19,6)`.  Only `(dW=1, dI=2)` reproduces the `(21,7)` output width at all under the second
+reading, and it does not reproduce the bits.
+
+Ruled out along the way: applying overflow once vs per adder-tree level (no change); keeping
+the `W_4` rotation in exact integers (no change); routing `W_4` through the max/max product
+format (gives `(23,7)`, wrong width).
+
+**Conclusion: guessing formats against the end-to-end golden has stopped converging, and the
+committed 4/5 model is not obviously a step on the way to the right one.**  The remaining step
+is real instrumentation — copy the fixed-FFT headers into a debug tree, add per-stage dumps,
+and compare stage by stage.  That is a larger piece of work than it looked, and it is the only
+thing that will settle whether `isFirstStage` is what the width accounting says it is.
 
 ### Remaining
 
