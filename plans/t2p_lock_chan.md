@@ -942,3 +942,59 @@ The one place equality *is* asserted is the clean run: every window reports `CAP
 the last published total must then equal the counter.  That is not the same check wearing a different
 hat — it catches loss the host would **never be told about**, because it fell after the final
 announcement.
+
+### Checkpoint 3 — the lowering, and two asymmetries with TX that are worth the words
+
+**Nothing in the lowering path needed changing.**  Checkpoint 0's routing fix was the whole of it:
+`check()` is clean, the four boundary ports come out `samp_in / buf_w / buf_r / w_out`, the four
+internal channels are `dense / rdy / lock_if_cmd / lock_if_resp`, and one `add_if(lock)` still files
+the two `BramIF`s as wrapper wires.  The hazard manifest now names the **capture's** port as the
+writer, which is the port map RX needs and the one S1 could not produce.
+
+**The RX owner is on the SAFE side of the reset trap, and the TX owner is not.**
+`reference-hls-task-reset-trap` says a task that WRITES before it READS advances during reset.
+`shot_loop_play_task.h` cannot avoid that shape — a TX owner *produces* samples nobody asked for,
+which is what "the side that cannot stop" means there.  An RX owner **consumes** them, so its first
+act is a blocking stream read and it stalls at reset like any requester.  The statics still carry
+`#pragma HLS reset`; what this design does not *depend* on is the solution-level
+`config_rtl -reset state` that TX needed.  (It is set anyway, so the two builds differ in nothing a
+reader would have to explain.)
+
+**The input is read unconditionally and the memory write is what the guard covers.**
+
+```c
+    ap_uint<W> x = samp_in.read();      // UNCONDITIONAL
+    if (have) buf[dst + i] = x;
+```
+
+That is the shape a drop needs: a body that read only when it had room would be back-pressuring an
+ADC, and it would make `dropped` read **zero** for a design quietly losing everything one stage
+upstream.  The destination is decided *before* the block arrives — it depends only on statics the
+previous firing left behind — so there is no local copy and the store is one pipeline.
+
+**The C++ tracks `held_r[]` itself; pysim asks the lock endpoint.**  The pysim twin uses
+`may_touch()`, because there the endpoint is also the **guard** that raises on a violation.  There is
+no guard at RTL, so the body keeps the same fact in its own register.  The two are twins in behaviour
+and not in mechanism, which is written down rather than left to be noticed.
+
+**The free-region scan runs downward on purpose.**  `find_region` iterates `NR-1 → 0` with `UNROLL`,
+so the last assignment wins and the result is the *lowest* free region — which is what the pysim
+twin's upward first-match returns.  An upward unrolled loop would take the *highest*, and at
+`N_REGION == 2` that difference is invisible; on a three-region design the two backends would
+ping-pong in opposite orders.  It costs nothing to agree, which is exactly why it is recorded.
+
+#### MEASURED (Vitis HLS 2025.1, xczu48dr, 4 ns target)
+
+| module | loop | achieved II |
+|---|---|---|
+| `pingpong_capture_task_64_512_2_16` | `store_block` | **1** |
+| `pingpong_window_task_64_512_2_16` | `drain_window` | **1** |
+| `pingpong_window_task_64_512_2_16` | `await_grant` | **1** |
+| `rf_relayout_to_dense_task_64_4_2_s` | *(Stage A's, unlabelled)* | **1** |
+
+Estimated period **2.722 ns**, Fmax **367.4 MHz** — the same number the TX loop design measured, which
+is what one expects when the datapath is a BRAM port and a FIFO either way.
+
+**`store_block` is the interesting one.**  It reads unconditionally and writes conditionally, which
+is the shape that makes a drop possible without stalling an ADC — and it is exactly the shape one
+might expect to cost a cycle.  It does not.
