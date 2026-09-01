@@ -42,34 +42,35 @@ struct fft_params : ssr_fft_default_params {
 
 typedef ssr_fft_output_type<fft_params, T_in>::t_ssr_fft_out T_out;
 
-// Deterministic input, defined by stored bits so both sides start identical.
-static int in_re_bits(int n) { return ((n * 2731 + 17) % (1 << IN_W)); }
-static int in_im_bits(int n) { return ((n * 5417 + 913) % (1 << IN_W)); }
+// Deterministic inputs, defined by stored bits so both sides start identical.
+// Several independent vectors: identifying the network on one and confirming on the others is
+// what separates "the model is right" from "the model was fitted to one case".
+//   v0 linear ramp   v1 pseudo-random   v2 impulse   v3 constant   v4 alternating extremes
+static const int N_VEC = 5;
+static int in_re_bits(int v, int n) {
+    switch (v) {
+        case 0: return (n * 2731 + 17) % (1 << IN_W);
+        case 1: return (int)((n * 40503u + 20759u) * 2654435761u % (1u << IN_W));
+        case 2: return n == 0 ? (1 << (IN_W - 2)) : 0;
+        case 3: return 12345;
+        default: return (n % 2) ? ((1 << (IN_W - 1)) - 1) : (1 << (IN_W - 1));
+    }
+}
+static int in_im_bits(int v, int n) {
+    switch (v) {
+        case 0: return (n * 5417 + 913) % (1 << IN_W);
+        case 1: return (int)((n * 15485u + 7919u) * 40503u % (1u << IN_W));
+        case 2: return n == 3 ? -(1 << (IN_W - 2)) & ((1 << IN_W) - 1) : 0;
+        case 3: return (1 << IN_W) - 9876;
+        default: return (n % 2) ? (1 << (IN_W - 1)) : ((1 << (IN_W - 1)) - 1);
+    }
+}
 
 // NOTE: the HLS csim runtime prints "INFO [HLS SIM]: ..." to stdout when the program exits,
 // which would corrupt JSON written there.  So the report goes to a FILE given by argv[1].
 int main(int argc, char** argv) {
     FILE* out = (argc > 1) ? fopen(argv[1], "w") : stdout;
     if (!out) { fprintf(stderr, "cannot open %s\n", argv[1]); return 1; }
-    hls::stream<T_in> din[R];
-    hls::stream<T_out> dout[R];
-
-    T_in x[L];
-    for (int n = 0; n < L; n++) {
-        T_in_inner re, im;
-        re.range() = in_re_bits(n);
-        im.range() = in_im_bits(n);
-        x[n] = T_in(re, im);
-    }
-    for (int i = 0; i < L / R; i++)
-        for (int j = 0; j < R; j++) din[j].write(x[i * R + j]);
-
-    fft<fft_params>(din, dout);
-
-    T_out y[L];
-    for (int i = 0; i < L / R; i++)
-        for (int j = 0; j < R; j++) y[i * R + j] = dout[j].read();
-
     typedef T_out::value_type T_out_inner;
     const int OUT_W = T_out_inner::width;
     const int OUT_I = T_out_inner::iwidth;
@@ -86,19 +87,38 @@ int main(int argc, char** argv) {
     fprintf(out, "  \"note\": \"re/im are raw stored integers (unsigned two's complement of the width)\",\n");
     fprintf(out, "  \"stream_layout\": \"sample n -> stream (n %% R) at time (n / R)\",\n");
 
-    fprintf(out, "  \"input\": [\n");
-    for (int n = 0; n < L; n++)
-        fprintf(out, "    {\"n\": %d, \"re\": %lld, \"im\": %lld}%s\n", n,
-               (long long)x[n].real().range().to_int64(),
-               (long long)x[n].imag().range().to_int64(), n == L - 1 ? "" : ",");
-    fprintf(out, "  ],\n");
+    fprintf(out, "  \"vectors\": [\n");
+    for (int v = 0; v < N_VEC; v++) {
+        hls::stream<T_in> din[R];
+        hls::stream<T_out> dout[R];
+        T_in x[L];
+        for (int n = 0; n < L; n++) {
+            T_in_inner re, im;
+            re.range() = in_re_bits(v, n);
+            im.range() = in_im_bits(v, n);
+            x[n] = T_in(re, im);
+        }
+        for (int i = 0; i < L / R; i++)
+            for (int j = 0; j < R; j++) din[j].write(x[i * R + j]);
 
-    fprintf(out, "  \"output\": [\n");
-    for (int n = 0; n < L; n++)
-        fprintf(out, "    {\"n\": %d, \"re\": %lld, \"im\": %lld, \"re_f\": %.17g, \"im_f\": %.17g}%s\n", n,
-               (long long)y[n].real().range().to_int64(),
-               (long long)y[n].imag().range().to_int64(),
-               y[n].real().to_double(), y[n].imag().to_double(), n == L - 1 ? "" : ",");
+        fft<fft_params>(din, dout);
+
+        T_out y[L];
+        for (int i = 0; i < L / R; i++)
+            for (int j = 0; j < R; j++) y[i * R + j] = dout[j].read();
+
+        fprintf(out, "    {\"v\": %d,\n     \"input\": [", v);
+        for (int n = 0; n < L; n++)
+            fprintf(out, "{\"re\": %lld, \"im\": %lld}%s",
+                    (long long)x[n].real().range().to_int64(),
+                    (long long)x[n].imag().range().to_int64(), n == L - 1 ? "" : ", ");
+        fprintf(out, "],\n     \"output\": [");
+        for (int n = 0; n < L; n++)
+            fprintf(out, "{\"re\": %lld, \"im\": %lld}%s",
+                    (long long)y[n].real().range().to_int64(),
+                    (long long)y[n].imag().range().to_int64(), n == L - 1 ? "" : ", ");
+        fprintf(out, "]}%s\n", v == N_VEC - 1 ? "" : ",");
+    }
     fprintf(out, "  ]\n}\n");
     if (out != stdout) fclose(out);
     return 0;
