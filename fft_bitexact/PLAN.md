@@ -8,7 +8,7 @@ file is the argument, this one is the working record.  Where they disagree, this
 
 | | |
 |---|---|
-| Status | **S1 DONE** (2026-07-26).  S2 next. |
+| Status | **S1 DONE**; **S2 in progress** — golden + ordering + growth formulas done, model pending. |
 | Waveflow | `main` @ `e360b74` |
 | Vitis | 2025.1 (`/tools/Xilinx/2025.1`) |
 | Vitis DSP source | `/home/marco/AmirProjects/Vitis_Libraries_2025.1` (`2025.1` = `v2025.1_update2`) |
@@ -92,7 +92,58 @@ guess would have been wrong at over half the table.
   +inf -- `-0.5 lsb` -> `0`) that differs from quantize-then-negate.  `L=16` happens not to discriminate the two —
   the test skips, honestly, and says to revisit at larger `L`.
 
-## S2 — sequential radix-4 model  ← NEXT
+## S2 — sequential radix-4 model  ← IN PROGRESS
+
+**Done:** golden captured, output ordering pinned, growth formulas extracted.
+**Not done:** the bit-exact model itself.
+
+The real `xf::dsp::fft::fft<>` compiles and runs **natively under g++** — `hls::stream` in csim
+mode is an ordinary queue — so the S2 golden costs milliseconds, like S1's.  Config is the
+default struct with `N=16, R=4`; input `ap_fixed<16,2>`, output `ap_fixed<21,7>`.
+(`cpp/dump_fft.cpp` writes to a file, not stdout: the HLS csim runtime prints an
+`INFO [HLS SIM]` line at exit that would corrupt JSON on stdout.)
+
+### Ordering: pinned, no permutation needed
+
+`SSR_FFT_NATURAL` output equals numpy's `fft` ordering — matched to `1.4e-05` relative
+(quantization noise), while bit-reversed is off by `14.9`.  So a later bit-level failure can
+never be explained away as "maybe the order is wrong".  Pinned by `test_output_is_natural_order`,
+which also asserts the bit-reversed comparison *fails*, so the guard cannot go inert.
+
+### ⚠️ NO_SCALING is **not** free — this plan was wrong
+
+This document said the default config "needs no new arithmetic at all".  That holds for the
+twiddle *table* (S1) but **not** for the transform.  Two formulas out of the library:
+
+`FFTOutputTraits` (`hls_ssr_fft_output_traits.hpp:147-151`) — growth is bounded by `L`, not by
+operand widths::
+
+    OUTPUT_WL = inputSizeBits   + log2(L) + 1        # 16 + 4 + 1 = 21
+    OUTPUT_IL = integerPartBits + log2(L) + 1        #  2 + 4 + 1 =  7
+
+`FFTMultiplicationTraits` (`hls_ssr_fft_multiplication_traits.hpp:67-74`) — the twiddle product
+is **max-of-formats, truncated and wrapped**, not full precision::
+
+    product_IL = max(op1_IL, op2_IL)
+    product_FL = max(op1_FL, op2_FL)
+    typedef std::complex<ap_fixed<product_WL, product_IL, AP_TRN, AP_WRAP, 0>> T_productOpType;
+
+For `ap_fixed<16,2>` data x `ap_fixed<18,2>` twiddles that is `ap_fixed<18,2,AP_TRN,AP_WRAP>` —
+whereas Waveflow's `cmult` yields full precision `(2W+1, 2I+1) = (33,5)`.  **So the butterfly
+must requantize after every multiply**, and `cquantize` is a prerequisite for S2, not S3 work.
+
+Note the modes differ between the two places quantization happens: the twiddle *table* rounds
+and saturates (`AP_RND`/`AP_SAT`, S1); the twiddle *product* truncates and wraps
+(`AP_TRN`/`AP_WRAP`).  Using one where the other belongs is a 1-LSB error in the exact place
+this plan says such errors hide.
+
+### Remaining
+
+* A complex requantize.  Prototype it **locally** in `wf_fft/` first (same split-recombine
+  shape as `complexfield.csum`), and only promote it into `waveflow/hw/complexfield.py` once
+  S2 is bit-exact — changing the library on an unvalidated guess is the wrong order.
+* The radix-4 butterfly network + data commutation for `L=16, R=4` (2 stages).
+* Then the gate: `test_fft_is_bit_exact`, currently skipped with the reason recorded.
 
 Butterflies + digit-reversal via `cadd`/`csub`/`cmult`, `SSR_FFT_NO_SCALING`, `L=16`, `R=4`.
 

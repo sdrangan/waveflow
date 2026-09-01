@@ -23,3 +23,10 @@ g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN" "$ROOT/cpp/dump_twiddle.cp
 OUT="$ROOT/golden/twiddle_L16_R4_W18_I2.json"
 "$BIN" > "$OUT"
 echo "wrote $OUT"
+
+# S2 -- the transform itself
+BIN2="$(mktemp -d)/dump_fft"
+g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN2" "$ROOT/cpp/dump_fft.cpp"
+OUT2="$ROOT/golden/fft_L16_R4_noscale_natural.json"
+"$BIN2" "$OUT2" >/dev/null
+echo "wrote $OUT2"
