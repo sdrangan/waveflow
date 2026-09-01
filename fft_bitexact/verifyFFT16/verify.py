@@ -113,14 +113,15 @@ def main() -> int:
             print("        Running the C-sim vs Co-sim check only -- that one needs no model,")
             print("        and still proves synthesis preserved the C++ behaviour exactly.")
         print()
-        head = " | ".join(name.strip().ljust(14) for name, *_ in checks)
+        width = max(len(name.strip()) for name, *_ in checks)
+        head = " | ".join(name.strip().ljust(width) for name, *_ in checks)
         print(f"  vec | {head}")
-        print("  ----+-" + "-+-".join("-" * 14 for _ in checks))
+        print("  ----+-" + "-+-".join("-" * width for _ in checks))
         for v in range(n_vec):
             cells = []
             for _, ar, ai, br, bi in checks:
                 bad = int((ar[v] != br[v]).sum() + (ai[v] != bi[v]).sum())
-                cells.append("    exact     " if bad == 0 else f" {bad:4d} DIFFER ")
+                cells.append(("exact" if bad == 0 else f"{bad} DIFFER").center(width))
             print(f"  {v:3d} | " + " | ".join(cells))
         print()
 

@@ -49,7 +49,7 @@ One command runs all three stages in order, each stopping the script on failure:
 | stage | what happens | writes |
 |---|---|---|
 | `csim_design` | the C++ runs natively | `results/output_csim.txt` |
-| `csynth_design` | C++ → RTL | `fft_verify_proj/solution1/syn/` |
+| `csynth_design` | C++ → RTL | `fft1024_verify_proj/solution1/syn/` |
 | `cosim_design` | the **synthesized RTL** runs in `xsim`, driven by the same testbench | `results/output_cosim.txt` |
 
 Expect, in order:
@@ -112,7 +112,7 @@ head -5 results/output_csim.txt
 diff results/output_csim.txt results/output_cosim.txt && echo "C and RTL identical"
 ```
 
-## The 12 input vectors, and why these
+## The 8 input vectors, and why these
 
 | v | vector | why |
 |---|---|---|
