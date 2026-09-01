@@ -24,7 +24,18 @@ from waveflow.hw.bram import word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.locked_mem import LOCK_ACQUIRE
-from waveflow.hw.rf_pingpong_rx import N_REGION, PingPongCapture, RfPingPongRx
+from waveflow.hw.rf_pingpong_rx import (
+    CAP_LOST,
+    CAP_OK,
+    CAP_STATUS_NAMES,
+    CAPTURE_SCHEMA_CLASSES,
+    DROP_BW,
+    N_REGION,
+    CaptureWindowHdr,
+    PingPongCapture,
+    RfPingPongRx,
+    split_windows,
+)
 from waveflow.simulation.simulation import Simulation
 
 WORD_BW = 64
@@ -69,7 +80,18 @@ class Bench:
         self.out_if = StreamIF(name="tb_out", sim=self.sim, clk=self.clk, bitwidth=WORD_BW, depth=2)
         self.out_if.bind("master", self.dut.w_out)
         self.out_if.bind("slave", self.snk)
-        self.windows: list[np.ndarray] = []
+        #: Whole frames off the wire — header **and** samples, exactly as a host would see them.
+        self.frames: list[np.ndarray] = []
+
+    @property
+    def windows(self) -> list[np.ndarray]:
+        """Just the samples, header stripped by the schema that defines the layout."""
+        return [s for _h, s in split_windows(self.frames, WORD_BW)]
+
+    @property
+    def hdrs(self) -> list[CaptureWindowHdr]:
+        """Just the headers, in arrival order."""
+        return [h for h, _s in split_windows(self.frames, WORD_BW)]
 
     def _source(self, n_blocks: int):
         """A ramp, one block per block-period, on an **absolute** grid.
@@ -87,7 +109,7 @@ class Bench:
 
     def _drain(self):
         while True:
-            self.windows.append(np.asarray((yield from self.snk.get())).ravel().copy())
+            self.frames.append(np.asarray((yield from self.snk.get())).ravel().copy())
 
     def run(self, n_blocks: int, until: float) -> None:
         """Push *n_blocks* of ramp and let the design run to *until*.
@@ -155,9 +177,12 @@ def test_the_windows_are_whole_regions_and_arrive_as_frames():
     told a length.
     """
     b = run_capture()
-    assert b.windows, "no window reached the sink"
-    sizes = {int(w.size) for w in b.windows}
-    assert sizes == {REGION}, f"windows of {sorted(sizes)} words, expected only {REGION}"
+    assert b.frames, "no window reached the sink"
+    hn = CaptureWindowHdr.nwords_per_inst(WORD_BW)
+    assert {int(f.size) for f in b.frames} == {hn + REGION}, (
+        f"frames of {sorted({int(f.size) for f in b.frames})} words, expected only "
+        f"{hn + REGION} — one header word and {REGION} samples")
+    assert {int(w.size) for w in b.windows} == {REGION}
 
 
 def test_the_capture_never_stalls_its_input():
@@ -355,3 +380,117 @@ def test_the_capture_polls_exactly_once_per_block():
     b = Bench()
     assert b.dut.capture.lock.check_period == BLK_WORDS
     assert isinstance(b.dut.capture, PingPongCapture)
+
+
+# ---------------------------------------------------------------------------
+# S2 checkpoint 2 — the count and its verdict, on the wire
+# ---------------------------------------------------------------------------
+
+def test_the_header_is_one_word_and_the_layout_has_one_author():
+    """``8 + 28 + 28 == 64``, and the gate reads it through the schema's own deserializer.
+
+    A test that sliced the header off by hand would be a second author of the layout, and the two
+    would be free to disagree about a field width — silently, because both would still produce a
+    number.
+    """
+    assert CAPTURE_SCHEMA_CLASSES == [CaptureWindowHdr]
+    assert int(CaptureWindowHdr.get_bitwidth()) == 64
+    assert int(CaptureWindowHdr.nwords_per_inst(WORD_BW)) == 1
+    assert DROP_BW == 28
+
+
+def test_a_clean_run_publishes_CAP_OK_and_zero_on_every_window():
+    """**The verdict, read off the wire.**
+
+    Off the stream rather than off the counter, for the reason ``rf_shot_play`` reads its responses
+    off the wire: a design that counted correctly and *serialized* wrongly passes every internal
+    check there is, and the wire is the only thing a host can act on.
+    """
+    b = run_capture()
+    b.dut.assert_published_loss(b.frames, where="clean: ")
+    assert [int(h.status) for h in b.hdrs] == [CAP_OK] * len(b.hdrs)
+    assert [int(h.n_dropped) for h in b.hdrs] == [0] * len(b.hdrs)
+
+
+def test_every_window_says_which_region_it_came_from():
+    """The header's ``base_addr`` is what the reader turned into its ``acquire``.
+
+    So the alternation is visible to a **host**, not only to a test reaching into the design — which
+    matters because a design handing the same half out twice is otherwise indistinguishable from one
+    that swaps.
+    """
+    b = run_capture()
+    assert [int(h.base_addr) for h in b.hdrs] == [(i % N_REGION) * REGION
+                                                  for i in range(len(b.hdrs))]
+    assert [int(h.base_addr) for h in b.hdrs] == b.dut.window.bases
+
+
+def test_loss_is_LOUD_on_the_wire_and_not_only_in_a_counter():
+    """**The point of checkpoint 2.**  A dropped block changes the header of the very next window.
+
+    Everything else about that window is perfect: it is the right length, every sample in it is a
+    real sample, and the numbers inside it are contiguous.  Without the header, the only evidence
+    is a Python attribute nobody reads — which is exactly the shape sub-block loss had before
+    ``offer()`` published it.
+    """
+    b = run_capture(stall_blocks=REGION // BLK_WORDS + 2)
+    assert b.dut.n_dropped > 0
+
+    with pytest.raises(AssertionError, match="CAP_LOST"):
+        b.dut.assert_published_loss(b.frames, where="dirty: ")
+
+    lost = [i for i, h in enumerate(b.hdrs) if int(h.status) == CAP_LOST]
+    assert lost, (
+        f"nothing on the wire says this run lost samples: statuses "
+        f"{[CAP_STATUS_NAMES[int(h.status)] for h in b.hdrs]}")
+    # ... and the window carrying the verdict is itself flawless, which is why the header has to say
+    # so: the loss fell BEFORE it, not inside it.
+    w = b.windows[lost[0]]
+    assert int(w.size) == REGION
+    assert np.array_equal(np.diff(w.astype(np.int64)), np.ones(REGION - 1))
+
+
+def test_the_cumulative_count_never_goes_backwards_and_the_last_one_is_the_total():
+    """Cumulative, never incremental — :mod:`waveflow.hw.reverse_stream`'s rule 1.
+
+    A lost cumulative value is harmless because the next one carries the whole truth; a lost
+    *increment* is wrong forever.  So the sequence must be monotone, and its last member must be what
+    the design itself counted — a wire that disagrees with the counter reports a number nobody should
+    trust.
+    """
+    b = run_capture(stall_blocks=REGION // BLK_WORDS + 2)
+    counts = [int(h.n_dropped) for h in b.hdrs]
+    assert counts == sorted(counts), f"the cumulative drop count went backwards: {counts}"
+    # A BOUND, not an equality, and for checkpoint 1's reason: the last window publishes what was
+    # known at the last ANNOUNCEMENT, and the capture goes on dropping after it -- the run ends with
+    # the reader still holding a window.  MEASURED: 16 published against 32 counted.  Asserting
+    # equality would be asserting that the run stopped at a convenient moment.
+    assert 0 < counts[-1] <= int(b.dut.capture.n_dropped), (
+        f"the last window published {counts[-1]} and the design counted "
+        f"{int(b.dut.capture.n_dropped)}: a published total must be non-zero on a lossy run and can "
+        f"never exceed what was actually dropped.")
+
+
+def test_the_verdict_marks_the_window_AFTER_the_gap_and_not_the_one_before():
+    """Which window the verdict belongs to, asserted rather than assumed.
+
+    ``CAP_LOST`` means *samples were lost immediately before this window* — so the flagged window is
+    the one whose first sample does **not** follow the previous window's last.  Marking the window
+    before the gap instead would point a host at data that is entirely fine.
+    """
+    b = run_capture(stall_blocks=REGION // BLK_WORDS + 2)
+    wins, hdrs = b.windows, b.hdrs
+    assert len(wins) >= 2
+    for i in range(1, len(wins)):
+        gap = int(wins[i][0]) - int(wins[i - 1][-1]) - 1
+        want = CAP_LOST if gap else CAP_OK
+        assert int(hdrs[i].status) == want, (
+            f"window {i} follows a gap of {gap} sample(s) and its header says "
+            f"{CAP_STATUS_NAMES[int(hdrs[i].status)]}, expected {CAP_STATUS_NAMES[want]}")
+
+
+def test_the_first_window_is_CAP_OK_because_nothing_precedes_it():
+    """There is no gap before the first window, so its verdict is not a special case — it is just
+    the general rule with nothing on the left."""
+    b = run_capture()
+    assert int(b.hdrs[0].status) == CAP_OK and int(b.hdrs[0].n_dropped) == 0

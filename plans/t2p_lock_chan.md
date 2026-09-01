@@ -889,3 +889,56 @@ still holding a window and the capture goes on losing blocks it will never annou
 is a **bound** — `0 < visible <= counted` — and every visible gap must be a whole number of blocks,
 because the capture drops a block at a time.  Asserting equality would have been asserting that the
 run stopped at a convenient moment.
+
+### Checkpoint 2 — the count, and the verdict, on the wire
+
+The plan is explicit that *"the count is the design's to produce and the gate's to assert; the
+interface does not supply it"*, and that lost samples are silent in pysim in exactly the way sub-block
+loss was.  Checkpoint 1 produced the count as a Python attribute, which is **invisible to a host and
+invisible to the RTL** — the same shape the silence had.  This checkpoint puts it on the wire.
+
+**Every window is now a frame: one `CaptureWindowHdr`, then the samples.**  8 + 28 + 28 = exactly 64,
+one beat, the width everything in this arc speaks.  It is written **once**, by the capture, onto the
+`rdy` channel, and the reader forwards it verbatim as the frame's header — one schema rather than
+two, because it is one statement (*here is a region, here is what was lost before it*) and a second
+schema would be a second place for the two to disagree.
+
+**Two fields, because there are two different questions.**
+
+* `n_dropped` — words lost **since reset**, cumulative.  `reverse_stream`'s rule 1: a lost cumulative
+  value is harmless because the next carries the whole truth; a lost *increment* is wrong forever.
+* `status` — `CAP_OK` / `CAP_LOST`, *was anything lost immediately before this window?*  Not
+  derivable from one cumulative reading — a host would have to remember the last one and subtract —
+  and the design already knows.  The same split `ShotTxResp` makes between a status and a count.
+
+**The verdict marks the window AFTER the gap**, and that is asserted rather than assumed: the flagged
+window is the one whose first sample does not follow the previous window's last.  Marking the window
+*before* would point a host at data that is entirely fine.
+
+**One frame, not two writes.**  The first version wrote the header and then the payload, which in
+pysim is two bursts and therefore two `TLAST`s — measured as frames of `[1, 32, 1, 32, …]` at the
+sink.  The C++ twin writes the header beat and the payload beats into a single `axi4s` frame, so a
+split here would make the two backends disagree about the *boundary* rather than about a value, which
+is the harder kind of divergence to see.  The header is serialized through the schema's own
+serializer and concatenated; `split_windows()` is the one place the layout is read back, so a gate
+never slices it by hand.
+
+#### MEASURED (pysim, same run as checkpoint 1)
+
+| | clean | dirty (`stall_blocks=10`) |
+|---|---|---|
+| frames at the host | `[33, 33, 33, 33]` | `[33, 33, 33]` |
+| headers `(status, base, n_dropped)` | `(OK,0,0) (OK,32,0) (OK,0,0) (OK,32,0)` | `(OK,0,0) (OK,32,0) (**LOST**,0,16)` |
+| internal counter | 0 | 32 |
+
+**The published total is a lower bound on the counter, for checkpoint 1's reason.**  16 published
+against 32 counted: the last window carries what was known at the last *announcement*, and the
+capture goes on dropping after it, because the run ends with the reader still holding a window.  This
+is the second time in one stage that an equality assertion had to become a bound, and both times the
+cause was the same — **a counter records the whole run; the wire records what the design had a chance
+to say.**
+
+The one place equality *is* asserted is the clean run: every window reports `CAP_OK` with zero, and
+the last published total must then equal the counter.  That is not the same check wearing a different
+hat — it catches loss the host would **never be told about**, because it fell after the final
+announcement.

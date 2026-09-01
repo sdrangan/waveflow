@@ -50,6 +50,22 @@ already was.
 **The strongest statement of "nothing was dropped" is not the counter.**  It is that the windows,
 concatenated, are *contiguous*: the source is a ramp, so a gap in the numbers is a gap in the capture
 and no counter has to be believed.  :meth:`RfPingPongRx.assert_windows_contiguous`.
+
+The count is on the wire, and so is a verdict
+---------------------------------------------
+A Python counter is invisible to a host and invisible to the RTL.  So every window goes out as a
+**frame** — one :class:`CaptureWindowHdr` and then the samples — and the header carries both halves of
+what a host needs:
+
+* ``n_dropped``, the words lost **since reset**.  Cumulative, never incremental, for
+  :mod:`waveflow.hw.reverse_stream`'s rule 1: a lost cumulative value is harmless because the next
+  one carries the whole truth, and a lost *increment* is wrong forever.
+* ``status``, :data:`CAP_OK` or :data:`CAP_LOST` — **was anything lost immediately before this
+  window?**  That is the actionable question, and it is not derivable from one cumulative reading; a
+  host would have to remember the last one and subtract.  The design already knows, so it says so.
+
+The two are different questions and both are asked, which is the same split
+:class:`~waveflow.hw.rf_shot_tx.ShotTxResp` makes between a status and an ``nsamp_loaded``.
 """
 from __future__ import annotations
 
@@ -61,6 +77,7 @@ import numpy as np
 from waveflow.hw.bram import T2pBram, word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
+from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import (
@@ -81,6 +98,71 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.rf_relayout import RfRelayoutToDense
 from waveflow.hw.rf_shot_buf import WORD_BW
 from waveflow.simulation.simobj import ProcessGen
+
+#: Nothing was lost immediately before this window: it is contiguous with the one before it.
+CAP_OK = 0
+#: Samples were lost between the previous window and this one.  **A verdict, not a count** — a host
+#: that only had the cumulative number would have to remember the last one and subtract, and the
+#: design already knows the answer.
+CAP_LOST = 1
+
+#: Human-readable names, so an assertion says what happened rather than a number.
+CAP_STATUS_NAMES = {CAP_OK: "CAP_OK", CAP_LOST: "CAP_LOST"}
+
+#: Width of the cumulative drop counter on the wire.  **It wraps**, and that is stated rather than
+#: pretended away: 28 bits is 268 million words, which at any converter rate this repo models is
+#: hours — and the field is cumulative, so a wrap is a step a host can see rather than a value it
+#: silently mis-reads.  ``8 + 28 + 28`` is exactly 64, the width everything in this arc speaks.
+DROP_BW = 28
+
+_StatusField = IntField.specialize(bitwidth=8, signed=False)
+_AddrField = IntField.specialize(bitwidth=DROP_BW, signed=False)
+
+
+class CaptureWindowHdr(DataList):
+    """The word that rides ahead of every window, and travels twice.
+
+    It is written **once**, by the capture, onto the ``rdy`` channel — the announcement that a region
+    is complete — and the window reader forwards it verbatim as the header of the frame it hands the
+    host.  One schema rather than two because it is one statement: *here is a region, here is what was
+    lost before it*.  A second schema would be a second place for the two to disagree.
+
+    **``base_addr`` is an address, not a region index.**  The lock speaks in addresses and the reader
+    turns this straight into an ``acquire``; an index would be a second encoding of a geometry that
+    already has one.
+    """
+
+    include_filename: ClassVar[str | None] = "capture_window_hdr.h"
+    elements = {
+        "status":    {"schema": _StatusField, "description": "CAP_OK or CAP_LOST"},
+        "base_addr": {"schema": _AddrField,
+                      "description": "first element of the region this window came from"},
+        "n_dropped": {"schema": _AddrField,
+                      "description": "words lost since reset, CUMULATIVE (wraps at 2**28)"},
+    }
+
+
+#: Schema classes a build emits C++ headers for.  One: the whole vocabulary of this design's status
+#: is a header on a window.  Compare :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES`, which is
+#: two because TX has a command to answer; a capture is asked nothing.
+CAPTURE_SCHEMA_CLASSES = [CaptureWindowHdr]
+
+
+def split_windows(frames, bitwidth: int = WORD_BW):
+    """``[frame, ...]`` -> ``[(hdr, samples), ...]`` — the frame layout, read by the design that
+    defines it.
+
+    A gate that sliced the header off by hand would be a second author of this layout, and the two
+    would be free to disagree about a field width.  The schema's own deserializer is the one place
+    it lives.
+    """
+    hn = CaptureWindowHdr.nwords_per_inst(int(bitwidth))
+    out = []
+    for f in frames:
+        raw = np.asarray(f, dtype=np.uint64).ravel()
+        out.append((CaptureWindowHdr().deserialize(raw[:hn], word_bw=int(bitwidth)), raw[hn:]))
+    return out
+
 
 #: Regions the memory is split into.  **Two, and fixed at S2.**  Three would need an allocator and a
 #: policy for which one to hand out, which is S3's — and two is what the plan's *"the writer fills
@@ -149,8 +231,9 @@ class PingPongCapture(FreeRunMod):
         self.lock = LockedMemSlaveIF(sim=self.sim, name=f"{self.name}_lock",
                                      element_type=word_element(w), nelem=d, access="write",
                                      check_period=bw)
-        #: *Region ready*: the base address of a region this task has just finished filling.  See the
-        #: module docstring — the lock arbitrates, it does not synchronise.
+        #: *Region ready*: one :class:`CaptureWindowHdr` per region this task finishes filling.  See
+        #: the module docstring — the lock arbitrates, it does not synchronise, so the announcement is
+        #: a channel of its own.
         self.rdy_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_rdy", bitwidth=w,
                                       has_tlast=True)
         for ep in (self.samp_in, self.lock, self.rdy_out):
@@ -170,6 +253,9 @@ class PingPongCapture(FreeRunMod):
         self.n_written = 0
         self.n_blocks = 0
         self.n_ready = 0
+        #: :attr:`n_dropped` as it stood when the *previous* region was announced.  The difference is
+        #: what turns a cumulative count into the per-window verdict a host can act on.
+        self._announced_dropped = 0
 
     # -- geometry ----------------------------------------------------------------------------
 
@@ -238,9 +324,18 @@ class PingPongCapture(FreeRunMod):
             # firing will look for a free region and find the other one.
             self.full[self.cur] = True
             self.n_ready += 1
+            # THE VERDICT IS DECIDED HERE, WHERE THE ANSWER IS KNOWN.  Anything lost since the last
+            # announcement fell immediately before this window, so this window is not contiguous with
+            # the one before it -- which is the question a host actually has, and the one a single
+            # cumulative reading cannot answer.
+            hdr = CaptureWindowHdr()
+            hdr.status = CAP_LOST if self.n_dropped > self._announced_dropped else CAP_OK
+            hdr.base_addr = int(lo)
+            hdr.n_dropped = int(self.n_dropped) & ((1 << DROP_BW) - 1)
+            self._announced_dropped = int(self.n_dropped)
             # A BLOCKING write, and it cannot block: at most N_REGION regions can be full at once, so
             # at most N_REGION announcements can be outstanding, and the channel is that deep.
-            yield from self.rdy_out.write(np.array([lo], dtype=np.uint64))
+            yield from self.rdy_out.write(hdr)
         yield from self._poll()
 
     def _poll(self) -> ProcessGen[None]:
@@ -310,7 +405,7 @@ class PingPongWindow(FreeRunMod):
             raise ValueError(
                 f"a {d}-element memory does not split into {N_REGION} regions of whole "
                 f"{bw}-word blocks")
-        #: The base address of a region the capture has finished filling.
+        #: One :class:`CaptureWindowHdr` per region the capture has finished filling.
         self.rdy_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_rdy", bitwidth=w,
                                     has_tlast=True)
         #: One endpoint, three channels: the memory port (**read** — the RX inversion), the command
@@ -328,6 +423,9 @@ class PingPongWindow(FreeRunMod):
         #: ping-pong is a ping-pong rather than one half being read twice.
         self.n_windows = 0
         self.bases: list[int] = []
+        #: ``(status, n_dropped)`` for every window, as it went out on the wire.  Read from here only
+        #: for convenience; the gate reads the **stream**, because the wire is what a host sees.
+        self.hdrs: list[tuple[int, int]] = []
 
     @property
     def region_words(self) -> int:
@@ -347,7 +445,8 @@ class PingPongWindow(FreeRunMod):
         loop, so one pysim call must too.
         """
         w, n = int(self.bitwidth), self.region_words
-        base = int(np.asarray((yield from self.rdy_in.get(nwords_max=1))).ravel()[0])
+        hdr = yield from self.rdy_in.get_schema(CaptureWindowHdr)
+        base = int(hdr.base_addr)
         status = yield from self.lock.acquire(base, base + n)
         if status != LOCK_GRANTED:
             # Unreachable while the capture only announces regions inside the memory it declared --
@@ -359,7 +458,18 @@ class PingPongWindow(FreeRunMod):
                 f"{LOCK_STATUS_NAMES.get(status, status)}. The capture announced a region the "
                 f"memory does not have, so the two ends disagree about the geometry.")
         data, t0 = yield from self.lock.read_pipelined(word_element(w), n, addr=base)
-        yield from self.w_out.write_pipelined(data, t_out_start=t0)
+        # THE HEADER GOES OUT AHEAD OF THE SAMPLES, IN **ONE** FRAME -- one burst, one TLAST, at the
+        # end.  Two writes would be two bursts and therefore two frames, and a host reading through a
+        # DMA would see the header arrive as a transfer of its own; the C++ twin writes the header
+        # beat and the payload beats into a single axi4s frame, so a split here would make the two
+        # backends disagree about the boundary rather than about a value.
+        #
+        # Forwarded verbatim: this task is not the author of the verdict and must not become a second
+        # one -- it did not see the drops and has no way to.
+        frame = np.concatenate([
+            np.asarray(hdr.serialize(word_bw=w), dtype=np.uint64).ravel(),
+            np.asarray(data.val, dtype=np.uint64).reshape(-1)])
+        yield from self.w_out.write_pipelined(frame, t_out_start=t0)
         if self.stall_blocks:
             # THE DIRTY KNOB.  Holding the region past the time the capture needs it is the only way
             # RX loses samples, and a gate that cannot produce the condition cannot tell a design
@@ -370,6 +480,7 @@ class PingPongWindow(FreeRunMod):
         yield from self.lock.release()
         self.n_windows += 1
         self.bases.append(base)
+        self.hdrs.append((int(hdr.status), int(hdr.n_dropped)))
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +647,37 @@ class RfPingPongRx(FreeRunMod):
                 f"the alternating {want}. Handing the same half out twice moves the right number of "
                 f"words and exercises no second region at all.")
         self.lock.assert_handover_happened(int(w.n_windows))
+
+    def assert_published_loss(self, frames, *, where: str = "") -> None:
+        """**The verdict, read off the wire.**  Every window says ``CAP_OK`` and reports zero lost.
+
+        Off the stream rather than off the counter, for the reason
+        ``examples/rf_shot_play`` reads its responses off the wire: a design that counted correctly
+        and *serialized* wrongly passes every internal check there is, and the wire is the only thing
+        a host can act on.
+
+        This is what makes loss loud.  Without it, a dropped block is a Python attribute nobody
+        looks at — which is exactly the shape sub-block loss had before ``offer()`` published it.
+        """
+        wins = split_windows(frames, int(self.bitwidth))
+        if not wins:
+            raise AssertionError(
+                f"{where}no window reached the host, so its verdict says nothing about this run.")
+        bad = [(i, int(h.status), int(h.n_dropped)) for i, (h, _s) in enumerate(wins)
+               if int(h.status) != CAP_OK or int(h.n_dropped)]
+        if bad:
+            i, st, n = bad[0]
+            raise AssertionError(
+                f"{where}window {i} came out of the design carrying "
+                f"{CAP_STATUS_NAMES.get(st, st)} with n_dropped={n} (and {len(bad)} window(s) in "
+                f"all). The samples in it are perfectly good and there are exactly as many as there "
+                f"should be — the header is the ONLY place this run says it lost anything.")
+        last = int(wins[-1][0].n_dropped)
+        if last != int(self.capture.n_dropped):
+            raise AssertionError(
+                f"{where}the last window published n_dropped={last} and the design counted "
+                f"{int(self.capture.n_dropped)}. A design whose wire disagrees with its own counter "
+                f"reports a number nobody should trust.")
 
     def assert_no_loss(self) -> None:
         """**Nothing was dropped.**  The verdict RX needs and TX does not.
