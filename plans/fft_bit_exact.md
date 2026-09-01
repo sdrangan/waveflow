@@ -154,16 +154,20 @@ S1 and S2 need no changes to `waveflow/` at all.
 
 ## What could still go wrong
 
-* **Version skew.**  The checked-out `Vitis_Libraries` is **2023.1**; the installed toolchain
-  is **2025.1**.  The validation compares the Python model against whatever `vitis-run`
-  compiles, so if the shipped FFT changed between those, the source being replicated is not
-  the source being tested.  Settle this before trusting any bit-diff — either check out the
-  matching tag or confirm the fixed FFT headers are unchanged across the two.
+* ~~**Version skew.**~~  **Retired (2026-07-26) — checked, not a risk.**  `2025.1`
+  (`v2025.1_update2`, `b2c657d`) was checked out alongside the existing 2023.1 tree and the
+  whole of `dsp/L1/include/hw/vitis_fft/fixed/vitis_fft/` diffed: all 45 files differ, and
+  **every difference is a copyright header or trailing whitespace**.  Filtering those leaves
+  6 lines, all of them trailing-space removals (`namespace dsp { ` -> `namespace dsp {` in
+  `fft_complex.hpp`).  The fixed SSR FFT is functionally unchanged across the two releases, so
+  replicating either source and validating against Vitis 2025.1 is sound.  Re-run that diff if
+  the toolchain moves again — it is two commands and it is the cheapest risk retirement in
+  this plan.
 * **`CONVERGENT_RND` has no Waveflow equivalent.**  Believed inert in 2023.1 (nothing
-  dispatches on it), so out of scope at the default — but "inert" is an observation about one
-  checkout, and it is exactly the kind of thing that could be implemented in a later release.
-  Re-check it under the toolchain actually being validated against.  If it is ever live, it
-  needs a new `QMode`, not a workaround.
+  dispatches on it), so out of scope at the default.  The 2025.1 diff above confirms it is
+  still inert there — the headers are functionally identical — so this holds for the toolchain
+  actually being validated against.  If a later release ever implements it, it needs a new
+  `QMode`, not a workaround.
 * **Digit-reversal / output order.**  `SSR_FFT_NATURAL` vs `SSR_FFT_DIGIT_REVERSED_TRANSPOSED`
   is a permutation, not arithmetic, so it cannot cause a 1-LSB divergence — but it can cause a
   total mismatch that *looks* like one.  Pin the order explicitly in S2 before debugging any
@@ -172,6 +176,9 @@ S1 and S2 need no changes to `waveflow/` at all.
 ## Sources
 
 - [L1 SSR FFT user guide (2020.2)](https://xilinx.github.io/Vitis_Libraries/dsp/2020.2/user_guide/L1.html)
-- Local checkout: `/home/marco/AmirProjects/Vitis_Libraries` (`2023.1_motor_libs_update`),
-  `dsp/L1/include/hw/vitis_fft/fixed/vitis_fft/`
+- Local checkouts, `dsp/L1/include/hw/vitis_fft/fixed/vitis_fft/` in each:
+  - `/home/marco/AmirProjects/Vitis_Libraries_2025.1` — branch `2025.1` = `v2025.1_update2`
+    (`b2c657d`), sparse to `dsp/L1`, **matches the installed toolchain**; prefer this one.
+  - `/home/marco/AmirProjects/Vitis_Libraries` — `2023.1_motor_libs_update`, full checkout.
+    Functionally identical for the fixed FFT (see version skew above).
 - [Vitis_Libraries SSR FFT source](https://github.com/Xilinx/Vitis_Libraries/blob/master/dsp/L1/include/hw/vitis_fft/fixed/vitis_fft/hls_ssr_fft_traits.hpp)
