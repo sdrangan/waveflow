@@ -715,15 +715,47 @@ class LockedT2pMemIF(Interface):
                 f"LockedT2pMemIF '{self.name}': nelem={int(self.nelem)} but the '{ep_name}' "
                 f"endpoint declares {int(endpoint.nelem)}. The region bound is one number; a "
                 f"disagreement means one end can ask for what the other cannot check.")
+        # WHICH MEMORY PORT A SIDE GETS IS DECIDED BY WHAT IT DOES, NOT BY WHICH SIDE IT IS.
+        #
+        # S1 wired master -> port A and slave -> port B, which is right for TX and only for TX: there
+        # the requester is the loader (writes) and the owner is the player (reads).  RX inverts the
+        # directions and NOT the roles -- the capture cannot stop, so it is the owner, and it WRITES;
+        # the window reader arrives with a transaction, so it is the requester, and it READS.  Role
+        # and direction are independent axes and S1 accidentally coupled them; binding by `access`
+        # uncouples them, and `BramIF.bind` then checks the pairing it always checked.
+        #
+        # Port A stays the writer's in both directions, and that is not a preference:
+        # ``bram_t2p.v``'s ``$error`` is written one-sided (*A writes while B touches the same
+        # address*), so a writing port B would be invisible to the memory's only real RTL check.
+        # See :meth:`_mem_if_for`.
+        self._mem_if_for(endpoint, ep_name).bind("master", endpoint.mem_ep)
         if ep_name == 'master':
-            self.wr_if.bind("master", endpoint.mem_ep)
             self.cmd_if.bind("master", endpoint.cmd_ep)
             self.resp_if.bind("slave", endpoint.resp_ep)
         else:
-            self.rd_if.bind("master", endpoint.mem_ep)
             self.cmd_if.bind("slave", endpoint.cmd_ep)
             self.resp_if.bind("master", endpoint.resp_ep)
         super().bind(ep_name, endpoint)
+
+    def _mem_if_for(self, endpoint: InterfaceEndpoint, ep_name: str) -> BramIF:
+        """The ``BramIF`` *endpoint* belongs on — port A if it writes, port B if it reads.
+
+        Refused rather than defaulted when both sides declare the same direction: two writers is the
+        collision ``bram_t2p.v`` cannot see (its ``$error`` names port A as the writer), and two
+        readers is a lock arbitrating a memory nothing ever fills.  Either is a wiring mistake whose
+        symptom would be a correct-looking design that moves no data.
+        """
+        want_write = str(endpoint.access) != "read"          # "write" or "readwrite"
+        other = self.endpoints.get('slave' if ep_name == 'master' else 'master')
+        if other is not None and (str(other.access) != "read") == want_write:
+            raise ValueError(
+                f"LockedT2pMemIF '{self.name}': the '{ep_name}' endpoint declares "
+                f"access={endpoint.access!r} and the other side declares {other.access!r}, so both "
+                f"want the same memory port. A lock arbitrates ONE writer against ONE reader — two "
+                f"writers is the collision bram_t2p.v's one-sided $error cannot see, and two readers "
+                f"is a memory nothing fills. On TX the requester writes and the owner reads; on RX "
+                f"it is the other way round.")
+        return self.wr_if if want_write else self.rd_if
 
     # -- what a gate reads off a finished run ----------------------------------------------------
 

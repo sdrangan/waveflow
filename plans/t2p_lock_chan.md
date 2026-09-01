@@ -785,3 +785,47 @@ nothing stronger.
 documentation, either the player's read must be *conditional* in the RTL (which costs the
 speculative read the II=1 datapath is built on) or `bram_t2p.v`'s assertion has to become the
 enforcement — and that is the same one-sided-`$error` edit S2 already owns.
+
+---
+
+## S2 as built — decisions taken without the plan, and where they landed
+
+Written during the S2 build (2026-09-01), on branch `t2p-lock-chan-s2` off `plans-s2-scope`.
+
+### Checkpoint 0 — the answer to "does the interface need to change at all?"
+
+**Almost not. One change, and it is one line of routing plus its refusal.**
+
+The plan's guess was that `locked_mem.py` might need nothing, because S1's requester already acquires
+an arbitrary `[start, end)` while the owner holds the complement — which *is* two disjoint regions.
+**That half of the guess is exactly right, and it is verified rather than asserted**: a full
+ping-pong swap cycle runs on `acquire` / `grant` / `release` / `may_touch` **as S1 shipped them**, with
+no change to the protocol, the messages, the region bookkeeping or the complement guard.
+`test_two_disjoint_regions_swap_on_the_UNCHANGED_S1_protocol` is that run: three grants, the reader
+alternating `[0,32) → [32,64) → [0,32)`, and the middle window coming back as the ramp the capture
+wrote **while the reader held the other half**.
+
+What S1 did get wrong is a different axis, and it was invisible until RX asked for it:
+
+> **Role and direction are independent, and S1 coupled them.**
+>
+> `bind` routed *master → port A* and *slave → port B*. That is right for TX and **only** for TX,
+> where the requester is the loader (writes) and the owner is the player (reads). RX inverts the
+> **directions** while keeping the **roles**: the capture cannot stop, so it is still the owner — and
+> it *writes*; the window reader still arrives with a transaction, so it is still the requester — and
+> it *reads*. The RX pairing was therefore refused at bind, with a message about a memory port rather
+> than about the design.
+
+The fix is `_mem_if_for`: a side gets port A if it writes and port B if it reads, whichever role it
+is. **Port A stays the writer's in both directions**, which is not a preference — `bram_t2p.v`'s
+`$error` is one-sided (*A writes while B touches the same address*), so a writing port B would be
+invisible to the memory's only real RTL check. TX's routing is bit-for-bit what it was; the S1
+consumer's tests and gates are untouched.
+
+It comes with a refusal it did not have: **two ends that want the same memory port**. Two writers is
+the collision the one-sided `$error` cannot see; two readers is a lock arbitrating a memory nothing
+ever fills — a design that looks correct and moves no data. Both are wiring mistakes, and bind is the
+last place the message can still name the two declarations.
+
+**So S2 is a consumer plus its gates, and one four-line routing fix.** The plan asked not to
+manufacture interface work to fill the stage, and there was none to do.
