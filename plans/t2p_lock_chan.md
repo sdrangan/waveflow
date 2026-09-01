@@ -424,3 +424,61 @@ stops being an interface and starts being arbitration.
 - Making `bram_t2p.v`'s assertion symmetric (S2's decision).
 - A central arbiter. The lock is peer-to-peer between one owner and one requester.
 - `RfStreamBuf`. `CreditStreamIF` is still waiting for that consumer, and this plan does not touch it.
+
+---
+
+## S1 as built — decisions taken without the plan, and where they landed
+
+Written during the S1 build (2026-09-01).  Everything here was a question the sections above do not
+answer; each was decided from what their reasoning implies, and each is recorded rather than left in
+the code for someone to re-derive.
+
+### Checkpoint 1 — `waveflow/hw/locked_mem.py`
+
+**`addr_bits` is 28, and the messages are 64 bits exactly.**  The plan writes the field width as
+`addr_bits` without a number.  Taking it from the *memory* would mean the wire format changes when a
+memory does, which is the coupling `IDX_BW` exists to prevent next door — so it is a constant, and
+28 is the constant that makes `8 + 28 + 28` exactly **64**.  That is the width every design in this
+arc already speaks, so *"two schemas, one word each at 64 bits"* becomes structural rather than a
+coincidence that happens to hold.  `lock_bitwidth()` refuses anything that does not pack to one beat,
+because the owner's poll is a **non-blocking read** and half a command is not a command.
+
+**The lock channels are built at the schema's own width, not the memory's word width.**
+`AckedStreamIF`'s precedent (`status_bitwidth`): a channel whose width can disagree with what travels
+on it is a disagreement waiting to be found at the wrap.  A consequence worth stating: a 32-bit
+design still gets 64-bit lock FIFOs, which is two beats of storage and no beats of traffic.
+
+**A seam-spanning interface declares its wrapper wires, and `add_if` files them.**  This was the one
+structural problem the plan does not mention.  `LockedT2pMemIF` holds four channels and they do *not*
+lower the same way: the two `StreamIF`s are internal edges, and the two `BramIF`s are **wrapper
+wires** whose kernel-side ends must stay boundary ports.  `derive_internal_edges` walks
+`physical_interfaces()` and `derive_boundary` derives "internal" from the same walk — so a `BramIF`
+returned there would make the memory ports vanish into a FIFO that does not exist.
+
+The answer is a second hook, `Interface.rtl_interfaces()` (default `[]`), which
+`HwModule.add_if` sweeps into the `add_rtl_if` registry.  That keeps the plan's promise that *"the two
+`bind` calls are the whole wiring"* — a composite registers the lock once and both halves land where
+they belong — and nothing that was already lowering changes, because the default is empty.
+
+**`check_period` is asserted in SECONDS, not cycles.**  `check_period` counts the owner's *own work*,
+and what one element of that work costs is the owner's business: a player paced by a DAC spends a
+converter word-time per element, not a fabric cycle.  The interface refuses to invent that rate, so
+`assert_grant_bounded(max_seconds)` takes the product from the gate, which knows it.
+
+**`handle_nb()` exists beside `poll_nb()`.**  A `RELEASE` needs no decision and no answer, so handling
+it inside the endpoint keeps a design's state machine down to the case that *does* need one.  An
+`ACQUIRE` is returned untouched on purpose: granting it is the design's call, and it must come after
+the design has switched away from the region.
+
+**"A region that wraps" means a region whose last element is the memory's last element.**  A region
+that literally wraps modulo the depth is `start > end`, which the plan already answers with
+`LOCK_BAD_RANGE` — so it cannot be what the trap is about.  What the byte-versus-word bug actually
+was is `base + offset` staying *consistent* right up to the top of the address space, so the gate is
+`[nelem - n, nelem)`: the base is non-zero, the last element is the memory's last, and a wrongly
+scaled base runs off the end instead of aliasing quietly.  `test_a_region_at_the_TOP_of_the_memory_round_trips`.
+
+**Both dirty runs are in the pysim gate, by name.**  `test_the_requester_touching_ONE_element_outside_its_region_raises`
+and `test_the_owner_that_grants_BEFORE_it_stops_reading_raises`.  The second is the ordering
+everything turns on, and it fails because `grant()` takes the region out of the owner's hands *before*
+the response goes on the wire — so the owner's very next read is the failure rather than a plausible
+number.

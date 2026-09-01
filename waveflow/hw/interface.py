@@ -335,6 +335,23 @@ class Interface(SimObj):
         """
         return [self]
 
+    def rtl_interfaces(self) -> "list[Interface]":
+        """The **wrapper wires** this interface also carries — empty for all but a seam-spanning one.
+
+        :meth:`physical_interfaces` answers *what does this lower to inside the kernel*; this answers
+        *what does it lower to outside it*.  Almost every interface lives entirely on one side of
+        that seam and returns nothing here.  :class:`~waveflow.hw.locked_mem.LockedT2pMemIF` does
+        not: it is two ``hls::stream`` FIFOs **and** two ``mode=bram`` port pairs leaving the kernel
+        for a memory beside it, and the two halves go in different registries because an ``add_if``
+        edge makes both its endpoints stop being boundary ports — which is precisely what a memory
+        port must not do.
+
+        :meth:`~waveflow.hw.hw_module.HwModule.add_if` sweeps whatever this returns into the
+        ``add_rtl_if`` registry, so a composite registers the interface once and both halves land
+        where they belong.
+        """
+        return []
+
     # -- realization hook ---------------------------------------------------------------------
     #
     # The **edge-side twin** of a module's ``bfm_model()`` (``plans/behavioral_edges.md`` S1).  An
