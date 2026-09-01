@@ -52,10 +52,11 @@ instantiates `AP_TRN_ZERO`, `AP_RND_CONV`, `AP_SAT_SYM` or `AP_WRAP_SM`.
 the value is threaded as a template parameter through `hls_ssr_fft_types.hpp`,
 `hls_ssr_fft_complex_exp_table.hpp` and `hls_ssr_fft_output_traits.hpp`, but *nothing
 specializes on it* — there is no `TRN` vs `CONVERGENT_RND` dispatch anywhere under `fixed/`.
-The two typedefs that would implement the choice,
-`T_truncationBasedCastType` / `T_roundingBasedCastType`
-(`hls_ssr_fft_twiddle_table_traits.hpp:159-160`, repeated for each `ap_fixed` specialization at
-`:165-166`, `:171-172`, `:176-177`), are **declared and never referenced**.
+The cast is not selected by it at all: `TwiddleTable::initTwiddleTable`
+(`hls_ssr_fft_twiddle_table.hpp:62`) hardcodes `T_roundingBasedCastType`, which is used 11
+times across 5 headers.  Its sibling `T_truncationBasedCastType`
+(`hls_ssr_fft_twiddle_table_traits.hpp:159`, `:165`, `:171`, `:176`) is declared four times and
+**never used anywhere**.
 Outside those declarations the only mentions of `CONVERGENT_RND` under `fixed/` are two
 Doxygen comment blocks in `hls_ssr_fft.hpp` (`:3293`, `:3366`).
 
@@ -73,8 +74,11 @@ typedef std::complex<ap_fixed<IL, FL> >                  T_truncationBasedCastTy
 typedef std::complex<ap_fixed<IL, FL, AP_RND, AP_SAT> >  T_roundingBasedCastType;    // AP_RND + AP_SAT
 ```
 
-Both land inside the supported set.  The notes' "18 bits (16F + 2I)" is confirmed, but as a
-*default*, not a constant — it is `twiddle_table_word_length` / `twiddle_table_intger_part_length`
+Only the **rounding** one is ever used (see above), so the twiddles are quantized with
+`AP_RND` + `AP_SAT` — *not* `ap_fixed`'s defaults.  S1 confirmed this empirically: modelling
+them with `AP_TRN`/`AP_WRAP` is wrong at 10 of 16 entries for `L=16`.  Both modes are in
+Waveflow, so nothing new is needed — but the obvious guess is the wrong one.  The notes'
+"18 bits (16F + 2I)" is confirmed, but as a *default*, not a constant — it is `twiddle_table_word_length` / `twiddle_table_intger_part_length`
 on the parameter struct.
 
 ## The gap the notes missed
@@ -120,11 +124,11 @@ Line these up against what Waveflow has **today**:
 |---|---|
 | `scaling_mode = SSR_FFT_NO_SCALING` | free — growth tracking already is this |
 | `butterfly_rnd_mode = TRN` | `QMode.AP_TRN` |
-| twiddle cast (truncation) | `AP_TRN` + `AP_WRAP` |
+| twiddle cast (**rounding**, always) | `AP_RND` + `AP_SAT` |
 | `R = 4` | mechanical |
 
 **The default configuration needs no new arithmetic at all.**  So v1 targets it exactly —
-`R=4`, `SSR_FFT_NO_SCALING`, `TRN`, truncation twiddles, `SSR_FFT_NATURAL` — with `L = 16`
+`R=4`, `SSR_FFT_NO_SCALING`, `TRN` butterflies, `AP_RND`/`AP_SAT` twiddles, `SSR_FFT_NATURAL` — with `L = 16`
 rather than 1024, small enough to diff by eye when a stage disagrees.
 
 This deliberately inverts the notes' implied order.  The notes treat `cquantize` as
@@ -134,10 +138,12 @@ Do the free configuration first and the riskiest question gets answered first.
 
 ## Stages
 
-**S1 — twiddle table.**  Generate the `L=16, R=4` table in Python from `FixedField`
-(W=18, I=2, `AP_TRN`, `AP_WRAP`), and diff against the table the header generates.  No FFT
-yet.  This isolates risk corner #1 with nothing else in the frame.  If the constants match
-here they will not surprise us later.
+**S1 — twiddle table.**  ✅ **DONE (2026-07-26) — bit-exact, 16/16.**  Implemented in
+[`fft_bitexact/`](../fft_bitexact/) (`PLAN.md` there is the working record).  The golden comes
+from instantiating Vitis's own `TwiddleTable` natively under g++ — no Vitis run — and is
+compared as raw stored integers, never floats.  It corrected this plan: the quantization is
+`AP_RND`/`AP_SAT`, not the truncation this document originally assumed, which S1 caught before
+anything was built on top of it.  Exactly what isolating risk corner #1 was for.
 
 **S2 — sequential radix-4 model.**  Butterflies + digit-reversal in `cadd`/`csub`/`cmult`, no
 scaling.  Model the **arithmetic, not the parallelism** — the notes' key simplification holds
