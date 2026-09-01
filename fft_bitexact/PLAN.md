@@ -88,8 +88,8 @@ guess would have been wrong at over half the table.
   formula is not yet modelled — `ext_len()` raises rather than guessing).
 * `I = 2` integer bits is load-bearing: `ap_fixed<18,2>` stores `1.0` exactly as `2^16`.  With
   `I=1` every axis twiddle would saturate just short of 1.  Pinned by `test_axis_points_are_exact`.
-* `imag = -sin(...)` negates in `double` **before** quantizing.  Under `AP_RND` (half away from
-  zero) that differs from quantize-then-negate.  `L=16` happens not to discriminate the two —
+* `imag = -sin(...)` negates in `double` **before** quantizing.  Under `AP_RND` (round half **up**, toward
+  +inf -- `-0.5 lsb` -> `0`) that differs from quantize-then-negate.  `L=16` happens not to discriminate the two —
   the test skips, honestly, and says to revisit at larger `L`.
 
 ## S2 — sequential radix-4 model  ← NEXT

@@ -15,11 +15,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from waveflow.hw import fixpoint as fx
+from waveflow.utils import fixputils
 from waveflow.hw.fixpoint import FixedField
 from waveflow.utils.fixputils import OMode, QMode
 
-from fft_bitexact.wf_fft.twiddle import twiddle_ideal, twiddle_stored
+from fft_bitexact.wf_fft.twiddle import (twiddle_bits, twiddle_complex_type,
+                                         twiddle_ideal, twiddle_table)
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "twiddle_L16_R4_W18_I2.json"
 
@@ -45,7 +46,7 @@ def test_golden_is_the_expected_shape(golden):
 def test_twiddle_table_is_bit_exact(golden):
     """THE S1 GATE: Python == Vitis, stored bit for stored bit."""
     g_re, g_im = _golden_arrays(golden)
-    re, im = twiddle_stored(16, 4)
+    re, im = twiddle_bits(16, 4)
     assert re.tolist() == g_re.tolist(), "twiddle real parts diverge from Vitis"
     assert im.tolist() == g_im.tolist(), "twiddle imag parts diverge from Vitis"
 
@@ -75,11 +76,9 @@ def test_truncation_would_be_wrong(golden):
     g_re, g_im = _golden_arrays(golden)
     ideal = twiddle_ideal(16, 16)
     trn = FixedField.specialize(18, 2, True, QMode.AP_TRN, OMode.AP_WRAP)
-    mask = (1 << 18) - 1
 
     def stored(vals):
-        da = fx.from_real(vals, trn)
-        return (np.asarray(da.val).astype(np.int64).reshape(-1)) & mask
+        return np.asarray(fixputils.to_bits(fixputils.quantize_real(vals, trn.get_format()), 18))
 
     n_re = int((stored(np.real(ideal)) != g_re).sum())
     n_im = int((stored(np.imag(ideal)) != g_im).sum())
@@ -90,20 +89,33 @@ def test_truncation_would_be_wrong(golden):
 def test_negation_happens_before_quantization(golden):
     """``imag = -sin(...)`` is negated in double, then quantized -- not quantized then negated.
 
-    Under AP_RND (half away from zero) those are different operations.  Modelling it the wrong
+    Under AP_RND (round half up, toward +inf) those are different operations.  Modelling it the wrong
     way round is a plausible mistake that this pins.
     """
     g_re, g_im = _golden_arrays(golden)
     ft = FixedField.specialize(18, 2, True, QMode.AP_RND, OMode.AP_SAT)
-    mask = (1 << 18) - 1
     i = np.arange(16, dtype=np.float64)
 
     def stored(vals):
-        da = fx.from_real(vals, ft)
-        return (np.asarray(da.val).astype(np.int64).reshape(-1)) & mask
+        return np.asarray(fixputils.to_bits(fixputils.quantize_real(vals, ft.get_format()), 18))
 
     before = stored(-np.sin(2.0 * i * np.pi / 16.0))          # correct order
-    after = (-stored(np.sin(2.0 * i * np.pi / 16.0))) & mask   # quantize, then negate
+    after = np.asarray(fixputils.to_bits(
+        -fixputils.quantize_real(np.sin(2.0 * i * np.pi / 16.0), ft.get_format()), 18))
     assert before.tolist() == g_im.tolist()
     if after.tolist() == g_im.tolist():
         pytest.skip("L=16 does not discriminate the two orders; revisit at a larger L")
+
+
+def test_carrier_is_a_complex_dataarray_S2_can_use():
+    """The table must be a DataArray[ComplexField], not loose re/im arrays.
+
+    S2 feeds it straight into ``complexfield.cmult``.  Handing back bare numpy would force the
+    butterfly to re-wrap on every call and drop the format that carries growth tracking.
+    """
+    t = twiddle_table(16, 4)
+    assert t.element_type is twiddle_complex_type()
+    assert getattr(t.element_type, "is_complex_field", False)
+    fmt = t.element_type.inner_format()
+    assert (fmt.W, fmt.int_bits) == (18, 2)
+    assert (fmt.q_mode, fmt.o_mode) == (QMode.AP_RND, OMode.AP_SAT)
