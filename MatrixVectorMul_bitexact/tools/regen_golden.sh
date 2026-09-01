@@ -21,6 +21,14 @@ PY="${PY:-$ROOT/../env/bin/python}"
 BIN="$(mktemp -d)/dump_gemv"
 g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
     -o "$BIN" "$ROOT/cpp/dump_gemv.cpp"
+# non-float path (dot_dsp) -- its own generator, decimal values rather than bit patterns
+BIN_INT="$(mktemp -d)/dump_gemv_int"
+g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
+    -o "$BIN_INT" "$ROOT/cpp/dump_gemv_int.cpp"
+"$BIN_INT" "$ROOT/data/input_int_M3_N32.txt" "$ROOT/golden/gemv_int_M3_N32.txt" \
+    | grep -v "HLS SIM" || true
+echo "wrote $ROOT/golden/gemv_int_M3_N32.txt"
+
 for IN in "$ROOT"/data/input_M*_N*.txt; do
     BASE="$(basename "$IN" .txt)"; BASE="${BASE#input_}"
     OUT="$ROOT/golden/gemv_f32_${BASE}_sweepP.txt"

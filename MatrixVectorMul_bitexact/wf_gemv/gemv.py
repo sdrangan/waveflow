@@ -116,3 +116,49 @@ def gemv(matrix, vector, par_entries: int = 4, delays: int | None = None) -> np.
         raise ValueError(f"shape mismatch: matrix {m.shape}, vector {v.shape}")
     return np.array([dot(m[r], v, par_entries, delays) for r in range(m.shape[0])],
                     dtype=np.float32)
+
+
+# --- the non-float path -----------------------------------------------------------------------
+#: Element widths ``dot_dsp`` is exercised with.  ``dot_tree`` handles float and double; every
+#: other type takes this path.
+INT_WIDTHS = {"int16": 16, "int32": 32}
+
+
+def dot_int(a, b, width: int = 32) -> int:
+    """``dot_dsp`` (``helpers/funcs/dotHelper.hpp:75-100``) -- the non-float reduction.
+
+    Nothing tree-shaped here::
+
+        t_MacDataType l_res = 0;
+        for each beat:  for j in 0..parEntries-1:  l_res += l_x[j] * l_y[j];
+
+    A single accumulator, updated in index order.  So ``parEntries`` does **not** change the
+    result on this path -- unlike the float path, where it is part of the numerical contract.
+    The risk moves from summation order to the accumulator's **width**: it is ``t_MacDataType``,
+    which in practice equals the element type (see below), so a long dot product wraps.
+
+    ``t_MacDataType`` cannot be widened.  ``gemv`` declares its output stream as
+    ``WideType<t_DataType, 1>`` while forwarding to a ``DotHelper`` parameterised on
+    ``t_MacDataType``, so any differing MAC type fails to compile inside ``gemv.hpp:47``.  The
+    parameter is exposed, documented, and dead -- in 2023.1 and 2025.1 alike.  Hence a single
+    ``width`` here rather than separate element and accumulator widths.
+    """
+    a = np.asarray(a, dtype=np.int64)
+    b = np.asarray(b, dtype=np.int64)
+    if a.shape != b.shape:
+        raise ValueError(f"length mismatch: {a.shape} vs {b.shape}")
+    mask = (1 << width) - 1
+    sign = 1 << (width - 1)
+    acc = 0
+    for i in range(a.size):
+        acc = (acc + int(a[i]) * int(b[i])) & mask      # wraps at the accumulator width
+    return acc - (1 << width) if acc & sign else acc
+
+
+def gemv_int(matrix, vector, width: int = 32) -> np.ndarray:
+    """``y = M x`` on the ``dot_dsp`` path, with the accumulator wrapping at ``width``."""
+    m = np.asarray(matrix, dtype=np.int64)
+    v = np.asarray(vector, dtype=np.int64)
+    if m.ndim != 2 or m.shape[1] != v.size:
+        raise ValueError(f"shape mismatch: matrix {m.shape}, vector {v.shape}")
+    return np.array([dot_int(m[r], v, width) for r in range(m.shape[0])], dtype=np.int64)

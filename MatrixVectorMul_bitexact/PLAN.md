@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1 + S2 DONE** (2026-09-01) — bit-exact on 460 rows across 3 sizes x 5 stream widths.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1-S3 DONE** (2026-09-01) — float path bit-exact on 460 rows; non-float path on 75.  S3 also found a library defect.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -193,9 +193,38 @@ now bounded, raises if a size that *should* discriminate does not, and a test pi
 it cannot quietly become folklore.  The size stays in the suite because it exercises the
 no-cross-chunk path, but a gate resting only on it would be vacuous.
 
-**S3 — `t_MacDataType` and the non-float path.**  The generic specialization uses `dot_dsp`, not
-the tree, and `t_MacDataType` lets the accumulator differ from the element type.  Both change the
-bits.  Measure before modelling.
+**S3 — the non-float path.**  ✅ **DONE — bit-exact, 75/75 rows** (int32 and int16, three stream
+widths, 5 cases).
+
+`dot_dsp` (`helpers/funcs/dotHelper.hpp:75-100`) is nothing like the float path::
+
+    t_MacDataType l_res = 0;
+    for each beat:  for j in 0..parEntries-1:  l_res += l_x[j] * l_y[j];
+
+One accumulator, index order, no tree.  Two consequences, both measured and both pinned by tests:
+
+* **`parEntries` does not change the result here** — 0 of 30 rows vary across the swept widths,
+  where on the float path it sets the tree shape and *is* part of the numerical contract.  A model
+  that carried the float handling over would be wrong.
+* **The accumulator wraps.**  34 of 75 rows differ from an unwrapped (arbitrary-precision) sum, so
+  the goldens genuinely exercise it rather than passing for a model with no wrapping at all.
+
+### ⚠️ `t_MacDataType` is exposed, documented — and uncompilable
+
+The half of S3 about widening the accumulator **cannot be done**, and not for modelling reasons.
+`gemv` declares its output stream as `WideType<t_DataType, 1>` and then forwards it to
+`DotHelper<..., t_MacDataType>::dot`, which expects `WideType<t_MacDataType, 1>`::
+
+    gemv.hpp:47: error: cannot convert 'hls::stream<ap_uint<16> >' to 'hls::stream<ap_uint<32> >&'
+
+So any `t_MacDataType != t_DataType` fails to compile *inside the library*, on **both** the 5-arg
+and 8-arg overloads.  `dot()` escapes only by never passing the parameter.  Identical in 2023.1
+and 2025.1, so long-standing rather than a regression.
+
+This is why `gemv_int` takes one `width` rather than separate element and accumulator widths: the
+narrow-elements-wide-accumulator configuration a user would reach for to avoid overflow **does not
+build**.  A test asserts the header still has that shape, so if AMD fixes it the model's
+single-width assumption is flagged instead of quietly becoming wrong.
 
 **S4 — fixed point.**  `gemv` is templated, so `ap_fixed` can be instantiated even though the
 shipped tests do not.  This is where `waveflow`'s `FixedField` earns its place and where the work
