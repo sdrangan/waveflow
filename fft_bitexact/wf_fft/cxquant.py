@@ -1,4 +1,9 @@
-"""Complex requantize -- the one primitive the FFT butterfly needs and Waveflow lacks.
+"""The two complex primitives the FFT butterfly is built from.
+
+``cquantize`` now lives in ``waveflow.hw.complexfield`` (promoted in S3, once the complex
+conformance harness proved it against Vitis); what remains here is a thin shim plus the
+FFT-specific ``complex_multiply``, which deliberately did NOT move -- it encodes this design's
+quantization points, not complex arithmetic in general.
 
 ``waveflow/hw/complexfield.py`` exports ``cadd / csub / cmult / conj / csum`` and nothing lossy.
 The FFT needs lossy: ``FFTMultiplicationTraits`` (``hls_ssr_fft_multiplication_traits.hpp:67-74``)
@@ -18,6 +23,7 @@ from __future__ import annotations
 import numpy as np
 
 from waveflow.hw.complexfield import ComplexField
+from waveflow.hw.complexfield import cquantize as _lib_cquantize
 from waveflow.hw.dataschema import DataArray
 from waveflow.hw.fixpoint import FixedField
 from waveflow.utils import complexutils as cx
@@ -53,26 +59,15 @@ def complex_from_format(fmt: Format) -> type[ComplexField]:
 
 
 def cquantize(a: DataArray, target: Format | type[ComplexField]) -> DataArray:
-    """Requantize a ``DataArray[ComplexField]`` into ``target`` -- the lossy complex op.
+    """Requantize a ``DataArray[ComplexField]`` -- now a thin shim over the library.
 
-    Re and im are requantized independently with the same target format, which is what
-    ``std::complex<ap_fixed<...>>`` does: the two components are separate ``ap_fixed`` values
-    sharing a declared type.
+    Promoted to :func:`waveflow.hw.complexfield.cquantize` in S3, after the complex conformance
+    harness proved it bit-exact against Vitis over both ``QMode`` x both ``OMode``.  Kept here
+    only to accept a bare ``Format`` (convenient for the FFT's derived per-stage formats); the
+    arithmetic is the library's.
     """
-    ea = a.element_type
-    if not getattr(ea, "is_complex_field", False):
-        raise TypeError("cquantize needs a DataArray[ComplexField].")
-    if ea.kind == "float":
-        raise TypeError("cquantize is for fixed/int inner types; float has nothing to quantize.")
-
-    tgt_fmt = target if isinstance(target, Format) else target.inner_format()
-    src = ea.inner_format()
-    v = np.asarray(a.val)
-    re = fixputils.quantize(cx.re_of(v), src, tgt_fmt)
-    im = fixputils.quantize(cx.im_of(v), src, tgt_fmt)
-    cf = complex_from_format(tgt_fmt)
-    out = cx.make_complex(re, im, tgt_fmt)
-    return DataArray.specialize(cf, max_shape=(np.asarray(out).size,))(out)
+    tgt = complex_from_format(target) if isinstance(target, Format) else target
+    return _lib_cquantize(a, tgt)
 
 
 def complex_multiply(a_re: np.ndarray, a_im: np.ndarray, op1: Format,

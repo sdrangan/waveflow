@@ -8,7 +8,7 @@ file is the argument, this one is the working record.  Where they disagree, this
 
 | | |
 |---|---|
-| Status | **S1 DONE. S2 DONE** — bit-exact on all 12 vectors, boundary cases included. S3/S4 next. |
+| Status | **S1, S2, S3 DONE.** FFT bit-exact on all 12 vectors; `cquantize` promoted and Vitis-validated. S4 next. |
 | Waveflow | `main` @ `e360b74` |
 | Vitis | 2025.1 (`/tools/Xilinx/2025.1`) |
 | Vitis DSP source | `/home/marco/AmirProjects/Vitis_Libraries_2025.1` (`2025.1` = `v2025.1_update2`) |
@@ -222,9 +222,6 @@ neither can go inert.
 
 S2 is closed.  Next:
 
-* **S3** — promote `cquantize` into `waveflow/hw/complexfield.py` (it is a thin, validated
-  composition).  `complex_multiply` should probably stay here: it encodes this design's
-  quantization points, not complex arithmetic in general.
 * **S4** — `SSR_FFT_SCALE` and `SSR_FFT_GROW_TO_MAX_WIDTH`, then larger `L` and other radices.
   `ext_len` and the `L = R^2` decomposition are the parts that generalise least; expect to
   re-measure rather than re-derive.
@@ -244,15 +241,37 @@ Golden: extend `cpp/` to instantiate the real FFT and dump its output for a fixe
 permutation, not arithmetic — it cannot cause a 1-LSB error but it can cause a total mismatch
 that *looks* like one.  Settle it before debugging any value.
 
-## S3 — `cquantize` + `cshift`
+## S3 — `cquantize`  ✅ DONE
 
-`waveflow/hw/complexfield.py` exports `cadd / csub / cmult / conj / csum` and **nothing lossy**.
-`fixpoint.py` has `quantize` (`:180`) and `shift` (`:168`) for real `FixedField` only.  Add the
-complex forms on the `csum` split-recombine pattern (`complexfield.py:369`), and extend
-`examples/schemas/complex` to cover them.
+`cquantize` is now `waveflow/hw/complexfield.py`, alongside `cadd / csub / cmult / conj / csum`
+— the first lossy complex operation the library has.  It adds **no quantization logic**: it
+splits re/im, calls `fixputils.quantize`, recombines, in the same shape as `csum`.
 
-Caution: `shift` is a **lossless point-move** (stored bits unchanged, format reinterpreted).
-`SSR_FFT_SCALE` wants a lossy right-shift, so it is `cshift` *composed with* `cquantize`.
+**Validated against Vitis, not asserted.**  `examples/schemas/complex` gained four `cquantize_*`
+cases covering both `QMode` x both `OMode` on a wide->narrow conversion (`ap_fixed<24,8>` ->
+`ap_fixed<12,4>`) — the direction the FFT butterfly needs.  The C++ side is the assignment
+itself, `y[i] = a[i]` with differing declared in/out types, which is how a real design narrows a
+value.  Suite: **51/51 bit-exact**, up from 47.
+
+`fft_bitexact/wf_fft/cxquant.py` is now a thin shim over the library version, so there is one
+implementation rather than two.
+
+### What deliberately did NOT move
+
+`complex_multiply` stays in `fft_bitexact/`.  It encodes *this design's* quantization points —
+partial products truncated into `T_op1` before combining — not complex arithmetic in general.
+Promoting it would put an FFT-shaped assumption in a general-purpose module, and the natural
+reading of its name would be wrong: it is not "multiply two complex numbers".
+
+`cshift` was also not added.  Nothing needs it yet: the FFT's `SSR_FFT_NO_SCALING` path never
+shifts, and inventing an untested primitive for `SSR_FFT_SCALE` before S4 measures what that
+mode actually does would repeat the mistake this plan already made twice.
+
+### Hygiene
+
+The change adds **zero** new mypy errors (file baseline 50, still 50 — the first draft added 12
+by leaving `element_type` untyped) and leaves the repo suite unchanged at 3094 passed / 9
+pre-existing failures.
 
 ## S4 — the other two scaling modes, then widen
 
