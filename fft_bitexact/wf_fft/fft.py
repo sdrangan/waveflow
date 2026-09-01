@@ -186,3 +186,105 @@ def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
     if fout == fo:
         return out_r, out_i, fout
     return fp.quantize(out_r, fo, fout), fp.quantize(out_i, fo, fout), fout
+
+
+# ---------------------------------------------------------------------------------------------
+# General L = R^S
+# ---------------------------------------------------------------------------------------------
+def _log(n: int, base: int) -> int:
+    k, v = 0, 1
+    while v < n:
+        v *= base
+        k += 1
+    if v != n:
+        raise ValueError(f"{n} is not a power of {base}")
+    return k
+
+
+def stage_formats(in_w: int, in_i: int, n_stages: int,
+                  mode: str = NO_SCALING) -> list[tuple[Format, Format]]:
+    """``(input, output)`` format per stage, for ``L = R^n_stages``.
+
+    Measured at ``L=16`` (2 stages) and ``L=64`` (3 stages) with ``cpp/dump_stages.cpp``::
+
+        stage 1   (16,2) -> (19,5)        the rotation after it PRESERVES the format
+        stage 2   (19,5) -> (22,7)        the rotation after it drops one fractional bit
+        stage 3   (21,7) -> (24,9)        and so does the final output cast
+
+    So a stage widens by 3, and every inter-stage rotation except the first narrows by 1.
+    Total: ``in_W + 3S - (S-1) = in_W + 2S + 1``, and since ``log2(L) = 2S`` for ``R=4`` that is
+    the library's own ``OUTPUT_WL = in_W + log2(L) + 1`` -- which is how this rule was checked
+    at ``L=1024`` before any sample was compared.
+    """
+    out = []
+    f = _f(in_w, in_i)
+    for s in range(n_stages):
+        _, _, g = _stage_formats(f, s == 0, mode)
+        out.append((f, g))
+        f = g if s == 0 else _f(g.W - 1, g.int_bits)
+    return out
+
+
+def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i: int,
+                tw_w: int = 18, tw_i: int = 2,
+                mode: str = NO_SCALING) -> tuple[np.ndarray, np.ndarray, Format]:
+    """Bit-exact model for any ``L = R^S`` (``R = 4``), natural output order, forward.
+
+    The recursive decimation-in-frequency the library implements::
+
+        A_q[m]      = sum_p x[m + p*(L/R)] * W_R^{p q}          # one radix-R butterfly per m
+        X[q + R u]  = (L/R)-point DFT over m of ( A_q[m] * W_L^{m q} )
+
+    Written iteratively over stages so each stage's declared formats can be applied in order.
+    ``L=16`` is the two-stage case of this and gives identical results to :func:`fft16`.
+    """
+    n_stages = _log(length, R)
+    fmts = stage_formats(in_w, in_i, n_stages, mode)
+    ftw = exp_table_format(tw_w, tw_i)
+
+    # Values live in a flat array indexed by output position as it is progressively resolved.
+    cur_re = [np.array([v]) for v in x_re]
+    cur_im = [np.array([v]) for v in x_im]
+
+    # `blocks` are the independent sub-transforms at this level; each is a list of indices into
+    # cur_*, in the order the sub-transform sees them.  Stage 1 has one block of the whole array.
+    blocks = [list(range(length))]
+    out_pos = list(range(length))          # where each element of each block finally lands
+
+    pos = list(range(length))
+    for s in range(n_stages):
+        f_in, _ = fmts[s]
+        sub_len = len(blocks[0])
+        m_count = sub_len // R
+        tw_r, tw_i_ = twiddle_stored(sub_len, tw_w, tw_i)
+        new_blocks = []
+        for blk in blocks:
+            rotated: dict = {}
+            for m in range(m_count):
+                vr = [cur_re[blk[m + p * m_count]] for p in range(R)]
+                vi = [cur_im[blk[m + p * m_count]] for p in range(R)]
+                orr, oii, g = _dft4(vr, vi, f_in, s == 0, mode)
+                for q in range(R):
+                    if s == n_stages - 1:
+                        rotated[(q, m)] = (orr[q], oii[q])
+                    else:
+                        f_next = fmts[s + 1][0]
+                        rotated[(q, m)] = complex_multiply(
+                            orr[q], oii[q], g,
+                            np.array([tw_r[(m * q) % sub_len]]),
+                            np.array([tw_i_[(m * q) % sub_len]]), ftw, f_next)
+            # X[q + R*u] -- element q of the butterfly starts the sub-transform for residue q
+            for q in range(R):
+                idxs = [blk[q + R * u] for u in range(m_count)]
+                for m in range(m_count):
+                    cur_re[idxs[m]], cur_im[idxs[m]] = rotated[(q, m)]
+                new_blocks.append(idxs)
+        blocks = new_blocks
+
+    _, g_last = fmts[-1]
+    fout = _f(g_last.W - 1, g_last.int_bits) if n_stages >= 2 else g_last
+    re = np.array([int(v[0]) for v in cur_re], dtype=np.int64)
+    im = np.array([int(v[0]) for v in cur_im], dtype=np.int64)
+    if fout == g_last:
+        return re, im, fout
+    return fp.quantize(re, g_last, fout), fp.quantize(im, g_last, fout), fout

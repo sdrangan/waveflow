@@ -8,7 +8,7 @@ file is the argument, this one is the working record.  Where they disagree, this
 
 | | |
 |---|---|
-| Status | **S1–S4 DONE** for `L=16, R=4`: all three scaling modes bit-exact, `cquantize` promoted. Remaining: larger `L`, other radices. |
+| Status | **S1–S4 DONE** for `L=16, R=4`. **S5 in progress**: general `L=R^S` model written, exact at L=16, one +-1 LSB gap at L=64. |
 | Waveflow | `main` @ `e360b74` |
 | Vitis | 2025.1 (`/tools/Xilinx/2025.1`) |
 | Vitis DSP source | `/home/marco/AmirProjects/Vitis_Libraries_2025.1` (`2025.1` = `v2025.1_update2`) |
@@ -321,23 +321,61 @@ emitting one mode three times cannot make the parametrised gate vacuous), one as
 goldens share inputs with the S2 golden, and one asserts that modelling `SCALE` without the
 fractional drop fails — the mistake that mode invites, and one the width check alone would miss.
 
-## S5 — larger `L`, other radices  ← REMAINING
+## S5 — general `L = R^S`  ← IN PROGRESS
 
-The model is specific to `L = R^2` (`L=16, R=4`, two stages).  A general `L = R^S` needs the
-stage loop generalised and the inter-stage twiddle indices derived per stage; `R=2` and `R=8`
-change the butterfly matrix and the adder-tree depth.  `ext_len` is still only known for
-`L=16, R=4`.
+`fft_general` in `wf_fft/fft.py` implements the recursion the library actually uses, identified
+by feeding `x[n] = n` and reading the grouping straight out of the trace::
 
-Expect to **measure rather than derive** — the tracer already handles any configuration, and
-every format rule in this plan came from it after reasoning had failed twice.
+    A_q[m]     = sum_p x[m + p*(L/R)] * W_R^{p q}                 # butterfly, stride L/R
+    X[q + R u] = (L/R)-point DFT over m of ( A_q[m] * W_L^{m q} )  # recurse
 
-## Open questions
+`L=16` is the two-stage case of exactly this, and the general model reproduces both `fft16` and
+the Vitis golden **bit-exactly**.
 
-* **`CONVERGENT_RND` has no Waveflow equivalent.**  `butterfly_rnd_mode` is threaded as a
-  template parameter through five headers but nothing ever dispatches on its value, and the
-  twiddle cast is hardcoded to the rounding variant regardless — so it appears inert in 2025.1.
-  If a later release implements it, it needs a new `QMode`, not a workaround.
-* **`ext_len` for the general case.**  Only `L=16, R=4` is known.
-* **Version skew: retired.**  2023.1 vs 2025.1 differ in all 45 fixed-FFT headers, but every
-  difference is a copyright line or trailing whitespace.  Functionally identical.  Re-run the
-  diff if the toolchain moves.
+The per-stage format rule generalises cleanly.  A stage widens by 3; every inter-stage rotation
+except the first narrows by 1::
+
+    L=16    (16,2) -> (19,5) -> out (21,7)
+    L=64    (16,2) -> (19,5) -> (21,7) -> out (23,9)
+    L=1024  (16,2) -> (19,5) -> (21,7) -> (23,9) -> (25,11) -> out (27,13)
+
+`in_W + 2S + 1` = the library's `in_W + log2(L) + 1`.  The `L=1024` prediction `(27,13)` was
+confirmed against a real synthesis run before any sample was compared (`../verifyFFT1024`).
+
+### The remaining gap: quarter-wave twiddle lookup
+
+`L=64` is **structurally correct but not bit-exact**.  Per-stage tracing is precise about it:
+
+* stage 1 feeds the hardware's exact values in the hardware's exact order — **0/64 differ**
+* stage 2 likewise — **0/64 differ**
+* stage 3 inputs differ on **14 of 64**, and every difference is **±1 LSB**
+
+The cause is identified.  The inter-stage rotation does not read the twiddle table directly
+(`hls_ssr_fft.hpp:107-120`)::
+
+    ap_uint<log2(t_L)> index = n * p_k;
+    exp_factor = readQuaterTwiddleTable<t_L, t_R, log2(t_L), T_exp>(index, p_twiddleTable);
+    complexMultiply(p_inData[n], exp_factor, p_outData[n]);
+
+`readQuaterTwiddleTable` reconstructs the value from a **quarter-wave** table — a shifted cosine
+index, sign-inversion controls, and explicit saturation at `L/4` and `3L/4`
+(`hls_ssr_fft_twiddle_table.hpp:103-130`).  That is not identical to quantizing `cos/sin`
+directly, which is what S1 modelled and what this model still uses.  At `L=16` the two agree;
+at `L=64` they part by an LSB.
+
+Ruled out along the way: index scaling (a full-`L` table with `index = m q L/sub` gives results
+identical to a per-sub-length table), and whether the narrowing happens inside the multiply or
+as a separate cast afterwards.
+
+**Next step: model `readQuaterTwiddleTable`.**  It is ~30 lines of index arithmetic and two
+saturation cases — bounded work, and the tracer can dump the reconstructed `exp_factor` per call
+to check it directly rather than through the whole FFT.
+
+Note this also means the **S1 twiddle-table gate is narrower than it looks**: it validates the
+stored table, not the quarter-wave path that reads it.
+
+## S6 — other radices, and the forked sizes
+
+Not started.  `R=2/8/16` change the butterfly matrix and tree depth.  Sizes where
+`log2(L) % log2(R) != 0` (32, 128, 512 at `R=4`) take a different "forked" architecture that has
+not been looked at.
