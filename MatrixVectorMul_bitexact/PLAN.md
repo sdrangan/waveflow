@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1 DONE** (2026-09-01) — bit-exact on 8 cases.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1 + S2 DONE** (2026-09-01) — bit-exact on 460 rows across 3 sizes x 5 stream widths.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -173,8 +173,25 @@ FFT's S1 isolated the twiddle table.  Deliverable: a C++ dumper, a checked-in go
 asserting that **sequential summation gives a different answer** — if it does not, the case is too
 small to be discriminating and must be enlarged.
 
-**S2 — full `gemv`.**  All rows, the wide-stream layout, `t_LogParEntries` varied.  Golden from
-the real `xf::blas::gemv`.
+**S2 — full `gemv`.**  ✅ **DONE — bit-exact, 460/460 rows.**
+
+| size | widths x cases | rows | result |
+|---|---|---|---|
+| `M=1, N=16` | 5 x 4 | 20 | 0 differ |
+| `M=4, N=64` | 5 x 8 | 160 | 0 differ |
+| `M=7, N=128` | 5 x 8 | 280 | 0 differ |
+
+`logParEntries` is swept 0..4 in one golden, because S1 showed the stream width changes the bits.
+It does: on a discriminating case the five widths give four distinct answers, so the sweep is not
+padding.
+
+**One size cannot discriminate, and that is now asserted rather than assumed.**  At `M=1, N=16`
+with `P=4` there are 4 beats and `Delays=4` — exactly one chunk — so the chunk tree and a full
+tree are the *same* reduction and the two models agree by construction.  This was found the hard
+way: the generator searched for a discriminating vector at that size and looped forever.  It is
+now bounded, raises if a size that *should* discriminate does not, and a test pins the property so
+it cannot quietly become folklore.  The size stays in the suite because it exercises the
+no-cross-chunk path, but a gate resting only on it would be vacuous.
 
 **S3 — `t_MacDataType` and the non-float path.**  The generic specialization uses `dot_dsp`, not
 the tree, and `t_MacDataType` lets the accumulator differ from the element type.  Both change the
@@ -186,15 +203,18 @@ connects back to the library, as `cquantize` did for the FFT.
 
 **S5 — `alpha`/`beta` overload**, and `m`/`n` sweeps.
 
-**S6 — the systolic GEMM, if wanted.**  `gemmSystolicArray` with `N = 1` computes a
+**S6 — the systolic GEMM.**  *Not planned* — recorded only because it is what "systolic" would
+have meant here, and because 2025.1 adds an L1 `gemm/systolicArray.hpp` that 2023.1 lacks, so the
+option is now closer to hand than it was.  `gemmSystolicArray` with `N = 1` computes a
 matrix-vector product on a genuine systolic array.  Different kernel, different data movement,
 its own goldens.  Listed because it is what "systolic" would actually mean here — not because it
 follows from S1-S5.
 
 ## Open questions
 
-* **Which is actually wanted, L1 `gemv` or the systolic GEMM?**  The plan proceeds with `gemv`;
-  S6 is the other reading and would be a fresh start rather than an extension.
+* ~~**Which is actually wanted, L1 `gemv` or the systolic GEMM?**~~  **Settled (2026-09-01):
+  L1 `gemv` is the target.**  S6 stays listed as the other reading of "systolic", but it is not
+  planned work.
 * **Does float `dot_tree` give a stable answer under `-O` and across csim/cosim?**  It must, or
   bit-exactness is not a meaningful target.  S1 answers this before anything is built on it.
 * **Is `t_LogParEntries` part of the contract or an implementation detail?**  If the bits change

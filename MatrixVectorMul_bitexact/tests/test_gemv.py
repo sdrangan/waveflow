@@ -1,7 +1,8 @@
-"""S1 gate -- the Python gemv model against the real Vitis BLAS kernel.
+"""S1/S2 gates -- the Python gemv model against the real Vitis BLAS kernel.
 
-Golden: ``golden/gemv_f32_M4_N64_P4.txt``, produced by ``cpp/dump_gemv.cpp``, which instantiates
-``xf::blas::gemv`` itself.  Checked in, so these tests need neither Vitis nor a compiler.
+Goldens in ``golden/`` are produced by ``cpp/dump_gemv.cpp``, which instantiates
+``xf::blas::gemv`` itself and sweeps ``logParEntries`` 0..4.  Checked in, so these tests need
+neither Vitis nor a compiler.
 
 Everything is compared as IEEE-754 bit patterns.  A decimal comparison would hide exactly the
 1-ULP differences this kernel's reduction order produces, which is the whole subject.
@@ -14,11 +15,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from MatrixVectorMul_bitexact.wf_gemv.gemv import (adder_delays, binary_sum, dot, f32_bits, gemv)
+from MatrixVectorMul_bitexact.wf_gemv.gemv import (
+    adder_delays,
+    binary_sum,
+    dot,
+    f32_bits,
+    gemv,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-GOLDEN = ROOT / "golden" / "gemv_f32_M4_N64_P4.txt"
-PAR_ENTRIES = 4
+SIZES = [(1, 16), (4, 64), (7, 128)]
+DELAYS = 4
 
 
 def _rows(path: Path) -> list[list[str]]:
@@ -26,12 +33,12 @@ def _rows(path: Path) -> list[list[str]]:
             if ln.strip() and not ln.lstrip().startswith("#")]
 
 
-@pytest.fixture(scope="module")
-def data():
-    ni = _rows(ROOT / "data" / "input.txt")
-    n_case, m, n = (int(v) for v in ni[0])
+def _load(m: int, n: int) -> dict:
+    ni = _rows(ROOT / "data" / f"input_M{m}_N{n}.txt")
+    n_case, mm, nn = (int(v) for v in ni[0])
+    assert (mm, nn) == (m, n)
     vals = [int(v[0]) for v in ni[1:]]
-    f32 = lambda u: struct.unpack("<f", struct.pack("<I", u))[0]  # noqa: E731
+    f32 = lambda u: struct.unpack("<f", struct.pack("<I", u))[0]
     cases, off = [], 0
     for _ in range(n_case):
         A = np.array([f32(u) for u in vals[off:off + m * n]], dtype=np.float32).reshape(m, n)
@@ -39,8 +46,16 @@ def data():
         x = np.array([f32(u) for u in vals[off:off + n]], dtype=np.float32)
         off += n
         cases.append((A, x))
-    hw = [int(v[0]) for v in _rows(GOLDEN)[1:]]
-    return {"cases": cases, "hw": hw, "M": m, "N": n}
+    g = _rows(ROOT / "golden" / f"gemv_f32_M{m}_N{n}_sweepP.txt")
+    hdr = [int(v) for v in g[0]]
+    n_logp = hdr[0]
+    return {"cases": cases, "logps": hdr[1:1 + n_logp],
+            "hw": [int(v[0]) for v in g[1:]], "M": m, "N": n}
+
+
+@pytest.fixture(scope="module")
+def loaded() -> dict:
+    return {s: _load(*s) for s in SIZES}
 
 
 def _naive_tree(a, b):
@@ -51,76 +66,104 @@ def _naive_tree(a, b):
     return v[0]
 
 
-def test_golden_shape(data):
-    """Guard the golden -- a short regen would make every other test vacuous."""
-    assert data["M"] == 4 and data["N"] == 64
-    assert len(data["cases"]) == 8
-    assert len(data["hw"]) == 8 * data["M"]
-
-
+# --- structure --------------------------------------------------------------------------------
 def test_adder_delays_matches_the_library():
     """``AdderDelay<T>`` -- a property of the element type, and it changes the answer."""
-    assert adder_delays("float32") == 4
-    assert adder_delays("float64") == 8
-    assert adder_delays("int32") == 1
+    assert (adder_delays("float32"), adder_delays("float64"), adder_delays("int32")) == (4, 8, 1)
 
 
 def test_binary_sum_requires_power_of_two():
-    """``BinarySum<T,N>`` halves until it reaches 1; a non-power-of-two would silently misgroup."""
+    """``BinarySum<T,N>`` halves until it reaches 1; other lengths would silently misgroup."""
     assert binary_sum([1.0, 2.0, 3.0, 4.0]) == np.float32(10.0)
     with pytest.raises(ValueError, match="power-of-two"):
         binary_sum([1.0, 2.0, 3.0])
 
 
-def test_gemv_is_bit_exact(data):
-    """THE S1 GATE: the model equals xf::blas::gemv, bit for bit, on every case."""
-    bad = 0
-    for k, (A, x) in enumerate(data["cases"]):
-        got = gemv(A, x, PAR_ENTRIES)
-        want = data["hw"][k * data["M"]:(k + 1) * data["M"]]
-        bad += sum(1 for r in range(data["M"]) if f32_bits(got[r]) != want[r])
-    assert bad == 0, f"{bad} of {len(data['hw'])} rows differ from the hardware"
-
-
-def test_a_naive_tree_would_be_wrong(data):
-    """Teeth: a single binary tree over all N products is the obvious model, and it is wrong.
-
-    The library trees *within* a beat and *within* a chunk of beats, but accumulates *across*
-    chunks sequentially.  If this ever stops failing, the chunked accumulation has been
-    "simplified" into a plain tree and the model is silently wrong on ~1 row in 5.
-    """
-    bad = 0
-    for k, (A, x) in enumerate(data["cases"]):
-        want = data["hw"][k * data["M"]:(k + 1) * data["M"]]
-        bad += sum(1 for r in range(data["M"])
-                   if f32_bits(_naive_tree(A[r], x)) != want[r])
-    assert bad > 0, "the naive tree matched everywhere; the goldens no longer discriminate"
-
-
-def test_numpy_dot_would_be_wrong(data):
-    """Teeth: ``numpy.dot`` -- what anyone would reach for first -- disagrees on half the rows.
-
-    Worth pinning because numpy is *unreliably* right: it matched this kernel at N=64 with simple
-    data while differing at N=16, so a small test suite would have blessed it.
-    """
-    bad = 0
-    for k, (A, x) in enumerate(data["cases"]):
-        want = data["hw"][k * data["M"]:(k + 1) * data["M"]]
-        bad += sum(1 for r in range(data["M"]) if f32_bits(np.dot(A[r], x)) != want[r])
-    assert bad > 0, "numpy.dot matched everywhere; the goldens no longer discriminate"
-
-
-def test_par_entries_changes_the_result(data):
-    """``t_LogParEntries`` is part of the numerical contract, not just a throughput knob.
-
-    A design that retunes the stream width changes its output bits.  Recording that here means a
-    model that ignored the parameter could not pass.
-    """
-    A, x = data["cases"][4]                     # a discriminating case
-    assert any(f32_bits(dot(A[r], x, 4)) != f32_bits(dot(A[r], x, 8))
-               for r in range(data["M"])), "parEntries had no effect; the model ignores it"
-
-
 def test_dot_rejects_a_bad_length():
     with pytest.raises(ValueError, match="multiple of parEntries"):
         dot(np.ones(6, dtype=np.float32), np.ones(6, dtype=np.float32), 4)
+
+
+def test_goldens_are_the_expected_shape(loaded):
+    """Guard the goldens -- a short regen would make every other test vacuous."""
+    for (m, n), d in loaded.items():
+        assert d["logps"] == [0, 1, 2, 3, 4]
+        assert len(d["hw"]) == len(d["logps"]) * len(d["cases"]) * m
+
+
+# --- the gate ---------------------------------------------------------------------------------
+@pytest.mark.parametrize("size", SIZES, ids=[f"M{m}_N{n}" for m, n in SIZES])
+def test_gemv_is_bit_exact(loaded, size):
+    """THE GATE: the model equals xf::blas::gemv bit for bit, at every swept stream width."""
+    d = loaded[size]
+    m = d["M"]
+    i = bad = 0
+    for lp in d["logps"]:
+        for A, x in d["cases"]:
+            got = gemv(A, x, 1 << lp)
+            for r in range(m):
+                bad += f32_bits(got[r]) != d["hw"][i]
+                i += 1
+    assert bad == 0, f"M={size[0]} N={size[1]}: {bad} of {len(d['hw'])} rows differ"
+
+
+# --- teeth ------------------------------------------------------------------------------------
+def test_a_naive_tree_would_be_wrong(loaded):
+    """A single binary tree over all N products is the obvious model, and it is wrong.
+
+    The library trees *within* a beat and *within* a chunk of ``Delays`` beats, but accumulates
+    *across* chunks sequentially.  If this stops failing, that chunked accumulation has been
+    "simplified" into a plain tree.
+    """
+    d = loaded[(7, 128)]
+    lp2 = d["logps"].index(2)
+    base = lp2 * len(d["cases"]) * d["M"]
+    bad = 0
+    for k, (A, x) in enumerate(d["cases"]):
+        for r in range(d["M"]):
+            bad += f32_bits(_naive_tree(A[r], x)) != d["hw"][base + k * d["M"] + r]
+    assert bad > 0, "the naive tree matched everywhere; the goldens no longer discriminate"
+
+
+def test_numpy_dot_would_be_wrong(loaded):
+    """``numpy.dot`` -- the first thing anyone reaches for -- disagrees.
+
+    Worth pinning because numpy is *unreliably* right: it matched this kernel at N=64 with simple
+    data while differing at N=16, so a small suite would have blessed it.
+    """
+    d = loaded[(7, 128)]
+    lp2 = d["logps"].index(2)
+    base = lp2 * len(d["cases"]) * d["M"]
+    bad = 0
+    for k, (A, x) in enumerate(d["cases"]):
+        for r in range(d["M"]):
+            bad += f32_bits(np.dot(A[r], x)) != d["hw"][base + k * d["M"] + r]
+    assert bad > 0, "numpy.dot matched everywhere; the goldens no longer discriminate"
+
+
+def test_stream_width_changes_the_result(loaded):
+    """``t_LogParEntries`` is part of the numerical contract, not just a throughput knob.
+
+    A design that retunes the stream width changes its output bits, so a model ignoring the
+    parameter could not pass the gate above.
+    """
+    d = loaded[(7, 128)]
+    A, x = d["cases"][-1]
+    seen = {tuple(f32_bits(v) for v in gemv(A, x, 1 << lp)) for lp in d["logps"]}
+    assert len(seen) > 1, "every stream width gave the same answer; the model ignores it"
+
+
+def test_one_chunk_sizes_cannot_discriminate_and_that_is_recorded(loaded):
+    """`M=1, N=16` is in the suite even though it *cannot* separate the two models.
+
+    With ``N/P = 4`` beats and ``Delays = 4``, there is exactly one chunk, so the chunk tree and a
+    full tree are the same reduction.  The size still pins the no-cross-chunk path, but a gate
+    resting only on it would be vacuous -- which is why the larger sizes exist.  This asserts the
+    property rather than leaving it as folklore.
+    """
+    d = loaded[(1, 16)]
+    lp2 = d["logps"].index(2)
+    base = lp2 * len(d["cases"]) * d["M"]
+    same = all(f32_bits(_naive_tree(A[0], x)) == d["hw"][base + k]
+               for k, (A, x) in enumerate(d["cases"]))
+    assert same, "N=16 unexpectedly discriminates; the chunking assumption has changed"

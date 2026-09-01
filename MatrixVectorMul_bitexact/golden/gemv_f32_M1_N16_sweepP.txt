@@ -1,0 +1,25 @@
+# Vitis BLAS gemv golden -- IEEE-754 bit patterns
+# AdderDelay<float>=4  AdderDelay<double>=8
+# layout: for each logParEntries, for each case, M rows of y
+# n_logp logp_values... n_cases M N
+5 0 1 2 3 4 4 1 16
+1098907648
+1083616242
+3368267972
+0
+1098907648
+1083616242
+3368267972
+0
+1098907648
+1083616242
+3368267972
+0
+1098907648
+1083616242
+3368267972
+0
+1098907648
+1083616242
+3368267972
+0

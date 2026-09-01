@@ -21,13 +21,30 @@
 
 using namespace xf::blas;
 
-#ifndef GEMV_LOGP
-#define GEMV_LOGP 2
-#endif
-#define GEMV_P (1 << GEMV_LOGP)
+// S1 showed t_LogParEntries changes the bits, so the golden sweeps logParEntries 0..4 rather
+// than fixing one value.  N must be a multiple of the widest (16), which the generator ensures.
 
 static float f_of(unsigned int b) { float f; memcpy(&f, &b, 4); return f; }
 static unsigned int b_of(float f) { unsigned int b; memcpy(&b, &f, 4); return b; }
+
+// One instantiation per logParEntries.  Recursive because the width is a template parameter and
+// the sweep must cover several of them in one binary.
+template <int LOGP>
+static void run_one(FILE* fo, const std::vector<std::vector<float> >& As,
+                    const std::vector<std::vector<float> >& xs, int M, int N, int n_case) {
+    const int P = 1 << LOGP;
+    std::vector<float> y(M);
+    for (int k = 0; k < n_case; k++) {
+        std::vector<float> A = As[k], x = xs[k];
+        hls::stream<typename WideType<float, P>::t_TypeInt> sA, sX;
+        hls::stream<typename WideType<float, 1>::t_TypeInt> sY;
+        gem2Stream<float, P>(M, N, A.data(), sA);
+        vec2GemStream<float, P>(M, N, x.data(), sX);
+        gemv<float, LOGP, unsigned int, float>(M, N, sA, sX, sY);
+        writeStream2Vec<float, 1>(sY, M, y.data());
+        for (int r = 0; r < M; r++) fprintf(fo, "%u\n", b_of(y[r]));
+    }
+}
 
 int main(int argc, char** argv) {
     const char* in_path = (argc > 1) ? argv[1] : "data/input.txt";
@@ -44,31 +61,34 @@ int main(int argc, char** argv) {
     if (fscanf(fi, "%d %d %d", &n_case, &M, &N) != 3) {
         printf("WF_ERROR: bad header\n"); fclose(fi); return 1;
     }
-    if (N % GEMV_P) { printf("WF_ERROR: N=%d not a multiple of P=%d\n", N, GEMV_P); return 1; }
 
     FILE* fo = fopen(out_path, "w");
     if (!fo) { printf("WF_ERROR: cannot open %s\n", out_path); return 1; }
-    fprintf(fo, "# Vitis BLAS gemv golden -- IEEE-754 bit patterns, one y value per line\n");
-    fprintf(fo, "# logParEntries=%d  parEntries=%d  AdderDelay<float>=%d\n",
-            GEMV_LOGP, GEMV_P, AdderDelay<float>::m_Delays);
-    fprintf(fo, "# n_cases M N\n%d %d %d\n", n_case, M, N);
+    fprintf(fo, "# Vitis BLAS gemv golden -- IEEE-754 bit patterns\n");
+    fprintf(fo, "# AdderDelay<float>=%d  AdderDelay<double>=%d\n",
+            AdderDelay<float>::m_Delays, AdderDelay<double>::m_Delays);
+    fprintf(fo, "# layout: for each logParEntries, for each case, M rows of y\n");
+    fprintf(fo, "# n_logp logp_values... n_cases M N\n");
 
-    std::vector<float> A(M * N), x(N), y(M);
+    // read every case up front: the sweep replays them at each width
+    std::vector<std::vector<float> > As(n_case), xs(n_case);
     for (int k = 0; k < n_case; k++) {
+        As[k].resize(M * N); xs[k].resize(N);
         unsigned int u;
-        for (int i = 0; i < M * N; i++) { if (fscanf(fi, "%u", &u) != 1) { printf("WF_ERROR: short A\n"); return 1; } A[i] = f_of(u); }
-        for (int j = 0; j < N; j++)     { if (fscanf(fi, "%u", &u) != 1) { printf("WF_ERROR: short x\n"); return 1; } x[j] = f_of(u); }
-
-        hls::stream<WideType<float, GEMV_P>::t_TypeInt> sA, sX;
-        hls::stream<WideType<float, 1>::t_TypeInt> sY;
-        gem2Stream<float, GEMV_P>(M, N, A.data(), sA);
-        vec2GemStream<float, GEMV_P>(M, N, x.data(), sX);
-        gemv<float, GEMV_LOGP, unsigned int, float>(M, N, sA, sX, sY);
-        writeStream2Vec<float, 1>(sY, M, y.data());
-
-        for (int r = 0; r < M; r++) fprintf(fo, "%u\n", b_of(y[r]));
+        for (int i = 0; i < M * N; i++) { if (fscanf(fi, "%u", &u) != 1) { printf("WF_ERROR: short A\n"); return 1; } As[k][i] = f_of(u); }
+        for (int j = 0; j < N; j++)     { if (fscanf(fi, "%u", &u) != 1) { printf("WF_ERROR: short x\n"); return 1; } xs[k][j] = f_of(u); }
     }
-    fclose(fi); fclose(fo);
-    printf("WF_OK: %d cases x %d rows written to %s\n", n_case, M, out_path);
+    fclose(fi);
+
+    // Explicit, not a template recursion: the width is a compile-time parameter and five named
+    // calls are clearer than machinery to generate them.  Keep this list and the header in step.
+    fprintf(fo, "5 0 1 2 3 4 %d %d %d\n", n_case, M, N);
+    run_one<0>(fo, As, xs, M, N, n_case);
+    run_one<1>(fo, As, xs, M, N, n_case);
+    run_one<2>(fo, As, xs, M, N, n_case);
+    run_one<3>(fo, As, xs, M, N, n_case);
+    run_one<4>(fo, As, xs, M, N, n_case);
+    fclose(fo);
+    printf("WF_OK: 5 widths x %d cases x %d rows -> %s\n", n_case, M, out_path);
     return 0;
 }

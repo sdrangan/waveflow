@@ -21,6 +21,9 @@ PY="${PY:-$ROOT/../env/bin/python}"
 BIN="$(mktemp -d)/dump_gemv"
 g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
     -o "$BIN" "$ROOT/cpp/dump_gemv.cpp"
-OUT="$ROOT/golden/gemv_f32_M4_N64_P4.txt"
-"$BIN" "$ROOT/data/input.txt" "$OUT" | grep -v "HLS SIM" || true
-echo "wrote $OUT"
+for IN in "$ROOT"/data/input_M*_N*.txt; do
+    BASE="$(basename "$IN" .txt)"; BASE="${BASE#input_}"
+    OUT="$ROOT/golden/gemv_f32_${BASE}_sweepP.txt"
+    "$BIN" "$IN" "$OUT" | grep -v "HLS SIM" || true
+    echo "wrote $OUT"
+done
