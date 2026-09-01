@@ -30,3 +30,10 @@ g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN2" "$ROOT/cpp/dump_fft.cpp"
 OUT2="$ROOT/golden/fft_L16_R4_noscale_natural.json"
 "$BIN2" "$OUT2" >/dev/null
 echo "wrote $OUT2"
+
+# complex primitives the butterfly is built from
+BIN3="$(mktemp -d)/dump_cxops"
+g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN3" "$ROOT/cpp/dump_cxops.cpp"
+OUT3="$ROOT/golden/cxops_d16_2_t18_2.json"
+"$BIN3" "$OUT3" >/dev/null
+echo "wrote $OUT3"

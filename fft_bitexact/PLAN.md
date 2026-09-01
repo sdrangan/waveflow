@@ -137,11 +137,42 @@ and saturates (`AP_RND`/`AP_SAT`, S1); the twiddle *product* truncates and wraps
 (`AP_TRN`/`AP_WRAP`).  Using one where the other belongs is a 1-LSB error in the exact place
 this plan says such errors hide.
 
-### Remaining
+### The two primitives: prototyped locally, validated, bit-exact
 
-* A complex requantize.  Prototype it **locally** in `wf_fft/` first (same split-recombine
-  shape as `complexfield.csum`), and only promote it into `waveflow/hw/complexfield.py` once
-  S2 is bit-exact — changing the library on an unvalidated guess is the wrong order.
+`wf_fft/cxquant.py`, against `golden/cxops_d16_2_t18_2.json` (from the library's own
+`complexMultiply`, not a reimplementation).  Both **0 mismatches over 24 cases**.
+
+**Nothing here reimplements quantization.**  `cquantize` splits re/im, calls
+`fixputils.quantize` — the same function `fixpoint.quantize` uses, already conformance-tested
+against real Vitis across all four `QMode` x `OMode` combinations by
+`examples/schemas/fixedpoint` — and recombines, in the shape of `complexfield.csum`.
+
+**`cmult` + one `cquantize` is the WRONG recipe.**  `complexMultiply`
+(`hls_ssr_fft_complex_multiplier.hpp:29-45`) stores every partial product into `T_op1`, the
+*first operand's* type, before combining::
+
+    T_op1 real1 = op1.real() * op2.real();   // truncated into T_op1 here
+    T_op1 real2 = op1.imag() * op2.imag();   // and here
+    T_op1 real_out = real1 - real2;          // subtracted in T_op1
+    p_product.real(real_out);                // then widened into T_prd
+
+Three quantization points per component, not one.  Measured:
+
+| model | wrong (of 24) |
+|---|---|
+| partial products truncated to `T_op1` (the library's) | **0 re, 0 im** |
+| full-precision product then one requantize (the obvious one) | 18 re, 23 im |
+
+So `complexfield.cmult` is the wrong primitive for this FFT even though it is the natural
+reach.  `test_naive_full_product_would_be_wrong` pins the failure counts, so if anyone
+"simplifies" `complex_multiply` back to the obvious form the tests say so.
+
+This also lowers the stakes on promoting anything into `waveflow/`: `cquantize` is a thin,
+validated composition, but `complex_multiply` is FFT-specific and probably should **not**
+become a library primitive — it encodes this design's quantization points, not complex
+arithmetic in general.
+
+### Remaining
 * The radix-4 butterfly network + data commutation for `L=16, R=4` (2 stages).
 * Then the gate: `test_fft_is_bit_exact`, currently skipped with the reason recorded.
 
