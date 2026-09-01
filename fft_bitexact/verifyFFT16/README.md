@@ -137,9 +137,11 @@ values while looking perfect on ordinary data.
 * **Different inputs** — edit `data/input.txt` (header is `<n_vectors> <n_samples>`, then one
   `re im` pair per line as raw stored integers) and re-run both steps.  `verify.py` re-runs the
   model on whatever inputs it finds, so nothing needs regenerating.
-* **Different size or precision** — edit the `FFT_*` defines in `src/fft_top.hpp`.  Note the
-  Python model currently supports **L=16, R=4 only**; `verify.py` will stop with a clear width
-  mismatch rather than silently comparing the wrong thing.
+* **Different size or precision** — edit the `FFT_*` defines in `src/fft_top.hpp`.  The Python
+  model covers any **`L = 4^S`** (16, 64, 256, 1024, …).  Sizes that are not a power of the
+  radix — 32, 128, 512 at `R=4` — use a different "forked" architecture in the library and are
+  **not** covered; `verify.py` degrades to the synthesis-only check and says so rather than
+  comparing the wrong thing.
 
 ## If something fails
 

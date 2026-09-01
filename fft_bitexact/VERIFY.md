@@ -33,19 +33,22 @@ python verify.py                        # compare against the Python model
 Each folder has its own `README.md` (the walkthrough) and `ARCHITECTURE.md` (what the design is
 and which number formats it uses internally).
 
-## The honest difference between them
+## Both are full checks
 
-**The Python model implements `L=16` only.**  At 1024 the two model comparisons cannot run, and
-`verify.py` says so rather than comparing the wrong thing.  What still runs there — C-sim vs
-Co-sim — proves synthesis preserved the C++ behaviour exactly, which is the property most likely
-to break silently, but it does **not** validate the model at that size.
+The Python model covers any `L = 4^S`, so both folders run all three comparisons.
 
-So: the 16-point folder is a *model* check; the 1024-point folder is currently a *synthesis*
-check that is wired and waiting for the model.
+The 1024-point one is the stronger evidence — not because it is bigger, but because two
+behaviours appear there that `L=16` structurally cannot expose:
 
-Generalising the model to `L = R^S` is the open item (see `PLAN.md`, "S5").  When it lands,
-`verifyFFT1024/` starts checking all three with no edits — `verify.py` picks up any supported
-length from its `MODEL_LENGTHS` table.
+* the twiddle table is only a **quarter wave** past `L=16` (`L/4` entries), rebuilt by
+  `readQuaterTwiddleTable` with an exact `-1` substituted at `L/4` and `3L/4`
+* a stage's output is **narrowed before** the twiddle rotation, not inside the multiply
+
+A model validated only at 16 passes both folders' first check while being wrong at every larger
+size.  See `PLAN.md`, "S5".
+
+`verify.py` still reports honestly when handed a length the model does not cover, so pointing
+either folder at, say, `L=512` degrades to the synthesis-only check rather than lying.
 
 ## Which sizes take this code path
 
