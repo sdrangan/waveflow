@@ -1,7 +1,10 @@
-# FFT verification — Vitis simulations → Python model, end to end
+# FFT verification, 16-point — Vitis simulations → Python model, end to end
 
 A self-contained check that the Python bit-exact FFT model agrees with the real AMD Vitis SSR
 FFT: in C-simulation, in synthesized RTL, and with each other.
+
+The 1024-point sibling is [`../verifyFFT1024/`](../verifyFFT1024/); [`../VERIFY.md`](../VERIFY.md)
+compares the two.
 
 **Result on this machine: all three comparisons bit-exact over 12 vectors (384 values each).**
 
@@ -29,7 +32,7 @@ you can open, and `verify.py` reads exactly those files.
 ```bash
 source /tools/Xilinx/2025.1/Vitis/settings64.sh
 source /home/marco/AmirProjects/waveflow/env/bin/activate
-cd /home/marco/AmirProjects/waveflow/fft_bitexact/verify
+cd /home/marco/AmirProjects/waveflow/fft_bitexact/verifyFFT16
 export WF_VITIS_LIBS=/home/marco/AmirProjects/Vitis_Libraries_2025.1/dsp/L1/include/hw/vitis_fft/fixed
 ```
 

@@ -1,0 +1,165 @@
+# FFT verification, 1024-point — Vitis simulations → Python model
+
+The 1024-point sibling of [`../verifyFFT16/`](../verifyFFT16/).  Same structure, same flow,
+same commands — only `FFT_L` differs.
+
+**Result on this machine: C-sim vs Co-sim bit-exact over 8 vectors (16384 values).**
+
+> ### What this folder can and cannot check yet
+>
+> The Python model implements **L=16 only**, so the two model comparisons do not run here.
+> `verify.py` says so and runs the one check that needs no model:
+>
+> | check | 16-point | 1024-point |
+> |---|---|---|
+> | C-sim vs Python model | ✅ | ✗ — no model at this L |
+> | Co-sim vs Python model | ✅ | ✗ — no model at this L |
+> | **C-sim vs Co-sim** | ✅ | ✅ **bit-exact** |
+>
+> That remaining check is not a consolation prize: it proves synthesis preserved the C++
+> behaviour exactly across 16384 values, which is the property most likely to break silently.
+> But it does **not** validate the Python model at this size — nothing here does.
+>
+> Generalising the model to `L = R^S` is the open item (`../PLAN.md`, "S5").  When it lands,
+> this folder starts checking all three with no changes: `verify.py` picks the model up from
+> `MODEL_LENGTHS`.
+
+Everything here is meant to be run and inspected by hand.  For *what* is being simulated and
+why the number formats are what they are, read [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## What is in this folder
+
+```
+src/fft_top.hpp      the configuration -- change L, R, widths here
+src/fft_top.cpp      the DUT: a named wrapper around the library FFT
+src/fft_tb.cpp       the testbench, shared by C-sim and co-sim
+run.tcl              drives csim -> csynth -> cosim
+gen_input.py         regenerates data/input.txt (1024 samples is too many to hand-write)
+data/input.txt       8 input vectors, raw stored integers
+results/             where the two Vitis runs write their outputs
+verify.py            compares Vitis output against the Python model
+ARCHITECTURE.md      what the DUT is and which formats it uses internally
+```
+
+Nothing is generated behind your back: `data/input.txt` and both `results/*.txt` are plain text
+you can open, and `verify.py` reads exactly those files.
+
+## Step 0 — environment
+
+```bash
+source /tools/Xilinx/2025.1/Vitis/settings64.sh
+source /home/marco/AmirProjects/waveflow/env/bin/activate
+cd /home/marco/AmirProjects/waveflow/fft_bitexact/verifyFFT1024
+export WF_VITIS_LIBS=/home/marco/AmirProjects/Vitis_Libraries_2025.1/dsp/L1/include/hw/vitis_fft/fixed
+```
+
+`WF_VITIS_LIBS` must point at the *fixed-point* FFT headers; `run.tcl` stops with a clear error
+if it is unset.  Adjust both paths if your installs differ.
+
+## Step 1 — run the Vitis flow
+
+```bash
+vitis-run --mode hls --tcl run.tcl
+```
+
+One command runs all three stages in order, each stopping the script on failure:
+
+| stage | what happens | writes |
+|---|---|---|
+| `csim_design` | the C++ runs natively | `results/output_csim.txt` |
+| `csynth_design` | C++ → RTL | `fft_verify_proj/solution1/syn/` |
+| `cosim_design` | the **synthesized RTL** runs in `xsim`, driven by the same testbench | `results/output_cosim.txt` |
+
+Expect, in order:
+
+```
+WAVEFLOW_CSIM_OK
+WAVEFLOW_CSYNTH_OK
+WAVEFLOW_COSIM_OK
+WAVEFLOW_SUCCESS: csim + csynth + cosim all passed
+```
+
+**On "RTL simulation":** for a control-driven (`ap_ctrl_hs`) kernel like this one, `cosim_design`
+*is* the RTL simulation — Vitis has no separate step.  `output_cosim.txt` is produced by the
+synthesized hardware.
+
+Takes appreciably longer than the 16-point case — co-simulating 1024 points across 8 vectors
+dominates.  Budget ten minutes or so rather than two.
+
+## Step 2 — verify against the Python model
+
+```bash
+python verify.py
+```
+
+It checks three things, all on **raw stored integers** (a decimal comparison would hide exactly
+the 1-LSB differences that matter):
+
+1. **C-sim vs Python model** — the maths matches
+2. **Co-sim vs Python model** — the *synthesized RTL* matches
+3. **C-sim vs Co-sim** — C and RTL agree with each other
+
+Check 3 is not redundant: if 1 and 2 both failed identically it would show the model wrong
+rather than the flow broken, and vice versa.
+
+Expected tail (note the model comparisons are skipped, with the reason stated):
+
+```
+  NOTE: the Python model does not implement L=1024 (it covers [16]).
+        Running the C-sim vs Co-sim check only -- that one needs no model,
+        and still proves synthesis preserved the C++ behaviour exactly.
+
+  C-sim   vs Co-sim      : BIT-EXACT  (16384 values)
+
+ALL COMPARISONS BIT-EXACT
+```
+
+Exit status is 0 only if every comparison is exact, so it can be scripted.
+
+## Step 3 — look at the numbers yourself
+
+`--show` needs the Python model, so it is unavailable here; `verify.py` says so rather than
+printing something misleading.  Read the raw files instead:
+
+To read the raw files directly:
+
+```bash
+head -5 data/input.txt
+head -5 results/output_csim.txt
+diff results/output_csim.txt results/output_cosim.txt && echo "C and RTL identical"
+```
+
+## The 12 input vectors, and why these
+
+| v | vector | why |
+|---|---|---|
+| 0 | ramp | ordinary in-range data |
+| 1 | pseudo-random | no structure to hide behind |
+| 2 | impulse | a flat spectrum — exercises every twiddle |
+| 3 | constant | energy in one bin only |
+| 4 | alternating ±full-scale | **on the accumulator boundary** |
+| 5, 6 | all most-negative / all most-positive | saturation extremes |
+| 7 | mixed extremes | boundary crossings from another direction |
+
+The same kinds as the 16-point test, minus a few in-range ones — co-simulation is much slower
+here and the extra ordinary vectors add little once the boundary cases are covered.  They are
+generated by `gen_input.py` rather than hand-written, because 1024 samples is not readable.
+
+## Changing the test
+
+* **Different inputs** — edit `data/input.txt` (header is `<n_vectors> <n_samples>`, then one
+  `re im` pair per line as raw stored integers) and re-run both steps.  `verify.py` re-runs the
+  model on whatever inputs it finds, so nothing needs regenerating.
+* **Different inputs** — edit `gen_input.py` and re-run it, then re-run both steps.
+* **Different size or precision** — edit the `FFT_*` defines in `src/fft_top.hpp` *and* `L` in
+  `gen_input.py`.  Note that not every size uses this architecture: with radix 4, powers of 4
+  (16, 64, 256, 1024, 4096) take this path, while 32, 128 and 512 take a different "forked" one
+  that has not been looked at.
+
+## If something fails
+
+* `WAVEFLOW_ERROR: set WF_VITIS_LIBS` — Step 0 not done in this shell.
+* `missing results/output_csim.txt` — Step 1 did not get that far; read its output.
+* A comparison differs — with only the C-sim vs Co-sim check available here, a difference means
+  synthesis changed the behaviour, which is worth investigating carefully. Compare the files
+  directly with `diff` to find the first differing line.

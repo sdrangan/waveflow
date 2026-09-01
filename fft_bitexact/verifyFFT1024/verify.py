@@ -7,6 +7,10 @@ Reads the files this folder's Vitis run produced and checks three things:
   2. Co-simulation == Python model      (the *synthesized RTL* matches)
   3. C-simulation  == Co-simulation     (C and RTL agree with each other)
 
+Check 3 needs no Python model, so it runs at any transform length.  Checks 1 and 2 need a model
+for this L; the model currently covers L=16 only, and this script says so plainly rather than
+comparing the wrong thing or crashing.
+
 Everything is compared as raw stored integers.  A float comparison would hide exactly the
 1-LSB differences this exists to detect, so nothing here converts to decimal except the
 optional human-readable dump.
@@ -36,6 +40,11 @@ from waveflow.utils import fixputils as fp                      # noqa: E402
 IN_W, IN_I = 16, 2        # must match src/fft_top.hpp
 TW_W, TW_I = 18, 2
 
+#: Transform lengths the Python model implements.  ``fft16`` is specific to ``L = R^2``; a
+#: general ``L = R^S`` needs the stage loop generalised and per-stage twiddle indices derived.
+#: See ../PLAN.md "S5".
+MODEL_LENGTHS = {16: fft16}
+
 
 def _read_input(path: Path) -> tuple[np.ndarray, np.ndarray, int, int]:
     nums = [ln.split() for ln in path.read_text().splitlines()
@@ -63,11 +72,12 @@ def _signed(bits: np.ndarray, w: int) -> np.ndarray:
 
 def _model(in_re: np.ndarray, in_im: np.ndarray, out_w: int) -> tuple[np.ndarray, np.ndarray]:
     """Run the Python model over every vector, returning stored-bit arrays."""
+    fn = MODEL_LENGTHS[in_re.shape[1]]
     re_out = np.zeros_like(in_re)
     im_out = np.zeros_like(in_im)
     for v in range(in_re.shape[0]):
-        r, i, fmt = fft16(_signed(in_re[v], IN_W), _signed(in_im[v], IN_W),
-                          IN_W, IN_I, TW_W, TW_I, mode=NO_SCALING)
+        r, i, fmt = fn(_signed(in_re[v], IN_W), _signed(in_im[v], IN_W),
+                       IN_W, IN_I, TW_W, TW_I, mode=NO_SCALING)
         if fmt.W != out_w:
             raise SystemExit(f"model output width {fmt.W} != Vitis {out_w}")
         re_out[v] = np.asarray(fp.to_bits(np.asarray(r, dtype=np.int64), out_w))
@@ -85,23 +95,32 @@ def main() -> int:
     in_re, in_im, n_vec, n_samp = _read_input(HERE / "data" / "input.txt")
     csim_re, csim_im, out_w, out_i = _read_output(HERE / "results" / "output_csim.txt")
     cosim_re, cosim_im, _, _ = _read_output(HERE / "results" / "output_cosim.txt")
-    mdl_re, mdl_im = _model(in_re, in_im, out_w)
-
-    checks = [("C-sim   vs Python model", csim_re, csim_im, mdl_re, mdl_im),
-              ("Co-sim  vs Python model", cosim_re, cosim_im, mdl_re, mdl_im),
-              ("C-sim   vs Co-sim      ", csim_re, csim_im, cosim_re, cosim_im)]
+    have_model = n_samp in MODEL_LENGTHS
+    checks = [("C-sim   vs Co-sim      ", csim_re, csim_im, cosim_re, cosim_im)]
+    mdl_re = mdl_im = None
+    if have_model:
+        mdl_re, mdl_im = _model(in_re, in_im, out_w)
+        checks = [("C-sim   vs Python model", csim_re, csim_im, mdl_re, mdl_im),
+                  ("Co-sim  vs Python model", cosim_re, cosim_im, mdl_re, mdl_im)] + checks
 
     if not args.quiet:
         print(f"input   : {n_vec} vectors x {n_samp} samples, ap_fixed<{IN_W},{IN_I}>")
-        print(f"output  : ap_fixed<{out_w},{out_i}>  (raw stored integers)\n")
-        print("  vec | C-sim vs model | cosim vs model | C-sim vs cosim")
-        print("  ----+----------------+----------------+---------------")
+        print(f"output  : ap_fixed<{out_w},{out_i}>  (raw stored integers)")
+        if not have_model:
+            print(f"\n  NOTE: the Python model does not implement L={n_samp} "
+                  f"(it covers {sorted(MODEL_LENGTHS)}).")
+            print("        Running the C-sim vs Co-sim check only -- that one needs no model,")
+            print("        and still proves synthesis preserved the C++ behaviour exactly.")
+        print()
+        head = " | ".join(name.strip().ljust(14) for name, *_ in checks)
+        print(f"  vec | {head}")
+        print("  ----+-" + "-+-".join("-" * 14 for _ in checks))
         for v in range(n_vec):
             cells = []
             for _, ar, ai, br, bi in checks:
                 bad = int((ar[v] != br[v]).sum() + (ai[v] != bi[v]).sum())
-                cells.append("     exact    " if bad == 0 else f"  {bad:3d} DIFFER  ")
-            print(f"  {v:3d} |{cells[0]}|{cells[1]}|{cells[2]}")
+                cells.append("    exact     " if bad == 0 else f" {bad:4d} DIFFER ")
+            print(f"  {v:3d} | " + " | ".join(cells))
         print()
 
     failed = 0
@@ -113,7 +132,9 @@ def main() -> int:
             print(f"  {name}: {'BIT-EXACT' if bad == 0 else f'{bad}/{total} DIFFER'}  "
                   f"({total} values)")
 
-    if args.show is not None:
+    if args.show is not None and not have_model:
+        print(f"\n  --show needs the Python model, which does not implement L={n_samp}.")
+    elif args.show is not None:
         v = args.show
         print(f"\n  vector {v}, sample by sample (stored ints, then real value)")
         lsb = 2.0 ** -(out_w - out_i)
