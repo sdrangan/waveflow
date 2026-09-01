@@ -829,3 +829,63 @@ last place the message can still name the two declarations.
 
 **So S2 is a consumer plus its gates, and one four-line routing fix.** The plan asked not to
 manufacture interface work to fill the stage, and there was none to do.
+
+### Checkpoint 1 — the RX pair, and the channel the lock does not provide
+
+**`waveflow/hw/rf_pingpong_rx.py`: `PingPongCapture`, `PingPongWindow`, `RfPingPongRx`.**  The
+capture is the owner and it **writes**; the window reader is the requester and it **reads** — the
+inversion checkpoint 0 made bindable.
+
+**There is a `rdy` channel, and its existence is a finding rather than an oversight.**
+
+> **The lock arbitrates; it does not synchronise.**  It answers *may I touch these addresses* and has
+> no way to say *there is something there worth touching*.
+
+A reader that alternated blindly would acquire a half the capture had not filled and drain zeros —
+the plausible-samples failure this arc keeps meeting.  So the capture announces each region as it
+completes it, exactly as `RfShotBufLoad` announces a shot, and the reader blocks on the announcement
+before it asks for anything.  One word, and the word is the region's **base address**: an index would
+be a second encoding of a geometry the lock already speaks in addresses.
+
+**Its depth is `N_REGION`, and that is an invariant rather than a guess.**  At most `N_REGION`
+regions can be full at once, so at most that many announcements can be outstanding — which is what
+lets the capture write the channel *blocking* and still never stall.  A shallower channel would make
+the capture block on a reader, which is back-pressuring an ADC.
+
+**A region is free when it is RELEASED, not when it is taken.**  The capture keeps a `full` flag per
+region, set when it finishes filling one and cleared by the *release*.  If taking a region freed it,
+the capture could refill the half a reader is still draining — the collision, arrived at from the
+bookkeeping rather than from the lock.  This is also what makes the drop condition reachable at all:
+when neither region is free, the block has nowhere to go.
+
+**The capture takes its input first and unconditionally.**  A body that read only when it had room
+would be back-pressuring an ADC, and it would make the drop counter read *zero* for a design that was
+quietly losing everything upstream instead.  `test_the_capture_never_stalls_its_input` asserts every
+presented block was taken, and that `written + dropped == presented`.
+
+**On RX the ordering rule that TX turns on costs nothing — and the guard still has to be there.**
+The reader only ever asks for a region the capture has already announced and moved off, so no state
+change precedes the grant.  A design that drifted into granting the half it is filling would corrupt
+a window silently, so `test_the_capture_never_grants_a_region_it_is_filling` drives that case
+directly and the interface's own guard catches it.
+
+#### MEASURED (pysim, 40 blocks of 4 words at 4 Mword/s, `depth=64`, two regions of 32)
+
+| | clean | dirty (`stall_blocks=10`) |
+|---|---|---|
+| windows drained | **4** | 3 |
+| window bases | `[0, 32, 0, 32]` | `[0, 32, 0]` |
+| blocks taken off the input | **40** | **40** |
+| words written | **160** | 128 |
+| **words dropped** | **0** | **32** (8 blocks) |
+| grants | 4 | 3 |
+| gap visible between drained windows | **0** | **16** |
+
+**The counter and the samples do not have to be the same number, and asserting that they were was
+wrong.**  The first version of the dirty gate asserted equality and failed: 32 counted against 16
+visible.  The samples can only show loss that fell *between two windows the reader actually drained*;
+the counter also holds whatever was dropped after the last one, because the run ends with the reader
+still holding a window and the capture goes on losing blocks it will never announce.  So the relation
+is a **bound** — `0 < visible <= counted` — and every visible gap must be a whole number of blocks,
+because the capture drops a block at a time.  Asserting equality would have been asserting that the
+run stopped at a convenient moment.
