@@ -90,10 +90,15 @@ def _dft4(vr: list, vi: list, f: Format, first: bool) -> tuple[list, list, Forma
                                     ftw, fprod)
             pr.append(r)
             pi.append(m)
-        l1r = [fp._apply_overflow(pr[0] + pr[1], facc1), fp._apply_overflow(pr[2] + pr[3], facc1)]
-        l1i = [fp._apply_overflow(pi[0] + pi[1], facc1), fp._apply_overflow(pi[2] + pi[3], facc1)]
-        out_r.append(fp._apply_overflow(l1r[0] + l1r[1], facc2))
-        out_i.append(fp._apply_overflow(l1i[0] + l1i[1], facc2))
+        # Each tree addition wraps at its OPERAND width, then widens on assignment -- measured,
+        # not assumed.  For the stage-2 group-0 bin-1 case the hardware stores -524288 where
+        # p2+p3 = +524288: a wrap at 20 bits (the product width) even though the accumulator is
+        # declared (21,6).  Wrapping at the accumulator width instead leaves that value at
+        # +524288 and the whole bin wrong.
+        l1r = [fp._apply_overflow(pr[0] + pr[1], fprod), fp._apply_overflow(pr[2] + pr[3], fprod)]
+        l1i = [fp._apply_overflow(pi[0] + pi[1], fprod), fp._apply_overflow(pi[2] + pi[3], fprod)]
+        out_r.append(fp._apply_overflow(l1r[0] + l1r[1], facc1))
+        out_i.append(fp._apply_overflow(l1i[0] + l1i[1], facc1))
     return out_r, out_i, facc2
 
 

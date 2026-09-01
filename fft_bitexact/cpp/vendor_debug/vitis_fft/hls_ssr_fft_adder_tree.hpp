@@ -18,6 +18,7 @@
 // File Name: hls_ssr_fft_adder_tree.hpp
 #ifndef __HLS_SSR_FFT_ADDER_TREE_H__
 #define __HLS_SSR_FFT_ADDER_TREE_H__
+#include "wf_trace.hpp"
 #include <complex>
 
 #include "vitis_fft/hls_ssr_fft_traits.hpp"
@@ -78,6 +79,7 @@ LOOP_TREE_LEVEL:
     for (int n = 0; n < t_numberOfTreeNodes / 2; n++) {
 #pragma HLS UNROLL
         m_outputData[n] = p_data[2 * n] + p_data[2 * n + 1];
+        WF_TRACE("tree_lvl", t_treeLevel * 16 + n, m_outputData[n]);
     }
     AdderTreeClass<t_numberOfTreeNodes / 2> AdderTreeClass_obj;
 
@@ -94,6 +96,7 @@ void AdderTreeClass<2>::createTreeLevel(T_in p_data[2], T_out& p_accumValue) {
 #pragma HLS ARRAY_PARTITION variable = p_data complete dim = 1
 
     p_accumValue = p_data[1] + p_data[0];
+    WF_TRACE("tree_base", t_treeLevel, p_accumValue);
 }
 
 } // end namespace fft

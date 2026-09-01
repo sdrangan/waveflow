@@ -40,7 +40,7 @@ def test_golden_shape_and_config(g):
     assert g["output_order"] == "SSR_FFT_NATURAL"
     assert g["transform_direction"] == "FORWARD_TRANSFORM"
     assert g["butterfly_rnd_mode"] == "TRN"
-    assert len(g["vectors"]) == 5
+    assert len(g["vectors"]) == 12
     for v in g["vectors"]:
         assert len(v["input"]) == 16 and len(v["output"]) == 16
 

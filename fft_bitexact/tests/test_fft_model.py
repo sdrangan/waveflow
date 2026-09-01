@@ -16,7 +16,9 @@ from waveflow.utils import fixputils as fp
 from fft_bitexact.wf_fft.fft import fft16
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "fft_L16_R4_noscale_natural.json"
-NAMES = {0: "ramp", 1: "pseudo-random", 2: "impulse", 3: "constant", 4: "alternating-extremes"}
+NAMES = {0: "ramp", 1: "pseudo-random", 2: "impulse", 3: "constant", 4: "alternating-extremes",
+         5: "all-most-negative", 6: "all-most-positive", 7: "half-and-half", 8: "prng-a",
+         9: "prng-b", 10: "mixed-extremes-a", 11: "mixed-extremes-b"}
 
 
 @pytest.fixture(scope="module")
@@ -42,22 +44,21 @@ def _run(g: dict, v: int) -> tuple[int, int]:
             int((mi != np.array([e["im"] for e in vec["output"]])).sum()))
 
 
-@pytest.mark.parametrize("v", [0, 1, 2, 3], ids=[NAMES[i] for i in (0, 1, 2, 3)])
+@pytest.mark.parametrize("v", sorted(NAMES), ids=[NAMES[i] for i in sorted(NAMES)])
 def test_fft_is_bit_exact(g, v):
-    """THE S2 GATE: sequential radix-4 model == Vitis, stored bit for stored bit."""
+    """THE S2 GATE: sequential radix-4 model == Vitis, stored bit for stored bit.
+
+    Twelve vectors, seven of which (v5-v11) were added *after* the overflow rule was derived
+    from v4 -- so they are confirmation, not the cases the model was fitted to.  Five of those
+    seven sit on or across the accumulator boundary, which is where the model was wrong before.
+    """
     bad_re, bad_im = _run(g, v)
     assert (bad_re, bad_im) == (0, 0), f"v{v} diverges: {bad_re} re, {bad_im} im of 16"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ONE value of 32 still differs (was 25 before per-stage tracing): y[4].re, where the library "
-    "gives -32.0 and the model gives 0. Per-stage tracing (cpp/dump_stages.cpp) confirms stage 1 "
-    "matches the hardware exactly, 0/16, and that the stage-2 group-0 products sum to zero -- yet "
-    "the library's bfly_out for that bin is -1048576. So an overflow occurs inside the stage-2 "
-    "adder tree that the modelled accumulator formats do not reproduce. Bin 0 of the same group "
-    "matches exactly, so the tree shape is right; it is the intermediate width that is not."))
-def test_fft_bit_exact_at_overflow_boundary(g):
-    assert _run(g, 4) == (0, 0)
+def test_every_vector_is_covered(g):
+    """The golden must carry all twelve -- a short regen would silently shrink the gate."""
+    assert sorted(x["v"] for x in g["vectors"]) == sorted(NAMES)
 
 
 def test_the_gate_has_teeth(g):
@@ -70,3 +71,27 @@ def test_the_gate_has_teeth(g):
     finally:
         m.twiddle_stored = real
     assert (bad_re + bad_im) > 0, "perturbing the twiddle table did not change the output"
+
+
+def test_wrapping_at_accumulator_width_would_be_wrong(g):
+    """Teeth for the overflow rule specifically.
+
+    Tree additions wrap at their OPERAND width and widen on assignment.  Wrapping at the
+    accumulator width instead -- the natural reading of the declared types -- is wrong, and only
+    the boundary vectors show it.  If this starts passing, the rule has been "simplified" away.
+    """
+    import fft_bitexact.wf_fft.fft as m
+    real = m.fp._apply_overflow
+    seen = {}
+
+    def widened(q, fmt):
+        seen["hit"] = True
+        return real(q, m._f(fmt.W + 1, fmt.int_bits + 1))
+
+    m.fp._apply_overflow = widened
+    try:
+        bad = sum(sum(_run(g, v)) for v in (4, 5, 6, 7))
+    finally:
+        m.fp._apply_overflow = real
+    assert seen.get("hit"), "patch never fired -- the test is inert"
+    assert bad > 0, "wrapping one bit wider made no difference; the rule is unpinned"

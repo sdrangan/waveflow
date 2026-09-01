@@ -46,14 +46,23 @@ typedef ssr_fft_output_type<fft_params, T_in>::t_ssr_fft_out T_out;
 // Several independent vectors: identifying the network on one and confirming on the others is
 // what separates "the model is right" from "the model was fitted to one case".
 //   v0 linear ramp   v1 pseudo-random   v2 impulse   v3 constant   v4 alternating extremes
-static const int N_VEC = 5;
+static const int N_VEC = 12;
 static int in_re_bits(int v, int n) {
     switch (v) {
         case 0: return (n * 2731 + 17) % (1 << IN_W);
         case 1: return (int)((n * 40503u + 20759u) * 2654435761u % (1u << IN_W));
         case 2: return n == 0 ? (1 << (IN_W - 2)) : 0;
         case 3: return 12345;
-        default: return (n % 2) ? ((1 << (IN_W - 1)) - 1) : (1 << (IN_W - 1));
+        case 4: return (n % 2) ? ((1 << (IN_W - 1)) - 1) : (1 << (IN_W - 1));
+        // 5..11 exercise the overflow boundary from several directions -- the wrap rule was
+        // derived from v4 alone, so it must be confirmed on cases it was not fitted to.
+        case 5: return (1 << (IN_W - 1));                      // all most-negative
+        case 6: return ((1 << (IN_W - 1)) - 1);                // all most-positive
+        case 7: return (n < 8) ? (1 << (IN_W - 1)) : ((1 << (IN_W - 1)) - 1);
+        case 8: return (int)((n * 22367u + 5u) * 65521u % (1u << IN_W));
+        case 9: return (int)((n * 31337u + 4099u) * 2654435761u % (1u << IN_W));
+        case 10: return (n % 4 == 0) ? (1 << (IN_W - 1)) : (n * 8191) % (1 << IN_W);
+        default: return (n % 3 == 0) ? ((1 << (IN_W - 1)) - 1) : 0;
     }
 }
 static int in_im_bits(int v, int n) {
@@ -62,7 +71,14 @@ static int in_im_bits(int v, int n) {
         case 1: return (int)((n * 15485u + 7919u) * 40503u % (1u << IN_W));
         case 2: return n == 3 ? -(1 << (IN_W - 2)) & ((1 << IN_W) - 1) : 0;
         case 3: return (1 << IN_W) - 9876;
-        default: return (n % 2) ? (1 << (IN_W - 1)) : ((1 << (IN_W - 1)) - 1);
+        case 4: return (n % 2) ? (1 << (IN_W - 1)) : ((1 << (IN_W - 1)) - 1);
+        case 5: return (1 << (IN_W - 1));
+        case 6: return ((1 << (IN_W - 1)) - 1);
+        case 7: return (n < 8) ? ((1 << (IN_W - 1)) - 1) : (1 << (IN_W - 1));
+        case 8: return (int)((n * 7331u + 991u) * 40503u % (1u << IN_W));
+        case 9: return (int)((n * 15013u + 733u) * 15485u % (1u << IN_W));
+        case 10: return (n % 4 == 1) ? ((1 << (IN_W - 1)) - 1) : (n * 4093) % (1 << IN_W);
+        default: return (n % 3 == 1) ? (1 << (IN_W - 1)) : 0;
     }
 }
 

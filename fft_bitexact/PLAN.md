@@ -8,7 +8,7 @@ file is the argument, this one is the working record.  Where they disagree, this
 
 | | |
 |---|---|
-| Status | **S1 DONE**; **S2 mostly done** — model bit-exact on 4/5 vectors; overflow-boundary case is a known, pinned gap. |
+| Status | **S1 DONE. S2 DONE** — bit-exact on all 12 vectors, boundary cases included. S3/S4 next. |
 | Waveflow | `main` @ `e360b74` |
 | Vitis | 2025.1 (`/tools/Xilinx/2025.1`) |
 | Vitis DSP source | `/home/marco/AmirProjects/Vitis_Libraries_2025.1` (`2025.1` = `v2025.1_update2`) |
@@ -172,89 +172,66 @@ validated composition, but `complex_multiply` is FFT-specific and probably shoul
 become a library primitive — it encodes this design's quantization points, not complex
 arithmetic in general.
 
-### The network — `wf_fft/fft.py`, bit-exact on 4 of 5 vectors
+### The network — `wf_fft/fft.py`, **bit-exact on all 12 vectors**
 
 Decomposition for `L = R^2`, `n = n2 + R*n1`, `k = k1 + R*k2`:
 
     X[k1 + R k2] = sum_n2 W_R^{n2 k2} * ( W_L^{n2 k1} * ( sum_n1 x[n2 + R n1] W_R^{n1 k1} ) )
 
-Three facts out of the source made this tractable:
+**The formats were measured, not derived.**  Two rounds of reading the source and reasoning
+about `ButterflyTraits` produced two different models, both wrong.  Instrumenting a copy of the
+headers settled it in minutes.  Measured (`cpp/dump_stages.cpp`):
 
-* **The radix-4 DFT is exact.**  `W_R^k` for `R=4` is exactly `{1, -j, -1, +j}` (stored
-  `±65536`), so the butterfly multiplies are sign flips and swaps — no rounding at all.
-* **The adder tree is exact.**  It accumulates into `ap_fixed<W+1, I+1>`
-  (`hls_ssr_fft_butterfly_traits.hpp:34-37`), which *is* `add_format`.  Growth, not loss.
-* **So the rotation is the only lossy step** — one `complexMultiply` per sample per stage
-  boundary.  The whole transform loses precision in exactly one place.
-
-That accounts for the width exactly: `16,2` → 2 adder levels → `18,4` → first-stage rotation
-growth (`COMPLEX_ROTATED_BIT_GROWTH = 1`) → `19,5` → 2 more levels → `21,7`, which equals
-`in_W + log2(L) + 1`.
-
-Verified on **five independent input vectors**, not one — identifying a structure on a single
-case and declaring victory is how a fitted model passes.
-
-| vector | result |
-|---|---|
-| ramp, pseudo-random, impulse, constant | **bit-exact, 0/32 each** |
-| alternating extremes | **25/32 wrong — known gap** |
-
-### ⚠️ The open gap: intermediate overflow
-
-`v4` drives every input to ±full scale, so stage-1 sums land exactly on the `I=4` accumulator
-boundary (±8) and the hardware's intermediate **wrapping** dominates.  The model returns the
-mathematically correct spectrum (zero outside `k = 0, 8`); the library returns large wrap
-artifacts (`±65536`, `-329472`).  So this is not a 1-LSB rounding subtlety — it is a different
-overflow path, and it shows only at full scale.
-
-Tried, and did **not** fix it: applying overflow per adder-tree level rather than once; keeping
-the `W_4` rotation in exact integers so negating the most-negative value cannot wrap.
-
-Pinned by `test_fft_bit_exact_at_overflow_boundary` (`xfail(strict=True)`, so it announces
-itself the moment it starts passing).
-
-#### Investigation so far — the butterfly's real shape, and why it has not closed
-
-`hls_ssr_fft_parallel_fft_kernel.hpp:60-89` gives the butterfly exactly::
-
-    typedef ButterflyTraits<isFirstStage, mode, T_bflyIn>::T_butterflyComplexRotatedType T_productType;
-    typedef ButterflyTraits<isFirstStage, mode, T_productType>::T_butterflyAccumType     stage_accum;
-    T_productType product_vector[R];
-    for j: complexMultiply(D0[j], local_rN_kernel[i][j], product_vector[j]);
-    AdderTreeClass<R>::createTreeLevel(product_vector, D0t[i]);       // D0t is stage_accum
-
-So the `W_R` rotation **is** a `complexMultiply`, into `T_butterflyComplexRotatedType` =
-`ap_fixed<W+1, I + (isFirstStage ? 1 : 0)>` — *not* the max/max `FFTMultiplicationTraits`
-product format.  And `AdderTreeClass<2>`'s base case assigns into the caller's `T_out`, so the
-last tree level does not pass through the accumulator type.
-
-Two models, neither right everywhere:
-
-| model | v0-v3 (in range) | v4 (extremes) |
+| | stage 1 (`isFirst`) | stage 2 |
 |---|---|---|
-| exact `W_R` rotation, accum `(W+2, I+2)` — **committed** | **0/32 each** | 25/32 |
-| source-faithful `complexMultiply` rotation, inter-stage `(dW=1, dI=2)` | 16, 24, 8, 0 | 13/32 |
+| `bfly_in` | `(16,2)` | `(19,5)` |
+| `bfly_prod` | `(17,3)` | `(20,5)` |
+| `tree_lvl` | `(18,4)` | `(21,6)` |
+| `bfly_out` | `(19,5)` | `(22,7)` → cast to `(21,7)` |
 
-The second is the one the source text implies, and it is *worse* on every in-range vector while
-being better at the extremes.  The disagreement localises to the **inter-stage rotation
-format**: the committed model needs `(19,5)` to reach `(21,7)`, the source-faithful one needs
-`(19,6)`.  Only `(dW=1, dI=2)` reproduces the `(21,7)` output width at all under the second
-reading, and it does not reproduce the bits.
+Three things that reading alone had got wrong: a radix-4 stage carries **two** accumulator
+levels, so stage 1 emits `(19,5)` not `(18,4)`; the inter-stage rotation **preserves** the
+format rather than widening it; and the internal `(22,7)` is cast down to the declared output
+width at the end.
 
-Ruled out along the way: applying overflow once vs per adder-tree level (no change); keeping
-the `W_4` rotation in exact integers (no change); routing `W_4` through the max/max product
-format (gives `(23,7)`, wrong width).
+### The overflow rule — the last bit, and the subtlest
 
-**Conclusion: guessing formats against the end-to-end golden has stopped converging, and the
-committed 4/5 model is not obviously a step on the way to the right one.**  The remaining step
-is real instrumentation — copy the fixed-FFT headers into a debug tree, add per-stage dumps,
-and compare stage by stage.  That is a larger piece of work than it looked, and it is the only
-thing that will settle whether `isFirstStage` is what the width accounting says it is.
+Tree additions **wrap at their OPERAND width and widen on assignment**, not at the accumulator
+width the declared types suggest.  The decisive evidence, from the trace on the one value that
+still differed:
+
+    prod[2] + prod[3] = +524288        (both ap_fixed<20,5>)
+    hardware stores    -524288         -> a wrap at 20 bits, the PRODUCT width
+    yet the accumulator is declared (21,6), which holds +524288 comfortably
+
+Wrapping at `(21,6)` leaves that value at `+524288` and the whole bin wrong.  This is invisible
+on in-range data — it only bites when a sum crosses the operand boundary — which is exactly why
+the first model looked perfect on four vectors and was wrong.
+
+### Validation
+
+Twelve vectors.  **Seven (v5–v11) were added *after* the rule was derived from v4**, so they
+are confirmation rather than the cases the model was fitted to; five of the seven sit on or
+across the accumulator boundary.  All bit-exact, 0/32 each.
+
+Two teeth tests keep the gate honest: perturbing the twiddle table must break it, and wrapping
+one bit wider (the natural misreading) must break it.  Both assert the patch actually fired, so
+neither can go inert.
 
 ### Remaining
 
-* Localise the overflow path with per-stage goldens; retire the xfail.
-* Then S3/S4 below — noting `cquantize` already exists and is validated.
+S2 is closed.  Next:
+
+* **S3** — promote `cquantize` into `waveflow/hw/complexfield.py` (it is a thin, validated
+  composition).  `complex_multiply` should probably stay here: it encodes this design's
+  quantization points, not complex arithmetic in general.
+* **S4** — `SSR_FFT_SCALE` and `SSR_FFT_GROW_TO_MAX_WIDTH`, then larger `L` and other radices.
+  `ext_len` and the `L = R^2` decomposition are the parts that generalise least; expect to
+  re-measure rather than re-derive.
+
+**Method note for whoever picks this up:** instrument first.  Two rounds of reasoning from the
+headers produced two confidently wrong models; the tracer produced the right one immediately and
+is reusable (`cpp/vendor_debug/` + `-DWF_FFT_TRACE`).
 
 Model **the arithmetic, not the parallelism**: SSR is a throughput/layout property, so a
 sequential model is bit-identical to any SSR factor.  Needs no changes to `waveflow/` —
