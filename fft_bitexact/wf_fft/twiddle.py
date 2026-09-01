@@ -58,14 +58,12 @@ def twiddle_complex_type(w: int = TWIDDLE_W, i: int = TWIDDLE_I) -> type[Complex
 def ext_len(length: int, radix: int) -> int:
     """``TwiddleTableLENTraits<L, R>::EXTENDED_TWIDDLE_TALBE_LENGTH``.
 
-    Confirmed = ``L`` for the S1 case (L=16, R=4) by dumping it from the C++ side.  The general
-    formula is not modelled, so anything else raises rather than guessing.
+    Deprecated alias for :func:`quarter_table_len`, kept because the S1 tests and docs name it.
+    It once raised for anything but ``L=16``; that was superseded when the quarter-wave path was
+    measured at 16, 64 and 1024, and leaving two functions answering the same question -- one of
+    them wrong by omission -- was the actual hazard.
     """
-    if length == 16 and radix == 4:
-        return 16
-    raise NotImplementedError(
-        f"ext_len not yet modelled for L={length}, R={radix} -- dump it from "
-        "cpp/dump_twiddle.cpp and extend this function with the value it reports.")
+    return quarter_table_len(length, radix)
 
 
 def twiddle_ideal(length: int, n: int) -> np.ndarray:

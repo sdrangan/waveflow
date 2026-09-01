@@ -98,10 +98,15 @@ im, _ = fixputils.fixed_sum(cx.im_of(v), fmt, axis=axis)
 return _wrap_complex(cx.make_complex(re, im, r), _result_inner(ea.kind, r))
 ```
 
-One caution: `shift` is a **lossless point-move** (stored bits unchanged, format
-reinterpreted).  `SSR_FFT_SCALE` wants a lossy right-shift, so it is `cshift` **composed with**
-`cquantize` back to the working width, not `cshift` alone.  Anyone reading `shift`'s name and
-assuming it discards LSBs will produce a model that is wrong in a way csim will catch late.
+One caution, since `shift` is a **lossless point-move** (stored bits unchanged, format
+reinterpreted): anyone reading its name and assuming it discards LSBs will produce a model that
+is wrong in a way csim catches late.
+
+> **This paragraph originally continued "`SSR_FFT_SCALE` wants a lossy right-shift, so it is
+> `cshift` composed with `cquantize`."  S4 measured the mode and there is no shift in the
+> datapath at all** — `SCALE` holds the accumulator *width* fixed while the integer part grows,
+> so each level drops a fractional bit as a consequence of the declared format.  `cshift` was
+> never needed and never written.
 
 ## v1 scope: the default parameter struct, and why
 
@@ -122,19 +127,26 @@ Line these up against what Waveflow has **today**:
 
 | default | today |
 |---|---|
-| `scaling_mode = SSR_FFT_NO_SCALING` | free — growth tracking already is this |
+| `scaling_mode = SSR_FFT_NO_SCALING` | growth tracking already is this |
 | `butterfly_rnd_mode = TRN` | `QMode.AP_TRN` |
 | twiddle cast (**rounding**, always) | `AP_RND` + `AP_SAT` |
 | `R = 4` | mechanical |
 
-**The default configuration needs no new arithmetic at all.**  So v1 targets it exactly —
-`R=4`, `SSR_FFT_NO_SCALING`, `TRN` butterflies, `AP_RND`/`AP_SAT` twiddles, `SSR_FFT_NATURAL` — with `L = 16`
-rather than 1024, small enough to diff by eye when a stage disagrees.
+So v1 targets the default exactly — `R=4`, `SSR_FFT_NO_SCALING`, `TRN` butterflies,
+`AP_RND`/`AP_SAT` twiddles, `SSR_FFT_NATURAL` — with `L = 16` rather than 1024, small enough to
+diff by eye when a stage disagrees.
 
-This deliberately inverts the notes' implied order.  The notes treat `cquantize` as
-groundwork; sequencing it first spends effort on the two *non-default* scaling modes before
-anything has proven the twiddle table matches — which is the thing most likely to be wrong.
-Do the free configuration first and the riskiest question gets answered first.
+> **This section originally concluded "the default configuration needs no new arithmetic at
+> all."  That was wrong**, and it is left here corrected rather than deleted because it is the
+> plan's most instructive mistake.  The table above compares *declared modes*, and every one of
+> them does match — but matching modes says nothing about **where** quantization is applied.  The
+> butterfly turned out to requantize after every twiddle multiply, into a type the library
+> derives per stage, so S2 needed `cquantize` after all and `cmult` turned out to be the wrong
+> primitive entirely.  A checklist of settings is not a model of a datapath.
+
+The ordering still stands, for a different reason than the one originally given.  Doing the
+default configuration first answers the riskiest question — does the twiddle table match — before
+any effort goes into the two non-default scaling modes.
 
 ## Stages
 
@@ -145,22 +157,43 @@ compared as raw stored integers, never floats.  It corrected this plan: the quan
 `AP_RND`/`AP_SAT`, not the truncation this document originally assumed, which S1 caught before
 anything was built on top of it.  Exactly what isolating risk corner #1 was for.
 
-**S2 — sequential radix-4 model.**  Butterflies + digit-reversal in `cadd`/`csub`/`cmult`, no
-scaling.  Model the **arithmetic, not the parallelism** — the notes' key simplification holds
-and should be restated in code comments: SSR is a throughput/layout property, so a sequential
-model is bit-identical to any SSR factor.  Golden = the Python model; assert against a real
-Vitis FFT through the `examples/schemas/complex` rig.
+**S2 — sequential radix-4 model.**  ✅ **DONE — bit-exact, 12 vectors at `L=16`.**  The key
+simplification held: SSR is a throughput/layout property, so a sequential model is bit-identical
+to any SSR factor.  Two predictions in this plan did **not**:
 
-**S3 — `cquantize` + `cshift`.**  Add them to `complexfield.py` on the `csum` pattern, extend
-the complex conformance harness to cover them (new ops in `_OPS` and `kernels.py::_OPCALL`).
-Now the arithmetic gap is closed, and closed with the same bit-exact evidence as everything
-else in that file.
+* *"butterflies in `cadd`/`csub`/`cmult`"* — `complexfield.cmult` is the **wrong primitive**.
+  The library truncates each partial product into the first operand's type before combining, so
+  a full-precision multiply plus one requantize is wrong in 18 of 24 real parts.
+* the per-stage widths were derived twice from the headers and were wrong twice; instrumenting a
+  copy of the headers settled them in minutes.
 
-**S4 — the other two scaling modes.**  `SSR_FFT_SCALE` (right-shift `log2(R)`/stage =
-`cshift` + `cquantize`) and `SSR_FFT_GROW_TO_MAX_WIDTH` (grow to 27 then saturate =
-`OMode.AP_SAT`).  Then widen `L` and radix.
+**S3 — `cquantize`.**  ✅ **DONE — promoted to `waveflow/hw/complexfield.py`, Vitis-validated.**
+`examples/schemas/complex` gained four `cquantize_*` cases over both `QMode` x both `OMode`;
+the suite runs 51/51 bit-exact.  **`cshift` was never added** — nothing needed it, and inventing
+an untested primitive for a mode S4 had not yet measured would have repeated the S2 mistake.
 
-S1 and S2 need no changes to `waveflow/` at all.
+**S4 — the other two scaling modes.**  ✅ **DONE — all three modes bit-exact, 36 runs.**  This
+plan predicted `SSR_FFT_SCALE` = *"right-shift `log2(R)`/stage = `cshift` + `cquantize`"*.
+Measurement says otherwise: **there is no shift operation in the datapath at all.**  All three
+modes grow the integer part identically and differ only in what happens to the *width*; `SCALE`
+holds the width fixed, so each accumulator level drops a fractional bit.  The shift is a
+consequence of a format rule, not an operation.
+
+**S5 — general `L = R^S`.**  ✅ **DONE — bit-exact at `L=16`, `64`, and `1024`**, the last
+against both C-simulation and co-simulated RTL (16384 values each).  Two behaviours appear only
+past `L=16`: the twiddle table is a **quarter wave** beyond that size (`L/4` entries, rebuilt by
+`readQuaterTwiddleTable` with an exact `-1` at `L/4` and `3L/4`), and a stage's output is
+**narrowed before** the twiddle rotation rather than inside the multiply.
+
+**S6 — other radices and the forked sizes.**  Not started.  `R=2/8/16` change the butterfly
+matrix and tree depth; sizes where `log2(L) % log2(R) != 0` (32, 128, 512 at `R=4`) take a
+different architecture that has not been examined.
+
+The working record, with the measurements behind each of these, is
+[`fft_bitexact/PLAN.md`](../fft_bitexact/PLAN.md); the runnable end-to-end checks are
+[`fft_bitexact/VERIFY.md`](../fft_bitexact/VERIFY.md).
+
+S1 and S2 needed no changes to `waveflow/` at all; S3 added exactly one function.
 
 ## What could still go wrong
 

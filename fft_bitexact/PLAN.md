@@ -84,18 +84,19 @@ guess would have been wrong at over half the table.
 
 ### Other S1 notes
 
-* `EXTENDED_TWIDDLE_TALBE_LENGTH` = **16** for `L=16, R=4` (dumped from C++; the general
-  formula is not yet modelled — `ext_len()` raises rather than guessing).
+* `EXTENDED_TWIDDLE_TALBE_LENGTH` = **16** for `L=16, R=4` (dumped from C++).  S5 later measured
+  it at 64 and 1024 and found it is `L` up to 16 and `L/4` beyond — see `quarter_table_len`.
 * `I = 2` integer bits is load-bearing: `ap_fixed<18,2>` stores `1.0` exactly as `2^16`.  With
   `I=1` every axis twiddle would saturate just short of 1.  Pinned by `test_axis_points_are_exact`.
 * `imag = -sin(...)` negates in `double` **before** quantizing.  Under `AP_RND` (round half **up**, toward
   +inf -- `-0.5 lsb` -> `0`) that differs from quantize-then-negate.  `L=16` happens not to discriminate the two —
   the test skips, honestly, and says to revisit at larger `L`.
 
-## S2 — sequential radix-4 model  ← IN PROGRESS
+## S2 — sequential radix-4 model  ✅ DONE
 
-**Done:** golden captured, output ordering pinned, growth formulas extracted.
-**Not done:** the bit-exact model itself.
+Bit-exact on 12 vectors at `L=16`.  The narrative below is kept in the order it happened,
+because the wrong turns are the useful part: the golden and ordering came first, then a model
+that looked right on four vectors and was wrong on the fifth, then per-stage tracing.
 
 The real `xf::dsp::fft::fft<>` compiles and runs **natively under g++** — `hls::stream` in csim
 mode is an ordinary queue — so the S2 golden costs milliseconds, like S1's.  Config is the
@@ -263,9 +264,12 @@ partial products truncated into `T_op1` before combining — not complex arithme
 Promoting it would put an FFT-shaped assumption in a general-purpose module, and the natural
 reading of its name would be wrong: it is not "multiply two complex numbers".
 
-`cshift` was also not added.  Nothing needs it yet: the FFT's `SSR_FFT_NO_SCALING` path never
-shifts, and inventing an untested primitive for `SSR_FFT_SCALE` before S4 measures what that
-mode actually does would repeat the mistake this plan already made twice.
+`cshift` was also not added, and S4 justified that decision better than the reasoning behind it:
+**no scaling mode shifts.**  `SSR_FFT_SCALE` holds the accumulator width fixed while the integer
+part grows, so each level drops a fractional bit as a consequence of its declared format — there
+is no shift operation anywhere in the datapath.  Had `cshift` been written up front, on the
+assumption that a mode called SCALE shifts, it would have been an untested primitive modelling
+an operation that does not exist.
 
 ### Hygiene
 

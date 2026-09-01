@@ -48,10 +48,13 @@ For `L=1024` that gives `16 + 3*5 - 4 = 27` total bits and `2 + 3 + 2*4 = 13` in
 matching the declared output `ap_fixed<27,13>` and the library's own
 `OUTPUT_WL = in_W + log2(L) + 1`.
 
-> **Not independently measured at L=1024.**  The rule above is extrapolated from measurements
-> at `L=16` (2 stages) and `L=64` (3 stages).  It predicts the output format correctly, which is
-> a real check, but the per-stage widths here have not been traced.  Do that before relying on
-> them — `../cpp/dump_modes.cpp` handles any configuration.
+> **The per-stage widths here are extrapolated; the end-to-end result is not.**  The width rule
+> was traced at `L=16` (2 stages) and `L=64` (3 stages) and extended to 5 stages.  It predicts
+> this design's declared output `ap_fixed<27,13>` correctly, and the Python model built on it is
+> **bit-exact against both the C-simulation and the co-simulated RTL here** (16384 values each),
+> which no wrong intermediate width would survive.  The individual stage widths at `L=1024` have
+> still not been traced directly; `../cpp/dump_modes.cpp` handles any configuration if you want
+> them confirmed rather than inferred.
 
 Three details that decide the low bits:
 
