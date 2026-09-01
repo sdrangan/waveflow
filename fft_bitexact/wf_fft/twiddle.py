@@ -97,3 +97,68 @@ def twiddle_bits(length: int, radix: int, w: int = TWIDDLE_W, i: int = TWIDDLE_I
     v = np.asarray(da.val)
     return (np.asarray(fixputils.to_bits(cx.re_of(v), w)),
             np.asarray(fixputils.to_bits(cx.im_of(v), w)))
+
+
+# --- quarter-wave table access ----------------------------------------------------------------
+def quarter_table_len(length: int, radix: int) -> int:
+    """``TwiddleTableLENTraits<L,R>::EXTENDED_TWIDDLE_TALBE_LENGTH`` -- measured, not derived.
+
+    ``L=16 -> 16`` (the whole circle), ``L=64 -> 16``, ``L=1024 -> 256`` (i.e. ``L/4``).  So for
+    anything past ``L=16`` the stored table holds only a quarter wave and the rest of the circle
+    is *reconstructed* -- see :func:`read_quarter_twiddle`.
+    """
+    return length if length <= 16 else length // 4
+
+
+def read_quarter_twiddle(index: int, tbl_im: np.ndarray, length: int,
+                         w: int = TWIDDLE_W, i: int = TWIDDLE_I) -> tuple[int, int]:
+    """``readQuaterTwiddleTable`` (``hls_ssr_fft_twiddle_table.hpp:103-148``).
+
+    Both the real and imaginary parts are read from the table's **imaginary** column (the
+    ``-sin`` quarter wave); the real part just enters at a ``+3L/4`` phase offset.  Everything
+    else is index symmetry:
+
+    * bit ``phase-2`` of the index inverts the LUT index (two's complement within its width)
+    * bit ``phase-1`` negates the output
+    * the two axis indices ``L/4`` and ``3L/4`` bypass the table entirely and return ``-1.0``
+
+    That last case is why this cannot be replaced by quantizing ``cos``/``sin`` directly: at the
+    axis points the hardware substitutes an exact ``-1``, and elsewhere it reuses one quarter of
+    the wave, so a value read here can differ by an LSB from an independently quantized one.
+    Returns ``(re, im)`` as *signed* stored integers.
+    """
+    phase = int(np.log2(length))
+    mask = (1 << phase) - 1
+    lut_w = phase - 2
+    lut_mask = (1 << lut_w) - 1
+    minus_one = -(1 << (w - i))                 # -1.0 in ap_fixed<w,i>
+    fmt = twiddle_type(w, i).get_format()
+
+    def path(idx: int) -> int:
+        idx &= mask
+        invert = (idx >> (phase - 2)) & 1
+        negate = (idx >> (phase - 1)) & 1
+        saturate = idx in (length // 4, 3 * length // 4)
+        lut_index = idx & lut_mask
+        if invert:
+            lut_index = (-lut_index) & lut_mask
+        temp = minus_one if saturate else int(tbl_im[lut_index])
+        if negate:
+            temp = int(fixputils._apply_overflow(np.array([-temp]), fmt)[0])
+        return temp
+
+    return path(index + 3 * length // 4), path(index)
+
+
+def quarter_twiddles(length: int, w: int = TWIDDLE_W, i: int = TWIDDLE_I
+                     ) -> tuple[np.ndarray, np.ndarray]:
+    """The full circle of twiddles as the hardware sees it -- via the quarter-wave path."""
+    ext = quarter_table_len(length, 4)
+    ideal = twiddle_ideal(length, ext)
+    fmt = twiddle_type(w, i).get_format()
+    tbl_im = fixputils.quantize_real(np.imag(ideal), fmt)
+    re = np.zeros(length, dtype=np.int64)
+    im = np.zeros(length, dtype=np.int64)
+    for n in range(length):
+        re[n], im[n] = read_quarter_twiddle(n, tbl_im, length, w, i)
+    return re, im

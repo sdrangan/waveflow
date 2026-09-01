@@ -39,6 +39,13 @@ OUT4="$ROOT/golden/fft_L16_R4_modes.json"
 "$BIN4" "$OUT4" >/dev/null
 echo "wrote $OUT4"
 
+# L=64 -- three stages, the case that pins the narrow-then-rotate rule
+BIN5="$(mktemp -d)/dump_fft_l64"
+g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN5" "$ROOT/cpp/dump_fft_l64.cpp"
+OUT5="$ROOT/golden/fft_L64_R4_noscale_natural.json"
+"$BIN5" "$OUT5" >/dev/null
+echo "wrote $OUT5"
+
 # complex primitives the butterfly is built from
 BIN3="$(mktemp -d)/dump_cxops"
 g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN3" "$ROOT/cpp/dump_cxops.cpp"

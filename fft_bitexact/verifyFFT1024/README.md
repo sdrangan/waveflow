@@ -3,29 +3,11 @@
 The 1024-point sibling of [`../verifyFFT16/`](../verifyFFT16/).  Same structure, same flow,
 same commands — only `FFT_L` differs.
 
-**Result on this machine: C-sim vs Co-sim bit-exact over 8 vectors (16384 values).**
+**Result on this machine: all three comparisons bit-exact over 8 vectors (16384 values each).**
 
-> ### What this folder can and cannot check yet
->
-> The Python model implements **L=16 only**, so the two model comparisons do not run here.
-> `verify.py` says so and runs the one check that needs no model:
->
-> | check | 16-point | 1024-point |
-> |---|---|---|
-> | C-sim vs Python model | ✅ | ✗ — no model at this L |
-> | Co-sim vs Python model | ✅ | ✗ — no model at this L |
-> | **C-sim vs Co-sim** | ✅ | ✅ **bit-exact** |
->
-> That remaining check is not a consolation prize: it proves synthesis preserved the C++
-> behaviour exactly across 16384 values, which is the property most likely to break silently.
-> But it does **not** validate the Python model at this size — nothing here does.
->
-> Generalising the model to `L = R^S` is the open item (`../PLAN.md`, "S5").  When it lands,
-> this folder starts checking all three with no changes: `verify.py` picks the model up from
-> `MODEL_LENGTHS`.
-
-Everything here is meant to be run and inspected by hand.  For *what* is being simulated and
-why the number formats are what they are, read [ARCHITECTURE.md](ARCHITECTURE.md).
+> The Python model covers any `L = 4^S`, so all three checks run here.  This is the stronger of
+> the two folders: 1024 points exposes two behaviours `L=16` cannot — the quarter-wave twiddle
+> table and the narrow-before-rotate rule — and both are matched exactly.
 
 ## What is in this folder
 
@@ -102,13 +84,11 @@ the 1-LSB differences that matter):
 Check 3 is not redundant: if 1 and 2 both failed identically it would show the model wrong
 rather than the flow broken, and vice versa.
 
-Expected tail (note the model comparisons are skipped, with the reason stated):
+Expected tail:
 
 ```
-  NOTE: the Python model does not implement L=1024 (it covers [16]).
-        Running the C-sim vs Co-sim check only -- that one needs no model,
-        and still proves synthesis preserved the C++ behaviour exactly.
-
+  C-sim   vs Python model: BIT-EXACT  (16384 values)
+  Co-sim  vs Python model: BIT-EXACT  (16384 values)
   C-sim   vs Co-sim      : BIT-EXACT  (16384 values)
 
 ALL COMPARISONS BIT-EXACT
@@ -118,8 +98,11 @@ Exit status is 0 only if every comparison is exact, so it can be scripted.
 
 ## Step 3 — look at the numbers yourself
 
-`--show` needs the Python model, so it is unavailable here; `verify.py` says so rather than
-printing something misleading.  Read the raw files instead:
+```bash
+python verify.py --show 1        # vector 1, sample by sample, with real values
+```
+
+Or read the raw files directly:
 
 To read the raw files directly:
 

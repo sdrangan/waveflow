@@ -20,6 +20,7 @@
 //#define __HLS_SSR_FFT_USE_FULL_WAVE_TWIDDLE_TABLE__
 //#define HLS_SSR_FFT_DISABLE_NATURAL_ORDER_172836475866778896
 #ifndef __SYNTHESIS__
+#include "wf_trace.hpp"
 #include <assert.h>
 #endif
 #include <complex>
@@ -119,6 +120,10 @@ L_TWIDDLE_FACTOR_MUL:
         }
 
         complexMultiply(p_inData[n], exp_factor, p_outData[n]);
+#ifdef WF_FFT_TRACE
+        { WfTraceRec r; r.tag = "tw_idx"; r.idx = (int)index; r.W = t_L; r.I = p_k;
+          r.re = n; r.im = 0; wf_trace_log().push_back(r); }
+#endif
     }
 }
 

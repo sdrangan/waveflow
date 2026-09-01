@@ -12,8 +12,8 @@ Same structure, same commands, same file formats — only the transform length d
 | input | `ap_fixed<16,2>` | `ap_fixed<16,2>` |
 | output | `ap_fixed<21,7>` | `ap_fixed<27,13>` |
 | vectors | 12 | 8 |
-| C-sim vs Python model | ✅ bit-exact | ✗ no model at this `L` |
-| Co-sim vs Python model | ✅ bit-exact | ✗ no model at this `L` |
+| C-sim vs Python model | ✅ bit-exact | ✅ bit-exact |
+| Co-sim vs Python model | ✅ bit-exact | ✅ bit-exact |
 | C-sim vs Co-sim | ✅ bit-exact (384) | ✅ bit-exact (16384) |
 | DSP / FF / LUT | 12 / 4017 / 6922 | 20 / 16381 / 21481 |
 | co-sim latency | 41 cycles | 1477 cycles |

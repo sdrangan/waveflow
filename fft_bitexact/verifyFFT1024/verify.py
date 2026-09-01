@@ -34,16 +34,16 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))          # repo root, so fft_bitexact/ imports
 
-from fft_bitexact.wf_fft.fft import NO_SCALING, fft16          # noqa: E402
+from fft_bitexact.wf_fft.fft import NO_SCALING, fft_general    # noqa: E402
 from waveflow.utils import fixputils as fp                      # noqa: E402
 
 IN_W, IN_I = 16, 2        # must match src/fft_top.hpp
 TW_W, TW_I = 18, 2
 
-#: Transform lengths the Python model implements.  ``fft16`` is specific to ``L = R^2``; a
-#: general ``L = R^S`` needs the stage loop generalised and per-stage twiddle indices derived.
-#: See ../PLAN.md "S5".
-MODEL_LENGTHS = {16: fft16}
+#: Transform lengths the Python model implements: any ``L = 4^S``.  ``fft_general`` covers the
+#: whole family; sizes that are not a power of the radix (32, 128, 512) take a different
+#: "forked" architecture in the library and are NOT covered.  See ../PLAN.md "S6".
+MODEL_LENGTHS = {4 ** s: fft_general for s in range(2, 8)}
 
 
 def _read_input(path: Path) -> tuple[np.ndarray, np.ndarray, int, int]:
@@ -72,11 +72,12 @@ def _signed(bits: np.ndarray, w: int) -> np.ndarray:
 
 def _model(in_re: np.ndarray, in_im: np.ndarray, out_w: int) -> tuple[np.ndarray, np.ndarray]:
     """Run the Python model over every vector, returning stored-bit arrays."""
-    fn = MODEL_LENGTHS[in_re.shape[1]]
+    length = in_re.shape[1]
+    fn = MODEL_LENGTHS[length]
     re_out = np.zeros_like(in_re)
     im_out = np.zeros_like(in_im)
     for v in range(in_re.shape[0]):
-        r, i, fmt = fn(_signed(in_re[v], IN_W), _signed(in_im[v], IN_W),
+        r, i, fmt = fn(_signed(in_re[v], IN_W), _signed(in_im[v], IN_W), length,
                        IN_W, IN_I, TW_W, TW_I, mode=NO_SCALING)
         if fmt.W != out_w:
             raise SystemExit(f"model output width {fmt.W} != Vitis {out_w}")
@@ -108,7 +109,7 @@ def main() -> int:
         print(f"output  : ap_fixed<{out_w},{out_i}>  (raw stored integers)")
         if not have_model:
             print(f"\n  NOTE: the Python model does not implement L={n_samp} "
-                  f"(it covers {sorted(MODEL_LENGTHS)}).")
+                  f"(it covers L = 4^S: {sorted(MODEL_LENGTHS)}).")
             print("        Running the C-sim vs Co-sim check only -- that one needs no model,")
             print("        and still proves synthesis preserved the C++ behaviour exactly.")
         print()

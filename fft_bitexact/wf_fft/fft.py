@@ -53,11 +53,16 @@ def exp_table_format(tw_w: int, tw_i: int) -> Format:
 
 
 def twiddle_stored(length: int, tw_w: int, tw_i: int) -> tuple[np.ndarray, np.ndarray]:
-    """``W_L^i`` as stored integers -- the inter-stage rotation table."""
-    ft = exp_table_format(tw_w, tw_i)
-    i = np.arange(length, dtype=np.float64)
-    return (fp.quantize_real(np.cos(2.0 * np.pi * i / length), ft),
-            fp.quantize_real(-np.sin(2.0 * np.pi * i / length), ft))
+    """``W_L^i`` as stored integers -- the inter-stage rotation table, **as the hardware reads it**.
+
+    Not a direct quantization of ``cos``/``sin``: past ``L=16`` the design stores only a quarter
+    wave (``EXTENDED_TWIDDLE_TALBE_LENGTH = L/4``) and rebuilds the circle with
+    ``readQuaterTwiddleTable``, substituting an exact ``-1`` at the two axis indices.  Reading
+    the full circle directly agrees at ``L=16`` and diverges by an LSB beyond it -- which is
+    what kept ``L=64`` off by 14 values.  See ``twiddle.quarter_twiddles``.
+    """
+    from .twiddle import quarter_twiddles
+    return quarter_twiddles(length, tw_w, tw_i)
 
 
 def _accumulate(a, b, operand: Format, target: Format):
@@ -241,6 +246,7 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
     n_stages = _log(length, R)
     fmts = stage_formats(in_w, in_i, n_stages, mode)
     ftw = exp_table_format(tw_w, tw_i)
+    tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i)
 
     # Values live in a flat array indexed by output position as it is progressively resolved.
     cur_re = [np.array([v]) for v in x_re]
@@ -256,7 +262,12 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
         f_in, _ = fmts[s]
         sub_len = len(blocks[0])
         m_count = sub_len // R
-        tw_r, tw_i_ = twiddle_stored(sub_len, tw_w, tw_i)
+        # ONE full-L table for every stage, with the index scaled -- `index = n * p_k` in
+        # hls_ssr_fft.hpp:107 is an ap_uint<log2(t_L)>, i.e. always the L-length phase space.
+        # With a DIRECT table W_L^(mq*L/sub) == W_sub^(mq) and the choice would not matter; with
+        # the quarter-wave reconstruction it does, because the two land on different LUT indices
+        # and different axis-saturation cases.
+        tw_scale = length // sub_len
         new_blocks = []
         for blk in blocks:
             rotated: dict = {}
@@ -269,10 +280,20 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
                         rotated[(q, m)] = (orr[q], oii[q])
                     else:
                         f_next = fmts[s + 1][0]
+                        idx = (m * q * tw_scale) % length
+                        # The stage output is narrowed to the NEXT stage's format BEFORE the
+                        # rotation, and the multiply then runs with that narrow type as its first
+                        # operand.  Narrowing inside the multiply instead -- the natural reading,
+                        # since complexMultiply takes a product type -- leaves 14 of 64 stage-3
+                        # inputs off by an LSB at L=64.  Measured, not deduced.
+                        a, b, op1 = orr[q], oii[q], g
+                        if (g.W, g.int_bits) != (f_next.W, f_next.int_bits):
+                            a = fp.quantize(a, g, f_next)
+                            b = fp.quantize(b, g, f_next)
+                            op1 = f_next
                         rotated[(q, m)] = complex_multiply(
-                            orr[q], oii[q], g,
-                            np.array([tw_r[(m * q) % sub_len]]),
-                            np.array([tw_i_[(m * q) % sub_len]]), ftw, f_next)
+                            a, b, op1,
+                            np.array([tw_r[idx]]), np.array([tw_i_[idx]]), ftw, f_next)
             # X[q + R*u] -- element q of the butterfly starts the sub-transform for residue q
             for q in range(R):
                 idxs = [blk[q + R * u] for u in range(m_count)]
