@@ -81,7 +81,15 @@ include-package-data = true
 # `rtl/**` ships the hand-written Verilog a module declares through `rtl_module()` (the memory a
 # kernel cannot contain).  Same reason as the XSI harness: GenRtlStep copies it into a design's
 # build tree, so without this a pip-installed user's build cannot find the file the hook names.
-"waveflow.build" = ["xsi/**", "rtl/**"]
+#
+# The top-level `*.h` / `*.hpp` / `*.tpp` / `*.cpp` are the HAND-WRITTEN TASK BODIES and the C++
+# support headers a build copies into a design's tree — `mem_*_task.h`, `rf_*_task.h`,
+# `shot_tx_*_task.h`, `mem_lock.h`, `streamutils_hls.h`, `memmgr.hpp`, and the rest.  They are the
+# other half of every hook component: the Python class names the body, and the step copies the file.
+# Tracked in git since they were written, but shipped by NEITHER the package-data globs above nor
+# MANIFEST.in (whose `recursive-include waveflow` covers only *.json/*.yaml/*.yml/*.txt/*.md), so a
+# pip-installed non-editable waveflow had every hook component fail on a missing source file.
+"waveflow.build" = ["xsi/**", "rtl/**", "*.h", "*.hpp", "*.tpp", "*.cpp"]
 
 # Pytest configuration
 [tool.pytest.ini_options]

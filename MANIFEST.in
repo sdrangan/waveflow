@@ -27,6 +27,13 @@ recursive-include waveflow/calib/fixtures *
 # be in the wheel: without them a pip-installed user gets "XSI harness source file not found".
 recursive-include waveflow/build/xsi *
 
+# The hand-written hls::task bodies and C++ support headers at the top of waveflow/build/ —
+# mem_*_task.h, rf_*_task.h, shot_tx_*_task.h, mem_lock.h, streamutils_hls.h, memmgr.hpp and the
+# rest.  A hook component is half Python (the class that names the body) and half this file (which
+# the build step copies into the design tree), so an sdist without them builds a wheel that cannot
+# compile any hook design.  The *.json/*.yaml/... recursion above does not reach these extensions.
+recursive-include waveflow/build *.h *.hpp *.tpp *.cpp
+
 # Exclude Python cache and build artifacts
 global-exclude __pycache__/
 global-exclude *.pyc
