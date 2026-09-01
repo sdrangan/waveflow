@@ -40,7 +40,9 @@ def test_golden_shape_and_config(g):
     assert g["output_order"] == "SSR_FFT_NATURAL"
     assert g["transform_direction"] == "FORWARD_TRANSFORM"
     assert g["butterfly_rnd_mode"] == "TRN"
-    assert len(g["input"]) == 16 and len(g["output"]) == 16
+    assert len(g["vectors"]) == 5
+    for v in g["vectors"]:
+        assert len(v["input"]) == 16 and len(v["output"]) == 16
 
 
 def test_no_scaling_growth_formula(g):
@@ -65,8 +67,9 @@ def test_output_is_natural_order(g):
     never explained by "maybe the order is wrong".  The tolerance is quantization noise; the
     bit-exact claim is a separate test (S2, not yet written).
     """
-    x = _complex(g["input"], g["in_W"], g["in_I"])
-    y = _complex(g["output"], g["out_W"], g["out_I"])
+    vec = next(v for v in g["vectors"] if v["v"] == 1)   # pseudo-random: no symmetry to hide behind
+    x = _complex(vec["input"], g["in_W"], g["in_I"])
+    y = _complex(vec["output"], g["out_W"], g["out_I"])
     ref = np.fft.fft(x)
 
     rel = np.abs(y - ref).max() / np.abs(ref).max()
@@ -76,6 +79,4 @@ def test_output_is_natural_order(g):
     assert np.abs(y - ref[order]).max() > 1.0, "bit-reversed should NOT match -- guard is inert"
 
 
-@pytest.mark.skip(reason="S2 bit-exact model not written yet -- golden and formulas are in place")
-def test_fft_is_bit_exact():
-    """THE S2 GATE (to come): sequential radix-4 model == Vitis, stored bit for stored bit."""
+# The S2 gate itself lives in test_fft_model.py.

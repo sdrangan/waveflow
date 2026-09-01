@@ -8,7 +8,7 @@ file is the argument, this one is the working record.  Where they disagree, this
 
 | | |
 |---|---|
-| Status | **S1 DONE**; **S2 in progress** — golden + ordering + growth formulas done, model pending. |
+| Status | **S1 DONE**; **S2 mostly done** — model bit-exact on 4/5 vectors; overflow-boundary case is a known, pinned gap. |
 | Waveflow | `main` @ `e360b74` |
 | Vitis | 2025.1 (`/tools/Xilinx/2025.1`) |
 | Vitis DSP source | `/home/marco/AmirProjects/Vitis_Libraries_2025.1` (`2025.1` = `v2025.1_update2`) |
@@ -172,11 +172,53 @@ validated composition, but `complex_multiply` is FFT-specific and probably shoul
 become a library primitive — it encodes this design's quantization points, not complex
 arithmetic in general.
 
-### Remaining
-* The radix-4 butterfly network + data commutation for `L=16, R=4` (2 stages).
-* Then the gate: `test_fft_is_bit_exact`, currently skipped with the reason recorded.
+### The network — `wf_fft/fft.py`, bit-exact on 4 of 5 vectors
 
-Butterflies + digit-reversal via `cadd`/`csub`/`cmult`, `SSR_FFT_NO_SCALING`, `L=16`, `R=4`.
+Decomposition for `L = R^2`, `n = n2 + R*n1`, `k = k1 + R*k2`:
+
+    X[k1 + R k2] = sum_n2 W_R^{n2 k2} * ( W_L^{n2 k1} * ( sum_n1 x[n2 + R n1] W_R^{n1 k1} ) )
+
+Three facts out of the source made this tractable:
+
+* **The radix-4 DFT is exact.**  `W_R^k` for `R=4` is exactly `{1, -j, -1, +j}` (stored
+  `±65536`), so the butterfly multiplies are sign flips and swaps — no rounding at all.
+* **The adder tree is exact.**  It accumulates into `ap_fixed<W+1, I+1>`
+  (`hls_ssr_fft_butterfly_traits.hpp:34-37`), which *is* `add_format`.  Growth, not loss.
+* **So the rotation is the only lossy step** — one `complexMultiply` per sample per stage
+  boundary.  The whole transform loses precision in exactly one place.
+
+That accounts for the width exactly: `16,2` → 2 adder levels → `18,4` → first-stage rotation
+growth (`COMPLEX_ROTATED_BIT_GROWTH = 1`) → `19,5` → 2 more levels → `21,7`, which equals
+`in_W + log2(L) + 1`.
+
+Verified on **five independent input vectors**, not one — identifying a structure on a single
+case and declaring victory is how a fitted model passes.
+
+| vector | result |
+|---|---|
+| ramp, pseudo-random, impulse, constant | **bit-exact, 0/32 each** |
+| alternating extremes | **25/32 wrong — known gap** |
+
+### ⚠️ The open gap: intermediate overflow
+
+`v4` drives every input to ±full scale, so stage-1 sums land exactly on the `I=4` accumulator
+boundary (±8) and the hardware's intermediate **wrapping** dominates.  The model returns the
+mathematically correct spectrum (zero outside `k = 0, 8`); the library returns large wrap
+artifacts (`±65536`, `-329472`).  So this is not a 1-LSB rounding subtlety — it is a different
+overflow path, and it shows only at full scale.
+
+Tried, and did **not** fix it: applying overflow per adder-tree level rather than once; keeping
+the `W_4` rotation in exact integers so negating the most-negative value cannot wrap.
+
+Next step is what the original notes prescribed: **per-stage goldens**.  Instrument the C++ to
+dump each stage and compare stage by stage — end-to-end comparison cannot localise a wrap that
+happened two stages back.  Pinned by `test_fft_bit_exact_at_overflow_boundary`
+(`xfail(strict=True)`, so it announces itself the moment it starts passing).
+
+### Remaining
+
+* Localise the overflow path with per-stage goldens; retire the xfail.
+* Then S3/S4 below — noting `cquantize` already exists and is validated.
 
 Model **the arithmetic, not the parallelism**: SSR is a throughput/layout property, so a
 sequential model is bit-identical to any SSR factor.  Needs no changes to `waveflow/` —
