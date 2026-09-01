@@ -37,6 +37,11 @@ from .cxquant import complex_multiply
 
 R = 4
 
+#: The three ``scaling_mode_enum`` values, as the goldens name them.
+NO_SCALING = "SSR_FFT_NO_SCALING"
+SCALE = "SSR_FFT_SCALE"
+GROW_TO_MAX_WIDTH = "SSR_FFT_GROW_TO_MAX_WIDTH"
+
 
 def _f(w: int, i: int, q: QMode = QMode.AP_TRN, o: OMode = OMode.AP_WRAP) -> Format:
     return Format(W=w, int_bits=i, signed=True, q_mode=q, o_mode=o)
@@ -55,27 +60,58 @@ def twiddle_stored(length: int, tw_w: int, tw_i: int) -> tuple[np.ndarray, np.nd
             fp.quantize_real(-np.sin(2.0 * np.pi * i / length), ft))
 
 
-def _dft4(vr: list, vi: list, f: Format, first: bool) -> tuple[list, list, Format]:
-    """One radix-4 butterfly, with the formats CONFIRMED BY TRACE (not derived).
+def _accumulate(a, b, operand: Format, target: Format):
+    """One adder-tree addition: wrap at ``operand`` width, then convert into ``target``."""
+    wrapped = fp._apply_overflow(a + b, operand)
+    if (operand.W, operand.int_bits) == (target.W, target.int_bits):
+        return wrapped
+    return fp.quantize(wrapped, operand, target)
+
+
+def _stage_formats(f: Format, first: bool, mode: str) -> tuple[Format, Format, Format]:
+    """``(product, tree-level, tree-base)`` for one radix-4 stage.
+
+    **Measured, not derived** -- ``cpp/dump_modes.cpp`` traces every declared width under all
+    three scaling modes.  For ``ap_fixed<16,2>`` in, ``L=16``, ``R=4``::
+
+        NO_SCALING          (16,2) -> (17,3) -> (18,4) -> (19,5)   then (19,5) -> (20,5) -> (21,6) -> (22,7)
+        SCALE               (16,2) -> (16,3) -> (16,4) -> (16,5)   then (16,5) -> (16,5) -> (16,6) -> (16,7)
+        GROW_TO_MAX_WIDTH   (16,2) -> (17,3) -> (18,4) -> (19,5)   then (19,5) -> (19,5) -> (20,6) -> (21,7)
+
+    The integer part grows identically in all three -- ``+1`` per accumulator level, plus one
+    more in the first stage's rotation.  The modes differ only in what happens to the WIDTH:
+
+    * ``NO_SCALING`` widens at every step, so nothing is ever discarded.
+    * ``SCALE`` holds the width fixed, so each level drops one fractional bit -- that *is* the
+      per-stage right shift, expressed as a format rather than an explicit shift.
+    * ``GROW_TO_MAX_WIDTH`` widens except in the rotation of a non-first stage.
+
+    The width rules below are read off that table.  ``GROW_TO_MAX_WIDTH``'s cap (27 bits) is not
+    reached at these sizes, so it is not modelled -- see PLAN.md.
+    """
+    grow_i = 1 if first else 0
+    if mode == SCALE:
+        fprod = _f(f.W, f.int_bits + grow_i)
+        facc1 = _f(f.W, fprod.int_bits + 1)
+        facc2 = _f(f.W, facc1.int_bits + 1)
+    else:
+        prod_w = f.W + (1 if (mode == NO_SCALING or first) else 0)
+        fprod = _f(prod_w, f.int_bits + grow_i)
+        facc1 = _f(fprod.W + 1, fprod.int_bits + 1)
+        facc2 = _f(facc1.W + 1, facc1.int_bits + 1)
+    return fprod, facc1, facc2
+
+
+def _dft4(vr: list, vi: list, f: Format, first: bool, mode: str) -> tuple[list, list, Format]:
+    """One radix-4 butterfly.
 
     ``hls_ssr_fft_parallel_fft_kernel.hpp:104-180`` declares three types, so a radix-4 stage
-    carries *two* accumulator levels::
+    carries *two* accumulator levels; the rotation is a ``complexMultiply`` into the product
+    type, and ``local_r4_kernel[i][j]`` is ``W_4^{i*j}`` from exact ``+-1`` / ``0`` constants.
 
-        T_productType  = ButterflyTraits<isFirst, mode, T_bflyIn>::T_butterflyComplexRotatedType
-        stage1_accum   = ButterflyTraits<isFirst, mode, T_productType>::T_butterflyAccumType
-        stage2_accum   = ButterflyTraits<isFirst, mode, stage1_accum>::T_butterflyAccumType   <- output
-
-    Measured by instrumenting a copy of the headers (``cpp/dump_stages.cpp``):
-
-        stage 1 (isFirst):  in (16,2) -> prod (17,3) -> out (19,5)
-        stage 2:            in (19,5) -> prod (20,5) -> out (22,7)
-
-    The rotation is a ``complexMultiply`` into ``T_productType``, and ``local_r4_kernel[i][j]``
-    is ``W_4^{i*j}`` built from exact ``+-1`` / ``0`` constants.
+    Tree additions wrap at their OPERAND width and widen on assignment -- see ``fft16``.
     """
-    fprod = _f(f.W + 1, f.int_bits + (1 if first else 0))
-    facc1 = _f(fprod.W + 1, fprod.int_bits + 1)
-    facc2 = _f(facc1.W + 1, facc1.int_bits + 1)
+    fprod, facc1, facc2 = _stage_formats(f, first, mode)
     ftw = exp_table_format(18, 2)
     ei = np.arange(16, dtype=np.float64)
     ex_r = fp.quantize_real(np.cos(2.0 * np.pi * ei / R), ftw)
@@ -90,20 +126,25 @@ def _dft4(vr: list, vi: list, f: Format, first: bool) -> tuple[list, list, Forma
                                     ftw, fprod)
             pr.append(r)
             pi.append(m)
-        # Each tree addition wraps at its OPERAND width, then widens on assignment -- measured,
-        # not assumed.  For the stage-2 group-0 bin-1 case the hardware stores -524288 where
-        # p2+p3 = +524288: a wrap at 20 bits (the product width) even though the accumulator is
-        # declared (21,6).  Wrapping at the accumulator width instead leaves that value at
-        # +524288 and the whole bin wrong.
-        l1r = [fp._apply_overflow(pr[0] + pr[1], fprod), fp._apply_overflow(pr[2] + pr[3], fprod)]
-        l1i = [fp._apply_overflow(pi[0] + pi[1], fprod), fp._apply_overflow(pi[2] + pi[3], fprod)]
-        out_r.append(fp._apply_overflow(l1r[0] + l1r[1], facc1))
-        out_i.append(fp._apply_overflow(l1i[0] + l1i[1], facc1))
+        # A tree addition wraps at its OPERAND width, then converts into the declared
+        # accumulator format.  Both halves matter, for different modes:
+        #   * the wrap is what NO_SCALING needs -- measured: p2+p3 = +524288 (two ap_fixed<20,5>)
+        #     is stored as -524288, a wrap at 20 bits, though the accumulator is declared (21,6).
+        #   * the convert is what SCALE needs -- there the accumulator is the SAME width with one
+        #     more integer bit, so converting drops a fractional bit.  That is the per-stage
+        #     right shift, and _apply_overflow alone would silently skip it.
+        # For NO_SCALING / GROW the convert keeps the fraction and is exact, so one rule serves
+        # all three modes.
+        l1r = [_accumulate(pr[0], pr[1], fprod, facc1), _accumulate(pr[2], pr[3], fprod, facc1)]
+        l1i = [_accumulate(pi[0], pi[1], fprod, facc1), _accumulate(pi[2], pi[3], fprod, facc1)]
+        out_r.append(_accumulate(l1r[0], l1r[1], facc1, facc2))
+        out_i.append(_accumulate(l1i[0], l1i[1], facc1, facc2))
     return out_r, out_i, facc2
 
 
 def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
-          tw_w: int = 18, tw_i: int = 2) -> tuple[np.ndarray, np.ndarray, Format]:
+          tw_w: int = 18, tw_i: int = 2,
+          mode: str = NO_SCALING) -> tuple[np.ndarray, np.ndarray, Format]:
     """L=16, R=4, NO_SCALING, natural order, forward.  Stored ints in, stored ints out.
 
     The inter-stage rotation **preserves** the stage-1 output format -- the trace shows stage-2
@@ -116,7 +157,7 @@ def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
     tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i)
 
     stage1 = {n2: _dft4([np.array([x_re[n2 + R * n1]]) for n1 in range(R)],
-                        [np.array([x_im[n2 + R * n1]]) for n1 in range(R)], fin, True)
+                        [np.array([x_im[n2 + R * n1]]) for n1 in range(R)], fin, True, mode)
               for n2 in range(R)}
     f1 = stage1[0][2]                                   # (19,5)
 
@@ -133,10 +174,15 @@ def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
     fo = f1
     for k1 in range(R):
         orr, oii, fo = _dft4([rotated[(n2, k1)][0] for n2 in range(R)],
-                             [rotated[(n2, k1)][1] for n2 in range(R)], f1, False)
+                             [rotated[(n2, k1)][1] for n2 in range(R)], f1, False, mode)
         for k2 in range(R):
             out_r[k1 + R * k2] = int(orr[k2][0])
             out_i[k1 + R * k2] = int(oii[k2][0])
 
-    fout = _f(in_w + 4 + 1, in_i + 4 + 1)               # FFTOutputTraits: in + log2(L) + 1
+    # Only NO_SCALING narrows at the end: its internal (22,7) is cast to the declared (21,7).
+    # SCALE and GROW_TO_MAX_WIDTH already land on their output format -- measured, see
+    # cpp/dump_modes.cpp.
+    fout = _f(in_w + 4 + 1, in_i + 4 + 1) if mode == NO_SCALING else fo
+    if fout == fo:
+        return out_r, out_i, fout
     return fp.quantize(out_r, fo, fout), fp.quantize(out_i, fo, fout), fout

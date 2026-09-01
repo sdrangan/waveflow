@@ -31,6 +31,14 @@ OUT2="$ROOT/golden/fft_L16_R4_noscale_natural.json"
 "$BIN2" "$OUT2" >/dev/null
 echo "wrote $OUT2"
 
+# S4 -- all three scaling modes, with per-stage traces (needs the instrumented header copy)
+BIN4="$(mktemp -d)/dump_modes"
+g++ -std=c++14 -O0 -DWF_FFT_TRACE -I"$VITIS_INC" -I"$ROOT/cpp/vendor_debug" \
+    -o "$BIN4" "$ROOT/cpp/dump_modes.cpp"
+OUT4="$ROOT/golden/fft_L16_R4_modes.json"
+"$BIN4" "$OUT4" >/dev/null
+echo "wrote $OUT4"
+
 # complex primitives the butterfly is built from
 BIN3="$(mktemp -d)/dump_cxops"
 g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$VLIB" -o "$BIN3" "$ROOT/cpp/dump_cxops.cpp"

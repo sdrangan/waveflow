@@ -8,7 +8,7 @@ file is the argument, this one is the working record.  Where they disagree, this
 
 | | |
 |---|---|
-| Status | **S1, S2, S3 DONE.** FFT bit-exact on all 12 vectors; `cquantize` promoted and Vitis-validated. S4 next. |
+| Status | **S1–S4 DONE** for `L=16, R=4`: all three scaling modes bit-exact, `cquantize` promoted. Remaining: larger `L`, other radices. |
 | Waveflow | `main` @ `e360b74` |
 | Vitis | 2025.1 (`/tools/Xilinx/2025.1`) |
 | Vitis DSP source | `/home/marco/AmirProjects/Vitis_Libraries_2025.1` (`2025.1` = `v2025.1_update2`) |
@@ -273,10 +273,63 @@ The change adds **zero** new mypy errors (file baseline 50, still 50 — the fir
 by leaving `element_type` untyped) and leaves the repo suite unchanged at 3094 passed / 9
 pre-existing failures.
 
-## S4 — the other two scaling modes, then widen
+## S4 — the other two scaling modes  ✅ DONE
 
-`SSR_FFT_SCALE` and `SSR_FFT_GROW_TO_MAX_WIDTH` (grow to 27, saturate → `OMode.AP_SAT`).
-Then larger `L`, other radices.
+All three `scaling_mode_enum` values are bit-exact: **0 mismatches over 36 FFT runs** (3 modes x
+12 vectors).
+
+Measured first, as S2 taught (`cpp/dump_modes.cpp` traces every declared width per mode):
+
+| mode | stage 1 | stage 2 | out |
+|---|---|---|---|
+| `NO_SCALING` | `(16,2)→(19,5)` | `(19,5)→(22,7)` | cast to `(21,7)` |
+| `SCALE` | `(16,2)→(16,5)` | `(16,5)→(16,7)` | `(16,7)` — **width never grows** |
+| `GROW_TO_MAX_WIDTH` | `(16,2)→(19,5)` | `(19,5)→(21,7)` | `(21,7)`, no cast |
+
+The integer part grows identically in all three — `+1` per accumulator level, plus one in the
+first stage's rotation.  **The modes differ only in what happens to the width**, which is a
+tidier statement than the guide's "grow / scale / grow-and-saturate" framing:
+
+* `NO_SCALING` widens at every step, so nothing is discarded.
+* `SCALE` holds the width fixed, so each level drops a fractional bit.  That *is* the per-stage
+  right shift, expressed as a format rather than an explicit shift — there is no shift operation
+  anywhere in the datapath.
+* `GROW_TO_MAX_WIDTH` widens except in a non-first stage's rotation.
+
+### The rule got simpler, not more special-cased
+
+S2 ended with "wrap at the operand width".  S4 needed "drop a fractional bit", and rather than
+branch per mode the two merged into one operation::
+
+    def _accumulate(a, b, operand, target):
+        wrapped = _apply_overflow(a + b, operand)      # what NO_SCALING needs
+        return wrapped if operand == target else quantize(wrapped, operand, target)   # what SCALE needs
+
+For `NO_SCALING` and `GROW` the convert keeps the fraction and is exact, so one rule serves all
+three modes.  Getting there took one wrong turn worth recording: the first attempt paired level
+2's addition with the *product* format instead of the level-1 output format, which broke the two
+modes that had been passing.  The levels are `(prod → acc1)` then `(acc1 → acc2)`.
+
+`GROW_TO_MAX_WIDTH`'s 27-bit cap is **not** modelled — it is not reached at these widths, so
+there is nothing here to check it against.  A design near the cap needs a golden that reaches it
+first.
+
+### Teeth
+
+Beyond the per-mode gates: one test asserts the three modes actually *differ* (so a bad regen
+emitting one mode three times cannot make the parametrised gate vacuous), one asserts the mode
+goldens share inputs with the S2 golden, and one asserts that modelling `SCALE` without the
+fractional drop fails — the mistake that mode invites, and one the width check alone would miss.
+
+## S5 — larger `L`, other radices  ← REMAINING
+
+The model is specific to `L = R^2` (`L=16, R=4`, two stages).  A general `L = R^S` needs the
+stage loop generalised and the inter-stage twiddle indices derived per stage; `R=2` and `R=8`
+change the butterfly matrix and the adder-tree depth.  `ext_len` is still only known for
+`L=16, R=4`.
+
+Expect to **measure rather than derive** — the tracer already handles any configuration, and
+every format rule in this plan came from it after reasoning had failed twice.
 
 ## Open questions
 
