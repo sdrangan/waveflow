@@ -34,8 +34,11 @@ Growth tracking is already correct and already matches what an unscaled FFT need
 ## The notes' two risk corners are both smaller than feared
 
 The notes name twiddle quantization and per-stage round/saturate as "where 1-LSB divergence
-hides."  Reading the shipped source (`Vitis_Libraries`, tag `2023.1_motor_libs_update`, at
-`dsp/L1/include/hw/vitis_fft/fixed/vitis_fft/`) narrows both.
+hides."  Reading the shipped source narrows both.  **All line numbers below are for the 2025.1 checkout**
+(`Vitis_Libraries_2025.1`, branch `2025.1` = `v2025.1_update2`, at
+`dsp/L1/include/hw/vitis_fft/fixed/vitis_fft/`) — the release matching the installed
+toolchain.  The 2023.1 tree is functionally identical but its added copyright line shifts
+every citation here by one.
 
 **Rounding modes.**  Waveflow implements two of `ap_fixed`'s seven quantization modes
 (`QMode.AP_TRN`, `QMode.AP_RND`) and two of its five overflow modes (`OMode.AP_WRAP`,
@@ -44,18 +47,19 @@ hides."  Reading the shipped source (`Vitis_Libraries`, tag `2023.1_motor_libs_u
 instantiates `AP_TRN_ZERO`, `AP_RND_CONV`, `AP_SAT_SYM` or `AP_WRAP_SM`.
 
 `butterfly_rnd_mode` does admit a second value —
-`enum butterfly_rnd_mode_enum { TRN, CONVERGENT_RND }` (`hls_ssr_fft_enums.hpp:73`) — and
+`enum butterfly_rnd_mode_enum { TRN, CONVERGENT_RND }` (`hls_ssr_fft_enums.hpp:74`) — and
 `CONVERGENT_RND` has **no** Waveflow equivalent.  It appears to be **inert in this version**:
 the value is threaded as a template parameter through `hls_ssr_fft_types.hpp`,
 `hls_ssr_fft_complex_exp_table.hpp` and `hls_ssr_fft_output_traits.hpp`, but *nothing
 specializes on it* — there is no `TRN` vs `CONVERGENT_RND` dispatch anywhere under `fixed/`.
 The two typedefs that would implement the choice,
 `T_truncationBasedCastType` / `T_roundingBasedCastType`
-(`hls_ssr_fft_twiddle_table_traits.hpp:158-159`), are **declared and never referenced**.
+(`hls_ssr_fft_twiddle_table_traits.hpp:159-160`, repeated for each `ap_fixed` specialization at
+`:165-166`, `:171-172`, `:176-177`), are **declared and never referenced**.
 Outside those declarations the only mentions of `CONVERGENT_RND` under `fixed/` are two
-Doxygen comment blocks in `hls_ssr_fft.hpp` (`:3292`, `:3365`).
+Doxygen comment blocks in `hls_ssr_fft.hpp` (`:3293`, `:3366`).
 
-So modelling `TRN` (the default, `hls_ssr_fft_enums.hpp:87`) should be sufficient *and* is
+So modelling `TRN` (the default, `hls_ssr_fft_enums.hpp:88`) should be sufficient *and* is
 probably what the hardware does regardless of the setting.  Treat that as a version-specific
 observation, not a guarantee — see version skew below.  It was nearly recorded here as
 "`CONVERGENT_RND` is never referenced," which a truncated grep made look true; the conclusion
@@ -97,7 +101,7 @@ assuming it discards LSBs will produce a model that is wrong in a way csim will 
 
 ## v1 scope: the default parameter struct, and why
 
-`ssr_fft_default_params` (`hls_ssr_fft_enums.hpp:75-88`, the `TRN` default at `:87`) is:
+`ssr_fft_default_params` (`hls_ssr_fft_enums.hpp:76-89`, the `TRN` default at `:88`) is:
 
 ```cpp
 static const int N = 1024;
