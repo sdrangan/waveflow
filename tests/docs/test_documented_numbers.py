@@ -615,30 +615,42 @@ def test_the_pysim_loss_the_rf_pages_now_quote_is_recomputed():
 def test_rule_6_quotes_a_case_where_index_agrees_and_arrival_does_not():
     """Rule 6's evidence: the two backends agree on the sample index and differ on arrival.
 
-    **The evidence was replaced on 2026-08-17.** It used to be the loopback's startup transient, 2
-    blocks in pysim against 1 at RTL — and that stopped demonstrating anything when the XSI DAC began
-    withholding ``TREADY`` and the RTL figure became 2 as well. A rule illustrated by two numbers that
-    now match is a rule with no evidence, so it is pointed at a case that still shows the split.
+    **The evidence has now been moved twice, and the history is the rule's best argument.**
 
-    ``rf_blk_delay`` is the better case anyway: it is one design measured both ways, where the
-    *index* relation (``out_ts = in_ts + delay``) holds exactly on both backends and the *arrival*
-    position differs by a fixed 64 samples. Both numbers are live — the pysim delay is asserted by
-    ``test_rf_blk_delay.py`` and the skew by the XSI gate.
+    * It was the loopback's startup transient (2 blocks in pysim against 1 at RTL) until 2026-08-17,
+      when the XSI DAC learned to withhold ``TREADY`` and the RTL figure became 2 as well.
+    * It moved to ``rf_blk_delay``'s 4-sample grid skew, which held until 2026-08-31 — when a cycle
+      of phase was corrected in the converter *model* and the skew went to 0.
+    * It is back on the loopback, whose transient is 1 at RTL again, because that same correction
+      removed the coincidence that had been cancelling the real edge-vs-source difference.
+
+    So the page now quotes **both halves separately**: ``rf_blk_delay`` for the index relation, which
+    has never moved through any of it, and the loopback for the arrival difference, which is what the
+    rule is warning about.  This test pins each half to the constant that is actually asserted by a
+    gate, and refuses a page whose arrival evidence has quietly stopped differing.
     """
     from examples.rf_blk_delay.rf_blk_delay import BLKSIZE, DELAY_BLOCKS
-    from tests.examples.test_rf_blk_delay_xsi import RTL_GRID_SKEW
+    from tests.examples.test_rf_loopback_xsi import RTL_STARTUP_BLOCKS
 
     text = _page("guide/rf/rfdc/rules.md")
+
+    # -- the index half: rf_blk_delay's delay, quoted as the number it asks for --------------------
     pysim_delay = DELAY_BLOCKS * BLKSIZE
-    assert RTL_GRID_SKEW > 0, (
-        "the backends now agree on arrival position too; rule 6's evidence needs rewriting again "
-        "rather than re-numbering — find a case where they still differ, or drop the rule")
-    assert f"**{pysim_delay}** in pysim and **{pysim_delay - RTL_GRID_SKEW}** at RTL" in text, (
-        f"rules.md should quote the measured arrival positions as {pysim_delay} (pysim) and "
-        f"{pysim_delay - RTL_GRID_SKEW} (RTL)")
-    assert f"**{RTL_GRID_SKEW}**-sample difference" in text, (
-        f"rules.md should name the skew itself ({RTL_GRID_SKEW}), which is the quantity a reader "
-        f"would otherwise have to subtract for themselves")
+    assert f"`k·256 + {pysim_delay}`" in text, (
+        f"rules.md should quote the delay relation with the measured {pysim_delay}")
+
+    # -- the arrival half: the loopback's transient, which must still DIFFER -----------------------
+    pysim_transient = 2      # RfLoopbackTB.loop_blk_latency, asserted by the XSI gate
+    assert RTL_STARTUP_BLOCKS != pysim_transient, (
+        "the backends agree on the loopback's transient too; rule 6's arrival evidence needs "
+        "rewriting again rather than re-numbering — find a case where they still differ, or drop "
+        "the rule")
+    assert (f"**{pysim_transient}** blocks in pysim and **{RTL_STARTUP_BLOCKS}** at RTL") in text, (
+        f"rules.md should quote the measured transients as {pysim_transient} (pysim) and "
+        f"{RTL_STARTUP_BLOCKS} (RTL)")
+    assert f"A **{pysim_transient - RTL_STARTUP_BLOCKS}**-block difference" in text, (
+        f"rules.md should name the difference itself ({pysim_transient - RTL_STARTUP_BLOCKS}), "
+        f"which is the quantity a reader would otherwise have to subtract for themselves")
 
 
 def test_the_rf_guide_quotes_the_fmax_its_examples_actually_close():

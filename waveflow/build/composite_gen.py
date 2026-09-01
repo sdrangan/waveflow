@@ -57,6 +57,13 @@ class ExtPort:
     #: (``input [15:0] rx_str_TDATA``), and recovering a width by parsing ``ap_uint<W>`` back out of
     #: :attr:`decl` is the kind of second derivation that drifts.  0 where nothing needed it.
     width: int = 0
+    #: AXIS only: the port carries the **AXI4-Stream side channels** (``ap_axis``), so Vitis gives it
+    #: TLAST — and TKEEP/TSTRB with it.  Kept beside :attr:`kind` rather than folded into it because
+    #: the direction and the side channels are independent questions, and a kind vocabulary of four
+    #: (``axis_in_full``, ...) would have to be spelled out in ``BFM_DUALS``, ``_boundary_trace`` and
+    #: the wrapper's signal table — three places that would then each need to know the product rather
+    #: than the two factors.
+    axi4s: bool = False
 
     @property
     def xsi_prefix(self) -> str:
@@ -479,13 +486,35 @@ def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
     return entry
 
 
-def _axis_port(name: str, width: int, kind: str = "axis_in") -> ExtPort:
+def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = False) -> ExtPort:
     """An AXIS boundary port.  *kind* (``axis_in``/``axis_out``) does not change the emitted C++ — a
     kernel's ``hls::stream&`` is the same either way — but it records the DIRECTION, which is what a
-    testbench needs to know whether to model a master or a slave against it."""
-    return ExtPort(f"hls::stream<ap_uint<{width}> >& {name}",
-                   (f"#pragma HLS INTERFACE axis port={name}",),
-                   name=name, kind=kind, bundle=None, width=width)
+    testbench needs to know whether to model a master or a slave against it.
+
+    *axi4s* DOES change the C++, and it is the one thing that decides whether the port has a **TLAST
+    pin**.  The pragma is identical either way — ``axis`` describes the protocol; the **word type**
+    decides the pins:
+
+    ==================================  ===========================================================
+    ``hls::stream<ap_uint<W> >``        TDATA/TVALID/TREADY, and nothing else
+    ``hls::stream<axi4s_word<W> >``     the above **plus TLAST**, TKEEP and TSTRB
+    ==================================  ===========================================================
+
+    ``streamutils::axi4s_word<W>`` is ``ap_axis<W,0,0,0>``, and it has to be that rather than the
+    plain ``{data, last}`` ``framed_word`` — **measured, 2026-08-31**.  A ``framed_word`` boundary
+    port compiles, and Vitis packs the whole struct into one wide TDATA: at ``W=64`` the port came
+    out ``[127:0] s_in_TDATA`` with no TLAST anywhere.  The side channels are a property of
+    ``ap_axis``, not of having a ``last`` member.  (``framed_word`` remains right for an INTERNAL
+    channel, where ``ap_axis`` is refused outright — HLS 214-208.)
+
+    It is off by default because those pins are not free: they are wires someone has to connect in a
+    block diagram, and every design in this repo that does not read the frame boundary is better
+    without them.  See :attr:`waveflow.hw.interface.StreamIFSlave.boundary_tlast` for when to ask.
+    """
+    decl = (f"hls::stream<streamutils::axi4s_word<{width}> >& {name}" if axi4s
+            else f"hls::stream<ap_uint<{width}> >& {name}")
+    return ExtPort(decl, (f"#pragma HLS INTERFACE axis port={name}",),
+                   name=name, kind=kind, bundle=None, width=width, axi4s=axi4s)
 
 
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
@@ -816,8 +845,15 @@ def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     # interface holds it too -- but the *ports* the top needs are its two streams.  Expanding both
     # keeps the "bound to an internal interface" test an identity comparison, which is what makes it
     # cheap and exact.  `physical_endpoints()` is `[self]` for everything that is not a composite.
+    # EXPAND THE INTERFACES TOO, not only the endpoints — for the reason `derive_internal_edges`
+    # expands before it dispatches.  A composite interface whose channels do NOT all lower the same
+    # way is the case this catches: a `LockedT2pMemIF` is two FIFOs *and* two `mode=bram` port pairs,
+    # and only the FIFOs are internal.  Reading the composite's own `endpoints` instead would put its
+    # memory ports in this set and make them vanish from the boundary — a kernel with no way to reach
+    # its memory, and no error until the wrapper has nothing to join.
     internal = {id(phys) for iface in _all_interfaces(comp)
-                for ep in iface.endpoints.values() if ep is not None
+                for sub in iface.physical_interfaces()
+                for ep in sub.endpoints.values() if ep is not None
                 for phys in ep.physical_endpoints()}
     eps = [phys for child in kernel_tasks(comp)
            for ep in child.endpoints.values()
@@ -905,7 +941,12 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
     is refused for ``bram``, which is correct — that caller is asking about a port the wrapper hides.
     """
     if kind in ("axis_in", "axis_out"):
-        return _axis_port(name, width, kind=kind)
+        # The framing is the ENDPOINT's declaration, never a build-side default: a port that carries
+        # TLAST does so because the design reads the frame boundary, which is a fact about the
+        # design.  `getattr` with a default keeps every non-stream endpoint (and any third-party
+        # one) working unchanged rather than needing the attribute added to it.
+        return _axis_port(name, width, kind=kind,
+                          axi4s=bool(getattr(ep, "boundary_tlast", False)))
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
@@ -1123,6 +1164,11 @@ def render_top(spec: TopSpec) -> str:
     lines += [f'#include "{h}"' for h in includes]
     lines.append("#include <ap_int.h>")
     lines.append('#include "memmgr.hpp"')
+    # A side-channel boundary port's type IS streamutils::axi4s_word, so the header that defines it
+    # is not optional and is not the design's to remember: derived from the ports, like the pragmas.
+    # (`extra_includes` may name it too; dict.fromkeys below is not applied here, so the guard is.)
+    if any(p.axi4s for p in spec.ports) and "streamutils_hls.h" not in spec.extra_includes:
+        lines.append('#include "streamutils_hls.h"')
     lines += [f'#include "{h}"' for h in spec.extra_includes]   # e.g. hls_streamofblocks.h (SOBIF)
     lines += [f'#include "{h}"' for h in spec.cmd_headers]
     lines += [f'#include "{h}"' for h in task_headers]

@@ -781,8 +781,21 @@ class HwModule(SimObj):
         Not for external interface endpoints — those are :meth:`add_endpoint`.
         This records the master↔slave connection so the composite codegen can
         lower it (an on-chip FIFO/BRAM inside a kernel; AXI between IPs in a
-        system build), keeping a single introspectable graph on the parent."""
+        system build), keeping a single introspectable graph on the parent.
+
+        **An interface that SPANS the wrapper seam is swept into both registries.**
+        :class:`~waveflow.hw.locked_mem.LockedT2pMemIF` is one object holding four channels, and
+        they do not lower the same way: its two ``StreamIF``\\ s are internal edges, while its two
+        :class:`~waveflow.hw.bram.BramIF`\\ s are wrapper wires whose kernel-side ends must STAY
+        boundary ports.  Such an interface declares the second half through ``rtl_interfaces()``,
+        and it is filed here rather than at every call site — a composite that registered the lock
+        and forgot the two memory wires would get a dangling ``bram`` port, which
+        :func:`~waveflow.build.wrapper_gen.wrapper_spec` refuses, but only after codegen.  The
+        default is no such interfaces, so nothing that was already lowering changes.
+        """
         self.interfaces[interface.name] = interface
+        for rtl_if in getattr(interface, "rtl_interfaces", list)():
+            self.add_rtl_if(rtl_if)
 
     def __post_init__(self) -> None:
         # Wrap HwParam field values BEFORE super().__post_init__ so any

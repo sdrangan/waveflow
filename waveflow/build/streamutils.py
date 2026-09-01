@@ -253,6 +253,29 @@ class RfShotBufStep(Buildable):
     :func:`~waveflow.hw.rf_relayout.slot_elem_type` and
     :func:`~waveflow.hw.rf_relayout.dense_elem_type` must write into the **same** *output_dir*.
 
+    **Stage B's two bodies ship here too**, and that is the same judgement as the paragraph above
+    rather than a second one.  :mod:`waveflow.hw.rf_shot_tx` is the *command layer* for exactly this
+    buffer: ``shot_tx_load_task`` writes into ``rf_shot_buf_load_task``'s stream and
+    ``shot_tx_play_task`` sits on its ``rdy`` token, so a build that copied one without the other
+    would have a design with a hole in the middle of it.  They are not a second vocabulary the way
+    the streaming buffer's would be — there is one word for *shot* here, and five status codes that
+    only this buffer can produce.  ``shot_tx_load_task.h`` includes the generated
+    ``rf_shot_tx_hdr.h`` / ``rf_shot_tx_resp.h``, so a
+    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES` — **with** ``framed=True``, because the
+    boundary port is a ``framed_word`` stream and the plain ``read_stream`` methods will not bind to
+    one — must write into the same *output_dir*.
+
+    **The infinite-play pair ships here too**, and that is the same judgement again rather than a new
+    one.  :mod:`waveflow.hw.rf_shot_loop` is a *sibling* of ``rf_shot_tx`` — a different player, a
+    different loader, and no ``rdy`` / ``rep`` / ``done`` at all — but it speaks the same vocabulary:
+    one ``ShotTxHdr``, one ``ShotTxResp``, the same five status codes, and the same re-layout on the
+    way to the converter.  Shipping it separately would put one word for *shot* in two include
+    directories.  It also needs :class:`MemLockStep`'s ``mem_lock.h`` and a
+    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.locked_mem.LOCK_SCHEMA_CLASSES` in the same *output_dir*; those are the
+    lock's, not this design's, which is why they are a step of their own.
+
     Parameters
     ----------
     output_dir : str | Path
@@ -272,7 +295,9 @@ class RfShotBufStep(Buildable):
         return {name: self._output_dir / f"{name}.h" for name in self._SRC}
 
     _SRC = ("rf_shot_buf_load_task", "rf_shot_buf_read_task",
-            "rf_relayout_to_dense_task", "rf_relayout_to_slots_task")
+            "rf_relayout_to_dense_task", "rf_relayout_to_slots_task",
+            "shot_tx_load_task", "shot_tx_play_task",
+            "shot_loop_load_task", "shot_loop_play_task")
 
     def generate(self, key: str, config: BuildConfig) -> str:
         if key not in self._SRC:
@@ -281,6 +306,44 @@ class RfShotBufStep(Buildable):
         if not src_path.exists():
             raise FileNotFoundError(f"RfShotBuf source file not found: {src_path}")
         return src_path.read_text(encoding="utf-8")
+
+
+class MemLockStep(Buildable):
+    """Copy ``mem_lock.h`` — the C++ half of :mod:`waveflow.hw.locked_mem`.
+
+    ``plans/t2p_lock_chan.md`` S1.  A step of its own rather than a line in another one, because the
+    lock is a **primitive**: it is not the shot buffer's, not the streaming buffer's, and the RX
+    consumer S2 builds will reach for the same header.  Folding it into
+    :class:`RfShotBufStep` would file a general mechanism under its first user, which is the shape
+    :class:`~waveflow.hw.reverse_stream.CreditStreamIF` is still paying for.
+
+    One header, and it carries no task body: what a lock-aware ``hls::task`` *does* is the design's,
+    and the three moves it needs (request, await, poll+grant) are inline functions here so no body
+    hand-rolls a beat.
+
+    ``mem_lock.h`` ``#include``\\ s the generated ``mem_lock_cmd.h`` / ``mem_lock_resp.h`` by plain
+    name, so a :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.locked_mem.LOCK_SCHEMA_CLASSES` must write into the **same** *output_dir*.
+    Plain ``read_stream`` / ``write_stream`` are enough and ``framed=True`` is not wanted: the lock
+    channels are *internal* edges, where ``ap_axis`` is refused outright (HLS 214-208).
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {"mem_lock": self._output_dir / "mem_lock.h"}
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        if key != "mem_lock":
+            raise KeyError(f"Unknown MemLockStep output key: {key!r}")
+        return (_SRC_DIR / "mem_lock.h").read_text(encoding="utf-8")
 
 
 class MemStreamStep(Buildable):

@@ -269,10 +269,26 @@ public:
         // every 4, "a word was due and no beat landed this cycle" counted the beat pattern of two
         // unrelated periods -- 10000 of 60000 cycles on a run that was bit-exact end to end.  Held to
         // the grid, the counter measures starvation again, which is what it is for.
+        //
+        // A BEAT IS JUDGED BY THE TREADY THIS MODEL ACTUALLY DROVE, NOT BY THE ONE IT IS ABOUT TO.
+        //
+        // `ready` is recomputed here from `pending`, and `pending` moved in the PREVIOUS update() --
+        // so the freshly computed value is the one that will go on the wire at the end of THIS cycle
+        // and be seen by the DUT at the NEXT edge.  What the DUT is capturing right now is whatever
+        // drive() put out last cycle, which is `driven`.  Judging the handshake by `ready` therefore
+        // disagreed with the RTL exactly where TREADY changed.
+        //
+        // MEASURED 2026-08-31, on examples/rf_shot_play: the design put 192 beats on `samp_out` (the
+        // VCD's TVALID && TREADY count, and every internal channel agreed), and this model counted
+        // 191.  One word in 192, and it is the worst possible shape of error -- the played waveform
+        // is bit-exact for 2.75 plays and then simply stops, which reads as a design that stalls.
+        // It surfaced here rather than in the earlier converter gates because those feed the DAC in
+        // bursts, so TREADY is high nearly all the time; a shot player offers CONTINUOUSLY at II=1,
+        // so TREADY toggles on almost every beat and the disagreement has somewhere to land.
         for (std::size_t i = 0; i < ch_.size(); ++i) {
             Ch& c = ch_[i];
+            c.beat = c.driven && d_.get1(c.tvalid);
             c.ready = (c.pending < cap_);
-            c.beat = c.ready && d_.get1(c.tvalid);
             if (c.beat) c.word = d_.getW(c.tdata);
         }
     }
@@ -315,8 +331,12 @@ public:
     }
 
     void drive() override {
-        for (std::size_t i = 0; i < ch_.size(); ++i)
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            // Remember what went on the wire: the NEXT sample() has to judge the handshake by this
+            // value, not by the one it will compute from a `pending` that has since moved.
+            ch_[i].driven = ch_[i].ready;
             d_.put1(ch_[i].tready, ch_[i].ready ? 1u : 0u);
+        }
     }
 
     /// Words taken off the fabric, summed over channels.
@@ -393,7 +413,11 @@ private:
         std::size_t   pending = 0;
         std::uint64_t word    = 0;
         bool          beat    = false;
+        //: What the NEXT drive() will put on TREADY.
         bool          ready   = true;
+        //: What the LAST drive() put there -- the value the DUT is capturing now.  Initialized true
+        //: because that is what reset drives (the harness calls drive() inside sim.reset()).
+        bool          driven  = true;
     };
 
     Dut&       d_;

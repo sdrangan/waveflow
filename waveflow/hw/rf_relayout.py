@@ -190,11 +190,26 @@ class _RelayoutTask(FreeRunMod):
     #: identity**, which is every configuration in the repo but the 4x2 preset and is exactly why the
     #: path had to be gated on a build that is not.
     shift: HwParam[int] = 2
+    #: Words per pysim burst — **a modelling input, and not hardware.**  A plain field rather than an
+    #: ``HwParam`` deliberately: it reaches no template argument, because the RTL body converts one
+    #: word per firing and knows nothing about it.
+    #:
+    #: ``1`` is the honest default and is what this task always did.  It is raised only when this
+    #: stage is the **last** one before a converter, because pysim's quantum on that edge is a
+    #: *block*: ``Rfdc``'s DAC process takes one ``blksize``-sample burst per event and refuses a
+    #: partial one.  The accommodation follows the **port**, not the class —
+    #: :attr:`~waveflow.hw.rf_shot_tx.ShotTxPlay.blk_words` is the same field for the same reason, on
+    #: whichever stage the converter happens to back-pressure.
+    blk_words: int = 1
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
         w = int(self.bitwidth)
+        if int(self.blk_words) < 1:
+            raise ValueError(
+                f"{type(self).__name__} '{self.name}': blk_words={self.blk_words!r}. A burst of "
+                f"zero words is not a shorter burst, it is no burst.")
         self.s_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w, has_tlast=True)
         self.s_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_s_out", bitwidth=w,
                                     has_tlast=True)
@@ -213,10 +228,16 @@ class _RelayoutTask(FreeRunMod):
         One word per burst in the scenario, for ``bram_access``'s reason: a pysim slave dequeues a whole
         burst per ``get`` and ``nwords_max`` *discards* the remainder, so a multi-word burst would be
         one pysim firing against many RTL firings.
+
+        :attr:`blk_words` is the one exception and it is the converter edge's, stated rather than
+        absorbed: when this stage is the **last** one, ``Rfdc``'s DAC takes a whole block per event
+        and refuses a partial one, so the twin must hand it exactly that.  At the default of 1
+        nothing about this method moves.
         """
-        words = yield from self.s_in.get(nwords_max=1)
-        out = self._convert(np.asarray(words, dtype=np.uint64).ravel()[:1])
-        yield from self.s_out.write(np.asarray(out, dtype=np.uint64))
+        n = int(self.blk_words)
+        words = yield from self.s_in.get(nwords_max=n)
+        raw = np.asarray(words, dtype=np.uint64).ravel()[:n]
+        yield from self.s_out.write(np.asarray(self._convert(raw), dtype=np.uint64))
 
 
 @dataclass

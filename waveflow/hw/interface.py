@@ -335,6 +335,23 @@ class Interface(SimObj):
         """
         return [self]
 
+    def rtl_interfaces(self) -> "list[Interface]":
+        """The **wrapper wires** this interface also carries — empty for all but a seam-spanning one.
+
+        :meth:`physical_interfaces` answers *what does this lower to inside the kernel*; this answers
+        *what does it lower to outside it*.  Almost every interface lives entirely on one side of
+        that seam and returns nothing here.  :class:`~waveflow.hw.locked_mem.LockedT2pMemIF` does
+        not: it is two ``hls::stream`` FIFOs **and** two ``mode=bram`` port pairs leaving the kernel
+        for a memory beside it, and the two halves go in different registries because an ``add_if``
+        edge makes both its endpoints stop being boundary ports — which is precisely what a memory
+        port must not do.
+
+        :meth:`~waveflow.hw.hw_module.HwModule.add_if` sweeps whatever this returns into the
+        ``add_rtl_if`` registry, so a composite registers the interface once and both halves land
+        where they belong.
+        """
+        return []
+
     # -- realization hook ---------------------------------------------------------------------
     #
     # The **edge-side twin** of a module's ``bfm_model()`` (``plans/behavioral_edges.md`` S1).  An
@@ -993,6 +1010,10 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
     #: :class:`InterfaceEndpoint` for the contract.
     boundary_kind: ClassVar[str] = "axis_in"
 
+    #: Whether a **boundary** port made from this endpoint carries TLAST *at RTL*.  See
+    #: :class:`FramedStreamIFSlave`, which is how a design says yes.
+    boundary_tlast: ClassVar[bool] = False
+
     has_tlast: bool = True
     """Whether this stream carries a TLAST signal (True) or not (False)."""
 
@@ -1214,6 +1235,9 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
     #: :class:`InterfaceEndpoint` for the contract.
     boundary_kind: ClassVar[str] = "axis_out"
 
+    #: See :class:`FramedStreamIFMaster`.
+    boundary_tlast: ClassVar[bool] = False
+
     has_tlast: bool = True
     """Whether this stream carries a TLAST signal (True) or not (False)."""
 
@@ -1355,6 +1379,63 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
 # while gathering block j (plans/component.md, memory
 # reference-hls-stream-of-blocks-pingpong).
 #
+# ---------------------------------------------------------------------------
+# The framed pair: an AXI-Stream boundary port that HAS a TLAST pin
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FramedStreamIFSlave(StreamIFSlave):
+    """A stream slave whose **boundary** port carries TLAST at RTL.
+
+    Two different claims live near each other here, and only one of them is this class's:
+
+    * :attr:`~StreamIFSlave.has_tlast` is about **pysim**.  A burst boundary exists, so ``get()``
+      with no count is defined.  Every RF and mem-stream endpoint in the repo already sets it.
+    * :attr:`boundary_tlast` is about the **generated C++**, and it decides the port's *type*:
+      ``hls::stream<ap_uint<W> >&`` has no TLAST wire on the kernel at all, while
+      ``hls::stream<streamutils::framed_word<W> >&`` makes Vitis emit ``<port>_TLAST``.
+
+    So a stream can be framed in pysim and unframed at RTL, and until this class existed *every*
+    free-running composite in the repo was exactly that: nine designs declaring ``has_tlast=True``
+    against kernels with no TLAST pin.  That is why the RTL framing is a **subclass** rather than a
+    field — a per-instance flag would have moved every calibration key in the repo (an endpoint's
+    attribute set is part of :func:`~waveflow.build.elaborate.structure_signature`, and
+    ``tests/calib/test_key_stability.py`` is there to notice), while a subclass changes the signature
+    of exactly the designs that use one.  Which is correct: a port with a TLAST pin **is** different
+    hardware.
+
+    **Ask for it when the frame boundary is data the design must act on.**  The case it was built for
+    is :class:`waveflow.hw.rf_shot_tx.ShotTxLoad`: a host may send fewer payload words than its
+    header declared, and without the pin that short frame is a *hang* rather than a verdict — there
+    is no other in-band way to say "that is the end", because a payload word and a header word are
+    the same 64 bits.  A stream whose frames are only a pysim convenience must NOT ask: an unused
+    TLAST pin is still a wire someone has to connect in a block diagram.
+
+    Internal channels are unaffected either way — a composite's internal edges lower to plain
+    ``ap_uint`` FIFOs (or to a ``framed_word`` one, via ``StreamIF.framed``), which is a separate
+    decision made on the channel rather than on the endpoint.
+    """
+
+    boundary_tlast: ClassVar[bool] = True
+
+    type_name = 'framed_stream_if_slave'
+
+
+@dataclass
+class FramedStreamIFMaster(StreamIFMaster):
+    """A stream master whose boundary port carries TLAST at RTL.
+
+    The contract is :class:`FramedStreamIFSlave`'s, asked of the other end.  A response stream read
+    by a host through an AXI DMA S2MM channel wants the pin for the same reason the command stream
+    does: the DMA's ``recvchannel`` needs a packet boundary to know one transfer has finished, and
+    the alternative is a host that must already know how many words to expect.
+    """
+
+    boundary_tlast: ClassVar[bool] = True
+
+    type_name = 'framed_stream_if_master'
+
+
 # The pysim models the depth-2 ping-pong with a free-buffer counter + a ready
 # queue, so the sim exhibits the overlap: the producer can acquire and fill the
 # second buffer while the consumer still holds (random-reads) the first.

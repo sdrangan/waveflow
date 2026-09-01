@@ -61,6 +61,31 @@ _AXIS_SIGS = {
     "axis_out": (("TDATA", "output", True), ("TVALID", "output", False), ("TREADY", "input", False)),
 }
 
+#: The extra pins an ``ap_axis`` boundary port has, and only that kind.  Vitis emits the AXI4-Stream
+#: side channels for a ``streamutils::axi4s_word<W>`` port and none of them for an ``ap_uint<W>`` one,
+#: so a wrapper that declared them unconditionally would name pins the kernel instance does not have
+#: and would not elaborate.  Each entry is ``(signal, byte_wide)``: TLAST is one bit, TKEEP and TSTRB
+#: are one bit per BYTE of the payload.
+#:
+#: All three travel in the same direction as TDATA — they are payload and qualifiers, not handshake —
+#: so the direction is derived from the kind's TDATA row rather than written down a second time.
+_AXI4S_EXTRA = (("TKEEP", True), ("TSTRB", True), ("TLAST", False))
+
+
+def _axis_sigs(p) -> tuple[tuple[str, str, object], ...]:
+    """The AXIS pins of boundary port *p*, side channels included iff the port carries them.
+
+    The third element is the pin's WIDTH: ``True`` means the payload width (TDATA), ``False`` one
+    bit, and an ``int`` an explicit width — which is what the byte-granular TKEEP/TSTRB need.
+    """
+    sigs: tuple[tuple[str, str, object], ...] = _AXIS_SIGS[p.kind]
+    if not getattr(p, "axi4s", False):
+        return sigs
+    tdata_dir = next(d for sig, d, _w in sigs if sig == "TDATA")
+    nbytes = max(1, int(p.width) // 8)
+    return sigs + tuple((sig, tdata_dir, (nbytes if byte_wide else False))
+                        for sig, byte_wide in _AXI4S_EXTRA)
+
 #: The kernel-side role each memory-port role is wired to.  Mechanical, and it is the join the whole
 #: wrapper exists to make: the memory's ``din`` takes the kernel's ``Din``, and the memory's ``dout``
 #: drives the kernel's ``Dout``.
@@ -142,7 +167,7 @@ def _axis_ports(spec) -> list[tuple[str, str, int]]:
     """
     ports: list[tuple[str, str, int]] = [("ap_clk", "input", 1), ("ap_rst_n", "input", 1)]
     for p in spec.pin_ports:
-        sigs = _AXIS_SIGS.get(p.kind)
+        sigs = _axis_sigs(p) if p.kind in _AXIS_SIGS else None
         if sigs is None:
             raise LoweringError(
                 f"wrapper_spec: boundary port {p.name!r} is {p.kind!r}, which has no wrapper port "
@@ -150,7 +175,9 @@ def _axis_ports(spec) -> list[tuple[str, str, int]]:
                 f"wrapped design needs its pass-through written and gated, not guessed."
             )
         for sig, direction, wide in sigs:
-            ports.append((f"{p.name}_{sig}", direction, p.width if wide else 1))
+            # `wide` is True (the payload width), False (one bit) or an explicit int.
+            ports.append((f"{p.name}_{sig}", direction,
+                          p.width if wide is True else (1 if wide is False else int(wide))))
     return ports
 
 
@@ -201,7 +228,7 @@ def wrapper_spec(comp, spec) -> WrapperSpec:
     mem_conns: dict[int, list[tuple[str, str]]] = {}
 
     for p in spec.pin_ports:                      # AXIS: straight through, same names
-        for sig, _dir, _wide in _AXIS_SIGS[p.kind]:
+        for sig, _dir, _wide in _axis_sigs(p):
             kconns.append((f"{p.name}_{sig}", f"{p.name}_{sig}"))
 
     bram_ports = [p for p in spec.ports if p.kind == "bram"]
