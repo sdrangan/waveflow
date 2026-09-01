@@ -482,3 +482,45 @@ and `test_the_owner_that_grants_BEFORE_it_stops_reading_raises`.  The second is 
 everything turns on, and it fails because `grant()` takes the region out of the owner's hands *before*
 the response goes on the wire — so the owner's very next read is the failure rather than a plausible
 number.
+
+### Checkpoint 2 — the lowering
+
+**`derive_boundary` had to expand `physical_interfaces()` too, not only `physical_endpoints()`.**
+This was a real defect the plan does not predict, and it is worth stating because it is the general
+form of the S1 structural problem.  `derive_boundary` builds its *internal* set by walking each
+registered interface's own `endpoints` and expanding those — which is right for `AckedStreamIF`,
+where every channel lowers the same way, and wrong the moment an interface's channels do **not**.
+`LockedT2pMemIF`'s endpoints expand to `(mem, cmd, resp)`, so all three landed in *internal* and the
+memory ports vanished from the boundary: a kernel with no way to reach its memory, and no error until
+the wrapper had nothing to join.  The fix is one line — expand the interface first, then read the
+sub-interfaces' endpoints — and it is exactly what `derive_internal_edges` already did.
+
+**`mem_lock.h` is framework and the toy's two bodies are not.**  The three moves a lock-aware body
+needs (request, await, poll+grant) ship from `waveflow/build/` through `MemLockStep`, so no body
+hand-rolls a beat and both ends read the layout through the generated schema headers.  A step of its
+own rather than a line in `RfShotBufStep`: the lock is a primitive and S2's RX consumer will reach for
+the same header, and filing a general mechanism under its first user is the shape `CreditStreamIF` is
+still paying for.
+
+**`MEM_LOCK_W` is a `#define`, not a template parameter.**  The channel width is the schema's and the
+schema is fixed, so a body that took it as a parameter would be advertising a freedom that does not
+exist — and the two ends could then be instantiated at different widths.
+
+**The minimal consumer is a test fixture (`tests/hw/lock_toy/`), not an example.**  What is on trial
+is the lowering; an example teaches a design, and this one teaches nothing a user wants.  Building a
+teaching example ahead of the first real consumer would be the un-consumed-abstraction mistake this
+plan opens by refusing.
+
+**The owner inherits the reset trap and the requester does not.**  `reference-hls-task-reset-trap`
+says a task that WRITES before it READS advances during reset.  An owner *cannot* avoid that shape —
+writing without being asked is what "the side that cannot stop" means — so every owner needs
+`#pragma HLS reset` on its statics **and** `config_rtl -reset state` in the solution tcl, which is
+what actually closed it under Vitis 2025.1 in `rf_repeat_play`.  A requester opens with a blocking
+read and is on the safe side.  This is an obligation the interface imposes on one of its two users
+and not the other, and it belongs in the docs page when one is written.
+
+**Measured (Vitis HLS 2025.1, xczu48dr, 4 ns):** both pipelined loops reach **II=1** — the
+requester's `store_shot` (payload beat in, memory beat out, one pipeline, no local copy) and the
+owner's `play_chunk` (`buf[rd + i]` at a running static base).  The loop names are *discovered* from
+the report by label rather than spelled, because a spelled name stops matching on a comment edit and
+a gate that skipped on a miss would read as a pass.

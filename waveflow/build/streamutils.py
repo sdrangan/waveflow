@@ -297,6 +297,44 @@ class RfShotBufStep(Buildable):
         return src_path.read_text(encoding="utf-8")
 
 
+class MemLockStep(Buildable):
+    """Copy ``mem_lock.h`` — the C++ half of :mod:`waveflow.hw.locked_mem`.
+
+    ``plans/t2p_lock_chan.md`` S1.  A step of its own rather than a line in another one, because the
+    lock is a **primitive**: it is not the shot buffer's, not the streaming buffer's, and the RX
+    consumer S2 builds will reach for the same header.  Folding it into
+    :class:`RfShotBufStep` would file a general mechanism under its first user, which is the shape
+    :class:`~waveflow.hw.reverse_stream.CreditStreamIF` is still paying for.
+
+    One header, and it carries no task body: what a lock-aware ``hls::task`` *does* is the design's,
+    and the three moves it needs (request, await, poll+grant) are inline functions here so no body
+    hand-rolls a beat.
+
+    ``mem_lock.h`` ``#include``\\ s the generated ``mem_lock_cmd.h`` / ``mem_lock_resp.h`` by plain
+    name, so a :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.locked_mem.LOCK_SCHEMA_CLASSES` must write into the **same** *output_dir*.
+    Plain ``read_stream`` / ``write_stream`` are enough and ``framed=True`` is not wanted: the lock
+    channels are *internal* edges, where ``ap_axis`` is refused outright (HLS 214-208).
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {"mem_lock": self._output_dir / "mem_lock.h"}
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        if key != "mem_lock":
+            raise KeyError(f"Unknown MemLockStep output key: {key!r}")
+        return (_SRC_DIR / "mem_lock.h").read_text(encoding="utf-8")
+
+
 class MemStreamStep(Buildable):
     """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
     output directory.

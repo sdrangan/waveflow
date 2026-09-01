@@ -845,8 +845,15 @@ def derive_boundary(comp, names) -> tuple[tuple[str, object], ...]:
     # interface holds it too -- but the *ports* the top needs are its two streams.  Expanding both
     # keeps the "bound to an internal interface" test an identity comparison, which is what makes it
     # cheap and exact.  `physical_endpoints()` is `[self]` for everything that is not a composite.
+    # EXPAND THE INTERFACES TOO, not only the endpoints — for the reason `derive_internal_edges`
+    # expands before it dispatches.  A composite interface whose channels do NOT all lower the same
+    # way is the case this catches: a `LockedT2pMemIF` is two FIFOs *and* two `mode=bram` port pairs,
+    # and only the FIFOs are internal.  Reading the composite's own `endpoints` instead would put its
+    # memory ports in this set and make them vanish from the boundary — a kernel with no way to reach
+    # its memory, and no error until the wrapper has nothing to join.
     internal = {id(phys) for iface in _all_interfaces(comp)
-                for ep in iface.endpoints.values() if ep is not None
+                for sub in iface.physical_interfaces()
+                for ep in sub.endpoints.values() if ep is not None
                 for phys in ep.physical_endpoints()}
     eps = [phys for child in kernel_tasks(comp)
            for ep in child.endpoints.values()
