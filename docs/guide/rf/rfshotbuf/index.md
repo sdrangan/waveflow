@@ -2,6 +2,7 @@
 title: RfShotBuf
 parent: RF converters
 nav_order: 2
+has_children: true
 audience: python
 summary: "The finite sample buffer: for designs where nothing reads the memory while something else is writing it. Not yet written."
 ---
