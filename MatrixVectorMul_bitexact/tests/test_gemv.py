@@ -24,7 +24,7 @@ from MatrixVectorMul_bitexact.wf_gemv.gemv import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-SIZES = [(1, 16), (4, 64), (7, 128)]
+SIZES = [(1, 16), (4, 64), (7, 128), (2, 48), (16, 32), (3, 176)]
 DELAYS = 4
 
 
@@ -59,8 +59,15 @@ def loaded() -> dict:
 
 
 def _naive_tree(a, b):
-    """The plausible wrong model: one binary tree over all N products."""
+    """The plausible wrong model: one binary tree over all N products.
+
+    Zero-padded to a power of two so it stays defined for a non-power-of-two N, which the library
+    supports and the suite now covers (N=48, N=176).  Zero padding is exact in IEEE-754, so it
+    introduces no rounding of its own.
+    """
     v = [np.float32(a[i] * b[i]) for i in range(len(a))]
+    while len(v) & (len(v) - 1):
+        v.append(np.float32(0))
     while len(v) > 1:
         v = [np.float32(v[i] + v[i + 1]) for i in range(0, len(v), 2)]
     return v[0]
@@ -167,3 +174,42 @@ def test_one_chunk_sizes_cannot_discriminate_and_that_is_recorded(loaded):
     same = all(f32_bits(_naive_tree(A[0], x)) == d["hw"][base + k]
                for k, (A, x) in enumerate(d["cases"]))
     assert same, "N=16 unexpectedly discriminates; the chunking assumption has changed"
+
+
+def test_a_full_tree_and_the_library_coincide_below_four_chunks(loaded):
+    """The exact condition under which the gate goes blind -- measured, not assumed.
+
+    A zero-padded full binary tree and the library's reduction are the **same reduction** whenever
+    the chunk count ``ceil((N/P) / Delays)`` is 3 or fewer, because a left-fold and a balanced
+    tree agree up to three terms::
+
+        k = 3   (c0 + c1) + c2          == ((0 + c0) + c1) + c2
+        k = 4   (c0 + c1) + (c2 + c3)   != ((c0 + c1) + c2) + c3
+
+    S2 recorded this as "one chunk", from ``M=1, N=16`` at ``P=4``.  That was too narrow: adding
+    ``(2, 48)`` to the sweep, where ``P=4`` gives 12 beats but only 3 chunks, made the generator's
+    old guard raise a false alarm.  Both halves are asserted here against the real goldens, so
+    neither the rule nor its boundary can drift back into folklore.
+    """
+    delays = adder_delays("float32")
+    blind = seeing = 0
+    for (m, n), d in loaded.items():
+        for lp in d["logps"]:
+            par = 1 << lp
+            if n % par:
+                continue
+            chunks = -(-(n // par) // delays)
+            base = d["logps"].index(lp) * len(d["cases"]) * m
+            same = all(f32_bits(_naive_tree(A[r], x)) == d["hw"][base + k * m + r]
+                       for k, (A, x) in enumerate(d["cases"]) for r in range(m))
+            if chunks < 4:
+                assert same, (
+                    f"M={m} N={n} P={par}: {chunks} chunks, so a full tree should be the same "
+                    f"reduction, but the golden disagrees -- the chunking rule has changed")
+                blind += 1
+            else:
+                seeing += not same
+    assert blind, "no size/width combination in the suite has fewer than four chunks"
+    assert seeing, (
+        "no size/width combination with >= 4 chunks separates a full tree from the library; "
+        "the whole suite has stopped discriminating")

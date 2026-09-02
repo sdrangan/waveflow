@@ -162,3 +162,42 @@ def gemv_int(matrix, vector, width: int = 32) -> np.ndarray:
     if m.ndim != 2 or m.shape[1] != v.size:
         raise ValueError(f"shape mismatch: matrix {m.shape}, vector {v.shape}")
     return np.array([dot_int(m[r], v, width) for r in range(m.shape[0])], dtype=np.int64)
+
+
+# --- the alpha/beta overload ------------------------------------------------------------------
+def scal(vector, alpha) -> np.ndarray:
+    """``scal`` (``scal.hpp:66``) -- ``alpha * x``, elementwise, rounded to float32 per element."""
+    v = np.asarray(vector, dtype=np.float32)
+    a = np.float32(alpha)
+    return np.array([np.float32(a * v[i]) for i in range(v.size)], dtype=np.float32)
+
+
+def axpy(x, y, alpha) -> np.ndarray:
+    """``axpy`` (``axpy.hpp:71``) -- ``alpha * x + y``, as **two** rounded operations.
+
+    The library writes it as one expression, ``p_alpha * l_realX + l_realY``, which is a fused
+    multiply-add candidate.  An FMA keeps the product's full precision and rounds once; a separate
+    multiply and add round twice.  **They give different bits** -- measured, 25 of 576 rows on the
+    S5 golden.  This models the unfused reading, and ``tests/test_gemv_ab.py`` pins that choice
+    against the library rather than leaving it to the compiler's mood.
+    """
+    xf = np.asarray(x, dtype=np.float32)
+    yf = np.asarray(y, dtype=np.float32)
+    a = np.float32(alpha)
+    return np.array([np.float32(np.float32(a * xf[i]) + yf[i]) for i in range(xf.size)],
+                    dtype=np.float32)
+
+
+def gemv_ab(matrix, vector, y, alpha, beta, par_entries: int = 4,
+            delays: int | None = None) -> np.ndarray:
+    """``yr = alpha * (M x) + beta * y`` -- the 8-arg overload (``gemv.hpp:66-85``).
+
+    No new arithmetic: it is the 5-arg ``gemv``, then ``scal``, then ``axpy``.  What matters is
+    that ``beta * y`` is rounded to float32 in ``scal`` **before** ``axpy`` adds it -- computing
+    ``alpha*dot + beta*y`` in one wider expression and rounding once gives different bits.
+
+    Unlike the 5-arg overload this one takes no ``t_MacDataType``, so the accumulator is always
+    the element type.
+    """
+    dot_result = gemv(matrix, vector, par_entries, delays)
+    return axpy(dot_result, scal(y, beta), alpha)

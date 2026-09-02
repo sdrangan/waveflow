@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1-S4 DONE** (2026-09-02) — float path bit-exact on 460 rows; non-float on 75; `ap_fixed` on 288 (144 as the library ships, 144 with its defect corrected).  S3 and S4 each found a library defect; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation.**  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1-S5 DONE** (2026-09-02) — bit-exact on **2763 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 75.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -175,23 +175,43 @@ small to be discriminating and must be enlarged.
 
 **S2 — full `gemv`.**  ✅ **DONE — bit-exact, 460/460 rows.**
 
-| size | widths x cases | rows | result |
-|---|---|---|---|
-| `M=1, N=16` | 5 x 4 | 20 | 0 differ |
-| `M=4, N=64` | 5 x 8 | 160 | 0 differ |
-| `M=7, N=128` | 5 x 8 | 280 | 0 differ |
+Six sizes after the S5 sweep, five stream widths and eight cases each — **1320 rows, 0 differ**:
+
+| size | rows | widths where a full tree and the library differ at all |
+|---|---|---|
+| `M=1, N=16` | 40 | P=1 |
+| `M=2, N=48` | 80 | P=1, 2 |
+| `M=16, N=32` | 640 | P=1, 2 |
+| `M=4, N=64` | 160 | P=1, 2, 4 |
+| `M=3, N=176` | 120 | P=1, 2, 4, 8 |
+| `M=7, N=128` | 280 | P=1, 2, 4, 8 |
+
+The last three sizes and the width column arrived with S5; `N=48` and `N=176` are deliberately not
+powers of two, which the library supports and which a full-tree comparison model has to be
+zero-padded to handle at all.
 
 `logParEntries` is swept 0..4 in one golden, because S1 showed the stream width changes the bits.
 It does: on a discriminating case the five widths give four distinct answers, so the sweep is not
 padding.
 
-**One size cannot discriminate, and that is now asserted rather than assumed.**  At `M=1, N=16`
-with `P=4` there are 4 beats and `Delays=4` — exactly one chunk — so the chunk tree and a full
-tree are the *same* reduction and the two models agree by construction.  This was found the hard
-way: the generator searched for a discriminating vector at that size and looped forever.  It is
-now bounded, raises if a size that *should* discriminate does not, and a test pins the property so
-it cannot quietly become folklore.  The size stays in the suite because it exercises the
-no-cross-chunk path, but a gate resting only on it would be vacuous.
+**Some size/width combinations cannot discriminate at all, and the exact condition is now
+measured.**  A zero-padded full binary tree and the library's reduction are the *same* reduction
+whenever the chunk count `ceil((N/P) / Delays)` is **3 or fewer** — 0 differences in 400 random
+trials for every such combination tested, and frequent differences for every combination at 4 or
+more:
+
+    k = 3   (c0 + c1) + c2          == ((0 + c0) + c1) + c2      the padded slot contributes 0
+    k = 4   (c0 + c1) + (c2 + c3)   != ((c0 + c1) + c2) + c3      the first real difference
+
+S2 originally recorded this as *"one chunk"*, generalising from `M=1, N=16` at `P=4`.  **That was
+too narrow**, and S5 caught it: adding `(2, 48)`, where `P=4` gives 12 beats but only 3 chunks,
+made the generator's guard — `N // P > DELAYS` — raise a false alarm on data that no search could
+have found.  The guard now uses the measured condition, the search runs at every swept width
+rather than only `P=4`, and a test asserts both halves of the rule against the real goldens.
+
+The first version of this was found the hard way too: the generator searched for a discriminating
+vector at `M=1, N=16` and looped forever.  It is bounded, and it raises if a size that *should*
+discriminate does not.
 
 **S3 — the non-float path.**  ✅ **DONE — bit-exact, 75/75 rows** (int32 and int16, three stream
 widths, 5 cases).
@@ -284,7 +304,53 @@ later that the model is describing a bug that no longer exists.
 **Not covered:** `ap_ufixed`; `W > 31`; and the two-defect interaction is unexplored, since with
 `t_MacDataType` uncompilable there is no configuration in which both could be exercised at once.
 
-**S5 — `alpha`/`beta` overload**, and `m`/`n` sweeps.
+**S5 — `alpha`/`beta` overload, and `m`/`n` sweeps.**  ✅ **DONE — bit-exact, 792/792 rows**
+(6 (alpha, beta) pairs x 3 stream widths x 4 cases, at `M=4, N=64` and `M=7, N=128`), plus three
+new sizes on the float path taking it from 460 to 1320 rows.
+
+The 8-arg overload (`gemv.hpp:66-85`) computes `yr = alpha * (M x) + beta * y` and introduces no
+new kernel — it is a composition of three shipped ones::
+
+    gemv(...)  ->  l_x        the 5-arg overload, i.e. all of S1-S2
+    scal(...)  ->  l_y        l_y[j] = beta * y[j]                 (scal.hpp:66)
+    axpy(...)  ->  yr         yr[j]  = alpha * l_x[j] + l_y[j]     (axpy.hpp:71)
+
+Two things decide the bits, and both are gated by tests that fail if the data stops separating
+them.  `beta * y` is **rounded to float32 in `scal` before `axpy` adds it**, so the natural model —
+evaluate `alpha*dot + beta*y` in one wider expression and round once — is wrong.  And the
+composition is checked at the ends: `(alpha, beta) = (1, 0)` must reproduce the 5-arg overload
+exactly, `(0, 1)` must return `y` untouched.
+
+Unlike the 5-arg overload this one takes no `t_MacDataType`.  It also declares
+`const unsigned int l_numIter` and never uses it — harmless, but a second piece of dead code in
+the same file as S3's dead template parameter.
+
+### ⚠️ "Bit-exact" is conditional on the compiler not fusing the multiply-add
+
+`axpy` writes `p_alpha * l_realX + l_realY` as a single expression.  That is a fused-multiply-add
+candidate: an FMA keeps the product's full precision and rounds **once**, where a separate
+multiply and add round **twice**.  Building the same dumper both ways:
+
+| build | vs `-O0` |
+|---|---|
+| `-O2` | identical |
+| `-O2 -ffp-contract=off` | identical |
+| `-O3 -march=native` | **25 of 576 rows differ** |
+| `-O2 -mfma -ffp-contract=fast` | **25 of 576 rows differ** |
+
+`-O0` suppresses it on this host only because the default `-march` has no FMA; on a host whose
+baseline includes it the golden would silently change.  So `tools/regen_golden.sh` now passes
+`-ffp-contract=off` explicitly, and a test asserts the fused reading still disagrees — if it ever
+stops, the pin has become unfalsifiable and should be removed rather than trusted.
+
+Verified at the same time, answering a standing open question: **the float `dot_tree` path is
+stable** across `-O0`, `-O2`, `-O3 -march=native` and `-ffp-contract=off`, byte-for-byte.  It has
+no multiply-add in one expression, so there is nothing to contract — the exposure is specific to
+`axpy`, and therefore specific to this overload.
+
+**Not measured:** what Vitis HLS itself does.  Whether synthesis emits a fused or an unfused
+operator for that line is a question about the RTL, not about csim, and it is the one thing that
+would decide which of the two goldens the hardware matches.
 
 **S6 — the systolic GEMM.**  *Not planned* — recorded only because it is what "systolic" would
 have meant here, and because 2025.1 adds an L1 `gemm/systolicArray.hpp` that 2023.1 lacks, so the
@@ -298,8 +364,12 @@ follows from S1-S5.
 * ~~**Which is actually wanted, L1 `gemv` or the systolic GEMM?**~~  **Settled (2026-09-01):
   L1 `gemv` is the target.**  S6 stays listed as the other reading of "systolic", but it is not
   planned work.
-* **Does float `dot_tree` give a stable answer under `-O` and across csim/cosim?**  It must, or
-  bit-exactness is not a meaningful target.  S1 answers this before anything is built on it.
+* ~~**Does float `dot_tree` give a stable answer under `-O`?**~~  **Settled in S5 by measurement:
+  yes** — byte-identical across `-O0`, `-O2`, `-O3 -march=native` and `-ffp-contract=off`.  But
+  the `alpha`/`beta` overload is **not**, because `axpy` has a contractable multiply-add; see S5.
+* **Does Vitis HLS emit a fused or an unfused operator for `axpy`'s `alpha*x + y`?**  Unanswered,
+  and it decides which S5 golden the hardware matches.  Needs a csynth/cosim run rather than the
+  native builds everything here uses.
 * ~~**Is `t_LogParEntries` part of the contract or an implementation detail?**~~  **Settled by
   measurement: it depends on the path.**  On `dot_tree` (float, double) it sets the tree shape and
   four of five swept widths give distinct answers, so a model must take it as a parameter and any
