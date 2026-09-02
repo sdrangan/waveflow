@@ -31,6 +31,10 @@ WF_GEMV_TOP(gemv_u32_top,      T_u32,   GEMVI_M,   GEMVI_N,   GEMVI_LOGP)
 WF_GEMV_TOP(gemv_fixed_top,    T_fixed, GEMVF_M,   GEMVF_N,   GEMVI_LOGP)
 WF_GEMV_TOP(gemv_fix24_top,    T_fix24, GEMVF24_M, GEMVF24_N, GEMVI_LOGP)
 
+// The "bring your own input" DUT.  Its sizes and element type come from gemv_user_cfg.hpp,
+// which make_user_dut.py generates from the header of data/user_input.txt.
+WF_GEMV_TOP(gemv_user_top,     T_user,  WF_USER_M, WF_USER_N, WF_USER_LOGP)
+
 // The alpha/beta overload has a different shape: two more scalars, a second input vector read
 // through readVec2Stream, and a second output stream.
 void gemv_ab_top(T_f32 p_alpha, T_f32 p_beta,

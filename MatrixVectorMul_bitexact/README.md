@@ -20,7 +20,7 @@ kernel.  The two probe genuinely different failure modes — see "Why this is no
 ```
 MatrixVectorMul_bitexact/
 ├── README.md          this file
-├── VERIFY.md          how to check the claims yourself, at four levels of effort
+├── VERIFY.md          how to check the claims yourself, at five levels of effort
 ├── PLAN.md            the working record: what was measured, what was wrong, what remains
 │
 ├── wf_gemv/           THE MODEL -- the deliverable
@@ -198,8 +198,9 @@ mistake that was actually available to make here.
 ## `verifyGEMV/` — the Vitis check
 
 Takes the real kernel through C-simulation, C-synthesis and C/RTL co-simulation and compares
-every result against the model.  **27/27 comparisons pass**, 176 rows.  Nine DUTs, each answering
-a question native C-simulation structurally cannot:
+every result against the model.  **30/30 comparisons pass**, 182 rows.  Ten DUTs — nine answering
+a question native C-simulation structurally cannot, plus a `user` DUT for **your own data**
+(see [Bring your own input](verifyGEMV/README.md#bring-your-own-input)):
 
 | DUT | question | verdict |
 |---|---|---|

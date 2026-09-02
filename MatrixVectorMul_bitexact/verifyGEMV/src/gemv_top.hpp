@@ -23,6 +23,10 @@
 #include <hls_stream.h>
 #include "xf_blas.hpp"
 
+// Generated from data/user_input.txt by make_user_dut.py -- the "bring your own input" DUT.
+// A default is committed so the package builds out of the box; re-run the script to replace it.
+#include "gemv_user_cfg.hpp"
+
 // Sizes are compile-time so the RTL is bounded and the interface is arrays only.  The testbenches
 // refuse to run if an input file disagrees with the DUT it is driving.
 //
@@ -102,5 +106,8 @@ void gemv_u32_top(T_u32 p_A[GEMVI_M * GEMVI_N], T_u32 p_x[GEMVI_N], T_u32 p_y[GE
 void gemv_fixed_top(T_fixed p_A[GEMVF_M * GEMVF_N], T_fixed p_x[GEMVF_N], T_fixed p_y[GEMVF_M]);
 void gemv_fix24_top(T_fix24 p_A[GEMVF24_M * GEMVF24_N], T_fix24 p_x[GEMVF24_N],
                     T_fix24 p_y[GEMVF24_M]);
+
+void gemv_user_top(T_user p_A[WF_USER_M * WF_USER_N], T_user p_x[WF_USER_N],
+                   T_user p_y[WF_USER_M]);
 
 #endif

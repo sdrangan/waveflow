@@ -41,6 +41,7 @@ set duts {
     {u32       gemv_u32_top       gemv_intlike_tb.cpp  1  input_int.txt}
     {fixed     gemv_fixed_top     gemv_intlike_tb.cpp  2  input_fixed.txt}
     {fix24     gemv_fix24_top     gemv_intlike_tb.cpp  3  input_fix24.txt}
+    {user      gemv_user_top      gemv_user_tb.cpp    -1  user_input.txt}
 }
 
 # WF_DUTS, if set, is a space-separated list of DUT names to run -- so fixing one does not cost a

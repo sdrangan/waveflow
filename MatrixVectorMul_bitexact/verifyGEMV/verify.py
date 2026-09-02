@@ -51,9 +51,15 @@ def _b64(d) -> int:
     return struct.unpack("<Q", struct.pack("<d", np.float64(d)))[0]
 
 
+def input_path(name: str) -> Path:
+    """The shipped DUTs read ``data/input_<name>.txt``; the user DUT reads ``data/user_input.txt``
+    because that is the name the docs tell people to create."""
+    return HERE / "data" / ("user_input.txt" if name == "user" else f"input_{name}.txt")
+
+
 def read_cases(name: str, conv, dtype):
     """The shared ``n_cases M N`` input format: per case, an M*N matrix then an N vector."""
-    lines = _payload(HERE / "data" / f"input_{name}.txt")
+    lines = _payload(input_path(name))
     n_case, m, n = (int(v) for v in lines[0].split())
     vals, pos, cases = [int(v) for v in lines[1:]], 0, []
     for _ in range(n_case):
@@ -146,6 +152,57 @@ def _ab_expected(logp: int) -> dict:
             for r, v in enumerate(gemv_ab(a, x, y, alpha, beta, par_entries=1 << logp))}
 
 
+def read_user_directives() -> tuple[str, int]:
+    """The ``# type`` / ``# logp`` lines make_user_dut.py also reads, so both agree by
+    construction rather than by the user remembering to keep them in step."""
+    import re
+    path = input_path("user")
+    if not path.exists():
+        raise SystemExit(
+            f"verify.py: {path} does not exist.\n"
+            f"  The `user` DUT is for your own data.  Create that file (see 'Bring your own\n"
+            f"  input' in README.md), run `python make_user_dut.py`, then re-run the flow.")
+    d = {}
+    for raw in path.read_text().splitlines():
+        m = re.match(r"#\s*(type|logp)\s*[:=]?\s*(\S+)", raw.strip(), re.IGNORECASE)
+        if m:
+            d[m.group(1).lower()] = m.group(2)
+        elif raw.strip() and not raw.lstrip().startswith("#"):
+            break
+    return d.get("type", "float"), int(d.get("logp", 2))
+
+
+def _user_expected(_logp: int) -> dict:
+    """Run YOUR data through the model, choosing the path from the input file's own directives."""
+    import re
+    tname, logp = read_user_directives()
+    fx = re.fullmatch(r"fixed<(\d+),(\d+)>", tname)
+    if tname in ("float", "double"):
+        dt = np.float32 if tname == "float" else np.float64
+        conv = _f32 if tname == "float" else _f64
+        bits = f32_bits if tname == "float" else _b64
+        _m, _n, cases = read_cases("user", conv, dt)
+        return {(k, r): bits(v)
+                for k, (a, x) in enumerate(cases)
+                for r, v in enumerate(gemv(a, x, par_entries=1 << logp, dtype=dt))}
+    _m, _n, cases = read_cases("user", int, object)
+    if fx:
+        w, i = int(fx.group(1)), int(fx.group(2))
+        fmt = fixed_format(w, i, QMode.AP_TRN, OMode.AP_WRAP)
+        mask = (1 << w) - 1
+        return {(k, r): int(v) & mask
+                for k, (a, x) in enumerate(cases)
+                for r, v in enumerate(gemv_fixed_as_shipped(
+                    np.array(a.tolist(), dtype=np.int64), np.array(x.tolist(), dtype=np.int64), fmt))}
+    widths = {"int8": 8, "int16": 16, "int32": 32, "int64": 64, "uint16": 16, "uint32": 32}
+    if tname not in widths:
+        raise SystemExit(f"verify.py: unknown '# type {tname}' in data/user_input.txt")
+    return {(k, r): int(v)
+            for k, (a, x) in enumerate(cases)
+            for r, v in enumerate(gemv_int(a, x, width=widths[tname],
+                                           signed=not tname.startswith("u")))}
+
+
 #: name, what it settles, key length, output radix, hex digits, header field holding logP,
 #: and a callable taking that logP and returning {key: expected bits}
 DUTS = [
@@ -166,7 +223,28 @@ DUTS = [
      lambda lp: _fixed_expected("fixed", 16, 8)),
     ("fix24", "ap_fixed<24,12> -- WideType slot is 32 bits in csim, 24 in RTL", 2, 16, 6, 4,
      lambda lp: _fixed_expected("fix24", 24, 12)),
+    ("user", "YOUR data -- see 'Bring your own input' in README.md", 2, 10, 16, 3,
+     _user_expected),
 ]
+
+
+def _user_results_match(path: Path) -> bool:
+    """Catch the trap: you changed data/user_input.txt but did not re-run the Vitis flow.
+
+    The results in ``results/`` were produced from whatever the input file said *then*.  Comparing
+    them against a model run on new data yields a confusing row-count mismatch, so say plainly
+    what happened instead.
+    """
+    inp = _payload(input_path("user"))[0].split()
+    out = _payload(path)[0].split()
+    if inp[:3] != out[:3]:
+        print(f"    {RED}FAIL{RESET} {path.name} is STALE: it was produced from "
+              f"n_cases/M/N = {' '.join(out[:3])}, but data/user_input.txt now says "
+              f"{' '.join(inp[:3])}.\n"
+              f"          Re-run:  python make_user_dut.py "
+              f"&& WF_DUTS=user vitis-run --mode hls --tcl run.tcl")
+        return False
+    return True
 
 
 def compare(label: str, got: dict, want: dict, width: int) -> bool:
@@ -285,11 +363,19 @@ def main() -> int:
                       f"({path.stat().st_size} bytes) -- the Vitis stage that writes it did not "
                       f"finish.  Check logs/run.log.")
                 continue
+            if name == "user" and not _user_results_match(path):
+                ok = False
+                continue
             logp = this
             stages[stage] = read_output(path, n_key, base)
         if not stages:
             continue
-        want = expected(logp)
+        try:
+            want = expected(logp)
+        except SystemExit as exc:
+            ok = False
+            print(f"    {RED}FAIL{RESET} cannot build expected values: {exc}")
+            continue
         for stage, got in stages.items():
             ok &= compare(f"{stage} vs Python model", got, want, width)
             ran += 1

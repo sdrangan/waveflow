@@ -11,6 +11,7 @@ Run everything from the repository root.
 | **2. Rebuild the goldens** | + `g++`, Vitis headers, BLAS source | ~21 s | those goldens really do come from the vendor's code |
 | **3. Vary the compiler** | same as 2 | ~10 s | the FMA caveat is real, and the golden's build flags matter |
 | **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~15 min | the model matches **synthesized RTL** on all five element paths |
+| **5. Use your own data** | same as 4 | ~90 s | the same three-way check, on **your** numbers |
 
 ## Level 1 — run the gates
 
@@ -124,8 +125,8 @@ vitis-run --mode hls --tcl run.tcl     # ~15 min; WF_DUTS="i32 u32" runs a subse
 python verify.py
 ```
 
-Expected: **27/27 comparisons pass** — nine DUTs x (C-sim vs model, co-sim vs model, C-sim vs
-co-sim), 176 rows.
+Expected: **30/30 comparisons pass** — ten DUTs x (C-sim vs model, co-sim vs model, C-sim vs
+co-sim), 182 rows.
 
 | DUT | question only synthesis could answer | verdict |
 |---|---|---|
@@ -138,6 +139,7 @@ co-sim), 176 rows.
 | `u32` | **is `ap_uint<32>` really read unsigned?** | ✅ **yes** |
 | `fixed` | is the `ap_fixed` defect real hardware? | ⚠️ **yes** |
 | `fix24` | `WideType`'s slot is 32 bits in csim, 24 in RTL — does it leak? | ✅ **no divergence** |
+| `user` | **your own data** — see level 5 below | ✅ on the shipped example |
 
 ### The two verdicts
 
@@ -159,6 +161,42 @@ defensible choice among two.
 
 The signedness result is corroborated the same way: `i32` and `u32` synthesize to **identical**
 latency, DSP, FF and LUT — the same hardware, differing only in what the bits are taken to mean.
+
+## Level 5 — check bit-exactness on *your* data
+
+Levels 1-4 check the data this project ships.  To check your own numbers end to end — C-simulation
+of the library, the synthesized RTL, and the Python model, all compared bit for bit — use the
+`user` DUT:
+
+```bash
+cd MatrixVectorMul_bitexact/verifyGEMV
+python encode_user_input.py my_numbers.txt        # your decimals -> data/user_input.txt
+python make_user_dut.py                           # -> src/gemv_user_cfg.hpp
+WF_DUTS=user vitis-run --mode hls --tcl run.tcl   # ~90 s
+python verify.py
+```
+
+`my_numbers.txt` is plain decimal text with a five-line header:
+
+```text
+# type float        <- float | double | int8..64 | uint16/uint32 | fixed<W,I>
+# logp 2            <- log2 stream width; N must be a multiple of 2**logp
+2 3 64              <- n_cases M N
+  ... M*N matrix entries (row-major), then N vector entries, per case ...
+```
+
+The three lines you are looking for in `verify.py`'s output:
+
+```
+user  (YOUR data -- ...)
+    PASS csim vs Python model:  ... rows bit-exact
+    PASS cosim vs Python model: ... rows bit-exact
+    PASS csim vs cosim: identical
+```
+
+**[`verifyGEMV/README.md`](verifyGEMV/README.md#bring-your-own-input) has the full walkthrough**,
+including the failure modes, why the on-disk format is bit patterns rather than decimals, and the
+chunk-count caveat — below four chunks a passing run does not exercise the reduction's shape.
 
 ## What is still not verified
 
