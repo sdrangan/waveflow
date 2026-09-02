@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1-S7 DONE** (2026-09-02) — bit-exact on **2877 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 135, double 54 — plus 121 rows against **synthesized RTL** in `verifyGEMV/`.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1-S7 DONE** (2026-09-02) — bit-exact on **2877 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 135, double 54 — plus 176 rows across **nine synthesized DUTs** in `verifyGEMV/`, covering every element path the model supports.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -364,6 +364,39 @@ no multiply-add in one expression, so there is nothing to contract — the expos
 **Not measured:** what Vitis HLS itself does.  Whether synthesis emits a fused or an unfused
 operator for that line is a question about the RTL, not about csim, and it is the one thing that
 would decide which of the two goldens the hardware matches.
+
+**S8 — verify everything against synthesized RTL.**  ✅ **DONE — 27/27 comparisons, 176 rows,
+nine DUTs.**
+
+`verifyGEMV/` grew from three DUTs to nine so that every "not verified" item in `VERIFY.md` was
+either measured or shown to be unmodellable.  Two questions were settled that C-simulation could
+not reach, both corroborated structurally as well as numerically:
+
+* **HLS does not fuse `axpy`'s `alpha*x + y`.**  RTL matches the unfused model 96/96 and the
+  fused one 92/96, with 4 rows separating them; the synthesis report instantiates `fmul` and
+  `fadd` as separate cores.
+* **`ap_uint<32>` really is read unsigned.**  RTL matches the unsigned model 9/9 and the signed
+  one 4/9; `i32` and `u32` synthesize to *identical* latency, DSP, FF and LUT.
+
+Also closed: `double`, the padding path, a second stream width, the integer path (never
+synthesized before at all), and `WideType`'s `sizeof(T)*8` slot width — which is 32 bits for
+`ap_fixed<24,12>` in csim and 24 under synthesis, and **does not leak into the data path**.
+
+**Three things in this stage were nearly worthless and had to be fixed before they meant
+anything**, each found by asking "could this check fail?":
+
+1. `f32_pad` at `N=176` gives 11 beats padded to 12 — only **3 chunks**, where a left-fold and a
+   balanced tree coincide.  It measured 0/8 discriminating rows.  Resized to `N=208` (13 beats
+   padded to 16, 4 chunks), it is 2/8.
+2. The integer input sat four orders of magnitude below the accumulator limit, so **not one row
+   wrapped** and the DUT would have passed for a model with no wrapping at all.  The generator
+   now searches for a scale where some rows overflow and some do not, and raises otherwise.
+3. The integer DUTs were compared **bit-for-bit**, and `int32_t` and `ap_uint<32>` emit identical
+   bits — so the `u32` DUT proved nothing about signedness.  The testbenches now emit the decimal
+   *value*, which is the only place the two differ.
+
+`verify.py` now prints both verdicts with their separation counts, so neither can quietly become
+vacuous again.
 
 **S7 — the supported-input audit.**  ✅ **DONE — and it found two silent-wrong-answer bugs in
 the model itself.**

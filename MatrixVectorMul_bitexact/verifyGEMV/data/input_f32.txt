@@ -1,4 +1,4 @@
-# verifyGEMV input -- float, 5-arg gemv.  IEEE-754 bit patterns.
+# verifyGEMV input -- float.  IEEE-754 32-bit patterns, decimal.
 # per case: M*N matrix (row-major) then N vector entries
 # n_cases M N
 4 4 64

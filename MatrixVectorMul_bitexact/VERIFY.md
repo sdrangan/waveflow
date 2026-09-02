@@ -10,7 +10,7 @@ Run everything from the repository root.
 | **1. Run the gates** | Python + numpy | ~3 s | the model matches 2877 checked-in golden rows |
 | **2. Rebuild the goldens** | + `g++`, Vitis headers, BLAS source | ~19 s | those goldens really do come from the vendor's code |
 | **3. Vary the compiler** | same as 2 | ~10 s | the FMA caveat is real, and the golden's build flags matter |
-| **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~4 min | the model matches **synthesized RTL**, not just C-simulation |
+| **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~13 min | the model matches **synthesized RTL** on all five element paths |
 
 ## Level 1 — run the gates
 
@@ -120,53 +120,58 @@ source env/bin/activate
 export WF_BLAS_LIBS=/home/marco/AmirProjects/Vitis_Libraries_2025.1/blas/L1/include/hw
 
 cd MatrixVectorMul_bitexact/verifyGEMV
-vitis-run --mode hls --tcl run.tcl     # ~4 min
+vitis-run --mode hls --tcl run.tcl     # ~13 min; WF_DUTS="i32 u32" runs a subset
 python verify.py
 ```
 
-Expected: **9/9 comparisons pass** — three DUTs x (C-sim vs model, co-sim vs model, C-sim vs
-co-sim), 121 rows.
+Expected: **27/27 comparisons pass** — nine DUTs x (C-sim vs model, co-sim vs model, C-sim vs
+co-sim), 176 rows.
 
 | DUT | question only synthesis could answer | verdict |
 |---|---|---|
-| `gemv_f32_top` | does the `dot_tree` reduction survive to RTL? | ✅ yes, 16/16 rows |
-| `gemv_ab_top` | **does HLS fuse `axpy`'s `alpha*x + y`?** | ✅ **no** |
-| `gemv_fixed_top` | is the `ap_fixed` defect real hardware or a csim artifact? | ⚠️ **real hardware** |
+| `f32` | does the `dot_tree` reduction survive to RTL? | ✅ yes |
+| `f32_wide` | is `P=4` special, or does the stream width generalise? | ✅ generalises |
+| `f32_pad` | the beat-count **padding** path | ✅ matches |
+| `f64` | **double** — `AdderDelay` 8 rather than 4 | ✅ matches |
+| `ab` | **does HLS fuse `axpy`'s `alpha*x + y`?** | ✅ **no** |
+| `i32` | the integer `dot_dsp` path | ✅ matches |
+| `u32` | **is `ap_uint<32>` really read unsigned?** | ✅ **yes** |
+| `fixed` | is the `ap_fixed` defect real hardware? | ⚠️ **yes** |
+| `fix24` | `WideType`'s slot is 32 bits in csim, 24 in RTL — does it leak? | ✅ **no divergence** |
 
-### The FMA question is settled
+### The two verdicts
 
-Level 3 shows the *C compiler's* choice changes 25 of 576 rows.  Level 4 shows what the
-**synthesis tool** chose, on two independent lines of evidence:
+`verify.py` prints both, and for each it reports whether the data could have produced the
+opposite answer — a check that cannot fail proves nothing:
 
 ```
-rows on which the two readings differ at all : 4/96
-RTL matches the UNFUSED (separate mul + add) : 96/96
-RTL matches the FUSED (single rounding)      : 92/96
-=> Vitis HLS does NOT fuse it.
+FMA verdict                                     Signed/unsigned verdict
+  two readings differ on : 4/96                   two readings differ on : 5/9
+  RTL matches UNFUSED    : 96/96                  RTL matches UNSIGNED   : 9/9
+  RTL matches FUSED      : 92/96                  RTL matches SIGNED     : 4/9
+  => HLS does NOT fuse it.                        => really read unsigned.
 ```
 
-and the synthesis report instantiates two separate cores — `fmul_32ns_32ns_32_4_max_dsp_1` and
-`fadd_32ns_32ns_32_5_full_dsp_1` — rather than a fused MAC.
+The FMA result is corroborated structurally: the synthesis report instantiates
+`fmul_32ns_32ns_32_4_max_dsp_1` and `fadd_32ns_32ns_32_5_full_dsp_1` as separate cores.  So the
+`-ffp-contract=off` pin in `tools/regen_golden.sh` **matches the hardware**, rather than being a
+defensible choice among two.
 
-The first line is the important one: `verify.py` reports `INCONCLUSIVE` rather than claiming a
-result if no row separates the two readings.
-
-So the `-ffp-contract=off` pin in `tools/regen_golden.sh` **matches the hardware**, rather than
-merely being a defensible choice among two.
+The signedness result is corroborated the same way: `i32` and `u32` synthesize to **identical**
+latency, DSP, FF and LUT — the same hardware, differing only in what the bits are taken to mean.
 
 ## What is still not verified
 
-* **Only the swept configuration is synthesized.**  `verifyGEMV/` covers `M=4, N=64, P=4` for
-  float and `M=3, N=32, P=4` for `ap_fixed`.  The native goldens cover six sizes and five stream
-  widths; RTL covers one of each.  Nothing suggests the others differ — the reduction structure
-  is the same code — but it has not been measured.
-* **`double` is modelled but not synthesized.**  Its golden comes from C-simulation only; no
-  DUT in `verifyGEMV/` uses it.
-* **`ap_ufixed` and `ap_fixed` wider than 31 bits** are unmodelled.
-* **`WideType`'s packing under synthesis.**  It uses `sizeof(T)*8` as the slot width, which for
-  `ap_fixed<24,12>` is 32 bits in C-simulation and would be 24 under `__SYNTHESIS__`.  The
-  synthesized `ap_fixed` DUT uses `<16,8>`, where `sizeof` is exactly 2 bytes and the question
-  does not arise — so this remains open for widths that are not a whole number of bytes.
+Everything the previous version of this section listed has now been measured.  What remains:
+
+* **`ap_ufixed` and `ap_fixed` wider than 31 bits are unmodelled**, so there is nothing to verify.
+  The width ceiling is a property of `waveflow.utils.fixputils`, which is int64-backed while the
+  exact `acc + product` intermediate needs `2W+1` bits.
+* **RTL covers one size per element path**, and the native goldens cover more: six sizes and five
+  stream widths on the float path against three synthesized configurations.  The three that *are*
+  synthesized were chosen to span the structural cases (a second stream width, and the padding
+  path), so this is now a question of breadth rather than of an untested behaviour.
+* **`double` is synthesized at one configuration only** (`M=2, N=64, P=2`).
 
 ## If something fails
 

@@ -1,4 +1,4 @@
-# verifyGEMV input -- alpha/beta gemv.  IEEE-754 bit patterns.
+# verifyGEMV input -- alpha/beta gemv.  IEEE-754 32-bit patterns, decimal.
 # per case: M*N matrix, N vector, M y-entries; then n_ab (alpha, beta) pairs
 # n_cases M N n_ab
 4 4 64 6

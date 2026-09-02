@@ -5,8 +5,8 @@ bits, it produces the same output bits as the kernel, without running Vitis.
 
 Verified against the shipped library on **2877 golden rows** — five element paths, six matrix
 sizes, five stream widths, zero differences — and against **synthesized RTL** in
-[`verifyGEMV/`](verifyGEMV/), where C-simulation and C/RTL co-simulation both match the model bit
-for bit on all three DUTs.
+[`verifyGEMV/`](verifyGEMV/), where nine DUTs cover every element path the model supports and
+C-simulation and C/RTL co-simulation both match it bit for bit.
 
 **Where to start:** [`VERIFY.md`](VERIFY.md) if you want to run something;
 [`PLAN.md`](PLAN.md) if you want to know how it was built, what was measured, and what is still
@@ -195,14 +195,20 @@ mistake that was actually available to make here.
 ## `verifyGEMV/` — the Vitis check
 
 Takes the real kernel through C-simulation, C-synthesis and C/RTL co-simulation and compares
-every result against the model.  **9/9 comparisons pass.**  Three DUTs, each answering a question
-native C-simulation structurally cannot:
+every result against the model.  **27/27 comparisons pass**, 176 rows.  Nine DUTs, each answering
+a question native C-simulation structurally cannot:
 
 | DUT | question | verdict |
 |---|---|---|
-| `gemv_f32_top` | does the `dot_tree` reduction survive to RTL? | ✅ yes |
-| `gemv_ab_top` | does HLS fuse `axpy`'s `alpha*x + y` into an FMA? | ✅ **no** — separate `fmul` and `fadd` cores |
-| `gemv_fixed_top` | is the `ap_fixed` defect real hardware or a csim artifact? | ⚠️ **real hardware** |
+| `f32`, `f32_wide`, `f32_pad` | does `dot_tree` survive to RTL — at another stream width, and on the padding path? | ✅ yes to all three |
+| `f64` | double, where `AdderDelay` is 8 rather than 4 | ✅ yes |
+| `ab` | does HLS fuse `axpy`'s `alpha*x + y` into an FMA? | ✅ **no** — separate `fmul` and `fadd` cores |
+| `i32`, `u32` | the integer path; and is `ap_uint<32>` really read unsigned? | ✅ yes — and they synthesize **identically** |
+| `fixed`, `fix24` | is the `ap_fixed` defect real hardware or a csim artifact? | ⚠️ **real hardware** |
+
+`fix24` also settles a `WideType` worry: its slot is `sizeof(T)*8`, so 32 bits for
+`ap_fixed<24,12>` in C-simulation and 24 under synthesis.  It does not leak — csim and cosim
+agree 9/9.
 
 See its `README.md` for the evidence and `ARCHITECTURE.md` for what each DUT is.
 
