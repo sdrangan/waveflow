@@ -413,6 +413,75 @@ a reader holding a lock the writer needs means lost samples — and lost samples
 in exactly the way sub-block loss already was. The count is the design's to produce and the gate's to
 assert; the interface does not supply it.
 
+#### Enable-gating is CLOSED, and not for the reason you would guess
+
+**Do not re-attempt making the owner's memory port go quiet from C++.** It was tried at S1, it is in
+the shipped code, and it does not work.
+
+`shot_loop_play_task.h` already guards its read with a **register**, not an address comparison:
+
+```c
+static ap_uint<1> playing = 0;
+...
+samp_out.write(playing ? buf[BASE + rd + i] : (ap_uint<W>)SHOT_LOOP_FILLER);
+```
+
+`playing` changes once per handover and never per beat, so there is nothing data-dependent in the
+loop's trip count and **II=1 survives** — measured, not assumed. The pipelining cost everyone expects
+here is *not paid*, and the guard still fails: Vitis evaluates `buf[...]` unconditionally and muxes
+the filler in, so the read port stays enabled for the whole 34-cycle overlap. The positive control
+and the shipped design are identical on this net.
+
+So the finding is stronger than *"a per-access range check would break the pipeline"*:
+
+> **The cheapest conceivable guard — one register bit, no address arithmetic, no II cost — does not
+> produce a quiet memory port.** The obstacle is not pipelining. Vitis owns the port enable and
+> hoists the read out of the ternary.
+
+Two consequences for S2:
+
+1. **Disjoint regions are not merely the cheap option; they are the only one that does not fight the
+   tool.** If the writer and reader never share addresses, both ports staying live is *irrelevant*
+   rather than tolerated, and no enable needs gating.
+2. The two alternatives stay open but cost more than they look. **Gating `EN` in the wrapper** is the
+   natural place (the wrapper already owns the memory-port wiring — it is where the `>> 3` lives),
+   but the kernel must then *export* the holding bit as a port, which HLS makes awkward; it is a
+   `wrapper_gen` + codegen change, bounded but real. **A sticky `collision` output on the memory**
+   prevents nothing — it makes a violation *visible in both backends*, replacing a VCD scan that has
+   now twice failed to separate a clean design from a deliberately dirty one. That one is worth doing
+   on its own merits and belongs to `plans/rtl_module.md`, not here.
+
+#### One thing S2 must decide before it builds anything
+
+`plans/rf_shot_buf.md` Stage C wants **pre-trigger history**: fill circularly, stop on a trigger, read
+out a window that begins *before* the trigger fired. A circular fill spans the whole memory, which is
+in tension with a disjoint-region split, and the resolution changes what S2 is:
+
+* **Triggered one-shot** — write circularly, trigger, *stop writing*, hand the reader the whole
+  memory. Writer and reader are never live together, so this is S1's degenerate case (`region = all`)
+  and needs no second region at all. Pre-trigger history works because the writer already wrote it.
+  Samples arriving during read-out are lost, which for a one-shot capture is correct behaviour, not a
+  defect — but the drop counter must say so.
+* **Continuous capture** — writer fills `[256, 512)` while the reader drains `[0, 256)`, swap, repeat.
+  Nothing is dropped, and this is what the region parameter was built for. But a window is then at
+  most one region long and **cannot start before the region boundary**, so pre-trigger history is
+  bounded by the region rather than by the memory.
+
+These are different products. Pick one deliberately and say which on the page; do not discover the
+tension mid-build.
+
+**DECIDED 2026-09-01: continuous capture.** S2 builds the two-region variant, because it is the one
+that exercises `[start, end)` at all — the triggered one-shot is `region = all` and would leave the
+interface exactly where S1 left it, unverified in the only dimension S2 exists to verify. The cost is
+accepted: a capture window is bounded by the region, so pre-trigger history cannot reach past the
+region boundary. Full-depth history stays available later as the `region = all` case with a trigger
+and a stop, reusing this stage's drop counter.
+
+**Check this before building anything.** S1's requester already acquires an arbitrary
+`[start, end)` while the owner holds the complement — which *is* two disjoint regions. It is
+plausible that `locked_mem.py` needs **no change at all** and S2 is a consumer plus its gates. Verify
+that first; if true, say so and do not manufacture interface work to fill the stage.
+
 ### S3 — many regions, many requesters
 
 Only if something demands it. Needs an allocator and a deadlock argument, and at that point this
@@ -716,3 +785,285 @@ nothing stronger.
 documentation, either the player's read must be *conditional* in the RTL (which costs the
 speculative read the II=1 datapath is built on) or `bram_t2p.v`'s assertion has to become the
 enforcement — and that is the same one-sided-`$error` edit S2 already owns.
+
+---
+
+## S2 as built — decisions taken without the plan, and where they landed
+
+Written during the S2 build (2026-09-01), on branch `t2p-lock-chan-s2` off `plans-s2-scope`.
+
+### Checkpoint 0 — the answer to "does the interface need to change at all?"
+
+**Almost not. One change, and it is one line of routing plus its refusal.**
+
+The plan's guess was that `locked_mem.py` might need nothing, because S1's requester already acquires
+an arbitrary `[start, end)` while the owner holds the complement — which *is* two disjoint regions.
+**That half of the guess is exactly right, and it is verified rather than asserted**: a full
+ping-pong swap cycle runs on `acquire` / `grant` / `release` / `may_touch` **as S1 shipped them**, with
+no change to the protocol, the messages, the region bookkeeping or the complement guard.
+`test_two_disjoint_regions_swap_on_the_UNCHANGED_S1_protocol` is that run: three grants, the reader
+alternating `[0,32) → [32,64) → [0,32)`, and the middle window coming back as the ramp the capture
+wrote **while the reader held the other half**.
+
+What S1 did get wrong is a different axis, and it was invisible until RX asked for it:
+
+> **Role and direction are independent, and S1 coupled them.**
+>
+> `bind` routed *master → port A* and *slave → port B*. That is right for TX and **only** for TX,
+> where the requester is the loader (writes) and the owner is the player (reads). RX inverts the
+> **directions** while keeping the **roles**: the capture cannot stop, so it is still the owner — and
+> it *writes*; the window reader still arrives with a transaction, so it is still the requester — and
+> it *reads*. The RX pairing was therefore refused at bind, with a message about a memory port rather
+> than about the design.
+
+The fix is `_mem_if_for`: a side gets port A if it writes and port B if it reads, whichever role it
+is. **Port A stays the writer's in both directions**, which is not a preference — `bram_t2p.v`'s
+`$error` is one-sided (*A writes while B touches the same address*), so a writing port B would be
+invisible to the memory's only real RTL check. TX's routing is bit-for-bit what it was; the S1
+consumer's tests and gates are untouched.
+
+It comes with a refusal it did not have: **two ends that want the same memory port**. Two writers is
+the collision the one-sided `$error` cannot see; two readers is a lock arbitrating a memory nothing
+ever fills — a design that looks correct and moves no data. Both are wiring mistakes, and bind is the
+last place the message can still name the two declarations.
+
+**So S2 is a consumer plus its gates, and one four-line routing fix.** The plan asked not to
+manufacture interface work to fill the stage, and there was none to do.
+
+### Checkpoint 1 — the RX pair, and the channel the lock does not provide
+
+**`waveflow/hw/rf_pingpong_rx.py`: `PingPongCapture`, `PingPongWindow`, `RfPingPongRx`.**  The
+capture is the owner and it **writes**; the window reader is the requester and it **reads** — the
+inversion checkpoint 0 made bindable.
+
+**There is a `rdy` channel, and its existence is a finding rather than an oversight.**
+
+> **The lock arbitrates; it does not synchronise.**  It answers *may I touch these addresses* and has
+> no way to say *there is something there worth touching*.
+
+A reader that alternated blindly would acquire a half the capture had not filled and drain zeros —
+the plausible-samples failure this arc keeps meeting.  So the capture announces each region as it
+completes it, exactly as `RfShotBufLoad` announces a shot, and the reader blocks on the announcement
+before it asks for anything.  One word, and the word is the region's **base address**: an index would
+be a second encoding of a geometry the lock already speaks in addresses.
+
+**Its depth is `N_REGION`, and that is an invariant rather than a guess.**  At most `N_REGION`
+regions can be full at once, so at most that many announcements can be outstanding — which is what
+lets the capture write the channel *blocking* and still never stall.  A shallower channel would make
+the capture block on a reader, which is back-pressuring an ADC.
+
+**A region is free when it is RELEASED, not when it is taken.**  The capture keeps a `full` flag per
+region, set when it finishes filling one and cleared by the *release*.  If taking a region freed it,
+the capture could refill the half a reader is still draining — the collision, arrived at from the
+bookkeeping rather than from the lock.  This is also what makes the drop condition reachable at all:
+when neither region is free, the block has nowhere to go.
+
+**The capture takes its input first and unconditionally.**  A body that read only when it had room
+would be back-pressuring an ADC, and it would make the drop counter read *zero* for a design that was
+quietly losing everything upstream instead.  `test_the_capture_never_stalls_its_input` asserts every
+presented block was taken, and that `written + dropped == presented`.
+
+**On RX the ordering rule that TX turns on costs nothing — and the guard still has to be there.**
+The reader only ever asks for a region the capture has already announced and moved off, so no state
+change precedes the grant.  A design that drifted into granting the half it is filling would corrupt
+a window silently, so `test_the_capture_never_grants_a_region_it_is_filling` drives that case
+directly and the interface's own guard catches it.
+
+#### MEASURED (pysim, 40 blocks of 4 words at 4 Mword/s, `depth=64`, two regions of 32)
+
+| | clean | dirty (`stall_blocks=10`) |
+|---|---|---|
+| windows drained | **4** | 3 |
+| window bases | `[0, 32, 0, 32]` | `[0, 32, 0]` |
+| blocks taken off the input | **40** | **40** |
+| words written | **160** | 128 |
+| **words dropped** | **0** | **32** (8 blocks) |
+| grants | 4 | 3 |
+| gap visible between drained windows | **0** | **16** |
+
+**The counter and the samples do not have to be the same number, and asserting that they were was
+wrong.**  The first version of the dirty gate asserted equality and failed: 32 counted against 16
+visible.  The samples can only show loss that fell *between two windows the reader actually drained*;
+the counter also holds whatever was dropped after the last one, because the run ends with the reader
+still holding a window and the capture goes on losing blocks it will never announce.  So the relation
+is a **bound** — `0 < visible <= counted` — and every visible gap must be a whole number of blocks,
+because the capture drops a block at a time.  Asserting equality would have been asserting that the
+run stopped at a convenient moment.
+
+### Checkpoint 2 — the count, and the verdict, on the wire
+
+The plan is explicit that *"the count is the design's to produce and the gate's to assert; the
+interface does not supply it"*, and that lost samples are silent in pysim in exactly the way sub-block
+loss was.  Checkpoint 1 produced the count as a Python attribute, which is **invisible to a host and
+invisible to the RTL** — the same shape the silence had.  This checkpoint puts it on the wire.
+
+**Every window is now a frame: one `CaptureWindowHdr`, then the samples.**  8 + 28 + 28 = exactly 64,
+one beat, the width everything in this arc speaks.  It is written **once**, by the capture, onto the
+`rdy` channel, and the reader forwards it verbatim as the frame's header — one schema rather than
+two, because it is one statement (*here is a region, here is what was lost before it*) and a second
+schema would be a second place for the two to disagree.
+
+**Two fields, because there are two different questions.**
+
+* `n_dropped` — words lost **since reset**, cumulative.  `reverse_stream`'s rule 1: a lost cumulative
+  value is harmless because the next carries the whole truth; a lost *increment* is wrong forever.
+* `status` — `CAP_OK` / `CAP_LOST`, *was anything lost immediately before this window?*  Not
+  derivable from one cumulative reading — a host would have to remember the last one and subtract —
+  and the design already knows.  The same split `ShotTxResp` makes between a status and a count.
+
+**The verdict marks the window AFTER the gap**, and that is asserted rather than assumed: the flagged
+window is the one whose first sample does not follow the previous window's last.  Marking the window
+*before* would point a host at data that is entirely fine.
+
+**One frame, not two writes.**  The first version wrote the header and then the payload, which in
+pysim is two bursts and therefore two `TLAST`s — measured as frames of `[1, 32, 1, 32, …]` at the
+sink.  The C++ twin writes the header beat and the payload beats into a single `axi4s` frame, so a
+split here would make the two backends disagree about the *boundary* rather than about a value, which
+is the harder kind of divergence to see.  The header is serialized through the schema's own
+serializer and concatenated; `split_windows()` is the one place the layout is read back, so a gate
+never slices it by hand.
+
+#### MEASURED (pysim, same run as checkpoint 1)
+
+| | clean | dirty (`stall_blocks=10`) |
+|---|---|---|
+| frames at the host | `[33, 33, 33, 33]` | `[33, 33, 33]` |
+| headers `(status, base, n_dropped)` | `(OK,0,0) (OK,32,0) (OK,0,0) (OK,32,0)` | `(OK,0,0) (OK,32,0) (**LOST**,0,16)` |
+| internal counter | 0 | 32 |
+
+**The published total is a lower bound on the counter, for checkpoint 1's reason.**  16 published
+against 32 counted: the last window carries what was known at the last *announcement*, and the
+capture goes on dropping after it, because the run ends with the reader still holding a window.  This
+is the second time in one stage that an equality assertion had to become a bound, and both times the
+cause was the same — **a counter records the whole run; the wire records what the design had a chance
+to say.**
+
+The one place equality *is* asserted is the clean run: every window reports `CAP_OK` with zero, and
+the last published total must then equal the counter.  That is not the same check wearing a different
+hat — it catches loss the host would **never be told about**, because it fell after the final
+announcement.
+
+### Checkpoint 3 — the lowering, and two asymmetries with TX that are worth the words
+
+**Nothing in the lowering path needed changing.**  Checkpoint 0's routing fix was the whole of it:
+`check()` is clean, the four boundary ports come out `samp_in / buf_w / buf_r / w_out`, the four
+internal channels are `dense / rdy / lock_if_cmd / lock_if_resp`, and one `add_if(lock)` still files
+the two `BramIF`s as wrapper wires.  The hazard manifest now names the **capture's** port as the
+writer, which is the port map RX needs and the one S1 could not produce.
+
+**The RX owner is on the SAFE side of the reset trap, and the TX owner is not.**
+`reference-hls-task-reset-trap` says a task that WRITES before it READS advances during reset.
+`shot_loop_play_task.h` cannot avoid that shape — a TX owner *produces* samples nobody asked for,
+which is what "the side that cannot stop" means there.  An RX owner **consumes** them, so its first
+act is a blocking stream read and it stalls at reset like any requester.  The statics still carry
+`#pragma HLS reset`; what this design does not *depend* on is the solution-level
+`config_rtl -reset state` that TX needed.  (It is set anyway, so the two builds differ in nothing a
+reader would have to explain.)
+
+**The input is read unconditionally and the memory write is what the guard covers.**
+
+```c
+    ap_uint<W> x = samp_in.read();      // UNCONDITIONAL
+    if (have) buf[dst + i] = x;
+```
+
+That is the shape a drop needs: a body that read only when it had room would be back-pressuring an
+ADC, and it would make `dropped` read **zero** for a design quietly losing everything one stage
+upstream.  The destination is decided *before* the block arrives — it depends only on statics the
+previous firing left behind — so there is no local copy and the store is one pipeline.
+
+**The C++ tracks `held_r[]` itself; pysim asks the lock endpoint.**  The pysim twin uses
+`may_touch()`, because there the endpoint is also the **guard** that raises on a violation.  There is
+no guard at RTL, so the body keeps the same fact in its own register.  The two are twins in behaviour
+and not in mechanism, which is written down rather than left to be noticed.
+
+**The free-region scan runs downward on purpose.**  `find_region` iterates `NR-1 → 0` with `UNROLL`,
+so the last assignment wins and the result is the *lowest* free region — which is what the pysim
+twin's upward first-match returns.  An upward unrolled loop would take the *highest*, and at
+`N_REGION == 2` that difference is invisible; on a three-region design the two backends would
+ping-pong in opposite orders.  It costs nothing to agree, which is exactly why it is recorded.
+
+#### MEASURED (Vitis HLS 2025.1, xczu48dr, 4 ns target)
+
+| module | loop | achieved II |
+|---|---|---|
+| `pingpong_capture_task_64_512_2_16` | `store_block` | **1** |
+| `pingpong_window_task_64_512_2_16` | `drain_window` | **1** |
+| `pingpong_window_task_64_512_2_16` | `await_grant` | **1** |
+| `rf_relayout_to_dense_task_64_4_2_s` | *(Stage A's, unlabelled)* | **1** |
+
+Estimated period **2.722 ns**, Fmax **367.4 MHz** — the same number the TX loop design measured, which
+is what one expects when the datapath is a BRAM port and a FIFO either way.
+
+**`store_block` is the interesting one.**  It reads unconditionally and writes conditionally, which
+is the shape that makes a drop possible without stalling an ADC — and it is exactly the shape one
+might expect to cost a cycle.  It does not.
+
+### Checkpoint 4 — the RTL gate, and the claim two regions can make that one cannot
+
+`examples/rf_pingpong_rx` and `tests/examples/test_rf_pingpong_rx_xsi.py`.  A real ADC filling the
+memory, the ping-pong receiver, one sink taking windows.  **There is no command stream**, and that is
+the design rather than an omission: a capture is asked nothing — it is *told* when a region is ready
+by the design itself, and it answers on every window with a header a host can act on.  Compare
+`examples/rf_samp_buf_rx`, whose whole middle is a command layer because *its* reader has to say which
+window it wants.
+
+#### MEASURED at RTL (Vitis HLS 2025.1, xczu48dr, 4 ns; xsim 2025.1; 2800 cycles)
+
+| | value |
+|---|---|
+| windows to the host | **4 frames of 129 words** — one header, 128 samples |
+| headers | `(CAP_OK, 0, 0) (CAP_OK, 128, 0) (CAP_OK, 0, 0) (CAP_OK, 128, 0)` |
+| samples | **2048, contiguous**, codes `1000 … 3047` |
+| words the converter handed over | **640**, in 40 blocks |
+| words the converter could **not** hand over | **0** |
+| host words / last window | **516** / cycle **2205** |
+| achieved II | **1** on `store_block`, `drain_window`, `await_grant`, and the re-layout |
+
+**Bit-identical to the pysim golden** — same four frames, same four headers, same 2048 contiguous
+codes.  That is the twin comparison this arc exists to make, and on RX it is unusually strong,
+because contiguity is a property of the *whole run* rather than of any one window.
+
+#### S2's RTL claim is a POSITIVE one, and S1's could not be
+
+S1 could only report an absence — the cycle-exact scan found nothing — and **its own positive control
+found nothing either**: with one region the shipped design and the deliberately broken one both had
+34 cycles of both-ports-live, and `find_read_during_write` separated neither.  Two disjoint regions
+change the shape of the evidence entirely.  MEASURED on this run's VCD:
+
+| | value |
+|---|---|
+| cycles with **both** memory ports live (`en && we` / `en`) | **140** |
+| of those, cycles with the writer and reader in the **same region** | **0** |
+| of those, cycles at the **same address** | **0** |
+| regions each port visited over those cycles | writer `[70, 70]`, reader `[70, 70]` |
+| `find_read_during_write` | 0 |
+
+The 140 is what makes the 0 mean something: a run where the two were never live together would prove
+nothing at all.  And both ports visit *both* regions in equal measure, so it is not one side sitting
+still either.
+
+> **This is the consequence the plan predicted under *Enable-gating is CLOSED*, now measured:** *"If
+> the writer and reader never share addresses, both ports staying live is irrelevant rather than
+> tolerated, and no enable needs gating."*  Vitis still owns the port enable and still reads
+> speculatively.  With two regions that stops mattering, and the region becomes **enforced at RTL by
+> construction** rather than by an assertion nobody can hear.
+
+**S2 therefore answers the question S1 left open** — *"if the region is to be correctness rather than
+documentation, either the player's read must be conditional or `bram_t2p.v`'s assertion has to become
+the enforcement"* — with a third option the plan itself named and did not cost out: **neither, if the
+regions are disjoint.**
+
+#### No dirty RTL build, and why that is not the S1 situation
+
+The fault-injection knob is `stall_blocks`, and it is a **pysim modelling field**: it reaches no
+template argument, because *a reader that dawdles* is not something the RTL can be asked to do.  A
+control would need a second design, as S1's did.
+
+It is not needed here, and the reason is the one above: S1 needed a control because its claim was an
+*absence*, and an absence can be produced by a scan bound to the wrong nets.  S2's claim is a
+positive, self-witnessing measurement — 140 cycles of simultaneous liveness, 0 of them shared — which
+cannot be produced by a scan that is looking at nothing.  The clean/dirty pairing lives in pysim,
+where the knob does (`tests/hw/test_rf_pingpong_rx.py`), and the RTL gate says so on its own page.
+
+**`WANT_XSI_GATES` 86 → 95.**

@@ -346,6 +346,49 @@ class MemLockStep(Buildable):
         return (_SRC_DIR / "mem_lock.h").read_text(encoding="utf-8")
 
 
+class RfPingPongStep(Buildable):
+    """Copy the continuous-capture receiver's two hand-written ``hls::task`` bodies.
+
+    ``plans/t2p_lock_chan.md`` S2.  :mod:`waveflow.hw.rf_pingpong_rx` is **framework**, so its bodies
+    ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles — the
+    same mechanism :class:`RfShotBufStep` uses.
+
+    **A step of its own rather than a line in** :class:`RfShotBufStep`, and the reason is the one that
+    step's own docstring gives for splitting from :class:`RfSampBufStep`: these are a different
+    *design*, not a different half of one.  The shot buffer's vocabulary is a shot, a verdict and a
+    repeat count; this one's is a region, a window and a drop.  They share the **lock**, and the lock
+    is :class:`MemLockStep`'s — a primitive filed under neither of its users.
+
+    Both bodies ``#include`` the generated ``capture_window_hdr.h`` and ``mem_lock.h``, so a
+    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
+    :data:`~waveflow.hw.rf_pingpong_rx.CAPTURE_SCHEMA_CLASSES` and a :class:`MemLockStep` must write
+    into the same *output_dir*.  The window body writes an ``axi4s`` frame, so the schema needs its
+    ``write_axi4_stream`` methods — which ``DataSchemaStep`` emits by default.
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {name: self._output_dir / f"{name}.h" for name in self._SRC}
+
+    _SRC = ("pingpong_capture_task", "pingpong_window_task")
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        if key not in self._SRC:
+            raise KeyError(f"Unknown RfPingPongStep output key: {key!r}")
+        src_path = _SRC_DIR / f"{key}.h"
+        if not src_path.exists():
+            raise FileNotFoundError(f"RfPingPong source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")
+
+
 class MemStreamStep(Buildable):
     """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
     output directory.

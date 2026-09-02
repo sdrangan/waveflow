@@ -57,15 +57,25 @@ class Bench:
     written **wrong** on purpose.
     """
 
-    def __init__(self, nelem: int = NELEM, check_period: int = CHECK_PERIOD) -> None:
+    def __init__(self, nelem: int = NELEM, check_period: int = CHECK_PERIOD,
+                 *, rx: bool = False) -> None:
+        """*rx* selects the **direction** pairing, and it is a separate axis from the roles.
+
+        ``False`` is TX: the requester is the loader (writes) and the owner is the player (reads).
+        ``True`` is RX: the requester is the window reader (reads) and the owner is the capture
+        (writes) -- because the side that cannot stop is the owner either way, and on RX that side
+        is the one filling the memory.  The roles do not move; only what each does through its
+        memory port does.
+        """
         self.sim = Simulation()
         self.nelem = int(nelem)
+        self.rx = bool(rx)
         self.clk = Clock(name="clk", freq=250e6)
         self.mem = T2pBram(sim=self.sim, name="mem", element_type=WORD, nelem=self.nelem)
         self.req = LockedMemMasterIF(sim=self.sim, name="loader", element_type=WORD,
-                                     nelem=self.nelem, access="write")
+                                     nelem=self.nelem, access="read" if rx else "write")
         self.own = LockedMemSlaveIF(sim=self.sim, name="player", element_type=WORD,
-                                    nelem=self.nelem, access="read",
+                                    nelem=self.nelem, access="write" if rx else "read",
                                     check_period=int(check_period))
         self.lk = LockedT2pMemIF(sim=self.sim, name="buf_lock", clk=self.clk, element_type=WORD,
                                  nelem=self.nelem, memory=self.mem)
@@ -553,3 +563,111 @@ def test_release_carries_the_region_it_gives_back():
     out: dict = {}
     b.run(owner(b), requester_body(b, 16, 24, ramp(8), out))
     assert seen == [(LOCK_ACQUIRE, 16, 24), (LOCK_RELEASE, 16, 24)]
+
+
+# ---------------------------------------------------------------------------
+# S2 checkpoint 0 — role and direction are independent axes
+# ---------------------------------------------------------------------------
+
+def test_the_memory_port_a_side_gets_is_decided_by_what_it_DOES():
+    """**The one interface change S2 needed**, and the reason it was needed at all.
+
+    S1 wired the requester to port A and the owner to port B, which is right for TX and *only* for
+    TX: there the requester is the loader (writes) and the owner is the player (reads).  RX inverts
+    the **directions** and not the **roles** — the capture cannot stop, so it is still the owner, and
+    it writes; the window reader still arrives with a transaction, so it is still the requester, and
+    it reads.  Role and direction are independent axes and S1 coupled them, so the RX pairing was
+    refused at bind with a message about the memory port rather than about the design.
+
+    Port A stays the writer's in both directions, which is not a preference: ``bram_t2p.v``'s
+    ``$error`` is one-sided, so a writing port B would be invisible to the memory's only real check.
+    """
+    tx, rx = Bench(), Bench(rx=True)
+    assert tx.req.mem_ep.interface is tx.lk.wr_if and tx.own.mem_ep.interface is tx.lk.rd_if
+    assert rx.req.mem_ep.interface is rx.lk.rd_if and rx.own.mem_ep.interface is rx.lk.wr_if
+    # ... and port A is the writer's on both benches, because that is the memory's own assumption.
+    for b in (tx, rx):
+        assert b.lk.wr_if.endpoints["slave"] is b.mem.wr_port
+        assert b.lk.rd_if.endpoints["slave"] is b.mem.rd_port
+
+
+@pytest.mark.parametrize("req_access, own_access", [("write", "write"), ("read", "read")])
+def test_two_ends_wanting_the_same_memory_port_are_refused(req_access, own_access):
+    """A lock arbitrates **one** writer against **one** reader; anything else is a wiring mistake.
+
+    Two writers is the collision ``bram_t2p.v``'s one-sided ``$error`` cannot see.  Two readers is a
+    lock arbitrating a memory nothing ever fills — a design that looks correct and moves no data.
+    Both are refused at bind, where the message can still name the two declarations.
+    """
+    sim = Simulation()
+    mem = T2pBram(sim=sim, name="mem", element_type=WORD, nelem=NELEM)
+    lk = LockedT2pMemIF(sim=sim, name="lk", clk=Clock(freq=250e6), element_type=WORD,
+                        nelem=NELEM, memory=mem)
+    lk.bind("master", LockedMemMasterIF(sim=sim, name="r", element_type=WORD, nelem=NELEM,
+                                        access=req_access))
+    with pytest.raises(ValueError, match="same memory port"):
+        lk.bind("slave", LockedMemSlaveIF(sim=sim, name="o", element_type=WORD, nelem=NELEM,
+                                          access=own_access))
+
+
+def test_two_disjoint_regions_swap_on_the_UNCHANGED_S1_protocol():
+    """**The other half of checkpoint 0**: the region machinery needed no change at all.
+
+    A ping-pong capture is two disjoint regions, and S1's requester already acquires an arbitrary
+    ``[start, end)`` while the owner holds the complement — which *is* two regions.  So this drives a
+    full swap cycle through ``acquire`` / ``grant`` / ``release`` / :meth:`may_touch` exactly as S1
+    shipped them, and the only thing S2 had to add was the direction routing above.
+
+    What it asserts is the property the swap exists for: **the owner keeps writing the half the
+    reader does not hold**, across a handover, and every word the reader takes out is one the owner
+    put in.
+    """
+    b = Bench(nelem=NELEM, check_period=CHECK_PERIOD, rx=True)
+    half = NELEM // 2
+    regions = [(0, half), (half, NELEM)]
+    out: dict = {"windows": [], "dropped": 0}
+
+    def capture(n_chunks):
+        cur, wp = 1, half                      # fill the TOP half first; the reader takes the bottom
+        for _ in range(n_chunks):
+            lo, hi = regions[cur]
+            if wp + CHECK_PERIOD <= hi:
+                yield from b.own.write_pipelined(ramp(CHECK_PERIOD, base=1000 + wp), addr=wp)
+                wp += CHECK_PERIOD
+            else:
+                nxt = 1 - cur
+                nlo, nhi = regions[nxt]
+                if b.own.may_touch(nlo) and b.own.may_touch(nhi - 1):
+                    cur, wp = nxt, nlo         # the other half is free: swap into it
+                else:
+                    out["dropped"] += CHECK_PERIOD    # the reader still holds it — samples are gone
+                    yield b.own.timeout(CHECK_PERIOD / float(b.clk.freq))
+            cmd = yield from b.own.handle_nb()
+            if cmd is not None and int(cmd.opcode) == LOCK_ACQUIRE:
+                # NO state change needed: the capture is not touching the half it is asked for.
+                yield from b.own.grant(int(cmd.start_addr), int(cmd.end_addr))
+
+    def reader(n_windows):
+        which = 0
+        for _ in range(n_windows):
+            lo, hi = regions[which]
+            assert (yield from b.req.acquire(lo, hi)) == LOCK_GRANTED
+            data, _t0 = yield from b.req.read_pipelined(WORD, hi - lo, addr=lo)
+            out["windows"].append((lo, np.asarray(data.val).reshape(-1).copy()))
+            yield from b.req.release()
+            which = 1 - which
+
+    b.run(capture(40), reader(3))
+
+    assert [lo for lo, _ in out["windows"]] == [0, half, 0], (
+        "the reader did not ping-pong between the two halves")
+    b.lk.assert_handover_happened(3)
+    # The second window is the one that proves the concurrency: the owner filled [half, NELEM) while
+    # the reader held [0, half), so those words were written UNDER a live reader on the other half.
+    lo, got = out["windows"][1]
+    assert np.array_equal(got, ramp(half, base=1000 + half)), (
+        f"the top half came back {got[:4]}…, not the ramp the capture wrote while the reader held "
+        f"the bottom half. That overlap is the whole point of two regions.")
+    assert out["dropped"] > 0, (
+        "this scenario is deliberately mistimed so the capture outruns the reader at least once — a "
+        "run with no drops has not exercised the condition the S2 drop counter exists for")

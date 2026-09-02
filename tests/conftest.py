@@ -34,7 +34,7 @@ import pytest
 #: gate -- most likely to a collection error, which is silent in every other reading of the output.
 #:
 #: To update: ``pytest -m xsi --collect-only -q`` and sum the per-file counts.
-WANT_XSI_GATES = 86
+WANT_XSI_GATES = 95
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.
