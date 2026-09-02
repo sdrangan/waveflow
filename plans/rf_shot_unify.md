@@ -347,6 +347,49 @@ ordering — the same `mem_lock.h`, the same `LockedT2pMemIF`, the same grant se
 uses. A second deliberately broken design would be a second copy of a finding, not a second finding.
 What is new at Stage A is the merge, and the merge is proven by running one RTL against both streams.
 
+### The consequence that finding has, and it is structural: TX is a SINGLE-region design
+
+The 2 collisions are not bad luck in a scenario. They follow from a property of the design that
+`plans/t2p_lock_chan.md` does not currently make explicit, and that a reader of that plan would get
+backwards.
+
+`RfShotTxUnified` asks for **one** region and hands it back and forth —
+`ShotTxLoader.region` is documented as *"`[base, base + nword)` — the one region this design ever
+asks for."* So the writer and the reader **do** share addresses, in turn.
+
+S2's answer to the RTL-enforcement question — *disjoint regions, so both ports staying live is
+irrelevant rather than tolerated* — is therefore a guarantee **`RfShotRx` has and `RfShotTx` does
+not**:
+
+| | `RfShotRx` (2 regions) | `RfShotTx` (1 region) |
+|---|---|---|
+| address collisions | **0, by construction** | **2, benign by measurement** |
+| what proves it | the region split | a byte-identical pysim run that raises on yielded reads |
+| waveform / window switch | gapless | a filler gap at every handover |
+
+Neither is wrong. But the family is **not uniformly protected**, and
+`plans/t2p_lock_chan.md`'s *"disjoint regions are the mechanism"* reads as though it covers both
+halves. It covers one. Say so in both plans.
+
+#### The option this opens, NOT taken at Stage A
+
+A **two-region TX** — load the new shot into region B while region A plays, switch at the wrap —
+would give collisions of 0 by construction, and **gapless waveform switching**: no filler between
+waveforms at all. Look at the measured loop playout, `(F,3) (P,1) (F,2) (P,1) (F,15)` — every
+handover costs a gap. At `depth=256` holding an `nword=64` shot there is room for four regions, so
+the memory cost is nil.
+
+It goes further than tidiness: with two regions a **finite** shot playing A can accept a load into B
+*without being truncated*, so the `SHOT_BUSY` asymmetry — the thing that made Stage A a merge rather
+than a rename — would largely dissolve, surviving only for the case where both regions are spoken
+for. And TX and RX would become the same shape, which is what a plan called *one shot-buffer design*
+ought to mean.
+
+**Deliberately not folded into Stage B.** Stage B is a pure deletion, where any regression is
+trivially attributable to a removal; a single-to-two-region refactor inside it would destroy that
+property. Decide it on its own merits afterwards. It is recorded here because Stage B is what makes
+the single-region design the *surviving* one, and that is the moment to have looked.
+
 ### Assumption recorded: `n_plays` is not pinned on a mixed run
 
 `RfShotTxUnified.assert_finite_completed(n_shots, n_plays=None)` takes the pass count as *optional*.
