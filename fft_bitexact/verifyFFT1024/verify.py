@@ -26,6 +26,8 @@ Exit status is 0 only if every comparison is bit-exact.
 from __future__ import annotations
 
 import argparse
+import pathlib
+import re
 import sys
 from pathlib import Path
 
@@ -37,8 +39,31 @@ sys.path.insert(0, str(HERE.parents[1]))          # repo root, so fft_bitexact/ 
 from fft_bitexact.wf_fft.fft import NO_SCALING, fft_general
 from waveflow.utils import fixputils as fp
 
-IN_W, IN_I = 16, 2        # must match src/fft_top.hpp
-TW_W, TW_I = 18, 2
+
+def _defines(path: pathlib.Path) -> dict[str, int]:
+    """Read the ``#define FFT_*`` values out of the DUT header.
+
+    These used to be duplicated here as literals with a comment saying "must match
+    src/fft_top.hpp".  They did not have to match -- nothing checked -- so following the README's
+    own advice to change the precision in the header left this script comparing against a model
+    run at the *old* precision, and every vector then reported as differing for a reason that had
+    nothing to do with the library.  One source of truth instead.
+    """
+    text = path.read_text()
+    out = {}
+    for key in ("FFT_L", "FFT_R", "FFT_IN_W", "FFT_IN_I", "FFT_TW_W", "FFT_TW_I"):
+        m = re.search(rf"^\s*#define\s+{key}\s+(\d+)", text, re.MULTILINE)
+        if not m:
+            raise SystemExit(f"{path}: no '#define {key} <n>' found -- cannot infer the DUT's "
+                             f"configuration.  Has the header been restructured?")
+        out[key] = int(m.group(1))
+    return out
+
+
+_DEF = _defines(HERE / "src" / "fft_top.hpp")
+IN_W, IN_I = _DEF["FFT_IN_W"], _DEF["FFT_IN_I"]
+TW_W, TW_I = _DEF["FFT_TW_W"], _DEF["FFT_TW_I"]
+DUT_L = _DEF["FFT_L"]
 
 #: Transform lengths the Python model implements: any ``L = 4^S``.  ``fft_general`` covers the
 #: whole family; sizes that are not a power of the radix (32, 128, 512) take a different
@@ -91,11 +116,32 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--show", type=int, metavar="V", help="dump vector V sample by sample")
     ap.add_argument("--quiet", action="store_true", help="exit code only")
+    ap.add_argument("--input", default="input.txt",
+                    help="input file under data/ (default: input.txt).  Use the file you built "
+                         "with encode_input.py to check your own samples.")
     args = ap.parse_args()
 
-    in_re, in_im, n_vec, n_samp = _read_input(HERE / "data" / "input.txt")
+    in_path = HERE / "data" / args.input
+    if not in_path.exists():
+        raise SystemExit(f"{in_path} does not exist.  For your own samples, build it with\n"
+                         f"  python encode_input.py <your-decimals.txt>\n"
+                         f"See 'Bring your own input' in README.md.")
+    in_re, in_im, n_vec, n_samp = _read_input(in_path)
     csim_re, csim_im, out_w, out_i = _read_output(HERE / "results" / "output_csim.txt")
     cosim_re, cosim_im, _, _ = _read_output(HERE / "results" / "output_cosim.txt")
+    # The results in results/ were produced from whatever input run.tcl was given.  Comparing them
+    # against a model run on a DIFFERENT input yields a shape mismatch or, worse, a plausible
+    # wrong verdict -- so check they belong together and say plainly if they do not.
+    if csim_re.shape != (n_vec, n_samp):
+        raise SystemExit(
+            f"results/ hold {csim_re.shape[0]} vector(s) x {csim_re.shape[1]} samples, but "
+            f"data/{args.input} has {n_vec} x {n_samp}.\n"
+            f"  The results are stale for this input.  Re-run:\n"
+            f"    WF_INPUT={args.input} vitis-run --mode hls --tcl run.tcl")
+    if n_samp != DUT_L:
+        raise SystemExit(
+            f"data/{args.input} has {n_samp} samples but src/fft_top.hpp sets FFT_L={DUT_L}.\n"
+            f"  Change FFT_L (and re-run the flow), or supply {DUT_L}-sample vectors.")
     have_model = n_samp in MODEL_LENGTHS
     checks = [("C-sim   vs Co-sim      ", csim_re, csim_im, cosim_re, cosim_im)]
     mdl_re = mdl_im = None

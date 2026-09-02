@@ -2,3 +2,7 @@
 fft1024_verify_proj/
 logs/
 *.log
+
+# Your own samples, and the file encode_input.py builds from them.  Not part of the
+# repo: the shipped input.txt and results/ are the reference run, and they stay put.
+data/user_input.txt

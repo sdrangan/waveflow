@@ -15,9 +15,10 @@ Same structure, same commands, same file formats — only the transform length d
 | C-sim vs Python model | ✅ bit-exact | ✅ bit-exact |
 | Co-sim vs Python model | ✅ bit-exact | ✅ bit-exact |
 | C-sim vs Co-sim | ✅ bit-exact (384) | ✅ bit-exact (16384) |
-| DSP / FF / LUT | 12 / 4017 / 6922 | 20 / 16381 / 21481 |
-| co-sim latency | 41 cycles | 1477 cycles |
-| runtime | ~2 min | ~10 min |
+| BRAM / DSP / FF / LUT | 0 / 12 / 4017 / 6922 | 20 / **48** / 16381 / 21481 |
+| co-sim latency (min) | 41 cycles | 1477 cycles |
+| co-sim latency (avg / max) | 41 / 42 | 2244 / 2491 |
+| runtime | ~1 min | ~1.5 min |
 
 Both use the identical flow:
 
@@ -32,6 +33,27 @@ python verify.py                        # compare against the Python model
 
 Each folder has its own `README.md` (the walkthrough) and `ARCHITECTURE.md` (what the design is
 and which number formats it uses internally).
+
+## Checking your own samples
+
+Both folders take **your** data as readily as the shipped vectors, and neither overwrites the
+reference run:
+
+```bash
+cd verifyFFT16                                    # or verifyFFT1024
+python encode_input.py my_samples.txt             # decimals -> data/user_input.txt
+WF_INPUT=user_input.txt vitis-run --mode hls --tcl run.tcl
+python verify.py --input user_input.txt
+```
+
+`my_samples.txt` is one complex sample per line, `re im`, as ordinary decimals — one vector is
+`L` samples.  `encode_input.py` converts them to the raw stored integers the flow consumes,
+reading the width from `src/fft_top.hpp` so it always matches the DUT:
+
+    a real value  r  in ap_fixed<W,I>  is stored as  round(r * 2**(W-I))
+
+Each folder's `README.md` has the full walkthrough under **Bring your own input**, including the
+failure modes and why the on-disk format is integers rather than decimals.
 
 ## Both are full checks
 

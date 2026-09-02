@@ -23,7 +23,7 @@ fft_bitexact/
 ├── tools/             one script that rebuilds every golden
 ├── tests/             the gates, run with plain pytest -- no Vitis needed
 │
-├── verifyFFT16/       runnable end-to-end check at L=16
+├── verifyFFT16/       runnable end-to-end check at L=16   (+ your own samples)
 └── verifyFFT1024/     the same at L=1024
 ```
 
@@ -117,12 +117,18 @@ verifyFFT16/
 ├── ARCHITECTURE.md    what the DUT is and its internal number formats
 ├── run.tcl            csim -> csynth -> cosim, one command
 ├── verify.py          compares Vitis output against the model
+├── encode_input.py    your decimals -> data/user_input.txt
 ├── src/               fft_top.hpp (config), fft_top.cpp (DUT), fft_tb.cpp (testbench)
 ├── data/input.txt     input vectors, raw stored integers
 └── results/           output_csim.txt, output_cosim.txt
 ```
 
 `verifyFFT1024/` adds `gen_input.py`, because 1024 samples is not readable by hand.
+
+Both also take **your own samples**: write them as ordinary decimals, run `encode_input.py`, and
+drive the flow with `WF_INPUT=user_input.txt` / `verify.py --input user_input.txt`.  The shipped
+vectors and results are left untouched.  See **Bring your own input** in either folder's
+`README.md`, or [`VERIFY.md`](VERIFY.md).
 
 Both build a Vitis project tree in place (`fft_verify_proj/`, `fft1024_verify_proj/`) which is
 gitignored; everything else is plain text you can open.

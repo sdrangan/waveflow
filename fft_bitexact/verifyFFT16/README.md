@@ -19,6 +19,8 @@ src/fft_top.cpp      the DUT: a named wrapper around the library FFT
 src/fft_tb.cpp       the testbench, shared by C-sim and co-sim
 run.tcl              drives csim -> csynth -> cosim
 data/input.txt       12 input vectors, raw stored integers
+encode_input.py      your decimals -> data/user_input.txt  (see 'Bring your own input')
+data/user_input.txt  YOUR samples once encoded (gitignored -- yours, not the repo's)
 results/             where the two Vitis runs write their outputs
 verify.py            compares Vitis output against the Python model
 ARCHITECTURE.md      what the DUT is and which formats it uses internally
@@ -66,7 +68,7 @@ WAVEFLOW_SUCCESS: csim + csynth + cosim all passed
 *is* the RTL simulation — Vitis has no separate step.  `output_cosim.txt` is produced by the
 synthesized hardware.
 
-Takes a couple of minutes; the co-simulation dominates.
+Takes about a minute; the co-simulation dominates.
 
 ## Step 2 — verify against the Python model
 
@@ -132,16 +134,70 @@ confirmation rather than the cases it was fitted to.  Five of them sit on or acr
 accumulator boundary — the region where an earlier version of the model was wrong on 25 of 32
 values while looking perfect on ordinary data.
 
-## Changing the test
+## Bring your own input
 
-* **Different inputs** — edit `data/input.txt` (header is `<n_vectors> <n_samples>`, then one
-  `re im` pair per line as raw stored integers) and re-run both steps.  `verify.py` re-runs the
-  model on whatever inputs it finds, so nothing needs regenerating.
-* **Different size or precision** — edit the `FFT_*` defines in `src/fft_top.hpp`.  The Python
-  model covers any **`L = 4^S`** (16, 64, 256, 1024, …).  Sizes that are not a power of the
-  radix — 32, 128, 512 at `R=4` — use a different "forked" architecture in the library and are
-  **not** covered; `verify.py` degrades to the synthesis-only check and says so rather than
-  comparing the wrong thing.
+The 12 shipped vectors were chosen to stress particular corners.  To check bit-exactness on
+**your own samples** — C-simulation of the library, the synthesized RTL, and the Python model,
+all compared bit for bit — you do not have to touch the shipped data.
+
+### 1. Write your samples as ordinary decimals
+
+One complex sample per line, `re im`, vectors back to back.  Blank lines and `#` comments are
+ignored:
+
+```text
+# my_samples.txt -- 16 samples = one vector
+ 0.5      0.0
+ 0.25    -0.125
+ ...
+```
+
+### 2. Encode, run, compare
+
+```bash
+python encode_input.py my_samples.txt                  # -> data/user_input.txt
+WF_INPUT=user_input.txt vitis-run --mode hls --tcl run.tcl
+python verify.py --input user_input.txt
+```
+
+That is the whole flow.  `data/input.txt` and the shipped `results/` are left alone, so you can
+go back to the reference run at any time by omitting both options.
+
+### Why the file on disk holds integers, not decimals
+
+`data/*.txt` stores each sample as its **raw stored integer** — the `ap_fixed` bit field:
+
+```text
+a real value  r  in ap_fixed<W,I>  is stored as  round(r * 2**(W-I))
+```
+
+For this DUT that is `ap_fixed<16,2>`, so `stored = round(r * 2**14)` and the
+representable range is `[-2.0, 1.99993896484375]`.  Bit-exactness is a claim about stored bits, and a decimal
+round-trip through text can absorb exactly the 1-LSB differences this package exists to detect —
+so the on-disk format is unambiguous by construction, and `encode_input.py` does the conversion
+once, in one place.  It reads `W` and `I` from `src/fft_top.hpp`, so it always matches the DUT
+you are about to build.
+
+### Things that will bite you
+
+| symptom | cause |
+|---|---|
+| `has N samples, which is not a multiple of the DUT's L=16` | one vector is `L` samples; pad, or change `FFT_L` |
+| `value ... is outside ap_fixed<16,2>` | scale your data, or widen `FFT_IN_W`/`FFT_IN_I` — refused rather than silently wrapped |
+| `results/ hold N vector(s) ... stale for this input` | you changed the input but did not re-run the flow; the message gives the command |
+| `has N samples but src/fft_top.hpp sets FFT_L=...` | the DUT and the data disagree on the transform length |
+| `expected 're im', got 1 field(s)` | a line is missing its imaginary part — write `0` for real-valued data |
+
+### Changing size or precision
+
+Edit the `FFT_*` defines in `src/fft_top.hpp` and re-run both steps.  **`verify.py` and
+`encode_input.py` both read that header**, so the model, the encoder and the DUT cannot drift
+apart — they used to, when the widths were duplicated as literals in `verify.py`.
+
+The Python model covers any **`L = 4^S`** (16, 64, 256, 1024, …).  Sizes that are not a power of
+the radix — 32, 128, 512 at `R=4` — use a different "forked" architecture in the library and are
+**not** covered; `verify.py` degrades to the C-sim vs co-sim check and says so rather than
+comparing the wrong thing.
 
 ## If something fails
 

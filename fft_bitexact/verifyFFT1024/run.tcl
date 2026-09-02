@@ -14,7 +14,16 @@ if {[info exists ::env(WF_VITIS_LIBS)]} {
     exit 1
 }
 set cf "-I$here/src -I$vlib -std=c++14"
-set data "$here/data/input.txt"
+# WF_INPUT selects which file under data/ to drive the DUT with, so checking your own samples
+# does not mean overwriting the shipped vectors.  See "Bring your own input" in README.md.
+set inname "input.txt"
+if {[info exists ::env(WF_INPUT)]} { set inname $::env(WF_INPUT) }
+set data "$here/data/$inname"
+if {![file exists $data]} {
+    puts "WAVEFLOW_ERROR: $data does not exist (WF_INPUT=$inname)"
+    exit 1
+}
+puts "WAVEFLOW_INPUT: $inname"
 
 open_project -reset fft1024_verify_proj
 set_top fft_top
