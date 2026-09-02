@@ -26,6 +26,7 @@ PY="${PY:-$ROOT/../env/bin/python}"
 "$PY" "$HERE/gen_input.py"
 "$PY" "$HERE/gen_input_fixed.py"
 "$PY" "$HERE/gen_input_ab.py"
+"$PY" "$HERE/gen_input_f64.py"
 
 BIN="$(mktemp -d)/dump_gemv"
 g++ -std=c++14 -O0 $FPFLAGS -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
@@ -37,6 +38,17 @@ g++ -std=c++14 -O0 $FPFLAGS -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
 "$BIN_INT" "$ROOT/data/input_int_M3_N32.txt" "$ROOT/golden/gemv_int_M3_N32.txt" \
     | grep -v "HLS SIM" || true
 echo "wrote $ROOT/golden/gemv_int_M3_N32.txt"
+
+# double path -- same dot_tree reduction, but AdderDelay is 8 rather than 4
+BIN_F64="$(mktemp -d)/dump_gemv_f64"
+g++ -std=c++14 -O0 $FPFLAGS -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
+    -o "$BIN_F64" "$ROOT/cpp/dump_gemv_f64.cpp"
+for IN in "$ROOT"/data/input_f64_M*_N*.txt; do
+    BASE="$(basename "$IN" .txt)"; BASE="${BASE#input_f64_}"
+    OUT="$ROOT/golden/gemv_f64_${BASE}.txt"
+    "$BIN_F64" "$IN" "$OUT" | grep -v "HLS SIM" || true
+    echo "wrote $OUT"
+done
 
 # ap_fixed path (S4) -- the SAME source built twice.  The plain build is the shipped library,
 # defect and all; the -DWF_PATCHED build puts cpp/vendor_patched/dotHelper_patched.hpp ahead of

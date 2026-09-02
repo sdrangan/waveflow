@@ -62,60 +62,77 @@ def bits_f32(pattern: int) -> np.float32:
     return np.float32(struct.unpack("<f", struct.pack("<I", int(pattern)))[0])
 
 
-def binary_sum(values) -> np.float32:
+def binary_sum(values, dtype=np.float32) -> np.floating:
     """``BinarySum<T, N>`` (``helpers/utils/utils.hpp:39-54``) -- divide and conquer.
 
     ``sum(x) = sum(x[:N/2]) + sum(x[N/2:])``.  Requires a power-of-two length, which the callers
     guarantee: beats are ``2^logParEntries`` wide and chunks are ``2^logDelays``.
     """
-    v = [np.float32(x) for x in values]
+    dt = np.dtype(dtype).type
+    v = [dt(x) for x in values]
     if len(v) & (len(v) - 1):
         raise ValueError(f"BinarySum needs a power-of-two length, got {len(v)}")
     while len(v) > 1:
-        v = [np.float32(v[i] + v[i + 1]) for i in range(0, len(v), 2)]
+        v = [dt(v[i] + v[i + 1]) for i in range(0, len(v), 2)]
     return v[0]
 
 
-def dot(a, b, par_entries: int = 4, delays: int | None = None) -> np.float32:
-    """One row of ``gemv`` -- ``dot_tree`` for a float element type.
+def dot(a, b, par_entries: int = 4, delays: int | None = None,
+        dtype=np.float32) -> np.floating:
+    """One row of ``gemv`` -- ``dot_tree``, the reduction ``float`` and ``double`` take.
 
     ``par_entries`` is ``1 << t_LogParEntries``, the stream width; ``delays`` defaults to the
-    element type's ``AdderDelay``.  Both change the result, so both are explicit.
+    element type's ``AdderDelay`` (**4 for float, 8 for double**).  Both change the result, so
+    both are explicit.
+
+    ``dtype`` selects the element type.  It is a real parameter, not decoration: ``double`` takes
+    the same code path but groups beats by 8 instead of 4, and every rounding happens at 53 bits
+    instead of 24.  An earlier version hardcoded ``float32`` while ``adder_delays`` already
+    answered for ``float64``, so a caller asking for double got plausible, silently wrong
+    numbers -- exactly the failure this project exists to prevent.
     """
-    a = np.asarray(a, dtype=np.float32)
-    b = np.asarray(b, dtype=np.float32)
+    dt = np.dtype(dtype)
+    if dt.name not in ADDER_DELAYS:
+        raise NotImplementedError(
+            f"dot_tree is the float/double path; {dt.name} takes dot_dsp -- use dot_int(). "
+            f"Supported here: {sorted(ADDER_DELAYS)}.")
+    t = dt.type
+    a = np.asarray(a, dtype=dt)
+    b = np.asarray(b, dtype=dt)
     if a.shape != b.shape:
         raise ValueError(f"length mismatch: {a.shape} vs {b.shape}")
     if a.size % par_entries:
         raise ValueError(f"n={a.size} must be a multiple of parEntries={par_entries}")
-    d = adder_delays("float32") if delays is None else delays
+    d = adder_delays(dt) if delays is None else delays
 
-    products = [np.float32(a[i] * b[i]) for i in range(a.size)]
-    beats = [binary_sum(products[s:s + par_entries])
+    products = [t(a[i] * b[i]) for i in range(a.size)]
+    beats = [binary_sum(products[s:s + par_entries], dt)
              for s in range(0, len(products), par_entries)]
     # padding(): the beat count is padded up to a multiple of Delays.  Padding with zero is exact
     # in IEEE-754 for every finite value, so it moves no bits -- but it does decide the chunking,
     # which does.
     while len(beats) % d:
-        beats.append(np.float32(0))
-    total = np.float32(0)
+        beats.append(t(0))
+    total = t(0)
     for s in range(0, len(beats), d):
-        total = np.float32(total + binary_sum(beats[s:s + d]))
+        total = t(total + binary_sum(beats[s:s + d], dt))
     return total
 
 
-def gemv(matrix, vector, par_entries: int = 4, delays: int | None = None) -> np.ndarray:
-    """``y = M x``, bit-exact against ``xf::blas::gemv`` for ``float``.
+def gemv(matrix, vector, par_entries: int = 4, delays: int | None = None,
+         dtype=np.float32) -> np.ndarray:
+    """``y = M x``, bit-exact against ``xf::blas::gemv`` for ``float`` and ``double``.
 
     The library streams ``x`` once per row (its testbench uses ``vec2GemStream``), so every row
     sees the same vector and the rows are independent.
     """
-    m = np.asarray(matrix, dtype=np.float32)
-    v = np.asarray(vector, dtype=np.float32)
+    dt = np.dtype(dtype)
+    m = np.asarray(matrix, dtype=dt)
+    v = np.asarray(vector, dtype=dt)
     if m.ndim != 2 or m.shape[1] != v.size:
         raise ValueError(f"shape mismatch: matrix {m.shape}, vector {v.shape}")
-    return np.array([dot(m[r], v, par_entries, delays) for r in range(m.shape[0])],
-                    dtype=np.float32)
+    return np.array([dot(m[r], v, par_entries, delays, dt) for r in range(m.shape[0])],
+                    dtype=dt)
 
 
 # --- the non-float path -----------------------------------------------------------------------
@@ -124,7 +141,7 @@ def gemv(matrix, vector, par_entries: int = 4, delays: int | None = None) -> np.
 INT_WIDTHS = {"int16": 16, "int32": 32}
 
 
-def dot_int(a, b, width: int = 32) -> int:
+def dot_int(a, b, width: int = 32, signed: bool = True) -> int:
     """``dot_dsp`` (``helpers/funcs/dotHelper.hpp:75-100``) -- the non-float reduction.
 
     Nothing tree-shaped here::
@@ -142,26 +159,39 @@ def dot_int(a, b, width: int = 32) -> int:
     ``t_MacDataType``, so any differing MAC type fails to compile inside ``gemv.hpp:47``.  The
     parameter is exposed, documented, and dead -- in 2023.1 and 2025.1 alike.  Hence a single
     ``width`` here rather than separate element and accumulator widths.
+
+    ``signed`` selects how the wrapped accumulator is read back.  The stored bits are the same
+    either way -- ``ap_uint<32>`` and ``int32_t`` produce identical hardware -- but the value they
+    denote is not, and an unsigned kernel returns the large positive number where a signed one
+    returns its negative counterpart.  Measured against both.
     """
-    a = np.asarray(a, dtype=np.int64)
-    b = np.asarray(b, dtype=np.int64)
+    a = np.asarray(a, dtype=object)
+    b = np.asarray(b, dtype=object)
     if a.shape != b.shape:
         raise ValueError(f"length mismatch: {a.shape} vs {b.shape}")
     mask = (1 << width) - 1
-    sign = 1 << (width - 1)
     acc = 0
     for i in range(a.size):
         acc = (acc + int(a[i]) * int(b[i])) & mask      # wraps at the accumulator width
-    return acc - (1 << width) if acc & sign else acc
+    if signed and acc >> (width - 1):
+        return acc - (1 << width)
+    return acc
 
 
-def gemv_int(matrix, vector, width: int = 32) -> np.ndarray:
-    """``y = M x`` on the ``dot_dsp`` path, with the accumulator wrapping at ``width``."""
-    m = np.asarray(matrix, dtype=np.int64)
-    v = np.asarray(vector, dtype=np.int64)
+def gemv_int(matrix, vector, width: int = 32, signed: bool = True) -> np.ndarray:
+    """``y = M x`` on the ``dot_dsp`` path, with the accumulator wrapping at ``width``.
+
+    ``dtype=object`` rather than ``int64`` so the accumulate is exact at any width and numpy
+    never has to overflow.  At ``width = 64`` this is a matter of hygiene, not of the answer:
+    masking is a ring homomorphism, so truncating each product first gives the same result --
+    measured, 0 of 15 int64 golden rows differ.  It stops mattering only if the model is ever
+    asked for a width numpy cannot hold at all.
+    """
+    m = np.asarray(matrix, dtype=object)
+    v = np.asarray(vector, dtype=object)
     if m.ndim != 2 or m.shape[1] != v.size:
         raise ValueError(f"shape mismatch: matrix {m.shape}, vector {v.shape}")
-    return np.array([dot_int(m[r], v, width) for r in range(m.shape[0])], dtype=np.int64)
+    return np.array([dot_int(m[r], v, width, signed) for r in range(m.shape[0])], dtype=object)
 
 
 # --- the alpha/beta overload ------------------------------------------------------------------

@@ -70,6 +70,15 @@ int main(int argc, char** argv) {
     run_one<int32_t, int32_t, 4>(fo, "i32", A, x, M, N, n_case);
     run_one<int16_t, int16_t, 2>(fo, "i16", A, x, M, N, n_case);
     run_one<int16_t, int16_t, 3>(fo, "i16", A, x, M, N, n_case);
+    // Unsigned and the width extremes.  The stored bits of ap_uint<32> and int32_t are identical
+    // -- same hardware -- but the VALUE they denote is not, and a model that always reads the
+    // accumulator as signed returns the negative counterpart of the right answer.  int8 and
+    // int64 pin the ends of the width range; int64 also exercises the model's arbitrary-precision
+    // accumulate, where a numpy int64 would wrap early and silently.
+    run_one<ap_uint<32>, ap_uint<32>, 2>(fo, "u32", A, x, M, N, n_case);
+    run_one<ap_uint<16>, ap_uint<16>, 2>(fo, "u16", A, x, M, N, n_case);
+    run_one<int8_t, int8_t, 2>(fo, "i8", A, x, M, N, n_case);
+    run_one<int64_t, int64_t, 2>(fo, "i64", A, x, M, N, n_case);
     fclose(fo);
     printf("WF_OK: non-float goldens written to %s\n", argv[2]);
     return 0;

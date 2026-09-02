@@ -16,7 +16,11 @@ from MatrixVectorMul_bitexact.wf_gemv.gemv import gemv_int
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN = ROOT / "golden" / "gemv_int_M3_N32.txt"
 INPUT = ROOT / "data" / "input_int_M3_N32.txt"
-WIDTHS = {"i32": 32, "i16": 16}
+#: config tag -> (accumulator width, signed).  The unsigned entries matter: ap_uint<32> and
+#: int32_t are the SAME hardware and the same stored bits, but denote different values, so a
+#: model that always reads the accumulator as signed returns the negative counterpart.
+WIDTHS = {"i32": (32, True), "i16": (16, True), "u32": (32, False), "u16": (16, False),
+          "i8": (8, True), "i64": (64, True)}
 
 
 def _rows(path: Path) -> list[list[str]]:
@@ -24,9 +28,11 @@ def _rows(path: Path) -> list[list[str]]:
             if ln.strip() and not ln.lstrip().startswith("#")]
 
 
-def _fit(v: int, w: int) -> int:
+def _fit(v: int, w: int, signed: bool = True) -> int:
     """Narrow to the element type exactly as the C++ ``(T_elem)`` cast does."""
-    return (int(v) + (1 << (w - 1))) % (1 << w) - (1 << (w - 1))
+    if signed:
+        return (int(v) + (1 << (w - 1))) % (1 << w) - (1 << (w - 1))
+    return int(v) % (1 << w)
 
 
 @pytest.fixture(scope="module")
@@ -47,19 +53,23 @@ def loaded() -> dict:
 def test_golden_shape(loaded):
     assert loaded["M"] == 3 and loaded["N"] == 32
     assert len(loaded["cases"]) == 5
-    assert len(loaded["golden"]) == 5 * loaded["M"] * 5      # 5 (config, logP) runs
+    runs = 9                                   # (config, logP) pairs in cpp/dump_gemv_int.cpp
+    assert len(loaded["golden"]) == 5 * loaded["M"] * runs
+    assert {r[0] for r in loaded["golden"]} == set(WIDTHS), "golden configs and WIDTHS disagree"
 
 
 def test_non_float_gemv_is_bit_exact(loaded):
     """THE S3 GATE: the dot_dsp model equals the hardware on every row."""
-    bad = 0
+    bad = []
     for cfg, _lp, k, r, y in loaded["golden"]:
-        w = WIDTHS[cfg]
+        w, sg = WIDTHS[cfg]
         A, x = loaded["cases"][int(k)]
-        el = np.array([_fit(v, w) for v in A[int(r)]], dtype=np.int64)
-        xv = np.array([_fit(v, w) for v in x], dtype=np.int64)
-        bad += gemv_int(el.reshape(1, -1), xv, w)[0] != int(y)
-    assert bad == 0, f"{bad} of {len(loaded['golden'])} rows differ"
+        el = np.array([_fit(v, w, sg) for v in A[int(r)]], dtype=object)
+        xv = np.array([_fit(v, w, sg) for v in x], dtype=object)
+        got = gemv_int(el.reshape(1, -1), xv, w, sg)[0]
+        if got != int(y):
+            bad.append(f"{cfg} case={k} row={r}: model {got} != golden {y}")
+    assert not bad, f"{len(bad)} of {len(loaded['golden'])} rows differ:\n" + "\n".join(bad[:8])
 
 
 def test_par_entries_does_not_change_the_non_float_result(loaded):
@@ -86,9 +96,9 @@ def test_the_goldens_actually_overflow_the_accumulator(loaded):
     """
     bad = 0
     for cfg, _lp, k, r, y in loaded["golden"]:
-        w = WIDTHS[cfg]
+        w, sg = WIDTHS[cfg]
         A, x = loaded["cases"][int(k)]
-        exact = sum(_fit(p, w) * _fit(q, w) for p, q in zip(A[int(r)], x))
+        exact = sum(_fit(p, w, sg) * _fit(q, w, sg) for p, q in zip(A[int(r)], x))
         bad += exact != int(y)
     assert bad > 0, "no row overflows; the goldens no longer exercise wrapping"
 
@@ -113,3 +123,30 @@ def test_wider_mac_type_is_uncompilable_in_the_library():
         "gemv's output stream is no longer element-typed -- t_MacDataType may now work, so "
         "gemv_int's single-width assumption needs revisiting")
     assert "t_MacDataType>::dot" in text, "gemv no longer forwards t_MacDataType"
+
+
+def test_reading_the_accumulator_as_signed_is_wrong_for_unsigned_types(loaded):
+    """⚠️ The defect this parametrisation was added for.
+
+    ``ap_uint<32>`` and ``int32_t`` produce **identical hardware and identical stored bits** --
+    only the value they denote differs.  The model used to read the accumulator as signed
+    unconditionally, so for an unsigned kernel it returned the negative counterpart of the right
+    answer: a plausible number, silently wrong, on a type the library fully supports.
+
+    If this stops failing, the goldens no longer contain an unsigned row whose top bit is set,
+    and the signed/unsigned distinction has become untested rather than unnecessary.
+    """
+    wrong = total = 0
+    for cfg, _lp, k, r, y in loaded["golden"]:
+        w, sg = WIDTHS[cfg]
+        if sg:
+            continue
+        A, x = loaded["cases"][int(k)]
+        el = np.array([_fit(v, w, sg) for v in A[int(r)]], dtype=object)
+        xv = np.array([_fit(v, w, sg) for v in x], dtype=object)
+        total += 1
+        wrong += gemv_int(el.reshape(1, -1), xv, w, signed=True)[0] != int(y)
+    assert total, "no unsigned configs in the golden"
+    assert wrong > 0, (
+        "forcing a signed read matched every unsigned row -- no golden row has its top bit set, "
+        "so the distinction is untested")

@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1-S6 DONE** (2026-09-02) — bit-exact on **2763 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 75 — plus 121 rows against **synthesized RTL** in `verifyGEMV/`.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1-S7 DONE** (2026-09-02) — bit-exact on **2877 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 135, double 54 — plus 121 rows against **synthesized RTL** in `verifyGEMV/`.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -364,6 +364,36 @@ no multiply-add in one expression, so there is nothing to contract — the expos
 **Not measured:** what Vitis HLS itself does.  Whether synthesis emits a fused or an unfused
 operator for that line is a question about the RTL, not about csim, and it is the one thing that
 would decide which of the two goldens the hardware matches.
+
+**S7 — the supported-input audit.**  ✅ **DONE — and it found two silent-wrong-answer bugs in
+the model itself.**
+
+Prompted by a plain question: *for the input types that actually work, is the model perfect?*  The
+honest way to answer was to run the types nobody had run.  Two of them were broken:
+
+**`double` was not modelled at all.**  `dot` hardcoded `np.float32` on every line while
+`adder_delays` already answered **8** for `float64` — so the model *advertised* double support and
+silently returned float32-precision numbers for it.  Plausible, wrong, and nothing in the suite
+could catch it because nothing ran double against the library.  Now a real parameter
+(`dtype=np.float64`), with its own golden (`cpp/dump_gemv_f64.cpp`, 54 rows, three stream widths)
+and a gate asserting that float32 arithmetic *and* 4-beat grouping each fail on it.
+
+**Unsigned integers returned the wrong sign.**  `dot_int` read the wrapped accumulator as signed
+unconditionally.  `ap_uint<32>` and `int32_t` are the *same hardware* and the same stored bits —
+only the value they denote differs — so an unsigned kernel got the negative counterpart of the
+right answer.  Now `signed=`, with `u32`/`u16` in the golden and a gate that fails if no unsigned
+row has its top bit set.
+
+Also widened while there: `int8` and `int64` are now in the golden, taking the integer path from
+75 rows to 135.
+
+**What was already right**, measured rather than assumed: `float` (as expected), signed `int32`
+and `int16`, and every float special value — **denormals, ±inf, NaN, −0.0 and overflow-to-inf all
+match the library exactly**, with no flush-to-zero surprise on either side.
+
+Both bugs share a shape worth naming: the model returned a **confident wrong number** rather than
+raising.  `dot` now raises `NotImplementedError` for a dtype it does not model, so the next
+unsupported type is a stack trace rather than a plausible answer.
 
 **Systolic GEMM — dropped.**  Earlier drafts listed a `gemmSystolicArray` stage as the other
 reading of "systolic".  It is **out of scope** by decision (2026-09-02): this project is the L1

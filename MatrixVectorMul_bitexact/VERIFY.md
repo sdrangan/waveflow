@@ -7,7 +7,7 @@ Run everything from the repository root.
 
 | | needs | takes | proves |
 |---|---|---|---|
-| **1. Run the gates** | Python + numpy | ~2.6 s | the model matches 2763 checked-in golden rows |
+| **1. Run the gates** | Python + numpy | ~3 s | the model matches 2877 checked-in golden rows |
 | **2. Rebuild the goldens** | + `g++`, Vitis headers, BLAS source | ~19 s | those goldens really do come from the vendor's code |
 | **3. Vary the compiler** | same as 2 | ~10 s | the FMA caveat is real, and the golden's build flags matter |
 | **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~4 min | the model matches **synthesized RTL**, not just C-simulation |
@@ -19,17 +19,18 @@ source env/bin/activate
 pytest MatrixVectorMul_bitexact/tests/ -q
 ```
 
-Expected: **45 passed** in about 2.6 seconds.  No Vitis, no compiler, no network — the goldens
+Expected: **52 passed** in about 3 seconds.  No Vitis, no compiler, no network — the goldens
 are checked in.
 
-That covers four element paths and 2763 rows:
+That covers five element paths and 2877 rows:
 
 | path | golden rows | what it pins |
 |---|---|---|
 | float `dot_tree` | 1320 | the three-order reduction, six sizes x five stream widths |
 | `alpha`/`beta` overload | 792 | `scal` then `axpy`, six scalar pairs |
 | `ap_fixed` | 576 | per-element Q/O narrowing — half as shipped, half corrected |
-| integer `dot_dsp` | 75 | single-accumulator wrapping at int16 / int32 |
+| integer `dot_dsp` | 135 | wrapping, **signed and unsigned**, widths 8/16/32/64 |
+| double `dot_tree` | 54 | the same reduction grouped by 8 rather than 4 |
 
 ## Level 2 — rebuild every golden from the shipped library
 
@@ -159,7 +160,9 @@ merely being a defensible choice among two.
   float and `M=3, N=32, P=4` for `ap_fixed`.  The native goldens cover six sizes and five stream
   widths; RTL covers one of each.  Nothing suggests the others differ — the reduction structure
   is the same code — but it has not been measured.
-* **`double`, `ap_ufixed`, and `W > 31`** are unmodelled and unsynthesized.
+* **`double` is modelled but not synthesized.**  Its golden comes from C-simulation only; no
+  DUT in `verifyGEMV/` uses it.
+* **`ap_ufixed` and `ap_fixed` wider than 31 bits** are unmodelled.
 * **`WideType`'s packing under synthesis.**  It uses `sizeof(T)*8` as the slot width, which for
   `ap_fixed<24,12>` is 32 bits in C-simulation and would be 24 under `__SYNTHESIS__`.  The
   synthesized `ap_fixed` DUT uses `<16,8>`, where `sizeof` is exactly 2 bytes and the question

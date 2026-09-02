@@ -3,7 +3,7 @@
 A bit-exact Python model of the **AMD Vitis BLAS L1 `gemv`** (`y = M x`): given the same input
 bits, it produces the same output bits as the kernel, without running Vitis.
 
-Verified against the shipped library on **2763 golden rows** — four element paths, six matrix
+Verified against the shipped library on **2877 golden rows** — five element paths, six matrix
 sizes, five stream widths, zero differences — and against **synthesized RTL** in
 [`verifyGEMV/`](verifyGEMV/), where C-simulation and C/RTL co-simulation both match the model bit
 for bit on all three DUTs.
@@ -55,7 +55,7 @@ fixed-point path imports `waveflow.utils.fixputils` and adds no quantization log
 
 | file | what it is |
 |---|---|
-| `gemv.py` | the float path (`dot`, `gemv`), the integer path (`dot_int`, `gemv_int`), and the `alpha`/`beta` overload (`scal`, `axpy`, `gemv_ab`) |
+| `gemv.py` | the float/double path (`dot`, `gemv`), the integer path (`dot_int`, `gemv_int`), and the `alpha`/`beta` overload (`scal`, `axpy`, `gemv_ab`) |
 | `fixed.py` | the `ap_fixed` path — **two** models, because the library is wrong here: `gemv_fixed` is what the kernel computes, `gemv_fixed_as_shipped` is what it actually emits |
 
 ### The reduction the float path models
@@ -78,6 +78,20 @@ the design pipelines around.  Not a user knob, and it changes the answer.
 `dot_dsp` is one accumulator in index order, no tree at all.  So `parEntries` is part of the
 numerical contract on the float path and irrelevant on the other — a model that carried one over
 to the other would be wrong.  Both properties are pinned by tests.
+
+## What the model supports
+
+| you give it | verdict |
+|---|---|
+| `float` | ✅ bit-exact, both overloads, incl. denormals, ±inf, NaN, −0.0, overflow |
+| `double` | ✅ bit-exact — pass `dtype=np.float64` |
+| signed integers, 8 to 64 bits | ✅ bit-exact |
+| **unsigned** integers | ✅ bit-exact — pass `signed=False` |
+| `ap_fixed` | ⚠️ bit-exact *against a broken kernel* — see the defect below |
+| anything else | raises `NotImplementedError` rather than guessing |
+
+The last row is the point.  Both of the model's own bugs found in S7 returned a confident wrong
+number instead of failing, so an unmodelled dtype now raises.
 
 ## Two library defects, found by modelling it
 
@@ -112,7 +126,8 @@ patterns rather than decimals.  Checked in so the tests need neither Vitis nor a
 | `gemv_ab_M*_N*.txt` | the `alpha`/`beta` overload, six (alpha, beta) pairs | 792 |
 | `gemv_fixed_W*_*_shipped.txt` | `ap_fixed` **as the library ships** — i.e. wrong | 288 |
 | `gemv_fixed_W*_*_patched.txt` | `ap_fixed` with the one-line defect corrected | 288 |
-| `gemv_int_M3_N32.txt` | `dot_dsp`, int16 and int32 | 75 |
+| `gemv_int_M3_N32.txt` | `dot_dsp`, signed and **unsigned**, widths 8/16/32/64 | 135 |
+| `gemv_f64_M3_N128.txt` | **double** `dot_tree` — same path, `AdderDelay` 8 not 4 | 54 |
 
 Float and `alpha`/`beta` goldens are IEEE-754 bit patterns; `ap_fixed` goldens are the raw stored
 field in hex; the integer golden is decimal, where value and bit pattern coincide.
