@@ -200,7 +200,7 @@ class LockToy(FreeRunMod):
                                   the tasks' memory ports stay BOUNDARY ports
     ============================  =============================================================
 
-    Compare :class:`~waveflow.hw.rf_shot_buf.RfShotBuf`, which needs four registrations to say the
+    Compare :class:`~waveflow.hw.rf_shot_tx.RfShotTx`, which needs four registrations to say the
     same thing because it wires the memory by hand.  That the lock collapses them is the point of
     ``rtl_interfaces()``, not a convenience: a composite that registered the lock and forgot the two
     memory wires would get a dangling ``bram`` port, refused only after codegen.

@@ -13,7 +13,7 @@ knowing anything about RF::
     data_r ◀─ │ BramReadCmd │ ◀─────────└──────────┘
     resp_r ◀─ └────────────┘
 
-**The duplication with** :mod:`waveflow.hw.rf_shot_buf` **is deliberate.**  Seeing the same primitive
+**The duplication with** :mod:`waveflow.hw.rf_shot_tx` **is deliberate.**  Seeing the same primitive
 carry two unrelated designs is the point of having a primitive; this one is the domain-free half.
 
 Scenario zero is the witness, and its numbers are not negotiable
@@ -49,7 +49,7 @@ there is data.
 
 **Status carries the range check**, in **word** units, and it is *refusal* rather than wrap: a
 command whose range leaves the memory is rejected whole, because a silent wrap would hand back
-plausible data from the wrong place.  (Contrast :class:`~waveflow.hw.rf_shot_buf.RfShotBuf` and the
+plausible data from the wrong place.  (Contrast :class:`~waveflow.hw.rf_shot_tx.RfShotTx` and the
 RF buffers, where a *circular* pointer is the whole point.)
 
 > **The bounds check would NOT have caught the addressing bug.**  The check is in words — the

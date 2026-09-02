@@ -1,7 +1,8 @@
 """One shot transmitter, both play modes — ``plans/rf_shot_unify.md`` Stage A.
 
-The merge of :mod:`waveflow.hw.rf_shot_tx` (finite, ``ShotPhase`` + ``rdy`` + ``done``, five tasks)
-and :mod:`waveflow.hw.rf_shot_loop` (infinite, the lock, three tasks).  What is on trial is that one
+The merge of a finite transmitter (``ShotPhase`` + ``rdy`` + ``done``, five tasks) and an infinite
+one (the lock, three tasks), both retired by ``plans/rf_shot_unify.md`` Stage B.  What is on trial
+is that one
 design does what both did, so the four gates are named for the four things the pair could do between
 them:
 
@@ -34,7 +35,7 @@ from waveflow.hw.rf_shot_tx import (
     ShotTxHdr,
 )
 from waveflow.hw.rf_relayout import to_slots
-from waveflow.hw.rf_shot_tx_unified import FILLER, RfShotTxUnified, ShotPlayCmd
+from waveflow.hw.rf_shot_tx import FILLER, RfShotTx, ShotPlayCmd
 from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 from waveflow.simulation.simulation import Simulation
 
@@ -91,7 +92,7 @@ def frame(opcode: int, tid: int, nsamp: int, nrepeat: int, payload: np.ndarray) 
 class Bench:
     """The design, a frame source, and a sink — no converter, and that is deliberate.
 
-    ``examples/rf_shot_play`` puts a real ``Rfdc`` on the end because the property *that* design
+    ``examples/rf_shot_unified`` puts a real ``Rfdc`` on the end because the property *that* graph
     claims is that it keeps a DAC fed.  What is on trial here is the **merge**, and a converter would
     add a second thing that can fail while proving nothing extra about it: the player's metronome is
     handed over directly, so the pacing is the same either way.
@@ -100,7 +101,7 @@ class Bench:
     def __init__(self, *, shift: int = 2) -> None:
         self.sim = Simulation()
         self.clk = Clock(name="clk", freq=250e6)
-        self.dut = RfShotTxUnified(sim=self.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW,
+        self.dut = RfShotTx(sim=self.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW,
                                    depth=DEPTH, nword=NWORD, base=BASE, shift=int(shift),
                                    blk_words=BLK_WORDS, dac_word_rate=DAC_WORD_RATE, clk=self.clk)
         self.src = StreamIFMaster(sim=self.sim, name="src", bitwidth=WORD_BW, has_tlast=True)
@@ -200,7 +201,8 @@ def named(rs):
 def test_a_finite_shot_plays_n_passes_and_then_goes_quiet():
     """**Gate 1.**  ``SHOT_LOAD`` with ``nrepeat = 3``: three passes, bit-exact, then filler forever.
 
-    Three claims, and the third is the one ``rf_shot_loop`` could not make at all: it *stops*.  A
+    Three claims, and the third is the one the infinite predecessor could not make at all: it
+    *stops*.  A
     player that never stopped would produce a longer perfectly good signal; one that stopped early, a
     shorter one.  Only the pass count and the trailing filler separate them.
     """
@@ -322,7 +324,7 @@ def test_a_load_arriving_while_an_INFINITE_shot_plays_is_accepted():
 
     ``busy`` must be set by a finite shot and **not** by an infinite one.  A design that set it for
     both would answer ``SHOT_BUSY`` forever to every load after the first loop — which is exactly the
-    defect ``rf_shot_loop`` was written to avoid.
+    defect the infinite predecessor was written to avoid.
     """
     a, bb = ramp(1000), ramp(5000)
     b = Bench()
@@ -403,7 +405,8 @@ def test_all_five_verdicts_plus_the_fence_in_one_stream():
 def test_a_short_shot_is_loaded_and_then_never_played():
     """Half a waveform must not reach the converter — on **either** path.
 
-    ``RfShotTx`` achieves this by handing the player a repeat count of zero; ``rf_shot_loop`` cannot,
+    This achieves it by handing the player a repeat count of zero; the infinite predecessor could
+    not,
     and says so: it plays the padded result because it has no way to go quiet.  The merged design
     does have one, so the stricter rule wins and both paths get it.
     """
@@ -450,7 +453,7 @@ def test_the_play_command_is_one_beat_and_carries_the_hosts_own_opcode():
     assert (int(got.opcode), int(got.nrepeat)) == (SHOT_LOOP, 3)
 
 
-class _GrantsWhilePlaying(RfShotTxUnified.player_cls):
+class _GrantsWhilePlaying(RfShotTx.player_cls):
     """The shipped player with the ``playing = False`` before the grant removed — **one line**."""
 
     def run_iter(self):
@@ -481,7 +484,7 @@ def test_a_player_that_grants_and_keeps_reading_raises():
     :meth:`~waveflow.hw.locked_mem.LockedMemSlaveIF.grant` takes the region out of the owner's hands
     before the answer goes on the wire.
     """
-    class Dirty(RfShotTxUnified):
+    class Dirty(RfShotTx):
         player_cls = _GrantsWhilePlaying
 
     b = Bench.__new__(Bench)
@@ -521,7 +524,7 @@ def test_the_design_is_three_tasks_and_three_channels_plus_the_lock():
     from waveflow.build.composite_gen import composite_top_spec
     from waveflow.build.elaborate import elaborate
 
-    comp = elaborate(RfShotTxUnified,
+    comp = elaborate(RfShotTx,
                      {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH, "nword": NWORD,
                       "base": BASE, "shift": 2, "blk_words": BLK_WORDS},
                      name="rf_shot_tx_unified")

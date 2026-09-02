@@ -22,12 +22,13 @@
 //
 // `busy` is set only by SHOT_LOAD, so a load of either kind arriving while a LOOP plays is accepted
 // and takes the lock.  A design that set it for both would answer SHOT_BUSY forever after the first
-// loop -- which is the defect rf_shot_loop was written to avoid.
+// loop -- which is the defect the infinite-play predecessor was written to avoid.
 //
 // A SHORT SHOT IS LOADED AND THEN NOT PLAYED, ON EITHER PATH.
 //
 // `pc.nrepeat` is zero unless the verdict is SHOT_LOADED.  RfShotTx achieves this with a repeat count
-// of zero and rf_shot_loop cannot -- it plays the padded result because it has no way to go quiet.
+// of zero and the infinite-play predecessor could not -- it played the padded result, because it
+// had no way to go quiet.
 // This design has one, so the stricter rule wins.  A short FINITE shot still sets `busy` and is still
 // owed a `done`: the player sends it immediately on seeing the release.
 //

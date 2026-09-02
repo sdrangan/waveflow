@@ -6,9 +6,9 @@ consumes the playout exactly as it consumes any other design's.
 
 **Two scenarios of ONE design, and that the design is one is the whole point.**
 
-``RfShotTx`` and ``RfShotTxLoop`` are complementary rather than duplicated: one plays a counted
-number of passes and refuses a load while it does so, the other plays forever and lets a load
-preempt it.  Stage A merges them, and a merge is only proven by driving *both* streams into the
+The two designs this one replaced were complementary rather than duplicated: one played a counted
+number of passes and refused a load while it did so, the other played forever and let a load
+preempt it.  Stage A merged them, and a merge is only proven by driving *both* streams into the
 *same* RTL:
 
 * ``vectors/cmd`` — a ``SHOT_LOAD`` of three passes.  A load arriving behind it is answered
@@ -21,15 +21,17 @@ One snapshot, one ``xsimk.dll``, two mains that differ only in three bundle name
 testbench *graph* would be a second model of one design, which is the trap this arc has paid for
 more than once.
 
-Why there is no positive control here, and where it lives
----------------------------------------------------------
-``rf_shot_loop``'s gate pairs its clean run against a design with the player's ``playing = 0``
-removed, because ``bram_t2p.v``'s ``$error`` is discarded by XSI and a scan that finds nothing is
-otherwise indistinguishable from a scan bound to the wrong nets.  That control proves the *lock's*
-ordering, and this design uses the same ``mem_lock.h``, the same ``LockedT2pMemIF`` and the same
-grant sequence.  Shipping a second deliberately broken design to re-prove it would be a second copy
-of a finding, not a second finding.  What is new here is the **merge**, and the merge is proven by
-the two scenarios above and by :func:`test_both_backends_agree_sample_for_sample`.
+Why there is no positive control here
+--------------------------------------
+The infinite predecessor's gate paired its clean run against a design with the player's
+``playing = 0`` removed, because ``bram_t2p.v``'s ``$error`` is discarded by XSI and a scan that
+finds nothing is otherwise indistinguishable from a scan bound to the wrong nets.  That control
+proved the *lock's* ordering, and it survives in pysim as
+``tests/hw/test_rf_shot_tx_unified.py::test_a_player_that_grants_and_keeps_reading_raises``, where
+the guard raises rather than producing a plausible sample.  Shipping a second deliberately broken
+RTL design to re-prove it would be a second copy of a finding, not a second finding.  What is new
+here is the **merge**, and the merge is proven by the two scenarios above and by
+:func:`test_both_backends_agree_sample_for_sample`.
 
 What is gated, and how each fails
 ---------------------------------
@@ -40,7 +42,8 @@ What is gated, and how each fails
   would have made impossible.
 * **Gate 3 — ``SHOT_BUSY``.**  In the finite stream and *only* there.  A design that set ``busy`` for
   both opcodes would answer ``SHOT_BUSY`` forever after the first loop, which is the defect
-  ``rf_shot_loop`` was written to avoid; one that set it for neither would truncate a finite shot.
+  the infinite predecessor was written to avoid; one that set it for neither would truncate a
+  finite shot.
   Both scenarios in one gate are what separates those.
 * **Gate 4 — all five verdicts plus ``SHOT_END``**, across the two streams, each with its own
   ``tid`` and in order.
@@ -92,9 +95,9 @@ XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
 
-#: The two hand-written mains, and the bundles each writes.  ONE design and one snapshot: unlike
-#: ``rf_shot_loop``'s pairing, these two runs load the same ``xsimk.dll`` on purpose — that they are
-#: the same RTL is the claim.
+#: The two hand-written mains, and the bundles each writes.  ONE design and one snapshot: unlike the
+#: clean/dirty pairings elsewhere in this family, these two runs load the same ``xsimk.dll`` on
+#: purpose — that they are the same RTL is the claim.
 SCENARIOS = (
     ("cmd", f"{TOP}_counters", "resp", "rf_out", FINITE_FRAMES, check_finite_playout),
     ("cmd_loop", f"{TOP}_loop", "resp_loop", "rf_out_loop", LOOP_FRAMES, check_loop_playout),
@@ -116,7 +119,7 @@ WANT_DAC_WORDS = 359
 
 #: Blocks the converter's grid had to fill **itself**.  **ZERO on both paths, and that is the
 #: design's whole claim**: quiet is silence the DESIGN produces — real beats carrying
-#: :data:`~waveflow.hw.rf_shot_tx_unified.FILLER` — not silence the grid invents.  A player that
+#: :data:`~waveflow.hw.rf_shot_tx.FILLER` — not silence the grid invents.  A player that
 #: blocked while it did not own the region, or that stopped writing when its passes ran out, would be
 #: caught here and by nothing else.
 WANT_ZERO_FILLED = 0
@@ -138,7 +141,7 @@ WANT_LAST_UNDERRUN_CYCLE = 4
 #: fifteen blocks of quiet.  The handover is the number this plan is about: how long the converter
 #: plays silence while the memory changes hands.  The long tail is the merged design's own
 #: improvement — the last load is SHORT, and a short shot is loaded and never played;
-#: ``rf_shot_loop`` plays the padded result because it has no way to go quiet.
+#: the infinite predecessor played the padded result, because it had no way to go quiet.
 WANT_SEGMENT_BLOCKS = {
     "cmd": [(True, 3), (False, 12), (True, 7)],
     "cmd_loop": [(True, 3), (False, 1), (True, 2), (False, 1), (True, 15)],
@@ -311,8 +314,8 @@ def test_the_rtl_plays_a_finite_shot_three_times_and_then_goes_quiet(runs):
     """**Gate 1.**  ``SHOT_LOAD`` with ``nrepeat = 3``: three whole passes, bit-exact, then filler.
 
     One comparison covers the whole path: header -> lock -> memory -> player -> re-layout ->
-    converter -> codes.  ``RfShotTxLoop`` cannot pass this test at all — it has no repeat count and
-    no way to stop.
+    converter -> codes.  The infinite predecessor could not pass this test at all — it had no
+    repeat count and no way to stop.
     """
     runs["cmd"]["check"](runs["cmd"]["played"], where="XSI cmd: ")
 
@@ -323,7 +326,8 @@ def test_the_rtl_switches_waveform_mid_play_on_the_infinite_path(runs):
 
     Under ``RfShotTx`` the preempting frame would be :data:`~waveflow.hw.rf_shot_tx.SHOT_BUSY` and
     there would be no waveform B at all.  The trailing quiet is this design's own improvement over
-    ``RfShotTxLoop``: the last load is SHORT, and a short shot is loaded and then not played.
+    the infinite predecessor: the last load is SHORT, and a short shot is loaded and then not
+    played.
     """
     runs["cmd_loop"]["check"](runs["cmd_loop"]["played"], where="XSI cmd_loop: ")
 
@@ -402,7 +406,7 @@ def test_shot_busy_answers_a_finite_shot_and_only_a_finite_shot(runs):
     assert "SHOT_BUSY" not in names["cmd_loop"], (
         f"the loop stream's verdicts are {names['cmd_loop']}; a SHOT_BUSY here means `busy` is set "
         f"by SHOT_LOOP too, and an infinite player that refuses every later load can never be "
-        f"replaced — the defect rf_shot_loop was written to avoid.")
+        f"replaced — the defect the infinite predecessor was written to avoid.")
 
 
 @pytest.mark.xsi
@@ -432,8 +436,8 @@ def test_the_dac_is_never_starved_on_either_path(runs, name):
     Two ways to fail, and this design has both in a way neither predecessor did.  A player that
     blocked while it did not own the memory back-pressures the converter through the handover — the
     infinite path's failure.  A player that simply *stopped writing* when its passes ran out starves
-    it forever after — the finite path's, and the one ``rf_shot_loop`` never had to survive because
-    it never stops.  Either way the grid fills the gap itself, which is what this counter counts.
+    it forever after — the finite path's, and the one the infinite predecessor never had to survive
+    because it never stopped.  Either way the grid fills the gap itself, which is what this counter counts.
     """
     c = runs[name]["counters"]
     assert c["DAC_BLOCKS_ZERO_FILLED"] == WANT_ZERO_FILLED, (

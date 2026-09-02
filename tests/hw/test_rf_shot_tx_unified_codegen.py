@@ -24,8 +24,11 @@ from waveflow.build.elaborate import elaborate
 from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES
-from waveflow.hw.rf_shot_tx import SHOT_TX_SCHEMA_CLASSES
-from waveflow.hw.rf_shot_tx_unified import UNIFIED_TX_SCHEMA_CLASSES, RfShotTxUnified
+from waveflow.hw.rf_shot_tx import (
+    SHOT_TX_SCHEMA_CLASSES,
+    UNIFIED_TX_SCHEMA_CLASSES,
+    RfShotTx,
+)
 from waveflow.toolchain import toolchain
 
 TOP = "rf_shot_tx_unified"
@@ -44,7 +47,7 @@ _ELAB = {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH, "nword": NWO
 
 
 def _dut():
-    return elaborate(RfShotTxUnified, dict(_ELAB), name=TOP)
+    return elaborate(RfShotTx, dict(_ELAB), name=TOP)
 
 
 # ---------------------------------------------------------------------------
@@ -139,19 +142,26 @@ def test_the_wrapper_joins_both_memory_ports_from_one_add_if():
     assert "bram_t2p" in v, "the memory is not instantiated beside the kernel"
 
 
-def test_the_predecessors_are_untouched():
-    """**Stage A deletes nothing**, and this is the assertion that says so.
+def test_the_predecessors_are_gone():
+    """**Stage B is a pure deletion**, and this is the assertion that says it held.
 
-    If the merge turns out harder than it looks, the working designs must still be there — so both
-    still import, still lower, and their own gates still run.
+    Stage A's counterpart asserted the opposite — that both predecessors still imported and still
+    lowered — because a merge that broke them had to leave them working.  They are gone now, and the
+    reason to gate their absence rather than simply enjoy it is that this module is where a
+    reintroduction would land: :class:`RfShotTx` still carries the vocabulary both of them spoke, so
+    re-adding either would import cleanly and quietly restore the two-designs-one-job state
+    ``plans/rf_shot_unify.md`` exists to end.
     """
-    from waveflow.hw.rf_shot_loop import RfShotTxLoop
-    from waveflow.hw.rf_shot_tx import RfShotTx
+    import importlib
 
-    for cls, name in ((RfShotTx, "rf_shot_tx"), (RfShotTxLoop, "rf_shot_tx_loop")):
-        assert cls.cpp_kernel_name == name
-        ok, msg = check(elaborate(cls, {}, name=name), COMPOSITE_KERNEL)
-        assert ok, f"{name} stopped lowering: {msg}"
+    for mod in ("waveflow.hw.rf_shot_buf", "waveflow.hw.rf_shot_loop"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(mod)
+    # And the surviving name is the merged design, not the five-task one it replaced.
+    assert RfShotTx.cpp_kernel_name == "rf_shot_tx_unified"
+    assert {c.__name__ for c in SHOT_TX_SCHEMA_CLASSES} == {"ShotTxHdr", "ShotTxResp"}, (
+        "the boundary vocabulary moved into this module when rf_shot_tx.py's old contents went; a "
+        "build that emits no rf_shot_tx_hdr.h has a loader that cannot parse a command.")
 
 
 # ---------------------------------------------------------------------------

@@ -58,9 +58,9 @@ from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES  # noqa: E402
 from waveflow.hw.rf_relayout import dense_elem_type, slot_elem_type, slots_per_word  # noqa: E402
 from waveflow.hw.rf_shot_tx import SHOT_TX_SCHEMA_CLASSES  # noqa: E402
-from waveflow.hw.rf_shot_tx_unified import (  # noqa: E402
+from waveflow.hw.rf_shot_tx import (  # noqa: E402
     UNIFIED_TX_SCHEMA_CLASSES,
-    RfShotTxUnified,
+    RfShotTx,
 )
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
@@ -129,9 +129,9 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     inner.add(ArrayUtilsStep(slot_elem_type(WORD, INCLUDE_DIR), [word_bw]))
     inner.add(ArrayUtilsStep(dense_elem_type(WORD, INCLUDE_DIR), [word_bw]))
     inner.add(GenRtlStep(name="place_memory", comp_class=_memory_class(), output_dir="xsi"))
-    inner.add(GenWrapperStep(name="wrapper", comp_class=RfShotTxUnified, elab_params=dict(_ELAB),
+    inner.add(GenWrapperStep(name="wrapper", comp_class=RfShotTx, elab_params=dict(_ELAB),
                              width=word_bw, output_dir="xsi"))
-    inner.add(AddVcdTopStep(name="vcd_dumper", comp_class=RfShotTxUnified,
+    inner.add(AddVcdTopStep(name="vcd_dumper", comp_class=RfShotTx,
                             source_artifact="rf_shot_unified_source", output_dir="xsi",
                             top=WRAPPER))
     results = inner.run(config, force=True)
@@ -139,7 +139,7 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     if failed:
         raise RuntimeError(f"gen-include failed: {failed}")
 
-    comp = elaborate(RfShotTxUnified, dict(_ELAB), name=TOP)
+    comp = elaborate(RfShotTx, dict(_ELAB), name=TOP)
     if comp.is_identity:
         raise RuntimeError(
             f"{TOP} elaborated with shift=0, which makes the last stage the IDENTITY — a build that "
@@ -167,7 +167,7 @@ def generate_dut(out_dir: Path = HERE) -> Path:
 
 def _memory_class():
     """The memory class the design instantiates — read off the elaborated graph, not restated."""
-    comp = elaborate(RfShotTxUnified, dict(_ELAB))
+    comp = elaborate(RfShotTx, dict(_ELAB))
     mems = {type(m) for m in comp.rtl_mods.values()}
     if len(mems) != 1:
         raise RuntimeError(f"expected exactly one RTL module class in {TOP}, got {mems}")
@@ -247,7 +247,7 @@ class PySimStep(BuildStep):
 
 @dataclass(kw_only=True)
 class CodegenDutStep(BuildStep):
-    description = "Lower RfShotTxUnified to its ap_ctrl_none top + the memory + the wrapper."
+    description = "Lower RfShotTx to its ap_ctrl_none top + the memory + the wrapper."
     consumes = ["rf_shot_unified_source"]
     produces: ClassVar[dict] = {"rf_shot_tx_unified_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
                                 "run_tcl": Path(f"{TOP}.tcl"),

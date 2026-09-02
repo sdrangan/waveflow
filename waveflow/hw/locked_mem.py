@@ -770,7 +770,7 @@ class LockedT2pMemIF(Interface):
 
         A guard that never fired is not evidence that the invariant held — it is evidence that
         something ran.  The same statement
-        :meth:`~waveflow.hw.rf_shot_buf.RfShotBuf.assert_phases_separated` makes next door.
+        :meth:`LockedT2pMemIF.assert_handover_happened` makes one line above.
         """
         m, s = self.endpoints.get("master"), self.endpoints.get("slave")
         if m is None or s is None:

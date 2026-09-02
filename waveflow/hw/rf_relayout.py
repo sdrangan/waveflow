@@ -198,7 +198,7 @@ class _RelayoutTask(FreeRunMod):
     #: stage is the **last** one before a converter, because pysim's quantum on that edge is a
     #: *block*: ``Rfdc``'s DAC process takes one ``blksize``-sample burst per event and refuses a
     #: partial one.  The accommodation follows the **port**, not the class —
-    #: :attr:`~waveflow.hw.rf_shot_tx.ShotTxPlay.blk_words` is the same field for the same reason, on
+    #: :attr:`~waveflow.hw.rf_shot_tx.ShotTxPlayer.blk_words` is the same field for the same reason, on
     #: whichever stage the converter happens to back-pressure.
     blk_words: int = 1
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))

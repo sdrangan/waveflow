@@ -227,54 +227,37 @@ class RfTxStreamStep(Buildable):
 
 
 class RfShotBufStep(Buildable):
-    """Copy the **finite** sample buffer's hand-written task bodies, and its logic-side re-layout.
+    """Copy the shot family's **logic-side re-layout** task bodies.
 
     The same mechanism as :class:`RfSampBufStep` and for the same reason:
-    :mod:`waveflow.hw.rf_shot_buf` and :mod:`waveflow.hw.rf_relayout` are **framework**, so their
-    ``hls::task`` bodies ship from ``waveflow/build/`` and each example gets a copy beside the top
-    Vitis compiles.
+    :mod:`waveflow.hw.rf_relayout` is **framework**, so its ``hls::task`` bodies ship from
+    ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles.
+
+    **It shipped six more bodies until ``plans/rf_shot_unify.md`` Stage B.**  Those were the
+    ``ShotPhase``-and-``rdy`` buffer primitive, the finite command layer on top of it, and the
+    infinite-play sibling beside it — three designs that
+    :class:`~waveflow.hw.rf_shot_tx.RfShotTx` now covers on one lock, and whose bodies went with
+    them.  The step keeps its name because ``RfShotBuf`` survives as the **family** name (see
+    ``docs/guide/rf/rfshotbuf/``); what it ships is now the pair every member of that family needs
+    and nobody else does.
 
     **A separate step from** :class:`RfSampBufStep`, deliberately.  ``plans/rf_shot_buf.md`` opens by
     saying why the two designs are separate plans rather than two halves of one: every line of the
     streaming buffer's machinery — credit, ack, progress, ``MARGIN``, the horizon — exists to
-    arbitrate between a live reader and a live writer, and the shot buffer has no such pair.  Handing
-    a shot-buffer build the streaming vocabulary would put two answers to "how does the reader know
-    where the writer is?" in one include directory, when the shot buffer's answer is *there is
-    nothing to know*.
+    arbitrate between a live reader and a live writer, and the shot family has no such pair.  Handing
+    a shot build the streaming vocabulary would put two answers to "how does the reader know where
+    the writer is?" in one include directory, when the shot answer is *there is nothing to know*.
 
-    **All four bodies together**, though, because the buffer and the re-layout are one interface: the
-    logic-side port carries densely-packed samples precisely so the buffer can own the converter's
-    packing, and a build that copied the buffer without the conversion would have a port whose format
-    nothing could produce.  Two unused headers cost nothing — Vitis compiles what the top includes.
+    **Both bodies together**, because a design takes one or the other by direction and a build that
+    guessed would be guessing: TX converts dense words to converter slots on the way out, RX converts
+    slots to dense words on the way in.  One unused header costs nothing — Vitis compiles what the
+    top includes.
 
-    The two re-layout bodies ``#include`` the generated ``rf_slot_elem_array_utils.h`` /
+    The two bodies ``#include`` the generated ``rf_slot_elem_array_utils.h`` /
     ``rf_dense_elem_array_utils.h`` by plain name, so an
     :class:`~waveflow.hw.arrayutils.ArrayUtilsStep` for
     :func:`~waveflow.hw.rf_relayout.slot_elem_type` and
     :func:`~waveflow.hw.rf_relayout.dense_elem_type` must write into the **same** *output_dir*.
-
-    **Stage B's two bodies ship here too**, and that is the same judgement as the paragraph above
-    rather than a second one.  :mod:`waveflow.hw.rf_shot_tx` is the *command layer* for exactly this
-    buffer: ``shot_tx_load_task`` writes into ``rf_shot_buf_load_task``'s stream and
-    ``shot_tx_play_task`` sits on its ``rdy`` token, so a build that copied one without the other
-    would have a design with a hole in the middle of it.  They are not a second vocabulary the way
-    the streaming buffer's would be — there is one word for *shot* here, and five status codes that
-    only this buffer can produce.  ``shot_tx_load_task.h`` includes the generated
-    ``rf_shot_tx_hdr.h`` / ``rf_shot_tx_resp.h``, so a
-    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
-    :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES` — **with** ``framed=True``, because the
-    boundary port is a ``framed_word`` stream and the plain ``read_stream`` methods will not bind to
-    one — must write into the same *output_dir*.
-
-    **The infinite-play pair ships here too**, and that is the same judgement again rather than a new
-    one.  :mod:`waveflow.hw.rf_shot_loop` is a *sibling* of ``rf_shot_tx`` — a different player, a
-    different loader, and no ``rdy`` / ``rep`` / ``done`` at all — but it speaks the same vocabulary:
-    one ``ShotTxHdr``, one ``ShotTxResp``, the same five status codes, and the same re-layout on the
-    way to the converter.  Shipping it separately would put one word for *shot* in two include
-    directories.  It also needs :class:`MemLockStep`'s ``mem_lock.h`` and a
-    :class:`~waveflow.hw.dataschema.DataSchemaStep` for
-    :data:`~waveflow.hw.locked_mem.LOCK_SCHEMA_CLASSES` in the same *output_dir*; those are the
-    lock's, not this design's, which is why they are a step of their own.
 
     Parameters
     ----------
@@ -294,17 +277,14 @@ class RfShotBufStep(Buildable):
     def build_outputs(self) -> dict[str, Path]:
         return {name: self._output_dir / f"{name}.h" for name in self._SRC}
 
-    _SRC = ("rf_shot_buf_load_task", "rf_shot_buf_read_task",
-            "rf_relayout_to_dense_task", "rf_relayout_to_slots_task",
-            "shot_tx_load_task", "shot_tx_play_task",
-            "shot_loop_load_task", "shot_loop_play_task")
+    _SRC = ("rf_relayout_to_dense_task", "rf_relayout_to_slots_task")
 
     def generate(self, key: str, config: BuildConfig) -> str:
         if key not in self._SRC:
             raise KeyError(f"Unknown RfShotBufStep output key: {key!r}")
         src_path = _SRC_DIR / f"{key}.h"
         if not src_path.exists():
-            raise FileNotFoundError(f"RfShotBuf source file not found: {src_path}")
+            raise FileNotFoundError(f"RfShotBufStep source file not found: {src_path}")
         return src_path.read_text(encoding="utf-8")
 
 
@@ -392,18 +372,20 @@ class RfPingPongStep(Buildable):
 class RfShotTxUnifiedStep(Buildable):
     r"""Copy the **unified** shot transmitter's two hand-written ``hls::task`` bodies.
 
-    ``plans/rf_shot_unify.md`` Stage A.  :mod:`waveflow.hw.rf_shot_tx_unified` is framework, so its
+    ``plans/rf_shot_unify.md`` Stage A.  :mod:`waveflow.hw.rf_shot_tx` is framework, so its
     bodies ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles —
     the same mechanism :class:`RfShotBufStep` and :class:`RfPingPongStep` use.
 
     **A step of its own while Stage A runs**, and that is the merge-only rule made structural: the
-    predecessors' bodies are still shipped by :class:`RfShotBufStep` and a build must be able to ask
-    for either family without getting both.  Stage B deletes those and folds this one in.
+    predecessors' bodies were still shipped by :class:`RfShotBufStep` and a build had to be able to
+    ask for either family without getting both.  **Stage B deleted those bodies**, so the separation
+    no longer buys anything; the step stays separate because merging it back would be a refactor of a
+    survivor inside a stage whose whole property is that every regression is a removal.
 
     The loader body ``#include``\ s the generated ``rf_shot_tx_hdr.h`` / ``rf_shot_tx_resp.h`` and
     both bodies ``#include`` ``shot_play_cmd.h``, so ``DataSchemaStep``\ s for
     :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES` **and**
-    :data:`~waveflow.hw.rf_shot_tx_unified.UNIFIED_TX_SCHEMA_CLASSES` must write into the same
+    :data:`~waveflow.hw.rf_shot_tx.UNIFIED_TX_SCHEMA_CLASSES` must write into the same
     *output_dir*, along with :class:`MemLockStep`'s ``mem_lock.h``.  The re-layout body is Stage A's
     and comes from :class:`RfShotBufStep`.
     """
@@ -427,7 +409,7 @@ class RfShotTxUnifiedStep(Buildable):
             raise KeyError(f"Unknown RfShotTxUnifiedStep output key: {key!r}")
         src_path = _SRC_DIR / f"{key}.h"
         if not src_path.exists():
-            raise FileNotFoundError(f"RfShotTxUnified source file not found: {src_path}")
+            raise FileNotFoundError(f"RfShotTx source file not found: {src_path}")
         return src_path.read_text(encoding="utf-8")
 
 

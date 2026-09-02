@@ -2,7 +2,7 @@ r"""rf_pingpong_rx.py — **continuous capture**: fill one half while a reader d
 
 ``plans/t2p_lock_chan.md`` S2, and the second consumer of
 :class:`~waveflow.hw.locked_mem.LockedT2pMemIF`.  The RX counterpart of
-:mod:`waveflow.hw.rf_shot_loop`, and the direction where the region parameter stops being an
+:mod:`waveflow.hw.rf_shot_tx`, and the direction where the region parameter stops being an
 optimisation and starts being correctness::
 
     Rfdc.rx_streams[0] --slots--> RfRelayoutToDense --dense--> PingPongCapture --[lock]--> [ BRAM ]
@@ -27,8 +27,8 @@ answers *may I touch these addresses* — it has no way to say *there is somethi
 touching*.  A reader that alternated blindly would acquire a half the capture had not filled yet and
 drain zeros, which is the plausible-samples failure this whole arc keeps meeting.  So the capture
 announces each region as it completes it, exactly as
-:class:`~waveflow.hw.rf_shot_buf.RfShotBufLoad` announces a shot, and the reader blocks on that
-announcement before it asks for anything.
+:class:`~waveflow.hw.rf_shot_tx.ShotTxLoader` hands its player a shot, and the reader blocks on
+that announcement before it asks for anything.
 
 One channel, one word, and the word is the region's **base address** — not an index, because an index
 would be a second encoding of a geometry the lock already speaks in addresses.
@@ -96,7 +96,7 @@ from waveflow.hw.locked_mem import (
 )
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.rf_relayout import RfRelayoutToDense
-from waveflow.hw.rf_shot_buf import WORD_BW
+from waveflow.hw.rf_shot_tx import WORD_BW
 from waveflow.simulation.simobj import ProcessGen
 
 #: Nothing was lost immediately before this window: it is contiguous with the one before it.
@@ -652,7 +652,7 @@ class RfPingPongRx(FreeRunMod):
         """**The verdict, read off the wire.**  Every window says ``CAP_OK`` and reports zero lost.
 
         Off the stream rather than off the counter, for the reason
-        ``examples/rf_shot_play`` reads its responses off the wire: a design that counted correctly
+        ``examples/rf_shot_unified`` reads its responses off the wire: a design that counted correctly
         and *serialized* wrongly passes every internal check there is, and the wire is the only thing
         a host can act on.
 

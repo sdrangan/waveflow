@@ -1,15 +1,16 @@
-"""rf_shot_unified.py — ``plans/rf_shot_unify.md`` Stage A: **one transmitter, both play modes**.
+"""rf_shot_unified.py — ``plans/rf_shot_unify.md``: **one transmitter, both play modes**.
 
-The user story ``examples/rf_shot_play`` and ``examples/rf_shot_loop`` tell *between* them, told once::
+The user story two retired examples told *between* them — a finite play-set and an infinite one —
+told once by one design::
 
-    StreamDriver --[ShotTxHdr | dense words ... TLAST]--> RfShotTxUnified.s_in
-    RfShotTxUnified.resp_out --> StreamSink              (one ShotTxResp per header)
-    RfShotTxUnified.samp_out --> Rfdc.tx_streams[0] | Rfdc.tx_rf --RFSampIF--> RfDataSink
+    StreamDriver --[ShotTxHdr | dense words ... TLAST]--> RfShotTx.s_in
+    RfShotTx.resp_out --> StreamSink              (one ShotTxResp per header)
+    RfShotTx.samp_out --> Rfdc.tx_streams[0] | Rfdc.tx_rf --RFSampIF--> RfDataSink
 
 **Two scenarios, and they cannot be one.**  A file-driven driver pushes every frame back to back, and
 a *finite* shot in flight refuses everything behind it — which is the design working, not a testbench
-limitation.  So the finite behaviours and the infinite ones need separate streams, exactly as
-``rf_shot_play`` needed two for its own reason:
+limitation.  So the finite behaviours and the infinite ones need separate streams, exactly as the
+finite predecessor's example needed two for its own reason:
 
 ``cmd_finite`` — ``SHOT_LOAD`` with ``nrepeat=3``, then three frames that arrive mid-play
 
@@ -71,7 +72,7 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_ZERO_LEN,
     ShotTxHdr,
 )
-from waveflow.hw.rf_shot_tx_unified import FILLER, RfShotTxUnified
+from waveflow.hw.rf_shot_tx import FILLER, RfShotTx
 from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 from waveflow.simulation.rf_tb import RfDataSink
 from waveflow.simulation.simulation import Simulation
@@ -268,7 +269,7 @@ class RfShotUnifiedTB(FreeRunMod):
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1, word=self.word)
         w = self.rfdc.axis_bitwidth
-        self.dut = RfShotTxUnified.for_word(
+        self.dut = RfShotTx.for_word(
             self.word, depth=int(self.depth), nword=int(self.nword), sim=self.sim,
             name=f"{self.name}_dut", clk=self.axis_clk, base=int(self.base),
             # pysim's quantum on the converter edge is a BLOCK: the Rfdc's DAC process takes one
@@ -394,7 +395,7 @@ def played_samples(tb: RfShotUnifiedTB) -> np.ndarray:
 def segments(played: np.ndarray) -> list[tuple[bool, np.ndarray]]:
     """The playout split into ``(is_filler, samples)`` runs.
 
-    Filler is a run of :data:`~waveflow.hw.rf_shot_tx_unified.FILLER` codes.  Both waveforms start at
+    Filler is a run of :data:`~waveflow.hw.rf_shot_tx.FILLER` codes.  Both waveforms start at
     a non-zero code precisely so this is unambiguous.
     """
     segs: list[tuple[bool, np.ndarray]] = []
@@ -446,8 +447,8 @@ def check_finite_playout(played: np.ndarray, *, where: str = "") -> None:
 def check_loop_playout(played: np.ndarray, *, where: str = "") -> None:
     """**Gate 2.**  Waveform A, a gap, waveform B — then quiet, because the last load was short.
 
-    The trailing filler is the merged design's own improvement: ``rf_shot_loop`` plays a padded short
-    shot because it has no way to go quiet, and this one does.
+    The trailing filler is the merged design's own improvement: the infinite predecessor played a
+    padded short shot because it had no way to go quiet, and this one does.
     """
     want_a, want_b = shot_codes(CODE_A), shot_codes(CODE_B)
     runs = [s for f, s in segments(played) if not f]

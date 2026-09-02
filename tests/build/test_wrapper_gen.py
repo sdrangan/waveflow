@@ -185,7 +185,7 @@ def test_the_a_half_reaches_the_memory_and_the_b_half_is_tied_off():
 @pytest.mark.parametrize("width, shift", [(8, 0), (16, 1), (32, 2), (64, 3), (128, 4)])
 def test_the_byte_address_shift_is_log2_of_the_byte_width(width, shift):
     """``_bram_addr_shift`` is the single statement of Vitis's scaling, and it is checked against the
-    real RTL by ``tests/examples/test_rf_shot_buf_xsi.py`` — here only that the arithmetic is what it
+    real RTL by ``tests/examples/test_bram_access_xsi.py`` — here only that the arithmetic is what it
     claims."""
     from waveflow.build.wrapper_gen import _bram_addr_shift
     assert _bram_addr_shift(width) == shift

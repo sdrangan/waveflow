@@ -1,6 +1,6 @@
 """rf_pingpong_rx.py — ``plans/t2p_lock_chan.md`` S2: **capture continuously and lose nothing**.
 
-The RX half of the story ``examples/rf_shot_loop`` tells on TX.  There the two regions were an
+The RX half of the story ``examples/rf_shot_unified`` tells on TX.  There the two regions were an
 optimisation nobody needed — a handover is a *gap*, and you had already accepted discontinuity when
 you asked to change waveform.  Here they are correctness: **you cannot back-pressure an ADC**, so a
 reader holding the region the capture needs is not a gap, it is samples that no longer exist::
@@ -8,7 +8,7 @@ reader holding the region the capture needs is not a gap, it is samples that no 
     RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --> RfPingPongRx.samp_in
     RfPingPongRx.w_out --> StreamSink        (one FRAME per window: a header, then the samples)
 
-**The converter is really here**, for ``rf_shot_loop``'s reason inverted: the one thing a capture
+**The converter is really here**, for the TX design's reason inverted: the one thing a capture
 design exists to satisfy is that an ADC cannot be told to wait, and the whole claim of this design is
 that a *window read-out* does not make it wait either.  The tile is ADC-only (``n_rx=1, n_tx=0``):
 wiring a fake DAC in would add a metronome nothing feeds.
