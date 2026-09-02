@@ -329,7 +329,7 @@ class MemLockStep(Buildable):
 class RfPingPongStep(Buildable):
     """Copy the continuous-capture receiver's two hand-written ``hls::task`` bodies.
 
-    ``plans/t2p_lock_chan.md`` S2.  :mod:`waveflow.hw.rf_pingpong_rx` is **framework**, so its bodies
+    ``plans/t2p_lock_chan.md`` S2.  :mod:`waveflow.hw.rf_shot_rx` is **framework**, so its bodies
     ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles — the
     same mechanism :class:`RfShotBufStep` uses.
 
@@ -341,7 +341,7 @@ class RfPingPongStep(Buildable):
 
     Both bodies ``#include`` the generated ``capture_window_hdr.h`` and ``mem_lock.h``, so a
     :class:`~waveflow.hw.dataschema.DataSchemaStep` for
-    :data:`~waveflow.hw.rf_pingpong_rx.CAPTURE_SCHEMA_CLASSES` and a :class:`MemLockStep` must write
+    :data:`~waveflow.hw.rf_shot_rx.CAPTURE_SCHEMA_CLASSES` and a :class:`MemLockStep` must write
     into the same *output_dir*.  The window body writes an ``axi4s`` frame, so the schema needs its
     ``write_axi4_stream`` methods — which ``DataSchemaStep`` emits by default.
     """

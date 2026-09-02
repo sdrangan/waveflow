@@ -1,4 +1,4 @@
-// rf_pingpong_rx_counters.cpp -- HAND-WRITTEN.  Runs the generated harness and prints the model
+// rf_shot_rx_counters.cpp -- HAND-WRITTEN.  Runs the generated harness and prints the model
 // counters as KEY=VALUE lines.
 //
 // Why this exists beside the generated main.  The generated main runs and dumps, and correctness is
@@ -22,10 +22,10 @@
 // Regenerate the harness, not this file.
 #include <cstdio>
 
-#include "rf_pingpong_rx_tb_harness.h"
+#include "rf_shot_rx_tb_harness.h"
 
 int main() {
-    rf_pingpong_rx_tb::Harness h("rf_pingpong_rx_counters.wdb");
+    rf_shot_rx_tb::Harness h("rf_shot_rx_counters.wdb");
     h.run(2800);
 
     // The converter side: what it presented, and what the fabric would not take.

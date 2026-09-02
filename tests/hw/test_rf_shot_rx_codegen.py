@@ -25,10 +25,10 @@ from waveflow.build.elaborate import elaborate
 from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES
-from waveflow.hw.rf_pingpong_rx import CAPTURE_SCHEMA_CLASSES, N_REGION, RfPingPongRx
+from waveflow.hw.rf_shot_rx import CAPTURE_SCHEMA_CLASSES, N_REGION, RfShotRx
 from waveflow.toolchain import toolchain
 
-TOP = "rf_pingpong_rx"
+TOP = "rf_shot_rx"
 WORD_BW = 64
 DEPTH = 512
 BLK_WORDS = 16
@@ -42,7 +42,7 @@ _ELAB = {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH, "shift": SHI
 
 
 def _rx():
-    return elaborate(RfPingPongRx, dict(_ELAB), name=TOP)
+    return elaborate(RfShotRx, dict(_ELAB), name=TOP)
 
 
 # ---------------------------------------------------------------------------

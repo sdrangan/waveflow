@@ -1,12 +1,12 @@
-"""rf_pingpong_rx.py — ``plans/t2p_lock_chan.md`` S2: **capture continuously and lose nothing**.
+"""rf_shot_rx.py — ``plans/t2p_lock_chan.md`` S2: **capture continuously and lose nothing**.
 
 The RX half of the story ``examples/rf_shot_unified`` tells on TX.  There the two regions were an
 optimisation nobody needed — a handover is a *gap*, and you had already accepted discontinuity when
 you asked to change waveform.  Here they are correctness: **you cannot back-pressure an ADC**, so a
 reader holding the region the capture needs is not a gap, it is samples that no longer exist::
 
-    RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --> RfPingPongRx.samp_in
-    RfPingPongRx.w_out --> StreamSink        (one FRAME per window: a header, then the samples)
+    RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --> RfShotRx.samp_in
+    RfShotRx.w_out --> StreamSink        (one FRAME per window: a header, then the samples)
 
 **The converter is really here**, for the TX design's reason inverted: the one thing a capture
 design exists to satisfy is that an ADC cannot be told to wait, and the whole claim of this design is
@@ -39,11 +39,11 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
-from waveflow.hw.rf_pingpong_rx import (
+from waveflow.hw.rf_shot_rx import (
     CAP_OK,
     CAP_STATUS_NAMES,
     N_REGION,
-    RfPingPongRx,
+    RfShotRx,
     split_windows,
 )
 from waveflow.hw.rf_sample_if import RFSampIF
@@ -63,7 +63,7 @@ WORD = Rfsoc4x2SampWord.specialize(samp_per_word=4)
 WORD_BW = int(WORD.bitwidth)
 SPW = int(WORD.samp_per_word)
 
-#: Memory depth in **WORDS**, split into :data:`~waveflow.hw.rf_pingpong_rx.N_REGION` regions.
+#: Memory depth in **WORDS**, split into :data:`~waveflow.hw.rf_shot_rx.N_REGION` regions.
 DEPTH = 256
 REGION_WORDS = DEPTH // N_REGION
 #: Samples in one window — what a host gets per frame.
@@ -128,7 +128,7 @@ def write_scenario(root, n_blk: int = N_BLK) -> None:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class RfPingPongRxTB(FreeRunMod):
+class RfShotRxTB(FreeRunMod):
     """A real ADC filling the memory, the ping-pong receiver, and one sink taking windows.
 
     Structurally ``RfSampBufRxTB`` with the command layer removed — which is the comparison worth
@@ -146,7 +146,7 @@ class RfPingPongRxTB(FreeRunMod):
     word: type[Rfsoc4x2SampWord] = WORD
     #: **Fault injection.**  Blocks' worth of time the reader sits on its window before releasing it.
     #: ``0`` is the design; anything else makes it lose samples on purpose — see
-    #: :attr:`~waveflow.hw.rf_pingpong_rx.PingPongWindow.stall_blocks`.
+    #: :attr:`~waveflow.hw.rf_shot_rx.PingPongWindow.stall_blocks`.
     stall_blocks: int = 0
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
     n_cycles: int = XSI_N_CYCLES
@@ -160,7 +160,7 @@ class RfPingPongRxTB(FreeRunMod):
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=0, word=self.word)
         w = self.rfdc.axis_bitwidth
-        self.dut = RfPingPongRx.for_word(
+        self.dut = RfShotRx.for_word(
             self.word, depth=int(self.depth), sim=self.sim, name=f"{self.name}_dut",
             clk=self.axis_clk, blk_words=int(self.blksize) // SPW,
             stall_blocks=int(self.stall_blocks), blk_period=self.blk_period)
@@ -212,11 +212,11 @@ class RfPingPongRxTB(FreeRunMod):
 # Running it, and reading what came out
 # ---------------------------------------------------------------------------
 
-def run_pysim(root=None, **kw) -> RfPingPongRxTB:
+def run_pysim(root=None, **kw) -> RfShotRxTB:
     """Build the graph, run it to the metronome's horizon, return the testbench."""
     import tempfile
 
-    tb = RfPingPongRxTB(name="tb", sim=Simulation(), **kw)
+    tb = RfShotRxTB(name="tb", sim=Simulation(), **kw)
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
         write_scenario(base, n_blk=int(tb.n_blk))
@@ -240,7 +240,7 @@ def run_pysim(root=None, **kw) -> RfPingPongRxTB:
     return tb
 
 
-def frames_from_sink(tb: RfPingPongRxTB) -> list[np.ndarray]:
+def frames_from_sink(tb: RfShotRxTB) -> list[np.ndarray]:
     """The raw frames the sink collected — header **and** samples, as a host would see them."""
     return [np.asarray(b, dtype=np.uint64).ravel() for b in tb.win_snk.words]
 
@@ -248,7 +248,7 @@ def frames_from_sink(tb: RfPingPongRxTB) -> list[np.ndarray]:
 def windows_as_codes(frames) -> list[tuple[object, np.ndarray]]:
     """``[(hdr, codes), ...]`` — each window's header and its samples as **signed converter codes**.
 
-    The header is split off by :func:`~waveflow.hw.rf_pingpong_rx.split_windows`, which is the design's
+    The header is split off by :func:`~waveflow.hw.rf_shot_rx.split_windows`, which is the design's
     own reader of its own layout; the samples are unpacked through the word type's serializer.  Both
     halves go through the one place that owns them, so this function invents nothing.
     """

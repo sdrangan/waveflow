@@ -1,6 +1,6 @@
 """Continuous capture at RTL — ``plans/t2p_lock_chan.md`` S2, checkpoint 4.
 
-What xsim elaborates is the **wrapper** (``rf_pingpong_rx_top``): the kernel plus its hand-written
+What xsim elaborates is the **wrapper** (``rf_shot_rx_top``): the kernel plus its hand-written
 ``bram_t2p`` memory, so the testbench sees only AXI-Stream and the converter model feeds it exactly
 as it feeds any other design.
 
@@ -26,7 +26,7 @@ disjoint regions that stops mattering.
 that dawdles is not a thing the RTL can be asked to do.  A control would need a second design, as S1's
 did.  It is not needed here: the claim above is positive and self-witnessing, which is what S1's
 absence-of-hazard claim was not.  The clean/dirty pairing lives in pysim, where the knob does
-(``tests/hw/test_rf_pingpong_rx.py``).
+(``tests/hw/test_rf_shot_rx.py``).
 
 Needs a prior csynth plus the XSI toolchain; skips **loudly** rather than passing when either is
 missing.
@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.rf_pingpong_rx.rf_pingpong_rx import (
+from examples.rf_shot_rx.rf_shot_rx import (
     CAP_OK,
     CAP_STATUS_NAMES,
     CODE_BASE,
@@ -52,7 +52,7 @@ from examples.rf_pingpong_rx.rf_pingpong_rx import (
     expected_bases,
     windows_as_codes,
 )
-from examples.rf_pingpong_rx.rf_pingpong_rx_build import (
+from examples.rf_shot_rx.rf_shot_rx_build import (
     RTL_FILES,
     TOP,
     WRAPPER,
@@ -62,7 +62,7 @@ from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 from waveflow.utils.bram_trace import describe, find_read_during_write, sampled
 
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_pingpong_rx"
+ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_rx"
 XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
@@ -135,7 +135,7 @@ def run(tmp_path_factory) -> dict:
     """
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(VERILOG.is_dir(),
-             f"no csynth RTL at {VERILOG} — run rf_pingpong_rx_build.py --through csynth")
+             f"no csynth RTL at {VERILOG} — run rf_shot_rx_build.py --through csynth")
     # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it did
     # not produce reports "a real behaviour change" when the truth is a stale artifact.
     _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
@@ -143,7 +143,7 @@ def run(tmp_path_factory) -> dict:
     # is a prerequisite rather than a checked-in file — and a missing one must SKIP loudly rather
     # than raise.
     for f in (*RTL_FILES, f"vcd_dumper_{WRAPPER}.v", f"{TOP}_hazard.json"):
-        _require((XSI / f).is_file(), f"{XSI / f} — run rf_pingpong_rx_build.py")
+        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_rx_build.py")
 
     # Regenerate the file list from the RTL actually on disk; never trust the committed .f.
     (XSI / f"rtl_{WRAPPER}.f").write_text(
@@ -164,7 +164,7 @@ def run(tmp_path_factory) -> dict:
         f"the traced run produced no {trace.name}. Is vcd_dumper_{WRAPPER}.v present in {XSI}, and "
         f"did {XSI_RUNNER} get the `trace` argument?")
 
-    keep = tmp_path_factory.mktemp("rf_pingpong_rx_xsi") / "trace.vcd"
+    keep = tmp_path_factory.mktemp("rf_shot_rx_xsi") / "trace.vcd"
     shutil.copyfile(trace, keep)
     return {
         "counters": _counters(text),

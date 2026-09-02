@@ -5,7 +5,7 @@ region parameter was built for.  S1 proved a handover; this proves two regions, 
 dimension S1 left unverified.
 
 **The clean run and the dirty run are the same graph with one knob moved.**
-:attr:`~waveflow.hw.rf_pingpong_rx.PingPongWindow.stall_blocks` is how long the reader sits on its
+:attr:`~waveflow.hw.rf_shot_rx.PingPongWindow.stall_blocks` is how long the reader sits on its
 window before releasing it, and it is the only thing on RX that loses samples: you cannot
 back-pressure an ADC, so a reader holding the region the capture needs is not a gap, it is capture
 that no longer exists.  A gate that could not produce that condition could not tell a design that
@@ -24,7 +24,7 @@ from waveflow.hw.bram import word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.locked_mem import LOCK_ACQUIRE
-from waveflow.hw.rf_pingpong_rx import (
+from waveflow.hw.rf_shot_rx import (
     CAP_LOST,
     CAP_OK,
     CAP_STATUS_NAMES,
@@ -33,7 +33,7 @@ from waveflow.hw.rf_pingpong_rx import (
     N_REGION,
     CaptureWindowHdr,
     PingPongCapture,
-    RfPingPongRx,
+    RfShotRx,
     split_windows,
 )
 from waveflow.simulation.simulation import Simulation
@@ -65,7 +65,7 @@ class Bench:
     def __init__(self, *, stall_blocks: int = 0, depth: int = DEPTH) -> None:
         self.sim = Simulation()
         self.clk = Clock(name="clk", freq=250e6)
-        self.dut = RfPingPongRx(sim=self.sim, name="rx", bitwidth=WORD_BW, samp_per_word=4,
+        self.dut = RfShotRx(sim=self.sim, name="rx", bitwidth=WORD_BW, samp_per_word=4,
                                depth=depth, shift=SHIFT, blk_words=BLK_WORDS,
                                stall_blocks=int(stall_blocks), blk_period=BLK_PERIOD,
                                clk=self.clk)
@@ -336,7 +336,7 @@ def test_the_capture_is_the_OWNER_and_it_WRITES():
 def test_the_rdy_channel_is_as_deep_as_the_regions_are_many():
     """The invariant that lets the capture write it **blocking** without ever stalling.
 
-    At most :data:`~waveflow.hw.rf_pingpong_rx.N_REGION` regions can be full at once, so at most that
+    At most :data:`~waveflow.hw.rf_shot_rx.N_REGION` regions can be full at once, so at most that
     many announcements can be outstanding.  A shallower channel would make the capture block on a
     reader — which is back-pressuring an ADC, the one thing this design may not do.
     """
@@ -370,7 +370,7 @@ def test_a_geometry_that_cannot_split_into_regions_is_refused(kw, match):
     which point the contiguity check would have to know which.
     """
     with pytest.raises(ValueError, match=match):
-        RfPingPongRx(sim=Simulation(), name="bad", bitwidth=WORD_BW, samp_per_word=4,
+        RfShotRx(sim=Simulation(), name="bad", bitwidth=WORD_BW, samp_per_word=4,
                      depth=kw.get("depth", DEPTH), shift=SHIFT,
                      blk_words=kw.get("blk_words", BLK_WORDS))
 

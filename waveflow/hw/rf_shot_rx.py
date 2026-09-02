@@ -1,4 +1,4 @@
-r"""rf_pingpong_rx.py — **continuous capture**: fill one half while a reader drains the other.
+r"""rf_shot_rx.py — **continuous capture**: fill one half while a reader drains the other.
 
 ``plans/t2p_lock_chan.md`` S2, and the second consumer of
 :class:`~waveflow.hw.locked_mem.LockedT2pMemIF`.  The RX counterpart of
@@ -43,13 +43,13 @@ read.  When there is no such region the block is **discarded and counted**.
 
 That counter is the design's, not the interface's.  ``plans/t2p_lock_chan.md`` is explicit: *the count
 is the design's to produce and the gate's to assert; the interface does not supply it.*  See
-:attr:`PingPongCapture.n_dropped`, and :meth:`RfPingPongRx.assert_no_loss` for the verdict that makes
+:attr:`PingPongCapture.n_dropped`, and :meth:`RfShotRx.assert_no_loss` for the verdict that makes
 it loud — because a dropped block is otherwise perfectly silent, in exactly the way sub-block loss
 already was.
 
 **The strongest statement of "nothing was dropped" is not the counter.**  It is that the windows,
 concatenated, are *contiguous*: the source is a ramp, so a gap in the numbers is a gap in the capture
-and no counter has to be believed.  :meth:`RfPingPongRx.assert_windows_contiguous`.
+and no counter has to be believed.  :meth:`RfShotRx.assert_windows_contiguous`.
 
 The count is on the wire, and so is a verdict
 ---------------------------------------------
@@ -488,7 +488,7 @@ class PingPongWindow(FreeRunMod):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class RfPingPongRx(FreeRunMod):
+class RfShotRx(FreeRunMod):
     r"""The whole continuous-capture receiver as one design scope.
 
     Three ``hls::task``\ s and one memory beside them::
@@ -513,7 +513,7 @@ class RfPingPongRx(FreeRunMod):
     and that is the stage that carries ``blk_words``.
     """
 
-    cpp_kernel_name: ClassVar[str | None] = "rf_pingpong_rx"
+    cpp_kernel_name: ClassVar[str | None] = "rf_shot_rx"
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
     bitwidth: HwParam[int] = WORD_BW
@@ -614,7 +614,7 @@ class RfPingPongRx(FreeRunMod):
 
         if not (isinstance(word, type) and issubclass(word, RfdcSampWord)):
             raise TypeError(
-                f"RfPingPongRx.for_word() takes the converter's WORD TYPE — the packing convention, "
+                f"RfShotRx.for_word() takes the converter's WORD TYPE — the packing convention, "
                 f"not a width. Got {word!r}.")
         check_geometry(word)
         return cls(bitwidth=int(word.bitwidth), samp_per_word=slots_per_word(word),
