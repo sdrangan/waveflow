@@ -32,7 +32,6 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_WRONG_LEN,
     SHOT_ZERO_LEN,
     ShotTxHdr,
-    ShotTxResp,
 )
 from waveflow.hw.rf_relayout import to_slots
 from waveflow.hw.rf_shot_tx_unified import FILLER, RfShotTxUnified, ShotPlayCmd
