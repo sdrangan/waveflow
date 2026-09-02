@@ -240,3 +240,39 @@ takes 1 grant. That pair is the merge: the same body, one exit condition apart.
 subclasses the shipped player with the `playing = False` removed — one line — and the pysim guard
 raises on the very next chunk. At RTL `bram_t2p.v`'s `$error` catches the same thing and XSI discards
 it, so this is the only place the ordering is a *failure* rather than a plausible sample.
+
+### The lowering, and the II the merge did not cost
+
+`waveflow/build/shot_tx_loader_task.h` and `shot_tx_player_task.h`, shipped by
+`RfShotTxUnifiedStep` — a step of its own while Stage A runs, so a build can ask for either family
+without getting both. Stage B deletes the predecessors' and folds this one in.
+
+**The player's C++ is `shot_loop_play_task.h` plus four lines**, and they are the merge:
+
+```c
+if (rd >= NW) { rd = 0; if (!loop) { if (--nrep_left == 0) { playing = 0; done; } } }
+```
+
+Both are register reads *outside* the pipelined loop body, which is why the exit condition costs
+nothing — the shape one might expect to break II=1 does not, for the same reason
+`plans/t2p_lock_chan.md` records about the `playing` guard.
+
+**MEASURED (Vitis HLS 2025.1, xczu48dr, 4 ns target):**
+
+| module | loop | achieved II |
+|---|---|---|
+| `shot_tx_loader_task_64_256_64_4_192` | `take_shot` | **1** |
+| | `drain_tail` | **1** |
+| | `await_grant` | **1** |
+| `shot_tx_player_task_64_256_64_192_16` | `play_chunk` | **1** |
+| `rf_relayout_to_slots_task_64_4_2_s` | *(Stage A's, unlabelled)* | **1** |
+
+Estimated period **2.772 ns**, Fmax **360.8 MHz**.
+
+**Counted at the port map:** three tasks against `RfShotTx`'s five, and `rep done samp` plus one
+`add_if(lock)` against seven hand-wired channels plus two `BramIF`s. The four that vanished — `pay`,
+`rdy_load`, `rdy_play`, `dense` — existed only to move samples between tasks the lock made
+unnecessary.
+
+`test_the_predecessors_are_untouched` asserts the merge-only rule directly: both old designs still
+import and still lower.

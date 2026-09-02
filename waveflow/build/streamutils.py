@@ -389,6 +389,48 @@ class RfPingPongStep(Buildable):
         return src_path.read_text(encoding="utf-8")
 
 
+class RfShotTxUnifiedStep(Buildable):
+    r"""Copy the **unified** shot transmitter's two hand-written ``hls::task`` bodies.
+
+    ``plans/rf_shot_unify.md`` Stage A.  :mod:`waveflow.hw.rf_shot_tx_unified` is framework, so its
+    bodies ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles —
+    the same mechanism :class:`RfShotBufStep` and :class:`RfPingPongStep` use.
+
+    **A step of its own while Stage A runs**, and that is the merge-only rule made structural: the
+    predecessors' bodies are still shipped by :class:`RfShotBufStep` and a build must be able to ask
+    for either family without getting both.  Stage B deletes those and folds this one in.
+
+    The loader body ``#include``\ s the generated ``rf_shot_tx_hdr.h`` / ``rf_shot_tx_resp.h`` and
+    both bodies ``#include`` ``shot_play_cmd.h``, so ``DataSchemaStep``\ s for
+    :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES` **and**
+    :data:`~waveflow.hw.rf_shot_tx_unified.UNIFIED_TX_SCHEMA_CLASSES` must write into the same
+    *output_dir*, along with :class:`MemLockStep`'s ``mem_lock.h``.  The re-layout body is Stage A's
+    and comes from :class:`RfShotBufStep`.
+    """
+
+    def __init__(self, output_dir: str | Path = ".") -> None:
+        super().__init__()
+        self._output_dir = Path(output_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return self._output_dir
+
+    @property
+    def build_outputs(self) -> dict[str, Path]:
+        return {name: self._output_dir / f"{name}.h" for name in self._SRC}
+
+    _SRC = ("shot_tx_loader_task", "shot_tx_player_task")
+
+    def generate(self, key: str, config: BuildConfig) -> str:
+        if key not in self._SRC:
+            raise KeyError(f"Unknown RfShotTxUnifiedStep output key: {key!r}")
+        src_path = _SRC_DIR / f"{key}.h"
+        if not src_path.exists():
+            raise FileNotFoundError(f"RfShotTxUnified source file not found: {src_path}")
+        return src_path.read_text(encoding="utf-8")
+
+
 class MemStreamStep(Buildable):
     """Build step that copies the fixed ``MemRStream`` / ``MemWStream`` task-body headers to an
     output directory.
