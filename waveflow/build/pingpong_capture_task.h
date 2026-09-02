@@ -8,7 +8,7 @@
 // THE OWNER HERE READS BEFORE IT WRITES, AND THAT IS THE OPPOSITE OF TX.
 //
 // reference-hls-task-reset-trap: an hls::task that WRITES before it READS advances during reset.
-// shot_loop_play_task.h is on the wrong side of that line and cannot help it -- a TX owner produces
+// shot_tx_player_task.h is on the wrong side of that line and cannot help it -- a TX owner produces
 // samples nobody asked for, which is what "the side that cannot stop" means there.  An RX owner
 // CONSUMES them, so its first act is a blocking stream read and it stalls at reset like any
 // requester.  The statics still carry `#pragma HLS reset` because they are state and a reset should

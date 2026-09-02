@@ -10,8 +10,9 @@
 //
 //     if (rd >= NW) { rd = 0; if (!loop) { if (--nrep_left == 0) { playing = 0; done; } } }
 //
-// shot_loop_play_task.h wraps and keeps going; shot_tx_play_task.h counts passes in an outer loop
-// and returns.  Here one body does both, and the difference is a single register read.  Everything
+// The infinite predecessor's body wrapped and kept going; the finite one counted passes in an
+// outer loop and returned.  Here one body does both, and the difference is a single register read.
+// Everything
 // above it -- the chunk, the filler, the poll, the ordering -- is shared, which is what makes this a
 // merge rather than two designs sharing a file.
 //

@@ -230,7 +230,8 @@ def test_the_merged_design_csynthesizes_at_ii_1(tmp_path):
     pass.
 
     ``play_chunk`` is the one that carries the merge.  It gained a pass counter and an exit condition
-    over ``rf_shot_loop``'s, and both are register reads outside the loop body — so the shape one
+    over the infinite predecessor's, and both are register reads outside the loop body — so the
+    shape one
     might expect to cost a cycle does not.
     """
     from waveflow.utils.csynthparse import loop_pipeline_ii, module_loops

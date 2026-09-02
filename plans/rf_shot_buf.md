@@ -1,8 +1,21 @@
 # `RfShotBuf` — the finite sample buffer
 
-**Status: STAGES A AND B BUILT AND RTL-GATED (2026-08-31). Stages C-E open.** Started 2026-08-24.
-This file owns `RfShotBuf` — the **finite** sample buffer, its examples, and its documentation. The
-streaming buffer is `plans/rf_samp_new.md`; the converter is `plans/adc_model.md`.
+**Status: SUPERSEDED IN STRUCTURE — Stages A and B were built, RTL-gated, and then DELETED. To be
+rewritten by `plans/rf_shot_unify.md` Stage C.** Started 2026-08-24. This file owns `RfShotBuf` —
+the **finite** sample buffer, its examples, and its documentation. The streaming buffer is
+`plans/rf_samp_new.md`; the converter is `plans/adc_model.md`.
+
+> **Read this before following any path below.** `plans/rf_shot_unify.md` **Stage B** (2026-09-02)
+> deleted `waveflow/hw/rf_shot_buf.py` (`RfShotBufLoad`, `RfShotBufRead`, `RfShotBuf`, `ShotPhase`),
+> the five-task `RfShotTx` composite that sat on it, `examples/rf_shot_buf` and
+> `examples/rf_shot_play`, and all of their gates. One design replaces all of it:
+> `waveflow/hw/rf_shot_tx.py`'s `RfShotTx`, on `LockedT2pMemIF`, serving both play modes, with
+> `examples/rf_shot_unified` as its example. `RfShotBuf` survives as the **family name** — the
+> receiver is `waveflow/hw/rf_shot_rx.py`'s `RfShotRx`.
+>
+> **Stages C, D and E below all assume the deleted structure** and cannot be built as written.
+> Everything above them is the record of how the family got here, and is left as written. Stage C of
+> `plans/rf_shot_unify.md` rewrites this file.
 
 It exists as a separate plan rather than a section of `rf_samp_new.md` deliberately. That file is
 ~1200 lines of machinery — credit and ack channels, `time_compare`, the half-wrap contract, the

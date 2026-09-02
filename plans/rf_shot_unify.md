@@ -404,3 +404,128 @@ The loader reads its `done` token non-blockingly, **after** the header — so `b
 it therefore ends with `busy` still set, and that is correct rather than a leak: the state is only
 ever read when a frame is being judged. The gate asserts `n_done` and the *acceptance of a later
 frame* instead, which is what a host would actually observe.
+
+---
+
+## Stage B as built — the deletions, and the two numbers that were not what the plan said
+
+Built 2026-09-02 on branch `rf-shot-unify-b` off `rf-shot-unify-a`. **A pure deletion**, plus the one
+move and the two renames the stage cannot avoid, so that any regression is trivially attributable to
+a removal.
+
+### What went
+
+| deleted | what it was |
+|---|---|
+| `waveflow/hw/rf_shot_buf.py` | `RfShotBufLoad`, `RfShotBufRead`, `RfShotBuf`, `ShotPhase` |
+| `waveflow/hw/rf_shot_tx.py`'s contents | the five-task finite composite and its Stage-A instantiation |
+| `waveflow/hw/rf_shot_loop.py` | `ShotLoopLoad`, `ShotLoopPlay`, `RfShotTxLoop` |
+| six `waveflow/build/*_task.h` | `rf_shot_buf_{load,read}`, `shot_tx_{load,play}`, `shot_loop_{load,play}` |
+| `examples/rf_shot_buf`, `rf_shot_play`, `rf_shot_loop` | and their `.gitignore` entries |
+| seven test files | including three `-m xsi` gate files |
+| `docs/examples/rf_shot_play/` (3 pages) | docs for a deleted example |
+| `docs/guide/rf/rfshotbuf/{tx,tx_internal}.md` | 620 lines describing the deleted five-task design |
+
+**The task bodies were checked, not assumed.** `rf_relayout_to_{dense,slots}_task.h` have three live
+consumers (`rf_relayout`, `rf_shot_rx`, `rf_shot_unified`) and stay; the other six had no consumer
+outside the deleted modules and their own gates. `RfShotBufStep._SRC` went from **eight** entries to
+**two**, and the step **keeps its name** — `RfShotBuf` survives as the family name, exactly as this
+plan says under *`RfShotBuf` is absorbed, not retained*.
+
+### GATE ARITHMETIC — and the plan's number was off by two
+
+| file | gates |
+|---|---|
+| `test_rf_shot_buf_xsi.py` | 5 |
+| `test_rf_shot_play_xsi.py` | **13** *(the plan said 11)* |
+| `test_rf_shot_loop_xsi.py` | 10 |
+| **removed** | **28** |
+
+`test_rf_shot_play_xsi.py` has **11 test functions**, two of which are
+`@pytest.mark.parametrize`d over two scenarios — so it *collects* 13 items, and `WANT_XSI_GATES`
+counts collected items (`_XSI_SELECTED`), not functions. **115 → 87**, confirmed by
+`pytest -m xsi --collect-only`: 87 collected, 87 passed, **0 skipped**.
+
+### The move: the vocabulary went to the unified TX module, as Stage A said it would
+
+`ShotTxHdr`, `ShotTxResp`, the three opcodes, the five status codes, `SHOT_STATUS_NAMES`,
+`SHOT_TX_SCHEMA_CLASSES` and the three geometry constants (`WORD_BW`, `BUF_DEPTH`, `SHOT_WORDS`) now
+live in `waveflow/hw/rf_shot_tx.py`. **No shared `rf_shot_msg.py`**, for the reason Stage A recorded:
+it would have exactly one consumer. `RfShotRx` imports `WORD_BW` from the TX module and defines its
+own `CaptureWindowHdr` — a capture is asked nothing, so it has no command to parse.
+
+There was never a window with two copies: Stage A imported the definitions rather than duplicating
+them, and the same commit that deleted the old module spliced them into the new one.
+
+### The two renames
+
+**`rf_shot_tx_unified.py` → `rf_shot_tx.py`, `RfShotTxUnified` → `RfShotTx`.** Stage A's own record
+anticipated this — *"a rename of the module plus a move of the four declarations"* — and this plan's
+§ *`RfShotBuf` is absorbed, not retained* states the surviving classes are `RfShotTx` and `RfShotRx`.
+It also **repairs six cross-references for free**: `locked_mem.py`, `rf_relayout.py` and
+`interface.py` all pointed at `waveflow.hw.rf_shot_tx` symbols that the merged module now owns.
+
+**`rf_pingpong_rx.py` → `rf_shot_rx.py`, `RfPingPongRx` → `RfShotRx`**, with the example directory
+and the three test files. Re-generated and re-synthesized under the new top name, and **every
+recorded number is unchanged**: ADC 640 words / 0 dropped / 40 blocks, window 516 words, last window
+at cycle **2205**, **140** cycles with both memory ports live and **0** with writer and reader in the
+same region, Fmax 367.3 MHz. That the numbers did not move is what says the rename was
+behaviour-neutral.
+
+### What was deliberately NOT renamed, and why
+
+* **`cpp_kernel_name = "rf_shot_tx_unified"`, `examples/rf_shot_unified/`, the XSI harness artifacts,
+  `RfShotTxUnifiedStep` and `UNIFIED_TX_SCHEMA_CLASSES`.** Renaming these rewrites the RTL
+  identifiers the Stage-A gate records, and Stage B must not change that gate. Cosmetic, and Stage C
+  work.
+* **`PingPongCapture`, `PingPongWindow`, `pingpong_{capture,window}_task.h`, `RfPingPongStep`.** They
+  are named for the **mechanism** — two regions alternating — which is still exactly what they do.
+  Renaming the bodies would also rename the synthesized modules the II gate looks up **by name**,
+  which is how a gate starts skipping and reading as a pass.
+* **`RfShotTxUnifiedStep` was not merged back into `RfShotBufStep`.** The separation no longer buys
+  anything now that the predecessors' bodies are gone, but merging it would be a refactor of a
+  survivor inside a stage whose whole property is that every regression is a removal.
+
+### Assumption recorded: what counts as a "dangling reference"
+
+The done-when says no dangling reference to a deleted symbol, module or example — and taken
+literally that would delete the *provenance of measurements*. `waveflow/build/xsi/xsi_rfdc.h` carries
+`// MEASURED 2026-08-31, on examples/rf_shot_play: the design put 192 beats on samp_out`, copied into
+twelve example trees. That measurement **was** made on that example; renaming it to a surviving one
+would be a lie, and deleting it would throw away why the constant is what it is.
+
+So the line drawn was: **fix every reference a tool would follow** — imports, `_SRC` entries, file
+paths, `:mod:` / `:class:` / `:attr:` / `:meth:` / `:data:` / `:func:` roles, and markdown links —
+and **keep bare-prose historical mentions**, rewording them where they read as though the thing is
+still present ("the infinite predecessor", "the retired `rf_shot_buf` example"). The byte-address
+finding in `wrapper_gen.py` kept its story and was repointed at the gate that still checks it,
+`test_bram_access_xsi.py::test_the_wrapper_undoes_the_shift_vitis_actually_emits`.
+
+### Assumption recorded: the deleted docs pages are not replaced here
+
+`tx.md` and `tx_internal.md` described the five-task design in detail, down to `rf_shot_tx.py` line
+numbers and `examples/rf_shot_play/include/` paths. Keeping them would have left the guide
+confidently describing a design that no longer exists, which is worse than a gap; rewriting them for
+the merged design is **Stage C**, and doing it inside a deletion stage is exactly the refactor Stage
+B is defined to exclude. `docs/guide/rf/rfshotbuf/index.md` survives — it is the family page, it
+already says *under construction*, and it references no deleted symbol.
+
+`plans/rf_shot_buf.md` and `plans/t2p_lock_chan.md` were **not** rewritten either: they are the
+record of what those stages built and measured. Each got a note at the top saying where its products
+live now, so a reader following them does not walk into a deleted path.
+
+### One test was replaced rather than deleted
+
+Stage A's `test_the_predecessors_are_untouched` asserted the merge-only rule — both old designs still
+import and still lower. Its subject is gone, so it became `test_the_predecessors_are_gone`, which
+asserts the two modules raise `ModuleNotFoundError` and that the surviving `rf_shot_tx` owns the
+boundary vocabulary. The reason to gate an absence rather than enjoy it: `RfShotTx` still speaks
+everything both predecessors spoke, so re-adding either would import cleanly and quietly restore the
+two-designs-one-job state this plan exists to end.
+
+### Not done, and deliberately
+
+**The two-region TX** recorded above under *The option this opens, NOT taken at Stage A* was not
+touched. Stage B is a pure deletion; a single-to-two-region refactor inside it would destroy the
+property that makes the stage worth having. It is still open, and it is still the thing that would
+make TX and RX the same shape.

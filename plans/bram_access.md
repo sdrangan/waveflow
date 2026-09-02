@@ -23,8 +23,8 @@ claude "Read plans/bram_access.md, section 'Stage 1 — the design', and build i
 ## Why it exists
 
 `BramIF` is useful well beyond RF, and today the only way to see it used is `examples/bram_toy` — a
-minimal reproduction with no documentation page and no pysim test — or `examples/rf_shot_buf`, which
-couples it to a converter. Someone who wants "shared memory between two tasks" for a non-RF design
+minimal reproduction with no documentation page and no pysim test — or the shot-buffer examples,
+which couple it to a converter. Someone who wants "shared memory between two tasks" for a non-RF design
 should not have to read an RF example.
 
 **The duplication with `rf_shot_buf` is deliberate and a feature**: seeing the same primitive reused

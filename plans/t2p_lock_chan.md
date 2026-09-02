@@ -1,8 +1,19 @@
 # `LockedT2pMemIF` — a lock channel over a shared true-dual-port memory
 
-**Status: SPECIFIED HERE, NOTHING BUILT.** Started 2026-09-01. Owns the shared-memory handover
-primitive and its first consumer (infinite play on `RfShotTx`). Does **not** own `RfShotBuf` Stage C,
-which is `plans/rf_shot_buf.md`'s — this plan exists to give Stage C an interface it can reach for.
+**Status: S1 AND S2 BUILT AND RTL-GATED. Both consumers have since been renamed or absorbed —
+see the note below.** Started 2026-09-01. Owns the shared-memory handover primitive and its first
+consumer (infinite play on `RfShotTx`). Does **not** own `RfShotBuf` Stage C, which is
+`plans/rf_shot_buf.md`'s — this plan exists to give Stage C an interface it can reach for.
+
+> **Where S1's and S2's products live now.** `plans/rf_shot_unify.md` **Stage B** (2026-09-02)
+> deleted `waveflow/hw/rf_shot_loop.py`, `examples/rf_shot_loop` and its gate: the infinite player
+> was merged into `waveflow/hw/rf_shot_tx.py`'s `RfShotTx`, which now serves both opcodes on one
+> lock, and `examples/rf_shot_unified` is the example that drives it. S2's receiver was **renamed**
+> — `rf_pingpong_rx.py` → `waveflow/hw/rf_shot_rx.py`, `RfPingPongRx` → `RfShotRx`,
+> `examples/rf_pingpong_rx` → `examples/rf_shot_rx` — with every measurement below unchanged; only
+> the composite's name moved, and the leaf tasks kept theirs. **Everything below is the record of
+> what S1 and S2 built and measured, and is left as written.** Follow the names in this note, not
+> the ones in the sections.
 
 ---
 

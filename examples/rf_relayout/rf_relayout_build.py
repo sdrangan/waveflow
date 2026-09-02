@@ -10,8 +10,8 @@
                    two re-layout bodies, at a geometry where the conversion is not the identity.
 
 **No wrapper and no memory here** — the re-layout holds no state, so the thing xsim elaborates is the
-kernel itself.  That is the difference from ``rf_shot_buf``, and it is why this example's ``.f`` is
-named for the top rather than for a wrapper.
+kernel itself.  That is the difference from the shot family, whose designs all wrap a memory, and it
+is why this example's ``.f`` is named for the top rather than for a wrapper.
 
 **The two array-utils headers are generated into the same directory as the task bodies**, because the
 bodies include them by plain name.  Their *class names* are fixed
