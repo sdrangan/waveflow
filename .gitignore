@@ -315,3 +315,15 @@ examples/rf_pingpong_rx/results/
 examples/rf_pingpong_rx/logs/
 examples/rf_pingpong_rx/dfx_runtime.txt
 examples/rf_pingpong_rx/xsi/vectors/
+
+# rf_shot_unified (plans/rf_shot_unify.md Stage A): one transmitter, both opcodes, on the lock.  Same
+# treatment as rf_shot_loop -- the generated top, the copied framework headers, the logs, the results
+# and BOTH scenarios' vectors are derivable from the two committed .py files, the two hand-written
+# mains in xsi/, and one `pytest`.
+examples/rf_shot_unified/rf_shot_tx_unified_proj/
+examples/rf_shot_unified/gen/
+examples/rf_shot_unified/include/
+examples/rf_shot_unified/results/
+examples/rf_shot_unified/logs/
+examples/rf_shot_unified/dfx_runtime.txt
+examples/rf_shot_unified/xsi/vectors/
