@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1-S3 DONE** (2026-09-01) — float path bit-exact on 460 rows; non-float path on 75.  S3 also found a library defect.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1-S4 DONE** (2026-09-02) — float path bit-exact on 460 rows; non-float on 75; `ap_fixed` on 288 (144 as the library ships, 144 with its defect corrected).  S3 and S4 each found a library defect; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation.**  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -226,9 +226,63 @@ narrow-elements-wide-accumulator configuration a user would reach for to avoid o
 build**.  A test asserts the header still has that shape, so if AMD fixes it the model's
 single-width assumption is flagged instead of quietly becoming wrong.
 
-**S4 — fixed point.**  `gemv` is templated, so `ap_fixed` can be instantiated even though the
-shipped tests do not.  This is where `waveflow`'s `FixedField` earns its place and where the work
-connects back to the library, as `cquantize` did for the FFT.
+**S4 — fixed point.**  ✅ **DONE — bit-exact, 288/288 rows** (`ap_fixed<16,8>` and
+`ap_fixed<24,12>`, four (Q, O) combinations, three stream widths, two builds).
+
+`ap_fixed` is not `float`, so it takes `dot_dsp` — the same single-accumulator path as S3.  With
+`t_MacDataType` pinned to the element type (S3), the accumulator **is** the element format, so
+every `l_res += l_x[j] * l_y[j]` narrows back to `<W,I>` and applies the format's Q and O modes::
+
+    product          exact -- ap_fixed<W,I> * ap_fixed<W,I> is ap_fixed<2W,2I>
+    l_res + product  exact -- the operator's return type is wide enough
+    assignment       LOSSY -- narrowing applies Q, then O
+
+The knobs therefore move from summation order (the float path) to **quantization and overflow,
+applied once per element rather than once at the end**.  That is the S4 gate: the model that
+accumulates exactly and rounds once — what anyone would write from the docs, and what a DSP MAC
+with a wide accumulator would do — is wrong on **132/144** rows at `W=16` and **114/144** at
+`W=24`.  Ignoring `AP_RND` misses every `AP_RND` row (72/144).  `parEntries` again does not
+change the result, and again that is measured, not carried over.
+
+This is where `waveflow`'s numeric core earns its place: `wf_gemv/fixed.py` is `fixputils.mult`,
+`fixputils.add` and `fixputils.quantize` in a three-line loop, with the `Q`/`O` semantics already
+validated by the FFT work.  Its one limit is `W <= 31` — the exact `acc + product` intermediate
+needs `2W+1` bits and `fixputils` is int64-backed — and `fixed_format` raises at construction
+rather than wrapping silently.
+
+### ⚠️ `gemv` returns wrong answers for every `ap_fixed` instantiation
+
+Not a modelling subtlety — a one-line defect that corrupts the result.  `dot_dsp` ends with
+(`helpers/funcs/dotHelper.hpp:98`)::
+
+    p_res.write(l_res);        // l_res is t_MacDataType; the stream carries ap_uint<W>
+
+That conversion is **numeric, not a bit repack**: it truncates toward zero to the integer part,
+which the consumer then unpacks as a raw stored field.  Measured, `ap_fixed<16,8>`::
+
+    true dot = 27.75  ->  stream carries 27  ->  reads back as 27/256 = 0.105469
+
+Every fractional bit is gone and the magnitude is off by `2**F`.  The float path does not have
+this: `postProcess` (`sum.hpp:79`) writes a `WideType`, whose `operator t_TypeInt` packs by
+`reinterpret_cast`.  Two sibling reductions, two conventions.  For an integer element type the
+numeric conversion is the identity, which is why S3 never saw it.
+
+`dotHelper.hpp` is **byte-identical between 2023.1 and 2025.1**, so this is long-standing.  It
+also survives to RTL: the conversion is C++ semantics, not a csim artifact.
+
+Both behaviours are modelled and both goldens come from the library's own code:
+
+| golden | built from | model |
+|---|---|---|
+| `*_shipped.txt` | the untouched library | `gemv_fixed_as_shipped` |
+| `*_patched.txt` | `cpp/vendor_patched/dotHelper_patched.hpp` — a copy of that one header with that one line changed, put ahead of the shipped copy by its own include guard | `gemv_fixed` |
+
+Nothing in the vendor tree is edited.  `test_the_shipped_kernel_is_wrong` fails if a future
+release makes the two goldens agree — the signal to retire `as_shipped` rather than to discover
+later that the model is describing a bug that no longer exists.
+
+**Not covered:** `ap_ufixed`; `W > 31`; and the two-defect interaction is unexplored, since with
+`t_MacDataType` uncompilable there is no configuration in which both could be exercised at once.
 
 **S5 — `alpha`/`beta` overload**, and `m`/`n` sweeps.
 
@@ -246,5 +300,11 @@ follows from S1-S5.
   planned work.
 * **Does float `dot_tree` give a stable answer under `-O` and across csim/cosim?**  It must, or
   bit-exactness is not a meaningful target.  S1 answers this before anything is built on it.
-* **Is `t_LogParEntries` part of the contract or an implementation detail?**  If the bits change
-  with it, a model must take it as a parameter, and any design that retunes it changes its output.
+* ~~**Is `t_LogParEntries` part of the contract or an implementation detail?**~~  **Settled by
+  measurement: it depends on the path.**  On `dot_tree` (float, double) it sets the tree shape and
+  four of five swept widths give distinct answers, so a model must take it as a parameter and any
+  design that retunes it changes its output.  On `dot_dsp` (integer, `ap_fixed`) it changes
+  nothing — the accumulation is in index order at any width.  Tests pin both.
+* **Should the `ap_fixed` defect be reported upstream?**  It is a one-line fix and it silently
+  corrupts every fixed-point `gemv`/`dot`.  Out of scope here, but the patched header and the
+  paired goldens are exactly the reproducer a report would need.

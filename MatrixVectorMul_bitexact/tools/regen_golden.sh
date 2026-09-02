@@ -17,6 +17,7 @@ PY="${PY:-$ROOT/../env/bin/python}"
 [ -f "$BLAS_INC/xf_blas.hpp" ]   || { echo "xf_blas.hpp not under BLAS_INC=$BLAS_INC" >&2; exit 1; }
 
 "$PY" "$HERE/gen_input.py"
+"$PY" "$HERE/gen_input_fixed.py"
 
 BIN="$(mktemp -d)/dump_gemv"
 g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
@@ -28,6 +29,24 @@ g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
 "$BIN_INT" "$ROOT/data/input_int_M3_N32.txt" "$ROOT/golden/gemv_int_M3_N32.txt" \
     | grep -v "HLS SIM" || true
 echo "wrote $ROOT/golden/gemv_int_M3_N32.txt"
+
+# ap_fixed path (S4) -- the SAME source built twice.  The plain build is the shipped library,
+# defect and all; the -DWF_PATCHED build puts cpp/vendor_patched/dotHelper_patched.hpp ahead of
+# it, whose include guard suppresses the shipped header.  One line differs between them.  Nothing
+# in the vendor tree is edited.
+BIN_FIX="$(mktemp -d)/dump_gemv_fixed"
+g++ -std=c++14 -O0 -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
+    -o "$BIN_FIX" "$ROOT/cpp/dump_gemv_fixed.cpp"
+BIN_FIX_P="$(mktemp -d)/dump_gemv_fixed_patched"
+g++ -std=c++14 -O0 -DWF_PATCHED -I"$ROOT/cpp/vendor_patched" \
+    -I"$VITIS_INC" -I"$BLAS_INC" -I"$BLAS_INC/xf_blas" \
+    -o "$BIN_FIX_P" "$ROOT/cpp/dump_gemv_fixed.cpp"
+for IN in "$ROOT"/data/input_fixed_*.txt; do
+    BASE="$(basename "$IN" .txt)"; BASE="${BASE#input_fixed_}"
+    "$BIN_FIX"   "$IN" "$ROOT/golden/gemv_fixed_${BASE}_shipped.txt" | grep -v "HLS SIM" || true
+    "$BIN_FIX_P" "$IN" "$ROOT/golden/gemv_fixed_${BASE}_patched.txt" | grep -v "HLS SIM" || true
+    echo "wrote $ROOT/golden/gemv_fixed_${BASE}_{shipped,patched}.txt"
+done
 
 for IN in "$ROOT"/data/input_M*_N*.txt; do
     BASE="$(basename "$IN" .txt)"; BASE="${BASE#input_}"
