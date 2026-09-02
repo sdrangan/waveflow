@@ -1,6 +1,6 @@
 # Bit-exact Vitis BLAS matrix-vector multiply — the plan
 
-**Status:** **S1-S5 DONE** (2026-09-02) — bit-exact on **2763 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 75.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
+**Status:** **S1-S6 DONE** (2026-09-02) — bit-exact on **2763 golden rows**: float 1320, `alpha`/`beta` 792, `ap_fixed` 576 (half as the library ships, half with its defect corrected), integer 75 — plus 121 rows against **synthesized RTL** in `verifyGEMV/`.  S3, S4 and S5 each found something in the library; **the S4 one makes `gemv` return wrong answers for every `ap_fixed` instantiation**, and the S5 one makes "bit-exact" conditional on the compiler not fusing a multiply-add.  Premise confirmed — see "First measurement" below.  Sibling of [`../fft_bitexact/`](../fft_bitexact/), which is
 finished for `L = 4^S`; this applies the same method to a different kernel.  Everything below was
 checked against the shipped source and the installed toolchain, not assumed.
 
@@ -30,9 +30,9 @@ for the FFT (self-contained, C-simulable, synthesizable on its own).  `krnl_gemv
 now because it is a platform kernel with `BLAS_numChannels` DDR interfaces; it needs XRT and a
 shell rather than plain `csim`/`cosim`, which would put the toolchain in the way of the modelling.
 
-If the systolic array is what actually matters, say so — the honest way to get it is
-**S6** below (GEMM with `N = 1` *is* a matrix-vector product), and it is a different project shape,
-not a tweak.
+**Settled (2026-09-02): the systolic reading is dropped and this project is the L1 `gemv`.**  The
+section stays because it records why the request as phrased could not be met literally — nothing
+in Vitis BLAS is both systolic and a GEMV — not because the option is still open.
 
 ---
 
@@ -304,6 +304,19 @@ later that the model is describing a bug that no longer exists.
 **Not covered:** `ap_ufixed`; `W > 31`; and the two-defect interaction is unexplored, since with
 `t_MacDataType` uncompilable there is no configuration in which both could be exercised at once.
 
+**S6 — Vitis verification.**  ✅ **DONE — 9/9 comparisons, 121 rows** ([`verifyGEMV/`](verifyGEMV/)).
+
+C-simulation, C-synthesis and C/RTL co-simulation of three DUTs, each compared against the model
+and against each other.  It answered both questions the native builds could not reach: **HLS does
+not fuse `axpy`'s multiply-add**, and **the `ap_fixed` defect is in the synthesized hardware**,
+not a C-simulation artifact.  See that folder's `README.md` and `ARCHITECTURE.md`.
+
+One thing worth recording for anyone building a similar package: with `hls::stream` as top-level
+arguments, `csim` and `csynth` both pass and co-simulation then aborts with *"an hls::stream is
+read while empty"* while instrumenting the testbench.  Taking arrays and doing the stream
+plumbing inside the top -- the shape the library's own `L1/tests/hw/gemv/uut_top.cpp` uses --
+cosims cleanly.
+
 **S5 — `alpha`/`beta` overload, and `m`/`n` sweeps.**  ✅ **DONE — bit-exact, 792/792 rows**
 (6 (alpha, beta) pairs x 3 stream widths x 4 cases, at `M=4, N=64` and `M=7, N=128`), plus three
 new sizes on the float path taking it from 460 to 1320 rows.
@@ -352,24 +365,27 @@ no multiply-add in one expression, so there is nothing to contract — the expos
 operator for that line is a question about the RTL, not about csim, and it is the one thing that
 would decide which of the two goldens the hardware matches.
 
-**S6 — the systolic GEMM.**  *Not planned* — recorded only because it is what "systolic" would
-have meant here, and because 2025.1 adds an L1 `gemm/systolicArray.hpp` that 2023.1 lacks, so the
-option is now closer to hand than it was.  `gemmSystolicArray` with `N = 1` computes a
-matrix-vector product on a genuine systolic array.  Different kernel, different data movement,
-its own goldens.  Listed because it is what "systolic" would actually mean here — not because it
-follows from S1-S5.
+**Systolic GEMM — dropped.**  Earlier drafts listed a `gemmSystolicArray` stage as the other
+reading of "systolic".  It is **out of scope** by decision (2026-09-02): this project is the L1
+`gemv`, and that is a different kernel with different data movement and its own goldens.
 
 ## Open questions
 
 * ~~**Which is actually wanted, L1 `gemv` or the systolic GEMM?**~~  **Settled (2026-09-01):
-  L1 `gemv` is the target.**  S6 stays listed as the other reading of "systolic", but it is not
-  planned work.
+  L1 `gemv` is the target**, and as of 2026-09-02 the systolic GEMM is dropped outright rather
+  than merely unplanned.
 * ~~**Does float `dot_tree` give a stable answer under `-O`?**~~  **Settled in S5 by measurement:
   yes** — byte-identical across `-O0`, `-O2`, `-O3 -march=native` and `-ffp-contract=off`.  But
   the `alpha`/`beta` overload is **not**, because `axpy` has a contractable multiply-add; see S5.
-* **Does Vitis HLS emit a fused or an unfused operator for `axpy`'s `alpha*x + y`?**  Unanswered,
-  and it decides which S5 golden the hardware matches.  Needs a csynth/cosim run rather than the
-  native builds everything here uses.
+* ~~**Does Vitis HLS emit a fused or an unfused operator for `axpy`'s `alpha*x + y`?**~~
+  **Settled (2026-09-02): it does NOT fuse.**  `verifyGEMV/` synthesizes the overload and runs it
+  in co-simulation; the RTL matches the unfused model on 96/96 rows and the fused one on 92/96,
+  and the data separates the two on 4 rows, so the check is not vacuous.  Corroborated
+  structurally: the synthesis report instantiates `fmul_32ns_32ns_32_4_max_dsp_1` and
+  `fadd_32ns_32ns_32_5_full_dsp_1` as separate cores.  The `-ffp-contract=off` pin therefore
+  matches the hardware rather than being a defensible guess.
+* ~~**Is the `ap_fixed` defect a C-simulation artifact?**~~  **No — it is in the RTL.**
+  `gemv_fixed_top` co-simulates to exactly what `gemv_fixed_as_shipped` predicts, 9/9 rows.
 * ~~**Is `t_LogParEntries` part of the contract or an implementation detail?**~~  **Settled by
   measurement: it depends on the path.**  On `dot_tree` (float, double) it sets the tree shape and
   four of five swept widths give distinct answers, so a model must take it as a parameter and any

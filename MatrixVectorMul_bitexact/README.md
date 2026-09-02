@@ -4,7 +4,9 @@ A bit-exact Python model of the **AMD Vitis BLAS L1 `gemv`** (`y = M x`): given 
 bits, it produces the same output bits as the kernel, without running Vitis.
 
 Verified against the shipped library on **2763 golden rows** — four element paths, six matrix
-sizes, five stream widths, zero differences.
+sizes, five stream widths, zero differences — and against **synthesized RTL** in
+[`verifyGEMV/`](verifyGEMV/), where C-simulation and C/RTL co-simulation both match the model bit
+for bit on all three DUTs.
 
 **Where to start:** [`VERIFY.md`](VERIFY.md) if you want to run something;
 [`PLAN.md`](PLAN.md) if you want to know how it was built, what was measured, and what is still
@@ -26,7 +28,9 @@ MatrixVectorMul_bitexact/
 ├── data/              the inputs those goldens were produced from
 ├── cpp/               the generators that produce golden/, + a one-line-patched header copy
 ├── tools/             input generators + one script that rebuilds every golden
-└── tests/             the gates, run with plain pytest -- no Vitis needed
+├── tests/             the gates, run with plain pytest -- no Vitis needed
+│
+└── verifyGEMV/        the Vitis check: csim -> csynth -> cosim, compared against the model
 ```
 
 ## Why this is not the FFT
@@ -172,6 +176,20 @@ Many of these assert that a **plausible wrong model fails**: `numpy.dot`, a plai
 quantizing once at the end instead of per element, ignoring `AP_RND`, and the fused reading of
 `axpy`'s multiply-add.  A gate that cannot fail proves nothing, and every one of those is a
 mistake that was actually available to make here.
+
+## `verifyGEMV/` — the Vitis check
+
+Takes the real kernel through C-simulation, C-synthesis and C/RTL co-simulation and compares
+every result against the model.  **9/9 comparisons pass.**  Three DUTs, each answering a question
+native C-simulation structurally cannot:
+
+| DUT | question | verdict |
+|---|---|---|
+| `gemv_f32_top` | does the `dot_tree` reduction survive to RTL? | ✅ yes |
+| `gemv_ab_top` | does HLS fuse `axpy`'s `alpha*x + y` into an FMA? | ✅ **no** — separate `fmul` and `fadd` cores |
+| `gemv_fixed_top` | is the `ap_fixed` defect real hardware or a csim artifact? | ⚠️ **real hardware** |
+
+See its `README.md` for the evidence and `ARCHITECTURE.md` for what each DUT is.
 
 ## Conventions used throughout
 

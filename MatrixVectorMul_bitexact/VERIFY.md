@@ -10,6 +10,7 @@ Run everything from the repository root.
 | **1. Run the gates** | Python + numpy | ~2.6 s | the model matches 2763 checked-in golden rows |
 | **2. Rebuild the goldens** | + `g++`, Vitis headers, BLAS source | ~19 s | those goldens really do come from the vendor's code |
 | **3. Vary the compiler** | same as 2 | ~10 s | the FMA caveat is real, and the golden's build flags matter |
+| **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~4 min | the model matches **synthesized RTL**, not just C-simulation |
 
 ## Level 1 — run the gates
 
@@ -104,30 +105,65 @@ so the pin cannot quietly become unfalsifiable.
 byte-identical across all four builds, because it has no multiply-add in one expression.  The
 exposure is specific to `axpy`, and therefore specific to the `alpha`/`beta` overload.
 
-## What is *not* verified here — and how this differs from `fft_bitexact`
+## Level 4 — run it through Vitis
 
-The FFT project has two runnable Vitis packages ([`verifyFFT16/`](../fft_bitexact/verifyFFT16/)
-and [`verifyFFT1024/`](../fft_bitexact/verifyFFT1024/)) that take the design through
-C-simulation → C-synthesis → C/RTL co-simulation and compare all three.  **This project has no
-equivalent.** Every golden here comes from native C-simulation.
+[`verifyGEMV/`](verifyGEMV/) takes the real kernel through **C-simulation → C-synthesis → C/RTL
+co-simulation** and compares every result against the Python model.  Co-simulation *is* the RTL
+simulation: Vitis has no separate RTL-sim step for an `ap_ctrl_hs` kernel, it drives the
+synthesized RTL with the same testbench in `xsim`.
 
-That gap has one concrete consequence, and it is the open question level 3 raises:
+```bash
+source /tools/Xilinx/2025.1/Vitis/settings64.sh
+source /tools/Xilinx/2025.1/Vivado/settings64.sh
+source env/bin/activate
+export WF_BLAS_LIBS=/home/marco/AmirProjects/Vitis_Libraries_2025.1/blas/L1/include/hw
 
-> **Does Vitis HLS emit a fused or an unfused operator for `axpy`'s `alpha*x + y`?**
+cd MatrixVectorMul_bitexact/verifyGEMV
+vitis-run --mode hls --tcl run.tcl     # ~4 min
+python verify.py
+```
 
-Only synthesis can answer it, and the answer decides which of the two readings the *hardware*
-matches.  For the float `dot_tree` path the question does not arise, and for the integer and
-`ap_fixed` paths the arithmetic is integral, so the exposure is confined to the `alpha`/`beta`
-overload.
+Expected: **9/9 comparisons pass** — three DUTs x (C-sim vs model, co-sim vs model, C-sim vs
+co-sim), 121 rows.
 
-Two smaller things are also unverified against RTL: that C-simulation and co-simulation agree at
-all here (they do for the FFT), and that `WideType`'s packing behaves the same under synthesis —
-it uses `sizeof(T)*8` as the slot width, which for `ap_fixed<24,12>` is 32 bits in C-simulation
-and would be 24 under `__SYNTHESIS__`.  That affects the stream layout, not the arithmetic the
-model reproduces, but it has not been measured.
+| DUT | question only synthesis could answer | verdict |
+|---|---|---|
+| `gemv_f32_top` | does the `dot_tree` reduction survive to RTL? | ✅ yes, 16/16 rows |
+| `gemv_ab_top` | **does HLS fuse `axpy`'s `alpha*x + y`?** | ✅ **no** |
+| `gemv_fixed_top` | is the `ap_fixed` defect real hardware or a csim artifact? | ⚠️ **real hardware** |
 
-Building a `verifyGEMV/` package on the FFT's pattern is the natural next step and would settle
-all three.
+### The FMA question is settled
+
+Level 3 shows the *C compiler's* choice changes 25 of 576 rows.  Level 4 shows what the
+**synthesis tool** chose, on two independent lines of evidence:
+
+```
+rows on which the two readings differ at all : 4/96
+RTL matches the UNFUSED (separate mul + add) : 96/96
+RTL matches the FUSED (single rounding)      : 92/96
+=> Vitis HLS does NOT fuse it.
+```
+
+and the synthesis report instantiates two separate cores — `fmul_32ns_32ns_32_4_max_dsp_1` and
+`fadd_32ns_32ns_32_5_full_dsp_1` — rather than a fused MAC.
+
+The first line is the important one: `verify.py` reports `INCONCLUSIVE` rather than claiming a
+result if no row separates the two readings.
+
+So the `-ffp-contract=off` pin in `tools/regen_golden.sh` **matches the hardware**, rather than
+merely being a defensible choice among two.
+
+## What is still not verified
+
+* **Only the swept configuration is synthesized.**  `verifyGEMV/` covers `M=4, N=64, P=4` for
+  float and `M=3, N=32, P=4` for `ap_fixed`.  The native goldens cover six sizes and five stream
+  widths; RTL covers one of each.  Nothing suggests the others differ — the reduction structure
+  is the same code — but it has not been measured.
+* **`double`, `ap_ufixed`, and `W > 31`** are unmodelled and unsynthesized.
+* **`WideType`'s packing under synthesis.**  It uses `sizeof(T)*8` as the slot width, which for
+  `ap_fixed<24,12>` is 32 bits in C-simulation and would be 24 under `__SYNTHESIS__`.  The
+  synthesized `ap_fixed` DUT uses `<16,8>`, where `sizeof` is exactly 2 bytes and the question
+  does not arise — so this remains open for widths that are not a whole number of bytes.
 
 ## If something fails
 
