@@ -276,3 +276,88 @@ unnecessary.
 
 `test_the_predecessors_are_untouched` asserts the merge-only rule directly: both old designs still
 import and still lower.
+
+### The RTL half: one snapshot, two streams
+
+`examples/rf_shot_unified` and `tests/examples/test_rf_shot_unified_xsi.py` (20 gates;
+`WANT_XSI_GATES` **95 → 115**, and Stage B lowers it again when the predecessors go).
+
+The two scenarios load **the same `xsimk.dll`** and differ in three bundle names, driven by two
+hand-written mains (`rf_shot_tx_unified_counters.cpp`, `rf_shot_tx_unified_loop.cpp`). That the RTL
+is one design is the claim, so a second testbench *graph* would have been a second model of it.
+
+They cannot be one stream, and the reason is the design rather than the harness: a file-driven driver
+never reads a verdict, so a stream opening with a finite shot has every later frame answered
+`SHOT_BUSY` — that *is* what `SHOT_BUSY` is — and a stream opening with an infinite one can never
+demonstrate a refusal. One scenario per opcode is the minimum.
+
+**MEASURED (Vivado 2025.1 xsim, 1400 cycles, `nword=64`, `blk_words=16`, `depth=256`, region
+`[192, 256)` — the top of the memory — 256 Msamp/s DAC):**
+
+| | `cmd` (finite) | `cmd_loop` (infinite) |
+|---|---|---|
+| verdicts | `LOADED / BUSY / WRONG_LEN / ZERO_LEN / END→LOADED` | `LOADED / WRONG_LEN / ZERO_LEN / LOADED / SHORT / END→LOADED` |
+| playout, in converter blocks | `(F,3) (P,12) (F,7)` | `(F,3) (P,1) (F,2) (P,1) (F,15)` |
+| last verdict at cycle | **269** | **500** |
+| DAC words taken | 359 | 359 |
+| blocks the grid zero-filled | **0** | **0** |
+| underruns | 1, at cycle 4 (startup) | 1, at cycle 4 (startup) |
+| lock grants | 1 | 3 |
+| write addresses touched | `192..255` | `192..255` |
+
+Both playouts are **byte-identical to the pysim golden** over the common horizon (1280 samples; the
+RTL run is bounded in cycles and the pysim run in converter blocks, so only the tails differ in
+length). The finite run's 12 sample blocks are 3 × 256 samples — three whole passes — and the 7
+blocks behind them are gate 1: the design stopped **on purpose**. The loop run's 2-block gap is the
+handover; its 15-block tail is the merged design's own improvement, since the last load is `SHORT`
+and a short shot is loaded and never played, which `rf_shot_loop` cannot do.
+
+`blocks_zero_filled == 0` on **both** paths is the sharpest number here. The infinite path's way to
+fail it is a player that back-pressures the converter through a handover; the finite path's is a
+player that simply stops writing when its passes run out — a failure `rf_shot_loop` never had to
+survive, because it never stops. Quiet is a **value**.
+
+### A FINDING: the yielded player still drives its read port, and on a preemption the addresses collide
+
+`find_read_during_write` — `bram_t2p.v`'s own predicate, same address and same cycle — returns
+**0 collisions on `cmd` and 2 on `cmd_loop`** (cycles 469 and 470, elements 216 and 217). Cycles with
+both ports merely *live* inside the region: **18** and **55**.
+
+This is the S1 observation reaching its conclusion. `plans/t2p_lock_chan.md` records that Vitis reads
+the BRAM unconditionally at II=1 and muxes the filler in afterwards, and that a register guard was
+measured not to quiet the port; at S1 that produced 34 both-live cycles in *both* designs and no
+address collision, so the cycle-exact predicate stayed silent. Here the region is four times larger
+and two of the three grants land **mid-play**, so the player's read pointer is somewhere in the
+middle of the region when the loader starts writing at its base — and the two sweeps eventually cross.
+
+**It is not a defect, and the evidence is in a different test.** pysim's `LockedMemSlaveIF.grant()`
+takes the region out of the owner's hands and *raises* on the very next access, so if the RTL player
+were **using** those words the two backends could not be byte-identical — and they are. The word is
+fetched and thrown away.
+
+So the gate records both numbers as measurements and pins them, rather than asserting zero. A rise
+means the player started reading somewhere it should not; a fall means the read port stopped being
+unconditional, which would change what a grant does and does not enforce at RTL. Asserting
+`collisions == 0` here would have been a green gate bought by choosing a scenario that never
+preempts, which is the opposite of what Stage A is for.
+
+**There is no positive control in this gate, deliberately.** `rf_shot_loop`'s gate pairs its clean
+run against a design with the player's `playing = 0` removed, and that control proves the *lock's*
+ordering — the same `mem_lock.h`, the same `LockedT2pMemIF`, the same grant sequence this design
+uses. A second deliberately broken design would be a second copy of a finding, not a second finding.
+What is new at Stage A is the merge, and the merge is proven by running one RTL against both streams.
+
+### Assumption recorded: `n_plays` is not pinned on a mixed run
+
+`RfShotTxUnified.assert_finite_completed(n_shots, n_plays=None)` takes the pass count as *optional*.
+`n_plays` counts **total** wraps including a preempted loop's, so a run that mixes the two opcodes
+has a value that depends on when the preemption landed. Pinning it would be pinning the scheduler
+rather than the design; the finite gate pins it, the mixed one does not.
+
+### Assumption recorded: `busy` clears on a harvest, not at the end of a run
+
+The loader reads its `done` token non-blockingly, **after** the header — so `busy` is cleared by the
+*next arriving frame*, not by the play-set ending. A run whose last shot finishes with nothing behind
+it therefore ends with `busy` still set, and that is correct rather than a leak: the state is only
+ever read when a frame is being judged. The gate asserts `n_done` and the *acceptance of a later
+frame* instead, which is what a host would actually observe.
