@@ -210,7 +210,7 @@ def test_the_witness_survives_real_rtl_at_a_width_that_wraps(runs):
 
     At 64-bit words a design addressing 256 of 1024 words is past ``depth / (W/8) = 128``, so a
     wrapper that did not undo Vitis's byte scaling would return the second half of the ramp twice —
-    which is exactly what ``examples/rf_shot_buf`` found and what the retired ``bram_toy`` could not.
+    which is exactly what the retired ``rf_shot_buf`` example found and what ``bram_toy`` could not.
 
     That this passes on a **traced** run is also the evidence that tracing is free: the dumper is a
     second elaborated top, so the cycle count is the number an untraced run produced.

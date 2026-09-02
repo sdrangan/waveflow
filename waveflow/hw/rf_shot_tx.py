@@ -1,62 +1,57 @@
-"""rf_shot_tx.py — ``plans/rf_shot_buf.md`` Stage B: **TX — play a stored waveform**.
+r"""rf_shot_tx.py — **one** shot transmitter, on the lock, with both play modes.
 
-Stage A built the primitive (:mod:`waveflow.hw.rf_shot_buf`): a memory, a loader, a reader, and a
-``rdy`` token between them.  It had no command, no payload source and no verdict, because it had
-nothing to answer.  This module adds those three and nothing else::
+``plans/rf_shot_unify.md``.  Stage A built this beside two predecessors — a finite player
+(``ShotPhase`` + ``rdy`` + ``done``, five tasks) and an infinite one (``LockedT2pMemIF``, three
+tasks) — and **Stage B deleted them both**, along with the ``ShotPhase`` buffer primitive underneath
+the first, and moved their shared vocabulary in here.  What is left is one design that does what all
+three did::
 
-    DMA (MM2S) --AXIS: [ShotTxHdr][samples ... TLAST]--> RfShotBufLoad --> BRAM
-    DMA (S2MM) <---------------- ShotTxResp -----------                     | rdy
-                                                                            v
-                                     RfShotBufRead --> RfRelayoutToSlots --> Rfdc.tx_streams[0]
+    s_in --[ShotTxHdr | samples ... TLAST]--> ShotTxLoader --[lock]--> [ BRAM ]
+    resp_out <------------- ShotTxResp ----------  |  ^                    |
+                                                 rep  done                |
+                                                   v  |                   |
+                                          ShotTxPlayer --[lock]-----------+
+                                                   |
+                                       RfRelayoutToSlots --> samp_out
 
-The payload is **in-band on the stream**, the shape ``examples/stream_inband`` teaches: a header
-ahead of the samples, ``TLAST`` marking the end, and a persistent loop that halts on ``END``.
+**The two predecessors were complementary, not duplicates**, which is why Stage A was a build and
+not a rename:
 
-Why in-band, and not the ``m_axi`` arena the plan first chose
--------------------------------------------------------------
+===============================  =======================  ==========================
+                                 the finite one           the infinite one
+===============================  =======================  ==========================
+play                             finite ``nrepeat``       infinite
+a load arriving mid-play         refused, ``SHOT_BUSY``   **preempts** via the lock
+``SHOT_LOAD``                    yes                      *refused*
+``SHOT_LOOP``                    —                        required
+===============================  =======================  ==========================
 
-``plans/rf_shot_buf.md`` § *Where the payload comes from* chose ``m_axi`` with an in-band address on
-2026-08-24, and § *Decisions a session must not re-open* listed it.  **Re-opened and reversed
-2026-08-31**, for a constraint that was not on the table when it was written: this design is handed
-to someone wiring it in Vivado IPI by hand and driving it from PYNQ.  The plan's own case for
-``m_axi`` is RX-driven and concedes *"TX is the weaker case"*; TX-before-RX is a separate settled
-decision, so Stage C stays free to choose its own transport with capture evidence in hand.
+Here both opcodes are legal, and **the play loop differs only in its exit condition**: finite counts
+passes and stops, infinite does not.  Everything else — the chunk, the poll, the filler, the ordering
+that the whole protocol turns on — is one body.
 
-Three things decided it, and none is development time:
+Why ``SHOT_BUSY`` survives, and only for the finite case
+--------------------------------------------------------
+Preempting a **finite** shot would silently truncate something the host explicitly asked for: it said
+*play this n times*, and a design that stopped after two would produce a perfectly good, shorter
+signal that nothing downstream could question.  Preempting an **infinite** one is the only way to
+ever end it — a design that answered ``BUSY`` there would refuse every load forever.
 
-* **The port was already a stream.**  :class:`~waveflow.hw.rf_shot_buf.RfShotBufLoad`'s ``s_in`` is a
-  ``StreamIFSlave`` with ``has_tlast=True``.  The arena route inserts
-  :class:`~waveflow.hw.mem_stream.MemRStream` — a burst engine — to feed a port that was streaming
-  anyway.
-* **The short-load verdict becomes structural.**  § *The response is not optional* exists because a
-  short transfer completes cleanly at the DMA while the buffer sits half loaded.  On a stream that is
-  ``TLAST`` before ``nword`` words: the defect is visible **on the data path**, not inferred from a
-  completion echo.
-* **In Vivado it is one IP.**  MM2S carries header and payload, S2MM carries the verdict, both
-  channels of the same AXI DMA.  The arena route needs the kernel's own master wired to a PS HP port
-  and ``pynq.allocate().physical_address`` plumbed into the command, whose failure mode is a
-  plausible-looking wrong address.
+So the loader refuses while a finite shot is in flight and does **not** request the lock; it accepts
+and preempts otherwise.  That asymmetry is why the ``done`` token survives from the finite one: the
+loader has to know when a finite shot has *finished*, and only the player knows.  The infinite path
+neither sends nor needs one.
 
-**What was given up, stated so it is not rediscovered as a surprise:** the kernel can no longer
-*fetch*.  A resident library of waveforms in DDR, switched by command with no host transfer, is an
-``m_axi`` capability, and pulse-to-pulse agility is where it would matter.  Nor can several modules
-share one arena without a DMA each.  The escape hatch is scatter-gather DMA with pre-built
-descriptors, which is **more** Vivado than the ``m_axi`` it replaces, not less.
-
-**What was NOT given up: the ceiling.**  ``m_axi`` does not let a design exceed the buffer.  Playing
-past the shot means a producer refilling while a consumer drains — a live reader and a live writer,
-which is the concurrency problem :mod:`waveflow.hw.rf_tx_stream` and ``plans/rf_samp_new.md``'s
-credit/ack/margin machinery exist for.  Even the BRAM-less version (burst from DDR straight at the
-converter) does not escape it: variable DDR latency against a hard grid deadline forces a prefetch
-FIFO, and managing that FIFO's occupancy *is* a streaming buffer.  **The transport choice does not
-move the boundary in** ``docs/guide/rf/choosing.md`` **— that boundary is concurrency.**
-
-The in-band *address* argument survives untouched, and still forbids a control register: per
-``plans/design_cut.md`` ``BFM_DUALS["axilite_slave"].model is None``, so a design taking its command
-from a host-written register could not be XSI-lowered at all.
-
-**Nothing here modifies Stage A.**  ``RfShotBufLoad`` and ``RfShotBufRead`` are used exactly as they
-were built and gated; the command layer sits *in front of* the loader.
+What the lock replaced
+----------------------
+The finite predecessor hand-wired seven internal channels and two
+:class:`~waveflow.hw.bram.BramIF`\ s, and carried a ``ShotPhase`` object whose own docstring said it
+was **pysim-only** — so its central safety claim never had an RTL witness.  Here one ``add_if(lock)``
+files the two lock
+streams as internal edges and both memory wires as wrapper wires, and the guard that replaces
+``ShotPhase`` is :class:`~waveflow.hw.locked_mem._RegionGuard` in pysim *plus* the S2 measurement at
+RTL.  Three channels remain that the lock does not own — ``rep``, ``done`` and ``samp`` — and each
+carries something the lock has no opinion about.
 """
 from __future__ import annotations
 
@@ -65,7 +60,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from waveflow.hw.bram import BramIF, T2pBram, word_element
+from waveflow.hw.bram import T2pBram, word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.dataschema import DataList, IntField
@@ -78,18 +73,36 @@ from waveflow.hw.interface import (
     StreamIFMaster,
     StreamIFSlave,
 )
+from waveflow.hw.locked_mem import (
+    LOCK_ACQUIRE,
+    LOCK_GRANTED,
+    LOCK_STATUS_NAMES,
+    LockedMemMasterIF,
+    LockedMemSlaveIF,
+    LockedT2pMemIF,
+)
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.rf_relayout import RfRelayoutToSlots
 from waveflow.hw.rf_samp_buf import IDX_BW
-from waveflow.hw.rf_shot_buf import (
-    BUF_DEPTH,
-    SHOT_WORDS,
-    WORD_BW,
-    RfShotBufLoad,
-    RfShotBufRead,
-    ShotPhase,
-)
 from waveflow.simulation.simobj import ProcessGen
+
+# ---------------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------------
+
+#: Default word width in bits — **64**, and that number is a measurement rather than a preference.
+#: ``plans/adc_model.md`` § *Take 64 bits, not 56*: the integer serializer never straddles a word
+#: boundary, so four 14-bit samples occupy the same word count at 64 bits as at a tight 56, byte
+#: aligned, with 8 bits idle — and 64 is exactly the RFDC word width at four 16-bit slots, which
+#: makes the logic-side re-layout a **pure re-layout inside one width**.
+WORD_BW = 64
+
+#: Default buffer depth in **words** (a power of two — the memory's address wrap is a mask).
+BUF_DEPTH = 1024
+
+#: Default words in one shot.  Not the depth: a shot shorter than the memory is the ordinary case,
+#: and the two being separate is what lets a gate exercise a partial buffer.
+SHOT_WORDS = 256
 
 # ---------------------------------------------------------------------------
 # The opcode
@@ -103,7 +116,7 @@ SHOT_LOAD = 0
 #: commands wants a terminator.  What it *does* is different, and the difference is the execution
 #: model rather than a choice.  ``PolyAccel`` is :class:`~waveflow.hw.hw_hostactivated.HostActivated`
 #: — a ``while (True)`` inside ``on_start`` that ``END`` breaks so the kernel can return and raise
-#: ``ap_done``.  :class:`ShotTxLoad` is an ``hls::task``: **there is no loop to break**, because the
+#: ``ap_done``.  :class:`ShotTxLoader` is an ``hls::task``: **there is no loop to break**, because the
 #: task runtime re-fires the body forever and an ``ap_ctrl_none`` design has no ``return`` to reach.
 #:
 #: So ``END`` is worth having for what its *response* proves rather than for what it stops.  The
@@ -125,8 +138,9 @@ SHOT_END = 1
 #: overloading it would make "play forever" and "never play" the same value on the wire.
 #:
 #: :class:`~waveflow.hw.rf_shot_tx.RfShotTx` does not implement it (a finite player has nothing to
-#: hand over); :class:`~waveflow.hw.rf_shot_loop.RfShotTxLoop` implements only it.  The code lives
-#: here because the *header* is one schema and a second vocabulary for one opcode would be worse.
+#: Until ``plans/rf_shot_unify.md`` Stage B there were two designs and each implemented exactly one
+#: of the pair; :class:`RfShotTx` implements both, and this constant is why the two could share a
+#: header schema across that whole period rather than growing a second vocabulary for one opcode.
 SHOT_LOOP = 2
 
 # ---------------------------------------------------------------------------
@@ -140,12 +154,12 @@ SHOT_LOADED = 0
 #: the right shape carrying half a signal.  Nothing on the host side can see it.
 SHOT_SHORT = 1
 #: ``nsamp`` disagrees with the shot the buffer was built for.  Build-time structure
-#: (:attr:`~waveflow.hw.rf_shot_buf.RfShotBuf.nword`) is the single source for the length; a command
+#: (:attr:`RfShotTx.nword`) is the single source for the length; a command
 #: that disagreed is refused rather than truncated, because a truncated waveform is data of the wrong
 #: duration and plays as a quieter, shorter signal.
 SHOT_WRONG_LEN = 2
 #: The header arrived while a shot was playing.  Refused **at the command**, before a word is taken,
-#: rather than asserted after the fact by :class:`~waveflow.hw.rf_shot_buf.ShotPhase`.
+#: rather than asserted after the fact — which is what the retired ``ShotPhase`` did, in pysim only.
 SHOT_BUSY = 3
 #: ``nsamp == 0``.  Refused for the reason :data:`~waveflow.hw.rf_tx_stream.TX_ZERO_LEN` gives next
 #: door: a zero-length load has nothing to complete on, so it can never resolve.
@@ -178,7 +192,7 @@ class ShotTxHdr(DataList):
     **stream transaction**.  The three designs are alternatives, never layers.
 
     **There is no length-of-shot field.**  How many words a shot is, is build-time structure declared
-    once on ``RfShotBuf.nword``; a command that restated it would be a second source that could
+    once on :attr:`RfShotTx.nword`; a command that restated it would be a second source that could
     disagree — the discipline :class:`~waveflow.hw.rfdc.Rfdc` follows by reading ``samp_rate`` off the
     clock rather than declaring its own.  ``nsamp`` is here because it is what the *host* believes it
     is sending, and catching that belief disagreeing with what arrived is the verdict's whole job.
@@ -223,110 +237,151 @@ class ShotTxResp(DataList):
 SHOT_TX_SCHEMA_CLASSES = [ShotTxHdr, ShotTxResp]
 
 
+
+#: What the player emits while it is not playing — between shots, during a handover, and after a
+#: finite play-set has finished.  **Zero, and it is a value rather than a stall**: the player cannot
+#: stop, so a body that blocked here would back-pressure the converter.
+FILLER = 0
+
+class ShotPlayCmd(DataList):
+    """Loader -> player: *what to do with the shot you are about to be handed back*.
+
+    **It carries the host's own opcode**, not a parallel vocabulary invented for the internal wire.
+    The player needs exactly two things the lock has no opinion about — how many passes, and whether
+    anyone is waiting for a ``done`` — and both are already in the header the host sent.  A second
+    encoding would be a second thing to keep in step.
+
+    Two rules, and between them they cover every case both predecessors had:
+
+    * **``nrepeat == 0`` means play nothing.**  That is ``RfShotTx``'s existing convention for a shot
+      that was loaded and must not reach the converter (a :data:`~waveflow.hw.rf_shot_tx.SHOT_SHORT`
+      one), and it needs no third mode to express.
+    * **``opcode`` says who is waiting.**  :data:`~waveflow.hw.rf_shot_tx.SHOT_LOAD` means the loader
+      is blocked on a ``done`` and the player owes it one; :data:`~waveflow.hw.rf_shot_tx.SHOT_LOOP`
+      means nobody is waiting and the player must not send one.  A spurious ``done`` would clear a
+      ``busy`` that a *later* finite shot set, and the next load would preempt it — the exact
+      truncation ``SHOT_BUSY`` exists to prevent.
+
+    It is a schema rather than a raw word because a sentinel in a bare ``ap_uint`` is how a design
+    ends up comparing against a magic number in two places.
+    """
+
+    include_filename: ClassVar[str | None] = "shot_play_cmd.h"
+    elements = {
+        "opcode":  {"schema": OpField,
+                    "description": "SHOT_LOAD (a done is owed) or SHOT_LOOP (none is)"},
+        "nrepeat": {"schema": IdxField,
+                    "description": "passes to play; 0 means play nothing"},
+    }
+
+
+#: Schema classes a build emits C++ headers for.  ``ShotTxHdr`` and ``ShotTxResp`` are **not** here:
+#: they are still :mod:`waveflow.hw.rf_shot_tx`'s at Stage A — see the ownership decision recorded in
+#: ``plans/rf_shot_unify.md``.  A build wanting this design needs both lists.
+UNIFIED_TX_SCHEMA_CLASSES = [ShotPlayCmd]
+
+
 # ---------------------------------------------------------------------------
-# The loader: a header, a verdict, and the payload on its way to the buffer
+# The loader — the REQUESTER
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ShotTxLoad(FreeRunMod):
-    r"""Read a header, decide, forward the payload, answer — exactly one response per header.
+class ShotTxLoader(FreeRunMod):
+    r"""Read a frame, decide, take the region, write it, give it back, tell the player, answer.
 
-    Sits **in front of** :class:`~waveflow.hw.rf_shot_buf.RfShotBufLoad`, which is unchanged and
-    unaware::
+    The requester side of the lock.  It does ``RfShotTx``'s command work and
+    the infinite predecessor's memory write in one body: there is no separate buffer task, because
+    the lock
+    is what makes writing the memory directly safe.
 
-        s_in --[ShotTxHdr | w0 w1 ... TLAST]--> ShotTxLoad --pay--> RfShotBufLoad --> BRAM
-                                                    | ^ done
-                                                    | +---------------------- ShotTxPlay
-                                                    +--rep--> ShotTxPlay
-                                                    +--resp--> the host
+    **All five verdicts are reachable here**, which is the merge:
 
-    **The frame boundary is the mechanism, not a convenience.**  ``s_in`` is a
-    :class:`~waveflow.hw.interface.FramedStreamIFSlave`, so the kernel has a real ``TLAST`` pin.  A
-    payload word and a header word are the same 64 bits, so without it there is no in-band way to
-    say *that was the end* — a host that sent fewer words than it declared would simply stall the
-    buffer's counted loop, and a hang is indistinguishable from a deadlock.  With it, a short
-    transfer is a **verdict on the data path** rather than something inferred from a completion echo
-    that never arrives.
+    ==============================================  ==================================
+    ``nsamp == 0``                                  :data:`~waveflow.hw.rf_shot_tx.SHOT_ZERO_LEN`
+    ``nsamp`` disagrees with ``nword * spw``        :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN`
+    an opcode that is neither ``LOAD`` nor ``LOOP`` :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN`
+    a **finite** shot is still playing              :data:`~waveflow.hw.rf_shot_tx.SHOT_BUSY`
+    ``TLAST`` before the shot was full              :data:`~waveflow.hw.rf_shot_tx.SHOT_SHORT`
+    otherwise                                       :data:`~waveflow.hw.rf_shot_tx.SHOT_LOADED`
+    ==============================================  ==================================
 
-    Four refusals, and each is a different repair
-    ---------------------------------------------
-    :data:`SHOT_ZERO_LEN` and :data:`SHOT_WRONG_LEN` are faults in the *command*, decided from the
-    header alone and answered **before a single payload word is taken**.  :data:`SHOT_BUSY` is a
-    fault in the *timing* — a load arriving while a shot is playing — and it is refused rather than
-    queued, because accepting it would overwrite the memory under the reader, which is precisely the
-    overlap :class:`~waveflow.hw.rf_shot_buf.ShotPhase` exists to make unreachable.
-    :data:`SHOT_SHORT` is the one verdict that cannot be reached from the header: it is what the
-    *stream* turned out to be, and ``nsamp_loaded`` is the number a DMA cannot produce.
+    **Malformed before transient**, which is the repo's order and for its reason: a command that is
+    wrong *and* badly timed should be told the thing it can fix.  Retry repairs a ``BUSY``; nothing
+    repairs a length the buffer was not built for.
 
-    A refused header still drains its payload
-    -----------------------------------------
-    The law :mod:`waveflow.hw.rf_tx_stream`'s loader states, and it is the same law here: words left
-    on the wire become the *next* header, and every command after that is garbage for reasons that
-    look nothing like the cause.  The drain is a counted loop that runs whatever the verdict; only
-    the ``pay_out`` write is conditional.
-
-    An accepted-but-short shot is PADDED
-    ------------------------------------
-    :class:`~waveflow.hw.rf_shot_buf.RfShotBufLoad`'s inner loop is counted — ``nword`` words, no
-    early exit — which is exactly why it reaches II=1 where the streaming buffer cannot, and it is
-    not this module's to change.  So a short frame is completed with zeros: the buffer fills, emits
-    its one token, and the design stays live.  The zeros are never played, because a short shot is
-    handed a repeat count of **zero**: the token still has to be consumed (nothing else will take
-    it), but half a waveform must not reach the converter.  That is why the verdict and the repeat
-    count travel together.
+    **``busy`` covers both opcodes.**  A ``SHOT_LOOP`` arriving while a *finite* shot plays is
+    refused too — the objection is not to what the new shot is, it is that truncating the running
+    one would be invisible.  A load of either kind arriving while an *infinite* shot plays is
+    accepted and preempts it.
     """
 
-    cpp_kernel_name: ClassVar[str | None] = "shot_tx_load"
+    cpp_kernel_name: ClassVar[str | None] = "shot_tx_loader"
 
-    #: Word width in bits — the stream's, the buffer's, and the converter's.  One number, because the
-    #: 64-bit choice (``plans/adc_model.md`` § *Take 64 bits, not 56*) makes the whole path one width.
+    #: Word width in bits — the host port's and the memory's.
     bitwidth: HwParam[int] = WORD_BW
-    #: Words in one shot.  **Build-time structure**, and the single source: the header's ``nsamp`` is
-    #: what the host *believes*, and catching the two disagreeing is what :data:`SHOT_WRONG_LEN` is.
+    #: Memory depth in **elements**; the bound the region is checked against.
+    depth: HwParam[int] = BUF_DEPTH
+    #: Words in one shot.  Build-time structure and the single source for the length: the header's
+    #: ``nsamp`` is what the *host* believes, and catching the two disagreeing is what
+    #: :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN` is.
     nword: HwParam[int] = SHOT_WORDS
     #: Samples one word carries — what turns a word count into the ``nsamp`` a host speaks in.
     samp_per_word: HwParam[int] = 4
+    #: First element of the region.  **Non-zero is the interesting case**: ``base + offset`` is the
+    #: shape of the byte-versus-word bug ``bram_toy`` stayed green through.
+    base: HwParam[int] = 0
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, nw, spw = int(self.bitwidth), int(self.nword), int(self.samp_per_word)
+        w, d, nw = int(self.bitwidth), int(self.depth), int(self.nword)
+        spw, b = int(self.samp_per_word), int(self.base)
         if nw < 1:
             raise ValueError(f"a shot is {nw} words; there is nothing to load")
         if spw < 1 or w % spw:
             raise ValueError(
                 f"a {w}-bit word cannot carry {spw} samples without one straddling a slot")
+        if b < 0 or b + nw > d:
+            raise ValueError(
+                f"the region [{b}, {b + nw}) does not fit a {d}-element memory. Refused here rather "
+                f"than on the wire, where it would come back as LOCK_BAD_RANGE every single load.")
         if nw * spw >= (1 << IDX_BW):
             raise ValueError(
                 f"a shot of {nw} words x {spw} samples is {nw * spw} samples, which does not fit "
-                f"the {IDX_BW}-bit nsamp / nsamp_loaded fields. A verdict that wrapped would report "
-                f"a short load as a correct one.")
-        #: The host's port: header **and** payload, one frame, ``TLAST`` at the end.
+                f"the {IDX_BW}-bit nsamp field. A verdict that wrapped would report a short load as "
+                f"a correct one.")
+        #: The host's port: header **and** payload, one frame, ``TLAST`` at the end.  Without the pin
+        #: there is no in-band way to say *that was the end* — a payload word and a header word are
+        #: the same bits — so a short transfer would stall a counted loop, and a hang is
+        #: indistinguishable from a deadlock.
         self.s_in = FramedStreamIFSlave(sim=self.sim, name=f"{self.name}_s_in", bitwidth=w,
                                         has_tlast=True)
-        #: One token per completed play-set, from :class:`ShotTxPlay`.  The only thing that clears
-        #: busy, and the only reason this module has an input other than the host's.
-        self.done_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_done", bitwidth=w,
-                                     has_tlast=True)
-        #: The payload, on its way to the unmodified Stage A loader.
-        self.pay_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_pay", bitwidth=w,
-                                      has_tlast=True)
-        #: How many times to play what was just loaded — **zero** when the shot is not playable.
-        self.rep_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_rep", bitwidth=w,
-                                      has_tlast=True)
-        #: The verdict.  A boundary port with its own ``TLAST`` so a host reading it through an AXI
-        #: DMA S2MM channel learns where one response ends without being told how long it is.
+        #: The verdict, with its own ``TLAST`` so a host reading through a DMA S2MM channel learns
+        #: where one response ends without being told how long it is.
         self.resp_out = FramedStreamIFMaster(sim=self.sim, name=f"{self.name}_resp", bitwidth=w,
                                              has_tlast=True)
-        for ep in (self.s_in, self.done_in, self.pay_out, self.rep_out, self.resp_out):
+        #: One endpoint, three channels: the memory port, the lock command out, the lock response in.
+        self.lock = LockedMemMasterIF(sim=self.sim, name=f"{self.name}_lock",
+                                      element_type=word_element(w), nelem=d, access="write")
+        #: What to do with the shot just written — see :class:`ShotPlayCmd`.
+        self.rep_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_rep", bitwidth=w,
+                                      has_tlast=True)
+        #: One token per completed **finite** play-set.  The only thing that clears
+        #: :attr:`busy`, and the only reason this module has an input other than the host's.
+        self.done_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_done", bitwidth=w,
+                                     has_tlast=True)
+        # ORDER MATTERS: `boundary` is derived from add_comp x add_endpoint order, so s_in, resp_out
+        # and the lock's memory port must be registered before the two internal tokens.
+        for ep in (self.s_in, self.resp_out, self.lock, self.rep_out, self.done_in):
             self.add_endpoint(ep)
-        #: Shots accepted and not yet finished playing.  Sim-only bookkeeping — the C++ twin holds
-        #: the same one bit in a ``static`` — and it is what :data:`SHOT_BUSY` reads.
-        self.busy = 0
-        #: ``(tid, status, nsamp_loaded)`` for every response, in the order they went out.  A run's
-        #: verdicts are the thing this module exists to produce, so a gate reads them here rather
-        #: than re-deserializing the stream.
+        #: ``(tid, status, nsamp_loaded)`` for every response, in the order they went out.
         self.resps: list[tuple[int, int, int]] = []
+        #: Shots actually written to the memory.  Counted rather than inferred from the verdicts: a
+        #: run whose loader answered correctly and stored nothing passes every response check.
+        self.n_stored = 0
+        #: A **finite** shot is in flight.  Sim-only bookkeeping — the C++ twin holds the same one
+        #: bit in a ``static`` — and it is what :data:`~waveflow.hw.rf_shot_tx.SHOT_BUSY` reads.
+        self.busy = 0
 
     # -- geometry ----------------------------------------------------------------------------
 
@@ -335,26 +390,34 @@ class ShotTxLoad(FreeRunMod):
         """Samples in a full shot — the one value ``ShotTxHdr.nsamp`` may carry."""
         return int(self.nword) * int(self.samp_per_word)
 
+    @property
+    def region(self) -> tuple[int, int]:
+        """``[base, base + nword)`` — the one region this design ever asks for."""
+        return int(self.base), int(self.base) + int(self.nword)
+
     def kernel_task(self) -> KernelTask:
-        return KernelTask("shot_tx_load_task", "shot_tx_load_task.h",
-                          ("s_in", "done_in", "pay_out", "rep_out", "resp_out"),
-                          template_args=(int(self.bitwidth), int(self.nword),
-                                         int(self.samp_per_word)))
+        # `lock` appears ONCE and becomes THREE arguments, spliced in adjacent in
+        # physical_endpoints() order -- which is why the C++ takes (buf, cmd, resp) together.
+        return KernelTask("shot_tx_loader_task", "shot_tx_loader_task.h",
+                          ("s_in", "done_in", "lock", "rep_out", "resp_out"),
+                          template_args=(int(self.bitwidth), int(self.depth), int(self.nword),
+                                         int(self.samp_per_word), int(self.base)))
 
     # -- the pysim twin ----------------------------------------------------------------------
 
     def _verdict(self, hdr) -> int:
-        """The header-only refusals, in the order the C++ body tests them.
-
-        **Malformed before transient**, which is :mod:`waveflow.hw.rf_tx_stream`'s order and for its
-        reason: a command that is wrong *and* badly timed should be told the thing it can fix.  Retry
-        repairs a :data:`SHOT_BUSY`; nothing repairs a length that does not fit the buffer.
-        """
+        """The header-only refusals, in the order the C++ body tests them."""
+        op = int(hdr.opcode)
+        if op not in (SHOT_LOAD, SHOT_LOOP):
+            return SHOT_WRONG_LEN
         if int(hdr.nsamp) == 0:
             return SHOT_ZERO_LEN
         if int(hdr.nsamp) != self.nsamp_shot:
             return SHOT_WRONG_LEN
         if self.busy:
+            # A FINITE shot is running.  Refused rather than preempted: the host asked for a number
+            # of passes, and stopping early would produce a perfectly good shorter signal that
+            # nothing downstream could question.
             return SHOT_BUSY
         return SHOT_LOADED
 
@@ -362,9 +425,16 @@ class ShotTxLoad(FreeRunMod):
         """One firing is one frame, which is one iteration of the C++ body.
 
         ``get()`` with no count returns **the whole burst**, and a burst is a ``TLAST``-delimited
-        frame — so the pysim read of "the header, then words until last" is one call, and the two
-        backends see the same boundary rather than two encodings of it.  Everything after that is
-        what ``shot_tx_load_task.h`` does, in the same order.
+        frame — so the read of "the header, then words until last" is one call and the two backends
+        see the same boundary rather than two encodings of it.
+
+        **A known twin divergence, carried over from the infinite predecessor and re-stated because
+        it is
+        still true.**  The C++ acquires the region and *then* reads the payload beat by beat, because
+        ``buf[lo + i] = s_in.read()`` at II=1 is one pipeline.  This body cannot: the frame is in hand
+        before there is anything to decide.  So the RTL holds the region for the whole **transfer**
+        and pysim holds it for the **write**, and the handover gap differs between the backends.
+        Both are measured; neither is inherited.
         """
         w, nw = int(self.bitwidth), int(self.nword)
         frame = np.asarray((yield from self.s_in.get()), dtype=np.uint64).ravel()
@@ -375,39 +445,68 @@ class ShotTxLoad(FreeRunMod):
         hdr = ShotTxHdr().deserialize(frame[:hn], word_bw=w)
         payload = frame[hn:]
 
-        # The done token is harvested AFTER the header has arrived, so `busy` is as fresh as it can
-        # be when read.  Non-blocking: a play still running is the answer, not a reason to wait.
+        # Harvested AFTER the header has arrived, so `busy` is as fresh as it can be when it is read.
+        # NON-BLOCKING: a finite shot still running is the ANSWER (SHOT_BUSY), not a reason to wait.
         if (yield from self.done_in.get_nb(nwords_max=1)) is not None:
             self.busy = 0
 
         if int(hdr.opcode) == SHOT_END:
-            # A fence.  No payload to drain (the frame is the header), nothing to change, and its
-            # response is the proof that everything ahead of it has been processed.
+            # A FENCE, not a halt.  An hls::task has no loop to break, so what END is worth is what
+            # its RESPONSE proves: headers are answered strictly in order, so this one says
+            # everything ahead of it has been processed.
             yield from self._answer(hdr, SHOT_LOADED, 0)
             return
 
         status = self._verdict(hdr)
-        accept = status == SHOT_LOADED
-        # One counted pass does all three jobs: forward, drain, pad.  `payload` may be shorter than
-        # the shot (a short frame), longer (a malformed one, whose tail is dropped rather than left
-        # to become the next header) or exact.
+        if status != SHOT_LOADED:
+            # Nothing to drain: the frame arrived whole, so a refused command leaves no residue on
+            # the wire to become the next header.  That is the framed port's doing, not this body's.
+            yield from self._answer(hdr, status, 0)
+            return
+
         took = min(int(payload.size), nw)
-        if accept:
-            for i in range(nw):
-                val = int(payload[i]) if i < took else 0
-                yield from self.pay_out.write(np.array([val], dtype=np.uint64))
-            if took < nw:
-                status = SHOT_SHORT
-            # A shot that is not playable is loaded and then not played: the token the buffer emits
-            # still has to be consumed, so the play-set is zero repeats rather than absent.
-            nrep = int(hdr.nrepeat) if status == SHOT_LOADED else 0
-            yield from self.rep_out.write(np.array([nrep], dtype=np.uint64))
+        # A short frame is completed with ZEROS so the region is fully written -- and then not
+        # played, on EITHER path.  The infinite predecessor played the padded result, because it had
+        # no way to
+        # go quiet; this design does, so half a waveform never reaches the converter.
+        words = np.zeros(nw, dtype=np.uint64)
+        words[:took] = payload[:took]
+
+        lo, hi = self.region
+        lock_status = yield from self.lock.acquire(lo, hi)
+        if lock_status != LOCK_GRANTED:
+            # Unreachable while `base` and `nword` are checked at construction, which is where the
+            # same predicate already ran.  Raised rather than answered, because a region the design
+            # declared and the memory refuses is a wiring fault, not a host's mistake.
+            raise AssertionError(
+                f"{type(self).__name__} '{self.name}': ACQUIRE [{lo}, {hi}) came back "
+                f"{LOCK_STATUS_NAMES.get(lock_status, lock_status)} on a memory of "
+                f"{int(self.depth)} elements. The region is build-time structure and was checked at "
+                f"construction, so the two ends disagree about the geometry.")
+        yield from self.lock.write_pipelined(words, addr=lo)
+
+        if took < nw:
+            status = SHOT_SHORT                 # THE verdict this response exists for
+
+        # THE PLAY COMMAND GOES OUT BEFORE THE RELEASE, and the player reads it on the release.
+        # Ordering the two writes this way is what makes the player's read of it a bounded wait
+        # rather than a guess -- and the player blocks for it, so even a scheduler that reordered
+        # them would be correct, only slower by a beat.
+        cmd = ShotPlayCmd()
+        cmd.opcode = int(hdr.opcode)
+        cmd.nrepeat = int(hdr.nrepeat) if status == SHOT_LOADED else 0
+        yield from self.rep_out.write(cmd)
+        # A BARRIER, not a hint: the player may resume the instant it sees this.
+        yield from self.lock.release()
+        self.n_stored += 1
+        if int(hdr.opcode) == SHOT_LOAD:
+            # Only a finite shot makes the design busy, and only a finite shot is owed a `done`.
             self.busy = 1
-        yield from self._answer(hdr, status, took * int(self.samp_per_word) if accept else 0)
+
+        yield from self._answer(hdr, status, took * int(self.samp_per_word))
 
     def _answer(self, hdr, status: int, nsamp_loaded: int) -> ProcessGen[None]:
-        """Exactly one :class:`ShotTxResp` per header — see ``plans/rf_shot_buf.md`` § *Why no
-        ``has_response`` flag*."""
+        """Exactly one :class:`~waveflow.hw.rf_shot_tx.ShotTxResp` per header."""
         r = ShotTxResp()
         r.tid, r.status, r.nsamp_loaded = int(hdr.tid), int(status), int(nsamp_loaded)
         self.resps.append((int(hdr.tid), int(status), int(nsamp_loaded)))
@@ -415,222 +514,250 @@ class ShotTxLoad(FreeRunMod):
 
 
 # ---------------------------------------------------------------------------
-# The player: nrepeat plays, and the only thing that knows when they are over
+# The player — the OWNER
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ShotTxPlay(FreeRunMod):
-    r"""Turn one loaded shot into ``nrepeat`` plays, and say when the last one has gone out.
+class ShotTxPlayer(FreeRunMod):
+    r"""Play the region — a counted number of passes, or forever — and yield it on request.
 
-    It sits on **both** the token channel and the sample path, and needs both::
+    The owner side of the lock: it holds the whole memory by default, it cannot stop, and it polls
+    the command channel exactly once per :attr:`blk_words` elements of its own work.
 
-        RfShotBufLoad --rdy--> ShotTxPlay --rdy--> RfShotBufRead --> RfRelayoutToSlots
-                                   ^ rep                                     |
-                              ShotTxLoad <--- done --- ShotTxPlay <--- samp --+
-                                                            |
-                                                            +--> the converter
+    **The play loop differs from the infinite predecessor's in exactly one place**, and it is the
+    wrap::
 
-    **Why the repeat is not simply more tokens.**  ``RfShotBufRead`` plays one shot per ``rdy`` token
-    and is RTL-gated as it stands, so the repeat has to come from something in front of it.  That
-    something could have been :class:`ShotTxLoad` writing ``nrepeat`` tokens — but the token channel
-    is depth 1, so the write of token *k+1* returns when the reader **starts** play *k*, not when it
-    finishes.  A loader that answered "done" there would clear busy while the last play was still
-    coming out of the memory, and the next load would overwrite it mid-play.  Sitting on the sample
-    path is what makes completion **exact**: the ``done`` token is written after the last word of the
-    last play has been handed on, and there is nothing left to be early about.
+        if self.rd == 0 and not self.loop:      # a pass has just finished
+            self.nrep_left -= 1
+            if self.nrep_left == 0:
+                self.playing = False            # ... and go quiet
+                yield from self.done_out.write(...)
 
-    **Nothing here is a schedule.**  There is no grid arithmetic, no deadline and no slot: the
-    converter back-pressures, the relayout back-pressures, this task stalls, and the memory holds.
-    That is the whole of the never-miss-a-deadline obligation on the shot design — once a play has
-    started, a BRAM read at II=1 can always supply a word per cycle, so the only reachable underruns
-    are the ones before the first word arrives.  Compare :mod:`waveflow.hw.rf_tx_stream`, which needs
-    an absolute slot grid, an ack channel and a lateness verdict, because *its* source can genuinely
-    fall behind.
+    Everything else — the chunk, the anchoring, the filler, the poll, the ordering — is shared.  That
+    is the whole content of the merge: two designs that differed only in an exit condition.
 
-    **No ``static``, anywhere.**  A play-set lives entirely inside one firing, so there is no state
-    to carry across firings and nothing for the reset trap to catch (``reference-hls-task-reset-trap``:
-    an ``hls::task`` that WRITES before it READS advances during reset).  This body's first act is a
-    blocking read, twice over.
+    **The one ordering everything turns on**::
+
+        self.playing = False            # STOP TOUCHING IT ...
+        yield from self.lock.grant(...) # ... THEN grant
+
+    Granting while still reading lets the loader write memory this task is reading.
+    :meth:`~waveflow.hw.locked_mem.LockedMemSlaveIF.grant` takes the region out of the owner's hands
+    before the answer goes on the wire, so getting the two lines the wrong way round **raises on the
+    very next chunk** instead of returning a plausible sample.
+
+    **The ``done`` token is owed only on the finite path**, and a spurious one is worse than none: it
+    would clear a ``busy`` that a *later* finite shot set, and the next load would preempt it — the
+    truncation ``SHOT_BUSY`` exists to prevent.  :class:`ShotPlayCmd` carries the host's opcode for
+    exactly this reason.
+
+    **Statics, and therefore the reset trap.**  ``rd``, ``playing``, ``loop`` and ``nrep_left`` are
+    carried across firings, and this body **writes before it reads** — writing without being asked is
+    what *the side that cannot stop* means.  The C++ twin carries ``#pragma HLS reset`` on each and
+    the build needs ``config_rtl -reset state``.
     """
 
-    cpp_kernel_name: ClassVar[str | None] = "shot_tx_play"
+    cpp_kernel_name: ClassVar[str | None] = "shot_tx_player"
 
     bitwidth: HwParam[int] = WORD_BW
-    #: Words in one shot — the inner loop's trip count, and the same build-time number
-    #: :class:`~waveflow.hw.rf_shot_buf.RfShotBufRead` emits per token.
+    depth: HwParam[int] = BUF_DEPTH
+    #: Words in one shot — the region's length, and the wrap point of the read pointer.
     nword: HwParam[int] = SHOT_WORDS
-
-    # -- two modelling inputs, and neither is hardware -------------------------------------------
-    #
-    # Both exist because pysim's quantum on the converter edge is a *block*, and both are the same
-    # accommodation :class:`~waveflow.hw.rf_samp_buf_tx.RfSampBufPlayer` documents at length.  They
-    # are plain fields rather than HwParams deliberately: they reach no template argument, because
-    # the RTL body writes one word per beat and knows nothing about either.
-
-    #: Words per pysim output burst.  ``Rfdc``'s DAC process consumes a whole ``blksize``-sample
-    #: burst per event and refuses a partial one, so the twin must hand it exactly that.  ``1`` is
-    #: the honest default (one word, one write); a testbench wiring this to a converter sets it to
-    #: ``blksize // samp_per_word``.  Must divide :attr:`nword`, so a play is a whole number of
-    #: blocks and a play boundary lands on a block boundary.
-    blk_words: int = 1
-    #: **Words per second the DAC consumes** — ``samp_rate / samp_per_word`` — or ``None`` to run at
-    #: the fabric's rate alone.
-    #:
-    #: In RTL this task is paced by ``TREADY`` and needs nothing: it writes a word, the 2-deep
-    #: boundary port fills, and it waits for the converter to take one.  That back-pressure **is** the
-    #: whole scheduling story of the shot design, which is why the body has no grid arithmetic in it.
-    #: pysim has no such back-pressure for a burst write (``StreamIF`` routes intra-burst overflow to
-    #: a counter rather than blocking — see ``docs/guide/rf/rfdc/fidelity.md``), so the metronome has
-    #: to be handed over instead.  Left unset the playout runs at the fabric's rate, the converter is
-    #: never the bottleneck, and the one property this design claims — that it keeps a DAC fed — is
-    #: not being tested at all.
+    #: First element of the region.  Must match the loader's; the composite passes one number.
+    base: HwParam[int] = 0
+    #: Elements between polls, **and** words per pysim output burst — one number, because they are
+    #: the same boundary.  A poll per converter block is the natural cadence.
+    blk_words: HwParam[int] = 1
+    #: **Words per second the DAC consumes** — or ``None`` to run at the fabric's rate alone.  A
+    #: modelling input and not hardware: in RTL this task is paced by ``TREADY``, but pysim does not
+    #: back-pressure a burst write, so the metronome has to be handed over.
     dac_word_rate: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, nw, bw = int(self.bitwidth), int(self.nword), int(self.blk_words)
-        if nw < 1:
-            raise ValueError(f"a shot is {nw} words; there is nothing to play")
+        w, d, nw = int(self.bitwidth), int(self.depth), int(self.nword)
+        b, bw = int(self.base), int(self.blk_words)
+        if b < 0 or b + nw > d:
+            raise ValueError(f"the region [{b}, {b + nw}) does not fit a {d}-element memory")
         if bw < 1 or nw % bw:
             raise ValueError(
-                f"blk_words={bw} does not divide a {nw}-word shot. pysim hands the converter one "
-                f"block per event, so a shot that is not a whole number of blocks would end "
-                f"mid-block and the next play would start inside one.")
+                f"blk_words={bw} does not divide a {nw}-word shot. A chunk that straddled the end "
+                f"of the region would need two base additions, and the play boundary would stop "
+                f"landing on a block boundary.")
+        self.lock = LockedMemSlaveIF(sim=self.sim, name=f"{self.name}_lock",
+                                     element_type=word_element(w), nelem=d, access="read",
+                                     check_period=bw)
+        self.samp_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_samp", bitwidth=w,
+                                       has_tlast=True)
         self.rep_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_rep", bitwidth=w,
                                     has_tlast=True)
-        self.rdy_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_rdy_in", bitwidth=w,
-                                    has_tlast=True)
-        self.rdy_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_rdy_out", bitwidth=w,
-                                      has_tlast=True)
-        self.samp_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_samp_in", bitwidth=w,
-                                     has_tlast=True)
-        self.samp_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_samp_out", bitwidth=w,
-                                       has_tlast=True)
         self.done_out = StreamIFMaster(sim=self.sim, name=f"{self.name}_done", bitwidth=w,
                                        has_tlast=True)
-        for ep in (self.rep_in, self.rdy_in, self.rdy_out, self.samp_in, self.samp_out,
-                   self.done_out):
+        # ORDER MATTERS: the lock's memory port must be registered before the internal tokens, so
+        # `boundary` picks it up in the position the composite names.
+        for ep in (self.lock, self.samp_out, self.rep_in, self.done_out):
             self.add_endpoint(ep)
-        #: Plays completed over the whole run, and words handed on.  Counted rather than inferred:
-        #: a run whose player never fired is a run that proved nothing, and a word count that is not
-        #: ``n_plays * nword`` is a truncated play the sample data alone can hide.
-        self.n_plays = 0
+
+        #: The read pointer **within the region** — a ``static`` in the C++ twin.
+        self.rd = 0
+        #: ``True`` while it owns the region *and* has something to play.  **Starts false**: nothing
+        #: has been loaded yet, and playing a memory that was never written is a plausible sample
+        #: rather than a silence.
+        self.playing = False
+        #: ``True`` when the current shot is a ``SHOT_LOOP``.  The exit condition, and the only
+        #: difference between the two predecessors' players.
+        self.loop = False
+        #: Passes left on a finite shot.  Meaningless while :attr:`loop`.
+        self.nrep_left = 0
+        #: Chunks emitted, chunks that were filler, and words that came out of the memory.  All
+        #: three, because a run that played nothing but filler looks identical to a run that played
+        #: nothing at all, and a truncated play carries the right samples as far as it got.
+        self.n_chunks = 0
+        self.n_filler = 0
         self.n_words = 0
-        #: The pysim rate grid: when the first block went out, and how many have.  Sim-only, and
-        #: ``None`` until the first play-set starts (see :meth:`run_iter`).
+        #: Passes completed, handovers resumed, and ``done`` tokens sent.
+        self.n_plays = 0
+        self.n_resumed = 0
+        self.n_done = 0
+        #: The pysim rate grid: when the first block went out, and how many have.
         self._t0: float | None = None
         self._blocks = 0
 
     def kernel_task(self) -> KernelTask:
-        return KernelTask("shot_tx_play_task", "shot_tx_play_task.h",
-                          ("rep_in", "rdy_in", "rdy_out", "samp_in", "samp_out", "done_out"),
-                          template_args=(int(self.bitwidth), int(self.nword)))
+        return KernelTask("shot_tx_player_task", "shot_tx_player_task.h",
+                          ("lock", "rep_in", "done_out", "samp_out"),
+                          template_args=(int(self.bitwidth), int(self.depth), int(self.nword),
+                                         int(self.base), int(self.blk_words)))
 
     def run_iter(self) -> ProcessGen[None]:
-        """One firing is one play-set: the repeat count, the shot's token, then ``nrepeat`` plays.
+        """One firing is one chunk **and exactly one poll** — the C++ body's outer iteration."""
+        yield from self._chunk_and_pace()
 
-        **Word-granular on the way in, block-shaped on the way out.**  ``samp_in`` is read one word
-        per ``get`` because that is what the stage upstream writes — a pysim slave dequeues a whole
-        burst per ``get`` and ``nwords_max`` *discards* the remainder, so a multi-word read here
-        would be one pysim firing against ``nword`` RTL firings and the two backends would be running
-        different designs (``examples/bram_access`` spells this out).  What is *shaped* is only the
-        handover to the converter: :attr:`blk_words` words go out as one burst, because pysim's
-        quantum on that edge is a block.
+        # EXACTLY ONE POLL, outside everything above -- that is what `check_period` means and what
+        # keeps the datapath's II untouched.  `handle_nb` applies a RELEASE on the spot because a
+        # release needs no decision and no answer; an ACQUIRE comes back untouched because granting
+        # it is this body's call and must follow the state change.
+        cmd = yield from self.lock.handle_nb()
+        if cmd is None:
+            return
+        if int(cmd.opcode) == LOCK_ACQUIRE:
+            self.playing = False                    # STOP TOUCHING IT ...
+            yield from self.lock.grant(int(cmd.start_addr), int(cmd.end_addr))   # ... THEN grant
+            return
 
-        The rate is charged **per block on an absolute grid**, never as a relative timeout.  A
-        relative wait restarts from wherever ``now`` happens to be when the body finishes, so
-        everything the body yielded for is added to the period and never given back — the defect
-        ``RFSampIF``'s metronome exists to avoid, and the one that made ``rf_samp_buf_tx``'s player
-        slip a whole block every fourth firing.
+        # A RELEASE.  The play command is already on its channel -- the loader wrote it first -- so
+        # this read is a bounded wait rather than a guess.  BLOCKING, and safe: it is
+        # control-dependent on the poll's result, so nothing can hoist it, and it costs at most a
+        # beat inside a gap the design is already in.
+        play = yield from self.rep_in.get_schema(ShotPlayCmd)
+        # A new waveform starts at its beginning: resuming mid-shot would splice the tail of the old
+        # waveform's phase onto the new one, which is right in no application and is invisible from a
+        # word count.
+        self.rd = 0
+        self.loop = int(play.opcode) == SHOT_LOOP
+        self.nrep_left = int(play.nrepeat)
+        self.playing = self.nrep_left > 0
+        self.n_resumed += 1
+        if not self.playing and not self.loop:
+            # A finite shot that must not play -- a SHORT one.  The loader is blocked on a `done`
+            # and nothing else will ever send it.
+            yield from self._send_done()
+
+    def _chunk_and_pace(self) -> ProcessGen[None]:
+        """One chunk out — from the memory when it owns it, filler when it does not — then the rate.
+
+        Split from :meth:`run_iter` so the datapath and the *decision* are separable: the poll is one
+        firing's worth of lock traffic sitting outside a body that is otherwise a counted loop, which
+        is exactly the shape the C++ has and exactly why ``II=1`` survives having a lock at all.
+
+        The rate is charged **after** the hand-off and on an **absolute** grid.  Charging first would
+        make every block arrive one period late; a relative wait restarts from wherever ``now``
+        happens to be, so everything the body yielded for is added to the period and never given back
+        — the defect that made ``rf_samp_buf_tx``'s player slip a whole block every fourth firing.
         """
-        nw, bw = int(self.nword), int(self.blk_words)
-        rep = yield from self.rep_in.get(nwords_max=1)
-        nrep = int(np.asarray(rep, dtype=np.uint64).ravel()[0])
-        yield from self.rdy_in.get(nwords_max=1)          # the shot is in the memory
+        w, bw, nw = int(self.bitwidth), int(self.blk_words), int(self.nword)
+        if self.playing:
+            data, t0 = yield from self.lock.read_pipelined(word_element(w), bw,
+                                                           addr=int(self.base) + self.rd)
+            yield from self.samp_out.write_pipelined(data, t_out_start=t0)
+            self.n_words += bw
+            self.rd += bw
+            if self.rd >= nw:
+                # A pass has just finished.  THE ONE PLACE THE TWO PREDECESSORS DIFFER.
+                self.rd = 0
+                self.n_plays += 1
+                if not self.loop:
+                    self.nrep_left -= 1
+                    if self.nrep_left <= 0:
+                        self.playing = False
+                        yield from self._send_done()
+        else:
+            yield from self.samp_out.write(np.full(bw, FILLER, dtype=np.uint64))
+            self.n_filler += 1
+        self.n_chunks += 1
+
         if self._t0 is None:
-            # The grid's origin: the instant the FIRST play-set started handing words over.  Set
-            # here rather than at construction, because a converter's grid begins when the design
-            # has something to put on it, and anchoring at t=0 would charge the load time twice.
+            # The grid's origin: the instant the FIRST block went out.  Set here rather than at
+            # construction, because anchoring at t=0 would charge the design for time before it had
+            # anything to put on the wire.
             self._t0 = self.now
-        for _ in range(nrep):
-            yield from self.rdy_out.write(np.array([1], dtype=np.uint64))
-            for _ in range(nw // bw):
-                out = np.empty(bw, dtype=np.uint64)
-                for k in range(bw):
-                    word = yield from self.samp_in.get(nwords_max=1)
-                    out[k] = int(np.asarray(word, dtype=np.uint64).ravel()[0])
-                    self.n_words += 1
-                # Hand off FIRST, then charge: charging before the write would make every block
-                # arrive one period late, so the player and the converter would serialize rather
-                # than overlap.
-                yield from self.samp_out.write(out)
-                self._blocks += 1
-                if self.dac_word_rate:
-                    deadline = self._t0 + self._blocks * (bw / float(self.dac_word_rate))
-                    yield self.timeout(max(0.0, deadline - self.now))
-            self.n_plays += 1
+        self._blocks += 1
+        if self.dac_word_rate:
+            deadline = self._t0 + self._blocks * (bw / float(self.dac_word_rate))
+            yield self.timeout(max(0.0, deadline - self.now))
+
+    def _send_done(self) -> ProcessGen[None]:
+        """Tell the loader a finite play-set is over.  **Never on the loop path.**
+
+        A spurious token would clear a ``busy`` that a later finite shot set, and the next load would
+        preempt it — which is the truncation ``SHOT_BUSY`` exists to prevent, arrived at from the
+        other side.
+        """
+        self.n_done += 1
         yield from self.done_out.write(np.array([1], dtype=np.uint64))
 
 
 # ---------------------------------------------------------------------------
-# The composite: a command layer, the Stage A buffer, and the converter's packing
+# The composite
 # ---------------------------------------------------------------------------
 
 @dataclass
 class RfShotTx(FreeRunMod):
-    r"""The whole transmitter as one design scope: load a waveform once, play it ``nrepeat`` times.
+    r"""The whole transmitter as one design scope — finite play and infinite play, one design.
 
-    Five ``hls::task``\ s and one memory beside them::
+    Three ``hls::task``\ s and one memory beside them::
 
-        s_in --> ShotTxLoad --pay--> RfShotBufLoad --> [ BRAM ] --> RfShotBufRead
-                  |  |  ^                   |                            |
-             resp_out |  |                 rdy                          dense
-                      |  |                  v                            v
-                      | done            ShotTxPlay --rdy-------> RfRelayoutToSlots
-                      |  ^                  ^                            |
-                      +-rep-> ShotTxPlay <--samp---------------------- (slots)
-                                  |
-                                  +--> samp_out --> Rfdc.tx_streams[0]
+        s_in --> ShotTxLoader --[lock]--> [ BRAM ] --[lock]--> ShotTxPlayer --> RfRelayoutToSlots
+                   |   ^ done                                       |                    |
+               resp_out +--------------- rep ---------------------->+                samp_out
 
-    (``ShotTxPlay`` appears twice only because the diagram is flat: it is one task, and it is the
-    task the converter back-pressures.)
+    **It was built under the name ``RfShotTxUnified``**, beside the two designs it merges, because
+    Stage A of ``plans/rf_shot_unify.md`` was forbidden to touch either: if the merge had turned out
+    harder than it looked, the working designs had to still be there.  Stage B deleted them and this
+    class took the freed name.
 
-    **The Stage A pair is instantiated, not nested**, and that is forced rather than preferred.
-    :class:`~waveflow.hw.rf_shot_buf.RfShotBuf` owns its ``rdy`` channel as an *internal* edge, so a
-    composite that used it whole could not put anything on that wire — and the repeat is exactly a
-    thing on that wire.  So this composite wires
-    :class:`~waveflow.hw.rf_shot_buf.RfShotBufLoad`, :class:`~waveflow.hw.rf_shot_buf.RfShotBufRead`
-    and the memory itself, using all three **exactly as Stage A built and gated them**: not one line
-    of ``rf_shot_buf.py`` or ``rf_relayout.py`` changes, and the numbers those gates recorded still
-    describe the same RTL.
+    What the lock removed, counted
+    ------------------------------
+    The finite predecessor wired **seven** internal channels and **two** ``BramIF``\ s by hand
+    (``pay rep rdy_load rdy_play dense samp done`` + ``bufw bufr``), instantiated **five** tasks, and
+    shared a pysim-only ``ShotPhase`` object between two of them.  This wires **three**
+    (``rep done samp``) and one ``add_if(lock)``, and instantiates three.  The four that vanished —
+    ``pay``, ``rdy_load``, ``rdy_play``, ``dense`` — existed only to move samples between tasks the
+    lock made unnecessary, and ``ShotPhase`` is replaced by a guard that also exists at RTL.
 
-    **Where the relayout goes, and why the player is last.**  The buffer holds *dense* words — the
-    logic-side format, four 14-bit samples packed at 14-bit stride in a 64-bit beat — because that is
-    what a host can write without knowing anything about justification (``plans/adc_model.md``
-    § *The logic-side interface*, option 2).  The converter wants slots, so
-    :class:`~waveflow.hw.rf_relayout.RfRelayoutToSlots` sits between them and the buffer owns the
-    converter's packing: ``justify`` can change and nothing upstream of that stage moves.
-
-    It goes **before** the player rather than after, and that is a modelling constraint made
-    structural.  The last stage on this chain is the one the converter back-pressures, and it is
-    therefore the one that has to be paced in pysim — ``Rfdc``'s DAC process consumes a whole
-    ``blksize`` burst per event and refuses a partial one, while ``RfRelayoutToSlots`` writes one
-    word per firing and is RTL-gated as it stands.  Putting the player last is what lets
-    :attr:`ShotTxPlay.blk_words` shape that handover without touching Stage A.  At RTL the order is
-    immaterial (both stages are II=1 pass-throughs), which is what makes it free to choose on the
-    modelling side.
-
-    **What is absent is the lesson.**  There is no credit channel, no ack, no progress pointer, no
-    ``MARGIN``, no slot arithmetic and no lateness verdict — every mechanism ``plans/rf_samp_new.md``
-    spends its length on.  The only reverse traffic in the whole diagram is the ``done`` token, and
-    it is not arbitration: it is the answer to *may I overwrite the memory yet*, which exists because
-    a shot buffer's reader and writer are **never** live at the same time.  ``docs/guide/rf/choosing.md``
-    divides the two buffer classes by concurrency, and this diagram is what that division looks like.
+    ``rep`` and ``done`` survive because the lock has no opinion about them: one says *what to play*
+    and the other says *a finite shot has finished*, and neither is a question about who may touch
+    which addresses.
     """
 
-    cpp_kernel_name: ClassVar[str | None] = "rf_shot_tx"
+    cpp_kernel_name: ClassVar[str | None] = "rf_shot_tx_unified"
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
+
+    #: The player class this composite instantiates.  A ClassVar, so it is changed by subclassing and
+    #: never by a caller — the seam an example uses to build a deliberately broken twin without
+    #: copying the composite.  The infinite predecessor carried the same seam, for the same reason.
+    player_cls: ClassVar[type] = ShotTxPlayer
 
     #: Word width in bits — one number for the host port, the memory, the player and the converter.
     bitwidth: HwParam[int] = WORD_BW
@@ -638,24 +765,26 @@ class RfShotTx(FreeRunMod):
     samp_per_word: HwParam[int] = 4
     #: Memory depth in **WORDS** (a power of two: the address wrap is a mask).
     depth: HwParam[int] = BUF_DEPTH
-    #: Words in one shot.  ``<= depth``.
+    #: Words in one shot.  ``base + nword <= depth``.
     nword: HwParam[int] = SHOT_WORDS
-    #: Bits the effective sample sits above the bottom of its converter slot —
-    #: :meth:`~waveflow.hw.rfdc_samp_word.RfdcSampWord.justify_shift`.  **0 makes the last stage the
-    #: identity**, which is every configuration in the repo but the 4x2 preset, so a build that leaves
-    #: it at 0 is measuring a pair of wires.
+    #: First element of the region.  **One number, passed to both ends**, because a loader and a
+    #: player that disagreed about where the waveform is would each be individually correct.
+    base: HwParam[int] = 0
+    #: Bits the effective sample sits above the bottom of its converter slot.  **0 makes the last
+    #: stage the identity**, so a build that leaves it there is measuring a pair of wires.
     shift: HwParam[int] = 2
-    #: Words per pysim output burst on the converter-facing port, and the DAC's word rate — both
-    #: :class:`ShotTxPlay`'s modelling inputs, passed through.  See :attr:`ShotTxPlay.blk_words` and
-    #: :attr:`ShotTxPlay.dac_word_rate`; neither reaches the hardware.
-    blk_words: int = 1
+    #: Words per converter block: the player's chunk, its poll period, and the re-layout's pysim
+    #: burst.  One number for all three because they are one boundary.
+    blk_words: HwParam[int] = 1
+    #: The DAC's word rate — :attr:`ShotTxPlayer.dac_word_rate`, passed through.  Not hardware.
     dac_word_rate: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
         w, d, nw = int(self.bitwidth), int(self.depth), int(self.nword)
-        spw, sh = int(self.samp_per_word), int(self.shift)
+        spw, sh, b = int(self.samp_per_word), int(self.shift), int(self.base)
+        bw = int(self.blk_words)
         if d & (d - 1):
             raise ValueError(f"buffer depth must be a power of two (got {d}): the wrap is a mask")
         if not 1 <= nw <= d:
@@ -663,40 +792,29 @@ class RfShotTx(FreeRunMod):
                 f"a shot is {nw} words but the buffer holds {d}: a shot longer than the memory is "
                 f"not a shot, it is a stream, and streaming is what waveflow.hw.rf_tx_stream is for")
 
-        self.load = ShotTxLoad(sim=self.sim, name=f"{self.name}_load", bitwidth=w, nword=nw,
-                               samp_per_word=spw, clk=self.clk)
-        self.buf_load = RfShotBufLoad(sim=self.sim, name=f"{self.name}_buf_load", bitwidth=w,
-                                      depth=d, nword=nw, clk=self.clk)
-        self.play = ShotTxPlay(sim=self.sim, name=f"{self.name}_play", bitwidth=w, nword=nw,
-                               blk_words=int(self.blk_words),
-                               dac_word_rate=self.dac_word_rate, clk=self.clk)
-        self.buf_read = RfShotBufRead(sim=self.sim, name=f"{self.name}_buf_read", bitwidth=w,
-                                      depth=d, nword=nw, clk=self.clk)
+        self.load = ShotTxLoader(sim=self.sim, name=f"{self.name}_load", bitwidth=w, depth=d,
+                                 nword=nw, samp_per_word=spw, base=b, clk=self.clk)
+        self.play = type(self).player_cls(sim=self.sim, name=f"{self.name}_play", bitwidth=w,
+                                          depth=d, nword=nw, base=b, blk_words=bw,
+                                          dac_word_rate=self.dac_word_rate, clk=self.clk)
+        # The re-layout is LAST, so it is the stage the converter back-pressures and therefore the
+        # one that carries the block-shaped handover.  The accommodation follows the port.
         self.relayout = RfRelayoutToSlots(sim=self.sim, name=f"{self.name}_to_slots", bitwidth=w,
-                                          n_slot=spw, shift=sh, clk=self.clk)
-        # add_comp order is emit order, and it is the DATA-FLOW order: command layer, buffer write,
-        # the token stage, buffer read, the converter's packing, and the player last because it is
-        # the stage the converter back-pressures.
-        for c in (self.load, self.buf_load, self.buf_read, self.relayout, self.play):
+                                          n_slot=spw, shift=sh, blk_words=bw, clk=self.clk)
+        # add_comp order is emit order and the DATA-FLOW order: command layer, playout, packing.
+        for c in (self.load, self.play, self.relayout):
             self.add_comp(c)
 
-        # -- the internal channels.  Each depth is a statement, not a default. -------------------
+        # -- the three channels the lock does NOT own ------------------------------------------
         #
-        # The two token channels are depth 1 because there is exactly one token in flight by
-        # construction: `done` cannot accumulate (a second load is refused until it arrives) and a
-        # `rdy` cannot either (the reader takes one before doing anything).  A deeper queue could
-        # only hold a token for a shot that has already been overwritten, which is the state
-        # ShotPhase refuses.  The word channels are depth 2 -- the HLS default for a top argument and
-        # enough for a producer and a consumer to overlap by one beat, which is all an II=1 chain
-        # needs.
-        for nm, master, slave, depth in (
-                ("pay", self.load.pay_out, self.buf_load.s_in, 2),
-                ("rep", self.load.rep_out, self.play.rep_in, 1),
-                ("rdy_load", self.buf_load.rdy_out, self.play.rdy_in, 1),
-                ("rdy_play", self.play.rdy_out, self.buf_read.rdy_in, 1),
-                ("dense", self.buf_read.s_out, self.relayout.s_in, 2),
-                ("samp", self.relayout.s_out, self.play.samp_in, 2),
-                ("done", self.play.done_out, self.load.done_in, 1)):
+        # `rep` and `done` are depth 1 because there is exactly one of each in flight by
+        # construction: a play command is written once per accepted load, and a `done` cannot
+        # accumulate because a second finite load is refused until the first is harvested.  `samp` is
+        # depth 2 -- the HLS default for a top argument and enough for a producer and a consumer to
+        # overlap by one beat, which is all an II=1 chain needs.
+        for nm, master, slave, depth in (("rep", self.load.rep_out, self.play.rep_in, 1),
+                                         ("done", self.play.done_out, self.load.done_in, 1),
+                                         ("samp", self.play.samp_out, self.relayout.s_in, 2)):
             ifc = StreamIF(name=f"{self.name}_{nm}_if", sim=self.sim, clk=self.clk, bitwidth=w,
                            depth=depth)
             ifc.bind(ep_name="master", endpoint=master)
@@ -704,28 +822,19 @@ class RfShotTx(FreeRunMod):
             self.add_if(ifc)
 
         # `mem`, not `buf`: the attribute name becomes the Verilog INSTANCE name and `buf` is a
-        # primitive gate name, which the wrapper emitter refuses by name rather than letting xvlog
-        # fail on a syntax error that mentions no Python.
+        # primitive gate, which the wrapper emitter refuses by name rather than letting xvlog fail on
+        # a syntax error that mentions no Python.
         self.mem = T2pBram(sim=self.sim, name=f"{self.name}_mem",
                            element_type=word_element(w), nelem=d)
         self.add_rtl_mod(self.mem)
-        for nm, master, slave in (("bufw", self.buf_load.buf_w, self.mem.wr_port),
-                                  ("bufr", self.buf_read.buf_r, self.mem.rd_port)):
-            # A BramIF goes in add_rtl_if and NEVER add_if: the walks that derive channels and
-            # boundary ports read the add_if registry, and a BramIF in it would make the kernel's
-            # memory ports disappear into a FIFO that does not exist.
-            rif = BramIF(name=f"{self.name}_{nm}_if", sim=self.sim)
-            rif.bind(ep_name="master", endpoint=master)
-            rif.bind(ep_name="slave", endpoint=slave)
-            self.add_rtl_if(rif)
 
-        #: One :class:`~waveflow.hw.rf_shot_buf.ShotPhase` for both halves of the buffer — the
-        #: assertion spans them, so it cannot live in either.  The same wiring
-        #: :class:`~waveflow.hw.rf_shot_buf.RfShotBuf` does, restated here because this composite
-        #: instantiates the two tasks rather than the packaged pair.
-        self.phase = ShotPhase()
-        self.buf_load.phase = self.phase
-        self.buf_read.phase = self.phase
+        #: The lock, and the whole of the memory wiring.  One ``add_if`` files the two lock streams
+        #: as internal edges and the two ``BramIF``\\ s as wrapper wires.
+        self.lock = LockedT2pMemIF(name=f"{self.name}_lock_if", sim=self.sim, clk=self.clk,
+                                   element_type=word_element(w), nelem=d, memory=self.mem)
+        self.lock.bind("master", self.load.lock)
+        self.lock.bind("slave", self.play.lock)
+        self.add_if(self.lock)
 
         #: ``add_comp`` x ``add_endpoint`` order with every internally-bound endpoint removed.  The
         #: two ``buf_*`` entries are ports of the KERNEL, joined to the memory inside the wrapper.
@@ -734,7 +843,7 @@ class RfShotTx(FreeRunMod):
         # Convenience refs for testbenches — the boundary endpoints live on the children.
         self.s_in = self.load.s_in
         self.resp_out = self.load.resp_out
-        self.samp_out = self.play.samp_out
+        self.samp_out = self.relayout.s_out
 
     # -- geometry, read off the graph rather than restated -------------------------------------
 
@@ -744,41 +853,32 @@ class RfShotTx(FreeRunMod):
         return int(self.nword) * int(self.samp_per_word)
 
     @property
-    def nsamp_held(self) -> int:
-        """Samples the memory holds.  **100% payload**: no headroom for data in flight, because
-        there is none — see :attr:`~waveflow.hw.rf_shot_buf.RfShotBuf.nsamp_held`."""
-        return int(self.depth) * int(self.samp_per_word)
+    def region(self) -> tuple[int, int]:
+        """``[base, base + nword)``."""
+        return self.load.region
 
     @property
     def is_identity(self) -> bool:
-        """``True`` when the last stage's re-layout does nothing — see
-        :attr:`~waveflow.hw.rf_relayout.RfRelayout.is_identity`.  A gate should assert it is
+        """``True`` when the last stage's re-layout does nothing.  A gate should assert it is
         ``False``, or it is measuring a pair of wires rather than the conversion."""
         return int(self.shift) == 0
 
     @classmethod
     def for_word(cls, word, *, depth: int = BUF_DEPTH, nword: int = SHOT_WORDS, **kwargs):
-        """Build the whole transmitter from the converter's **word type** — the single place the four
-        integers are derived.
-
-        The same reading :meth:`~waveflow.hw.rf_shot_buf.RfShotBuf.for_word` does, extended by the
-        one number the relayout needs.  A type cannot be an ``HwParam``
-        (``HwModule.__post_init__`` wraps every one in ``HwParamValue(int(value))``), so what
-        survives the call is integers and this classmethod is where they come from.
-        """
+        """Build the transmitter from the converter's **word type** — the single place the integers
+        are derived.  A type cannot be an ``HwParam``, so what survives the call is integers."""
         from waveflow.hw.rf_relayout import check_geometry, slots_per_word
         from waveflow.hw.rfdc_samp_word import RfdcSampWord
 
         if not (isinstance(word, type) and issubclass(word, RfdcSampWord)):
             raise TypeError(
-                f"RfShotTx.for_word() takes the converter's WORD TYPE — the packing convention, not "
-                f"a width. Got {word!r}. Build one with RfdcSampWord.specialize(...) or a board "
-                f"preset such as Rfsoc4x2SampWord.specialize(samp_per_word=4).")
+                f"RfShotTx.for_word() takes the converter's WORD TYPE — the packing "
+                f"convention, not a width. Got {word!r}.")
         check_geometry(word)
         return cls(bitwidth=int(word.bitwidth), samp_per_word=slots_per_word(word),
                    depth=int(depth), nword=int(nword), shift=int(word.justify_shift()), **kwargs)
 
-    # -- counters ------------------------------------------------------------------------------
+    # -- counters and verdicts -------------------------------------------------------------------
 
     @property
     def resps(self) -> list[tuple[int, int, int]]:
@@ -787,46 +887,59 @@ class RfShotTx(FreeRunMod):
 
     @property
     def n_plays(self) -> int:
-        """Plays the player finished."""
+        """Passes the player finished."""
         return int(self.play.n_plays)
 
-    def assert_played(self, n_plays: int) -> None:
-        """After a run: the player played *n_plays* shots, whole ones, and the buffer's two phases
-        never overlapped.
+    def assert_handover(self, n_loads: int, *, max_grant_seconds: float | None = None) -> None:
+        """After a run: *n_loads* waveforms were handed over, and every one of them cleanly.
 
-        Three claims a byte comparison does not make.  A playout that stopped mid-shot has the right
-        words in the right order for as far as it got — the failure this repo keeps meeting — so the
-        word count is checked against ``n_plays * nword`` rather than assumed from it.
+        Claims a byte comparison does not make.  The lock changed hands exactly *n_loads* times on
+        both sides; every grant was released, so the run did not end mid-handover; the player played
+        filler, which is what makes a handover visible on the output at all; and it resumed once per
+        handover, so the design is not sitting in a gap.
         """
-        got, want_words = int(self.play.n_plays), int(n_plays) * int(self.nword)
-        if got != int(n_plays):
+        self.lock.assert_handover_happened(int(n_loads))
+        if max_grant_seconds is not None:
+            self.lock.assert_grant_bounded(float(max_grant_seconds))
+        if int(self.load.n_stored) != int(n_loads):
             raise AssertionError(
-                f"{type(self).__name__} '{self.name}': played {got} shots, expected {int(n_plays)}. "
-                f"Responses so far: {self.resps}")
-        if int(self.play.n_words) != want_words:
+                f"{type(self).__name__} '{self.name}': the loader stored {int(self.load.n_stored)} "
+                f"shot(s), expected {int(n_loads)}. Responses: {self.resps}")
+        if int(self.play.n_filler) < int(n_loads):
             raise AssertionError(
-                f"{type(self).__name__} '{self.name}': {got} plays handed on "
-                f"{int(self.play.n_words)} words, not {want_words}. A play that stopped part way "
-                f"carries the right samples as far as it got, so only the count says so.")
-        self.assert_phases_separated()
+                f"{type(self).__name__} '{self.name}': the player emitted "
+                f"{int(self.play.n_filler)} filler chunk(s) across {int(n_loads)} handover(s). A "
+                f"handover that produced no gap is a handover the output cannot show.")
+        if int(self.play.n_resumed) != int(n_loads):
+            raise AssertionError(
+                f"{type(self).__name__} '{self.name}': the player resumed "
+                f"{int(self.play.n_resumed)} time(s) after {int(n_loads)} handover(s). A design "
+                f"left in the gap plays filler forever and every counter above still looks right.")
 
-    def assert_phases_separated(self) -> None:
-        """Restate, after a run, what :class:`~waveflow.hw.rf_shot_buf.ShotPhase` refused during it.
+    def assert_finite_completed(self, n_shots: int, n_plays: int | None = None) -> None:
+        """After a **finite** run: every finite shot ended, and every one was accounted for.
 
-        A guard that never fired is not evidence that the invariant held — it is evidence that
-        *something* ran.  Same statement as
-        :meth:`~waveflow.hw.rf_shot_buf.RfShotBuf.assert_phases_separated`, reached through this
-        composite's own phase object.
+        Two separate failures.  A player that never stopped produces a longer perfectly good signal;
+        one that never sent its ``done`` leaves the loader permanently busy — every later load
+        answers ``SHOT_BUSY`` and the design looks like it is working right up until a host tries to
+        change waveform.
+
+        *n_plays* is **total** passes, finite and infinite alike, so it is optional: a run that mixes
+        the two has a loop-pass count that depends on when the preemption landed, and pinning it
+        would be pinning the scheduler rather than the design.  Pass it only where every pass was
+        finite.
         """
-        p = self.phase
-        if p.n_written == 0 or p.n_read == 0:
+        if n_plays is not None and int(self.play.n_plays) != int(n_plays):
             raise AssertionError(
-                f"{type(self).__name__} '{self.name}': the phase guard cannot have proved anything — "
-                f"{p.n_written} words were written and {p.n_read} read. A run in which one side "
-                f"never moved has not exercised the separation it claims to keep.")
-        if p.writing or p.reading:
+                f"{type(self).__name__} '{self.name}': the player finished "
+                f"{int(self.play.n_plays)} pass(es), expected {int(n_plays)}. A play that stopped "
+                f"early carries the right samples as far as it got, so only the count says so.")
+        if int(self.play.n_done) != int(n_shots):
             raise AssertionError(
-                f"{type(self).__name__} '{self.name}': the run ended mid-phase "
-                f"(writing={p.writing}, reading={p.reading}). A shot that was started and not "
-                f"finished leaves the memory holding half a signal, which is invisible from a word "
-                f"count.")
+                f"{type(self).__name__} '{self.name}': the player sent {int(self.play.n_done)} "
+                f"done token(s) for {int(n_shots)} finite shot(s). A missing one leaves the loader "
+                f"permanently busy, and every later load answers SHOT_BUSY.")
+        if self.play.playing:
+            raise AssertionError(
+                f"{type(self).__name__} '{self.name}': the run ended with the player still playing "
+                f"a finite shot. It was asked for a fixed number of passes and did not stop.")

@@ -38,9 +38,10 @@ It went unnoticed because the scaling is *consistent*: a design that writes and 
 same scaled address round-trips perfectly right up to the point where the memory wraps.
 The retired ``bram_toy`` filled 256 of 1024 words at 16 bits — byte addresses 0…510, no wrap — and was
 therefore green either way, which is what a witness cannot prove and a wider design immediately can:
-``examples/rf_shot_buf`` at 64 bits wrote 256 words into 1024 and got the second half back twice.
-:func:`~waveflow.build.wrapper_gen.render_wrapper`'s output is now checked against the *actual*
-generated RTL by ``tests/examples/test_rf_shot_buf_xsi.py``, so the shift is a measurement of what
+the retired ``rf_shot_buf`` example at 64 bits wrote 256 words into 1024 and got the second half
+back twice.  :func:`~waveflow.build.wrapper_gen.render_wrapper`'s output is now checked against the
+*actual* generated RTL by ``tests/examples/test_bram_access_xsi.py``
+(``test_the_wrapper_undoes_the_shift_vitis_actually_emits``), so the shift is a measurement of what
 Vitis emits rather than a belief about it.
 """
 from __future__ import annotations

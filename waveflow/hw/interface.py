@@ -1405,7 +1405,7 @@ class FramedStreamIFSlave(StreamIFSlave):
     hardware.
 
     **Ask for it when the frame boundary is data the design must act on.**  The case it was built for
-    is :class:`waveflow.hw.rf_shot_tx.ShotTxLoad`: a host may send fewer payload words than its
+    is :class:`waveflow.hw.rf_shot_tx.ShotTxLoader`: a host may send fewer payload words than its
     header declared, and without the pin that short frame is a *hang* rather than a verdict — there
     is no other in-band way to say "that is the end", because a payload word and a header word are
     the same 64 bits.  A stream whose frames are only a pysim convenience must NOT ask: an unused

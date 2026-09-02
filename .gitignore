@@ -292,26 +292,27 @@ examples/rf_repeat_play/logs/
 examples/rf_repeat_play/dfx_runtime.txt
 examples/rf_repeat_play/xsi/vectors/
 
-# rf_shot_loop (plans/t2p_lock_chan.md S1): TWO csynth projects, because the RTL hazard scan needs a
-# positive control -- the same composite with the player's `playing = 0` removed.  Both are build
-# output.  Same treatment as rf_repeat_play: the generated top, the copied framework headers, the
-# logs and the vectors are all derivable from the two committed .py files, `src/` and one `pytest`.
-examples/rf_shot_loop/rf_shot_tx_loop_proj/
-examples/rf_shot_loop/rf_shot_tx_loop_dirty_proj/
-examples/rf_shot_loop/gen/
-examples/rf_shot_loop/include/
-examples/rf_shot_loop/results/
-examples/rf_shot_loop/logs/
-examples/rf_shot_loop/dfx_runtime.txt
-examples/rf_shot_loop/xsi/vectors/
 
-# rf_pingpong_rx (plans/t2p_lock_chan.md S2): the continuous-capture receiver.  Same treatment as
-# rf_shot_loop -- the generated top, the copied framework headers, the logs, the results and the
-# vectors are all derivable from the two committed .py files and one `pytest`.
-examples/rf_pingpong_rx/rf_pingpong_rx_proj/
-examples/rf_pingpong_rx/gen/
-examples/rf_pingpong_rx/include/
-examples/rf_pingpong_rx/results/
-examples/rf_pingpong_rx/logs/
-examples/rf_pingpong_rx/dfx_runtime.txt
-examples/rf_pingpong_rx/xsi/vectors/
+# rf_shot_rx (plans/t2p_lock_chan.md S2; renamed from rf_pingpong_rx by plans/rf_shot_unify.md
+# Stage B): the continuous-capture receiver.  Same treatment as every other example -- the generated
+# top, the copied framework headers, the logs, the results and the vectors are all derivable from
+# the two committed .py files and one `pytest`.
+examples/rf_shot_rx/rf_shot_rx_proj/
+examples/rf_shot_rx/gen/
+examples/rf_shot_rx/include/
+examples/rf_shot_rx/results/
+examples/rf_shot_rx/logs/
+examples/rf_shot_rx/dfx_runtime.txt
+examples/rf_shot_rx/xsi/vectors/
+
+# rf_shot_unified (plans/rf_shot_unify.md Stage A): one transmitter, both opcodes, on the lock.  Same
+# treatment as every other example -- the generated top, the copied framework headers, the logs, the
+# results and BOTH scenarios' vectors are derivable from the two committed .py files, the two
+# hand-written mains in xsi/, and one `pytest`.
+examples/rf_shot_unified/rf_shot_tx_unified_proj/
+examples/rf_shot_unified/gen/
+examples/rf_shot_unified/include/
+examples/rf_shot_unified/results/
+examples/rf_shot_unified/logs/
+examples/rf_shot_unified/dfx_runtime.txt
+examples/rf_shot_unified/xsi/vectors/

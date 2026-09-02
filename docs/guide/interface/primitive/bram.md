@@ -296,7 +296,7 @@ words are reachable; everything above that aliases onto a live word, silently.
 So a design that never addresses past that point is green whether or not the wrapper undoes anything.
 The retired `bram_toy` filled 256 of 1024 words at **16 bits** — byte addresses 0…510, no wrap — and
 stayed green straight through the defect. It took a *wider* design to expose it:
-`examples/rf_shot_buf` at 64 bits wrote 256 words into 1024 and got the second half of its shot back
+the retired `rf_shot_buf` example at 64 bits wrote 256 words into 1024 and got the second half of its shot back
 twice.
 
 | word width | shift | words reachable in a 1024-word memory |
