@@ -1,0 +1,17 @@
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_fifo_w64_d1_S.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_fifo_w64_d2_S.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_flow_control_loop_pipe_sequential_init.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_capture_task_64_256_2_16_Pipeline_store_block.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_capture_task_64_256_2_16_s.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_capture_task_64_256_2_16_s_full_r_RAM_AUTO_1R1W.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_capture_task_64_256_2_16_s_full_r_RAM_AUTO_1R1W_ram.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_capture_task_64_256_2_16_s_held_r_RAM_AUTO_1R1W.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_capture_task_64_256_2_16_s_held_r_RAM_AUTO_1R1W_ram.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_window_task_64_256_2_16_Pipeline_await_grant.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_window_task_64_256_2_16_Pipeline_drain_window.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_pingpong_window_task_64_256_2_16_s.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_regslice_both.v
+../rf_pingpong_rx_proj/solution1/syn/verilog/rf_pingpong_rx_rf_relayout_to_dense_task_64_4_2_s.v
+bram_t2p.v
+rf_pingpong_rx_top.v

@@ -998,3 +998,72 @@ is what one expects when the datapath is a BRAM port and a FIFO either way.
 **`store_block` is the interesting one.**  It reads unconditionally and writes conditionally, which
 is the shape that makes a drop possible without stalling an ADC — and it is exactly the shape one
 might expect to cost a cycle.  It does not.
+
+### Checkpoint 4 — the RTL gate, and the claim two regions can make that one cannot
+
+`examples/rf_pingpong_rx` and `tests/examples/test_rf_pingpong_rx_xsi.py`.  A real ADC filling the
+memory, the ping-pong receiver, one sink taking windows.  **There is no command stream**, and that is
+the design rather than an omission: a capture is asked nothing — it is *told* when a region is ready
+by the design itself, and it answers on every window with a header a host can act on.  Compare
+`examples/rf_samp_buf_rx`, whose whole middle is a command layer because *its* reader has to say which
+window it wants.
+
+#### MEASURED at RTL (Vitis HLS 2025.1, xczu48dr, 4 ns; xsim 2025.1; 2800 cycles)
+
+| | value |
+|---|---|
+| windows to the host | **4 frames of 129 words** — one header, 128 samples |
+| headers | `(CAP_OK, 0, 0) (CAP_OK, 128, 0) (CAP_OK, 0, 0) (CAP_OK, 128, 0)` |
+| samples | **2048, contiguous**, codes `1000 … 3047` |
+| words the converter handed over | **640**, in 40 blocks |
+| words the converter could **not** hand over | **0** |
+| host words / last window | **516** / cycle **2205** |
+| achieved II | **1** on `store_block`, `drain_window`, `await_grant`, and the re-layout |
+
+**Bit-identical to the pysim golden** — same four frames, same four headers, same 2048 contiguous
+codes.  That is the twin comparison this arc exists to make, and on RX it is unusually strong,
+because contiguity is a property of the *whole run* rather than of any one window.
+
+#### S2's RTL claim is a POSITIVE one, and S1's could not be
+
+S1 could only report an absence — the cycle-exact scan found nothing — and **its own positive control
+found nothing either**: with one region the shipped design and the deliberately broken one both had
+34 cycles of both-ports-live, and `find_read_during_write` separated neither.  Two disjoint regions
+change the shape of the evidence entirely.  MEASURED on this run's VCD:
+
+| | value |
+|---|---|
+| cycles with **both** memory ports live (`en && we` / `en`) | **140** |
+| of those, cycles with the writer and reader in the **same region** | **0** |
+| of those, cycles at the **same address** | **0** |
+| regions each port visited over those cycles | writer `[70, 70]`, reader `[70, 70]` |
+| `find_read_during_write` | 0 |
+
+The 140 is what makes the 0 mean something: a run where the two were never live together would prove
+nothing at all.  And both ports visit *both* regions in equal measure, so it is not one side sitting
+still either.
+
+> **This is the consequence the plan predicted under *Enable-gating is CLOSED*, now measured:** *"If
+> the writer and reader never share addresses, both ports staying live is irrelevant rather than
+> tolerated, and no enable needs gating."*  Vitis still owns the port enable and still reads
+> speculatively.  With two regions that stops mattering, and the region becomes **enforced at RTL by
+> construction** rather than by an assertion nobody can hear.
+
+**S2 therefore answers the question S1 left open** — *"if the region is to be correctness rather than
+documentation, either the player's read must be conditional or `bram_t2p.v`'s assertion has to become
+the enforcement"* — with a third option the plan itself named and did not cost out: **neither, if the
+regions are disjoint.**
+
+#### No dirty RTL build, and why that is not the S1 situation
+
+The fault-injection knob is `stall_blocks`, and it is a **pysim modelling field**: it reaches no
+template argument, because *a reader that dawdles* is not something the RTL can be asked to do.  A
+control would need a second design, as S1's did.
+
+It is not needed here, and the reason is the one above: S1 needed a control because its claim was an
+*absence*, and an absence can be produced by a scan bound to the wrong nets.  S2's claim is a
+positive, self-witnessing measurement — 140 cycles of simultaneous liveness, 0 of them shared — which
+cannot be produced by a scan that is looking at nothing.  The clean/dirty pairing lives in pysim,
+where the knob does (`tests/hw/test_rf_pingpong_rx.py`), and the RTL gate says so on its own page.
+
+**`WANT_XSI_GATES` 86 → 95.**

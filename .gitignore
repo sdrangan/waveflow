@@ -304,3 +304,14 @@ examples/rf_shot_loop/results/
 examples/rf_shot_loop/logs/
 examples/rf_shot_loop/dfx_runtime.txt
 examples/rf_shot_loop/xsi/vectors/
+
+# rf_pingpong_rx (plans/t2p_lock_chan.md S2): the continuous-capture receiver.  Same treatment as
+# rf_shot_loop -- the generated top, the copied framework headers, the logs, the results and the
+# vectors are all derivable from the two committed .py files and one `pytest`.
+examples/rf_pingpong_rx/rf_pingpong_rx_proj/
+examples/rf_pingpong_rx/gen/
+examples/rf_pingpong_rx/include/
+examples/rf_pingpong_rx/results/
+examples/rf_pingpong_rx/logs/
+examples/rf_pingpong_rx/dfx_runtime.txt
+examples/rf_pingpong_rx/xsi/vectors/
