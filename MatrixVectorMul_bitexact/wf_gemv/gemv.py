@@ -2,8 +2,9 @@
 
 The arithmetic here is ordinary float32 multiply and add.  What makes a naive model wrong is not
 the operations but **the order they are applied in**: floating-point addition is not associative,
-so a dot product's bits are decided by the reduction shape.  ``numpy.dot`` is wrong on half the
-test cases and a plain binary tree on a fifth of them, while being defensible code in both cases.
+so a dot product's bits are decided by the reduction shape.  Measured across the 1320 float
+golden rows: ``numpy.dot`` is wrong on **56%** of them and a plain binary tree on **23%**, while
+being defensible code in both cases.
 
 ## The structure, read from the library and confirmed by measurement
 
@@ -13,7 +14,7 @@ dispatches on the element type (``helpers/funcs/dotHelper.hpp:108-152``)::
     float, double     ->  dot_tree
     everything else   ->  dot_dsp        (not modelled yet -- S3)
 
-``dot_tree`` is ``mul`` then ``sum``, and ``sum`` (``helpers/funcs/sum.hpp:104-118``) is three
+``dot_tree`` is ``mul`` then ``sum``, and ``sum`` (``helpers/funcs/sum.hpp:102-118``) is three
 stages, which together are *not* a plain tree::
 
     preProcess   BinarySum over each beat of ParEntries      -> one value per beat
@@ -196,7 +197,7 @@ def gemv_int(matrix, vector, width: int = 32, signed: bool = True) -> np.ndarray
 
 # --- the alpha/beta overload ------------------------------------------------------------------
 def scal(vector, alpha) -> np.ndarray:
-    """``scal`` (``scal.hpp:66``) -- ``alpha * x``, elementwise, rounded to float32 per element."""
+    """``scal`` (``scal.hpp:65``) -- ``alpha * x``, elementwise, rounded to float32 per element."""
     v = np.asarray(vector, dtype=np.float32)
     a = np.float32(alpha)
     return np.array([np.float32(a * v[i]) for i in range(v.size)], dtype=np.float32)
@@ -207,7 +208,7 @@ def axpy(x, y, alpha) -> np.ndarray:
 
     The library writes it as one expression, ``p_alpha * l_realX + l_realY``, which is a fused
     multiply-add candidate.  An FMA keeps the product's full precision and rounds once; a separate
-    multiply and add round twice.  **They give different bits** -- measured, 25 of 576 rows on the
+    multiply and add round twice.  **They give different bits** -- measured, 25 of 288 rows on the
     S5 golden.  This models the unfused reading, and ``tests/test_gemv_ab.py`` pins that choice
     against the library rather than leaving it to the compiler's mood.
     """
@@ -220,7 +221,7 @@ def axpy(x, y, alpha) -> np.ndarray:
 
 def gemv_ab(matrix, vector, y, alpha, beta, par_entries: int = 4,
             delays: int | None = None) -> np.ndarray:
-    """``yr = alpha * (M x) + beta * y`` -- the 8-arg overload (``gemv.hpp:66-85``).
+    """``yr = alpha * (M x) + beta * y`` -- the 8-arg overload (``gemv.hpp:67-85``).
 
     No new arithmetic: it is the 5-arg ``gemv``, then ``scal``, then ``axpy``.  What matters is
     that ``beta * y`` is rounded to float32 in ``scal`` **before** ``axpy`` adds it -- computing

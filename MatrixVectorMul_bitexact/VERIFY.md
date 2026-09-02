@@ -7,10 +7,10 @@ Run everything from the repository root.
 
 | | needs | takes | proves |
 |---|---|---|---|
-| **1. Run the gates** | Python + numpy | ~3 s | the model matches 2877 checked-in golden rows |
-| **2. Rebuild the goldens** | + `g++`, Vitis headers, BLAS source | ~19 s | those goldens really do come from the vendor's code |
+| **1. Run the gates** | Python + numpy | ~2.3 s | the model matches 2877 checked-in golden rows |
+| **2. Rebuild the goldens** | + `g++`, Vitis headers, BLAS source | ~21 s | those goldens really do come from the vendor's code |
 | **3. Vary the compiler** | same as 2 | ~10 s | the FMA caveat is real, and the golden's build flags matter |
-| **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~13 min | the model matches **synthesized RTL** on all five element paths |
+| **4. Run it through Vitis** | + Vitis HLS and Vivado `xsim` | ~15 min | the model matches **synthesized RTL** on all five element paths |
 
 ## Level 1 — run the gates
 
@@ -19,7 +19,7 @@ source env/bin/activate
 pytest MatrixVectorMul_bitexact/tests/ -q
 ```
 
-Expected: **52 passed** in about 3 seconds.  No Vitis, no compiler, no network — the goldens
+Expected: **52 passed** in about 2.3 seconds.  No Vitis, no compiler, no network — the goldens
 are checked in.
 
 That covers five element paths and 2877 rows:
@@ -84,7 +84,7 @@ diff <(grep -v '^#' golden/gemv_ab_M4_N64.txt) \
      <(grep -v '^#' /tmp/ab_fma.txt) | grep -c '^<'
 ```
 
-Expected: **25**.  Twenty-five of 576 rows change, from nothing but a compiler flag.
+Expected: **25**.  Twenty-five of 288 rows change, from nothing but a compiler flag.
 
 The full picture, all four builds of the same source:
 
@@ -120,7 +120,7 @@ source env/bin/activate
 export WF_BLAS_LIBS=/home/marco/AmirProjects/Vitis_Libraries_2025.1/blas/L1/include/hw
 
 cd MatrixVectorMul_bitexact/verifyGEMV
-vitis-run --mode hls --tcl run.tcl     # ~13 min; WF_DUTS="i32 u32" runs a subset
+vitis-run --mode hls --tcl run.tcl     # ~15 min; WF_DUTS="i32 u32" runs a subset
 python verify.py
 ```
 

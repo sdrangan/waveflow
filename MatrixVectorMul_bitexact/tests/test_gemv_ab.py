@@ -1,6 +1,6 @@
 """S5 gates -- the alpha/beta gemv overload against the real Vitis BLAS kernel.
 
-``yr = alpha * (M x) + beta * y`` (``gemv.hpp:66-85``) is a composition of three shipped kernels:
+``yr = alpha * (M x) + beta * y`` (``gemv.hpp:67-85``) is a composition of three shipped kernels:
 the 5-arg ``gemv`` that S1-S2 already model, then ``scal`` (``beta * y``), then ``axpy``
 (``alpha * dot + that``).  The new arithmetic is one line, and it is a fused-multiply-add
 candidate -- which is what most of this file is about.
@@ -76,7 +76,7 @@ def test_an_fma_model_gives_different_bits() -> None:
     ``axpy`` writes ``p_alpha * l_realX + l_realY`` as one expression.  A compiler is free to
     contract that into a fused multiply-add, which keeps the product's full precision and rounds
     once instead of twice.  Building the *same* dumper with ``-O3 -march=native`` (or
-    ``-mfma -ffp-contract=fast``) changes 25 of 576 rows on ``M4_N64``.
+    ``-mfma -ffp-contract=fast``) changes 25 of 288 rows on ``M4_N64``.
 
     So "bit-exact" here is conditional on the multiply and the add being separately rounded.  This
     test reproduces the contracted reading in float64 -- exact for a float32 product -- and

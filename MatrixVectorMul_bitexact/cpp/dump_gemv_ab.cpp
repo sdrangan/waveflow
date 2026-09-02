@@ -2,10 +2,10 @@
 //
 //     yr = alpha * (M x) + beta * y
 //
-// The 8-arg gemv (gemv.hpp:66-85) is a composition of three shipped kernels, not new arithmetic:
+// The 8-arg gemv (gemv.hpp:67-85) is a composition of three shipped kernels, not new arithmetic:
 //
 //     gemv(...)  ->  l_x        the 5-arg overload, i.e. everything S1-S2 already models
-//     scal(...)  ->  l_y        l_y[j] = beta * y[j]                (scal.hpp:66)
+//     scal(...)  ->  l_y        l_y[j] = beta * y[j]                (scal.hpp:65)
 //     axpy(...)  ->  yr         yr[j]  = alpha * l_x[j] + l_y[j]    (axpy.hpp:71)
 //
 // The interesting line is axpy's `p_alpha * l_realX + l_realY`: a multiply feeding an add, in one

@@ -120,7 +120,7 @@ def test_par_entries_does_not_change_the_result(name: str, build: str) -> None:
     """Measured, not assumed -- and it is the opposite of the float path.
 
     ``dot_dsp`` accumulates in index order at any stream width, so unlike ``dot_tree`` (where
-    ``logParEntries`` sets the tree shape and four of five widths give distinct answers) it is
+    ``logParEntries`` sets the tree shape and the five widths give up to five distinct answers) it is
     not part of the numerical contract here.
     """
     rows = _read_golden(ROOT / "golden" / f"gemv_fixed_{name}_{build}.txt")

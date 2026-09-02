@@ -18,13 +18,13 @@ source /tools/Xilinx/2025.1/Vivado/settings64.sh
 source ../../env/bin/activate
 export WF_BLAS_LIBS=/home/marco/AmirProjects/Vitis_Libraries_2025.1/blas/L1/include/hw
 
-vitis-run --mode hls --tcl run.tcl     # csim -> csynth -> cosim, all nine DUTs (~13 min)
+vitis-run --mode hls --tcl run.tcl     # csim -> csynth -> cosim, all nine DUTs (~15 min)
 python verify.py                        # compare everything against the Python model
 ./report.sh                             # the synthesis numbers, straight from the reports
 ```
 
 `WF_DUTS="i32 u32" vitis-run --mode hls --tcl run.tcl` re-runs a subset, so fixing one DUT does
-not cost a full sweep.
+not cost a full sweep — a single small DUT is about 80 seconds.
 
 `verify.py` reports honestly on a partly-run flow rather than pretending a skipped stage passed,
 and exits non-zero if anything failed or was left empty.
@@ -49,7 +49,7 @@ Each exists because native C-simulation structurally cannot answer its question.
 
 `axpy` computes `p_alpha * l_realX + l_realY` as a **single expression** (`axpy.hpp:71`).  A
 fused multiply-add keeps the product's full precision and rounds once; a separate multiply and
-add round twice.  On native builds this is worth 25 of 576 rows depending on nothing but a
+add round twice.  On native builds this is worth 25 of 288 rows depending on nothing but a
 compiler flag — so which one the *hardware* does is not a detail.
 
 Two independent lines of evidence say **Vitis HLS does not fuse it**:

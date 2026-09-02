@@ -3,7 +3,7 @@
 // ⚠️ This is the one that matters most.  `axpy` computes `p_alpha * l_realX + l_realY` as a
 // SINGLE expression (axpy.hpp:71).  A fused multiply-add keeps the product's full precision and
 // rounds once; a separate multiply and add round twice, and they give different bits -- 25 of
-// 576 rows on the native goldens.  Whether Vitis HLS emits a fused or an unfused operator is a
+// 288 rows on the native goldens.  Whether Vitis HLS emits a fused or an unfused operator is a
 // question only synthesis can answer, and this DUT is how it gets answered.
 //
 //   argv[1] = input file, argv[2] = output file

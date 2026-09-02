@@ -20,7 +20,7 @@ kernel.  The two probe genuinely different failure modes — see "Why this is no
 ```
 MatrixVectorMul_bitexact/
 ├── README.md          this file
-├── VERIFY.md          how to check the claims yourself, at three levels of effort
+├── VERIFY.md          how to check the claims yourself, at four levels of effort
 ├── PLAN.md            the working record: what was measured, what was wrong, what remains
 │
 ├── wf_gemv/           THE MODEL -- the deliverable
@@ -139,13 +139,14 @@ field in hex; the integer golden is decimal, where value and bit pattern coincid
 ## `cpp/` — golden generators
 
 Each `dump_*.cpp` instantiates the shipped library and dumps what *it* produces.  All compile
-natively under `g++` against `<hls_stream.h>`, so regenerating every golden takes ~19 seconds
+natively under `g++` against `<hls_stream.h>`, so regenerating every golden takes ~21 seconds
 rather than a Vitis run.
 
 | file | dumps |
 |---|---|
 | `dump_gemv.cpp` | the float path, sweeping `logParEntries` 0..4 |
-| `dump_gemv_int.cpp` | the `dot_dsp` path at int16 / int32 |
+| `dump_gemv_int.cpp` | the `dot_dsp` path — signed and unsigned, widths 8/16/32/64 |
+| `dump_gemv_f64.cpp` | the **double** path, where `AdderDelay` is 8 rather than 4 |
 | `dump_gemv_fixed.cpp` | the `ap_fixed` path, sweeping (`QMode` x `OMode`) x stream width; the format width comes from the input file's header — built **twice** |
 | `dump_gemv_ab.cpp` | the `alpha`/`beta` overload |
 
@@ -169,7 +170,8 @@ This is the same technique as `fft_bitexact/cpp/vendor_debug/`, at one file inst
 | `gen_input.py` | float inputs — **searches** for vectors on which the candidate models provably disagree |
 | `gen_input_fixed.py` | `ap_fixed` inputs — searches for data that overflows *some* rows and not others, so the `OMode` sweep carries information |
 | `gen_input_ab.py` | `alpha`/`beta` inputs, with hand-chosen scalar pairs |
-| `regen_golden.sh` | rebuilds every input and every golden, ~19s |
+| `gen_input_f64.py` | double inputs — the same discriminating search, at `Delays = 8` |
+| `regen_golden.sh` | rebuilds every input and every golden, ~21s |
 
 The generators **raise rather than settle for weaker data**.  A size that stops discriminating
 announces itself instead of quietly blessing a wrong model — this caught a real error in the
@@ -177,15 +179,16 @@ suite's own discrimination rule (see `PLAN.md`, S5).
 
 ## `tests/`
 
-Plain `pytest MatrixVectorMul_bitexact/tests/` — **45 tests, ~2.6 s, no Vitis and no compiler**,
+Plain `pytest MatrixVectorMul_bitexact/tests/` — **52 tests, ~2.3 s, no Vitis and no compiler**,
 because the goldens are checked in.
 
 | file | tests | gate |
 |---|---|---|
 | `test_gemv.py` | 15 | the float path, six sizes x five widths |
 | `test_gemv_ab.py` | 7 | the `alpha`/`beta` overload |
+| `test_gemv_f64.py` | 6 | **double** — `AdderDelay` 8, and 53-bit arithmetic |
 | `test_gemv_fixed.py` | 18 | `ap_fixed`, both builds, plus the defect's shape |
-| `test_gemv_int.py` | 5 | `dot_dsp` at int16 / int32 |
+| `test_gemv_int.py` | 6 | `dot_dsp`, signed and **unsigned**, widths 8/16/32/64 |
 
 Many of these assert that a **plausible wrong model fails**: `numpy.dot`, a plain binary tree,
 quantizing once at the end instead of per element, ignoring `AP_RND`, and the fused reading of

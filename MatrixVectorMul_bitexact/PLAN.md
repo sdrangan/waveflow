@@ -140,7 +140,7 @@ per-beat tree, and the model would be unpinned in exactly the dimension that mat
 
 **S1 — the reduction tree.**  ✅ **DONE — bit-exact, 32/32 rows over 8 cases.**
 
-The structure is not a tree.  `sum()` (`helpers/funcs/sum.hpp:104-118`) is three stages::
+The structure is not a tree.  `sum()` (`helpers/funcs/sum.hpp:102-118`) is three stages::
 
     preProcess   BinarySum over each beat of ParEntries    -> one value per beat
     padding      pad the beat count to a multiple of Delays
@@ -173,7 +173,8 @@ FFT's S1 isolated the twiddle table.  Deliverable: a C++ dumper, a checked-in go
 asserting that **sequential summation gives a different answer** — if it does not, the case is too
 small to be discriminating and must be enlarged.
 
-**S2 — full `gemv`.**  ✅ **DONE — bit-exact, 460/460 rows.**
+**S2 — full `gemv`.**  ✅ **DONE — bit-exact, 1320/1320 rows.**  Originally 460 over three
+sizes; S5's `m`/`n` sweep took it to six.
 
 Six sizes after the S5 sweep, five stream widths and eight cases each — **1320 rows, 0 differ**:
 
@@ -191,7 +192,7 @@ powers of two, which the library supports and which a full-tree comparison model
 zero-padded to handle at all.
 
 `logParEntries` is swept 0..4 in one golden, because S1 showed the stream width changes the bits.
-It does: on a discriminating case the five widths give four distinct answers, so the sweep is not
+It does: on a discriminating case the five widths give up to **five** distinct answers, so the sweep is not
 padding.
 
 **Some size/width combinations cannot discriminate at all, and the exact condition is now
@@ -213,8 +214,8 @@ The first version of this was found the hard way too: the generator searched for
 vector at `M=1, N=16` and looped forever.  It is bounded, and it raises if a size that *should*
 discriminate does not.
 
-**S3 — the non-float path.**  ✅ **DONE — bit-exact, 75/75 rows** (int32 and int16, three stream
-widths, 5 cases).
+**S3 — the non-float path.**  ✅ **DONE — bit-exact, 135/135 rows.**  Originally 75 (int32 and
+int16 at three stream widths, 5 cases); S7 added unsigned and the width extremes.
 
 `dot_dsp` (`helpers/funcs/dotHelper.hpp:75-100`) is nothing like the float path::
 
@@ -226,7 +227,7 @@ One accumulator, index order, no tree.  Two consequences, both measured and both
 * **`parEntries` does not change the result here** — 0 of 30 rows vary across the swept widths,
   where on the float path it sets the tree shape and *is* part of the numerical contract.  A model
   that carried the float handling over would be wrong.
-* **The accumulator wraps.**  34 of 75 rows differ from an unwrapped (arbitrary-precision) sum, so
+* **The accumulator wraps.**  75 of 135 rows differ from an unwrapped (arbitrary-precision) sum, so
   the goldens genuinely exercise it rather than passing for a model with no wrapping at all.
 
 ### ⚠️ `t_MacDataType` is exposed, documented — and uncompilable
@@ -246,8 +247,9 @@ narrow-elements-wide-accumulator configuration a user would reach for to avoid o
 build**.  A test asserts the header still has that shape, so if AMD fixes it the model's
 single-width assumption is flagged instead of quietly becoming wrong.
 
-**S4 — fixed point.**  ✅ **DONE — bit-exact, 288/288 rows** (`ap_fixed<16,8>` and
-`ap_fixed<24,12>`, four (Q, O) combinations, three stream widths, two builds).
+**S4 — fixed point.**  ✅ **DONE — bit-exact, 576/576 rows** (`ap_fixed<16,8>` and
+`ap_fixed<24,12>`, four (Q, O) combinations, three stream widths, two builds -- 288 rows per
+build).
 
 `ap_fixed` is not `float`, so it takes `dot_dsp` — the same single-accumulator path as S3.  With
 `t_MacDataType` pinned to the element type (S3), the accumulator **is** the element format, so
@@ -304,12 +306,14 @@ later that the model is describing a bug that no longer exists.
 **Not covered:** `ap_ufixed`; `W > 31`; and the two-defect interaction is unexplored, since with
 `t_MacDataType` uncompilable there is no configuration in which both could be exercised at once.
 
-**S6 — Vitis verification.**  ✅ **DONE — 9/9 comparisons, 121 rows** ([`verifyGEMV/`](verifyGEMV/)).
+**S6 — Vitis verification.**  ✅ **DONE — superseded by S8, which grew this to nine DUTs.**
+Recorded as it stood: 9/9 comparisons, 121 rows, three DUTs ([`verifyGEMV/`](verifyGEMV/)).
+For the current state of that package see S8 and its own `README.md`.
 
 C-simulation, C-synthesis and C/RTL co-simulation of three DUTs, each compared against the model
 and against each other.  It answered both questions the native builds could not reach: **HLS does
 not fuse `axpy`'s multiply-add**, and **the `ap_fixed` defect is in the synthesized hardware**,
-not a C-simulation artifact.  See that folder's `README.md` and `ARCHITECTURE.md`.
+not a C-simulation artifact.
 
 One thing worth recording for anyone building a similar package: with `hls::stream` as top-level
 arguments, `csim` and `csynth` both pass and co-simulation then aborts with *"an hls::stream is
@@ -321,11 +325,11 @@ cosims cleanly.
 (6 (alpha, beta) pairs x 3 stream widths x 4 cases, at `M=4, N=64` and `M=7, N=128`), plus three
 new sizes on the float path taking it from 460 to 1320 rows.
 
-The 8-arg overload (`gemv.hpp:66-85`) computes `yr = alpha * (M x) + beta * y` and introduces no
+The 8-arg overload (`gemv.hpp:67-85`) computes `yr = alpha * (M x) + beta * y` and introduces no
 new kernel — it is a composition of three shipped ones::
 
     gemv(...)  ->  l_x        the 5-arg overload, i.e. all of S1-S2
-    scal(...)  ->  l_y        l_y[j] = beta * y[j]                 (scal.hpp:66)
+    scal(...)  ->  l_y        l_y[j] = beta * y[j]                 (scal.hpp:65)
     axpy(...)  ->  yr         yr[j]  = alpha * l_x[j] + l_y[j]     (axpy.hpp:71)
 
 Two things decide the bits, and both are gated by tests that fail if the data stops separating
@@ -348,8 +352,8 @@ multiply and add round **twice**.  Building the same dumper both ways:
 |---|---|
 | `-O2` | identical |
 | `-O2 -ffp-contract=off` | identical |
-| `-O3 -march=native` | **25 of 576 rows differ** |
-| `-O2 -mfma -ffp-contract=fast` | **25 of 576 rows differ** |
+| `-O3 -march=native` | **25 of 288 rows differ** |
+| `-O2 -mfma -ffp-contract=fast` | **25 of 288 rows differ** |
 
 `-O0` suppresses it on this host only because the default `-march` has no FMA; on a host whose
 baseline includes it the golden would silently change.  So `tools/regen_golden.sh` now passes
@@ -451,7 +455,7 @@ reading of "systolic".  It is **out of scope** by decision (2026-09-02): this pr
   `gemv_fixed_top` co-simulates to exactly what `gemv_fixed_as_shipped` predicts, 9/9 rows.
 * ~~**Is `t_LogParEntries` part of the contract or an implementation detail?**~~  **Settled by
   measurement: it depends on the path.**  On `dot_tree` (float, double) it sets the tree shape and
-  four of five swept widths give distinct answers, so a model must take it as a parameter and any
+  the five swept widths give up to five distinct answers, so a model must take it as a parameter and any
   design that retunes it changes its output.  On `dot_dsp` (integer, `ap_fixed`) it changes
   nothing — the accumulation is in index order at any width.  Tests pin both.
 * **Should the `ap_fixed` defect be reported upstream?**  It is a one-line fix and it silently

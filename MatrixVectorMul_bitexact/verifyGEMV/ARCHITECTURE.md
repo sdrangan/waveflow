@@ -63,7 +63,7 @@ postProcess   per chunk of Delays beats: BinarySum       (a tree)
 `Delays` is `AdderDelay<float>::m_Delays` = **4**, the floating-point adder latency the design
 pipelines around.  A property of the element type, not a user knob, and it changes the answer.
 
-The three DUTs vary what is checked: `f32` is the baseline, `f32_wide` shows the stream width is
+These three vary what is checked: `f32` is the baseline, `f32_wide` shows the stream width is
 not special at 4, and `f32_pad` is the only one whose beat count is **not** a multiple of
 `Delays` — so it is the only one where `padding()` actually pads.
 
@@ -87,7 +87,7 @@ No new kernel — a composition of three shipped ones:
 
 ```
 gemv(...)  ->  l_x     the 5-arg overload above
-scal(...)  ->  l_y     l_y[j] = beta * y[j]                  (scal.hpp:66)
+scal(...)  ->  l_y     l_y[j] = beta * y[j]                  (scal.hpp:65)
 axpy(...)  ->  yr      yr[j]  = alpha * l_x[j] + l_y[j]      (axpy.hpp:71)
 ```
 
