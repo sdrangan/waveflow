@@ -92,7 +92,7 @@ def frame(opcode: int, tid: int, nsamp: int, nrepeat: int, payload: np.ndarray) 
 class Bench:
     """The design, a frame source, and a sink — no converter, and that is deliberate.
 
-    ``examples/rf_shot_unified`` puts a real ``Rfdc`` on the end because the property *that* graph
+    ``examples/rf_shot_tx`` puts a real ``Rfdc`` on the end because the property *that* graph
     claims is that it keeps a DAC fed.  What is on trial here is the **merge**, and a converter would
     add a second thing that can fail while proving nothing extra about it: the player's metronome is
     handed over directly, so the pacing is the same either way.
@@ -527,7 +527,7 @@ def test_the_design_is_three_tasks_and_three_channels_plus_the_lock():
     comp = elaborate(RfShotTx,
                      {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH, "nword": NWORD,
                       "base": BASE, "shift": 2, "blk_words": BLK_WORDS},
-                     name="rf_shot_tx_unified")
+                     name="rf_shot_tx")
     spec = composite_top_spec(comp, width=WORD_BW)
     assert len(spec.tasks) == 3
     assert [(p.name, p.kind) for p in spec.ports] == [

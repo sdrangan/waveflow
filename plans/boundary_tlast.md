@@ -125,7 +125,7 @@ Derived from `examples/*/gen/*.cpp`. `S` = schema/host, `P` = payload/host, `C` 
 | `rf_repeat_play` | `cmd_in` `resp_out` / `wave_in` `samp_in` `samp_out` | 2×S frame, rest C/P |
 | `rf_samp_buf_rx` | `s_cmd` `s_resp` / `s_in` `s_out` | 2×S frame, 2×C none |
 | `rf_samp_buf_tx` | `s_resp` / `s_in` `s_out` | 1×S frame, 2×C none |
-| `rf_shot_unified` | `s_in` `resp_out` framed; `samp_out` not | **done — the reference** |
+| `rf_shot_tx` | `s_in` `resp_out` framed; `samp_out` not | **done — the reference** |
 | `block_scale` | `s_in` | **already `axi4s` — host-activated flow** |
 
 Roughly **16 schema ports across 9 designs** in scope for Stage 2, and no converter port moves at

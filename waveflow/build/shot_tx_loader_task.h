@@ -2,7 +2,7 @@
 #define WAVEFLOW_SHOT_TX_LOADER_TASK_H
 // shot_tx_loader_task.h — read a frame, decide, take the region, write it, hand it back, answer.
 //
-// The unified shot transmitter's command layer (plans/rf_shot_unify.md Stage A).  Its Python twin is
+// The shot transmitter's command layer (plans/rf_shot_unify.md).  Its Python twin is
 // ShotTxLoader.run_iter, which is the pysim golden and NOT the source of this file.
 //
 // IT IS shot_loop_load_task.h PLUS THE TWO THINGS THE FINITE PATH NEEDS.

@@ -278,7 +278,7 @@ class ShotPlayCmd(DataList):
 #: Schema classes a build emits C++ headers for.  ``ShotTxHdr`` and ``ShotTxResp`` are **not** here:
 #: they are still :mod:`waveflow.hw.rf_shot_tx`'s at Stage A — see the ownership decision recorded in
 #: ``plans/rf_shot_unify.md``.  A build wanting this design needs both lists.
-UNIFIED_TX_SCHEMA_CLASSES = [ShotPlayCmd]
+SHOT_PLAY_SCHEMA_CLASSES = [ShotPlayCmd]
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +751,7 @@ class RfShotTx(FreeRunMod):
     which addresses.
     """
 
-    cpp_kernel_name: ClassVar[str | None] = "rf_shot_tx_unified"
+    cpp_kernel_name: ClassVar[str | None] = "rf_shot_tx"
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
     #: The player class this composite instantiates.  A ClassVar, so it is changed by subclassing and

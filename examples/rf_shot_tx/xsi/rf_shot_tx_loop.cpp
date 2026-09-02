@@ -1,4 +1,4 @@
-// rf_shot_tx_unified_loop.cpp -- HAND-WRITTEN.  Scenario TWO: an INFINITE shot, preempted.
+// rf_shot_tx_loop.cpp -- HAND-WRITTEN.  Scenario TWO: an INFINITE shot, preempted.
 //
 // WHY A SECOND MAIN AND NOT A SECOND TESTBENCH.
 //
@@ -31,10 +31,10 @@
 // Regenerate the harness, not this file.
 #include <cstdio>
 
-#include "rf_shot_tx_unified_tb_harness.h"
+#include "rf_shot_tx_tb_harness.h"
 
 int main() {
-    rf_shot_tx_unified_tb::Harness h("rf_shot_tx_unified_loop.wdb");
+    rf_shot_tx_tb::Harness h("rf_shot_tx_loop.wdb");
     // Reassigned BEFORE run(), because the models load and dump in pre_sim / post_sim -- the same
     // lifecycle phases the generated harness sets these in, so this is a different value for the
     // same knob rather than a different mechanism.

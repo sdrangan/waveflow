@@ -1,6 +1,6 @@
 """rf_shot_rx.py — ``plans/t2p_lock_chan.md`` S2: **capture continuously and lose nothing**.
 
-The RX half of the story ``examples/rf_shot_unified`` tells on TX.  There the two regions were an
+The RX half of the story ``examples/rf_shot_tx`` tells on TX.  There the two regions were an
 optimisation nobody needed — a handover is a *gap*, and you had already accepted discontinuity when
 you asked to change waveform.  Here they are correctness: **you cannot back-pressure an ADC**, so a
 reader holding the region the capture needs is not a gap, it is samples that no longer exist::

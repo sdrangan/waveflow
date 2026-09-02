@@ -1,4 +1,4 @@
-"""The unified transmitter's **lowering**: what the merge becomes, and whether Vitis takes it.
+"""The shot transmitter's **lowering**: what the merge becomes, and whether Vitis takes it.
 
 ``plans/rf_shot_unify.md`` Stage A.  The pysim gates prove the merge behaves like both predecessors;
 this proves the other half — that it reaches a generated top with the memory ports on the right side
@@ -26,12 +26,12 @@ from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES
 from waveflow.hw.rf_shot_tx import (
     SHOT_TX_SCHEMA_CLASSES,
-    UNIFIED_TX_SCHEMA_CLASSES,
+    SHOT_PLAY_SCHEMA_CLASSES,
     RfShotTx,
 )
 from waveflow.toolchain import toolchain
 
-TOP = "rf_shot_tx_unified"
+TOP = "rf_shot_tx"
 WORD_BW = 64
 SPW = 4
 DEPTH = 256
@@ -158,7 +158,7 @@ def test_the_predecessors_are_gone():
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(mod)
     # And the surviving name is the merged design, not the five-task one it replaced.
-    assert RfShotTx.cpp_kernel_name == "rf_shot_tx_unified"
+    assert RfShotTx.cpp_kernel_name == "rf_shot_tx"
     assert {c.__name__ for c in SHOT_TX_SCHEMA_CLASSES} == {"ShotTxHdr", "ShotTxResp"}, (
         "the boundary vocabulary moved into this module when rf_shot_tx.py's old contents went; a "
         "build that emits no rf_shot_tx_hdr.h has a loader that cannot parse a command.")
@@ -175,7 +175,7 @@ def _stage(tmp_path: Path) -> Path:
         MemLockStep,
         MemMgrStep,
         RfShotBufStep,
-        RfShotTxUnifiedStep,
+        RfShotTxStep,
         StreamUtilsStep,
     )
     from waveflow.hw.arrayutils import ArrayUtilsStep
@@ -192,11 +192,11 @@ def _stage(tmp_path: Path) -> Path:
     dag.add(MemMgrStep(output_dir=inc))
     # The re-layout body is Stage A's and shared; the two merged bodies are this design's.
     dag.add(RfShotBufStep(output_dir=inc))
-    dag.add(RfShotTxUnifiedStep(output_dir=inc))
+    dag.add(RfShotTxStep(output_dir=inc))
     dag.add(MemLockStep(output_dir=inc))
     # BOTH schema lists: the header and the verdict are still rf_shot_tx's at Stage A, and the play
     # command is the merged design's own.  See the ownership decision in plans/rf_shot_unify.md.
-    for cls in [*SHOT_TX_SCHEMA_CLASSES, *LOCK_SCHEMA_CLASSES, *UNIFIED_TX_SCHEMA_CLASSES]:
+    for cls in [*SHOT_TX_SCHEMA_CLASSES, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
         dag.add(DataSchemaStep(cls, word_bw_supported=[WORD_BW], include_dir=inc))
     # The serializers the re-layout body calls.  The SLOT element is the converter's container width
     # and the DENSE element the effective one; at 14-in-16 they differ, which is what makes the last

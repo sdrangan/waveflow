@@ -369,8 +369,8 @@ class RfPingPongStep(Buildable):
         return src_path.read_text(encoding="utf-8")
 
 
-class RfShotTxUnifiedStep(Buildable):
-    r"""Copy the **unified** shot transmitter's two hand-written ``hls::task`` bodies.
+class RfShotTxStep(Buildable):
+    r"""Copy the shot transmitter's two hand-written ``hls::task`` bodies.
 
     ``plans/rf_shot_unify.md`` Stage A.  :mod:`waveflow.hw.rf_shot_tx` is framework, so its
     bodies ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles —
@@ -385,7 +385,7 @@ class RfShotTxUnifiedStep(Buildable):
     The loader body ``#include``\ s the generated ``rf_shot_tx_hdr.h`` / ``rf_shot_tx_resp.h`` and
     both bodies ``#include`` ``shot_play_cmd.h``, so ``DataSchemaStep``\ s for
     :data:`~waveflow.hw.rf_shot_tx.SHOT_TX_SCHEMA_CLASSES` **and**
-    :data:`~waveflow.hw.rf_shot_tx.UNIFIED_TX_SCHEMA_CLASSES` must write into the same
+    :data:`~waveflow.hw.rf_shot_tx.SHOT_PLAY_SCHEMA_CLASSES` must write into the same
     *output_dir*, along with :class:`MemLockStep`'s ``mem_lock.h``.  The re-layout body is Stage A's
     and comes from :class:`RfShotBufStep`.
     """
@@ -406,7 +406,7 @@ class RfShotTxUnifiedStep(Buildable):
 
     def generate(self, key: str, config: BuildConfig) -> str:
         if key not in self._SRC:
-            raise KeyError(f"Unknown RfShotTxUnifiedStep output key: {key!r}")
+            raise KeyError(f"Unknown RfShotTxStep output key: {key!r}")
         src_path = _SRC_DIR / f"{key}.h"
         if not src_path.exists():
             raise FileNotFoundError(f"RfShotTx source file not found: {src_path}")

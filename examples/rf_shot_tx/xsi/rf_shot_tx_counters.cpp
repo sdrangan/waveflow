@@ -1,4 +1,4 @@
-// rf_shot_tx_unified_counters.cpp -- HAND-WRITTEN.  Scenario ONE: a FINITE shot.
+// rf_shot_tx_counters.cpp -- HAND-WRITTEN.  Scenario ONE: a FINITE shot.
 //
 // Runs the generated harness on `vectors/cmd` and prints the model counters as KEY=VALUE lines.
 //
@@ -25,10 +25,10 @@
 // Regenerate the harness, not this file.
 #include <cstdio>
 
-#include "rf_shot_tx_unified_tb_harness.h"
+#include "rf_shot_tx_tb_harness.h"
 
 int main() {
-    rf_shot_tx_unified_tb::Harness h("rf_shot_tx_unified_counters.wdb");
+    rf_shot_tx_tb::Harness h("rf_shot_tx_counters.wdb");
     h.run(1400);
 
     // The DAC plays whatever is in its FIFO when a sample period comes due, INCLUDING nothing.

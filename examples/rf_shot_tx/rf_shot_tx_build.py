@@ -1,4 +1,4 @@
-"""rf_shot_unified_build.py — build the unified transmitter: pysim -> codegen -> csynth.
+"""rf_shot_tx_build.py — build the shot transmitter: pysim -> codegen -> csynth.
 
 ``plans/rf_shot_unify.md`` Stage A.  The rungs, in the order a failure is cheapest to diagnose:
 
@@ -9,9 +9,9 @@
     codegen_tb  -> the XSI harness + main + both scenario bundles
     csynth      -> Vitis HLS; re-emits ``rtl_<wrapper>.f`` from the RTL on disk
 
-The RTL rung is the ``-m xsi`` gate in ``tests/examples/test_rf_shot_unified_xsi.py``.
+The RTL rung is the ``-m xsi`` gate in ``tests/examples/test_rf_shot_tx_xsi.py``.
 
-What a simulator elaborates is the **wrapper** (``rf_shot_tx_unified_top``), not the kernel.
+What a simulator elaborates is the **wrapper** (``rf_shot_tx_top``), not the kernel.
 
 **The reset trap is closed here and only here.**  The player holds four ``static``\\ s and **writes
 before it reads** — writing without being asked is what *the side that cannot stop* means — so
@@ -47,7 +47,7 @@ from waveflow.build.streamutils import (  # noqa: E402
     MemLockStep,
     MemMgrStep,
     RfShotBufStep,
-    RfShotTxUnifiedStep,
+    RfShotTxStep,
     StreamUtilsStep,
     XsiHarnessStep,
 )
@@ -59,13 +59,13 @@ from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES  # noqa: E402
 from waveflow.hw.rf_relayout import dense_elem_type, slot_elem_type, slots_per_word  # noqa: E402
 from waveflow.hw.rf_shot_tx import SHOT_TX_SCHEMA_CLASSES  # noqa: E402
 from waveflow.hw.rf_shot_tx import (  # noqa: E402
-    UNIFIED_TX_SCHEMA_CLASSES,
+    SHOT_PLAY_SCHEMA_CLASSES,
     RfShotTx,
 )
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 
-from examples.rf_shot_unified.rf_shot_unified import (  # noqa: E402
+from examples.rf_shot_tx.rf_shot_tx import (  # noqa: E402
     BASE,
     BLKSIZE,
     DEPTH,
@@ -73,12 +73,12 @@ from examples.rf_shot_unified.rf_shot_unified import (  # noqa: E402
     SCENARIOS,
     SPW,
     WORD,
-    RfShotUnifiedTB,
+    RfShotTxTB,
     write_scenario,
 )
 
 #: The generated kernel's name, and the wrapper's.
-TOP = "rf_shot_tx_unified"
+TOP = "rf_shot_tx"
 WRAPPER = f"{TOP}_top"
 INCLUDE_DIR = "include"
 
@@ -108,20 +108,20 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     inner = BuildDag()
     # The dumper step consumes the design source (it is derived from the class), so the inner DAG
     # needs the same source node the outer one has.
-    inner.add(SourceStep(artifact="rf_shot_unified_source", path=HERE / "rf_shot_unified.py"))
+    inner.add(SourceStep(artifact="rf_shot_tx_source", path=HERE / "rf_shot_tx.py"))
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     # `render_top` includes memmgr.hpp unconditionally, so a generated top needs it beside the
     # sources even when the design has no m_axi port at all.
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
     # The re-layout body is Stage A's and shared; the two merged bodies are this design's.
     inner.add(RfShotBufStep(output_dir=INCLUDE_DIR))
-    inner.add(RfShotTxUnifiedStep(output_dir=INCLUDE_DIR))
+    inner.add(RfShotTxStep(output_dir=INCLUDE_DIR))
     inner.add(MemLockStep(output_dir=INCLUDE_DIR))
     inner.add(XsiHarnessStep(output_dir="xsi"))
     # THREE schema lists.  The header and the verdict are still rf_shot_tx's at Stage A -- see the
     # ownership decision in plans/rf_shot_unify.md -- the lock's are the lock's, and the play command
     # is the merged design's own.
-    for cls in [*SHOT_TX_SCHEMA_CLASSES, *LOCK_SCHEMA_CLASSES, *UNIFIED_TX_SCHEMA_CLASSES]:
+    for cls in [*SHOT_TX_SCHEMA_CLASSES, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
         inner.add(DataSchemaStep(cls, word_bw_supported=[word_bw], include_dir=INCLUDE_DIR))
     # The serializers the re-layout body calls.  The SLOT element is the converter's container width
     # and the DENSE element the effective one; at 14-in-16 they differ, which is what makes the last
@@ -132,7 +132,7 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     inner.add(GenWrapperStep(name="wrapper", comp_class=RfShotTx, elab_params=dict(_ELAB),
                              width=word_bw, output_dir="xsi"))
     inner.add(AddVcdTopStep(name="vcd_dumper", comp_class=RfShotTx,
-                            source_artifact="rf_shot_unified_source", output_dir="xsi",
+                            source_artifact="rf_shot_tx_source", output_dir="xsi",
                             top=WRAPPER))
     results = inner.run(config, force=True)
     failed = [n for n, r in results.items() if not r.success]
@@ -174,16 +174,16 @@ def _memory_class():
     return mems.pop()
 
 
-def make_xsi_tb() -> RfShotUnifiedTB:
+def make_xsi_tb() -> RfShotTxTB:
     """The graph the XSI testbench is generated from — the same class the pysim golden runs."""
-    return RfShotUnifiedTB(name="xsi_tb", sim=Simulation())
+    return RfShotTxTB(name="xsi_tb", sim=Simulation())
 
 
 def generate_tb(out_dir: Path = HERE) -> None:
     """Generate the XSI harness + main from the TB graph, and write **both** scenario bundles.
 
     Both, because the second is driven by a hand-written main beside the generated one
-    (``rf_shot_tx_unified_loop.cpp``): the graph is identical and only the bundle names differ, so a
+    (``rf_shot_tx_loop.cpp``): the graph is identical and only the bundle names differ, so a
     second testbench *graph* would be a second model of one design.
     """
     tb = make_xsi_tb()
@@ -206,13 +206,13 @@ def generate_tb(out_dir: Path = HERE) -> None:
 class PySimStep(BuildStep):
     """Run **both** scenarios in SimPy — the toolchain-free golden."""
 
-    description = "Run the RfShotUnifiedTB pysim golden (finite, infinite, and every verdict)."
-    consumes = ["rf_shot_unified_source"]
-    produces: ClassVar[dict] = {"pysim_results": Path("results/rf_shot_unified_pysim.json")}
+    description = "Run the RfShotTxTB pysim golden (finite, infinite, and every verdict)."
+    consumes = ["rf_shot_tx_source"]
+    produces: ClassVar[dict] = {"pysim_results": Path("results/rf_shot_tx_pysim.json")}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
-        from examples.rf_shot_unified.rf_shot_unified import (
+        from examples.rf_shot_tx.rf_shot_tx import (
             check_finite_playout,
             check_loop_playout,
             check_responses,
@@ -239,7 +239,7 @@ class PySimStep(BuildStep):
                 "underrun": int(tb.dac_if.underrun),
                 "blocks_delivered": int(tb.dac_if.blocks_delivered),
             }
-        p = config.root_dir / "results" / "rf_shot_unified_pysim.json"
+        p = config.root_dir / "results" / "rf_shot_tx_pysim.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(out, indent=2), encoding="utf-8")
         return {"pysim_results": p}
@@ -248,8 +248,8 @@ class PySimStep(BuildStep):
 @dataclass(kw_only=True)
 class CodegenDutStep(BuildStep):
     description = "Lower RfShotTx to its ap_ctrl_none top + the memory + the wrapper."
-    consumes = ["rf_shot_unified_source"]
-    produces: ClassVar[dict] = {"rf_shot_tx_unified_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
+    consumes = ["rf_shot_tx_source"]
+    produces: ClassVar[dict] = {"rf_shot_tx_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
                                 "run_tcl": Path(f"{TOP}.tcl"),
                                 "dut_ports": Path(f"xsi/{TOP}_ports.h"),
                                 "wrapper_v": Path(f"xsi/{WRAPPER}.v"),
@@ -261,7 +261,7 @@ class CodegenDutStep(BuildStep):
     def run(self, config: BuildConfig, **_) -> dict:
         generate_dut(config.root_dir)
         root = config.root_dir
-        return {"rf_shot_tx_unified_cpp": root / GEN_DIR / f"{TOP}.cpp",
+        return {"rf_shot_tx_cpp": root / GEN_DIR / f"{TOP}.cpp",
                 "run_tcl": root / f"{TOP}.tcl",
                 "dut_ports": root / "xsi" / f"{TOP}_ports.h",
                 "wrapper_v": root / "xsi" / f"{WRAPPER}.v",
@@ -272,8 +272,8 @@ class CodegenDutStep(BuildStep):
 
 @dataclass(kw_only=True)
 class CodegenTbStep(BuildStep):
-    description = "Lower RfShotUnifiedTB to the XSI harness + main + both scenario bundles."
-    consumes = ["rf_shot_unified_source", "dut_ports"]
+    description = "Lower RfShotTxTB to the XSI harness + main + both scenario bundles."
+    consumes = ["rf_shot_tx_source", "dut_ports"]
     produces: ClassVar[dict] = {"tb_harness": Path(f"xsi/{TOP}_tb_harness.h"),
                                 "tb_main": Path(f"xsi/{TOP}_bfm_tb.cpp")}
     params: ClassVar[dict] = {}
@@ -293,7 +293,7 @@ class CSynthStep(BuildStep):
     """
 
     description = "Run Vitis HLS C-synthesis of the generated top."
-    consumes = ["rf_shot_tx_unified_cpp", "run_tcl"]
+    consumes = ["rf_shot_tx_cpp", "run_tcl"]
     produces: ClassVar[dict] = {"report_dir": Path(f"{TOP}_proj/solution1")}
     params: ClassVar[dict] = {"live_output": False}
 
@@ -312,9 +312,9 @@ class CSynthStep(BuildStep):
         return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
 
 
-def build_rf_shot_unified_dag() -> BuildDag:
+def build_rf_shot_tx_dag() -> BuildDag:
     dag = BuildDag()
-    dag.add(SourceStep(artifact="rf_shot_unified_source", path=HERE / "rf_shot_unified.py"))
+    dag.add(SourceStep(artifact="rf_shot_tx_source", path=HERE / "rf_shot_tx.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
     dag.add(CodegenTbStep(name="codegen_tb"))
@@ -325,7 +325,7 @@ def build_rf_shot_unified_dag() -> BuildDag:
 if __name__ == "__main__":
     from waveflow.build.cli import run_dag_cli
 
-    run_dag_cli(build_rf_shot_unified_dag,
-                description="Build the rf_shot_unified design: pysim -> codegen -> csynth.",
+    run_dag_cli(build_rf_shot_tx_dag,
+                description="Build the rf_shot_tx design: pysim -> codegen -> csynth.",
                 default_through="csynth",
                 root_dir=HERE)

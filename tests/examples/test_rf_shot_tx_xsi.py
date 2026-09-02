@@ -1,6 +1,6 @@
 """One transmitter, both opcodes, at RTL — ``plans/rf_shot_unify.md`` Stage A, gates 1-4.
 
-What xsim elaborates is the **wrapper** (``rf_shot_tx_unified_top``): the kernel plus its
+What xsim elaborates is the **wrapper** (``rf_shot_tx_top``): the kernel plus its
 hand-written ``bram_t2p`` memory, so the testbench sees only AXI-Stream and the converter model
 consumes the playout exactly as it consumes any other design's.
 
@@ -27,7 +27,7 @@ The infinite predecessor's gate paired its clean run against a design with the p
 ``playing = 0`` removed, because ``bram_t2p.v``'s ``$error`` is discarded by XSI and a scan that
 finds nothing is otherwise indistinguishable from a scan bound to the wrong nets.  That control
 proved the *lock's* ordering, and it survives in pysim as
-``tests/hw/test_rf_shot_tx_unified.py::test_a_player_that_grants_and_keeps_reading_raises``, where
+``tests/hw/test_rf_shot_tx.py::test_a_player_that_grants_and_keeps_reading_raises``, where
 the guard raises rather than producing a plausible sample.  Shipping a second deliberately broken
 RTL design to re-prove it would be a second copy of a finding, not a second finding.  What is new
 here is the **merge**, and the merge is proven by the two scenarios above and by
@@ -69,7 +69,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.rf_shot_unified.rf_shot_unified import (
+from examples.rf_shot_tx.rf_shot_tx import (
     BASE,
     BLKSIZE,
     FINITE_FRAMES,
@@ -84,13 +84,13 @@ from examples.rf_shot_unified.rf_shot_unified import (
     run_pysim,
     segments,
 )
-from examples.rf_shot_unified.rf_shot_unified_build import RTL_FILES, TOP, WRAPPER, generate_tb
+from examples.rf_shot_tx.rf_shot_tx_build import RTL_FILES, TOP, WRAPPER, generate_tb
 from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
 from waveflow.hw.rf_shot_tx import SHOT_STATUS_NAMES, ShotTxResp
 from waveflow.utils.bram_trace import describe, find_read_during_write, sampled
 
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_unified"
+ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_tx"
 XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
@@ -267,7 +267,7 @@ def runs(tmp_path_factory) -> dict:
     """
     _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
     _require(VERILOG.is_dir(),
-             f"no csynth RTL at {VERILOG} — run rf_shot_unified_build.py --through csynth")
+             f"no csynth RTL at {VERILOG} — run rf_shot_tx_build.py --through csynth")
     # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it did
     # not produce reports "a real behaviour change" when the truth is a stale artifact.
     _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
@@ -275,13 +275,13 @@ def runs(tmp_path_factory) -> dict:
     # is a prerequisite rather than a checked-in file — and a missing one must SKIP loudly rather
     # than raise, which is what the whole-session gate in tests/conftest.py is about.
     for f in (*RTL_FILES, f"vcd_dumper_{WRAPPER}.v", f"{TOP}_hazard.json"):
-        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_unified_build.py")
+        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_tx_build.py")
     generate_tb(ROOT)
     (XSI / f"rtl_{WRAPPER}.f").write_text(
         render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
     shutil.rmtree(XSI / "xsim.dir" / WRAPPER, ignore_errors=True)
 
-    keep = tmp_path_factory.mktemp("rf_shot_unified_xsi")
+    keep = tmp_path_factory.mktemp("rf_shot_tx_xsi")
     out: dict[str, dict] = {}
     for name, tb, resp_b, rf_b, frames, check in SCENARIOS:
         for od in (resp_b, rf_b):

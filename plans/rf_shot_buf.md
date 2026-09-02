@@ -10,7 +10,7 @@ the **finite** sample buffer, its examples, and its documentation. The streaming
 > the five-task `RfShotTx` composite that sat on it, `examples/rf_shot_buf` and
 > `examples/rf_shot_play`, and all of their gates. One design replaces all of it:
 > `waveflow/hw/rf_shot_tx.py`'s `RfShotTx`, on `LockedT2pMemIF`, serving both play modes, with
-> `examples/rf_shot_unified` as its example. `RfShotBuf` survives as the **family name** — the
+> `examples/rf_shot_tx` as its example. `RfShotBuf` survives as the **family name** — the
 > receiver is `waveflow/hw/rf_shot_rx.py`'s `RfShotRx`.
 >
 > **Stages C, D and E below all assume the deleted structure** and cannot be built as written.
