@@ -200,7 +200,7 @@ class ShotTxHdr(DataList):
 
     include_filename: ClassVar[str | None] = "rf_shot_tx_hdr.h"
     elements = {
-        "opcode":  {"schema": OpField, "description": "SHOT_LOAD or SHOT_END"},
+        "opcode":  {"schema": OpField, "description": "SHOT_LOAD, SHOT_LOOP or SHOT_END"},
         "tid":     {"schema": IdxField, "description": "transaction id, echoed on the response"},
         "nsamp":   {"schema": IdxField, "description": "samples the host is sending (0 for END)"},
         "nrepeat": {"schema": IdxField,
