@@ -529,3 +529,142 @@ two-designs-one-job state this plan exists to end.
 touched. Stage B is a pure deletion; a single-to-two-region refactor inside it would destroy the
 property that makes the stage worth having. It is still open, and it is still the thing that would
 make TX and RX the same shape.
+
+---
+
+## Stage C as built — the naming leftovers, and two pages that had been wrong all arc
+
+Built 2026-09-02 on branch `rf-shot-unify-c` off `main` (PR #181 merged as `25ac62e`). **Prose and
+renames only**; no design's behaviour changed, and the way that is checked is that every recorded
+number is asserted exactly by a gate that still passes.
+
+### 1. "unified" is gone
+
+It was a name relative to two predecessors that no longer exist, so it had become debris. Stage B
+left it deliberately — a pure deletion must not touch the Stage-A gate — and nothing constrained it
+any more.
+
+| | before | after |
+|---|---|---|
+| kernel | `cpp_kernel_name = "rf_shot_tx_unified"` | `"rf_shot_tx"` |
+| example | `examples/rf_shot_unified/` | `examples/rf_shot_tx/` |
+| build step | `RfShotTxUnifiedStep` | `RfShotTxStep` |
+| schema list | `UNIFIED_TX_SCHEMA_CLASSES` | `SHOT_PLAY_SCHEMA_CLASSES` |
+| testbench | `RfShotUnifiedTB` | `RfShotTxTB` |
+| tests | `test_rf_shot_tx_unified*`, `test_rf_shot_unified_xsi` | `test_rf_shot_tx*`, `test_rf_shot_tx_xsi` |
+
+TX and RX are now `examples/rf_shot_{tx,rx}` driving `waveflow/hw/rf_shot_{tx,rx}.py` through kernels
+named `rf_shot_{tx,rx}` — the pair this plan asked for.
+
+**`cpp_kernel_name` feeds the generated top and the wrapper**, so this renamed RTL files:
+`rf_shot_tx_unified.v` → `rf_shot_tx.v`, `_top` → `rf_shot_tx_top`, and the FIFO modules with them.
+Re-generated and re-csynthed.
+
+**EVERY RECORDED NUMBER IS IDENTICAL**, and the gate asserting each one exactly is what proves it:
+`resp_last` 269 / 500, DAC 359 words, 0 zero-filled, 1 underrun at cycle 4, blocks `(F,3)(P,12)(F,7)`
+and `(F,3)(P,1)(F,2)(P,1)(F,15)`, 18 / 55 both-live cycles, 0 / 2 collisions, writes `192..255`, Fmax
+**360.77 MHz** — the same figure as before the rename.
+
+**The five II modules did NOT change name**, and that is why the II gate still finds them rather than
+skipping (which would have read as a pass): they are named for the task **bodies**
+(`shot_tx_loader_task_*`, `shot_tx_player_task_*`, `rf_relayout_to_slots_task_*`), and the rename
+never touched a body filename.
+
+Left alone deliberately: the AMD *Unified Installer*, `shared_mem`'s *unified BuildDag*, and
+`rf_shot_tx.py`'s own record that the class *"was built under the name `RfShotTxUnified`"* — that one
+is history, in the past tense, and true.
+
+### 2. `choosing.md` was wrong in both directions, and the fix is structural
+
+The page claimed **`RfStreamBuf` is built and RTL-gated**. No class of that name exists and none ever
+has. It also called `RfShotBuf` *designed, not built*, when both its halves were by then gated at
+RTL. Patching two sentences would have left the page's entire comparison built around a class that
+does not exist.
+
+**Both names are family names**, and the page now says so first and resolves them:
+
+| family | transmit | receive |
+|---|---|---|
+| `RfShotBuf` (finite) | `RfShotTx` | `RfShotRx` |
+| `RfStreamBuf` (continuous) | `RfTxStream` | `RfSampBufRx` |
+
+and states that the two families are **not at the same stage**: the shot family is complete and on one
+mechanism; the streaming family has a finished stream-based transmitter (`RfTxStream`) and an *older*
+BRAM receiver (`RfSampBufRx`) whose replacement is `plans/rf_samp_new.md` Stage 2 and is unbuilt.
+
+**Two further claims on that page were false and are now qualified rather than deleted.**
+
+* *"Pre-trigger comes free"* and *"it is the only option"* — the **architectural** claim is true and
+  worth keeping (a continuous buffer has already discarded the samples), but the **capability is not
+  built**. The page now says *architecturally yes — not built*, and points at Stage C.
+* *"change data mid-flight: no"* for the finite buffer. `RfShotTx` **can** now, by preempting a
+  `SHOT_LOOP` — at the cost of a gap in the output, because TX holds one region. A real capability
+  with a real price, and the row says both.
+
+### 3. `docs/guide/rf/rfshotbuf/` is a section rather than a stub
+
+Four pages, in the shape that worked before and for the reason it worked:
+
+* `index.md` — the family page. The stale *"designed, not built"* status and the *Under construction*
+  banner are gone; it already had `has_children: true`.
+* `tx.md` — for someone who wants to **use** it: architecture, boundary ports, the messages as field
+  tables, the two play modes and what a load does to each, the five verdicts, and the four rules that
+  bite.
+* `rx.md` — the same for `RfShotRx`, plus the section a reader most needs: **what this is not.**
+* `tx_internal.md` — for developers and agents. Opens by saying users can skip it, and **cites the
+  source with file:line** rather than paraphrasing.
+
+Child pages carry `parent: RfShotBuf` **and** `grand_parent: RF converters` — Just the Docs binds
+`parent:` by title string, and the nav gate fails without the disambiguation.
+
+**Every number on those pages is one a gate currently asserts**, and the gate is named beside it. The
+link gate caught one bad anchor on the first run, which is the gate doing its job.
+
+### 4. `plans/rf_shot_buf.md` is rewritten around the one stage that is left
+
+790 lines → 408. Its Stages A and B described designs that Stage B of this plan deleted; D and E are
+done. What survives is the reasoning that is still binding (the in-band payload reversal, the
+logic-side port, the response, the no-`has_response` argument) and the traps, which outlived the code
+that found them.
+
+**Five section headings are cited from code** — *The logic-side port*, *The caveat, and it is a Stage
+A gate*, *The commands*, *Why no `has_response` flag*, and the opening paragraph — by
+`rf_relayout.py`, `rf_shot_tx.py`, `streamutils.py`, three test files and two task headers. They are
+preserved verbatim. A rewrite that renamed them would have broken ten citations silently.
+
+**Stage C is kept alive with a section saying precisely why `RfShotRx` does not subsume it.** The
+short form: `RfShotRx` is a **conveyor** — it hands out region A the instant it completes it and
+begins overwriting region B, so the readable past is one region deep, and that is **not a bound you
+can raise by making the memory bigger**, because `N_REGION = 2` splits whatever depth it is given.
+Stage C inverts the relationship: nobody reads while armed, so the whole memory is history, and the
+trigger is what turns a circular scribble into an addressable record. They cannot be one design with
+a flag, because *always be handing out regions* and *never hand out anything until told* are opposite
+answers to what the memory is for.
+
+### Assumption recorded: what `UNIFIED_TX_SCHEMA_CLASSES` became
+
+The plan names the rename but not the replacement. `SHOT_PLAY_SCHEMA_CLASSES` — named for what it
+holds (`ShotPlayCmd`, the internal loader→player wire), mirroring `SHOT_TX_SCHEMA_CLASSES` for the
+boundary vocabulary. The two lists stay separate because they are two different things: one is what a
+host speaks, one is what the design says to itself.
+
+### Assumption recorded: one schema description was stale and was corrected
+
+`ShotTxHdr.opcode` still described itself as *"SHOT_LOAD or SHOT_END"* after `SHOT_LOOP` became legal.
+That string reaches the generated `rf_shot_tx_hdr.h` and would have been reproduced verbatim in the
+docs field table, so it was corrected to *"SHOT_LOAD, SHOT_LOOP or SHOT_END"*. It is a comment: the
+example was re-generated and re-csynthed, and the gate's numbers are unchanged.
+
+### Assumption recorded: `plans/t2p_lock_chan.md` still is not rewritten
+
+One path inside the supersession note Stage B added to it was updated (`examples/rf_shot_unified` →
+`examples/rf_shot_tx`), because that note exists **to point a reader at the surviving code** and a
+pointer at a renamed directory defeats its own purpose. Nothing else in that file changed; it remains
+the record of what the lock's two stages measured.
+
+### Measurement provenance is still not repointed
+
+`waveflow/build/xsi/xsi_rfdc.h` still records that its driven-vs-ready fix was measured on
+`examples/rf_shot_play` — an example deleted at Stage B. The measurement happened there; repointing it
+at a survivor would be a lie, and deleting it would throw away why the constant is what it is. Same
+rule Stage B recorded: fix what a tool would follow, keep bare-prose history in the past tense.

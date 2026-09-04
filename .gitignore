@@ -305,14 +305,14 @@ examples/rf_shot_rx/logs/
 examples/rf_shot_rx/dfx_runtime.txt
 examples/rf_shot_rx/xsi/vectors/
 
-# rf_shot_unified (plans/rf_shot_unify.md Stage A): one transmitter, both opcodes, on the lock.  Same
-# treatment as every other example -- the generated top, the copied framework headers, the logs, the
-# results and BOTH scenarios' vectors are derivable from the two committed .py files, the two
-# hand-written mains in xsi/, and one `pytest`.
-examples/rf_shot_unified/rf_shot_tx_unified_proj/
-examples/rf_shot_unified/gen/
-examples/rf_shot_unified/include/
-examples/rf_shot_unified/results/
-examples/rf_shot_unified/logs/
-examples/rf_shot_unified/dfx_runtime.txt
-examples/rf_shot_unified/xsi/vectors/
+# rf_shot_tx (plans/rf_shot_unify.md): one transmitter, both opcodes, on the lock.  Same treatment
+# as every other example -- the generated top, the copied framework headers, the logs, the results
+# and BOTH scenarios' vectors are derivable from the two committed .py files, the two hand-written
+# mains in xsi/, and one `pytest`.
+examples/rf_shot_tx/rf_shot_tx_proj/
+examples/rf_shot_tx/gen/
+examples/rf_shot_tx/include/
+examples/rf_shot_tx/results/
+examples/rf_shot_tx/logs/
+examples/rf_shot_tx/dfx_runtime.txt
+examples/rf_shot_tx/xsi/vectors/

@@ -1,4 +1,4 @@
-"""rf_shot_unified.py — ``plans/rf_shot_unify.md``: **one transmitter, both play modes**.
+"""rf_shot_tx.py — ``plans/rf_shot_unify.md``: **one transmitter, both play modes**.
 
 The user story two retired examples told *between* them — a finite play-set and an infinite one —
 told once by one design::
@@ -243,8 +243,8 @@ def write_scenario(root, frames, name: str) -> None:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class RfShotUnifiedTB(FreeRunMod):
-    """A driver pushing frames, the unified transmitter, a real DAC, and two sinks."""
+class RfShotTxTB(FreeRunMod):
+    """A driver pushing frames, the transmitter, a real DAC, and two sinks."""
 
     potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
 
@@ -327,11 +327,11 @@ class RfShotUnifiedTB(FreeRunMod):
 # Running it, and reading what came out
 # ---------------------------------------------------------------------------
 
-def run_pysim(root=None, frames=None, **kw) -> RfShotUnifiedTB:
+def run_pysim(root=None, frames=None, **kw) -> RfShotTxTB:
     """Build the graph, run it to the metronome's horizon, return the testbench."""
     import tempfile
 
-    tb = RfShotUnifiedTB(name="tb", sim=Simulation(), **kw)
+    tb = RfShotTxTB(name="tb", sim=Simulation(), **kw)
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
         write_scenario(base, FINITE_FRAMES if frames is None else frames,
@@ -357,7 +357,7 @@ def run_pysim(root=None, frames=None, **kw) -> RfShotUnifiedTB:
     return tb
 
 
-def responses(tb: RfShotUnifiedTB) -> list[tuple[int, int, int]]:
+def responses(tb: RfShotTxTB) -> list[tuple[int, int, int]]:
     """``(tid, status, nsamp_loaded)`` in arrival order, read off the response **stream**.
 
     Off the wire rather than off the module's own list, because the wire is what a host sees and it
@@ -387,7 +387,7 @@ def blocks_to_codes(blocks) -> np.ndarray:
     return np.asarray(from_real(arr.reshape(-1), WORD.samp_type()), dtype=np.int64)
 
 
-def played_samples(tb: RfShotUnifiedTB) -> np.ndarray:
+def played_samples(tb: RfShotTxTB) -> np.ndarray:
     """Everything the converter put on the air, as signed codes."""
     return blocks_to_codes(np.asarray(tb.sink.blocks))
 

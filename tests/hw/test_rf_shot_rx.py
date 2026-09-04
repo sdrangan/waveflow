@@ -402,7 +402,7 @@ def test_the_header_is_one_word_and_the_layout_has_one_author():
 def test_a_clean_run_publishes_CAP_OK_and_zero_on_every_window():
     """**The verdict, read off the wire.**
 
-    Off the stream rather than off the counter, for the reason ``rf_shot_unified`` reads its responses
+    Off the stream rather than off the counter, for the reason ``rf_shot_tx`` reads its responses
     off the wire: a design that counted correctly and *serialized* wrongly passes every internal
     check there is, and the wire is the only thing a host can act on.
     """

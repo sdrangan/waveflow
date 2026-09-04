@@ -126,7 +126,7 @@ counters are.** `RFSampIF.counters()` returns all four numbers, and asserting
 `underrun == 0 and overrun == 0` is what turns a design that would fail on hardware into one that
 fails in simulation.
 
-**You usually do not handle this yourself.** [`RfStreamBuf` and `RfShotBuf`](../choosing.md) sit
+**You usually do not handle this yourself.** [the `RfShotBuf` and `RfStreamBuf` families](../choosing.md) sit
 between the converter and your logic precisely so the never-miss-a-deadline obligation is theirs, and
 it is discharged once there rather than in every design. The counters are what you reach for when you
 consume the converter's stream **directly** — which is the right answer for a filter or a detector,

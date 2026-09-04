@@ -8,7 +8,7 @@ consumer (infinite play on `RfShotTx`). Does **not** own `RfShotBuf` Stage C, wh
 > **Where S1's and S2's products live now.** `plans/rf_shot_unify.md` **Stage B** (2026-09-02)
 > deleted `waveflow/hw/rf_shot_loop.py`, `examples/rf_shot_loop` and its gate: the infinite player
 > was merged into `waveflow/hw/rf_shot_tx.py`'s `RfShotTx`, which now serves both opcodes on one
-> lock, and `examples/rf_shot_unified` is the example that drives it. S2's receiver was **renamed**
+> lock, and `examples/rf_shot_tx` is the example that drives it. S2's receiver was **renamed**
 > — `rf_pingpong_rx.py` → `waveflow/hw/rf_shot_rx.py`, `RfPingPongRx` → `RfShotRx`,
 > `examples/rf_pingpong_rx` → `examples/rf_shot_rx` — with every measurement below unchanged; only
 > the composite's name moved, and the leaf tasks kept theirs. **Everything below is the record of

@@ -2,7 +2,7 @@
 #define WAVEFLOW_SHOT_TX_PLAYER_TASK_H
 // shot_tx_player_task.h — play the region a counted number of times, or forever, and yield it.
 //
-// The unified shot transmitter's player (plans/rf_shot_unify.md Stage A), and the OWNER side of the
+// The shot transmitter's player (plans/rf_shot_unify.md), and the OWNER side of the
 // lock.  Its Python twin is ShotTxPlayer.run_iter, which is the pysim golden and NOT the source of
 // this file.
 //
@@ -53,7 +53,7 @@
 
 //: What goes out while this task is not playing -- between shots, during a handover, and after a
 //: finite play-set has finished.  A VALUE, not a stall: the owner cannot stop.  Matches
-//: waveflow.hw.rf_shot_tx_unified.FILLER.
+//: waveflow.hw.rf_shot_tx.FILLER.
 #ifndef SHOT_TX_FILLER
 #define SHOT_TX_FILLER 0
 #endif

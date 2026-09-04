@@ -107,11 +107,11 @@ beat, oldest sample in the least-significant slot.
 samples as they arrive — a filter, a detector, a decimator. No buffer, nothing extra to build. Most
 designs want this.
 
-**2. Put a finite buffer behind it** (`RfShotBuf`) when you need to *hold* samples: capture a window
+**2. Put a finite buffer behind it** (the `RfShotBuf` family: `RfShotTx`, `RfShotRx`) when you need to *hold* samples: capture a window
 and read it out afterwards, or play a waveform from memory. Load, then use — nothing reads while
 anything writes.
 
-**3. Put a continuous buffer behind it** (`RfStreamBuf`) when something must read while something
+**3. Put a continuous buffer behind it** (the `RfStreamBuf` family: `RfTxStream`, `RfSampBufRx`) when something must read while something
 else is still writing — draining a capture while still capturing, or loading the next waveform
 mid-play.
 

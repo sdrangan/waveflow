@@ -652,7 +652,7 @@ class RfShotRx(FreeRunMod):
         """**The verdict, read off the wire.**  Every window says ``CAP_OK`` and reports zero lost.
 
         Off the stream rather than off the counter, for the reason
-        ``examples/rf_shot_unified`` reads its responses off the wire: a design that counted correctly
+        ``examples/rf_shot_tx`` reads its responses off the wire: a design that counted correctly
         and *serialized* wrongly passes every internal check there is, and the wire is the only thing
         a host can act on.
 

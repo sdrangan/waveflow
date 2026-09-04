@@ -4,7 +4,7 @@ parent: Guide
 nav_order: 10.25
 has_children: true
 audience: python
-summary: "Modelling a design that talks to one or more RF data converters — ADC/DAC blocks such as the RFDC on an AMD RFSoC. Rfdc emulates the converter itself, with an AXI-Stream side identical to the AMD IP and an RF side you can attach sources, sinks and channels to; RfShotBuf and RfStreamBuf sit on top of it when you want to hold samples rather than pass them through."
+summary: "Modelling a design that talks to one or more RF data converters — ADC/DAC blocks such as the RFDC on an AMD RFSoC. Rfdc emulates the converter itself, with an AXI-Stream side identical to the AMD IP and an RF side you can attach sources, sinks and channels to; the RfShotBuf and RfStreamBuf families sit on top of it when you want to hold samples rather than pass them through."
 ---
 
 # RF converters
@@ -24,13 +24,18 @@ rules. You are free to build logic against those streams directly — for anythi
 samples as they arrive, a filter or a detector, that is the right answer. Waveflow also provides two
 hardware modules that sit on top and offer a simpler, asynchronous interface:
 
-- [**`RfShotBuf`**](./rfshotbuf/) — a **finite** buffer for designs where nothing reads while
-  something is writing: load a waveform, *then* play it; capture a window, *then* transfer it. All of
-  its memory is payload, and it is the only option that can give you pre-trigger history.
+- [**`RfShotBuf`**](./rfshotbuf/) — the **finite** family, for designs where nothing reads while
+  something is writing: load a waveform, *then* play it; capture into a region, *then* transfer it.
+  All of its memory is payload, and it is the only family that *could* give you pre-trigger history.
+  Two classes: [`RfShotTx`](./rfshotbuf/tx.md) and [`RfShotRx`](./rfshotbuf/rx.md).
 
-- [**`RfStreamBuf`**](./rfstreambuf/) — a **continuous** buffer for designs where the reader and the
-  writer overlap: load the next waveform while the current one plays, or drain a capture while still
-  capturing. Unbounded in duration, at the cost of headroom and a reverse channel.
+- [**`RfStreamBuf`**](./rfstreambuf/) — the **continuous** family, for designs where the reader and
+  the writer overlap: load the next waveform while the current one plays, or drain a capture while
+  still capturing. Unbounded in duration, at the cost of headroom and a reverse channel. Two classes:
+  `RfTxStream` and `RfSampBufRx`.
+
+Both names are **families rather than classes** — there is no `RfShotBuf` or `RfStreamBuf` to
+import.
 
 See [choosing a sample buffer](./choosing.md) for more detail on selecting between them — it turns
 the choice into one question you can check against your own design.

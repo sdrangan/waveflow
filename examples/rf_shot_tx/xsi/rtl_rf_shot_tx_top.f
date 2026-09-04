@@ -1,0 +1,14 @@
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_fifo_w64_d1_S.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_fifo_w64_d2_S.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_flow_control_loop_pipe_sequential_init.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_regslice_both.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_rf_relayout_to_slots_task_64_4_2_s.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_256_64_4_192_Pipeline_await_grant.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_256_64_4_192_Pipeline_drain_tail.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_256_64_4_192_Pipeline_take_shot.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_256_64_4_192_s.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_player_task_64_256_64_192_16_Pipeline_play_chunk.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_player_task_64_256_64_192_16_s.v
+bram_t2p.v
+rf_shot_tx_top.v
