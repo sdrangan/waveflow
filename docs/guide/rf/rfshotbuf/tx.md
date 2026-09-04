@@ -19,23 +19,38 @@ channel-sounding sequence, a pulse train. If you need to change the samples *whi
 out*, without a gap, this is the wrong buffer — see
 [choosing a sample buffer](../choosing.md).
 
-```
-   host ──[ShotTxHdr | samples … TLAST]──▶ ┌─────────────┐
-                                           │ ShotTxLoader│──┐
-   host ◀────────── ShotTxResp ─────────── └─────────────┘  │ lock ⇄ region
-                                                            ▼
-                                                       ┌─────────┐
-                                                       │  BRAM   │
-                                                       └─────────┘
-                                                            ▲
-                                                            │ lock ⇄ region
-                                           ┌─────────────┐  │
-                        samp_out ◀─────────│ ShotTxPlayer│──┘
-                        (to Rfdc)          └─────────────┘
+```mermaid
+flowchart LR
+    HOST["host<br/>(AXI DMA)"]
+    MEM[("BRAM")]
+    RFDC["Rfdc"]
+
+    subgraph K["RfShotTx — one kernel"]
+        L["ShotTxLoader"]
+        P["ShotTxPlayer"]
+        R["re-layout<br/>wired for you"]
+    end
+
+    HOST -- "ShotTxHdr, samples, TLAST" --> L
+    L -- "ShotTxResp" --> HOST
+    L <-- "lock: take, write, give back" --> MEM
+    P <-- "lock: play, yield on request" --> MEM
+    P --> R
+    R -- "samp_out" --> RFDC
 ```
 
-Between the player and `samp_out` sits one more stage that re-lays the samples from the dense packing
-the memory holds into the slot packing the converter wants. You do not wire it; the composite does.
+**The memory is inside the design but outside the kernel**, which is why the diagram draws it apart
+from the box. It is hand-written Verilog a generated wrapper joins to the tasks: the generated HLS
+kernel cannot contain it, because Vitis turns an array shared between two tasks into a synchronizing
+channel and refuses one port used both ways. Nothing outside `RfShotTx` sees it either way — see
+[the boundary](#the-boundary).
+
+**Neither task owns the memory outright.** Both reach it through the same lock, and that is what lets
+a new waveform be loaded while an old one is still playing — see
+[two play modes](#two-play-modes-and-what-a-load-does-to-each).
+
+The re-layout stage between the player and `samp_out` re-packs samples from the dense packing the
+memory holds into the slot packing the converter wants. You do not wire it; the composite does.
 
 ## Instantiating one
 
@@ -58,17 +73,71 @@ dut = RfShotTx.for_word(
 )
 ```
 
-`for_word` derives the width and the slot re-layout from the converter's word type, so the buffer
-cannot disagree with the converter about packing. The three numbers you actually decide are `depth`,
-`nword` and `base`.
+### Why `for_word` and not a constructor argument
+
+**The converter's word type *is* the parameter** — it is just passed to a classmethod rather than a
+field, and that is forced rather than preferred. `HwModule.__post_init__` wraps every `HwParam` in
+`HwParamValue(int(value))`, so **a type cannot survive as one**. `for_word` is the seam where the
+type becomes the three integers the module actually stores:
+
+| derived from `word` | what it fixes |
+|---|---|
+| `bitwidth` | the AXI-Stream width of all three ports, and the memory's |
+| `samp_per_word` | how many samples ride in one beat |
+| `shift` | how far a sample sits above the bottom of its converter slot |
+
+So you never type a width, and the buffer cannot disagree with the converter about packing. What is
+left for you to decide is the **geometry**: `depth`, `nword`, `base` and `blk_words`.
+
+### The geometry, in the units it is actually in
+
+| | unit | meaning |
+|---|---|---|
+| `depth` | **words** | how big the memory is |
+| `nword` | **words** | how big one shot is |
+| `base` | **words** | where this shot's region starts |
+| `blk_words` | **words** | words per chunk — the lock poll period |
+| `nsamp` | **samples** | `nword × samp_per_word`, and the only value the header may carry |
+
+{: .warning }
+**The numbers above are a trap, and it is worth naming.** With `depth=256` and `samp_per_word=4`,
+`depth / samp_per_word` happens to equal `nword`. **That relationship does not exist.** `depth` and
+`nword` are both word counts and `samp_per_word` converts words to samples — the arithmetic mixes
+units and only lands on 64 by coincidence of this configuration. A shot is as long as you declare it,
+independently of how big the memory is. These are the gated numbers, so they stay; the coincidence is
+called out rather than designed away.
 
 **`nword` is build-time structure, not a command field.** How long a shot is, is declared once, here.
 A header that disagrees is *refused*, never truncated — that is what `SHOT_WRONG_LEN` is for. `nsamp`
 exists on the header because it is what the **host believes** it is sending, and catching that belief
 disagreeing with what arrived is the response's whole job.
 
+### Why `base` is not zero
+
+Not to leave memory unused, and **not because multiple regions need it** — the lock speaks in
+addresses, so a design that wants two regions asks for `[0, 128)` and then `[128, 256)` at runtime and
+needs no build-time parameter at all. That is exactly what [`RfShotRx`](./rx.md) does: it has
+`N_REGION = 2`, computes each region's bounds itself, and puts the base address **on the wire** in its
+window header. It has no `base` parameter.
+
+`base` on `RfShotTx` is a **build-time placement of the one region this design asks for**, and the
+honest reason the example makes it non-zero is that it exercises the offset arithmetic. `base +
+offset` is the shape of the byte-versus-word addressing bug that had every BRAM design in this repo
+mis-addressed while `bram_toy` stayed green — because in a small enough region every address is in
+range either way, so the design round-trips perfectly right up to the point its memory wraps. Setting
+`base = depth − nword` puts the region at the very top, which is the placement that catches it.
+
+So: any `base` that fits works, `0` included. It is a parameter because a design that always placed
+its region at zero would never test the arithmetic that a design placing it elsewhere depends on.
+
 **`base + nword` must fit inside `depth`**, and `blk_words` must divide `nword` so a chunk never
 straddles the end of the region.
+
+{: .note }
+**`dac_word_rate` is a modelling input, not hardware.** At RTL the player is paced by `TREADY` and
+needs nothing; pysim does not back-pressure a burst write, so the converter's rate has to be handed
+over instead. It is `samp_rate / samp_per_word` — which the design could in principle derive rather
+than have you compute, and that it does not is a known wart rather than a decision.
 
 ## The boundary
 
@@ -113,6 +182,82 @@ One 64-bit word, one per header, in order.
 `nsamp_loaded` is what landed, not what was asked for. On `SHOT_LOADED` the two agree; on
 `SHOT_SHORT` the difference *is* the diagnosis — and it is a number a DMA cannot give you, because
 `sendchannel.transfer()` knows it pushed bytes, not whether they were a whole waveform.
+
+## The protocol
+
+Every exchange is the same three moves: **a header, its payload, one verdict.** What differs is what
+happens to the playout while that is going on.
+
+### The verdict answers the load, not the playout
+
+This is the one thing most likely to surprise you. `ShotTxResp` goes out as soon as the payload has
+landed and the memory has been handed back — **before the first sample reaches the converter**, and
+long before the last one does. It tells you whether the *transfer* was good. It does not tell you the
+waveform has finished playing.
+
+```mermaid
+sequenceDiagram
+    participant H as host
+    participant T as RfShotTx
+    participant D as Rfdc
+    H->>T: ShotTxHdr(SHOT_LOAD, tid=1, nsamp, nrepeat=3)
+    H->>T: payload words, TLAST on the last
+    T-->>H: ShotTxResp(tid=1, SHOT_LOADED, nsamp)
+    Note over T,D: only now does anything play
+    T->>D: pass 1 of 3
+    T->>D: pass 2 of 3
+    T->>D: pass 3 of 3
+    Note over T,D: goes quiet — filler, never silence
+```
+
+There is no "playout finished" message. A host that needs to know a finite shot is done discovers it
+by being accepted again: while it is still playing, every load is answered `SHOT_BUSY`.
+
+### Replacing a waveform that is playing forever
+
+A `SHOT_LOOP` never ends on its own, so a new load is the only thing that can end it. The player
+yields the memory, the loader writes into it, and the player picks the new waveform up **from its
+beginning**.
+
+```mermaid
+sequenceDiagram
+    participant H as host
+    participant T as RfShotTx
+    participant D as Rfdc
+    H->>T: ShotTxHdr(SHOT_LOOP, tid=1, nsamp)
+    H->>T: payload A, TLAST
+    T-->>H: ShotTxResp(tid=1, SHOT_LOADED, nsamp)
+    T->>D: waveform A, repeating
+    H->>T: ShotTxHdr(SHOT_LOOP, tid=2, nsamp)
+    H->>T: payload B, TLAST
+    Note over T,D: player yields the region; filler goes out meanwhile
+    T-->>H: ShotTxResp(tid=2, SHOT_LOADED, nsamp)
+    T->>D: waveform B, from its start, repeating
+```
+
+**The gap is real and it is filler, not silence.** The converter is fed a defined value throughout
+the handover — see [the rules that bite](#the-rules-that-bite).
+
+### The refusal you are expected to hit
+
+`SHOT_BUSY` is not an error. It is the design protecting a finite shot from being truncated
+mid-flight, and it is **the only verdict a retry repairs** — the other four are faults in the command
+and will fail identically forever.
+
+```mermaid
+sequenceDiagram
+    participant H as host
+    participant T as RfShotTx
+    Note over T: a finite shot is still playing
+    H->>T: ShotTxHdr(SHOT_LOAD, tid=2, nsamp)
+    H->>T: payload, TLAST
+    T-->>H: ShotTxResp(tid=2, SHOT_BUSY, 0)
+    Note over H: wait, then send the same frame again
+```
+
+**Send the payload even when you expect a refusal.** The design drains it whatever the verdict, and a
+frame left half-consumed makes its leftover words the *next* header — after which every command is
+garbage for reasons that look nothing like the cause.
 
 ## Two play modes, and what a load does to each
 
@@ -183,15 +328,22 @@ from a word count.
 
 ## Driving it from a host
 
-The command stream is a file-driven bundle in simulation and an AXI DMA on hardware. The shape is the
-same either way:
+[The protocol](#the-protocol) is the same whether the command stream is a file-driven bundle in
+simulation or an AXI DMA on hardware. What changes is only the transport:
 
-1. Write the header word, then the payload words, `TLAST` on the last one.
-2. Read one response word.
-3. Check `status`. On `SHOT_BUSY`, wait and retry — it is the only verdict a retry repairs.
+| | simulation | hardware |
+|---|---|---|
+| `s_in` | a bundle of frames on disk | AXI DMA **MM2S** |
+| `resp_out` | a bundle the sink writes back | AXI DMA **S2MM** |
+| `samp_out` | the `Rfdc` model's DAC process | the RFDC IP |
 
-A driver that pushes every frame back to back without reading verdicts will see `SHOT_BUSY` for
-everything behind a finite shot. That is the design working, not a limitation of the testbench.
+One DMA carries both directions, which is why the payload rides in-band on `s_in` rather than
+arriving through a second port or an `m_axi` master.
+
+**A driver that pushes every frame back to back without reading verdicts** will see `SHOT_BUSY` for
+everything queued behind a finite shot — the frames are consumed and refused, not held. That is the
+design working, not a limitation of the testbench, and it is why a scenario that wants two accepted
+finite loads needs the verdicts read between them.
 
 ## Next
 
