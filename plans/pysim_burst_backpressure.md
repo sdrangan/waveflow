@@ -516,3 +516,103 @@ a modelling choice), not a stall against hardware.
 
 **`examples/rf_shot_tx`'s comment is reversed by this stage** and is rewritten rather than left to
 contradict the code beneath it.
+
+---
+
+## S2 step 2 as built — and the plan's chunking policy does not work
+
+**The change is what the plan asked for at the top, and *not* what it asked for on overflow.** A
+burst that fits now blocks until the whole thing fits — one event, real back-pressure. A burst larger
+than its queue cannot cost `ceil(N / capacity)` stalls, because **that deadlocks**, and the deadlock
+is a property of the model rather than a bug in the loop.
+
+### The finding: chunking at capacity deadlocks against this consumer
+
+The plan's fix was *"chunk into at most `capacity` at a time, so the producer stalls once per
+queue-full's worth."* Implemented literally, the suite hangs. Reduced to nine lines:
+
+```
+t=0  put nrx 2      # chunk 1 of a 3-word burst into a 2-deep queue
+t=0  put nrx 1      # chunk 2 -- blocks, queue is full
+     -> producer stuck: 2 in nrx, data_buffer still EMPTY
+```
+
+The reason is the shape of the read side, which the plan and S1 both looked at without noticing what
+it implies:
+
+* the words travel as **one whole burst** through `data_buffer`;
+* the consumer (`run_proc` `:457-468`, `get` `:491-502`) takes that burst **first**, and only then
+  retires its words from `ntx`/`nrx`.
+
+So a producer that chunks never reaches `data_buffer.put`, the consumer never receives, and nothing
+is ever retired. **`ceil(N / capacity)` stalls is unreachable**, and implementing it would have been
+modelling a word-by-word handshake this simulator does not have.
+
+### What was built instead
+
+`_admit_blocking(ep, nwords)` reserves `min(nwords, capacity)` in one `put`, and parks any remainder
+in `ntx` exactly as before:
+
+| | behaviour | events |
+|---|---|---|
+| `N <= capacity` | block until the **whole burst** fits | **1** — the intended semantics, exactly |
+| `N > capacity` | block until the queue is **empty**, then hand the whole burst over | 1 stall per burst |
+| `capacity == inf` | `min(N, inf) == N`, cannot block | 1, never waits |
+
+The second row is why **`ntx` survives**, and why the read side needed no change at all: the overflow
+still has to be accounted somewhere the consumer can retire it from, and the read side already takes
+`min(nwords, ntx.level)` before touching `nrx`. A burst larger than its queue is modelled as *one
+burst in flight at a time* rather than as a word-granular FIFO — the honest reading of a model whose
+data moves in bursts.
+
+**No chunk loop means the `inf` case needs no branch**, which is the tidier answer to S1's second
+measurement: `min(N, inf)` is `N`, whereas a chunk loop against an infinite capacity never shrinks
+its remainder and spins forever.
+
+### Assumption recorded: one stall per oversized burst, not ceil(N/capacity)
+
+The plan's event-cost table says an overflowing burst should cost `ceil(N / depth)` events, on the
+grounds that *"pushing 16 words into a 2-deep FIFO really does stall the producer 8 times."* That is
+true of the hardware and **not reachable in this model**, for the reason above. The six channels it
+applies to are all INTERNAL (see Task 0), so the under-count is confined to designs whose real FIFO
+is genuinely 2 deep, and it is an under-count of *stalls*, never of data.
+
+Making it reachable means changing what `data_buffer` carries — a word-granular handover rather than
+a burst — which is a much larger change to the transfer model and is **not** what this plan scoped.
+Recorded here so a later stage can decide it deliberately rather than discover it.
+
+### What moved: nothing
+
+**The whole non-vitis suite is at exactly its 6 baseline failures, and `-m xsi` is unchanged at 87.**
+That is not a null result, it is the result of doing step 1 first:
+
+* the 13 boundary channels were sized to their bursts, so they never reach the blocking path's
+  waiting branch at all — a burst that fits costs one event, exactly as before;
+* the 6 internal channels do now stall, and no gate's asserted number depends on it. Their stalls
+  are real and are now modelled; nothing downstream was pinned to their absence.
+
+Had the order been reversed, S1's second measurement put the bill at **65,878 extra producer stalls**
+across the suite, concentrated in the channels step 1 had already fixed.
+
+### The three gates
+
+`tests/hw/test_stream_depth.py::TestABurstWriteWaitsForRoom`:
+
+* **`test_a_producer_into_a_full_channel_actually_stalls`** — the property the arc exists for. Two
+  runs of the same graph, one with an idle consumer and one with a slow one: writes end
+  `[4.0, 8.0, 12.0]` free and `[4.0, 8.0, 14.0]` stalled. Before S2 both read `[4.0, 8.0, 12.0]`.
+* **`test_a_burst_larger_than_the_channel_does_not_hang`** — `N > depth` directly, asserting all
+  three writes *completed* and that `nrx`/`ntx` are both zero afterwards. A hang looks exactly like a
+  slow test, so the assertion is on completion rather than on a time.
+* **`test_an_unbounded_channel_still_works_and_never_stalls`** — `capacity == inf`, asserting the
+  writes cost only transfer time against a consumer 100× slower than the producer.
+
+### Docstrings rewritten rather than left describing the old world
+
+* `offer()`'s (`:916`) said `_push_to_endpoint` "blocks at one single point (`nrx.put(1)`)". It now
+  says the split is what *distinguishes* the two paths.
+* `_admit`'s said it was "the same split `_push_to_endpoint` uses… factored out so the two cannot
+  drift". They are now meant to differ, so it says that, and says why `offer()` is right to keep the
+  old policy: a converter cannot stall a physical sample grid.
+
+**`offer()` and `_admit` are otherwise untouched**, as the plan requires.
