@@ -425,3 +425,194 @@ It concentrates in a few channels. A 512-word burst into a 2-deep queue is **255
 depths that are free to raise, *then* flip. Done in that order most of those 65,878 stalls never
 happen, because a 512-into-512 channel is one event again. Done in the other order the suite pays for
 every one of them and then has to be walked back.
+
+---
+
+## S2 Task 0 — the boundary / internal split, and it is 13 / 6
+
+**Most of the 19 are BOUNDARY, so this is an afternoon and not an arc.** Committed before any
+semantics changed, because everything downstream branches on it.
+
+Classified **structurally**, not by name: a channel is INTERNAL iff the composite that owns it is one
+that lowers to a kernel, so the channel becomes a `#pragma HLS STREAM depth=N` FIFO. A channel owned
+by the **testbench** has one end on a DUT boundary port, and a top-level AXI-Stream argument cannot
+carry a depth at all.
+
+| | count | what `depth` means there | S2's move |
+|---|---|---|---|
+| **BOUNDARY** (testbench-owned) | **13** | a pysim-only number — Vitis ignores it at a top-level port | raise it to ≥ the burst |
+| **INTERNAL** (kernel-owned) | **6** | **physical** — it is the generated FIFO | leave it; the stall is real and must be paid |
+
+### The 13 boundary channels
+
+| design | channel | burst | bound |
+|---|---|---|---|
+| `bram_access` | `tb_cmd_r_if` | 3 | 2 |
+| `bram_access` | `tb_cmd_w_if` | 4 | 2 |
+| `bram_access` | `tb_data_r_if` | 128 | 64 † |
+| `bram_access` | `tb_data_w_if` | 256 | 2 |
+| `fir_block` | `tb_cmd_if` | 6 | 2 |
+| `rf_blk_delay` | `tb_dac_axis` | 64 | 2 |
+| `rf_loopback` | `rf_tb_dac_axis` | 64 | 2 |
+| `rf_samp_buf_rx` | `tb_cmd_axis` | 3 | 2 |
+| `rf_samp_buf_tx` | `tb_cmd_axis` | 512 | 2 |
+| `rf_samp_buf_tx` | `tb_dac_axis` | 256 | 2 |
+| `rf_shot_rx` | `tb_win_axis` | 129 | 64 † |
+| `rf_shot_tx` | `tb_cmd_axis` | 65 | 2 |
+| `rf_shot_tx` | `tb_dac_axis` | 16 | 2 |
+
+† the two whose **sink declared its own `queue_size = 64`**. `bind()` applies the channel depth only
+when the endpoint declared none, so raising the channel does nothing for these; the sink's own
+declaration is what binds.
+
+### The 6 internal channels — the stalls that have to be paid
+
+| design | channel | producer → consumer | burst | depth |
+|---|---|---|---|---|
+| `fir_block` | `tb_fir_cmd_rd_if` | `FirCmdRx` → `MemRStream` | 5 | 2 |
+| `fir_block` | `tb_fir_rdata_if` | `MemRStream` → `FirCompute` | 32 | 2 |
+| `fir_block` | `tb_fir_wdata_if` | `FirCompute` → `MemWStream` | 32 | 2 |
+| `mem_copy` | `tb_copier_copy_data_if` | `MemRStream` → `MemWStream` | 128 | 2 |
+| `rf_shot_rx` | `tb_dut_dense_if` | `RfRelayoutToDense` → `PingPongCapture` | 16 | 2 |
+| `rf_shot_tx` | `tb_dut_samp_if` | `ShotTxPlayer` → `RfRelayoutToSlots` | 16 | 2 |
+
+These are **real** hardware FIFOs two words deep, and the producer really does stall filling them.
+Raising any of them would change the generated RTL and is a design decision, not a modelling one —
+out of S2's scope. `mem_copy`'s 128-into-2 is the worst of them at **64 stalls per burst**.
+
+### A contradiction in the tree, surfaced rather than routed around
+
+Three places say **do not put a depth on a boundary channel**:
+
+1. `composite_gen.py:965` `_check_boundary_depth` — **raises `LoweringError`** for any boundary port
+   whose interface declares a depth ≠ `DEFAULT_STREAM_DEPTH`, because *"a depth that is silently 2 is
+   worse than no depth, the number in the Python reads like a fact"* — written after a real defect
+   *"that hid an ADC dropping 72 of 512 words while pysim reported a clean run."*
+2. `reference-fifo-depth-is-physical`, the calibration blocker.
+3. `examples/rf_shot_tx/rf_shot_tx.py` — *"No depth overrides on the three that become the DUT's own
+   boundary ports."*
+
+And one place does it anyway, deliberately and while green — `examples/rf_repeat_play`, which is why
+it is one of the three unaffected designs:
+
+> *"Deep enough for a block plus slack: the player hands a whole block over at once and the Rfdc
+> consumes one per event, so a shallower queue would make the handover itself the pacing rather than
+> the metronome."* — `rf_repeat_play.py:440-442`, `depth = 4 * blk_samp`
+
+**They are reconcilable, and the reconciliation is the rule S2 follows.** `_check_boundary_depth`'s
+subject is an interface **the composite itself owns** — one that becomes a kernel port. It never
+fires on a testbench-owned channel, because codegen elaborates the DUT *unbound* and the boundary
+endpoint's `interface` is then `None`. A testbench channel is not lowered to anything: the TB is a
+`SEQUENTIAL_XSI_TB`, not a kernel.
+
+So: **the depth on a channel the DUT owns is a hardware claim and stays refused; the depth on a
+channel the testbench owns is a modelling choice and is free.** All 13 above are the second kind.
+
+**What this does and does not cost in fidelity.** At RTL the DUT's port FIFO really is 2 deep and the
+XSI BFM really does back-pressure at it — that measurement is untouched, because the two backends are
+compared on **data** (byte-identity), never on each other's cycle counts. What a deeper pysim TB queue
+removes is a stall against a *model* (a `StreamDriver` is a model of a DMA whose own timing is already
+a modelling choice), not a stall against hardware.
+
+**`examples/rf_shot_tx`'s comment is reversed by this stage** and is rewritten rather than left to
+contradict the code beneath it.
+
+---
+
+## S2 step 2 as built — and the plan's chunking policy does not work
+
+**The change is what the plan asked for at the top, and *not* what it asked for on overflow.** A
+burst that fits now blocks until the whole thing fits — one event, real back-pressure. A burst larger
+than its queue cannot cost `ceil(N / capacity)` stalls, because **that deadlocks**, and the deadlock
+is a property of the model rather than a bug in the loop.
+
+### The finding: chunking at capacity deadlocks against this consumer
+
+The plan's fix was *"chunk into at most `capacity` at a time, so the producer stalls once per
+queue-full's worth."* Implemented literally, the suite hangs. Reduced to nine lines:
+
+```
+t=0  put nrx 2      # chunk 1 of a 3-word burst into a 2-deep queue
+t=0  put nrx 1      # chunk 2 -- blocks, queue is full
+     -> producer stuck: 2 in nrx, data_buffer still EMPTY
+```
+
+The reason is the shape of the read side, which the plan and S1 both looked at without noticing what
+it implies:
+
+* the words travel as **one whole burst** through `data_buffer`;
+* the consumer (`run_proc` `:457-468`, `get` `:491-502`) takes that burst **first**, and only then
+  retires its words from `ntx`/`nrx`.
+
+So a producer that chunks never reaches `data_buffer.put`, the consumer never receives, and nothing
+is ever retired. **`ceil(N / capacity)` stalls is unreachable**, and implementing it would have been
+modelling a word-by-word handshake this simulator does not have.
+
+### What was built instead
+
+`_admit_blocking(ep, nwords)` reserves `min(nwords, capacity)` in one `put`, and parks any remainder
+in `ntx` exactly as before:
+
+| | behaviour | events |
+|---|---|---|
+| `N <= capacity` | block until the **whole burst** fits | **1** — the intended semantics, exactly |
+| `N > capacity` | block until the queue is **empty**, then hand the whole burst over | 1 stall per burst |
+| `capacity == inf` | `min(N, inf) == N`, cannot block | 1, never waits |
+
+The second row is why **`ntx` survives**, and why the read side needed no change at all: the overflow
+still has to be accounted somewhere the consumer can retire it from, and the read side already takes
+`min(nwords, ntx.level)` before touching `nrx`. A burst larger than its queue is modelled as *one
+burst in flight at a time* rather than as a word-granular FIFO — the honest reading of a model whose
+data moves in bursts.
+
+**No chunk loop means the `inf` case needs no branch**, which is the tidier answer to S1's second
+measurement: `min(N, inf)` is `N`, whereas a chunk loop against an infinite capacity never shrinks
+its remainder and spins forever.
+
+### Assumption recorded: one stall per oversized burst, not ceil(N/capacity)
+
+The plan's event-cost table says an overflowing burst should cost `ceil(N / depth)` events, on the
+grounds that *"pushing 16 words into a 2-deep FIFO really does stall the producer 8 times."* That is
+true of the hardware and **not reachable in this model**, for the reason above. The six channels it
+applies to are all INTERNAL (see Task 0), so the under-count is confined to designs whose real FIFO
+is genuinely 2 deep, and it is an under-count of *stalls*, never of data.
+
+Making it reachable means changing what `data_buffer` carries — a word-granular handover rather than
+a burst — which is a much larger change to the transfer model and is **not** what this plan scoped.
+Recorded here so a later stage can decide it deliberately rather than discover it.
+
+### What moved: nothing
+
+**The whole non-vitis suite is at exactly its 6 baseline failures, and `-m xsi` is unchanged at 87.**
+That is not a null result, it is the result of doing step 1 first:
+
+* the 13 boundary channels were sized to their bursts, so they never reach the blocking path's
+  waiting branch at all — a burst that fits costs one event, exactly as before;
+* the 6 internal channels do now stall, and no gate's asserted number depends on it. Their stalls
+  are real and are now modelled; nothing downstream was pinned to their absence.
+
+Had the order been reversed, S1's second measurement put the bill at **65,878 extra producer stalls**
+across the suite, concentrated in the channels step 1 had already fixed.
+
+### The three gates
+
+`tests/hw/test_stream_depth.py::TestABurstWriteWaitsForRoom`:
+
+* **`test_a_producer_into_a_full_channel_actually_stalls`** — the property the arc exists for. Two
+  runs of the same graph, one with an idle consumer and one with a slow one: writes end
+  `[4.0, 8.0, 12.0]` free and `[4.0, 8.0, 14.0]` stalled. Before S2 both read `[4.0, 8.0, 12.0]`.
+* **`test_a_burst_larger_than_the_channel_does_not_hang`** — `N > depth` directly, asserting all
+  three writes *completed* and that `nrx`/`ntx` are both zero afterwards. A hang looks exactly like a
+  slow test, so the assertion is on completion rather than on a time.
+* **`test_an_unbounded_channel_still_works_and_never_stalls`** — `capacity == inf`, asserting the
+  writes cost only transfer time against a consumer 100× slower than the producer.
+
+### Docstrings rewritten rather than left describing the old world
+
+* `offer()`'s (`:916`) said `_push_to_endpoint` "blocks at one single point (`nrx.put(1)`)". It now
+  says the split is what *distinguishes* the two paths.
+* `_admit`'s said it was "the same split `_push_to_endpoint` uses… factored out so the two cannot
+  drift". They are now meant to differ, so it says that, and says why `offer()` is right to keep the
+  old policy: a converter cannot stall a physical sample grid.
+
+**`offer()` and `_admit` are otherwise untouched**, as the plan requires.

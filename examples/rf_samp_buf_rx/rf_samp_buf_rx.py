@@ -270,7 +270,8 @@ class RfSampBufRxTB(FreeRunMod):
         self.adc_axis.bind("slave", self.dut.s_in)
         self.add_if(self.adc_axis)
 
-        cmd_axis = StreamIF(name=f"{self.name}_cmd_axis", sim=self.sim, clk=self.axis_clk,
+        # depth 8: a capture command is 3 words, presented as one burst.  Testbench channel.
+        cmd_axis = StreamIF(name=f"{self.name}_cmd_axis", sim=self.sim, clk=self.axis_clk, depth=8,
                             bitwidth=w)
         cmd_axis.bind("master", self.cmd_drv.stream_ep)
         cmd_axis.bind("slave", self.dut.s_cmd)

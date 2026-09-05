@@ -296,8 +296,10 @@ class RfSampBufTxTB(FreeRunMod):
         # No depth overrides: these become the DUT's top-level AXIS ports, and a top-level argument
         # cannot carry a FIFO depth (Vitis ignores the pragma).  The elasticity that matters is
         # inside the design -- and here it is the circular buffer itself.
+        # The driver presents a whole waveform frame (up to NSAMP words) in one burst, so the
+        # channel is sized to it; a testbench channel, so the depth is pysim-only.
         cmd_axis = StreamIF(name=f"{self.name}_cmd_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w)
+                            bitwidth=w, depth=2 * XSI_NSAMP)
         cmd_axis.bind("master", self.cmd_drv.stream_ep)
         cmd_axis.bind("slave", self.dut.s_in)
         self.add_if(cmd_axis)
@@ -305,8 +307,10 @@ class RfSampBufTxTB(FreeRunMod):
         # No depth override, and it would not help: pysim does not back-pressure a burst write, so
         # a queue bound cannot pace the player.  The metronome is handed to it directly instead --
         # see RfSampBufPlayer.dac_word_rate, where the measurement is recorded.
+        # The player hands the converter a whole block at once; deep enough for it plus slack, so
+        # the handover is not itself the pacing.  Same reasoning as examples/rf_repeat_play.
         self.dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
-                                 bitwidth=w)
+                                 bitwidth=w, depth=2 * int(self.blksize))
         self.dac_axis.bind("master", self.dut.s_out)
         self.dac_axis.bind("slave", self.rfdc.tx_streams[0])
         self.add_if(self.dac_axis)

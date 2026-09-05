@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, ClassVar, Generator
+import math
 import simpy
 
 import numpy as np
@@ -619,21 +620,64 @@ class QueuedTransferIF(Interface):
             if dly > 0:
                 yield self.timeout(dly)
 
-            nwords_rem = words.shape[0]
-
-            if nwords_rem > 0:
-                yield ep.nrx.put(1)
-                nwords_rem -= 1
-
-            nwords_rx = min(nwords_rem, ep.nrx.capacity - ep.nrx.level)
-            if nwords_rx > 0:
-                yield ep.nrx.put(nwords_rx)
-                nwords_rem -= nwords_rx
-
-            if nwords_rem > 0:
-                yield ep.ntx.put(nwords_rem)
-
+            yield from _admit_blocking(ep, int(words.shape[0]))
             yield ep.data_buffer.put(words)
+
+
+def _admit_blocking(ep: "QueuedTransferIFSlave", nwords: int) -> "ProcessGen[None]":
+    """Reserve room in *ep*'s RX queue for the burst, **waiting as long as it takes**.
+
+    This is what makes a pysim producer feel its consumer.  Before
+    ``plans/pysim_burst_backpressure.md`` S2 the write path blocked for exactly **one** word
+    (``nrx.put(1)``), filled whatever ``nrx`` happened to have free, and dumped the remainder into
+    the unbounded ``ntx`` — so a 512-word burst into a 2-deep queue completed immediately and
+    ``write()`` behaved almost exactly like ``offer()``.  The two are meant to be the answers to
+    *who may wait*.  Now it waits for room for ``min(nwords, capacity)``.
+
+    **Why ``min`` and not the whole burst, and why not a chunk loop.**
+
+    ``simpy.Container.put(n)`` blocks until the whole amount fits, so a bare ``put(N)`` with
+    ``N > capacity`` can never complete.  The obvious repair — chunk at ``capacity`` so the producer
+    stalls once per queue-full's worth — **deadlocks against this consumer protocol**, and that is a
+    property of the model rather than a bug in the loop:
+
+    * the words travel as **one whole burst** through ``data_buffer``;
+    * the consumer (:meth:`QueuedTransferIFSlave.run_proc`, :meth:`~QueuedTransferIFSlave.get`)
+      takes that burst **first** and only then retires the burst's words from ``ntx``/``nrx``.
+
+    So a producer that chunks never reaches ``data_buffer.put``, the consumer never receives, and
+    nothing is ever retired.  Measured: a 3-word burst into a 2-deep queue parks 2 words in ``nrx``
+    and stops there forever.
+
+    **``ceil(N / capacity)`` stalls is therefore unreachable**, and claiming it would be modelling a
+    word-by-word handshake this simulator does not have.  What is reachable, and what this does:
+
+    ======================================  ===============================================
+    ``N <= capacity``                       block until the **whole burst** fits — one event,
+                                            which is exactly the intended semantics
+    ``N > capacity``                        block until the queue is **empty**, then hand the
+                                            whole burst over — one stall per burst
+    ======================================  ===============================================
+
+    The second row is why ``ntx`` survives: the overflow still has to be accounted somewhere the
+    consumer can retire it from, and the read side takes ``min(nwords, ntx.level)`` before touching
+    ``nrx``.  A burst larger than its queue is therefore modelled as *one burst in flight at a time*
+    rather than as a word-granular FIFO — the honest reading of a model whose data moves in bursts.
+
+    **``capacity`` may be infinite.**  A `CrossBarIF` endpoint declares no ``queue_size``
+    (``examples/interface/crossbar_demo.py``), and an unbounded container can never block.
+    ``min(nwords, inf)`` is ``nwords``, so that case needs no branch — but it does need ``int()``,
+    because ``put()`` on a float amount is not the same object and the guard below keeps it honest.
+    """
+    if nwords <= 0:
+        return
+    cap = ep.nrx.capacity
+    want = nwords if cap == math.inf else min(int(nwords), int(cap))
+    yield ep.nrx.put(int(want))
+    rem = int(nwords) - int(want)
+    if rem > 0:
+        # Only reachable when the burst is larger than the whole queue.  See the table above.
+        yield ep.ntx.put(rem)
 
 
 # ---------------------------------------------------------------------------
@@ -912,11 +956,13 @@ class StreamIF(QueuedTransferIF):
         *already full* at the start of the window, i.e. the consumer has not kept up since the last
         one.  It is not clipped to the free space, and that is not a shortcut:
 
-        ``_push_to_endpoint`` puts what fits in ``nrx`` and the remainder in the **unbounded**
-        ``ntx``, blocking at one single point (``nrx.put(1)``, which waits only when the queue is
-        completely full).  So this framework already models ``depth`` as tolerance for a consumer
-        *hiccup between bursts*, not as intra-burst capacity — a 64-word burst through a depth-2
-        stream is legal and always was.  A rule that clipped to the free space would therefore
+        ``offer()`` keeps the old split — what fits goes in ``nrx``, the remainder in the
+        **unbounded** ``ntx`` — and that is now the *difference* between the two paths rather than a
+        shared implementation detail.  ``write()`` blocks on the whole burst
+        (``plans/pysim_burst_backpressure.md`` S2); ``offer()`` cannot, because the thing calling it
+        physically cannot wait.  So for a converter ``depth`` remains tolerance for a consumer
+        *hiccup between bursts* rather than intra-burst capacity — a 64-word burst through a depth-2
+        stream is legal here and always was.  A rule that clipped to the free space would therefore
         report drops for a consumer that never stalls at all (measured: 504 of 512 words), which
         makes ``dropped == 0`` unreachable and the contract clause worthless.
 
@@ -955,10 +1001,21 @@ class StreamIF(QueuedTransferIF):
         return n
 
     def _admit(self, ep: "StreamIFSlave", words: Words) -> ProcessGen[None]:
-        """Queue accounting for an accepted burst — the same split :meth:`_push_to_endpoint` uses.
+        """Queue accounting for an accepted burst — **the split that only ``offer()`` still uses.**
 
-        Factored out so the blocking and non-blocking paths cannot drift on what a burst *does* to
-        the queue; they differ only in what happens when there is no room.
+        It used to be shared with :meth:`_push_to_endpoint`, "factored out so the blocking and
+        non-blocking paths cannot drift".  ``plans/pysim_burst_backpressure.md`` S2 made them differ
+        **on purpose**, so the sharing is gone and this is now the whole of the non-blocking policy:
+        put what fits in ``nrx``, dump the remainder in the unbounded ``ntx``, and never wait.
+
+        That is right for the caller it has. ``offer()`` is what a **converter** uses, and a
+        converter presents a beat whether or not the fabric is ready — it has no way to stall a
+        physical sample grid. What the fabric does not take is *gone*, and is counted in ``dropped``
+        by the caller. A producer that *can* wait calls ``write()`` instead, which now does.
+
+        ``ntx`` is what keeps the consumer's accounting balanced across the two: the read side takes
+        ``min(nwords, ntx.level)`` from it before touching ``nrx``, so the words this method parked
+        there are retired by whichever reader eventually drains the burst.
         """
         rem = int(words.shape[0])
         if rem > 0:
