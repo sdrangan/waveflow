@@ -368,3 +368,60 @@ S2 changes; **`offer`** is `_admit`, which S2 leaves alone. `bound` is the slave
 **Raw data**: the histogram of every observed burst size per channel is regenerable by
 re-running the measurement described under *Method* above; it was not committed, because it is a
 derived artifact of a run rather than a decision.
+
+---
+
+## S1 — a second, independent measurement (2026-09-05)
+
+Run separately from the one above and recorded separately **on purpose**: the scopes differ, so the
+numbers are not interchangeable and blending them would produce a table nobody could reproduce.
+
+* **Above:** 12 designs with a runnable pysim golden, reached through their example modules.
+* **Here:** the whole `-m "not vitis and not xsi"` suite, by wrapping
+  `QueuedTransferIF._push_to_endpoint` in the measuring process only. 18,077 burst writes observed;
+  the suite finished at exactly the 6 baseline failures under observation.
+
+The two agree where they overlap. Two things this scope adds:
+
+### 1. `CrossBarIF` is in S2's blast radius, and it is unbounded
+
+The table above reports **0** unbounded channels, which is right for the twelve designs — every
+`StreamIF` there got a real bound from `bind()`. It is **not** right for S2's scope.
+
+`examples/interface/crossbar_demo.py` declares `queue_size: int | None = None`, so its channels have
+`capacity = float('inf')`. Ten such channels were observed carrying bursts. And `CrossBarIF` routes
+through the **blocking** path — `interface.py:1663`, inside `class CrossBarIF(QueuedTransferIF)`:
+
+```python
+yield from self._push_to_endpoint(out_ep, words)
+```
+
+They are **safe** — an unbounded container can never block, so `put(N)` on one always completes
+immediately — but they should be counted as safe rather than be absent. The coverage note above
+(*"build no QueuedTransferIF graph to measure"*) does not cover this case: `CrossBarIF` **is** a
+`QueuedTransferIF`. The gap is a class of *interface*, not only a class of example.
+
+**For S2:** whatever chunking replaces the split must stay correct when `capacity` is `inf`. A naive
+`min(remaining, capacity)` chunk loop against an infinite capacity is a bug waiting to happen.
+
+### 2. The cost of getting the order wrong: 65,878 extra stalls
+
+The count above says *how many* channels move. This says *what it costs* to move them without the
+depth review first.
+
+**Flipping the semantics alone would add 65,878 extra producer stalls across the pysim suite.** Those
+are SimPy events, so it is a simulation-speed cost on top of the timing churn — the suite gets slower
+in proportion to how badly each burst overflows its queue.
+
+It concentrates in a few channels. A 512-word burst into a 2-deep queue is **255 stalls per write**:
+
+| channel | burst | bound | stalls per write |
+|---|---|---|---|
+| ten `*_cmd_axis` (`al1`, `far`, `fc0`, `fc2`, `fc16`, `sus2`, `sus3`, `tb`, `w1`, …) | 512 | 2 | 255 |
+| `tb_copier_copy_data_if` | 512 | 2 | 255 |
+| `stream_if39`, `stream_if51` | 257 | 2 | 128 |
+
+**This is the quantitative case for the conclusion the first measurement already reached.** Raise the
+depths that are free to raise, *then* flip. Done in that order most of those 65,878 stalls never
+happen, because a 512-into-512 channel is one event again. Done in the other order the suite pays for
+every one of them and then has to be walked back.
