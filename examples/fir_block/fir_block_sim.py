@@ -177,7 +177,10 @@ class FirBlockTB(FreeRunMod):
         for c in (self.dut, self.driver, self.done_sink, self.mem):
             self.add_comp(c)
 
-        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
+        # depth 16: a FirCmd frame is 6 words and the driver presents it in one burst.  A testbench
+        # channel, so the depth is a pysim modelling choice (plans/pysim_burst_backpressure.md S2).
+        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w,
+                          depth=16)
         cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
         cmd_if.bind(ep_name="slave", endpoint=self.dut.s_cmd)
         self.add_if(cmd_if)

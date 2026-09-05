@@ -165,8 +165,12 @@ class RfShotRxTB(FreeRunMod):
             clk=self.axis_clk, blk_words=int(self.blksize) // SPW,
             stall_blocks=int(self.stall_blocks), blk_period=self.blk_period)
         self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in")
+        # queue_size, not the channel depth: bind() gives a slave the channel's depth only when the
+        # endpoint declared none, and a StreamSink declares its own.  A window frame is one header
+        # plus REGION_WORDS samples, so the historical 64 would stall the reader mid-window.
         self.win_snk = StreamSink(sim=self.sim, name=f"{self.name}_win_snk", bitwidth=w,
-                                  out_bundle="vectors/win", has_tlast=True)
+                                  out_bundle="vectors/win", has_tlast=True,
+                                  queue_size=2 * (REGION_WORDS + 1))
         for c in (self.dut, self.rfdc, self.source, self.win_snk):
             self.add_comp(c)
 

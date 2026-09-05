@@ -294,13 +294,26 @@ class RfShotTxTB(FreeRunMod):
         self.add_if(self.dac_if)
 
         # --- the PL domain -----------------------------------------------------------------------
-        # No depth overrides on the three that become the DUT's own boundary ports: a top-level AXIS
-        # argument cannot carry a FIFO depth (Vitis ignores the pragma, sometimes silently).
-        for nm, master, slave in (("cmd", self.drv.stream_ep, self.dut.s_in),
-                                  ("resp", self.dut.resp_out, self.resp_snk.stream_ep),
-                                  ("dac", self.dut.samp_out, self.rfdc.tx_streams[0])):
-            ifc = StreamIF(name=f"{self.name}_{nm}_axis", sim=self.sim, clk=self.axis_clk,
-                           bitwidth=w)
+        # DEPTHS SIZED TO THE BURST, and that is a reversal of what this comment used to say.
+        #
+        # It used to read "no depth overrides on the three that become the DUT's own boundary ports:
+        # a top-level AXIS argument cannot carry a FIFO depth".  The first half is right and the
+        # conclusion was backwards.  These three interfaces are owned by the TESTBENCH, not by
+        # RfShotTx: codegen elaborates the DUT unbound, so `_check_boundary_depth` never sees them
+        # and nothing here reaches the RTL.  What the number does is decide whether pysim's producer
+        # stalls against a MODEL -- a StreamDriver is a model of a DMA -- and a whole frame arriving
+        # in one event is the honest reading of that.  A depth on an interface the DUT itself owns is
+        # still a hardware claim and still refused.  See plans/pysim_burst_backpressure.md S2 Task 0.
+        cmd_words = int(self.nword) + 1          # one ShotTxHdr, then the payload
+        blk_words = int(self.blksize) // SPW     # what the player hands over at once
+        for nm, master, slave, depth in (
+                ("cmd", self.drv.stream_ep, self.dut.s_in, 2 * cmd_words),
+                ("resp", self.dut.resp_out, self.resp_snk.stream_ep, None),
+                ("dac", self.dut.samp_out, self.rfdc.tx_streams[0], 2 * blk_words)):
+            ifc = (StreamIF(name=f"{self.name}_{nm}_axis", sim=self.sim, clk=self.axis_clk,
+                            bitwidth=w, depth=depth) if depth is not None else
+                   StreamIF(name=f"{self.name}_{nm}_axis", sim=self.sim, clk=self.axis_clk,
+                            bitwidth=w))
             ifc.bind("master", master)
             ifc.bind("slave", slave)
             self.add_if(ifc)

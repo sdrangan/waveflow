@@ -502,8 +502,10 @@ class RfLoopbackTB(FreeRunMod):
             self.add_if(adc_axis)
             self.adc_axis.append(adc_axis)
 
+            # Deep enough for a whole block plus slack -- the relay hands one over at once.  A
+            # testbench channel, so the depth is a pysim modelling choice.
             dac_axis = StreamIF(name=f"{self.name}_dac_axis{sfx}", sim=self.sim, clk=self.axis_clk,
-                                bitwidth=w)
+                                bitwidth=w, depth=2 * (int(self.blksize) // int(self.word.samp_per_word)))
             dac_axis.bind("master", self.dut.s_outs[i])
             dac_axis.bind("slave", self.rfdc.tx_streams[i])
             self.add_if(dac_axis)

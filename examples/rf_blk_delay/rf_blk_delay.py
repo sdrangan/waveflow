@@ -562,8 +562,10 @@ class RfBlkDelayTB(FreeRunMod):
         self.add_if(self.dac_if)
 
         # --- the PL domain ---------------------------------------------------------------------
-        def wire(nm, master, slave):
-            i = StreamIF(name=f"{self.name}_{nm}", sim=self.sim, clk=self.axis_clk, bitwidth=w)
+        def wire(nm, master, slave, depth=None):
+            i = (StreamIF(name=f"{self.name}_{nm}", sim=self.sim, clk=self.axis_clk, bitwidth=w,
+                          depth=int(depth)) if depth is not None else
+                 StreamIF(name=f"{self.name}_{nm}", sim=self.sim, clk=self.axis_clk, bitwidth=w))
             i.bind("master", master)
             i.bind("slave", slave)
             self.add_if(i)
@@ -574,7 +576,11 @@ class RfBlkDelayTB(FreeRunMod):
         self.adc_axis = wire("adc_axis", self.rfdc.rx_streams[0], self.loop.s_in)
         wire("rxresp_axis", self.loop.rx_resp, self.rxresp_sink.stream_ep)
         wire("txresp_axis", self.loop.tx_resp, self.txresp_sink.stream_ep)
-        self.dac_axis = wire("dac_axis", self.loop.s_out, self.rfdc.tx_streams[0])
+        # Deep enough for a whole block plus slack: the player hands one over at once and the Rfdc
+        # consumes one per event, so a shallower queue would make the handover itself the pacing.
+        # A testbench channel, so the depth is a pysim modelling choice and claims nothing at RTL.
+        self.dac_axis = wire("dac_axis", self.loop.s_out, self.rfdc.tx_streams[0],
+                             depth=2 * (BLKSIZE // SAMP_PER_WORD))
 
 
 def write_scenario(root) -> None:

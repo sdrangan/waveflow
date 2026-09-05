@@ -616,23 +616,37 @@ class BramAccessTB(FreeRunMod):
                                       in_bundle="vectors/cmd_r", has_tlast=True)
         self.resp_w_snk = TimedStreamSink(sim=self.sim, name=f"{self.name}_resp_w_snk", bitwidth=w,
                                           out_bundle="vectors/resp_w", has_tlast=True)
+        # queue_size, not the channel depth: bind() gives a slave the channel's depth only when the
+        # endpoint declared none, and a StreamSink declares 64.  A read-out frame is up to FILL
+        # words, so 64 would stall the DUT mid-frame.
         self.data_r_snk = TimedStreamSink(sim=self.sim, name=f"{self.name}_data_r_snk", bitwidth=w,
-                                          out_bundle="vectors/data_r", has_tlast=True)
+                                          out_bundle="vectors/data_r", has_tlast=True,
+                                          queue_size=FILL)
         self.resp_r_snk = TimedStreamSink(sim=self.sim, name=f"{self.name}_resp_r_snk", bitwidth=w,
                                           out_bundle="vectors/resp_r", has_tlast=True)
         for c in (self.dut, self.cmd_w_drv, self.data_w_drv, self.cmd_r_drv,
                   self.resp_w_snk, self.data_r_snk, self.resp_r_snk):
             self.add_comp(c)
 
-        self._join(f"{self.name}_cmd_w_if", self.cmd_w_drv.stream_ep, self.dut.wr.cmd_w, w)
-        self._join(f"{self.name}_data_w_if", self.data_w_drv.stream_ep, self.dut.wr.data_w, w)
+        # Depths sized to the largest burst each producer presents, so a whole frame lands in one
+        # SimPy event instead of stalling the driver word by word.  These are TESTBENCH channels —
+        # one end is a DUT boundary port, and a top-level AXIS argument cannot carry a FIFO depth at
+        # all, so the number is a pysim modelling choice and claims nothing about the RTL.  See
+        # plans/pysim_burst_backpressure.md S2 Task 0.
+        self._join(f"{self.name}_cmd_w_if", self.cmd_w_drv.stream_ep, self.dut.wr.cmd_w, w,
+                   depth=8)               # a write command is 4 words
+        self._join(f"{self.name}_data_w_if", self.data_w_drv.stream_ep, self.dut.wr.data_w, w,
+                   depth=FILL)            # the whole fill arrives as one frame
         self._join(f"{self.name}_resp_w_if", self.dut.wr.resp_w, self.resp_w_snk.stream_ep, w)
-        self._join(f"{self.name}_cmd_r_if", self.cmd_r_drv.stream_ep, self.dut.rd.cmd_r, w)
+        self._join(f"{self.name}_cmd_r_if", self.cmd_r_drv.stream_ep, self.dut.rd.cmd_r, w,
+                   depth=8)               # a read command is 3 words
         self._join(f"{self.name}_data_r_if", self.dut.rd.data_r, self.data_r_snk.stream_ep, w)
         self._join(f"{self.name}_resp_r_if", self.dut.rd.resp_r, self.resp_r_snk.stream_ep, w)
 
-    def _join(self, name: str, master, slave, w: int) -> None:
-        iface = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=w)
+    def _join(self, name: str, master, slave, w: int, depth: int | None = None) -> None:
+        iface = (StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=w, depth=int(depth))
+                 if depth is not None else
+                 StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=w))
         iface.bind(ep_name="master", endpoint=master)
         iface.bind(ep_name="slave", endpoint=slave)
         self.add_if(iface)

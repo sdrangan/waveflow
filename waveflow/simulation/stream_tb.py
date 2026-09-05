@@ -124,13 +124,23 @@ class StreamSink(HwModule):
     out_bundle: DynParam[str] = ""
     #: Accept TLAST-delimited packets (match the producer's framing).  Default ``False``.
     has_tlast: bool = False
+    #: Words the sink's RX queue holds.  **Declared here rather than left to the channel**, because
+    #: `bind()` hands a slave the channel's depth only when the endpoint declared none — so a sink
+    #: that says nothing would inherit `DEFAULT_STREAM_DEPTH` (2) and stall its producer on every
+    #: multi-word frame.  64 is the historical default and covers every frame in the tree bar two;
+    #: a testbench receiving longer frames raises it (``plans/pysim_burst_backpressure.md`` S2).
+    #:
+    #: It is a number rather than "unbounded" on purpose: a sink is *"always ready"* only until
+    #: something is wrong, and a bound that can be exceeded is what makes a runaway producer visible
+    #: instead of silently absorbed.
+    queue_size: int = 64
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.words: list[np.ndarray] = []
         self.stream_ep = StreamIFSlave(
             sim=self.sim, bitwidth=self.bitwidth, has_tlast=self.has_tlast,
-            rx_proc=self.rx_proc, queue_size=64)
+            rx_proc=self.rx_proc, queue_size=int(self.queue_size))
         self.add_endpoint(self.stream_ep)      # see StreamDriver.__post_init__
 
     def rx_proc(self, words: Words) -> ProcessGen[None]:
