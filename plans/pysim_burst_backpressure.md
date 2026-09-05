@@ -425,3 +425,94 @@ It concentrates in a few channels. A 512-word burst into a 2-deep queue is **255
 depths that are free to raise, *then* flip. Done in that order most of those 65,878 stalls never
 happen, because a 512-into-512 channel is one event again. Done in the other order the suite pays for
 every one of them and then has to be walked back.
+
+---
+
+## S2 Task 0 — the boundary / internal split, and it is 13 / 6
+
+**Most of the 19 are BOUNDARY, so this is an afternoon and not an arc.** Committed before any
+semantics changed, because everything downstream branches on it.
+
+Classified **structurally**, not by name: a channel is INTERNAL iff the composite that owns it is one
+that lowers to a kernel, so the channel becomes a `#pragma HLS STREAM depth=N` FIFO. A channel owned
+by the **testbench** has one end on a DUT boundary port, and a top-level AXI-Stream argument cannot
+carry a depth at all.
+
+| | count | what `depth` means there | S2's move |
+|---|---|---|---|
+| **BOUNDARY** (testbench-owned) | **13** | a pysim-only number — Vitis ignores it at a top-level port | raise it to ≥ the burst |
+| **INTERNAL** (kernel-owned) | **6** | **physical** — it is the generated FIFO | leave it; the stall is real and must be paid |
+
+### The 13 boundary channels
+
+| design | channel | burst | bound |
+|---|---|---|---|
+| `bram_access` | `tb_cmd_r_if` | 3 | 2 |
+| `bram_access` | `tb_cmd_w_if` | 4 | 2 |
+| `bram_access` | `tb_data_r_if` | 128 | 64 † |
+| `bram_access` | `tb_data_w_if` | 256 | 2 |
+| `fir_block` | `tb_cmd_if` | 6 | 2 |
+| `rf_blk_delay` | `tb_dac_axis` | 64 | 2 |
+| `rf_loopback` | `rf_tb_dac_axis` | 64 | 2 |
+| `rf_samp_buf_rx` | `tb_cmd_axis` | 3 | 2 |
+| `rf_samp_buf_tx` | `tb_cmd_axis` | 512 | 2 |
+| `rf_samp_buf_tx` | `tb_dac_axis` | 256 | 2 |
+| `rf_shot_rx` | `tb_win_axis` | 129 | 64 † |
+| `rf_shot_tx` | `tb_cmd_axis` | 65 | 2 |
+| `rf_shot_tx` | `tb_dac_axis` | 16 | 2 |
+
+† the two whose **sink declared its own `queue_size = 64`**. `bind()` applies the channel depth only
+when the endpoint declared none, so raising the channel does nothing for these; the sink's own
+declaration is what binds.
+
+### The 6 internal channels — the stalls that have to be paid
+
+| design | channel | producer → consumer | burst | depth |
+|---|---|---|---|---|
+| `fir_block` | `tb_fir_cmd_rd_if` | `FirCmdRx` → `MemRStream` | 5 | 2 |
+| `fir_block` | `tb_fir_rdata_if` | `MemRStream` → `FirCompute` | 32 | 2 |
+| `fir_block` | `tb_fir_wdata_if` | `FirCompute` → `MemWStream` | 32 | 2 |
+| `mem_copy` | `tb_copier_copy_data_if` | `MemRStream` → `MemWStream` | 128 | 2 |
+| `rf_shot_rx` | `tb_dut_dense_if` | `RfRelayoutToDense` → `PingPongCapture` | 16 | 2 |
+| `rf_shot_tx` | `tb_dut_samp_if` | `ShotTxPlayer` → `RfRelayoutToSlots` | 16 | 2 |
+
+These are **real** hardware FIFOs two words deep, and the producer really does stall filling them.
+Raising any of them would change the generated RTL and is a design decision, not a modelling one —
+out of S2's scope. `mem_copy`'s 128-into-2 is the worst of them at **64 stalls per burst**.
+
+### A contradiction in the tree, surfaced rather than routed around
+
+Three places say **do not put a depth on a boundary channel**:
+
+1. `composite_gen.py:965` `_check_boundary_depth` — **raises `LoweringError`** for any boundary port
+   whose interface declares a depth ≠ `DEFAULT_STREAM_DEPTH`, because *"a depth that is silently 2 is
+   worse than no depth, the number in the Python reads like a fact"* — written after a real defect
+   *"that hid an ADC dropping 72 of 512 words while pysim reported a clean run."*
+2. `reference-fifo-depth-is-physical`, the calibration blocker.
+3. `examples/rf_shot_tx/rf_shot_tx.py` — *"No depth overrides on the three that become the DUT's own
+   boundary ports."*
+
+And one place does it anyway, deliberately and while green — `examples/rf_repeat_play`, which is why
+it is one of the three unaffected designs:
+
+> *"Deep enough for a block plus slack: the player hands a whole block over at once and the Rfdc
+> consumes one per event, so a shallower queue would make the handover itself the pacing rather than
+> the metronome."* — `rf_repeat_play.py:440-442`, `depth = 4 * blk_samp`
+
+**They are reconcilable, and the reconciliation is the rule S2 follows.** `_check_boundary_depth`'s
+subject is an interface **the composite itself owns** — one that becomes a kernel port. It never
+fires on a testbench-owned channel, because codegen elaborates the DUT *unbound* and the boundary
+endpoint's `interface` is then `None`. A testbench channel is not lowered to anything: the TB is a
+`SEQUENTIAL_XSI_TB`, not a kernel.
+
+So: **the depth on a channel the DUT owns is a hardware claim and stays refused; the depth on a
+channel the testbench owns is a modelling choice and is free.** All 13 above are the second kind.
+
+**What this does and does not cost in fidelity.** At RTL the DUT's port FIFO really is 2 deep and the
+XSI BFM really does back-pressure at it — that measurement is untouched, because the two backends are
+compared on **data** (byte-identity), never on each other's cycle counts. What a deeper pysim TB queue
+removes is a stall against a *model* (a `StreamDriver` is a model of a DMA whose own timing is already
+a modelling choice), not a stall against hardware.
+
+**`examples/rf_shot_tx`'s comment is reversed by this stage** and is rewritten rather than left to
+contradict the code beneath it.
