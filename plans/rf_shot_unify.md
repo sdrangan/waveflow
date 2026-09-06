@@ -1,9 +1,11 @@
 # Plan — one shot-buffer design, on the lock
 
-**Status: DECIDED 2026-09-02, NOTHING BUILT.** Owns the collapse of four shot-buffer designs into
-two — one TX, one RX — both on `LockedT2pMemIF`. Supersedes the structure `plans/rf_shot_buf.md`
-assumes; that file is rewritten in Stage C and stays intact until then as the record of how the
-family got here.
+**Status: COMPLETE — Stages A, B and C all merged (PRs #181, #182), 2026-09-04.** Four shot-buffer
+designs are now two: `RfShotTx` and `RfShotRx`, both on `LockedT2pMemIF`. 22,210 lines deleted.
+Nothing in this plan is outstanding; the *as built* sections below are its record.
+
+Open work it spun off, tracked elsewhere: the wire-format arc (message widths, two-region TX — not
+yet written down), and `plans/rf_shot_buf.md`'s remaining stage (pre-trigger capture).
 
 ---
 
