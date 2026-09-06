@@ -135,9 +135,16 @@ straddles the end of the region.
 
 {: .note }
 **`dac_word_rate` is a modelling input, not hardware.** At RTL the player is paced by `TREADY` and
-needs nothing; pysim does not back-pressure a burst write, so the converter's rate has to be handed
-over instead. It is `samp_rate / samp_per_word` — which the design could in principle derive rather
-than have you compute, and that it does not is a known wart rather than a decision.
+needs nothing. In pysim it still has to be handed over — **but not for the reason this note used to
+give.** It said *"pysim does not back-pressure a burst write"*, and since
+`plans/pysim_burst_backpressure.md` S2 that is false: a burst write now blocks until its consumer has
+room. What back-pressure paces is the **rate**, and measured (S3) that is not sufficient on its own:
+with the metronome removed the throughput stays right — no underrun, the same number of blocks
+delivered — while the player runs *ahead* of the data and fills the downstream queues with filler, so
+the first real sample appears three times later than it does at RTL. Back-pressure controls how fast
+the player may go, not how far ahead of the shot it may get. The rate is
+`samp_rate / samp_per_word` — which the design could in principle derive rather than have you
+compute, and that it does not is a known wart rather than a decision.
 
 ## The boundary
 
