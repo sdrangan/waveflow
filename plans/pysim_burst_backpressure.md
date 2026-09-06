@@ -1,8 +1,14 @@
 # Plan — a pysim burst write should stall when its consumer is full
 
-**Status: SCOPED HERE, NOTHING BUILT.** Started 2026-09-04. Owns the back-pressure semantics of
-`QueuedTransferIF._push_to_endpoint`, and the metronome parameters that exist only because it is
-missing. Does **not** own `offer()`, which is correct as it stands.
+**Status: S1 and S2 MERGED (PRs #184, #185). S3 RAN AND WAS REFUTED (PR #186), 2026-09-06.**
+A pysim burst write now blocks until its consumer has room, and no gate number moved.
+
+**S3 did not retire anything, and that is the result rather than a shortfall:** back-pressure paces a
+producer's *rate*, not how far *ahead of its data* it may get, so all three metronomes were kept —
+each for its own measured reason. The follow-up is `plans/filler_offer.md`.
+
+Owns the back-pressure semantics of `QueuedTransferIF._push_to_endpoint`. Does **not** own `offer()`,
+which is correct as it stands.
 
 ---
 
