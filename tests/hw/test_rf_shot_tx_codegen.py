@@ -26,6 +26,7 @@ from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES
 from waveflow.hw.rf_shot_tx import (
     SHOT_TX_SCHEMA_CLASSES,
+    shot_tx_schemas,
     SHOT_PLAY_SCHEMA_CLASSES,
     RfShotTx,
 )
@@ -159,7 +160,11 @@ def test_the_predecessors_are_gone():
             importlib.import_module(mod)
     # And the surviving name is the merged design, not the five-task one it replaced.
     assert RfShotTx.cpp_kernel_name == "rf_shot_tx"
-    assert {c.__name__ for c in SHOT_TX_SCHEMA_CLASSES} == {"ShotTxHdr", "ShotTxResp"}, (
+    # The pair is specialized per geometry now (plans/rf_shot_wire_format.md Part A), so the class
+    # NAMES carry their widths; what must hold is that both still emit the headers the loader body
+    # includes by plain name.
+    assert {c.include_filename for c in SHOT_TX_SCHEMA_CLASSES} == {
+        "rf_shot_tx_hdr.h", "rf_shot_tx_resp.h"}, (
         "the boundary vocabulary moved into this module when rf_shot_tx.py's old contents went; a "
         "build that emits no rf_shot_tx_hdr.h has a loader that cannot parse a command.")
 
@@ -196,7 +201,11 @@ def _stage(tmp_path: Path) -> Path:
     dag.add(MemLockStep(output_dir=inc))
     # BOTH schema lists: the header and the verdict are still rf_shot_tx's at Stage A, and the play
     # command is the merged design's own.  See the ownership decision in plans/rf_shot_unify.md.
-    for cls in [*SHOT_TX_SCHEMA_CLASSES, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
+# The header/response pair for THIS geometry, not the module default: plans/rf_shot_wire_format.md
+    # Part A derives nsamp's width from nword x samp_per_word, so the emitted C++ has to be the
+    # design's own pair or the twin would parse a different wire.
+    hdr_cls, resp_cls = shot_tx_schemas(int(_ELAB["nword"]), int(_ELAB["samp_per_word"]))
+    for cls in [hdr_cls, resp_cls, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
         dag.add(DataSchemaStep(cls, word_bw_supported=[WORD_BW], include_dir=inc))
     # The serializers the re-layout body calls.  The SLOT element is the converter's container width
     # and the DENSE element the effective one; at 14-in-16 they differ, which is what makes the last

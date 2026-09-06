@@ -70,7 +70,7 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_STATUS_NAMES,
     SHOT_WRONG_LEN,
     SHOT_ZERO_LEN,
-    ShotTxHdr,
+    shot_tx_schemas,
 )
 from waveflow.hw.rf_shot_tx import FILLER, RfShotTx
 from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
@@ -121,6 +121,13 @@ SHORT_WORDS = NWORD // 2
 # The waveforms
 # ---------------------------------------------------------------------------
 
+#: The header/response pair for THIS geometry.  Not the module defaults: since
+#: ``plans/rf_shot_wire_format.md`` Part A the widths are derived from ``nword x samp_per_word``, so
+#: a testbench that used the defaults would be a second opinion about the wire — right here only by
+#: coincidence, and wrong the moment the geometry changes.
+HDR, RESP = shot_tx_schemas(NWORD, SPW)
+
+
 def shot_codes(base: int, nword: int = NWORD) -> np.ndarray:
     """``nword * samp_per_word`` distinguishable converter codes, as signed integers."""
     return np.arange(int(base), int(base) + int(nword) * SPW, dtype=np.int64)
@@ -153,7 +160,7 @@ def frame(opcode: int, tid: int, nsamp: int, nrepeat: int, payload: np.ndarray) 
     and the XSI ``AxisMaster`` raises ``TLAST`` on each burst's last beat — so the two backends carry
     the same boundary rather than two encodings of it.
     """
-    h = ShotTxHdr()
+    h = HDR()
     h.opcode, h.tid, h.nsamp, h.nrepeat = int(opcode), int(tid), int(nsamp), int(nrepeat)
     return np.concatenate([np.asarray(h.serialize(word_bw=WORD_BW), dtype=np.uint64).ravel(),
                            np.asarray(payload, dtype=np.uint64).ravel()])
@@ -204,11 +211,11 @@ def expected_responses(frames) -> list[tuple[int, int, int]]:
     only when that shot's passes are over.  Within a back-to-back scenario nothing finishes in time,
     so once set it stays set — which is exactly why the two scenarios are two.
     """
-    hn = ShotTxHdr.nwords_per_inst(WORD_BW)
+    hn = HDR.nwords_per_inst(WORD_BW)
     out: list[tuple[int, int, int]] = []
     busy = False
     for f in frames:
-        h = ShotTxHdr().deserialize(np.asarray(f, dtype=np.uint64)[:hn], word_bw=WORD_BW)
+        h = HDR().deserialize(np.asarray(f, dtype=np.uint64)[:hn], word_bw=WORD_BW)
         took = min(int(np.asarray(f).size) - hn, NWORD)
         op = int(h.opcode)
         if op == SHOT_END:
@@ -377,15 +384,14 @@ def responses(tb: RfShotTxTB) -> list[tuple[int, int, int]]:
     is the half a counter cannot vouch for: a design that decided correctly and serialized wrongly
     passes every internal check.
     """
-    from waveflow.hw.rf_shot_tx import ShotTxResp
 
     if not tb.resp_snk.words:
         return []
     words = np.concatenate([np.asarray(b).ravel() for b in tb.resp_snk.words])
-    n = ShotTxResp.nwords_per_inst(WORD_BW)
+    n = RESP.nwords_per_inst(WORD_BW)
     out = []
     for i in range(0, words.size - n + 1, n):
-        r = ShotTxResp().deserialize(words[i:i + n], word_bw=WORD_BW)
+        r = RESP().deserialize(words[i:i + n], word_bw=WORD_BW)
         out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))
     return out
 

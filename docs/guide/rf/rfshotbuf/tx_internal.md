@@ -242,17 +242,58 @@ the thing it can fix. Retry repairs a `BUSY`; nothing repairs a length the buffe
 
 ## On-wire layouts
 
-All four schemas are `DataList`s and pack into exactly one 64-bit word. The generated headers are
-`rf_shot_tx_hdr.h`, `rf_shot_tx_resp.h`, `shot_play_cmd.h`, `capture_window_hdr.h` — a body that
-hand-rolled the packing would be a second author of one statement.
+Every schema packs into exactly one 64-bit word. The generated headers are `rf_shot_tx_hdr.h`,
+`rf_shot_tx_resp.h`, `shot_play_cmd.h`, `capture_window_hdr.h` — a body that hand-rolled the packing
+would be a second author of one statement.
+
+**The two host-facing messages derive their widths from the geometry**
+(`plans/rf_shot_wire_format.md` Part A). `ShotTxHdr` and `ShotTxResp` are `ParamSchema`s, and
+`shot_tx_schemas(nword, samp_per_word)` is the one place that decides — the pysim twin, the generated
+C++ and the build's `DataSchemaStep` all take their pair from it, so they cannot disagree about the
+wire.
 
 | schema | fields (bits) | total |
 |---|---|---|
-| `ShotTxHdr` | `opcode` 8, `tid` 16, `nsamp` 16, `nrepeat` 16 | 56 |
-| `ShotTxResp` | `tid` 16, `status` 16, `nsamp_loaded` 16 | 48 |
-| `ShotPlayCmd` | `opcode` 8, `nrepeat` 16 | 24 |
+| `ShotTxHdr` | `opcode` 2, `tid` 16, `nsamp` **derived**, `nrepeat` 16, `_rsvd` **declared** | **64, exactly** |
+| `ShotTxResp` | `tid` 16, `status` 8, `nsamp_loaded` **derived**, `_rsvd` **declared** | **64, exactly** |
+| `ShotPlayCmd` | `opcode` 2, `nrepeat` 16 | 18 |
 | `CaptureWindowHdr` | `status` 8, `base_addr` 28, `n_dropped` 28 | **64, exactly** |
 | `MemLockCmd` / `MemLockResp` | `opcode`/`status` 8, `start_addr` 28, `end_addr` 28 | **64, exactly** |
+
+At the gated geometry — `nword=64`, `samp_per_word=4`, so 256 samples — `nsamp` is **16** bits and the
+emitted header is:
+
+```c
+struct ShotTxHdr {
+    ap_uint<2>  opcode;    // res.range(1, 0)
+    ap_uint<16> tid;       // res.range(17, 2)
+    ap_uint<16> nsamp;     // res.range(33, 18)
+    ap_uint<16> nrepeat;   // res.range(49, 34)
+    ap_uint<14> _rsvd;     // res.range(63, 50)  -- reserved, must be zero
+    static constexpr int bitwidth = 64;
+};
+```
+
+**Three things that table says, and each was a decision:**
+
+* **`opcode` is 2 bits because there are three opcodes.** It was 8, which was a number nobody chose.
+* **`nsamp` is derived, not checked.** It used to be 16 bits because `IDX_BW` said so — a constant
+  imported from `rf_samp_buf`, *the superseded family* — and construction **refused** a geometry
+  whose shot did not fit it. Now `nsamp_bw_for(nword, samp_per_word)` sizes the field from the
+  design, so the largest legal value fits by construction and there is nothing left to refuse. The
+  witness is
+  `tests/hw/test_rf_shot_tx.py::test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips`,
+  which builds the geometry the old code rejected and round-trips a 262144-sample length.
+* **The word stays 64 bits and the slack is a declared `_rsvd` field.** The point of deriving the
+  widths is that a field cannot silently overflow, *not* that the message gets smaller — a stable
+  wire size is what a DMA moves cleanly, so the padding is named rather than incidental.
+  `test_both_messages_are_one_word_and_the_padding_is_declared` holds that across four geometries.
+
+**Why `nsamp` has a floor of 16 bits rather than fitting exactly.** An exact fit would be *narrower*
+than the old wire at this geometry — 256 samples needs 9 bits — and narrowing it would make a host's
+mistyped length **alias onto a legal one**: 768 samples wrapping to 256 and being accepted as
+correct, which is the very failure the old check existed to prevent, arrived at from the other side.
+The derived width is a floor, rounded up to a whole byte because a host writes bytes.
 
 ## The reset trap, and which body is on which side of it
 

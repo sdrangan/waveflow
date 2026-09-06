@@ -63,8 +63,9 @@ import numpy as np
 from waveflow.hw.bram import T2pBram, word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL
-from waveflow.hw.dataschema import DataList, IntField
+from waveflow.hw.dataschema import DataList, IntField, ParamSchema
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.param import Param
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import (
     FramedStreamIFMaster,
@@ -83,7 +84,6 @@ from waveflow.hw.locked_mem import (
 )
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.rf_relayout import RfRelayoutToSlots
-from waveflow.hw.rf_samp_buf import IDX_BW
 from waveflow.simulation.simobj import ProcessGen
 
 # ---------------------------------------------------------------------------
@@ -174,15 +174,87 @@ SHOT_STATUS_NAMES = {
     SHOT_ZERO_LEN: "SHOT_ZERO_LEN",
 }
 
-IdxField = IntField.specialize(bitwidth=IDX_BW, signed=False)
-OpField = IntField.specialize(bitwidth=8, signed=False)
+#: Bits for :attr:`ShotTxHdr.opcode` — **sized to the opcode count, which is three**
+#: (:data:`SHOT_LOAD`, :data:`SHOT_END`, :data:`SHOT_LOOP`).  It was 8 before
+#: ``plans/rf_shot_wire_format.md`` Part A, which was a number nobody chose.
+OPCODE_BW = 2
+
+#: Bits for :attr:`ShotTxResp.status` — five verdicts, rounded up to a byte.  A host reads this
+#: field out of a DMA buffer and a byte is the unit it reads in; three bits would save nothing that
+#: is not spent on padding anyway.
+STATUS_BW = 8
+
+#: Bits for ``tid``.  **A parameter of this module**, chosen here rather than inherited: it was
+#: ``IDX_BW`` from :mod:`waveflow.hw.rf_samp_buf` — the superseded family — which made the clean
+#: lock-based design depend on a module marked for retirement.  Nobody chose that; it rode in with a
+#: schema move.  16 bits is 65536 transactions in flight, which is far past what one in-order command
+#: stream can have outstanding.
+TID_BW = 16
+
+#: Bits for ``nrepeat``.  Also this module's own, and 16 for the same reason: a repeat count is a
+#: small number, and the field costs nothing that padding would not.
+NREPEAT_BW = 16
+
+#: The wire size of both messages, in bits.  **One 64-bit word, deliberately** — see
+#: :func:`nsamp_bw_for`.  ``plans/rf_shot_wire_format.md`` Part A: the point of deriving the widths
+#: is that a field cannot silently overflow, *not* that the message gets smaller.  A stable wire size
+#: is what a DMA wants, so the slack is declared as a reserved field rather than left incidental.
+MSG_BW = 64
+
+#: The floor on ``nsamp``'s width.  A geometry-derived width alone would be *narrower* than today at
+#: the gated geometry (256 samples needs 9 bits), and narrowing it would make a host's mistyped
+#: length **alias onto a legal one** — 768 samples wrapping to 256 and being accepted as correct,
+#: which is the very failure the old check existed to prevent, reintroduced from the other side.  So
+#: the derived width is a floor, not an exact fit, and it never goes below what the wire carries
+#: today.
+NSAMP_BW_FLOOR = 16
+
+
+def nsamp_bw_for(nword: int, samp_per_word: int) -> int:
+    """Bits ``nsamp`` needs for a shot of *nword* x *samp_per_word* samples.
+
+    **Derived from the geometry rather than checked against a constant**, which is the whole of
+    ``plans/rf_shot_wire_format.md`` Part A.  Before it, the width was ``IDX_BW`` — 16, from another
+    module — and construction *refused* a shot too large for it:
+
+    ``if nw * spw >= (1 << IDX_BW): raise ValueError(...)``
+
+    That made a constant bound the design.  Now the design sizes the field, so the largest legal
+    ``nsamp`` fits **by construction** and the check is unnecessary rather than deleted on faith.
+    :func:`test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips` is the witness.
+
+    Rounded up to a whole byte because a host writes bytes, and floored at
+    :data:`NSAMP_BW_FLOOR` — see there for why an exact fit would be a regression.
+    """
+    need = int(nword) * int(samp_per_word)
+    bits = max(int(need).bit_length(), 1)
+    bits = ((bits + 7) // 8) * 8                       # a host writes bytes
+    return max(bits, NSAMP_BW_FLOOR)
+
+
+def _rsvd_bw(*used: int) -> int:
+    """Bits left in a :data:`MSG_BW` word once *used* are spent — the **declared** padding."""
+    spent = sum(int(u) for u in used)
+    if spent > MSG_BW:
+        raise ValueError(
+            f"the message fields need {spent} bits, which does not fit one {MSG_BW}-bit word. "
+            f"The wire size is fixed at one word on purpose (plans/rf_shot_wire_format.md Part A): "
+            f"a DMA moves whole words and a host that was written against one word would have to "
+            f"change. Narrow a field rather than widening the message.")
+    return MSG_BW - spent
+
+
+OpField = IntField.specialize(bitwidth=OPCODE_BW, signed=False)
+StatusField = IntField.specialize(bitwidth=STATUS_BW, signed=False)
+TidField = IntField.specialize(bitwidth=TID_BW, signed=False)
+RepeatField = IntField.specialize(bitwidth=NREPEAT_BW, signed=False)
 
 
 # ---------------------------------------------------------------------------
 # The in-band header, and the verdict that answers it
 # ---------------------------------------------------------------------------
 
-class ShotTxHdr(DataList):
+class ShotTxHdr(ParamSchema):
     r"""The header that rides ahead of the samples on the same stream.
 
     Named so it cannot be confused with the two ``TxCmd``\ s that already exist, which
@@ -199,16 +271,26 @@ class ShotTxHdr(DataList):
     """
 
     include_filename: ClassVar[str | None] = "rf_shot_tx_hdr.h"
+
+    #: Width of ``nsamp``, derived from the geometry by :func:`nsamp_bw_for`.  A design specializes
+    #: this rather than accepting the default; :meth:`ShotTxLoader.schemas` is where that happens.
+    nsamp_bw = Param(NSAMP_BW_FLOOR)
+    #: Declared padding to :data:`MSG_BW`.  Follows from ``nsamp_bw`` and is passed with it.
+    rsvd_bw = Param(MSG_BW - OPCODE_BW - TID_BW - NSAMP_BW_FLOOR - NREPEAT_BW)
+
     elements = {
         "opcode":  {"schema": OpField, "description": "SHOT_LOAD, SHOT_LOOP or SHOT_END"},
-        "tid":     {"schema": IdxField, "description": "transaction id, echoed on the response"},
-        "nsamp":   {"schema": IdxField, "description": "samples the host is sending (0 for END)"},
-        "nrepeat": {"schema": IdxField,
+        "tid":     {"schema": TidField, "description": "transaction id, echoed on the response"},
+        "nsamp":   {"schema": IntField.specialize(nsamp_bw, signed=False),
+                    "description": "samples the host is sending (0 for END)"},
+        "nrepeat": {"schema": RepeatField,
                     "description": "times to play the shot once loaded (>= 1)"},
+        "_rsvd":   {"schema": IntField.specialize(rsvd_bw, signed=False),
+                    "description": "reserved, must be zero -- pads the header to one 64-bit word"},
     }
 
 
-class ShotTxResp(DataList):
+class ShotTxResp(ParamSchema):
     """One response per header, and exactly one — see ``plans/rf_shot_buf.md`` § *Why no
     ``has_response`` flag*: there is no configuration in which a command is issued and nobody wants to
     know whether it worked.
@@ -220,12 +302,22 @@ class ShotTxResp(DataList):
     """
 
     include_filename: ClassVar[str | None] = "rf_shot_tx_resp.h"
+
+    #: Width of ``nsamp_loaded`` — **the same derived width as the header's** ``nsamp``, because the
+    #: two are compared by the host and a response that could not express what the header asked for
+    #: would make ``SHOT_SHORT``'s diagnosis unreadable.
+    nsamp_bw = Param(NSAMP_BW_FLOOR)
+    #: Declared padding to :data:`MSG_BW`.
+    rsvd_bw = Param(MSG_BW - TID_BW - STATUS_BW - NSAMP_BW_FLOOR)
+
     elements = {
-        "tid":          {"schema": IdxField, "description": "the header's transaction id"},
-        "status":       {"schema": IdxField,
+        "tid":          {"schema": TidField, "description": "the header's transaction id"},
+        "status":       {"schema": StatusField,
                          "description": "SHOT_LOADED / SHORT / WRONG_LEN / BUSY / ZERO_LEN"},
-        "nsamp_loaded": {"schema": IdxField,
+        "nsamp_loaded": {"schema": IntField.specialize(nsamp_bw, signed=False),
                          "description": "samples actually written to the buffer"},
+        "_rsvd":        {"schema": IntField.specialize(rsvd_bw, signed=False),
+                         "description": "reserved, must be zero -- pads the response to one word"},
     }
 
 
@@ -234,7 +326,32 @@ class ShotTxResp(DataList):
 #: :data:`~waveflow.hw.rf_tx_stream.TX_STREAM_SCHEMA_CLASSES`, which is four because the streaming
 #: transmitter also has to say things to *itself* (a tagged sample, a per-window status); the shot
 #: design has nothing to arbitrate, so it has nothing internal to name.
-SHOT_TX_SCHEMA_CLASSES = [ShotTxHdr, ShotTxResp]
+def shot_tx_schemas(nword: int = SHOT_WORDS, samp_per_word: int = 4):
+    """The ``(header, response)`` pair for a design of this geometry.
+
+    **One place decides the widths**, so the pysim twin, the generated C++ and the build's
+    :class:`~waveflow.hw.dataschema.DataSchemaStep` cannot disagree about the wire.  Both messages
+    are one :data:`MSG_BW`-bit word whatever the geometry; what varies is how much of that word
+    ``nsamp`` occupies and how much is declared reserved.
+    """
+    nb = nsamp_bw_for(nword, samp_per_word)
+    hdr = ShotTxHdr.specialize(nsamp_bw=nb,
+                               rsvd_bw=_rsvd_bw(OPCODE_BW, TID_BW, nb, NREPEAT_BW))
+    resp = ShotTxResp.specialize(nsamp_bw=nb,
+                                 rsvd_bw=_rsvd_bw(TID_BW, STATUS_BW, nb))
+    # `specialize` names the subclass after its params (ShotTxHdr_nsamp_bw16_rsvd_bw14), and that
+    # name becomes the generated C++ STRUCT name.  The hand-written task bodies include
+    # `rf_shot_tx_hdr.h` and say `ShotTxHdr h;`, so the struct has to keep the plain name -- one
+    # geometry is emitted per build, so there is never more than one ShotTxHdr in an include dir.
+    hdr.__name__ = ShotTxHdr.__name__
+    resp.__name__ = ShotTxResp.__name__
+    return hdr, resp
+
+
+#: The schema classes a build emits C++ headers for, **at the default geometry**.  A design whose
+#: ``nword`` x ``samp_per_word`` needs a wider ``nsamp`` must pass its own pair — see
+#: :func:`shot_tx_schemas`, and ``examples/rf_shot_tx``'s build, which does exactly that.
+SHOT_TX_SCHEMA_CLASSES = list(shot_tx_schemas())
 
 
 
@@ -270,7 +387,7 @@ class ShotPlayCmd(DataList):
     elements = {
         "opcode":  {"schema": OpField,
                     "description": "SHOT_LOAD (a done is owed) or SHOT_LOOP (none is)"},
-        "nrepeat": {"schema": IdxField,
+        "nrepeat": {"schema": RepeatField,
                     "description": "passes to play; 0 means play nothing"},
     }
 
@@ -345,11 +462,11 @@ class ShotTxLoader(FreeRunMod):
             raise ValueError(
                 f"the region [{b}, {b + nw}) does not fit a {d}-element memory. Refused here rather "
                 f"than on the wire, where it would come back as LOCK_BAD_RANGE every single load.")
-        if nw * spw >= (1 << IDX_BW):
-            raise ValueError(
-                f"a shot of {nw} words x {spw} samples is {nw * spw} samples, which does not fit "
-                f"the {IDX_BW}-bit nsamp field. A verdict that wrapped would report a short load as "
-                f"a correct one.")
+        # There is no "does nsamp fit?" check here any more, and its absence is the point of
+        # plans/rf_shot_wire_format.md Part A.  It used to refuse a shot larger than a 16-bit field
+        # borrowed from another module; now `nsamp_bw_for` sizes the field from THIS geometry, so
+        # the largest legal value fits by construction and there is nothing left to refuse.
+        self.hdr_cls, self.resp_cls = shot_tx_schemas(nw, spw)
         #: The host's port: header **and** payload, one frame, ``TLAST`` at the end.  Without the pin
         #: there is no in-band way to say *that was the end* — a payload word and a header word are
         #: the same bits — so a short transfer would stall a counted loop, and a hang is
@@ -439,10 +556,10 @@ class ShotTxLoader(FreeRunMod):
         w, nw = int(self.bitwidth), int(self.nword)
         frame = np.asarray((yield from self.s_in.get()), dtype=np.uint64).ravel()
 
-        hn = ShotTxHdr.nwords_per_inst(w)
+        hn = self.hdr_cls.nwords_per_inst(w)
         # The schema's own deserializer, never a field walk: the layout has one author and the
         # generated C++ reads it through the same statement.
-        hdr = ShotTxHdr().deserialize(frame[:hn], word_bw=w)
+        hdr = self.hdr_cls().deserialize(frame[:hn], word_bw=w)
         payload = frame[hn:]
 
         # Harvested AFTER the header has arrived, so `busy` is as fresh as it can be when it is read.
@@ -507,7 +624,7 @@ class ShotTxLoader(FreeRunMod):
 
     def _answer(self, hdr, status: int, nsamp_loaded: int) -> ProcessGen[None]:
         """Exactly one :class:`~waveflow.hw.rf_shot_tx.ShotTxResp` per header."""
-        r = ShotTxResp()
+        r = self.resp_cls()
         r.tid, r.status, r.nsamp_loaded = int(hdr.tid), int(status), int(nsamp_loaded)
         self.resps.append((int(hdr.tid), int(status), int(nsamp_loaded)))
         yield from self.resp_out.write(r)

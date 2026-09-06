@@ -57,7 +57,7 @@ from waveflow.hw.arrayutils import ArrayUtilsStep  # noqa: E402
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES  # noqa: E402
 from waveflow.hw.rf_relayout import dense_elem_type, slot_elem_type, slots_per_word  # noqa: E402
-from waveflow.hw.rf_shot_tx import SHOT_TX_SCHEMA_CLASSES  # noqa: E402
+from waveflow.hw.rf_shot_tx import shot_tx_schemas  # noqa: E402
 from waveflow.hw.rf_shot_tx import (  # noqa: E402
     SHOT_PLAY_SCHEMA_CLASSES,
     RfShotTx,
@@ -121,7 +121,11 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     # THREE schema lists.  The header and the verdict are still rf_shot_tx's at Stage A -- see the
     # ownership decision in plans/rf_shot_unify.md -- the lock's are the lock's, and the play command
     # is the merged design's own.
-    for cls in [*SHOT_TX_SCHEMA_CLASSES, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
+# The header/response pair for THIS geometry, not the module default: plans/rf_shot_wire_format.md
+    # Part A derives nsamp's width from nword x samp_per_word, so the emitted C++ has to be the
+    # design's own pair or the twin would parse a different wire.
+    hdr_cls, resp_cls = shot_tx_schemas(int(_ELAB["nword"]), int(_ELAB["samp_per_word"]))
+    for cls in [hdr_cls, resp_cls, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
         inner.add(DataSchemaStep(cls, word_bw_supported=[word_bw], include_dir=INCLUDE_DIR))
     # The serializers the re-layout body calls.  The SLOT element is the converter's container width
     # and the DENSE element the effective one; at 14-in-16 they differ, which is what makes the last

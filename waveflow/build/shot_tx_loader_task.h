@@ -121,13 +121,16 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
     // MALFORMED BEFORE TRANSIENT, which is this repo's order and for its reason: a command that is
     // wrong AND badly timed should be told the thing it can fix.  Retry repairs a BUSY; nothing
     // repairs a length the buffer was not built for.
-    ap_uint<16> status = SHOT_LOADED;
+    // Sized from the RESPONSE's own field rather than a literal: plans/rf_shot_wire_format.md
+    // Part A derives the message widths from the geometry, so a hard-coded width here would be a
+    // second opinion about the wire.
+    decltype(ShotTxResp::status) status = SHOT_LOADED;
     bool accept = false;
     if (h.opcode != SHOT_OP_LOAD && h.opcode != SHOT_OP_LOOP) {
         status = SHOT_WRONG_LEN;            // refused, never reinterpreted
     } else if (h.nsamp == 0) {
         status = SHOT_ZERO_LEN;             // nothing to complete on, so it could never resolve
-    } else if (h.nsamp != (ap_uint<16>)(NW * SPW)) {
+    } else if (h.nsamp != (decltype(h.nsamp))(NW * SPW)) {
         status = SHOT_WRONG_LEN;            // refused, never truncated
     } else if (busy) {
         status = SHOT_BUSY;                 // transient, and the only one a retry repairs
@@ -184,7 +187,8 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
             // shot is whole, so half a waveform never reaches the converter on either path.
             ShotPlayCmd pc;
             pc.opcode = h.opcode;
-            pc.nrepeat = (status == SHOT_LOADED) ? (ap_uint<16>)h.nrepeat : (ap_uint<16>)0;
+            pc.nrepeat = (status == SHOT_LOADED) ? (decltype(pc.nrepeat))h.nrepeat
+                                                 : (decltype(pc.nrepeat))0;
             pc.write_stream<W>(rep_out);
             // A BARRIER, not a hint: the player may resume the instant it sees this.
             memlock::mem_lock_request(cmd_out, LOCK_RELEASE, lo, hi);
@@ -207,7 +211,8 @@ drain_tail:
 
     r.status = status;
     // What actually LANDED, not what was asked for -- the number a DMA cannot produce.
-    r.nsamp_loaded = accept ? (ap_uint<16>)(took * SPW) : (ap_uint<16>)0;
+    r.nsamp_loaded = accept ? (decltype(r.nsamp_loaded))(took * SPW)
+                            : (decltype(r.nsamp_loaded))0;
     r.write_axi4_stream<W>(resp_out);
 }
 

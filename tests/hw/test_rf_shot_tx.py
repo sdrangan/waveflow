@@ -440,6 +440,73 @@ def test_a_frame_whose_opcode_is_neither_LOAD_nor_LOOP_is_refused(monkeypatch=No
 # The play command, and the ordering everything turns on
 # ---------------------------------------------------------------------------
 
+def test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips():
+    """**The witness for `plans/rf_shot_wire_format.md` Part A.**
+
+    Before Part A, ``nsamp`` was 16 bits wide because ``IDX_BW`` said so — a constant imported from
+    :mod:`waveflow.hw.rf_samp_buf`, the superseded family — and ``RfShotTx.__post_init__`` *refused*
+    any geometry whose shot did not fit it:
+
+    ``if nw * spw >= (1 << IDX_BW): raise ValueError("... does not fit the 16-bit nsamp field")``
+
+    A constant from another module bounded the design. Now the design sizes the field, so this test
+    is the check becoming **unnecessary** rather than deleted on faith: it builds the geometry the
+    old code refused, and shows the length survives the wire.
+
+    Without this the change is unfalsifiable — everything else only confirms nothing broke.
+    """
+    from waveflow.hw.rf_shot_tx import nsamp_bw_for, shot_tx_schemas
+
+    big_nword = 1 << 16                       # 65536 words x 4 = 262144 samples
+    nsamp = big_nword * SPW
+    assert nsamp >= (1 << 16), "the point is a shot the OLD 16-bit field could not carry"
+
+    # 1. the width follows the geometry rather than a constant
+    nb = nsamp_bw_for(big_nword, SPW)
+    assert nb > 16, f"nsamp is still {nb} bits; it has to grow with the shot"
+
+    # 2. the design CONSTRUCTS at that geometry -- this is the line the old check refused
+    dut = RfShotTx(sim=Simulation(), name="big", bitwidth=WORD_BW, samp_per_word=SPW,
+                   depth=1 << 17, nword=big_nword, base=0, shift=2,
+                   blk_words=BLK_WORDS, dac_word_rate=DAC_WORD_RATE,
+                   clk=Clock(name="c", freq=250e6))
+    assert dut.nsamp_shot == nsamp
+
+    # 3. and the length round-trips on the wire, which is what the field is for
+    hdr_cls, resp_cls = shot_tx_schemas(big_nword, SPW)
+    h = hdr_cls()
+    h.opcode, h.tid, h.nsamp, h.nrepeat, h._rsvd = SHOT_LOAD, 7, nsamp, 3, 0
+    back = hdr_cls().deserialize(h.serialize(word_bw=WORD_BW), word_bw=WORD_BW)
+    assert int(back.nsamp) == nsamp, (
+        f"nsamp came back {int(back.nsamp)} instead of {nsamp} — the field wrapped, which is "
+        f"exactly the 'verdict that wrapped reports a short load as a correct one' failure the old "
+        f"check existed to prevent.")
+    assert (int(back.opcode), int(back.tid), int(back.nrepeat)) == (SHOT_LOAD, 7, 3)
+
+    # 4. and it is still ONE 64-bit word, which is the decision the plan made explicitly
+    assert hdr_cls.get_bitwidth() == 64 and hdr_cls.nwords_per_inst(WORD_BW) == 1
+    assert resp_cls.get_bitwidth() == 64 and resp_cls.nwords_per_inst(WORD_BW) == 1
+
+
+def test_both_messages_are_one_word_and_the_padding_is_declared():
+    """One 64-bit word at every geometry, with the slack **named** rather than incidental.
+
+    ``plans/rf_shot_wire_format.md`` Part A: the point of deriving the widths is that a field cannot
+    silently overflow, *not* that the message gets smaller — a stable wire size is what a DMA wants.
+    So whatever ``nsamp`` does not use is a declared ``_rsvd`` field, and the total is invariant.
+    """
+    from waveflow.hw.rf_shot_tx import MSG_BW, shot_tx_schemas
+
+    for nword, spw in ((16, 4), (64, 4), (1 << 16, 4), (1 << 20, 2)):
+        hdr, resp = shot_tx_schemas(nword, spw)
+        for cls in (hdr, resp):
+            assert cls.get_bitwidth() == MSG_BW, (
+                f"{cls.__name__} is {cls.get_bitwidth()} bits at nword={nword}, spw={spw}; the "
+                f"wire size is supposed to be {MSG_BW} whatever the geometry.")
+            assert "_rsvd" in cls.elements, f"{cls.__name__}'s padding is not declared"
+            assert cls.nwords_per_inst(64) == 1
+
+
 def test_the_play_command_is_one_beat_and_carries_the_hosts_own_opcode():
     """``8 + 16`` in one 64-bit beat, and the opcode is the host's rather than a parallel vocabulary.
 
