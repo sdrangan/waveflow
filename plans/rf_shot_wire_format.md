@@ -162,3 +162,108 @@ precedent unless there is a reason not to, and say which.
 - `plans/rf_shot_buf.md`'s remaining stage, pre-trigger capture. Wants a settled geometry, so it comes
   after this.
 - `RfShotRx`. Neither part touches it; it already has two regions and puts its base on the wire.
+
+---
+
+## Part A as built
+
+Built 2026-09-06 on branch `rf-shot-wire-a` off `main` (PR #187 merged as `ff2cf79`). **Part B not
+started.**
+
+### The widths, and where each number comes from
+
+| field | before | after | why |
+|---|---|---|---|
+| `opcode` | 8 | **2** | three opcodes. It was a number nobody chose. |
+| `tid` | `IDX_BW` = 16 | **`TID_BW` = 16** | *this module's* constant now. Same value, chosen here. |
+| `nrepeat` | `IDX_BW` = 16 | **`NREPEAT_BW` = 16** | same. |
+| `nsamp` | `IDX_BW` = 16 | **derived**, 16 at the gated geometry | `nsamp_bw_for(nword, samp_per_word)` |
+| `status` (resp) | `IDX_BW` = 16 | **`STATUS_BW` = 8** | five verdicts, byte-rounded — a host reads bytes. |
+| `nsamp_loaded` | `IDX_BW` = 16 | **derived**, same as `nsamp` | the host compares the two. |
+| — | (8 bits spare, incidental) | **`_rsvd`, declared** | the padding is named. |
+
+Both messages are **one 64-bit word at every geometry**. Header at the gated geometry:
+`opcode[1:0] | tid[17:2] | nsamp[33:18] | nrepeat[49:34] | _rsvd[63:50]`.
+
+**`ShotTxHdr` and `ShotTxResp` are now `ParamSchema`s**, and `shot_tx_schemas(nword,
+samp_per_word)` is the single place that decides — the pysim twin, the generated C++ and the build's
+`DataSchemaStep` all take their pair from it.
+
+### The `IDX_BW` import is gone
+
+`from waveflow.hw.rf_samp_buf import IDX_BW` — the clean lock-based design's one hard dependency on
+the superseded family — no longer exists. The only remaining mentions of the name in
+`rf_shot_tx.py` are past-tense prose explaining what changed.
+
+### Assumption recorded: `nsamp` has a 16-bit FLOOR, it is not an exact fit
+
+The plan says *derived from the geometry*. Derived **exactly** would be a regression, and the plan
+did not anticipate it: at the gated geometry 256 samples needs **9 bits**, and a 9-bit `nsamp` makes
+a host's mistyped length **alias onto a legal one** — 768 wrapping to 256 and being *accepted as
+correct*. That is the identical failure the old check existed to prevent (*"a verdict that wrapped
+would report a short load as a correct one"*), arrived at from the other side.
+
+So `nsamp_bw_for` returns `max(bit_length(nword × samp_per_word) rounded up to a byte, 16)`:
+
+* **derived** — it grows with the geometry, which is the whole point;
+* **floored at what the wire carries today**, so no host sees the field narrow;
+* **byte-rounded**, because a host writes bytes.
+
+The width is a *floor* on what the design needs, not a tight fit. Overflow of the design's own length
+is impossible by construction, which is what the removed check was about.
+
+### The check at `rf_shot_tx.py:348` is gone, and demonstrated rather than asserted
+
+```python
+if nw * spw >= (1 << IDX_BW):
+    raise ValueError("... does not fit the 16-bit nsamp field ...")
+```
+
+Deleted. The witness is
+`tests/hw/test_rf_shot_tx.py::test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips`,
+which does four things in order: derives the width for `nword = 65536` (**24 bits**, `> 16`),
+**constructs `RfShotTx` at the geometry the old code refused**, round-trips a **262144**-sample
+length through serialize/deserialize and checks it comes back exactly, and confirms both messages are
+still one 64-bit word. Without it the change would be unfalsifiable.
+
+`test_both_messages_are_one_word_and_the_padding_is_declared` holds the wire size at 64 across four
+geometries including `nword = 1<<20`.
+
+### The generated C++ matches — confirmed, not assumed
+
+Regenerated and read. `struct ShotTxHdr` carries `ap_uint<2> opcode`, `ap_uint<16> tid/nsamp/nrepeat`,
+`ap_uint<14> _rsvd`, `bitwidth = 64`, and a `pack_to_uint` whose ranges are the layout above.
+**csynth passes** (Vitis HLS 2025.1, Fmax **360.77 MHz** — unchanged), which is the real test that the
+hand-written body compiles against the derived widths.
+
+Two things that needed fixing for that, and neither was optional:
+
+1. **The task body hard-coded `ap_uint<16>`** in four places — comparing `h.nsamp` against
+   `NW * SPW`, assigning `nsamp_loaded`, and the local `status`. A literal width there is a second
+   opinion about the wire. They are now `decltype(h.nsamp)` / `decltype(r.nsamp_loaded)` /
+   `decltype(ShotTxResp::status)`, so the body follows whatever the schema derived.
+2. **`specialize()` names the subclass after its params** (`ShotTxHdr_nsamp_bw16_rsvd_bw14`), and
+   that name becomes the generated **struct** name — which the body, which says `ShotTxHdr h;`, could
+   not compile against. `shot_tx_schemas` pins `__name__` back to the base. One geometry is emitted
+   per build, so there is never more than one `ShotTxHdr` in an include directory.
+
+### The example used the base classes, and that was a latent second source
+
+`examples/rf_shot_tx` built its frames with the unspecialized `ShotTxHdr` — correct at this geometry
+**only by coincidence**, because the base defaults happen to equal what 256 samples derives. It now
+takes `HDR, RESP = shot_tx_schemas(NWORD, SPW)`, so a geometry change cannot leave the testbench
+speaking a different wire from the design. The XSI gate's response reader follows.
+
+### No cycle count moved
+
+`tests/examples/test_rf_shot_tx_xsi.py`: **20 gates, 0 skipped**, and the gate asserts every recorded
+value exactly — `resp_last` 269 / 500, DAC 359 words, 0 zero-filled, 1 underrun at cycle 4, blocks
+`(F,3)(P,12)(F,7)` and `(F,3)(P,1)(F,2)(P,1)(F,15)`, 18/55 both-live cycles, 0/2 collisions, writes
+`192..255`, II=1 on five loops.
+
+**That it did not move is expected and worth stating why:** the header is still exactly one beat and
+the payload is untouched, so the *number of transfers* is identical. Only the bit positions inside
+the word changed, and a cycle count cannot see those. `RfShotRx` is untouched and its 9 gates are
+unchanged, which is the finding the plan asked to watch for and did not occur.
+
+pysim is bit-identical too: `(F,192) (P,768) (F,320)` and the same five verdicts.

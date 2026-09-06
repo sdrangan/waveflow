@@ -171,9 +171,9 @@ One 64-bit word, ahead of the samples on the same stream.
 
 | field | bits | meaning |
 |---|---|---|
-| `opcode` | 8 | `SHOT_LOAD`, `SHOT_LOOP` or `SHOT_END` |
+| `opcode` | 2 | `SHOT_LOAD`, `SHOT_LOOP` or `SHOT_END` |
 | `tid` | 16 | transaction id, echoed on the response |
-| `nsamp` | 16 | samples the host is sending (0 for `END`) |
+| `nsamp` | 16 † | samples the host is sending (0 for `END`) |
 | `nrepeat` | 16 | times to play the shot once loaded |
 
 ### `ShotTxResp` — what comes back
@@ -183,8 +183,13 @@ One 64-bit word, one per header, in order.
 | field | bits | meaning |
 |---|---|---|
 | `tid` | 16 | the header's transaction id |
-| `status` | 16 | one of the five verdicts below |
-| `nsamp_loaded` | 16 | samples **actually** written to the buffer |
+| `status` | 8 | one of the five verdicts below |
+| `nsamp_loaded` | 16 † | samples **actually** written to the buffer |
+
+† **`nsamp` and `nsamp_loaded` are sized from your geometry**, not fixed at 16. 16 bits is the floor
+and what this configuration gets; a design whose `nword × samp_per_word` needs more gets more, and
+both messages stay one 64-bit word either way — the slack is a declared `_rsvd` field. See
+[the on-wire layouts](./tx_internal.md#on-wire-layouts).
 
 `nsamp_loaded` is what landed, not what was asked for. On `SHOT_LOADED` the two agree; on
 `SHOT_SHORT` the difference *is* the diagnosis — and it is a number a DMA cannot give you, because

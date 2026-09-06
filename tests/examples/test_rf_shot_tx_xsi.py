@@ -75,6 +75,7 @@ from examples.rf_shot_tx.rf_shot_tx import (
     FINITE_FRAMES,
     LOOP_FRAMES,
     NWORD,
+    RESP,
     XSI_N_CYCLES,
     blocks_to_codes,
     check_finite_playout,
@@ -87,7 +88,7 @@ from examples.rf_shot_tx.rf_shot_tx import (
 from examples.rf_shot_tx.rf_shot_tx_build import RTL_FILES, TOP, WRAPPER, generate_tb
 from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
-from waveflow.hw.rf_shot_tx import SHOT_STATUS_NAMES, ShotTxResp
+from waveflow.hw.rf_shot_tx import SHOT_STATUS_NAMES
 from waveflow.utils.bram_trace import describe, find_read_during_write, sampled
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_tx"
@@ -215,10 +216,10 @@ def _responses(bundle: str) -> list[tuple[int, int, int]]:
     if not d.is_dir():
         return []
     words = np.concatenate(read_burst_bundle(d)).ravel()
-    n = ShotTxResp.nwords_per_inst(64)
+    n = RESP.nwords_per_inst(64)
     out = []
     for i in range(0, words.size - n + 1, n):
-        r = ShotTxResp().deserialize(words[i:i + n], word_bw=64)
+        r = RESP().deserialize(words[i:i + n], word_bw=64)
         out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))
     return out
 
