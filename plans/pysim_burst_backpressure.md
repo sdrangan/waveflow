@@ -616,3 +616,116 @@ across the suite, concentrated in the channels step 1 had already fixed.
   old policy: a converter cannot stall a physical sample grid.
 
 **`offer()` and `_admit` are otherwise untouched**, as the plan requires.
+
+---
+
+## S3 as measured — **the hypothesis is REFUTED. No metronome was retired.**
+
+S3's premise was that `dac_word_rate` exists only because a pysim producer could not be paced by its
+consumer, so S2 should have made it redundant. **It is not redundant, and the reason is precise:**
+
+> **Back-pressure paces the *rate*. It does not bound how far *ahead of the data* a free-running
+> producer may get.**
+
+Nothing in the repo was changed to remove a metronome. What follows is the measurement.
+
+### The experiment, on `ShotTxPlayer` — the one the plan is actually about
+
+`examples/rf_shot_tx`, the gated configuration, with `dac_word_rate` neutralised and **nothing else
+touched**:
+
+| | lead filler | playout, samples | underrun | blocks delivered | plays | grants |
+|---|---|---|---|---|---|---|
+| **with** the metronome | **192** | `(F,192) (P,768) (F,320)` | 0 | 20 | 3 | 1 |
+| **without** it | **640** | `(F,640) (P,640)` | 0 | 20 | 3 | 1 |
+
+**Throughput is untouched and correctness is untouched** — no underrun, the same 20 blocks, the same
+three passes, the same single grant, the same verdicts. What moves is *when the shot appears*: the
+first real sample is delayed from 3 blocks to 10, and the trailing quiet disappears because the run
+ends mid-playout.
+
+**And it moves AWAY from the hardware.** The RTL gate records the lead filler as **3 blocks**
+(`WANT_SEGMENT_BLOCKS["cmd"] = [(True, 3), (False, 12), (True, 7)]`). With the metronome pysim reads
+3 blocks and agrees; without it pysim reads 10 and
+`test_both_backends_agree_sample_for_sample` would fail at sample 192. The metronome is not
+compensating for missing back-pressure — it is holding the player to the converter's grid, which is
+what `TREADY` does at RTL and what a queue depth cannot do.
+
+### Why back-pressure cannot substitute
+
+A `FreeRunMod` player never stops having something to write: when it is not playing it writes
+**filler**. So the moment the downstream has room it fills it — with filler — and the shot, when it
+finally arrives, queues *behind* that. Back-pressure limits the standing occupancy; it does not stop
+the producer from getting the *wrong words* into the pipe first.
+
+The metronome prevents that by making the player's own firing rate equal the converter's. That is a
+different quantity from queue occupancy and no depth setting expresses it.
+
+### It is NOT an artefact of S2's depth raise, and that was checked
+
+S2 step 1 raised `tb_dac_axis` from 2 to `2 * blk_words = 32`, which is the obvious suspect. Sweeping
+that depth with the metronome off:
+
+| `dac_axis` depth | 32 | 16 | 8 | 4 | 2 |
+|---|---|---|---|---|---|
+| lead filler (samples) | 640 | 576 | 576 | 576 | 576 |
+
+So the depth raise accounts for **64 samples of it (one block)** and the remaining **384 (six
+blocks)** is intrinsic to removing the metronome. The two do interact — a deeper queue gives the
+free-running player more room to run ahead into — but the interaction is the smaller half, and even
+at the RTL's own depth of 2 the disagreement is six blocks.
+
+### The other two, decided on their merits rather than by analogy
+
+**(2) `RfSampBufPlayer.dac_word_rate` — KEPT, and it is a different shape.** It is not a plain
+metronome: `period = max(fabric, demand)` models **which side is the bottleneck**. Measured with
+`demand` neutralised, `n_underrun` moves **1903 → 1793**, so it is load-bearing on a number a gate
+reads. Its own docstring records the failure mode as verdict-level rather than timing-level — *"the
+loader could never stay ahead of it and every command would eventually be refused as too late"* — and
+records a bug that *"showed a gap every third block"*, so this code has been wrong before in exactly
+this area. `fabric` is not redundant under any reading, and the `max()` is doing real work.
+
+**(3) `RfTxStream.slot_period` — KEPT, and it is load-bearing differently again.** It **raises when
+unset** (*"slot_period was never set, so this player…"*), deliberately at use rather than in
+`__post_init__`, because `elaborate()` passes `HwParam`s and nothing else. Its docstring gives the
+same verdict-level failure as (2): without the converter's rate the player runs at the fabric's and
+*"every command comes back `TX_TOO_LATE` for a reason that is in the model rather than in the
+design."* Retiring it is not a timing change, it is removing a guard.
+
+**Since (1) — the simplest, most plainly removable of the three — is refuted, (2) and (3) are refuted
+a fortiori**: both do strictly more than pace, and both were already documented as doing so.
+
+### What this means for the plan's S3
+
+S3 as written cannot be done, and the sentence *"paced entirely by back-pressure flowing upstream
+from `RFSampIF` through `Rfdc`"* is the part that does not hold. Back-pressure flows, and it is not
+enough. **Nothing declares a rate** is reachable only by giving a free-running producer some other
+way to know the converter's grid, and the honest options are:
+
+* **leave it** — one float per player, documented as the converter's grid rather than as a
+  workaround for missing back-pressure (what this stage did);
+* **derive it** — the player could read `samp_rate` off the converter's clock the way `Rfdc` already
+  does, which removes the *hand-computation* (`float(self.samp_rate) / SPW` in the example) without
+  removing the concept. This is the wart the docs note already calls out, and it is a real,
+  separable improvement;
+* **make the filler path back-pressure-aware** — have the player offer filler rather than write it,
+  so it cannot run ahead on words nobody asked for. This is a design change, not a modelling one, and
+  it would need its own gates.
+
+### `blk_words` still carries two meanings
+
+The plan expected S3 to reduce it to *"only the lock poll period"*. It cannot, because the second
+meaning — words per pysim output burst — is what the surviving metronome is charged against
+(`deadline = _t0 + _blocks * (bw / dac_word_rate)`). With the metronome kept, the burst granularity
+still has to be expressed, and it is still the same boundary. **Unchanged, and the docstring that
+says it means two things is still true.**
+
+### What was changed
+
+**One documentation clause, which S2 falsified independently of S3's outcome.**
+`docs/guide/rf/rfshotbuf/tx.md` said *"pysim does not back-pressure a burst write"*. Since S2 that is
+false. The note now says what is actually true — back-pressure paces the rate, and S3 measured that
+this is not sufficient — rather than being deleted along with a parameter that is still there.
+
+`examples/rf_shot_tx/rf_shot_tx.py`'s `float(self.samp_rate) / SPW` **stays**, because the parameter
+it feeds stays.
