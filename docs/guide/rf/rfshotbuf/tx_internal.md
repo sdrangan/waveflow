@@ -196,7 +196,7 @@ correct rather than a leak: the state is only ever read when a frame is being ju
 
 ### `ShotPlayCmd` carries the host's own opcode
 
-The loader → player wire is `{opcode: 8, nrepeat: 16}` (`rf_shot_tx.py:246-281`), one beat, and the
+The loader → player wire is `{opcode: 2, nrepeat: 16}` (`rf_shot_tx.py:246-281`), one beat, and the
 opcode is the host's `SHOT_LOAD` / `SHOT_LOOP` rather than a parallel `PLAY_FINITE` / `PLAY_LOOP`
 vocabulary invented for the internal wire.
 
