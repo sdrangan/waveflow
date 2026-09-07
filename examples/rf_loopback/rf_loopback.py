@@ -40,7 +40,7 @@ from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, 
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 
-from examples.rf_loopback.rfdc import Rfdc
+from waveflow.hw.rfdc import Rfdc
 from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord
 
 
@@ -210,7 +210,7 @@ class RfSampPassThrough(FreeRunMod):
     #: DUT out of a testbench walk.
     cpp_kernel_name: ClassVar[str | None] = "rf_pass_through"
 
-    #: AXIS word width in bits — the converter's :attr:`~examples.rf_loopback.rfdc.Rfdc.
+    #: AXIS word width in bits — the converter's :attr:`~waveflow.hw.rfdc.Rfdc.
     #: axis_bitwidth`, read off it when the testbench builds the graph.  The width follows from the
     #: converter's :class:`~waveflow.hw.rfdc_samp_word.RfdcSampWord`; nothing here restates it.
     bitwidth: HwParam[int] = 64

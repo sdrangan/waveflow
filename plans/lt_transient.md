@@ -258,7 +258,7 @@ C_lead = SPW * ( max(D_samp, B)             # 1  the composite's own `samp` FIFO
 | 1 | `D_samp` | 2 words | `RfShotTx.__post_init__`, `waveflow/hw/rf_shot_tx.py:934` — the `("samp", …, 2)` row |
 | 2 | — | `B` | `_RelayoutTask.run_iter`, `waveflow/hw/rf_relayout.py:225` — one `get(nwords_max=blk_words)` held across the `write` |
 | 3 | `D_dac` | `2 * blk_words` = 32 words | `examples/rf_shot_tx/rf_shot_tx.py:319` — the testbench's `dac` row |
-| 4 | — | `tx_blksize // SPW` = `B` | `Rfdc._dac_proc`, `examples/rf_loopback/rfdc.py:579` — one block held across `tx_rf.put` |
+| 4 | — | `tx_blksize // SPW` = `B` | `Rfdc._dac_proc`, `waveflow/hw/rfdc.py:579` — one block held across `tx_rf.put` |
 | 5 | `D_rf` | 2 blocks | `RFSampIF.depth` = `DEFAULT_RF_DEPTH`, `waveflow/hw/rf_sample_if.py:59` |
 | 6 | `D_rx` | 2 blocks | `RfDataSink.depth` = `DEFAULT_RF_RX_DEPTH`, `waveflow/hw/rf_sample_if.py:62` |
 
@@ -608,6 +608,6 @@ Only if wanted. The `Rfdc` emits a timing event derived from `tx_samp_rate`.
 
 - `RfSampBufPlayer` and `RfTxStream`'s pacing. Kept for measured reasons.
 - The word-granular `data_buffer` question — the 6 internal channels under-counting their stalls.
-- **Where `Rfdc` lives.** It is defined in `examples/rf_loopback/rfdc.py` and imported by seven RF
+- **Where `Rfdc` lives.** It is defined in `waveflow/hw/rfdc.py` and imported by seven RF
   designs and a whole guide section, while its siblings `RFSampIF` and `RfdcSampWord` are framework.
   A real structural question, and not this plan's.

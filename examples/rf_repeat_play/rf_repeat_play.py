@@ -388,7 +388,7 @@ class RfRepeatPlayTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from examples.rf_loopback.rfdc import Rfdc
+        from waveflow.hw.rfdc import Rfdc
 
         self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=float(self.axis_freq))
         self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
@@ -576,7 +576,7 @@ class RfCircPlayTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from examples.rf_loopback.rfdc import Rfdc
+        from waveflow.hw.rfdc import Rfdc
 
         self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=float(self.axis_freq))
         self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))

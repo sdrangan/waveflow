@@ -400,7 +400,7 @@ def pack(word_type: type[RfdcSampWord], samps: Any) -> np.ndarray:
 
     So a float array is refused rather than quantized, and the message names the missing call.  The
     caller therefore knows the amplitude scale, which is right: ``full_scale`` is a property of the
-    converter (:class:`~examples.rf_loopback.rfdc.Rfdc`), not of the word.
+    converter (:class:`~waveflow.hw.rfdc.Rfdc`), not of the word.
 
     Channel-major, per channel
     --------------------------

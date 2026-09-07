@@ -448,7 +448,7 @@ def test_the_rtl_page_reports_the_hook_findings_the_code_actually_produces():
     from waveflow.simulation.rf_tb import RfDataSink, RfDataSource
 
     from examples.rf_loopback.rf_loopback import RfSampPassThrough
-    from examples.rf_loopback.rfdc import Rfdc
+    from waveflow.hw.rfdc import Rfdc
 
     text = _page("examples/rf_loopback/rtl.md")
 
@@ -524,7 +524,7 @@ def test_the_converter_parameter_split_matches_the_class():
     Checked against ``Rfdc.__annotations__`` — the declaration itself — and on **both** pages, so
     the guide and the example cannot drift apart either.
     """
-    from examples.rf_loopback.rfdc import Rfdc
+    from waveflow.hw.rfdc import Rfdc
 
     hw = {n for n, a in Rfdc.__annotations__.items() if "HwParam" in str(a)}
     plain = set(Rfdc.__annotations__) - hw

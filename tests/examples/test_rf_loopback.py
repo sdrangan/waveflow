@@ -27,7 +27,7 @@ from waveflow.hw.fixpoint import from_real, to_real
 from waveflow.simulation.simulation import Simulation
 
 from examples.rf_loopback.rf_loopback import RfLoopbackSim, RfLoopbackTB, RfSampPassThrough
-from examples.rf_loopback.rfdc import Rfdc
+from waveflow.hw.rfdc import Rfdc
 from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord as WORD, pack, unpack
 
 
@@ -944,7 +944,7 @@ class TestRfdcGuards:
         The converter takes an I/Q word now; what it still insists on is that the RF edge agrees
         about complex-ness, which is checked at bind rather than at construction because that is
         where the second declaration first exists (see
-        :meth:`~examples.rf_loopback.rfdc.Rfdc.on_rf_bind`).
+        :meth:`~waveflow.hw.rfdc.Rfdc.on_rf_bind`).
 
         The geometry is the one that matters on this board: 2 complex samples a beat, 14-in-16, a
         64-bit word — an I/Q design stays on the same bus by halving ``samp_per_word``.

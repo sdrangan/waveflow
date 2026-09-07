@@ -617,7 +617,7 @@ class RfSampBufRx(FreeRunMod):
         """The fastest converter this buffer can be fed by, in samples/s, at *f_axis*.
 
         ``samp_per_word * f_axis / cycles_per_word``.  **Not** the port's capacity, which is
-        ``samp_per_word * f_axis`` and which :class:`~examples.rf_loopback.rfdc.Rfdc` already checks;
+        ``samp_per_word * f_axis`` and which :class:`~waveflow.hw.rfdc.Rfdc` already checks;
         the difference between the two is where the first RTL run of this design lost 1695 of 4096
         samples.
 

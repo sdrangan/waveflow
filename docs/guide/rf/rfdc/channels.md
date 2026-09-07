@@ -83,5 +83,5 @@ two separate tiles — started separately, and often clocked at different rates.
 - [Quickstart](./quickstart.md) — a converter wired end to end.
 - [The RF side](./rf_side.md) — where `n_ch`, `blksize` and the sample clock are declared.
 
-**Source of truth:** `examples/rf_loopback/rfdc.py`, `waveflow/hw/rf_sample_if.py`,
+**Source of truth:** `waveflow/hw/rfdc.py`, `waveflow/hw/rf_sample_if.py`,
 `plans/adc_model.md` § *Channels, ports, and where I/Q lives*.
