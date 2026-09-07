@@ -37,7 +37,7 @@ RTL — the two are held together by the gates, not by codegen.
 ## TX: three tasks and a memory
 
 `RfShotTx` is a composite of three free-running `hls::task` bodies plus one BRAM beside them
-(`rf_shot_tx.py:795-845`).
+(`rf_shot_tx.py:836-955`).
 
 ```
     s_in ──▶ ShotTxLoader ──[lock]──▶ [ BRAM ] ──[lock]──▶ ShotTxPlayer ──▶ RfRelayoutToSlots ──▶ samp_out
@@ -59,7 +59,7 @@ carries `blk_words`.
 
 ### The channels, and why each depth is what it is
 
-Three internal channels survive that the lock does not own (`rf_shot_tx.py:815-822`):
+Three internal channels survive that the lock does not own (`rf_shot_tx.py:923-930`):
 
 | channel | from → to | depth | why |
 |---|---|---|---|
@@ -68,15 +68,15 @@ Three internal channels survive that the lock does not own (`rf_shot_tx.py:815-8
 | `samp` | player → re-layout | 2 | the HLS default for a top argument; one beat of producer/consumer overlap is all an II=1 chain needs |
 
 Everything else the two predecessors wired by hand — `pay`, `rdy_load`, `rdy_play`, `dense`, and both
-`BramIF`s — is gone. One `add_if(self.lock)` (`rf_shot_tx.py:837`) files the two lock streams as
+`BramIF`s — is gone. One `add_if(self.lock)` (`rf_shot_tx.py:945`) files the two lock streams as
 internal FIFOs **and** sweeps the two `BramIF`s into the RTL registry so the tasks' memory ports stay
 boundary ports.
 
-**The memory attribute is called `mem`, not `buf`** (`rf_shot_tx.py:827-830`), because the attribute
+**The memory attribute is called `mem`, not `buf`** (`rf_shot_tx.py:935-937`), because the attribute
 name becomes the Verilog *instance* name and `buf` is a primitive gate. The wrapper emitter refuses it
 by name rather than letting `xvlog` fail on a syntax error that mentions no Python.
 
-The boundary is stated explicitly (`rf_shot_tx.py:841`) as `add_comp` × `add_endpoint` order with
+The boundary is stated explicitly (`rf_shot_tx.py:949`) as `add_comp` × `add_endpoint` order with
 every internally-bound endpoint removed. The two `buf_*` entries are ports of the **kernel**, joined
 to the memory inside the generated wrapper — which is why what a simulator elaborates is
 `rf_shot_tx_top` and not `rf_shot_tx`.

@@ -22,9 +22,15 @@ loop path's gap is what a single-region handover costs.
   practice it is re-rendered rarely and rots quietly.  This one is a plain ``python
   rf_shot_tx_build.py --through sync_docs_figures`` on any machine.
 * **Its equality with the RTL is already a gate.**
-  ``tests/examples/test_rf_shot_tx_xsi.py::test_both_backends_agree_sample_for_sample`` asserts the
-  pysim playout is byte-identical to the RTL one over the common horizon.  So a figure drawn from
-  pysim is a figure of the RTL, and something already fails if that stops being true.
+  ``tests/examples/test_rf_shot_tx_xsi.py::test_the_two_backends_agree_after_their_own_transients``
+  asserts every played sample matches the RTL's once the two captures are aligned on their own
+  playout logs.  So a figure drawn from pysim is a figure of the RTL, and something already fails if
+  that stops being true.
+
+  **The leading filler run is longer than the RTL's**, and that is the model rather than the design:
+  since ``plans/lt_transient.md`` S2 the pysim player has no metronome and runs ahead of the
+  converter's grid by the sum of the declared depths along the path.  It is a *prefix* -- everything
+  after the first filler->play transition is sample-for-sample what the RTL does.
 
 Generated SVGs land in ``results/`` (gitignored); :class:`SyncDocsFiguresStep` promotes them into
 ``docs/examples/rf_shot_tx/images/`` as committed assets and writes ``sync_status.json`` beside them

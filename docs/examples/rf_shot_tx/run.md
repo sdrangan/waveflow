@@ -61,9 +61,10 @@ Two things make this one safe to commit:
 
 * it regenerates anywhere, with one command and no license;
 * its equality with the RTL is **already a gate** —
-  `test_both_backends_agree_sample_for_sample` asserts the pysim playout is byte-identical to the RTL
-  one, so a figure drawn from pysim is a figure of the RTL and something fails if that stops being
-  true.
+  `test_the_two_backends_agree_after_their_own_transients` asserts every played sample of the pysim
+  playout equals the RTL one once the two are aligned on their own playout logs, so a figure drawn
+  from pysim is a figure of the RTL and something fails if that stops being true. What the alignment
+  removes is the loosely-timed **lead**, which the figure shows as a longer leading filler run.
 
 `sync_docs_figures` writes `images/sync_status.json` beside the committed SVG — source path plus
 content hash — so staleness is detectable without re-rendering. The SVG itself is deterministic

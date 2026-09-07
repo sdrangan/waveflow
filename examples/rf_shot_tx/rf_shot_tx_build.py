@@ -222,13 +222,16 @@ class PySimStep(BuildStep):
 
     def run(self, config: BuildConfig, **_) -> dict:
         from examples.rf_shot_tx.rf_shot_tx import (
+            c_lead,
             check_finite_playout,
             check_loop_playout,
+            check_phase,
             check_responses,
             played_samples,
             responses,
             run_pysim,
             segments,
+            transients,
         )
 
         out: dict[str, object] = {}
@@ -238,10 +241,18 @@ class PySimStep(BuildStep):
             played = played_samples(tb)
             (check_finite_playout if name == "cmd" else check_loop_playout)(
                 played, where=f"pysim {name}: ")
+            # LT gate 1 (`plans/lt_transient.md` S2), run here as well as in the XSI gate: it needs
+            # no toolchain, and it is the check that makes relaxing the cross-backend comparison
+            # safe -- so the toolchain-free rung should be able to fail on it.
+            check_phase(played, where=f"pysim {name}: ")
+            startup, handovers = transients(played)
             out[name] = {
                 "responses": responses(tb),
                 "segments": [(bool(f), int(s.size)) for f, s in segments(played)],
                 "played_samples": int(played.size),
+                "startup_transient": startup,
+                "handover_transients": handovers,
+                "c_lead": int(c_lead(tb)),
                 "n_plays": int(tb.dut.play.n_plays),
                 "n_done": int(tb.dut.play.n_done),
                 "grants": int(tb.dut.lock.n_grants),

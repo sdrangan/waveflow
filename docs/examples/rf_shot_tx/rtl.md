@@ -4,12 +4,12 @@ parent: Playing a stored waveform
 grand_parent: Examples
 nav_order: 2
 audience: hls
-summary: "The XSI run for rf_shot_tx: one snapshot driven by two command bundles, twenty gates, and every measured number with the assertion that pins it. The playout block shapes, the last verdict's cycle, the converter counters that say the DAC was never starved, the write address range, the achieved II of five pipelined loops, and the two read-during-write collisions that are recorded as a measurement rather than asserted away."
+summary: "The XSI run for rf_shot_tx: one snapshot driven by two command bundles, thirty gates, and every measured number with the assertion that pins it. The playout block shapes, the last verdict's cycle, the converter counters that say the DAC was never starved, the write address range, the achieved II of five pipelined loops, the two read-during-write collisions that are recorded as a measurement rather than asserted away, and the three loosely-timed gates that replaced one byte-identical comparison."
 ---
 
 # Taking it to RTL
 
-`tests/examples/test_rf_shot_tx_xsi.py` — **20 gates**, run with `pytest -m xsi`. What xsim
+`tests/examples/test_rf_shot_tx_xsi.py` — **30 gates**, run with `pytest -m xsi`. What xsim
 elaborates is the wrapper `rf_shot_tx_top`; the testbench sees only AXI-Stream, and the converter
 model consumes the playout exactly as it consumes any other design's.
 
@@ -56,8 +56,8 @@ grant wait again.
 **The two collisions are recorded, not asserted away.** `bram_t2p.v`'s own predicate — same address,
 same cycle, one port writing and the other reading — finds **0** on the finite path and **2** on the
 loop path. They are benign, and the evidence is a *different* test: pysim raises on any read of a
-yielded region, and `test_both_backends_agree_sample_for_sample` shows the two backends are
-byte-identical, so the word is fetched and thrown away. The gate **pins both counts** rather than
+yielded region, and `test_the_two_backends_agree_after_their_own_transients` shows every played
+sample agrees, so the word is fetched and thrown away. The gate **pins both counts** rather than
 asserting zero, because asserting zero here would be a green bought by choosing a scenario that never
 preempts. Why they happen at all is
 [in the guide](../../guide/rf/rfshotbuf/tx_internal.md#finding-tx-holds-one-region-rx-holds-two).

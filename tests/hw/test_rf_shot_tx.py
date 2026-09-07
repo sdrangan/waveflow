@@ -55,6 +55,13 @@ BLK_WORDS = 4
 BASE = DEPTH - NWORD
 NSAMP = NWORD * SPW
 #: One word every 250 ns, so a pass is 4 us and a run is a handful of firings.
+#:
+#: **It is the SINK's rate, and since ``plans/lt_transient.md`` S2 that is the only place it can
+#: be.**  It used to be handed to the player as a ``dac_word_rate`` metronome; the player has no
+#: such field any more, because at RTL nothing tells it a rate — ``TREADY`` does.  So the bench
+#: models the converter's appetite where a converter's appetite lives, on the consumer, and the
+#: player is paced by back-pressure flowing back up the channel.  The scenario timings below are
+#: unchanged by the move: throughput is still one 4-word chunk per microsecond.
 DAC_WORD_RATE = 4e6
 
 
@@ -94,8 +101,10 @@ class Bench:
 
     ``examples/rf_shot_tx`` puts a real ``Rfdc`` on the end because the property *that* graph
     claims is that it keeps a DAC fed.  What is on trial here is the **merge**, and a converter would
-    add a second thing that can fail while proving nothing extra about it: the player's metronome is
-    handed over directly, so the pacing is the same either way.
+    add a second thing that can fail while proving nothing extra about it.  What the bench does need
+    from a converter is its *rate*, and :meth:`_drain` is that and nothing else: one chunk per
+    :data:`DAC_WORD_RATE`-worth of words, on an absolute grid, so the player is paced by
+    back-pressure exactly as it is at RTL.
     """
 
     def __init__(self, *, shift: int = 2) -> None:
@@ -103,7 +112,7 @@ class Bench:
         self.clk = Clock(name="clk", freq=250e6)
         self.dut = RfShotTx(sim=self.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW,
                                    depth=DEPTH, nword=NWORD, base=BASE, shift=int(shift),
-                                   blk_words=BLK_WORDS, dac_word_rate=DAC_WORD_RATE, clk=self.clk)
+                                   blk_words=BLK_WORDS, clk=self.clk)
         self.src = StreamIFMaster(sim=self.sim, name="src", bitwidth=WORD_BW, has_tlast=True)
         self.resp_snk = StreamIFSlave(sim=self.sim, name="resp_snk", bitwidth=WORD_BW,
                                       has_tlast=True)
@@ -118,8 +127,21 @@ class Bench:
         self.played: list[np.ndarray] = []
 
     def _drain(self):
+        """The converter's appetite: one chunk per chunk period, on an **absolute** grid.
+
+        Absolute rather than ``yield timeout(period)`` in a loop, for the reason
+        :meth:`~waveflow.hw.rf_sample_if.RFSampIF.run_proc` states: anything the body yields for
+        would otherwise be added to the period and never given back, and the grid would slip
+        cumulatively and silently.
+        """
+        period = BLK_WORDS / DAC_WORD_RATE
+        k = 0
         while True:
             self.played.append(np.asarray((yield from self.samp_snk.get())).ravel())
+            k += 1
+            dly = k * period - self.samp_snk.now
+            if dly > 0:
+                yield self.samp_snk.timeout(dly)
 
     def _resp(self):
         while True:
@@ -468,8 +490,7 @@ def test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips():
     # 2. the design CONSTRUCTS at that geometry -- this is the line the old check refused
     dut = RfShotTx(sim=Simulation(), name="big", bitwidth=WORD_BW, samp_per_word=SPW,
                    depth=1 << 17, nword=big_nword, base=0, shift=2,
-                   blk_words=BLK_WORDS, dac_word_rate=DAC_WORD_RATE,
-                   clk=Clock(name="c", freq=250e6))
+                   blk_words=BLK_WORDS, clk=Clock(name="c", freq=250e6))
     assert dut.nsamp_shot == nsamp
 
     # 3. and the length round-trips on the wire, which is what the field is for
@@ -524,7 +545,7 @@ class _GrantsWhilePlaying(RfShotTx.player_cls):
     """The shipped player with the ``playing = False`` before the grant removed — **one line**."""
 
     def run_iter(self):
-        yield from self._chunk_and_pace()
+        yield from self._chunk()
         cmd = yield from self.lock.handle_nb()
         if cmd is None:
             return
@@ -558,8 +579,7 @@ def test_a_player_that_grants_and_keeps_reading_raises():
     b.sim = Simulation()
     b.clk = Clock(name="clk", freq=250e6)
     b.dut = Dirty(sim=b.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW, depth=DEPTH,
-                  nword=NWORD, base=BASE, shift=2, blk_words=BLK_WORDS,
-                  dac_word_rate=DAC_WORD_RATE, clk=b.clk)
+                  nword=NWORD, base=BASE, shift=2, blk_words=BLK_WORDS, clk=b.clk)
     b.src = StreamIFMaster(sim=b.sim, name="src", bitwidth=WORD_BW, has_tlast=True)
     b.resp_snk = StreamIFSlave(sim=b.sim, name="resp_snk", bitwidth=WORD_BW, has_tlast=True)
     b.samp_snk = StreamIFSlave(sim=b.sim, name="samp_snk", bitwidth=WORD_BW, has_tlast=True)

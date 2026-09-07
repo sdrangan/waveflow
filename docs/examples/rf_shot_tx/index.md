@@ -41,7 +41,16 @@ Reading the figure top to bottom is reading the whole design:
   The long tail is a `SHOT_SHORT` load that is stored and then never played.
 
 The figure is rendered from the **pysim** run and regenerates with no toolchain; it is a picture of
-the RTL because `test_both_backends_agree_sample_for_sample` asserts the two are byte-identical.
+the RTL because `test_the_two_backends_agree_after_their_own_transients` asserts every played sample
+agrees once the two captures are aligned on their own playout logs.
+
+**The leading shaded run is longer here than it is at RTL, and that is the model rather than the
+design.** Since [`plans/lt_transient.md`](../../guide/rf/rfshotbuf/tx.md#pacing-and-the-lt-transient)
+S2 the pysim player carries no metronome: it is paced by back-pressure alone, which controls how fast
+it may go and not how far *ahead of the data* it may get. While it owns nothing to play it writes
+filler, so a shot loaded later queues behind whatever filler is already in flight — 448 samples of
+it, the sum of the declared depths along the path. Everything after that first transition is
+sample-for-sample what the RTL does.
 
 ## Two scenarios, and they cannot be one
 
