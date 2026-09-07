@@ -65,6 +65,11 @@ from waveflow.hw.rf_shot_tx import (  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 
+from examples.rf_shot_tx.rf_shot_tx_figures import (  # noqa: E402
+    PlayoutFigureStep,
+    SyncDocsFiguresStep,
+)
+
 from examples.rf_shot_tx.rf_shot_tx import (  # noqa: E402
     BASE,
     BLKSIZE,
@@ -323,6 +328,10 @@ def build_rf_shot_tx_dag() -> BuildDag:
     dag.add(CodegenDutStep(name="codegen_dut"))
     dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
+    # The committed-figure rungs, on demand.  They render from PYSIM rather than a VCD, so they need
+    # no toolchain -- see rf_shot_tx_figures.py for why that is the point rather than a shortcut.
+    dag.add(PlayoutFigureStep(name="playout_figure"))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
     return dag
 
 
