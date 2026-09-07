@@ -89,8 +89,10 @@ LOCK_RELEASE = 1
 #: :class:`MemLockResp` statuses.
 LOCK_GRANTED = 0
 #: ``end > nelem``, or ``start > end``.  **Refused, never clamped** — the same discipline
-#: :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN` follows, and for its reason: a clamped region is a
-#: different region, silently.
+#: :data:`~waveflow.hw.rf_shot_tx.SHOT_SHORT` follows, and for its reason: a clamped region is a
+#: different region, silently, exactly as a truncated waveform is a different signal.  (It used to
+#: name ``SHOT_WRONG_LEN``, which ``plans/rf_shot_geometry.md`` retired along with the length check
+#: it policed; the argument moved to the verdict that still makes it.)
 LOCK_BAD_RANGE = 1
 
 #: Human-readable names, so an assertion says what happened rather than a number.

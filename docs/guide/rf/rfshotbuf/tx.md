@@ -5,7 +5,7 @@ grand_parent: RF converters
 nav_order: 1
 audience: python
 api: [RfShotTx, ShotTxHdr, ShotTxResp, Rfdc, RFSampIF, StreamIF]
-summary: "Playing a stored waveform out of a converter: hand RfShotTx a shot once and it plays it a counted number of times or forever, answering every command with one verdict. The boundary ports, the in-band header and response as field tables, the two play modes and what a load arriving mid-play does to each, all five verdicts and which are transient, and the four rules that bite — including why the output is never silent and why a short transfer is a verdict rather than a hang."
+summary: "Playing a stored waveform out of a converter: hand RfShotTx a shot once and it plays it a counted number of times or forever, answering every command with one verdict. The two-number geometry — the shot IS the buffer — the boundary ports, the in-band header and response as field tables, the two play modes and what a load arriving mid-play does to each, all four verdicts and which are transient, and the four rules that bite, including why the output is never silent and why a short transfer is a verdict rather than a hang."
 ---
 
 # Transmit — `RfShotTx`
@@ -41,9 +41,7 @@ rfdc = Rfdc(name="rfdc", sim=sim, n_rx=0, n_tx=1, word=word)
 
 dut = RfShotTx.for_word(
     word,
-    depth=256,          # words in the memory
-    nword=64,           # words in one shot  -> nsamp = 64 * 4 = 256 samples
-    base=192,           # first element of the region
+    depth=64,           # words in the memory, which IS the length of a shot -> 64 * 4 = 256 samples
     blk_words=16,       # words per chunk: the poll period, and the pysim block quantum
     sim=sim, name="dut", clk=axis_clk,
 )
@@ -63,30 +61,37 @@ type becomes the three integers the module actually stores:
 | `shift` | how far a sample sits above the bottom of its converter slot |
 
 So you never type a width, and the buffer cannot disagree with the converter about packing. What is
-left for you to decide is the **geometry**: `depth`, `nword`, `base` and `blk_words`.
+left for you to decide is the **geometry**, and it is **two numbers**: `depth` and `blk_words`.
 
 ### The geometry, in the units it is actually in
 
 | | unit | meaning |
 |---|---|---|
-| `depth` | **words** | how big the memory is |
-| `nword` | **words** | how big one shot is |
-| `base` | **words** | where the shot sits in the memory; any value with `base + nword <= depth` |
-| `blk_words` | **words** | words the player moves per step; must divide `nword` |
-| `nsamp` | **samples** | `nword × samp_per_word`, and the only value the header may carry |
+| `depth` | **words** | how big the memory is, **and therefore how long a shot is**. A power of two |
+| `blk_words` | **words** | words the player moves per step; must divide `depth` |
 
-{: .warning }
-**The numbers above are a trap, and it is worth naming.** With `depth=256` and `samp_per_word=4`,
-`depth / samp_per_word` happens to equal `nword`. **That relationship does not exist.** `depth` and
-`nword` are both word counts and `samp_per_word` converts words to samples — the arithmetic mixes
-units and only lands on 64 by coincidence of this configuration. A shot is as long as you declare it,
-independently of how big the memory is. These are the gated numbers, so they stay; the coincidence is
-called out rather than designed away.
+**The shot IS the buffer.** There used to be three more numbers here — `nword` (how long a shot is),
+`base` (where it sits) and the header's `nsamp` (how long the host thinks it is) — and
+[`plans/rf_shot_geometry.md`](https://github.com/sdrangan/waveflow) removed all three, because
+between them they described **one** degree of freedom and a reader could not tell which of them they
+were allowed to choose:
 
-**`nword` is build-time structure, not a command field.** How long a shot is, is declared once, here.
-A header that disagrees is *refused*, never truncated — that is what `SHOT_WRONG_LEN` is for. `nsamp`
-exists on the header because it is what the **host believes** it is sending, and catching that belief
-disagreeing with what arrived is the response's whole job.
+* `nsamp` had exactly one legal value, `nword × samp_per_word`, or the command was refused. It was a
+  checksum wearing a parameter's clothes.
+* `base` had no user-facing justification. Its only stated reason was that a non-zero value exercised
+  `base + offset`, which is a reason for a *test*, not for a knob on your constructor.
+* `nword` then looked arbitrary, because the one thing it interacted with was redundant and the other
+  was unexplained.
+
+**And the bug class went with the arithmetic, rather than going untested.** `base` existed and *then*
+needed a gate to prove its addressing was not broken. Without it the loader writes `mem[i]`, the
+player reads `mem[i]`, and the only address arithmetic left is the wrap at `depth` — which, `depth`
+being a power of two, is a **mask**. What is gated now is that the player sweeps the whole buffer and
+wraps, which is the arithmetic that still exists.
+
+**How long a shot is, is declared once, here** — and nothing on the wire restates it, so nothing can
+disagree with it. What you give up is that a short transfer is detected only by where `TLAST` falls;
+see [`SHOT_SHORT`](#the-verdicts) and `nsamp_loaded`.
 
 ## The boundary
 
@@ -115,8 +120,11 @@ One 64-bit word, ahead of the samples on the same stream.
 |---|---|---|
 | `opcode` | 2 | `SHOT_LOAD`, `SHOT_LOOP` or `SHOT_END` |
 | `tid` | 16 | transaction id, echoed on the response |
-| `nsamp` | 16 † | samples the host is sending (0 for `END`) |
 | `nrepeat` | 16 | times to play the shot once loaded |
+
+**There is no length field.** The shot is the buffer, so its length is `depth` and you do not restate
+it. The remaining 30 bits are declared `_rsvd`, so the message is still exactly one 64-bit word — the
+size a DMA moves — at every geometry.
 
 ### `ShotTxResp` — what comes back
 
@@ -125,17 +133,20 @@ One 64-bit word, one per header, in order.
 | field | bits | meaning |
 |---|---|---|
 | `tid` | 16 | the header's transaction id |
-| `status` | 8 | one of the five verdicts below |
+| `status` | 8 | one of the four verdicts below |
 | `nsamp_loaded` | 16 † | samples **actually** written to the buffer |
 
-† **`nsamp` and `nsamp_loaded` are sized from your geometry**, not fixed at 16. 16 bits is the floor
-and what this configuration gets; a design whose `nword × samp_per_word` needs more gets more, and
-both messages stay one 64-bit word either way — the slack is a declared `_rsvd` field. See
+† **`nsamp_loaded` is sized from your geometry**, not fixed at 16. 16 bits is the floor and what this
+configuration gets; a design whose `depth × samp_per_word` needs more gets more, and the message
+stays one 64-bit word either way — the slack is a declared `_rsvd` field. See
 [the on-wire layouts](./tx_internal.md#on-wire-layouts).
 
-`nsamp_loaded` is what landed, not what was asked for. On `SHOT_LOADED` the two agree; on
-`SHOT_SHORT` the difference *is* the diagnosis — and it is a number a DMA cannot give you, because
-`sendchannel.transfer()` knows it pushed bytes, not whether they were a whole waveform.
+**`nsamp_loaded` is the only length on the wire, in either direction**, and it is the one worth
+having: it is what *landed*, not what was asked for. On `SHOT_LOADED` it is a full buffer; on
+`SHOT_SHORT` it *is* the diagnosis — and it is a number a DMA cannot give you, because
+`sendchannel.transfer()` knows it pushed bytes, not whether they were a whole waveform. That
+asymmetry is why it stayed when the header's length went: the header's could only ever be right or
+refused, and this one tells you something you have no other way to learn.
 
 ## The protocol
 
@@ -154,9 +165,9 @@ sequenceDiagram
     participant H as host
     participant T as RfShotTx
     participant D as Rfdc
-    H->>T: ShotTxHdr(SHOT_LOAD, tid=1, nsamp, nrepeat=3)
+    H->>T: ShotTxHdr(SHOT_LOAD, tid=1, nrepeat=3)
     H->>T: payload words, TLAST on the last
-    T-->>H: ShotTxResp(tid=1, SHOT_LOADED, nsamp)
+    T-->>H: ShotTxResp(tid=1, SHOT_LOADED, nsamp_loaded)
     Note over T,D: only now does anything play
     T->>D: pass 1 of 3
     T->>D: pass 2 of 3
@@ -178,14 +189,14 @@ sequenceDiagram
     participant H as host
     participant T as RfShotTx
     participant D as Rfdc
-    H->>T: ShotTxHdr(SHOT_LOOP, tid=1, nsamp)
+    H->>T: ShotTxHdr(SHOT_LOOP, tid=1)
     H->>T: payload A, TLAST
-    T-->>H: ShotTxResp(tid=1, SHOT_LOADED, nsamp)
+    T-->>H: ShotTxResp(tid=1, SHOT_LOADED, nsamp_loaded)
     T->>D: waveform A, repeating
-    H->>T: ShotTxHdr(SHOT_LOOP, tid=2, nsamp)
+    H->>T: ShotTxHdr(SHOT_LOOP, tid=2)
     H->>T: payload B, TLAST
     Note over T,D: player yields the region — filler goes out meanwhile
-    T-->>H: ShotTxResp(tid=2, SHOT_LOADED, nsamp)
+    T-->>H: ShotTxResp(tid=2, SHOT_LOADED, nsamp_loaded)
     T->>D: waveform B, from its start, repeating
 ```
 
@@ -203,7 +214,7 @@ sequenceDiagram
     participant H as host
     participant T as RfShotTx
     Note over T: a finite shot is still playing
-    H->>T: ShotTxHdr(SHOT_LOAD, tid=2, nsamp)
+    H->>T: ShotTxHdr(SHOT_LOAD, tid=2)
     H->>T: payload, TLAST
     T-->>H: ShotTxResp(tid=2, SHOT_BUSY, 0)
     Note over H: wait, then send the same frame again
@@ -246,14 +257,20 @@ deadlocked one.
 | status | meaning | transient? |
 |---|---|---|
 | `SHOT_LOADED` | the shot is in the memory and playable | — |
-| `SHOT_SHORT` | `TLAST` arrived before the shot was full | no |
-| `SHOT_WRONG_LEN` | `nsamp` disagrees with `nword * samp_per_word`, or the opcode is not one of the three | no |
+| `SHOT_SHORT` | `TLAST` arrived before the buffer was full | no |
+| `SHOT_BAD_OPCODE` | the opcode is not one of the three | no |
 | `SHOT_BUSY` | a **finite** shot is still playing | **yes — retry works** |
-| `SHOT_ZERO_LEN` | `nsamp == 0` | no |
+
+**Four, and it was five.** `SHOT_ZERO_LEN` (`nsamp == 0`) and the length half of `SHOT_WRONG_LEN`
+(`nsamp` disagreeing with the buffer) both read a header field that no longer exists. The verdict
+itself survives as `SHOT_BAD_OPCODE` — **the wire value is unchanged**, so a host decoding a status
+byte needs no change; only the name moved, onto the fault it actually reports. Folding it into
+`SHOT_SHORT` instead would have made a malformed command look like a truncated one, which is exactly
+the confusion `SHOT_SHORT` exists to prevent.
 
 **Malformed is decided before transient**, and for a reason: a command that is both wrong *and* badly
-timed should be told the thing it can fix. A retry repairs a `SHOT_BUSY`; nothing repairs a length
-the buffer was not built for.
+timed should be told the thing it can fix. A retry repairs a `SHOT_BUSY`; nothing repairs an opcode
+this design does not know.
 
 **A short shot is loaded and then never played.** It reaches the memory — you can see how much
 arrived in `nsamp_loaded` — but the player is told to play zero passes, so half a waveform never
@@ -278,7 +295,10 @@ gapless, you need the streaming family or a two-region TX, and the latter is not
 tail of the old waveform's phase onto the new one would be wrong in every application and invisible
 from a word count.
 
-**4. `nsamp` is checked, never trusted.** See `SHOT_WRONG_LEN` above.
+**4. `TLAST` is the only short-transfer detector.** Nothing on the wire declares how long a transfer
+is meant to be, so a frame that ends early is caught by where `TLAST` falls and reported by
+`nsamp_loaded`. Drive the stream so `TLAST` lands on the last payload word — a DMA does this for you
+— and read `nsamp_loaded` on every response rather than only the status.
 
 ## Driving it from a host
 

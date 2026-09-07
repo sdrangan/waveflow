@@ -18,13 +18,14 @@ design fits, rather than discovering the limit later.
 
 ## Axis 1 — how the memory is indexed
 
-The buffer length is **fixed at build time** either way: `nword` is a build parameter, not a header
-field, and a command that disagrees is refused with `SHOT_WRONG_LEN`. What differs is what an address
+The buffer length is **fixed at build time** either way: it is `depth`, a build parameter, and no
+header field restates it — since `plans/rf_shot_geometry.md` **the shot is the buffer**. What differs
+is what an address
 *means*.
 
 | | **relative** (built) | **absolute** (not built) |
 |---|---|---|
-| where sample *i* of a shot lives | `mem[base + i]` | `mem[i mod BUF_LEN]` |
+| where sample *i* of a shot lives | `mem[i]` | `mem[i mod BUF_LEN]` |
 | where playout restarts | the region's start, every pass | wherever the sample counter says |
 | TX↔RX relation | none | **sample *j* is at the same index in both** |
 | depends on | nothing outside the design | `t0_tx ≡ t0_rx` — MTS actually holding |

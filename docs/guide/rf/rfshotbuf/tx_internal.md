@@ -124,10 +124,11 @@ quietly been optimised back into a blocking read.
 
 ### FINDING: TX holds one region, RX holds two
 
-`ShotTxLoader.region` is *"`[base, base + nword)` — the one region this design ever asks for"*
-(`rf_shot_tx.py:394-397`). Writer and reader therefore **do** share addresses, in turn.
+`ShotTxLoader.region` is *"`[0, depth)` — the whole memory, which is the one region this design ever
+asks for"*. Writer and reader therefore **do** share addresses, in turn — all of them, since
+[`plans/rf_shot_geometry.md`](#) made the shot the buffer.
 
-`play_chunk` is pipelined at II=1 and reads `buf[BASE + rd + i]` **unconditionally**, muxing the
+`play_chunk` is pipelined at II=1 and reads `buf[rd + i]` **unconditionally**, muxing the
 filler in afterwards (`shot_tx_player_task.h:105-108`). A register guard was measured **not** to quiet
 the port — Vitis owns the enable — so a *yielded* player keeps driving its read address. Consequently:
 
@@ -231,14 +232,18 @@ correct, only slower by a beat.
 
 `rf_shot_tx.py:408-422`, C++ at `shot_tx_loader_task.h:125-135`:
 
-1. opcode not one of the three → `SHOT_WRONG_LEN`
-2. `nsamp == 0` → `SHOT_ZERO_LEN`
-3. `nsamp != nword * samp_per_word` → `SHOT_WRONG_LEN`
-4. `busy` → `SHOT_BUSY`
-5. otherwise accept; `SHOT_SHORT` is decided **after** the transfer, from how much arrived
+1. opcode not one of the three → `SHOT_BAD_OPCODE`
+2. `busy` → `SHOT_BUSY`
+3. otherwise accept; `SHOT_SHORT` is decided **after** the transfer, from how much arrived
+
+**Two tests, and it was four.** The middle two read the header's `nsamp` — `== 0` and
+`!= nword * samp_per_word` — and the field is gone, so they are too. What is left is the one thing a
+header can still be malformed about. The verdict kept its wire value and changed its name:
+`SHOT_WRONG_LEN` was already reporting a wrong *opcode* here, which is an overload a host debugging a
+status byte pays for.
 
 **Malformed before transient**, deliberately: a command that is wrong *and* badly timed should be told
-the thing it can fix. Retry repairs a `BUSY`; nothing repairs a length the buffer was not built for.
+the thing it can fix. Retry repairs a `BUSY`; nothing repairs an opcode this design does not know.
 
 ## On-wire layouts
 
@@ -246,30 +251,31 @@ Every schema packs into exactly one 64-bit word. The generated headers are `rf_s
 `rf_shot_tx_resp.h`, `shot_play_cmd.h`, `capture_window_hdr.h` — a body that hand-rolled the packing
 would be a second author of one statement.
 
-**The two host-facing messages derive their widths from the geometry**
-(`plans/rf_shot_wire_format.md` Part A). `ShotTxHdr` and `ShotTxResp` are `ParamSchema`s, and
-`shot_tx_schemas(nword, samp_per_word)` is the one place that decides — the pysim twin, the generated
-C++ and the build's `DataSchemaStep` all take their pair from it, so they cannot disagree about the
-wire.
+**The response derives its width from the geometry** (`plans/rf_shot_wire_format.md` Part A).
+`ShotTxHdr` and `ShotTxResp` are `ParamSchema`s, and `shot_tx_schemas(depth, samp_per_word)` is the
+one place that decides — the pysim twin, the generated C++ and the build's `DataSchemaStep` all take
+their pair from it, so they cannot disagree about the wire.
+
+Only the response varies now: since `plans/rf_shot_geometry.md` the header carries no length, so its
+layout is identical at every geometry.
 
 | schema | fields (bits) | total |
 |---|---|---|
-| `ShotTxHdr` | `opcode` 2, `tid` 16, `nsamp` **derived**, `nrepeat` 16, `_rsvd` **declared** | **64, exactly** |
+| `ShotTxHdr` | `opcode` 2, `tid` 16, `nrepeat` 16, `_rsvd` 30 | **64, exactly** |
 | `ShotTxResp` | `tid` 16, `status` 8, `nsamp_loaded` **derived**, `_rsvd` **declared** | **64, exactly** |
 | `ShotPlayCmd` | `opcode` 2, `nrepeat` 16 | 18 |
 | `CaptureWindowHdr` | `status` 8, `base_addr` 28, `n_dropped` 28 | **64, exactly** |
 | `MemLockCmd` / `MemLockResp` | `opcode`/`status` 8, `start_addr` 28, `end_addr` 28 | **64, exactly** |
 
-At the gated geometry — `nword=64`, `samp_per_word=4`, so 256 samples — `nsamp` is **16** bits and the
-emitted header is:
+At the gated geometry — `depth=64`, `samp_per_word=4`, so a full buffer is 256 samples —
+`nsamp_loaded` is **16** bits and the emitted header is:
 
 ```c
 struct ShotTxHdr {
     ap_uint<2>  opcode;    // res.range(1, 0)
     ap_uint<16> tid;       // res.range(17, 2)
-    ap_uint<16> nsamp;     // res.range(33, 18)
-    ap_uint<16> nrepeat;   // res.range(49, 34)
-    ap_uint<14> _rsvd;     // res.range(63, 50)  -- reserved, must be zero
+    ap_uint<16> nrepeat;   // res.range(33, 18)
+    ap_uint<30> _rsvd;     // res.range(63, 34)  -- reserved, must be zero
     static constexpr int bitwidth = 64;
 };
 ```
@@ -277,23 +283,27 @@ struct ShotTxHdr {
 **Three things that table says, and each was a decision:**
 
 * **`opcode` is 2 bits because there are three opcodes.** It was 8, which was a number nobody chose.
-* **`nsamp` is derived, not checked.** It used to be 16 bits because `IDX_BW` said so — a constant
-  imported from `rf_samp_buf`, *the superseded family* — and construction **refused** a geometry
-  whose shot did not fit it. Now `nsamp_bw_for(nword, samp_per_word)` sizes the field from the
-  design, so the largest legal value fits by construction and there is nothing left to refuse. The
-  witness is
-  `tests/hw/test_rf_shot_tx.py::test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips`,
-  which builds the geometry the old code rejected and round-trips a 262144-sample length.
+  Two bits also means **3 is the only illegal opcode the wire can carry**, which is what makes
+  `SHOT_BAD_OPCODE` reachable from a real frame rather than only from a hand-built object.
+* **`nsamp_loaded` is derived, not checked.** The width used to be 16 because `IDX_BW` said so — a
+  constant imported from `rf_samp_buf`, *the superseded family* — and construction **refused** a
+  geometry that did not fit it. Now `nsamp_bw_for(depth, samp_per_word)` sizes the field from the
+  design, so the largest value it can ever report fits by construction. The witness is
+  `tests/hw/test_rf_shot_tx.py::test_a_buffer_too_large_for_the_old_16_bit_field_builds_and_round_trips`,
+  which builds the geometry the old code rejected and round-trips a 262144-sample length. It used to
+  watch the header's `nsamp`; `plans/rf_shot_geometry.md` moved it onto the response's field, which
+  is the only length left on the wire and fails the same way if it wraps — reporting a partial load
+  as a full one.
 * **The word stays 64 bits and the slack is a declared `_rsvd` field.** The point of deriving the
   widths is that a field cannot silently overflow, *not* that the message gets smaller — a stable
   wire size is what a DMA moves cleanly, so the padding is named rather than incidental.
   `test_both_messages_are_one_word_and_the_padding_is_declared` holds that across four geometries.
 
-**Why `nsamp` has a floor of 16 bits rather than fitting exactly.** An exact fit would be *narrower*
-than the old wire at this geometry — 256 samples needs 9 bits — and narrowing it would make a host's
-mistyped length **alias onto a legal one**: 768 samples wrapping to 256 and being accepted as
-correct, which is the very failure the old check existed to prevent, arrived at from the other side.
-The derived width is a floor, rounded up to a whole byte because a host writes bytes.
+**Why `nsamp_loaded` has a floor of 16 bits rather than fitting exactly.** The floor's original
+reason retired with the header's length: it stopped a host's mistyped length from *aliasing onto a
+legal one* on the way in, and there is no length on the way in. What is left is a field the host
+**reads**, and holding it at one width across geometries is what lets a host be compiled against this
+wire once. The padding is declared either way, so a narrower field would buy nothing and cost that.
 
 ## The reset trap, and which body is on which side of it
 
@@ -335,31 +345,47 @@ left unlabelled because other gates name that module.
 
 ### The two RTL scenarios
 
-`tests/examples/test_rf_shot_tx_xsi.py`, 1400 cycles, `nword=64`, `blk_words=16`, `depth=256`, region
+`tests/examples/test_rf_shot_tx_xsi.py`, 1400 cycles, `depth=64`, `blk_words=16`, region
 `[192, 256)` at the top of the memory, 256 Msamp/s DAC. One design, one `xsimk.dll`, two command
 bundles.
 
 | | `cmd` (finite) | `cmd_loop` (infinite) |
 |---|---|---|
-| verdicts | `LOADED / BUSY / WRONG_LEN / ZERO_LEN / END→LOADED` | `LOADED / WRONG_LEN / ZERO_LEN / LOADED / SHORT / END→LOADED` |
+| verdicts | `LOADED / BUSY / BAD_OPCODE / BAD_OPCODE / END→LOADED` | `LOADED / BAD_OPCODE / BAD_OPCODE / LOADED / SHORT / END→LOADED` |
 | playout, converter blocks | `(F,3) (P,12) (F,7)` | `(F,3) (P,1) (F,2) (P,1) (F,15)` |
-| last verdict at cycle | **269** | **500** |
+| last verdict at cycle | **273** | **502** |
 | DAC words taken | 359 | 359 |
 | blocks the grid zero-filled | **0** | **0** |
 | lock grants | 1 | 3 |
-| write addresses touched | `192..255` | `192..255` |
+| write addresses touched | `0..63` | `0..63` |
 
-Both playouts are **byte-identical to the pysim golden** over the common horizon — the RTL run is
-bounded in cycles and the pysim run in converter blocks, so only the tails differ in length.
+Both playouts match the pysim golden **sample for sample once each capture is aligned on its own
+playout log** — see `plans/lt_transient.md`, which retired the byte-identical-from-`t=0` comparison
+along with the metronome that made it possible.
 
 `blocks_zero_filled == 0` on both paths is the sharpest number. The infinite path's way to fail it is
 a player that back-pressures the converter through a handover; the finite path's is a player that
 simply stops writing when its passes run out. **Quiet is a value.**
 
-**The region sits at the top of the memory on purpose.** `base + offset` is the shape of the
-byte-versus-word addressing bug: consistently mis-scaled addressing round-trips *perfectly* right up
-to the point where the memory wraps, so the assertion is which elements the writer actually touched,
-not that the data came back.
+**The region used to sit at the top of the memory on purpose**, and does not any more.
+`base + offset` was the shape of the byte-versus-word addressing bug: consistently mis-scaled
+addressing round-trips *perfectly* right up to the point where the memory wraps, so the assertion was
+which elements the writer actually touched, not that the data came back.
+`plans/rf_shot_geometry.md` removed `base`, and its argument was that **the bug class disappears
+rather than going untested** — the loader writes `mem[i]`, the player reads `mem[i]`, and the only
+address arithmetic left is the read pointer's wrap at `depth`, which is a mask because `depth` is a
+power of two. So the write-range assertion stays (it is what says the counted load pass *fills* the
+buffer) and a new one covers the wrap: the player must sweep every element, read nothing outside, and
+return to 0 — twice, since `cmd` plays three passes.
+
+**The last verdict moved 269 → 273 and 500 → 502 with that change, and the cause was measured.** Not
+the geometry: the old design rebuilt at the *new* geometry — depth 64, base 0, four-field header —
+still answered 269. Not the scenario: the frames' word counts are unchanged and refusing a frame from
+a different branch of the verdict chain costs nothing. Not the load: the write burst runs cycles
+70..133 either way. It is the **wire** — one fewer header field to unpack and two fewer verdict tests
+means a differently scheduled body, and the response lands a few cycles later. The same re-timing
+slid the writer's sweep past the yielded player's address rather than through it, which is why
+`cmd_loop`'s read-during-write collisions went 2 → 0.
 
 ### RX
 

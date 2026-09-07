@@ -4,12 +4,12 @@ parent: Playing a stored waveform
 grand_parent: Examples
 nav_order: 2
 audience: hls
-summary: "The XSI run for rf_shot_tx: one snapshot driven by two command bundles, thirty gates, and every measured number with the assertion that pins it. The playout block shapes, the last verdict's cycle, the converter counters that say the DAC was never starved, the write address range, the achieved II of five pipelined loops, the two read-during-write collisions that are recorded as a measurement rather than asserted away, and the three loosely-timed gates that replaced one byte-identical comparison."
+summary: "The XSI run for rf_shot_tx: one snapshot driven by two command bundles, thirty-one gates, and every measured number with the assertion that pins it. The playout block shapes, the last verdict's cycle, the converter counters that say the DAC was never starved, the write address range, the read pointer's sweep and wrap, the achieved II of five pipelined loops, the read-during-write collisions that are recorded as a measurement rather than asserted away, and the three loosely-timed gates that replaced one byte-identical comparison."
 ---
 
 # Taking it to RTL
 
-`tests/examples/test_rf_shot_tx_xsi.py` — **30 gates**, run with `pytest -m xsi`. What xsim
+`tests/examples/test_rf_shot_tx_xsi.py` — **31 gates**, run with `pytest -m xsi`. What xsim
 elaborates is the wrapper `rf_shot_tx_top`; the testbench sees only AXI-Stream, and the converter
 model consumes the playout exactly as it consumes any other design's.
 
@@ -21,7 +21,7 @@ passing when either is missing, and `-m xsi` fails the session if any gate skips
 
 ## Every number, and the gate that asserts it
 
-Recorded at `nword=64`, `blk_words=16`, `depth=256`, region `[192, 256)`, 256 MSa/s DAC, over 1400
+Recorded at `depth=64`, `blk_words=16`, region `[0, 64)` — the whole memory — 256 MSa/s DAC, over 1400
 cycles.
 
 | measurement | `cmd` | `cmd_loop` | asserted by |

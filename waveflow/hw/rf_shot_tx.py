@@ -100,9 +100,6 @@ WORD_BW = 64
 #: Default buffer depth in **words** (a power of two — the memory's address wrap is a mask).
 BUF_DEPTH = 1024
 
-#: Default words in one shot.  Not the depth: a shot shorter than the memory is the ordinary case,
-#: and the two being separate is what lets a gate exercise a partial buffer.
-SHOT_WORDS = 256
 
 # ---------------------------------------------------------------------------
 # The opcode
@@ -149,29 +146,35 @@ SHOT_LOOP = 2
 
 #: The shot is in the memory and is playable.
 SHOT_LOADED = 0
-#: ``TLAST`` arrived before the shot was full — **the status this response exists for**.  A short
+#: ``TLAST`` arrived before the buffer was full — **the status this response exists for**.  A short
 #: transfer completes cleanly at the DMA, so the host sees success while the buffer holds a block of
 #: the right shape carrying half a signal.  Nothing on the host side can see it.
+#:
+#: **Since ``plans/rf_shot_geometry.md`` it is the ONLY way a short transfer is detectable.**  The
+#: header used to declare a length and the loader used to check it; with the length gone, ``TLAST``
+#: arriving early is the sole evidence, and :attr:`ShotTxResp.nsamp_loaded` is the sole diagnosis.
 SHOT_SHORT = 1
-#: ``nsamp`` disagrees with the shot the buffer was built for.  Build-time structure
-#: (:attr:`RfShotTx.nword`) is the single source for the length; a command
-#: that disagreed is refused rather than truncated, because a truncated waveform is data of the wrong
-#: duration and plays as a quieter, shorter signal.
-SHOT_WRONG_LEN = 2
+#: The opcode is not one of the three this design knows.  Refused, never **reinterpreted**: a command
+#: answered as something other than what it asked for is invisible, because the samples would look
+#: perfect.
+#:
+#: **Renamed from ``SHOT_WRONG_LEN`` by ``plans/rf_shot_geometry.md``, and the wire value is
+#: deliberately unchanged so no host has to change.**  The old name was already an overload at this
+#: site — *"wrong length"* reported for a wrong *opcode* — and this is the one use of it that
+#: survives the header losing its length.  Folding it into :data:`SHOT_SHORT` was the alternative and
+#: was refused: it would make a malformed command look like a truncated one, which is the exact
+#: conflation ``SHOT_SHORT`` exists to prevent.
+SHOT_BAD_OPCODE = 2
 #: The header arrived while a shot was playing.  Refused **at the command**, before a word is taken,
 #: rather than asserted after the fact — which is what the retired ``ShotPhase`` did, in pysim only.
 SHOT_BUSY = 3
-#: ``nsamp == 0``.  Refused for the reason :data:`~waveflow.hw.rf_tx_stream.TX_ZERO_LEN` gives next
-#: door: a zero-length load has nothing to complete on, so it can never resolve.
-SHOT_ZERO_LEN = 4
 
 #: Human-readable names, so an assertion says what happened rather than a number.
 SHOT_STATUS_NAMES = {
     SHOT_LOADED: "SHOT_LOADED",
     SHOT_SHORT: "SHOT_SHORT",
-    SHOT_WRONG_LEN: "SHOT_WRONG_LEN",
+    SHOT_BAD_OPCODE: "SHOT_BAD_OPCODE",
     SHOT_BUSY: "SHOT_BUSY",
-    SHOT_ZERO_LEN: "SHOT_ZERO_LEN",
 }
 
 #: Bits for :attr:`ShotTxHdr.opcode` — **sized to the opcode count, which is three**
@@ -179,7 +182,7 @@ SHOT_STATUS_NAMES = {
 #: ``plans/rf_shot_wire_format.md`` Part A, which was a number nobody chose.
 OPCODE_BW = 2
 
-#: Bits for :attr:`ShotTxResp.status` — five verdicts, rounded up to a byte.  A host reads this
+#: Bits for :attr:`ShotTxResp.status` — four verdicts, rounded up to a byte.  A host reads this
 #: field out of a DMA buffer and a byte is the unit it reads in; three bits would save nothing that
 #: is not spent on padding anyway.
 STATUS_BW = 8
@@ -201,17 +204,19 @@ NREPEAT_BW = 16
 #: is what a DMA wants, so the slack is declared as a reserved field rather than left incidental.
 MSG_BW = 64
 
-#: The floor on ``nsamp``'s width.  A geometry-derived width alone would be *narrower* than today at
-#: the gated geometry (256 samples needs 9 bits), and narrowing it would make a host's mistyped
-#: length **alias onto a legal one** — 768 samples wrapping to 256 and being accepted as correct,
-#: which is the very failure the old check existed to prevent, reintroduced from the other side.  So
-#: the derived width is a floor, not an exact fit, and it never goes below what the wire carries
-#: today.
+#: The floor on ``nsamp_loaded``'s width — **16 bits, whatever the geometry derives**.
+#:
+#: The reason changed with ``plans/rf_shot_geometry.md``, and the old one is worth recording because
+#: it **retired** rather than turned out wrong: the floor used to stop a host's mistyped *length* from
+#: aliasing onto a legal one on the way in.  There is no length on the way in any more.  What is left
+#: is a field the host **reads**, and holding it at one width across geometries is what lets a host be
+#: compiled against this wire once.  The slack is declared padding either way (:func:`_rsvd_bw`), so
+#: a narrower field would buy nothing and cost that.
 NSAMP_BW_FLOOR = 16
 
 
-def nsamp_bw_for(nword: int, samp_per_word: int) -> int:
-    """Bits ``nsamp`` needs for a shot of *nword* x *samp_per_word* samples.
+def nsamp_bw_for(depth: int, samp_per_word: int) -> int:
+    """Bits ``nsamp_loaded`` needs to express a full buffer of *depth* x *samp_per_word* samples.
 
     **Derived from the geometry rather than checked against a constant**, which is the whole of
     ``plans/rf_shot_wire_format.md`` Part A.  Before it, the width was ``IDX_BW`` — 16, from another
@@ -219,14 +224,18 @@ def nsamp_bw_for(nword: int, samp_per_word: int) -> int:
 
     ``if nw * spw >= (1 << IDX_BW): raise ValueError(...)``
 
-    That made a constant bound the design.  Now the design sizes the field, so the largest legal
-    ``nsamp`` fits **by construction** and the check is unnecessary rather than deleted on faith.
-    :func:`test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips` is the witness.
+    That made a constant bound the design.  Now the design sizes the field, so the largest value it
+    can ever report fits **by construction** and the check is unnecessary rather than deleted on
+    faith.  :func:`test_a_buffer_too_large_for_the_old_16_bit_field_builds_and_round_trips` is the
+    witness — retargeted by ``plans/rf_shot_geometry.md`` from the header's ``nsamp``, which no
+    longer exists, onto the response's ``nsamp_loaded``, which does the same job on the way back.
 
-    Rounded up to a whole byte because a host writes bytes, and floored at
-    :data:`NSAMP_BW_FLOOR` — see there for why an exact fit would be a regression.
+    **Takes ``depth`` rather than ``nword`` because the shot IS the buffer**: a full load is ``depth``
+    words, so that is the largest ``nsamp_loaded`` this design can ever answer with.
+
+    Rounded up to a whole byte because a host writes bytes, and floored at :data:`NSAMP_BW_FLOOR`.
     """
-    need = int(nword) * int(samp_per_word)
+    need = int(depth) * int(samp_per_word)
     bits = max(int(need).bit_length(), 1)
     bits = ((bits + 7) // 8) * 8                       # a host writes bytes
     return max(bits, NSAMP_BW_FLOOR)
@@ -263,26 +272,26 @@ class ShotTxHdr(ParamSchema):
     :class:`waveflow.hw.rf_samp_buf_tx.TxCmd` names a **buffer window**, and this one names a
     **stream transaction**.  The three designs are alternatives, never layers.
 
-    **There is no length-of-shot field.**  How many words a shot is, is build-time structure declared
-    once on :attr:`RfShotTx.nword`; a command that restated it would be a second source that could
-    disagree — the discipline :class:`~waveflow.hw.rfdc.Rfdc` follows by reading ``samp_rate`` off the
-    clock rather than declaring its own.  ``nsamp`` is here because it is what the *host* believes it
-    is sending, and catching that belief disagreeing with what arrived is the verdict's whole job.
+    **There is no length field at all**, and ``plans/rf_shot_geometry.md`` is why.  It carried one
+    (``nsamp``) whose only legal value was ``nword x samp_per_word`` — a checksum wearing a
+    parameter's clothes, and a reader met it as a parameter first.  **The shot IS the buffer** now:
+    the length is :attr:`RfShotTx.depth`, the host does not restate it, and there is nothing for a
+    restatement to disagree with.  What a short transfer costs in exchange is that ``TLAST`` becomes
+    the sole detector — see :data:`SHOT_SHORT`.
+
+    So the header is what a stream transaction actually needs: *which* operation, *whose* it is, and
+    *how many times to play it*.
     """
 
     include_filename: ClassVar[str | None] = "rf_shot_tx_hdr.h"
 
-    #: Width of ``nsamp``, derived from the geometry by :func:`nsamp_bw_for`.  A design specializes
-    #: this rather than accepting the default; :meth:`ShotTxLoader.schemas` is where that happens.
-    nsamp_bw = Param(NSAMP_BW_FLOOR)
-    #: Declared padding to :data:`MSG_BW`.  Follows from ``nsamp_bw`` and is passed with it.
-    rsvd_bw = Param(MSG_BW - OPCODE_BW - TID_BW - NSAMP_BW_FLOOR - NREPEAT_BW)
+    #: Declared padding to :data:`MSG_BW`.  A fixed width, because nothing in this message is derived
+    #: from the geometry any more — the one field that was (``nsamp``) is gone.
+    rsvd_bw = Param(MSG_BW - OPCODE_BW - TID_BW - NREPEAT_BW)
 
     elements = {
         "opcode":  {"schema": OpField, "description": "SHOT_LOAD, SHOT_LOOP or SHOT_END"},
         "tid":     {"schema": TidField, "description": "transaction id, echoed on the response"},
-        "nsamp":   {"schema": IntField.specialize(nsamp_bw, signed=False),
-                    "description": "samples the host is sending (0 for END)"},
         "nrepeat": {"schema": RepeatField,
                     "description": "times to play the shot once loaded (>= 1)"},
         "_rsvd":   {"schema": IntField.specialize(rsvd_bw, signed=False),
@@ -295,17 +304,22 @@ class ShotTxResp(ParamSchema):
     ``has_response`` flag*: there is no configuration in which a command is issued and nobody wants to
     know whether it worked.
 
-    ``nsamp_loaded`` is **what actually landed**, not what was asked for.  On :data:`SHOT_LOADED` the
-    two agree; on :data:`SHOT_SHORT` the difference *is* the diagnosis, and it is the number a DMA
-    cannot produce — ``sendchannel.transfer()`` knows it pushed bytes, not whether they were a whole
-    waveform.
+    ``nsamp_loaded`` is **what actually landed**, not what was asked for — and since
+    ``plans/rf_shot_geometry.md`` removed the header's ``nsamp`` it is the **only** length on the
+    wire, in either direction.  On :data:`SHOT_LOADED` it is a full buffer; on :data:`SHOT_SHORT` it
+    *is* the diagnosis, and it is the number a DMA cannot produce — ``sendchannel.transfer()`` knows
+    it pushed bytes, not whether they were a whole waveform.
+
+    **It stayed while the header's ``nsamp`` went, and the asymmetry is the point.**  The header's
+    was a restatement of build-time structure and could only ever be right or refused; this one
+    carries information the host has no other way to get.
     """
 
     include_filename: ClassVar[str | None] = "rf_shot_tx_resp.h"
 
-    #: Width of ``nsamp_loaded`` — **the same derived width as the header's** ``nsamp``, because the
-    #: two are compared by the host and a response that could not express what the header asked for
-    #: would make ``SHOT_SHORT``'s diagnosis unreadable.
+    #: Width of ``nsamp_loaded``, derived from the geometry by :func:`nsamp_bw_for` — a full buffer
+    #: is ``depth x samp_per_word`` samples, and a response that could not express one would make
+    #: ``SHOT_SHORT``'s diagnosis unreadable at the top of its range.
     nsamp_bw = Param(NSAMP_BW_FLOOR)
     #: Declared padding to :data:`MSG_BW`.
     rsvd_bw = Param(MSG_BW - TID_BW - STATUS_BW - NSAMP_BW_FLOOR)
@@ -313,7 +327,7 @@ class ShotTxResp(ParamSchema):
     elements = {
         "tid":          {"schema": TidField, "description": "the header's transaction id"},
         "status":       {"schema": StatusField,
-                         "description": "SHOT_LOADED / SHORT / WRONG_LEN / BUSY / ZERO_LEN"},
+                         "description": "SHOT_LOADED / SHORT / BAD_OPCODE / BUSY"},
         "nsamp_loaded": {"schema": IntField.specialize(nsamp_bw, signed=False),
                          "description": "samples actually written to the buffer"},
         "_rsvd":        {"schema": IntField.specialize(rsvd_bw, signed=False),
@@ -326,17 +340,20 @@ class ShotTxResp(ParamSchema):
 #: :data:`~waveflow.hw.rf_tx_stream.TX_STREAM_SCHEMA_CLASSES`, which is four because the streaming
 #: transmitter also has to say things to *itself* (a tagged sample, a per-window status); the shot
 #: design has nothing to arbitrate, so it has nothing internal to name.
-def shot_tx_schemas(nword: int = SHOT_WORDS, samp_per_word: int = 4):
+def shot_tx_schemas(depth: int = BUF_DEPTH, samp_per_word: int = 4):
     """The ``(header, response)`` pair for a design of this geometry.
 
     **One place decides the widths**, so the pysim twin, the generated C++ and the build's
     :class:`~waveflow.hw.dataschema.DataSchemaStep` cannot disagree about the wire.  Both messages
-    are one :data:`MSG_BW`-bit word whatever the geometry; what varies is how much of that word
-    ``nsamp`` occupies and how much is declared reserved.
+    are one :data:`MSG_BW`-bit word whatever the geometry.
+
+    Only the **response** varies now: since ``plans/rf_shot_geometry.md`` the header carries no
+    length, so its layout is the same at every geometry and what the pair still shares is the word
+    size.  The response's ``nsamp_loaded`` is sized from ``depth`` — the shot is the buffer, so a
+    full load is ``depth x samp_per_word`` samples.
     """
-    nb = nsamp_bw_for(nword, samp_per_word)
-    hdr = ShotTxHdr.specialize(nsamp_bw=nb,
-                               rsvd_bw=_rsvd_bw(OPCODE_BW, TID_BW, nb, NREPEAT_BW))
+    nb = nsamp_bw_for(depth, samp_per_word)
+    hdr = ShotTxHdr.specialize(rsvd_bw=_rsvd_bw(OPCODE_BW, TID_BW, NREPEAT_BW))
     resp = ShotTxResp.specialize(nsamp_bw=nb,
                                  rsvd_bw=_rsvd_bw(TID_BW, STATUS_BW, nb))
     # `specialize` names the subclass after its params (ShotTxHdr_nsamp_bw16_rsvd_bw14), and that
@@ -349,7 +366,7 @@ def shot_tx_schemas(nword: int = SHOT_WORDS, samp_per_word: int = 4):
 
 
 #: The schema classes a build emits C++ headers for, **at the default geometry**.  A design whose
-#: ``nword`` x ``samp_per_word`` needs a wider ``nsamp`` must pass its own pair — see
+#: ``depth`` x ``samp_per_word`` needs a wider ``nsamp_loaded`` must pass its own pair — see
 #: :func:`shot_tx_schemas`, and ``examples/rf_shot_tx``'s build, which does exactly that.
 SHOT_TX_SCHEMA_CLASSES = list(shot_tx_schemas())
 
@@ -411,20 +428,23 @@ class ShotTxLoader(FreeRunMod):
     the lock
     is what makes writing the memory directly safe.
 
-    **All five verdicts are reachable here**, which is the merge:
+    **All four verdicts are reachable here**, which is the merge:
 
     ==============================================  ==================================
-    ``nsamp == 0``                                  :data:`~waveflow.hw.rf_shot_tx.SHOT_ZERO_LEN`
-    ``nsamp`` disagrees with ``nword * spw``        :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN`
-    an opcode that is neither ``LOAD`` nor ``LOOP`` :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN`
+    an opcode that is neither ``LOAD`` nor ``LOOP`` :data:`~waveflow.hw.rf_shot_tx.SHOT_BAD_OPCODE`
     a **finite** shot is still playing              :data:`~waveflow.hw.rf_shot_tx.SHOT_BUSY`
-    ``TLAST`` before the shot was full              :data:`~waveflow.hw.rf_shot_tx.SHOT_SHORT`
+    ``TLAST`` before the buffer was full            :data:`~waveflow.hw.rf_shot_tx.SHOT_SHORT`
     otherwise                                       :data:`~waveflow.hw.rf_shot_tx.SHOT_LOADED`
     ==============================================  ==================================
 
+    It was five before ``plans/rf_shot_geometry.md``.  Both that went were about a length the header
+    no longer declares: ``SHOT_ZERO_LEN`` was ``nsamp == 0`` and ``SHOT_WRONG_LEN``'s length half was
+    ``nsamp != nword * spw``.  The verdict itself survives as ``SHOT_BAD_OPCODE`` — same wire value,
+    a name that describes the fault it actually reports.
+
     **Malformed before transient**, which is the repo's order and for its reason: a command that is
     wrong *and* badly timed should be told the thing it can fix.  Retry repairs a ``BUSY``; nothing
-    repairs a length the buffer was not built for.
+    repairs an opcode this design does not know.
 
     **``busy`` covers both opcodes.**  A ``SHOT_LOOP`` arriving while a *finite* shot plays is
     refused too — the objection is not to what the new shot is, it is that truncating the running
@@ -436,37 +456,27 @@ class ShotTxLoader(FreeRunMod):
 
     #: Word width in bits — the host port's and the memory's.
     bitwidth: HwParam[int] = WORD_BW
-    #: Memory depth in **elements**; the bound the region is checked against.
+    #: Memory depth in **elements**, and therefore the **length of a shot**: since
+    #: ``plans/rf_shot_geometry.md`` the shot IS the buffer.  There is no separate ``nword``, no
+    #: ``base``, and no length on the wire to disagree with this one.
     depth: HwParam[int] = BUF_DEPTH
-    #: Words in one shot.  Build-time structure and the single source for the length: the header's
-    #: ``nsamp`` is what the *host* believes, and catching the two disagreeing is what
-    #: :data:`~waveflow.hw.rf_shot_tx.SHOT_WRONG_LEN` is.
-    nword: HwParam[int] = SHOT_WORDS
-    #: Samples one word carries — what turns a word count into the ``nsamp`` a host speaks in.
+    #: Samples one word carries — what turns a word count into the ``nsamp_loaded`` a host reads.
     samp_per_word: HwParam[int] = 4
-    #: First element of the region.  **Non-zero is the interesting case**: ``base + offset`` is the
-    #: shape of the byte-versus-word bug ``bram_toy`` stayed green through.
-    base: HwParam[int] = 0
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, d, nw = int(self.bitwidth), int(self.depth), int(self.nword)
-        spw, b = int(self.samp_per_word), int(self.base)
-        if nw < 1:
-            raise ValueError(f"a shot is {nw} words; there is nothing to load")
+        w, d, spw = int(self.bitwidth), int(self.depth), int(self.samp_per_word)
+        if d < 1:
+            raise ValueError(f"the buffer is {d} words; there is nothing to load")
         if spw < 1 or w % spw:
             raise ValueError(
                 f"a {w}-bit word cannot carry {spw} samples without one straddling a slot")
-        if b < 0 or b + nw > d:
-            raise ValueError(
-                f"the region [{b}, {b + nw}) does not fit a {d}-element memory. Refused here rather "
-                f"than on the wire, where it would come back as LOCK_BAD_RANGE every single load.")
-        # There is no "does nsamp fit?" check here any more, and its absence is the point of
-        # plans/rf_shot_wire_format.md Part A.  It used to refuse a shot larger than a 16-bit field
-        # borrowed from another module; now `nsamp_bw_for` sizes the field from THIS geometry, so
-        # the largest legal value fits by construction and there is nothing left to refuse.
-        self.hdr_cls, self.resp_cls = shot_tx_schemas(nw, spw)
+        # There is no region check here any more, and there is nothing left to check: the region is
+        # the whole memory, so it fits by construction.  `base` used to make [base, base+nword) a
+        # thing that could be wrong, and plans/rf_shot_geometry.md removed the arithmetic rather
+        # than the gate that covered it.
+        self.hdr_cls, self.resp_cls = shot_tx_schemas(d, spw)
         #: The host's port: header **and** payload, one frame, ``TLAST`` at the end.  Without the pin
         #: there is no in-band way to say *that was the end* — a payload word and a header word are
         #: the same bits — so a short transfer would stall a counted loop, and a hang is
@@ -504,33 +514,33 @@ class ShotTxLoader(FreeRunMod):
 
     @property
     def nsamp_shot(self) -> int:
-        """Samples in a full shot — the one value ``ShotTxHdr.nsamp`` may carry."""
-        return int(self.nword) * int(self.samp_per_word)
+        """Samples in a full shot — the largest ``ShotTxResp.nsamp_loaded`` this design answers."""
+        return int(self.depth) * int(self.samp_per_word)
 
     @property
     def region(self) -> tuple[int, int]:
-        """``[base, base + nword)`` — the one region this design ever asks for."""
-        return int(self.base), int(self.base) + int(self.nword)
+        """``[0, depth)`` — the whole memory, which is the one region this design ever asks for."""
+        return 0, int(self.depth)
 
     def kernel_task(self) -> KernelTask:
         # `lock` appears ONCE and becomes THREE arguments, spliced in adjacent in
         # physical_endpoints() order -- which is why the C++ takes (buf, cmd, resp) together.
         return KernelTask("shot_tx_loader_task", "shot_tx_loader_task.h",
                           ("s_in", "done_in", "lock", "rep_out", "resp_out"),
-                          template_args=(int(self.bitwidth), int(self.depth), int(self.nword),
-                                         int(self.samp_per_word), int(self.base)))
+                          template_args=(int(self.bitwidth), int(self.depth),
+                                         int(self.samp_per_word)))
 
     # -- the pysim twin ----------------------------------------------------------------------
 
     def _verdict(self, hdr) -> int:
-        """The header-only refusals, in the order the C++ body tests them."""
+        """The header-only refusals, in the order the C++ body tests them.
+
+        Two of them, where there were four: the header carries nothing that can be malformed except
+        the opcode, because it carries no length.
+        """
         op = int(hdr.opcode)
         if op not in (SHOT_LOAD, SHOT_LOOP):
-            return SHOT_WRONG_LEN
-        if int(hdr.nsamp) == 0:
-            return SHOT_ZERO_LEN
-        if int(hdr.nsamp) != self.nsamp_shot:
-            return SHOT_WRONG_LEN
+            return SHOT_BAD_OPCODE
         if self.busy:
             # A FINITE shot is running.  Refused rather than preempted: the host asked for a number
             # of passes, and stopping early would produce a perfectly good shorter signal that
@@ -553,7 +563,7 @@ class ShotTxLoader(FreeRunMod):
         and pysim holds it for the **write**, and the handover gap differs between the backends.
         Both are measured; neither is inherited.
         """
-        w, nw = int(self.bitwidth), int(self.nword)
+        w, nw = int(self.bitwidth), int(self.depth)
         frame = np.asarray((yield from self.s_in.get()), dtype=np.uint64).ravel()
 
         hn = self.hdr_cls.nwords_per_inst(w)
@@ -592,9 +602,10 @@ class ShotTxLoader(FreeRunMod):
         lo, hi = self.region
         lock_status = yield from self.lock.acquire(lo, hi)
         if lock_status != LOCK_GRANTED:
-            # Unreachable while `base` and `nword` are checked at construction, which is where the
-            # same predicate already ran.  Raised rather than answered, because a region the design
-            # declared and the memory refuses is a wiring fault, not a host's mistake.
+            # Unreachable: the region IS the memory since plans/rf_shot_geometry.md, so there is no
+            # geometry left for the two ends to disagree about.  Raised rather than answered, because
+            # a region the design declared and the memory refuses is a wiring fault, not a host's
+            # mistake.
             raise AssertionError(
                 f"{type(self).__name__} '{self.name}': ACQUIRE [{lo}, {hi}) came back "
                 f"{LOCK_STATUS_NAMES.get(lock_status, lock_status)} on a memory of "
@@ -677,11 +688,10 @@ class ShotTxPlayer(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "shot_tx_player"
 
     bitwidth: HwParam[int] = WORD_BW
+    #: Memory depth in elements, **and** the wrap point of the read pointer — one number, because
+    #: since ``plans/rf_shot_geometry.md`` the shot IS the buffer.  A power of two, so the wrap is a
+    #: mask rather than an addition.
     depth: HwParam[int] = BUF_DEPTH
-    #: Words in one shot — the region's length, and the wrap point of the read pointer.
-    nword: HwParam[int] = SHOT_WORDS
-    #: First element of the region.  Must match the loader's; the composite passes one number.
-    base: HwParam[int] = 0
     #: Elements between polls, **and** words per pysim output burst — one number, because they are
     #: the same boundary.  A poll per converter block is the natural cadence.
     #:
@@ -694,15 +704,12 @@ class ShotTxPlayer(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, d, nw = int(self.bitwidth), int(self.depth), int(self.nword)
-        b, bw = int(self.base), int(self.blk_words)
-        if b < 0 or b + nw > d:
-            raise ValueError(f"the region [{b}, {b + nw}) does not fit a {d}-element memory")
-        if bw < 1 or nw % bw:
+        w, d, bw = int(self.bitwidth), int(self.depth), int(self.blk_words)
+        if bw < 1 or d % bw:
             raise ValueError(
-                f"blk_words={bw} does not divide a {nw}-word shot. A chunk that straddled the end "
-                f"of the region would need two base additions, and the play boundary would stop "
-                f"landing on a block boundary.")
+                f"blk_words={bw} does not divide a {d}-word buffer. A chunk that straddled the wrap "
+                f"would have to be split across two reads, and the play boundary would stop landing "
+                f"on a block boundary.")
         self.lock = LockedMemSlaveIF(sim=self.sim, name=f"{self.name}_lock",
                                      element_type=word_element(w), nelem=d, access="read",
                                      check_period=bw)
@@ -717,7 +724,8 @@ class ShotTxPlayer(FreeRunMod):
         for ep in (self.lock, self.samp_out, self.rep_in, self.done_out):
             self.add_endpoint(ep)
 
-        #: The read pointer **within the region** — a ``static`` in the C++ twin.
+        #: The read pointer into the buffer — a ``static`` in the C++ twin.  It wraps at
+        #: :attr:`depth`, which is the whole of this design's addressing.
         self.rd = 0
         #: ``True`` while it owns the region *and* has something to play.  **Starts false**: nothing
         #: has been loaded yet, and playing a memory that was never written is a plausible sample
@@ -742,8 +750,8 @@ class ShotTxPlayer(FreeRunMod):
     def kernel_task(self) -> KernelTask:
         return KernelTask("shot_tx_player_task", "shot_tx_player_task.h",
                           ("lock", "rep_in", "done_out", "samp_out"),
-                          template_args=(int(self.bitwidth), int(self.depth), int(self.nword),
-                                         int(self.base), int(self.blk_words)))
+                          template_args=(int(self.bitwidth), int(self.depth),
+                                         int(self.blk_words)))
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one chunk **and exactly one poll** — the C++ body's outer iteration."""
@@ -796,10 +804,12 @@ class ShotTxPlayer(FreeRunMod):
         converter's own grid would have put it.  The gates align on each backend's own playout log
         instead of demanding the two grids coincide.
         """
-        w, bw, nw = int(self.bitwidth), int(self.blk_words), int(self.nword)
+        w, bw, nw = int(self.bitwidth), int(self.blk_words), int(self.depth)
         if self.playing:
-            data, t0 = yield from self.lock.read_pipelined(word_element(w), bw,
-                                                           addr=int(self.base) + self.rd)
+            # `addr=self.rd`, with no base to add: the region is the whole memory, so the only
+            # address arithmetic left is the wrap below -- and `depth` is a power of two, so at RTL
+            # that is a mask.
+            data, t0 = yield from self.lock.read_pipelined(word_element(w), bw, addr=self.rd)
             yield from self.samp_out.write_pipelined(data, t_out_start=t0)
             self.n_words += bw
             self.rd += bw
@@ -873,13 +883,10 @@ class RfShotTx(FreeRunMod):
     bitwidth: HwParam[int] = WORD_BW
     #: Samples one word carries.
     samp_per_word: HwParam[int] = 4
-    #: Memory depth in **WORDS** (a power of two: the address wrap is a mask).
+    #: Memory depth in **WORDS**, and therefore the length of a shot — **the shot IS the buffer**
+    #: (``plans/rf_shot_geometry.md``).  A power of two, because the read pointer's wrap is then a
+    #: mask, and that mask is the only address arithmetic this design has.
     depth: HwParam[int] = BUF_DEPTH
-    #: Words in one shot.  ``base + nword <= depth``.
-    nword: HwParam[int] = SHOT_WORDS
-    #: First element of the region.  **One number, passed to both ends**, because a loader and a
-    #: player that disagreed about where the waveform is would each be individually correct.
-    base: HwParam[int] = 0
     #: Bits the effective sample sits above the bottom of its converter slot.  **0 makes the last
     #: stage the identity**, so a build that leaves it there is measuring a pair of wires.
     shift: HwParam[int] = 2
@@ -890,21 +897,19 @@ class RfShotTx(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w, d, nw = int(self.bitwidth), int(self.depth), int(self.nword)
-        spw, sh, b = int(self.samp_per_word), int(self.shift), int(self.base)
-        bw = int(self.blk_words)
+        w, d = int(self.bitwidth), int(self.depth)
+        spw, sh, bw = int(self.samp_per_word), int(self.shift), int(self.blk_words)
         if d & (d - 1):
             raise ValueError(f"buffer depth must be a power of two (got {d}): the wrap is a mask")
-        if not 1 <= nw <= d:
-            raise ValueError(
-                f"a shot is {nw} words but the buffer holds {d}: a shot longer than the memory is "
-                f"not a shot, it is a stream, and streaming is what waveflow.hw.rf_tx_stream is for")
+        # There is no "does the shot fit the buffer?" check any more, and nothing replaced it: the
+        # shot IS the buffer, so the two cannot disagree.  A waveform longer than the memory is still
+        # not a shot -- it is a stream, and streaming is what waveflow.hw.rf_tx_stream is for -- but
+        # that is now a statement about which design to pick rather than a value to refuse.
 
         self.load = ShotTxLoader(sim=self.sim, name=f"{self.name}_load", bitwidth=w, depth=d,
-                                 nword=nw, samp_per_word=spw, base=b, clk=self.clk)
+                                 samp_per_word=spw, clk=self.clk)
         self.play = type(self).player_cls(sim=self.sim, name=f"{self.name}_play", bitwidth=w,
-                                          depth=d, nword=nw, base=b, blk_words=bw,
-                                          clk=self.clk)
+                                          depth=d, blk_words=bw, clk=self.clk)
         # The re-layout is LAST, so it is the stage the converter back-pressures and therefore the
         # one that carries the block-shaped handover.  The accommodation follows the port.
         self.relayout = RfRelayoutToSlots(sim=self.sim, name=f"{self.name}_to_slots", bitwidth=w,
@@ -964,12 +969,12 @@ class RfShotTx(FreeRunMod):
 
     @property
     def nsamp_shot(self) -> int:
-        """Samples in one shot — what a host's ``ShotTxHdr.nsamp`` must equal."""
-        return int(self.nword) * int(self.samp_per_word)
+        """Samples in one shot — a full buffer, and the largest ``nsamp_loaded`` on the wire."""
+        return int(self.depth) * int(self.samp_per_word)
 
     @property
     def region(self) -> tuple[int, int]:
-        """``[base, base + nword)``."""
+        """``[0, depth)`` — the whole memory."""
         return self.load.region
 
     @property
@@ -979,7 +984,7 @@ class RfShotTx(FreeRunMod):
         return int(self.shift) == 0
 
     @classmethod
-    def for_word(cls, word, *, depth: int = BUF_DEPTH, nword: int = SHOT_WORDS, **kwargs):
+    def for_word(cls, word, *, depth: int = BUF_DEPTH, **kwargs):
         """Build the transmitter from the converter's **word type** — the single place the integers
         are derived.  A type cannot be an ``HwParam``, so what survives the call is integers."""
         from waveflow.hw.rf_relayout import check_geometry, slots_per_word
@@ -991,7 +996,7 @@ class RfShotTx(FreeRunMod):
                 f"convention, not a width. Got {word!r}.")
         check_geometry(word)
         return cls(bitwidth=int(word.bitwidth), samp_per_word=slots_per_word(word),
-                   depth=int(depth), nword=int(nword), shift=int(word.justify_shift()), **kwargs)
+                   depth=int(depth), shift=int(word.justify_shift()), **kwargs)
 
     # -- counters and verdicts -------------------------------------------------------------------
 
