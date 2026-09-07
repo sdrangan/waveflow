@@ -16,6 +16,7 @@ to write.
 ## The whole receive path
 
 ```python
+from waveflow.hw.rfdc import Rfdc
 from waveflow.hw.rf_sample_if import RFSampIF
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord

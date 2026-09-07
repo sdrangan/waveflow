@@ -50,7 +50,7 @@ from waveflow.simulation.rf_tb import RfDataSource  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
 
-from examples.rf_loopback.rfdc import Rfdc  # noqa: E402
+from waveflow.hw.rfdc import Rfdc  # noqa: E402
 from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 
 # Re-exported so a reader of this example does not have to know which names are framework and which

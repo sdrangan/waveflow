@@ -52,7 +52,7 @@ from waveflow.simulation.rf_tb import RfDataSource
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamSink
 
-from examples.rf_loopback.rfdc import Rfdc
+from waveflow.hw.rfdc import Rfdc
 
 HERE = Path(__file__).resolve().parent
 

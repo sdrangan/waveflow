@@ -133,5 +133,5 @@ port's capacity and not your design's — see [rule 4](./rules.md#4-port-capacit
 - [The RF side](./rf_side.md) — where `complex_samp` is declared, and the widening rule.
 - [Fidelity](./fidelity.md) — what this model does *not* tell you.
 
-**Source of truth:** `examples/rf_loopback/rfdc.py`, `waveflow/hw/rf_sample_if.py`,
+**Source of truth:** `waveflow/hw/rfdc.py`, `waveflow/hw/rf_sample_if.py`,
 `waveflow/hw/rfdc_samp_word.py`, `plans/adc_model.md` § *Channels, ports, and where I/Q lives*.

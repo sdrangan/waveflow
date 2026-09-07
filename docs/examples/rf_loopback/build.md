@@ -262,5 +262,5 @@ primes its buffer before enabling the tile.
 - [Running it](./run.md) — the three claims, and the two faults that make the counters mean
   something.
 
-**Source of truth:** `examples/rf_loopback/rf_loopback.py`, `examples/rf_loopback/rfdc.py`,
+**Source of truth:** `examples/rf_loopback/rf_loopback.py`, `waveflow/hw/rfdc.py`,
 `tests/examples/test_rf_loopback.py`.

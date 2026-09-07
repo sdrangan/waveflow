@@ -10,7 +10,7 @@ summary: "How to create an Rfdc: the word type that carries its sample geometry,
 
 # Instantiating the converter
 
-[`Rfdc`](../../../../examples/rf_loopback/rfdc.py) is **one module carrying both directions**. Not
+[`Rfdc`](../../../../waveflow/hw/rfdc.py) is **one module carrying both directions**. Not
 two blocks: the TX and RX sample counters must hold a fixed relation, and that is a property *of the
 converter*, which is also what lets the two grids' time origins have exactly one owner.
 
@@ -185,4 +185,4 @@ quantize → pack → real RTL → unpack → dequantize → Python comes back *
 - [Connecting the RF side](./rf_side.md) — the interface, the sources and sinks, and `t0`.
 - [Connecting the fabric side](./axis_side.md) — packing, the word type, and the rate check.
 
-**Source of truth:** `examples/rf_loopback/rfdc.py`, `tests/examples/test_rf_loopback.py`.
+**Source of truth:** `waveflow/hw/rfdc.py`, `tests/examples/test_rf_loopback.py`.

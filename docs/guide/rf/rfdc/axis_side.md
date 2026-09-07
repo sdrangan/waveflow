@@ -151,5 +151,5 @@ than a bigger number on the port. See
 - [Block sampling](./sampling.md) — the model underneath both sides.
 - [The design rules](./rules.md) — including the two this page hands off to.
 
-**Source of truth:** `examples/rf_loopback/rfdc.py`, `waveflow/build/xsi/xsi_rfdc.h`,
+**Source of truth:** `waveflow/hw/rfdc.py`, `waveflow/build/xsi/xsi_rfdc.h`,
 `tests/build/test_xsi_rfdc_samp.py`.

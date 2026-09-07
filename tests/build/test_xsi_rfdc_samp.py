@@ -413,7 +413,7 @@ def test_the_format_literal_rfdc_emits_reads_back_field_for_field(tmp_path):
     That is also why ``xsi_rfdc_samp.h`` APPENDS the two new fields rather than grouping the widths
     together, which would have read better and broken every literal already in a generated TB.
     """
-    from examples.rf_loopback.rfdc import Rfdc
+    from waveflow.hw.rfdc import Rfdc
     from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
     from waveflow.simulation.simulation import Simulation
 
@@ -451,7 +451,7 @@ def test_the_format_literal_carries_the_iq_rules_by_name(tmp_path):
     what the Python side thinks. The whole literal is still not an identifier, so the harness's
     promote-bare-identifiers rule does not see them.
     """
-    from examples.rf_loopback.rfdc import Rfdc
+    from waveflow.hw.rfdc import Rfdc
     from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 
     W = Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True, iq_order="q_low")

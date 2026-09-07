@@ -146,7 +146,9 @@ class Rfdc(HwModule):
     #: When the **DAC** tile's sample counter starts.  Normally **equal** to :attr:`t0_rx` — that is
     #: what MTS gives you, and it is the default.  A loopback does *not* stagger this to buy pipeline
     #: latency: the one-block cost of a loop through the RF grids is structural and is paid by the
-    #: startup transient (see :attr:`~examples.rf_loopback.rf_loopback.RfSampPassThrough.blk_latency`).
+    #: startup transient, which a design declares as its ``blk_latency`` (``examples/rf_loopback``
+    #: is the worked case).  Named as prose, not an ``:attr:`` xref: this module is framework and
+    #: must not resolve against an example's API.
     #: Set it non-zero only to model a tile deliberately started late, or a measured MTS residual.
     t0_tx: float = 0.0
 
