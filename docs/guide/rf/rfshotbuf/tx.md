@@ -31,6 +31,8 @@ The two tasks never touch the memory at the same time — how they hand it over 
 
 ## Instantiating one
 
+A typical `RfShotTx` module is instantiated as follows:
+
 ```python
 from waveflow.hw.rf_shot_tx import RfShotTx
 from waveflow.hw.rfdc import Rfdc
@@ -47,12 +49,18 @@ dut = RfShotTx.for_word(
 )
 ```
 
-### Why `for_word` and not a constructor argument
+The parameters are:
 
-**The converter's word type *is* the parameter** — it is just passed to a classmethod rather than a
-field, and that is forced rather than preferred. `HwModule.__post_init__` wraps every `HwParam` in
-`HwParamValue(int(value))`, so **a type cannot survive as one**. `for_word` is the seam where the
-type becomes the three integers the module actually stores:
+| | unit | meaning |
+|---|---|---|
+| `word` | *(a type)* | the converter's [sample word class](../rfdc/word.md) — a subclass of `RfdcSampWord`, such as the `Rfsoc4x2SampWord` above. It fixes the packing, so the buffer cannot disagree with the `Rfdc` about it |
+| `depth` | **words** | How big the memory is, **and therefore how long a shot is**. A power of two |
+| `blk_words` | **words** | words the player moves per step; must divide `depth` |
+
+Notes:
+
+1.  **Use the `for_word` method and not a constructor**:  a build-time `HwParam` is wrapped in `HwParamValue(int(value))`, so a **type** cannot survive as one. The packing is therefore taken from the `word` argument to a classmethod instead.  Specifically, the `for_word` method will extract the following parameters from the `word` class:
+
 
 | derived from `word` | what it fixes |
 |---|---|
@@ -60,40 +68,9 @@ type becomes the three integers the module actually stores:
 | `samp_per_word` | how many samples ride in one beat |
 | `shift` | how far a sample sits above the bottom of its converter slot |
 
-So you never type a width, and the buffer cannot disagree with the converter about packing. What is
-left for you to decide is the **geometry**, and it is **two numbers**: `depth` and `blk_words`.
+2.  **Buffer size**:  Each **shot** will be the entire buffer `= depth x samp_per_word` samples.
 
-### The geometry, in the units it is actually in
-
-| | unit | meaning |
-|---|---|---|
-| `depth` | **words** | how big the memory is, **and therefore how long a shot is**. A power of two |
-| `blk_words` | **words** | words the player moves per step; must divide `depth` |
-
-**The shot IS the buffer.** There used to be three more numbers here — `nword` (how long a shot is),
-`base` (where it sits) and the header's `nsamp` (how long the host thinks it is) — and
-[`plans/rf_shot_geometry.md`](https://github.com/sdrangan/waveflow) removed all three, because
-between them they described **one** degree of freedom and a reader could not tell which of them they
-were allowed to choose:
-
-* `nsamp` had exactly one legal value, `nword × samp_per_word`, or the command was refused. It was a
-  checksum wearing a parameter's clothes.
-* `base` had no user-facing justification. Its only stated reason was that a non-zero value exercised
-  `base + offset`, which is a reason for a *test*, not for a knob on your constructor.
-* `nword` then looked arbitrary, because the one thing it interacted with was redundant and the other
-  was unexplained.
-
-**And the bug class went with the arithmetic, rather than going untested.** `base` existed and *then*
-needed a gate to prove its addressing was not broken. Without it the loader writes `mem[i]`, the
-player reads `mem[i]`, and the only address arithmetic left is the wrap at `depth` — which, `depth`
-being a power of two, is a **mask**. What is gated now is that the player sweeps the whole buffer and
-wraps, which is the arithmetic that still exists.
-
-**How long a shot is, is declared once, here** — and nothing on the wire restates it, so nothing can
-disagree with it. What you give up is that a short transfer is detected only by where `TLAST` falls;
-see [`SHOT_SHORT`](#the-verdicts) and `nsamp_loaded`.
-
-## The boundary
+## Interfaces
 
 `RfShotTx` presents **three** AXI-Stream ports. The memory is inside the design: the composite
 instantiates its own BRAM and the two `buf_w` / `buf_r` wires only exist between the kernel and that
