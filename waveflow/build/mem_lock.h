@@ -129,7 +129,8 @@ static inline bool mem_lock_poll(chan& cmd_in, MemLockCmd& c) {
 ///
 /// @tparam NELEM  the memory's depth in ELEMENTS -- build-time structure, and the single source for
 ///                the bound.  A region is refused, never clamped: a clamped region is a different
-///                region, silently, which is SHOT_WRONG_LEN's argument applied to an address range.
+///                region, silently, which is SHOT_SHORT's argument applied to an address range --
+///                a truncated waveform is not a shorter one, it is the wrong signal.
 ///
 /// CALL THIS ONLY AFTER THE CALLER HAS STOPPED TOUCHING THE REGION.  See the header note.
 template <int NELEM>

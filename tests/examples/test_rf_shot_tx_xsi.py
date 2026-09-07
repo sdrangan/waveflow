@@ -78,11 +78,10 @@ import numpy as np
 import pytest
 
 from examples.rf_shot_tx.rf_shot_tx import (
-    BASE,
     BLKSIZE,
+    DEPTH,
     FINITE_FRAMES,
     LOOP_FRAMES,
-    NWORD,
     RESP,
     XSI_N_CYCLES,
     blocks_to_codes,
@@ -118,15 +117,31 @@ SCENARIOS = (
     ("cmd_loop", f"{TOP}_loop", "resp_loop", "rf_out_loop", LOOP_FRAMES, check_loop_playout),
 )
 
-#: Cycle the last verdict reached its sink, per scenario.  **Recorded 2026-09-02 on the first green
-#: run.**  Exact, not a bound: a cycle count that moves is either a regression or an improvement, and
-#: both deserve a human.
+#: Cycle the last verdict reached its sink, per scenario.  **Recorded 2026-09-02, re-measured
+#: 2026-09-07.**  Exact, not a bound: a cycle count that moves is either a regression or an
+#: improvement, and both deserve a human.
 #:
-#: The shape of the 269: one accepted load — a one-word header, a grant that costs one poll period of
-#: the DAC-paced player, and 64 payload words at one per cycle — plus four refusals, two of which
-#: carry a full payload to drain.  The loop stream's 500 is longer because it *accepts* three of its
+#: The shape of the 273: one accepted load — a one-word header, a grant that costs one poll period of
+#: the DAC-paced player, and 64 payload words at one per cycle — plus three refusals, two of which
+#: carry a full payload to drain.  The loop stream's 502 is longer because it *accepts* three of its
 #: six frames, and each acceptance pays the grant wait again.
-WANT_RESP_LAST_CYCLE = {"cmd": 269, "cmd_loop": 500}
+#:
+#: **269 -> 273 and 500 -> 502 at ``plans/rf_shot_geometry.md``, and the cause was measured rather
+#: than assumed.**  Three things were ruled out and one was found:
+#:
+#: * **not the scenario.**  The frames' word counts are unchanged (65,65,65,1,1 and 65,65,1,65,33,1)
+#:   and ``CMD_SENT``/``CMD_TOTAL`` still read 197/197.  Re-running ``cmd`` with ``tid`` 2 refused by
+#:   the *last* verdict test instead of the first gave 273 either way, so which branch refuses a
+#:   frame costs nothing.
+#: * **not the geometry.**  The old design was rebuilt in a worktree at the NEW geometry — depth 64,
+#:   base 0, four-field header unchanged — and answered **269**, exactly as it did at depth 256 with
+#:   the region at the top.  Shrinking the memory and dropping ``base`` cost zero cycles.
+#: * **not the load.**  The write burst runs cycles 70..133 on both designs, to the cycle.
+#: * **it is the wire.**  The header lost a field and the verdict chain lost two tests, so the body
+#:   Vitis schedules either side of the load is a different body, and the response path lands a few
+#:   cycles later.  Everything the design *does* is unchanged: same playout shapes, same DAC words,
+#:   same II on all five loops.
+WANT_RESP_LAST_CYCLE = {"cmd": 273, "cmd_loop": 502}
 
 #: Words the DAC pulled off the fabric in :data:`XSI_N_CYCLES` cycles at 0.256 words/cycle.  The same
 #: in both scenarios, which is the point: the converter's appetite is a property of the converter.
@@ -169,14 +184,29 @@ WANT_SEGMENT_BLOCKS = {
 WANT_PORT_OVERLAP_CYCLES = {"cmd": 18, "cmd_loop": 55}
 
 #: ``bram_t2p.v``'s own predicate — same address, same cycle, one port writing and the other reading.
-#: **Recorded 2026-09-02, and NOT zero on the loop path.**  Read the docstring of
-#: :func:`test_the_handover_leaves_a_speculative_read_that_the_design_discards`; the short version is
-#: that Vitis reads the BRAM unconditionally at II=1 and muxes the filler in afterwards, so a yielded
-#: player still drives its read port, and on a preemption the two addresses eventually coincide.
-WANT_RDW_COLLISIONS = {"cmd": 0, "cmd_loop": 2}
+#: **Recorded 2026-09-02, re-measured 2026-09-07.**  Vitis reads the BRAM unconditionally at II=1 and
+#: muxes the filler in afterwards, so a yielded player still drives its read port — and whether its
+#: address ever *coincides* with the writer's is a matter of phase.  Read the docstring of
+#: :func:`test_the_handover_leaves_a_speculative_read_that_the_design_discards`.
+#:
+#: **``cmd_loop`` went 2 -> 0 at ``plans/rf_shot_geometry.md``, from the same cause as
+#: :data:`WANT_RESP_LAST_CYCLE`, and that was measured too**: the old design rebuilt at the NEW
+#: geometry still collides twice (cycles 469 and 470, addresses 24 and 25), so moving the buffer did
+#: not move them.  The few-cycle re-timing of the response path did — it slid the writer's sweep past
+#: the yielded player's address instead of through it.
+#:
+#: **Zero here is luck, not a guarantee**, which is why this stays pinned rather than becoming an
+#: assertion that there are none: the reads are still unconditional and still discarded, and a
+#: version that collides again is not thereby broken. What matters is that the number is *watched*.
+WANT_RDW_COLLISIONS = {"cmd": 0, "cmd_loop": 0}
 
-#: The elements the writer actually touched.  The region sits at the TOP of the memory on purpose.
-WANT_WRITE_RANGE = (BASE, BASE + NWORD - 1)
+#: The elements the writer actually touched — **the whole buffer, and nothing outside it**.
+#:
+#: It was ``(192, 255)`` before ``plans/rf_shot_geometry.md``: a 64-word shot placed at the top of a
+#: 256-word memory, so ``base + offset`` was exercised.  There is no ``base`` any more and no
+#: addition to exercise; what the range still says is that the counted load pass **fills the buffer**,
+#: which is the pad's claim and is what makes ``SHOT_SHORT``'s ``nsamp_loaded`` mean something.
+WANT_WRITE_RANGE = (0, DEPTH - 1)
 
 #: **The startup transient per backend and scenario, in samples.**  Recorded 2026-09-07 (S1) and
 #: re-measured on the first green S2 run.  RECORDED, not cross-compared — the two backends are
@@ -210,11 +240,15 @@ GUARD = 0
 #: body — one blocking read of the response, right after the request — **deadlocks**: Vitis schedules
 #: two ops on two streams with no data dependency into one state, that state stalls on the empty
 #: response FIFO, and the request is therefore never sent.
+#: The names carry the TEMPLATE ARGUMENTS, so ``plans/rf_shot_geometry.md`` renamed four of these by
+#: removing two of them from each body: ``<64, 256, 64, 4, 192>`` became ``<64, 64, 4>`` and
+#: ``<64, 256, 64, 192, 16>`` became ``<64, 64, 16>``.  Verified against the report directory rather
+#: than predicted — a name that MISSES makes this gate skip, which reads as a pass.
 _II_MODULES = (
-    "shot_tx_loader_task_64_256_64_4_192_Pipeline_take_shot",
-    "shot_tx_loader_task_64_256_64_4_192_Pipeline_drain_tail",
-    "shot_tx_loader_task_64_256_64_4_192_Pipeline_await_grant",
-    "shot_tx_player_task_64_256_64_192_16_Pipeline_play_chunk",
+    "shot_tx_loader_task_64_64_4_Pipeline_take_shot",
+    "shot_tx_loader_task_64_64_4_Pipeline_drain_tail",
+    "shot_tx_loader_task_64_64_4_Pipeline_await_grant",
+    "shot_tx_player_task_64_64_16_Pipeline_play_chunk",
     # Unlabelled, and it stays that way: `rf_relayout_to_slots_task.h` is shared with the designs
     # this one merges, and adding a label would rename a module their gates name.  Safe because only
     # the MODULE is spelled out here — the loop inside it is discovered.
@@ -574,15 +608,21 @@ def test_shot_busy_answers_a_finite_shot_and_only_a_finite_shot(runs):
 
 
 @pytest.mark.xsi
-def test_all_five_verdicts_and_the_fence_appear_across_the_two_streams(runs):
+def test_all_four_verdicts_and_the_fence_appear_across_the_two_streams(runs):
     """**Gate 4's other half.**  Every legal answer is exercised by one RTL, and none is a guess.
+
+    **Four, where it was five.**  ``plans/rf_shot_geometry.md`` retired ``SHOT_ZERO_LEN``
+    (``nsamp == 0``) and the length half of ``SHOT_WRONG_LEN`` (``nsamp != nword * spw``) along with
+    the header field both read; the verdict itself survives as ``SHOT_BAD_OPCODE``, same wire value,
+    named for the fault it actually reports.  So this gate asserts one fewer status because the
+    design produces one fewer, not because it stopped looking.
 
     ``SHOT_END`` is answered rather than acted on: an ``hls::task`` has no loop to break, so what the
     fence is worth is what its RESPONSE proves — headers are answered strictly in order, so the
     ``SHOT_LOADED`` closing each stream says everything ahead of it has been processed.
     """
     seen = {SHOT_STATUS_NAMES[s] for k in ("cmd", "cmd_loop") for _t, s, _n in runs[k]["responses"]}
-    want = {"SHOT_LOADED", "SHOT_SHORT", "SHOT_WRONG_LEN", "SHOT_BUSY", "SHOT_ZERO_LEN"}
+    want = {"SHOT_LOADED", "SHOT_SHORT", "SHOT_BAD_OPCODE", "SHOT_BUSY"}
     assert want <= seen, (
         f"the two streams together produced {sorted(seen)}; missing {sorted(want - seen)}. A "
         f"verdict no scenario reaches is a verdict no backend has ever compared.")
@@ -641,12 +681,17 @@ def test_the_scenario_was_consumed_and_the_last_verdict_landed_on_the_recorded_c
 @pytest.mark.xsi
 @pytest.mark.parametrize("name", ["cmd", "cmd_loop"])
 def test_the_write_addresses_reach_the_last_element_and_no_further(runs, name):
-    """``base + offset``, measured on the memory's own pins.
+    """**The whole buffer, and nothing outside it**, measured on the memory's own pins.
 
-    The byte-versus-word bug had every BRAM design mis-addressed and ``bram_toy`` stayed green
-    through it, because consistently mis-scaled addressing round-trips perfectly right up to the top
-    of the address space.  So the assertion is not "the data came back" — it is *which elements the
-    writer actually touched*, and the gated region ends at the memory's last.
+    This gate used to be about ``base + offset``: the byte-versus-word bug had every BRAM design in
+    this repo mis-addressed and ``bram_toy`` stayed green through it, because consistently mis-scaled
+    addressing round-trips perfectly right up to the top of the address space.
+    ``plans/rf_shot_geometry.md`` removed ``base``, so that arithmetic no longer exists to be wrong.
+
+    What survives is the other half, and it is still worth measuring: the load pass is **counted**,
+    so it writes ``depth`` elements whatever arrives, and a short frame is padded rather than leaving
+    the tail holding the previous waveform.  The assertion is not "the data came back" — it is
+    *which elements the writer actually touched*.
     """
     wa, _ra, wl, _rl = _port_pins(runs[name]["vcd"], runs["manifest"])
     touched = np.unique(wa[wl])
@@ -655,6 +700,49 @@ def test_the_write_addresses_reach_the_last_element_and_no_further(runs, name):
         f"{name}: the writer touched elements {int(touched.min())}..{int(touched.max())}, expected "
         f"exactly {WANT_WRITE_RANGE}. A base that is scaled wrongly lands somewhere plausible and "
         f"round-trips perfectly — only the address range says so.")
+
+
+@pytest.mark.xsi
+def test_the_player_sweeps_the_whole_buffer_and_wraps(runs):
+    """**The wrap, measured on the read port — the only address arithmetic this design has left.**
+
+    ``plans/rf_shot_geometry.md`` removed ``base``, and with it ``buf[BASE + rd + i]``.  What is left
+    is ``buf[rd + i]`` with ``rd`` wrapping at ``depth``, and ``depth`` is a power of two, so at RTL
+    that wrap is a **mask** rather than an addition.  The plan's argument for removing ``base`` was
+    that the bug class disappears rather than going untested — so the one piece of arithmetic that
+    *does* still exist gets the gate.
+
+    Three claims, and each fails differently:
+
+    * **every element is read**, so the player is not playing a sub-range of a waveform it was handed
+      whole;
+    * **nothing outside** ``[0, depth)`` is, which a mask cannot do wrong but an addition could;
+    * **the pointer returns to 0 after the last element**, which is the wrap itself.  A player that
+      saturated instead of wrapping would replay the last word forever and every counter downstream
+      would still add up — ``cmd`` plays three passes, so the wrap has to happen twice.
+
+    Run on ``cmd``: it is the finite scenario, so the whole playout is one waveform and a read
+    address outside the buffer cannot be explained away by a handover.
+    """
+    _wa, ra, _wl, rl = _port_pins(runs["cmd"]["vcd"], runs["manifest"])
+    live = np.asarray(ra)[np.asarray(rl)]
+    assert live.size, "the player never drove its read port; there is no addressing to check"
+    assert int(live.min()) >= 0 and int(live.max()) == DEPTH - 1, (
+        f"the player read elements {int(live.min())}..{int(live.max())}, expected the whole buffer "
+        f"[0, {DEPTH}). A read past the end is what an addition can do and a mask cannot.")
+    assert set(range(DEPTH)) <= set(int(x) for x in live), (
+        f"the player read only {len(set(int(x) for x in live))} of {DEPTH} elements. It is playing a "
+        f"sub-range of a waveform it was handed whole, which sounds like a shorter signal and "
+        f"nothing else says so.")
+    # THE WRAP ITSELF: the last element is followed, somewhere, by the first.  Vitis reads the port
+    # unconditionally (see the speculative-read gate below), so the sequence carries reads from while
+    # the player was yielded too -- which is why this asks whether the transition EXISTS rather than
+    # asserting the whole sequence is monotonic.
+    wrapped = np.flatnonzero((live[:-1] == DEPTH - 1) & (live[1:] == 0))
+    assert wrapped.size >= 2, (
+        f"the read pointer went {DEPTH - 1} -> 0 only {wrapped.size} time(s); cmd plays three "
+        f"passes, so it must wrap at least twice. A pointer that saturated at the last element "
+        f"would replay one word forever and every counter downstream would still add up.")
 
 
 @pytest.mark.xsi
@@ -668,17 +756,25 @@ def test_the_handover_leaves_a_speculative_read_that_the_design_discards(runs, n
     the ordering.
 
     At RTL it buys something weaker, and this test records exactly what.  ``play_chunk`` is pipelined
-    at II=1 and reads ``buf[BASE + rd + i]`` **unconditionally**, muxing the filler in afterwards; a
+    at II=1 and reads ``buf[rd + i]`` **unconditionally**, muxing the filler in afterwards; a
     register guard was measured not to quiet the port (``plans/t2p_lock_chan.md``, *enable-gating is
     closed*).  So a yielded player keeps driving its read address, and:
 
     * ``cmd``      — one grant, taken before anything has played: ``18`` cycles of both-ports-live on
       the region and **no** address collision.
-    * ``cmd_loop`` — three grants, two of them mid-play: ``55`` cycles of overlap and **two** cycles
-      where the two addresses coincide.  ``bram_t2p.v`` ``$error``\\ s on those, and XSI throws the
-      ``$error`` away (``reference-xsi-discards-rtl-text``), so this scan is the only witness.
+    * ``cmd_loop`` — three grants, two of them mid-play: ``55`` cycles of overlap and, since
+      ``plans/rf_shot_geometry.md``, **no** cycle where the two addresses coincide.  It used to be
+      two, and the change is phase rather than substance — the old design rebuilt at the new geometry
+      still collides twice, so what moved them was the few-cycle re-timing of the response path, not
+      the buffer moving.  ``bram_t2p.v`` ``$error``\\ s on a collision and XSI throws the ``$error``
+      away (``reference-xsi-discards-rtl-text``), so this scan is the only witness either way.
 
-    Those two collisions are **not** a defect, and the evidence is in a different test:
+    **The overlap is the number that carries the claim; the collision count is the number that is
+    merely watched.**  Overlap stayed at 18 and 55 across the change, which is what says the read
+    port is still unconditional.  A collision count of zero must not be read as a design that cannot
+    collide.
+
+    Collisions here are **not** a defect, and the evidence is in a different test:
     :func:`test_the_two_backends_agree_after_their_own_transients` compares this run against a pysim
     run where reading a yielded region raises, and every playout sample agrees.  The word is fetched
     and thrown away.  (That gate used to demand byte-identity from ``t=0``; since
@@ -689,10 +785,10 @@ def test_the_handover_leaves_a_speculative_read_that_the_design_discards(runs, n
     enforce at RTL.
     """
     wa, ra, wl, rl = _port_pins(runs[name]["vcd"], runs["manifest"])
-    inside = (wa >= BASE) & (wa < BASE + NWORD) & (ra >= BASE) & (ra < BASE + NWORD)
+    inside = (wa < DEPTH) & (ra < DEPTH)
     overlap = int(np.flatnonzero(wl & rl & inside).size)
     assert overlap == WANT_PORT_OVERLAP_CYCLES[name], (
-        f"{name}: both memory ports are live on [{BASE}, {BASE + NWORD}) for {overlap} cycle(s), "
+        f"{name}: both memory ports are live on [0, {DEPTH}) for {overlap} cycle(s), "
         f"expected {WANT_PORT_OVERLAP_CYCLES[name]}. Vitis reads speculatively and muxes, so this "
         f"is not zero by design; a CHANGE is what matters.")
     hz = find_read_during_write(runs[name]["vcd"], runs["manifest"])
@@ -744,7 +840,7 @@ def test_the_grant_wait_is_still_a_loop_and_not_a_blocking_read():
     A module named for that loop is what says the barrier is still in ``mem_lock.h``.
     """
     _require(REPORT.is_dir(), f"no csynth report dir at {REPORT}")
-    await_mod = "shot_tx_loader_task_64_256_64_4_192_Pipeline_await_grant"
+    await_mod = "shot_tx_loader_task_64_64_4_Pipeline_await_grant"
     assert (REPORT / f"{await_mod}_csynth.xml").is_file(), (
         f"no synthesized module for the grant wait ({await_mod}). If mem_lock_await went back to a "
         f"single blocking read, this design deadlocks at RTL and csynth says nothing about it.")

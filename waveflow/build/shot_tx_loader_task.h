@@ -55,11 +55,10 @@
 //: cannot disagree about the encoding -- the convention every task body in this family follows.
 //: Guarded because a build may ship the predecessors' bodies into the same directory.
 #ifndef SHOT_LOADED
-#define SHOT_LOADED    0
-#define SHOT_SHORT     1
-#define SHOT_WRONG_LEN 2
-#define SHOT_BUSY      3
-#define SHOT_ZERO_LEN  4
+#define SHOT_LOADED     0
+#define SHOT_SHORT      1
+#define SHOT_BAD_OPCODE 2
+#define SHOT_BUSY       3
 #endif
 
 //: ShotTxHdr.opcode.
@@ -72,16 +71,17 @@
 #endif
 
 /// @tparam W     word width in bits -- the host port's and the memory's.
-/// @tparam D     memory depth in elements.  The `mode=bram` array's size, which is what makes the
-///               pragma take effect (an unsized pointer degrades to an ap_vld scalar port).
-/// @tparam NW    words in one shot.  BUILD-TIME STRUCTURE and the single source for the length: the
-///               header's `nsamp` is what the HOST believes, and catching the two disagreeing is
-///               what SHOT_WRONG_LEN is.
-/// @tparam SPW   samples one word carries -- only used to translate a word count into the `nsamp` a
-///               host speaks in.
-/// @tparam BASE  first element of the region.  NON-ZERO IS THE INTERESTING CASE: `base + offset` is
-///               the shape of the byte-versus-word bug bram_toy stayed green through.
-template <int W, int D, int NW, int SPW, int BASE>
+/// @tparam D     memory depth in elements, AND the length of a shot: THE SHOT IS THE BUFFER
+///               (plans/rf_shot_geometry.md).  It is also the `mode=bram` array's size, which is
+///               what makes the pragma take effect -- an unsized pointer degrades to an ap_vld
+///               scalar port.
+///
+///               There is no NW and no BASE any more.  The region is the whole memory, so the
+///               loader writes buf[i] and there is no `base + offset` to get wrong; the coverage
+///               that arithmetic needed is not lost, the arithmetic is.
+/// @tparam SPW   samples one word carries -- only used to translate a word count into the
+///               `nsamp_loaded` a host reads.
+template <int W, int D, int SPW>
 static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
                                 hls::stream<ap_uint<W> >& done_in,
                                 ap_uint<W> buf[D],
@@ -120,18 +120,18 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
 
     // MALFORMED BEFORE TRANSIENT, which is this repo's order and for its reason: a command that is
     // wrong AND badly timed should be told the thing it can fix.  Retry repairs a BUSY; nothing
-    // repairs a length the buffer was not built for.
+    // repairs an opcode this design does not know.
+    //
+    // TWO TESTS, WHERE THERE WERE FOUR.  The other two read the header's `nsamp` -- zero-length and
+    // length-disagrees -- and plans/rf_shot_geometry.md removed the field they read.  What is left
+    // is the one thing a header can still be malformed about.
     // Sized from the RESPONSE's own field rather than a literal: plans/rf_shot_wire_format.md
     // Part A derives the message widths from the geometry, so a hard-coded width here would be a
     // second opinion about the wire.
     decltype(ShotTxResp::status) status = SHOT_LOADED;
     bool accept = false;
     if (h.opcode != SHOT_OP_LOAD && h.opcode != SHOT_OP_LOOP) {
-        status = SHOT_WRONG_LEN;            // refused, never reinterpreted
-    } else if (h.nsamp == 0) {
-        status = SHOT_ZERO_LEN;             // nothing to complete on, so it could never resolve
-    } else if (h.nsamp != (decltype(h.nsamp))(NW * SPW)) {
-        status = SHOT_WRONG_LEN;            // refused, never truncated
+        status = SHOT_BAD_OPCODE;           // refused, never reinterpreted
     } else if (busy) {
         status = SHOT_BUSY;                 // transient, and the only one a retry repairs
     } else {
@@ -142,32 +142,36 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
     int took = 0;
 
     if (accept) {
+        // THE WHOLE MEMORY, every time.  There is one region and it is all of it.
         memlock::mem_lock_request(cmd_out, LOCK_ACQUIRE,
-                                  (ap_uint<28>)BASE, (ap_uint<28>)(BASE + NW));
+                                  (ap_uint<28>)0, (ap_uint<28>)D);
         ap_uint<28> lo = 0, hi = 0;
         // Bounded by the player's check_period -- that bound is the whole reason the player declares
         // one.  Implemented as a read_nb poll loop inside mem_lock_await; a plain blocking read here
         // would be scheduled into the request's state and deadlock (plans/t2p_lock_chan.md S1).
         ap_uint<8> granted = memlock::mem_lock_await(resp_in, lo, hi);
         if (granted != LOCK_GRANTED) {
-            // Unreachable while BASE and NW are what the Python checked at construction.  A region
-            // the design declared and the memory refuses is a WIRING fault, not a host's mistake --
-            // so it is reported as malformed and the payload is drained below rather than left to
-            // become the next header.
+            // Unreachable: the region IS the memory, so there is no geometry left for the two ends
+            // to disagree about.  A region the design declared and the memory refuses is a WIRING
+            // fault, not a host's mistake -- so it is reported as malformed and the payload is
+            // drained below rather than left to become the next header.
             accept = false;
-            status = SHOT_WRONG_LEN;
+            status = SHOT_BAD_OPCODE;
         } else {
-            // ONE COUNTED PASS DOES ALL THREE JOBS: store, drain, pad.  Counted (`i < NW`) with
+            // ONE COUNTED PASS DOES ALL THREE JOBS: store, drain, pad.  Counted (`i < D`) with
             // PIPELINE II=1, so there is no data-dependent TRIP COUNT for Vitis to refuse to
             // flatten; `ended` is a data-dependent CONDITION inside the body, which is a different
             // thing and was measured at II=1.
+            //
+            // FIXED LENGTH IS LOAD-BEARING and survived plans/rf_shot_geometry.md deliberately: the
+            // counted trip count is what reaches II=1, and the pad needs a length to pad TO.
             //
             // LABELLED, and that is not decoration: Vitis names an unlabelled loop
             // VITIS_LOOP_<line>_1 and nests that into its children, so a comment edit above renames
             // the synthesized module -- and a gate looking the II up by name then MISSES and skips,
             // which reads as a pass.
         take_shot:
-            for (int i = 0; i < NW; i++) {
+            for (int i = 0; i < D; i++) {
 #pragma HLS PIPELINE II=1
                 ap_uint<W> x = 0;
                 if (!ended) {
@@ -180,8 +184,10 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
                 // Past the frame's end this is the pad.
                 buf[lo + i] = x;
             }
-            if (took < NW) {
-                status = SHOT_SHORT;        // THE verdict this response exists for
+            if (took < D) {
+                // THE verdict this response exists for -- and since the header stopped declaring a
+                // length, TLAST arriving early is the ONLY evidence a transfer was short.
+                status = SHOT_SHORT;
             }
             // WHAT TO PLAY, decided here and sent BEFORE the release.  nrepeat is zero unless the
             // shot is whole, so half a waveform never reaches the converter on either path.
@@ -199,7 +205,7 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
         }
     }
 
-    // A frame LONGER than the shot, or the payload of a refused one.  Unbounded and therefore
+    // A frame LONGER than the buffer, or the payload of a refused one.  Unbounded and therefore
     // unpipelined -- deliberately: it runs only on a malformed frame, it is outside every pipelined
     // region, and the alternative (leaving the residue) is the desynchronisation it exists to
     // prevent, arrived at from the other side.

@@ -40,7 +40,7 @@ The consequence is measured rather than argued, and it is on both pages.
 ## Where to start
 
 - [**Transmit — `RfShotTx`**](./tx.md) — what to write to play a waveform: the ports, the in-band
-  command, the five verdicts, the two play modes, and the rules that bite.
+  command, the four verdicts, the two play modes, and the rules that bite.
 - [**Receive — `RfShotRx`**](./rx.md) — what to write to capture: the window header, what
   `n_dropped` means, and why two regions make loss impossible rather than merely unlikely.
 - [**Internals**](./tx_internal.md) — for developers and agents. The tasks, the channels, the lock

@@ -67,7 +67,7 @@ one can never demonstrate a refusal. One scenario per opcode is the minimum.
 | | `vectors/cmd` | `vectors/cmd_loop` |
 |---|---|---|
 | opens with | `SHOT_LOAD`, `nrepeat = 3` | `SHOT_LOOP` |
-| verdicts produced | `LOADED`, `BUSY`, `WRONG_LEN`, `ZERO_LEN`, `END`→`LOADED` | `LOADED`, `WRONG_LEN`, `ZERO_LEN`, `LOADED`, `SHORT`, `END`→`LOADED` |
+| verdicts produced | `LOADED`, `BUSY`, `BAD_OPCODE`, `BAD_OPCODE`, `END`→`LOADED` | `LOADED`, `BAD_OPCODE`, `BAD_OPCODE`, `LOADED`, `SHORT`, `END`→`LOADED` |
 | what it proves | a finite shot is not truncated | a load mid-play preempts, and a short shot never plays |
 
 Between them every legal verdict is exercised — asserted by
@@ -77,17 +77,24 @@ Between them every legal verdict is exercised — asserted by
 
 | | value | what it is |
 |---|---|---|
-| `depth` | 256 words | the memory |
-| `nword` | 64 words | one shot — 256 samples at 4 samples/word |
-| `base` | 192 | the region, at the **top** of the memory |
+| `depth` | 64 words | the memory, **and therefore one shot** — 256 samples at 4 samples/word |
 | `blk_words` | 16 | words per chunk: the lock poll period |
 | `samp_rate` | 256 MSa/s | the converter's grid |
 
-**`base` is non-zero on purpose.** `base + offset` is the shape of the byte-versus-word addressing
-bug that had every BRAM design in this repo mis-addressed while a smaller example stayed green, so
-the region sits at the very top where the arithmetic is exercised.
-`test_the_write_addresses_reach_the_last_element_and_no_further` asserts the writer touches exactly
-`192..255`.
+**Two numbers, and it was four.** `nword` (64 words, one shot) and `base` (192, placing the region at
+the top of the memory) are gone — `plans/rf_shot_geometry.md` made the shot *be* the buffer, so
+`depth` is the length as well as the size and there is nowhere else a shot could sit. `depth` is 64
+rather than a rounder 256 deliberately: it is what `nword` was, so the played length is unchanged and
+every recorded number on these pages stayed comparable across the change.
+
+**The addressing bug class went with `base`, rather than going untested.** `base + offset` was the
+shape of the byte-versus-word bug that had every BRAM design in this repo mis-addressed while a
+smaller example stayed green, and the region sat at the very top so the arithmetic was exercised.
+Without `base` there is no addition: the loader writes `mem[i]`, the player reads `mem[i]`, and the
+wrap at `depth` is a mask. So `test_the_write_addresses_reach_the_last_element_and_no_further` now
+asserts the writer touches exactly `0..63` — which is what says the counted load pass *fills* the
+buffer — and `test_the_player_sweeps_the_whole_buffer_and_wraps` covers the one piece of arithmetic
+that still exists.
 
 ## Pages
 

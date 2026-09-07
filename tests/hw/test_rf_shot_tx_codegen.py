@@ -35,16 +35,15 @@ from waveflow.toolchain import toolchain
 TOP = "rf_shot_tx"
 WORD_BW = 64
 SPW = 4
-DEPTH = 256
-NWORD = 64
+#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).  64
+#: rather than 256, matching the example: it is what ``nword`` was, so the emitted template arguments
+#: stay comparable across the change.
+DEPTH = 64
 BLK_WORDS = 16
-#: The region at the **top** of the memory — ``base + offset`` is the shape of the byte-versus-word
-#: bug, so a build that only ever loaded at zero would be measuring nothing.
-BASE = DEPTH - NWORD
 SHIFT = 2
 
-_ELAB = {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH, "nword": NWORD,
-         "base": BASE, "shift": SHIFT, "blk_words": BLK_WORDS}
+_ELAB = {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH,
+         "shift": SHIFT, "blk_words": BLK_WORDS}
 
 
 def _dut():
@@ -87,13 +86,18 @@ def test_both_task_bodies_are_instantiated_from_one_geometry():
     """``lock`` occupies one name in each signature and three arguments in the C++.
 
     Adjacent and in ``physical_endpoints()`` order, which is why both hand-written bodies read
-    ``(buf, cmd, resp)`` together.  And the two halves take the same ``BASE`` and ``NW``: a player
-    told a different region from its loader is a design whose two ends are each individually correct.
+    ``(buf, cmd, resp)`` together.  And the two halves take the same ``D``: a player told a different
+    region from its loader is a design whose two ends are each individually correct.
+
+    **Two template arguments each, where there were four and five.**
+    ``plans/rf_shot_geometry.md`` removed ``NW`` and ``BASE`` from both bodies — the shot is the
+    buffer, so ``D`` is the length as well as the size, and there is no placement to pass.  That the
+    *same* ``D`` reaches both is now structural rather than a thing to check.
     """
     text = render_top(composite_top_spec(_dut(), width=WORD_BW))
-    assert (f"hls::task t0(shot_tx_loader_task<{WORD_BW}, {DEPTH}, {NWORD}, {SPW}, {BASE}>, "
+    assert (f"hls::task t0(shot_tx_loader_task<{WORD_BW}, {DEPTH}, {SPW}>, "
             f"s_in, done, buf_w, lock_if_cmd, lock_if_resp, rep, resp_out);") in text
-    assert (f"hls::task t1(shot_tx_player_task<{WORD_BW}, {DEPTH}, {NWORD}, {BASE}, {BLK_WORDS}>, "
+    assert (f"hls::task t1(shot_tx_player_task<{WORD_BW}, {DEPTH}, {BLK_WORDS}>, "
             f"buf_r, lock_if_cmd, lock_if_resp, rep, done, samp);") in text
 
 
@@ -202,9 +206,9 @@ def _stage(tmp_path: Path) -> Path:
     # BOTH schema lists: the header and the verdict are still rf_shot_tx's at Stage A, and the play
     # command is the merged design's own.  See the ownership decision in plans/rf_shot_unify.md.
 # The header/response pair for THIS geometry, not the module default: plans/rf_shot_wire_format.md
-    # Part A derives nsamp's width from nword x samp_per_word, so the emitted C++ has to be the
-    # design's own pair or the twin would parse a different wire.
-    hdr_cls, resp_cls = shot_tx_schemas(int(_ELAB["nword"]), int(_ELAB["samp_per_word"]))
+    # Part A derives nsamp_loaded's width from depth x samp_per_word, so the emitted C++ has to be
+    # the design's own pair or the twin would parse a different wire.
+    hdr_cls, resp_cls = shot_tx_schemas(int(_ELAB["depth"]), int(_ELAB["samp_per_word"]))
     for cls in [hdr_cls, resp_cls, *LOCK_SCHEMA_CLASSES, *SHOT_PLAY_SCHEMA_CLASSES]:
         dag.add(DataSchemaStep(cls, word_bw_supported=[WORD_BW], include_dir=inc))
     # The serializers the re-layout body calls.  The SLOT element is the converter's container width

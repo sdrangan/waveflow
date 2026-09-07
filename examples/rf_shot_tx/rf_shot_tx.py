@@ -14,36 +14,42 @@ finite predecessor's example needed two for its own reason:
 
 ``cmd_finite`` — ``SHOT_LOAD`` with ``nrepeat=3``, then three frames that arrive mid-play
 
-============  ==========================================  ================
+============  ==========================================  ==================
 ``tid`` 0     a whole shot, three passes                  ``SHOT_LOADED``
 ``tid`` 1     another load, arriving mid-play             ``SHOT_BUSY``
-``tid`` 2     ``nsamp`` the design was not built for      ``SHOT_WRONG_LEN``
-``tid`` 3     ``nsamp == 0``, and no payload at all       ``SHOT_ZERO_LEN``
+``tid`` 2     an opcode this design does not know         ``SHOT_BAD_OPCODE``
+``tid`` 3     the same, with no payload at all            ``SHOT_BAD_OPCODE``
 ``tid`` 4     ``SHOT_END`` — the fence                    ``SHOT_LOADED``
-============  ==========================================  ================
+============  ==========================================  ==================
 
 ``cmd_loop`` — ``SHOT_LOOP``, switched mid-play, then a short one
 
-============  ==========================================  ================
+============  ==========================================  ==================
 ``tid`` 0     waveform A, played forever                  ``SHOT_LOADED``
-``tid`` 1     ``nsamp`` wrong — **and its payload drains** ``SHOT_WRONG_LEN``
-``tid`` 2     ``nsamp == 0``                              ``SHOT_ZERO_LEN``
+``tid`` 1     a bad opcode — **and its payload drains**   ``SHOT_BAD_OPCODE``
+``tid`` 2     a bad opcode, no payload                    ``SHOT_BAD_OPCODE``
 ``tid`` 3     waveform B, **preempting** A                ``SHOT_LOADED``
 ``tid`` 4     a truncated transfer                        ``SHOT_SHORT``
 ``tid`` 5     ``SHOT_END``                                ``SHOT_LOADED``
-============  ==========================================  ================
+============  ==========================================  ==================
 
 ``tid`` 1 and 2 sit between the two loop loads deliberately: their payloads have to be drained, which
 buys waveform A airtime on the converter before B arrives.  Without them the switch would happen
-before A had played a block.
+before A had played a block.  **Their word counts are what matters** — a header plus a full payload,
+then a bare header — so ``plans/rf_shot_geometry.md`` kept both shapes exactly when it changed what
+made them refusable.  The frames used to be malformed *lengths*; a length is not something a header
+can carry any more, so they are malformed *opcodes* instead, and the airtime is unchanged.
 
 **The converter is really here**, because the one thing a playout design exists to satisfy is that a
 DAC cannot be told to wait — and the claim of *both* halves is that neither a handover nor the end of
 a finite shot makes it wait: it gets filler, on time, as real beats.
 
-**The region is at the top of the memory** (``base = depth - nword``): ``base + offset`` is the shape
-of the byte-versus-word bug ``bram_toy`` stayed green through, so a build that only ever loaded at
-zero would be measuring nothing.
+**The shot IS the buffer** (``plans/rf_shot_geometry.md``): the loader writes ``mem[i]``, the player
+reads ``mem[i]``, and the only address arithmetic left is the read pointer's wrap at ``depth`` — a
+mask, because ``depth`` is a power of two.  There used to be a ``base`` here, placed at the top of
+the memory so ``base + offset`` was exercised; the coverage that needed is not lost, the arithmetic
+is.  What replaces it is a gate that plays **long enough to wrap**, which is the one piece of
+addressing that still exists.
 """
 from __future__ import annotations
 
@@ -66,10 +72,9 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_LOAD,
     SHOT_LOADED,
     SHOT_LOOP,
+    SHOT_BAD_OPCODE,
     SHOT_SHORT,
     SHOT_STATUS_NAMES,
-    SHOT_WRONG_LEN,
-    SHOT_ZERO_LEN,
     shot_tx_schemas,
 )
 from waveflow.hw.rf_shot_tx import FILLER, RfShotTx
@@ -88,11 +93,15 @@ WORD = Rfsoc4x2SampWord.specialize(samp_per_word=4)
 WORD_BW = int(WORD.bitwidth)
 SPW = int(WORD.samp_per_word)
 
-#: Words in one shot, words the memory holds, and where the shot sits — at the **top**.
-NWORD = 64
-DEPTH = 256
-BASE = DEPTH - NWORD
-NSAMP = NWORD * SPW
+#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).
+#:
+#: **64, not 256, and that is deliberate.**  It is what ``nword`` was before the shot became the
+#: buffer, so the played length is unchanged and every recorded number in this example stays
+#: comparable across the change.  A rounder ``depth`` would have made "the numbers held" a
+#: coincidence instead of evidence.
+DEPTH = 64
+#: Samples in a full shot — the largest ``nsamp_loaded`` this design can answer with.
+NSAMP = DEPTH * SPW
 
 #: Samples per converter block, and the same number in words.
 BLKSIZE = 64
@@ -135,7 +144,13 @@ XSI_N_CYCLES = 1400
 CODE_A = 1000
 CODE_B = 5000
 #: Words in the deliberately truncated transfer.
-SHORT_WORDS = NWORD // 2
+SHORT_WORDS = DEPTH // 2
+
+#: An opcode this design does not know.  ``OPCODE_BW`` is 2 bits and the three legal values are 0, 1
+#: and 2, so **3 is the only illegal opcode the wire can carry** — which is what makes
+#: :data:`~waveflow.hw.rf_shot_tx.SHOT_BAD_OPCODE` reachable from a real frame rather than only from
+#: a hand-built object.
+BAD_OPCODE = 3
 
 
 # ---------------------------------------------------------------------------
@@ -143,38 +158,42 @@ SHORT_WORDS = NWORD // 2
 # ---------------------------------------------------------------------------
 
 #: The header/response pair for THIS geometry.  Not the module defaults: since
-#: ``plans/rf_shot_wire_format.md`` Part A the widths are derived from ``nword x samp_per_word``, so
-#: a testbench that used the defaults would be a second opinion about the wire — right here only by
-#: coincidence, and wrong the moment the geometry changes.
-HDR, RESP = shot_tx_schemas(NWORD, SPW)
+#: ``plans/rf_shot_wire_format.md`` Part A the response's width is derived from
+#: ``depth x samp_per_word``, so a testbench that used the defaults would be a second opinion about
+#: the wire — right here only by coincidence, and wrong the moment the geometry changes.
+HDR, RESP = shot_tx_schemas(DEPTH, SPW)
 
 
-def shot_codes(base: int, nword: int = NWORD) -> np.ndarray:
-    """``nword * samp_per_word`` distinguishable converter codes, as signed integers."""
-    return np.arange(int(base), int(base) + int(nword) * SPW, dtype=np.int64)
+def shot_codes(base: int, nwords: int = DEPTH) -> np.ndarray:
+    """``nwords * samp_per_word`` distinguishable converter codes, as signed integers.
+
+    ``nwords`` is how much waveform to *build*, which is a testbench's business — not the design's
+    retired ``nword`` parameter, which said how long a shot was.  A full one is :data:`DEPTH` words.
+    """
+    return np.arange(int(base), int(base) + int(nwords) * SPW, dtype=np.int64)
 
 
-def shot_slots(base: int, nword: int = NWORD) -> np.ndarray:
+def shot_slots(base: int, nwords: int = DEPTH) -> np.ndarray:
     """The same waveform as **converter words** — what the DAC is handed."""
     from waveflow.hw.rfdc_samp_word import pack
 
-    return np.asarray(pack(WORD, shot_codes(base, nword).reshape(1, -1)), dtype=np.uint64).ravel()
+    return np.asarray(pack(WORD, shot_codes(base, nwords).reshape(1, -1)), dtype=np.uint64).ravel()
 
 
-def shot_dense(base: int, nword: int = NWORD) -> np.ndarray:
+def shot_dense(base: int, nwords: int = DEPTH) -> np.ndarray:
     """The same waveform as **densely-packed** words — what a host writes.
 
     Dense on the wire and dense in the memory: the host needs to know nothing about justification,
     and the re-layout at the end of the chain owns the converter's packing.
     """
-    return to_dense(WORD, shot_slots(base, nword))
+    return to_dense(WORD, shot_slots(base, nwords))
 
 
 # ---------------------------------------------------------------------------
 # The scenarios
 # ---------------------------------------------------------------------------
 
-def frame(opcode: int, tid: int, nsamp: int, nrepeat: int, payload: np.ndarray) -> np.ndarray:
+def frame(opcode: int, tid: int, nrepeat: int, payload: np.ndarray) -> np.ndarray:
     """One AXI-Stream **frame**: the header, then the payload, ``TLAST`` on the last word.
 
     A burst in the bundle *is* a frame — the pysim ``StreamDriver`` writes one burst per ``write``
@@ -182,7 +201,7 @@ def frame(opcode: int, tid: int, nsamp: int, nrepeat: int, payload: np.ndarray) 
     the same boundary rather than two encodings of it.
     """
     h = HDR()
-    h.opcode, h.tid, h.nsamp, h.nrepeat = int(opcode), int(tid), int(nsamp), int(nrepeat)
+    h.opcode, h.tid, h.nrepeat = int(opcode), int(tid), int(nrepeat)
     return np.concatenate([np.asarray(h.serialize(word_bw=WORD_BW), dtype=np.uint64).ravel(),
                            np.asarray(payload, dtype=np.uint64).ravel()])
 
@@ -192,11 +211,14 @@ def finite_frames() -> list[np.ndarray]:
     a = shot_dense(CODE_A)
     empty = np.zeros(0, dtype=np.uint64)
     return [
-        frame(SHOT_LOAD, 0, NSAMP, NREPEAT, a),
-        frame(SHOT_LOAD, 1, NSAMP, 1, a),
-        frame(SHOT_LOAD, 2, NSAMP + SPW, 1, a),
-        frame(SHOT_LOOP, 3, 0, 1, empty),
-        frame(SHOT_END, 4, 0, 0, empty),
+        frame(SHOT_LOAD, 0, NREPEAT, a),
+        frame(SHOT_LOAD, 1, 1, a),
+        # MALFORMED BEATS TRANSIENT, and that is what tid 2 is for: a finite shot is still playing,
+        # so a legal load here would be SHOT_BUSY -- this one is answered SHOT_BAD_OPCODE instead,
+        # because a host can fix an opcode and can only retry a busy.
+        frame(BAD_OPCODE, 2, 1, a),
+        frame(BAD_OPCODE, 3, 1, empty),
+        frame(SHOT_END, 4, 0, empty),
     ]
 
 
@@ -205,12 +227,14 @@ def loop_frames() -> list[np.ndarray]:
     a, b = shot_dense(CODE_A), shot_dense(CODE_B)
     empty = np.zeros(0, dtype=np.uint64)
     return [
-        frame(SHOT_LOOP, 0, NSAMP, 1, a),
-        frame(SHOT_LOOP, 1, NSAMP + SPW, 1, a),
-        frame(SHOT_LOOP, 2, 0, 1, empty),
-        frame(SHOT_LOOP, 3, NSAMP, 1, b),
-        frame(SHOT_LOOP, 4, NSAMP, 1, b[:SHORT_WORDS]),
-        frame(SHOT_END, 5, 0, 0, empty),
+        frame(SHOT_LOOP, 0, 1, a),
+        # A FULL PAYLOAD ON A REFUSED FRAME, which is the point: it has to be drained, and draining it
+        # is what buys waveform A airtime on the converter before B arrives.
+        frame(BAD_OPCODE, 1, 1, a),
+        frame(BAD_OPCODE, 2, 1, empty),
+        frame(SHOT_LOOP, 3, 1, b),
+        frame(SHOT_LOOP, 4, 1, b[:SHORT_WORDS]),
+        frame(SHOT_END, 5, 0, empty),
     ]
 
 
@@ -228,6 +252,11 @@ def expected_responses(frames) -> list[tuple[int, int, int]]:
     assert what the design happens to do.  The rules are :class:`ShotTxLoader`'s, restated in the
     smallest form that can be read at a glance — and a disagreement is the finding.
 
+    **Four rules where there were six**, and the two that went were the ones that read a length off
+    the header.  What is left cannot be read off the header at all except the opcode: whether a
+    transfer was short is decided by where ``TLAST`` fell, which is why the ``took`` count below is
+    the whole of it.
+
     ``busy`` is modelled the way the design has it: set by an accepted **finite** load, and cleared
     only when that shot's passes are over.  Within a back-to-back scenario nothing finishes in time,
     so once set it stays set — which is exactly why the two scenarios are two.
@@ -237,20 +266,16 @@ def expected_responses(frames) -> list[tuple[int, int, int]]:
     busy = False
     for f in frames:
         h = HDR().deserialize(np.asarray(f, dtype=np.uint64)[:hn], word_bw=WORD_BW)
-        took = min(int(np.asarray(f).size) - hn, NWORD)
+        took = min(int(np.asarray(f).size) - hn, DEPTH)
         op = int(h.opcode)
         if op == SHOT_END:
             out.append((int(h.tid), SHOT_LOADED, 0))
         elif op not in (SHOT_LOAD, SHOT_LOOP):
-            out.append((int(h.tid), SHOT_WRONG_LEN, 0))
-        elif int(h.nsamp) == 0:
-            out.append((int(h.tid), SHOT_ZERO_LEN, 0))
-        elif int(h.nsamp) != NSAMP:
-            out.append((int(h.tid), SHOT_WRONG_LEN, 0))
+            out.append((int(h.tid), SHOT_BAD_OPCODE, 0))
         elif busy:
             out.append((int(h.tid), SHOT_BUSY, 0))
         else:
-            out.append((int(h.tid), SHOT_LOADED if took == NWORD else SHOT_SHORT, took * SPW))
+            out.append((int(h.tid), SHOT_LOADED if took == DEPTH else SHOT_SHORT, took * SPW))
             busy = op == SHOT_LOAD
     return out
 
@@ -276,9 +301,7 @@ class RfShotTxTB(FreeRunMod):
 
     potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
 
-    nword: int = NWORD
     depth: int = DEPTH
-    base: int = BASE
     blksize: int = BLKSIZE
     n_blk: int = N_BLK
     samp_rate: float = SAMP_RATE
@@ -298,8 +321,8 @@ class RfShotTxTB(FreeRunMod):
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1, word=self.word)
         w = self.rfdc.axis_bitwidth
         self.dut = RfShotTx.for_word(
-            self.word, depth=int(self.depth), nword=int(self.nword), sim=self.sim,
-            name=f"{self.name}_dut", clk=self.axis_clk, base=int(self.base),
+            self.word, depth=int(self.depth), sim=self.sim,
+            name=f"{self.name}_dut", clk=self.axis_clk,
             # pysim's quantum on the converter edge is a BLOCK: the Rfdc's DAC process takes one
             # blksize burst per event and refuses a partial one.  A modelling shape only.
             #
@@ -338,7 +361,7 @@ class RfShotTxTB(FreeRunMod):
         # stalls against a MODEL -- a StreamDriver is a model of a DMA -- and a whole frame arriving
         # in one event is the honest reading of that.  A depth on an interface the DUT itself owns is
         # still a hardware claim and still refused.  See plans/pysim_burst_backpressure.md S2 Task 0.
-        cmd_words = int(self.nword) + 1          # one ShotTxHdr, then the payload
+        cmd_words = int(self.depth) + 1          # one ShotTxHdr, then the payload
         blk_words = int(self.blksize) // SPW     # what the player hands over at once
         for nm, master, slave, depth in (
                 ("cmd", self.drv.stream_ep, self.dut.s_in, 2 * cmd_words),

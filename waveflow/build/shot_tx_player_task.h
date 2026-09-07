@@ -8,7 +8,7 @@
 //
 // THE MERGE IS THE FOUR LINES AFTER THE WRAP, AND NOTHING ELSE.
 //
-//     if (rd >= NW) { rd = 0; if (!loop) { if (--nrep_left == 0) { playing = 0; done; } } }
+//     if (rd >= D) { rd = 0; if (!loop) { if (--nrep_left == 0) { playing = 0; done; } } }
 //
 // The infinite predecessor's body wrapped and kept going; the finite one counted passes in an
 // outer loop and returned.  Here one body does both, and the difference is a single register read.
@@ -69,15 +69,17 @@
 #endif
 
 /// @tparam W     word width in bits -- the memory's and the output stream's.
-/// @tparam D     memory depth in elements, and the bound mem_lock_grant refuses a region against.
-/// @tparam NW    words in one shot -- the region's length and the wrap point of the read pointer.
-/// @tparam BASE  first element of the region.  ONE number, shared with the loader: a loader and a
-///               player that disagreed about where the waveform is would each be individually
-///               correct.
+/// @tparam D     memory depth in elements, the bound mem_lock_grant refuses a region against, AND
+///               the wrap point of the read pointer: THE SHOT IS THE BUFFER
+///               (plans/rf_shot_geometry.md).  A power of two, so the wrap is a mask.
+///
+///               There is no NW and no BASE.  `buf[rd + i]` reads from the memory's own origin, so
+///               the loader and the player cannot disagree about where the waveform is -- there is
+///               nowhere else it could be.
 /// @tparam BW    words per chunk: the pipelined loop's trip count AND the poll period.  Must divide
-///               NW, so a chunk never straddles the end of the region and the play boundary keeps
-///               landing on a block boundary.
-template <int W, int D, int NW, int BASE, int BW>
+///               D, so a chunk never straddles the wrap and the play boundary keeps landing on a
+///               block boundary.
+template <int W, int D, int BW>
 static void shot_tx_player_task(ap_uint<W> buf[D],
                                 memlock::chan& cmd_in,
                                 memlock::chan& resp_out,
@@ -93,7 +95,8 @@ static void shot_tx_player_task(ap_uint<W> buf[D],
     //: the two predecessors' players.
     static ap_uint<1> loop = 0;
 #pragma HLS reset variable=loop
-    //: The read pointer WITHIN the region.
+    //: The read pointer into the buffer.  It wraps at D, and that wrap is the whole of this
+    //: design's addressing.
     static ap_uint<32> rd = 0;
 #pragma HLS reset variable=rd
     //: Passes left on a finite shot.  Meaningless while `loop`.
@@ -105,12 +108,12 @@ static void shot_tx_player_task(ap_uint<W> buf[D],
 play_chunk:
     for (int i = 0; i < BW; i++) {
 #pragma HLS PIPELINE II=1
-        samp_out.write(playing ? buf[BASE + rd + i] : (ap_uint<W>)SHOT_TX_FILLER);
+        samp_out.write(playing ? buf[rd + i] : (ap_uint<W>)SHOT_TX_FILLER);
     }
 
     if (playing) {
         rd = rd + BW;
-        if (rd >= (ap_uint<32>)NW) {
+        if (rd >= (ap_uint<32>)D) {
             // A pass has just finished.  THE ONE PLACE THE TWO PREDECESSORS DIFFER.
             rd = 0;
             if (!loop) {

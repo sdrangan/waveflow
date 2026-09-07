@@ -28,10 +28,9 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_LOAD,
     SHOT_LOADED,
     SHOT_LOOP,
+    SHOT_BAD_OPCODE,
     SHOT_SHORT,
     SHOT_STATUS_NAMES,
-    SHOT_WRONG_LEN,
-    SHOT_ZERO_LEN,
     ShotTxHdr,
 )
 from waveflow.hw.rf_relayout import to_slots
@@ -46,14 +45,18 @@ WORD = Rfsoc4x2SampWord.specialize(samp_per_word=4)
 
 WORD_BW = int(WORD.bitwidth)
 SPW = int(WORD.samp_per_word)
-DEPTH = 64
-NWORD = 16
+#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).
+#:
+#: **16, not 64**: it is what ``nword`` was before the shot became the buffer, so every played
+#: length, pass count and scenario timing in this file is unchanged by the geometry change and the
+#: assertions below stay comparable across it.
+DEPTH = 16
 BLK_WORDS = 4
-#: The region sits at the **top** of the memory: ``base + offset`` is the shape of the
-#: byte-versus-word bug ``bram_toy`` stayed green through, and a design that only ever loaded at zero
-#: would be measuring nothing.
-BASE = DEPTH - NWORD
-NSAMP = NWORD * SPW
+NSAMP = DEPTH * SPW
+
+#: An opcode this design does not know.  ``OPCODE_BW`` is 2 bits and the legal values are 0, 1 and 2,
+#: so 3 is the only illegal one the wire can carry.
+BAD_OPCODE = 3
 #: One word every 250 ns, so a pass is 4 us and a run is a handful of firings.
 #:
 #: **It is the SINK's rate, and since ``plans/lt_transient.md`` S2 that is the only place it can
@@ -65,7 +68,7 @@ NSAMP = NWORD * SPW
 DAC_WORD_RATE = 4e6
 
 
-def ramp(base: int, n: int = NWORD) -> np.ndarray:
+def ramp(base: int, n: int = DEPTH) -> np.ndarray:
     """*n* distinguishable words.  Distinguishable matters: a zeroed memory reads as zeros, so a
     constant payload cannot tell a write that landed from one that never happened — and the whole
     claim of gate 2 is that the output *switches*."""
@@ -84,14 +87,14 @@ def slots(dense: np.ndarray) -> np.ndarray:
     return np.asarray(to_slots(WORD, np.asarray(dense, dtype=np.uint64)), dtype=np.uint64).ravel()
 
 
-def frame(opcode: int, tid: int, nsamp: int, nrepeat: int, payload: np.ndarray) -> np.ndarray:
+def frame(opcode: int, tid: int, nrepeat: int, payload: np.ndarray) -> np.ndarray:
     """One ``TLAST``-delimited frame: the header, then the samples.
 
     Header **and** payload on one port, which is what makes the frame boundary the mechanism rather
     than a convenience: a payload word and a header word are the same 64 bits.
     """
     h = ShotTxHdr()
-    h.opcode, h.tid, h.nsamp, h.nrepeat = int(opcode), int(tid), int(nsamp), int(nrepeat)
+    h.opcode, h.tid, h.nrepeat = int(opcode), int(tid), int(nrepeat)
     return np.concatenate([np.asarray(h.serialize(word_bw=WORD_BW), dtype=np.uint64).ravel(),
                            np.asarray(payload, dtype=np.uint64).ravel()])
 
@@ -111,7 +114,7 @@ class Bench:
         self.sim = Simulation()
         self.clk = Clock(name="clk", freq=250e6)
         self.dut = RfShotTx(sim=self.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW,
-                                   depth=DEPTH, nword=NWORD, base=BASE, shift=int(shift),
+                                   depth=DEPTH, shift=int(shift),
                                    blk_words=BLK_WORDS, clk=self.clk)
         self.src = StreamIFMaster(sim=self.sim, name="src", bitwidth=WORD_BW, has_tlast=True)
         self.resp_snk = StreamIFSlave(sim=self.sim, name="resp_snk", bitwidth=WORD_BW,
@@ -230,7 +233,7 @@ def test_a_finite_shot_plays_n_passes_and_then_goes_quiet():
     """
     a = ramp(1000)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOAD, 0, NSAMP, 3, a))], until=60e-6)
+    b.run([(0.0, frame(SHOT_LOAD, 0, 3, a))], until=60e-6)
     dut = b.dut
 
     assert named(b.resps) == [(0, "SHOT_LOADED", NSAMP)], named(b.resps)
@@ -242,28 +245,31 @@ def test_a_finite_shot_plays_n_passes_and_then_goes_quiet():
     assert len(runs) == 1, (
         f"the playout has {len(runs)} non-filler run(s); a finite shot is one continuous run of "
         f"passes between the startup filler and the tail")
-    assert runs[0].size == 3 * NWORD, (
-        f"the run is {runs[0].size} words, expected {3 * NWORD} — three whole passes")
-    assert np.array_equal(runs[0].reshape(3, NWORD), np.tile(slots(a), (3, 1))), (
+    assert runs[0].size == 3 * DEPTH, (
+        f"the run is {runs[0].size} words, expected {3 * DEPTH} — three whole passes")
+    assert np.array_equal(runs[0].reshape(3, DEPTH), np.tile(slots(a), (3, 1))), (
         "the three passes are not three copies of the loaded waveform")
     assert segs[-1][0], "the run did not end in filler — the player never went quiet"
 
 
-def test_the_memory_holds_the_shot_at_the_declared_region_and_nowhere_else():
-    """``base + offset``, checked where a round-trip cannot see it.
+def test_the_shot_fills_the_whole_memory_and_the_region_is_all_of_it():
+    """**The shot IS the buffer** — the region is ``[0, depth)`` and the load fills every word.
 
-    The waveform coming back correct proves the *scaling* is consistent, not that it is right — that
-    is exactly how the byte-versus-word bug survived. So the words either side of the region are
-    checked too.
+    This gate used to place the region at the top of the memory and check the words either side of
+    it, because ``base + offset`` was the shape of the byte-versus-word bug ``bram_toy`` stayed green
+    through.  ``plans/rf_shot_geometry.md`` removed ``base``, so there is no placement to get wrong
+    and nothing outside the region to check — the region is the memory.
+
+    What is left to assert is the half that still has content: the counted load pass writes **every**
+    element, so a short frame is padded rather than leaving the tail holding the previous waveform.
+    The wrap that replaced the addition is gated at RTL, where it is visible on the read port.
     """
     a = ramp(1000)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOAD, 0, NSAMP, 1, a))], until=40e-6)
-    lo, hi = b.dut.region
-    assert (lo, hi) == (BASE, BASE + NWORD)
-    assert np.array_equal(b.dut.mem.storage[lo:hi], a)
-    assert int(b.dut.mem.storage[lo - 1]) == 0, "the word below the region moved; the base is off"
-    assert hi == DEPTH, "this gate is meant to place the region at the TOP of the memory"
+    b.run([(0.0, frame(SHOT_LOAD, 0, 1, a))], until=40e-6)
+    assert b.dut.region == (0, DEPTH), (
+        f"the region is {b.dut.region}; the shot is the buffer, so it can only be [0, {DEPTH}).")
+    assert np.array_equal(b.dut.mem.storage[0:DEPTH], a)
 
 
 # ---------------------------------------------------------------------------
@@ -279,14 +285,14 @@ def test_an_infinite_shot_switches_waveform_mid_play_with_filler_between():
     """
     a, bb = ramp(1000), ramp(5000)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOOP, 0, NSAMP, 1, a)),
-           (20e-6, frame(SHOT_LOOP, 1, NSAMP, 1, bb))],
+    b.run([(0.0, frame(SHOT_LOOP, 0, 1, a)),
+           (20e-6, frame(SHOT_LOOP, 1, 1, bb))],
           until=40e-6)
     dut = b.dut
 
     assert named(b.resps) == [(0, "SHOT_LOADED", NSAMP), (1, "SHOT_LOADED", NSAMP)], named(b.resps)
     dut.assert_handover(2)
-    assert np.array_equal(dut.mem.storage[BASE:DEPTH], bb)
+    assert np.array_equal(dut.mem.storage[0:DEPTH], bb)
     assert int(dut.play.n_done) == 0, (
         "the infinite path sent a done token; a spurious one clears a busy that a LATER finite shot "
         "set, and the next load would preempt it")
@@ -322,22 +328,22 @@ def test_a_load_arriving_while_a_finite_shot_plays_is_refused(second_opcode):
     """
     a, bb = ramp(1000), ramp(5000)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOAD, 0, NSAMP, 3, a)),
-           (5e-6, frame(second_opcode, 1, NSAMP, 1, bb))],
+    b.run([(0.0, frame(SHOT_LOAD, 0, 3, a)),
+           (5e-6, frame(second_opcode, 1, 1, bb))],
           until=60e-6)
     dut = b.dut
 
     assert named(b.resps) == [(0, "SHOT_LOADED", NSAMP), (1, "SHOT_BUSY", 0)], named(b.resps)
     # The refusal did NOT take the lock, and did NOT touch the memory.
     dut.assert_handover(1)
-    assert np.array_equal(dut.mem.storage[BASE:DEPTH], a), (
+    assert np.array_equal(dut.mem.storage[0:DEPTH], a), (
         "the refused load wrote to the memory anyway — SHOT_BUSY must refuse before it requests")
     # ... and the first shot played out in full.
     dut.assert_finite_completed(n_shots=1, n_plays=3)
     runs = [s for f, s in b.segments() if not f]
-    assert len(runs) == 1 and runs[0].size == 3 * NWORD, (
+    assert len(runs) == 1 and runs[0].size == 3 * DEPTH, (
         f"the running shot was truncated: {[int(r.size) for r in runs]} words against "
-        f"{3 * NWORD} expected. That is a perfectly good shorter signal, which is why it needs a "
+        f"{3 * DEPTH} expected. That is a perfectly good shorter signal, which is why it needs a "
         f"count and not a comparison.")
 
 
@@ -350,8 +356,8 @@ def test_a_load_arriving_while_an_INFINITE_shot_plays_is_accepted():
     """
     a, bb = ramp(1000), ramp(5000)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOOP, 0, NSAMP, 1, a)),
-           (10e-6, frame(SHOT_LOAD, 1, NSAMP, 2, bb))],
+    b.run([(0.0, frame(SHOT_LOOP, 0, 1, a)),
+           (10e-6, frame(SHOT_LOAD, 1, 2, bb))],
           until=60e-6)
     assert named(b.resps) == [(0, "SHOT_LOADED", NSAMP), (1, "SHOT_LOADED", NSAMP)], named(b.resps)
     b.dut.assert_handover(2)
@@ -360,9 +366,9 @@ def test_a_load_arriving_while_an_INFINITE_shot_plays_is_accepted():
     # half: exactly one done, and the player quiet at the end.
     b.dut.assert_finite_completed(n_shots=1)
     runs = [s for f, s in b.segments() if not f]
-    assert np.array_equal(runs[-1].reshape(-1, NWORD), np.tile(slots(bb), (runs[-1].size // NWORD, 1)))
-    assert runs[-1].size == 2 * NWORD, (
-        f"the preempting finite shot played {runs[-1].size // NWORD} pass(es), expected 2")
+    assert np.array_equal(runs[-1].reshape(-1, DEPTH), np.tile(slots(bb), (runs[-1].size // DEPTH, 1)))
+    assert runs[-1].size == 2 * DEPTH, (
+        f"the preempting finite shot played {runs[-1].size // DEPTH} pass(es), expected 2")
 
 
 def test_the_busy_flag_clears_when_the_finite_shot_finishes():
@@ -374,9 +380,9 @@ def test_the_busy_flag_clears_when_the_finite_shot_finishes():
     """
     a, bb, c = ramp(1000), ramp(5000), ramp(9000)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOAD, 0, NSAMP, 1, a)),
-           (2e-6, frame(SHOT_LOAD, 1, NSAMP, 1, bb)),      # mid-play -> refused
-           (30e-6, frame(SHOT_LOAD, 2, NSAMP, 1, c))],     # after it finished -> accepted
+    b.run([(0.0, frame(SHOT_LOAD, 0, 1, a)),
+           (2e-6, frame(SHOT_LOAD, 1, 1, bb)),      # mid-play -> refused
+           (30e-6, frame(SHOT_LOAD, 2, 1, c))],     # after it finished -> accepted
           until=80e-6)
     assert named(b.resps) == [(0, "SHOT_LOADED", NSAMP),
                               (1, "SHOT_BUSY", 0),
@@ -389,39 +395,43 @@ def test_the_busy_flag_clears_when_the_finite_shot_finishes():
 
 
 # ---------------------------------------------------------------------------
-# Gate 4 — all five verdicts
+# Gate 4 — all four verdicts
 # ---------------------------------------------------------------------------
 
-def test_all_five_verdicts_plus_the_fence_in_one_stream():
+def test_all_four_verdicts_plus_the_fence_in_one_stream():
     """**Gate 4.**  Every status this design can produce, in one run, in an order that is not a race.
 
-    ``tid`` 0 is the only load that can succeed; everything after it arrives while a *finite* shot is
-    playing, so the refusals exercise the busy path — and **malformed is tested before transient**,
-    which is what makes ``tid`` 2 and 3 distinguishable from ``SHOT_BUSY``.  A build that reordered
-    the two tests would return ``SHOT_BUSY`` for them and this scenario would say so.
+    ``tid`` 0 is the only load that can succeed at first; the two behind it arrive while a *finite*
+    shot is playing, so they exercise the busy path — and **malformed is tested before transient**,
+    which is what makes ``tid`` 2 distinguishable from ``SHOT_BUSY``.  A build that reordered the two
+    tests would return ``SHOT_BUSY`` for it and this scenario would say so.
+
+    **Four, where it was five.**  ``plans/rf_shot_geometry.md`` retired ``SHOT_ZERO_LEN``
+    (``nsamp == 0``) and the length half of ``SHOT_WRONG_LEN`` (``nsamp != nword * spw``) with the
+    header field both read.  The verdict survives as ``SHOT_BAD_OPCODE`` — same wire value, named for
+    the fault it reports — and it is what ``tid`` 2 now provokes.
     """
     a = ramp(1000)
     empty = np.zeros(0, dtype=np.uint64)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOAD, 0, NSAMP, 3, a)),                     # LOADED
-           (2e-6, frame(SHOT_LOAD, 1, NSAMP, 1, a)),                    # BUSY  (transient)
-           (3e-6, frame(SHOT_LOAD, 2, NSAMP + SPW, 1, a)),              # WRONG_LEN (malformed)
-           (4e-6, frame(SHOT_LOOP, 3, 0, 1, empty)),                    # ZERO_LEN  (malformed)
-           (30e-6, frame(SHOT_LOAD, 4, NSAMP, 1, a[:NWORD // 2])),      # SHORT
-           (50e-6, frame(SHOT_END, 5, 0, 0, empty))],                   # the fence
+    b.run([(0.0, frame(SHOT_LOAD, 0, 3, a)),                     # LOADED
+           (2e-6, frame(SHOT_LOAD, 1, 1, a)),                    # BUSY  (transient)
+           (3e-6, frame(BAD_OPCODE, 2, 1, a)),                   # BAD_OPCODE (malformed, and it
+           #                                                       beats the busy it arrived during)
+           (30e-6, frame(SHOT_LOAD, 3, 1, a[:DEPTH // 2])),      # SHORT
+           (50e-6, frame(SHOT_END, 4, 0, empty))],               # the fence
           until=90e-6)
 
     assert named(b.resps) == [
         (0, "SHOT_LOADED", NSAMP),
         (1, "SHOT_BUSY", 0),
-        (2, "SHOT_WRONG_LEN", 0),
-        (3, "SHOT_ZERO_LEN", 0),
-        (4, "SHOT_SHORT", (NWORD // 2) * SPW),
-        (5, "SHOT_LOADED", 0),
+        (2, "SHOT_BAD_OPCODE", 0),
+        (3, "SHOT_SHORT", (DEPTH // 2) * SPW),
+        (4, "SHOT_LOADED", 0),
     ], named(b.resps)
-    assert {s for _t, s, _n in b.resps} == {SHOT_LOADED, SHOT_BUSY, SHOT_WRONG_LEN,
-                                           SHOT_ZERO_LEN, SHOT_SHORT}, (
-        "the run did not reach all five verdicts")
+    assert {s for _t, s, _n in b.resps} == {SHOT_LOADED, SHOT_BUSY, SHOT_BAD_OPCODE,
+                                           SHOT_SHORT}, (
+        "the run did not reach all four verdicts")
 
 
 def test_a_short_shot_is_loaded_and_then_never_played():
@@ -432,15 +442,15 @@ def test_a_short_shot_is_loaded_and_then_never_played():
     and says so: it plays the padded result because it has no way to go quiet.  The merged design
     does have one, so the stricter rule wins and both paths get it.
     """
-    a, short = ramp(1000), ramp(5000, NWORD // 2)
+    a, short = ramp(1000), ramp(5000, DEPTH // 2)
     b = Bench()
-    b.run([(0.0, frame(SHOT_LOOP, 0, NSAMP, 1, a)),
-           (20e-6, frame(SHOT_LOOP, 1, NSAMP, 1, short))],
+    b.run([(0.0, frame(SHOT_LOOP, 0, 1, a)),
+           (20e-6, frame(SHOT_LOOP, 1, 1, short))],
           until=40e-6)
-    assert named(b.resps)[1] == (1, "SHOT_SHORT", (NWORD // 2) * SPW)
+    assert named(b.resps)[1] == (1, "SHOT_SHORT", (DEPTH // 2) * SPW)
     # It landed in the memory, padded ...
-    assert np.array_equal(b.dut.mem.storage[BASE:BASE + NWORD // 2], short)
-    assert not b.dut.mem.storage[BASE + NWORD // 2:DEPTH].any(), "the tail was not padded with zeros"
+    assert np.array_equal(b.dut.mem.storage[0:DEPTH // 2], short)
+    assert not b.dut.mem.storage[DEPTH // 2:DEPTH].any(), "the tail was not padded with zeros"
     # ... and the run ends in filler rather than playing it.
     assert b.segments()[-1][0], "a short shot reached the converter"
     assert not b.dut.play.playing
@@ -453,8 +463,8 @@ def test_a_frame_whose_opcode_is_neither_LOAD_nor_LOOP_is_refused(monkeypatch=No
     perfect.  ``SHOT_END`` is the one other legal value and it is a fence, handled before the verdict.
     """
     b = Bench()
-    b.run([(0.0, frame(7, 0, NSAMP, 1, ramp(1000)))], until=20e-6)
-    assert named(b.resps) == [(0, "SHOT_WRONG_LEN", 0)]
+    b.run([(0.0, frame(BAD_OPCODE, 0, 1, ramp(1000)))], until=20e-6)
+    assert named(b.resps) == [(0, "SHOT_BAD_OPCODE", 0)]
     assert b.dut.lock.n_grants == 0, "an unknown opcode took the lock"
 
 
@@ -462,12 +472,12 @@ def test_a_frame_whose_opcode_is_neither_LOAD_nor_LOOP_is_refused(monkeypatch=No
 # The play command, and the ordering everything turns on
 # ---------------------------------------------------------------------------
 
-def test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips():
-    """**The witness for `plans/rf_shot_wire_format.md` Part A.**
+def test_a_buffer_too_large_for_the_old_16_bit_field_builds_and_round_trips():
+    """**The witness for `plans/rf_shot_wire_format.md` Part A**, retargeted but not weakened.
 
-    Before Part A, ``nsamp`` was 16 bits wide because ``IDX_BW`` said so — a constant imported from
-    :mod:`waveflow.hw.rf_samp_buf`, the superseded family — and ``RfShotTx.__post_init__`` *refused*
-    any geometry whose shot did not fit it:
+    Before Part A, the length field was 16 bits wide because ``IDX_BW`` said so — a constant imported
+    from :mod:`waveflow.hw.rf_samp_buf`, the superseded family — and ``RfShotTx.__post_init__``
+    *refused* any geometry whose shot did not fit it:
 
     ``if nw * spw >= (1 << IDX_BW): raise ValueError("... does not fit the 16-bit nsamp field")``
 
@@ -475,36 +485,42 @@ def test_a_shot_too_large_for_the_old_16_bit_field_builds_and_round_trips():
     is the check becoming **unnecessary** rather than deleted on faith: it builds the geometry the
     old code refused, and shows the length survives the wire.
 
+    **The field it watches moved**, because ``plans/rf_shot_geometry.md`` removed the header's
+    ``nsamp``: the only length on the wire now is the response's ``nsamp_loaded``, and it is still
+    derived, still has to grow with the geometry, and still has to round-trip.  The failure it
+    guards is unchanged in kind — a width that wrapped would report a *partial* load as a full one,
+    which is the one thing ``SHOT_SHORT``'s diagnosis exists to say.
+
     Without this the change is unfalsifiable — everything else only confirms nothing broke.
     """
     from waveflow.hw.rf_shot_tx import nsamp_bw_for, shot_tx_schemas
 
-    big_nword = 1 << 16                       # 65536 words x 4 = 262144 samples
-    nsamp = big_nword * SPW
-    assert nsamp >= (1 << 16), "the point is a shot the OLD 16-bit field could not carry"
+    big_depth = 1 << 16                       # 65536 words x 4 = 262144 samples
+    nsamp = big_depth * SPW
+    assert nsamp >= (1 << 16), "the point is a buffer the OLD 16-bit field could not describe"
 
     # 1. the width follows the geometry rather than a constant
-    nb = nsamp_bw_for(big_nword, SPW)
-    assert nb > 16, f"nsamp is still {nb} bits; it has to grow with the shot"
+    nb = nsamp_bw_for(big_depth, SPW)
+    assert nb > 16, f"nsamp_loaded is still {nb} bits; it has to grow with the buffer"
 
     # 2. the design CONSTRUCTS at that geometry -- this is the line the old check refused
     dut = RfShotTx(sim=Simulation(), name="big", bitwidth=WORD_BW, samp_per_word=SPW,
-                   depth=1 << 17, nword=big_nword, base=0, shift=2,
+                   depth=big_depth, shift=2,
                    blk_words=BLK_WORDS, clk=Clock(name="c", freq=250e6))
     assert dut.nsamp_shot == nsamp
 
     # 3. and the length round-trips on the wire, which is what the field is for
-    hdr_cls, resp_cls = shot_tx_schemas(big_nword, SPW)
-    h = hdr_cls()
-    h.opcode, h.tid, h.nsamp, h.nrepeat, h._rsvd = SHOT_LOAD, 7, nsamp, 3, 0
-    back = hdr_cls().deserialize(h.serialize(word_bw=WORD_BW), word_bw=WORD_BW)
-    assert int(back.nsamp) == nsamp, (
-        f"nsamp came back {int(back.nsamp)} instead of {nsamp} — the field wrapped, which is "
-        f"exactly the 'verdict that wrapped reports a short load as a correct one' failure the old "
-        f"check existed to prevent.")
-    assert (int(back.opcode), int(back.tid), int(back.nrepeat)) == (SHOT_LOAD, 7, 3)
+    hdr_cls, resp_cls = shot_tx_schemas(big_depth, SPW)
+    r = resp_cls()
+    r.tid, r.status, r.nsamp_loaded, r._rsvd = 7, SHOT_SHORT, nsamp, 0
+    back = resp_cls().deserialize(r.serialize(word_bw=WORD_BW), word_bw=WORD_BW)
+    assert int(back.nsamp_loaded) == nsamp, (
+        f"nsamp_loaded came back {int(back.nsamp_loaded)} instead of {nsamp} — the field wrapped, "
+        f"which reports a partial load as a correct one. That is the failure the old check existed "
+        f"to prevent, arrived at from the response's side.")
+    assert (int(back.tid), int(back.status)) == (7, SHOT_SHORT)
 
-    # 4. and it is still ONE 64-bit word, which is the decision the plan made explicitly
+    # 4. and both are still ONE 64-bit word, which is the decision the plan made explicitly
     assert hdr_cls.get_bitwidth() == 64 and hdr_cls.nwords_per_inst(WORD_BW) == 1
     assert resp_cls.get_bitwidth() == 64 and resp_cls.nwords_per_inst(WORD_BW) == 1
 
@@ -514,15 +530,16 @@ def test_both_messages_are_one_word_and_the_padding_is_declared():
 
     ``plans/rf_shot_wire_format.md`` Part A: the point of deriving the widths is that a field cannot
     silently overflow, *not* that the message gets smaller — a stable wire size is what a DMA wants.
-    So whatever ``nsamp`` does not use is a declared ``_rsvd`` field, and the total is invariant.
+    So whatever ``nsamp_loaded`` does not use is a declared ``_rsvd`` field, and the total is
+    invariant — and since the header carries no length at all, its padding is simply fixed.
     """
     from waveflow.hw.rf_shot_tx import MSG_BW, shot_tx_schemas
 
-    for nword, spw in ((16, 4), (64, 4), (1 << 16, 4), (1 << 20, 2)):
-        hdr, resp = shot_tx_schemas(nword, spw)
+    for depth, spw in ((16, 4), (64, 4), (1 << 16, 4), (1 << 20, 2)):
+        hdr, resp = shot_tx_schemas(depth, spw)
         for cls in (hdr, resp):
             assert cls.get_bitwidth() == MSG_BW, (
-                f"{cls.__name__} is {cls.get_bitwidth()} bits at nword={nword}, spw={spw}; the "
+                f"{cls.__name__} is {cls.get_bitwidth()} bits at depth={depth}, spw={spw}; the "
                 f"wire size is supposed to be {MSG_BW} whatever the geometry.")
             assert "_rsvd" in cls.elements, f"{cls.__name__}'s padding is not declared"
             assert cls.nwords_per_inst(64) == 1
@@ -579,7 +596,7 @@ def test_a_player_that_grants_and_keeps_reading_raises():
     b.sim = Simulation()
     b.clk = Clock(name="clk", freq=250e6)
     b.dut = Dirty(sim=b.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW, depth=DEPTH,
-                  nword=NWORD, base=BASE, shift=2, blk_words=BLK_WORDS, clk=b.clk)
+                  shift=2, blk_words=BLK_WORDS, clk=b.clk)
     b.src = StreamIFMaster(sim=b.sim, name="src", bitwidth=WORD_BW, has_tlast=True)
     b.resp_snk = StreamIFSlave(sim=b.sim, name="resp_snk", bitwidth=WORD_BW, has_tlast=True)
     b.samp_snk = StreamIFSlave(sim=b.sim, name="samp_snk", bitwidth=WORD_BW, has_tlast=True)
@@ -592,8 +609,8 @@ def test_a_player_that_grants_and_keeps_reading_raises():
 
     a, bb = ramp(1000), ramp(5000)
     with pytest.raises(RuntimeError, match="has YIELDED"):
-        b.run([(0.0, frame(SHOT_LOOP, 0, NSAMP, 1, a)),
-               (20e-6, frame(SHOT_LOOP, 1, NSAMP, 1, bb))],
+        b.run([(0.0, frame(SHOT_LOOP, 0, 1, a)),
+               (20e-6, frame(SHOT_LOOP, 1, 1, bb))],
               until=40e-6)
 
 
@@ -612,8 +629,8 @@ def test_the_design_is_three_tasks_and_three_channels_plus_the_lock():
     from waveflow.build.elaborate import elaborate
 
     comp = elaborate(RfShotTx,
-                     {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH, "nword": NWORD,
-                      "base": BASE, "shift": 2, "blk_words": BLK_WORDS},
+                     {"bitwidth": WORD_BW, "samp_per_word": SPW, "depth": DEPTH,
+                      "shift": 2, "blk_words": BLK_WORDS},
                      name="rf_shot_tx")
     spec = composite_top_spec(comp, width=WORD_BW)
     assert len(spec.tasks) == 3

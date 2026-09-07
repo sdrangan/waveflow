@@ -39,7 +39,14 @@ import pytest
 #: One byte-identical-from-t=0 comparison (2 items) retired, and the three LT gates took its place —
 #: phase and transient per backend and scenario (4 each), agreement per scenario (2), and the
 #: derived-bound check (2).  A deliberate addition, which is the only reason this number ever moves.
-WANT_XSI_GATES = 97
+#:
+#: 97 -> 98 on 2026-09-07 (``plans/rf_shot_geometry.md``): the same file went 30 -> 31.  Removing
+#: ``base`` removed the ``base + offset`` arithmetic its gate covered, and
+#: ``test_the_player_sweeps_the_whole_buffer_and_wraps`` gates what replaced it — the read pointer's
+#: wrap at ``depth``, which is the only address arithmetic the design still has.  No gate was lost:
+#: the two retired VERDICTS (``SHOT_ZERO_LEN`` and ``SHOT_WRONG_LEN``'s length half) were asserted
+#: inside gates that survive, not by gates of their own.
+WANT_XSI_GATES = 98
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

@@ -91,7 +91,7 @@ module rf_shot_tx_top (
         .buf_r_Rst_B()
     );
 
-    bram_t2p #(.DW(64), .AW(8)) mem (
+    bram_t2p #(.DW(64), .AW(6)) mem (
         .clk(ap_clk),
         .a_addr(buf_w_addr_a >> 3),
         .a_din(buf_w_din_a),
