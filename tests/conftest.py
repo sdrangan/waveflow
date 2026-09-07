@@ -34,7 +34,12 @@ import pytest
 #: gate -- most likely to a collection error, which is silent in every other reading of the output.
 #:
 #: To update: ``pytest -m xsi --collect-only -q`` and sum the per-file counts.
-WANT_XSI_GATES = 87
+#:
+#: 87 -> 97 on 2026-09-07 (``plans/lt_transient.md`` S2): ``test_rf_shot_tx_xsi.py`` went 20 -> 30.
+#: One byte-identical-from-t=0 comparison (2 items) retired, and the three LT gates took its place —
+#: phase and transient per backend and scenario (4 each), agreement per scenario (2), and the
+#: derived-bound check (2).  A deliberate addition, which is the only reason this number ever moves.
+WANT_XSI_GATES = 97
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

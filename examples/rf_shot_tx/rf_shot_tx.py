@@ -49,7 +49,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import numpy as np
 
@@ -104,9 +104,30 @@ SAMP_RATE = 256e6
 #: Passes the finite scenario asks for.
 NREPEAT = 3
 
+#: Converter blocks the run needs **once the loosely-timed lead is removed** — the horizon this
+#: testbench had when the player still carried a metronome, and the part of :data:`N_BLK` that is
+#: about the design rather than about the model.
+N_BLK_BASE = 20
+
 #: Converter blocks the metronome runs for, and the XSI main's fixed run bound.  A testbench
 #: constant, not a latency: the converter never exhausts, so an unbounded run would not return.
-N_BLK = 20
+#:
+#: **27 = N_BLK_BASE + ceil(c_lead / blksize), and the 7 is derived rather than chosen.**  Since
+#: ``plans/lt_transient.md`` S2 the player has no metronome, so it runs ahead of the converter's grid
+#: by as much as the declared depths along the path allow — :func:`c_lead` samples, 448 at this
+#: geometry, which S1 measured at exactly the bound.  That lead is a *prefix* of filler, and at 20
+#: blocks the horizon closed with the third pass and the trailing quiet still in the pipe: the
+#: playout was truncated by the testbench rather than by the design.  Seven more blocks is precisely
+#: the lead, so the run covers what it covered before.
+#:
+#: **Written down rather than computed here, and gated instead.**  :func:`c_lead` needs a *bound*
+#: graph and this is a field default of the testbench that graph comes from, so deriving it at import
+#: would be circular.  :func:`check_horizon_covers_the_lead` is the other half: one formula, in
+#: :func:`c_lead`, and a check that this number still follows from it.
+#:
+#: **This is the one number S2 changed**, and everything downstream of it — played sample counts,
+#: trailing-filler lengths — moves by construction rather than because the design does anything new.
+N_BLK = 27
 XSI_N_CYCLES = 1400
 
 #: Base sample codes for the two waveforms.  Far apart and non-overlapping, so "the output switched"
@@ -281,10 +302,16 @@ class RfShotTxTB(FreeRunMod):
             name=f"{self.name}_dut", clk=self.axis_clk, base=int(self.base),
             # pysim's quantum on the converter edge is a BLOCK: the Rfdc's DAC process takes one
             # blksize burst per event and refuses a partial one.  A modelling shape only.
-            blk_words=int(self.blksize) // SPW,
-            # The metronome, handed over directly: pysim does not back-pressure a burst write, so
-            # this is the only way the converter's rate reaches the player.
-            dac_word_rate=float(self.samp_rate) / SPW)
+            #
+            # AND NOTHING ELSE.  There was a `dac_word_rate` here -- the converter's rate, computed
+            # by hand as samp_rate / SPW and handed to the player as a metronome -- and
+            # `plans/lt_transient.md` S2 retired it.  What paced the player was never hardware: at
+            # RTL `TREADY` does it.  The metronome existed to force pysim onto the converter's own
+            # time grid so a byte-identical-from-t=0 comparison could pass, and that comparison was
+            # a fidelity level loosely-timed modelling does not promise.  The player is now paced by
+            # back-pressure alone and runs `c_lead()` samples ahead; the gates align on each
+            # backend's own playout log instead.
+            blk_words=int(self.blksize) // SPW)
         self.drv = StreamDriver(sim=self.sim, name=f"{self.name}_drv", bitwidth=w,
                                 in_bundle=str(self.in_bundle), has_tlast=True)
         self.resp_snk = StreamSink(sim=self.sim, name=f"{self.name}_resp_snk", bitwidth=w,
@@ -427,6 +454,266 @@ def segments(played: np.ndarray) -> list[tuple[bool, np.ndarray]]:
             segs.append((bool(mark[start]), played[start:i]))
             start = i
     return segs
+
+
+# ---------------------------------------------------------------------------
+# The LT gate vocabulary — ``plans/lt_transient.md`` S2
+# ---------------------------------------------------------------------------
+#
+# Three gates replace one `array_equal`, and the reason is recorded rather than assumed.  The old
+# assertion demanded the two backends be byte-identical **from t=0, including the startup
+# transient** -- a fidelity level loosely-timed modelling does not promise, and the only way pysim
+# could meet it was a metronome on the player declaring the converter's rate.  That parameter is
+# gone (see `RfShotTxTB.__post_init__`), so the two backends now start playing at different
+# instants and the comparison has to say what it actually cares about:
+#
+#   1. `check_phase`               -- each backend against the WAVEFORM, per segment.
+#   2. `compare_after_transients`  -- the two backends against each other, aligned on their own logs.
+#   3. `transients`                -- the lead, recorded per backend rather than cross-compared.
+#
+# Gate 1 is what makes relaxing gate 2 safe: an LT transient shifts *when* a segment starts and can
+# hide nothing about what is in it, and gate 1 does not care when playing started.
+
+
+class PlayRun(NamedTuple):
+    """One playout run in a captured stream: what was played, where, and for how long.
+
+    ``event`` is the waveform's **base code**, so the log says *what happened* and not merely how
+    many times something did.  Two runs that played different waveforms in the same order have
+    different logs, and :func:`compare_after_transients` refuses to align them -- which is the point
+    of asserting the event sequence before comparing anything.
+    """
+
+    event: int
+    start: int
+    length: int
+
+
+#: The base codes a playout run may legitimately start on.  A run that starts anywhere else is a
+#: phase error, and naming them is what makes :func:`check_phase` a real check rather than a
+#: tautology: deriving the base from the run's own first sample would assert nothing about it.
+KNOWN_BASES = (CODE_A, CODE_B)
+
+#: Blocks the sink's own queue holds in steady state.  **Zero, and measured** (S1): `RfDataSink`
+#: appends and loops with nothing to wait for, so its `DEFAULT_RF_RX_DEPTH` blocks are drained in
+#: the same event they are filled.  It is a parameter of :func:`c_lead` rather than a dropped term
+#: because a consumer that *can* wait would occupy it, and then the lead would grow by exactly this.
+SINK_BLOCKS_HELD = 0
+
+
+def check_golden_is_loggable(*bases: int) -> None:
+    """Refuse a golden whose first sample is :data:`~waveflow.hw.rf_shot_tx.FILLER`.
+
+    **The whole log rests on this**, and until S2 it was a convention in :func:`segments`' docstring
+    rather than a check.  ``segments()`` splits on ``== FILLER``, so a waveform that *opened* with a
+    zero would put every boundary one sample late.
+
+    **Stronger than "the waveform has at least one non-zero sample", and the difference is the
+    reason this exists.**  Both backends would make the identical error, so the two logs would still
+    agree and :func:`compare_after_transients` would still pass -- alignment is robust to it.  What
+    breaks is **coverage**: the leading zeros of every playout run would sit inside the filler run
+    and never be compared at all.  A gate that silently stops looking at samples is worse than one
+    that fails.
+
+    Raises rather than asserts: it runs at import, and ``python -O`` strips an ``assert``.
+    """
+    for base in bases:
+        first = int(shot_codes(base)[0])
+        if first == FILLER:
+            raise ValueError(
+                f"the golden at base {base} starts on {first}, which is FILLER. segments() splits "
+                f"the playout on FILLER, so the filler->play boundary would land after the leading "
+                f"zeros -- identically in both backends, so the alignment would survive and the "
+                f"leading samples of every run would go silently uncompared.")
+
+
+check_golden_is_loggable(*KNOWN_BASES)
+
+
+def c_lead(tb: "RfShotTxTB", *, sink_blocks_held: int = SINK_BLOCKS_HELD) -> int:
+    """The **lead** in samples: how far ahead of the converter's grid the player may get.
+
+    Derived from the declared depths on the bound interface graph, never chosen -- so it tracks when
+    ``blk_words`` or a queue depth changes, which is the whole reason `plans/lt_transient.md`
+    insisted the bound be derived.  Every term is sourced in that plan's *S1 as measured*, and S1
+    measured the total at **exactly** this value with each stage at its declared maximum.
+
+    ``max(depth, blk_words)`` is not a flourish.  `interface._admit_blocking` has two regimes: a
+    burst that fits waits for room and the channel's capacity is its depth, while a burst **larger
+    than the whole queue** waits for the queue to empty and then goes in whole -- one burst in
+    flight.  The composite's own ``samp`` channel is declared depth 2 against a 16-word burst, so
+    its capacity is 16 words and not 2; a formula that read ``depth`` and stopped there would
+    understate that term eightfold.
+
+    What this does **not** bound is the transient.  The startup transient also carries the design's
+    own load latency -- driver, header, payload, lock acquire, grant -- expressed on the converter's
+    grid, and no queue depth is an input to it.  See :func:`transients`.
+    """
+    spw = int(tb.word.samp_per_word)
+    blk = int(tb.blksize)
+    bw = int(tb.dut.play.blk_words)
+    samp_if = tb.dut.interfaces[f"{tb.dut.name}_samp_if"]
+    return (
+        spw * max(int(samp_if.depth), bw)          # 1  the composite's own `samp` FIFO
+        + spw * int(tb.dut.relayout.blk_words)     # 2  the re-layout task's in-flight burst
+        + spw * max(int(tb.dac_axis.depth), bw)    # 3  the testbench's `dac` FIFO
+        + blk                                      # 4  the Rfdc's DAC process, in-flight block
+        + blk * int(tb.dac_if.depth)               # 5  RFSampIF's producer-side buffer
+        + blk * int(sink_blocks_held)              # 6  the sink's own queue -- zero, and measured
+    )
+
+
+def check_horizon_covers_the_lead(tb: "RfShotTxTB", *, where: str = "") -> None:
+    """:data:`N_BLK` still follows from :func:`c_lead` — the other half of "derived, not chosen".
+
+    The horizon is a field default of the very testbench :func:`c_lead` reads, so it cannot be
+    computed at import without circularity.  It is written down instead, and this is what keeps the
+    two honest: **one formula, in `c_lead`, and a check that the recorded number still follows.**
+
+    A horizon that no longer covers the lead does not fail loudly on its own — the run simply stops
+    with part of the playout still in the pipe, and the capture looks like a design that was
+    truncated.  That is the failure this exists to name.
+    """
+    import math
+
+    want = int(N_BLK_BASE) + math.ceil(c_lead(tb) / int(tb.blksize))
+    if int(tb.n_blk) != want:
+        raise AssertionError(
+            f"{where}the horizon is {int(tb.n_blk)} blocks; c_lead is {c_lead(tb)} samples, so it "
+            f"should be N_BLK_BASE ({N_BLK_BASE}) + ceil({c_lead(tb)} / {int(tb.blksize)}) = {want}. "
+            f"A depth on the path changed and the horizon did not follow: the run would end with "
+            f"part of the playout still in flight, which reads as a truncated design.")
+
+
+def play_log(played: np.ndarray) -> list[PlayRun]:
+    """The playout runs of *played*, in order — **the log both gates align on**.
+
+    Derived from the stream itself: :func:`segments` already splits a playout into
+    ``(is_filler, samples)`` runs, and the filler->play transitions *are* the log.  No VCD, no
+    cycle-to-sample mapping, and both backends go through this same function -- so neither can be
+    aligned by something the other does not have.
+
+    It works only because the golden excludes ``FILLER``; :func:`check_golden_is_loggable` is that
+    dependency made into a check.
+    """
+    out: list[PlayRun] = []
+    i = 0
+    for is_filler, seg in segments(played):
+        if not is_filler:
+            out.append(PlayRun(event=int(seg[0]), start=i, length=int(seg.size)))
+        i += int(seg.size)
+    return out
+
+
+def check_phase(played: np.ndarray, *, where: str = "") -> None:
+    """**Gate 1.**  Every playout run is the loaded waveform, in phase, from its own beginning.
+
+    ``real[i] == shot_codes(base)[i % nsamp]`` within each run -- a read-pointer error, a wrap error
+    or an off-by-one at the region boundary all break it, and **an LT transient cannot**: this gate
+    does not care when playing started, only what came out once it did.  That is what makes relaxing
+    the cross-backend comparison safe rather than merely convenient.
+
+    **Per segment, not per run of the whole capture.**  `RfShotTx` restarts the shot from its
+    beginning after a preemption, so a whole-capture assertion would fail for the right reason and
+    look like a bug.
+
+    **Per backend.**  It is not a comparison against the other one: `array_equal` against the other
+    backend says only that they differ, while this says *which* has the wrong phase.
+
+    Two things it catches that :func:`check_finite_playout` and :func:`check_loop_playout` do not:
+    it runs on the **pysim** capture as well as the RTL one, and it covers the ragged **tail** --
+    those two truncate to whole passes (``whole = size - size % want.size``) and never look at a
+    final partial pass the horizon cut.
+    """
+    for k, (is_filler, seg) in enumerate(segments(played)):
+        if is_filler or seg.size == 0:
+            continue
+        base = int(seg[0])
+        if base not in KNOWN_BASES:
+            raise AssertionError(
+                f"{where}playout run {k} starts on code {base}, which is not one of the loaded "
+                f"waveforms {list(KNOWN_BASES)}. A run that begins mid-waveform is a read pointer "
+                f"that did not wrap to the region's start.")
+        want = shot_codes(base)
+        got_want = want[np.arange(seg.size) % want.size]
+        if not np.array_equal(seg, got_want):
+            i = int(np.flatnonzero(seg != got_want)[0])
+            raise AssertionError(
+                f"{where}playout run {k} (base {base}, {seg.size} samples) is out of phase at "
+                f"sample {i}: played {int(seg[i])}, the waveform's sample {i % want.size} is "
+                f"{int(got_want[i])}.")
+
+
+def compare_after_transients(a: np.ndarray, log_a: list[PlayRun],
+                             b: np.ndarray, log_b: list[PlayRun],
+                             *, guard: int = 0, where: str = "",
+                             names: tuple[str, str] = ("a", "b")) -> None:
+    """**Gate 2.**  The two captures, aligned on their **own** logs, compared **exactly**.
+
+    Startup and handover are the same case here: each is a filler->play transition, and each stream
+    is segmented at its own.  The LT lead is then a constant prefix the alignment removes, which is
+    why retiring the player's metronome does not weaken this.
+
+    **The event sequence is asserted first, and that is load-bearing.**  Two runs that saw
+    *different events* -- a different number of playouts, or the same number of different waveforms
+    -- is a real divergence, and aligning them anyway would paper over exactly the failure worth
+    catching.
+
+    **Exact, not a tolerance.**  These are integer converter codes computed from one golden on both
+    sides; any difference is a defect and an MSE would hide a single wrong sample.
+
+    **This is the successor to ``test_both_backends_agree_sample_for_sample``, and it inherits that
+    test's other claim.**  The old gate was the honest half of
+    ``test_the_handover_leaves_a_speculative_read_that_the_design_discards``: pysim takes the region
+    out of the owner's hands inside ``grant()`` and RAISES on the very next access, so if the RTL
+    player were *using* the words it speculatively reads while yielded, the two sequences could not
+    agree.  This gate still compares values after alignment, so that proof survives intact -- the
+    alignment moves *where* the comparison starts, never *what* it compares.
+
+    ``guard`` samples are skipped at the start of each run.  It defaults to **0** because S1
+    measured 0 to be sufficient in both scenarios, on all 1088 samples after the first transition.
+    It stays a parameter as insurance against a geometry where the boundary lands a sample or two
+    off -- not as cover for the lead, which the log already removes.
+    """
+    ea, eb = [r.event for r in log_a], [r.event for r in log_b]
+    if ea != eb:
+        raise AssertionError(
+            f"{where}the two runs saw different events: {names[0]} played {ea}, {names[1]} played "
+            f"{eb}. Different events is a divergence in its own right -- aligning them anyway would "
+            f"compare two things that did not happen in the same order.")
+    for k, (ra, rb) in enumerate(zip(log_a, log_b)):
+        n = min(ra.length, rb.length) - int(guard)
+        if n <= 0:
+            continue
+        sa = a[ra.start + guard:ra.start + guard + n]
+        sb = b[rb.start + guard:rb.start + guard + n]
+        if not np.array_equal(sa, sb):
+            i = int(np.flatnonzero(sa != sb)[0])
+            raise AssertionError(
+                f"{where}playout run {k} (event {ra.event}) differs at sample {i} of {n}: "
+                f"{names[0]}[{ra.start + guard + i}] = {int(sa[i])}, "
+                f"{names[1]}[{rb.start + guard + i}] = {int(sb[i])}. The runs are aligned on their "
+                f"own filler->play boundaries, so this is a value difference and not a timing one.")
+
+
+def transients(played: np.ndarray) -> tuple[int, list[int]]:
+    """``(startup, handovers)`` in samples — **the measurement gate 3 pins**.
+
+    Two quantities and **not one**, because they are not the same thing (S1):
+
+    * the **startup** transient is the design's load latency *plus* the LT lead, so it differs
+      between a backend paced by ``TREADY`` and one paced by back-pressure alone;
+    * a **handover** is pure latency.  The lead is built once, and by the time a handover happens
+      the pipe is already full -- so it is identical in both backends and under either pacing.
+
+    A trailing filler run is neither: it is the design going quiet on purpose, and its length is set
+    by the horizon.  Only filler runs with a playout on *both* sides are handovers.
+    """
+    segs = segments(played)
+    startup = int(segs[0][1].size) if segs and segs[0][0] else 0
+    handovers = [int(s.size) for k, (f, s) in enumerate(segs)
+                 if f and 0 < k < len(segs) - 1]
+    return startup, handovers
 
 
 def check_responses(got, frames, *, where: str = "") -> None:

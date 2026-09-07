@@ -684,11 +684,12 @@ class ShotTxPlayer(FreeRunMod):
     base: HwParam[int] = 0
     #: Elements between polls, **and** words per pysim output burst — one number, because they are
     #: the same boundary.  A poll per converter block is the natural cadence.
+    #:
+    #: **It is not a rate.**  It used to be a third thing as well — the quantum a ``dac_word_rate``
+    #: metronome divided to get a period — and ``plans/lt_transient.md`` S2 retired that.  The burst
+    #: width remains because the converter edge downstream takes a whole block per event and refuses
+    #: a partial one; that is a modelling *shape*, and nothing here declares how fast anything runs.
     blk_words: HwParam[int] = 1
-    #: **Words per second the DAC consumes** — or ``None`` to run at the fabric's rate alone.  A
-    #: modelling input and not hardware: in RTL this task is paced by ``TREADY``, but pysim does not
-    #: back-pressure a burst write, so the metronome has to be handed over.
-    dac_word_rate: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -737,9 +738,6 @@ class ShotTxPlayer(FreeRunMod):
         self.n_plays = 0
         self.n_resumed = 0
         self.n_done = 0
-        #: The pysim rate grid: when the first block went out, and how many have.
-        self._t0: float | None = None
-        self._blocks = 0
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("shot_tx_player_task", "shot_tx_player_task.h",
@@ -749,7 +747,7 @@ class ShotTxPlayer(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one chunk **and exactly one poll** — the C++ body's outer iteration."""
-        yield from self._chunk_and_pace()
+        yield from self._chunk()
 
         # EXACTLY ONE POLL, outside everything above -- that is what `check_period` means and what
         # keeps the datapath's II untouched.  `handle_nb` applies a RELEASE on the spot because a
@@ -781,17 +779,22 @@ class ShotTxPlayer(FreeRunMod):
             # and nothing else will ever send it.
             yield from self._send_done()
 
-    def _chunk_and_pace(self) -> ProcessGen[None]:
-        """One chunk out — from the memory when it owns it, filler when it does not — then the rate.
+    def _chunk(self) -> ProcessGen[None]:
+        """One chunk out — from the memory when it owns it, filler when it does not.
 
         Split from :meth:`run_iter` so the datapath and the *decision* are separable: the poll is one
         firing's worth of lock traffic sitting outside a body that is otherwise a counted loop, which
         is exactly the shape the C++ has and exactly why ``II=1`` survives having a lock at all.
 
-        The rate is charged **after** the hand-off and on an **absolute** grid.  Charging first would
-        make every block arrive one period late; a relative wait restarts from wherever ``now``
-        happens to be, so everything the body yielded for is added to the period and never given back
-        — the defect that made ``rf_samp_buf_tx``'s player slip a whole block every fourth firing.
+        **Nothing here declares a rate**, and it used to (``plans/lt_transient.md``).  What paces
+        this task is the same thing that paces it at RTL: it writes, and when the consumer has no
+        room it blocks.  What back-pressure does *not* do is bound how far **ahead of the data** a
+        free-running source gets — while it owns nothing it writes filler, so a shot loaded later
+        queues behind whatever filler is already in flight.  That lead is bounded by the declared
+        depths along the path (S1 measured 448 samples at ``examples/rf_shot_tx``'s geometry) and it
+        is a *prefix*, not a loss: every sample written arrives, in order, just later than the
+        converter's own grid would have put it.  The gates align on each backend's own playout log
+        instead of demanding the two grids coincide.
         """
         w, bw, nw = int(self.bitwidth), int(self.blk_words), int(self.nword)
         if self.playing:
@@ -813,16 +816,6 @@ class ShotTxPlayer(FreeRunMod):
             yield from self.samp_out.write(np.full(bw, FILLER, dtype=np.uint64))
             self.n_filler += 1
         self.n_chunks += 1
-
-        if self._t0 is None:
-            # The grid's origin: the instant the FIRST block went out.  Set here rather than at
-            # construction, because anchoring at t=0 would charge the design for time before it had
-            # anything to put on the wire.
-            self._t0 = self.now
-        self._blocks += 1
-        if self.dac_word_rate:
-            deadline = self._t0 + self._blocks * (bw / float(self.dac_word_rate))
-            yield self.timeout(max(0.0, deadline - self.now))
 
     def _send_done(self) -> ProcessGen[None]:
         """Tell the loader a finite play-set is over.  **Never on the loop path.**
@@ -893,8 +886,6 @@ class RfShotTx(FreeRunMod):
     #: Words per converter block: the player's chunk, its poll period, and the re-layout's pysim
     #: burst.  One number for all three because they are one boundary.
     blk_words: HwParam[int] = 1
-    #: The DAC's word rate — :attr:`ShotTxPlayer.dac_word_rate`, passed through.  Not hardware.
-    dac_word_rate: float | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -913,7 +904,7 @@ class RfShotTx(FreeRunMod):
                                  nword=nw, samp_per_word=spw, base=b, clk=self.clk)
         self.play = type(self).player_cls(sim=self.sim, name=f"{self.name}_play", bitwidth=w,
                                           depth=d, nword=nw, base=b, blk_words=bw,
-                                          dac_word_rate=self.dac_word_rate, clk=self.clk)
+                                          clk=self.clk)
         # The re-layout is LAST, so it is the stage the converter back-pressures and therefore the
         # one that carries the block-shaped handover.  The accommodation follows the port.
         self.relayout = RfRelayoutToSlots(sim=self.sim, name=f"{self.name}_to_slots", bitwidth=w,
@@ -929,6 +920,13 @@ class RfShotTx(FreeRunMod):
         # accumulate because a second finite load is refused until the first is harvested.  `samp` is
         # depth 2 -- the HLS default for a top argument and enough for a producer and a consumer to
         # overlap by one beat, which is all an II=1 chain needs.
+        #
+        # THAT 2 IS NOT ITS PYSIM CAPACITY, and the difference matters to anyone computing how far
+        # ahead the player can get.  `interface._admit_blocking` hands a burst LARGER than the whole
+        # queue over in one piece (it waits for the queue to empty first), and this player writes
+        # `blk_words` at a time -- so in pysim the channel carries one whole burst, not two words.
+        # `examples.rf_shot_tx.rf_shot_tx.c_lead` spells the rule as `max(depth, blk_words)`; reading
+        # the 2 and stopping there understates this stage eightfold at that example's geometry.
         for nm, master, slave, depth in (("rep", self.load.rep_out, self.play.rep_in, 1),
                                          ("done", self.play.done_out, self.load.done_in, 1),
                                          ("samp", self.play.samp_out, self.relayout.s_in, 2)):

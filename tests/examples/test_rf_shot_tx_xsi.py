@@ -31,7 +31,7 @@ proved the *lock's* ordering, and it survives in pysim as
 the guard raises rather than producing a plausible sample.  Shipping a second deliberately broken
 RTL design to re-prove it would be a second copy of a finding, not a second finding.  What is new
 here is the **merge**, and the merge is proven by the two scenarios above and by
-:func:`test_both_backends_agree_sample_for_sample`.
+:func:`test_the_two_backends_agree_after_their_own_transients`.
 
 What is gated, and how each fails
 ---------------------------------
@@ -47,9 +47,17 @@ What is gated, and how each fails
   Both scenarios in one gate are what separates those.
 * **Gate 4 — all five verdicts plus ``SHOT_END``**, across the two streams, each with its own
   ``tid`` and in order.
-* **Both backends byte-identical**, sample for sample over the common horizon — so the command
-  layer, the lock, the memory, the player, the re-layout and the converter's unpack are covered by
-  one comparison, made in **converter codes**, which is what a host wrote.
+* **The three LT gates** (``plans/lt_transient.md`` S2), which replace one byte-identical-from-t=0
+  comparison.  The player has no metronome any more, so the two backends start playing at different
+  instants and a raw ``array_equal`` would be asserting a fidelity level loosely-timed modelling
+  does not promise:
+
+  - **phase**, per backend and per segment, against the *waveform* rather than the other backend;
+  - **agreement**, aligned on each capture's own playout log and compared exactly — still one
+    comparison covering the command layer, the lock, the memory, the player, the re-layout and the
+    converter's unpack, in **converter codes**, which is what a host wrote;
+  - **the transient**, recorded per backend rather than cross-compared, plus the derived bound it
+    has to sit under.  Relaxing a comparison must not stop a measurement.
 * **The region is at the top of the memory.**  ``base + offset`` is the shape of the byte-versus-word
   bug ``bram_toy`` stayed green through.
 * **The DAC is never starved on either path.**  Filler is a *value*, not a stall.
@@ -78,12 +86,18 @@ from examples.rf_shot_tx.rf_shot_tx import (
     RESP,
     XSI_N_CYCLES,
     blocks_to_codes,
+    c_lead,
     check_finite_playout,
+    check_horizon_covers_the_lead,
     check_loop_playout,
+    check_phase,
     check_responses,
+    compare_after_transients,
+    play_log,
     played_samples,
     run_pysim,
     segments,
+    transients,
 )
 from examples.rf_shot_tx.rf_shot_tx_build import RTL_FILES, TOP, WRAPPER, generate_tb
 from waveflow.build.composite_gen import render_rtl_f
@@ -163,6 +177,29 @@ WANT_RDW_COLLISIONS = {"cmd": 0, "cmd_loop": 2}
 
 #: The elements the writer actually touched.  The region sits at the TOP of the memory on purpose.
 WANT_WRITE_RANGE = (BASE, BASE + NWORD - 1)
+
+#: **The startup transient per backend and scenario, in samples.**  Recorded 2026-09-07 (S1) and
+#: re-measured on the first green S2 run.  RECORDED, not cross-compared — the two backends are
+#: supposed to differ, because only one of them is paced by the converter.
+#:
+#: 192 at RTL is the design's load latency on the converter's grid: driver, header, 64 payload
+#: words, lock acquire, grant.  640 in pysim is that same 192 plus the 448-sample LT lead, and the
+#: lead is what a free-running player fills the path with while it owns nothing to play.
+WANT_STARTUP = {("rtl", "cmd"): 192, ("rtl", "cmd_loop"): 192,
+                ("pysim", "cmd"): 640, ("pysim", "cmd_loop"): 640}
+
+#: **Handover transients, in samples** — how long the converter plays silence while the memory
+#: changes hands.  The **same in both backends**, and that is the finding: the lead is built once,
+#: so by the time a handover happens the pipe is already full and none of it reaches the gap.
+#: ``cmd`` has none — a finite shot is one continuous run.
+WANT_HANDOVERS = {"cmd": [], "cmd_loop": [128]}
+
+#: Samples skipped at the start of each aligned run.  **Zero, and measured** rather than chosen: S1
+#: compared RTL against the LT pysim capture aligned on their own logs and found them identical over
+#: all 1088 samples after the first transition, in both scenarios.  It stays a parameter as
+#: insurance against a geometry where the boundary lands a sample or two off — never as cover for
+#: the lead, which the log already removes.
+GUARD = 0
 
 #: The synthesized pipelined loops, by module.  Named for the **label** on each loop: Vitis names an
 #: unlabelled loop ``VITIS_LOOP_<line>_1`` and nests that name into its children, so a comment edit
@@ -349,27 +386,153 @@ def test_the_playout_has_the_recorded_block_shape(runs, name):
         f"quiet on purpose.")
 
 
+@pytest.fixture(scope="module")
+def pysim_runs() -> dict:
+    """The SimPy golden for both scenarios, once.
+
+    Module-scoped for the same reason :func:`runs` is: three of the LT gates read the same two
+    captures, and re-running the simulation per test would be three copies of one measurement.
+    """
+    out: dict[str, dict] = {}
+    for name, _tb, _resp_b, _rf_b, frames, _check in SCENARIOS:
+        tb = run_pysim(frames=frames, in_bundle=f"vectors/{name}")
+        out[name] = {"played": played_samples(tb), "tb": tb}
+    return out
+
+
+def _capture(runs, pysim_runs, backend: str, name: str):
+    """The played stream of one *backend* on one scenario, in converter codes."""
+    return runs[name]["played"] if backend == "rtl" else pysim_runs[name]["played"]
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("backend", ["rtl", "pysim"])
+@pytest.mark.parametrize("name", ["cmd", "cmd_loop"])
+def test_every_playout_segment_is_in_phase_with_the_waveform(runs, pysim_runs, backend, name):
+    """**LT gate 1.**  Each backend against the **waveform**, per segment — not against each other.
+
+    ``real[i] == shot_codes(base)[i % nsamp]`` inside every playout run.  It catches read-pointer
+    errors, wrap errors and off-by-ones at the region boundary, and **an LT transient cannot break
+    it**: it does not care when playing started.  That is precisely what makes relaxing the
+    cross-backend comparison safe rather than merely convenient — the property that comparison was
+    really protecting is checked here, per backend, and more sharply.  ``array_equal`` against the
+    other backend says only that the two differ; this says *which one* has the wrong phase.
+
+    **Per segment**, because `RfShotTx` restarts the shot from its beginning after a preemption, so
+    a whole-capture assertion would fail for the right reason and look like a bug.
+
+    Two things it reaches that :func:`test_the_rtl_plays_a_finite_shot_three_times_and_then_goes_quiet`
+    and its loop counterpart do not: the **pysim** capture, which nothing checked directly before,
+    and the ragged **tail** — those two truncate to whole passes and never look at a final partial
+    pass the horizon cut.
+    """
+    check_phase(_capture(runs, pysim_runs, backend, name), where=f"{backend} {name}: ")
+
+
 @pytest.mark.xsi
 @pytest.mark.parametrize("name", ["cmd", "cmd_loop"])
-def test_both_backends_agree_sample_for_sample(runs, name):
-    """**Byte-identical**, RTL against the SimPy golden, in converter codes.
+def test_the_two_backends_agree_after_their_own_transients(runs, pysim_runs, name):
+    """**LT gate 2, and the successor to ``test_both_backends_agree_sample_for_sample``.**
 
-    Compared over the common horizon: the RTL run is a fixed number of *cycles* and the pysim run a
-    fixed number of converter *blocks*, so the two tails differ in length by construction and
-    nothing else.  Everything before that is one comparison of the whole path.
+    Each capture is segmented at **its own** filler->play transitions and each playout run compared
+    **exactly**, after :data:`GUARD` samples.  Startup and handover are one case: a handover is just
+    another logged event.
 
-    This is also the honest half of
+    **What changed and what did not.**  The old gate asserted ``array_equal`` from ``t=0``, which
+    only held because the player carried a ``dac_word_rate`` metronome forcing pysim onto the
+    converter's own time grid.  That parameter is retired, so pysim now starts playing
+    :data:`~examples.rf_shot_tx.rf_shot_tx.C_LEAD`-worth of filler later than the RTL does.  The
+    lead is a constant **prefix**, and aligning on each capture's own log removes it — every sample
+    of every playout run is still compared, exactly, in converter codes.
+
+    **The event sequence is asserted first**, and it is load-bearing: two runs that saw *different*
+    events — a different number of playouts, or different waveforms in the same slots — is a real
+    divergence, and alignment must fail loudly there rather than paper over it.
+
+    **It still carries the speculative-read proof.**  The old gate was named as the honest half of
     :func:`test_the_handover_leaves_a_speculative_read_that_the_design_discards`: pysim takes the
-    region out of the owner's hands inside ``grant()`` and RAISES on the very next access, so if the
-    RTL player were *using* the words it reads while yielded, these two sequences could not agree.
+    region out of the owner's hands inside ``grant()`` and **raises** on the very next access, so if
+    the RTL player were *using* the words it reads while yielded, the two sequences could not agree.
+    This gate compares the same values, so the claim survives intact — alignment moves *where* the
+    comparison starts, never *what* it compares.
     """
     rtl = runs[name]["played"]
-    py = played_samples(run_pysim(frames=runs[name]["frames"], in_bundle=f"vectors/{name}"))
+    py = pysim_runs[name]["played"]
     assert rtl.size and py.size, f"{name}: one of the backends produced no samples at all"
-    n = min(int(rtl.size), int(py.size))
-    assert np.array_equal(rtl[:n], py[:n]), (
-        f"{name}: the two backends disagree — first mismatch at sample "
-        f"{int(np.flatnonzero(rtl[:n] != py[:n])[0])} of {n}.")
+    compare_after_transients(rtl, play_log(rtl), py, play_log(py),
+                             guard=GUARD, where=f"{name}: ", names=("RTL", "pysim"))
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("backend", ["rtl", "pysim"])
+@pytest.mark.parametrize("name", ["cmd", "cmd_loop"])
+def test_the_transients_are_the_recorded_ones(runs, pysim_runs, backend, name):
+    """**LT gate 3.**  The lead, **recorded per backend** — the measurement gate 2 stopped making.
+
+    The risk in relaxing a comparison is silently ceasing to measure, and this is what prevents it.
+    A *difference between* the backends is no longer a failure; a **change in either** still is.
+
+    **Startup and handover are pinned separately, because they are not the same quantity** (S1):
+
+    * the **startup** transient is the design's load latency *plus* the LT lead, so the two backends
+      legitimately differ — 192 at RTL, where ``TREADY`` paces the player word by word, against 640
+      in pysim, where back-pressure paces the *rate* but not how far ahead of the data the player
+      may get;
+    * a **handover** is pure latency — 128 samples in **both** backends.  The lead is built once, and
+      by the time a handover happens the pipe is already full, so nothing of it reaches the gap.
+      A single number covering both cases would have hidden exactly that.
+
+    ``cmd`` has no handover at all: a finite shot is one continuous run, so ``cmd_loop`` is the only
+    scenario that measures one.
+    """
+    startup, handovers = transients(_capture(runs, pysim_runs, backend, name))
+    assert startup == WANT_STARTUP[(backend, name)], (
+        f"{backend} {name}: the startup transient is {startup} samples, recorded "
+        f"{WANT_STARTUP[(backend, name)]}. This is a measurement, not a target — a change is a "
+        f"finding either way, and the two backends are SUPPOSED to differ here.")
+    assert handovers == WANT_HANDOVERS[name], (
+        f"{backend} {name}: handover transients {handovers}, recorded {WANT_HANDOVERS[name]}. A "
+        f"handover is how long the converter plays silence while the memory changes hands, and it "
+        f"is pure latency — identical in both backends and under either pacing.")
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("name", ["cmd", "cmd_loop"])
+def test_the_lt_lead_sits_under_the_bound_the_declared_depths_derive(runs, pysim_runs, name):
+    """The bound is **derived from the declared depths, not chosen** — and both halves are checked.
+
+    ``plans/lt_transient.md`` states the invariant that survived S1's measurement::
+
+        transient_startup(LT)  <=  C_lead + transient_startup(RTL)
+        transient_handover(LT)  =  transient_handover(RTL)
+
+    and **not** the plan's original claim that the transient sits under the sum of the depths, which
+    S1 refuted: 640 > 448.  The depth sum bounds the **lead**.  The rest of the startup transient is
+    the design's own load latency — driver, header, payload, lock acquire, grant — and no queue
+    depth is an input to it.
+
+    :func:`~examples.rf_shot_tx.rf_shot_tx.c_lead` reads the six terms off the bound interface graph,
+    so this tracks automatically when ``blk_words`` or a queue depth changes — which is the reason
+    the plan insisted on deriving it.  It also catches a stage nobody modelled: S1 found two
+    (the composite's own ``samp`` FIFO and the re-layout task) hiding behind one that holds nothing
+    (the sink's queue), and the two errors cancelled in the total.
+    """
+    tb = pysim_runs[name]["tb"]
+    bound = c_lead(tb)
+    # ... and the horizon still follows from the same formula.  A run whose horizon stopped covering
+    # the lead ends with part of the playout in flight and looks like a truncated design.
+    check_horizon_covers_the_lead(tb, where=f"{name}: ")
+    rtl_start, rtl_hand = transients(runs[name]["played"])
+    py_start, py_hand = transients(pysim_runs[name]["played"])
+    assert py_start <= bound + rtl_start, (
+        f"{name}: the LT startup transient is {py_start} samples against a bound of "
+        f"{bound} (C_lead) + {rtl_start} (the RTL's own) = {bound + rtl_start}. Either a stage on "
+        f"the path holds more than it declares, or there is a stage in the path that c_lead() does "
+        f"not know about.")
+    assert py_hand == rtl_hand, (
+        f"{name}: handovers are {py_hand} in pysim against {rtl_hand} at RTL. The lead is built "
+        f"once, so by the time a handover happens the pipe is full and the two must agree exactly; "
+        f"a difference here means the LT lead is reaching a gap it cannot reach.")
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +679,11 @@ def test_the_handover_leaves_a_speculative_read_that_the_design_discards(runs, n
       ``$error`` away (``reference-xsi-discards-rtl-text``), so this scan is the only witness.
 
     Those two collisions are **not** a defect, and the evidence is in a different test:
-    :func:`test_both_backends_agree_sample_for_sample` compares this run against a pysim run where
-    reading a yielded region raises, and they are byte-identical.  The word is fetched and thrown
-    away.  What would make it a defect is the count *changing*, which is why both numbers are pinned
+    :func:`test_the_two_backends_agree_after_their_own_transients` compares this run against a pysim
+    run where reading a yielded region raises, and every playout sample agrees.  The word is fetched
+    and thrown away.  (That gate used to demand byte-identity from ``t=0``; since
+    ``plans/lt_transient.md`` S2 it aligns on each capture's own playout log first, which moves
+    *where* the comparison starts and not *what* it compares — so this evidence is unchanged.)  What would make it a defect is the count *changing*, which is why both numbers are pinned
     rather than bounded — a rise means the player started reading somewhere it should not, and a fall
     means the read port stopped being unconditional, which changes what the region does and does not
     enforce at RTL.

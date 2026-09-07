@@ -1,21 +1,24 @@
 # Plan — loosely-timed by default, matched on demand
 
-**Status: DECIDED 2026-09-07. S1 MEASURED 2026-09-07; nothing built.** Owns what the pysim↔RTL
-comparison asserts about *timing*, and the metronome parameters that exist to satisfy the current
-answer. **Replaces `plans/filler_offer.md`**, which proposed a player-side fix for something the
-player was not causing.
+**Status: S1 MEASURED and S2 BUILT, 2026-09-07. Only S3 (Matched mode) is left, and it is
+optional.** Owns what the pysim↔RTL comparison asserts about *timing*, and the metronome parameters
+that existed to satisfy the old answer. **Replaces `plans/filler_offer.md`**, which proposed a
+player-side fix for something the player was not causing.
 
 ---
 
-## Next session starts here — S2
+## Next session starts here — S3, **and only if wanted**
 
-**S1 is DONE** (2026-09-07, branch `lt-transient-s1`) — see *S1 as measured*. It changed no gate and
-no constant. The bound is `C_lead = 448` samples at the gated geometry, the measured lead is 448
-exactly, and the plan's "128-sample gap" was two errors that cancelled.
+**S1 and S2 are DONE** (2026-09-07, branches `lt-transient-s1` / `lt-transient-s2`) — see *S1 as
+measured* and *S2 as built*. The three gates are in, `ShotTxPlayer.dac_word_rate` is retired, and no
+number the design produces moved: the generated C++ is byte-identical and every RTL measurement holds.
+
+S3 is **Matched mode** — a debugging tool, not a gate. Nothing depends on it.
 
 ```
-claude "Read plans/lt_transient.md, sections 'What the gates become' and 'S1 as measured',
-        and build S2.  The formula and every number S2 needs are in 'S1 as measured'."
+claude "Read plans/lt_transient.md, sections 'Matched mode, later' and 'S2 as built', and build S3.
+        It is a DEBUGGING mode: it must not become the reference, and it must not be what any gate
+        runs in."
 ```
 
 ---
@@ -205,7 +208,7 @@ guarantee degrades exactly as tile sync does**, and the model can already expres
 **Its gate would be different, not stricter**: absolute (`sample_j == mem[j % BUF_LEN]` against a
 global counter) rather than per-segment. Do not build it by tightening this plan's phase check.
 
-## What retires
+## What retires — **done, see *S2 as built***
 
 * `ShotTxPlayer.dac_word_rate`, and the hand-computed `samp_rate / samp_per_word` in the example.
 * `blk_words`'s second meaning — it becomes only the lock poll period.
@@ -218,8 +221,9 @@ global counter) rather than per-segment. Do not build it by tightening this plan
 **Relaxing a gate must not stop a measurement.** Gate 3 exists for this: the transient stays pinned
 per backend even though it is no longer cross-compared.
 
-**The stale docstring.** `rf_shot_tx.py:689-690` still says *"pysim does not back-pressure a burst
-write"*. S2 made that false. Fix it with this work.
+**The stale docstring.** ~~`rf_shot_tx.py:689-690` still says *"pysim does not back-pressure a burst
+write"*.~~ **Fixed in S2**, along with `_chunk_and_pace`, whose name became a lie once it stopped
+pacing.
 
 **Cycle counts are measurements.** Relaxing the comparison changes what is asserted, not what the
 design does — so a *design* number that moves is a finding, not a re-record.
@@ -435,6 +439,138 @@ No gate, no assertion, no constant. `test_both_backends_agree_sample_for_sample`
 and `dac_word_rate` are all exactly as they were; the suites are unchanged (6 non-vitis failures,
 87 XSI gates, 0 skipped).
 
+## S2 as built — **three gates, one number moved, and the design did not**
+
+Built 2026-09-07, branch `lt-transient-s2`. `ShotTxPlayer.dac_word_rate` and `RfShotTx.dac_word_rate`
+are gone; `RfSampBufPlayer.dac_word_rate` and `RfTxStream.slot_period` remain, for the measured
+reasons `plans/pysim_burst_backpressure.md` S3 records.
+
+### The three gates
+
+All three live in `tests/examples/test_rf_shot_tx_xsi.py`; the vocabulary they call
+(`check_phase`, `compare_after_transients`, `play_log`, `transients`, `c_lead`) is in
+`examples/rf_shot_tx/rf_shot_tx.py`, beside `segments()` — **the log and the comparison are one
+mechanism and belong together.** *(Assumption recorded: the plan writes
+`compare_after_transients` as a free function without saying where it lives. Nothing outside this
+example derives a log from its own output yet, so it is not framework until a second caller exists.)*
+
+| | gate | what it asserts | items |
+|---|---|---|---|
+| 1 | `test_every_playout_segment_is_in_phase_with_the_waveform` | `real[i] == shot_codes(base)[i % nsamp]` inside every playout run, **per backend, per segment** | 4 |
+| 2 | `test_the_two_backends_agree_after_their_own_transients` | same event sequence, then every playout run compared **exactly** after `GUARD` samples | 2 |
+| 3 | `test_the_transients_are_the_recorded_ones` | startup and handover pinned **per backend**, separately | 4 |
+| — | `test_the_lt_lead_sits_under_the_bound_the_declared_depths_derive` | `startup(LT) <= c_lead + startup(RTL)`, and `handover(LT) == handover(RTL)` | 2 |
+
+**Gate 1 is what makes gate 2's relaxation safe**, and it is stronger than what it supplements in two
+places: it runs on the **pysim** capture, which nothing checked directly before, and it covers the
+ragged **tail** — `check_finite_playout` / `check_loop_playout` truncate to whole passes
+(`whole = size - size % want.size`) and never look at a final partial pass the horizon cut.
+
+**Gate 1 asserts the segment's base is a *declared* waveform** (`KNOWN_BASES`) before checking phase
+against it. Deriving the base from the run's own first sample would make the check tautological at
+`i = 0` and unable to catch a run that started mid-waveform — which is exactly the read-pointer error
+it exists for.
+
+**Gate 2's event is the waveform's base code**, so the log says *what* happened and not merely how
+many times something did: a run that played `[A, B]` against one that played `[A, A]` fails on the
+event sequence rather than being aligned and then compared. *(Assumption recorded: the plan's
+`log_a = [(e, i), ...]` does not say what `e` is.)*
+
+**Gate 2 compares per playout run, not from each event to the end of the stream.** S1 measured the
+stronger whole-tail form and it also holds, but per-run keeps the concerns apart: gate 2 owns
+*values*, gate 3 owns *transient lengths*. Under the whole-tail form a handover that changed length
+would fail gate 2 with a confusing message about a value.
+
+### The speculative-read claim survived
+
+The retired gate's docstring named it as *"the honest half"* of
+`test_the_handover_leaves_a_speculative_read_that_the_design_discards`: pysim takes the region out of
+the owner's hands inside `grant()` and **raises** on the very next access, so if the RTL player were
+*using* the words it speculatively reads while yielded, the two sequences could not agree. Gate 2
+compares the same values against the same pysim run, so the proof is intact — **alignment moves
+*where* the comparison starts, never *what* it compares.** Said so in gate 2's docstring, and the
+speculative-read test's own docstring now points at gate 2 and records that the alignment does not
+weaken the evidence it is leaning on.
+
+### `guard = 0`, and it stayed a parameter
+
+S1 measured RTL against the LT pysim capture, aligned on their own logs, identical over all 1088
+samples after the first transition in both scenarios. So `GUARD = 0` and no machinery was built for a
+number the measurement says is unnecessary. It stays a parameter as insurance against a geometry
+where a boundary lands a sample or two off — never as cover for the lead, which the log removes.
+
+### Every number, and whether `n_blk` explains it
+
+**`n_blk` 20 → 27 is the one number S2 changed**, and it is derived:
+`N_BLK_BASE + ceil(c_lead / blksize)` = `20 + ceil(448 / 64)` = `27`. Without it the LT run loses its
+tail — the third pass and the trailing quiet are still in the pipe when the horizon closes, so the
+playout is truncated by the testbench rather than by the design.
+
+**It is written down and *gated*, not computed at import.** `c_lead()` needs a bound graph and
+`n_blk` is a field default of the very testbench that graph comes from, so deriving it at import
+would be circular. `check_horizon_covers_the_lead()` closes that: one formula, in `c_lead`, and a
+check that the recorded number still follows from it. Worth having because the failure is quiet — a
+horizon that stopped covering the lead does not raise, it just ends the run with part of the playout
+in flight, and the capture then looks like a design that truncated itself.
+
+Moved, **all of them downstream of `n_blk` by construction**:
+
+| number | before | after | why |
+|---|---|---|---|
+| pysim `played_samples`, both scenarios | 1280 | 1728 | 27 blocks instead of 20 |
+| pysim `blocks_delivered` | 20 | 27 | same |
+| pysim startup transient | 192 | 640 | the metronome is gone: 192 (load latency) + 448 (`C_lead`) |
+| pysim trailing filler, `cmd` | 320 | 320 | *unchanged* — the tail is back, exactly |
+| pysim trailing filler, `cmd_loop` | 832 | 832 | *unchanged* |
+| `docs/examples/rf_shot_tx/images/playout.svg` | — | regenerated | drawn from the pysim run; the leading shaded run is now the lead |
+| `WANT_XSI_GATES` | 87 | 97 | `test_rf_shot_tx_xsi.py` 20 → 30 gates |
+
+**Did not move — and this is the claim the plan made:**
+
+* every RTL number. `WANT_SEGMENT_BLOCKS`, `WANT_RESP_LAST_CYCLE` (269 / 500), `WANT_DAC_WORDS`
+  (359), `WANT_ZERO_FILLED` (0), `WANT_DAC_UNDERRUN` (1 at cycle 4), `WANT_PORT_OVERLAP_CYCLES`
+  (18 / 55), `WANT_RDW_COLLISIONS` (0 / 2), `WANT_WRITE_RANGE`, every II.
+* the generated C++. `gen/rf_shot_tx.cpp` and `include/` regenerate **byte-identical**, so
+  `rtl_staleness` still reports clean and no csynth was needed. That is the proof `dac_word_rate`
+  never reached hardware.
+* pysim `n_plays`, `n_done`, `grants`, `underrun`, `overrun`, and every verdict on both streams.
+* all 17 gates in `tests/hw/test_rf_shot_tx.py`, unchanged assertions.
+
+### The bench that had no converter
+
+`tests/hw/test_rf_shot_tx.py`'s `Bench` has no `Rfdc` on purpose, and it took the player's metronome
+directly. With the field gone the pacing had to come from somewhere, and **the honest somewhere is
+the consumer**: `DAC_WORD_RATE` now paces `Bench._drain` — one chunk per chunk period, on an absolute
+grid — so the player is back-pressured exactly as it is at RTL. Throughput is unchanged at one 4-word
+chunk per microsecond, every scenario timing in that file still lands where it did, and all 17
+assertions pass untouched. *(Assumption recorded: the plan says the parameter goes from the player
+and does not say what a converter-less bench should do instead. Moving a converter's rate onto the
+model of a converter is what its own reasoning implies.)*
+
+### Two smaller things
+
+**The stale docstring is fixed.** `ShotTxPlayer` no longer claims *"pysim does not back-pressure a
+burst write"*; `_chunk_and_pace` is now `_chunk`, because after the change the name was a lie.
+
+**`blk_words` — stated accurately rather than as the plan phrased it.** The plan says it "becomes
+only the lock poll period". It does not, quite: the body still writes `blk_words` per burst, and it
+must, because the converter edge downstream takes a whole block per event and refuses a partial one.
+What it stopped being is a **rate** — the quantum a metronome divided. The field's docstring now says
+that, rather than claiming a decoupling the code does not have. Decoupling the burst width from the
+poll period would mean changing the re-layout↔`Rfdc` burst contract, which is a different piece of
+work and not this plan's.
+
+**The golden's non-zero start is a check now**, `check_golden_is_loggable`, run at import so no
+consumer can build a golden the log cannot segment. It **raises** rather than asserts, because
+`python -O` strips an `assert` and this one is load-bearing.
+
+### Also fixed in passing
+
+`docs/guide/rf/rfshotbuf/tx_internal.md` cited five line ranges in `rf_shot_tx.py` that were
+**already wrong at `main`** — `rf_shot_tx.py:815-822` was said to be the channel table and was
+`self.n_chunks += 1`, about 110 lines off. S2 shifted the file another seven lines, so they were
+re-anchored rather than left. Not a defect S2 introduced.
+
 ---
 
 ## Stages
@@ -451,12 +587,18 @@ so — a formula that does not match reality is worse than no formula.
 **Result in *S1 as measured*.** The bound holds at equality; the gap was a misquoted measurement plus
 a two-stage omission that cancelled it.
 
-### S2 — the three gates, and the retirement
+### S2 — the three gates, and the retirement — **DONE**
 
 Phase per segment; agreement aligned on the log; transient recorded. Assert the golden starts
 non-zero. Then `dac_word_rate` goes from `ShotTxPlayer` and `blk_words` loses its second meaning.
 
 **Expect the design's numbers not to move** — nothing here changes what the design does.
+
+**Result in *S2 as built*.** They did not: the generated C++ is byte-identical and every RTL number
+holds. One number moved — `n_blk` 20 → 27, derived as `20 + ceil(C_lead / blksize)` — and everything
+else that moved is downstream of it. `blk_words` is recorded as it actually is rather than as the
+plan phrased it: it stopped being a *rate*, and it is still the burst width, because the converter
+edge takes a whole block per event.
 
 ### S3 — Matched mode
 

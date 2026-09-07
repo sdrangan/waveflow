@@ -69,7 +69,6 @@ dut = RfShotTx.for_word(
     base=192,           # first element of the region
     blk_words=16,       # words per chunk: the poll period, and the pysim block quantum
     sim=sim, name="dut", clk=axis_clk,
-    dac_word_rate=256e6 / 4,
 )
 ```
 
@@ -133,18 +132,54 @@ its region at zero would never test the arithmetic that a design placing it else
 **`base + nword` must fit inside `depth`**, and `blk_words` must divide `nword` so a chunk never
 straddles the end of the region.
 
-{: .note }
-**`dac_word_rate` is a modelling input, not hardware.** At RTL the player is paced by `TREADY` and
-needs nothing. In pysim it still has to be handed over — **but not for the reason this note used to
-give.** It said *"pysim does not back-pressure a burst write"*, and since
-`plans/pysim_burst_backpressure.md` S2 that is false: a burst write now blocks until its consumer has
-room. What back-pressure paces is the **rate**, and measured (S3) that is not sufficient on its own:
-with the metronome removed the throughput stays right — no underrun, the same number of blocks
-delivered — while the player runs *ahead* of the data and fills the downstream queues with filler, so
-the first real sample appears three times later than it does at RTL. Back-pressure controls how fast
-the player may go, not how far ahead of the shot it may get. The rate is
-`samp_rate / samp_per_word` — which the design could in principle derive rather than have you
-compute, and that it does not is a known wart rather than a decision.
+## Pacing, and the LT transient
+
+**Nothing here declares a rate, and it used to.** There was a `dac_word_rate` argument on this
+constructor — the converter's word rate, computed by hand as `samp_rate / samp_per_word` — and
+`plans/lt_transient.md` retired it. It was never hardware: at RTL the player is paced by `TREADY`,
+and the parameter existed only so a pysim run would land on the converter's own time grid and satisfy
+a gate that demanded the two backends be byte-identical **from `t = 0`**. Nothing chose that gate; it
+was written as `array_equal` because that is the obvious thing to write, and it is a fidelity level
+loosely-timed modelling does not promise.
+
+So the player is paced by back-pressure alone, and there is one consequence worth understanding
+before you read a pysim playout:
+
+**Back-pressure paces the *rate*. It does not bound how far *ahead of the data* a free-running
+producer gets.** The player never stops having something to write — when it owns nothing it writes
+filler — so the moment the path downstream has room it fills it, and the shot, when it finally
+arrives, queues *behind* that filler. The result is a longer run of filler before the first real
+sample in pysim than at RTL. It is a **prefix**, not a loss: every sample written arrives, in order.
+
+**The lead is bounded, and the bound is derived rather than chosen.** Every stage between the player
+and the converter's grid blocks on a finite declared depth, and
+`examples.rf_shot_tx.rf_shot_tx.c_lead()` reads all six terms off the bound interface graph:
+
+| # | stage | at the example's geometry |
+|---|---|---|
+| 1 | the composite's own `samp` FIFO | 64 samples |
+| 2 | the re-layout task's in-flight burst | 64 |
+| 3 | the testbench's `dac` FIFO | 128 |
+| 4 | the `Rfdc`'s DAC process, in-flight block | 64 |
+| 5 | `RFSampIF`'s producer-side buffer | 128 |
+| 6 | the sink's own queue — **zero**, because `RfDataSink` drains without waiting | 0 |
+| | **total** | **448** |
+
+Two traps are recorded in that measurement. A channel's capacity is `max(depth, blk_words)` and not
+`depth`: `_admit_blocking` hands a burst larger than the whole queue over in one piece, so the `samp`
+channel's declared depth of 2 carries 16 words. And term 6 is a property of the *consumer*, not of
+the depth — a sink that could wait would occupy it, and then the lead would grow by exactly that.
+
+**What the depths do not bound is the transient.** The startup transient also carries the design's own
+load latency — driver, header, payload, lock acquire, grant — expressed on the converter's grid, and
+no queue depth is an input to it. A **handover** is different again: it is pure latency, identical in
+both backends, because the lead is built once and by the time a handover happens the pipe is already
+full.
+
+The gates follow from that. Each backend is checked against the *waveform* per segment (`check_phase`);
+the two are compared **exactly** after being aligned on their own filler→play logs
+(`compare_after_transients`); and the transient itself is **recorded per backend** rather than
+cross-compared, because relaxing a comparison must not stop a measurement.
 
 ## The boundary
 
