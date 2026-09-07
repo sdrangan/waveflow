@@ -19,38 +19,15 @@ channel-sounding sequence, a pulse train. If you need to change the samples *whi
 out*, without a gap, this is the wrong buffer — see
 [choosing a sample buffer](../choosing.md).
 
-```mermaid
-flowchart LR
-    HOST["host<br/>(AXI DMA)"]
-    MEM[("BRAM")]
-    RFDC["Rfdc"]
+![RfShotTx: a host hands a header and its samples in on one stream and gets one verdict back; the
+loader writes them to a BRAM; the player reads that BRAM at the converter's pace](../figures/rf_shot_tx.svg)
 
-    subgraph K["RfShotTx — one kernel"]
-        L["ShotTxLoader"]
-        P["ShotTxPlayer"]
-        R["re-layout<br/>wired for you"]
-    end
+Three tasks and one memory between them. The host sends a header and, behind it on the **same
+stream**, the samples; one verdict comes back per header. `ShotTxLoader` writes the shot into the
+memory, and `ShotTxPlayer` reads it out at whatever rate the converter takes it.
 
-    HOST -- "ShotTxHdr, samples, TLAST" --> L
-    L -- "ShotTxResp" --> HOST
-    L <-- "lock: take, write, give back" --> MEM
-    P <-- "lock: play, yield on request" --> MEM
-    P --> R
-    R -- "samp_out" --> RFDC
-```
-
-**The memory is inside the design but outside the kernel**, which is why the diagram draws it apart
-from the box. It is hand-written Verilog a generated wrapper joins to the tasks: the generated HLS
-kernel cannot contain it, because Vitis turns an array shared between two tasks into a synchronizing
-channel and refuses one port used both ways. Nothing outside `RfShotTx` sees it either way — see
-[the boundary](#the-boundary).
-
-**Neither task owns the memory outright.** Both reach it through the same lock, and that is what lets
-a new waveform be loaded while an old one is still playing — see
-[two play modes](#two-play-modes-and-what-a-load-does-to-each).
-
-The re-layout stage between the player and `samp_out` re-packs samples from the dense packing the
-memory holds into the slot packing the converter wants. You do not wire it; the composite does.
+The two tasks never touch the memory at the same time — how they hand it over is
+[internal](./tx_internal.md), and nothing you send depends on it.
 
 ## Instantiating one
 
@@ -94,8 +71,8 @@ left for you to decide is the **geometry**: `depth`, `nword`, `base` and `blk_wo
 |---|---|---|
 | `depth` | **words** | how big the memory is |
 | `nword` | **words** | how big one shot is |
-| `base` | **words** | where this shot's region starts |
-| `blk_words` | **words** | words per chunk — the lock poll period |
+| `base` | **words** | where the shot sits in the memory; any value with `base + nword <= depth` |
+| `blk_words` | **words** | words the player moves per step; must divide `nword` |
 | `nsamp` | **samples** | `nword × samp_per_word`, and the only value the header may carry |
 
 {: .warning }
@@ -110,76 +87,6 @@ called out rather than designed away.
 A header that disagrees is *refused*, never truncated — that is what `SHOT_WRONG_LEN` is for. `nsamp`
 exists on the header because it is what the **host believes** it is sending, and catching that belief
 disagreeing with what arrived is the response's whole job.
-
-### Why `base` is not zero
-
-Not to leave memory unused, and **not because multiple regions need it** — the lock speaks in
-addresses, so a design that wants two regions asks for `[0, 128)` and then `[128, 256)` at runtime and
-needs no build-time parameter at all. That is exactly what [`RfShotRx`](./rx.md) does: it has
-`N_REGION = 2`, computes each region's bounds itself, and puts the base address **on the wire** in its
-window header. It has no `base` parameter.
-
-`base` on `RfShotTx` is a **build-time placement of the one region this design asks for**, and the
-honest reason the example makes it non-zero is that it exercises the offset arithmetic. `base +
-offset` is the shape of the byte-versus-word addressing bug that had every BRAM design in this repo
-mis-addressed while `bram_toy` stayed green — because in a small enough region every address is in
-range either way, so the design round-trips perfectly right up to the point its memory wraps. Setting
-`base = depth − nword` puts the region at the very top, which is the placement that catches it.
-
-So: any `base` that fits works, `0` included. It is a parameter because a design that always placed
-its region at zero would never test the arithmetic that a design placing it elsewhere depends on.
-
-**`base + nword` must fit inside `depth`**, and `blk_words` must divide `nword` so a chunk never
-straddles the end of the region.
-
-## Pacing, and the LT transient
-
-**Nothing here declares a rate, and it used to.** There was a `dac_word_rate` argument on this
-constructor — the converter's word rate, computed by hand as `samp_rate / samp_per_word` — and
-`plans/lt_transient.md` retired it. It was never hardware: at RTL the player is paced by `TREADY`,
-and the parameter existed only so a pysim run would land on the converter's own time grid and satisfy
-a gate that demanded the two backends be byte-identical **from `t = 0`**. Nothing chose that gate; it
-was written as `array_equal` because that is the obvious thing to write, and it is a fidelity level
-loosely-timed modelling does not promise.
-
-So the player is paced by back-pressure alone, and there is one consequence worth understanding
-before you read a pysim playout:
-
-**Back-pressure paces the *rate*. It does not bound how far *ahead of the data* a free-running
-producer gets.** The player never stops having something to write — when it owns nothing it writes
-filler — so the moment the path downstream has room it fills it, and the shot, when it finally
-arrives, queues *behind* that filler. The result is a longer run of filler before the first real
-sample in pysim than at RTL. It is a **prefix**, not a loss: every sample written arrives, in order.
-
-**The lead is bounded, and the bound is derived rather than chosen.** Every stage between the player
-and the converter's grid blocks on a finite declared depth, and
-`examples.rf_shot_tx.rf_shot_tx.c_lead()` reads all six terms off the bound interface graph:
-
-| # | stage | at the example's geometry |
-|---|---|---|
-| 1 | the composite's own `samp` FIFO | 64 samples |
-| 2 | the re-layout task's in-flight burst | 64 |
-| 3 | the testbench's `dac` FIFO | 128 |
-| 4 | the `Rfdc`'s DAC process, in-flight block | 64 |
-| 5 | `RFSampIF`'s producer-side buffer | 128 |
-| 6 | the sink's own queue — **zero**, because `RfDataSink` drains without waiting | 0 |
-| | **total** | **448** |
-
-Two traps are recorded in that measurement. A channel's capacity is `max(depth, blk_words)` and not
-`depth`: `_admit_blocking` hands a burst larger than the whole queue over in one piece, so the `samp`
-channel's declared depth of 2 carries 16 words. And term 6 is a property of the *consumer*, not of
-the depth — a sink that could wait would occupy it, and then the lead would grow by exactly that.
-
-**What the depths do not bound is the transient.** The startup transient also carries the design's own
-load latency — driver, header, payload, lock acquire, grant — expressed on the converter's grid, and
-no queue depth is an input to it. A **handover** is different again: it is pure latency, identical in
-both backends, because the lead is built once and by the time a handover happens the pipe is already
-full.
-
-The gates follow from that. Each backend is checked against the *waveform* per segment (`check_phase`);
-the two are compared **exactly** after being aligned on their own filler→play logs
-(`compare_after_transients`); and the transient itself is **recorded per backend** rather than
-cross-compared, because relaxing a comparison must not stop a measurement.
 
 ## The boundary
 
@@ -277,7 +184,7 @@ sequenceDiagram
     T->>D: waveform A, repeating
     H->>T: ShotTxHdr(SHOT_LOOP, tid=2, nsamp)
     H->>T: payload B, TLAST
-    Note over T,D: player yields the region; filler goes out meanwhile
+    Note over T,D: player yields the region — filler goes out meanwhile
     T-->>H: ShotTxResp(tid=2, SHOT_LOADED, nsamp)
     T->>D: waveform B, from its start, repeating
 ```
