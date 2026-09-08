@@ -5,7 +5,7 @@ grand_parent: RF converters
 nav_order: 2
 audience: python
 api: [RfShotRx, CaptureWindowHdr, Rfdc, RFSampIF, StreamIF]
-summary: "Capturing samples out of a converter into a memory a reader drains behind it: RfShotRx fills one region while a reader drains the other, so nothing is dropped while the reader keeps up. The boundary ports, the window header as a field table, what n_dropped and CAP_LOST each answer and why both are needed, and the two rules an ADC-facing design cannot break — it may not stall, and it may not overwrite a region nobody has read."
+summary: "Capturing samples out of a converter into a memory a reader drains behind it: RfShotRx fills one region while a reader drains the other, so nothing is dropped while the reader keeps up. The boundary ports, the window header as a field table, what n_dropped and CAP_LOST each answer and why both are needed, the build-time absolute_index that turns a drop from a shift into a hole, and the two rules an ADC-facing design cannot break — it may not stall, and it may not overwrite a region nobody has read."
 ---
 
 # Receive — `RfShotRx`
@@ -83,6 +83,7 @@ dut = RfShotRx.for_word(
     word,
     depth=256,        # words in the memory, split into N_REGION (= 2) regions
     blk_words=16,     # words per converter block: the chunk, the poll period, the output burst
+    absolute_index=0, # 0: an address says how far into this capture.  1: it says WHEN
     sim=sim, name="dut", clk=axis_clk,
 )
 ```
@@ -121,6 +122,40 @@ wrong forever.
 question and is **not derivable** from one cumulative reading. A host would have to remember the last
 value and subtract. The design already knows, so it says so. It is the same split `ShotTxResp` makes
 between a `status` and an `nsamp_loaded`.
+
+## `absolute_index` — when a drop is a hole rather than a shift
+
+By default the write pointer is **fill-driven**: it advances only when a block is actually placed. So
+an address says *how far into this capture*, and a block the capture had nowhere to put shifts every
+address after it. The samples are all valid and all in the wrong place, which is invisible in a word
+count and invisible in the data.
+
+With `absolute_index=1` the pointer advances on **every** block the capture consumes, dropped ones
+included, and wraps at `depth`. It therefore holds the design's own word count since reset, and a
+captured sample sits at the address its own index names. A drop then leaves a **hole**: the samples
+either side of it are still correctly placed and still usable.
+
+It is a **build-time** parameter — it changes the RTL, so it is an `HwParam` lowered as a template
+argument — and `0` is exactly the behaviour every earlier version of this design had.
+
+**What it costs.** Which region a block belongs to becomes a function of its index, so the capture
+asks *is that region free?* once, at the region's first block, and holds the answer. A region that is
+busy when its turn comes round is therefore skipped **entirely**, where the default retries every
+block and recovers the moment a region frees. A stalled reader loses more, in whole windows rather
+than in blocks.
+
+**What that buys.** An announced window is never partly stale — it is filled completely or not
+announced at all. So *where* a hole is falls out of the header you already receive: window *w*'s
+first sample is at absolute word index `w * region_words + n_dropped`, and the gap before it runs
+from the previous window's count up to this one's. No per-block valid mask, and no second field on a
+wire this family holds at one 64-bit word. `window_abs_index()` is that arithmetic and
+`RfShotRx.assert_windows_absolute()` is the contract.
+
+`base_addr` is unchanged by all of this: still an address, still 28 bits. The mode changes *which*
+address a block gets, never what the field means — the reader turns it straight into an `acquire`.
+
+See [Options](./tx_options.md#absolute-indexing--absolute_index) for the transmit side of the same
+parameter, and for why shared addresses across the two halves still need MTS.
 
 ## The two rules an ADC-facing design cannot break
 

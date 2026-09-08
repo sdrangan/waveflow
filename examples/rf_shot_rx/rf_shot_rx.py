@@ -52,6 +52,7 @@ from waveflow.simulation.rf_tb import RfDataSource
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamSink
 
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.rfdc import Rfdc
 
 HERE = Path(__file__).resolve().parent
@@ -124,6 +125,29 @@ def write_scenario(root, n_blk: int = N_BLK) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The two builds of one design
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RfShotRxAbs(RfShotRx):
+    r"""``RfShotRx`` with ``absolute_index = 1`` — a second **build**, not a second design.
+
+    ``plans/rf_shot_absolute.md`` S2, and the mirror of
+    :class:`~examples.rf_shot_tx.rf_shot_tx.RfShotTxAbs`.  The body is the same body: one C++
+    template with ``if (ABS)`` branches Vitis folds, so the two settings are two pieces of RTL cut
+    from one source rather than two sources that drift.  What this subclass exists for is the
+    **name**: an XSI snapshot, a Vitis project and a generated ports header are all keyed on
+    ``cpp_kernel_name``, so the two variants need two of those to sit in one example directory and be
+    elaborated against each other.
+
+    Nothing else is overridden, and that is the claim worth being able to check by eye.
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_shot_rx_abs"
+    absolute_index: HwParam[int] = 1
+
+
+# ---------------------------------------------------------------------------
 # The graph
 # ---------------------------------------------------------------------------
 
@@ -150,6 +174,10 @@ class RfShotRxTB(FreeRunMod):
     stall_blocks: int = 0
     #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
     n_cycles: int = XSI_N_CYCLES
+    #: Which of the two builds this graph wraps — :class:`~waveflow.hw.rf_shot_rx.RfShotRx` or
+    #: :class:`RfShotRxAbs`.  ONE testbench graph for both, because a second graph would be a second
+    #: model of one design; the variant is a property of the build, exactly as ``absolute_index`` is.
+    dut_cls: type = RfShotRx
     axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
 
     def __post_init__(self) -> None:
@@ -160,7 +188,7 @@ class RfShotRxTB(FreeRunMod):
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=0, word=self.word)
         w = self.rfdc.axis_bitwidth
-        self.dut = RfShotRx.for_word(
+        self.dut = self.dut_cls.for_word(
             self.word, depth=int(self.depth), sim=self.sim, name=f"{self.name}_dut",
             clk=self.axis_clk, blk_words=int(self.blksize) // SPW,
             stall_blocks=int(self.stall_blocks), blk_period=self.blk_period)
@@ -316,6 +344,45 @@ def check_windows(frames, *, where: str = "", expect_loss: bool = False) -> np.n
             f"{where}the first window starts at code {int(flat[0])}, not {CODE_BASE} — the capture "
             f"handed out a region before it had filled it from the beginning.")
     return flat
+
+
+def check_addresses_are_the_phase(frames, *, where: str = "") -> list[int]:
+    """**The address is the phase**, read off the window frames a host actually receives.
+
+    Two layers, and neither is enough alone:
+
+    * the **header** claim —
+      :meth:`~waveflow.hw.rf_shot_rx.RfShotRx.assert_windows_absolute` — that every window's
+      ``base_addr`` is the address its own absolute index names, and that every published loss is a
+      whole number of windows;
+    * the **data** claim, here — that the samples which arrived under that claim are the ones whose
+      indices name it.  The source is a ramp starting at :data:`CODE_BASE`, so sample *j* of the run
+      belongs at memory address ``(j // samp_per_word) mod depth``; a window announced at
+      ``base_addr`` must therefore hold ramp codes congruent to ``base_addr * samp_per_word``.
+
+    A design that placed correctly and announced wrongly passes the second alone; one that announced
+    correctly and placed wrongly passes the first.  Returns the absolute word index of each window.
+    """
+    from waveflow.hw.rf_shot_rx import window_abs_index
+
+    wins = windows_as_codes(frames)
+    if not wins:
+        raise AssertionError(f"{where}no window reached the host.")
+    nsamp = int(DEPTH) * SPW
+    out = []
+    for w, (hdr, codes) in enumerate(wins):
+        base = int(hdr.base_addr)
+        k = window_abs_index(w, int(hdr.n_dropped), REGION_WORDS)
+        out.append(k)
+        want = (np.arange(int(codes.size), dtype=np.int64) + base * SPW) % nsamp
+        got = (np.asarray(codes, dtype=np.int64) - CODE_BASE) % nsamp
+        if not np.array_equal(got, want):
+            i = int(np.flatnonzero(got != want)[0])
+            raise AssertionError(
+                f"{where}window {w} (base_addr {base}) holds code {int(codes[i])} at position {i}. "
+                f"Its ramp index modulo one memory is {int(got[i])}, and the address it came out of "
+                f"names {int(want[i])}. The address is supposed to BE the timestamp.")
+    return out
 
 
 def expected_bases(n_windows: int) -> list[int]:

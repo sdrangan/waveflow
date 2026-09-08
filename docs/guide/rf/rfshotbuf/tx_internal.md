@@ -137,9 +137,16 @@ the port — Vitis owns the enable — so a *yielded* player keeps driving its r
 | TX, finite stream (one grant, before anything plays) | 18 | **0** |
 | TX, loop stream (three grants, two mid-play) | 55 | **2** |
 | RX (two disjoint regions) | 140 | **0** |
+| RX at `absolute_index=1` | 132 | **0** |
 
 TX numbers from `tests/examples/test_rf_shot_tx_xsi.py`; RX from
-`tests/examples/test_rf_shot_rx_xsi.py`.
+`tests/examples/test_rf_shot_rx_xsi.py` and `test_rf_shot_rx_abs_xsi.py`.
+
+**The last row is a re-measurement, not a repetition.** Absolute indexing changes *when* the capture
+claims a region, so the property that makes the region enforced at RTL by construction has to be
+measured again on that build rather than inherited from this one. The eight-cycle difference in the
+first column is the placement decision being a different piece of logic; the zero is the claim, and
+both ports still visit both regions in equal measure.
 
 **The two collisions are not a defect, and the evidence is a different test.** pysim raises on any
 read of a yielded region, and the two backends are byte-identical over the whole run
@@ -332,6 +339,36 @@ reaches. So the answer is decided on *armed*, at accept.
 
 One template argument, `ABS`, and `if (ABS)` branches Vitis folds — one body, not two, because two
 copied bodies would be two designs that drift.
+
+### The same parameter on the receive side
+
+`plans/rf_shot_absolute.md` S2. `PingPongCapture` takes the same `absolute_index`, and the shape is
+the mirror image: `wp` was **fill-driven** — it did not advance on a drop — which is the only reason
+an RX address was relative, exactly as `rd = 0` on accept was the only reason a TX one was. Two edits:
+
+1. **the advance is unconditional** — `wp` moves and wraps at `depth` on every firing, dropped blocks
+   included;
+2. **the region search collapses to one question**, asked once per region at its first block: *is
+   the region this index names free?* The answer is held in a `claimed` bit for the whole region.
+
+**The same split, and the same silent failure if you get it wrong.** The advance leaves the guard;
+the **announcement** does not. A region nothing was written into is not a window, and announcing one
+would publish the previous pass's samples under this pass's header — while every counter still added
+up. `tests/hw/test_rf_shot_rx.py` ships the natural wrong edit as a class: `wp` advanced
+unconditionally with the search left alone, so the first block after a stall rewinds the pointer to a
+region base and throws away everything the advance bought.
+
+**Holding the claim for a whole region is what makes a hole locatable.** Because `have` cannot change
+midway, a region is filled entirely or skipped entirely, so an announced window is never part stale
+and every published `n_dropped` is a whole number of windows. That is why the header needs no
+per-block valid mask — see [Options](./tx_options.md#where-a-hole-is-without-a-valid-mask).
+
+**The trap RX has and TX does not** is that the lock is on the critical path here: TX's player owns
+one region and yields it, this design holds two and hands them over continuously. Claiming a region
+earlier could have broken the disjoint-region property above, and does not — a region is claimed only
+while its `full` flag is clear, and only the capture sets that flag, at the *end* of filling, so the
+reader cannot acquire a region mid-fill in either mode. Measured rather than argued: the last row of
+the table above.
 
 ## The reset trap, and which body is on which side of it
 
