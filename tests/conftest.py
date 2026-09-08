@@ -57,7 +57,18 @@ import pytest
 #: agreement, II, the template argument, and the pysim rung's record.  ``test_rf_shot_tx_xsi.py``
 #: is unchanged at 31: the default build is the negative control, so every one of its numbers had
 #: to keep its meaning, and every one did.
-WANT_XSI_GATES = 115
+#:
+#: 115 -> 127 on 2026-09-08 (``plans/rf_shot_absolute.md`` S2, the RECEIVE half): a new file,
+#: ``test_rf_shot_rx_abs_xsi.py``, collects **12**.  The same reason as S1's 17 — ``ABS`` is a
+#: template argument, so the mode is a second piece of RTL and needs its own csynth and its own xsim
+#: snapshot — plus one RX has and TX does not: ``plans/t2p_lock_chan.md`` S2's disjoint-region
+#: property is what makes the region enforced at RTL by construction, absolute indexing moves *when*
+#: a region is claimed, and that property can therefore only be **re-measured**, never inherited.
+#: The 12 are: the address-is-the-phase gate, the drop-leaves-a-hole gate and its negative control,
+#: the cost measurement, the disjoint-region and read-during-write gates, contiguity, alternation,
+#: the clean-run identity with the default build, II, the template argument, and the pysim rung's
+#: record.  ``test_rf_shot_rx_xsi.py`` is unchanged at 9.
+WANT_XSI_GATES = 127
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

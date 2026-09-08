@@ -95,8 +95,14 @@ WANT_SAME_REGION_CYCLES = 0
 #: unlabelled loop ``VITIS_LOOP_<line>_1`` and nests that name into its children, so a comment edit
 #: renames the module — and a gate that looks the II up by name then MISSES and skips, which reads as
 #: a pass.
+#: ``plans/rf_shot_absolute.md`` S2 added ``ABS`` to the CAPTURE's template arguments and not to the
+#: window reader's, so ``pingpong_capture_task_64_256_2_16_*`` became ``..._64_256_2_16_0_*`` here
+#: and ``..._64_256_2_16_1_*`` in the absolute build, while the two window modules are untouched.
+#: **Read off the report directory, never predicted**: S1 lost a run to reading a name off RTL
+#: synthesized before the parameter existed — the staleness guard caught it, the gate SKIPPED, and
+#: the session gate failed on the skip.
 _II_MODULES = (
-    "pingpong_capture_task_64_256_2_16_Pipeline_store_block",
+    "pingpong_capture_task_64_256_2_16_0_Pipeline_store_block",
     "pingpong_window_task_64_256_2_16_Pipeline_drain_window",
     "pingpong_window_task_64_256_2_16_Pipeline_await_grant",
     # Unlabelled, and it stays that way: `rf_relayout_to_dense_task.h` is Stage A's, RTL-gated as it
