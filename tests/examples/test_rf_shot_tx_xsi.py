@@ -244,11 +244,19 @@ GUARD = 0
 #: removing two of them from each body: ``<64, 256, 64, 4, 192>`` became ``<64, 64, 4>`` and
 #: ``<64, 256, 64, 192, 16>`` became ``<64, 64, 16>``.  Verified against the report directory rather
 #: than predicted — a name that MISSES makes this gate skip, which reads as a pass.
+#:
+#: ``plans/rf_shot_absolute.md`` renamed the player's again — ``<64, 64, 16>`` became
+#: ``<64, 64, 16, 0>`` — and **the zero is in the mangled name**, so the default build's module is
+#: ``shot_tx_player_task_64_64_16_0_...``.  That is the one thing about this edit that had to be
+#: measured rather than reasoned about: a first reading of the report directory said the name had
+#: NOT changed, and that reading was of RTL synthesized before the parameter existed.
+#: :func:`~waveflow.build.trace_steps.rtl_staleness` is what caught it, and re-running csynth is what
+#: settled it.
 _II_MODULES = (
     "shot_tx_loader_task_64_64_4_Pipeline_take_shot",
     "shot_tx_loader_task_64_64_4_Pipeline_drain_tail",
     "shot_tx_loader_task_64_64_4_Pipeline_await_grant",
-    "shot_tx_player_task_64_64_16_Pipeline_play_chunk",
+    "shot_tx_player_task_64_64_16_0_Pipeline_play_chunk",
     # Unlabelled, and it stays that way: `rf_relayout_to_slots_task.h` is shared with the designs
     # this one merges, and adding a label would rename a module their gates name.  Safe because only
     # the MODULE is spelled out here — the loop inside it is discovered.

@@ -8,7 +8,7 @@
 ../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_64_4_Pipeline_drain_tail.v
 ../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_64_4_Pipeline_take_shot.v
 ../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_loader_task_64_64_4_s.v
-../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_player_task_64_64_16_Pipeline_play_chunk.v
-../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_player_task_64_64_16_s.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_player_task_64_64_16_0_Pipeline_play_chunk.v
+../rf_shot_tx_proj/solution1/syn/verilog/rf_shot_tx_shot_tx_player_task_64_64_16_0_s.v
 bram_t2p.v
 rf_shot_tx_top.v

@@ -77,6 +77,7 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_STATUS_NAMES,
     shot_tx_schemas,
 )
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.rf_shot_tx import FILLER, RfShotTx
 from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 from waveflow.simulation.rf_tb import RfDataSink
@@ -292,6 +293,27 @@ def write_scenario(root, frames, name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The two builds of one design
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RfShotTxAbs(RfShotTx):
+    r"""``RfShotTx`` with ``absolute_index = 1`` — a second **build**, not a second design.
+
+    ``plans/rf_shot_absolute.md``.  The body is the same body: one C++ template with ``if (ABS)``
+    branches Vitis folds, so the two settings are two pieces of RTL cut from one source rather than
+    two sources that drift.  What this subclass exists for is the **name**: an XSI snapshot, a Vitis
+    project and a generated ports header are all keyed on ``cpp_kernel_name``, so the two variants
+    need two of those to sit in one example directory and be elaborated against each other.
+
+    Nothing else is overridden, and that is the claim worth being able to check by eye.
+    """
+
+    cpp_kernel_name: ClassVar[str | None] = "rf_shot_tx_abs"
+    absolute_index: HwParam[int] = 1
+
+
+# ---------------------------------------------------------------------------
 # The graph
 # ---------------------------------------------------------------------------
 
@@ -311,6 +333,10 @@ class RfShotTxTB(FreeRunMod):
     #: the bundle names in its own hand-written main.
     in_bundle: str = "vectors/cmd"
     n_cycles: int = XSI_N_CYCLES
+    #: Which of the two builds this graph wraps — :class:`RfShotTx` or :class:`RfShotTxAbs`.  ONE
+    #: testbench graph for both, because a second graph would be a second model of one design; the
+    #: variant is a property of the build, exactly as ``absolute_index`` is.
+    dut_cls: type = RfShotTx
     axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
 
     def __post_init__(self) -> None:
@@ -320,7 +346,7 @@ class RfShotTxTB(FreeRunMod):
 
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1, word=self.word)
         w = self.rfdc.axis_bitwidth
-        self.dut = RfShotTx.for_word(
+        self.dut = self.dut_cls.for_word(
             self.word, depth=int(self.depth), sim=self.sim,
             name=f"{self.name}_dut", clk=self.axis_clk,
             # pysim's quantum on the converter edge is a BLOCK: the Rfdc's DAC process takes one
@@ -665,6 +691,68 @@ def check_phase(played: np.ndarray, *, where: str = "") -> None:
                 f"{where}playout run {k} (base {base}, {seg.size} samples) is out of phase at "
                 f"sample {i}: played {int(seg[i])}, the waveform's sample {i % want.size} is "
                 f"{int(got_want[i])}.")
+
+
+def check_address_is_the_phase(played: np.ndarray, *, where: str = "") -> None:
+    """**The absolute-index gate.**  Every played word's address IS its own timestamp.
+
+    ``played[i] == shot_codes(base)[i % nsamp]`` with ``i`` counted from the design's **first output
+    sample**, not from the run's.  ``i // samp_per_word mod depth`` is the read pointer's value at
+    that word, so this says the memory index a sample came out of equals its absolute word index
+    modulo the buffer — which is the property that lets a TX and an RX correlate by address with no
+    timestamping and no bookkeeping.
+
+    **Strictly stronger than :func:`check_phase`**, which re-bases on each run's own first sample
+    and therefore says nothing about *where* the run began.  This one has no free parameter at all,
+    and it is exactly the assertion that must FAIL at ``absolute_index = 0`` — see the negative
+    control in ``tests/examples/test_rf_shot_tx_abs_xsi.py``.
+
+    **It rests on the capture being the design's own stream, sample for sample.**  It is:
+    ``DAC_BLOCKS_ZERO_FILLED`` is zero on every gated run and pysim's ``RFSampIF.underrun`` is zero
+    too, so the converter's grid never invented a block, and index *i* of the capture is output word
+    *i // spw* of the player.  A run that started zero-filling would shift the whole capture and this
+    gate would fail — correctly, because the timestamp claim would no longer be readable off the air.
+    """
+    nsamp = int(DEPTH) * SPW
+    i = 0
+    for k, (is_filler, seg) in enumerate(segments(played)):
+        if is_filler or seg.size == 0:
+            i += int(seg.size)
+            continue
+        base = int(seg[0])
+        if base not in KNOWN_BASES:
+            raise AssertionError(
+                f"{where}playout run {k} starts on code {base}, which is not one of the loaded "
+                f"waveforms {list(KNOWN_BASES)}.")
+        want = shot_codes(base)
+        idx = np.arange(i, i + seg.size)
+        got_want = want[idx % nsamp]
+        if not np.array_equal(seg, got_want):
+            j = int(np.flatnonzero(seg != got_want)[0])
+            raise AssertionError(
+                f"{where}playout run {k} is out of ABSOLUTE phase at sample {i + j}: played "
+                f"{int(seg[j])}, but absolute index {i + j} mod {nsamp} is waveform sample "
+                f"{(i + j) % nsamp} = {int(got_want[j])}. The memory index is supposed to BE the "
+                f"timestamp.")
+        i += int(seg.size)
+
+
+def check_starts_on_a_boundary(played: np.ndarray, *, where: str = "") -> None:
+    """**A playout starts on a boundary** — the half a reader can check by eye against a log.
+
+    ``blk_words`` divides ``depth``, so the read pointer takes exactly ``0, BW, ... D-BW`` and
+    ``rd == 0`` happens once per pass; a run beginning anywhere else is a start that was not
+    deferred, and it is the only way the congruence above can break.
+    """
+    nsamp = int(DEPTH) * SPW
+    starts = [r.start for r in play_log(played)]
+    if not starts:
+        raise AssertionError(f"{where}the design played nothing, so there is no boundary to check")
+    bad = [s for s in starts if s % nsamp]
+    if bad:
+        raise AssertionError(
+            f"{where}playout run(s) beginning at absolute sample {bad} — not a multiple of one "
+            f"pass ({nsamp} samples). Starts were {starts}.")
 
 
 def compare_after_transients(a: np.ndarray, log_a: list[PlayRun],
