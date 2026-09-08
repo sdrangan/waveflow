@@ -25,6 +25,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.locked_mem import LOCK_ACQUIRE
 from waveflow.hw.rf_shot_rx import (
+    window_abs_index,
     CAP_LOST,
     CAP_OK,
     CAP_STATUS_NAMES,
@@ -62,11 +63,13 @@ class Bench:
     extra about the handover; the example (checkpoint 4) does that.
     """
 
-    def __init__(self, *, stall_blocks: int = 0, depth: int = DEPTH) -> None:
+    def __init__(self, *, stall_blocks: int = 0, depth: int = DEPTH,
+                 absolute_index: int = 0, dut_cls: type = RfShotRx) -> None:
         self.sim = Simulation()
         self.clk = Clock(name="clk", freq=250e6)
-        self.dut = RfShotRx(sim=self.sim, name="rx", bitwidth=WORD_BW, samp_per_word=4,
+        self.dut = dut_cls(sim=self.sim, name="rx", bitwidth=WORD_BW, samp_per_word=4,
                                depth=depth, shift=SHIFT, blk_words=BLK_WORDS,
+                               absolute_index=int(absolute_index),
                                stall_blocks=int(stall_blocks), blk_period=BLK_PERIOD,
                                clk=self.clk)
         # The source drives the CAPTURE directly: the re-layout is a pass-through for this gate and
@@ -137,9 +140,9 @@ class Bench:
             obj.post_sim()
 
 
-def run_capture(*, stall_blocks: int = 0, n_blocks: int = 40) -> Bench:
+def run_capture(*, stall_blocks: int = 0, n_blocks: int = 40, **kw) -> Bench:
     """Push *n_blocks* of ramp through the pair and stop a little after the source does."""
-    b = Bench(stall_blocks=stall_blocks)
+    b = Bench(stall_blocks=stall_blocks, **kw)
     b.run(n_blocks, until=(n_blocks + 8) * BLK_PERIOD)
     return b
 
@@ -494,3 +497,241 @@ def test_the_first_window_is_CAP_OK_because_nothing_precedes_it():
     the general rule with nothing on the left."""
     b = run_capture()
     assert int(b.hdrs[0].status) == CAP_OK and int(b.hdrs[0].n_dropped) == 0
+
+
+# ---------------------------------------------------------------------------
+# The index is a timestamp — ``plans/rf_shot_absolute.md`` S2
+# ---------------------------------------------------------------------------
+#
+# The bench source is a ramp of WORDS whose value IS its index (`np.arange(i*BLK_WORDS, ...)`), so
+# "the address is the phase" is a statement about array values and needs no cycle-to-sample mapping
+# and no VCD: the word carrying `v` belongs at address `v % DEPTH`.
+
+#: Blocks the reader sits on its window for — long enough that the capture runs out of regions.
+STALL = REGION // BLK_WORDS + 2
+
+#: The run the two controls are named against.  **Measured, not swept.**  With nothing lost the two
+#: modes place every block at the same address, so a control has to be a run that DROPPED something;
+#: and even then a default-mode window can land on its absolute address by luck — at 80 blocks the
+#: default run's fifth window does. Sixty blocks with a stalled reader is a run where the default
+#: mode gets three windows in a row wrong and the absolute mode gets all of them right.
+CONTROL_BLOCKS = 60
+
+
+def word_phase_errors(b: "Bench") -> list[tuple[int, int, int]]:
+    """``(window, position, value)`` for every word not at the address its own index names.
+
+    The data-level half of *the address is the phase*.
+    :meth:`~waveflow.hw.rf_shot_rx.RfShotRx.assert_windows_absolute` is the header-level half — it
+    asks whether the design *claims* the right address — and this asks whether the samples that
+    arrived under that claim are the ones whose indices name it. Both, because a design that placed
+    correctly and announced wrongly passes either one alone.
+    """
+    bad = []
+    for w, (hdr, samples) in enumerate(split_windows(b.frames, WORD_BW)):
+        base = int(hdr.base_addr)
+        for i, v in enumerate(np.asarray(samples).ravel().tolist()):
+            if int(v) % DEPTH != (base + i) % DEPTH:
+                bad.append((w, i, int(v)))
+    return bad
+
+
+def test_a_clean_run_places_every_word_at_its_own_absolute_address():
+    """**Gate 1**, on a run that lost nothing — where the two modes agree by construction.
+
+    Worth asserting anyway, and worth saying why it proves less than the lossy run below: with
+    nothing dropped the fill pointer and the block count advance together, so a default build passes
+    this too. It is the *floor* — a mode that broke the ordinary case would be caught here — and the
+    control that separates the two modes is :func:`test_the_same_assertions_FAIL_at_absolute_index_0`.
+    """
+    b = run_capture(absolute_index=1)
+    assert b.dut.n_dropped == 0, "this gate is about the clean case; the reader kept up"
+    b.dut.assert_windows_absolute(b.frames, where="abs clean: ")
+    assert not word_phase_errors(b)
+    b.dut.assert_ran(min_windows=2)
+
+
+def test_a_DROP_leaves_a_HOLE_and_not_a_SHIFT():
+    """**The gate that carries S1's correction.**
+
+    S1 deferred RX with *"a capture that drops a block loses its place in a way a player cannot."*
+    That described the implementation, not a necessity — and this is the assertion it claimed was
+    impossible. The reader is starved until the capture runs out of regions; the windows *after* the
+    loss are then asserted to be at the addresses their own absolute indices name, not shifted up by
+    what was lost.
+
+    The reachability guard is the first assertion: a run that dropped nothing proves nothing here.
+    """
+    b = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=1)
+    dropped = int(b.dut.n_dropped)
+    assert dropped, (
+        "the stalled reader lost nothing, so this run cannot show what a drop does to an address. "
+        "Raise STALL or CONTROL_BLOCKS — this gate is vacuous otherwise.")
+
+    idx = b.dut.assert_windows_absolute(b.frames, where="abs lossy: ")
+    assert not word_phase_errors(b), "a window's samples are not the ones its address names"
+
+    # ... and the loss is REAL and lands BETWEEN windows rather than inside one.
+    lost = [(w, int(h.n_dropped)) for w, (h, _s) in enumerate(split_windows(b.frames, WORD_BW))]
+    assert lost[-1][1] > 0, f"no window published a loss: {lost}"
+    after = [w for w, nd in lost if nd]
+    assert after, "no window was published after the loss, so nothing was re-addressed"
+    # The recorded shape of this run, so a change in what it exercises is a finding rather than a
+    # silent weakening: two clean windows, 64 words (two whole windows) lost, then two more.
+    assert [nd for _w, nd in lost] == [0, 0, 64, 64], f"the control run's shape moved: {lost}"
+    assert idx == [0, 32, 128, 160], f"absolute indices {idx}"
+
+
+def test_the_same_assertions_FAIL_at_absolute_index_0():
+    """**THE NEGATIVE CONTROL**, and it names its run rather than sweeping.
+
+    Without it ``absolute_index`` could do nothing and every gate above would still pass. Two things
+    the control has to get right, and both were measured rather than assumed:
+
+    * **it must be a lossy run.** With nothing dropped the fill pointer and the block count advance
+      together, so the default build satisfies the absolute assertions honestly.
+    * **it must be a named lossy run.** Even after a drop a default-mode window can land on its
+      absolute address by coincidence — at 80 blocks the default run's fifth window does. At
+      :data:`CONTROL_BLOCKS` it gets three in a row wrong, which is a control that says something.
+    """
+    b = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=0)
+    assert int(b.dut.n_dropped), "the control run must actually drop something"
+
+    # The default design is CORRECT — every window is whole and its samples are contiguous within it.
+    wins = [s for _h, s in split_windows(b.frames, WORD_BW)]
+    assert wins and all(int(np.asarray(x).size) == REGION for x in wins)
+    for x in wins:
+        v = np.asarray(x).ravel().astype(np.int64)
+        assert np.all(np.diff(v) == 1), "a default-mode window is not internally contiguous"
+
+    # ... and it fails both halves of the absolute claim, which is the whole point.
+    #
+    # It fails the WHOLE-WINDOW half first, and that is not an accident of ordering: the default
+    # mode retries every block, so it recovers partway through a region and its published losses are
+    # not multiples of a window. Both halves are checked, the second one by hand, so a control that
+    # only ever tripped the cheap assertion cannot be mistaken for one that tripped the real one.
+    with pytest.raises(AssertionError):
+        b.dut.assert_windows_absolute(b.frames)
+    hdrs = [h for h, _s in split_windows(b.frames, WORD_BW)]
+    placed = [(w, window_abs_index(w, int(h.n_dropped), REGION) % DEPTH, int(h.base_addr))
+              for w, h in enumerate(hdrs)]
+    assert any(k != base for _w, k, base in placed), (
+        f"every default-mode window landed on its absolute address anyway: {placed}")
+    bad = word_phase_errors(b)
+    assert bad, (
+        "the default build placed every word at its absolute address on a run that dropped "
+        f"{int(b.dut.n_dropped)} word(s). Then absolute_index changes nothing and every gate above "
+        "is asserting a property the design already had.")
+    assert bad[0][0] == 2, f"the first misplaced window is {bad[0][0]}, recorded 2"
+
+
+class _AdvancesOnDropButStillSearches(RfShotRx.capture_cls):
+    """The shipped capture with the advance made unconditional and **the region search left alone**.
+
+    The natural wrong edit, and the exact mirror of S1's ``_CountsPassesWhilePlayingFiller``: half
+    of ``plans/rf_shot_absolute.md`` S2 applied. ``wp`` now moves on a drop — that part is right —
+    but the placement decision is still *find any free region and restart at its beginning*, so the
+    first block after a stall resets the pointer to a region base and everything the unconditional
+    advance bought is thrown away on the spot.
+    """
+
+    def _place(self) -> bool:
+        bw = int(self.blk_words)
+        _lo, hi = self.region(self.cur)
+        if not self.full[self.cur] and self.wp + bw <= hi:
+            return True
+        nxt = self._free_region()
+        if nxt is None:
+            return False
+        # THE DEFECT: the search still rewinds the pointer, so the count it was advancing is lost.
+        self.cur = nxt
+        self.wp = self.region(nxt)[0]
+        return True
+
+
+def test_a_capture_that_advances_on_a_drop_but_still_SEARCHES():
+    """**The positive control for the wrong edit**, with a reachability guard.
+
+    It is not subtly wrong and it is not loudly wrong either: every window is still full, still
+    internally contiguous, still announced with a correct ``CAP_LOST`` and a correct cumulative
+    count. What it loses is the only thing the mode is for — after a stall the search rewinds ``wp``
+    to a region base, so the block that lands there is not the block whose index names that address.
+
+    The guard is the first assertion: if this design stops dropping, the control is asserting
+    nothing and says so instead of passing.
+    """
+    class Dirty(RfShotRx):
+        capture_cls = _AdvancesOnDropButStillSearches
+
+    b = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=1, dut_cls=Dirty)
+    assert int(b.dut.n_dropped), (
+        "the dirty capture dropped nothing, so it never reached the branch that contains the "
+        "defect. This control is vacuous — raise STALL or CONTROL_BLOCKS.")
+
+    # Everything the OTHER gates check still holds on this broken design ...
+    wins = split_windows(b.frames, WORD_BW)
+    assert wins, "the dirty design published no window at all"
+    assert all(int(np.asarray(x).size) == REGION for _h, x in wins)
+    assert any(int(h.status) == CAP_LOST for h, _x in wins), "the loss is still published"
+
+    # ... and this is the one thing that does not.
+    with pytest.raises(AssertionError):
+        b.dut.assert_windows_absolute(b.frames, where="dirty: ")
+    assert word_phase_errors(b), (
+        "the dirty capture placed every word at its absolute address anyway. Then the search is not "
+        "what breaks absolute addressing and this control is asserting nothing.")
+
+
+def test_absolute_indexing_costs_a_WHOLE_WINDOW_where_the_default_costs_a_BLOCK():
+    """**The cost, measured** — the RX mirror of the deferral TX pays.
+
+    A region busy at its boundary is skipped **entirely**, because the claim is made once and held;
+    the default mode retries every block and recovers as soon as a region frees. So on the same
+    stalled run the absolute build loses more, in coarser units, and both numbers are recorded.
+
+    That coarseness is not only a cost: it is what keeps an announced window from ever being part
+    stale, and therefore what lets the header localize a hole with no per-block valid mask
+    (``plans/rf_shot_absolute.md`` S2, *what is in a hole*).
+    """
+    lo = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=0)
+    hi = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=1)
+    assert (int(lo.dut.n_dropped), int(hi.dut.n_dropped)) == (64, 112), (
+        f"the recorded cost moved: default lost {int(lo.dut.n_dropped)} word(s) and absolute lost "
+        f"{int(hi.dut.n_dropped)}. Both are measurements; a change in either is a finding.")
+    # Every loss the absolute build publishes is a whole window; the default build's are not.
+    abs_nd = [int(h.n_dropped) for h, _s in split_windows(hi.frames, WORD_BW)]
+    assert all(nd % REGION == 0 for nd in abs_nd), f"published losses {abs_nd} are not whole windows"
+    def_nd = [int(h.n_dropped) for h, _s in split_windows(lo.frames, WORD_BW)]
+    assert any(nd % REGION for nd in def_nd), (
+        f"the default build also lost whole windows only ({def_nd}), so this gate is not "
+        f"distinguishing the two granularities.")
+
+
+def test_the_default_is_zero_and_it_reaches_the_capture_and_the_template():
+    """``absolute_index`` defaults to today's behaviour, and it is a **build-time** parameter.
+
+    The default is what makes every recorded number in this family keep its meaning. The template
+    argument is what makes the two settings two different pieces of RTL rather than one with a
+    register in it — see ``tests/hw/test_rf_shot_rx_codegen.py``. It reaches the **capture** and not
+    the window reader, which follows the ``base_addr`` it is handed.
+    """
+    b = Bench()
+    assert int(b.dut.absolute_index) == 0 and int(b.dut.capture.absolute_index) == 0
+    assert b.dut.capture.kernel_task().template_args == (WORD_BW, DEPTH, N_REGION, BLK_WORDS, 0)
+    a = Bench(absolute_index=1)
+    assert a.dut.capture.kernel_task().template_args == (WORD_BW, DEPTH, N_REGION, BLK_WORDS, 1)
+    assert "absolute" not in str(a.dut.window.kernel_task().template_args)
+    assert a.dut.window.kernel_task().template_args == (WORD_BW, DEPTH, N_REGION, BLK_WORDS)
+
+
+def test_a_region_that_is_not_a_power_of_two_is_refused_under_absolute_index():
+    """The region is ``wp // region_words`` and the boundary test is ``wp % region_words``.
+
+    Both are a shift and a mask at a power of two and a **divider on the datapath's critical path**
+    otherwise, so the geometry is refused rather than synthesized slowly and silently. It is refused
+    only under the mode that needs it: the default mode never divides.
+    """
+    kw = dict(name="rx", bitwidth=WORD_BW, depth=96, blk_words=BLK_WORDS)
+    PingPongCapture(sim=Simulation(), **kw)     # 96 // 2 == 48: fine at the default
+    with pytest.raises(ValueError, match="power-of-two region"):
+        PingPongCapture(sim=Simulation(), absolute_index=1, **kw)
