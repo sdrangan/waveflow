@@ -4,54 +4,89 @@ parent: RfShotBuf
 grand_parent: RF converters
 nav_order: 4
 audience: python
-summary: "Two independent choices a shot buffer makes — how the memory is indexed, and how faithfully simulation reproduces timing — with what is built today, what is planned, and what each alternative would buy. Read this if you are deciding whether RfShotTx fits, or wondering why a transient does not match."
+summary: "Where RfShotTx sits in the shot-buffer design space, and why today's point is the intersection of two constraints rather than a design in its own right. Covers what fixed-size relative indexing costs you, what absolute indexing would buy, what scoping found would make it cheap, and separately how much of the simulator's timing you are entitled to believe."
 ---
 
 # Options and what is not built
 
-`RfShotTx` makes two choices that could each have gone the other way. Both are worth knowing before
-you build on it: one decides whether you can correlate transmitted and received samples by memory
-address, and the other decides how much of the simulator's timing you are entitled to believe.
+`RfShotTx` sits at one point in a small design space, and **the point it sits at today is temporary**.
+This page says which point, what the alternatives would buy, and what you are entitled to believe
+about the simulator's timing — the last of which is a separate question about the *model* rather than
+the design.
 
-**Only one setting of each is built.** The others are described here so you can tell whether the
-design fits, rather than discovering the limit later.
+## Sizing and indexing are one choice, not two
 
-## Axis 1 — how the memory is indexed
+How long a shot is and what an address *means* look independent and are not. An address can carry
+absolute phase — *sample j lives at `mem[j mod BUF_LEN]`* — only if there is a fixed `BUF_LEN` to take
+the modulus against. Let the length vary and the modulus has no fixed base, so the address can only
+mean *wherever the host put it*.
 
-The buffer length is **fixed at build time** either way: it is `depth`, a build parameter, and no
-header field restates it — since `plans/rf_shot_geometry.md` **the shot is the buffer**. What differs
-is what an address
-*means*.
+That leaves three coherent designs, not four:
 
-| | **relative** (built) | **absolute** (not built) |
-|---|---|---|
-| where sample *i* of a shot lives | `mem[i]` | `mem[i mod BUF_LEN]` |
-| where playout restarts | the region's start, every pass | wherever the sample counter says |
-| TX↔RX relation | none | **sample *j* is at the same index in both** |
-| depends on | nothing outside the design | `t0_tx ≡ t0_rx` — MTS actually holding |
+| | shot size | what an address means | status |
+|---|---|---|---|
+| **sounding** | fixed at build time | **absolute** — sample *j* is at `mem[j mod depth]` | not built |
+| **general** | chosen per shot | **relative** — wherever it was loaded | not built; needs an allocator |
+| **today** | fixed at build time | **relative** | **built** |
 
-### What absolute indexing would buy
+### Today is the intersection, and that is worth saying plainly
 
-**Memory index becomes a timestamp.** If transmitted sample *j* sits at `mem[j mod BUF_LEN]` and a
-received sample *j* likewise, then TX and RX correlate **by address**, with no timestamping and no
+The bottom row takes the constraint of the first design and the guarantee of the second. **You accept
+that a shot must be exactly `depth` words, and you get nothing back for it that a variable-length
+design would not also give you.**
+
+Fixed length is not free of value — it is what lets the load loop reach `II=1` with a counted trip
+count, what gives the pad a length to pad *to*, and what keeps an allocator out of the design. But
+those are *implementation* benefits. From where you sit they are not features, and the honest reading
+is that this row is a way-station rather than a destination.
+
+**The direction is toward the top row.** Absolute indexing needs the fixed length this design already
+has, so it is a small change from here and variable sizing is a much larger one — see
+*What scoping found* below.
+
+## What absolute indexing would buy
+
+**Memory index becomes a timestamp.** If transmitted sample *j* sits at `mem[j mod depth]` and a
+received sample *j* likewise, then TX and RX correlate **by address** — no timestamping, no
 bookkeeping. For channel sounding that correlation *is* the measurement.
 
-### What it would cost
+### What scoping found
 
-The guarantee holds only as far as **tile synchronisation** does. `Rfdc` already models this:
-`t0_tx` is *"normally equal to `t0_rx` — that is what MTS gives you"*, and a non-zero value means a
-tile deliberately started late, or a measured MTS residual. So absolute indexing is not a property of
-the buffer alone; it is a property of the buffer **and** the converter's epochs agreeing.
+Two things, and both were better than expected.
 
-It also gives up the freedom relative indexing has: with an absolute index, where a shot sits is
-decided by its sample number rather than by you.
+**The player already carries the counter.** It writes `blk_words` words on *every* firing — samples
+when it has something to play, `FILLER` when it does not — so its own output count is the absolute
+word index. Today's read pointer is reset to `0` whenever a shot is accepted, which is the only reason
+it is a *relative* index. Let it free-run and it is an absolute one.
+
+**Starting at the beginning is still possible.** The obvious cost of absolute indexing — that playout
+begins wherever the counter happens to be, so the first sample out is not the first sample of your
+waveform — goes away if the design defers the change from filler to samples until the pointer reaches
+a buffer boundary. `blk_words` already divides `depth`, so that boundary is hit exactly once per pass
+and the wait is bounded by one pass. Because the waveform fills the whole buffer *and* starts on a
+boundary, sample *j* is then always emitted at an absolute index congruent to *j* — the full
+timestamp property, with *a waveform starts at its beginning* kept intact.
 
 {: .note }
-Absolute indexing would need its **own** gate, not a stricter version of the current one. Today's
-phase check asserts `real[i] == shot_codes[i % nsamp]` *within a playout segment*; the absolute
-version asserts against a **global** sample counter. Different assertion, not a tightening.
+It would also survive the loosely-timed model below better than it looks. The two backends would each
+start on a boundary of their **own** counter, so they would disagree about **which pass** a shot lands
+in and agree exactly about **phase within the pass**. Phase is what a sounding correlation uses.
 
-## Axis 2 — how faithfully simulation reproduces timing
+### What it would still depend on
+
+**Tile synchronisation, which is not something this design can promise.** `Rfdc` already models the
+gap: `t0_tx` is *"normally equal to `t0_rx` — that is what MTS gives you"*, and a non-zero value means
+a tile deliberately started late, or a measured MTS residual. Absolute indexing is a property of the
+buffer **and** the converter's epochs agreeing, and only the first half lives here.
+
+{: .note }
+It would need its **own** gate, not a stricter version of the current one. Today's phase check asserts
+`real[i] == shot_codes[i % nsamp]` *within a playout segment*; the absolute version asserts against a
+**global** sample counter. A different assertion, not a tightening.
+
+## A separate question — how faithfully simulation reproduces timing
+
+This one is about the model, not the design, and it is orthogonal to everything above.
 
 | | **loosely timed** (built) | **matched** (not built) |
 |---|---|---|
@@ -85,11 +120,11 @@ mode that ships.
 
 ## What is built today
 
-**Relative indexing, loosely timed.** That combination is what every gate exercises and what the
+**Fixed-size shots, relative indexing, loosely timed.** That is what every gate exercises and what the
 [transmit](./tx.md) and [receive](./rx.md) pages describe.
 
-The other three combinations are coherent designs; none is implemented. If one of them is what you
-need, that is worth knowing before you build on this rather than after.
+The alternatives above are coherent designs and none is implemented. If one of them is what you need,
+that is worth knowing before you build on this rather than after.
 
 ## Next
 
