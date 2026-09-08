@@ -58,7 +58,7 @@ apparatus exists for, working.
 These were not in the plan; each is what its reasoning implies.
 
 **`cmd_loop` under `absolute_index = 1` plays nothing, and that is gated rather than worked around.**
-The plan's cost line — *"latency, bounded by one pass"* — bites on that stream: its loads are spaced
+It is the second half of the cost line above, measured: its loads are spaced
 closer than one pass, so each is preempted while still armed. Rather than invent a wider-spaced
 scenario, the run is asserted as it is. It is the honest statement of what the mode costs, and it is
 also the only place a stale arm would be visible: an ACQUIRE that cleared `playing` without clearing
@@ -127,8 +127,12 @@ crossed-zero case to get wrong. Because the waveform fills the whole buffer *and
 boundary, sample *j* is then always emitted at an absolute index congruent to *j*: the full timestamp
 property, with *a waveform starts at its beginning* kept intact.
 
-The cost is latency, bounded by one pass — at the gated geometry `depth / blk_words = 4`, so at most
-three chunks of extra filler after a load lands.
+The cost has **two** parts, and only the first is latency. A shot that plays waits at most one pass —
+at the gated geometry `depth / blk_words = 4`, so at most three chunks of extra filler after a load
+lands. But **a load arriving inside that window cancels the arm outright**, so a host that reloads
+faster than one pass gets *nothing*, silently: every command still answers `SHOT_LOADED`. That is
+starvation, not latency, and it is the number to look at before choosing this mode for a design
+that switches waveforms quickly.
 
 **It also survives the loosely-timed model, which is the part that was not obvious.** The player only
 ever writes whole chunks, so the LT lead is structurally a whole number of chunks. Both backends

@@ -67,7 +67,7 @@ exactly `0, blk_words, ... depth - blk_words` and hits zero once per pass; the p
 zero before it switches from filler to samples. Because the waveform fills the whole buffer *and*
 starts on a boundary, you get the timestamp property with *a waveform starts at its beginning* intact.
 
-### What it costs: one pass of latency, and never more
+### What it costs: one pass of latency, and a shot you may not get
 
 A shot loaded partway through a pass waits for the next boundary before a single sample reaches the
 air. That wait is bounded by one pass and is measured, not asserted: at the gated geometry
