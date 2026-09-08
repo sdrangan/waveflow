@@ -20,6 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from waveflow.hw.bram import word_element
 from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.rf_shot_tx import (
@@ -110,12 +111,14 @@ class Bench:
     back-pressure exactly as it is at RTL.
     """
 
-    def __init__(self, *, shift: int = 2) -> None:
+    def __init__(self, *, shift: int = 2, absolute_index: int = 0,
+                 dut_cls: type = RfShotTx) -> None:
         self.sim = Simulation()
         self.clk = Clock(name="clk", freq=250e6)
-        self.dut = RfShotTx(sim=self.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW,
+        self.dut = dut_cls(sim=self.sim, name="dut", bitwidth=WORD_BW, samp_per_word=SPW,
                                    depth=DEPTH, shift=int(shift),
-                                   blk_words=BLK_WORDS, clk=self.clk)
+                                   blk_words=BLK_WORDS,
+                                   absolute_index=int(absolute_index), clk=self.clk)
         self.src = StreamIFMaster(sim=self.sim, name="src", bitwidth=WORD_BW, has_tlast=True)
         self.resp_snk = StreamIFSlave(sim=self.sim, name="resp_snk", bitwidth=WORD_BW,
                                       has_tlast=True)
@@ -208,6 +211,21 @@ class Bench:
                 segs.append((bool(mark[start]), out[start:i]))
                 start = i
         return segs
+
+    def play_runs(self) -> list[tuple[int, int]]:
+        """``(absolute word index of the first word, length)`` per playout run.
+
+        The index is **absolute**: counted from the design's own first output word, which under
+        ``absolute_index`` is the word the read pointer's epoch is anchored on.  Nothing is dropped
+        between the player and this sink — the bench's drain takes every chunk — so a position in
+        :attr:`out` *is* a word count since reset, which is the quantity the whole feature is about.
+        """
+        i, out = 0, []
+        for is_filler, seg in self.segments():
+            if not is_filler:
+                out.append((i, int(seg.size)))
+            i += int(seg.size)
+        return out
 
     @property
     def resps(self) -> list[tuple[int, int, int]]:
@@ -661,3 +679,316 @@ def test_the_player_polls_once_per_block():
     number rather than a hope."""
     b = Bench()
     assert b.dut.play.lock.check_period == BLK_WORDS
+
+
+# ---------------------------------------------------------------------------
+# The index is a timestamp — ``plans/rf_shot_absolute.md``
+# ---------------------------------------------------------------------------
+#
+# The bench works in WORDS, and that is what makes these gates readable: a position in `bench.out`
+# is the player's own word count since reset, so "the address is the phase" is a statement about
+# array indices and needs no cycle-to-sample mapping and no VCD.
+
+
+def check_address_is_the_phase(b: "Bench", base: int, *, where: str = "") -> None:
+    """**The whole feature, asserted directly.**  Every played word's address is its absolute index.
+
+    ``out[i] == waveform[i % depth]`` for every word of every playout run, where ``i`` counts from
+    the design's first output word.  ``i % depth`` *is* the read pointer's value at that word, so
+    this says the memory index a sample came from equals its own timestamp modulo the buffer — which
+    is what makes TX and RX correlatable by address without any bookkeeping.
+
+    It is strictly stronger than :func:`check_phase`'s per-run version in
+    ``examples/rf_shot_tx``: that one re-bases on each run's first sample and therefore says nothing
+    about *where* the run began.  This one has no free parameter at all.
+    """
+    out, want = b.out, slots(ramp(base))
+    for k, (start, n) in enumerate(b.play_runs()):
+        idx = np.arange(start, start + n)
+        got, exp = out[start:start + n], want[idx % want.size]
+        if not np.array_equal(got, exp):
+            i = int(np.flatnonzero(got != exp)[0])
+            raise AssertionError(
+                f"{where}playout run {k} is out of absolute phase at word {start + i}: played "
+                f"{int(got[i])}, but absolute index {start + i} mod {DEPTH} is address "
+                f"{(start + i) % DEPTH}, which holds {int(exp[i])}. The memory index is supposed to "
+                f"BE the timestamp.")
+
+
+def check_starts_on_a_boundary(b: "Bench", *, where: str = "") -> None:
+    """**A playout starts on a boundary** — the half a reader can check by eye against a log.
+
+    ``blk_words`` divides ``depth``, so the read pointer takes exactly ``0, BW, ... D-BW`` and
+    ``rd == 0`` happens once per pass.  A run that begins anywhere else is a start that was not
+    deferred, and it is the only way the phase property above can break.
+    """
+    starts = [start for start, _ in b.play_runs()]
+    assert starts, f"{where}the design played nothing, so there is no boundary to check"
+    bad = [s for s in starts if s % DEPTH]
+    if bad:
+        raise AssertionError(
+            f"{where}playout run(s) beginning at absolute word {bad} — not a multiple of "
+            f"depth={DEPTH}. Starts were {starts}. A start that is not deferred to the next "
+            f"rd == 0 splices the waveform onto the wrong phase for the whole run.")
+
+
+#: When the single load frame is pushed, and what each time is for.  **Measured, not chosen**: at
+#: ``absolute_index = 0`` the run begins at word 24, 44 and 76 respectively, and only the first of
+#: those is off a boundary by an amount the reader can see at a glance.  Note that a load *can* land
+#: on a boundary by luck — 2.7 us does, which is exactly why the negative control below names a time
+#: that does not rather than asserting failure for an arbitrary one.
+LOAD_TIMES = (0.0, 5e-6, 13e-6)
+
+
+@pytest.mark.parametrize("t_load", LOAD_TIMES)
+def test_the_address_is_the_phase_under_absolute_index(t_load):
+    """**Gate 1.**  Every played word's address equals its absolute word index modulo ``depth``.
+
+    Three load times, because the property must not depend on when the shot arrived — that
+    independence *is* the feature, and one load time could satisfy it by coincidence.
+    """
+    b = Bench(absolute_index=1)
+    b.run([(t_load, frame(SHOT_LOAD, 0, 3, ramp(1000)))], until=50e-6)
+    check_address_is_the_phase(b, 1000, where=f"load at {t_load * 1e6:g} us: ")
+
+
+@pytest.mark.parametrize("t_load", LOAD_TIMES)
+def test_a_playout_starts_on_a_buffer_boundary_under_absolute_index(t_load):
+    """**Gate 2.**  Every segment begins at an absolute word index that is a multiple of ``depth``."""
+    b = Bench(absolute_index=1)
+    b.run([(t_load, frame(SHOT_LOAD, 0, 3, ramp(1000)))], until=50e-6)
+    check_starts_on_a_boundary(b, where=f"load at {t_load * 1e6:g} us: ")
+
+
+def test_the_same_two_assertions_FAIL_at_absolute_index_0():
+    """**THE NEGATIVE CONTROL**, and it is not optional.
+
+    Without it ``absolute_index`` could do nothing at all and both gates above would still pass:
+    they would be asserting that *some* start happened to be congruent to zero, which a design that
+    ignored the parameter entirely could manage by luck.  ``plans/lt_transient.md`` shipped three
+    gates whose negative controls were never committed, and this is the plan refusing to repeat it.
+
+    ``t_load = 0`` is named rather than swept for the reason :data:`LOAD_TIMES` records: at 2.7 us
+    the default design starts at word 32 and passes both assertions honestly.  A control that
+    demanded failure at *every* load time would be asserting something untrue.
+    """
+    b = Bench(absolute_index=0)
+    b.run([(0.0, frame(SHOT_LOAD, 0, 3, ramp(1000)))], until=50e-6)
+    # The design is correct — it plays three whole passes of the waveform it was handed.
+    runs = b.play_runs()
+    assert runs == [(24, 3 * DEPTH)], f"the default design's playout moved: {runs}"
+    with pytest.raises(AssertionError, match="not a multiple of depth"):
+        check_starts_on_a_boundary(b)
+    with pytest.raises(AssertionError, match="out of absolute phase"):
+        check_address_is_the_phase(b, 1000)
+
+
+def test_load_time_moves_the_PASS_and_never_the_PHASE():
+    """**Gate 3.**  The same shot at two load times: different pass, identical phase.
+
+    This is the experiment the merged TX/RX example wants, and it is checkable with TX alone. What a
+    later load costs is *which pass* the waveform lands in — the deferral, bounded by one pass — and
+    what it must never cost is the congruence, because that is the whole reason to defer.
+    """
+    seen = []
+    for t_load in LOAD_TIMES:
+        b = Bench(absolute_index=1)
+        b.run([(t_load, frame(SHOT_LOAD, 0, 3, ramp(1000)))], until=50e-6)
+        check_address_is_the_phase(b, 1000, where=f"load at {t_load * 1e6:g} us: ")
+        check_starts_on_a_boundary(b, where=f"load at {t_load * 1e6:g} us: ")
+        (start, n), = b.play_runs()
+        seen.append((start // DEPTH, start % DEPTH, n))
+
+    passes = [p for p, _, _ in seen]
+    assert len(set(passes)) == len(passes), (
+        f"the three loads all began in pass {passes} — a run that cannot distinguish the load times "
+        f"cannot show that the pass moved, so this gate would be asserting nothing.")
+    assert {ph for _, ph, _ in seen} == {0}, f"phase within the pass moved: {seen}"
+    assert {n for _, _, n in seen} == {3 * DEPTH}, (
+        f"the played length moved with the load time: {seen}. It is three passes whenever the shot "
+        f"plays at all.")
+
+
+def test_a_finite_shot_under_absolute_index_still_plays_EXACTLY_n_passes():
+    """**The `nrep` trap, from the output side.**  Deferral must not cost a pass.
+
+    ``rd`` now wraps while the design plays filler, and the natural edit — moving the whole wrap
+    block out of ``if (playing)`` — decrements ``nrep_left`` on those wraps too.  The word counts
+    still add up, so the counters say nothing; the *length of the playout* is what says it, and it
+    is three whole passes exactly.  :func:`test_a_player_that_counts_passes_while_it_plays_filler`
+    is the paired dirty run.
+    """
+    b = Bench(absolute_index=1)
+    b.run([(2e-6, frame(SHOT_LOAD, 0, 3, ramp(1000)))], until=50e-6)
+    (start, n), = b.play_runs()
+    assert n == 3 * DEPTH, f"played {n} words, expected {3 * DEPTH} — three whole passes"
+    assert b.dut.play.n_plays == 3 and b.dut.play.n_done == 1
+    b.dut.assert_finite_completed(n_shots=1, n_plays=3)
+
+
+class _CountsPassesWhilePlayingFiller(RfShotTx.player_cls):
+    """The shipped player with ``nrep_left`` moved OUT of the ``playing`` guard — **the trap**.
+
+    One block instead of two, which is exactly the edit ``plans/rf_shot_absolute.md`` names as the
+    natural one and the wrong one.
+    """
+
+    def _chunk(self):
+        w, bw, nw = int(self.bitwidth), int(self.blk_words), int(self.depth)
+        if self.pending and self.rd == 0:
+            self.playing, self.pending = True, False
+        if self.playing:
+            data, t0 = yield from self.lock.read_pipelined(word_element(w), bw, addr=self.rd)
+            yield from self.samp_out.write_pipelined(data, t_out_start=t0)
+            self.n_words += bw
+        else:
+            yield from self.samp_out.write(np.full(bw, FILLER, dtype=np.uint64))
+            self.n_filler += 1
+        # THE DEFECT: the accounting came out of the guard with the advance.
+        self.rd += bw
+        if self.rd >= nw:
+            self.rd = 0
+            self.n_plays += 1
+            if not self.loop:
+                self.nrep_left -= 1
+                if self.nrep_left <= 0:
+                    self.playing = False
+                    yield from self._send_done()
+        self.n_chunks += 1
+
+
+def test_a_player_that_counts_passes_while_it_plays_filler():
+    """**The positive control for the trap** — and the reason the split is two conditions.
+
+    The design above is the whole of the wrong edit, and what it produces is **a perfectly good
+    shorter signal**: the count is partly spent on filler wraps before the deferred start arrives,
+    so the host asks for three passes and gets two. Every response is still ``SHOT_LOADED`` with the
+    right ``nsamp_loaded``, the ``done`` still arrives, the design still goes quiet on a boundary and
+    still plays the waveform in phase — :func:`check_address_is_the_phase` passes on this run. Only
+    the LENGTH says so, which is why the length is the assertion in the clean gate.
+    """
+    class Dirty(RfShotTx):
+        player_cls = _CountsPassesWhilePlayingFiller
+
+    b = Bench(absolute_index=1, dut_cls=Dirty)
+    b.run([(5e-6, frame(SHOT_LOAD, 0, 3, ramp(1000)))], until=50e-6)
+    assert b.resps == [(0, SHOT_LOADED, DEPTH * SPW)], (
+        f"the LOADER still answered normally: {named(b.resps)} — which is the point. The defect is "
+        f"invisible from the command path.")
+    assert b.dut.play.n_done == 3, (
+        f"the dirty player sent {b.dut.play.n_done} done token(s), recorded 3 where ONE is owed: "
+        f"`nrep_left` runs past zero on the filler wraps and re-fires the exit every pass. A "
+        f"spurious `done` clears a `busy` a LATER finite shot set — the truncation SHOT_BUSY exists "
+        f"to prevent, arrived at from the other side — and the loader in this one-frame run never "
+        f"has occasion to notice.")
+    # Everything the OTHER gates check still holds on this broken design ...
+    check_starts_on_a_boundary(b, where="dirty: ")
+    check_address_is_the_phase(b, 1000, where="dirty: ")
+    # ... and this is the one thing that does not.
+    (_start, n), = b.play_runs()
+    assert n != 3 * DEPTH, (
+        f"the dirty player played {n} words — the full {3 * DEPTH} the host asked for. The trap is "
+        f"no longer reachable and this control is asserting nothing.")
+    assert n == 2 * DEPTH, (
+        f"the dirty player played {n} words. Recorded at TWO passes of {DEPTH}: one of the three "
+        f"was spent on a filler wrap between the accept and the deferred start.")
+
+
+def test_a_short_shot_is_owed_its_done_IMMEDIATELY_under_absolute_index():
+    """**The trap that would deadlock rather than fail.**
+
+    ``done`` for a shot that must never play cannot be routed through ``pending``: the loader is
+    blocked on that token and the boundary that would release it is a boundary the shot will never
+    reach. So the SHORT answer is decided on *armed*, at accept, and the deferral never sees it.
+
+    A deadlock here is a run that produces nothing and a suite that reports a timeout, so the
+    assertion worth making is the positive one: the verdict arrives, the ``done`` arrives, and the
+    design stays quiet.
+    """
+    for absolute_index in (0, 1):
+        b = Bench(absolute_index=absolute_index)
+        b.run([(0.0, frame(SHOT_LOAD, 0, 3, ramp(1000)[:DEPTH // 2]))], until=40e-6)
+        assert named(b.resps) == [(0, "SHOT_SHORT", (DEPTH // 2) * SPW)], (
+            f"absolute_index={absolute_index}: {named(b.resps)}")
+        assert b.dut.play.n_done == 1, (
+            f"absolute_index={absolute_index}: the loader was never told the shot was over, so it "
+            f"is busy forever — and under deferral it would be waiting for a boundary a shot that "
+            f"never plays never reaches.")
+        assert b.play_runs() == [], "a truncated transfer reached the converter"
+
+
+class _WatchesTheGrant(RfShotTx.player_cls):
+    """The shipped player, with the state at each grant recorded — **nothing about it changed**.
+
+    ``lock.grant`` is wrapped rather than overridden, so what runs is the real body and the real
+    ordering; the wrapper only reads two bits on the way past.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        #: ``(armed when this firing began, playing at the grant, pending at the grant)``.
+        self.at_grant: list[tuple[bool, bool, bool]] = []
+        self._armed_at_entry = False
+        inner = self.lock.grant
+
+        def watched(lo, hi):
+            self.at_grant.append((self._armed_at_entry, bool(self.playing), bool(self.pending)))
+            yield from inner(lo, hi)
+
+        self.lock.grant = watched
+
+    def run_iter(self):
+        self._armed_at_entry = bool(self.pending)
+        yield from super().run_iter()
+
+
+def test_an_ACQUIRE_disarms_a_PENDING_shot_and_not_only_a_playing_one():
+    """A stale arm must not survive a lock handover.
+
+    ``plans/rf_shot_absolute.md`` names this as the third trap, and it is the one whose *output* is
+    unobservable: every RELEASE in practice carries a fresh play command that overwrites ``pending``
+    anyway, so a design that cleared only ``playing`` would produce the same samples right up until
+    a handover that did not. That is what makes this gate white-box on purpose — it reads the two
+    bits at the grant and asserts the invariant the ordering claim is really about, *the region goes
+    out of this task's hands with nothing left armed against it*.
+
+    The second load is timed to land inside the **arm window**: waveform A is accepted, and the
+    preemption arrives before A's deferred start. So the outgoing shot is one that never played a
+    sample, and only ``pending`` can be holding it.
+    """
+    class Dut(RfShotTx):
+        player_cls = _WatchesTheGrant
+
+    b = Bench(absolute_index=1, dut_cls=Dut)
+    b.run([(0.0, frame(SHOT_LOOP, 0, 1, ramp(1000))),
+           (3e-6, frame(SHOT_LOOP, 1, 1, ramp(5000)))], until=50e-6)
+
+    seen = b.dut.play.at_grant
+    assert any(armed for armed, _, _ in seen), (
+        f"no grant landed while a shot was ARMED but not yet playing: {seen}. This gate is then "
+        f"asserting nothing about `pending` at all — retime the second load into the arm window.")
+    assert all(not playing and not pending for _, playing, pending in seen), (
+        f"the region was granted with the player still holding it: {seen}. `playing` first, then "
+        f"`pending`, THEN grant.")
+
+    # ... and the consequence, in-band: the arm was dropped, so waveform A never reached the wire.
+    runs = b.play_runs()
+    assert len(runs) == 1 and runs[0][0] % DEPTH == 0, f"playout runs {runs}"
+    start, n = runs[0]
+    assert np.array_equal(b.out[start:start + DEPTH], slots(ramp(5000))), (
+        "the surviving playout is not waveform B — an arm that outlived the handover would play A "
+        "out of a memory that no longer holds it")
+
+
+def test_the_default_is_zero_and_it_reaches_the_player_and_the_template():
+    """``absolute_index`` defaults to today's behaviour, and it is a **build-time** parameter.
+
+    The default is what makes every recorded number in this family keep its meaning. The template
+    argument is what makes the two settings two different pieces of RTL rather than one with a
+    register in it — see ``tests/hw/test_rf_shot_tx_codegen.py``.
+    """
+    b = Bench()
+    assert int(b.dut.absolute_index) == 0 and int(b.dut.play.absolute_index) == 0
+    assert b.dut.play.kernel_task().template_args == (WORD_BW, DEPTH, BLK_WORDS, 0)
+    assert Bench(absolute_index=1).dut.play.kernel_task().template_args == (
+        WORD_BW, DEPTH, BLK_WORDS, 1)
