@@ -14,9 +14,9 @@ This page says which point, what the alternatives would buy, and what you are en
 about the simulator's timing — the last of which is a separate question about the *model* rather than
 the design.
 
-## Sizing and indexing are one choice, not two
+## Fixed vs. variable shot size
 
-How long a shot is and what an address *means* look independent and are not. An address can carry
+**Sizing and indexing are one choice, not two.** How long a shot is and what an address *means* look independent and are not. An address can carry
 absolute phase — *sample j lives at `mem[j mod BUF_LEN]`* — only if there is a fixed `BUF_LEN` to take
 the modulus against. Let the length vary and the modulus has no fixed base, so the address can only
 mean *wherever the host put it*.
@@ -29,7 +29,7 @@ That leaves three coherent designs, not four:
 | **general** | chosen per shot | **relative** — wherever it was loaded | not built; needs an allocator |
 | **today** | fixed at build time | **relative** | **built** |
 
-### Today is the intersection, and that is worth saying plainly
+### Today is the intersection
 
 The bottom row takes the constraint of the first design and the guarantee of the second. **You accept
 that a shot must be exactly `depth` words, and you get nothing back for it that a variable-length
@@ -84,9 +84,10 @@ It would need its **own** gate, not a stricter version of the current one. Today
 `real[i] == shot_codes[i % nsamp]` *within a playout segment*; the absolute version asserts against a
 **global** sample counter. A different assertion, not a tightening.
 
-## A separate question — how faithfully simulation reproduces timing
-
-This one is about the model, not the design, and it is orthogonal to everything above.
+## Loosely timed vs. matched timing
+
+**This one is about the model, not the design**, and it is orthogonal to everything above: it decides
+how much of the simulator's timing you are entitled to believe, whichever design you are running.
 
 | | **loosely timed** (built) | **matched** (not built) |
 |---|---|---|
