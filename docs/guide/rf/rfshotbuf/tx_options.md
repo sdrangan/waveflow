@@ -4,7 +4,7 @@ parent: RfShotBuf
 grand_parent: RF converters
 nav_order: 4
 audience: python
-summary: "Where RfShotTx sits in the shot-buffer design space, and why today's point is the intersection of two constraints rather than a design in its own right. Covers what fixed-size relative indexing costs you, what absolute indexing would buy, what scoping found would make it cheap, and separately how much of the simulator's timing you are entitled to believe."
+summary: "Where RfShotTx sits in the shot-buffer design space. Covers absolute indexing -- built for TX as the build-time `absolute_index`, what it buys, what one pass of latency it costs, and why it is only half of the sounding story while RfShotRx does not index absolutely -- what fixed-size relative indexing still costs you, and separately how much of the simulator's timing you are entitled to believe."
 ---
 
 # Options and what is not built
@@ -25,11 +25,11 @@ That leaves three coherent designs, not four:
 
 | | shot size | what an address means | status |
 |---|---|---|---|
-| **sounding** | fixed at build time | **absolute** — sample *j* is at `mem[j mod depth]` | not built |
+| **sounding** | fixed at build time | **absolute** — sample *j* is at `mem[j mod depth]` | **built on TX** (`absolute_index=1`); `RfShotRx` does not |
 | **general** | chosen per shot | **relative** — wherever it was loaded | not built; needs an allocator |
-| **today** | fixed at build time | **relative** | **built** |
+| **default** | fixed at build time | **relative** | **built**, and the default |
 
-### Today is the intersection
+### The default row is the intersection
 
 The bottom row takes the constraint of the first design and the guarantee of the second. **You accept
 that a shot must be exactly `depth` words, and you get nothing back for it that a variable-length
@@ -37,55 +37,78 @@ design would not also give you.**
 
 Fixed length is not free of value — it is what lets the load loop reach `II=1` with a counted trip
 count, what gives the pad a length to pad *to*, and what keeps an allocator out of the design. But
-those are *implementation* benefits. From where you sit they are not features, and the honest reading
-is that this row is a way-station rather than a destination.
+those are *implementation* benefits. From where you sit they are not features.
 
-**The direction is toward the top row.** Absolute indexing needs the fixed length this design already
-has, so it is a small change from here and variable sizing is a much larger one — see
-*What scoping found* below.
+The top row is now reachable from here, on the transmit side, by building with `absolute_index=1`.
+Variable sizing is still a much larger change and still needs an allocator.
 
-## What absolute indexing would buy
+## Absolute indexing — `absolute_index`
 
-**Memory index becomes a timestamp.** If transmitted sample *j* sits at `mem[j mod depth]` and a
-received sample *j* likewise, then TX and RX correlate **by address** — no timestamping, no
-bookkeeping. For channel sounding that correlation *is* the measurement.
+**Memory index becomes a timestamp.** With `absolute_index=1` the player's read pointer counts
+*every* word it emits since reset — filler included — so the address a sample comes out of is that
+sample's own word index modulo `depth`. Sample *j* is emitted at an absolute index congruent to *j*,
+whenever the shot happened to be loaded.
 
-### What scoping found
+```python
+tx = RfShotTx.for_word(Rfsoc4x2SampWord.specialize(samp_per_word=4), sim=sim,
+                       depth=64, blk_words=16, absolute_index=1)
+```
 
-Two things, and both were better than expected.
+It is a **build-time** parameter and not a runtime flag: it changes the RTL, so it is an `HwParam`
+lowered as a template argument. `0` is the default and is exactly the behaviour every earlier version
+of this design had.
 
-**The player already carries the counter.** It writes `blk_words` words on *every* firing — samples
-when it has something to play, `FILLER` when it does not — so its own output count is the absolute
-word index. Today's read pointer is reset to `0` whenever a shot is accepted, which is the only reason
-it is a *relative* index. Let it free-run and it is an absolute one.
+### A playout starts at its own beginning
 
-**Starting at the beginning is still possible.** The obvious cost of absolute indexing — that playout
-begins wherever the counter happens to be, so the first sample out is not the first sample of your
-waveform — goes away if the design defers the change from filler to samples until the pointer reaches
-a buffer boundary. `blk_words` already divides `depth`, so that boundary is hit exactly once per pass
-and the wait is bounded by one pass. Because the waveform fills the whole buffer *and* starts on a
-boundary, sample *j* is then always emitted at an absolute index congruent to *j* — the full
-timestamp property, with *a waveform starts at its beginning* kept intact.
+The obvious cost of absolute indexing would be that playout begins wherever the counter happens to be,
+so the first sample out is not the first sample of your waveform. **Deferring the start to a buffer
+boundary removes that instead of trading it.** `blk_words` divides `depth`, so the read pointer takes
+exactly `0, blk_words, ... depth - blk_words` and hits zero once per pass; the player waits for that
+zero before it switches from filler to samples. Because the waveform fills the whole buffer *and*
+starts on a boundary, you get the timestamp property with *a waveform starts at its beginning* intact.
 
-{: .note }
-It would also survive the loosely-timed model below better than it looks. The two backends would each
-start on a boundary of their **own** counter, so they would disagree about **which pass** a shot lands
-in and agree exactly about **phase within the pass**. Phase is what a sounding correlation uses.
+### What it costs: one pass of latency, and never more
 
-### What it would still depend on
+A shot loaded partway through a pass waits for the next boundary before a single sample reaches the
+air. That wait is bounded by one pass and is measured, not asserted: at the gated geometry
+(`depth=64`, `blk_words=16`, four samples per word) the finite scenario's startup filler goes from 192
+samples to 256.
 
-**Tile synchronisation, which is not something this design can promise.** `Rfdc` already models the
-gap: `t0_tx` is *"normally equal to `t0_rx` — that is what MTS gives you"*, and a non-zero value means
-a tile deliberately started late, or a measured MTS residual. Absolute indexing is a property of the
-buffer **and** the converter's epochs agreeing, and only the first half lives here.
+**If your loads arrive closer together than one pass, some of them will never play at all.** A load
+that preempts an armed-but-not-yet-started shot cancels it — correctly, since the memory it would have
+played has already been rewritten. The gated infinite scenario is exactly that case: it plays two
+waveforms under the default and **nothing** under `absolute_index=1`, on the same command stream. That
+is the design working, and it is the number to look at before choosing this mode for a design that
+switches waveforms quickly.
 
-{: .note }
-It would need its **own** gate, not a stricter version of the current one. Today's phase check asserts
-`real[i] == shot_codes[i % nsamp]` *within a playout segment*; the absolute version asserts against a
-**global** sample counter. A different assertion, not a tightening.
+Nothing else moves. The converter is never starved — a longer wait is longer filler, which is a value
+the design produces rather than a stall — every verdict on the response path is unchanged, and every
+pipelined loop still reaches `II=1`.
 
-## Loosely timed vs. matched timing
-
+### It survives the loosely-timed model
+
+The player only ever writes whole chunks, so the loosely-timed lead is a whole number of chunks and
+each backend starts on a boundary of its **own** counter. The two therefore disagree about **which
+pass** a shot lands in and agree exactly about **phase within the pass** — measured: pysim starts the
+gated shot at absolute sample 768 and the RTL at 256, and both satisfy the same congruence.
+
+### What this does not give you
+
+**It is the transmit half.** `RfShotRx` captures continuously into two regions and announces each with
+a `base_addr` on the wire; whether *its* addresses can carry absolute phase is a separate question
+with a different answer, because a capture that drops a block loses its place in a way a player
+cannot. **Correlating TX against RX by address is not available**, and a page claiming otherwise while
+only one end indexes absolutely would be worse than one that admits the gap.
+
+**Tile synchronisation is not something this design can promise either.** `Rfdc` models the gap:
+`t0_tx` is *"normally equal to `t0_rx` — that is what MTS gives you"*, and a non-zero value means a
+tile deliberately started late, or a measured MTS residual. Absolute indexing is a property of the
+buffer **and** the converter's epochs agreeing; only the first half lives here.
+
+## Loosely timed vs. matched timing
+
+
+
 **This one is about the model, not the design**, and it is orthogonal to everything above: it decides
 how much of the simulator's timing you are entitled to believe, whichever design you are running.
 
@@ -121,11 +144,15 @@ mode that ships.
 
 ## What is built today
 
-**Fixed-size shots, relative indexing, loosely timed.** That is what every gate exercises and what the
-[transmit](./tx.md) and [receive](./rx.md) pages describe.
+**Fixed-size shots, loosely timed, and indexing you choose at build time.** `absolute_index=0` — the
+default, and what the [transmit](./tx.md) and [receive](./rx.md) pages describe — is relative
+indexing; `absolute_index=1` is the sounding row, on TX only. Both are gated at RTL, each with its own
+csynth and its own xsim snapshot, because the parameter is a template argument and the two settings
+are two designs.
 
-The alternatives above are coherent designs and none is implemented. If one of them is what you need,
-that is worth knowing before you build on this rather than after.
+What is still not implemented: **variable-length shots** (they need an allocator), **absolute indexing
+on `RfShotRx`**, and **matched timing**. If one of those is what you need, that is worth knowing
+before you build on this rather than after.
 
 ## Next
 
