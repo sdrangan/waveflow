@@ -110,9 +110,15 @@ def test_the_three_tasks_take_their_lock_arguments_adjacent():
     Adjacent and in ``physical_endpoints()`` order, which is why both hand-written bodies read
     ``(buf, cmd, resp)`` together.  The two are instantiated from **one** set of template arguments,
     so a window task told a different geometry from its capture is not expressible.
+
+    The capture then takes a **fifth**, ``ABS`` (``plans/rf_shot_absolute.md`` S2), and the window
+    reader does not: it follows the ``base_addr`` it is handed and has no opinion about where that
+    address came from.  ``0`` here because ``0`` is what every gate in this family was recorded
+    against, and it is spelled out rather than defaulted in the C++ — a template argument a build
+    forgets to pass is a design nobody chose.
     """
     text = render_top(composite_top_spec(_rx(), width=WORD_BW))
-    assert (f"hls::task t1(pingpong_capture_task<{WORD_BW}, {DEPTH}, {N_REGION}, {BLK_WORDS}>, "
+    assert (f"hls::task t1(pingpong_capture_task<{WORD_BW}, {DEPTH}, {N_REGION}, {BLK_WORDS}, 0>, "
             f"dense, buf_w, lock_if_cmd, lock_if_resp, rdy);") in text
     assert (f"hls::task t2(pingpong_window_task<{WORD_BW}, {DEPTH}, {N_REGION}, {BLK_WORDS}>, "
             f"rdy, buf_r, lock_if_cmd, lock_if_resp, w_out);") in text

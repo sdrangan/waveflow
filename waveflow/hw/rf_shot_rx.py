@@ -164,6 +164,25 @@ def split_windows(frames, bitwidth: int = WORD_BW):
     return out
 
 
+def window_abs_index(w: int, n_dropped: int, region_words: int) -> int:
+    """The **absolute word index** of window *w*'s first sample, from its header alone.
+
+    ``plans/rf_shot_absolute.md`` S2, *what is in a hole*.  This is the arithmetic that makes a
+    per-block valid mask unnecessary: every announced window is exactly ``region_words`` words —
+    the design never announces a partially written region — and every word the capture could not
+    place is counted in ``n_dropped``.  So the words the capture has *consumed* by the end of window
+    *w* are ``(w + 1) * region_words + n_dropped``, and the window's own first word is
+    ``region_words`` before that.
+
+    A host therefore knows **where** a hole is, not merely that there was one, out of the header it
+    already receives: the gap before window *w* runs from
+    ``w * region_words + n_dropped_prev`` to ``w * region_words + n_dropped``.
+
+    *w* is the window's ordinal in arrival order and *n_dropped* is its header's cumulative count.
+    """
+    return int(w) * int(region_words) + int(n_dropped)
+
+
 #: Regions the memory is split into.  **Two, and fixed at S2.**  Three would need an allocator and a
 #: policy for which one to hand out, which is S3's — and two is what the plan's *"the writer fills
 #: ``[256, 512)`` while the reader drains ``[0, 256)``"* asks for.  It is a module constant rather
@@ -208,6 +227,19 @@ class PingPongCapture(FreeRunMod):
     #: because they are one boundary — a converter block is the quantum on the input edge, and a poll
     #: per block is the natural cadence for a grant.
     blk_words: HwParam[int] = 16
+    #: **The index is a timestamp** (``plans/rf_shot_absolute.md`` S2), and the mirror of
+    #: :attr:`~waveflow.hw.rf_shot_tx.ShotTxPlayer.absolute_index`.  ``0`` is the behaviour this
+    #: design has always had: :attr:`wp` is **fill-driven** — it does not advance on a drop — so an
+    #: address says *how far into this capture*, and a lost block shifts everything after it.
+    #: ``1`` makes :attr:`wp` advance **unconditionally**, so it holds this task's own word count
+    #: since reset modulo :attr:`depth` and **a drop leaves a hole rather than a shift**: the samples
+    #: either side of it are still at the addresses their own indices name.
+    #:
+    #: **Zero is today's behaviour on purpose**: every recorded number in this family keeps its
+    #: meaning, and one that moves at the default is a finding rather than a consequence.
+    #:
+    #: It changes the RTL, so it is an ``HwParam`` and not a runtime flag.
+    absolute_index: HwParam[int] = 0
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -223,6 +255,17 @@ class PingPongCapture(FreeRunMod):
                 f"blk_words={bw} does not divide a {d // N_REGION}-element region. A block that "
                 f"straddled a region boundary would have to be split across two locks, and the half "
                 f"on the far side would land in memory the capture may not hold.")
+        rw = d // N_REGION
+        if int(self.absolute_index) and (rw & (rw - 1)):
+            # Under absolute indexing the region is `wp // region_words` and the boundary test is
+            # `wp % region_words == 0`.  Both are a shift and a mask when the region is a power of
+            # two and a DIVIDER on the datapath's critical path when it is not, so the geometry is
+            # refused rather than synthesized slowly and silently.
+            raise ValueError(
+                f"absolute_index needs a power-of-two region, and {d} // {N_REGION} = {rw} is not "
+                f"one. The region a block belongs to is `wp // {rw}` and the boundary test is "
+                f"`wp % {rw} == 0`; at a non-power-of-two those are a divider rather than a shift "
+                f"and a mask.")
         #: Densely-packed samples from the converter's side of the re-layout.
         self.samp_in = StreamIFSlave(sim=self.sim, name=f"{self.name}_samp_in", bitwidth=w,
                                      has_tlast=True)
@@ -240,8 +283,17 @@ class PingPongCapture(FreeRunMod):
             self.add_endpoint(ep)
 
         #: Which region is being filled, and how far into it.  ``static``\ s in the C++ twin.
+        #:
+        #: **Under :attr:`absolute_index`, :attr:`wp` is not "how far into it" — it is the word
+        #: count since reset, modulo :attr:`depth`**, and :attr:`cur` is the region that count names
+        #: rather than the region a search happened to find.
         self.cur = 0
         self.wp = 0
+        #: **The current region was claimed at its boundary** — meaningful only under
+        #: :attr:`absolute_index`.  Asked once per region, at the block whose ``wp`` is the region's
+        #: first address, and held for the whole region.  So a region is filled entirely or skipped
+        #: entirely, and **an announced window is never partially written**.
+        self.claimed = False
         #: Per region: does it still hold samples nobody has read?  A region is free when the reader
         #: releases it, never merely when the reader takes it.
         self.full = [False] * N_REGION
@@ -275,17 +327,53 @@ class PingPongCapture(FreeRunMod):
         return KernelTask("pingpong_capture_task", "pingpong_capture_task.h",
                           ("samp_in", "lock", "rdy_out"),
                           template_args=(int(self.bitwidth), int(self.depth), N_REGION,
-                                         int(self.blk_words)))
+                                         int(self.blk_words), int(self.absolute_index)))
 
     # -- the pysim twin ----------------------------------------------------------------------
 
+    def _region_free(self, i: int) -> bool:
+        """Region *i* is one this task may fill: not yielded, and not holding an unread window."""
+        lo, hi = self.region(i)
+        return bool(not self.full[i] and self.lock.may_touch(lo) and self.lock.may_touch(hi - 1))
+
     def _free_region(self) -> int | None:
-        """A region this task may fill: not yielded, and not still holding an unread window."""
+        """The lowest region this task may fill, or ``None``.  **The default mode's search.**"""
         for i in range(N_REGION):
-            lo, hi = self.region(i)
-            if not self.full[i] and self.lock.may_touch(lo) and self.lock.may_touch(hi - 1):
+            if self._region_free(i):
                 return i
         return None
+
+    def _place(self) -> bool:
+        """Decide where this block goes — and whether it goes anywhere at all.
+
+        Two modes, and the difference is the whole of ``plans/rf_shot_absolute.md`` S2.
+
+        **Default.**  Keep filling :attr:`cur` while it has room; otherwise *search* for a free
+        region and restart at its beginning.  Where a block lands therefore depends on how many
+        blocks were dropped before it, which is what makes the address relative.
+
+        **``absolute_index``.**  :attr:`wp` advances unconditionally below and wraps at
+        :attr:`depth`, so it *is* the word count since reset modulo the memory — and the region a
+        block belongs to is a function of that count rather than of reader timing.  The search
+        collapses to a single question, asked **once per region** at its first block: *is the region
+        this index names free?*  Held for the whole region, so a region is filled entirely or
+        skipped entirely and **an announced window is never partially written**.
+        """
+        bw, rw = int(self.blk_words), self.region_words
+        if int(self.absolute_index):
+            if self.wp % rw == 0:
+                self.cur = self.wp // rw
+                self.claimed = self._region_free(self.cur)
+            return self.claimed
+        _lo, hi = self.region(self.cur)
+        if not self.full[self.cur] and self.wp + bw <= hi:
+            return True
+        nxt = self._free_region()
+        if nxt is None:
+            return False
+        self.cur = nxt
+        self.wp = self.region(nxt)[0]
+        return True
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one block in, one block placed **or dropped**, and exactly one poll.
@@ -300,42 +388,51 @@ class PingPongCapture(FreeRunMod):
                            dtype=np.uint64).ravel()[:bw]
         self.n_blocks += 1
 
+        have = self._place()
         lo, hi = self.region(self.cur)
-        if self.full[self.cur] or self.wp + bw > hi:
-            nxt = self._free_region()
-            if nxt is None:
-                # NOWHERE TO PUT IT.  The block is gone -- and it is gone for the one reason RX has
-                # and TX does not: the reader is holding, or has not drained, the region this task
-                # needs.  Counted rather than raised, because on a real ADC this is a fact about the
-                # run and not a bug in the design.
-                self.n_dropped += bw
-                yield self.timeout(bw / float(self.clk.freq))
-                yield from self._poll()
-                return
-            self.cur = nxt
-            lo, hi = self.region(nxt)
-            self.wp = lo
+        if have:
+            yield from self.lock.write_pipelined(words, addr=self.wp)
+            self.n_written += bw
+        else:
+            # NOWHERE TO PUT IT.  The block is gone -- and it is gone for the one reason RX has and
+            # TX does not: the reader is holding, or has not drained, the region this task needs.
+            # Counted rather than raised, because on a real ADC this is a fact about the run and not
+            # a bug in the design.
+            self.n_dropped += bw
+            yield self.timeout(bw / float(self.clk.freq))
 
-        yield from self.lock.write_pipelined(words, addr=self.wp)
-        self.wp += bw
-        self.n_written += bw
-        if self.wp >= hi:
-            # The region is complete.  Mark it, announce it, and leave `cur` where it is -- the next
-            # firing will look for a free region and find the other one.
-            self.full[self.cur] = True
-            self.n_ready += 1
-            # THE VERDICT IS DECIDED HERE, WHERE THE ANSWER IS KNOWN.  Anything lost since the last
-            # announcement fell immediately before this window, so this window is not contiguous with
-            # the one before it -- which is the question a host actually has, and the one a single
-            # cumulative reading cannot answer.
-            hdr = CaptureWindowHdr()
-            hdr.status = CAP_LOST if self.n_dropped > self._announced_dropped else CAP_OK
-            hdr.base_addr = int(lo)
-            hdr.n_dropped = int(self.n_dropped) & ((1 << DROP_BW) - 1)
-            self._announced_dropped = int(self.n_dropped)
-            # A BLOCKING write, and it cannot block: at most N_REGION regions can be full at once, so
-            # at most N_REGION announcements can be outstanding, and the channel is that deep.
-            yield from self.rdy_out.write(hdr)
+        # THE ADVANCE, AND THE SPLIT `plans/rf_shot_absolute.md` S2 TURNS ON.
+        #
+        # Under `absolute_index` the pointer moves on EVERY firing, dropped blocks included -- that
+        # is what makes it the absolute word index and a drop a HOLE rather than a shift.  What must
+        # NOT come out of the guard with it is the ANNOUNCEMENT: a region nothing was written into is
+        # not a window, and handing one out would publish the previous pass's samples under this
+        # pass's header.
+        if int(self.absolute_index) or have:
+            self.wp += bw
+            if self.wp >= hi and have:
+                # The region is complete.  Mark it and announce it; `cur` is left where it is --
+                # the default mode's next firing searches, and the absolute mode's reads the region
+                # off the pointer it just advanced.
+                self.full[self.cur] = True
+                self.n_ready += 1
+                # THE VERDICT IS DECIDED HERE, WHERE THE ANSWER IS KNOWN.  Anything lost since the
+                # last announcement fell immediately before this window, so this window is not
+                # contiguous with the one before it -- which is the question a host actually has,
+                # and the one a single cumulative reading cannot answer.
+                hdr = CaptureWindowHdr()
+                hdr.status = CAP_LOST if self.n_dropped > self._announced_dropped else CAP_OK
+                hdr.base_addr = int(lo)
+                hdr.n_dropped = int(self.n_dropped) & ((1 << DROP_BW) - 1)
+                self._announced_dropped = int(self.n_dropped)
+                # A BLOCKING write, and it cannot block: at most N_REGION regions can be full at
+                # once, so at most N_REGION announcements can be outstanding, and the channel is
+                # that deep.
+                yield from self.rdy_out.write(hdr)
+            if int(self.absolute_index) and self.wp >= int(self.depth):
+                # THE WRAP, and it is the whole of this design's absolute addressing.  `depth` is a
+                # power of two, so at RTL it is a mask.
+                self.wp = 0
         yield from self._poll()
 
     def _poll(self) -> ProcessGen[None]:
@@ -516,6 +613,12 @@ class RfShotRx(FreeRunMod):
     cpp_kernel_name: ClassVar[str | None] = "rf_shot_rx"
     potential_targets: ClassVar[frozenset[str]] = frozenset({COMPOSITE_KERNEL})
 
+    #: The capture class this composite instantiates.  A ClassVar, so it is changed by subclassing
+    #: and never by a caller — the seam a gate uses to build a deliberately broken twin without
+    #: copying the composite.  :attr:`~waveflow.hw.rf_shot_tx.RfShotTx.player_cls` is the same seam
+    #: on the other design, and it is what lets S1's ``nrep`` control be one class.
+    capture_cls: ClassVar[type] = PingPongCapture
+
     bitwidth: HwParam[int] = WORD_BW
     #: Samples one word carries.
     samp_per_word: HwParam[int] = 4
@@ -528,6 +631,12 @@ class RfShotRx(FreeRunMod):
     #: Words per converter block: the re-layout's pysim burst, the capture's chunk, its poll period,
     #: and the reader's output burst.  One number for all of them, because they are one quantum.
     blk_words: HwParam[int] = 16
+    #: **The index is a timestamp** — forwarded to :class:`PingPongCapture`, where it is documented.
+    #: ``0`` is every earlier version's behaviour and the default, so a number that moves at the
+    #: default is a finding.  It reaches the **capture** and nothing else:
+    #: :class:`PingPongWindow` follows the ``base_addr`` it is handed and has no opinion about where
+    #: that address came from, which is the same reason ``base_addr`` stays an address.
+    absolute_index: HwParam[int] = 0
     #: Sim-only, and there to break things — see :attr:`PingPongWindow.stall_blocks`.
     stall_blocks: int = 0
     #: Seconds per source block, for the stall to be measured in.  Not hardware.
@@ -544,8 +653,9 @@ class RfShotRx(FreeRunMod):
         # The re-layout is FIRST: the converter's slot words become the dense words the memory holds.
         self.relayout = RfRelayoutToDense(sim=self.sim, name=f"{self.name}_to_dense", bitwidth=w,
                                           n_slot=spw, shift=sh, blk_words=bw, clk=self.clk)
-        self.capture = PingPongCapture(sim=self.sim, name=f"{self.name}_capture", bitwidth=w,
-                                       depth=d, blk_words=bw, clk=self.clk)
+        self.capture = type(self).capture_cls(
+            sim=self.sim, name=f"{self.name}_capture", bitwidth=w, depth=d, blk_words=bw,
+            absolute_index=int(self.absolute_index), clk=self.clk)
         self.window = PingPongWindow(sim=self.sim, name=f"{self.name}_window", bitwidth=w,
                                      depth=d, blk_words=bw, stall_blocks=int(self.stall_blocks),
                                      blk_period=self.blk_period, clk=self.clk)
@@ -633,6 +743,12 @@ class RfShotRx(FreeRunMod):
         A guard that never fired is not evidence.  *Alternating* is the part a window count cannot
         give: a design that handed the same half out twice would move the right number of words and
         prove nothing about two regions.
+
+        **Alternation is a property of a run that lost nothing**, and under
+        :attr:`absolute_index` that is not a technicality: a skipped region does not lose its turn,
+        so a run that skipped an odd number of them announces the same base twice in a row and is
+        working correctly.  Call this on clean runs; :meth:`assert_windows_absolute` is what a
+        lossy one is held to.
         """
         w = self.window
         if int(w.n_windows) < int(min_windows):
@@ -700,6 +816,50 @@ class RfShotRx(FreeRunMod):
             raise AssertionError(
                 f"{type(self).__name__} '{self.name}': nothing was dropped and nothing was written. "
                 f"A run in which the capture never moved has not proved anything about loss.")
+
+    def assert_windows_absolute(self, frames, *, where: str = "") -> list[int]:
+        """**The address is the phase** — ``absolute_index``'s whole contract, read off the wire.
+
+        Two claims, and the second is what makes the first exact:
+
+        * every announced window's ``n_dropped`` is a **whole number of windows**.  Under
+          ``absolute_index`` a region is claimed at its first block and held for all of it, so a
+          region is filled entirely or skipped entirely and loss arrives in units of one window.
+          That is what keeps an announced window from ever being partially written, and it is why
+          this design needs no per-block valid mask (``plans/rf_shot_absolute.md`` S2).
+        * every window's ``base_addr`` is the address its own **absolute index** names —
+          ``window_abs_index(...) % depth`` — rather than a function of when a reader drained.
+
+        **This is the assertion that must FAIL at ``absolute_index = 0``**, and only on a run that
+        actually dropped something: with nothing lost the two modes place every block at the same
+        address, so a control run has to be one where the reader was starved.
+
+        Returns the absolute word index of each window, so a caller can go on to check the samples
+        at those indices are the ones the source sent.
+        """
+        wins = split_windows(frames, int(self.bitwidth))
+        if not wins:
+            raise AssertionError(
+                f"{where}no window reached the host, so absolute addressing says nothing.")
+        rw, d = self.region_words, int(self.depth)
+        out: list[int] = []
+        for w, (hdr, _samples) in enumerate(wins):
+            nd, base = int(hdr.n_dropped), int(hdr.base_addr)
+            if nd % rw:
+                raise AssertionError(
+                    f"{where}window {w} published n_dropped={nd}, which is not a whole number of "
+                    f"{rw}-word windows. Under absolute_index a region is claimed at its boundary "
+                    f"and held for all of it, so loss comes in whole windows; a partial count means "
+                    f"a region was abandoned midway and whatever was announced is part stale.")
+            k = window_abs_index(w, nd, rw)
+            out.append(k)
+            if k % d != base:
+                raise AssertionError(
+                    f"{where}window {w} came out of region {base} but its absolute word index is "
+                    f"{k}, which names address {k % d}. The address is supposed to BE the "
+                    f"timestamp: {w} whole window(s) were written and {nd} word(s) lost before it, "
+                    f"so it belongs at {k % d}.")
+        return out
 
     def assert_windows_contiguous(self, windows, *, where: str = "") -> np.ndarray:
         """The strongest form of *nothing was dropped*: the windows join without a gap.
