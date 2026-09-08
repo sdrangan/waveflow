@@ -3,7 +3,8 @@
 **Status: BUILT 2026-09-07, one stage.** `absolute_index` is a build-time `HwParam` on
 `ShotTxPlayer` and `RfShotTx`, defaulting to `0` — today's behaviour — lowered as a fourth template
 argument on `shot_tx_player_task`. Both settings are synthesized and gated at RTL. `RfShotRx` is
-untouched; *What this does not deliver* is still true and is now said in the docs.
+untouched by S1. **S2 scopes the RX half and S3 the worked example** — both below, added
+2026-09-08 after S1's stated reason for deferring RX turned out to be wrong.
 
 ---
 
@@ -203,20 +204,96 @@ simpler rather than harder — but `test_every_pipelined_loop_reaches_ii_1` is t
 `_II_MODULES` names carry the template arguments, so a new parameter **renames every module**. Read
 the names off the report directory; a stale one makes that gate skip, which reads as a pass.
 
-## What this does not deliver
+## S2 — the receive half
 
-**The sounding use case needs both ends, and this is the TX half.** `RfShotRx` captures continuously
-into two regions and announces each with a `base_addr` on the wire; whether its addresses can carry
-absolute phase is a separate question with a different answer, because a capture that drops a block
-loses its place in a way a player cannot. Correlating TX against RX by address is not available at
-the end of this plan.
+**Scoped 2026-09-08. The reason S1 gave for deferring this was wrong, and correcting it is what makes
+S2 small.** S1 said *"a capture that drops a block loses its place in a way a player cannot."* That
+describes today's implementation, not a necessity.
 
-Say that in the docs when it lands. A page claiming *"index becomes a timestamp"* while only one end
-indexes absolutely would be worse than today's, which at least admits the feature is absent.
+`PingPongCapture._chunk` is the mirror of the player:
+
+```python
+words = yield from self.samp_in.get(nwords_max=bw)   # EVERY firing, unconditionally
+self.n_blocks += 1
+...
+    self.n_dropped += bw
+    return                                            # <- `wp` does NOT advance
+...
+self.wp += bw
+```
+
+`n_blocks` is the unconditional counter — the absolute block index, already present. `wp` is
+fill-driven, and that is the *only* reason the address is relative, exactly as `rd = 0` on accept was
+on TX. **Derive the address from the block count and a drop leaves a hole rather than a shift**: the
+capture loses the data, not its place.
+
+### It also makes the design more deterministic
+
+Which region a block lands in becomes a function of its **index** rather than of reader timing, so
+`_free_region()`'s search collapses to *is the region this index belongs to free? if not, drop and
+advance*. Fewer states, and a window's identity no longer depends on when a reader drained.
+
+### The question S2 has and S1 did not: what is in a hole
+
+`CAP_LOST` and the cumulative `n_dropped` already answer **whether** something was lost. Under
+absolute indexing a reader also wants **where**, because the samples either side of a hole are still
+correctly placed and still usable — which is the whole point.
+
+Decide deliberately and record the choice. `assert_windows_contiguous` — *"the source is a ramp, so a
+gap in the numbers is a gap in the capture and no counter has to be believed"* — is the existing
+mechanism and may be enough; a per-block valid mask is the alternative and costs wire.
+
+### Gates
+
+Mirror S1's, including its controls, which is most of the value of doing this second:
+
+* **The address is the phase**, on the write pins.
+* **A window's `base_addr` is a function of its index**, not of reader timing.
+* **The negative control**: at `absolute_index = 0` both assertions fail.
+* **A drop leaves a hole, not a shift** — force a drop by starving the reader and assert the blocks
+  *after* it are still at their absolute addresses. This is the assertion that S1's wrong reason
+  claimed was impossible, so it is the one that carries the correction.
+* **A positive control that ships the wrong edit**, as `_CountsPassesWhilePlayingFiller` does for TX.
+  The natural wrong edit here is advancing `wp` on a drop while leaving the region search alone.
+
+### Traps
+
+**The lock is on the critical path here in a way it was not on TX.** TX's player owns one region and
+yields it; RX holds two and hands them over continuously. An index-driven region choice changes *when*
+a region is claimed, so re-read `plans/t2p_lock_chan.md` S2's disjoint-region argument before moving
+that logic — the property that made the region enforced at RTL by construction (140 both-live, 0
+shared) must survive.
+
+**`base_addr` on the wire keeps its meaning and its width.** It is still an address, still 28 bits.
+Do not turn it into an index; the lock speaks in addresses and `CaptureWindowHdr`'s docstring says so.
+
+**Module names carry the template argument**, so `_II_MODULES` in the RX gate file must be re-anchored
+against the report directory. S1 lost a run to reading names off RTL synthesized before the parameter
+existed.
+
+## S3 — the worked example
+
+**One `Rfdc` at `n_rx=1, n_tx=1`**, a `BlockChannel` with a delay between `tx_rf` and `rx_rf`, and
+both buffers at `absolute_index = 1`. The first thing in the repo to exercise the reason `Rfdc`
+carries both directions in one module: *"the TX and RX sample counters must hold a fixed relation, and
+that is a property of the converter."*
+
+**The result worth building it for: the channel delay is an address difference.** A sample sent from
+`mem[j]` arrives at `mem[(j + D) mod depth]`, so `D` is read off two window headers with no
+timestamps and no correlation. That is a much stronger claim than *the capture matches*.
+
+**It aliases at `depth`.** A delay longer than one buffer is indistinguishable from `D mod depth`, so
+the geometry must be chosen against the delay being demonstrated. Say so in the example's docs; it is
+the first thing a reader will trip over.
+
+**A THIRD example, not a replacement.** `examples/rf_shot_tx` and `examples/rf_shot_rx` stay. A
+loopback cannot isolate a TX defect from an RX one, and those two gate sets are the per-design
+contracts. The cost is a third csynth and another rise in `WANT_XSI_GATES`, which is worth it —
+*(if the intent was to retire the standalone examples, this is the line to change, and S3 shrinks.)*
+
 
 ## Not in scope
 
-- **`RfShotRx`.** Above.
 - **Matched timing.** `plans/lt_transient.md` S3. Independent of this, and not an `HwParam`.
 - **Variable-length shots.** The other row of `tx_options.md`, and it needs an allocator —
   `plans/t2p_lock_chan.md` S3 fenced that off as *"where this stops being an interface and starts
