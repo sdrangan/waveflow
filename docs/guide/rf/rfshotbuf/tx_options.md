@@ -16,32 +16,52 @@ the design.
 
 ## Fixed vs. variable shot size
 
-**Sizing and indexing are one choice, not two.** How long a shot is and what an address *means* look independent and are not. An address can carry
-absolute phase — *sample j lives at `mem[j mod BUF_LEN]`* — only if there is a fixed `BUF_LEN` to take
-the modulus against. Let the length vary and the modulus has no fixed base, so the address can only
-mean *wherever the host put it*.
+**Sizing and indexing are one choice, not two.** How long a shot is and what an address *means* look
+independent and are not. An address can carry absolute phase — *sample j lives at `mem[j mod
+BUF_LEN]`* — only if there is a fixed `BUF_LEN` to take the modulus against. Let the length vary and
+the modulus has no fixed base, so the address can only mean *wherever the host put it*.
 
 That leaves three coherent designs, not four:
 
-| | shot size | what an address means | status |
-|---|---|---|---|
-| **sounding** | fixed at build time | **absolute** — sample *j* is at `mem[j mod depth]` | **built, on both halves** (`absolute_index=1`) |
-| **general** | chosen per shot | **relative** — wherever it was loaded | not built; needs an allocator |
-| **default** | fixed at build time | **relative** | **built**, and the default |
+| | what an address means | status |
+|---|---|---|
+| **fixed size, absolute indexing** | sample *j* is at `mem[j mod depth]` | **built, both halves** — `absolute_index=1` |
+| **fixed size, relative indexing** | wherever it was loaded | **built**, and the default |
+| **variable size, relative indexing** | wherever it was loaded | not built; needs an allocator |
 
-### The default row is the intersection
+### The middle row is dominated, and that is worth saying
 
-The bottom row takes the constraint of the first design and the guarantee of the second. **You accept
-that a shot must be exactly `depth` words, and you get nothing back for it that a variable-length
-design would not also give you.**
+**Fixed size buys you nothing unless you spend it on absolute indexing.** The top row spends it. The
+middle row pays the constraint — your shot must be exactly `depth` words — and collects nothing a
+variable-length design would not also give you. It is not a point on a frontier; it is the third row
+with a restriction added.
 
-Fixed length is not free of value — it is what lets the load loop reach `II=1` with a counted trip
-count, what gives the pad a length to pad *to*, and what keeps an allocator out of the design. But
-those are *implementation* benefits. From where you sit they are not features.
+Fixed length is not valueless, but the value is *ours*, not yours: a counted trip count is what lets
+the load loop reach `II=1`, the pad needs a length to pad *to*, and an allocator stays out of the
+design.
 
-The top row is reachable from here by building with `absolute_index=1` — on **both** halves since
-`plans/rf_shot_absolute.md` S2. Variable sizing is still a much larger change and still needs an
-allocator.
+{: .note }
+The one thing that could rescue the middle row is if variable length cost `II=1`, and it probably does
+not: the load loop can stay counted to `depth` with the store predicated, leaving only the *play*
+bound variable. Untested — `plans/rf_shot_geometry.md` claims the counted trip count for the **load**
+loop, and nobody has tried the other shape.
+
+**So the middle row is where the design is, not where it is going.** It is the right default anyway,
+for a reason that has nothing to do with sizing — see below.
+
+### Which one do you want
+
+| you are doing | pick |
+|---|---|
+| channel sounding — correlate TX and RX by address, loads spaced well apart, MTS holds | `absolute_index=1` |
+| play this pulse **now**, or switch waveforms faster than one pass | `absolute_index=0` |
+| running a reader that is marginal on draining regions | `absolute_index=0` |
+
+**`0` is the default even though sounding is the motivating application.** Absolute indexing is not
+strictly better: a load arriving inside the deferral window is cancelled outright, so a host reloading
+faster than one pass gets *nothing* while every command still answers `SHOT_LOADED`. A default that
+can silently emit nothing is worse than one that puts your waveform at an address you have to ask
+about — silence is the harder failure to diagnose.
 
 ## Absolute indexing — `absolute_index`
 
@@ -177,7 +197,7 @@ mode that ships.
 
 **Fixed-size shots, loosely timed, and indexing you choose at build time.** `absolute_index=0` — the
 default, and what the [transmit](./tx.md) and [receive](./rx.md) pages describe — is relative
-indexing; `absolute_index=1` is the sounding row, on **both** halves. All four builds are gated at
+indexing; `absolute_index=1` is the absolute row, on **both** halves. All four builds are gated at
 RTL, each with its own csynth and its own xsim snapshot, because the parameter is a template argument
 and the two settings are two designs.
 
