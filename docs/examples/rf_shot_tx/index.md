@@ -45,7 +45,7 @@ the RTL because `test_the_two_backends_agree_after_their_own_transients` asserts
 agrees once the two captures are aligned on their own playout logs.
 
 **The leading shaded run is longer here than it is at RTL, and that is the model rather than the
-design.** Since [`plans/lt_transient.md`](../../guide/rf/rfshotbuf/tx_options.md#axis-2--how-faithfully-simulation-reproduces-timing)
+design.** Since [`plans/lt_transient.md`](../../guide/rf/rfshotbuf/tx_options.md#loosely-timed-vs-matched-timing)
 S2 the pysim player carries no metronome: it is paced by back-pressure alone, which controls how fast
 it may go and not how far *ahead of the data* it may get. While it owns nothing to play it writes
 filler, so a shot loaded later queues behind whatever filler is already in flight — 448 samples of
