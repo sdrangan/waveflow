@@ -94,11 +94,16 @@ gated shot at absolute sample 768 and the RTL at 256, and both satisfy the same 
 
 ### What this does not give you
 
-**It is the transmit half.** `RfShotRx` captures continuously into two regions and announces each with
-a `base_addr` on the wire; whether *its* addresses can carry absolute phase is a separate question
-with a different answer, because a capture that drops a block loses its place in a way a player
-cannot. **Correlating TX against RX by address is not available**, and a page claiming otherwise while
-only one end indexes absolutely would be worse than one that admits the gap.
+**It is the transmit half.** `RfShotRx` still indexes relatively — it announces each window with a
+`base_addr` on the wire and its write pointer advances only when a block is *stored*. So
+**correlating TX against RX by address is not available**, and a page claiming otherwise while only
+one end indexes absolutely would be worse than one that admits the gap.
+
+**That is an implementation, not a limit.** The capture consumes a block on *every* firing, so it
+already holds the same unconditional counter the player does; the address is relative only because
+the pointer is driven by what was stored rather than by what arrived. Deriving it from the block
+count instead makes a dropped block leave a **hole** rather than a shift — the capture loses the
+data, not its place. `plans/rf_shot_absolute.md` S2 scopes it.
 
 **Tile synchronisation is not something this design can promise either.** `Rfdc` models the gap:
 `t0_tx` is *"normally equal to `t0_rx` — that is what MTS gives you"*, and a non-zero value means a
