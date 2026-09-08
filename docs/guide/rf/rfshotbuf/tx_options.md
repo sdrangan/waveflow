@@ -4,7 +4,7 @@ parent: RfShotBuf
 grand_parent: RF converters
 nav_order: 4
 audience: python
-summary: "Where RfShotTx sits in the shot-buffer design space. Covers absolute indexing -- built for TX as the build-time `absolute_index`, what it buys, what one pass of latency it costs, and why it is only half of the sounding story while RfShotRx does not index absolutely -- what fixed-size relative indexing still costs you, and separately how much of the simulator's timing you are entitled to believe."
+summary: "Where RfShotTx sits in the shot-buffer design space. Covers absolute indexing -- the build-time `absolute_index`, now on both halves, what it buys, what it costs on each side, where a hole is without a valid mask, and why shared addresses still need MTS -- what fixed-size relative indexing still costs you, and separately how much of the simulator's timing you are entitled to believe."
 ---
 
 # Options and what is not built
@@ -25,7 +25,7 @@ That leaves three coherent designs, not four:
 
 | | shot size | what an address means | status |
 |---|---|---|---|
-| **sounding** | fixed at build time | **absolute** — sample *j* is at `mem[j mod depth]` | **built on TX** (`absolute_index=1`); `RfShotRx` does not |
+| **sounding** | fixed at build time | **absolute** — sample *j* is at `mem[j mod depth]` | **built, on both halves** (`absolute_index=1`) |
 | **general** | chosen per shot | **relative** — wherever it was loaded | not built; needs an allocator |
 | **default** | fixed at build time | **relative** | **built**, and the default |
 
@@ -39,8 +39,9 @@ Fixed length is not free of value — it is what lets the load loop reach `II=1`
 count, what gives the pad a length to pad *to*, and what keeps an allocator out of the design. But
 those are *implementation* benefits. From where you sit they are not features.
 
-The top row is now reachable from here, on the transmit side, by building with `absolute_index=1`.
-Variable sizing is still a much larger change and still needs an allocator.
+The top row is reachable from here by building with `absolute_index=1` — on **both** halves since
+`plans/rf_shot_absolute.md` S2. Variable sizing is still a much larger change and still needs an
+allocator.
 
 ## Absolute indexing — `absolute_index`
 
@@ -92,23 +93,48 @@ each backend starts on a boundary of its **own** counter. The two therefore disa
 pass** a shot lands in and agree exactly about **phase within the pass** — measured: pysim starts the
 gated shot at absolute sample 768 and the RTL at 256, and both satisfy the same congruence.
 
-### What this does not give you
+### The receive half indexes absolutely too
 
-**It is the transmit half.** `RfShotRx` still indexes relatively — it announces each window with a
-`base_addr` on the wire and its write pointer advances only when a block is *stored*. So
-**correlating TX against RX by address is not available**, and a page claiming otherwise while only
-one end indexes absolutely would be worse than one that admits the gap.
+`RfShotRx` takes the same `absolute_index`, and it means the same thing: its write pointer advances
+on **every** block it consumes rather than only on the ones it manages to place, so a captured sample
+sits at the address its own index names.
 
-**That is an implementation, not a limit.** The capture consumes a block on *every* firing, so it
-already holds the same unconditional counter the player does; the address is relative only because
-the pointer is driven by what was stored rather than by what arrived. Deriving it from the block
-count instead makes a dropped block leave a **hole** rather than a shift — the capture loses the
-data, not its place. `plans/rf_shot_absolute.md` S2 scopes it.
+**The consequence worth knowing is what a drop does.** With relative indexing, a block the capture
+had nowhere to put shifts every address after it — the samples are all valid and all in the wrong
+place. With absolute indexing a drop leaves a **hole**: the samples either side of it are still
+correctly placed and still usable, which is the whole point.
 
-**Tile synchronisation is not something this design can promise either.** `Rfdc` models the gap:
-`t0_tx` is *"normally equal to `t0_rx` — that is what MTS gives you"*, and a non-zero value means a
-tile deliberately started late, or a measured MTS residual. Absolute indexing is a property of the
-buffer **and** the converter's epochs agreeing; only the first half lives here.
+The cost is the mirror of the deferral TX pays. A region that is busy when its turn comes round is
+skipped **entirely**, because the capture asks *is the region this index names free?* once, at that
+region's first block, and holds the answer for the whole region. So a stalled reader loses more, in
+whole windows rather than in blocks. That coarseness is also what buys the localisation below: an
+announced window is never part stale.
+
+### Where a hole is, without a valid mask
+
+The header does not gain a field, and it did not need one. Every announced window is exactly one
+region of words and every word the capture could not place is counted in `n_dropped`, so window *w*'s
+first sample sits at absolute word index `w * region_words + n_dropped`, and the gap before it runs
+from `w * region_words + n_dropped_prev` up to that. A per-block valid mask would be a second
+encoding of something the header already determines — on a wire this family has deliberately held at
+one 64-bit word.
+
+`waveflow.hw.rf_shot_rx.window_abs_index` is that arithmetic, and
+`RfShotRx.assert_windows_absolute` is the contract asserted against it.
+
+### What this still does not give you
+
+**Tile synchronisation, which is not something these designs can promise.** Both halves now index
+absolutely, so TX and RX addresses are comparable *given a shared epoch* — and the epoch is the
+converter's, not the buffer's. `Rfdc` models the gap: `t0_tx` is *"normally equal to `t0_rx` — that
+is what MTS gives you"*, and a non-zero value means a tile deliberately started late, or a measured
+MTS residual. **Absolute indexing makes the buffers able to use MTS; it cannot make MTS true.** A
+loopback that reads a channel delay off two window headers is `plans/rf_shot_absolute.md` S3 and is
+**not built**.
+
+**And a delay longer than one buffer is indistinguishable from `D mod depth`.** The index is a
+timestamp modulo the memory, so a correlation aliases at `depth`, and the geometry has to be chosen
+against the delay being measured.
 
 ## Loosely timed vs. matched timing
 
@@ -151,13 +177,14 @@ mode that ships.
 
 **Fixed-size shots, loosely timed, and indexing you choose at build time.** `absolute_index=0` — the
 default, and what the [transmit](./tx.md) and [receive](./rx.md) pages describe — is relative
-indexing; `absolute_index=1` is the sounding row, on TX only. Both are gated at RTL, each with its own
-csynth and its own xsim snapshot, because the parameter is a template argument and the two settings
-are two designs.
+indexing; `absolute_index=1` is the sounding row, on **both** halves. All four builds are gated at
+RTL, each with its own csynth and its own xsim snapshot, because the parameter is a template argument
+and the two settings are two designs.
 
-What is still not implemented: **variable-length shots** (they need an allocator), **absolute indexing
-on `RfShotRx`**, and **matched timing**. If one of those is what you need, that is worth knowing
-before you build on this rather than after.
+What is still not implemented: **variable-length shots** (they need an allocator), **matched
+timing**, and the **loopback that reads a channel delay off two window headers**
+(`plans/rf_shot_absolute.md` S3). If one of those is what you need, that is worth knowing before you
+build on this rather than after.
 
 ## Next
 
