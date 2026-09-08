@@ -93,11 +93,16 @@ def test_both_task_bodies_are_instantiated_from_one_geometry():
     ``plans/rf_shot_geometry.md`` removed ``NW`` and ``BASE`` from both bodies — the shot is the
     buffer, so ``D`` is the length as well as the size, and there is no placement to pass.  That the
     *same* ``D`` reaches both is now structural rather than a thing to check.
+
+    The player then took a **third**, ``ABS`` (``plans/rf_shot_absolute.md``), and it is ``0`` here
+    because ``0`` is the behaviour every gate in this family was recorded against.  It is spelled
+    out rather than defaulted in the C++, because a template argument that a build forgets to pass
+    is a design nobody chose.
     """
     text = render_top(composite_top_spec(_dut(), width=WORD_BW))
     assert (f"hls::task t0(shot_tx_loader_task<{WORD_BW}, {DEPTH}, {SPW}>, "
             f"s_in, done, buf_w, lock_if_cmd, lock_if_resp, rep, resp_out);") in text
-    assert (f"hls::task t1(shot_tx_player_task<{WORD_BW}, {DEPTH}, {BLK_WORDS}>, "
+    assert (f"hls::task t1(shot_tx_player_task<{WORD_BW}, {DEPTH}, {BLK_WORDS}, 0>, "
             f"buf_r, lock_if_cmd, lock_if_resp, rep, done, samp);") in text
 
 
