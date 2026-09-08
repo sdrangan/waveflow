@@ -46,7 +46,18 @@ import pytest
 #: wrap at ``depth``, which is the only address arithmetic the design still has.  No gate was lost:
 #: the two retired VERDICTS (``SHOT_ZERO_LEN`` and ``SHOT_WRONG_LEN``'s length half) were asserted
 #: inside gates that survive, not by gates of their own.
-WANT_XSI_GATES = 98
+#:
+#: 98 -> 115 on 2026-09-07 (``plans/rf_shot_absolute.md``): a new file,
+#: ``test_rf_shot_tx_abs_xsi.py``, collects **17**.  ``absolute_index`` is a template argument, so
+#: the two settings are two pieces of RTL and the mode needs its own csynth and its own xsim
+#: snapshot — a gate that only ever elaborated the default would be asserting the mode's behaviour
+#: against a simulator.  The 17 are: the two feature gates (address-is-phase, boundary start) and
+#: their negative control, the ``nrep`` gate, block shape and deferral cost per scenario (4), the
+#: loop stream's preemption gate, DAC and verdict counters per scenario (4), cross-backend
+#: agreement, II, the template argument, and the pysim rung's record.  ``test_rf_shot_tx_xsi.py``
+#: is unchanged at 31: the default build is the negative control, so every one of its numbers had
+#: to keep its meaning, and every one did.
+WANT_XSI_GATES = 115
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

@@ -1,18 +1,88 @@
 # Plan — the index is a timestamp
 
-**Status: SCOPED 2026-09-07, NOTHING BUILT.** Adds absolute indexing to `RfShotTx` as a build-time
-mode, defaulting to today's behaviour. Does not touch `RfShotRx` — see *What this does not deliver*,
-because that section is the reason this plan is only half a feature.
+**Status: BUILT 2026-09-07, one stage.** `absolute_index` is a build-time `HwParam` on
+`ShotTxPlayer` and `RfShotTx`, defaulting to `0` — today's behaviour — lowered as a fourth template
+argument on `shot_tx_player_task`. Both settings are synthesized and gated at RTL. `RfShotRx` is
+untouched; *What this does not deliver* is still true and is now said in the docs.
 
 ---
 
-## Next session starts here — S1
+## What was built, and what it measured
 
-```
-claude "Read plans/rf_shot_absolute.md and build it.  One stage.  `absolute_index` defaults
-        to 0 so every existing gate keeps its meaning; the new mode needs its OWN gates and
-        its own RTL.  The nrep trap in 'Traps' is the one that fails silently."
-```
+**The three edits, in `waveflow/hw/rf_shot_tx.py` and identically in
+`waveflow/build/shot_tx_player_task.h`:**
+
+1. the advance and the wrap left `if (playing)` and became `if (ABS || playing)`; **the repeat count
+   and the `done` stayed behind**, under a nested `if (playing)`;
+2. accept sets `pending = arm` and leaves `rd` alone, where it used to write `rd = 0`;
+3. `if (ABS) { if (pending && rd == 0) { playing = 1; pending = 0; } }`, **above** the write loop.
+
+Plus the two the traps demanded: the `SHORT` answer is decided on `arm` rather than on `playing`, so
+it is still owed immediately at accept; and the ACQUIRE branch clears `pending` as well as `playing`.
+
+**One body, not two.** `ABS` is a template argument and the branches are `if (ABS)`; Vitis folds it.
+
+### The numbers
+
+| | default build | `absolute_index = 1` |
+|---|---|---|
+| `cmd` startup filler | 192 samples | **256** — the deferral, under the one-pass bound of 256 |
+| `cmd` playout | 3 x 256 samples | **3 x 256**, unchanged — the `nrep` split held |
+| `cmd_loop` playout | A, a gap, B | **nothing** — every load preempted before its boundary |
+| DAC blocks zero-filled | 0 | **0** — a longer wait is longer filler, never a stall |
+| `RESP_LAST_CYCLE` | 273 / 502 | 271 / 500 |
+| `II` on all five loops | 1 | **1** — the `pending` bit costs nothing |
+
+**No default-mode number moved.** Every one of `test_rf_shot_tx_xsi.py`'s 31 gates holds after a
+fresh csynth of the changed body: 359 DAC words, 273 / 502, one underrun at cycle 4, zero
+zero-filled, the same segment shapes, the same transients, the same port-overlap and collision
+counts. That was the point of defaulting to `0`.
+
+`WANT_XSI_GATES` **98 -> 115**: one new file, `tests/examples/test_rf_shot_tx_abs_xsi.py`, collecting
+17. `ABS` is a template argument, so the mode is a second piece of RTL and needs its own `csynth` and
+its own xsim snapshot; a gate that only ever elaborated the default would be asserting the mode's
+behaviour against a simulator.
+
+### The `_II_MODULES` rename, which had to be measured twice
+
+Adding the argument renamed the player's modules in **both** builds:
+`shot_tx_player_task_64_64_16_*` became `..._64_64_16_0_*` in the default build and `..._64_64_16_1_*`
+in the absolute one. The first reading of the report directory said the default build's name was
+*unchanged* — a plausible story about Vitis dropping a trailing zero — and it was a reading of RTL
+synthesized before the parameter existed. `rtl_staleness` refused the stale project, the II gate
+**skipped**, and the session gate failed on the skip. That is the sequence the whole no-silent-skip
+apparatus exists for, working.
+
+## Assumptions taken during the build
+
+These were not in the plan; each is what its reasoning implies.
+
+**`cmd_loop` under `absolute_index = 1` plays nothing, and that is gated rather than worked around.**
+It is the second half of the cost line above, measured: its loads are spaced
+closer than one pass, so each is preempted while still armed. Rather than invent a wider-spaced
+scenario, the run is asserted as it is. It is the honest statement of what the mode costs, and it is
+also the only place a stale arm would be visible: an ACQUIRE that cleared `playing` without clearing
+`pending` would start the outgoing shot at the next boundary out of a memory the incoming load has
+already rewritten, and the capture is supposed to be empty.
+
+**The negative control runs in pysim, not at RTL.** What it must isolate is the *parameter*, and the
+pysim pair differ in nothing else; the RTL pair differ in a snapshot as well, so a failure there would
+have a second candidate explanation. The positive half of the same pairing *is* asserted at RTL.
+There is a second, independent negative control at the toolchain-free tier
+(`tests/hw/test_rf_shot_tx.py`), and a **positive** control for the `nrep` trap: the wrong edit,
+shipped as a class, which plays two passes where three were asked for while answering every header
+normally.
+
+**The second build is a subclass, `RfShotTxAbs`, defined in the example.** It sets
+`cpp_kernel_name` and the parameter's default and overrides nothing else. It exists for the *name*: a
+Vitis project, an xsim snapshot and a generated ports header are all keyed on the kernel's name, and
+the two variants have to sit in one example directory to be compared against each other. The
+testbench graph is the same `RfShotTxTB`, cut at a different DUT class — a second graph would be a
+second model of one design.
+
+**`assert_finite_completed` also refuses a run that ends with a shot still armed.** A boundary that
+never arrives is a player that stopped counting, and it would otherwise look like a shot that was
+never loaded.
 
 ---
 
@@ -28,7 +98,7 @@ transmitted sample *j* sits at `mem[j mod depth]` and a received sample *j* like
 correlate **by address**, with no timestamping and no bookkeeping. For channel sounding that
 correlation *is* the measurement.
 
-## What changes — three edits, and they are small
+## What changed — three edits, and they were small
 
 The design already contains the counter. `play_chunk` writes `BW` words on **every** firing —
 `samp_out.write(playing ? buf[rd + i] : SHOT_TX_FILLER)` — so the number of words it has emitted
@@ -57,8 +127,12 @@ crossed-zero case to get wrong. Because the waveform fills the whole buffer *and
 boundary, sample *j* is then always emitted at an absolute index congruent to *j*: the full timestamp
 property, with *a waveform starts at its beginning* kept intact.
 
-The cost is latency, bounded by one pass — at the gated geometry `depth / blk_words = 4`, so at most
-three chunks of extra filler after a load lands.
+The cost has **two** parts, and only the first is latency. A shot that plays waits at most one pass —
+at the gated geometry `depth / blk_words = 4`, so at most three chunks of extra filler after a load
+lands. But **a load arriving inside that window cancels the arm outright**, so a host that reloads
+faster than one pass gets *nothing*, silently: every command still answers `SHOT_LOADED`. That is
+starvation, not latency, and it is the number to look at before choosing this mode for a design
+that switches waveforms quickly.
 
 **It also survives the loosely-timed model, which is the part that was not obvious.** The player only
 ever writes whole chunks, so the LT lead is structurally a whole number of chunks. Both backends
@@ -76,7 +150,7 @@ It is genuinely build-time: it changes the RTL, so it is an `HwParam` and not a 
 timing-fidelity mode (`tx_options.md`, *Loosely timed vs. matched timing*) is **not** — the RTL is
 identical either way and it belongs on the simulation side. Do not add it here.
 
-## Gates
+## Gates — all built
 
 **The address is the phase.** For every played word, its address equals the absolute word index
 modulo `depth`. This is the whole feature, asserted directly.

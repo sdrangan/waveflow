@@ -16,6 +16,19 @@
 // above it -- the chunk, the filler, the poll, the ordering -- is shared, which is what makes this a
 // merge rather than two designs sharing a file.
 //
+// `rd` IS EITHER A POSITION OR A TIMESTAMP, AND `ABS` IS WHICH (plans/rf_shot_absolute.md).
+//
+// At ABS=0 -- the default, and every predecessor's behaviour -- `rd` is reset on accept and advances
+// only while playing, so it says HOW FAR INTO THIS WAVEFORM.  At ABS=1 it advances and wraps on every
+// firing, filler included, so it says HOW MANY WORDS SINCE RESET, modulo D; a shot is armed in
+// `pending` at accept and starts at the next rd == 0.  Sample j then comes out at an absolute index
+// congruent to j, which is the whole feature, and a waveform still starts at its beginning.
+//
+// THE SPLIT AT THE WRAP IS LOAD-BEARING AND FAILS SILENTLY IF YOU GET IT WRONG.  The advance leaves
+// the `playing` guard; `nrep_left` and the `done` do NOT.  Move the whole block and the repeat count
+// ticks on filler wraps -- a finite shot ends early or never starts -- while every word count still
+// adds up.
+//
 // SET THE STATE BEFORE YOU GRANT.  ALWAYS.  THIS IS THE ONE ORDERING EVERYTHING TURNS ON.
 //
 // `playing = 0` comes BEFORE mem_lock_grant().  Granting while still reading lets the loader write
@@ -79,7 +92,17 @@
 /// @tparam BW    words per chunk: the pipelined loop's trip count AND the poll period.  Must divide
 ///               D, so a chunk never straddles the wrap and the play boundary keeps landing on a
 ///               block boundary.
-template <int W, int D, int BW>
+/// @tparam ABS   THE INDEX IS A TIMESTAMP (plans/rf_shot_absolute.md).  0 is every predecessor's
+///               behaviour: a shot starts at rd == 0 the instant it is accepted.  1 makes `rd`
+///               advance UNCONDITIONALLY -- filler included -- so it holds this task's own word
+///               count since reset modulo D, and a playout is deferred to the next rd == 0.  Then
+///               sample j is always emitted at an absolute index congruent to j, which is the whole
+///               feature.
+///
+///               ONE BODY, NOT TWO.  It is a template argument and the branches are `if (ABS)`, so
+///               Vitis folds the constant and each build synthesizes exactly the design it asked
+///               for.  Two copied bodies would be two designs that drift.
+template <int W, int D, int BW, int ABS>
 static void shot_tx_player_task(ap_uint<W> buf[D],
                                 memlock::chan& cmd_in,
                                 memlock::chan& resp_out,
@@ -102,6 +125,20 @@ static void shot_tx_player_task(ap_uint<W> buf[D],
     //: Passes left on a finite shot.  Meaningless while `loop`.
     static ap_uint<32> nrep_left = 0;
 #pragma HLS reset variable=nrep_left
+    //: ARMED, but waiting for the boundary.  Meaningful only when ABS.  Set at accept, cleared by
+    //: the rd == 0 that turns `playing` on.  BW divides D, so rd takes exactly 0, BW, ... D-BW and
+    //: rd == 0 happens exactly once per pass: an exact test with no crossed-zero case.
+    static ap_uint<1> pending = 0;
+#pragma HLS reset variable=pending
+
+    // THE START, AND IT IS BEFORE THE WRITE LOOP.  Testing rd == 0 here is what makes the chunk
+    // starting at 0 the FIRST ONE PLAYED rather than the one after it.
+    if (ABS) {
+        if (pending && rd == 0) {
+            playing = 1;
+            pending = 0;
+        }
+    }
 
     // LABELLED, and the II gate looks this module up by that label -- see the note in
     // shot_tx_loader_task.h.
@@ -111,12 +148,20 @@ play_chunk:
         samp_out.write(playing ? buf[rd + i] : (ap_uint<W>)SHOT_TX_FILLER);
     }
 
-    if (playing) {
+    // THE ADVANCE, AND THE SPLIT plans/rf_shot_absolute.md NAMES AS THE SILENT TRAP.
+    //
+    // When ABS the pointer advances and wraps on EVERY firing, filler included -- that is what makes
+    // it this task's own word count since reset and therefore a timestamp.  What must NOT come out
+    // of the guard with it is the repeat count: `nrep_left` would then tick once per pass while the
+    // design plays filler, and a finite shot would end early or never start at all.  The word counts
+    // still add up either way, so no counter gate catches it.  Two conditions where there was one:
+    // the advance is unconditional, the accounting is not.
+    if (ABS || playing) {
         rd = rd + BW;
         if (rd >= (ap_uint<32>)D) {
-            // A pass has just finished.  THE ONE PLACE THE TWO PREDECESSORS DIFFER.
             rd = 0;
-            if (!loop) {
+            if (playing && !loop) {
+                // A pass has just finished.  THE ONE PLACE THE TWO PREDECESSORS DIFFER.
                 nrep_left = nrep_left - 1;
                 if (nrep_left == 0) {
                     playing = 0;
@@ -132,6 +177,10 @@ play_chunk:
     if (memlock::mem_lock_poll(cmd_in, c)) {
         if (c.opcode == LOCK_ACQUIRE) {
             playing = 0;                    // STOP TOUCHING IT ...
+            // ... AND DISARM.  Every RELEASE in practice carries a fresh play command that
+            // overwrites this, but a stale arm surviving a handover would start a waveform nobody
+            // asked for at the next boundary.  Clearing `playing` alone would leave it.
+            pending = 0;
             memlock::mem_lock_grant<D>(resp_out, c.start_addr, c.end_addr);   // ... THEN grant
         } else {
             // A RELEASE.  The play command is already on its channel -- the loader wrote it first --
@@ -139,16 +188,30 @@ play_chunk:
             // blocking read is safe HERE and was not in S1's requester.
             ShotPlayCmd pc;
             pc.read_stream<W>(rep_in);
-            // A new waveform starts at its beginning: resuming mid-shot would splice the tail of the
-            // old waveform's phase onto the new one, which is right in no application and is
-            // invisible from a word count.
-            rd = 0;
             loop = (pc.opcode == (ap_uint<8>)SHOT_OP_LOOP) ? (ap_uint<1>)1 : (ap_uint<1>)0;
             nrep_left = pc.nrepeat;
-            playing = (pc.nrepeat != 0) ? (ap_uint<1>)1 : (ap_uint<1>)0;
-            if (!playing && !loop) {
+            // ARMED is not PLAYING, and separating them is the second of the three edits.
+            const ap_uint<1> arm = (pc.nrepeat != 0) ? (ap_uint<1>)1 : (ap_uint<1>)0;
+            if (ABS) {
+                // DO NOT TOUCH `rd`.  It is this task's word count since reset and a shot has no
+                // business resetting it; what a new waveform gets instead is the next boundary,
+                // which the test above the write loop turns into `playing`.  Bounded by one pass.
+                pending = arm;
+                playing = 0;
+            } else {
+                // A new waveform starts at its beginning: resuming mid-shot would splice the tail of
+                // the old waveform's phase onto the new one, which is right in no application and is
+                // invisible from a word count.
+                rd = 0;
+                playing = arm;
+            }
+            if (!arm && !loop) {
                 // A finite shot that must not play -- a SHORT one.  The loader is waiting on a
                 // `done` and nothing else will ever send it.
+                //
+                // ON `arm`, NEVER ON `pending`, AND NEVER DEFERRED.  Routing this through the
+                // boundary would leave the loader blocked on a token owed for a shot that by
+                // definition never plays: a DEADLOCK rather than a failing gate.
                 done_out.write((ap_uint<W>)1);
             }
         }

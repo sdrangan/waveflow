@@ -679,9 +679,21 @@ class ShotTxPlayer(FreeRunMod):
     truncation ``SHOT_BUSY`` exists to prevent.  :class:`ShotPlayCmd` carries the host's opcode for
     exactly this reason.
 
-    **Statics, and therefore the reset trap.**  ``rd``, ``playing``, ``loop`` and ``nrep_left`` are
-    carried across firings, and this body **writes before it reads** — writing without being asked is
-    what *the side that cannot stop* means.  The C++ twin carries ``#pragma HLS reset`` on each and
+    **``rd`` is either a position or a timestamp, and :attr:`absolute_index` is which.**  At ``0`` —
+    the default, and every predecessor's behaviour — it is reset on accept and advances only while
+    playing, so it says *how far into this waveform*.  At ``1`` it advances and wraps on **every**
+    firing, filler included, so it says *how many words since reset*, modulo :attr:`depth`; a shot is
+    armed in :attr:`pending` at accept and starts at the next ``rd == 0``.  Sample *j* then comes out
+    at an absolute index congruent to *j* — ``plans/rf_shot_absolute.md``.
+
+    **The split at the wrap is load-bearing.**  The advance leaves the ``playing`` guard;
+    ``nrep_left`` and the ``done`` do not.  Moving the whole block makes the repeat count tick on
+    filler wraps, so a finite shot ends early or never starts — and every word count still adds up,
+    which is why the gate for it is the *length of the playout*.
+
+    **Statics, and therefore the reset trap.**  ``rd``, ``playing``, ``pending``, ``loop`` and
+    ``nrep_left`` are carried across firings, and this body **writes before it reads** — writing
+    without being asked is what *the side that cannot stop* means.  The C++ twin carries ``#pragma HLS reset`` on each and
     the build needs ``config_rtl -reset state``.
     """
 
@@ -700,6 +712,19 @@ class ShotTxPlayer(FreeRunMod):
     #: width remains because the converter edge downstream takes a whole block per event and refuses
     #: a partial one; that is a modelling *shape*, and nothing here declares how fast anything runs.
     blk_words: HwParam[int] = 1
+    #: **The index is a timestamp** (``plans/rf_shot_absolute.md``).  ``0`` is the behaviour every
+    #: predecessor had: a shot starts at :attr:`rd` ``= 0`` the instant it is accepted, so the read
+    #: pointer says *how far into this waveform* and nothing more.  ``1`` makes :attr:`rd` advance
+    #: **unconditionally** — filler included — so what it holds is the design's own word count since
+    #: reset, modulo :attr:`depth`, and a playout is deferred to the next ``rd == 0``.
+    #:
+    #: **Zero is today's behaviour on purpose**: every recorded number in this family keeps its
+    #: meaning, and one that moves at the default is a finding rather than a consequence.
+    #:
+    #: It changes the RTL, so it is an ``HwParam`` and not a runtime flag.  The *timing-fidelity*
+    #: mode (``docs/guide/rf/rfshotbuf/tx_options.md``) is the opposite case and does not belong
+    #: here: the RTL is identical either way.
+    absolute_index: HwParam[int] = 0
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -731,6 +756,12 @@ class ShotTxPlayer(FreeRunMod):
         #: has been loaded yet, and playing a memory that was never written is a plausible sample
         #: rather than a silence.
         self.playing = False
+        #: **Armed, but waiting for the boundary** — meaningful only under :attr:`absolute_index`.
+        #: Set at accept and cleared by the ``rd == 0`` that turns :attr:`playing` on, so a shot
+        #: begins at a word index congruent to zero and sample *j* is always emitted at an absolute
+        #: index congruent to *j*.  ``blk_words`` divides ``depth``, so ``rd == 0`` happens exactly
+        #: once per pass and the test is exact rather than a crossed-zero case.
+        self.pending = False
         #: ``True`` when the current shot is a ``SHOT_LOOP``.  The exit condition, and the only
         #: difference between the two predecessors' players.
         self.loop = False
@@ -751,7 +782,7 @@ class ShotTxPlayer(FreeRunMod):
         return KernelTask("shot_tx_player_task", "shot_tx_player_task.h",
                           ("lock", "rep_in", "done_out", "samp_out"),
                           template_args=(int(self.bitwidth), int(self.depth),
-                                         int(self.blk_words)))
+                                         int(self.blk_words), int(self.absolute_index)))
 
     def run_iter(self) -> ProcessGen[None]:
         """One firing is one chunk **and exactly one poll** — the C++ body's outer iteration."""
@@ -766,6 +797,11 @@ class ShotTxPlayer(FreeRunMod):
             return
         if int(cmd.opcode) == LOCK_ACQUIRE:
             self.playing = False                    # STOP TOUCHING IT ...
+            # ... AND DISARM.  In practice every RELEASE carries a fresh play command that
+            # overwrites this, but a stale arm surviving a lock handover would start a waveform
+            # nobody asked for at the next boundary — the kind of defect that works until it does
+            # not.  Clearing `playing` alone would leave it.
+            self.pending = False
             yield from self.lock.grant(int(cmd.start_addr), int(cmd.end_addr))   # ... THEN grant
             return
 
@@ -774,17 +810,30 @@ class ShotTxPlayer(FreeRunMod):
         # control-dependent on the poll's result, so nothing can hoist it, and it costs at most a
         # beat inside a gap the design is already in.
         play = yield from self.rep_in.get_schema(ShotPlayCmd)
-        # A new waveform starts at its beginning: resuming mid-shot would splice the tail of the old
-        # waveform's phase onto the new one, which is right in no application and is invisible from a
-        # word count.
-        self.rd = 0
         self.loop = int(play.opcode) == SHOT_LOOP
         self.nrep_left = int(play.nrepeat)
-        self.playing = self.nrep_left > 0
+        # ARMED is not PLAYING, and separating them is edit 2 of `plans/rf_shot_absolute.md`.
+        arm = self.nrep_left > 0
+        if int(self.absolute_index):
+            # DO NOT TOUCH `rd`.  It is the design's word count since reset and a shot has no
+            # business resetting it; what a new waveform gets instead is the next boundary, which
+            # `_chunk` turns into `playing`.  Deferral is bounded by one pass.
+            self.pending = arm
+            self.playing = False
+        else:
+            # A new waveform starts at its beginning: resuming mid-shot would splice the tail of the
+            # old waveform's phase onto the new one, which is right in no application and is
+            # invisible from a word count.
+            self.rd = 0
+            self.playing = arm
         self.n_resumed += 1
-        if not self.playing and not self.loop:
+        if not arm and not self.loop:
             # A finite shot that must not play -- a SHORT one.  The loader is blocked on a `done`
             # and nothing else will ever send it.
+            #
+            # **ON `arm`, NEVER ON `pending`, and never deferred.**  Routing this through the
+            # boundary would leave the loader blocked on a token that is owed for a shot which by
+            # definition never plays: a deadlock rather than a failing gate.
             yield from self._send_done()
 
     def _chunk(self) -> ProcessGen[None]:
@@ -805,6 +854,14 @@ class ShotTxPlayer(FreeRunMod):
         instead of demanding the two grids coincide.
         """
         w, bw, nw = int(self.bitwidth), int(self.blk_words), int(self.depth)
+        absolute = bool(int(self.absolute_index))
+
+        # THE START, AND IT IS BEFORE THE WRITE.  `rd == 0` is the boundary, and testing it here is
+        # what makes the chunk starting at 0 the FIRST ONE PLAYED rather than the one after it.
+        if absolute and self.pending and self.rd == 0:
+            self.playing = True
+            self.pending = False
+
         if self.playing:
             # `addr=self.rd`, with no base to add: the region is the whole memory, so the only
             # address arithmetic left is the wrap below -- and `depth` is a power of two, so at RTL
@@ -812,19 +869,30 @@ class ShotTxPlayer(FreeRunMod):
             data, t0 = yield from self.lock.read_pipelined(word_element(w), bw, addr=self.rd)
             yield from self.samp_out.write_pipelined(data, t_out_start=t0)
             self.n_words += bw
-            self.rd += bw
-            if self.rd >= nw:
-                # A pass has just finished.  THE ONE PLACE THE TWO PREDECESSORS DIFFER.
-                self.rd = 0
-                self.n_plays += 1
-                if not self.loop:
-                    self.nrep_left -= 1
-                    if self.nrep_left <= 0:
-                        self.playing = False
-                        yield from self._send_done()
         else:
             yield from self.samp_out.write(np.full(bw, FILLER, dtype=np.uint64))
             self.n_filler += 1
+
+        # THE ADVANCE, AND THE SPLIT THAT `plans/rf_shot_absolute.md` NAMES AS THE SILENT TRAP.
+        #
+        # Under `absolute_index` the pointer advances and wraps on EVERY firing, filler included --
+        # that is what makes it the design's own word count since reset and therefore a timestamp.
+        # What must NOT come out with it is the repeat count: `nrep_left` would then tick once per
+        # pass while the design is playing filler, and a finite shot would end early or never start.
+        # The word counts still add up either way, so no counter gate catches it.  Hence two
+        # conditions where there was one: the advance is unconditional, the accounting is not.
+        if absolute or self.playing:
+            self.rd += bw
+            if self.rd >= nw:
+                self.rd = 0
+                if self.playing:
+                    # A pass has just finished.  THE ONE PLACE THE TWO PREDECESSORS DIFFER.
+                    self.n_plays += 1
+                    if not self.loop:
+                        self.nrep_left -= 1
+                        if self.nrep_left <= 0:
+                            self.playing = False
+                            yield from self._send_done()
         self.n_chunks += 1
 
     def _send_done(self) -> ProcessGen[None]:
@@ -893,6 +961,12 @@ class RfShotTx(FreeRunMod):
     #: Words per converter block: the player's chunk, its poll period, and the re-layout's pysim
     #: burst.  One number for all three because they are one boundary.
     blk_words: HwParam[int] = 1
+    #: **The index is a timestamp** — forwarded to :class:`ShotTxPlayer`, where it is documented.
+    #: ``0`` is every predecessor's behaviour and the default, so a number that moves at the default
+    #: is a finding.  It is TX-only: :class:`~waveflow.hw.rf_shot_rx.RfShotRx` announces a
+    #: ``base_addr`` of its own and whether *that* can carry absolute phase is a different question
+    #: with a different answer, so correlating the two ends by address is not available here.
+    absolute_index: HwParam[int] = 0
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -909,7 +983,8 @@ class RfShotTx(FreeRunMod):
         self.load = ShotTxLoader(sim=self.sim, name=f"{self.name}_load", bitwidth=w, depth=d,
                                  samp_per_word=spw, clk=self.clk)
         self.play = type(self).player_cls(sim=self.sim, name=f"{self.name}_play", bitwidth=w,
-                                          depth=d, blk_words=bw, clk=self.clk)
+                                          depth=d, blk_words=bw,
+                                          absolute_index=int(self.absolute_index), clk=self.clk)
         # The re-layout is LAST, so it is the stage the converter back-pressures and therefore the
         # one that carries the block-shaped handover.  The accommodation follows the port.
         self.relayout = RfRelayoutToSlots(sim=self.sim, name=f"{self.name}_to_slots", bitwidth=w,
@@ -1063,3 +1138,8 @@ class RfShotTx(FreeRunMod):
             raise AssertionError(
                 f"{type(self).__name__} '{self.name}': the run ended with the player still playing "
                 f"a finite shot. It was asked for a fixed number of passes and did not stop.")
+        if self.play.pending:
+            raise AssertionError(
+                f"{type(self).__name__} '{self.name}': the run ended with a shot still ARMED and "
+                f"never started — under absolute_index a playout waits for the next rd == 0, and a "
+                f"boundary that never arrives is a player that stopped counting.")

@@ -94,7 +94,7 @@ owner — the owner is *the side that cannot stop*.
 self.playing = False            # STOP TOUCHING IT ...
 yield from self.lock.grant(...) # ... THEN grant
 ```
-`rf_shot_tx.py:645-646`, and its C++ twin at `shot_tx_player_task.h:131-132`.
+`rf_shot_tx.py:787-793`, and its C++ twin at `shot_tx_player_task.h:166-171`. Under `absolute_index` the same branch clears the **`pending`** bit as well: a stale arm surviving a handover would start a waveform nobody asked for at the next boundary.
 
 Granting while still reading lets the loader write memory the player is reading — precisely the
 collision the lock exists to prevent. **The pysim guard is what proves this ordering; the waveform
@@ -129,7 +129,7 @@ asks for"*. Writer and reader therefore **do** share addresses, in turn — all 
 [`plans/rf_shot_geometry.md`](#) made the shot the buffer.
 
 `play_chunk` is pipelined at II=1 and reads `buf[rd + i]` **unconditionally**, muxing the
-filler in afterwards (`shot_tx_player_task.h:105-108`). A register guard was measured **not** to quiet
+filler in afterwards (`shot_tx_player_task.h:132-136`). A register guard was measured **not** to quiet
 the port — Vitis owns the enable — so a *yielded* player keeps driving its read address. Consequently:
 
 | scenario | both ports live on the region | same-address collisions |
@@ -156,18 +156,20 @@ recorded in `plans/rf_shot_unify.md` and is **not built**.
 ## The merge, and where it actually is
 
 Both play modes are one body. The difference is four lines after the wrap
-(`rf_shot_tx.py:685-694`, C++ twin `shot_tx_player_task.h:110-123`):
+(`rf_shot_tx.py:872-885`, C++ twin `shot_tx_player_task.h:138-160`):
 
 ```python
-self.rd += bw
-if self.rd >= nw:
-    self.rd = 0
-    self.n_plays += 1
-    if not self.loop:
-        self.nrep_left -= 1
-        if self.nrep_left <= 0:
-            self.playing = False
-            yield from self._send_done()
+if absolute or self.playing:            # the advance -- unconditional under absolute_index
+    self.rd += bw
+    if self.rd >= nw:
+        self.rd = 0
+        if self.playing:                # ... but the ACCOUNTING never is
+            self.n_plays += 1
+            if not self.loop:
+                self.nrep_left -= 1
+                if self.nrep_left <= 0:
+                    self.playing = False
+                    yield from self._send_done()
 ```
 
 Both `loop` and `nrep_left` are register reads **outside** the pipelined loop body, which is why the
@@ -222,7 +224,7 @@ yield from self.rep_out.write(cmd)
 yield from self.lock.release()
 ```
 
-The player reads that command on the RELEASE branch of its poll (`shot_tx_player_task.h:138`), so
+The player reads that command on the RELEASE branch of its poll (`shot_tx_player_task.h:177`), so
 ordering the two writes this way makes that read a **bounded wait** rather than a guess. The read is
 *control-dependent* on the poll's result, so nothing can hoist it above the loader's writes — which is
 the shape that produced the deadlock above. Even a scheduler that reordered the two writes would be
@@ -305,11 +307,37 @@ legal one* on the way in, and there is no length on the way in. What is left is 
 **reads**, and holding it at one width across geometries is what lets a host be compiled against this
 wire once. The padding is declared either way, so a narrower field would buy nothing and cost that.
 
+## `absolute_index`, and the one place the split matters
+
+`plans/rf_shot_absolute.md`. Three edits turn the read pointer into a timestamp, and they are the
+whole of the mode:
+
+1. **the advance is unconditional** — `rd` moves and wraps on every firing, filler included;
+2. **accept no longer resets `rd`** — it sets a `pending` bit instead;
+3. **`playing` turns on when `pending && rd == 0`**, tested *before* the write loop so the chunk
+   starting at `rd == 0` is the first one played.
+
+**The trap is in the first one, and it fails silently.** Today the wrap and the repeat count live in
+one block. Moving the whole block out of `if (playing)` is the natural edit and it is wrong:
+`nrep_left` would tick once per pass while the design plays filler, so a finite shot ends early or
+never starts — and the word counts still add up, so no counter gate catches it. The advance comes out
+of the guard; the accounting stays in. `tests/hw/test_rf_shot_tx.py` ships the wrong edit as a class
+and shows what it produces: a perfectly good *shorter* signal, two passes where three were asked for,
+answered `SHOT_LOADED` with the right `nsamp_loaded` throughout.
+
+**The `SHORT` path must not defer either.** `if (!playing && !loop) done_out.write(1)` answers a shot
+that must never play, and the loader is *blocked* on that token — routing it through `pending` would
+deadlock rather than fail a gate, because the boundary that would release it is one the shot never
+reaches. So the answer is decided on *armed*, at accept.
+
+One template argument, `ABS`, and `if (ABS)` branches Vitis folds — one body, not two, because two
+copied bodies would be two designs that drift.
+
 ## The reset trap, and which body is on which side of it
 
 **An `hls::task` that WRITES before it READS advances during reset.** An owner cannot avoid that
 shape — writing without being asked is what *the side that cannot stop* means — so `ShotTxPlayer`'s
-statics all carry `#pragma HLS reset` (`shot_tx_player_task.h:89-100`) **and** the build needs
+statics all carry `#pragma HLS reset` (`shot_tx_player_task.h:102-119`, five of them since `absolute_index` added `pending`) **and** the build needs
 `config_rtl -reset state`, which is what actually closed it under Vitis 2025.1. The solution config
 lives in the example's build (`examples/rf_shot_tx/rf_shot_tx_build.py`, `SOLUTION_CONFIG`).
 
@@ -330,11 +358,18 @@ whenever it missed.
 
 | module | loop | II |
 |---|---|---|
-| `shot_tx_loader_task_64_256_64_4_192` | `take_shot` | **1** |
+| `shot_tx_loader_task_64_64_4` | `take_shot` | **1** |
 | | `drain_tail` | **1** |
 | | `await_grant` | **1** |
-| `shot_tx_player_task_64_256_64_192_16` | `play_chunk` | **1** |
+| `shot_tx_player_task_64_64_16_0` | `play_chunk` | **1** |
 | `rf_relayout_to_slots_task_64_4_2_s` | *(unlabelled)* | **1** |
+
+The absolute-index build synthesizes the same five loops at the same II, with the player's modules
+named `shot_tx_player_task_64_64_16_1_*`
+(`tests/examples/test_rf_shot_tx_abs_xsi.py::test_every_pipelined_loop_still_reaches_ii_1_in_the_absolute_build`).
+**Read these names off the report directory, never predict them**: adding the fourth template argument
+renamed the player's modules in *both* builds, including the one whose new argument is zero, and a
+name that misses makes the II gate skip — which reads as a pass.
 
 Estimated period **2.772 ns**, Fmax **360.8 MHz**.
 

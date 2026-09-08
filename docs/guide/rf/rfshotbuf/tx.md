@@ -56,6 +56,7 @@ The parameters are:
 | `word` | *(a type)* | the converter's [sample word class](../rfdc/word.md) — a subclass of `RfdcSampWord`, such as the `Rfsoc4x2SampWord` above. It fixes the packing, so the buffer cannot disagree with the `Rfdc` about it |
 | `depth` | **words** | How big the memory is, **and therefore how long a shot is**. A power of two |
 | `blk_words` | **words** | words the player moves per step; must divide `depth` |
+| `absolute_index` | 0 or 1 | **0 (the default)** — a shot starts at the buffer's beginning the instant it is accepted, so the read pointer means *how far into this waveform*. **1** — the read pointer free-runs, so it means *how many words since reset*, and a playout is deferred to the next buffer boundary. See [Options](./tx_options.md#absolute-indexing--absolute_index) for what that buys and the one pass of latency it costs |
 
 Notes:
 
