@@ -305,6 +305,13 @@ examples/rf_shot_rx/logs/
 examples/rf_shot_rx/dfx_runtime.txt
 examples/rf_shot_rx/xsi/vectors/
 
+# rf_shot_loopback (plans/rf_shot_absolute.md S3): the two designs closed through one converter,
+# where the channel delay is a difference of memory addresses.  It has NO generated top and no
+# include/ -- there is no codegen rung, because both halves are RTL-gated by their own examples --
+# so what is derivable here is just the measurement and the rendered figure.  The figure PROMOTED
+# into docs/examples/ is committed; this copy is build output.
+examples/rf_shot_loopback/results/
+
 # rf_shot_tx (plans/rf_shot_unify.md): one transmitter, both opcodes, on the lock.  Same treatment
 # as every other example -- the generated top, the copied framework headers, the logs, the results
 # and BOTH scenarios' vectors are derivable from the two committed .py files, the two hand-written
