@@ -47,6 +47,13 @@ The consequence is measured rather than argued, and it is on both pages.
   protocol, the on-wire layouts and the findings that are easy to rediscover the hard way. **Skip it
   if you only want to use the design.**
 
+## The pair, worked through
+
+- [**Measuring a delay with an address**](../../../examples/rf_shot_loopback/) — both designs closed
+  through one converter with `absolute_index = 1`, where the channel delay becomes a difference of
+  memory addresses. It is also where the two per-design examples stop being enough: neither half can
+  say the two ends are in the *same* phase, because neither has the other end.
+
 ## Related
 
 - [Choosing a sample buffer](../choosing.md) — the one question that decides between this family and

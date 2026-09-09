@@ -1,10 +1,11 @@
 # Plan — the index is a timestamp
 
-**Status: S1 BUILT 2026-09-07, S2 BUILT 2026-09-08. S3 SCOPED, NOTHING BUILT.**
+**Status: BUILT. S1 2026-09-07, S2 2026-09-08, S3 2026-09-08. The arc is closed.**
 `absolute_index` is a build-time `HwParam` on `ShotTxPlayer` / `RfShotTx` (S1) and on
 `PingPongCapture` / `RfShotRx` (S2), defaulting to `0` — the behaviour each design already had —
 lowered as a template argument on both task bodies. All four builds are synthesized and gated at RTL.
-S3, the loopback that reads a channel delay off two window headers, is below and is **not built**.
+S3 is `examples/rf_shot_loopback`: both halves closed through one converter with a delayed path
+between them, where **the channel delay is a difference of memory addresses**.
 
 ---
 
@@ -378,7 +379,8 @@ from the mangled name; it is not.
 
 ## S3 — the worked example
 
-**SCOPED, NOTHING BUILT.** **One `Rfdc` at `n_rx=1, n_tx=1`**, a `BlockChannel` with a delay between
+**BUILT 2026-09-08** — what follows is the scope as written, and *What S3 built* below is what
+landed. **One `Rfdc` at `n_rx=1, n_tx=1`**, a `BlockChannel` with a delay between
 `tx_rf` and `rx_rf`, and both buffers at `absolute_index = 1` — which S2 has now made possible. The first thing in the repo to exercise the reason `Rfdc`
 carries both directions in one module: *"the TX and RX sample counters must hold a fixed relation, and
 that is a property of the converter."*
@@ -397,6 +399,108 @@ contracts. The cost is a third csynth and another rise in `WANT_XSI_GATES`, whic
 *(if the intent was to retire the standalone examples, this is the line to change, and S3 shrinks.)*
 
 
+### What S3 built
+
+`examples/rf_shot_loopback`, plus one framework node and two gate files. **Both standalone examples
+are untouched**, including their gate counts — asserted, by a gate in the new file that imports each
+one's vocabulary and fails loudly if either is retired.
+
+**The graph**, five participants and six edges::
+
+    StreamDriver --[ShotTxHdr | samples]--> RfShotTx.s_in
+    RfShotTx.samp_out --> Rfdc.tx_streams[0] | Rfdc.tx_rf --RFSampIF--> RfSampDelay
+                                                                            |
+    StreamSink <-- RfShotRx.w_out <-- Rfdc.rx_streams[0] | Rfdc.rx_rf <--RFSampIF--+
+
+One converter carrying both directions; both buffers at `absolute_index = 1`; **the same `depth` on
+both ends**, because *"sent from `mem[j]`, arrives at `mem[(j + D) mod depth]`"* needs one modulus
+and not two.
+
+**`RfSampDelay`, in `waveflow/simulation/rf_tb.py`** — the `Channel` block `rf_sample_if`'s docstring
+has always reserved the job for (*"gain, fractional delay, per-channel skew and multipath belong in a
+`Channel` block"*), built at the one fidelity that rule allows: bulk delay, whole samples, no
+interpolation. It keeps a sample tail across the block boundary, so a delay that is not a multiple of
+`blksize` is expressible — which is what makes the reading sample-granular rather than block-granular.
+It declares `blk_latency = 0`, stated rather than merely true, so a graph can **sum** it.
+
+#### The numbers
+
+| | value |
+|---|---|
+| configured path delay | 96 samples |
+| loop's own declared structural latency | 64 samples = one converter block |
+| **raw address difference the capture carries** | **160** |
+| **measured path delay** (raw − loop) | **96** — equals the configured one |
+| samples agreeing on that one difference | 4576, unanimous |
+| the same path one buffer longer (352) | reads **96** — aliases exactly |
+| transmit tile started one block late | reads **224** = 160 + 64 |
+| `absolute_index = 0`, same graph | **two** distinct differences — no single delay at all |
+| receiver drops / DAC underruns / edge overruns | 0 / 0 / 0 |
+
+**The structural term is declared, not fitted.** `RfShotLoopbackTB.loop_blk_latency` sums one
+converter hop with what the nodes on the path declare, exactly as `examples/rf_loopback` does, and
+driving the path at **zero** reads exactly 64 — which is the gate that says the subtraction is not a
+residual chosen to make the arithmetic work.
+
+**Gate count: 14 in `tests/examples/test_rf_shot_loopback.py` + 12 in
+`tests/hw/test_rf_samp_delay.py`, all toolchain-free. `WANT_XSI_GATES` is unchanged at 127** — see
+the decision below.
+
+#### The decision: no RTL rung, and the plan's own line changed
+
+The scope above said *"the cost is a third csynth and another rise in `WANT_XSI_GATES`, which is
+worth it"*. **It is not, and this is the line to change.** Three things, in order of weight:
+
+* **both designs in this graph are already RTL-gated at this exact mode** — 17 gates for the
+  transmitter at `absolute_index = 1` and 12 for the receiver. A loopback csynth would re-derive an
+  addressing claim two green gate sets already stand behind.
+* **what a loopback adds is a claim about the *pair*, and that claim is loosely-timed.** The address
+  correspondence is a statement about two absolute counters and a path between them; nothing in it is
+  a property of either kernel's RTL. S1 recorded the same thing from the other side: both backends
+  start on a boundary of their own counter and agree exactly about phase within a pass.
+* **it is not cheap.** A composite top *does* lower — measured: 6 tasks, 9 internal channels, 9 ports
+  including four BRAM ports — but it would be the first kernel in the repo with **two locked
+  memories**, needing a two-memory wrapper and hazard manifest, and the XSI testbench would need a
+  **C++ twin for `RfSampDelay`** that nothing else wants.
+
+If the loopback is ever closed at RTL, those are the two pieces to build first. The gate file and
+`docs/examples/rf_shot_loopback/run.md` both say this rather than leaving the absence to be noticed.
+
+#### Assumptions taken during the build
+
+**The delay is a node, and it had to be.** `rf_sample_if`'s docstring says *"bulk delay is already
+`t0`"*, which is true of an epoch and wrong as an answer here: the example's whole teaching point is
+that an RX offset has two sources and an address cannot tell them apart. Folding the path into `t0`
+would have made them one thing and destroyed the lesson. `RfSampDelay` is what the same docstring's
+*"belong in a `Channel` block"* clause always pointed at.
+
+**The epoch gate moves `t0_tx`, not `t0_rx`.** A *later receive* tile can only cancel structural
+latency the loop already has; past one block the block simply waits in a queue and the reading stops
+moving. Measured: `t0_rx` at +1 and +2 blocks both read 96. That saturation is the block-LT
+resolution limit showing through, and a gate that swept `t0_rx` would be asserting a saturation curve
+rather than a correspondence. `t0_tx` has no such floor — +1, +2 and +3 blocks read 224, 32 and 96,
+each exactly one block on from the last.
+
+**The aliasing gate compares readings, not captures.** A first draft asserted the two runs produce
+identical *bytes* and it failed — correctly. A longer path holds more silence before its first
+sample, so the two runs *are* distinguishable, just not by an address. That is now asserted as well,
+in the same gate: it is what says the aliasing claim is not comparing a run with itself, and it names
+precisely the information an address discards and a timestamp keeps.
+
+**Two waveforms, spaced by eight refused frames.** The measured threshold at this geometry is four —
+at zero and at two the first waveform never reaches the air and **every command is still answered
+`SHOT_LOADED`**, which is the trap S1 recorded, now with a gate on it. A second waveform earns its
+keep: the reading is unanimous across both, which says the correspondence is a property of the
+addressing rather than of one payload.
+
+**One `absolute_index` for the pair, not one per end.** A loopback with one end absolute and the
+other relative would capture perfectly good samples and read an address difference that means
+nothing. Making that unreachable by construction was cheaper than gating it.
+
+**The figure draws an address axis and no time axis.** `examples/rf_shot_tx`'s figure draws a sample
+axis because that page is about playout shape; this one is about a correspondence between two
+memories, and a time axis would have hidden it behind two waveforms the reader has to take on faith.
+
 ## Not in scope
 
 - **Matched timing.** `plans/lt_transient.md` S3. Independent of this, and not an `HwParam`.
@@ -404,4 +508,5 @@ contracts. The cost is a third csynth and another rise in `WANT_XSI_GATES`, whic
   `plans/t2p_lock_chan.md` S3 fenced that off as *"where this stops being an interface and starts
   being arbitration."*
 - **MTS itself.** `t0_tx ≡ t0_rx` is a property of the converter and the board. This plan makes the
-  buffer able to use it; it cannot make it true.
+  buffer able to use it; it cannot make it true. S3 shows what it buys by taking it away.
+- **A loopback closed at RTL.** See *The decision* under S3, and the two pieces it would need.
