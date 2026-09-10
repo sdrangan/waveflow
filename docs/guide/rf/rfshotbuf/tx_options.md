@@ -148,9 +148,12 @@ one 64-bit word.
 absolutely, so TX and RX addresses are comparable *given a shared epoch* — and the epoch is the
 converter's, not the buffer's. `Rfdc` models the gap: `t0_tx` is *"normally equal to `t0_rx` — that
 is what MTS gives you"*, and a non-zero value means a tile deliberately started late, or a measured
-MTS residual. **Absolute indexing makes the buffers able to use MTS; it cannot make MTS true.** A
-loopback that reads a channel delay off two window headers is `plans/rf_shot_absolute.md` S3 and is
-**not built**.
+MTS residual. **Absolute indexing makes the buffers able to use MTS; it cannot make MTS true.**
+
+[`examples/rf_shot_loopback`](../../../examples/rf_shot_loopback/) is the demonstration, and it shows
+both halves of that: with the two epochs tied, the address difference between the two memories **is**
+the channel delay; start one tile a block late and the reading moves by exactly a block, in a way the
+capture cannot distinguish from a longer path. What `t0` buys you is that the second term is zero.
 
 **And a delay longer than one buffer is indistinguishable from `D mod depth`.** The index is a
 timestamp modulo the memory, so a correlation aliases at `depth`, and the geometry has to be chosen
@@ -201,10 +204,14 @@ indexing; `absolute_index=1` is the absolute row, on **both** halves. All four b
 RTL, each with its own csynth and its own xsim snapshot, because the parameter is a template argument
 and the two settings are two designs.
 
+The pair is worked through end to end in
+[`examples/rf_shot_loopback`](../../../examples/rf_shot_loopback/), where the channel delay is read
+off two window headers.
+
 What is still not implemented: **variable-length shots** (they need an allocator), **matched
-timing**, and the **loopback that reads a channel delay off two window headers**
-(`plans/rf_shot_absolute.md` S3). If one of those is what you need, that is worth knowing before you
-build on this rather than after.
+timing**, and **a loopback closed at RTL** — the two halves are each RTL-gated at
+`absolute_index = 1`, but nothing synthesizes both into one kernel. If one of those is what you need,
+that is worth knowing before you build on this rather than after.
 
 ## Next
 

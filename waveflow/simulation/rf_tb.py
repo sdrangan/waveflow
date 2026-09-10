@@ -1,4 +1,5 @@
-"""rf_tb.py — reusable pysim RF-environment participants: a block source and a block sink.
+"""rf_tb.py — reusable pysim RF-environment participants: a block source, a block sink, and a
+bulk-delay path between two converter edges.
 
 The RF-domain twins of :mod:`waveflow.simulation.stream_tb`.  A :class:`StreamDriver` plays words
 onto an AXI-Stream; an :class:`RfDataSource` plays ``(n_ch, blksize)`` sample blocks onto an
@@ -11,7 +12,7 @@ the reason recorded in ``stream_tb``: a harness that lives in one example forces
 example's harness to import across into a sibling.  Nothing here knows about a converter, a schema,
 or a kernel — a source reads blocks from a file and puts them; a sink takes blocks and keeps them.
 
-**Pysim-only nodes.**  Neither declares ``kernel_task()`` nor ``bfm_model()``, which is not an
+**Pysim-only nodes.**  None declares ``kernel_task()``, which is not an
 omission — it is the third row of the kinds table (``plans/adc_model.md``): a module with neither
 hook is a node that exists in the Python graph and nowhere else.  ``check(RfDataSource,
 "xsi_bfm_model")`` answers ``False`` and says why.  Stage 2 replaces them at the RF boundary with
@@ -358,3 +359,120 @@ class RfDataSink(HwModule):
 
         return BfmModel("RfFileSink", ports=("rf_ep",),
                         extra_args=("1" if self.rf_ep.complex_samp else "0",))
+
+
+@dataclass
+class RfSampDelay(HwModule):
+    """A **path** between two converter edges: takes blocks from one, hands them to the other, later.
+
+    ``plans/rf_shot_absolute.md`` S3.  This is the ``Channel`` block
+    :mod:`~waveflow.hw.rf_sample_if`'s docstring reserves the job for — *"gain, fractional delay,
+    per-channel skew and multipath belong in a ``Channel`` block"* — built at the one fidelity that
+    rule allows an edge to keep for itself and this node to apply: **bulk delay, in whole samples.**
+
+    **Delay is a property of a PATH; the epoch is a property of a TILE.**  Both shift when a sample
+    arrives, and telling them apart is the whole reason this node exists rather than being folded
+    into ``t0``:
+
+    * :attr:`delay_samp` here says *this path delivers later*.  Change it and only the receiving
+      end moves; the transmitting tile's counter is untouched.
+    * ``t0`` on an :class:`~waveflow.hw.rf_sample_if.RFSampIF` says *this tile's counter started
+      later*.  Change it and the receiver's own idea of when sample zero was moves with it.
+
+    A capture that arrives at the wrong address cannot say which of the two it was, and a reader who
+    has only ever seen one of them will guess wrong.  ``examples/rf_shot_loopback`` drives both.
+
+    **Whole samples, and no interpolation.**  A fractional delay is a filter, and a filter here would
+    be a second signal-processing implementation nobody cross-checks — the same bar the edge's own
+    docstring sets.  What this node is for is making an *address difference* mean something, and an
+    address is an integer.
+
+    **The buffer is zero-filled at the start**, so the first :attr:`delay_samp` samples out of this
+    path are silence — which is what a path with a delay in it does, and it is visible in the
+    capture rather than hidden by a shifted index.
+
+    **It carries no ``n_ch`` / ``blksize``**: both are read off the bound interfaces, which is where
+    they live.  The two edges must agree about them, and :meth:`pre_sim` refuses if they do not —
+    a path that changed the block geometry would be a re-blocker, not a delay.
+    """
+
+    #: Samples of bulk delay this path adds, **per channel**.  ``0`` is a wire.
+    delay_samp: int = 0
+
+    #: Block periods this node adds on top of :attr:`delay_samp` — **zero, and declared rather than
+    #: assumed**.  The body emits in the same SimPy event it receives, so a block does not wait a
+    #: grid tick inside the path.
+    #:
+    #: It is a field because a graph that wants its loop's total latency has to *sum* what the nodes
+    #: on the path declare, the way ``examples/rf_loopback`` sums ``RfSampPassThrough.blk_latency``.
+    #: A zero that is stated can be added up; a zero that is merely true cannot.
+    blk_latency: int = 0
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        #: The incoming edge (this node is that edge's receiver) and the outgoing one.
+        self.rf_in = RFSampIFRx(sim=self.sim, depth=DEFAULT_RF_RX_DEPTH)
+        self.rf_out = RFSampIFTx(sim=self.sim)
+        for ep in (self.rf_in, self.rf_out):
+            self.add_endpoint(ep)
+        #: Blocks in and blocks out.  Both, because a path that swallowed everything and a path that
+        #: was never fed look identical from the far end.
+        self.n_in = 0
+        self.n_out = 0
+        self._tail = None
+
+    def pre_sim(self) -> None:
+        n_ch, blk = int(self.rf_in.n_ch), int(self.rf_in.blksize)
+        if (n_ch, blk) != (int(self.rf_out.n_ch), int(self.rf_out.blksize)):
+            raise ValueError(
+                f"RfSampDelay '{self.name}': the two edges disagree about the block — in is "
+                f"({n_ch}, {blk}) and out is ({int(self.rf_out.n_ch)}, "
+                f"{int(self.rf_out.blksize)}). A path delays samples; it does not re-block them.")
+        if bool(self.rf_in.complex_samp) != bool(self.rf_out.complex_samp):
+            raise ValueError(
+                f"RfSampDelay '{self.name}': one edge is complex and the other is not.")
+        if int(self.delay_samp) < 0:
+            raise ValueError(
+                f"RfSampDelay '{self.name}': delay_samp is {self.delay_samp}. A path cannot "
+                f"deliver a sample before it was sent.")
+        #: The samples still in flight — ``delay_samp`` of them, zero at the start.  Kept as one
+        #: ``(n_ch, delay_samp)`` array rather than a queue of blocks, because the delay is in
+        #: SAMPLES: a whole-block queue could only express multiples of ``blksize``, and a demo
+        #: whose delay is always a whole block cannot show that the reading is sample-granular.
+        dt = np.complex128 if self.rf_in.complex_samp else np.float64
+        self._tail = np.zeros((n_ch, int(self.delay_samp)), dtype=dt)
+
+    def run_proc(self) -> ProcessGen[None]:
+        """One block in, one block out — the **same** block period, shifted by :attr:`delay_samp`.
+
+        The node adds no rate of its own: it takes a block when the incoming grid delivers one and
+        offers a block to the outgoing edge's producer buffer immediately.  What it adds is exactly
+        the shift, and it adds it once — the tail carries the remainder across the block boundary,
+        which is what makes a delay that is not a multiple of ``blksize`` expressible at all.
+        """
+        while True:
+            blk = yield from self.rf_in.get()
+            self.n_in += 1
+            data = np.asarray(blk.data)
+            joined = np.concatenate([self._tail, data], axis=1)
+            n = data.shape[1]
+            out, self._tail = joined[:, :n], joined[:, n:]
+            yield from self.rf_out.put(out)
+            self.n_out += 1
+
+    def assert_ran(self, *, where: str = "") -> None:
+        """The path actually carried blocks, and nothing is stuck inside it.
+
+        A guard that never fired is not evidence: a delay of zero and a path nobody fed produce the
+        same empty capture at the far end.
+        """
+        if not self.n_in:
+            raise AssertionError(
+                f"{where}RfSampDelay '{self.name}' was never handed a block, so nothing it does "
+                f"was exercised.")
+        if not 0 <= self.n_in - self.n_out <= 1:
+            raise AssertionError(
+                f"{where}RfSampDelay '{self.name}' took {self.n_in} block(s) and emitted "
+                f"{self.n_out}. A path that absorbs blocks is a lossy channel, which this one is "
+                f"not modelling. ONE may legitimately be in flight when the horizon closes — the "
+                f"body can block offering it to a full producer buffer — and more than one cannot.")
