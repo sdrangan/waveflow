@@ -24,7 +24,7 @@ inner (they produce signed results); ``cadd``/``csub`` follow the inner rule.
 """
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import numpy as np
 
@@ -385,3 +385,40 @@ def csum(a: DataArray, axis: int = 0) -> DataArray:
         return _wrap_complex(cx.make_complex(re, im, r), _result_inner(ea.kind, r))
     from waveflow.hw.fixpoint import fixed_sum as _fixed_sum
     return _fixed_sum(a, axis=axis)
+
+
+def cquantize(a: DataArray, target: type["ComplexField"]) -> DataArray:
+    """Requantize to a declared ``target`` complex format — the only lossy complex operation.
+
+    The complex counterpart of :func:`waveflow.hw.fixpoint.quantize`, and the same shape as
+    :func:`csum` above: split the stored re/im components, requantize each with the real
+    ``fixputils.quantize``, recombine.  Re and im are independent ``ap_fixed`` values sharing a
+    declared type, which is exactly what ``std::complex<ap_fixed<...>>`` does, so quantizing
+    them separately is the faithful model rather than a convenience.
+
+    No quantization logic lives here: rounding (``QMode``) and overflow (``OMode``) are handled
+    by ``fixputils.quantize``.  Both it and this wrapper are proven bit-exact against Vitis --
+    ``examples/schemas/fixedpoint`` for the real op across all four mode combinations, and the
+    ``cquantize_*`` cases in ``examples/schemas/complex`` for this one.
+
+    ``target`` is a ``ComplexField`` subclass with a fixed/int inner type.  Float inners have
+    nothing to quantize and raise.
+    """
+    if not getattr(a.element_type, "is_complex_field", False):
+        raise TypeError("cquantize needs a DataArray[ComplexField].")
+    if not getattr(target, "is_complex_field", False):
+        raise TypeError("cquantize target must be a ComplexField type.")
+    ea = cast("type[ComplexField]", a.element_type)
+    if ea.kind == "float" or target.kind == "float":
+        raise TypeError(
+            "cquantize is for fixed/int inner types; a float complex has nothing to quantize.")
+    if ea.kind != target.kind:
+        raise TypeError(
+            f"cannot requantize a {ea.kind}-inner complex array into a {target.kind}-inner one.")
+
+    src, dst = ea.inner_format(), target.inner_format()
+    v = np.asarray(a.val)
+    re = fixputils.quantize(cx.re_of(v), src, dst)
+    im = fixputils.quantize(cx.im_of(v), src, dst)
+    out = np.asarray(cx.make_complex(re, im, dst))
+    return DataArray.specialize(target, max_shape=(out.size,))(out)

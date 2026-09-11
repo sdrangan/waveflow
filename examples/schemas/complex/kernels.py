@@ -8,7 +8,7 @@ arithmetic.  It:
 2. unpacks them into element buffers with the **generated** ``<type>_array_utils::read_array_slice``
    whole-array overload (the ``ComplexField`` C++ codegen from Phase 1),
 3. applies the op via **``complex_utils.hpp``** (``cmult`` / ``cadd`` / ``csub`` / ``conj``;
-   round-trip is the identity), and
+   round-trip is the identity, ``cquantize`` is the narrowing conversion), and
 4. packs the result with the generated ``write_array_slice`` and writes the words back.
 
 Each operand / result is (de)serialized at ``word_bw = its element bitwidth`` (<=64), so the
@@ -20,6 +20,10 @@ from __future__ import annotations
 
 _OPCALL = {
     "roundtrip": "a[i]",
+    # cquantize is the same expression as round-trip; what makes it a requantize is that the
+    # case declares DIFFERENT in/out element types, so `y[i] = a[i]` is the ap_fixed conversion
+    # under test -- exactly how a Vitis design narrows a value.
+    "cquantize": "a[i]",
     "conj": "complex_utils::conj(a[i])",
     "cmult": "complex_utils::cmult(a[i], b[i])",
     "cadd": "complex_utils::cadd(a[i], b[i])",
