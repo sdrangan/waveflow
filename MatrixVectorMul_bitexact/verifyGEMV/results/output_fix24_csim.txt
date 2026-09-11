@@ -1,0 +1,14 @@
+# Vitis BLAS gemv verification output -- ap_fixed<24,12>
+# y is the RAW STORED FIELD in hex; logParEntries=2
+# columns: case row y_hex
+# W n_cases M N logP
+24 3 3 32 2
+0 0 3
+0 1 0
+0 2 ffffbc
+1 0 19
+1 1 ffffeb
+1 2 fffeb2
+2 0 ffffe0
+2 1 fffffc
+2 2 a

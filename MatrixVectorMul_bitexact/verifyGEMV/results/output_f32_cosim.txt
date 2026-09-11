@@ -1,0 +1,21 @@
+# Vitis BLAS gemv verification output -- float, 5-arg overload
+# IEEE-754 bit patterns (decimal); logParEntries=2
+# columns: case row y_bits
+# n_cases M N logP
+4 4 64 2
+0 0 1099265593
+0 1 1095898656
+0 2 1097732657
+0 3 1098520886
+1 0 1243500515
+1 1 3374153498
+1 2 1248574103
+1 3 1227301367
+2 0 0
+2 1 0
+2 2 0
+2 3 0
+3 0 1115684864
+3 1 1136119285
+3 2 1143459317
+3 3 1148433646
