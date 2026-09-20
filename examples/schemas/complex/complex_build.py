@@ -42,7 +42,7 @@ from waveflow.build.streamutils import StreamUtilsStep
 from waveflow.hw.arrayutils import (
     _array_utils_filename, _array_utils_namespace, gen_array_utils, get_nwords, write_array,
 )
-from waveflow.hw.complexfield import ComplexField, cadd, cmult, conj, csub
+from waveflow.hw.complexfield import ComplexField, cadd, cmult, conj, cquantize, csub
 from waveflow.hw.dataschema import DataArray, FloatField, IntField
 from waveflow.hw.fixpoint import FixedField
 from waveflow.toolchain import toolchain
@@ -155,7 +155,7 @@ def _wbw(cf) -> int:
 @dataclass
 class Case:
     name: str
-    op: str                          # roundtrip | cmult | cadd | csub | conj
+    op: str                          # roundtrip | cmult | cadd | csub | conj | cquantize
     a: DataArray
     golden: DataArray
     b: DataArray | None = None
@@ -177,9 +177,12 @@ class Case:
 _OPS = {"cmult": cmult, "cadd": cadd, "csub": csub, "conj": conj}
 
 
-def _mk_case(name: str, op: str, a: DataArray, b: DataArray | None = None) -> Case:
+def _mk_case(name: str, op: str, a: DataArray, b: DataArray | None = None,
+             target=None) -> Case:
     if op == "roundtrip":
         golden = a
+    elif op == "cquantize":
+        golden = cquantize(a, target)
     elif op == "conj":
         golden = conj(a)
     else:
@@ -205,6 +208,18 @@ def build_cases() -> list[dict]:
     a, b = _fixed_int_operand(cfg, 2), _fixed_int_operand(cfg, 4)
     cases.append(_mk_case(f"roundtrip_{cfg.name}", "roundtrip", _roundtrip_operand(cfg)))
     cases.append(_mk_case(f"cadd_{cfg.name}", "cadd", a, b))
+
+    # ---- cquantize: requantize a wide complex operand into a narrower declared format ----
+    # Exercises both QModes x both OModes, and the wide->narrow path the FFT butterfly needs.
+    for q in (QMode.AP_TRN, QMode.AP_RND):
+        for o in (OMode.AP_WRAP, OMode.AP_SAT):
+            wide = ComplexConfig("q_src", "fixed", W=24, int_bits=8, signed=True,
+                                 q_mode=QMode.AP_TRN, o_mode=OMode.AP_WRAP)
+            narrow = ComplexConfig(f"q_{q.name.lower()}_{o.name.lower()}", "fixed", W=12,
+                                   int_bits=4, signed=True, q_mode=q, o_mode=o)
+            src = _fixed_int_operand(wide, 3)
+            cases.append(_mk_case(f"cquantize_{narrow.name}", "cquantize", src,
+                                  target=narrow.complex_cls))
 
     # ---- int (signed s8 / s16): round-trip + cmult/cadd/csub/conj ----
     for cfg in INTS:
