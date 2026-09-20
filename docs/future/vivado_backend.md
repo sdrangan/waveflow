@@ -17,5 +17,6 @@ Current code generation and examples target HLS-centric flows. There is no imple
 
 ## See also
 
-- [plans/vivado_plan.md](https://github.com/sdrangan/waveflow/blob/main/plans/vivado_plan.md)
-- TBD
+- [plans/board_packaging.md](https://github.com/sdrangan/waveflow/blob/main/plans/board_packaging.md) — the staged plan: each example exported as Vitis IP, wired in a Vivado block design,
+  built to a bitstream, and driven from PYNQ on an RFSoC 4x2.
+- [plans/rfsoc_4x2_bringup.md](https://github.com/sdrangan/waveflow/blob/main/plans/rfsoc_4x2_bringup.md) — the board, and the archival contract for a reproducible reference design.
