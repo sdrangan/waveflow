@@ -129,6 +129,11 @@ Thumbs.db
 !**/mcp/resources/*.json
 # P0 equivalence snapshots (plans/harmonize_calib.md) � committed so the refactor has a bar to clear.
 !tests/calib/golden/*.json
+# Same reason for the Vitis L1 conformance goldens: they are produced by the vendor's own
+# code and checked in so the gates need neither Vitis nor a compiler.  Without this the
+# blanket *.json rule drops them from a clone and every gate errors with FileNotFoundError
+# while still passing for whoever generated them.
+!tests/vitis_l1/fft/golden/*.json
 
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/

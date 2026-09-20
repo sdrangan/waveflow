@@ -1,0 +1,14 @@
+# Vitis BLAS gemv verification output -- ap_uint<32> (unsigned)
+# y is the signed-or-unsigned VALUE in decimal; logParEntries=2
+# columns: case row y_value
+# W n_cases M N logP
+32 3 3 32 2
+0 0 823880916
+0 1 4280840693
+0 2 3913010643
+1 0 601889748
+1 1 3869892589
+1 2 34389105
+2 0 4098456242
+2 1 3115723373
+2 2 2522201
