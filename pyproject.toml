@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.0",
     "numpy>=1.24",
+    "scipy>=1.10",
     "pandas>=2.0",
     "simpy>=4.1",
     "scikit-learn>=1.3",
@@ -62,7 +63,7 @@ build-backend = "setuptools.build_meta"
 # `_archive` is excluded to match the pytest ignore.
 [tool.setuptools.packages.find]
 include = ["waveflow*", "scripts*", "examples*"]
-exclude = ["examples._archive*"]
+exclude = ["examples._archive*", "examples.dse_fir.pi*", "examples.dse_fir.tests*"]
 namespaces = true
 
 # Include non-Python files (schemas, templates, docs assets)
@@ -75,6 +76,7 @@ include-package-data = true
 # corpus includes a .csv the MANIFEST's *.json recursion would otherwise miss).
 [tool.setuptools.package-data]
 "waveflow.calib" = ["platforms/**", "fixtures/**"]
+"examples.fir_block" = ["calib/**/*.json", "calib/**/*.jsonl", "calib/**/*.csv"]
 # The XSI harness is C++ source + the run.bat / run.sh drivers, copied into a design's xsi/
 # workspace by XsiHarnessStep.  Not Python, so package discovery misses it; without this a
 # pip-installed user hits "XSI harness source file not found" the first time they build a testbench.
@@ -91,11 +93,14 @@ include-package-data = true
 # pip-installed non-editable waveflow had every hook component fail on a missing source file.
 "waveflow.build" = ["xsi/**", "rtl/**", "*.h", "*.hpp", "*.tpp", "*.cpp"]
 
+[tool.setuptools.exclude-package-data]
+"*" = ["**/node_modules/**", "**/__pycache__/**", "**/*.pyc"]
+
 # Pytest configuration
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = "-q --ignore-glob=examples/_archive/*"
-testpaths = ["tests"]
+testpaths = ["tests", "examples/dse_fir/tests"]
 norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}", "examples/_archive"]
 markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",

@@ -175,7 +175,8 @@ class ToolRegistry:
                 "function": {
                     "name": t.name,
                     "description": t.description,
-                    "strict": True,
+                    # Optional pagination/open candidate objects are not strict OpenAI schemas.
+                    "strict": "dse" not in t.profiles,
                     "parameters": t.parameters,
                 },
             }
@@ -215,7 +216,33 @@ class ToolRegistry:
 # Global registry instance and tool registrations
 # ---------------------------------------------------------------------------
 
-REGISTRY = ToolRegistry()
+class _GlobalRegistry(ToolRegistry):
+    """Keep DSE imports and durable state out of normal workspace startup."""
+
+    def _dse(self) -> ToolRegistry:
+        from examples.dse_fir.dse_tools import make_dse_registry, make_service
+        # Resolve the host root per call; the durable service owns frozen policy.
+        return make_dse_registry(make_service())
+
+    def register_all(self, mcp: FastMCP, profile: str | None = None) -> None:
+        if profile == "dse":
+            self._dse().register_all(mcp, "dse")
+        else:
+            super().register_all(mcp, profile)
+
+    def tool_schemas(self, profile: str | None = None) -> list[dict[str, Any]]:
+        if profile == "dse":
+            from examples.dse_fir.dse_tools import make_dse_registry
+            return make_dse_registry(None).tool_schemas("dse")
+        return super().tool_schemas(profile)
+
+    def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
+        if name.startswith("dse_"):
+            return self._dse().dispatch(name, arguments)
+        return super().dispatch(name, arguments)
+
+
+REGISTRY = _GlobalRegistry()
 
 REGISTRY.add(
     name="waveflow_get_schema_draft_plan",

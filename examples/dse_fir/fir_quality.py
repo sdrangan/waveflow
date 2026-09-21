@@ -38,9 +38,11 @@ what makes the number comparable across scales at all.
 **The shape of J, and why a coarse grid suffices.**  At a fixed format the step ``Δ`` is fixed, so the
 quantization error is about ``T·Δ²/12`` *regardless of ``s``*, while the signal energy is ``s²‖h‖²``.
 So ``J`` falls like ``1/s²`` until taps begin to clip, and then falls off a cliff.  The optimum sits
-at the clipping knee.  The grid therefore spans ``s_max/8 … 4·s_max`` about
-``s_max = max_repr / max|h|`` and deliberately searches **past** the no-clipping point: one outlier
-tap saturating is often cheaper than losing resolution on all ``T``.
+at the clipping knee when output headroom permits it. The grid spans a conservative L1-based
+scale through four times that scale, but candidates are retained only when their *quantized*
+L1 norm times ``input_peak + one input LSB`` fits the positive output limit. The declared input
+peak is fixed across designs: lowering the drive to compensate for a large coefficient gain
+would make the quality comparison unfair.
 
 Rounding and overflow — a real trap
 -----------------------------------
@@ -226,24 +228,39 @@ def quantize_taps(h: np.ndarray, scale: float, samp_w: int, samp_i: int) -> np.n
 
 def design_quantized(spec: FirSpec, ntap: int, samp_w: int, samp_i: int,
                      method: Literal["kaiser", "remez"] = "kaiser",
-                     h: np.ndarray | None = None) -> QuantizedFir:
+                     h: np.ndarray | None = None, *,
+                     input_peak: float = 0.5) -> QuantizedFir:
     """Design at ``ntap`` taps and map into ``ap_fixed<samp_w, samp_i>`` at the best gain.
 
     *h* may be supplied to skip the prototype design when sweeping widths against one filter — the
     prototype depends only on ``(spec, ntap, method)``, so it is worth caching across ``samp_w``.
     """
+    if not 2 <= samp_w <= 32 or not 1 <= samp_i <= samp_w:
+        raise ValueError("require 2 <= samp_w <= 32 and 1 <= samp_i <= samp_w")
+    limit = max_representable(samp_w, samp_i)
+    if not np.isfinite(input_peak) or not 0 < input_peak <= limit:
+        raise ValueError("input_peak must be positive and representable")
     h = design_float(spec, ntap, method) if h is None else np.asarray(h, dtype=np.float64)
+    if h.shape != (ntap,) or not np.all(np.isfinite(h)):
+        raise ValueError("prototype must contain ntap finite coefficients")
     cls = tap_format(samp_w, samp_i)
 
     peak = float(np.max(np.abs(h)))
     if peak <= 0.0:
         raise ValueError("degenerate prototype: all taps zero")
-    s_max = max_representable(samp_w, samp_i) / peak
+    # AP_TRN input error is strictly below one LSB. Bound every possible
+    # sliding dot product, not just DC gain or this seed's waveform peak.
+    delta = 2.0 ** (samp_i - samp_w)
+    drive_bound = input_peak + delta
+    s_max = min(limit / peak, limit / (drive_bound * np.abs(h).sum()))
 
-    best: tuple[float, float, np.ndarray] = (-1.0, s_max, quantize_taps(h, s_max, samp_w, samp_i))
+    best: tuple[float, float, np.ndarray] = (0.0, 0.0, np.zeros(ntap, dtype=np.int64))
     for s in np.logspace(np.log10(s_max * SCALE_LO), np.log10(s_max * SCALE_HI), SCALE_N):
         stored = quantize_taps(h, float(s), samp_w, samp_i)
-        r2 = _r2(h, to_real(_as_fixed_array(stored, cls)))
+        real = to_real(_as_fixed_array(stored, cls))
+        if drive_bound * np.abs(real).sum() > limit:
+            continue
+        r2 = _r2(h, real)
         if r2 > best[0]:
             best = (r2, float(s), stored)
 
