@@ -9,6 +9,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
+from .checkpoint import project_checkpoint
 from .contracts import Candidate, Experiment, canonical
 from .dse_store import Store
 
@@ -115,6 +116,12 @@ class DseService:
         spent = {op: sum(r["cost"]["units"] for r in observations if r["operation"] == op)
                  for op in OPERATIONS}
         budget = self.config.budget.model_dump()
+        budget_summary = {"limits": budget, "spent": spent,
+                          "remaining": {op: budget[op] - spent[op] for op in OPERATIONS}}
+        checkpoint = project_checkpoint(
+            experiment_id=self.store.manifest["experiment_id"], observations=observations,
+            candidate_count=len(rows), best=best, budget=budget_summary,
+            constraints=self.config.constraints.model_dump())
         return {"schema_version": "fir-experiment-v1", "experiment_id": self.store.manifest["experiment_id"],
                 "experiment": self.config.model_dump(), "parameter_schema": Candidate.model_json_schema(),
                 "capabilities": self.backend.capabilities(),
@@ -122,8 +129,7 @@ class DseService:
                                "unit": "replay_query" if op == "synth" else "evaluation",
                                "estimated_live_seconds_not_charged": {"synth": 50, "rtlsim": 90}.get(op)}
                           for op in OPERATIONS},
-                "budget": {"limits": budget, "spent": {op: spent.get(op, 0) for op in OPERATIONS},
-                           "remaining": {op: budget[op] - spent.get(op, 0) for op in OPERATIONS}},
+                "budget": budget_summary, "checkpoint": checkpoint,
                 "best_feasible": best, "candidate_count": len(rows),
                 "semantics": {"quality": "gain-normalized periodic fixed-point waveform metric; not a worst-bin guarantee",
                               "throughput": "closed-form kernel rate assuming II=1; not board throughput",

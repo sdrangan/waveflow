@@ -12,6 +12,8 @@ from pydantic import ConfigDict, validate_call
 
 from waveflow.mcp.registry import ToolRegistry
 
+from .contracts import canonical
+
 
 class DseRegistry(ToolRegistry):
     """FastMCP 1.x defaults coerce and drop extras; enforce the direct contract."""
@@ -36,6 +38,9 @@ def compact_evidence(value: Any) -> Any:
     if isinstance(value, list):
         return [compact_evidence(item) for item in value]
     if not isinstance(value, dict):
+        return value
+    if value.get("schema_version") == "fir-checkpoint-v1":
+        # Already bounded and content-addressed. Reprojection invalidates its digest.
         return value
     output = {}
     for key, item in value.items():
@@ -76,7 +81,11 @@ def make_dse_registry(service: Service | None = None) -> ToolRegistry:
 
     def dse_get_dse_context() -> dict:
         """Read live FIR candidate schema, objective, evidence semantics and budgets."""
-        return invoke("dse_get_dse_context", {})
+        result = invoke("dse_get_dse_context", {})
+        if "checkpoint" in result:
+            # Opaque canonical bytes survive hosts with lossy JSON number types.
+            result["checkpoint_json"] = canonical(result.pop("checkpoint"))
+        return result
 
     def dse_pysim(params: dict[str, Any]) -> dict:
         """Evaluate one candidate in Python; not hardware timing evidence."""

@@ -3,6 +3,7 @@
 A bounded FIR DSE service with six typed tools, durable evidence, a JSON/CSV CLI,
 stdio MCP, and an optional Pi extension. Ordinary Python owns the semantics;
 agent hosts are replaceable. See [design](DESIGN.md) and [verification](VERIFICATION.md).
+Module diagram: [REVIEW.html](REVIEW.html).
 
 **Available now:** real fixed-point Python evaluation, canonical resource prediction,
 and replay of the committed 24-point HLS corpus. `synth` returns explicitly labeled
@@ -68,6 +69,17 @@ is [skills/fir-dse/SKILL.md](skills/fir-dse/SKILL.md).
 obtains schemas from Python, passes JSON as an argv value, and preserves cancellation.
 It does not disable other Pi tools or claim to sandbox the host.
 
+`WAVEFLOW_DSE_CONTEXT_POLICY=pull` (default) retains explicit context retrieval.
+`resume` restores the same checkpoint at session start and submits it before the
+next agent run. Session entries record experiment binding and submitted evidence;
+they do not prove provider receipt. Mismatched experiment bindings fail closed.
+
+Tool context includes `checkpoint_json`: canonical JSON text containing experiment
+ID, observation revision, content hash, constraints, budgets, best evidenced candidate
+and bounded references. Direct Python returns the corresponding `checkpoint` object.
+Pi preserves this text without numeric reserialization; tool details retain `raw_json`.
+Projection reads spend no evaluation units. Session state never overrides SQLite.
+
 Run npm installation/tests in a scratch copy, not this checkout: dependency trees
 interfere with repository-wide documentation/package checks. Copy both `pi/` and
 `skills/` as siblings; run `npm ci`, `npm run check`, `npm test` in the copied `pi/`.
@@ -75,6 +87,17 @@ Set `PYTHONPATH` to the repository root when testing from that scratch copy.
 `npm pack` includes the prepared portable skill in the Pi package.
 
 ## Reproduce the benchmark
+
+Deterministic recovery check, without model calls:
+
+```sh
+uv run python -m examples.dse_fir.recovery_probe --root ./new-recovery-run
+```
+
+The probe discards a committed replay response, reopens through a new CLI process,
+and checks checkpoint parity, citations and cache accounting in scripted pull/resume
+arms. Outputs: `report.json` and per-arm `exposure.json`. It tests recovery contracts,
+not Pi lifecycle execution or model performance. Existing output roots are rejected.
 
 The scorer's exhaustive reference is never exposed to the model:
 
@@ -109,6 +132,10 @@ uv run python -m examples.dse_fir.score_trial --root /path/to/trial-root \
   --trace /path/to/trial-output --reference /path/to/oracle.json \
   --output /path/to/verdict.json
 ```
+
+`selection_score` reports final-recommendation quality, the gap from the best
+observed candidate, and reference regret when an oracle is supplied. Invalid
+recommendations retain failure status and null quality/regret.
 
 The [first two real trials](evidence/first_trials.json) are retained as offline
 regression evidence: fail before compact views, pass after. Paid inference is

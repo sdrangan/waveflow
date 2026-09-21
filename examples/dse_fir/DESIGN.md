@@ -100,6 +100,29 @@ An agent disconnect is not a hardware cancellation mechanism.
 - Let CG expose the next real abstraction. Resource composition includes integration
   overhead; timing under feedback/contention is not generally the sum of block latencies.
 
+## Evidence recovery
+
+`checkpoint.py` projects a single service snapshot into bounded JSON. Domain
+identity, constraints, budget accounting and evidence remain authoritative in
+`DseService`/SQLite. Checkpoint identity covers its versioned projection; host
+sessions and exposure records do not enter candidate identity.
+
+The wire representation is `checkpoint_json`, an opaque canonical JSON string;
+direct Python retains the `checkpoint` object. Pi copies canonical text into
+messages and exposure entries, and retains tool stdout as text/`details.raw_json`.
+Parsing is used only for validation and binding. Reserializing JavaScript numbers
+would change float spelling, large integers and checkpoint hashes.
+
+Pi supports explicit retrieval (`pull`) or session restoration (`resume`). The
+optional lifecycle policy validates experiment binding, rejects stale responses,
+and submits a checkpoint before the next agent run. Exposure entries record the
+submitted content, not provider receipt. Neither mode changes the six tools.
+
+`recovery_probe.py` exercises local lost-response recovery through a new CLI
+process. `score_trial.py` separates final-selection quality from best-discovered
+quality. These checks establish interface behavior; model×policy effects require
+separate controlled trials. No automatic answer repair or search policy is added.
+
 ## Acceptance evidence
 
 Lean tests cover numerical correctness/headroom, replay provenance, prediction uncertainty,

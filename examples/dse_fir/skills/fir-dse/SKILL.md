@@ -15,6 +15,12 @@ root; do not invent a new root or change policy to escape a limit.
    Construct parameters from this schema, not from remembered candidate fields.
 2. Read `dse_get_results` before spending work; page with `offset` and `limit`.
    Context and results are live. Re-read after calls, reconnects, or cancellations.
+   Context includes bounded canonical JSON in `checkpoint_json`. Check its experiment ID and revision
+   after session recovery; follow result pages for omitted observations. Automatic
+   host delivery and explicit retrieval carry the same domain evidence. Neither
+   restores spent budgets nor guarantees that every observation fits in context.
+   Preserve the canonical text for hashes and session recovery; JavaScript numeric
+   parsing/reserialization can alter float spellings and integers above its exact range.
 3. Use `dse_pysim` for functional/quality evidence and
    `dse_predict_resource` for inexpensive resource estimates. Both take
    `{"params": {...}}`. Prefer a small, interpretable exploration over blind sweeps.

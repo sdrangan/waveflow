@@ -117,3 +117,27 @@ def test_compact_pages_preserve_ids_and_full_store(tmp_path):
     assert context["best_feasible"]["feasible"] is True
     assert len(json.dumps(context, indent=2)) < 15000
     assert "metadata" in service.results()["candidates"][0]["quality"]
+
+
+def test_checkpoint_transport_preserves_content_address(tmp_path):
+    from examples.dse_fir.contracts import identity
+    from examples.dse_fir.dse_tools import make_dse_registry
+    from examples.dse_fir.service import DseService
+
+    service = DseService(tmp_path)
+    expected = service.context()["checkpoint"]
+    actual = json.loads(make_dse_registry(service).dispatch("dse_get_dse_context", {})["checkpoint_json"])
+    assert actual == expected
+    assert actual["checkpoint_id"] == identity({k: v for k, v in actual.items() if k != "checkpoint_id"})
+
+
+def test_context_carries_lossless_checkpoint_json(tmp_path):
+    from examples.dse_fir.contracts import canonical
+    from examples.dse_fir.dse_tools import make_dse_registry
+    from examples.dse_fir.service import DseService
+
+    service = DseService(tmp_path, {"constraints": {"max_top_lut": 9007199254740993}})
+    context = make_dse_registry(service).dispatch("dse_get_dse_context", {})
+    assert context.get("checkpoint_json") == canonical(service.context()["checkpoint"])
+    assert "checkpoint" not in context  # One wire representation, no duplicated evidence.
+    assert "9007199254740993" in context["checkpoint_json"]

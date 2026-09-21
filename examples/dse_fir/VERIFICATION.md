@@ -116,3 +116,30 @@ grid optimum with valid evidence citations, confirmed runtime lock and zero
 spillover. Usage: 90712 input / 3179 output tokens. The original two snapshots
 remain historical regression evidence; source identity deliberately prevents
 resuming their stores under changed code.
+
+## Checkpoint and session recovery extension
+
+- **138 Python tests pass:** FIR, MCP and documentation integration. Ruff and diff checks pass.
+- **9 Pi tests pass** against SDK 0.86.1; TypeScript passes. The SDK test uses
+  `createAgentSession`, extension events and persisted session restoration with
+  the real Python CLI. Its offline assistant fixture triggers session persistence;
+  no provider request occurs.
+- `recovery_probe` passes through a new CLI process in both scripted arms.
+  Checkpoints match; each is **2080 canonical bytes**. Each arm retains one charged
+  replay query; the verification retry is cached. Evidence:
+  [recovery_probe.json](evidence/recovery_probe.json).
+- Wheel build and non-editable installation outside the checkout pass the same
+  recovery probe. Existing setuptools archive/package warnings remain.
+- Integration defect reproduced and fixed: legacy evidence compaction treated
+  checkpoint observation counts as dictionaries. Content-addressed checkpoints
+  now pass through unchanged; a regression checks projection/hash parity.
+- Independent review reproduced JavaScript numeric reserialization invalidating
+  checkpoint hashes. The real Pi SDK regression failed before the fix and passes
+  after it: Python recomputes hashes from injected and restored canonical text,
+  including the exact constraint `max_top_lut=9007199254740993`. Wire context uses
+  `checkpoint_json` without a duplicate parsed checkpoint; Pi preserves tool stdout.
+
+Limits: no new model trial, statistical comparison, live synthesis or RTL run.
+Exposure entries establish adapter submission, not provider receipt. Historical
+DeepSeek trials above predate this extension. Earlier full-suite failures remain
+documented; this revision uses the focused integration gate.

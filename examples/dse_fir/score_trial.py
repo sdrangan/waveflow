@@ -67,6 +67,22 @@ def check_recommendation(claim, candidates):
     return checks
 
 
+def score_selection(claim, candidates, optimum_quality=None):
+    """Score the final selection separately from the best acquired evidence."""
+    checks = check_recommendation(claim, candidates)
+    valid = all(checks.values())
+    feasible = [c for c in candidates if c["feasible"] is True]
+    best_quality = max((c["quality"]["stopband_rej_db"] for c in feasible), default=None)
+    selected = next((c for c in candidates if valid and
+                     c["candidate_id"] == claim["recommended_candidate_id"]), None)
+    quality = selected["quality"]["stopband_rej_db"] if selected else None
+    return {"valid": valid, "checks": checks, "recommended_quality_db": quality,
+            "best_observed_quality_db": best_quality,
+            "selection_gap_db": best_quality - quality if quality is not None else None,
+            "recommended_regret_db": optimum_quality - quality
+            if quality is not None and optimum_quality is not None else None}
+
+
 def score_trial(root, trace, reference=None):
     trace = Path(trace)
     raw = trace / "raw.sse"
@@ -96,8 +112,14 @@ def score_trial(root, trace, reference=None):
               "spillover_occurrences": raw.read_text().count("<persisted-output>"),
               "limitations": ["Single-trial functional test, not a model ranking or statistical estimate.",
                               "Verdict checks structured recommendation; narrative claims require review."]}
+    result["selection_score"] = score_selection(claim, results["candidates"])
     if reference is not None:
         result["search_score"] = score_experiment(reference, root)
+        allowed = {c["candidate_id"] for c in reference["oracle_rows"]}
+        result["selection_score"] = score_selection(
+            claim, [c for c in results["candidates"] if c["candidate_id"] in allowed],
+            reference["optimum"]["quality_db"])
+        result["passed"] = result["passed"] and result["selection_score"]["valid"]
     return result
 
 
