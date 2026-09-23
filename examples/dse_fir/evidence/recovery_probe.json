@@ -1,0 +1,317 @@
+{
+  "schema_version": "fir-recovery-probe-v1",
+  "model_calls": 0,
+  "checkpoint_parity": true,
+  "passed": true,
+  "arms": {
+    "pull": {
+      "checks": {
+        "quality_succeeded": true,
+        "checkpoint_preserved": true,
+        "binding_preserved": true,
+        "evidence_recovered": true,
+        "retry_cached": true,
+        "read_and_retry_uncharged": true,
+        "revision_preserved": true,
+        "bounded": true
+      },
+      "checkpoint_id": "8cb74b8edc225d2d286815f72260f8f1f7b870e3b111462a3639bdaf54096ba9",
+      "budget": {
+        "limits": {
+          "pysim": 64,
+          "predict_resource": 64,
+          "synth": 8,
+          "rtlsim": 2
+        },
+        "spent": {
+          "pysim": 1,
+          "predict_resource": 0,
+          "synth": 1,
+          "rtlsim": 0
+        },
+        "remaining": {
+          "pysim": 63,
+          "predict_resource": 64,
+          "synth": 7,
+          "rtlsim": 2
+        }
+      },
+      "selection_score": {
+        "valid": true,
+        "checks": {
+          "recommendation_parsed": true,
+          "candidate_exists": true,
+          "params_match": true,
+          "feasibility_supported": true,
+          "evidence_cited": true,
+          "citations_valid": true,
+          "objective_matches": true
+        },
+        "recommended_quality_db": 55.32082157015257,
+        "best_observed_quality_db": 55.32082157015257,
+        "selection_gap_db": 0.0,
+        "recommended_regret_db": null
+      },
+      "context_bytes": 2080,
+      "retrieval_seconds": 3.8473411360755563,
+      "exposure": {
+        "bytes": 2080,
+        "checkpoint": {
+          "best_feasible": {
+            "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+            "evaluation_refs": {
+              "pysim": {
+                "evaluation_id": "198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a",
+                "evidence_kind": "fixed_point_python",
+                "status": "ok"
+              },
+              "synth": {
+                "evaluation_id": "29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c",
+                "evidence_kind": "hls_estimate_replay",
+                "status": "ok"
+              }
+            },
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            },
+            "quality": {
+              "passband_sndr_db": 55.95403762058357,
+              "stopband_rej_db": 55.32082157015257,
+              "throughput_samp_per_cyc": 1.0
+            },
+            "resources": {
+              "top_dsp": 32,
+              "top_lut": 8674
+            }
+          },
+          "budget": {
+            "limits": {
+              "predict_resource": 64,
+              "pysim": 64,
+              "rtlsim": 2,
+              "synth": 8
+            },
+            "remaining": {
+              "predict_resource": 64,
+              "pysim": 63,
+              "rtlsim": 2,
+              "synth": 7
+            },
+            "spent": {
+              "predict_resource": 0,
+              "pysim": 1,
+              "rtlsim": 0,
+              "synth": 1
+            }
+          },
+          "checkpoint_id": "8cb74b8edc225d2d286815f72260f8f1f7b870e3b111462a3639bdaf54096ba9",
+          "constraints": {
+            "max_top_dsp": 48,
+            "max_top_lut": 53200,
+            "min_passband_sndr_db": 20.0,
+            "min_throughput": 1.0
+          },
+          "counts": {
+            "candidates": 1,
+            "observations": 2,
+            "statuses": {
+              "ok": 2
+            }
+          },
+          "experiment_id": "1c6c10e4686447613a9add0b0eba2ee0703770e70ad55587908d6d7a299cf837",
+          "omitted_observations": 0,
+          "policy_version": "evidence-checkpoint-v1",
+          "recent": [
+            {
+              "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+              "evaluation_id": "198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a",
+              "evidence_kind": "fixed_point_python",
+              "operation": "pysim",
+              "status": "ok"
+            },
+            {
+              "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+              "evaluation_id": "29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c",
+              "evidence_kind": "hls_estimate_replay",
+              "operation": "synth",
+              "status": "ok"
+            }
+          ],
+          "results_cursor": 0,
+          "revision": 2,
+          "schema_version": "fir-checkpoint-v1",
+          "semantics": "Predictions are not replayed HLS evidence. Feasible means quality + HLS resources, not RTL/physical validation. Metrics are bounded numeric summaries; oversized labels and constraints use SHA-256, unknown status counts use other. Full evidence: get_results."
+        },
+        "content": "{\"best_feasible\":{\"candidate_id\":\"380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1\",\"evaluation_refs\":{\"pysim\":{\"evaluation_id\":\"198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a\",\"evidence_kind\":\"fixed_point_python\",\"status\":\"ok\"},\"synth\":{\"evaluation_id\":\"29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c\",\"evidence_kind\":\"hls_estimate_replay\",\"status\":\"ok\"}},\"params\":{\"mem_dwidth\":32,\"ntap\":32,\"samp_i\":2,\"samp_w\":16,\"unroll_lane\":false},\"quality\":{\"passband_sndr_db\":55.95403762058357,\"stopband_rej_db\":55.32082157015257,\"throughput_samp_per_cyc\":1.0},\"resources\":{\"top_dsp\":32,\"top_lut\":8674}},\"budget\":{\"limits\":{\"predict_resource\":64,\"pysim\":64,\"rtlsim\":2,\"synth\":8},\"remaining\":{\"predict_resource\":64,\"pysim\":63,\"rtlsim\":2,\"synth\":7},\"spent\":{\"predict_resource\":0,\"pysim\":1,\"rtlsim\":0,\"synth\":1}},\"checkpoint_id\":\"8cb74b8edc225d2d286815f72260f8f1f7b870e3b111462a3639bdaf54096ba9\",\"constraints\":{\"max_top_dsp\":48,\"max_top_lut\":53200,\"min_passband_sndr_db\":20.0,\"min_throughput\":1.0},\"counts\":{\"candidates\":1,\"observations\":2,\"statuses\":{\"ok\":2}},\"experiment_id\":\"1c6c10e4686447613a9add0b0eba2ee0703770e70ad55587908d6d7a299cf837\",\"omitted_observations\":0,\"policy_version\":\"evidence-checkpoint-v1\",\"recent\":[{\"candidate_id\":\"380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1\",\"evaluation_id\":\"198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a\",\"evidence_kind\":\"fixed_point_python\",\"operation\":\"pysim\",\"status\":\"ok\"},{\"candidate_id\":\"380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1\",\"evaluation_id\":\"29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c\",\"evidence_kind\":\"hls_estimate_replay\",\"operation\":\"synth\",\"status\":\"ok\"}],\"results_cursor\":0,\"revision\":2,\"schema_version\":\"fir-checkpoint-v1\",\"semantics\":\"Predictions are not replayed HLS evidence. Feasible means quality + HLS resources, not RTL/physical validation. Metrics are bounded numeric summaries; oversized labels and constraints use SHA-256, unknown status counts use other. Full evidence: get_results.\"}",
+        "content_sha256": "4cbf968f30be403608daa39b2086b64999aeb3d99b3ad72c3c071f79cd327d70",
+        "event": "scripted_context_delivery",
+        "policy": "pull",
+        "provider_receipt": false,
+        "retrieval_seconds": 3.8473411360755563,
+        "schema_version": "fir-recovery-exposure-v1",
+        "trigger": "explicit_context_request"
+      }
+    },
+    "resume": {
+      "checks": {
+        "quality_succeeded": true,
+        "checkpoint_preserved": true,
+        "binding_preserved": true,
+        "evidence_recovered": true,
+        "retry_cached": true,
+        "read_and_retry_uncharged": true,
+        "revision_preserved": true,
+        "bounded": true
+      },
+      "checkpoint_id": "8cb74b8edc225d2d286815f72260f8f1f7b870e3b111462a3639bdaf54096ba9",
+      "budget": {
+        "limits": {
+          "pysim": 64,
+          "predict_resource": 64,
+          "synth": 8,
+          "rtlsim": 2
+        },
+        "spent": {
+          "pysim": 1,
+          "predict_resource": 0,
+          "synth": 1,
+          "rtlsim": 0
+        },
+        "remaining": {
+          "pysim": 63,
+          "predict_resource": 64,
+          "synth": 7,
+          "rtlsim": 2
+        }
+      },
+      "selection_score": {
+        "valid": true,
+        "checks": {
+          "recommendation_parsed": true,
+          "candidate_exists": true,
+          "params_match": true,
+          "feasibility_supported": true,
+          "evidence_cited": true,
+          "citations_valid": true,
+          "objective_matches": true
+        },
+        "recommended_quality_db": 55.32082157015257,
+        "best_observed_quality_db": 55.32082157015257,
+        "selection_gap_db": 0.0,
+        "recommended_regret_db": null
+      },
+      "context_bytes": 2080,
+      "retrieval_seconds": 2.205280389636755,
+      "exposure": {
+        "bytes": 2080,
+        "checkpoint": {
+          "best_feasible": {
+            "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+            "evaluation_refs": {
+              "pysim": {
+                "evaluation_id": "198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a",
+                "evidence_kind": "fixed_point_python",
+                "status": "ok"
+              },
+              "synth": {
+                "evaluation_id": "29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c",
+                "evidence_kind": "hls_estimate_replay",
+                "status": "ok"
+              }
+            },
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            },
+            "quality": {
+              "passband_sndr_db": 55.95403762058357,
+              "stopband_rej_db": 55.32082157015257,
+              "throughput_samp_per_cyc": 1.0
+            },
+            "resources": {
+              "top_dsp": 32,
+              "top_lut": 8674
+            }
+          },
+          "budget": {
+            "limits": {
+              "predict_resource": 64,
+              "pysim": 64,
+              "rtlsim": 2,
+              "synth": 8
+            },
+            "remaining": {
+              "predict_resource": 64,
+              "pysim": 63,
+              "rtlsim": 2,
+              "synth": 7
+            },
+            "spent": {
+              "predict_resource": 0,
+              "pysim": 1,
+              "rtlsim": 0,
+              "synth": 1
+            }
+          },
+          "checkpoint_id": "8cb74b8edc225d2d286815f72260f8f1f7b870e3b111462a3639bdaf54096ba9",
+          "constraints": {
+            "max_top_dsp": 48,
+            "max_top_lut": 53200,
+            "min_passband_sndr_db": 20.0,
+            "min_throughput": 1.0
+          },
+          "counts": {
+            "candidates": 1,
+            "observations": 2,
+            "statuses": {
+              "ok": 2
+            }
+          },
+          "experiment_id": "1c6c10e4686447613a9add0b0eba2ee0703770e70ad55587908d6d7a299cf837",
+          "omitted_observations": 0,
+          "policy_version": "evidence-checkpoint-v1",
+          "recent": [
+            {
+              "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+              "evaluation_id": "198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a",
+              "evidence_kind": "fixed_point_python",
+              "operation": "pysim",
+              "status": "ok"
+            },
+            {
+              "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+              "evaluation_id": "29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c",
+              "evidence_kind": "hls_estimate_replay",
+              "operation": "synth",
+              "status": "ok"
+            }
+          ],
+          "results_cursor": 0,
+          "revision": 2,
+          "schema_version": "fir-checkpoint-v1",
+          "semantics": "Predictions are not replayed HLS evidence. Feasible means quality + HLS resources, not RTL/physical validation. Metrics are bounded numeric summaries; oversized labels and constraints use SHA-256, unknown status counts use other. Full evidence: get_results."
+        },
+        "content": "{\"best_feasible\":{\"candidate_id\":\"380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1\",\"evaluation_refs\":{\"pysim\":{\"evaluation_id\":\"198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a\",\"evidence_kind\":\"fixed_point_python\",\"status\":\"ok\"},\"synth\":{\"evaluation_id\":\"29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c\",\"evidence_kind\":\"hls_estimate_replay\",\"status\":\"ok\"}},\"params\":{\"mem_dwidth\":32,\"ntap\":32,\"samp_i\":2,\"samp_w\":16,\"unroll_lane\":false},\"quality\":{\"passband_sndr_db\":55.95403762058357,\"stopband_rej_db\":55.32082157015257,\"throughput_samp_per_cyc\":1.0},\"resources\":{\"top_dsp\":32,\"top_lut\":8674}},\"budget\":{\"limits\":{\"predict_resource\":64,\"pysim\":64,\"rtlsim\":2,\"synth\":8},\"remaining\":{\"predict_resource\":64,\"pysim\":63,\"rtlsim\":2,\"synth\":7},\"spent\":{\"predict_resource\":0,\"pysim\":1,\"rtlsim\":0,\"synth\":1}},\"checkpoint_id\":\"8cb74b8edc225d2d286815f72260f8f1f7b870e3b111462a3639bdaf54096ba9\",\"constraints\":{\"max_top_dsp\":48,\"max_top_lut\":53200,\"min_passband_sndr_db\":20.0,\"min_throughput\":1.0},\"counts\":{\"candidates\":1,\"observations\":2,\"statuses\":{\"ok\":2}},\"experiment_id\":\"1c6c10e4686447613a9add0b0eba2ee0703770e70ad55587908d6d7a299cf837\",\"omitted_observations\":0,\"policy_version\":\"evidence-checkpoint-v1\",\"recent\":[{\"candidate_id\":\"380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1\",\"evaluation_id\":\"198fc8152dc08926a2004d72c3b904f93924417b15371073201a860b7e1dfd6a\",\"evidence_kind\":\"fixed_point_python\",\"operation\":\"pysim\",\"status\":\"ok\"},{\"candidate_id\":\"380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1\",\"evaluation_id\":\"29bf116f138ba18144eef854e1d9dc6faaa2437f26ae9d4b9e1def06482ad27c\",\"evidence_kind\":\"hls_estimate_replay\",\"operation\":\"synth\",\"status\":\"ok\"}],\"results_cursor\":0,\"revision\":2,\"schema_version\":\"fir-checkpoint-v1\",\"semantics\":\"Predictions are not replayed HLS evidence. Feasible means quality + HLS resources, not RTL/physical validation. Metrics are bounded numeric summaries; oversized labels and constraints use SHA-256, unknown status counts use other. Full evidence: get_results.\"}",
+        "content_sha256": "4cbf968f30be403608daa39b2086b64999aeb3d99b3ad72c3c071f79cd327d70",
+        "event": "scripted_context_delivery",
+        "policy": "resume",
+        "provider_receipt": false,
+        "retrieval_seconds": 2.205280389636755,
+        "schema_version": "fir-recovery-exposure-v1",
+        "trigger": "session_resume"
+      }
+    }
+  },
+  "limitations": [
+    "Scripted delivery; not a model comparison or Pi lifecycle test.",
+    "Lost response after local commit; no live-job cancellation claim.",
+    "Real Python evaluation and recorded HLS replay; no hardware run."
+  ]
+}

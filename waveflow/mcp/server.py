@@ -27,6 +27,10 @@ def build_mcp(
         workspace-mode tools **plus** generic file tools scoped to
         *work_dir*.
 
+        ``"dse"`` – expose only the six bounded FIR tools. *work_dir* is
+        the durable experiment root; omitted roots use WAVEFLOW_DSE_ROOT or
+        the platform user cache. No file or authoring tools are registered.
+
     work_dir:
         Root directory for file tools.  **Required** when ``mode="headless"``.
         All file-tool paths are resolved relative to (and must stay within)
@@ -41,13 +45,18 @@ def build_mcp(
     Raises
     ------
     ValueError
-        If *mode* is not ``"workspace"`` or ``"headless"``, or if
+        If *mode* is not ``"workspace"``, ``"headless"`` or ``"dse"``, or if
         ``mode="headless"`` but *work_dir* is ``None``.
     """
-    if mode not in ("workspace", "headless"):
+    if mode not in ("workspace", "headless", "dse"):
         raise ValueError(
-            f"mode must be 'workspace' or 'headless', got {mode!r}"
+            f"mode must be 'workspace', 'headless' or 'dse', got {mode!r}"
         )
+    if mode == "dse":
+        from examples.dse_fir.dse_tools import make_dse_registry, make_service
+        mcp_instance = FastMCP("waveflow-fir-dse")
+        make_dse_registry(make_service(Path(work_dir) if work_dir is not None else None)).register_all(mcp_instance, "dse")
+        return mcp_instance
     if mode == "headless" and work_dir is None:
         raise ValueError("work_dir is required for headless mode")
 

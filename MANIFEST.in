@@ -1,6 +1,8 @@
 # Include top-level documentation
 include README.md
 include LICENSE
+recursive-include examples/dse_fir/skills/fir-dse *.md
+include examples/dse_fir/pi/package.json examples/dse_fir/pi/package-lock.json examples/dse_fir/pi/index.ts examples/dse_fir/pi/tsconfig.json examples/dse_fir/pi/test.ts
 
 # Include everything in docs/ for GitHub Pages and local builds
 recursive-include docs *
@@ -38,3 +40,6 @@ recursive-include waveflow/build *.h *.hpp *.tpp *.cpp
 global-exclude __pycache__/
 global-exclude *.pyc
 global-exclude *.pyo
+prune examples/dse_fir/pi/node_modules
+prune examples/dse_fir/pi/skills
+prune examples/dse_fir/.pytest_cache

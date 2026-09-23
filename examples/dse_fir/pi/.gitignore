@@ -1,0 +1,4 @@
+node_modules/
+*.tgz
+# Regenerated from the portable repository skill by npm run prepack.
+skills/
