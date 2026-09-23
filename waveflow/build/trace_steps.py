@@ -137,6 +137,11 @@ class AddVcdTopStep(BuildStep):
     #: ``$dumpvars`` naming a scope that is not part of this elaboration is a hard error.  Left
     #: ``None`` for the ordinary case, where the kernel is the top.
     top: str | None = None
+    #: The artifact the dumper is published under.  One ``xsi/`` directory serves several tops, so
+    #: a DAG really does hold more than one of these steps -- and BuildDag refuses two producers of
+    #: one artifact.  The consuming :class:`RtlSimStep` takes the matching name in its
+    #: ``dumper_artifact``.
+    dumper_artifact: str = "vcd_dumper"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -151,14 +156,14 @@ class AddVcdTopStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"vcd_dumper": Path(self.output_dir) / f"vcd_dumper_{self._top}.v"}
+        return {self.dumper_artifact: Path(self.output_dir) / f"vcd_dumper_{self._top}.v"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         root_dir = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
         out_path = root_dir / self.output_dir / f"vcd_dumper_{self._top}.v"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(_DUMPER_TEMPLATE.format(top=self._top), encoding="utf-8")
-        return {"vcd_dumper": out_path}
+        return {self.dumper_artifact: out_path}
 
 
 @dataclass(kw_only=True)
@@ -199,6 +204,11 @@ class TraceManifestStep(BuildStep):
     source_artifact: str
     output_path: str = "results/trace_manifest.json"
     elab_params: dict[str, Any] | None = field(default=None)
+    #: The artifact the manifest is published under; one per traced top, since BuildDag refuses two
+    #: producers of one artifact.  The consuming :class:`ExtractBurstsStep` and
+    #: :class:`~waveflow.build.calib_steps.CalibBusStep` take the matching name in their
+    #: ``manifest_artifact``.
+    manifest_artifact: str = "trace_manifest"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -206,7 +216,7 @@ class TraceManifestStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"trace_manifest": Path(self.output_path)}
+        return {self.manifest_artifact: Path(self.output_path)}
 
     def run(self, config: BuildConfig, mem_dwidth=DEFAULT_MEM_DW, **artifacts) -> dict[str, Any]:
         comp = elaborate(self.comp_class, self.elab_params)
@@ -219,7 +229,7 @@ class TraceManifestStep(BuildStep):
         # DAG think the design changed on every build.
         out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                             encoding="utf-8")
-        return {"trace_manifest": out_path}
+        return {self.manifest_artifact: out_path}
 
 
 @dataclass(kw_only=True)
@@ -278,6 +288,11 @@ class RtlSimStep(BuildStep):
     rtl_artifact: str = "report_dir"
     dumper_artifact: str = "vcd_dumper"
     tb_artifact: str = "tb_main"
+    #: The artifact the traced VCD is published under; one per traced top, since BuildDag refuses
+    #: two producers of one artifact.  The consuming :class:`ExtractBurstsStep` and
+    #: :class:`~waveflow.build.calib_steps.CalibBusStep` take the matching name in their
+    #: ``vcd_artifact``.
+    vcd_artifact: str = "trace_vcd"
     prepare: Callable[[Path, "BuildConfig"], None] | None = None
 
     @property
@@ -286,7 +301,7 @@ class RtlSimStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"trace_vcd": Path(self.xsi_dir) / f"{self.top}_trace.vcd"}
+        return {self.vcd_artifact: Path(self.xsi_dir) / f"{self.top}_trace.vcd"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
@@ -313,7 +328,7 @@ class RtlSimStep(BuildStep):
                 f"{self.top}: {XSI_RUNNER} completed but wrote no {vcd.name}. Is "
                 f"vcd_dumper_{self.top}.v present in {xsi} (AddVcdTopStep), and did "
                 f"{XSI_RUNNER} get the `trace` argument?")
-        return {"trace_vcd": vcd}
+        return {self.vcd_artifact: vcd}
 
 
 @dataclass(kw_only=True)
@@ -350,6 +365,11 @@ class ExtractBurstsStep(BuildStep):
     #: How many firings each task is expected to complete -- the job count the scenario issued, as an
     #: int or a ``callable(config) -> int`` when a sweep varies it.  ``None`` disables the check.
     expect_firings: "int | Callable[[BuildConfig], int] | None" = None
+    #: The artifact the timing table is published under; one per traced top, since BuildDag refuses
+    #: two producers of one artifact.  The consuming
+    #: :class:`~waveflow.build.calib_steps.CollectTimingStep` takes the matching name in its
+    #: ``events_artifact``.
+    events_artifact: str = "timing_events"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -357,7 +377,7 @@ class ExtractBurstsStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"timing_events": Path(self.output_path)}
+        return {self.events_artifact: Path(self.output_path)}
 
     def _firing_rows(self, bt) -> list[dict]:
         rows: list[dict] = []
@@ -475,7 +495,7 @@ class ExtractBurstsStep(BuildStep):
         out_path = root / self.output_path
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return {"timing_events": out_path}
+        return {self.events_artifact: out_path}
 
 
 def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
