@@ -24,7 +24,7 @@ from typing import Any, Callable, ClassVar, Literal
 
 import numpy as np
 
-from waveflow.hw.dataschema import DataSchema, IntField, Words
+from waveflow.hw.dataschema import DataArray, DataSchema, IntField, Words
 from waveflow.hw.hwstmt import SynthCallStmt
 from waveflow.hw.memif import MMIFMaster, MMIFSlave
 from waveflow.hw.synth import synthesizable
@@ -162,9 +162,9 @@ class RegMap:
     only the bus-level word composition differs.
     """
 
-    #: Byte offset spacing between successive auto-assigned fields.  The base
-    #: RegMap packs fields tightly (one word each); VitisRegMap overrides this
-    #: to reproduce Vitis's data-word + control-word stride.
+    #: First byte offset the auto-placer may use.  The base RegMap packs fields
+    #: tightly from here (see ``_auto_assign``); VitisRegMap starts after its
+    #: control block and overrides the placement rule.
     _auto_start: int = 0
 
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None:
@@ -236,20 +236,7 @@ class RegMap:
             self._offsets[name] = f.offset
 
         # Pass 2: auto-assign remaining fields in declaration order.
-        next_free = self._auto_start
-        align = self._auto_align_bytes(word_bytes)
-        for name, f in fields.items():
-            if f.offset is not None:
-                continue
-            nwords = f.schema.nwords_per_inst(bitwidth)
-            while not all(
-                (next_free + k * word_bytes) not in occupied for k in range(nwords)
-            ):
-                next_free += align
-            self._offsets[name] = next_free
-            for k in range(nwords):
-                occupied.add(next_free + k * word_bytes)
-            next_free += self._auto_stride_bytes(nwords, word_bytes)
+        self._auto_assign(fields, occupied, word_bytes)
 
         # ------------------------------------------------------------------
         # Backing store — zero-initialised, one numpy array per field.
@@ -264,16 +251,28 @@ class RegMap:
     # Auto-placement policy (overridden by VitisRegMap)
     # ------------------------------------------------------------------
 
-    def _auto_align_bytes(self, word_bytes: int) -> int:
-        """Granularity the auto-placer steps by when hunting for a free slot."""
-        return word_bytes
+    def _auto_assign(
+        self, fields: dict[str, RegField], occupied: set[int], word_bytes: int,
+    ) -> None:
+        """Place every field without a manual ``offset``, in declaration order.
 
-    def _auto_stride_bytes(self, nwords: int, word_bytes: int) -> int:
-        """Bytes consumed by an auto-placed field of *nwords* words.
-
-        The base RegMap packs tightly: a field consumes exactly its own words.
+        The base RegMap packs tightly: a cursor walks forward from
+        ``_auto_start``, skipping manually-placed words, and each field
+        consumes exactly its own words.
         """
-        return nwords * word_bytes
+        next_free = self._auto_start
+        for name, f in fields.items():
+            if f.offset is not None:
+                continue
+            nwords = f.schema.nwords_per_inst(self.bitwidth)
+            while not all(
+                (next_free + k * word_bytes) not in occupied for k in range(nwords)
+            ):
+                next_free += word_bytes
+            self._offsets[name] = next_free
+            for k in range(nwords):
+                occupied.add(next_free + k * word_bytes)
+            next_free += nwords * word_bytes
 
     # ------------------------------------------------------------------
     # Layout queries
@@ -740,13 +739,38 @@ class VitisRegMap(RegMap):
         0x04 : Global Interrupt Enable Register (GIER)
         0x08 : IP Interrupt Enable Register (IER)
         0x0c : IP Interrupt Status Register (ISR)
-        0x10 : first user field  (0x14 : its control word / reserved)
-        0x18 : second user field (0x1c : …)
-        …
+        0x10 : user arguments, placed by the rule below
 
     So the four control signals are *bits of one word at 0x00* — not registers
-    of their own — and 32-bit scalar arguments start at 0x10 on an 8-byte
-    stride (one data word plus one control/reserved word each).
+    of their own — and user arguments start at 0x10.
+
+    Argument placement
+    ------------------
+    Measured from the ``ADDR_*`` maps of 17 probe kernels (Vitis HLS 2025.1,
+    ``csynth_design``, one ``control`` bundle; see ``_auto_assign``).  Each
+    argument, in declaration order, is placed at the **lowest free address at
+    or after 0x10** that meets its alignment — first fit, so a small scalar
+    may land in a hole an earlier array left, *ahead* of fields declared
+    before it.  Footprints, in 4-byte slots:
+
+    - **input scalar** (``RW`` / ``W``): ``ceil(W/32)`` data slots + one
+      control slot (reads ``reserved``).  4-byte aligned — a 64-bit port is
+      *not* 8-byte aligned.
+    - **output scalar** (``R``): twice that.  Data slots, then a control slot
+      carrying ``ap_vld``, then an undocumented gap of the same size again.
+      The gap is invisible when the output is the last argument.
+    - **array** (``DataArray`` with ``cpp_storage = "raw"``): a memory region
+      of ``next_pow2(4 * n)`` bytes, aligned to its own size.
+
+    Not modelled (all unmeasured or known to differ):
+
+    - An ``RW`` field the kernel *writes* becomes an in/out port, which Vitis
+      splits into ``<name>_i`` and ``<name>_o`` registers (the ``_o`` half
+      without the output gap).  Here ``RW`` always means *input*.
+    - Struct-typed fields (non-raw ``DataArray``, ``DataList``) are placed as
+      a scalar of their word count — not measured.
+    - Arrays of elements other than 32 bits wide are rejected.
+    - Multiple bundles, ``ap_ctrl_none``, and other Vitis versions.
 
     What this models, and what it does not
     -------------------------------------
@@ -765,8 +789,9 @@ class VitisRegMap(RegMap):
       interrupt line in the simulation.
     - ``auto_restart`` (bit 7) and ``interrupt`` (bit 9) are not modelled.
 
-    Nothing yet *enforces* that this layout tracks Vitis; ``control.h`` is the
-    authoritative artifact a conformance test could check against.
+    The ``-m vitis`` test ``tests/hw/test_regmap_vitis_layout.py`` csynths
+    probe kernels and diffs this layout against the generated ``ADDR_*``
+    localparams.
     """
 
     #: User arguments begin after the 16-byte control/interrupt block.
@@ -777,23 +802,47 @@ class VitisRegMap(RegMap):
     #: Bytes reserved for control + interrupt registers before user fields.
     CTRL_BLOCK_BYTES: int = 0x10
 
-    def _auto_align_bytes(self, word_bytes: int) -> int:
-        # Vitis places every scalar argument on an 8-byte boundary.
-        return 8
+    def _auto_assign(
+        self, fields: dict[str, RegField], occupied: set[int], word_bytes: int,
+    ) -> None:
+        """First-fit placement in declaration order — see the class docstring.
 
-    def _auto_stride_bytes(self, nwords: int, word_bytes: int) -> int:
-        """Bytes Vitis consumes per scalar argument: the field's data words
-        plus one control word, rounded up to the 8-byte argument grid.
-
-        Verified for 32-bit scalars (1 data word + 1 control word = 8 bytes:
-        x@0x10/x_ctrl@0x14, a@0x18/a_ctrl@0x1c, …).  The generalization to
-        multi-word fields follows the same data+control rule but is *not*
-        verified against a local artifact — in particular Vitis maps array
-        arguments on s_axilite as a BRAM-backed region, which this does not
-        attempt to reproduce.
+        ``occupied`` gets the whole footprint (control slot, output gap,
+        region padding), not just the data words, so no later field can land
+        on bytes Vitis has claimed.
         """
-        raw = (nwords + 1) * word_bytes
-        return ((raw + 7) // 8) * 8
+        for name, f in fields.items():
+            if f.offset is not None:
+                continue
+            size, align = self._vitis_footprint(name, f, word_bytes)
+            pos = -(-self._auto_start // align) * align
+            while any(p in occupied for p in range(pos, pos + size, word_bytes)):
+                pos += align
+            self._offsets[name] = pos
+            occupied.update(range(pos, pos + size, word_bytes))
+
+    def _vitis_footprint(
+        self, name: str, f: RegField, word_bytes: int,
+    ) -> tuple[int, int]:
+        """Return ``(size_bytes, align_bytes)`` Vitis claims for field *f*."""
+        nwords = int(f.schema.nwords_per_inst(self.bitwidth))
+        if (isinstance(f.schema, type) and issubclass(f.schema, DataArray)
+                and getattr(f.schema, "cpp_storage", "struct") == "raw"):
+            elem_bw = getattr(f.schema.element_type, "bitwidth", None)
+            if elem_bw != 32:
+                raise ValueError(
+                    f"Field '{name}': VitisRegMap only models s_axilite arrays of "
+                    f"32-bit elements (got element bitwidth {elem_bw}); the Vitis "
+                    "memory layout for other widths has not been measured."
+                )
+            size = word_bytes
+            while size < nwords * word_bytes:
+                size *= 2
+            return size, size
+        slots = nwords + 1
+        if f.access is RegAccess.R:
+            slots *= 2
+        return slots * word_bytes, word_bytes
 
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None:
         if bitwidth != 32:
