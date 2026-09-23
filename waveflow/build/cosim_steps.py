@@ -49,6 +49,11 @@ class ExtractCosimTimingStep(BuildStep):
         the candidate filenames.
     output_path : str
         Repo-relative location of the produced JSON artifact.
+    cosim_timing_artifact : str
+        Name the parsed timing is published under.  A DAG that extracts cosim timing for more
+        than one top needs a distinct name per step, since BuildDag refuses two producers of one
+        artifact; the downstream :class:`ValidateTimingStep` takes the matching name in its own
+        ``cosim_timing_artifact``.
     """
 
     description: str = (
@@ -59,6 +64,7 @@ class ExtractCosimTimingStep(BuildStep):
     top: str
     report_dir_artifact: str = "report_dir"
     output_path: str = "results/cosim_timing.json"
+    cosim_timing_artifact: str = "cosim_timing"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -66,7 +72,7 @@ class ExtractCosimTimingStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"cosim_timing": Path(self.output_path)}
+        return {self.cosim_timing_artifact: Path(self.output_path)}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         report_dir = artifacts[self.report_dir_artifact]
@@ -91,7 +97,7 @@ class ExtractCosimTimingStep(BuildStep):
         out_path = root_dir / self.output_path
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(cosim_timing, indent=2), encoding="utf-8")
-        return {"cosim_timing": out_path}
+        return {self.cosim_timing_artifact: out_path}
 
 
 def _detect_vitis_version(report_path: Path) -> str | None:
@@ -153,6 +159,9 @@ class ValidateTimingStep(BuildStep):
     cosim_timing_artifact: str = "cosim_timing"
     tolerance_cycles: int = 20
     output_path: str = "results/timing_verdict.json"
+    # The artifact the verdict is published under.  A DAG holding two of these steps needs a
+    # distinct name per step, since BuildDag refuses two producers of one artifact.
+    verdict_artifact: str = "timing_verdict"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -160,7 +169,7 @@ class ValidateTimingStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"timing_verdict": Path(self.output_path)}
+        return {self.verdict_artifact: Path(self.output_path)}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         py_path = Path(artifacts[self.py_timing_artifact])
@@ -193,4 +202,4 @@ class ValidateTimingStep(BuildStep):
                 f"(py={py_cycles}, cosim={cosim_cycles}) exceeds tolerance="
                 f"{self.tolerance_cycles}.  Verdict at {out_path}."
             )
-        return {"timing_verdict": out_path}
+        return {self.verdict_artifact: out_path}

@@ -71,12 +71,51 @@ def launcher_names(os_name: str | None = None) -> tuple[str, str]:
     return "run_xsim.sh", "run_xsim_vcd.sh"
 
 
+# ``log_wave`` spells "everything below here" as ``-r``/``-recursive``.  ``log_vcd`` has no such
+# option: it takes ``-level``, whose default of 0 already means "this scope and every level below".
+# A literal rewrite therefore produces ``log_vcd -r /``, which xsim 2025.1 rejects outright --
+# ``ERROR: [Common 17-170] Unknown option '-r'`` -- and then exits 0, leaving a VCD with no ``$var``
+# declarations at all.  The recursive form has to be translated, not copied.
+_RECURSIVE_FLAGS = ('-recursive', '-r')
+
+
+def _log_wave_to_log_vcd(command: str) -> str:
+    """
+    Rewrite one generated ``log_wave`` command as the ``log_vcd`` command tracing the same objects.
+
+    Only the options ahead of the object list are touched; the object list itself is copied through
+    verbatim, so the bracketed ``[get_objects -filter {...} ...]`` form Vitis emits for
+    ``trace_level port`` survives intact.
+    """
+    args = command.strip()[len('log_wave'):].strip()
+
+    recursive = False
+    while True:
+        for flag in _RECURSIVE_FLAGS:
+            if args == flag or args.startswith(f'{flag} '):
+                recursive = True
+                args = args[len(flag):].strip()
+                break
+        else:
+            break
+
+    # ``log_wave -r /`` names the root scope.  ``log_vcd`` matches hdl_object *patterns*, so the
+    # root has to be spelled as a wildcard.
+    if args in ('', '/'):
+        args = '/*'
+
+    if recursive:
+        args = f'-level 0 {args}'
+
+    return f'log_vcd {args}'
+
+
 def _get_log_vcd_command(lines, trace_level):
     for line in lines:
         stripped = line.strip()
         if stripped.startswith('log_wave '):
             if trace_level in {'*', 'all', 'port'}:
-                return f"{stripped.replace('log_wave', 'log_vcd', 1)}\n"
+                return f'{_log_wave_to_log_vcd(stripped)}\n'
             return f'log_vcd {trace_level}\n'
 
     raise RuntimeError(
@@ -165,6 +204,63 @@ def copy_vcd(sim_dir, base_dir, component_path, output_vcd):
     shutil.copyfile(src, dst)
     print(f"VCD copied to {dst}")
 
+
+def check_vcd_not_empty(vcd_path, sim_dir=None, trace_level=None):
+    """
+    Raise unless *vcd_path* declares at least one signal.
+
+    xsim exits 0 after rejecting a ``log_vcd`` command, so a VCD that logged nothing is otherwise
+    indistinguishable from a successful run: the file exists, the process succeeded, and the first
+    symptom shows up somewhere downstream.  ``$var`` is the VCD keyword that declares a traced
+    signal, so looking for one is the cheapest honest check.  Every ``$var`` lives in the header,
+    ahead of ``$enddefinitions``, so the scan stops there rather than reading a trace that can run
+    to hundreds of megabytes at ``trace_level all``.
+
+    Parameters
+    ----------
+    vcd_path : str | Path
+        The VCD to check.
+    sim_dir : str | Path | None
+        Simulation directory holding ``xsim.log``.  When given, any command xsim rejected is quoted
+        in the error message.
+    trace_level : str | None
+        Trace level the VCD was requested with, named in the error message.
+
+    Raises
+    ------
+    RuntimeError
+        If the file is missing, or declares no signals.
+    """
+    vcd_path = Path(vcd_path)
+    level = '' if trace_level is None else f' (trace_level={trace_level!r})'
+
+    if not vcd_path.exists():
+        raise RuntimeError(f"No VCD was written to {vcd_path}{level}.")
+
+    with vcd_path.open('r', encoding='utf-8', errors='replace') as f:
+        for line in f:
+            if '$var' in line:
+                return
+            if '$enddefinitions' in line:
+                break
+
+    detail = ''
+    if sim_dir is not None:
+        log_path = Path(sim_dir) / 'xsim.log'
+        if log_path.exists():
+            rejected = [
+                line.strip()
+                for line in log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+                if 'ERROR: [Common 17-170]' in line
+            ]
+            if rejected:
+                detail = '  xsim rejected a command: ' + ' '.join(rejected)
+
+    raise RuntimeError(
+        f"{vcd_path} declares no signals -- the simulation logged nothing{level}. "
+        f"Check the xsim log for a rejected log_vcd command.{detail}"
+    )
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Process VCD dump options.")
 
@@ -247,7 +343,8 @@ def run_xsim_vcd(
     Raises
     ------
     RuntimeError
-        If required simulation files are missing, or if the simulation process fails.
+        If required simulation files are missing, if the simulation process fails, or if the
+        simulation ran but logged no signals -- see :func:`check_vcd_not_empty`.
     FileNotFoundError
         If the expected simulation directory does not exist.
 
@@ -311,77 +408,32 @@ def run_xsim_vcd(
     copy_vcd(sim_dir, base_dir, component_path, output_vcd)
 
     vcd_dir = os.path.join(base_dir, 'vcd')
-    return Path(os.path.join(vcd_dir, output_vcd)).resolve()
+    vcd_out = Path(os.path.join(vcd_dir, output_vcd)).resolve()
+    check_vcd_not_empty(vcd_out, sim_dir=sim_dir, trace_level=trace_level)
+    return vcd_out
 
 
 def main():
-
-    # Get arguments
+    """
+    CLI entry point.  Thin wrapper over :func:`run_xsim_vcd` so both paths share one flow -- in
+    particular the empty-VCD check, which the CLI used to skip.
+    """
     args = parse_args()
-    component_name = args.comp
-    top_name = args.top
-    output_vcd = args.out
-    solution_name = args.soln
-    trace_level = args.trace_level
 
-    # Get directory paths
-    base_dir = os.getcwd()
-    component_path = os.path.join(base_dir, component_name)
-
-    # Set soln_path to either the provided component_path/solution or name
-    # or the first directory below component_path.  If there are multiple directories,
-    # print an error and list the sub-directories.
-    if solution_name is None:
-        subdirs = [d for d in os.listdir(component_path) if os.path.isdir(os.path.join(component_path, d))]
-        if len(subdirs) == 0:
-            print(f"ERROR: No subdirectories found in {component_path}. Please specify a solution name with --soln.")
-            sys.exit(1)
-        elif len(subdirs) > 1:
-            print(f"ERROR: Multiple subdirectories found in {component_path}. Please specify a solution name with --soln.")
-            print("Subdirectories:")
-            for d in subdirs:
-                print(f"  - {d}")
-            sys.exit(1)
-        else:
-            solution_name = subdirs[0]
-    soln_path = os.path.join(component_path, solution_name)
-
-    # Get candidate sim directories
-    sim_dir_candidates = [
-        os.path.join(soln_path, 'hls', 'sim', 'verilog'),
-        os.path.join(soln_path, 'sim', 'verilog')
-    ]
-    # Test if any of the candidate directories exist.  If not, print an error and exit.
-    found_sim_dir = False
-    for sim_dir in sim_dir_candidates:
-        if os.path.exists(sim_dir):
-            found_sim_dir = True
-            break
-    if not found_sim_dir:
-        print("ERROR: No valid simulation directory found. Please check your solution structure.")
-        print("Checked the following directories: ")
-        for d in sim_dir_candidates:
-            print(f"  - {d}")
+    try:
+        out_path = run_xsim_vcd(
+            top=args.top,
+            comp=args.comp,
+            out=args.out,
+            soln=args.soln,
+            trace_level=args.trace_level,
+        )
+    except (RuntimeError, FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"ERROR: {exc}")
         sys.exit(1)
 
-    launcher, launcher_vcd = launcher_names()
-    tcl_path = os.path.join(sim_dir, f'{top_name}.tcl')
-    tcl_vcd_path = os.path.join(sim_dir, f'{top_name}_vcd.tcl')
-    bat_path = os.path.join(sim_dir, launcher)
-    bat_vcd_path = os.path.join(sim_dir, launcher_vcd)
+    print(f"VCD written to: {out_path}")
 
-    if not os.path.exists(sim_dir):
-        raise FileNotFoundError(f"Simulation directory not found: {sim_dir}")
-
-    if not os.path.exists(bat_path):
-        print(f"ERROR: No simulation launcher at {bat_path}.")
-        print("Run the RTL co-simulation with trace capture enabled before generating a VCD.")
-        sys.exit(1)
-
-    modify_tcl(tcl_path, tcl_vcd_path, trace_level)
-    create_vcd_batch(top_name, bat_path, bat_vcd_path)
-    run_batch(bat_vcd_path)
-    copy_vcd(sim_dir, base_dir, component_path, output_vcd)
 
 if __name__ == "__main__":
     main()

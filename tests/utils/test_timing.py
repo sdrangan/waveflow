@@ -139,6 +139,22 @@ class TestTimingDiagram:
         assert ax is not None
         plt.close("all")
 
+    def test_plot_signals_empty_raises_named_error(self):
+        """An empty diagram used to surface as an UnboundLocalError on `tmin`."""
+        from waveflow.utils.timing import TimingDiagram
+
+        td = TimingDiagram()
+        with pytest.raises(ValueError, match="No signals to plot"):
+            td.plot_signals()
+
+    def test_plot_signals_empty_raises_even_with_trange(self):
+        """`trange` supplies the bounds, but there is still nothing to draw."""
+        from waveflow.utils.timing import TimingDiagram
+
+        td = TimingDiagram()
+        with pytest.raises(ValueError, match="No signals to plot"):
+            td.plot_signals(trange=[0, 40])
+
 
 class TestActivityDiagram:
     """The reusable activity-band renderer: a sibling of TimingDiagram.
