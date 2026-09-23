@@ -22,6 +22,7 @@ from waveflow.scripts.xsim_vcd import (
     run_xsim_vcd,
     modify_tcl,
     create_vcd_batch,
+    check_vcd_not_empty,
     launcher_names,
 )
 
@@ -51,7 +52,23 @@ class TestModifyTcl:
         modify_tcl(str(tcl_src), str(tcl_dst), trace_level="*")
         content = tcl_dst.read_text()
         assert "open_vcd" in content
-        assert "log_vcd -r /" in content
+        # `log_vcd` has no -r: xsim 2025.1 rejects it outright and then dumps nothing.  The
+        # recursive request becomes `-level 0` over a wildcard from the root scope.
+        assert "log_vcd -level 0 /*" in content
+        assert "log_vcd -r" not in content
+
+    def test_recursive_long_form_also_translated(self, tmp_path: Path) -> None:
+        """Vitis emits `-r`, but `log_wave` spells the same option `-recursive` too."""
+        tcl_src = tmp_path / "poly.tcl"
+        tcl_dst = tmp_path / "poly_vcd.tcl"
+        tcl_src.write_text(
+            "log_wave -recursive /apatb_poly_top/*\nrun all\nquit\n"
+        )
+        modify_tcl(str(tcl_src), str(tcl_dst), trace_level="all")
+        content = tcl_dst.read_text()
+        assert "log_vcd -level 0 /apatb_poly_top/*" in content
+        # The original log_wave line stays -- only the inserted log_vcd is translated.
+        assert "log_vcd -recursive" not in content
 
     def test_replaces_quit_with_close_vcd(self, tmp_path: Path) -> None:
         tcl_src = tmp_path / "poly.tcl"
@@ -78,6 +95,42 @@ class TestModifyTcl:
         modify_tcl(str(tcl_src), str(tcl_dst), trace_level="port")
         content = tcl_dst.read_text()
         assert "log_vcd [get_objects -filter {type == in_port || type == out_port || type == inout_port || type == port} /apatb_poly_top/AESL_inst_poly/*]" in content
+
+
+class TestCheckVcdNotEmpty:
+    """xsim exits 0 after rejecting a log_vcd command, so a VCD that logged nothing looks like
+    a successful run.  This check is what turns that into a failure at the point it happens."""
+
+    # What xsim leaves behind when the log_vcd command was rejected: a header and nothing else.
+    EMPTY_VCD = "$date\n  today\n$end\n$dumpvars\n$end\n"
+
+    def test_accepts_a_vcd_with_signals(self, tmp_path: Path) -> None:
+        vcd = tmp_path / "dump.vcd"
+        vcd.write_text("$var wire 1 ! ap_clk $end\n$enddefinitions $end\n")
+        check_vcd_not_empty(vcd)  # does not raise
+
+    def test_rejects_a_vcd_with_no_signals(self, tmp_path: Path) -> None:
+        vcd = tmp_path / "dump.vcd"
+        vcd.write_text(self.EMPTY_VCD)
+        with pytest.raises(RuntimeError, match="declares no signals"):
+            check_vcd_not_empty(vcd, trace_level="all")
+
+    def test_rejects_a_missing_vcd(self, tmp_path: Path) -> None:
+        with pytest.raises(RuntimeError, match="No VCD was written"):
+            check_vcd_not_empty(tmp_path / "absent.vcd")
+
+    def test_quotes_the_rejected_command_from_the_xsim_log(self, tmp_path: Path) -> None:
+        sim_dir = tmp_path / "sim"
+        sim_dir.mkdir()
+        (sim_dir / "xsim.log").write_text(
+            "## log_vcd -r /\n"
+            "ERROR: [Common 17-170] Unknown option '-r', please type 'log_vcd -help' for usage info.\n"
+        )
+        vcd = tmp_path / "dump.vcd"
+        vcd.write_text(self.EMPTY_VCD)
+
+        with pytest.raises(RuntimeError, match=r"Unknown option '-r'"):
+            check_vcd_not_empty(vcd, sim_dir=sim_dir, trace_level="all")
 
 
 class TestLauncherNames:
