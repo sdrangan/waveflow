@@ -294,3 +294,70 @@ def test_functional_verify_mirror_without_golden_filename_keeps_actual_name(tmp_
     )
     out_dir = result["mirror_dir"]
     assert (out_dir / "resp_hdr.bin").exists()
+
+
+def test_two_verify_steps_coexist_when_report_artifacts_differ(tmp_path):
+    """A DAG that verifies twice -- after csim and again after cosim, say -- needs a distinct
+    report artifact per step, since BuildDag refuses two producers of one artifact."""
+    from waveflow.build.build import BuildDag, SourceStep
+
+    def _dirs() -> BuildDag:
+        dag = BuildDag()
+        for art in ("golden_dir", "csim_dir", "cosim_dir"):
+            dag.add(SourceStep(artifact=art, path=tmp_path / art))
+        return dag
+
+    def _step(name: str, actual: str, report_artifact: str) -> FunctionalVerifyStep:
+        return FunctionalVerifyStep(
+            name=name,
+            golden_dir_artifact="golden_dir",
+            actual_dir_artifact=actual,
+            schemas=[{"filename": "resp_hdr.bin", "schema": PolyRespHdr}],
+            report_path=f"results/{name}.json",
+            report_artifact=report_artifact,
+        )
+
+    # Without distinct names the second add() is the failure the field exists to remove.
+    dag = _dirs()
+    dag.add(_step("verify_csim", "csim_dir", "verify_report"))
+    with pytest.raises(ValueError, match="already claimed"):
+        dag.add(_step("verify_cosim", "cosim_dir", "verify_report"))
+
+    dag = _dirs()
+    dag.add(_step("verify_csim", "csim_dir", "verify_csim_report"))
+    dag.add(_step("verify_cosim", "cosim_dir", "verify_cosim_report"))
+
+
+def test_report_artifact_names_the_returned_key(tmp_path):
+    """``run()`` publishes the report under ``report_artifact``, not the fixed default."""
+    golden = tmp_path / "golden"
+    actual = tmp_path / "actual"
+    golden.mkdir()
+    actual.mkdir()
+    _write_resp_hdr(golden / "resp_hdr.bin")
+    _write_resp_hdr(actual / "resp_hdr.bin")
+
+    step = FunctionalVerifyStep(
+        name="verify_cosim",
+        golden_dir_artifact="sim_dir",
+        actual_dir_artifact="cosim_dir",
+        schemas=[{"filename": "resp_hdr.bin", "schema": PolyRespHdr}],
+        report_path="results/verify_cosim.json",
+        report_artifact="verify_cosim_report",
+    )
+    assert "verify_cosim_report" in step.produces
+    assert "verify_report" not in step.produces
+
+    result = step.run(BuildConfig(root_dir=tmp_path), sim_dir=golden, cosim_dir=actual)
+    assert "verify_report" not in result
+    assert result["verify_cosim_report"].exists()
+
+
+def test_report_artifact_defaults_to_verify_report(tmp_path):
+    """Every caller predating the field keeps the name it already used."""
+    step = FunctionalVerifyStep(
+        name="verify",
+        golden_dir_artifact="sim_dir",
+        actual_dir_artifact="csim_dir",
+    )
+    assert "verify_report" in step.produces
