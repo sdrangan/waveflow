@@ -1,0 +1,11 @@
+# Vitis BLAS gemv verification output -- USER DUT, type float
+# y is the IEEE-754 BIT PATTERN in decimal; logParEntries=2
+# columns: case row y
+# n_cases M N logP
+2 3 64 2
+0 0 1115684864
+0 1 1136119285
+0 2 1143459317
+1 0 1231020246
+1 1 3384322612
+1 2 3372857368
