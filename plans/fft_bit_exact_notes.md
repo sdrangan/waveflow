@@ -1,6 +1,10 @@
 # Bit-exact Vitis L1 SSR FFT model — feasibility notes
 
-**Status: NOTES, not a plan.** Captured from a feasibility discussion. The idea is a
+**Status: SUPERSEDED (2026-07-26)** by [`fft_bit_exact.md`](./fft_bit_exact.md), which is the
+real plan these notes asked for -- `ComplexField` has landed.  Kept for the rationale and
+sources; where the two disagree, the plan wins (it was checked against the shipped source).
+
+**Originally: NOTES, not a plan.** Captured from a feasibility discussion. The idea is a
 standalone, bit-exact Python model of the Vitis DSP **L1 SSR FFT** (fixed-point),
 built on PySilicon's `FixedField`/`ComplexField`. Revisit and turn into a real plan
 once `ComplexField` lands.
