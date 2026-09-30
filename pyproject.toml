@@ -47,7 +47,6 @@ build_lab_autograder = "waveflow.scripts.build_lab_autograder:main"
 waveflow_mcp_setup = "waveflow.scripts.waveflow_mcp_setup:main"
 waveflow_mcp_server = "waveflow.mcp.server:main"
 waveflow = "waveflow.cli:main"
-build_corpus = "waveflow.mcp.build_corpus:main"
 clean_examples = "waveflow.scripts.clean_examples:main"
 publish_calib = "waveflow.calib.publish:main"
 waveflow_calib = "waveflow.calib.cli:main"
@@ -91,6 +90,13 @@ include-package-data = true
 # MANIFEST.in (whose `recursive-include waveflow` covers only *.json/*.yaml/*.yml/*.txt/*.md), so a
 # pip-installed non-editable waveflow had every hook component fail on a missing source file.
 "waveflow.build" = ["xsi/**", "rtl/**", "*.h", "*.hpp", "*.tpp", "*.cpp"]
+
+# The accelerator frames are markdown and TOML -- the specification, the process
+# text (which the scaffold also writes as a project's AGENTS.md) and the example
+# function specs.  No Python, so package discovery misses them entirely, and
+# without this `waveflow_get_process` returns a missing-file error on any
+# pip-installed waveflow.
+"waveflow.mcp.frames" = ["**/*.md", "**/*.toml"]
 
 # Pytest configuration
 [tool.pytest.ini_options]

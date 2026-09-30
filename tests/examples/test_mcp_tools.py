@@ -11,10 +11,9 @@ from pathlib import Path
 import pytest
 
 from waveflow.mcp.components import get_components
-from waveflow.mcp.example_rag import search_schema_examples
 from waveflow.mcp.schema_examples import get_schema_example, list_schema_examples
 from waveflow.mcp.registry import REGISTRY, ToolRegistry
-from waveflow.mcp.schema_tools import get_schema_draft_plan, validate_schema, validate_schema_from_file
+from waveflow.mcp.schema_tools import validate_schema, validate_schema_from_file
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +124,20 @@ def test_registry_has_expected_tools():
     assert "waveflow_search_examples" not in all_names
     assert "waveflow_search_schema_examples" not in all_names
     # Domain tools present in all profiles
-    assert "waveflow_get_schema_draft_plan" in all_names
+    # The static schema-draft plan was replaced by the frame process (D2)
+    assert "waveflow_get_schema_draft_plan" not in all_names
+    assert "waveflow_get_process" in all_names
+    assert "waveflow_list_frames" in all_names
     assert "waveflow_validate_schema" in all_names
     assert "waveflow_get_components" in all_names
-    # RAG search tool present (headless-only; visible when not filtering)
-    assert "waveflow_rag_search_examples" in all_names
+    # The OpenAI RAG tool was removed with D1; local search replaced it
+    assert "waveflow_rag_search_examples" not in all_names
+    assert "waveflow_search" in all_names
+    assert "waveflow_browse" in all_names
+    assert "waveflow_find_usage" in all_names
+    assert "waveflow_list_examples" in all_names
+    assert "waveflow_get_example" in all_names
+    assert "waveflow_get_doc" in all_names
     # File tools not in the registry (they are added dynamically by build_mcp)
     assert "list_files" not in all_names
     assert "read_file" not in all_names
@@ -139,19 +147,19 @@ def test_registry_has_expected_tools():
 
 def test_registry_workspace_profile_has_only_domain_tools():
     workspace_names = {s["function"]["name"] for s in REGISTRY.tool_schemas(profile="workspace")}
-    assert "waveflow_get_schema_draft_plan" in workspace_names
+    assert "waveflow_get_process" in workspace_names
     assert "waveflow_validate_schema" in workspace_names
     assert "waveflow_get_components" in workspace_names
-    assert "waveflow_rag_search_examples" in workspace_names
+    assert "waveflow_search" in workspace_names
     assert "list_files" not in workspace_names
 
 
-def test_registry_headless_profile_has_rag_and_domain_tools():
+def test_registry_headless_profile_has_knowledge_and_domain_tools():
     headless_names = {s["function"]["name"] for s in REGISTRY.tool_schemas(profile="headless")}
-    assert "waveflow_get_schema_draft_plan" in headless_names
+    assert "waveflow_get_process" in headless_names
     assert "waveflow_validate_schema" in headless_names
     assert "waveflow_get_components" in headless_names
-    assert "waveflow_rag_search_examples" in headless_names
+    assert "waveflow_search" in headless_names
 
 
 def test_registry_tool_schemas_are_openai_style():
@@ -174,40 +182,6 @@ def test_registry_dispatch_disabled_get_schema_example_raises_value_error():
         REGISTRY.dispatch(
             "waveflow_get_schema_example", {"example_id": "hist_cmd"}
         )
-
-
-def test_get_schema_draft_plan_final_step_recommends_validation():
-    result = get_schema_draft_plan(task="Need a DMA command schema")
-
-    assert result["steps"][-1]["goal"] == "Validate the schema and record assumptions"
-    assert result["steps"][-1]["recommended_tools"] == ["waveflow_validate_schema"]
-    assert "structural or typing issues" in result["steps"][-1]["instructions"]
-
-
-def test_get_schema_draft_plan_first_step_uses_registered_tool_names():
-    result = get_schema_draft_plan()
-
-    assert result["steps"][0]["recommended_tools"] == [
-        "waveflow_get_components",
-        "waveflow_rag_search_examples",
-    ]
-
-
-def test_get_schema_draft_plan_first_step_uses_workspace_root_when_provided():
-    result = get_schema_draft_plan(workspace_root="c:/demo/workspace")
-
-    assert "Check the workspace at c:/demo/workspace" in result["steps"][0]["instructions"]
-    assert "waveflow_get_components" in result["steps"][0]["instructions"]
-    assert "waveflow_rag_search_examples" in result["steps"][0]["instructions"]
-
-
-def test_get_schema_draft_plan_first_step_uses_only_example_tools_without_workspace_root():
-    result = get_schema_draft_plan()
-
-    instructions = result["steps"][0]["instructions"]
-    assert "waveflow_get_components" in instructions
-    assert "waveflow_rag_search_examples" in instructions
-    assert "waveflow_get_example_file" not in instructions
 
 
 def test_validate_schema_accepts_valid_datalist_source():
@@ -398,21 +372,21 @@ def test_build_mcp_headless_returns_fastmcp(tmp_path):
     assert mcp_inst.name == "waveflow"
 
 
-def test_build_mcp_workspace_exposes_rag_but_not_file_tools(tmp_path):
+def test_build_mcp_workspace_exposes_knowledge_but_not_file_tools(tmp_path):
     from waveflow.mcp.server import build_mcp
 
     mcp_inst = build_mcp(mode="workspace")
     # We check via the registry profile filter (the MCP instance doesn't have a
     # public tool-list API, but registry.tool_schemas gives us the profile view).
     ws_names = {s["function"]["name"] for s in REGISTRY.tool_schemas(profile="workspace")}
-    assert "waveflow_rag_search_examples" in ws_names
+    assert "waveflow_search" in ws_names
     assert "list_files" not in ws_names
     assert "read_file" not in ws_names
 
 
-def test_build_mcp_headless_registry_exposes_rag_tool(tmp_path):
+def test_build_mcp_headless_registry_exposes_knowledge_tools(tmp_path):
     hl_names = {s["function"]["name"] for s in REGISTRY.tool_schemas(profile="headless")}
-    assert "waveflow_rag_search_examples" in hl_names
+    assert "waveflow_search" in hl_names
 
 
 # ---------------------------------------------------------------------------
@@ -670,85 +644,4 @@ def test_registry_dispatch_get_components():
     result = REGISTRY.dispatch("waveflow_get_components", {})
     assert "components" in result
     assert "summary" in result
-
-
-# ---------------------------------------------------------------------------
-# waveflow_search_schema_examples
-# ---------------------------------------------------------------------------
-
-
-def test_search_schema_examples_missing_env_var_returns_error_dict(monkeypatch):
-    """When WAVEFLOW_EXAMPLES_VECTOR_STORE_ID is unset, a structured error
-    dict is returned (no exception raised)."""
-    monkeypatch.delenv("WAVEFLOW_EXAMPLES_VECTOR_STORE_ID", raising=False)
-
-    result = search_schema_examples(task="histogram command schema", keywords=["DataList"])
-
-    assert "summary" in result
-    assert "normalized_query" in result
-    assert "matches" in result
-    assert isinstance(result["matches"], list)
-    assert len(result["matches"]) == 0
-    assert "error" in result
-    assert "WAVEFLOW_EXAMPLES_VECTOR_STORE_ID" in result["error"]
-
-
-def test_search_schema_examples_normalized_query_includes_keywords(monkeypatch):
-    monkeypatch.delenv("WAVEFLOW_EXAMPLES_VECTOR_STORE_ID", raising=False)
-
-    result = search_schema_examples(
-        task="DMA command", keywords=["MemAddr", "DataList"]
-    )
-
-    assert "MemAddr" in result["normalized_query"]
-    assert "DataList" in result["normalized_query"]
-
-
-def test_search_schema_examples_normalized_query_no_keywords(monkeypatch):
-    monkeypatch.delenv("WAVEFLOW_EXAMPLES_VECTOR_STORE_ID", raising=False)
-
-    result = search_schema_examples(task="simple integer field")
-
-    assert result["normalized_query"] == "simple integer field"
-
-
-def test_search_schema_examples_decodes_uploaded_filename(monkeypatch):
-    class FakePage:
-        def __iter__(self):
-            yield type(
-                "FakeItem",
-                (),
-                {
-                    "filename": "examples__waveflow_path__conv2d__waveflow_path__conv2d.py",
-                    "attributes": {},
-                    "content": [type("Block", (), {"text": "snippet text"})()],
-                    "score": 0.75,
-                },
-            )()
-
-    class FakeVectorStores:
-        def search(self, vector_store_id, query, max_num_results):
-            return FakePage()
-
-    class FakeClient:
-        def __init__(self):
-            self.vector_stores = FakeVectorStores()
-
-    monkeypatch.setenv("WAVEFLOW_EXAMPLES_VECTOR_STORE_ID", "vs_test")
-    monkeypatch.setitem(__import__("sys").modules, "openai", type("FakeOpenAI", (), {"OpenAI": FakeClient}))
-
-    result = search_schema_examples(task="conv2d command")
-
-    assert result["matches"][0]["path"] == "examples/conv2d/conv2d.py"
-
-
-def test_registry_dispatch_rag_search_examples_missing_env(monkeypatch):
-    monkeypatch.delenv("WAVEFLOW_EXAMPLES_VECTOR_STORE_ID", raising=False)
-
-    result = REGISTRY.dispatch(
-        "waveflow_rag_search_examples",
-        {"task": "conv2d accelerator command", "keywords": ["DataList"], "k": 3},
-    )
-    assert "error" in result
-
 

@@ -34,7 +34,7 @@ from typing import Any, Callable
 from mcp.server.fastmcp import FastMCP
 
 from waveflow.mcp.components import get_components
-from waveflow.mcp.example_rag import search_schema_examples
+from waveflow.mcp.frames import waveflow_get_process, waveflow_list_frames
 from waveflow.mcp.knowledge import (
     waveflow_browse,
     waveflow_find_usage,
@@ -43,7 +43,7 @@ from waveflow.mcp.knowledge import (
     waveflow_list_examples,
     waveflow_search,
 )
-from waveflow.mcp.schema_tools import get_schema_draft_plan, validate_schema_from_file
+from waveflow.mcp.schema_tools import validate_schema_from_file
 
 
 # ---------------------------------------------------------------------------
@@ -226,32 +226,6 @@ class ToolRegistry:
 REGISTRY = ToolRegistry()
 
 REGISTRY.add(
-    name="waveflow_get_schema_draft_plan",
-    description=(
-        "Return a deterministic step-by-step workflow for drafting a new "
-        "waveflow schema from a natural-language request. This helper does "
-        "not search, rank, or recommend specific example IDs."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "task": {
-                "type": ["string", "null"],
-                "description": "Optional natural-language description of the schema the user wants to draft.",
-            },
-            "workspace_root": {
-                "type": ["string", "null"],
-                "description": "Optional workspace root path accepted for consistency with other helper tools.",
-            },
-        },
-        "required": ["task", "workspace_root"],
-        "additionalProperties": False,
-    },
-    fn=get_schema_draft_plan,
-    profiles={"workspace", "headless"},
-)
-
-REGISTRY.add(
     name="waveflow_validate_schema",
     description=(
         "Validate a waveflow schema source file and write a structured "
@@ -288,8 +262,9 @@ REGISTRY.add(
         "Includes all core schema classes (DataSchema, DataList, DataArray, "
         "DataField, IntField, FloatField, EnumField, MemAddr, IntEnum) and "
         "common design patterns with descriptions and keywords. "
-        "Call this first to select relevant keywords for "
-        "waveflow_rag_search_examples. Deterministic; no network access."
+        "Deterministic; no network access. To find the same vocabulary in "
+        "working code, use waveflow_find_usage; to find the page that "
+        "explains it, waveflow_search."
     ),
     parameters={
         "type": "object",
@@ -300,47 +275,6 @@ REGISTRY.add(
     fn=get_components,
     profiles={"workspace", "headless"},
 )
-
-REGISTRY.add(
-    name="waveflow_rag_search_examples",
-    description=(
-        "Search the OpenAI-hosted vector store of waveflow example corpus files. "
-        "Returns the top-k most relevant example snippets for the given task. "
-        "Requires WAVEFLOW_EXAMPLES_VECTOR_STORE_ID env var to be set. "
-        "Use waveflow_get_components first to obtain good keywords."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "task": {
-                "type": "string",
-                "description": "Natural-language description of the schema you want to build.",
-            },
-            "keywords": {
-                "type": ["array", "null"],
-                "items": {"type": "string"},
-                "description": (
-                    "Optional waveflow vocabulary keywords (from waveflow_get_components) "
-                    "to augment the search query."
-                ),
-            },
-            "k": {
-                "type": ["integer", "null"],
-                "description": "Maximum number of matches to return (default 5, max 20).",
-            },
-        },
-        "required": ["task", "keywords", "k"],
-        "additionalProperties": False,
-    },
-    fn=search_schema_examples,
-    profiles={"workspace", "headless"},
-)
-
-
-
-# ---------------------------------------------------------------------------
-# Knowledge tools (Stage 1): local search and read over the guide and examples
-# ---------------------------------------------------------------------------
 
 REGISTRY.add(
     name="waveflow_browse",
@@ -524,5 +458,57 @@ REGISTRY.add(
         "additionalProperties": False,
     },
     fn=waveflow_get_doc,
+    profiles={"workspace", "headless"},
+)
+
+
+# ---------------------------------------------------------------------------
+# Frames (Stage 3): the process an agent follows to build an accelerator
+# ---------------------------------------------------------------------------
+
+REGISTRY.add(
+    name="waveflow_list_frames",
+    description=(
+        "List the accelerator architectures Waveflow can guide you through "
+        "building ('frames'). Each entry gives the frame's name, what it is "
+        "for, the reference example it is modelled on, and the example "
+        "function specs that come with it. Call this if you do not already "
+        "know which frame you were asked for."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    fn=waveflow_list_frames,
+    profiles={"workspace", "headless"},
+)
+
+REGISTRY.add(
+    name="waveflow_get_process",
+    description=(
+        "Get the build process for an accelerator frame: the ordered steps, "
+        "which tool to use at each one, the two-stage freeze rule, and the "
+        "rules about generated files and hand-packing. Returns the frame's "
+        "specification alongside it. **Call this first** when asked to build "
+        "an accelerator, before reading any source or writing anything -- it "
+        "is the same text the scaffold writes as the project's AGENTS.md."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "frame": {
+                "type": ["string", "null"],
+                "description": (
+                    "Frame name from waveflow_list_frames. Defaults to "
+                    "'stream_inband'."
+                ),
+            },
+        },
+        "required": ["frame"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_get_process,
     profiles={"workspace", "headless"},
 )

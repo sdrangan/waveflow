@@ -42,10 +42,9 @@ _ATTR_LIST = re.compile(r"^\{:\s*\.\w+\s*\}\s*$")
 #: * ``plans/`` are working notes.  A plan routinely cites another that was finished and deleted, and
 #:   that is a true record of how the work went, not rot to repair.
 #: * ``examples/_archive/`` is archived by definition — its links point at the world as it was.
-#: * ``waveflow/mcp/corpus/`` is a snapshot corpus, regenerated wholesale rather than edited.
 #:
 #: Everything a reader is actually pointed at — ``docs/`` and the live example READMEs — is checked.
-_LINK_CHECK_SKIP = ("plans/", "examples/_archive/", "waveflow/mcp/corpus/")
+_LINK_CHECK_SKIP = ("plans/", "examples/_archive/")
 
 
 def _tracked_markdown() -> list[Path]:

@@ -1,0 +1,41 @@
+# The stream_inband frame: one architecture an AI can be asked to build in.
+#
+# A frame is a bundle with no code of its own -- this file, frame.md (the
+# specification), process.md (the ordered steps, also written as AGENTS.md by
+# the scaffold) and prompts/ (example function specs).  Every tool that reads
+# frames is frame-agnostic; adding one is adding a directory.
+
+name = "stream_inband"
+synopsis = """A host-launched streaming accelerator: parameters in a VitisRegMap, \
+ap_start, then a persistent loop over in-band DATA commands that ends on END, \
+halting with halted/error/tx_id on a framing or parameter error.  Each \
+transaction answers with a response header, the data burst, and a footer \
+carrying its per-transaction results.  Verified against an independent oracle, \
+against csim/cosim, and on cycle count against the pysim timing model."""
+
+# The example this frame is modeled on.  An agent should read it first; every
+# departure from it is a likely failure point.
+reference_examples = ["stream_inband"]
+
+# The architecture, in the terms `waveflow_find_usage` will answer for.
+module_kind = "HostActivated"
+testbench_kind = "SeqTB"
+control = "in-band command header on the input stream"
+parameters = "VitisRegMap"
+
+[docs]
+specification = "frame.md"
+process = "process.md"
+prompts = "prompts"
+
+[[prompts]]
+file = "01_gain_clip.md"
+synopsis = "Gain, round, clip, count clips.  Rounding and saturation stated bit-exactly."
+
+[[prompts]]
+file = "02_fir.md"
+synopsis = "FIR filter with up to 16 taps.  State, latency and streaming as measurable claims."
+
+[[prompts]]
+file = "03_cmag_peak.md"
+synopsis = "Complex float magnitude with a peak search.  Tolerance-based checking; near-ties and threshold edges."

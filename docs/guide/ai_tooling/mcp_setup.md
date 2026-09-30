@@ -57,6 +57,9 @@ You usually do not need to close and reopen VS Code unless you changed the envir
 
 ---
 
-## Semantic Example Search
+## Searching the Guide and Examples
 
-Optional OpenAI-backed semantic search for schema examples is documented separately in [rag.md](./rag.md).
+The server's search and read tools — how an assistant finds a page, a symbol
+in use, or a whole example — are documented in
+[Searching the Guide and Examples](./search.md). They are local and need no
+key or setup beyond an editable install.

@@ -57,8 +57,16 @@ def _prior(path: str, kind: str) -> float:
     return _PRIOR_SOURCE
 
 
-def _idx(root: str | None = None):
-    return get_index(Path(root) if root else None)
+def _idx():
+    """The process-wide index.
+
+    Deliberately takes no argument.  FastMCP builds each tool's JSON-Schema
+    from its **signature**, so anything these functions accept becomes a knob
+    the model can turn -- and a directory parameter would let it repoint the
+    index anywhere on the machine.  Tests and the CLI select a tree with the
+    ``WAVEFLOW_KB_ROOT`` environment variable instead.
+    """
+    return get_index()
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +74,7 @@ def _idx(root: str | None = None):
 # ---------------------------------------------------------------------------
 
 
-def waveflow_browse(section: str | None = None, root: str | None = None) -> dict[str, Any]:
+def waveflow_browse(section: str | None = None) -> dict[str, Any]:
     """The doc tree under *section*, with every page's title and summary.
 
     This is the semantic half of retrieval: the summaries were written for
@@ -74,7 +82,7 @@ def waveflow_browse(section: str | None = None, root: str | None = None) -> dict
     the meaning-matching that BM25 cannot.  ``section="examples"`` also lists
     the example cards.
     """
-    index = _idx(root)
+    index = _idx()
     sec = (section or "").strip().strip("/")
 
     if not sec:
@@ -159,7 +167,6 @@ def waveflow_search(
     scope: str | None = "all",
     k: int | None = 8,
     include_generated: bool | None = False,
-    root: str | None = None,
 ) -> dict[str, Any]:
     """BM25 over heading-sized chunks: the exact-words half of retrieval.
 
@@ -173,7 +180,7 @@ def waveflow_search(
     """
     scope = scope or "all"
     k = 8 if k is None else k
-    index = _idx(root)
+    index = _idx()
     if scope not in ("all", "docs", "examples"):
         return {"error": f"scope must be all|docs|examples, got {scope!r}"}
     k = max(1, min(int(k), 50))
@@ -232,7 +239,6 @@ def waveflow_search(
 def waveflow_find_usage(
     symbol: str,
     include_generated: bool | None = False,
-    root: str | None = None,
 ) -> dict[str, Any]:
     """Every place *symbol* is used, grouped by example.
 
@@ -241,7 +247,7 @@ def waveflow_find_usage(
     suggestions rather than an empty list, because the usual miss is a name
     remembered slightly wrong.
     """
-    index = _idx(root)
+    index = _idx()
     uses = index.usage.find(symbol)
     if not include_generated:
         tracked = index.corpus.tracked
@@ -278,14 +284,14 @@ def waveflow_find_usage(
 # ---------------------------------------------------------------------------
 
 
-def waveflow_list_examples(root: str | None = None) -> dict[str, Any]:
+def waveflow_list_examples() -> dict[str, Any]:
     """Every example card.
 
     The list is exactly the docs TOC (D5).  Directories under ``examples/``
     that no TOC page covers are deliberately absent: an example offered here is
     one an agent may copy, and the TOC is where that judgement already lives.
     """
-    index = _idx(root)
+    index = _idx()
     return {
         "examples": [
             c.to_dict(with_files=False)
@@ -294,11 +300,9 @@ def waveflow_list_examples(root: str | None = None) -> dict[str, Any]:
     }
 
 
-def waveflow_get_example(
-    name: str, file: str | None = None, root: str | None = None
-) -> dict[str, Any]:
+def waveflow_get_example(name: str, file: str | None = None) -> dict[str, Any]:
     """The card plus the file list, or one **whole** file from the example."""
-    index = _idx(root)
+    index = _idx()
     card = index.cards.get(name)
     if card is None:
         from difflib import get_close_matches
@@ -347,11 +351,9 @@ def waveflow_get_example(
 # ---------------------------------------------------------------------------
 
 
-def waveflow_get_doc(
-    path: str, heading: str | None = None, root: str | None = None
-) -> dict[str, Any]:
+def waveflow_get_doc(path: str, heading: str | None = None) -> dict[str, Any]:
     """A whole doc page, or one section of it."""
-    index = _idx(root)
+    index = _idx()
     rel = path.strip().lstrip("/")
     if rel not in index.corpus.pages:
         candidates = [p for p in index.corpus.pages if p.endswith("/" + rel) or p == rel]

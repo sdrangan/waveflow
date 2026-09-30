@@ -1,6 +1,13 @@
 # Plan: the accelerator-lab agent surface: knowledge search, process, scaffold, and action tools
 
-> **Status (2026-09-29): design plan, nothing built.** D1, D2 and D3 approved (all yes). Stage 1 is next.
+> **Status (2026-09-30): Stages 1, 2 and 3 built; D1 and D2 done.**
+> `waveflow/mcp/knowledge/` (six tools + CLI), the server `instructions`,
+> and `waveflow/mcp/frames/stream_inband/` with `waveflow_list_frames` /
+> `waveflow_get_process`.  The OpenAI RAG path, the committed corpus and
+> `waveflow_get_schema_draft_plan` are removed.  Stage 4 (the scaffold) and
+> the 89 doc summaries are next.  See
+> [accel_mcp_progress.md](accel_mcp_progress.md) for what happened, what the
+> plan got wrong, and the decisions waiting for review.
 
 ## Motivation
 

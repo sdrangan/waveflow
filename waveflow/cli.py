@@ -11,6 +11,8 @@ starting a server.
     waveflow kb examples
     waveflow kb example stream_inband --file poly.py
     waveflow kb doc docs/guide/custom_hooks/writing.md
+    waveflow frames
+    waveflow process stream_inband
 
 Output is JSON by default, so the CLI and the MCP tools return the same thing;
 ``--text`` prints the human-readable rendering instead.
@@ -19,9 +21,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
+from waveflow.mcp.frames import waveflow_get_process, waveflow_list_frames
 from waveflow.mcp.knowledge import (
     waveflow_browse,
     waveflow_find_usage,
@@ -98,6 +102,13 @@ def _render(cmd: str, data: dict[str, Any]) -> str:
             out.append(f"  build: {ex['build_script']}")
     elif cmd == "doc":
         return data["content"]
+    elif cmd == "frames":
+        for frame in data["frames"]:
+            out.append(f"{frame['name']:<18} {frame['synopsis']}")
+            for prompt in frame["prompts"]:
+                out.append(f"    {prompt['file']:<22} {prompt['synopsis']}")
+    elif cmd == "process":
+        return data["process"]
     return "\n".join(out)
 
 
@@ -112,7 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     kb = sub.add_parser("kb", help="search and read the guide and the examples")
     kb.add_argument("--text", action="store_true", help="human-readable output")
-    kb.add_argument("--root", help="repository root to index (default: this checkout)")
+    kb.add_argument(
+        "--root",
+        help=(
+            "repository root to index (default: this checkout). Sets "
+            "WAVEFLOW_KB_ROOT, which is also how the MCP server is pointed "
+            "at a different tree -- the tools themselves take no such "
+            "argument, so a model cannot repoint the index."
+        ),
+    )
     kbsub = kb.add_subparsers(dest="cmd", required=True)
 
     p = kbsub.add_parser("browse", help="the doc tree, with titles and summaries")
@@ -138,39 +157,73 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path")
     p.add_argument("--heading")
 
+    # `frames` and `process` sit beside `kb` rather than under it: they are
+    # the entry point for building something, not a way to look something up.
+    frames = sub.add_parser("frames", help="the accelerator architectures on offer")
+    frames.add_argument("--text", action="store_true")
+
+    process = sub.add_parser(
+        "process", help="the ordered steps for building in a frame"
+    )
+    process.add_argument("frame", nargs="?", default="stream_inband")
+    process.add_argument("--text", action="store_true")
+
     return parser
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
-    root = args.root
+    if args.group == "frames":
+        return waveflow_list_frames()
+    if args.group == "process":
+        return waveflow_get_process(args.frame)
+
+    if args.root:
+        os.environ["WAVEFLOW_KB_ROOT"] = args.root
+
     if args.cmd == "browse":
-        return waveflow_browse(args.section, root=root)
+        return waveflow_browse(args.section)
     if args.cmd == "search":
         return waveflow_search(
             args.query,
             scope=args.scope,
             k=args.k,
             include_generated=args.generated,
-            root=root,
         )
     if args.cmd == "usage":
-        return waveflow_find_usage(
-            args.symbol, include_generated=args.generated, root=root
-        )
+        return waveflow_find_usage(args.symbol, include_generated=args.generated)
     if args.cmd == "examples":
-        return waveflow_list_examples(root=root)
+        return waveflow_list_examples()
     if args.cmd == "example":
-        return waveflow_get_example(args.name, file=args.file, root=root)
+        return waveflow_get_example(args.name, file=args.file)
     if args.cmd == "doc":
-        return waveflow_get_doc(args.path, heading=args.heading, root=root)
+        return waveflow_get_doc(args.path, heading=args.heading)
     raise AssertionError(f"unhandled kb command {args.cmd!r}")
+
+
+def _utf8_stdout() -> None:
+    """Make stdout able to carry the docs.
+
+    Everything this command prints is documentation or source, and both are
+    full of ``->``-as-arrow, em dashes and box drawing.  A default Windows
+    console is cp1252, so ``waveflow process`` died with a UnicodeEncodeError
+    on character 5305 of its own output.  Replacing rather than failing: a
+    mangled arrow is a far better outcome than no process text at all.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _utf8_stdout()
     data = _dispatch(args)
     if args.text:
-        print(_render(args.cmd, data))
+        print(_render(getattr(args, "cmd", args.group), data))
     else:
         json.dump(data, sys.stdout, indent=2)
         sys.stdout.write("\n")
