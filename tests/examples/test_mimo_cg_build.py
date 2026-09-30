@@ -5,12 +5,18 @@ Seeds are fixed here and must never be changed to make a test pass (the plan's R
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
 
 from examples.mimo_cg.mimo_cg import (
+    CHUNK_BITS,
+    MAX_BITS,
+    MIN_ERRORS,
+    SNR_DB,
     Config,
+    all_configs,
     mmse_crossing_db,
     read_table,
     run_float_ber,
@@ -61,11 +67,16 @@ def test_simulate_point_is_a_pure_function_of_its_parameters():
 
 
 def test_results_do_not_depend_on_the_worker_count():
+    # -6 dB stops after the first chunk (every detector has >= 100 errors); 3 dB has too few
+    # errors per chunk and runs several chunks up to the budget.  Both stop paths are covered.
     configs = [Config(32, 4, "qpsk"), Config(64, 8, "16qam")]
-    snrs = [-6.0, 0.0]
-    serial = run_float_ber(configs, snrs, workers=1, max_bits=200_000)
-    parallel = run_float_ber(configs, snrs, workers=3, max_bits=200_000)
+    snrs = [-6.0, 3.0]
+    budget = 3 * CHUNK_BITS
+    serial = run_float_ber(configs, snrs, workers=1, max_bits=budget)
+    parallel = run_float_ber(configs, snrs, workers=3, max_bits=budget)
     assert serial == parallel
+    bits = {r["bits"] for r in serial}
+    assert min(bits) < budget and max(bits) >= budget > 2 * CHUNK_BITS
     assert [r["detector"] for r in serial[:7]] == [
         "zf",
         "mmse",
@@ -74,6 +85,41 @@ def test_results_do_not_depend_on_the_worker_count():
         "cg3",
         "cg4",
     ] + ["zf"]
+
+
+def test_committed_float_ber_table_is_the_paper_run():
+    path = PAPER_DATA / "float_ber.csv"
+    if not path.exists():
+        pytest.skip(f"{path} not built yet (python -m examples.mimo_cg.mimo_cg_build)")
+    header = path.read_text(encoding="utf-8").splitlines()[0]
+    assert f"max_bits={MAX_BITS}" in header and f"min_errors={MIN_ERRORS}" in header
+    rows = read_table(path)
+    assert (
+        len(rows) == sum(len(SNR_DB) * len(c.detectors) for c in all_configs()) == 7380
+    )
+    zf_theory = {
+        (int(r["M"]), int(r["K"]), r["modulation"]): float(r["zf_crossing_db"])
+        for r in read_table(PAPER_DATA / "zf_crossings.csv")
+    }
+    curves = defaultdict(list)
+    points = defaultdict(dict)
+    for r in rows:
+        key = (int(r["M"]), int(r["K"]), r["modulation"])
+        curves[key + (r["detector"],)].append(
+            {"rho_db": float(r["rho_db"]), "ber": float(r["ber"])}
+        )
+        points[key + (float(r["rho_db"]),)][r["detector"]] = r
+    for cfg in all_configs():
+        key = (cfg.M, cfg.K, cfg.modulation)
+        assert mmse_crossing_db(curves[key + ("mmse",)]) is not None, key
+        zf_sim = mmse_crossing_db(curves[key + ("zf",)])
+        assert abs(zf_sim - zf_theory[key]) <= 0.15, (key, zf_sim, zf_theory[key])
+        for rho in SNR_DB:
+            point = points[key + (float(rho),)]
+            errors = {d: int(r["bit_errors"]) for d, r in point.items()}
+            n_bits = int(point["mmse"]["bits"])
+            assert abs(errors[f"cg{cfg.K}"] - errors["mmse"]) <= 2, (key, rho)
+            assert n_bits >= MAX_BITS or min(errors.values()) >= MIN_ERRORS, (key, rho)
 
 
 def test_cg_at_nit_k_makes_the_same_decisions_as_exact_mmse():

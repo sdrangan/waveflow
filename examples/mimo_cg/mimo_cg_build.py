@@ -4,16 +4,22 @@ Step 1.4 of ``plans/mimo_cg/mimo_cg_paper_sims.md``.  Tables go to ``paper_data/
 figures go to ``docs/examples/mimo_cg/images/`` (committed).  Run from the repo root::
 
     python -m examples.mimo_cg.mimo_cg_build --list-steps
-    python -m examples.mimo_cg.mimo_cg_build --through float_figures --workers 8
+    python -m examples.mimo_cg.mimo_cg_build --through float_figures
     python -m examples.mimo_cg.mimo_cg_build --through float_figures --force   # re-run all
 
 ``--workers`` changes only the wall-clock time: every point is seeded by its parameters and
 simulated with single-threaded BLAS, so the tables are identical for any worker count.
+
+``--max-bits`` is for quick trials only.  The committed ``paper_data/float_ber.csv`` is the
+default budget (1e7 bits per point), which its provenance line records and
+``tests/examples/test_mimo_cg_build.py`` checks.  A changed parameter alone does not mark the
+step stale, so regenerate the committed table with ``--force`` and the default budget.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -36,6 +42,11 @@ from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli
 
 _SOURCE_DIR = Path(__file__).resolve().parent
+
+#: Default worker processes.  Results do not depend on it (tested), so the default uses the
+#: machine: a serial run of the full grid takes hours, and the DAG re-runs the tables whenever a
+#: model source file changes, even if only a docstring did.
+DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
 _SOURCES = {
     "mimo_link_source": "mimo_link.py",
     "detectors_source": "detectors.py",
@@ -73,7 +84,7 @@ class FloatBerStep(BuildStep):
     )
     consumes: ClassVar[list] = _MODEL
     produces: ClassVar[dict] = {"float_ber": Path("paper_data/float_ber.csv")}
-    params: ClassVar[dict] = {"workers": 1, "max_bits": MAX_BITS}
+    params: ClassVar[dict] = {"workers": DEFAULT_WORKERS, "max_bits": MAX_BITS}
 
     def run(self, config: BuildConfig, workers, max_bits, **_) -> dict:
         rows = run_float_ber(workers=workers, max_bits=max_bits)
@@ -111,7 +122,7 @@ class FloatRangesStep(BuildStep):
     )
     consumes: ClassVar[list] = _MODEL
     produces: ClassVar[dict] = {"float_ranges": Path("paper_data/float_ranges.csv")}
-    params: ClassVar[dict] = {"workers": 1}
+    params: ClassVar[dict] = {"workers": DEFAULT_WORKERS}
 
     def run(self, config: BuildConfig, workers, **_) -> dict:
         path = _paper_data(config, "float_ranges.csv")
@@ -169,7 +180,11 @@ def main() -> None:
         extra_args=[
             (
                 ("--workers",),
-                {"type": int, "default": 1, "help": "Parallel worker processes."},
+                {
+                    "type": int,
+                    "default": DEFAULT_WORKERS,
+                    "help": "Parallel worker processes (results do not depend on it).",
+                },
             ),
             (
                 ("--max-bits",),

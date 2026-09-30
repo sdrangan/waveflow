@@ -83,3 +83,20 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   for only one panel. None of those show in tests or checksums.
 - **Pick a statistical test's operating point from the theory table.** A point
   above the ZF crossing gives too few errors for a comparison to mean anything.
+
+## M1 review (2026-09-30)
+
+- **The DAG decides staleness from source-file timestamps.** A docstring-only edit
+  to `mimo_cg.py` or `detectors.py` re-runs the 30-minute tables. Batch edits to
+  model sources, and run `--status` before a build to see what will run.
+- **Intervals counted over channel blocks are too wide to compare detectors.**
+  They are valid, but at BER 1e-3 the 99.9% interval spans two orders of
+  magnitude. Compare detectors on identical samples (paired), and use
+  theory-crossing agreement as the accuracy evidence.
+- **One scale for every detector is not neutral.** Exact MMSE's μ mis-scales CG
+  iterates, because CG is nonlinear in its right-hand side, which leaves CG
+  slightly pessimistic at 2–3 iterations. A "same post-processing for all"
+  argument needs checking, not assuming.
+- **After stopping a background run, check for orphaned workers and verify the
+  outputs by hash.** `write_table` writes only at the end of a step, so a stopped
+  run left the committed tables intact.

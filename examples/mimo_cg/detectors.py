@@ -19,7 +19,12 @@ Unbiasing
 ---------
 MMSE and CG estimates are biased, ``E[x̂_k | x_k] = μ_k x_k``.  Before hard QAM slicing, each stream is
 divided by the exact ``μ_k = 1 − σ²[A⁻¹]_kk`` (:func:`mmse_bias`), the same scalar for exact
-MMSE and every CG iterate (plan §14).  A BER gap between them is then purely solver error.
+MMSE and every CG iterate (plan §14).  This μ is a **simulation-side genie**: it needs the
+floating-point ``A⁻¹``, which a CG receiver does not have.  It is exact for MMSE, but a CG
+iterate is a nonlinear function of its right-hand side, so μ slightly mis-scales low-iteration
+iterates for 16- and 64-QAM.  At 2–3 iterations CG's BER is about 7–12% pessimistic; from 4
+iterations on the effect is not measurable (M1 review, 2026-09-30).  QPSK and ZF are
+unaffected.
 
 Theory
 ------

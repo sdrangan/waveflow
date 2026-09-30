@@ -43,6 +43,10 @@ INK_SECONDARY = "#52514e"
 GRID = "#e4e3df"
 #: Blue ramp steps 250, 350, 450, 550, 650: ordinal, never lighter than 250 on a light surface.
 CG_RAMP = ("#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281")
+#: A marker per CG series (1, 2, 3, 4, K iterations), so the ramp survives print and grayscale.
+CG_MARKERS = ("o", "s", "^", "D", "v")
+#: Markers at every 4th SNR point (every 4 dB), so they identify a curve without cluttering it.
+MARK_EVERY = 4
 MOD_LABEL = {"qpsk": "QPSK", "16qam": "16-QAM", "64qam": "64-QAM"}
 
 STYLE = {
@@ -91,10 +95,19 @@ def _style_of(detector: str, K: int, k_label: bool) -> dict:
             "zorder": 4,
         }
     n = int(detector[2:])
+    slot = n - 1 if n <= 4 else 4
     if n <= 4:
-        return {"color": CG_RAMP[n - 1], "linestyle": "-", "label": f"CG, {n} it."}
-    label = "CG, K it." if k_label else f"CG, {n} it."
-    return {"color": CG_RAMP[4], "linestyle": "-", "label": label}
+        label = f"CG, {n} it."
+    else:
+        label = "CG, K it." if k_label else f"CG, {n} it."
+    return {
+        "color": CG_RAMP[slot],
+        "linestyle": "-",
+        "marker": CG_MARKERS[slot],
+        "markersize": 4.5,
+        "markevery": MARK_EVERY,
+        "label": label,
+    }
 
 
 def _panel(
@@ -195,7 +208,16 @@ def write_figures(
                 ncol=4,
                 fontsize=7,
             )
-            fig.tight_layout(rect=(0, 0, 1, 0.885))
+            fig.text(
+                0.5,
+                0.005,
+                "In the K = 4 column the 4-iteration curve (◇) is also the K-iteration curve.",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color=INK_SECONDARY,
+            )
+            fig.tight_layout(rect=(0, 0.025, 1, 0.885))
             written.append(_save(fig, out_dir / f"float_ber_{mod}.svg"))
     return written
 

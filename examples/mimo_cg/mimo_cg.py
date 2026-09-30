@@ -15,7 +15,9 @@ Monte Carlo design (plan §14)
 * Block fading: each channel realization carries ``NS = 32`` received vectors, so CG solves the
   multi-RHS system ``A X = HᴴY`` exactly as the hardware will.
 * All detectors see the same samples.  MMSE and CG estimates are divided by the exact μ
-  (:func:`~examples.mimo_cg.detectors.bias_from_system`) before hard slicing.
+  (:func:`~examples.mimo_cg.detectors.bias_from_system`) before hard slicing.  This μ is a
+  simulation-side genie that leaves CG slightly pessimistic at 2–3 iterations (see
+  :mod:`examples.mimo_cg.detectors`).
 * Stop rule per point: every detector has ≥ ``MIN_ERRORS`` bit errors, or ``MAX_BITS`` bits have
   been simulated.  Samples are drawn in fixed chunks of about ``CHUNK_BITS`` bits, and the rule
   is checked only at chunk boundaries, so a point's result is a pure function of its seed.
