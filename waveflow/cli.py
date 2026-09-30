@@ -14,6 +14,7 @@ starting a server.
     waveflow frames
     waveflow process stream_inband
     waveflow new-accel gain_clip --frame stream_inband
+    waveflow blind-test --prompt examples/mcp_test/tiny_test.md
 
 Output is JSON by default, so the CLI and the MCP tools return the same thing;
 ``--text`` prints the human-readable rendering instead.
@@ -116,6 +117,14 @@ def _render(cmd: str, data: dict[str, Any]) -> str:
         out.append(f"  from example: {data['source_example']}  frame: {data['frame']}")
         out.append("  read first:   " + ", ".join(data["read_first"]))
         out.append(f"  it runs now:  {data['next']}")
+    elif cmd == "blind-test":
+        out.append(
+            f"{data['phases']} run(s), {', '.join(data['models']) or '?'}, "
+            f"{data['tokens_in']:,} tokens in ({data['tokens_in_cached']:,} cached), "
+            f"{data['tokens_out']:,} out"
+        )
+        out.append(f"  the agent's work: {data['folder']}")
+        out.append(f"  read first:       {data['summary']}")
     return "\n".join(out)
 
 
@@ -183,6 +192,30 @@ def build_parser() -> argparse.ArgumentParser:
     accel.add_argument("--dir", dest="directory", help="default: ./<name>")
     accel.add_argument("--text", action="store_true")
 
+    blind = sub.add_parser(
+        "blind-test",
+        help="run a fresh Claude Code agent on a spec, unattended, and summarize what it did",
+    )
+    blind.add_argument("--prompt", help="the spec (.md); files it links to are copied too")
+    blind.add_argument("--resume", action="store_true",
+                       help="continue the interrupted or finished run in --folder (or the "
+                       "default folder of --prompt): same session, same settings")
+    blind.add_argument("--folder", help="a new, empty folder outside the Waveflow clone "
+                       "(default: <clone>/../waveflow_blind_tests/<spec name>)")
+    blind.add_argument("--message", help="the first message (default: build the spec in this folder)")
+    blind.add_argument("--approve", default="Approved. Continue.",
+                       help="reply sent when the agent stops for review (default: %(default)r)")
+    blind.add_argument("--no-approve", action="store_true", help="stop after the first run")
+    blind.add_argument("--rounds", type=int, default=1, help="approvals to send (default: 1)")
+    blind.add_argument("--model", help="Claude model (default: Claude Code's default)")
+    blind.add_argument("--allow", action="append", default=[],
+                       help="extra allowed tool, e.g. 'Bash(make:*)'; repeatable")
+    blind.add_argument("--permission-mode", help="default: acceptEdits")
+    blind.add_argument("--timeout", type=float, help="hours per run (default: 4)")
+    blind.add_argument("--force", action="store_true", help="reuse a non-empty folder / old log")
+    blind.add_argument("--silent", action="store_true", help="do not print the agent's log while it runs")
+    blind.add_argument("--text", action="store_true")
+
     return parser
 
 
@@ -194,6 +227,23 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.group == "new-accel":
         return waveflow_new_accel_project(
             args.name, frame=args.frame, directory=args.directory
+        )
+    if args.group == "blind-test":
+        from waveflow.mcp.blind_test import run_blind_test
+
+        return run_blind_test(
+            args.prompt,
+            args.folder,
+            message=args.message,
+            approve=None if args.no_approve else args.approve,
+            rounds=args.rounds,
+            model=args.model,
+            extra_allowed=args.allow,
+            permission_mode=args.permission_mode,
+            timeout=None if args.timeout is None else args.timeout * 3600,
+            force=args.force,
+            silent=args.silent,
+            resume=args.resume,
         )
 
     if args.root:
