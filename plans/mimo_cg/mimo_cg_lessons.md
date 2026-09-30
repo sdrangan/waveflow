@@ -67,3 +67,8 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   `int.bit_count()`). Write new code that way from the start.
 - **Black 26 warns "Python 3.12 cannot parse code formatted for Python 3.15".**
   The warning is harmless as long as `black --check` reports the files unchanged.
+- **Near convergence, CG's rounding sets any "equals" tolerance.** Two correct CG
+  implementations (gemm vs gemv, or 1 vs 32 columns in one gemm) agree to about
+  1e-15 early on, but only to about their own convergence error (up to 1.6e-10
+  here) at nit = K. Compare iterates tightly before convergence and loosely at
+  it, or compare each against the exact solve.
