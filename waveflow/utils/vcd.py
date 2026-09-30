@@ -115,13 +115,17 @@ def binary_str_to_numeric(
         # Unsigned integer conversion
         value = int(bin_str, 2)
     elif dtype == 'float':
-        # Float conversion (assuming IEEE 754 format)
+        # IEEE 754: reinterpret the word's bits.  Viewing an unsigned integer
+        # of the same width avoids serializing to bytes, so there is no byte
+        # order to get wrong (the old big-endian to_bytes + native frombuffer
+        # byte-swapped every float on a little-endian host).
+        int_value = int(bin_str, 2)
         if wid == 32:
-            int_value = int(bin_str, 2)
-            value = np.frombuffer(int_value.to_bytes(4, byteorder='big'), dtype=np.float32)[0]
+            value = np.array([int_value], dtype=np.uint32).view(np.float32)[0]
         elif wid == 64:
-            int_value = int(bin_str, 2)
-            value = np.frombuffer(int_value.to_bytes(8, byteorder='big'), dtype=np.float64)[0]
+            value = np.array([int_value], dtype=np.uint64).view(np.float64)[0]
+        else:
+            raise ValueError(f"Float conversion supports widths 32 and 64, not {wid}.")
     else:
         raise ValueError(f"Unsupported data type: {dtype}")
     return value

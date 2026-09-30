@@ -155,7 +155,7 @@ This keeps host-side register access aligned with kernel-side ergonomics while p
 
 A `VitisRegMap` is a `RegMap` subclass that reproduces the s_axilite control layout Vitis HLS generates. The user only declares their own kernel-specific fields; the control block is added automatically, and the [`VitisRegMapMMIFSlave`](#vitisregmapmmifslave) manages the control bits (it clears `ap_done` on launch and sets it when the kernel returns).
 
-The control block occupies the first 16 bytes, and **user fields start at `0x10` on an 8-byte stride** — Vitis gives each 32-bit scalar argument a data word plus a control/reserved word:
+The control block occupies the first 16 bytes, and **user fields start at `0x10`**:
 
 | Offset | Contents |
 |--------|----------|
@@ -163,9 +163,21 @@ The control block occupies the first 16 bytes, and **user fields start at `0x10`
 | `0x04` | `gier` — Global Interrupt Enable Register |
 | `0x08` | `ier` — IP Interrupt Enable Register |
 | `0x0C` | `isr` — IP Interrupt Status Register |
-| `0x10` | first user field (`0x14` reserved), then `0x18`, `0x20`, … |
+| `0x10` | user fields, placed by the rule below |
 
-The four `ap_*` signals are **bits of one word**, not registers of their own. See [Bit-packed fields](../interface/primitive/regmap.md#bit-packed-fields) for the mechanism, and [Fidelity](#fidelity-what-is-and-is-not-modelled) for what the model does not reproduce.
+The four `ap_*` signals are **bits of one word**, not registers of their own.
+
+Each user field goes, in declaration order, to the **lowest free address at or after `0x10`** that meets its alignment. The footprint depends on what the field is, counted in 4-byte slots:
+
+| Field | Footprint | Alignment |
+|-------|-----------|-----------|
+| Input scalar (`RW`, `W`, …) | `ceil(W/32)` data slots + 1 control slot (`reserved`) | 4 bytes |
+| Output scalar (`R`) | **twice** that: data, control (`ap_vld`), then an undocumented gap of equal size | 4 bytes |
+| Array (`DataArray`, `cpp_storage="raw"`, 32-bit elements) | a memory region of `next_pow2(4·n)` bytes | its own size |
+
+So `int x, a, b` then `int& y` land at `0x10`, `0x18`, `0x20`, `0x28` — the familiar 8-byte stride — but only because nothing follows the output. A field after an output skips the output's gap, a 64-bit scalar steps by 12 bytes rather than 16, and because placement is first fit, a small scalar can fill the hole an aligned array leaves *ahead* of fields declared before it. The rule is measured, not documented by AMD: `tests/hw/test_regmap_vitis_layout.py` pins it against 15 probe kernels and, under `-m vitis`, re-synthesizes them and diffs the model against the generated `ADDR_*` localparams.
+
+An `RW` field the kernel *writes* is the one case the model gets wrong by construction: Vitis turns it into an in/out port with separate `<name>_i` and `<name>_o` registers, while `VitisRegMap` treats every `RW` field as an input. See [Bit-packed fields](../interface/primitive/regmap.md#bit-packed-fields) for the mechanism, and [Fidelity](#fidelity-what-is-and-is-not-modelled) for what the model does not reproduce.
 
 ```python
 class VitisRegMap(RegMap):
@@ -189,7 +201,9 @@ POLY_REGMAP = VitisRegMap({
 })
 # offset_of("ap_start") == 0x00 with bit_offset_of("ap_start") == 0
 # offset_of("ap_done")  == 0x00 with bit_offset_of("ap_done")  == 1
-# offset_of("status_clear") == 0x10, offset_of("halted") == 0x18, etc.
+# offset_of("status_clear") == 0x10 (input: 8 bytes)
+# offset_of("halted") == 0x18, "error" == 0x28, "tx_id" == 0x38 (outputs: 16 bytes each)
+# offset_of("coeffs") == 0x50 (16-byte region, 16-byte aligned)
 ```
 
 `VitisRegMap` requires `bitwidth=32` — the Vitis s_axilite control bus is 32 bits wide and the control block is defined on 4-byte words.
@@ -388,9 +402,9 @@ Renders a table suitable for inclusion in design docs:
 | 0x00   | 1   | ap_done      | R      | 1     | Kernel finished              |
 | 0x10   | —   | status_clear | W1C    | 1     | Clear halted/error           |
 | 0x18   | —   | halted       | R      | 1     | 1 = halted on error          |
-| 0x20   | —   | error        | R      | 8     | Last error code              |
-| 0x28   | —   | tx_id        | R      | 16    | TX id of halted txn          |
-| 0x30   | —   | coeffs[4]    | RW     | 4×32  | Default coefficients         |
+| 0x28   | —   | error        | R      | 8     | Last error code              |
+| 0x38   | —   | tx_id        | R      | 16    | TX id of halted txn          |
+| 0x50   | —   | coeffs[4]    | RW     | 4×32  | Default coefficients         |
 ```
 
 ### C header

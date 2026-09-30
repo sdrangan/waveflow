@@ -24,6 +24,7 @@ from waveflow.utils.vcd import (
     AximmBeatType,
     SigInfo,
     VcdParser,
+    binary_str_to_numeric,
     clock_sample_times,
     split_framed_word,
     vcd_trace,
@@ -1264,3 +1265,74 @@ class TestExtractAxisBurstsWithoutTlast:
         bursts, _ = vp.extract_axis_bursts("top.clk", sigs)
         assert bursts[0]["data"].dtype == np.uint64
         assert [int(x) for x in bursts[0]["data"]] == [_AXIS_W0, _AXIS_W1]
+
+
+# ---------------------------------------------------------------------------
+# Tests: float decoding (binary_str_to_numeric, dtype="float")
+#
+# The decoder used to serialize the word big-endian and read it back as a native
+# (little-endian) float, so every float came back byte-swapped.  The round trips
+# compare bit patterns, not values, so -0.0 and subnormals are checked exactly.
+# ---------------------------------------------------------------------------
+
+_FLOAT_CASES = [0.0, -0.0, 0.5, -1.25, 1e-30, 3.4e38, float("inf"), float("-inf")]
+
+
+class TestFloatDecode:
+    @pytest.mark.parametrize("v", _FLOAT_CASES + [1e-45])  # 1e-45 = float32 subnormal
+    def test_float32_round_trip_bit_exact(self, v):
+        bits = np.array([v], dtype=np.float32).view(np.uint32)[0]
+        got = binary_str_to_numeric(format(bits, "032b"), "float", 32)
+        assert np.array([got], dtype=np.float32).view(np.uint32)[0] == bits
+
+    @pytest.mark.parametrize("v", _FLOAT_CASES + [5e-324])  # 5e-324 = float64 subnormal
+    def test_float64_round_trip_bit_exact(self, v):
+        bits = np.array([v], dtype=np.float64).view(np.uint64)[0]
+        got = binary_str_to_numeric(format(bits, "064b"), "float", 64)
+        assert np.array([got], dtype=np.float64).view(np.uint64)[0] == bits
+
+    @pytest.mark.parametrize("wid, utype, ftype", [(32, np.uint32, np.float32),
+                                                   (64, np.uint64, np.float64)])
+    def test_nan_decodes_to_nan(self, wid, utype, ftype):
+        bits = np.array([np.nan], dtype=ftype).view(utype)[0]
+        assert np.isnan(binary_str_to_numeric(format(bits, f"0{wid}b"), "float", wid))
+
+    def test_leading_zeros_dropped(self):
+        # VCD writers drop leading zeros; a positive float's sign bit is zero.
+        assert binary_str_to_numeric(format(0x3F800000, "b"), "float", 32) == 1.0
+
+    def test_unsupported_width_raises(self):
+        with pytest.raises(ValueError, match="32 and 64"):
+            binary_str_to_numeric("0" * 16, "float", 16)
+
+
+_F_HALF = format(int(np.array([0.5], dtype=np.float32).view(np.uint32)[0]), "b")
+_F_NEG = format(int(np.array([-1.25], dtype=np.float32).view(np.uint32)[0]), "b")
+
+_FLOAT_VCD = f"""\
+$timescale 1ns $end
+$scope module top $end
+$var wire 32 ! f [31:0] $end
+$upscope $end
+$enddefinitions $end
+#0
+b0 !
+#10
+b{_F_HALF} !
+#20
+b{_F_NEG} !
+"""
+
+
+class TestFloatThroughParser:
+    def test_float_signal_values(self, tmp_path):
+        p = tmp_path / "float.vcd"
+        p.write_text(_FLOAT_VCD)
+        vp = VcdParser(VCDVCD(str(p)))
+        vp.add_signal("top.f[31:0]", numeric_type="float")
+        si = vp.sig_info["top.f[31:0]"]
+        si.get_values()
+        # A nonzero sample keeps SigInfo from reclassifying the bus as two-level uint.
+        assert si.numeric_type == "float"
+        assert list(si.numeric_values) == [0.0, 0.5, -1.25]
+        assert si.disp_values == ["0.000", "0.500", "-1.250"]
