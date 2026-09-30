@@ -3,6 +3,7 @@ title: Python Simulation
 parent: Histogram with shared memory
 nav_order: 3
 has_children: false
+summary: "Running the histogram in SimPy before ever invoking Vitis, and checking the counts against the numpy golden. Unlike the register-map example, where the host talks to the kernel over one AXI-Lite link, here there are two participants on the memory side — the host controller and a MemoryMod standing in for shared DRAM."
 ---
 
 # Python simulation

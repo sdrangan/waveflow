@@ -3,6 +3,7 @@ title: Guide
 parent: Waveflow
 nav_order: 2
 has_children: true
+summary: "How the guide is organised: by layer — schema, vectorization, simulation, interfaces, flows, code generation, hooks — with the last three being one arc read three times from three positions. Model it in Python, generate what a tool can write from that model, hand-write only what no generator can guess. The same StreamIF appears in all three, so looking for streams in one section alone finds a hole that is really material in another."
 ---
 # Guide
 

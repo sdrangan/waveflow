@@ -2,6 +2,7 @@
 title: RTL simulation
 parent: Composite kernel interleaver
 nav_order: 6
+summary: "The rung that proves the one thing only RTL can show for a free-running design: the six-stage pipeline runs to completion without deadlock, and running, is bit-exact. Nothing but the in-band descriptor throttles these un-paced tasks, so a wiring bug that dropped a token would not give a wrong answer — it would hang, and the pysim can miss that class entirely."
 ---
 
 # RTL simulation

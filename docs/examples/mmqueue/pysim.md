@@ -3,6 +3,7 @@ title: Python simulation
 parent: VMAC with an AXI-MM command queue
 nav_order: 5
 has_children: false
+summary: "Wiring the host and the accelerator to one shared memory through an interconnect, and running the whole command-queue protocol as a discrete-event simulation. This is where numerical parity against the golden is established, before any C++ exists."
 ---
 
 # Python simulation

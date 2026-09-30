@@ -2,6 +2,7 @@
 title: RTL simulation
 parent: Free-running memory copy
 nav_order: 6
+summary: "The final rung: the synthesized DUT driven through real handshakes by the generated harness, one clock at a time. The cycle-accurate measurement of the actual RTL, and the number you would quote. Two toolchain steps stand between the Python model and the run."
 ---
 
 # RTL simulation

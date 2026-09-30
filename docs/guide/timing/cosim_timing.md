@@ -2,6 +2,7 @@
 title: Cosim timing
 parent: Timing Analysis Tools
 nav_order: 8
+summary: "Comparing the Python timing estimate against the cycle count Vitis cosim reports, as a build step with a recorded verdict. Three steps chain: extract the Python timing, parse the cosim report, and compare within a tolerance — always writing timing_verdict.json, and raising after writing it when the difference exceeds the tolerance."
 ---
 
 # Cosim timing

@@ -3,6 +3,7 @@ title: AXI4 Memory-Mapped Timing Analysis
 parent: Timing Analysis Tools
 nav_order: 6
 has_children: false
+summary: "Pulling AXI4 memory-mapped activity out of a VCD: add_aximm_signals loads the read and write address, data and handshake nets from one prefix — including the burst-length and last-beat signals on an AXI4-Full interface — and the accepted read and write bursts come out as data. Worked on the histogram example's m_axi_gmem master."
 ---
 
 # AXI4 Memory-Mapped Analysis

@@ -3,6 +3,7 @@ title: System simulation
 parent: Register mapped simple function
 nav_order: 3
 has_children: false
+summary: "Simulating the whole system in Python before writing any testbench: a host SimObj running concurrently with the kernel over real AXI-Lite transactions — write the inputs, assert ap_start, poll ap_done, read the result. The only path here that exercises the register-map protocol, and Python-only by nature rather than by omission, because a Vitis C++ testbench is a single straight-line main with nothing for that concurrency to lower onto."
 ---
 # System simulation
 

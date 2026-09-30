@@ -2,6 +2,7 @@
 title: RTL timing and the comparison
 parent: Composite kernel interleaver
 nav_order: 10
+summary: "Measuring the actual RTL timing from a trace and putting it beside the pysim's modelled timeline; they agree on the steady-state period to about 1%. Every stage fires once per job except the reader, which fires twice — P then X — so the pipeline is reader-bound: moving both vectors over one m_axi bus is the critical path."
 ---
 # RTL timing and the comparison
 

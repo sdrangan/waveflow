@@ -3,6 +3,7 @@ title: Vitis HLS Code Generation
 parent: Histogram with shared memory
 nav_order: 4
 has_children: false
+summary: "The same class that ran in SimPy is the source for the Vitis kernel. Waveflow emits everything mechanical — the m_axi signature, the interface pragmas, the multi-buffer burst calls, the validation-status plumbing — and leaves only the datapath hooks as hand-written C++. Walks the generated kernel, the generated testbench, and the seam between the two kinds of code."
 ---
 
 # Vitis HLS Code Generation

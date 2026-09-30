@@ -2,6 +2,7 @@
 title: Testbench (Python)
 parent: Block FIR with state
 nav_order: 5
+summary: "The harder half: writing a check that can actually catch a state bug. Computing the expected output the same way the DUT does — block by block, carrying the tail — is nearly worthless, because a bug in how the carry is stored reproduces itself in the check. The gate on this page found a bug C-synthesis was perfectly happy with."
 ---
 # Testbench — how do you know stateful hardware is right?
 

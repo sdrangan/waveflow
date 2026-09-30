@@ -3,6 +3,7 @@ title: Reading the trace
 parent: A memory reached three ways
 nav_order: 5
 has_children: false
+summary: "Reading the VCD the RTL run produced: what the design did, whether it did anything it was not allowed to, how long the memory really takes to answer, and how that compares with the Python model. Unlike the other timing pages here the lanes are the memory's own pins, so the picture shows the memory being used rather than inferring it from the streams at the boundary."
 ---
 
 # Reading the trace

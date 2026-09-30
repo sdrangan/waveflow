@@ -3,6 +3,7 @@ title: C and RTL Simulation
 parent: Histogram with shared memory
 nav_order: 5
 has_children: false
+summary: "Driving the generated kernel through Vitis: C-simulation checked bit-exact against the numpy golden across four coverage cases, C-synthesis to RTL, RTL co-simulation for a measured cycle count and a waveform, and extraction of the AXI-MM read and write bursts from that waveform."
 ---
 
 # C and RTL Simulation

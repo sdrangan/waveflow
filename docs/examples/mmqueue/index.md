@@ -3,6 +3,7 @@ title: VMAC with an AXI-MM command queue
 parent: Examples
 nav_order: 9
 has_children: true
+example_dir: examples/vmac
 summary: "Control moved off the stream and into memory: the host appends commands to a ring buffer in shared memory and a free-running accelerator dequeues and executes them over a single m_axi master. The vehicle is VMAC, a complex fixed-point vector-MAC with three element-wise operations and an optional row reduce. Being revised — the command-queue interface it demonstrates is current, but the accelerator itself is due a rebuild on the interleaver's foundation, so read it for the queue rather than for VMAC."
 ---
 

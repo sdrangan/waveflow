@@ -3,6 +3,7 @@ title: A memory reached three ways
 parent: Examples
 nav_order: 9.5
 has_children: true
+example_dir: examples/bram_access
 summary: "One true-dual-port memory that lives OUTSIDE the Vitis kernel, as hand-written Verilog joined by a generated wrapper, reached by three transactions over two free-running tasks: WRITE a payload in, COMPUTE over the words in place, READ them back. Command-driven, over DataList messages that generate the C++ headers the kernel compiles against; every transaction answers, because a write has no return path and a refused read is indistinguishable from a quiet stream. WRITE and COMPUTE share one port on one task, so what it costs to read a word you are about to write is a measurement in one waveform rather than an argument."
 ---
 

@@ -3,6 +3,7 @@ title: Writing the kernel hook
 parent: VMAC with an AXI-MM command queue
 nav_order: 7
 has_children: false
+summary: "The one method whose C++ is hand-written, walked as a specific datapath. The general hook contract — the templated signature, how a hook plugs into the generated kernel, and the csynth gotchas — belongs to the guide; this page is the VMAC datapath those pages leave out."
 ---
 
 # Writing the kernel hook — `vmac_compute_impl.tpp`

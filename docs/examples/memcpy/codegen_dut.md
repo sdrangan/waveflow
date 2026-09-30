@@ -2,6 +2,7 @@
 title: DUT codegen
 parent: Free-running memory copy
 nav_order: 4
+summary: "Lowering the three-leaf graph to a free-running Vitis HLS top. Explains what an hls::task is: a body the runtime re-fires on its own whenever its input streams have data, so there is no host handshake and the stages overlap — which is why sequence, read and write become three tasks wired by FIFOs rather than one sequential function."
 ---
 
 # DUT codegen — the graph becomes an `hls::task` top

@@ -3,6 +3,7 @@ title: The Python model
 parent: VMAC with an AXI-MM command queue
 nav_order: 4
 has_children: false
+summary: "The reference page of the example: the one-golden accelerator anatomy. A single author-written numerical golden that both the SimPy simulation and the synthesized kernel are checked against, wrapped in a synthesizable shell that owns memory and timing."
 ---
 
 # The Python model — one-golden anatomy

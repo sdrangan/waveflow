@@ -2,6 +2,7 @@
 title: Python Golden Model
 parent: Streaming polynomial
 nav_order: 1
+summary: "The first of the five groups: the input vectors, the SimPy run and a structured cycle-count measurement. Everything downstream is verified against the artifacts this group produces, and the same DataSchema definitions that drive the simulation also generate the C++ headers — one source of truth for the wire format."
 ---
 
 # Python golden model

@@ -2,6 +2,7 @@
 title: Vitis Pattern
 parent: Build System
 nav_order: 4
+summary: "The four-step Vitis pipeline — C-sim, validate against the Python simulation's binaries, C-synth, and inspect the synthesis report — documented as a pattern to copy rather than as shipped steps. The framework primitives underneath are real and reusable: the toolchain invocation and the csynth.xml parser."
 ---
 
 # Vitis Pattern

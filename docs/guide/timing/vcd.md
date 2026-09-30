@@ -3,6 +3,7 @@ title: Extracting VCD Files
 parent: Timing Analysis Tools
 nav_order: 3
 has_children: false
+summary: "Vitis cosim writes its waveforms to a proprietary .wdb; this re-runs the existing RTL simulation and exports an open VCD instead, so the per-cycle waveform is readable from Python and from other tools. Covers the parameters the helper needs, where to find each one in the directory structure Vitis leaves behind, and the cosim_design -trace_level the export depends on having been set."
 ---
 
 # Extracting VCD Files

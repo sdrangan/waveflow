@@ -3,6 +3,7 @@ title: Streaming Memory Kernels
 parent: Memory Modeling
 nav_order: 4
 has_children: false
+summary: "MemRStream and MemWStream give memory a command-based transactional interface: a kernel sends a read or write command on a stream and the component runs the burst. A lone kernel could own its m_axi port directly — the command stream earns its keep once memory is shared, because commands in, completions out and correlation by an opaque tag is most of what a crossbar needs."
 ---
 
 # Streaming Memory Kernels

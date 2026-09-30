@@ -3,6 +3,7 @@ title: AXI4-Stream Timing Analysis
 parent: Streaming polynomial
 nav_order: 6
 has_children: false
+summary: "Analysing the kernel's two AXI4-Stream interfaces from an existing VCD, without rerunning co-simulation: decoding the command header, the sample bursts and the response, and reading the per-burst timing off the waveform. The AXI-Lite register map is not in the VCD analysis — its status is observed at end of simulation from the JSON the run writes."
 ---
 
 # Polynomial AXI4-Stream Timing Analysis

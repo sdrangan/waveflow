@@ -3,6 +3,7 @@ title: Vitis HLS Code Generation
 parent: Register mapped simple function
 nav_order: 5
 has_children: false
+summary: "What the framework generates and what it leaves you: the AXI-Lite slave, the interface pragmas, the top-level signature and the testbench harness are mechanical and automatic; the compute body is a small hand-written .cpp beside the Python source. The same codegen step every example uses, wired twice — once for the kernel, once for the testbench."
 ---
 # Vitis HLS Code Generation
 

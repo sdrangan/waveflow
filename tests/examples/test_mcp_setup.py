@@ -1,157 +1,99 @@
-"""
-Tests for waveflow_mcp_setup: --build-rag flag behaviour (no network calls).
+"""Tests for ``waveflow_mcp_setup``: rendering and writing ``.vscode/mcp.json``.
+
+This file used to test ``--build-rag`` and nothing else.  That flag built an
+OpenAI vector store and wrote its ID into the config; both went away with
+decision D1, and the knowledge tools that replaced them need no key, no
+service and no environment variable -- so there is nothing left for the
+generated config to carry beyond the interpreter path.
+
+What is still worth pinning is the part that can destroy a file: the command
+refuses to overwrite an existing config without ``--force``, and ``--dry-run``
+writes nothing at all.
 """
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from waveflow.scripts.waveflow_mcp_setup import (
-    build_parser,
     main,
     render_mcp_config,
     write_mcp_config,
 )
 
 
+@pytest.fixture
+def no_interpreter_probe():
+    """Skip the subprocess that imports ``waveflow.mcp.server``."""
+    with patch("waveflow.scripts.waveflow_mcp_setup.validate_python_interpreter"):
+        yield
+
+
 # ---------------------------------------------------------------------------
-# render_mcp_config with vector_store_id
+# render / write
 # ---------------------------------------------------------------------------
 
 
-def test_render_mcp_config_without_vector_store_id():
-    """Rendered config should not contain env key when no vector_store_id given."""
-    config_str = render_mcp_config(python_path="/usr/bin/python3")
-    config = json.loads(config_str)
+def test_render_points_the_server_at_the_given_interpreter():
+    config = json.loads(render_mcp_config(python_path="/usr/bin/python3"))
     server = config["servers"]["waveflow"]
-    assert "env" not in server or "WAVEFLOW_EXAMPLES_VECTOR_STORE_ID" not in server.get("env", {})
+    assert server["command"] == "/usr/bin/python3"
+    assert server["args"] == ["-m", "waveflow.mcp.server"]
 
 
-def test_render_mcp_config_with_vector_store_id():
-    """Rendered config should include WAVEFLOW_EXAMPLES_VECTOR_STORE_ID in env."""
-    config_str = render_mcp_config(python_path="/usr/bin/python3", vector_store_id="vs_test123")
-    config = json.loads(config_str)
-    server = config["servers"]["waveflow"]
-    assert "env" in server
-    assert server["env"]["WAVEFLOW_EXAMPLES_VECTOR_STORE_ID"] == "vs_test123"
+def test_render_carries_no_api_environment():
+    """Nothing the server needs comes from the environment any more (D1)."""
+    config = json.loads(render_mcp_config(python_path="/usr/bin/python3"))
+    assert "env" not in config["servers"]["waveflow"]
 
 
-# ---------------------------------------------------------------------------
-# write_mcp_config with vector_store_id
-# ---------------------------------------------------------------------------
-
-
-def test_write_mcp_config_with_vector_store_id(tmp_path):
-    """Written file should contain the vector store ID when provided."""
-    output_path = write_mcp_config(
-        workspace=tmp_path,
-        python_path="/usr/bin/python3",
-        vector_store_id="vs_written999",
-    )
+def test_write_creates_the_vscode_config(tmp_path):
+    output_path = write_mcp_config(workspace=tmp_path, python_path="/usr/bin/python3")
+    assert output_path == tmp_path / ".vscode" / "mcp.json"
     config = json.loads(output_path.read_text())
-    assert config["servers"]["waveflow"]["env"]["WAVEFLOW_EXAMPLES_VECTOR_STORE_ID"] == "vs_written999"
+    assert config["servers"]["waveflow"]["command"] == "/usr/bin/python3"
+
+
+def test_write_refuses_to_clobber_without_force(tmp_path):
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "mcp.json").write_text('{"servers": {"mine": {}}}')
+
+    with pytest.raises(FileExistsError):
+        write_mcp_config(workspace=tmp_path, python_path="/usr/bin/python3")
+
+    assert "mine" in json.loads((vscode / "mcp.json").read_text())["servers"]
+
+
+def test_write_with_force_replaces_it(tmp_path):
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "mcp.json").write_text('{"servers": {"mine": {}}}')
+
+    write_mcp_config(workspace=tmp_path, python_path="/usr/bin/python3", force=True)
+    config = json.loads((vscode / "mcp.json").read_text())
+    assert "waveflow" in config["servers"]
 
 
 # ---------------------------------------------------------------------------
-# --build-rag flag: missing OPENAI_API_KEY
+# main
 # ---------------------------------------------------------------------------
 
 
-def test_main_build_rag_missing_api_key_exits_nonzero(tmp_path, monkeypatch, capsys):
-    """main() should return 1 and print a clear error when OPENAI_API_KEY is absent."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    with patch("waveflow.scripts.waveflow_mcp_setup.validate_python_interpreter"):
-        with patch("sys.argv", ["waveflow_mcp_setup", "--workspace", str(tmp_path), "--build-rag"]):
-            result = main()
-
-    assert result == 1
-    captured = capsys.readouterr()
-    assert "OPENAI_API_KEY" in captured.err
+def test_main_writes_the_config(tmp_path, no_interpreter_probe):
+    argv = ["waveflow_mcp_setup", "--workspace", str(tmp_path)]
+    with patch("sys.argv", argv):
+        assert main() == 0
+    assert (tmp_path / ".vscode" / "mcp.json").exists()
 
 
-# ---------------------------------------------------------------------------
-# --build-rag flag: successful build (mocked)
-# ---------------------------------------------------------------------------
+def test_main_dry_run_prints_and_writes_nothing(tmp_path, no_interpreter_probe, capsys):
+    argv = ["waveflow_mcp_setup", "--workspace", str(tmp_path), "--dry-run"]
+    with patch("sys.argv", argv):
+        assert main() == 0
 
-
-def test_main_build_rag_writes_vector_store_id(tmp_path, monkeypatch):
-    """main() with --build-rag should call build_example_rag and persist the returned ID."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
-
-    with patch("waveflow.scripts.waveflow_mcp_setup.validate_python_interpreter"):
-        with patch(
-            "waveflow.scripts.waveflow_mcp_setup._build_example_rag",
-            return_value="vs_mocked_abc",
-        ):
-            with patch("sys.argv", ["waveflow_mcp_setup", "--workspace", str(tmp_path), "--build-rag"]):
-                result = main()
-
-    assert result == 0
-    mcp_json = tmp_path / ".vscode" / "mcp.json"
-    assert mcp_json.exists()
-    config = json.loads(mcp_json.read_text())
-    assert config["servers"]["waveflow"]["env"]["WAVEFLOW_EXAMPLES_VECTOR_STORE_ID"] == "vs_mocked_abc"
-
-
-# ---------------------------------------------------------------------------
-# --build-rag + --dry-run: no file written, config printed with env
-# ---------------------------------------------------------------------------
-
-
-def test_main_build_rag_dry_run_does_not_write_file(tmp_path, monkeypatch, capsys):
-    """--dry-run should print the config containing the env var but not write any file."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
-
-    with patch("waveflow.scripts.waveflow_mcp_setup.validate_python_interpreter"):
-        with patch(
-            "waveflow.scripts.waveflow_mcp_setup._build_example_rag",
-            return_value="vs_dry_run_id",
-        ):
-            with patch(
-                "sys.argv",
-                ["waveflow_mcp_setup", "--workspace", str(tmp_path), "--build-rag", "--dry-run"],
-            ):
-                result = main()
-
-    assert result == 0
-    # File must NOT have been created
-    assert not (tmp_path / ".vscode" / "mcp.json").exists()
-    # The printed output must contain the vector store ID
-    captured = capsys.readouterr()
-    config = json.loads(captured.out)
-    assert config["servers"]["waveflow"]["env"]["WAVEFLOW_EXAMPLES_VECTOR_STORE_ID"] == "vs_dry_run_id"
-
-
-# ---------------------------------------------------------------------------
-# --build-rag + --force: overwrites existing file
-# ---------------------------------------------------------------------------
-
-
-def test_main_build_rag_force_overwrites_existing(tmp_path, monkeypatch):
-    """--force allows overwriting an existing .vscode/mcp.json."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
-
-    vscode_dir = tmp_path / ".vscode"
-    vscode_dir.mkdir()
-    existing = vscode_dir / "mcp.json"
-    existing.write_text('{"servers": {}}')
-
-    with patch("waveflow.scripts.waveflow_mcp_setup.validate_python_interpreter"):
-        with patch(
-            "waveflow.scripts.waveflow_mcp_setup._build_example_rag",
-            return_value="vs_forced_id",
-        ):
-            with patch(
-                "sys.argv",
-                ["waveflow_mcp_setup", "--workspace", str(tmp_path), "--build-rag", "--force"],
-            ):
-                result = main()
-
-    assert result == 0
-    config = json.loads(existing.read_text())
-    assert config["servers"]["waveflow"]["env"]["WAVEFLOW_EXAMPLES_VECTOR_STORE_ID"] == "vs_forced_id"
+    assert not (tmp_path / ".vscode").exists()
+    config = json.loads(capsys.readouterr().out)
+    assert "waveflow" in config["servers"]

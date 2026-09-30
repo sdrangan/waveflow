@@ -2,6 +2,7 @@
 title: C-Synth Resource Estimation
 parent: Streaming polynomial
 nav_order: 4
+summary: "Running C-synthesis and parsing the report into a per-loop pipeline and initiation-interval table plus a resource summary. The step fails the build when any reported loop has an initiation interval above 1, so a pipelining regression stops the build rather than being noticed later."
 ---
 
 # C-synth resource estimation

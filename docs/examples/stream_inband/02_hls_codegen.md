@@ -2,6 +2,7 @@
 title: HLS Code Generation
 parent: Streaming polynomial
 nav_order: 2
+summary: "Deriving the C++ sources — the kernel, the testbench and the per-schema utility headers — from the same Python definitions the golden uses. The surprising part is that the kernel and the testbench come out of the same step type, differing only by a flag: both are a Python method lowered to C++."
 ---
 
 # HLS code generation

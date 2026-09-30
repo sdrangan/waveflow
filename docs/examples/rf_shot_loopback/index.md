@@ -4,6 +4,7 @@ parent: Examples
 nav_order: 9.8
 has_children: true
 audience: python
+example_dir: examples/rf_shot_loopback
 summary: "The worked example for the RfShotTx / RfShotRx pair with absolute indexing on: one converter carrying both directions, a path with a bulk delay between them, and both buffers indexing absolutely. The channel delay is then a difference of memory addresses — read off a window header and one sample value, with no timestamps and no correlator. Covers why the reading aliases at one buffer, why an address cannot tell a path delay from an epoch offset, and why the two loads are spaced more than a pass apart."
 ---
 

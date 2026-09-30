@@ -2,6 +2,7 @@
 title: Testbench codegen
 parent: Free-running memory copy
 nav_order: 5
+summary: "The same lowering applied to the testbench graph. XSI loads the synthesized Verilog into a shared library C++ can step one clock at a time, but gives nothing to drive it with; the harness is that missing half — a bus-functional model per DUT port, plus the clock loop."
 ---
 
 # Testbench codegen — the graph becomes an XSI harness

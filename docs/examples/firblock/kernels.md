@@ -2,6 +2,7 @@
 title: The two kernels
 parent: Block FIR with state
 nav_order: 6
+summary: "Two hand-written task bodies that compute bit-identical results and differ only in how much work an iteration does: one output per iteration, or a whole transport word at once. One boolean parameter picks between them, so the pair is a quality-of-results probe rather than two designs."
 ---
 # The two kernels — one filter, two unrolling structures
 

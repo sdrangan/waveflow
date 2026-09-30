@@ -2,6 +2,7 @@
 title: Cross-firing state
 parent: Block FIR with state
 nav_order: 2
+summary: "Using HwState for real: two storages with different lifetimes in one module, interacting — the coefficients, loaded once and held, and the carry tail, rewritten every firing. That pairing is the thing a single-storage example cannot show, and it is why this design exists."
 ---
 # Cross-firing state — two flavours in one module
 

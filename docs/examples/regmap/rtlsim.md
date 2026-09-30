@@ -3,6 +3,7 @@ title: C and RTL Simulation
 parent: Register mapped simple function
 nav_order: 6
 has_children: false
+summary: "Driving Vitis through the whole flow: C-simulation checked bit-exact against the Python golden, C-synthesis with a resource and pipeline-II report, RTL co-simulation for a measured cycle count, and a validation step comparing that count against the Python prediction within a tolerance. The payoff is one JSON verdict that makes the cycle-approximate-Python claim concrete for this kernel."
 ---
 # C and RTL Simulation
 

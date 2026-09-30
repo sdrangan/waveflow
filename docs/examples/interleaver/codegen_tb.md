@@ -2,6 +2,7 @@
 title: Testbench codegen
 parent: Composite kernel interleaver
 nav_order: 5
+summary: "The DUT is free-running and owns its own m_axi bundles, and Vitis cosim can only drive a kernel it can call — so the testbench is a generated C++ BFM that drives the synthesized RTL in Vivado xsim, one clock at a time. Generated from the same testbench graph as the Python golden, and both write one scenario, so the RTL run cannot drift from the model it is checked against."
 ---
 
 # Testbench codegen

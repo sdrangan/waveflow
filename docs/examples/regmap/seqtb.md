@@ -3,6 +3,7 @@ title: Sequential execution
 parent: Register mapped simple function
 nav_order: 4
 has_children: false
+summary: "The second way to simulate: one sequential program, a SeqTB, that reads the inputs, invokes the kernel and writes the result. Because that is exactly the shape of a Vitis C++ testbench, the same main runs in three places — Python, C-simulation and RTL co-simulation — so the testbench that confirms the design here is the one that carries it into Vitis."
 ---
 # Sequential execution
 

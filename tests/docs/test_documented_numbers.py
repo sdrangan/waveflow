@@ -740,8 +740,8 @@ _SRC_ROOTS = ("waveflow", "examples", "tests")
 #: * ``tests/docs`` is documentation *about* documentation — and it defeated this check the first
 #:   time it ran, because the docstring below names the very phantom symbol the check exists to
 #:   catch, which put that name into the set and made the check pass.
-#: * ``_archive`` and ``mcp/corpus`` are snapshots; a name surviving only there is not an API.
-_SCAN_SKIP = ("_archive", "mcp/corpus", "tests/docs")
+#: * ``_archive`` is a snapshot; a name surviving only there is not an API.
+_SCAN_SKIP = ("_archive", "tests/docs")
 
 
 @pytest.fixture(scope="module")

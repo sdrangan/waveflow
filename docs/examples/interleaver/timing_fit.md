@@ -2,6 +2,7 @@
 title: Fitting the timing model
 parent: Composite kernel interleaver
 nav_order: 11
+summary: "Recovering the compute stage's latency and initiation interval from the RTL by the direct method: run the kernel at a range of sizes, record the cycles, fit a line, and ship the result to the platform library so any build loads it. The half of the calibration story mem_copy has none of, because the gather is the design's own kernel — read it as a recipe for fitting your own stage."
 ---
 # Fitting the timing model
 

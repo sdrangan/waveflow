@@ -2,6 +2,7 @@
 title: Module Overview
 parent: Free-running memory copy
 nav_order: 1
+summary: "What the module does — copy a run of words between memory regions — and why the simplest possible design is worth building: it exercises the whole free-running flow with nothing computed, so the structure is the subject rather than the maths. A data mover is also a real block: it is what a DMA engine in an SoC does."
 ---
 # Memory Copy
 

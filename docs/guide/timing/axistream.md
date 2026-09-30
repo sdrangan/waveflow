@@ -3,6 +3,7 @@ title: AXI4-Stream Timing Analysis
 parent: Timing Analysis Tools
 nav_order: 5
 has_children: false
+summary: "Pulling AXI4-Stream activity out of a VCD: add_axiss_signals loads a stream's TDATA, TVALID, TREADY and TLAST from one name prefix, and the result plots on a timing diagram or extracts as accepted beats. Worked on the polynomial example's two streams."
 ---
 
 # AXI4-Stream Analysis

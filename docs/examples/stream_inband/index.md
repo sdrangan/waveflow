@@ -3,6 +3,7 @@ title: Streaming polynomial
 parent: Examples
 nav_order: 3
 has_children: true
+example_dir: examples/stream_inband
 summary: "Control moves off the register map and onto the data stream. A polynomial accelerator packetizes a variable-length AXI4-Stream with TLAST, carries its command in-band as a header ahead of the samples rather than in registers, and runs as a persistent loop over back-to-back transactions that halts cleanly on an END command. Kernel and testbench are both generated from the one Python source, and the RTL cosim cycle count is checked against the pysim estimate."
 ---
 # Streaming polynomial

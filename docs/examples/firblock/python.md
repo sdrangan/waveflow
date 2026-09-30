@@ -2,6 +2,7 @@
 title: Python
 parent: Block FIR with state
 nav_order: 4
+summary: "Building the design in code: the two commands, the two custom leaves, and the composite that wires them to the framework mem-streams. The build is a BuildDag behind the standard CLI, so every stage is a --through target, and the first checkpoint runs the golden with no toolchain in seconds."
 ---
 # Python Model
 

@@ -2,6 +2,7 @@
 title: BFM Testbenches
 parent: Build System
 nav_order: 7
+summary: "At the XSI rung a C++ testbench drives the generated RTL cycle by cycle. The bus models are framework code and the assembly is generated, so what you write is the scenario and the golden, in Python on either side of the run — never per-cycle bus code. Lists which model serves which port."
 ---
 
 # BFM testbenches
