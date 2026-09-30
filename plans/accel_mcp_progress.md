@@ -32,9 +32,9 @@ tests/poly/test_timing_analysis.py::TestOutputSamples::test_y_values
 | Plans committed | done | `e1d28d8` |
 | Baseline + D5 list | done | `371a115` |
 | 1 — Stage 1: search and read | **done** | `8e74fe5` |
-| 2 — D1 removal (OpenAI RAG, committed corpus) | **done** | `HASH_234` |
-| 3 — Stage 2: wire the server | **done** | `HASH_234` |
-| 4 — Stage 3: frames, process, D2 removal | **done** | `HASH_234` |
+| 2 — D1 removal (OpenAI RAG, committed corpus) | **done** | `fd84023` |
+| 3 — Stage 2: wire the server | **done** | `fd84023` |
+| 4 — Stage 3: frames, process, D2 removal | **done** | `fd84023` |
 | 5 — Stage 4: `new-accel` scaffold | **not started** | |
 | 6 — doc summaries (89 pages) | **not started** | |
 
