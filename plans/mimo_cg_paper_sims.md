@@ -1,8 +1,8 @@
 # Plan: simulations for the CG massive-MIMO DSE paper
 
-**Status:** Ready (approved by the user 2026-09-29)
+**Status:** In progress (Phase 0 started 2026-09-30)
 **Complexity:** L3 Complex. Many components (link simulator, fixed-point division, bit-exact CG, three hardware blocks, performance models, DSE), several open design choices, and new tests throughout; everything is undoable with git. Scores: scope 3 · clarity 3 · novelty 3 · dependencies 3 · verification 3 · risk 2
-**Created:** 2026-09-29 · **Updated:** 2026-09-29
+**Created:** 2026-09-29 · **Updated:** 2026-09-30
 **Plan file:** `plans/mimo_cg_paper_sims.md` · **Lessons learned:** `plans/mimo_cg_lessons.md` (created in step 0.1)
 
 > **For the agent executing this plan:** read *Rules for the doer* first. The
@@ -503,7 +503,7 @@ identity, with the trailer (Rules 9).
 
 | # | Step | Inputs | Exit condition (verifiable) | Verify with | Checkpoint | Status |
 |---|---|---|---|---|---|---|
-| 0.1 | Create branch `paper/mimo-cg` from `main`; create `plans/mimo_cg_lessons.md`; commit this plan and the lessons file | this plan | On the branch; last commit authored and committed by `ali-rasteh <ali.rasteh1@gmail.com>`, with the trailer; working tree shows only ` M .gitignore` (and the ignored `docs/repo_docs/`) | `git branch --show-current`; `git log -1 --format='%an <%ae> / %cn <%ce>%n%b'`; `git status --short` | commit | ☐ |
+| 0.1 | Create branch `paper/mimo-cg` from `main`; create `plans/mimo_cg_lessons.md`; commit this plan and the lessons file | this plan | On the branch; last commit authored and committed by `ali-rasteh <ali.rasteh1@gmail.com>`, with the trailer; working tree shows only ` M .gitignore` (and the ignored `docs/repo_docs/`) | `git branch --show-current`; `git log -1 --format='%an <%ae> / %cn <%ce>%n%b'`; `git status --short` | commit | ☑ |
 | 0.2 | Create `examples/mimo_cg/.gitignore` ignoring `gen/`, `include/`, `*_proj/`, `results/`, `logs/`. Commit the §8 probe sources verbatim to `examples/mimo_cg/tools/xczu48dr_probe/` and run the probe there. Run `test_amd_tools` (expect exit 1, "TOO OLD", 2024.1) | §8 | Probe prints `PROBE_CSYNTH_OK`; `git check-ignore -v examples/mimo_cg/tools/xczu48dr_probe/probe_proj` reports the example `.gitignore`; `git check-ignore examples/mimo_cg/paper_data/x.csv` reports nothing; both outputs pasted into §15 | the commands themselves | commit | ☐ |
 | 0.3 | Re-check the existing bit-exact conformance on 2024.1: `pytest -m vitis -rs tests/examples/test_fixedpoint_conformance.py tests/examples/test_complex_conformance.py tests/hw/test_fixpoint_vitis.py -q` | — | AC0.1: N passed, 0 skipped, or every failure root-caused, recorded in §14 and accepted by the user | pytest summary with `-rs` | commit (§15, lessons) | ☐ |
 | 0.4 👁 | Add a "Superseded" banner and the corrected algorithm (§9) to `plans/cg.md`; refresh the build-vs-have table in `plans/paper_cg_dse_vision.md` from §7 and link this plan | §7, §9 | AC0.2 | run the §9 script with `.venv/bin/python -`; user reviews the diff | commit | ☐ |
@@ -661,6 +661,7 @@ identity, with the trailer (Rules 9).
 | Risk | Overlap with `plans/vitis_l1_hwmodule.md` (Amir Reza Kiani) and the planned VMAC rebuild | coordinate at gate 4.0 |
 | Risk | Broad `.gitignore` rules silently drop committed data (`*.json`, `*summary*`, `hls/`) | CSV only, `cpp/` not `hls/`, `git check-ignore -v` before relying on a path |
 | Risk | Held-out model accuracy misses the AC5 targets | vision's per-block + physics-prior approach; decide at 5.0 whether to densify or relax, with a §14 record |
+| Decision | Execute mode: deviation policy confirmed as 2 tested hypotheses, then stop; an independent reviewer agent checks each milestone against its acceptance criteria | user, 2026-09-30 |
 | Open question | Step-level detail for Phases 4–6 | refined at gates 4.0, 5.0, 6.0 |
 
 ## 15. Progress log
@@ -670,6 +671,8 @@ identity, with the trailer (Rules 9).
 | 2026-09-29 | planning | Readiness gate READY (21 ✅, 1 ⚠️ dirty tree accepted); xczu48dr csynth probe passed | §8 | none |
 | 2026-09-29 | planning | Independent review: 2 blocking and 12 should-fix findings plus 3 suggestions; all applied (§14) | this revision | none |
 | 2026-09-29 | planning | User approved the written plan; status set to Ready | user approval | none |
+| 2026-09-30 | gate | Readiness re-run: READY (21 ✅, 1 ⚠️ the accepted `.gitignore` edit); user said Start | §8 command, exit 0 | none |
+| 2026-09-30 | 0.1 | The user had already created `paper/mimo-cg` from `main` (`b3d0487`) and committed this plan as `c04c029`; the doer added `plans/mimo_cg_lessons.md` (seeded with the setup and planning lessons) and set Status to In progress | this step's commit; `git log`, `git status` | branch and plan commit done by the user, not the doer |
 
 ## 16. Completion report
 
