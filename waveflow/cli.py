@@ -13,6 +13,7 @@ starting a server.
     waveflow kb doc docs/guide/custom_hooks/writing.md
     waveflow frames
     waveflow process stream_inband
+    waveflow new-accel gain_clip --frame stream_inband
 
 Output is JSON by default, so the CLI and the MCP tools return the same thing;
 ``--text`` prints the human-readable rendering instead.
@@ -26,6 +27,7 @@ import sys
 from typing import Any
 
 from waveflow.mcp.frames import waveflow_get_process, waveflow_list_frames
+from waveflow.mcp.scaffold import waveflow_new_accel_project
 from waveflow.mcp.knowledge import (
     waveflow_browse,
     waveflow_find_usage,
@@ -109,6 +111,11 @@ def _render(cmd: str, data: dict[str, Any]) -> str:
                 out.append(f"    {prompt['file']:<22} {prompt['synopsis']}")
     elif cmd == "process":
         return data["process"]
+    elif cmd == "new-accel":
+        out.append(f"Wrote {len(data['files'])} files to {data['directory']}")
+        out.append(f"  from example: {data['source_example']}  frame: {data['frame']}")
+        out.append("  read first:   " + ", ".join(data["read_first"]))
+        out.append(f"  it runs now:  {data['next']}")
     return "\n".join(out)
 
 
@@ -168,6 +175,14 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("frame", nargs="?", default="stream_inband")
     process.add_argument("--text", action="store_true")
 
+    accel = sub.add_parser(
+        "new-accel", help="scaffold an accelerator project that runs as generated"
+    )
+    accel.add_argument("name", help="lower_snake_case; becomes the module and kernel name")
+    accel.add_argument("--frame", default=None, help="default: stream_inband")
+    accel.add_argument("--dir", dest="directory", help="default: ./<name>")
+    accel.add_argument("--text", action="store_true")
+
     return parser
 
 
@@ -176,6 +191,10 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return waveflow_list_frames()
     if args.group == "process":
         return waveflow_get_process(args.frame)
+    if args.group == "new-accel":
+        return waveflow_new_accel_project(
+            args.name, frame=args.frame, directory=args.directory
+        )
 
     if args.root:
         os.environ["WAVEFLOW_KB_ROOT"] = args.root

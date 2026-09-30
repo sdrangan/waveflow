@@ -39,3 +39,75 @@ synopsis = "FIR filter with up to 16 taps.  State, latency and streaming as meas
 [[prompts]]
 file = "03_cmag_peak.md"
 synopsis = "Complex float magnitude with a peak search.  Tolerance-based checking; near-ties and threshold edges."
+
+# ---------------------------------------------------------------------------
+# The scaffold template
+# ---------------------------------------------------------------------------
+#
+# `waveflow new-accel` copies the reference example out of the checkout and
+# renames it, rather than copying a committed `template/` directory.  A
+# committed template is a 1,300-line duplicate of `examples/stream_inband`
+# that rots the first time the example changes, and this plan's first
+# principle is derived, not hand-labeled.
+#
+# `name_token` is the identifier every name in the example is built from.  It
+# is not the example's name: the example called `stream_inband` names
+# everything `poly`.
+
+[template]
+source_example = "stream_inband"
+name_token = "poly"
+
+# Directories and file types of the example that are its *results*, not its
+# source.  Copying a worked run into a fresh project is how someone ends up
+# comparing their own design against the example's numbers.
+skip_dirs = ["__pycache__", "gen", "include", "logs", "results", "vcd", "data", "src"]
+skip_suffixes = [".ipynb", ".bin", ".vcd", ".json", ".csv", ".log"]
+
+# The compute, named by anchor rather than found by pattern.
+#
+# The scaffold removes exactly the function and leaves everything else --
+# framing, TLAST rules, error codes, the response header and footer, the
+# register map, the DAG -- because those are what the frame specifies and
+# what a fresh project must still get right on its own.  Cutting them out
+# would make the agent reinvent the one part the reference exists to show.
+#
+# Anchors are literal lines, matched after stripping, and applied to the
+# example's text BEFORE the rename, so they read in the example's own names.
+# `{name}` in a replacement becomes the new project's name.
+
+[[template.stub]]
+file = "poly.py"
+description = "the Horner evaluation in PolyAccel.evaluate"
+start = "y = np.zeros_like(samp_in, dtype=np.float32)"
+end = "power *= samp_in"
+replacement = """
+# TODO: your function goes here.  Identity for now, so that a fresh
+# {name} project runs end to end before you have written anything.
+#
+# Whatever replaces this has to be the same function the C++ hook in
+# {name}_evaluate_impl.tpp computes, bit for bit -- and both have to
+# match spec/oracle.py, which is written independently of both.
+y = samp_in.astype(np.float32)
+"""
+
+[[template.stub]]
+file = "poly_evaluate_impl.tpp"
+description = "the Horner helper"
+start = "static inline float eval_poly_horner(const float coeff[4], float x) {"
+end = "}"
+replacement = """
+// TODO: your function goes here.  The hook below is an identity
+// pass-through, so a fresh {name} project builds, runs and co-simulates
+// unmodified -- and so the first thing you debug is your own arithmetic
+// rather than the framing around it.
+"""
+
+[[template.stub]]
+file = "poly_evaluate_impl.tpp"
+description = "the call to the Horner helper"
+start = "y_lane[k] = eval_poly_horner(coeffs, x_lane[k]);"
+end = "y_lane[k] = eval_poly_horner(coeffs, x_lane[k]);"
+replacement = """
+y_lane[k] = x_lane[k];  // TODO: identity stub -- your function here
+"""

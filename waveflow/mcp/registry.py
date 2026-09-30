@@ -43,6 +43,7 @@ from waveflow.mcp.knowledge import (
     waveflow_list_examples,
     waveflow_search,
 )
+from waveflow.mcp.scaffold import waveflow_new_accel_project
 from waveflow.mcp.schema_tools import validate_schema_from_file
 
 
@@ -510,5 +511,45 @@ REGISTRY.add(
         "additionalProperties": False,
     },
     fn=waveflow_get_process,
+    profiles={"workspace", "headless"},
+)
+
+
+REGISTRY.add(
+    name="waveflow_new_accel_project",
+    description=(
+        "Scaffold a new accelerator project that runs before it is edited: "
+        "the reference example for the frame, renamed, with the compute "
+        "stubbed to an identity pass-through and spec/ stubs added. Writes "
+        "AGENTS.md (the frame's process) and a copy of frame.md into the "
+        "project. Use this instead of copying an example by hand -- the "
+        "rename touches schemas, class names, the C++ namespace, the kernel "
+        "name and the build DAG. After it returns, `python <name>_build.py "
+        "--through py_sim` passes with no edits; confirm that before writing "
+        "anything."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": (
+                    "Project name, lower_snake_case. Becomes the Python "
+                    "module, the C++ kernel name and the namespace."
+                ),
+            },
+            "frame": {
+                "type": ["string", "null"],
+                "description": "Frame name. Defaults to 'stream_inband'.",
+            },
+            "directory": {
+                "type": ["string", "null"],
+                "description": "Where to write it. Defaults to ./<name>.",
+            },
+        },
+        "required": ["name", "frame", "directory"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_new_accel_project,
     profiles={"workspace", "headless"},
 )
