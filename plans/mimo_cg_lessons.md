@@ -39,3 +39,15 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   `--force`.
 - **`FixedField` is capped at 64 bits** (int64 storage). Dot-product
   accumulators grow by log2(length) bits.
+
+## Phase 0 (2026-09-30)
+
+- **Don't pass `-q` to pytest in this repo.** `pyproject.toml` already sets
+  `addopts = "-q ..."`, so another `-q` makes it `-qq`, which drops the
+  "N passed" summary line. Use `-rs` without `-q` when the pass and skip counts
+  are the evidence.
+- **The bit-exact conformance suites hold on Vitis 2024.1.** 89 passed, 0 skipped
+  in about 9 minutes (roughly 6 s per C-simulation), so the `-m vitis` regression
+  in §11 is cheap enough to run at every milestone.
+- **Vitis creates a `logs/` directory beside the TCL it runs.** The example
+  `.gitignore` covers it; any new directory that runs Vitis needs the same.
