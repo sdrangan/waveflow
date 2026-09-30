@@ -49,5 +49,13 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **The bit-exact conformance suites hold on Vitis 2024.1.** 89 passed, 0 skipped
   in about 9 minutes (roughly 6 s per C-simulation), so the `-m vitis` regression
   in §11 is cheap enough to run at every milestone.
-- **Vitis creates a `logs/` directory beside the TCL it runs.** The example
-  `.gitignore` covers it; any new directory that runs Vitis needs the same.
+- **Vitis creates a `logs/` directory in its working directory.** Waveflow's
+  runner defaults that directory to the TCL's folder (`waveflow/toolchain/toolchain.py`,
+  `run_vitis_hls`), so in practice the two coincide. The example `.gitignore`
+  covers it; any new directory that runs Vitis needs the same.
+- **The readiness gate leaves `xelab.log` and `xelab.pb` in the repo root.** The
+  `xelab --version` probe writes them to the current directory. Both are
+  gitignored; delete them after the gate.
+- **Log overlapping steps as a deviation.** Preparing one step while another's long
+  run is in progress breaks "one step at a time" even when the commits stay in
+  order. Record it in §15.

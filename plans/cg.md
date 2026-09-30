@@ -10,9 +10,10 @@ has_children: false
 > **Superseded (2026-09-30).** The implementation work moves to `examples/mimo_cg/`, under
 > [`plans/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md). The code below has been corrected.
 > As first written it did not converge (relative error near 1.5 at every iteration count),
-> for four reasons: it had `X = X - P*alpha` for `X + P*alpha` and `P = R - P*beta` for
-> `R + P*beta`, its `rnorm = rnorm` never stored the new norms, and `X` started as a
-> vector rather than an n×n matrix.
+> for three reasons, each enough alone: it had `X = X - P*alpha` for `X + P*alpha` and
+> `P = R - P*beta` for `R + P*beta`, and its `rnorm = rnorm` never stored the new norms.
+> Two smaller fixes: `X` now starts as an n×n matrix rather than a vector (harmless before,
+> since broadcasting widened it), and the function now returns `X`.
 
 ##  IP definition
 
@@ -24,7 +25,7 @@ The python equivalent algorithm is as follows:
 ```python
 def cginv(Q, nit):
     """
-    Computes the matrix inverse for a nxn positive semi-definite matrix `Q`.
+    Computes the matrix inverse for a nxn Hermitian positive-definite matrix `Q`.
 
     Parameters
     ----------

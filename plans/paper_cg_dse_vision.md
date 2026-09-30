@@ -158,7 +158,7 @@ simulation to the full DSE and brute-force baseline.
 | Shared memory + queue (CG state) | **built** — `MemoryMod` (`waveflow/hw/memory.py`, formerly `MemComponent`) + `AXIMMQueue` (`waveflow/hw/aximm_queue.py`) |
 | Systolic matmul block | **new** (application-level) — nothing systolic exists; `waveflow/vitis_l1` has a bit-exact, real-valued GEMV model only (`plans/vitis_l1_hwmodule.md`, S1 onward open) |
 | CG control | **new** (application-level) — the `plans/cg.md` sketch was corrected on 2026-09-30 |
-| Cycle-approximate model | **built** — `TimingModel`/`LinCalibModel` and the `CollectTimingStep`/`FitTimingStep` DAG steps, with per-example fits; the only shipped platform is `zynq7020_bfm_100mhz` |
+| Cycle-approximate model | **built** — `TimingModel`/`LinCalibModel` and the `CollectTimingStep`/`FitTimingStep` DAG steps, with per-example fits; every committed calibration platform is xc7z020 (the package's `zynq7020_bfm_100mhz`, plus the libraries in `examples/fir_block` and `examples/vecmult`), and none targets xczu48dr |
 | Resource-approximate model | **built** (`plans/resource_model.md`, phases A–E) — `InspectSynthStep`, per-part device rules (DSP48E1 and DSP48E2), `VitisResourceModel`, `compose`, held-out validation on `fir_block`. Uncertainty- or decision-aware sampling is not built |
 | DSE / build / conformance harness | **built** — `build_dag` + `run_dag_cli`, `SweepRunner`/`ParamGrid` (`waveflow/build/sweep.py`), the conformance harnesses |
 
