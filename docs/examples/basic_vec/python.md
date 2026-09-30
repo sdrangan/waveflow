@@ -2,6 +2,7 @@
 title: The Python model
 parent: Basic vector arithmetic
 nav_order: 1
+summary: "The golden model: one vectorized multiply-accumulate per numeric kind, a*b + c over DataArrays with no per-element Python loop. The same expression in integer, float and fixed point, with the operators deriving the result width — 8-bit times 8-bit gives 16, plus a carry bit for the add."
 ---
 # The Python golden model
 

@@ -3,6 +3,7 @@ title: Python model
 parent: Register mapped simple function
 nav_order: 2
 has_children: false
+summary: "Declaring the control plane in Python: each register is a RegField with its data schema and access mode, and Waveflow adds the Vitis control block automatically. The one declaration drives the Python simulation, the generated HLS pragmas and the host-side offset map, so those three cannot disagree about where a register lives."
 ---
 
 # Python model

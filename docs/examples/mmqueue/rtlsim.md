@@ -3,6 +3,7 @@ title: C and RTL simulation
 parent: VMAC with an AXI-MM command queue
 nav_order: 8
 has_children: false
+summary: "Turning the Python model into real hardware and checking it, with every check against the same single execute golden. When Vitis disagrees the rule is to fix the kernel, never to loosen the compare. C-simulation and RTL co-simulation both go through a memory-image harness, and the numbers here are measured rather than estimated."
 ---
 
 # C and RTL simulation

@@ -3,6 +3,7 @@ title: Python simulation
 parent: A memory reached three ways
 nav_order: 2
 has_children: false
+summary: "Running the design in SimPy, long before Vitis is invoked, and recording the timing the trace page later compares against RTL. The testbench is the DUT plus six stream BFMs — and the memory is deliberately not among them, because it lives inside the DUT's wrapper. That absence is what keeps the RTL harness small: the elaborated design's only pins are AXI-Stream."
 ---
 
 # Python simulation

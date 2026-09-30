@@ -3,6 +3,7 @@ title: What we're building
 parent: VMAC with an AXI-MM command queue
 nav_order: 1
 has_children: false
+summary: "What VMAC computes and how the host talks to it: a complex vector-MAC over fixed-point matrices, driven by commands the host leaves in shared memory. The worked scenario is a host-driven complex correlation — an auto-correlation energy and a cross term, normalized — which is what the command set has to be able to express."
 ---
 
 # What we're building

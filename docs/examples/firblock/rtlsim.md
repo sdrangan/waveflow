@@ -2,6 +2,7 @@
 title: RTL simulation
 parent: Block FIR with state
 nav_order: 8
+summary: "The rung that answers what nothing earlier can: does the state actually survive between firings? C-synthesis can say the emitted static compiles and infers a memory, but a static swept by ap_rst would synthesize identically and quietly zero itself every job. A free-running composite also has no scheduler, so a token-count bug hangs or drops a job rather than producing a wrong answer."
 ---
 # RTL simulation — does the state actually survive?
 

@@ -2,6 +2,7 @@
 title: C-Sim Functional Verification
 parent: Streaming polynomial
 nav_order: 3
+summary: "Running the generated kernel under Vitis C-sim and comparing its outputs against the Python golden's, file by file. The comparator is generic and knows nothing about this design; all the design-specific knowledge sits in how it is wired, which is what makes the same step reusable."
 ---
 
 # C-sim functional verification

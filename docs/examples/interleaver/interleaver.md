@@ -2,6 +2,7 @@
 title: Module Overview
 parent: Composite kernel interleaver
 nav_order: 1
+summary: "What the module computes — a gather, Y[i] = X[P[i]] — and why it follows the data mover. Where mem_copy copies a buffer unchanged, this reorders it under a permutation, so it has a real compute stage, and that stage needs random access to the source, which shapes the whole design. Coordinates are element and word indices throughout, never byte addresses."
 ---
 # Interleaver — a gather accelerator
 

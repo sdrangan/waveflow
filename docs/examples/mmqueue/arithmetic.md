@@ -3,6 +3,7 @@ title: Fixed-point arithmetic
 parent: VMAC with an AXI-MM command queue
 nav_order: 3
 has_children: false
+summary: "What the derived formats mean numerically: the operand, accumulator and output formats, how precision grows along the datapath, and the single requantize that lands the result back in the output format. VMAC's use of the fixed-point machinery, not a re-teaching of it."
 ---
 
 # Fixed-point arithmetic

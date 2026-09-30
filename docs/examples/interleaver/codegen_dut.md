@@ -2,6 +2,7 @@
 title: DUT codegen
 parent: Composite kernel interleaver
 nav_order: 4
+summary: "Lowering the six-leaf graph to a free-running Vitis HLS top — the same lowering mem_copy uses, with nothing added for the gather. Explains what an hls::task top is: bodies the runtime re-fires on their own whenever their input streams have data, so there is no host handshake and the stages overlap rather than running in sequence."
 ---
 
 # DUT codegen

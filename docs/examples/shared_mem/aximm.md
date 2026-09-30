@@ -3,6 +3,7 @@ title: Understanding AXI Memory-Mapped
 parent: Histogram with shared memory
 nav_order: 1
 has_children: false
+summary: "The first example whose data lives in memory rather than on the control bus or a stream: the accelerator is handed byte addresses into shared DRAM, reads its inputs over an m_axi master and writes its outputs back the same way. Introduces why bulk data needs a different interface from the control registers and the streams of the earlier examples."
 ---
 
 # Understanding AXI Memory-Mapped

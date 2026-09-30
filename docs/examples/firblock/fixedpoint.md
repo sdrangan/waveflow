@@ -2,6 +2,7 @@
 title: Fixed point
 parent: Block FIR with state
 nav_order: 3
+summary: "The three decisions a real filter makes on top of the fixed-point guide: what format to declare, what to derive, and how the derived answer reaches the C++. Samples, coefficients and output share one format — Q2.14 by default — and the accumulator width is derived from it rather than chosen."
 ---
 # Fixed point — one declared format, one derived accumulator
 

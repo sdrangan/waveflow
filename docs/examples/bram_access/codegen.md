@@ -3,6 +3,7 @@ title: Code generation
 parent: A memory reached three ways
 nav_order: 3
 has_children: false
+summary: "Three artifacts from the one Python class: the Vitis HLS kernel, the hand-written memory placed beside it, and the wrapper that joins the two. The message headers are emitted first, from the same declarations the model reads through. Also the one thing that has to be reconciled between the kernel's ports and the memory's."
 ---
 
 # Code generation

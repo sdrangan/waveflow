@@ -3,6 +3,7 @@ title: Code generation
 parent: VMAC with an AXI-MM command queue
 nav_order: 6
 has_children: false
+summary: "The synthesizable top is auto-extracted from the same run_proc the Python simulation runs — there is no hand-written top anywhere in the build path. The framework lowers the extracted IR to a free-running, m_axi-only C++ kernel, and a Vitis cosim checks it bit-exact against the one golden."
 ---
 
 # Code generation — the synthesizable top

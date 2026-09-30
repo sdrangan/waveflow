@@ -3,6 +3,7 @@ title: Python model
 parent: A memory reached three ways
 nav_order: 1
 has_children: false
+summary: "The model: three transactions over one memory, each a command with a response. WRITE puts a payload at an address, COMPUTE rewrites that range in place as x*3 + 1, and READ returns it. WRITE and COMPUTE share a stream and a task because they share a port; READ is a second task on the other one."
 ---
 
 # Python model

@@ -2,6 +2,7 @@
 title: The Vitis equivalent
 parent: Basic vector arithmetic
 nav_order: 2
+summary: "The C++ side of the comparison, deliberately hand-written rather than generated: three minimal templates that reconstruct each operand bit-for-bit, compute the same a*b + c in typed C++, and emit the stored bits. Keeping codegen out of it keeps the focus on the bit-exactness; the generated flow is shown in the polynomial example."
 ---
 # The Vitis equivalent (hand-written)
 

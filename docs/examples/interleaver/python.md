@@ -2,6 +2,7 @@
 title: Python
 parent: Composite kernel interleaver
 nav_order: 2
+summary: "Building the design in Python: four hand-written FreeRunMod leaves, the two framework mem-streams they compose with, and the composite that wires all six. Shows how to write each kind of block for a gather, starting from the two descriptor types — one plain boundary command the host sends, one framed internal descriptor the pipeline forwards."
 ---
 # Python Model
 

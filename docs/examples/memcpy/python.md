@@ -2,6 +2,7 @@
 title: Python
 parent: Free-running memory copy
 nav_order: 2
+summary: "Building the design in Python: the three FreeRunMod leaves and the composite that wires them, and how to write each kind of block. Starts from the typed schemas every stream carries — the host's CopyCmd of two offsets, a length and a transaction id, in element and word coordinates rather than byte addresses."
 ---
 # Python Model
 

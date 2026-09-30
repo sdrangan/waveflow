@@ -2,6 +2,7 @@
 title: Testbench (Python)
 parent: Composite kernel interleaver
 nav_order: 3
+summary: "The graph that surrounds the design and drives it in pysim, with no toolchain: a participant on every boundary port, wired by the same Interface objects the design uses internally, checking the gather golden bit-exact. This is the functional golden, and the RTL simulation later drives the same scenario through real Verilog."
 ---
 
 # Testbench (Python)

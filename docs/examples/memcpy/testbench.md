@@ -2,6 +2,7 @@
 title: Testbench (Python)
 parent: Free-running memory copy
 nav_order: 3
+summary: "The testbench is itself a component graph, not a script that pokes the design: the DUT plus the participants around it, wired with the same Interface objects the design uses internally. That is the trick — one graph drives two backends, a fast SimPy run or a cycle-accurate RTL harness, and neither can describe a different test because there is only one description."
 ---
 
 # Testbench (Python)

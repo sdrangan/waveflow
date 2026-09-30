@@ -3,6 +3,7 @@ title: Python model
 parent: Histogram with shared memory
 nav_order: 2
 has_children: false
+summary: "Writing the histogram accelerator as an HwModule: the command and response schemas that ride the streams, the kernel's three data ports, and the on_start body that validates, reads, computes and writes back. The concept page covers why the data lives in memory and the control on a stream; this is how."
 ---
 
 # Python model

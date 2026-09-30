@@ -2,6 +2,7 @@
 title: DUT codegen
 parent: Block FIR with state
 nav_order: 7
+summary: "Lowering the four-component graph to a free-running hls::task top. The mechanism is the one mem_copy and interleaver already cover; what is specific here is what feeds the hand-written bodies — the storage and the types — and how one parameter picks between two of them."
 ---
 # DUT codegen — the graph becomes an `hls::task` top
 

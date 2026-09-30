@@ -3,6 +3,7 @@ title: Data types — command and formats
 parent: VMAC with an AXI-MM command queue
 nav_order: 2
 has_children: false
+summary: "The data layer in two halves: the command the host enqueues, and the dependent formats that command implies for the datapath. This page is about the types; what they mean numerically — how precision grows and where it is requantized — is the arithmetic page."
 ---
 
 # Data types — the command and its formats

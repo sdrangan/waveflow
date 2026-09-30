@@ -2,6 +2,7 @@
 title: RTL Cosim Timing Verification
 parent: Streaming polynomial
 nav_order: 5
+summary: "The group that closes the loop: read the cycle count the RTL co-simulator measured and compare it against the count the Python golden predicted. Agreement within tolerance means the SimPy timing model has been experimentally validated against the RTL — the strongest claim Waveflow makes about its simulation. Both steps emit structured JSON with named cycle counts rather than pass/fail bits."
 ---
 
 # RTL cosim timing verification

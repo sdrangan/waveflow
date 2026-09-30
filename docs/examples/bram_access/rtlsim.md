@@ -3,6 +3,7 @@ title: RTL simulation
 parent: A memory reached three ways
 nav_order: 4
 has_children: false
+summary: "Running the wrapper through XSI, Vivado's shared-library simulation interface, with a C++ testbench built from the same graph the pysim testbench came from. Not cosim: this top is ap_ctrl_none with two hls::task bodies that never return, and Vitis cosim of such a design is unreliable — the generated top says so in its own header comment."
 ---
 
 # RTL simulation

@@ -2,6 +2,7 @@
 title: The timing model
 parent: Composite kernel interleaver
 nav_order: 8
+summary: "The framework mem-streams ship their timing; the gather stage is the design's own kernel, so the design gives it one. In pysim the gather is instantaneous, so without a model the compute looks free and the timeline runs ahead of the RTL. Declares where the model lives on the stage, the formula it evaluates and what its parameters mean."
 ---
 # The compute stage's timing model
 

@@ -3,6 +3,7 @@ title: Timing — LT model + cosim calibration
 parent: VMAC with an AXI-MM command queue
 nav_order: 9
 has_children: false
+summary: "The capstone: the other pages prove the accelerator computes the right numbers, and this one asks whether the loosely-timed simulation predicts the right timing, where it stops being faithful, and whether a cosim calibration can close the gap. The named result is that bus utilization is not latency; a cosim sweep then calibrates the model."
 ---
 
 # Timing — the loosely-timed model and its cosim calibration
