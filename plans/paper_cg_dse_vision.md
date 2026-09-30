@@ -146,20 +146,26 @@ calibrate-from-runs structure as the resource model.
 
 ## Build-vs-have map
 
+Refreshed 2026-09-30. The executable plan for this paper's simulations is
+[`plans/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md): massive-MIMO uplink CG
+detection on `xczu48dr` with Vitis 2024.1, in phases from a floating-point link
+simulation to the full DSE and brute-force baseline.
+
 | Paper piece | Status |
 |---|---|
-| Bit-exact functional (accuracy) | `FixedField`/`ComplexField` — in progress; conformance harness = the "matches hardware" proof |
-| Vector unit (CG dots/AXPY) | roadmap #4 (`vecunit`) |
-| Shared memory + queue (CG state) | **built** — `MemComponent` + AXI-MM queue |
-| Systolic matmul block | **new** (application-level) |
-| CG control | **new** (application-level) |
-| Cycle-approximate model | partial — timing extraction + cycle-model-training |
-| Resource-approximate model | **new** — `csynthparse`/`InspectSynthStep` give actual resources; the predictive/active model is the contribution |
-| DSE / build / conformance harness | **built** — `build_dag` + `run_dag_cli` + cosim rig |
+| Bit-exact functional (accuracy) | **built** — `FixedField` (`waveflow/hw/fixpoint.py`) and `ComplexField` (`waveflow/hw/complexfield.py`, including `cquantize`), proven against Vitis by the conformance harnesses in `examples/schemas/fixedpoint/` and `examples/schemas/complex/`. No division or reciprocal yet, which CG's α and β need (plan Phase 2) |
+| Vector unit (CG dots/AXPY) | **partial** — `examples/vmac` has complex fixed-point `scalar_mult`, `inner_prod` and `sum` over an AXI-MM queue, with a calibrated cycle model; it lacks per-column α and AXPY. No `vecunit` exists |
+| Shared memory + queue (CG state) | **built** — `MemoryMod` (`waveflow/hw/memory.py`, formerly `MemComponent`) + `AXIMMQueue` (`waveflow/hw/aximm_queue.py`) |
+| Systolic matmul block | **new** (application-level) — nothing systolic exists; `waveflow/vitis_l1` has a bit-exact, real-valued GEMV model only (`plans/vitis_l1_hwmodule.md`, S1 onward open) |
+| CG control | **new** (application-level) — the `plans/cg.md` sketch was corrected on 2026-09-30 |
+| Cycle-approximate model | **built** — `TimingModel`/`LinCalibModel` and the `CollectTimingStep`/`FitTimingStep` DAG steps, with per-example fits; the only shipped platform is `zynq7020_bfm_100mhz` |
+| Resource-approximate model | **built** (`plans/resource_model.md`, phases A–E) — `InspectSynthStep`, per-part device rules (DSP48E1 and DSP48E2), `VitisResourceModel`, `compose`, held-out validation on `fir_block`. Uncertainty- or decision-aware sampling is not built |
+| DSE / build / conformance harness | **built** — `build_dag` + `run_dag_cli`, `SweepRunner`/`ParamGrid` (`waveflow/build/sweep.py`), the conformance harnesses |
 
-Most *infrastructure* exists or is roadmapped; the new pieces are the **systolic block**,
-**CG control**, and the **active resource model**. The paper *composes* — a far stronger
-position than "build everything."
+Most *infrastructure* now exists; the new pieces are the **systolic block**,
+**CG control**, **fixed-point division**, and **decision-aware sampling** for the
+resource model. The paper *composes* — a far stronger position than "build
+everything."
 
 ## Related notes
 - `plans/fixedfield.md` — the bit-exact fixed-point foundation (accuracy model).

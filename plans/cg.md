@@ -7,6 +7,13 @@ has_children: false
 
 # Conjugate Gradient Matrix Inverse
 
+> **Superseded (2026-09-30).** The implementation work moves to `examples/mimo_cg/`, under
+> [`plans/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md). The code below has been corrected.
+> As first written it did not converge (relative error near 1.5 at every iteration count),
+> for four reasons: it had `X = X - P*alpha` for `X + P*alpha` and `P = R - P*beta` for
+> `R + P*beta`, its `rnorm = rnorm` never stored the new norms, and `X` started as a
+> vector rather than an n×n matrix.
+
 ##  IP definition
 
 The IP will perform conjugate gradient (CG) descent for matrix inversion.  Matrix inversion is a fundamental  operation in many scientific computing applications and can be computationally intensive, making it a good candidate for hardware acceleration.
@@ -29,30 +36,32 @@ def cginv(Q, nit):
     X : approximation of inv(Q)
     """
     n = Q.shape[0]
-    X = np.zeros(n)
-    R = np.eye(n)
-    P = R
+    X = np.zeros((n, n), dtype=complex)
+    R = np.eye(n, dtype=complex)
+    P = R.copy()
     rnorm = np.ones(n)
     for i in range(nit):
         # Update S with matrix multiplication
         S = Q.dot(P)
 
         # Update X
-        ps = np.sum(np.conj(P)*S, axis=0)  # columnwise inner products
+        ps = np.real(np.sum(np.conj(P)*S, axis=0))  # columnwise inner products (real: Q is Hermitian PD)
         alpha = rnorm / ps
-        X = X - P*alpha[None,:]
+        X = X + P*alpha[None,:]
 
         # Compute matrix-matrix product QX
         QX = Q.dot(X)
 
-        # Update residual 
+        # Update residual (explicit form; the recurrence R = R - S*alpha[None,:]
+        # saves this second matrix multiplication)
         R = np.eye(n) - QX
         
         # Update P
         rnorm_new = np.sum(np.abs(R)**2, axis=0)  # column norms of R
         beta = rnorm_new / rnorm
-        rnorm = rnorm
-        P = R - P*beta[None,:]
+        rnorm = rnorm_new
+        P = R + P*beta[None,:]
+    return X
 ```
 
 The processing system will send `Q` and `nit` to the IP via shared memory.  The IP will compute `X` will indicate to the PS that it is completed and send the result back via shared memory.
