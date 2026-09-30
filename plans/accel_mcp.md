@@ -1,13 +1,16 @@
 # Plan: the accelerator-lab agent surface: knowledge search, process, scaffold, and action tools
 
-> **Status (2026-09-30): Stages 1, 2 and 3 built; D1 and D2 done.**
+> **Status (2026-09-30): Stages 1 to 4 built.  D1 and D2 done.**
 > `waveflow/mcp/knowledge/` (six tools + CLI), the server `instructions`,
-> and `waveflow/mcp/frames/stream_inband/` with `waveflow_list_frames` /
-> `waveflow_get_process`.  The OpenAI RAG path, the committed corpus and
-> `waveflow_get_schema_draft_plan` are removed.  Stage 4 (the scaffold) and
-> the 89 doc summaries are next.  See
-> [accel_mcp_progress.md](accel_mcp_progress.md) for what happened, what the
-> plan got wrong, and the decisions waiting for review.
+> `waveflow/mcp/frames/stream_inband/` with `waveflow_list_frames` /
+> `waveflow_get_process`, and `waveflow new-accel`, whose output passes
+> `--through validate_csim` unmodified on Vitis HLS 2025.1.  The OpenAI RAG
+> path, the committed corpus and `waveflow_get_schema_draft_plan` are removed,
+> and all 87 doc pages that lacked a `summary:` have one.  Stage 0 (the
+> baseline agent run) was never done and now gates Stage 1b; Stages 5, 6 and 7
+> are next.  Three decisions and seven corrections are waiting in
+> [accel_mcp_progress.md](accel_mcp_progress.md) -- including that there is no
+> `template/` directory, for the reason the Frames section now records.
 
 ## Motivation
 
@@ -72,10 +75,19 @@ build in. It is a bundle, with no code of its own:
 waveflow/mcp/frames/<frame>/
   frame.md        # protocol, errors, stages, comparisons, report (as plans/example_stream_prompts/frame.md)
   process.md      # what waveflow_get_process returns, and what the scaffold writes as AGENTS.md
-  template/       # the project waveflow new-accel copies: runs as generated, function stubbed out
   prompts/        # example function specs for this frame
-  frame.toml      # name, one-line synopsis, reference example(s)
+  frame.toml      # name, synopsis, reference example(s), and the [template] block
 ```
+
+**There is no `template/` directory** (changed 2026-09-30).  A committed copy
+of `examples/stream_inband` is a 1,300-line duplicate that rots the first time
+the example changes, which contradicts *derived, not hand-labeled*.  Instead
+`frame.toml` carries a `[template]` block naming the source example, the name
+token its identifiers are built from, and the compute regions to stub -- each
+by literal anchor, so a stub that stops matching is a hard error rather than a
+project that ships with the reference function still in it.  `new-accel` then
+copies the live example and renames it.  The cost is that scaffolding needs a
+checkout, the same condition the index already has.
 
 Every tool is frame-agnostic:
 
