@@ -59,3 +59,11 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Log overlapping steps as a deviation.** Preparing one step while another's long
   run is in progress breaks "one step at a time" even when the commits stay in
   order. Record it in §15.
+
+## Phase 1 (2026-09-30)
+
+- **Ruff 0.16.9 here goes beyond the E/F defaults.** It flags `RUF046`
+  (`int(round(x))`: `round` already returns an int) and `FURB161` (use
+  `int.bit_count()`). Write new code that way from the start.
+- **Black 26 warns "Python 3.12 cannot parse code formatted for Python 3.15".**
+  The warning is harmless as long as `black --check` reports the files unchanged.
