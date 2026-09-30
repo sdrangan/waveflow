@@ -1,4 +1,4 @@
-# Build outputs of the mimo_cg example (plans/mimo_cg_paper_sims.md).  The Python
+# Build outputs of the mimo_cg example (plans/mimo_cg/mimo_cg_paper_sims.md).  The Python
 # source, cpp/, tools/ sources and the committed paper_data/*.csv stay tracked.
 gen/
 include/

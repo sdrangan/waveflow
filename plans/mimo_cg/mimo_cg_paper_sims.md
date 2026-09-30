@@ -3,7 +3,7 @@
 **Status:** In progress (Phase 0 started 2026-09-30)
 **Complexity:** L3 Complex. Many components (link simulator, fixed-point division, bit-exact CG, three hardware blocks, performance models, DSE), several open design choices, and new tests throughout; everything is undoable with git. Scores: scope 3 · clarity 3 · novelty 3 · dependencies 3 · verification 3 · risk 2
 **Created:** 2026-09-29 · **Updated:** 2026-09-30
-**Plan file:** `plans/mimo_cg_paper_sims.md` · **Lessons learned:** `plans/mimo_cg_lessons.md` (created in step 0.1)
+**Plan file:** `plans/mimo_cg/mimo_cg_paper_sims.md` · **Lessons learned:** `plans/mimo_cg/mimo_cg_lessons.md` (created in step 0.1; both moved into `plans/mimo_cg/` on 2026-09-30)
 
 > **For the agent executing this plan:** read *Rules for the doer* first. The
 > plan is self-contained. Paths are repo-relative, commands are exact, and
@@ -22,7 +22,7 @@
    script or integration the plan didn't foresee, search for an existing one
    and propose it first.
 3. After each step, tick it in §10, add a line to the §15 progress log, and
-   append anything surprising to `plans/mimo_cg_lessons.md`.
+   append anything surprising to `plans/mimo_cg/mimo_cg_lessons.md`.
 4. When something fails, find the root cause from the error, logs, tests and
    actual state. No random fixes. Deviation policy (L3 default, confirm in
    execute mode): investigate up to 2 tested hypotheses, then stop and report.
@@ -105,8 +105,8 @@ this plan delivers the data, figures and code that back it.
 
 | Deliverable | Format | Location | For whom |
 |---|---|---|---|
-| This plan, kept current | Markdown | `plans/mimo_cg_paper_sims.md` | the user, the doer |
-| Lessons learned | Markdown | `plans/mimo_cg_lessons.md` | future sessions |
+| This plan, kept current | Markdown | `plans/mimo_cg/mimo_cg_paper_sims.md` | the user, the doer |
+| Lessons learned | Markdown | `plans/mimo_cg/mimo_cg_lessons.md` | future sessions |
 | Example-level ignore rules for build outputs | `.gitignore` | `examples/mimo_cg/.gitignore` | keeps build outputs out of git without touching the root `.gitignore` |
 | xczu48dr probe (sources committed, outputs ignored) | C++ + TCL | `examples/mimo_cg/tools/xczu48dr_probe/` | reproducible toolchain check |
 | Link simulator, detectors, bit-exact CG golden, build DAG, sweeps, figure scripts | Python | `examples/mimo_cg/` | co-authors, reviewers |
@@ -631,7 +631,7 @@ identity, with the trailer (Rules 9).
 
 | Role | Agent / model | Responsibility |
 |---|---|---|
-| Doer | Claude Code session running `/guided-task execute plans/mimo_cg_paper_sims.md` | Executes steps, verifies, logs |
+| Doer | Claude Code session running `/guided-task execute plans/mimo_cg/mimo_cg_paper_sims.md` | Executes steps, verifies, logs |
 | Explorer | Explore subagent | Broad read-only searches (e.g. VMAC internals, `vitis_l1` wrapper status) when a step needs them |
 | Reviewer | Independent general-purpose subagent; `/code-review` for diffs | Plan review before approval (done 2026-09-29); diff review at each milestone |
 | Decision maker | The user | Every 👁 gate and ⚠️ cost approval |
@@ -646,7 +646,7 @@ identity, with the trailer (Rules 9).
 | Decision | All phases planned; 0–3 step-level, 4–6 milestone-level with entry gates | user, 2026-09-29 |
 | Decision | Scenario defaults in §2 (uplink, i.i.d. Rayleigh, perfect CSI, uncoded, M/K/modulation sets, BER 1e-3; plain and multi-RHS CG simulated, hardware targets multi-RHS CG) | user, 2026-09-29 |
 | Decision | Code in `examples/mimo_cg/`; generic division in `waveflow/hw/fixpoint.py` through the existing fixed-point harness; tests in `tests/examples/` and `tests/hw/`; docs in `docs/examples/mimo_cg/`; Phase 0 edits `plans/cg.md` and `plans/paper_cg_dse_vision.md` | user, 2026-09-29 |
-| Decision | Branch `paper/mimo-cg`, commit per step, author and committer `ali-rasteh <ali.rasteh1@gmail.com>`, commit messages keep the `Co-Authored-By: Claude` trailer, `.gitignore` edit kept out, pause after each milestone, lessons in `plans/mimo_cg_lessons.md` | user, 2026-09-29 |
+| Decision | Branch `paper/mimo-cg`, commit per step, author and committer `ali-rasteh <ali.rasteh1@gmail.com>`, commit messages keep the `Co-Authored-By: Claude` trailer, `.gitignore` edit kept out, pause after each milestone, lessons in `plans/mimo_cg/mimo_cg_lessons.md` (moved there 2026-09-30) | user, 2026-09-29 |
 | Decision | No deadline; brute-force budget of about 48 h csynth | user, 2026-09-29 |
 | Decision | guided-task `marketplace_env` created; xczu48dr csynth probe run (passed); web access to AMD docs allowed; independent plan review run | user, 2026-09-29 |
 | Decision | All independent-review findings applied: SNR grids moved to −20…+20 dB with per-configuration Phase 3 windows; lint rule limited to new files and no new findings; sweep outputs via stage steps and a no-Vitis test; `--force` re-runs with per-point seeding; toolchain tests must run with 0 skipped; exact Cho–Yoon BER, 99.9% intervals, named test points; CG tolerances; "block-CG" renamed multi-RHS CG; zero-divisor guard; example `.gitignore`; step order fixed; probe and CG check script inlined; AC5 minimum counts; provisional AC6 measure; no scratch-directory exception needed | user, 2026-09-29 |
@@ -663,6 +663,7 @@ identity, with the trailer (Rules 9).
 | Risk | Held-out model accuracy misses the AC5 targets | vision's per-block + physics-prior approach; decide at 5.0 whether to densify or relax, with a §14 record |
 | Decision | Execute mode: deviation policy confirmed as 2 tested hypotheses, then stop; an independent reviewer agent checks each milestone against its acceptance criteria | user, 2026-09-30 |
 | Decision | `-q` dropped from every pytest command in §4, §10 and §11. `pyproject.toml` already sets `-q`, and a second one (`-qq`) hides the "N passed, M skipped" summary those criteria rely on. The command recorded in the §15 0.3 row is left as run | user, 2026-09-30 (M0 review) |
+| Decision | This plan and its lessons file moved into `plans/mimo_cg/`, keeping their names; forward-looking references updated. Ticked steps and §15 rows keep the paths as they were when the work was done. `plans/cg.md` and `plans/paper_cg_dse_vision.md` stay in `plans/` (pre-existing, shared plans) with their links updated | user, 2026-09-30 |
 | Open question | Step-level detail for Phases 4–6 | refined at gates 4.0, 5.0, 6.0 |
 
 ## 15. Progress log
@@ -679,6 +680,7 @@ identity, with the trailer (Rules 9).
 | 2026-09-30 | 0.4 | `plans/cg.md`: Superseded banner plus minimal fixes, keeping the explicit residual its architecture text describes. `plans/paper_cg_dse_vision.md`: build-vs-have table refreshed and this plan linked. §9 script: 9.66e-2, 4.75e-3, 1.05e-4, 2.01e-16 at nit 2, 4, 6, 8, assert passed. The `cg.md` code block extracted and run as written: 9.66e-2, 4.75e-3, 1.05e-4, 2.62e-16, assert passed. The user reviewed and approved the diff | both runs; user approval | Rules 2: the edits and both script runs were done while step 0.3's Vitis run was in progress. They were committed only after 0.3 was verified and committed and the user had reviewed the diff |
 | 2026-09-30 | 0.5 | `pytest -m "not vitis and not xsi" -p no:cacheprovider`: 7 failed, 3360 passed, 37 skipped, 284 deselected in 83.8 s; the 7 failures are exactly those in §6. Baseline for AC-R, with `ruff 0.16.9`, `ruff check --output-format concise` (files identical to `main`): `waveflow/hw/fixpoint.py` 1, `waveflow/utils/fixputils.py` 0, `waveflow/calib/device_rules.py` 11 | pytest summary; ruff counts | none |
 | 2026-09-30 | M0 | Independent reviewer agent: M0 complete, 0 blocking. The user approved a fix-up: tick cells, §4 AC0.1/AC0.2 boxes, verbatim 0.2 evidence, the 0.4 deviation entry, `cg.md` banner (three bugs broke convergence; the 1-D `X` was harmless, 2.6e-16 with it) and docstring (Hermitian positive-definite), the vision table's platform wording, lessons corrections, deletion of the ignored `xelab.log`/`xelab.pb` the readiness probe left in the repo root, and the `-q` amendment (§14). Stopped after M0 at the user's request | reviewer report; this commit | none |
+| 2026-09-30 | housekeeping | At the user's request, `git mv` of `plans/mimo_cg_paper_sims.md` and `plans/mimo_cg_lessons.md` into `plans/mimo_cg/`. References updated in this plan (header, Rules 3, §3, §13, §14, checklist coverage), the lessons file, `plans/cg.md`, `plans/paper_cg_dse_vision.md` and `examples/mimo_cg/.gitignore` | `git grep` finds no stale forward reference; links resolve | none |
 
 ## 16. Completion report
 
@@ -700,7 +702,7 @@ identity, with the trailer (Rules 9).
 | T: task definition, planning | T1 §1–§4; T2 each step's *Verify with*; T3 header paths, §15, Rules 5; T4 §10 steps and milestones; T5 §9 alternatives, §14 | — |
 | C: context and environment | C1 §5, §8; C2 §5 access column (all sources read directly); C3 §6; C4 `docs/repo_docs/` in §5; C5 Rules 2, §7; C6 §7 reuse and conventions | — |
 | V: verification | V1 §10, §11, Rules 11; V2 §11 regression, AC-R; V3 §16, Rules 12; V4 Rules 8, §14; V5 Rules 4, §12 | — |
-| D: documentation and continuity | D1 `plans/mimo_cg_lessons.md`, Rules 3; D2 step 6.d proposes `CLAUDE.md` additions; D3 §7 docs to sync, steps 0.4, 2.2, 6.d; D4 §16; D5 §16 reusable artifacts, the committed probe | — |
+| D: documentation and continuity | D1 `plans/mimo_cg/mimo_cg_lessons.md`, Rules 3; D2 step 6.d proposes `CLAUDE.md` additions; D3 §7 docs to sync, steps 0.4, 2.2, 6.d; D4 §16; D5 §16 reusable artifacts, the committed probe | — |
 | R: version control and safety | R1 §12 branch and commits, Rules 9; R2 §12 diff review areas, 👁 flags; R3 §12 table | — |
 | S: security and permissions | S2 §12 permissions | S1: no credentials are needed (the licence file is never opened) |
 | A: authoritative sources | A1 §5 (UG1399 2024.1, Cho–Yoon 2002, MRC closed form), Rules 2 | — |

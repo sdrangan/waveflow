@@ -8,7 +8,7 @@ has_children: false
 # Conjugate Gradient Matrix Inverse
 
 > **Superseded (2026-09-30).** The implementation work moves to `examples/mimo_cg/`, under
-> [`plans/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md). The code below has been corrected.
+> [`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg/mimo_cg_paper_sims.md). The code below has been corrected.
 > As first written it did not converge (relative error near 1.5 at every iteration count),
 > for three reasons, each enough alone: it had `X = X - P*alpha` for `X + P*alpha` and
 > `P = R - P*beta` for `R + P*beta`, and its `rnorm = rnorm` never stored the new norms.

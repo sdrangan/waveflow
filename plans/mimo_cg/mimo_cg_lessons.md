@@ -1,6 +1,6 @@
 # Lessons learned: CG massive-MIMO paper simulations
 
-Companion to [`plans/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md). The doer
+Companion to [`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md). The doer
 appends an entry whenever something surprising is learned: a mistake, a failed
 approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom.
 

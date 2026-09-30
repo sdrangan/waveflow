@@ -147,7 +147,7 @@ calibrate-from-runs structure as the resource model.
 ## Build-vs-have map
 
 Refreshed 2026-09-30. The executable plan for this paper's simulations is
-[`plans/mimo_cg_paper_sims.md`](mimo_cg_paper_sims.md): massive-MIMO uplink CG
+[`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg/mimo_cg_paper_sims.md): massive-MIMO uplink CG
 detection on `xczu48dr` with Vitis 2024.1, in phases from a floating-point link
 simulation to the full DSE and brute-force baseline.
 
