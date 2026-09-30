@@ -32,7 +32,7 @@ For larger QAM, :func:`ber_zf_rayleigh` integrates the exact AWGN BER over that 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 
@@ -93,6 +93,7 @@ def cg_multi_rhs(
     explicit_residual: bool = False,
     jacobi: bool = False,
     iterates: Iterable[int] | None = None,
+    on_iteration: Callable[[int, dict[str, np.ndarray]], None] | None = None,
 ) -> np.ndarray | dict[int, np.ndarray]:
     """Run CG on every column of ``A X = B`` for ``nit`` iterations, starting from ``X = 0``.
 
@@ -111,6 +112,11 @@ def cg_multi_rhs(
     iterates : iterable of int, optional
         If given, return ``{n: X_n}`` for each ``n`` in it (each ``0 <= n <= nit``) instead of
         ``X_nit``.  CG's iterates are a prefix of one run, so this costs one run.
+    on_iteration : callable, optional
+        Called as ``on_iteration(n, values)`` after setup (``n = 0``: ``X``, ``R``, ``P``, ``rz``)
+        and after each iteration ``n >= 1`` with that iteration's ``P`` (the direction it used),
+        ``S``, ``ps``, ``alpha``, ``X``, ``R``, ``rz`` and ``beta``.  ``rz`` is ``rᴴr`` (``rᴴz``
+        with Jacobi).  Used by :func:`profile_ranges`; the arrays must not be modified.
 
     Returns
     -------
@@ -135,19 +141,88 @@ def cg_multi_rhs(
     out: dict[int, np.ndarray] = {}
     if wanted is not None and 0 in wanted:
         out[0] = X.copy()
+    if on_iteration is not None:
+        on_iteration(0, {"X": X, "R": R, "P": P, "rz": rz})
     for n in range(1, nit + 1):
         S = A @ P
-        alpha = _guarded_div(rz, _column_dot(P, S))
+        ps = _column_dot(P, S)
+        alpha = _guarded_div(rz, ps)
         X = X + P * alpha
         R = B - A @ X if explicit_residual else R - S * alpha
         Z = R * dinv if jacobi else R
         rz_new = _column_dot(R, Z)
         beta = _guarded_div(rz_new, rz)
         rz = rz_new
+        if on_iteration is not None:
+            on_iteration(
+                n,
+                {
+                    "P": P,
+                    "S": S,
+                    "ps": ps,
+                    "alpha": alpha,
+                    "X": X,
+                    "R": R,
+                    "rz": rz,
+                    "beta": beta,
+                },
+            )
         P = Z + P * beta
         if wanted is not None and n in wanted:
             out[n] = X.copy()
     return out if wanted is not None else X
+
+
+#: The CG variables :func:`profile_ranges` reports, in table order.
+RANGE_VARIABLES = ("A", "B", "P", "S", "ps", "alpha", "X", "R", "rz", "beta")
+
+
+def _max_component(v: np.ndarray) -> float:
+    """``max(|Re|, |Im|)`` over every entry: what a complex fixed-point format must hold."""
+    v = np.asarray(v)
+    return float(max(np.max(np.abs(v.real)), np.max(np.abs(v.imag)))) if v.size else 0.0
+
+
+def profile_ranges(
+    A: np.ndarray,
+    B: np.ndarray,
+    nit: int,
+    *,
+    scale: float = 1.0,
+    explicit_residual: bool = False,
+) -> dict[str, np.ndarray]:
+    """Dynamic range of every CG variable, per iteration, for choosing fixed-point formats.
+
+    Runs :func:`cg_multi_rhs` on ``(A / scale) X = B / scale``.  The solution is unchanged, and
+    ``scale = M`` is the normalization that keeps ``HᴴH/M`` near the identity.
+
+    Returns
+    -------
+    dict
+        For each name in :data:`RANGE_VARIABLES`, an array of shape ``(nit + 1,)``: the maximum
+        over the batch and all entries of ``max(|Re|, |Im|)`` at iteration ``n`` (NaN where the
+        variable is undefined, e.g. ``S`` at ``n = 0``).  ``A`` and ``B`` are constant.  Also
+        ``"ps_min"`` and ``"rz_min"``: the smallest divisor of α and β at each iteration, which
+        sets the range the fixed-point division must handle.
+    """
+    A = np.asarray(A) / scale
+    B = np.asarray(B, dtype=complex) / scale
+    table = {
+        name: np.full(nit + 1, np.nan)
+        for name in RANGE_VARIABLES + ("ps_min", "rz_min")
+    }
+    table["A"][:] = _max_component(A)
+    table["B"][:] = _max_component(B)
+
+    def record(n: int, values: dict[str, np.ndarray]) -> None:
+        for name, v in values.items():
+            table[name][n] = _max_component(v)
+        if "ps" in values:
+            table["ps_min"][n] = float(np.min(np.abs(values["ps"])))
+        table["rz_min"][n] = float(np.min(np.abs(values["rz"])))
+
+    cg_multi_rhs(A, B, nit, explicit_residual=explicit_residual, on_iteration=record)
+    return table
 
 
 def cg_vector(A: np.ndarray, b: np.ndarray, nit: int) -> np.ndarray:

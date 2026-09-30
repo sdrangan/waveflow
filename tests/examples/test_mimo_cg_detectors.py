@@ -19,6 +19,7 @@ from examples.mimo_cg.detectors import (
     mmse,
     mmse_bias,
     mmse_matrix,
+    profile_ranges,
     zf,
 )
 from examples.mimo_cg.mimo_link import (
@@ -183,3 +184,69 @@ def test_mmse_is_cg_at_convergence_and_zf_is_the_noiseless_limit():
     Y = rayleigh(point_rng(10, 64, 8, 1), (64, NS))
     assert _rel(mmse(H, Y, SIGMA2), cg_multi_rhs(A, H.conj().T @ Y, 8)) <= 1e-8
     assert _rel(mmse(H, Y, 1e-12), zf(H, Y)) <= 1e-8
+
+
+# step 1.3: range profiling ----------------------------------------------------------------
+
+
+def _instrumented_cg(A: np.ndarray, b: np.ndarray, nit: int) -> dict[str, list[float]]:
+    """One CG run, written out independently, recording max(|Re|, |Im|) of each variable."""
+
+    def mc(v):
+        v = np.atleast_1d(np.asarray(v))
+        return float(max(np.max(np.abs(v.real)), np.max(np.abs(v.imag))))
+
+    seen: dict[str, list[float]] = {
+        k: [] for k in ("P", "S", "ps", "alpha", "X", "R", "rz")
+    }
+    x = np.zeros(b.shape, dtype=complex)
+    r = b.astype(complex).copy()
+    p = r.copy()
+    rr = np.vdot(r, r).real
+    for _ in range(nit):
+        s = A @ p
+        ps = np.vdot(p, s).real
+        a = rr / ps
+        x = x + a * p
+        r = r - a * s
+        rr_new = np.vdot(r, r).real
+        for name, v in (
+            ("P", p),
+            ("S", s),
+            ("ps", ps),
+            ("alpha", a),
+            ("X", x),
+            ("R", r),
+        ):
+            seen[name].append(mc(v))
+        seen["rz"].append(rr_new)
+        p = r + (rr_new / rr) * p
+        rr = rr_new
+    return seen
+
+
+def test_profile_ranges_bounds_an_independently_instrumented_run():
+    _, A, B = _system(32, 8, 3)
+    nit = 6
+    batch = profile_ranges(A, B, nit)
+    for j in range(B.shape[1]):
+        seen = _instrumented_cg(A, B[:, j], nit)
+        for name, values in seen.items():
+            for n, v in enumerate(values, start=1):
+                assert batch[name][n] >= v * (1 - 1e-12), (name, n, j)
+    # For a single right-hand side the profile *is* that run.
+    single = profile_ranges(A, B[:, :1], nit)
+    seen = _instrumented_cg(A, B[:, 0], nit)
+    for name, values in seen.items():
+        np.testing.assert_allclose(single[name][1:], values, rtol=1e-9, err_msg=name)
+    assert np.all(single["ps_min"][1:] == single["ps"][1:])
+
+
+def test_profile_ranges_normalization_keeps_x_and_scales_a():
+    _, A, B = _system(64, 8, 4)
+    raw = profile_ranges(A, B, 8)
+    norm = profile_ranges(A, B, 8, scale=64)
+    np.testing.assert_allclose(norm["X"][1:], raw["X"][1:], rtol=1e-9)
+    assert norm["A"][0] == pytest.approx(raw["A"][0] / 64)
+    assert norm["B"][0] == pytest.approx(raw["B"][0] / 64)
+    assert np.isnan(raw["S"][0]) and np.isnan(raw["beta"][0])
