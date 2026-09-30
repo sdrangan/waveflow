@@ -435,6 +435,11 @@ def _tracked(root: str) -> frozenset[str]:
     try:
         out = subprocess.run(
             ["git", "-C", root, "ls-files", "-z"],
+            # Never inherit stdin.  Inside the MCP server stdin is the
+            # JSON-RPC pipe, and git blocked on it until the timeout: the
+            # first index-backed tool call took 31.9 s instead of ~2 s, and
+            # the timeout's empty set then un-tagged every generated file.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             check=True,
             timeout=30,

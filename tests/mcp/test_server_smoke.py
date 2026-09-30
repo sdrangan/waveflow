@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,10 @@ EXPECTED_TOOLS = {
 REMOVED_TOOLS = {"waveflow_rag_search_examples", "waveflow_get_schema_draft_plan"}
 
 
+#: (tool, seconds) for every call in the session, filled in by `_drive`.
+SECONDS: list[tuple[str, float]] = []
+
+
 async def _drive() -> tuple[set[str], str, list[tuple[str, str]]]:
     """Run one stdio session; return the tool names, instructions, and results."""
     from mcp import ClientSession, StdioServerParameters
@@ -85,7 +90,9 @@ async def _drive() -> tuple[set[str], str, list[tuple[str, str]]]:
             names = {t.name for t in listed.tools}
 
             for tool, args in CALLS:
+                t0 = time.monotonic()
                 response = await session.call_tool(tool, args)
+                SECONDS.append((tool, time.monotonic() - t0))
                 text = "".join(
                     getattr(c, "text", "") for c in response.content
                 )
@@ -130,6 +137,18 @@ def test_search_over_stdio_actually_found_the_page(session) -> None:
     _, _, results = session
     hits = next(text for tool, text in results if tool == "waveflow_search")
     assert "docs/guide/custom_hooks/stream.md" in hits
+
+
+def test_no_tool_call_stalls_inside_the_server(session) -> None:
+    """The first index-backed call builds the index -- about 2 s.
+
+    Inside the server, not from the CLI, `git ls-files` inherited the MCP
+    JSON-RPC pipe as its stdin and blocked until its 30 s timeout.  The CLI
+    never showed it, and a blind-test agent sat waiting.  Only a real stdio
+    session can catch that, so it is timed here.
+    """
+    slow = [(tool, round(s, 1)) for tool, s in SECONDS if s > 15]
+    assert not slow, f"tool calls that stalled over stdio: {slow}"
 
 
 def test_get_example_over_stdio_returns_the_whole_file(session) -> None:
