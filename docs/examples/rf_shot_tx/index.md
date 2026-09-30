@@ -4,6 +4,7 @@ parent: Examples
 nav_order: 9.6
 has_children: true
 audience: python
+example_dir: examples/rf_shot_tx
 summary: "The worked example for RfShotTx: one transmitter, two command streams, and the same RTL answering both. A driver pushes in-band frames — a header then samples, TLAST at the end — the design loads them into a BRAM behind a lock, and a real Rfdc plays them out at the converter's grid. The finite stream plays three passes and goes quiet; the infinite one is preempted mid-play and switches waveform. Every verdict the protocol has is exercised across the two, and the playout is byte-identical between pysim and RTL."
 ---
 

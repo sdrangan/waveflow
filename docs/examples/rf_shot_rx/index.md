@@ -4,6 +4,7 @@ parent: Examples
 nav_order: 9.7
 has_children: true
 audience: python
+example_dir: examples/rf_shot_rx
 summary: "The worked example for RfShotRx: a real ADC plays a ramp into a memory split into two regions, the capture fills one while the reader drains the other, and every window goes out as a frame with a header that says what was lost. The scenario IS the gate — a ramp makes a dropped block a visible step in the numbers rather than something a counter has to be believed about."
 ---
 

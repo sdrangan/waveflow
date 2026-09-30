@@ -3,6 +3,7 @@ title: Histogram with shared memory
 parent: Examples
 nav_order: 4
 has_children: true
+example_dir: examples/shared_mem
 summary: "The payload moves off the control plane and into memory. A histogram accelerator takes three buffer addresses in its command, reads samples and bin edges and writes counts back over a single AXI4 memory-mapped master, while a stream still carries the command and the status response. The first example to exercise multiple distinct buffers at independent addresses, two element types over one bundle, and bounds checks that select a typed error status."
 ---
 

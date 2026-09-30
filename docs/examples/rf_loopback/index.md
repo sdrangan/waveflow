@@ -3,6 +3,7 @@ title: RF loopback
 parent: Examples
 nav_order: 10
 has_children: true
+example_dir: examples/rf_loopback
 summary: "The worked example for designs that talk to an RF data converter. A source plays sample blocks into an ADC, the samples cross into the fabric as AXI-Stream words, a trivial pass-through relays them, and a DAC turns them back into sample blocks at a sink — a loopback that is byte-identical end to end, two blocks later. Deliberately without DSP: the point is the converter boundary itself, and the loss counters that are the only evidence a sample grid was actually met."
 ---
 

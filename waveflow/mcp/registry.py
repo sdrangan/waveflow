@@ -35,6 +35,14 @@ from mcp.server.fastmcp import FastMCP
 
 from waveflow.mcp.components import get_components
 from waveflow.mcp.example_rag import search_schema_examples
+from waveflow.mcp.knowledge import (
+    waveflow_browse,
+    waveflow_find_usage,
+    waveflow_get_doc,
+    waveflow_get_example,
+    waveflow_list_examples,
+    waveflow_search,
+)
 from waveflow.mcp.schema_tools import get_schema_draft_plan, validate_schema_from_file
 
 
@@ -328,3 +336,193 @@ REGISTRY.add(
     profiles={"workspace", "headless"},
 )
 
+
+
+# ---------------------------------------------------------------------------
+# Knowledge tools (Stage 1): local search and read over the guide and examples
+# ---------------------------------------------------------------------------
+
+REGISTRY.add(
+    name="waveflow_browse",
+    description=(
+        "Browse the Waveflow documentation tree. Returns each page's path, "
+        "title and summary, plus the child sections. Call with no section for "
+        "the top level, then 'guide', 'examples', or a subsection such as "
+        "'guide/custom_hooks'. Use this when you know what you want to do but "
+        "not what Waveflow calls it -- the summaries let you match on meaning. "
+        "section='examples' lists the example cards instead."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "section": {
+                "type": ["string", "null"],
+                "description": (
+                    "Section to list: 'guide', 'examples', or a path such as "
+                    "'guide/custom_hooks'. Omit for the top level."
+                ),
+            },
+        },
+        "required": ["section"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_browse,
+    profiles={"workspace", "headless"},
+)
+
+REGISTRY.add(
+    name="waveflow_search",
+    description=(
+        "Keyword search over the Waveflow guide and the reference examples. "
+        "Returns ranked pointers: path, heading, line range and a short "
+        "snippet -- then read the whole file with waveflow_get_doc or "
+        "waveflow_get_example. Best when the query uses Waveflow's own "
+        "vocabulary (DataList, HostActivated, TLAST, cosim); if a plain-English "
+        "query misses, use waveflow_browse instead. Generated code is excluded "
+        "unless include_generated is true."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search terms; identifiers work well.",
+            },
+            "scope": {
+                "type": ["string", "null"],
+                "enum": ["all", "docs", "examples", None],
+                "description": "Restrict to 'docs' or 'examples'. Default 'all'.",
+            },
+            "k": {
+                "type": ["integer", "null"],
+                "description": "Maximum hits to return (default 8, max 50).",
+            },
+            "include_generated": {
+                "type": ["boolean", "null"],
+                "description": (
+                    "Include generated code and other build output. Default "
+                    "false. These files must never be hand-edited."
+                ),
+            },
+        },
+        "required": ["query", "scope", "k", "include_generated"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_search,
+    profiles={"workspace", "headless"},
+)
+
+REGISTRY.add(
+    name="waveflow_find_usage",
+    description=(
+        "Show every place a Waveflow symbol is actually used in the reference "
+        "examples, grouped by example: file, line and how it is used (import, "
+        "base class, decorator, port, call). Accepts a Python name "
+        "('HostActivated', 'DataList', 'synthesizable'), a C++ namespace call "
+        "('streamutils::read_stream'), or an HLS pragma "
+        "('#pragma HLS pipeline'). Use this rather than search when you want "
+        "working code for a specific name. Misses return close alternatives."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbol": {
+                "type": "string",
+                "description": (
+                    "The exact symbol, namespace call or pragma to look up."
+                ),
+            },
+            "include_generated": {
+                "type": ["boolean", "null"],
+                "description": (
+                    "Include generated code and build output. Default false."
+                ),
+            },
+        },
+        "required": ["symbol", "include_generated"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_find_usage,
+    profiles={"workspace", "headless"},
+)
+
+REGISTRY.add(
+    name="waveflow_list_examples",
+    description=(
+        "List every Waveflow reference example with its synopsis, source "
+        "directory, module classes and their kinds, ports, hand-written hook "
+        "files and build script. These are the designs worth copying; "
+        "directories under examples/ that are not listed here are older work "
+        "and must not be used as models. Call this before starting a new "
+        "design to choose the closest reference."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    fn=waveflow_list_examples,
+    profiles={"workspace", "headless"},
+)
+
+REGISTRY.add(
+    name="waveflow_get_example",
+    description=(
+        "Get one reference example: its card plus the full file list, or -- "
+        "with 'file' -- the whole contents of one of its files. Read files "
+        "whole rather than working from search snippets. Files tagged "
+        "generated are codegen output and must never be hand-edited."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": (
+                    "Example name from waveflow_list_examples, e.g. "
+                    "'stream_inband'."
+                ),
+            },
+            "file": {
+                "type": ["string", "null"],
+                "description": (
+                    "A file from the example, as a full path or a bare "
+                    "filename such as 'poly.py'. Omit for the card."
+                ),
+            },
+        },
+        "required": ["name", "file"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_get_example,
+    profiles={"workspace", "headless"},
+)
+
+REGISTRY.add(
+    name="waveflow_get_doc",
+    description=(
+        "Get a whole documentation page, or one section of it by heading. "
+        "Takes a path from waveflow_browse or waveflow_search, such as "
+        "'docs/guide/custom_hooks/writing.md'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": (
+                    "Page path, e.g. 'docs/guide/custom_hooks/writing.md'."
+                ),
+            },
+            "heading": {
+                "type": ["string", "null"],
+                "description": "Return only this section. Omit for the whole page.",
+            },
+        },
+        "required": ["path", "heading"],
+        "additionalProperties": False,
+    },
+    fn=waveflow_get_doc,
+    profiles={"workspace", "headless"},
+)
