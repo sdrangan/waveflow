@@ -3,6 +3,7 @@ title: Developer Setup
 parent: Installation
 nav_order: 2
 has_children: false
+summary: "Cloning and installing Waveflow for development, so you can modify it or run the bundled examples and tests: the clone, a virtual environment, the editable install with the dev tools, and how the requirements files are maintained. For using Waveflow as a library in your own project, see User Setup — that needs no clone."
 ---
 
 # Developer Setup — Cloning and Installing for Development

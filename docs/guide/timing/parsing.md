@@ -3,6 +3,7 @@ title: Parsing VCD Files
 parent: Timing Analysis Tools
 nav_order: 4
 has_children: false
+summary: "Reading a VCD into Python with VcdParser: loading the file, finding the signal names inside it, and adding the ones you want under short display names. The starting point for every other page in this section."
 ---
 
 # Parsing a VCD File

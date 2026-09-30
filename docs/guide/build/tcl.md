@@ -2,6 +2,7 @@
 title: Authoring run.tcl
 parent: Build System
 nav_order: 5
+summary: "What is inside the run.tcl the Vitis steps invoke, which the pattern page treats as a black box. The core sequence from open_project to csim_design, csynth_design and the optional cosim_design, shared by single-kernel and composite projects alike."
 ---
 
 # Authoring `run.tcl`

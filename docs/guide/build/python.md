@@ -2,6 +2,7 @@
 title: Python Simulation Pattern
 parent: Build System
 nav_order: 3
+summary: "A recipe rather than a step: how to write your own BuildStep that runs a SimPy simulation, derived from the polynomial accelerator's PySimStep. Waveflow ships no generic version because every design has its own components, testbench and result format. When a second example follows the pattern, the common scaffolding will be extracted."
 ---
 
 # Python Simulation Pattern

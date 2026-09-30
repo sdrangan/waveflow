@@ -2,6 +2,7 @@
 title: Code Generation Steps
 parent: Build System
 nav_order: 2
+summary: "The four built-in steps that turn Python schema definitions into the C++ a Vitis kernel compiles against: the stream helpers, the memory-manager headers, a header pair per DataSchema, and packed-array helpers per scalar element type. The dependency wiring among them is automatic, but the stream helpers must be added first."
 ---
 
 # Code Generation Steps

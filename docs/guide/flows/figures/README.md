@@ -2,6 +2,7 @@
 title: Flow figure sources
 nav_exclude: true
 search_exclude: true
+summary: "The flow diagrams are TikZ source compiled to cropped SVG, and both are committed. The SVG is deterministic output of the .tex, so a diagram cannot drift from its source the way a hand-exported image does."
 ---
 
 # Flow figures — TikZ source → committed SVG

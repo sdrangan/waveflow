@@ -3,6 +3,7 @@ title: Installing the MCP Server
 parent: AI Tooling
 nav_order: 2
 has_children: false
+summary: "Pointing VS Code at the Waveflow MCP server: install the package into a virtual environment, then run waveflow_mcp_setup --workspace . from the repository you want to work in, which writes .vscode/mcp.json. Written for VS Code; the same configuration adapts to other hosts such as Claude Code."
 ---
 
 # Setting up The MCP Server

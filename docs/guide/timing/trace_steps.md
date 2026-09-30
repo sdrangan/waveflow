@@ -3,6 +3,7 @@ title: Tracing a kernel run
 parent: Timing Analysis Tools
 nav_order: 9
 has_children: false
+summary: "Getting a VCD of a free-running kernel's internal signals, as four ordinary build steps rather than a procedure. The XSI value API resolves top-level ports only, and the interesting nets in a composite are the FIFOs between tasks, so a small Verilog module elaborated alongside the DUT dumps them. General infrastructure: the only example-specific input is the component class."
 ---
 
 # Tracing a kernel run — the four trace steps

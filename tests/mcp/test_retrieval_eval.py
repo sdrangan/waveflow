@@ -45,7 +45,13 @@ QUERIES: list[tuple[str, tuple[str, ...]]] = [
         "AXI4-Stream master and slave ports on a module",
         ("docs/guide/interface/", "docs/guide/comp_codegen/interface.md"),
     ),
-    ("halted error tx_id status after a failure", ("examples/stream_inband/poly.py",)),
+    (
+        "halted error tx_id status after a failure",
+        # Two right answers: the register-map fields are declared in `poly.py`,
+        # and what they mean after a halt is documented across the example's
+        # own pages.
+        ("examples/stream_inband/poly.py", "docs/examples/stream_inband/"),
+    ),
     # --- the register map ----------------------------------------------
     ("register map parameter array", ("docs/guide/interface/primitive/regmap.md",)),
     ("VitisRegMap RegField offsets", ("docs/guide/interface/primitive/regmap.md",)),

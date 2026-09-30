@@ -2,6 +2,7 @@
 title: XSI Build Rung
 parent: Build System
 nav_order: 6
+summary: "The RTL rung for when Vitis cosim is not the right path — notably free-running ap_ctrl_none task networks, which cosim refuses to run. Defines the terms first (xsim, xvlog, xelab, XSI, BFM, the .f manifest), then walks the flow from csynth through a simulator DLL driven cycle by cycle from C++ and compared against a golden."
 ---
 
 # XSI build rung (from zero)

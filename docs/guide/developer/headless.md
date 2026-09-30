@@ -3,6 +3,7 @@ title: Headless Testing
 parent: Developers
 nav_order: 1
 has_children: false
+summary: "Running a prompt against the MCP tools with no human and no IDE, to evaluate the agent as a new user with a specified context. headless.run_session takes the task, the model, the mode and a work directory, which can be left empty to simulate someone starting from nothing. The headless mode adds file read and write tools, which a workspace host such as VS Code already supplies."
 ---
 
 # Headless Testing Mode
