@@ -72,3 +72,14 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   1e-15 early on, but only to about their own convergence error (up to 1.6e-10
   here) at nit = K. Compare iterates tightly before convergence and loosely at
   it, or compare each against the exact solve.
+- **Worker processes barely beat multithreaded BLAS here.** A serial timing that
+  already used all 8 cores through BLAS predicted about 5 minutes with 8 pinned
+  workers; the real run took 29 minutes. Time a single-threaded worker before
+  estimating a parallel run.
+- **`--through X` runs only X's ancestors.** A final step must consume every table
+  its acceptance criterion expects, or those tables silently go unbuilt.
+- **Render the figures and look before committing.** The PNG preview caught a
+  title/legend collision, a curve hidden under another, and a legend label valid
+  for only one panel. None of those show in tests or checksums.
+- **Pick a statistical test's operating point from the theory table.** A point
+  above the ZF crossing gives too few errors for a comparison to mean anything.

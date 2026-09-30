@@ -65,12 +65,18 @@ def mmse(H: np.ndarray, Y: np.ndarray, sigma2: float) -> np.ndarray:
     return np.linalg.solve(mmse_matrix(H, sigma2), _herm(H) @ Y)
 
 
+def bias_from_system(A: np.ndarray, sigma2: float) -> np.ndarray:
+    """MMSE bias ``μ_k = 1 − σ²[A⁻¹]_kk`` from an already-formed ``A = HᴴH + σ²I``.
+
+    Shape ``(..., K, 1)``, so an estimate block ``(..., K, Ns)`` divides by it directly.
+    """
+    inv_diag = np.real(np.diagonal(np.linalg.inv(A), axis1=-2, axis2=-1))
+    return (1.0 - sigma2 * inv_diag)[..., :, None]
+
+
 def mmse_bias(H: np.ndarray, sigma2: float) -> np.ndarray:
     """Per-stream MMSE bias ``μ_k = 1 − σ²[A⁻¹]_kk = [A⁻¹G]_kk``, shape ``(..., K, 1)``."""
-    inv_diag = np.real(
-        np.diagonal(np.linalg.inv(mmse_matrix(H, sigma2)), axis1=-2, axis2=-1)
-    )
-    return (1.0 - sigma2 * inv_diag)[..., :, None]
+    return bias_from_system(mmse_matrix(H, sigma2), sigma2)
 
 
 def _column_dot(u: np.ndarray, v: np.ndarray) -> np.ndarray:
