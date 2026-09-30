@@ -1,7 +1,7 @@
 ---
 title: Searching the Guide and Examples
 parent: AI Tooling
-nav_order: 3
+nav_order: 2
 has_children: false
 summary: "How an AI assistant finds things in Waveflow: six local tools over the guide and the reference examples, with no API key, no service and no corpus to rebuild. The index is built in memory from your checkout each time the server starts, so it is never out of date, and every tool is also a waveflow kb subcommand for agents that cannot speak MCP."
 ---

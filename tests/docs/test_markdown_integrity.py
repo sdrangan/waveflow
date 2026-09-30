@@ -280,7 +280,17 @@ def test_relative_links_resolve(md_files):
     for p in md_files:
         if any(part in _rel(p) for part in _LINK_CHECK_SKIP):
             continue
+        fence = None
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            # A fenced code block is shown, not rendered: `[notes.md](notes.md)` inside a
+            # ```markdown example is text about a link, not a link, so it cannot be dead.
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                marker = stripped[:3]
+                fence = None if fence == marker else (fence or marker)
+                continue
+            if fence:
+                continue
             # Every relative target, not just `.md`.  These docs link into the source tree on
             # purpose -- 419 such links, all of which resolve -- so a renamed module rots them
             # exactly the way a moved page rots a cross-page link, and silently for the same reason.
