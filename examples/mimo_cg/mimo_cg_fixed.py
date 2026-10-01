@@ -152,6 +152,35 @@ class CgFormats:
         return out
 
 
+def accumulator_formats(formats: CgFormats, K: int) -> dict[str, Format]:
+    """The exact accumulator formats a hardware or C++ implementation must provide.
+
+    ``mm_ap`` (A @ P), ``mm_ax`` (A @ X, explicit residual), ``dot_ps`` (Σ Re(conj(P) S)),
+    ``dot_rz`` (Σ |R|²), and ``rzw``, the widened dividend register.
+    """
+    f = formats
+    return {
+        "mm_ap": _matmul_format(f.A, f.P, K),
+        "mm_ax": _matmul_format(f.A, f.X, K),
+        "dot_ps": _dot_format(f.P, f.S, K),
+        "dot_rz": _dot_format(f.R, f.R, K),
+        "rzw": _widened(f.rz, f.g_div),
+    }
+
+
+def quantize_inputs(
+    A: np.ndarray, B: np.ndarray, formats: CgFormats, scale: float = 1.0
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Stored integers ``(A_re, A_im, B_re, B_im)`` of ``A/scale`` and ``B/scale``.
+
+    This is the only floating-point to fixed-point step; :func:`cg_fixed` and the C++
+    conformance harness both use it, so they start from identical integers.
+    """
+    ar, ai = _from_real(np.asarray(A) / scale, formats.A)
+    br, bi = _from_real(np.asarray(B) / scale, formats.B)
+    return ar, ai, br, bi
+
+
 def _widened(fmt: Format, g: int) -> Format:
     return Format(fmt.W + g, fmt.int_bits, fmt.signed, fmt.q_mode, fmt.o_mode)
 
@@ -277,8 +306,7 @@ def cg_fixed(
     if wanted is not None and any(n < 0 or n > nit for n in wanted):
         raise ValueError(f"iterates must lie in [0, {nit}], got {sorted(wanted)}")
 
-    ar, ai = _from_real(np.asarray(A) / scale, f.A)
-    br, bi = _from_real(np.asarray(B) / scale, f.B)
+    ar, ai, br, bi = quantize_inputs(A, B, f, scale)
     ar, ai = np.broadcast_arrays(ar, ai)
     shape = np.broadcast_shapes(ar.shape[:-2], br.shape[:-2]) + br.shape[-2:]
     br, bi = np.broadcast_to(br, shape), np.broadcast_to(bi, shape)

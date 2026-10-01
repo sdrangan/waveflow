@@ -124,3 +124,12 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   nothing used 63-bit wraps until a widened division did.
 - **Anchor plan edits at line start.** `| 2.3 |` also appears in the §9 numbers
   table. Match `\n| 2.3 |`, and check that the commit includes the plan file.
+- **Don't use `std::complex<ap_fixed>` for a bit-exact model.** Its `operator*`
+  assigns each partial product back to the element type, which rounds where the
+  model keeps full precision. Keep re and im as separate `ap_fixed` values and write
+  the products out.
+- **Let Python emit only the types; hand-write the algorithm.** The C++ template
+  and the Python golden share one documented register order, and Python generates
+  the exact accumulator typedefs. Both matched on the first C-sim run.
+- **Batch conformance cases into one C-sim run.** One compile per case set (about
+  8 s) handles 51 problems, against roughly 6 s per case for one run each.
