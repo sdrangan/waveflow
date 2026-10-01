@@ -9,6 +9,7 @@ one (recorded from Claude Code 2.1.285).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from waveflow.mcp import blind_test as bt
@@ -214,7 +215,29 @@ def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
 
 
 def test_the_no_waveflow_arm_keeps_the_operators_path(monkeypatch):
+    monkeypatch.setattr(bt, "_vitis_bin", lambda: None)   # Vitis's own PATH entry: next test
     monkeypatch.setenv("PATH", "OPERATOR")
     assert bt._agent_env(True)["PATH"] == "OPERATOR"
     assert bt._agent_env(False)["PATH"].endswith("OPERATOR")
     assert bt._agent_env(False)["PATH"] != "OPERATOR"
+
+
+def test_vitis_is_on_path_and_allowed_however_it_is_spelled(tmp_path, monkeypatch):
+    """The first no-Waveflow rotate run was denied every call of vitis-run by full path."""
+    vb = tmp_path / "Xilinx" / "2025.1" / "Vitis" / "bin"
+    monkeypatch.setattr(bt, "_vitis_bin", lambda: vb)
+    rules = bt.vitis_allowed()
+    for spelled in (str(vb / "vitis-run.bat"), (vb / "vitis-run.bat").as_posix(), "vitis-run"):
+        assert f"Bash({spelled}:*)" in rules and f"PowerShell({spelled}:*)" in rules
+    for arm in (True, False):
+        assert bt._agent_env(arm)["PATH"].split(os.pathsep).count(str(vb)) == 1
+    assert str(vb) in bt.harness_note() and "vitis-run" in bt.harness_note()
+
+    spec = tmp_path / "s.md"
+    spec.write_text("x", encoding="utf-8")
+    seen = {}
+    monkeypatch.setattr(bt, "_drive", lambda f, l, config, **kw: seen.update(config) or {})
+    monkeypatch.setattr(bt, "_waveflow_importable", lambda nw: None)
+    for arm in (True, False):
+        bt.run_blind_test(spec, tmp_path / f"run{arm}", silent=True, no_waveflow=arm)
+        assert f"Bash({(vb / 'vitis-run.bat').as_posix()}:*)" in seen["allowed"]

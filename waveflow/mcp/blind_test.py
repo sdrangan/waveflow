@@ -148,6 +148,49 @@ HARNESS_NOTE = (
     "turn. ScheduleWakeup is not available."
 )
 
+def _vitis_bin() -> Path | None:
+    """The Vitis ``bin`` directory, or None when Vitis is not installed."""
+    try:
+        from waveflow.toolchain.toolchain import find_vitis_path
+
+        exe = find_vitis_path()
+    except Exception:
+        return None
+    return Path(exe).parent if exe else None
+
+
+def vitis_allowed() -> list[str]:
+    """Allow ``vitis-run`` however the agent spells it.
+
+    The agent of the first no-Waveflow rotate run (2026-10-01) found Vitis off PATH,
+    called it by full path, and was denied every time: a rule matches a command's
+    *prefix*, and ``Bash(vitis-run:*)`` is not a prefix of
+    ``/c/Xilinx/2025.1/Vitis/bin/vitis-run.bat``.  The Waveflow arm never noticed,
+    because its builds start Vitis from ``python``.
+    """
+    b = _vitis_bin()
+    if b is None:
+        return []
+    rules = []
+    for name in ("vitis-run", "vitis-run.bat", "vitis_hls", "vitis_hls.bat"):
+        win = str(b / name)
+        fwd = win.replace("\\", "/")
+        drive = fwd[0].lower()
+        msys = f"/{drive}{fwd[2:]}" if fwd[1:2] == ":" else fwd
+        for spelled in {win, fwd, msys, name}:
+            rules += [f"Bash({spelled}:*)", f"PowerShell({spelled}:*)"]
+    return sorted(set(rules))
+
+
+def harness_note() -> str:
+    """HARNESS_NOTE, plus where Vitis is -- environment facts, the same for both arms."""
+    b = _vitis_bin()
+    if b is None:
+        return HARNESS_NOTE
+    return (HARNESS_NOTE + f" Vitis HLS is installed and its bin directory ({b}) is on "
+            "PATH: run it as `vitis-run --mode hls --tcl <script>`.")
+
+
 #: How many times one run may be put back to work after a killed background
 #: command, so an agent that keeps doing it cannot loop forever.
 MAX_CONTINUES = 3
@@ -253,6 +296,10 @@ def _agent_env(no_waveflow: bool = False) -> dict[str, str]:
     rather than trusting whatever ``python`` the operator's shell resolves.
     """
     env = dict(os.environ)
+    # Both arms: Vitis on PATH, like a student who has sourced the Vitis settings.
+    vb = _vitis_bin()
+    if vb is not None:
+        env["PATH"] = str(vb) + os.pathsep + env.get("PATH", "")
     if not no_waveflow:
         bindir = str(Path(sys.executable).parent)
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
@@ -295,7 +342,7 @@ def _run_claude(
         "--setting-sources", "project",
         "--permission-mode", permission_mode,
         "--permission-prompts", "none",
-        "--append-system-prompt", HARNESS_NOTE,
+        "--append-system-prompt", harness_note(),
         "--disallowedTools", *DISALLOWED_TOOLS,
         "--allowedTools", *allowed,
     ]
@@ -668,7 +715,7 @@ def run_blind_test(
 
     first = message or (NO_WAVEFLOW_FIRST if no_waveflow else WAVEFLOW_FIRST).format(
         spec=prompt.name)
-    allowed = [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])]
+    allowed = [*DEFAULT_ALLOWED_TOOLS, *vitis_allowed(), *(extra_allowed or [])]
     config = {
         "prompt": str(prompt),
         "first_message": first,
@@ -722,7 +769,7 @@ def _resume(
     }
     # Saved list, plus defaults added since the run began (Monitor was one),
     # plus this call's --allow.
-    defaults = [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])]
+    defaults = [*DEFAULT_ALLOWED_TOOLS, *vitis_allowed(), *(extra_allowed or [])]
     if config.get("no_waveflow"):
         defaults = baseline_allowed(defaults)
     for a in defaults:
