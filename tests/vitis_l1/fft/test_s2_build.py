@@ -138,3 +138,34 @@ def test_the_generated_top_csynths_and_cosims_bit_exactly():
     done = subprocess.run([py, "verify.py"], cwd=PKG, capture_output=True, text=True)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "ALL BIT-EXACT" in done.stdout, done.stdout
+
+
+# -- the documented numbers ----------------------------------------------------------------------
+def test_the_timing_page_quotes_the_measured_cycles():
+    """Every cycle count in the guide must be the one that was measured.
+
+    The cosim reports are build artifacts and are not committed, so the measurement is recorded in
+    ``results/cosim_cycles.json`` and the page is held to *that*. A number in a doc that nothing
+    recomputes will rot; this is the cheapest link that cannot.
+    """
+    import json
+
+    rec = json.loads((PKG / "results" / "cosim_cycles.json").read_text(encoding="utf-8"))
+    page = (Path(__file__).resolve().parents[3] / "docs" / "guide" / "vitis_l1"
+            / "timing.md").read_text(encoding="utf-8")
+
+    lat, ii = rec["serial_tb"]["latency_min"], rec["serial_tb"]["interval_min"]
+    assert (lat, ii) == (45, 46), "the recorded measurement moved; update the page with it"
+    assert rec["pipelined_tb"]["latency_min"] == lat, (
+        "the two testbenches disagree on latency — the overlap conclusion needs revisiting")
+    assert rec["pipelined_tb"]["interval_min"] == ii, (
+        "the pipelined testbench now reports a different interval, which would mean frames DO "
+        "overlap and the page's conclusion is wrong")
+    assert f"| **{lat}** | **{ii}** |" in page, "the page's table no longer quotes the measurement"
+    ref = rec["reference_array_port_dut"]
+    assert f"| {ref['latency_min']} | {ref['interval_min']} |" in page
+    # The adapter's cost is a derived claim, so derive it rather than trusting the prose.
+    assert lat - ref["latency_min"] == 4 and ii - ref["interval_min"] == 4
+    assert "costs 4 cycles" in page
+    # ceil(latency / II) is what bounds frames in flight, and the page says one.
+    assert -(-lat // ii) == 1 and f"ceil({lat}/{ii}) = 1" in page

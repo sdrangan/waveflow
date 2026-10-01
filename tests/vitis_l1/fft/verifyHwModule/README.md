@@ -53,6 +53,19 @@ Two findings worth carrying into S6:
   configured with the plan's seed it would have claimed six, over-promising throughput sixfold.
   This is why `latency_cycles`/`ii_cycles` have no defaults.
 
+  **This was checked, not assumed.** `src/tb.cpp` fills the inputs, calls the top, drains the
+  outputs, then repeats — a shape that cannot overlap frames whatever the hardware could do, so on
+  its own it cannot tell "the design serializes" from "the testbench never asked it to". That is
+  the same error that made a declared II of 8 read as 16 in the pysim harness, with the lanes
+  transferred one after another instead of concurrently. So `src/tb_pipelined.cpp` queues every
+  frame's input up front and calls the top back to back with nothing drained in between. It reports
+  the **same** 45 and 46 (total 184 cycles for 4 frames = 46 each), so the serialization is in the
+  design as built, not in the measurement. Both figures are in
+  `results/cosim_cycles.json`, which `test_s2_build.py` holds the docs to.
+
+  What remains untested is whether a *different* construction would overlap — a free-running
+  `hls::task` body, or AMD's own wide-stream `fftStreamingKernel`.
+
 **C-synthesis cannot supply these numbers.** The plan expects to seed them from
 `csynthparse` (`PipelineII` / `Latency` out of `csynth.xml`), but for this top every latency and
 interval field reads `undef` — it is a `DATAFLOW` region, so Vitis does not bound it statically.
@@ -71,6 +84,8 @@ Vitis reports `CSim failed with errors` / `SIGSEGV` — naming neither the file 
 build.py              writes include/, gen/, run.tcl from the framework pieces
 verify.py             compares results/ against data/golden_output.txt
 src/tb.cpp            the testbench, shared by csim and cosim
+src/tb_pipelined.cpp  the overlap experiment: all input queued up front, calls back to back
+results/cosim_cycles.json  the measured latency/interval from both testbenches
 data/input.txt        the 12 L=16 golden input vectors (raw stored integers)
 data/golden_output.txt   what the vendor produced for them
 results/              output_csim.txt, output_cosim.txt — committed, they are the evidence
