@@ -100,3 +100,17 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **After stopping a background run, check for orphaned workers and verify the
   outputs by hash.** `write_table` writes only at the end of a step, so a stopped
   run left the committed tables intact.
+
+## Phase 2 (2026-09-30)
+
+- **Read the vendor header, not only the guide.** `ap_fixed_base.h` gives the
+  exact `RType::div` result format and the operation (`(a << Fb) / b`, truncated
+  toward zero). It also shows the C-simulation divide running at the shifted
+  dividend's width, which makes most-negative / −1 LSB wrap. Only an edge-case
+  conformance pair exposed that.
+- **A fixed-point division keeps the dividend's fraction bits.** Quotient
+  precision comes from widening the dividend first, not from the divisor or the
+  target format.
+- **Check a format's LSB before writing a test value.** `s16_10` has 6 fraction
+  bits, so 2⁻¹⁰ quantizes to 0, and the zero guard then hides the mistake as a
+  "wrong" result.

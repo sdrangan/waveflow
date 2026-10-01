@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from examples.schemas.fixedpoint.fixedpoint_build import conformance_for_case, div_cases
 from examples.schemas.fixedpoint.kernels import render_binop
 from waveflow.build.build import BuildConfig
 from waveflow.build.streamutils import StreamUtilsStep
@@ -98,3 +99,28 @@ def test_ap_fixed_mult_kernel_csim_bit_exact(tmp_path):
     expected = np.asarray(fixputils.to_bits(np.asarray(py), ft.W)).astype(np.uint64)
     assert np.array_equal(vitis_bits, expected), (
         f"mult+quantize bits differ: vitis={vitis_bits} python={expected} (real={to_real(py)})")
+
+
+DIV_CASES = div_cases()
+
+
+def test_div_cases_cover_the_ac22_requirements():
+    """plans/mimo_cg AC2.2: >= 1000 operand pairs, >= 3 formats, zero and tiny divisors, sat."""
+    assert sum(len(c["expected"]) for c in DIV_CASES) >= 1000
+    assert len({c["name"].split("_to_")[0] for c in DIV_CASES}) >= 3
+    assert any(c["name"].endswith("_sat") for c in DIV_CASES)
+    assert any(c["name"].endswith("_wrap") for c in DIV_CASES)
+
+
+@pytest.mark.vitis
+@pytest.mark.parametrize("case", DIV_CASES, ids=[c["name"] for c in DIV_CASES])
+def test_ap_fixed_div_with_zero_guard_is_bit_exact(tmp_path, case):
+    """``div`` == Vitis ``(b == 0) ? 0 : a / b``, bit for bit, exact and quantized in all modes."""
+    if not toolchain.find_vitis_path():
+        pytest.skip("Vitis not found.")
+    result = conformance_for_case(case, tmp_path)
+    assert result["count_ok"], f"{case['name']}: Vitis emitted a different number of outputs."
+    assert result["exact"], (
+        f"{case['name']}: {len(result['mismatches'])} disagreement(s) between Python and Vitis; "
+        f"the Python model is wrong (do NOT loosen). First few: {result['mismatches'][:5]}"
+    )

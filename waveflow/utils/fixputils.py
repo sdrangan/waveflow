@@ -207,6 +207,20 @@ def shift_format(a: Format, n: int) -> Format:
     return Format(a.W, a.int_bits + n, a.signed, a.q_mode, a.o_mode)
 
 
+def div_format(a: Format, b: Format) -> Format:
+    """``ap_fixed`` division: ``<Sb + Wa + max(Fb, 0), Sb + Ia + Fb>``, signed if either.
+
+    The rule of Vitis 2024.1 ``ap_fixed_base.h`` (``RType::div``, non-``__SC_COMPATIBLE__``;
+    ``Sb`` = 1 for a signed divisor).  The quotient keeps the **dividend's** fraction bits
+    (``F = Fa`` for ``Fb >= 0``).  For a more precise quotient, widen the dividend first:
+    quantize it to more fraction bits, which is exact.
+    """
+    _require_same_sign(a, b)
+    sb = 1 if b.signed else 0
+    fb = b.frac_bits
+    return Format(sb + a.W + max(fb, 0), sb + a.int_bits + fb, a.signed or b.signed)
+
+
 def sum_format(a: Format, n_terms: int) -> Format:
     """Reduction of ``n_terms`` values: grow integer bits by ``ceil(log2(n_terms))``."""
     if n_terms < 1:
@@ -235,6 +249,34 @@ def sub(sa: NDArray, a: Format, sb: NDArray, b: Format) -> tuple[NDArray, Format
     aa = np.asarray(sa).astype(r.dtype) << (r.frac_bits - a.frac_bits)
     bb = np.asarray(sb).astype(r.dtype) << (r.frac_bits - b.frac_bits)
     return (aa - bb).astype(r.dtype), r
+
+
+def div(sa: NDArray, a: Format, sb: NDArray, b: Format) -> tuple[NDArray, Format]:
+    """``ap_fixed`` division with a zero guard.
+
+    Vitis computes ``(a << max(Fb, 0)) / b`` as an integer division that truncates toward
+    zero (``sdiv``/``udiv`` in ``ap_fixed_base.h``); the result has :func:`div_format`.
+    ``ap_fixed`` leaves ``x / 0`` undefined, so Waveflow defines it as **0**: generated or
+    hand-written C++ must guard the same way, ``(b == 0) ? 0 : a / b``.
+
+    One Vitis C-simulation detail is reproduced exactly: the integer division runs at the
+    shifted dividend's width ``max(Wa + max(Fb, 0), Wb)``, not at the wider result type, so
+    the single overflowing case, the most negative dividend over a divisor of −1 LSB, wraps
+    back to the most negative value.  (In the CG solve, the divisors ``pᴴAp`` and ``rᴴr``
+    are never negative, so this cannot occur there.)
+    """
+    r = div_format(a, b)
+    num = np.asarray(sa).astype(r.dtype) << max(b.frac_bits, 0)
+    den = np.asarray(sb).astype(r.dtype)
+    num, den = np.broadcast_arrays(num, den)
+    zero = den == 0
+    safe = np.where(zero, 1, den)
+    if r.signed:
+        quot = np.sign(num) * np.sign(safe) * (np.abs(num) // np.abs(safe))
+        quot = truncate(quot, max(a.W + max(b.frac_bits, 0), b.W), signed=True)
+    else:
+        quot = num // safe
+    return np.where(zero, 0, quot).astype(r.dtype), r
 
 
 def shift(sa: NDArray, a: Format, n: int) -> tuple[NDArray, Format]:

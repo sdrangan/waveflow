@@ -87,6 +87,34 @@ The modes are `enum.Enum`s whose value is the Vitis template token (so codegen e
 `AP_RND_CONV`, which is **not in v1** (planned, see Phase 6). If your model needs
 unbiased rounding, do not assume `AP_RND` provides it.
 
+## Division
+
+`div(a, b)` is `ap_fixed` division, as Vitis 2024.1 implements it in
+`ap_fixed_base.h`, plus a guard that Waveflow adds:
+
+- **Result format.** `<Sb + Wa + max(Fb, 0), Sb + Ia + Fb>`, where `Sb` is 1 for a
+  signed divisor. The quotient keeps the **dividend's** fraction bits.
+- **Rounding.** The stored quotient is `(a << Fb) / b` in integer division,
+  truncated **toward zero**: `−1/3` gives `−0.3125` in `s8_4`, not floor's
+  `−0.375`.
+- **Precision.** To get a more precise quotient, first `quantize` the dividend to
+  more fraction bits. That step is exact.
+- **Zero divisor.** `ap_fixed` leaves `x / 0` undefined, so Waveflow defines it as
+  **0**. Matching C++ must guard the same way: `(b == 0) ? 0 : a / b`.
+- **One overflow corner.** Vitis C-simulation divides at the shifted dividend's
+  width `max(Wa + Fb, Wb)`, not at the wider result type, so the most negative
+  dividend divided by −1 LSB wraps back to the most negative value. `div`
+  reproduces this exactly.
+
+```python
+from waveflow.hw.fixpoint import FixedField, div, from_real, to_real
+
+Q8_4 = FixedField.specialize(8, 4)
+q = div(from_real([1.0, -1.0, 1.0], Q8_4), from_real([3.0, 3.0, 0.0], Q8_4))
+q.element_type.cpp_type   # 'ap_fixed<13, 9, AP_TRN, AP_WRAP>'
+to_real(q)                # array([ 0.3125, -0.3125,  0.    ])
+```
+
 ## Integer-backed storage and the real view
 
 Storage is the **stored integer** (decision: integer-backed). A scalar `FixedField`'s
@@ -115,7 +143,8 @@ The contract is proven empirically. The harness under
 quantizes a sweep of edge values (exact-representable, rounding midpoints, min/max
 overflow, negatives, unsigned-negative inputs) in Vitis C-sim and asserts the emitted
 bits equal the Python `fixputils` bits **exactly**, across the curated configs × every
-mode. If Python and Vitis ever disagree, the Python model is wrong — it is fixed, the
+mode. The arithmetic cases include division: 2632 operand pairs over five format pairs
+and all four modes, with zero, tiny and negative divisors. If Python and Vitis ever disagree, the Python model is wrong — it is fixed, the
 comparison is never loosened. Run it with `pytest -m vitis -k fixedpoint`.
 
 ## See also

@@ -73,6 +73,27 @@ int main(int argc, char** argv) {{
 """
 
 
+def render_div(type_a: str, wa: int, type_b: str, wb: int, type_t: str, wt: int) -> str:
+    """``y = (b == 0) ? 0 : a / b`` — ``ap_fixed`` division with Waveflow's zero guard.
+
+    ``a / b`` has the full-precision ``ap_fixed`` div type; assigning it to the target
+    quantizes with the target's modes, as for the other binary ops."""
+    return _PREAMBLE + f"""
+int main(int argc, char** argv) {{
+    auto A = read_bits(argv[1]);
+    auto B = read_bits(argv[2]);
+    std::ofstream out(argv[3]);
+    for (size_t i = 0; i < A.size(); ++i) {{
+        {type_a} a; a.range({wa} - 1, 0) = (ap_uint<{wa}>)A[i];
+        {type_b} b; b.range({wb} - 1, 0) = (ap_uint<{wb}>)B[i];
+        {type_t} y = (b == 0) ? {type_t}(0) : {type_t}(a / b);
+        out << (unsigned long long)y.range({wt} - 1, 0) << "\\n";
+    }}
+    return 0;
+}}
+"""
+
+
 def render_requant(type_src: str, wsrc: int, type_t: str, wt: int) -> str:
     """``y = x`` — quantize-on-assignment from a (wider) source to the target type."""
     return _PREAMBLE + f"""

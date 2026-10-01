@@ -5,11 +5,13 @@ round-trip, the scalar .real view, serialize round-trip, and the free arithmetic
 functions on DataArray operands — result-format derivation + exact real results
 (full-precision intermediates) + quantize vs the fixputils oracle.
 """
+from fractions import Fraction
+
 import numpy as np
 import pytest
 
 from waveflow.hw.fixpoint import (
-    FixedField, add, fixed_sum, from_real, mult, quantize, shift, sub, to_real,
+    FixedField, add, div, fixed_sum, from_real, mult, quantize, shift, sub, to_real,
 )
 from waveflow.utils import fixputils
 from waveflow.utils.fixputils import Format, OMode, QMode
@@ -166,3 +168,78 @@ def test_arith_kernel_renderers():
     dot = render_dot("ap_fixed<8, 4, AP_TRN, AP_WRAP>", 8, "ap_fixed<8, 4, AP_TRN, AP_WRAP>", 8,
                      "ap_fixed<22, 14, AP_TRN, AP_WRAP>", "ap_fixed<8, 4, AP_TRN, AP_WRAP>", 8)
     assert "acc += a * b;" in dot and "ap_fixed<22, 14, AP_TRN, AP_WRAP> acc = 0;" in dot
+
+
+# --- division (plans/mimo_cg/mimo_cg_paper_sims.md, step 2.2) ------------------------------
+
+
+def _trunc_div(n: int, d: int) -> int:
+    """Integer division truncating toward zero, in exact Python integers."""
+    q = abs(n) // abs(d)
+    return q if (n >= 0) == (d > 0) else -q
+
+
+def test_div_format_is_the_vitis_rule():
+    # <Sb + Wa + max(Fb, 0), Sb + Ia + Fb>: the quotient keeps the dividend's fraction bits.
+    assert fixputils.div_format(Format(8, 4), Format(8, 4)) == Format(13, 9, True)
+    assert fixputils.div_format(Format(33, 9), Format(34, 10)) == Format(58, 34, True)
+    assert fixputils.div_format(Format(8, 4, False), Format(8, 4, False)) == Format(12, 8, False)
+    assert fixputils.div_format(Format(16, 6), Format(12, 3)).frac_bits == 10
+    with pytest.raises(NotImplementedError):
+        fixputils.div_format(Format(8, 4), Format(8, 4, False))  # mixed sign
+    with pytest.raises(NotImplementedError):
+        fixputils.div_format(Format(40, 9), Format(34, 10))  # 1 + 40 + 24 > 64
+
+
+def test_div_truncates_toward_zero_and_guards_zero():
+    S = FixedField.specialize(8, 4)
+    a = from_real([1.0, -1.0, 7.0, -8.0, 1.0, 0.5, -0.0625], S)
+    b = from_real([3.0, 3.0, 0.0625, -0.0625, 0.0, -2.0, 0.0], S)
+    q = div(a, b)
+    assert q.element_type.get_format() == Format(13, 9, True)
+    # 1/3 = 0.333 -> 0.3125 and -1/3 -> -0.3125 (toward zero, not floor's -0.375); x/0 = 0.
+    # -8 / -0.0625 is min / -1 LSB, which Vitis C-sim wraps to -128 (see the test below).
+    np.testing.assert_array_equal(to_real(q), [0.3125, -0.3125, 112.0, -128.0, 0.0, -0.25, 0.0])
+
+
+@pytest.mark.parametrize(
+    "fa,fb",
+    [((8, 4), (8, 4)), ((16, 6), (12, 3)), ((33, 9), (34, 10)), ((33, 9), (33, 9)), ((20, 9), (16, 10))],
+)
+def test_div_matches_exact_integer_arithmetic(fa, fb):
+    """Stored quotient == trunc((a << Fb) / b) in exact Python integers, and |q - a/b| < 1 LSB."""
+    A, B = Format(*fa), Format(*fb)
+    rng = np.random.default_rng(17)
+    sa = rng.integers(-(1 << (A.W - 1)), 1 << (A.W - 1), size=400)
+    sb = rng.integers(-(1 << (B.W - 1)), 1 << (B.W - 1), size=400)
+    sb[:8] = [0, 1, -1, 2, -3, 7, (1 << (B.W - 1)) - 1, -(1 << (B.W - 1))]
+    q, r = fixputils.div(sa, A, sb, B)
+    for x, y, got in zip(sa.tolist(), sb.tolist(), q.tolist(), strict=True):
+        if y == 0:
+            assert got == 0
+            continue
+        if x == -(1 << (A.W - 1)) and y == -1:
+            continue  # the Vitis C-sim wrap, tested on its own below
+        assert got == _trunc_div(x << B.frac_bits, y)
+        exact = Fraction(x, 1 << A.frac_bits) / Fraction(y, 1 << B.frac_bits)
+        assert abs(Fraction(got, 1 << r.frac_bits) - exact) < Fraction(1, 1 << r.frac_bits)
+
+
+def test_div_min_by_minus_one_lsb_wraps_like_vitis_csim():
+    """Vitis C-sim divides at the shifted dividend's width (Wa + Fb = 12 bits here), so the
+    one overflowing quotient, min / -1 LSB = -8 / -0.0625 = +128, wraps to -128.  Measured on
+    Vitis 2024.1 (conformance case div_s8_4, pair 220); other negative divisors are exact."""
+    A = Format(8, 4)
+    q, r = fixputils.div(np.array([-128, -128]), A, np.array([-1, -16]), A)
+    np.testing.assert_array_equal(fixputils.to_float(q, r), [-128.0, 8.0])
+
+
+def test_div_then_quantize_saturates_or_wraps():
+    A, B = FixedField.specialize(20, 9), FixedField.specialize(16, 10)
+    a = from_real([200.0], A)
+    b = from_real([2.0 ** -6], B)  # one LSB of s16_10 (6 fraction bits): a huge quotient
+    wide = div(a, b)
+    sat = quantize(wide, FixedField.specialize(12, 5, o_mode=SAT))
+    wrap = quantize(wide, FixedField.specialize(12, 5, o_mode=WRAP))
+    assert to_real(sat)[0] == pytest.approx(16 - 2.0 ** -7)
+    assert to_real(wrap)[0] != to_real(sat)[0]

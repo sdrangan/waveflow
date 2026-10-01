@@ -19,6 +19,7 @@ def test_cases_cover_quantization_and_all_arithmetic_ops():
     assert any(n.startswith("add_") for n in names)
     assert any(n.startswith("quant_prod_to_s8_4") for n in names)     # requantize
     assert "dot_s24_12_n16" in names                                   # sum-of-products
+    assert sum(n.startswith("div_") for n in names) >= 5            # division, zero-guarded
     # every curated quantization config x mode (6 widths x 4 modes = 24)
     quant = [n for n in names if n.startswith("quant_s") or n.startswith("quant_u")]
     assert len(quant) == 24
