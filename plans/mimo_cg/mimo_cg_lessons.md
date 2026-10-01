@@ -148,3 +148,15 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Coverage needs a count, not just a pass.** Bit-exact on 580k words still said
   nothing about α/β saturation until a stress set forced it and a test checked it
   happened.
+
+## Phase 3 (2026-09-30)
+
+- **Don't name a sweep axis or step parameter `config`.** `BuildStep.run(self,
+  config, **params)` already takes `config` (the BuildConfig), so the DAG passes it
+  twice and every point fails.
+- **Seed by chunk to parallelize a point without moving samples.** A generator
+  keyed by (point, chunk index) lets any worker rebuild any chunk, so only error
+  counts cross process boundaries.
+- **Edit scripts must survive black.** Matching exact text that black has since
+  reformatted failed twice. Match on stable tokens or patterns, and stop with
+  nothing written when a match fails.
