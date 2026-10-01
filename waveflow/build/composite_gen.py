@@ -2714,7 +2714,8 @@ def tcl_target(config) -> tuple[str, float]:
 
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
                part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
-               solution_config: tuple[str, ...] = ()) -> str:
+               solution_config: tuple[str, ...] = (),
+               include_dirs: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
 
@@ -2735,13 +2736,22 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     csynth cannot resolve them.
 
     *part* / *period_ns* pin the synthesis target — pass :func:`tcl_target` of the build's config to
-    drive them from the selected platform; the defaults reproduce the historical TCL byte-for-byte."""
+    drive them from the selected platform; the defaults reproduce the historical TCL byte-for-byte.
+
+    *include_dirs* are additional ``-I`` paths appended to ``$cf``, for a body that includes
+    headers living outside the generated ``include/`` directory.  The case this exists for is
+    vendor IP: ``waveflow/vitis_l1`` wraps ``xf::dsp::fft::fft<>``, whose headers stay in the Vitis
+    install and are reached with an include path rather than copied
+    (:mod:`waveflow.build.vitis_l1_step` resolves it).  **Empty by default**, so every existing
+    generated top renders byte-for-byte as before — several are gated on exact RTL cycle counts, and
+    a changed TCL is a changed build."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
+    incs = "".join(f" -I{d}" for d in include_dirs)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\
 set part {{{part}}}
-set cf "-I{INCLUDE_DIR}"
+set cf "-I{INCLUDE_DIR}{incs}"
 puts "WAVEFLOW_INFO: {top_name}"
 open_project -reset {top_name}_proj
 set_top {top_name}

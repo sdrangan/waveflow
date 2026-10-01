@@ -266,7 +266,12 @@ class VitisFft(FreeRunMod):
             tuple([f"s_in_{i}" for i in range(R)] + [f"m_out_{i}" for i in range(R)]),
             template_args=(int(self.L), R, int(self.in_w), int(self.in_i),
                            int(self.tw_w), int(self.tw_i),
-                           int(self.scaling_mode), int(self.output_order)))
+                           int(self.scaling_mode), int(self.output_order),
+                           # The derived output width, passed so the C++ can static_assert it
+                           # against the vendor's own ssr_fft_output_type.  That turns "my
+                           # derivation matches OUTPUT_WL" into a compile-time check: a wrong
+                           # width cannot reach synthesis.
+                           int(self.out_fmt.W)))
 
     # -- pysim ----------------------------------------------------------------------------------
     def _get_frame(self, ep, n_words: int):
