@@ -366,15 +366,18 @@ re-pointed).
   do I loop over transactions in the testbench" and "how do I send a burst
   without TLAST".
 
-> **MOSTLY DONE (2026-10-01).**
+> **DONE (2026-10-01).**
 > - **New page:** `docs/guide/custom_hooks/body_only.md`, first in the
 >   section, linked from its index.
 > - **`comp_codegen/testbench.md`** gained "What a `SeqTB` body can
 >   express", a can/can't table that points to the hand-written route.
 > - **Two paraphrase tests**, both reached by BM25 (measured).
-> - **Not done:** `docs/guide/build/python.md` and `build/vitis.md` still
->   walk through the *old* `stream_inband` build line by line. They now say
->   so at the top; a full rewrite is a follow-up.
+> - **`build/python.md` and `build/vitis.md` rewritten** (2026-10-01) around
+>   the current `poly_build.py`: scenarios -> model -> pysim -> one `CheckStep`
+>   per stage; `SourcesStep` before `gen_kernel`; the env-var stage switch
+>   (no `--tclargs`); csynth gated on `check_csim`; cosim of one scenario; the
+>   framework timing steps; `summary` as the target; `run_dag_cli`; the
+>   one-level Vitis project rule. Stage 6 is DONE.
 
 ### Stage 7: measure again
 
