@@ -539,9 +539,30 @@ def _killed_at_end(transcript: Path) -> list[str]:
     ]
 
 
+_USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+               "output_tokens")
+
+
 def _result_record(transcript: Path) -> dict[str, Any] | None:
+    """The phase's result: the LAST result record, with usage, turns and time SUMMED.
+
+    One ``claude -p`` phase can write several result records.  Each time a Monitor
+    wakes an agent whose turn had ended, the session runs another turn and writes
+    another result covering that turn alone.  Taking only the last undercounted the
+    first no-Waveflow rotate run about 30-fold (91k tokens reported, 3.1M used).
+    """
     results = [r for r in _records(transcript) if r.get("type") == "result"]
-    return results[-1] if results else None
+    if not results:
+        return None
+    merged = dict(results[-1])
+    usage = dict(merged.get("usage") or {})
+    for k in _USAGE_KEYS:
+        usage[k] = sum(int((r.get("usage") or {}).get(k) or 0) for r in results)
+    merged["usage"] = usage
+    merged["num_turns"] = sum(int(r.get("num_turns") or 0) for r in results)
+    merged["duration_ms"] = sum(int(r.get("duration_ms") or 0) for r in results)
+    merged["result_records"] = len(results)
+    return merged
 
 
 def default_folder(prompt: str | Path) -> Path | None:

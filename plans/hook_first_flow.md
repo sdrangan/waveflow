@@ -135,6 +135,28 @@ So that "not much worse" is a number, not a feeling.
 >   Claude login, so they are the operator's to start:
 >   `waveflow blind-test --prompt examples/mcp_test/rotate_func.md [--no-waveflow]`.
 
+> **First pair of runs (2026-10-02), `rotate_func.md`, one run per arm:**
+>
+> | | No Waveflow | Waveflow |
+> | --- | --- | --- |
+> | Grader (seed 20261002, 18 hidden tx, 32 + 64) | **PASS**, `half_up/saturate/sum` | **PASS**, `half_up/saturate/sum` |
+> | Wall | 8.8 min | 12.6 min (1.4x) |
+> | Turns | 86 | 88 |
+> | Tokens in (cached) | 3.9M | 9.1M (2.3x) |
+> | Tokens out | 38k | 75k (2.0x) |
+>
+> - Same turn count; the Waveflow arm's tokens go to a **larger context per turn**
+>   (about 95k cached per turn vs about 41k): docs and example files read into it.
+> - **The frame adds work the spec did not ask for:** an END command, a response header
+>   and footer, a `BAD_PARAM` code, the Stage 1 review artifacts (worked examples,
+>   `layout.md`, `stage1_demo.py`) and pysim. The Waveflow agent says so in its
+>   report. A functional-only spec wants a lighter frame.
+> - **Harness defects found and fixed:** (1) `vitis-run` by full path was denied, and
+>   Vitis was off PATH; only the baseline arm calls it directly. (2) The summary kept
+>   only the LAST result record; Monitor wake-ups write one each, which undercounted
+>   the baseline about 30-fold (91k reported vs 3.1M).
+> - One run per arm is an anecdote, not a measurement; 2-3 each are still owed.
+
 ### Stage 1: the code-generation change
 
 - **Pass the register map into a hook.** When a hook parameter is the
