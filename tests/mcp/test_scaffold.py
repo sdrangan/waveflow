@@ -47,17 +47,20 @@ def test_writes_the_files_the_frame_promises(project: Path) -> None:
     for name in (
         "gain_clip.py",
         "gain_clip_build.py",
-        "gain_clip_evaluate_impl.tpp",
+        "gain_clip_body_impl.tpp",
+        "gain_clip_tb.cpp",
+        "scenarios.py",
+        "run.tcl",
         "AGENTS.md",
         "frame.md",
         "CLAUDE.md",
         "GEMINI.md",
-        "spec/oracle.py",
-        "spec/scenarios.py",
-        "spec/check.py",
-        "spec/layout.md",
+        "layout.md",
     ):
         assert (project / name).is_file(), f"missing {name}"
+    # The old spec/ folder is gone: scenarios.py carries the scenarios, the expected
+    # responses and the checker; <name>.py carries the schemas and the function.
+    assert not (project / "spec").exists()
 
 
 def test_agents_md_is_the_process_verbatim(project: Path) -> None:
@@ -172,12 +175,13 @@ def test_prose_about_the_reference_design_is_left_alone(project: Path) -> None:
 
 def test_the_compute_is_removed_from_both_sides(project: Path) -> None:
     python = (project / "gain_clip.py").read_text(encoding="utf-8")
-    cpp = (project / "gain_clip_evaluate_impl.tpp").read_text(encoding="utf-8")
+    cpp = (project / "gain_clip_body_impl.tpp").read_text(encoding="utf-8")
 
     assert "TODO" in python and "TODO" in cpp
-    # The Horner evaluation, on both sides.
-    assert "power *= samp_in" not in python
-    assert "eval_gain_clip_horner" not in cpp and "eval_poly_horner" not in cpp
+    # The Horner arithmetic, on both sides; the functions themselves stay as the seams.
+    assert "y = (y * xs)" not in python and "c[3]" not in python
+    assert "coeff[3]" not in cpp and "y = y * x;" not in cpp
+    assert "def gain_clip_eval" in python and "eval_gain_clip_horner" in cpp
 
 
 def test_the_framing_is_not_removed(project: Path) -> None:
@@ -188,7 +192,7 @@ def test_the_framing_is_not_removed(project: Path) -> None:
     is exactly what the reference example exists to prevent.
     """
     python = (project / "gain_clip.py").read_text(encoding="utf-8")
-    cpp = (project / "gain_clip_evaluate_impl.tpp").read_text(encoding="utf-8")
+    cpp = (project / "gain_clip_body_impl.tpp").read_text(encoding="utf-8")
 
     assert "WRONG_NSAMP" in python
     assert "TLAST_EARLY_SAMP_IN" in python
@@ -257,7 +261,7 @@ def test_the_tool_names_what_to_read_first(tmp_path) -> None:
         "demo_accel", frame=None, directory=str(tmp_path / "demo")
     )
     assert result["read_first"] == ["AGENTS.md", "frame.md"]
-    assert "--through py_sim" in result["next"]
+    assert "--through check_pysim" in result["next"]
 
 
 # ---------------------------------------------------------------------------
@@ -268,12 +272,13 @@ def test_the_tool_names_what_to_read_first(tmp_path) -> None:
 def test_scaffolded_project_runs_pysim(project: Path) -> None:
     """The whole point: it runs before anything is edited.
 
-    ``py_sim`` is the last step reachable without Vitis. The toolchain half of
-    the gate -- ``--through validate_csim`` -- is
+    ``check_pysim`` runs the model and pysim against the scenarios' expected
+    responses without Vitis. The toolchain half of the gate -- ``--through
+    check_csim`` -- is
     ``test_scaffolded_project_runs_csim`` below, marked ``vitis``.
     """
     completed = subprocess.run(
-        [sys.executable, "gain_clip_build.py", "--through", "py_sim"],
+        [sys.executable, "gain_clip_build.py", "--through", "check_pysim"],
         cwd=project,
         capture_output=True,
         text=True,
@@ -290,20 +295,20 @@ def test_scaffolded_project_runs_pysim(project: Path) -> None:
 
 @pytest.mark.vitis
 def test_scaffolded_project_runs_csim(project: Path) -> None:
-    """The frame's own gate: the template passes ``validate_csim`` unmodified.
+    """The frame's own gate: the template passes ``check_csim`` unmodified.
 
     Parametrizing this over the frames is what makes a second frame cost
     nothing to gate; with one frame it is written out.
     """
     completed = subprocess.run(
-        [sys.executable, "gain_clip_build.py", "--through", "validate_csim"],
+        [sys.executable, "gain_clip_build.py", "--through", "check_csim"],
         cwd=project,
         capture_output=True,
         text=True,
         timeout=3600,
     )
     assert completed.returncode == 0, (
-        "the scaffolded project does not reach validate_csim:\n"
+        "the scaffolded project does not reach check_csim:\n"
         + completed.stdout[-6000:]
         + completed.stderr[-6000:]
     )

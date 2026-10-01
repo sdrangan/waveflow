@@ -2,36 +2,33 @@
 title: Python Golden Model
 parent: Streaming polynomial
 nav_order: 1
-summary: "The first of the five groups: the input vectors, the SimPy run and a structured cycle-count measurement. Everything downstream is verified against the artifacts this group produces, and the same DataSchema definitions that drive the simulation also generate the C++ headers — one source of truth for the wire format."
+summary: "The Python half: schemas that generate the C++ wire format, a pure bit-exact model of the kernel (the arithmetic in the C++ operation order, and the whole protocol over a stream), scenarios whose expected responses are computed from intent rather than from any implementation, and pysim's cycle estimate for the timing check."
 ---
 
-# Python golden model
+# Python model
 
-The first group is the Python golden — input vectors, a SimPy
-simulation, and a structured cycle-count measurement.  Everything
-downstream of this group is verified against artifacts the golden
-produces.
+The first group runs entirely in Python.  It produces the stimulus every later stage
+reads, the expected responses every stage is checked against, and pysim's cycle
+estimate.
 
-| Step | Produces | What it does |
-|------|----------|--------------|
-| `build_inputs` | `coeffs`, `data_cmd_hdr`, `samp_in`, `end_cmd_hdr`, `data_dir` | Writes the four binary test-vector files into `data/` |
-| `py_sim`      | `sim_dir`, `log` | Runs `PolyAccel` + `PolyTB` in SimPy; writes `results/sim/resp_hdr.bin`, `samp_out.bin`, `regmap_status.json` and a structured event log to `results/sim_log.csv` |
-| `extract_py_timing` | `py_timing`, `durations` | Parses the event log into `results/py_timing.json` (structured `transaction_cycles` + raw event timestamps) |
+| Step | What it does |
+| --- | --- |
+| `scenarios` | Writes each scenario's stimulus (`data/<scenario>/in`) and expected response (`data/<scenario>/expected`, `expected_status.json`) |
+| `py_model` | Runs the pure model on every scenario, into `data/<scenario>/model` |
+| `check_model` | Compares it with the expected responses |
+| `py_sim` | Runs pysim -- the module's Python body with its timing model -- on the well-formed scenarios |
+| `check_pysim` | Compares those |
+| `extract_py_timing` | pysim's cycle count for the timing scenario, into `results/py_timing.json` |
 
-## Schemas: the single source of truth
+## Schemas: one source for the wire format
 
-The same `DataSchema` definitions in
-[`examples/stream_inband/poly.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly.py)
-drive Python serialization, generated C++ headers, and runtime
-sample-buffer sizing:
+The `DataSchema` classes in
+[`poly.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly.py)
+define the command header, response header, error codes and coefficients.  Waveflow
+generates their C++ headers and serializers, so Python and C++ pack words with code
+from the same declaration and nothing is packed by hand:
 
 ```python
-class CoeffArray(DataArray):
-    element_type = Float32
-    static = True
-    max_shape = (4,)
-    cpp_storage = "raw"
-
 class PolyCmdHdr(DataList):
     elements = {
         "cmd_type": {"schema": PolyCmdTypeField, "description": "DATA or END"},
@@ -40,63 +37,97 @@ class PolyCmdHdr(DataList):
     }
 ```
 
-`BuildInputsStep` uses these classes to write the binary vectors that
-both the Python sim and the C++ testbench (Group 2) read.
+## The pure model
 
-## The Python simulation
+The model is two pure functions, with no simulator in them.  They are what a
+system-level simulation calls, and what the C++ kernel is checked against, byte for byte.
 
-`PolyAccel` is a SimPy model of the kernel — it owns two
-stream endpoints, an AXI-Lite `VitisRegMap`, and an `on_start` body
-that runs as a `while True` coroutine.  `PolyTB` (the *SimPy* TB,
-distinct from the codegen-source `PolyTBHls` in Group 2) writes
-coefficients, raises `ap_start`, streams one DATA + END pair, and
-captures the response.
+`poly_eval` is the arithmetic.  It evaluates the polynomial in **Horner order, in
+float32, one operation at a time**, which is exactly what the C++ body does:
 
-The component carries timing parameters that the model uses to
-approximate RTL behaviour:
+```python
+def poly_eval(coeffs, x):
+    c = np.asarray(coeffs, dtype=np.float32)
+    xs = np.asarray(x, dtype=np.float32)
+    y = np.full(xs.shape, c[3], dtype=np.float32)
+    for k in (2, 1, 0):
+        y = (y * xs).astype(np.float32)
+        y = (y + c[k]).astype(np.float32)
+    return y
+```
+
+Matching the operation order is what makes the comparison exact rather than a
+tolerance.  The C++ keeps each multiply and add a separate statement for the same
+reason: a compiler may fuse `y * x + c` into a single multiply-add, which rounds once
+instead of twice.
+
+`poly_stream_model` is the whole kernel as a function of its input stream.  It reads
+command headers, answers each `DATA` transaction with a response header and the
+results, applies the TLAST rules, and returns the output bursts and the final register
+status.  It splits its output at TLAST, the only boundary on the wire, so it compares
+directly with what the C++ testbench records.
+
+## The scenarios, and why their expected responses are independent
+
+[`scenarios.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/scenarios.py)
+describes each scenario as **intents** -- "a transaction with these samples", "one whose
+sample burst ends early", "END":
+
+| Scenario | What it covers |
+| --- | --- |
+| `nominal` | three back-to-back transactions of 100, 7 and 1 samples |
+| `zero_len` | zero-length transactions, which have no sample burst and are not an error |
+| `early_tlast` | a sample burst that ends 4 words early: the kernel answers what it read and halts with `TLAST_EARLY_SAMP_IN` |
+| `no_tlast` | a sample burst with no TLAST on its last word: all outputs, then a halt with `NO_TLAST_SAMP_IN` |
+| `timing` | one 100-sample transaction, for the cycle count |
+
+From each intent it writes the stimulus *and* the expected response.  The expected
+response comes from the intent ("this transaction's outputs, then a halt"), not from
+parsing the stimulus as the model does.  So a model or a kernel that misreads the
+protocol cannot pass by agreeing with a reference that shares its mistake.  The
+arithmetic itself is pinned down separately, by worked examples with hand-computed
+values in the example's tests.
+
+The stimulus is a **burst bundle**: the words, the burst boundaries, and a TLAST flag
+per burst.  A flag of 0 is how a scenario sends a malformed transaction.  The pure
+model, pysim and the C++ testbench all read the same files.
+
+## pysim and the timing estimate
+
+`PolyAccel` is a body-only module: it declares its ports and register map and names its
+kernel body, `cpp_body = "body"`.  Its Python `body()` is the same kernel for pysim -- a
+thin port wrapper that calls `poly_eval`, plus a timing model:
 
 ```python
 proc_ii:      int = 1
-proc_latency: int = 40   # calibrated from RTL cosim — see Group 5
+proc_latency: int = 40   # calibrated against RTL cosim
 ```
 
-`proc_latency` is the fitted timing parameter — the manual v1 of the
-future model-training workflow that will fit such parameters per
-variant from a corpus of cosim measurements.  Group 5 closes that
-loop.
-
-## Structured timing artifact
-
-`ExtractPyTimingStep` reads the SimPy event log and converts the
-`samp_read_begin → samp_out_write_end` interval into a structured
-JSON the cosim side can be compared against directly:
+pysim runs the well-formed scenarios.  It cannot run the malformed ones, because a pysim
+stream has no way to omit TLAST; those are checked through the pure model and the C++
+kernel.  For the timing scenario, `extract_py_timing` turns the event log into a cycle
+count:
 
 ```json
 {
     "transaction_cycles": 140,
     "transaction_seconds": 1.4e-06,
     "clk_freq": 100000000.0,
-    "source": "py_sim",
-    "events": {
-        "samp_read_begin": 3.0e-08,
-        "samp_out_write_end": 1.43e-06
-    }
+    "source": "py_sim"
 }
 ```
 
-The named `transaction_cycles` field is the load-bearing one: it is
-the input to `ValidateTimingStep` in Group 5 and to any future
-parameter-fitting tooling that consumes a corpus of these files.
+That is 100 samples at one per cycle, plus the 40-cycle latency.
+[RTL co-simulation timing](./05_cosim_timing.md) compares it with what the RTL measures.
 
 ## Run just this group
 
 ```bash
-python -m examples.stream_inband.poly_build --through extract_py_timing
+python examples/stream_inband/poly_build.py --through check_pysim
 ```
 
-Produces `results/sim/`, `results/sim_log.csv`, and
-`results/py_timing.json`.
+No Vitis needed.
 
 ---
 
-Next: [HLS code generation →](./02_hls_codegen.md)
+Next: [Code generation →](./02_hls_codegen.md)

@@ -39,9 +39,7 @@ EXPECTED_MODULES: dict[str, dict[str, str]] = {
     "stream_inband": {
         "PolyAccel": "host-activated module",
         "PolyTB": "simulation object",
-        "PolyTBHls": "sequential testbench",
         "CoeffArray": "schema (array)",
-        "SampArray": "schema (array)",
         "PolyCmdHdr": "schema (list)",
         "PolyRespHdr": "schema (list)",
     },
@@ -110,17 +108,17 @@ def test_hostactivated_subclasses_are_exactly_these_three() -> None:
     assert bases == {"regmap", "shared_mem", "stream_inband"}
 
 
-def test_synthesizable_hook_in_stream_inband() -> None:
-    """``@synthesizable`` marks exactly ``PolyAccel.evaluate`` in ``poly.py``."""
-    result = waveflow_find_usage("synthesizable")
+def test_kernel_body_in_stream_inband() -> None:
+    """``cpp_body = "body"`` names ``PolyAccel``'s whole kernel body: a body-only kernel.
+
+    The index records it where it records ``@synthesizable`` -- both say "this method's
+    C++ is hand-written" -- so ``find_usage("cpp_body")`` finds the declaration and the
+    card lists the body's ``.tpp``.
+    """
+    result = waveflow_find_usage("cpp_body")
     assert result["found"]
-    poly = [
-        u
-        for u in result["by_example"]["stream_inband"]
-        if u["path"] == "examples/stream_inband/poly.py"
-    ]
-    decorators = [u for u in poly if u["how"] == "decorator"]
-    assert [u["in"] for u in decorators] == ["PolyAccel.evaluate"]
+    assert any(u["path"] == "examples/stream_inband/poly.py"
+               for u in result["by_example"]["stream_inband"])
 
 
 def test_hook_body_is_the_tpp_not_the_generated_headers() -> None:
@@ -131,7 +129,7 @@ def test_hook_body_is_the_tpp_not_the_generated_headers() -> None:
     point an agent straight at files it must never edit.
     """
     card = get_index().cards["stream_inband"]
-    assert card.hook_files == ["examples/stream_inband/poly_evaluate_impl.tpp"]
+    assert card.hook_files == ["examples/stream_inband/poly_body_impl.tpp"]
 
 
 def test_cpp_pragmas_and_namespace_calls_are_indexed() -> None:

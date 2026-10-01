@@ -93,7 +93,8 @@ def test_vitis_csim_plays_and_records_bundles(tmp_path) -> None:
     if not toolchain.find_vitis_path():
         pytest.skip("Vitis installation not found")
     assert StreamUtilsStep("include").run(BuildConfig(root_dir=tmp_path)).success
-    hdr, samples, footer = np.array([1, 2, 3]), np.arange(10, 15), np.array([99])
+    # 0xc15c40db has its top bit set (a negative float32): widening it must not sign-extend.
+    hdr, samples, footer = np.array([1, 0xC15C40DB, 3]), np.arange(10, 15), np.array([99])
     big = np.array([2**40 + 1, 2**63 + 2, 3], dtype=np.uint64)
     cases = {
         # a missing TLAST on the last burst: the recording is identical

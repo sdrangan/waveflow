@@ -121,11 +121,11 @@ def test_process_names_the_tools_it_tells_the_agent_to_call(process: str) -> Non
     "rule,needle",
     [
         ("stop after Stage 1", "Stop here"),
-        ("do not modify spec/", "Do not modify anything under it"),
+        ("the Stage 1 artifacts are frozen", "Stage 1 artifacts are now frozen"),
         ("never edit generated files", "Never edit a generated file"),
         ("never hand-pack words", "Never hand-pack words"),
         ("never write your own PASS column", "Never write your own PASS column"),
-        ("all three comparisons", "all three comparisons"),
+        ("every comparison must pass", "every comparison"),
         ("scenarios are pre-loaded", "pre-loaded"),
         ("the reference example", "stream_inband"),
     ],

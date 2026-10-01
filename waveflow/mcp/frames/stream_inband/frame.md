@@ -9,25 +9,28 @@ function spec and this frame disagree, the function spec wins.
 ## F1. Reference design and flow
 
 Build the design **the way Waveflow's `examples/stream_inband` (the streaming
-polynomial) is built**, using the full Waveflow machinery. Read that
-example's source and its docs pages (`docs/examples/stream_inband/`) before
-writing anything. In particular:
+polynomial) is built**: hook-first.  Read that example's source and its docs
+pages (`docs/examples/stream_inband/`) before writing anything.  In
+particular:
 
-| Piece | In `stream_inband` | Yours |
-| --- | --- | --- |
-| schemas | `PolyCmdHdr`, `PolyRespHdr`, `PolyError`, `CoeffArray` (`DataList` / `EnumField` / `DataArray`) | per the function spec |
-| accelerator | `PolyAccel(HostActivated)`: `VitisRegMap` + `on_start` persistent loop | same structure |
-| compute | `@synthesizable evaluate(...)` in Python + hand-written C++ hook `poly_evaluate_impl.tpp` | same structure |
-| timing model | `proc_latency`, `proc_ii` on the module | calibrated to your RTL (F7) |
-| pysim testbench | `PolyTB(SimObj)` | same structure |
-| C++ testbench | generated from `PolyTBHls(SeqTB)` | same structure |
-| build | `poly_build.py`: a `BuildDag` of named steps | same structure, using `run_dag_cli` |
+| Piece | In `stream_inband` | Yours | Written by |
+| --- | --- | --- | --- |
+| schemas | `PolyCmdHdr`, `PolyRespHdr`, `PolyError`, `CoeffArray` (`DataList` / `EnumField` / `DataArray`) | per the function spec | you |
+| the function | `poly_eval`: the arithmetic, in float32, in the C++ operation order | per the function spec | you |
+| the protocol model | `poly_stream_model`: the whole kernel as a pure function of its input stream | same structure | you |
+| scenarios | `scenarios.py`: intents, stimulus, expected responses, the checker | per the function spec | you |
+| the module | `PolyAccel(HostActivated)`, body-only (`cpp_body = "body"`): ports and `VitisRegMap` | same structure | you |
+| kernel boundary | `gen/poly.hpp`, `gen/poly.cpp`: prototype, pragmas, register map, one call to the body | -- | **Waveflow** |
+| kernel body | `poly_body_impl.tpp`: the whole kernel, in C++ | same structure | you |
+| pysim model | `PolyAccel.body()`: a port wrapper around the function, plus `proc_latency` / `proc_ii` | calibrated to your RTL (F7) | you |
+| C++ testbench | `poly_tb.cpp`: plays each scenario's stimulus, records the response | same structure | you |
+| headers, serializers | `include/*.h`, including `bundle_tb.h` | -- | **Waveflow** |
+| build | `poly_build.py`: a `BuildDag` ending in `summary` | same structure, using `run_dag_cli` | you |
 
-The following are **generated** and must never be hand-edited: the kernel
-C++, the testbench C++, and every header under `include/`. The only C++ you
-write is the compute hook, plus a helper hook if you need one. If the
-Waveflow machinery cannot express something you need, **stop and report it**.
-Do not work around it by hand-writing a generated file.
+The kernel boundary and everything under `include/` are **generated** and
+must never be hand-edited.  If the Waveflow machinery cannot express
+something you need, **stop and report it**.  Do not work around it by
+hand-writing a generated file.
 
 **Do not hand-pack words.** Every header, footer and sample burst is
 serialized through its Waveflow schema or through the Waveflow array
@@ -116,73 +119,74 @@ A halted run can therefore leave input unread. A leftover-data warning from
 csim in these scenarios is expected and is not a failure. The check is the
 output stream plus the register-map status.
 
-## F5. Stage 1: the specification artifacts (then STOP for review)
+## F5. Stage 1: the specification (then STOP for review)
 
-```
-spec/
-  <name>_schemas.py   # every schema: command header, response header, footer, error enum,
-                      # register-map parameter types
-  oracle.py           # an INDEPENDENT reference: plain numpy, no Waveflow HwModule, no SimPy.
-                      # Implements the function spec's exact function, F3/F4 framing and
-                      # errors, and the expected register-map status after a run.
-  scenarios.py        # builds every test scenario from fixed seeds into spec/vectors/<scenario>/:
-                      #   register-map parameters, the full input stream (all commands + samples,
-                      #   including malformed framing), and the oracle's expected output stream
-                      #   and status
-  check.py            # check.py <results_dir>: compares a run's outputs to the oracle, per scenario,
-                      # one PASS/FAIL line per criterion; exits nonzero on any failure
-  layout.md           # word-by-word layout of every header, footer and sample burst, obtained by
-                      # SERIALIZING instances with Waveflow, not by reasoning about the schema
-```
+Stage 1 writes down **what** the accelerator must do, in executable form:
 
-- `oracle.py` must **not** import the accelerator module, which does not
-  exist yet. That independence is the point. Stage 2's `HwModule` is checked
-  against it.
-- Run `oracle.py` on the function spec's worked examples and show the result.
-- `check.py` must be shown to **reject** at least two wrong outputs of your
-  choosing. Name the mutants and the output of each.
+- **The schemas,** in `<name>.py`: command header, response header, footer,
+  error enum, register-map parameter types.
+- **The function, `<name>_eval`,** in `<name>.py`: the spec's arithmetic as a
+  pure function, in the exact operation order and precision the C++ will use
+  (that is what lets every comparison be bit-exact).  Pin it down with the
+  function spec's **worked examples** -- values computed by hand, in a test --
+  because everything downstream trusts it.
+- **`scenarios.py`:** every scenario as a list of **intents**, from fixed
+  seeds, including the malformed ones (F4); its stimulus; and its **expected
+  response and register status, computed from the intent** -- not by running
+  a model of the protocol.  Plus the checker: words, burst boundaries, TLAST
+  flags and status, exactly.
+- **`layout.md`:** the word-by-word layout of every header, footer and burst,
+  obtained by **serializing instances with Waveflow**, not by reasoning about
+  the schema.
 
-When Stage 1 is complete, **stop and summarize** it. Do not write the
+Then show the checker **rejecting** at least two wrong outputs of your
+choosing (for example, the right function with the wrong rounding, or an
+error path that does not halt), and run the worked examples.
+
+When Stage 1 is complete, **stop and summarize** it.  Do not write the
 accelerator until the spec is approved.
 
 ## F6. Stage 2: the accelerator
 
 ```
-<name>.py                 # the HwModule, pysim testbench and SeqTB, importing spec/<name>_schemas.py
-<name>_<method>_impl.tpp  # the hand-written compute hook
-<name>_build.py           # BuildDag via run_dag_cli: build_inputs (from spec/vectors) -> py_sim ->
-                          # gen_include -> gen_kernel -> gen_tb -> csim -> validate_csim -> csynth ->
-                          # inspect_synth -> cosim -> timing steps; plus a step that runs spec/check.py
-                          # on the pysim, csim and cosim results
+<name>.py                 # + <name>_stream_model, the module (body-only) and its pysim
+                          #   wrapper, the pysim testbench -- next to the frozen schemas
+                          #   and <name>_eval
+<name>_body_impl.tpp      # the whole kernel body, in C++
+<name>_tb.cpp             # the C++ testbench
+<name>_build.py           # the BuildDag, ending in `summary`
 results/report.md
 ```
 
 Rules for Stage 2:
 
-- **Do not modify anything under `spec/`.** If you believe the spec, the
-  oracle or a scenario is wrong, stop and explain why.
+- **Do not modify the Stage 1 artifacts:** the schemas, `<name>_eval`,
+  `scenarios.py`, `layout.md`.  If you believe one is wrong, stop and explain
+  why.
 - **Do not relax an acceptance criterion.** If you cannot meet one, report
   the best value you reached and what limits it.
-- Every scenario runs through pysim and csim. The timing scenario also runs
-  through cosim. If the `SeqTB` cannot express a scenario, report which one
-  and why.
-- Scenarios are **pre-loaded**, as Vitis csim requires: the testbench pushes
-  every command and sample burst of a scenario (for example `DATA`, `DATA`,
-  `END`) before the kernel runs, then drains the outputs. No scenario may
-  make an input depend on an earlier output. A design that needs that
+- Every scenario runs through the protocol model and csim; the well-formed
+  ones through pysim; the timing scenario through cosim.
+- Scenarios are **pre-loaded**, as Vitis csim requires: the testbench plays
+  a scenario's whole stimulus before draining the outputs.  No scenario may
+  make an input depend on an earlier output.  A design that needs that
   requires a `FreeRunMod` with the concurrent BFM testbench flow, and is out
   of scope for this frame.
 
-## F7. The three comparisons
+## F7. The comparisons
 
-A design is accepted only when **all three** pass. Each one catches a
-different kind of mistake:
+Everything is checked against the **expected responses** of Stage 1, which
+come from the scenarios' intent.  Two implementations agreeing with each
+other proves nothing -- one person or one AI may have written both with the
+same misunderstanding -- so each is checked against that third description
+instead:
 
 | Comparison | Catches | Measured by |
 | --- | --- | --- |
-| oracle vs pysim | the Python model misreads the spec | `spec/check.py` on the pysim results |
-| pysim vs csim/cosim | the C++ hook does not match the Python model | `validate_csim`, plus `check.py` on the csim and cosim results |
-| pysim timing vs cosim cycles | the timing model (`proc_latency`, `proc_ii`) is wrong | the build's timing validation, **tolerance 20 cycles** as in `stream_inband` |
+| protocol model vs expected | the Python model misreads the protocol | the `check_model` step |
+| pysim vs expected | the module's Python body diverges from the model | the `check_pysim` step |
+| csim / cosim vs expected | the C++ body diverges | the `check_csim` and `check_cosim` steps |
+| pysim timing vs cosim cycles | the timing model (`proc_latency`, `proc_ii`) is wrong | `validate_timing`, **tolerance 20 cycles** as in `stream_inband` |
 
 The function spec adds absolute timing and resource targets on top of these.
 
@@ -190,7 +194,7 @@ The function spec adds absolute timing and resource targets on top of these.
 
 `results/report.md` contains one table with a row per acceptance criterion:
 the criterion, the required value, the measured value, PASS/FAIL, and the
-source of the number (build step, report file, VCD, or `check.py` output).
+source of the number (build step, report file, VCD, or a check step).
 Below the table, give:
 
 - the final `proc_latency` and `proc_ii`, and how you calibrated them;

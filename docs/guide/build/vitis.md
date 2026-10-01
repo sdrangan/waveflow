@@ -7,6 +7,13 @@ summary: "The four-step Vitis pipeline — C-sim, validate against the Python si
 
 # Vitis Pattern
 
+> **This walkthrough shows an earlier version of `stream_inband`'s build.**  The example
+> has since been rewritten hook-first: a body-only kernel, a hand-written C++ testbench, and
+> shared stimulus files checked by `scenarios.check`, so its current
+> [`poly_build.py`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py)
+> differs in detail.  The step-writing pattern explained here is unchanged; see the
+> [example's pages](../../examples/stream_inband/index.md) for what it does now.
+
 > **Status: pattern only.** Waveflow does not yet ship framework-level steps for Vitis C-sim, C-synth, or report inspection. The steps below live in [examples/stream_inband/poly_build.py](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py) and serve as the canonical recipe to copy. Once a second design uses them, the genuinely-common pieces (toolchain invocation, report parsing) will be extracted into `waveflow/build/`.
 
 A typical Vitis pipeline has four steps:
@@ -218,33 +225,39 @@ def build_poly_dag() -> BuildDag:
 
     # Source files
     dag.add(SourceStep(artifact="poly_source", path="poly.py"))
+    dag.add(SourceStep(artifact="scenarios_source", path="scenarios.py"))
 
     # Build steps (groups expressed as docstring comments in poly_build.py)
-    dag.add(BuildInputsStep(name="build_inputs"))                  # writes data/*.bin
-    dag.add(PySimStep(name="py_sim"))                              # SimPy → results/sim/*
-    dag.add(ExtractPyTimingStep(name="extract_py_timing"))         # py_timing.json
-    dag.add(HlsGenIncludeStep(name="gen_include"))                 # codegen sub-DAG → include/*.h
-    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))
-    dag.add(HlsCodegenStep(name="gen_tb",     comp_class=PolyTBHls, is_testbench=True, ...))
-    dag.add(CSimStep(name="csim"))                                 # Vitis C-sim
-    dag.add(FunctionalVerifyStep(name="validate_csim", ...))       # generic comparator
-    dag.add(CSynthStep(name="csynth"))                             # Vitis C-synth + cosim
-    dag.add(InspectSynthStep(name="inspect_synth"))                # parse csynth.xml
+    dag.add(ScenariosStep(name="scenarios"))                         # data/<scenario>/{in,expected}
+    dag.add(ModelStep(name="py_model"))                              # the pure model, every scenario
+    dag.add(CheckStep(name="check_model", stage="model", ...))       # vs the expected responses
+    dag.add(PySimStep(name="py_sim"))                                # pysim: the timing model
+    dag.add(CheckStep(name="check_pysim", stage="pysim", ...))
+    dag.add(ExtractPyTimingStep(name="extract_py_timing"))           # results/py_timing.json
+    dag.add(HlsGenIncludeStep(name="gen_include"))                   # include/*.h
+    dag.add(SourcesStep(name="sources"))                             # hand-written C++ in place
+    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))  # the kernel boundary
+    dag.add(CSimStep(name="csim"))                                   # Vitis C-sim, hand-written TB
+    dag.add(CheckStep(name="check_csim", stage="csim", ...))
+    dag.add(CSynthStep(name="csynth"))                               # Vitis C-synth + cosim
+    dag.add(InspectSynthStep(name="inspect_synth"))                  # parses csynth.xml
+    dag.add(CheckStep(name="check_cosim", stage="cosim", ...))
     dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly"))
-    dag.add(ValidateTimingStep(name="validate_timing"))            # py vs cosim cycles
+    dag.add(ValidateTimingStep(name="validate_timing", tolerance_cycles=20))
+    dag.add(SummaryStep(name="summary"))                             # every check, one file
     return dag
 ```
 
 Then per-run:
 
 ```python
-config = BuildConfig(root_dir=".", params={"clk_freq": 100e6, "nsamp": 100, ...})
+config = BuildConfig(root_dir=".", params={"clk_freq": 100e6})
 
 # Just Python sim + extracted timing (no Vitis)
 dag.run(config, through="extract_py_timing")
 
-# Full build with cosim timing comparison
-dag.run(config, through="validate_timing")
+# Everything, Vitis included: every check, the synthesis report, the timing verdict
+dag.run(config, through="summary")
 ```
 
 The CLI scaffolding around this is documented under [Python Simulation Pattern → CLI integration](./python.md#cli-integration); the same `main()` covers both Python-sim-only and full-Vitis runs because of `--through`.

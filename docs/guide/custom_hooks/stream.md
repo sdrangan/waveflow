@@ -15,8 +15,10 @@ produced beat by beat — the hook can't wait for a resident block. It owns the 
 results out, carrying `TLAST` framing as it goes.
 
 The worked example is the polynomial evaluator
-([`examples/stream_inband/poly_evaluate_impl.tpp`](../../../examples/stream_inband/poly_evaluate_impl.tpp)):
-samples stream in, each is run through a Horner-form polynomial, results stream out.
+([`examples/stream_inband/poly_body_impl.tpp`](../../../examples/stream_inband/poly_body_impl.tpp)):
+samples stream in, each is run through a Horner-form polynomial, results stream out.  It is a
+body-only kernel (`cpp_body`), so that file is the whole kernel; the lane loop below is its
+per-transaction helper, `transaction()`.
 
 ## The lane loop
 
@@ -27,7 +29,7 @@ result lane to `m_out`:
 
 ```cpp
 template <int in_bw, int out_bw>
-ap_uint<8> evaluate(PolyCmdHdr cmd_hdr,
+ap_uint<8> transaction(PolyCmdHdr cmd_hdr,
                     hls::stream<streamutils::axi4s_word<in_bw>>& s_in,
                     hls::stream<streamutils::axi4s_word<out_bw>>& m_out,
                     float coeffs[4]) {
@@ -103,4 +105,4 @@ in memory at a runtime-dependent address, drive the `m_axi` port from the datapa
 
 - [Kernel transfer reference](./reference.md) — the stream and memory lane/slice calls in one place.
 - [Writing a hook](./writing.md) — the hook contract and the `.cpp` vs `.tpp` rule.
-- [`examples/stream_inband`](../../../examples/stream_inband/poly_evaluate_impl.tpp) — the worked stream example.
+- [`examples/stream_inband`](../../../examples/stream_inband/poly_body_impl.tpp) — the worked stream example.

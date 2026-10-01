@@ -74,7 +74,7 @@ class Use:
     path: str
     line: int
     example: str
-    how: str  #: "import", "call", "base", "decorator", "port", "pragma", "include"
+    how: str  #: "import", "call", "base", "decorator", "body", "port", "pragma", "include"
     context: str = ""  #: the enclosing class or function, when there is one
 
 
@@ -151,7 +151,7 @@ class _PyVisitor(ast.NodeVisitor):
     # -- helpers --------------------------------------------------------
     #: `how` values, most specific first.  A class base is also a `Name` load,
     #: so both fire on the same line; only the stronger one is kept.
-    _RANK = ("base", "decorator", "port", "import", "call", "ref")
+    _RANK = ("base", "decorator", "body", "port", "import", "call", "ref")
 
     def _add(self, symbol: str, line: int, how: str) -> None:
         self.touched.add(symbol)
@@ -230,7 +230,24 @@ class _PyVisitor(ast.NodeVisitor):
         if name and self._interesting(name):
             self._add(name, dec.lineno, "decorator")
 
+    def _cpp_body(self, target: ast.expr, value: ast.expr | None, line: int) -> None:
+        # `cpp_body = "body"` (or `cpp_body: ClassVar[...] = "body"`) names a body-only
+        # kernel's hook: the method whose C++ is `<kernel>_body_impl.tpp`.  It is the
+        # same answer as `@synthesizable` gives for an extracted kernel's hook, so it
+        # goes in the same list -- without it the card says the example has no
+        # hand-written C++ at all.
+        if (isinstance(target, ast.Name) and target.id == "cpp_body"
+                and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            self.synth_methods.append(value.value)
+            self._add("cpp_body", line, "body")
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._cpp_body(node.target, node.value, node.lineno)
+        self.generic_visit(node)
+
     def visit_Assign(self, node: ast.Assign) -> None:
+        for tgt in node.targets:
+            self._cpp_body(tgt, node.value, node.lineno)
         # `self.s_in = StreamIFSlave(...)` -- a port declaration.  Ports are
         # what an agent reads first off a card, and they are never written
         # down anywhere but here.

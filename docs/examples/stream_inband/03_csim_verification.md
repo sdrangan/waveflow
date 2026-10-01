@@ -2,98 +2,71 @@
 title: C-Sim Functional Verification
 parent: Streaming polynomial
 nav_order: 3
-summary: "Running the generated kernel under Vitis C-sim and comparing its outputs against the Python golden's, file by file. The comparator is generic and knows nothing about this design; all the design-specific knowledge sits in how it is wired, which is what makes the same step reusable."
+summary: "Every scenario through Vitis C simulation in one run, with the hand-written testbench, and every response compared bit-exactly -- words, burst boundaries, TLAST flags and the final register status -- with the expected responses the Python model was also checked against. The error paths are verified in C++ too."
 ---
 
-# C-sim functional verification
+# C simulation
 
-The third group runs the generated C++ kernel under Vitis HLS C-sim
-and compares its outputs against the Python golden's outputs.  The
-"functional verification" name is literal: this group certifies that
-the same inputs produce the same outputs in both Python and Vitis.
+The third group runs the kernel under Vitis C simulation and checks every scenario's
+response.
 
-| Step | Produces | What it does |
-|------|----------|--------------|
-| `csim` | `csim_data_dir` | Invokes `vitis_hls run.tcl` with `WAVEFLOW_POLY_COSIM=0`; the generated `gen/poly_tb.cpp` reads `data/*.bin`, runs `poly(...)`, and writes `resp_hdr_data.bin`, `samp_out_data.bin`, `regmap_status.json` back into `data/` |
-| `validate_csim` | `verify_report`, `vitis_dir` | Runs a generic `FunctionalVerifyStep` that compares the Vitis-side outputs against the Python-side outputs file-by-file |
+| Step | What it does |
+| --- | --- |
+| `csim` | Runs `run.tcl` with `WAVEFLOW_POLY_STAGE=csim`.  `poly_tb.cpp` plays every scenario into the kernel and records each response into `data/<scenario>/csim/` |
+| `check_csim` | Compares each recorded response with `data/<scenario>/expected` |
 
-## How the comparison is wired
+## What is compared
 
-`FunctionalVerifyStep` is a generic comparator — it knows nothing
-about poly specifically.  All the poly-specific knowledge sits in the
-declarative manifest the step is constructed with:
+`scenarios.check` is one checker used for every stage -- the pure model, pysim, csim
+and cosim.  For each scenario it requires **exact** agreement on:
 
-```python
-dag.add(FunctionalVerifyStep(
-    name="validate_csim",
-    golden_dir_artifact="sim_dir",            # Python golden (Group 1)
-    actual_dir_artifact="csim_data_dir",      # Vitis output (this group)
-    extra_artifacts=["data_cmd_hdr"],
-    schemas=[
-        {"filename": "resp_hdr_data.bin",
-         "golden_filename": "resp_hdr.bin",
-         "schema": PolyRespHdr},
-    ],
-    arrays=[
-        {"filename": "samp_out_data.bin",
-         "golden_filename": "samp_out.bin",
-         "elem_type": Float32,
-         "count_from_extra": "data_cmd_hdr",
-         "count_schema": PolyCmdHdr,
-         "count_field": "nsamp",
-         "rtol": 1e-6, "atol": 1e-6},
-    ],
-    jsons=[
-        {"filename": "regmap_status.json",
-         "expect_zero": ["halted", "error"]},
-    ],
-    output_dir="results/vitis",
-    output_artifact="vitis_dir",
-    report_path="results/verify_csim.json",
-))
-```
+- the number of bursts and where they end;
+- every word;
+- every TLAST flag;
+- the final register status (`halted`, `error`, `tx_id`).
 
-Three comparator flavours run:
+There is no tolerance, even for the floating-point results.  The Python model and the
+C++ body evaluate the polynomial with the same float32 operations in the same order, so
+the bits agree.
 
-- **Schema** — `PolyRespHdr` parsed from both sides, compared via
-  `DataSchema.is_close`.
-- **Array** — `samp_out` parsed as a `Float32` buffer with `count`
-  pulled from the `data_cmd_hdr`'s `nsamp` field; compared via
-  `np.allclose` with `rtol=atol=1e-6`.
-- **JSON** — `regmap_status.json` parsed as a flat dict; `halted`
-  and `error` must both be zero (no halt, no error).
+The expected responses come from each scenario's intent, not from the Python model.
+"csim matches the model" would show only that two implementations agree, and one AI or
+one person may have written both with the same misunderstanding.  Here, both are
+checked against a third description of what *should* happen.
+
+## The error paths, in C++
+
+Two scenarios are malformed on purpose:
+
+| Scenario | Stimulus | Expected |
+| --- | --- | --- |
+| `early_tlast` | a 10-sample transaction whose burst ends after 6 | 6 results, no output TLAST, then `halted = 1`, `error = 3` (`TLAST_EARLY_SAMP_IN`), `tx_id = 32` |
+| `no_tlast` | a 10-sample burst with no TLAST on its last word | 10 results, then `halted = 1`, `error = 4` (`NO_TLAST_SAMP_IN`), `tx_id = 41` |
+
+Both run in the same C simulation as the well-formed scenarios.  The testbench drains
+any input a halted kernel left unread, so each scenario starts clean.
 
 ## What you see when it passes
 
-`results/verify_csim.json`:
-
-```json
-{
-    "pass": true,
-    "checks": [
-        {"kind": "schema", "filename": "resp_hdr_data.bin", "pass": true},
-        {"kind": "array",  "filename": "samp_out_data.bin", "pass": true},
-        {"kind": "json",   "filename": "regmap_status.json", "pass": true}
-    ]
-}
+```
+    csim   nominal      PASS
+    csim   zero_len     PASS
+    csim   early_tlast  PASS
+    csim   no_tlast     PASS
+    csim   timing       PASS
 ```
 
-On a mismatch the step raises `RuntimeError` with a one-line
-description of every failed check, and the report records what
-diverged.  `output_dir` (`results/vitis/`) mirrors every actual file
-under its golden filename so a side-by-side hexdump is one
-`diff -r results/sim results/vitis` away.
+`results/check_csim.json` holds the same, with an empty problem list for each scenario.
+On a mismatch, the step names the scenario, the burst and the first differing word.
 
 ## Run just this group
 
 ```bash
-python -m examples.stream_inband.poly_build --through validate_csim
+python examples/stream_inband/poly_build.py --through check_csim
 ```
 
-Requires Vitis HLS on `PATH` (the C-sim step shells out to
-`vitis_hls`).  Produces a populated `results/vitis/` and a green
-`results/verify_csim.json`.
+Requires Vitis HLS.
 
 ---
 
-Next: [C-synth resource estimation →](./04_csynth_resources.md)
+Next: [C synthesis →](./04_csynth_resources.md)

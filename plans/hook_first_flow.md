@@ -1,6 +1,6 @@
 # Plan: hook-first kernels — generated boundary, hand-written body, shared stimulus
 
-> **Status (2026-10-01): design plan, nothing built.** D1 to D4 decided
+> **Status (2026-10-01): Stages 1, 2, 3 and 5 done, Stage 6 mostly; 0, 4 and 7 open.** D1 to D4 decided
 > (2026-10-01, all as recommended): body-only kernels are declared with an
 > attribute, the status-schema return is dropped, `stream_inband` is
 > converted, and the lab keeps its frame, updated.
@@ -210,6 +210,68 @@ what it looks like is what gets written.
 **Gate:** every scenario passes pysim, csim and cosim against the checker,
 and the cosim timing check still passes.
 
+> **DONE (2026-10-01, branch `hook-first-flow`).**
+>
+> **What changed:**
+> - **`poly.py`:** the schemas are unchanged. New are the pure model
+>   (`poly_eval`, in float32 Horner order exactly as the C++;
+>   `poly_stream_model`, the whole protocol over a burst stream), a body-only
+>   `PolyAccel` whose `body()` is the port wrapper plus the existing timing
+>   model, and a `PolyTB` that plays the stimulus with concurrent push/pop.
+> - **`scenarios.py`:** `nominal`, `zero_len`, `early_tlast`, `no_tlast` and
+>   `timing`, each with its expected response computed from the *intent*,
+>   plus one checker used for every stage.
+> - **Hand-written C++:** `poly_body_impl.tpp` and `poly_tb.cpp`.
+> - **`poly_build.py`:** scenarios, model and its check, pysim and its check,
+>   py timing, headers, sources, `gen_kernel`, csim and its check, csynth with
+>   cosim, the synthesis report, the cosim check, timing, `summary`.
+>
+> **Gate, all held on Vitis HLS 2025.1**
+> (`tests/examples/test_poly_demo.py::test_vitis_csim_cosim_and_timing`):
+> - the model and csim are bit-exact on all 5 scenarios, floats and both
+>   error paths included;
+> - pysim is bit-exact on the 3 well-formed scenarios;
+> - cosim of the timing scenario is bit-exact;
+> - cosim measures 143 cycles against pysim's 140 (Δ 3, within ±20).
+>
+> **Found and fixed on the way:**
+> 1. **`bundle_tb.h` sign-extended words with the top bit set** (every
+>    negative float). The Stage 2 test had no such value; it does now, and
+>    fails without the fix.
+> 2. **A build outside the example's directory compiled the generated
+>    `TODO` stub as the body,** because `gen_kernel` ran before the
+>    hand-written body was copied in. A `sources` step now runs first, and
+>    csim refuses to run the stub.
+> 3. **`--through validate_timing` silently skipped the cosim response check
+>    and the synthesis report** (a target runs only its ancestors). The new
+>    `summary` step depends on every check.
+> 4. **`vitis-run` 2025.1 has no `--tclargs`,** so
+>    `toolchain.run_vitis_hls(args=...)` cannot work with it. The stage
+>    travels as `WAVEFLOW_POLY_STAGE`.
+> 5. **A zero-length transaction used to report `NO_TLAST_SAMP_IN`.** It is
+>    now accepted, and covered by `zero_len`.
+> 6. **The knowledge index found hook files only through `@synthesizable`,**
+>    so the card listed no hand-written C++ at all. `cpp_body` now counts too,
+>    and `find_usage("cpp_body")` works.
+>
+> **Moved:** the extracted variant (`PolyAccel` with
+> `on_start`/`@synthesizable evaluate`, `PolyTB`, `PolyTBHls`, `SampArray`,
+> its `.tpp`, and the old input writer) is now
+> `tests/fixtures/poly_extracted/`, verbatim. About 10 framework tests use it
+> to test the extractor and `SeqTB` code generation, which are still
+> supported.
+>
+> **Docs:** the six `docs/examples/stream_inband` pages are rewritten, and
+> five guide pages that cited the old files are fixed.
+> `docs/guide/build/python.md` and `build/vitis.md` walk through the *old*
+> build code line by line; they now say so at the top, and rewriting them is
+> left for Stage 6.
+>
+> **Scaffold:** `frame.toml`'s stubs are re-anchored to `poly_eval` and the
+> C++ Horner function, the tool's next step is `--through check_pysim`, and a
+> fresh project passes it unmodified. The `spec/` folder the scaffold still
+> writes is now redundant with `scenarios.py`; Stage 5 removes it.
+
 ### Stage 4: the rotate follow-ups this flow needs
 
 From PR #209's list:
@@ -245,6 +307,24 @@ From PR #209's list:
 **Gate:** a fresh scaffold passes csim unmodified (the existing gate,
 re-pointed).
 
+> **DONE (2026-10-01, branch `hook-first-flow`).**
+> - **`frame.md` rewritten:** F1 is a table of the pieces and who writes
+>   each; F5 (Stage 1) is the schemas, `<name>_eval` with worked examples,
+>   `scenarios.py` with expected responses computed from intent and its
+>   checker, and `layout.md`; F6 (Stage 2) is the protocol model, the
+>   body-only module, the C++ body and testbench, and the build through
+>   `summary`; F7 checks every stage against the expected responses.
+> - **`process.md` (= `AGENTS.md`) rewritten** for the hook-first flow,
+>   including the separate-statement rule for bit-exact floats and
+>   `--through summary`.
+> - **The scaffold no longer writes `spec/`**: `scenarios.py` and `<name>.py`
+>   carry what it held; `layout.md` is the one stub left.
+> - `plans/example_stream_prompts/frame.md` is synced to the new frame.
+>
+> **Gate:** `tests/mcp/test_scaffold.py::test_scaffolded_project_runs_csim`
+> (`-m vitis`) passes on Vitis HLS 2025.1. A fresh project with the
+> identity stubs reaches `check_csim` with every scenario passing.
+
 ### Stage 6: docs
 
 - **A page for the convention,** under `docs/guide/custom_hooks/`:
@@ -255,6 +335,16 @@ re-pointed).
 - **Paraphrase tests** for the questions agents actually asked, such as "how
   do I loop over transactions in the testbench" and "how do I send a burst
   without TLAST".
+
+> **MOSTLY DONE (2026-10-01).**
+> - **New page:** `docs/guide/custom_hooks/body_only.md`, first in the
+>   section, linked from its index.
+> - **`comp_codegen/testbench.md`** gained "What a `SeqTB` body can
+>   express", a can/can't table that points to the hand-written route.
+> - **Two paraphrase tests**, both reached by BM25 (measured).
+> - **Not done:** `docs/guide/build/python.md` and `build/vitis.md` still
+>   walk through the *old* `stream_inband` build line by line. They now say
+>   so at the top; a full rewrite is a follow-up.
 
 ### Stage 7: measure again
 

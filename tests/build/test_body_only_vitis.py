@@ -30,8 +30,12 @@ from typing import ClassVar
 
 import pytest
 
-from examples.stream_inband.poly import PolyAccel, PolyTBHls
-from examples.stream_inband.poly_build import BuildInputsStep, HlsGenIncludeStep
+from examples.stream_inband.poly_build import HlsGenIncludeStep
+from tests.fixtures.poly_extracted.poly_extracted import (
+    PolyAccel,
+    PolyTBHls,
+    write_legacy_inputs,
+)
 from waveflow.build.build import BuildConfig
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwcodegen_steps import HlsCodegenStep
@@ -43,7 +47,6 @@ pytestmark = pytest.mark.vitis
 
 HERE = Path(__file__).parent
 FIX = HERE / "fixtures" / "body_only"
-EXAMPLE = HERE.parents[1] / "examples" / "stream_inband"
 STATUS = ("halted", "error", "tx_id")
 
 
@@ -103,7 +106,7 @@ def built(tmp_path_factory) -> Path:
         pytest.skip("Vitis installation not found")
     root = tmp_path_factory.mktemp("body_only")
     cfg = BuildConfig(root_dir=root)
-    BuildInputsStep(name="build_inputs").run(cfg, nsamp=100)
+    write_legacy_inputs(root, nsamp=100)
     HlsGenIncludeStep(name="gen_include").run(cfg)
     (root / "gen").mkdir(exist_ok=True)
 
@@ -111,7 +114,8 @@ def built(tmp_path_factory) -> Path:
     for name, text in kernel_files_to_str(PolyAccel, output_dir="gen", impl_dir=".").items():
         if name.endswith((".hpp", ".cpp")):
             (root / "gen" / name).write_text(text, encoding="utf-8")
-    shutil.copy(EXAMPLE / "poly_evaluate_impl.tpp", root / "poly_evaluate_impl.tpp")
+    shutil.copy(HERE.parent / "fixtures" / "poly_extracted" / "poly_evaluate_impl.tpp",
+                root / "poly_evaluate_impl.tpp")
     # The body-only kernel and its hand-written body.
     for name, text in kernel_files_to_str(PolyBody, output_dir="gen", impl_dir=".").items():
         if name.endswith((".hpp", ".cpp")):

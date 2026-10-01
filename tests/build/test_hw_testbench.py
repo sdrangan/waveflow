@@ -192,7 +192,7 @@ def test_tb_files_to_str_returns_single_file():
 # Phase 3 — DUT binding + dut.run() lowering
 # ---------------------------------------------------------------------------
 
-from examples.stream_inband.poly import PolyAccel
+from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
 
 
 @dataclass
@@ -603,7 +603,7 @@ def test_write_status_json_filter_emits_debug_log():
 # ---------------------------------------------------------------------------
 
 from examples.regmap.simp_fun import SimpFun, SimpFunTBHls  # noqa: E402
-from examples.stream_inband.poly import (  # noqa: E402
+from tests.fixtures.poly_extracted.poly_extracted import (  # noqa: E402
     PolyAccel as _PolyAccel,
     PolyCmdHdr as _PolyCmdHdr,
     PolyRespHdr as _PolyRespHdr,

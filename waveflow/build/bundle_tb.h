@@ -127,7 +127,11 @@ inline int record_stream(hls::stream<streamutils::axi4s_word<W>>& s, const std::
     int n = 0;
     while (!s.empty()) {
         streamutils::axi4s_word<W> w = s.read();
-        cur.words.push_back(static_cast<uint64_t>(w.data.to_uint64()));
+        // Mask to W bits: widening the data field to 64 bits sign-extends a word whose top
+        // bit is set (measured: a negative float32, 0xc15c40db, came back 0xffffffffc15c40db).
+        uint64_t v = static_cast<uint64_t>(w.data.to_uint64());
+        if (W < 64) v &= (uint64_t(1) << W) - 1;
+        cur.words.push_back(v);
         ++n;
         if (w.last) {
             cur.tlast = true;

@@ -197,7 +197,7 @@ yield from self.resp_w.write(resp)
 
 **There is no `for` in it, and that is the point.** A per-element loop in a pysim body opts the design
 out of the LT model that is the tool's reason to exist; the C++ keeps its
-`#pragma HLS PIPELINE II=1` loop, exactly as `poly_evaluate_impl.tpp` keeps its lane loop. Three
+`#pragma HLS PIPELINE II=1` loop, exactly as `stream_inband`'s `poly_body_impl.tpp` keeps its lane loop. Three
 things carry the work instead:
 
 - **The command is read in one call and the response written in one.** That is the

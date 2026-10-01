@@ -7,6 +7,13 @@ summary: "A recipe rather than a step: how to write your own BuildStep that runs
 
 # Python Simulation Pattern
 
+> **This walkthrough shows an earlier version of `stream_inband`'s build.**  The example
+> has since been rewritten hook-first: a body-only kernel, a hand-written C++ testbench, and
+> shared stimulus files checked by `scenarios.check`, so its current
+> [`poly_build.py`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py)
+> differs in detail.  The step-writing pattern explained here is unchanged; see the
+> [example's pages](../../examples/stream_inband/index.md) for what it does now.
+
 Waveflow doesn't ship a generic "run a SimPy simulation" build step — every design has its own components, testbench, and result format, and a generic step would either need a long parameter list or constrain you to one shape. Instead this page is the **pattern**: a worked recipe for writing your own `BuildStep` that runs a Python simulation, derived from the poly accelerator's [`PySimStep`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py).
 
 When Waveflow has more than one example that follows this pattern, the common scaffolding will be extracted into a framework-level base class. Until then, copy this recipe.
