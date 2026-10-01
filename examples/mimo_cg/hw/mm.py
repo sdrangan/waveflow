@@ -322,7 +322,8 @@ class CgMmLoad(FreeRunMod):
 
 @dataclass
 class CgMmStore(FreeRunMod):
-    """Writes ``S₁ … S_nit``, one block per write; the last echoes the descriptor."""
+    """Writes ``S₁ … S_nit``, one block per write, then a zero-length write that echoes the
+    descriptor, so each job has as many writes as reads (see ``cg_mm_store_task.h``)."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_mm_store"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -373,17 +374,17 @@ class CgMmStore(FreeRunMod):
         for n in range(nit):
             sb = yield from self.s_blk.acquire_read()
             words = to_words(*sb.payload, f.S, w)
-            last = n == nit - 1
-            cmd = MemWCmd(addr=out + n * nw, len=len(words), fwd_bursts=int(last))
+            cmd = MemWCmd(addr=out + n * nw, len=len(words), fwd_bursts=0)
             yield from self.cmd_out.write(
                 np.asarray(cmd.serialize(word_bw=w), np.uint64)
             )
-            if last:
-                yield from self.cmd_out.write(
-                    np.asarray(desc.serialize(word_bw=w), np.uint64)
-                )
             yield from self.cmd_out.write(words)
             yield from self.s_blk.release_read()
+        # The echo rides on a zero-length write, so a job writes as often as it reads (nit + 1):
+        # the RTL's pointer FIFOs couple the reader's and writer's firing counts (cg_mm_store_task.h).
+        echo = MemWCmd(addr=out, len=0, fwd_bursts=1)
+        yield from self.cmd_out.write(np.asarray(echo.serialize(word_bw=w), np.uint64))
+        yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), np.uint64))
 
 
 @dataclass

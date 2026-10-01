@@ -358,7 +358,12 @@ class CgVecLoad(FreeRunMod):
 
 @dataclass
 class CgVecStore(FreeRunMod):
-    """Writes ``P₀ … P_{nit−1}`` (no echo) and then ``X`` (echoing the descriptor), one block each."""
+    """Writes ``P₀ … P_{nit−1}`` (no echo) and then ``X`` (echoing the descriptor), one block each.
+
+    That is ``nit + 1`` writes, matching the ``nit + 1`` reads (``B``, ``S₁ … S_nit``) — which is
+    load-bearing: HLS couples the reader's and writer's firing counts through the ``m_axi`` pointer
+    FIFOs, and a job with fewer writes than reads deadlocks the RTL after a few jobs (plan §15, 4.7).
+    """
 
     cpp_kernel_name: ClassVar[str | None] = "cg_vec_store"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW

@@ -46,7 +46,7 @@ MM_REPS = {
     "cg_mm_load_task": "1",
     "cg_mm_task": "1",
     "cg_mm_store_task": "1",
-    "mem_w_stream_framed_done_task": "nit",
+    "mem_w_stream_framed_done_task": "nit + 1",
 }
 
 _TASK = re.compile(r"hls::task\s+\w+\((?P<fn>[\w:]+(?:<[^>]*>)?),\s*(?P<args>[^)]*)\);")

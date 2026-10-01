@@ -198,3 +198,12 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Widen registers to an aligned memory format.** A 12-bit complex register would put
   2.5 elements in a 64-bit word, and the serializer splits `re` from `im` across words.
   A 16-bit format with the same integer bits is exact and stays on proven ground.
+- **In one HLS composite, a job must write as often as it reads.** HLS feeds the `m_axi`
+  pointer arguments to the mem-stream tasks through FIFOs that one `entry_proc` fills
+  in lockstep, so the reader can lead the writer by only about seven firings. One extra
+  read per job deadlocked the RTL after six jobs, in XSI only: the Python sim and C-sim
+  cannot see it. Balance with a zero-length final write that carries the echo. Test
+  more jobs than any FIFO is deep.
+- **Trace the top before guessing.** The VCD dumper (run.sh `trace`) shows each task's
+  done count and each FIFO's full/empty state at the hang. Two pages of output named
+  the culprit after two blind hypotheses had only narrowed it down.
