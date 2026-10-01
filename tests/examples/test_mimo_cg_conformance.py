@@ -16,6 +16,7 @@ from examples.mimo_cg.mimo_cg_conformance import (
     CASES_PER_SET,
     CPP_DIR,
     FORMAT_SETS,
+    STRESS_FORMATS,
     _problems,
     build_case_set,
     case_set_specs,
@@ -72,3 +73,26 @@ def test_python_golden_matches_cpp_reference_in_csim(tmp_path: Path, spec):
         f"{spec.name}: {len(result['mismatches'])} mismatching words; find which side is wrong "
         f"(do NOT loosen). First few: {result['mismatches'][:5]}"
     )
+
+
+def test_stress_set_saturates_alpha_and_beta():
+    """The saturation paths must be exercised: the stress set saturates alpha and beta."""
+    spec = next(s for s in SPECS if s.name == "stress_sat_recurrence_k16")
+    assert spec.formats == STRESS_FORMATS
+    counts = {"alpha": 0, "beta": 0}
+    for A, B, M in _problems(spec):
+        regs = []
+        cg_fixed(
+            A,
+            B,
+            spec.nit,
+            spec.formats,
+            scale=M,
+            on_iteration=lambda n, r, regs=regs: regs.append(r),
+        )
+        for r in regs:
+            for name in counts:
+                fmt = getattr(spec.formats, name)
+                hi, lo = (1 << (fmt.W - 1)) - 1, -(1 << (fmt.W - 1))
+                counts[name] += int(np.sum((r[name][0] == hi) | (r[name][0] == lo)))
+    assert counts["alpha"] >= 1 and counts["beta"] >= 10, counts

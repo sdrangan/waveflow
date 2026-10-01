@@ -114,9 +114,11 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Check a format's LSB before writing a test value.** `s16_10` has 6 fraction
   bits, so 2⁻¹⁰ quantizes to 0, and the zero guard then hides the mistake as a
   "wrong" result.
-- **A squared quantity needs about twice the fraction bits.** rᴴr = Σ|r|² gets its
-  integer bits from the first iteration but shrinks quadratically as CG converges.
-  With the same relative precision as R it underflows early and stalls α and β.
+- **A squared quantity needs about twice the fraction bits.** rᴴr = Σ|r|² and pᴴAp
+  get their integer bits from the first iteration but shrink quadratically as CG
+  converges. With the same relative precision as the vectors they lose precision
+  early and stall α and β. Both have to be widened; widening one barely helps (M2
+  review).
 - **"Fits 64 bits" has to cover every shift, not just the arithmetic.** The
   quantize up-shift after a division can need more bits than the division itself,
   so check it in the same feasibility function.
@@ -133,3 +135,16 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   the exact accumulator typedefs. Both matched on the first C-sim run.
 - **Batch conformance cases into one C-sim run.** One compile per case set (about
   8 s) handles 51 problems, against roughly 6 s per case for one run each.
+
+## M2 review (2026-09-30)
+
+- **Test a diagnosis by changing one thing at a time.** "rᴴr sets the floor" looked
+  right from one experiment. Widening rᴴr alone, then pᴴAp alone, showed that both
+  are needed.
+- **Scan feasibility limits over every integer.** Trying only even guard widths put
+  the cap at 10 when it was 11.
+- **`np.abs` on int64 overflows at −2⁶³.** Build truncating division from
+  `floor_divide` and a remainder correction.
+- **Coverage needs a count, not just a pass.** Bit-exact on 580k words still said
+  nothing about α/β saturation until a stress set forced it and a test checked it
+  happened.

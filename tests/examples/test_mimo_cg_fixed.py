@@ -141,18 +141,39 @@ def test_narrow_formats_lose_accuracy_monotonically():
     assert errs == sorted(errs, reverse=True), errs
 
 
-def test_scalar_guard_bits_lift_the_rz_precision_floor():
-    """rᴴr spans a squared range: its 9 integer bits are set by the first iteration (~85), so
-    with few fraction bits it underflows as CG converges and α, β stall.  Measured at W = 22:
-    g_s = 4 -> 5.9e-4, g_s = 8 -> 1.4e-4 (plan §15, step 2.3).  g_s = 10 is the largest scalar
-    width that fits the 64-bit cap at W = 22 (``CgFormats.intermediates``)."""
+def test_scalar_guard_bits_lift_the_quadratic_form_floor():
+    """rᴴr and pᴴAp span squared ranges: their integer bits are set early (~85 and ~259), so with
+    few fraction bits they lose relative precision as CG converges and α, β stall.  Measured at
+    W = 22: g_s = 4 -> 5.9e-4, g_s = 8 -> 1.4e-4 (plan §15).  The largest feasible g_s at W = 22
+    is 11; the binding limit is the 64-bit Python model's quantize up-shift for β, not ap_fixed.
+    """
     e4 = _mean_err(CgFormats.from_width(22, 4, 4))
     e8 = _mean_err(CgFormats.from_width(22, 8, 4))
     e10 = _mean_err(CgFormats.from_width(22, 10, 4))
     assert e8 * 2 <= e4, (e4, e8)
     assert e10 <= e8 * 1.05, (e8, e10)
+    CgFormats.from_width(22, 11, 4).intermediates(16)
     with pytest.raises(NotImplementedError):
-        CgFormats.from_width(22, 12, 4).intermediates(K)
+        CgFormats.from_width(22, 12, 4).intermediates(16)
+
+
+def test_the_floor_needs_both_quadratic_forms_widened():
+    """M2 review: widening rᴴr alone or pᴴAp alone barely helps; widening both does
+    (W = 22: 5.9e-4 -> rz only 4.9e-4, ps only 5.4e-4, both 1.4e-4)."""
+    import dataclasses
+
+    from examples.mimo_cg.mimo_cg_fixed import register
+
+    base = CgFormats.from_width(22, 4, 4)
+
+    def wider(fmt):
+        return register(fmt.W + 4, fmt.int_bits)
+
+    e_base = _mean_err(base)
+    e_rz = _mean_err(dataclasses.replace(base, rz=wider(base.rz)))
+    e_ps = _mean_err(dataclasses.replace(base, ps=wider(base.ps)))
+    e_both = _mean_err(dataclasses.replace(base, rz=wider(base.rz), ps=wider(base.ps)))
+    assert e_both * 2 <= min(e_rz, e_ps) and e_rz > 0.7 * e_base and e_ps > 0.7 * e_base
 
 
 def test_result_exposes_stored_real_and_typed_views():
@@ -185,8 +206,9 @@ def test_paired_simulator_draws_exactly_the_float_samples():
 @pytest.mark.parametrize("explicit", [False, True], ids=["recurrence", "explicit"])
 @pytest.mark.parametrize("rho_db", [-2.0, 0.0, 2.0])
 def test_wide_bit_exact_detector_pairs_with_float_cg(rho_db, explicit):
-    """AC2.4, second half: on identical samples the wide-format detector decides like float CG
-    on >= 99.9% of bits, and its error count is within max(3, 1%) of float CG's."""
+    """AC2.4, second half: on identical samples the wide-format detector's decisions differ from
+    float CG's on at most max(5, 1% of float CG's errors) bits, and its error count is within
+    max(3, 1%) of float CG's."""
     rows = simulate_point_fixed(
         DEFAULT,
         rho_db,
@@ -198,7 +220,8 @@ def test_wide_bit_exact_detector_pairs_with_float_cg(rho_db, explicit):
     by = {r["detector"]: r for r in rows}
     for n in DEFAULT.nits:
         flt, fxd = by[f"cg{n}"], by[f"fx:wide:cg{n}"]
-        assert fxd["mismatch"] <= 1e-3 * fxd["bits"], (n, fxd["mismatch"])
+        # Tightened at the M2 review (plan §14): <= max(5, 1% of float CG's errors).
+        assert fxd["mismatch"] <= max(5, 0.01 * flt["bit_errors"]), (n, fxd["mismatch"])
         assert abs(fxd["bit_errors"] - flt["bit_errors"]) <= max(
             3, 0.01 * flt["bit_errors"]
         ), (

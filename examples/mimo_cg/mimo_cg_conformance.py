@@ -23,6 +23,7 @@ Run from the repo root::
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import shutil
@@ -37,6 +38,7 @@ from examples.mimo_cg.mimo_cg_fixed import (
     accumulator_formats,
     cg_fixed,
     quantize_inputs,
+    register,
 )
 from examples.mimo_cg.mimo_link import Qam, noise_variance, point_rng, rayleigh
 from waveflow.toolchain import toolchain
@@ -57,6 +59,14 @@ FORMAT_SETS: dict[str, CgFormats] = {
 }
 
 
+#: Conformance-only stress formats, not a design point: alpha and beta get 2 and 1 integer bits,
+#: so they saturate often at K = 16 (about 6 alpha and 133 beta saturations per case set) and the
+#: saturation paths of golden and C++ are compared.  The design formats never saturate them.
+STRESS_FORMATS = dataclasses.replace(
+    CgFormats.from_width(12, 2, 2), alpha=register(14, 2), beta=register(14, 1)
+)
+
+
 @dataclass(frozen=True)
 class CaseSetSpec:
     name: str
@@ -69,7 +79,8 @@ class CaseSetSpec:
 
 
 def case_set_specs() -> list[CaseSetSpec]:
-    """Every format set in both residual forms at K = 8, plus the wide set at K = 16."""
+    """Every format set in both residual forms at K = 8, the wide set at K = 16, and the
+    saturation stress set in both forms at K = 16."""
     specs = []
     for i, (name, fmt) in enumerate(FORMAT_SETS.items()):
         for explicit in (False, True):
@@ -82,6 +93,13 @@ def case_set_specs() -> list[CaseSetSpec]:
     specs.append(
         CaseSetSpec("wide_recurrence_k16", FORMAT_SETS["wide"], 16, 4, 16, False, 120)
     )
+    for explicit in (False, True):
+        form = "explicit" if explicit else "recurrence"
+        specs.append(
+            CaseSetSpec(
+                f"stress_sat_{form}_k16", STRESS_FORMATS, 16, 4, 16, explicit, 130
+            )
+        )
     return specs
 
 

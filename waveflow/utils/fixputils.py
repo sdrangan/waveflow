@@ -264,8 +264,9 @@ def div(sa: NDArray, a: Format, sb: NDArray, b: Format) -> tuple[NDArray, Format
     One Vitis C-simulation detail is reproduced exactly: the integer division runs at the
     shifted dividend's width ``max(Wa + max(Fb, 0), Wb)``, not at the wider result type, so
     the single overflowing case, the most negative dividend over a divisor of −1 LSB, wraps
-    back to the most negative value.  (In the CG solve, the divisors ``pᴴAp`` and ``rᴴr``
-    are never negative, so this cannot occur there.)
+    back to the most negative value.  This is C-simulation behaviour: the synthesis branch of
+    ``ap_fixed_base.h`` leaves the case undefined, so RTL may differ.  (It cannot arise in the
+    CG solve, whose dividends ``rᴴr`` are never negative.)
     """
     r = div_format(a, b)
     num = np.asarray(sa).astype(r.dtype) << max(b.frac_bits, 0)
@@ -274,7 +275,12 @@ def div(sa: NDArray, a: Format, sb: NDArray, b: Format) -> tuple[NDArray, Format
     zero = den == 0
     safe = np.where(zero, 1, den)
     if r.signed:
-        quot = np.sign(num) * np.sign(safe) * (np.abs(num) // np.abs(safe))
+        # Truncation toward zero from floor division plus a remainder test: no abs(), which
+        # overflows at -2**63 (a 64-bit signed divisor).  |num| <= 2**62, so neither
+        # floor_divide nor remainder can overflow.
+        floor = np.floor_divide(num, safe)
+        inexact = np.remainder(num, safe) != 0
+        quot = floor + (inexact & ((num < 0) != (safe < 0)))
         quot = truncate(quot, max(a.W + max(b.frac_bits, 0), b.W), signed=True)
     else:
         quot = num // safe

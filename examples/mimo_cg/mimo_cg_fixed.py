@@ -17,7 +17,7 @@ guard)::
 
     1. S     = q_S(A @ P)                     full-precision complex products, exact sum over K
     2. ps    = q_ps(Σ_k Re(conj(P) * S))      per column
-    3. alpha = q_alpha(w(rz) / ps)            ps == 0 -> alpha = 0 (the column freezes)
+    3. alpha = q_alpha(w(rz) / ps)            ps == 0 -> alpha = 0 (X unchanged this iteration)
     4. X     = q_X(X + P * alpha)
     5. R     = q_R(R - S * alpha)             recurrence, or q_R(B - A @ X) explicit
     6. rz'   = q_rz(Σ_k |R|²)
@@ -26,7 +26,12 @@ guard)::
     9. P     = q_P(R + P * beta)
 
 Every product and sum before a ``q_`` is exact.  Integer arithmetic is associative, so any
-summation order gives the same register values.
+summation order gives the same register values.  A column freezes only once ``rz == 0``:
+then α = 0 (zero dividend), β = 0 (guard), and R, P stay zero.  A zero ``ps`` with a nonzero
+``rz`` only skips that iteration's X update; β becomes 1 and CG continues.
+
+"Bit-exact" covers the CG from the quantized A/M and B/M onward; the Gram matrix and the
+matched filter are floating point (gate 2.1 decision 6).
 
 Representation
 --------------
@@ -97,7 +102,12 @@ class CgFormats:
 
     @classmethod
     def wide(cls) -> CgFormats:
-        """AC2.4's wide reference (gate 2.1 decision 7): every register has 24 fraction bits."""
+        """AC2.4's wide reference (gate 2.1 decision 7): every register has 24 fraction bits.
+
+        Validated against float CG at 64×8 (≤ 6e-5 from −10 to 20 dB).  At M/K = 2 it is
+        looser: the M2 review measured up to 7.4e-4 at 32×16, 10 dB, mid-iteration.  So the
+        no-quantization baseline for Phase 3 and the paper is float CG, not these formats.
+        """
         return cls(
             A=register(28, 3),
             B=register(28, 4),

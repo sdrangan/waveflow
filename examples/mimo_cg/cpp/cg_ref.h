@@ -6,7 +6,7 @@
 //
 //   1. S     = q_S(A @ P)                  exact products, exact sum over K
 //   2. ps    = q_ps(sum_k Re(conj(P) S))   per column
-//   3. alpha = q_alpha(w(rz) / ps)         ps == 0 -> alpha = 0
+//   3. alpha = q_alpha(w(rz) / ps)         ps == 0 -> alpha = 0 (only rz == 0 freezes a column)
 //   4. X     = q_X(X + P alpha)
 //   5. R     = q_R(R - S alpha)            or q_R(B - A @ X) when T::EXPLICIT
 //   6. rz'   = q_rz(sum_k |R|^2)

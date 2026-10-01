@@ -254,3 +254,10 @@ def test_truncate_sign_extends_at_63_bits():
         x[:4] = [0, -1, (1 << (wid - 1)) - 1, -(1 << (wid - 1))]
         ref = [((int(v) + (1 << (wid - 1))) % (1 << wid)) - (1 << (wid - 1)) for v in x]
         assert fixputils.truncate(x, wid, True).tolist() == ref, wid
+
+
+def test_div_by_the_most_negative_64_bit_divisor():
+    """|num| < 2**63 over -2**63 truncates to 0; an abs()-based quotient once returned +/-1."""
+    A, B = Format(8, 4), Format(64, 10)  # F2 = 54
+    q, _ = fixputils.div(np.array([5, -5, 0]), A, np.array([-(1 << 63)] * 3), B)
+    assert q.tolist() == [0, 0, 0]
