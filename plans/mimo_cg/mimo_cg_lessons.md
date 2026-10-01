@@ -114,3 +114,13 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Check a format's LSB before writing a test value.** `s16_10` has 6 fraction
   bits, so 2⁻¹⁰ quantizes to 0, and the zero guard then hides the mistake as a
   "wrong" result.
+- **A squared quantity needs about twice the fraction bits.** rᴴr = Σ|r|² gets its
+  integer bits from the first iteration but shrinks quadratically as CG converges.
+  With the same relative precision as R it underflows early and stalls α and β.
+- **"Fits 64 bits" has to cover every shift, not just the arithmetic.** The
+  quantize up-shift after a division can need more bits than the division itself,
+  so check it in the same feasibility function.
+- **Edge widths find latent bugs.** `truncate` had always overflowed at 63 bits;
+  nothing used 63-bit wraps until a widened division did.
+- **Anchor plan edits at line start.** `| 2.3 |` also appears in the §9 numbers
+  table. Match `\n| 2.3 |`, and check that the commit includes the plan file.
