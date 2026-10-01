@@ -1912,6 +1912,11 @@ def extract_kernel(comp) -> HwStmt:
             f"its codegen is the sub-component graph (composite_top_spec)."
         )
     _validate_leaf_is_flat(comp)
+    # A body-only kernel (``cpp_body``) has nothing to extract: its top is the pragmas plus
+    # one call to the hand-written hook with every kernel argument.
+    from waveflow.build.hwgen import body_hook_name, body_only_tree
+    if body_hook_name(comp):
+        return body_only_tree(comp)
     from waveflow.build.hwresolve import resolve_kernel  # local: avoid an import cycle
     tree = HwStmtExtractor(comp, method_name=path.method).extract()
     return resolve_kernel(tree, comp)

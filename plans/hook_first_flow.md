@@ -124,6 +124,38 @@ still bound to the top. A spike on 2026-09-30 showed that code generation
 already works with a status *returned* from the hook; this gate covers the
 by-reference form and Vitis.
 
+> **DONE (2026-10-01, branch `hook-first-s1`).**
+> - `HostActivated.cpp_body` names the body. The module writes no
+>   `on_start`; one is supplied that runs the Python body in pysim.
+> - `extract_kernel` returns a one-call tree for it, so every caller (header,
+>   top, stubs, checks) takes the new path.
+> - **The hook's C++ parameters are the kernel's own** (`_kernel_arg_decls`,
+>   now the single source of the top-level argument order): streams templated
+>   on their `HwParam` widths, register fields by reference, `m_axi` pointers.
+> - **The stub carries `#pragma HLS INLINE`** and lists the module's schema
+>   headers, since the top-level header only includes what the arguments use.
+>
+> **Gate, all four held on Vitis HLS 2025.1**
+> (`tests/build/test_body_only_vitis.py`, `-m vitis`, about 1 min):
+> 1. csim byte-identical to the extracted `poly` kernel on the same inputs;
+> 2. csynth, II = 1, about 138 MHz estimated;
+> 3. register offsets equal the `VitisRegMap` (0x10/0x20/0x30/0x40);
+> 4. an early TLAST makes the hook write halted=1, error=3, tx_id=42
+>    through the references.
+>
+> Item 4 needed a hand-written C++ testbench. The generated `SeqTB` one
+> always pops `nsamp` samples, so it aborts on an empty stream after a halt:
+> one more data point for Stage 2. Fast tests:
+> `tests/build/test_body_only_kernel.py`. No regressions: 2,630 passed in
+> `tests/build`, `tests/hw` and `tests/examples`, with only the known
+> failure deselected.
+>
+> **Not done, and not needed:** passing the register map into an *ordinary*
+> hook called from an extracted `on_start` (the first bullet above). A
+> body-only kernel already hands the hook every register field by reference,
+> and with D2 there is no other caller. Revisit only if a design needs an
+> extracted control loop *and* a hook that writes status.
+
 ### Stage 2: shared stimulus and the C++ stream helper
 
 - **The stimulus format.** Extend the existing burst bundle (`burst_io`:

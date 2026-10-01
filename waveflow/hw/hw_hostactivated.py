@@ -15,6 +15,7 @@ Codegen dispatch is by class (:func:`~waveflow.build.codegen_dispatch.codegen_pa
 """
 from __future__ import annotations
 
+import inspect
 from abc import abstractmethod
 from typing import Any, ClassVar
 
@@ -61,8 +62,29 @@ class HostActivated(HwModule):
     #: intent declaratively.
     _kernel_method: ClassVar[str] = 'on_start'
 
+    #: Body-only kernel: the name of the method that IS the kernel body.  When set, the module
+    #: writes no ``on_start``.  The generated top is the interface pragmas and register map plus
+    #: one call to this hook with every kernel argument -- streams, register fields (by
+    #: reference) and m_axi pointers, in signature order -- and the hook's C++ is hand-written
+    #: (``<kernel>_<cpp_body>_impl.tpp``).  The method's Python body is the model pysim runs:
+    #: typically a thin port wrapper around a pure, bit-exact model function.
+    cpp_body: ClassVar[str | None] = None
+
     def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
+        # A body-only kernel's on_start is just "run the body": supply it, so the class is
+        # concrete without the author writing simulation-style code to imitate.
+        if cls.cpp_body and getattr(cls.on_start, '__isabstractmethod__', False):
+            body = cls.cpp_body
+
+            def on_start(self) -> ProcessGen[None]:
+                result = getattr(self, body)()
+                if inspect.isgenerator(result):
+                    return (yield from result)
+                return result
+
+            on_start.__doc__ = f"Run the body-only kernel's model, ``{body}()``."
+            cls.on_start = on_start  # type: ignore[method-assign]
         # Class-level contract: a host-activated leaf runs once per trigger, so it must not carry a
         # free-running `run_iter`. HostActivated itself has no run_iter, so a truthy lookup means a
         # subclass added one. (Mirrors the FreeRunMod body-XOR-children check.)
