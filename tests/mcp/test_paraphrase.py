@@ -71,6 +71,20 @@ PARAPHRASES: list[tuple[str, str, str]] = [
         "docs/examples/vecmult/",
         BROWSE,
     ),
+    # The two the rotate blind-test agent was stuck on (PR #209).  Measured by
+    # BM25 on 2026-10-01, after the "What a SeqTB body can express" section:
+    # the loop question's top hit is that section; the TLAST one reaches the
+    # page at rank 2.
+    (
+        "how do I loop over transactions in the testbench",
+        "docs/guide/comp_codegen/testbench.md",
+        BM25,
+    ),
+    (
+        "how do I send a burst without TLAST",
+        "docs/guide/comp_codegen/testbench.md",
+        BM25,
+    ),
 ]
 
 _IDS = [q for q, _, _ in PARAPHRASES]

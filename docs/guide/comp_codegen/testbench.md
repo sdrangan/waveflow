@@ -73,8 +73,11 @@ The `@sim_only` timer calls are **stripped** by the extractor — they capture l
 and emit nothing, so the generated `int main()` is the same with or without them.
 
 A stream DUT looks the same with push/pop instead of a regmap — see `PolyTBHls` in
-[`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py), which preloads
-coefficients, pushes a command header and a sample array, calls `dut.run()`, and pops the response.
+[`tests/fixtures/poly_extracted/poly_extracted.py`](../../../tests/fixtures/poly_extracted/poly_extracted.py),
+which preloads coefficients, pushes a command header and a sample array, calls `dut.run()`, and pops
+the response.  (The `stream_inband` example itself no longer uses a `SeqTB`: it has a hand-written
+C++ testbench that plays shared stimulus files into the kernel, which can loop over transactions and
+send a burst without TLAST.  See its [code generation page](../../examples/stream_inband/02_hls_codegen.md).)
 
 ## The body must be straight-line
 
@@ -90,6 +93,26 @@ testbench is a different [target](./index.md) — `sequential_xsi_tb`, the
 [concurrent (free-running)](../flows/concurrent.md) flow — and it **is** built.
 Honest limit: this is a **gate, not a proof** — it rejects the syntax that certainly forks, but cannot
 certify that a body is sequential.
+
+### What a `SeqTB` body can express
+
+The body is translated, statement by statement, into C++ `main()` by the same extractor that lowers
+kernel bodies, so it has the same fixed vocabulary:
+
+| Expressible | Not expressible |
+| --- | --- |
+| creating schemas, reading and writing them from files | a `for` loop |
+| `push` / `push_array` / `pop` / `pop_array`, with counts read from data | an `if` on the testbench's own data |
+| `dut.run()`, register-map reads and writes, status JSON | a loop that ends (`while True` has no `break`) |
+| | a burst without TLAST (`push_array` always ends with TLAST) |
+
+So the **shape** of a `SeqTB` -- how many transactions it sends and receives -- is fixed when it is
+written.  A test with several scenarios of different shapes, or with malformed transactions, does not
+fit.  For those, write the testbench as ordinary C++ and let it read stimulus files that Python writes
+once: `wf::play_stream` and `wf::record_stream` from the generated `include/bundle_tb.h` move whole
+streams, TLAST flags included.  That is how a [body-only kernel](../custom_hooks/body_only.md) is tested,
+and how the [Streaming polynomial](../../examples/stream_inband/02_hls_codegen.md) example loops over
+its scenarios.
 
 ## Generating it
 
