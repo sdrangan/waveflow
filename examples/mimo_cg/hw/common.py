@@ -30,13 +30,14 @@ testbench uses the same renderer, so the hardware and the proven C++ reference a
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import ClassVar
 
 import numpy as np
 
 from examples.mimo_cg.mimo_cg_fixed import CgFormats, accumulator_formats
 from waveflow.hw.complexfield import ComplexField
-from waveflow.hw.dataschema import DataArray, DataList, IntField
+from waveflow.hw.dataschema import DataArray, DataList, EnumField, IntField
 from waveflow.hw.fixpoint import FixedField
 from waveflow.utils import complexutils as cx
 from waveflow.utils.fixputils import Format
@@ -73,6 +74,31 @@ class CgDesc(DataList):
     elements: ClassVar[dict] = {
         "nit": {"schema": Word32, "description": "CG iterations (1..K)"},
         "x_off": {"schema": Word32, "description": "X (K x N) output word offset"},
+    }
+
+
+class IterOp(IntEnum):
+    """What one per-iteration command asks of a block."""
+
+    INIT = 0  #: start a job (the vector unit initializes from B, the matmul loads A)
+    ITER = 1  #: one CG iteration
+    LAST = 2  #: the job's final iteration (the vector unit then emits X, not P)
+
+
+IterOpField = EnumField.specialize(enum_type=IterOp, bitwidth=32)
+
+
+class CgIterCmd(DataList):
+    """One entry of a block's command queue (``cg_ctrl`` → ``cg_vec`` / ``cg_mm``): the op and the
+    iteration it belongs to (0 for ``INIT``)."""
+
+    include_filename: ClassVar[str | None] = "cg_iter_cmd.h"
+    elements: ClassVar[dict] = {
+        "op": {"schema": IterOpField, "description": "INIT, ITER or LAST"},
+        "it": {
+            "schema": Word32,
+            "description": "iteration number, 1..nit (0 for INIT)",
+        },
     }
 
 
@@ -136,7 +162,10 @@ def from_words(
         np.asarray(words, dtype=np.uint64), word_bw=mem_dw
     )
     pairs = np.ascontiguousarray(np.asarray(arr)).view(np.int64).reshape(-1, 2)
-    re, im = pairs[:, 0].copy(), pairs[:, 1].copy()  # each element is an (re, im) int64 record
+    re, im = (
+        pairs[:, 0].copy(),
+        pairs[:, 1].copy(),
+    )  # each element is an (re, im) int64 record
     shift = LANE_BITS - fmt.W
     if np.any(re & ((1 << shift) - 1)) or np.any(im & ((1 << shift) - 1)):
         raise ValueError(
@@ -149,6 +178,32 @@ def nwords(n_elems: int, mem_dw: int = DEFAULT_MEM_DW) -> int:
     """Memory words holding ``n_elems`` complex elements (aligned, ``mem_dw / 32`` per word)."""
     _check_mem_dw(mem_dw)
     return -(-n_elems // (mem_dw // ELEM_BITS))
+
+
+# --- the formats the hardware is built for ----------------------------------------------------
+
+
+#: The format sets a block can be built with, by id (a ``HwParam`` is an integer): the M3 frontier
+#: formats (W12g8, the default; W14g8 for 64-QAM 32×16) and the M2 saturation stress set
+#: (gate 4.0 decision 5).
+HW_FORMAT_NAMES = ("W12g8", "W14g8", "stress")
+
+
+def hw_formats() -> dict[str, CgFormats]:
+    """The buildable format sets, by name (see :data:`HW_FORMAT_NAMES`)."""
+    from examples.mimo_cg.mimo_cg_accuracy_sweep import sweep_format
+    from examples.mimo_cg.mimo_cg_conformance import STRESS_FORMATS
+
+    return {
+        "W12g8": sweep_format(12, 8),
+        "W14g8": sweep_format(14, 8),
+        "stress": STRESS_FORMATS,
+    }
+
+
+def hw_format(fmt_id: int) -> CgFormats:
+    """The format set with this id (``HW_FORMAT_NAMES[fmt_id]``)."""
+    return hw_formats()[HW_FORMAT_NAMES[int(fmt_id)]]
 
 
 # --- C++ types -----------------------------------------------------------------------------
