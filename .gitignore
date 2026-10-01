@@ -39,6 +39,12 @@ hls/
 #                              of publishing at all.  (The untracked work tier is **/calib/work/,
 #                              ignored separately below.)
 !waveflow/calib/platforms/**
+
+# The FFT bit-exact goldens are the deliverable, not build output: fft_bitexact's tests read
+# them instead of running Vitis, so a clone without them cannot verify anything.  The blanket
+# *.json above had silently swallowed all six -- the tests errored with FileNotFoundError on a
+# fresh checkout while passing locally.  Regenerate with fft_bitexact/tools/regen_golden.sh.
+!fft_bitexact/golden/**
 !**/calib/platforms/**
 # The `**/` matters: `calib/platforms/**` contains a slash, so git anchors it to the repo
 # root -- an example's library at examples/<name>/calib/platforms/ stayed ignored, with only
