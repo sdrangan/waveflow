@@ -320,6 +320,7 @@ TCL_TEMPLATE = """open_project -reset {project}
 set_top {top}
 {design_files}
 add_files -tb {tb} -cflags "{cflags}"
+{tb_files}
 open_solution -reset sol
 set_part {{xc7z020clg484-1}}
 create_clock -period 10
@@ -342,14 +343,22 @@ def run_csim(adapter: ModuleType, word_bw: int, calls, work: Path,
     # silently left out of csim).  So Vitis runs in the adapter's ROOT -- the arm's folder --
     # with a one-level project there and the design files named relative to it.
     root = Path(getattr(adapter, "ROOT", Path(adapter.__file__).resolve().parent)).resolve()
-    rel = []
-    for src in adapter.SOURCES:
-        p = (Path(src) if Path(src).is_absolute() else root / src).resolve()
-        try:
-            rel.append(p.relative_to(root).as_posix())
-        except ValueError:
-            raise ValueError(f"adapter source {p} is not under ROOT {root}") from None
+    def under_root(srcs):
+        out = []
+        for src in srcs:
+            p = (Path(src) if Path(src).is_absolute() else root / src).resolve()
+            try:
+                out.append(p.relative_to(root).as_posix())
+            except ValueError:
+                raise ValueError(f"adapter source {p} is not under ROOT {root}") from None
+        return out
+
+    rel = under_root(adapter.SOURCES)
+    tb_rel = under_root(getattr(adapter, "TB_SOURCES", []))
+    # CFLAGS may depend on the width (a kernel whose width is a -D macro).
     cflags = getattr(adapter, "CFLAGS", "")
+    if callable(cflags):
+        cflags = cflags(word_bw)
     # The testbench is a file Vitis compiles too, so it also goes under ROOT.
     tb = root / f"_grader_tb_w{word_bw}.cpp"
     stim, out = work / f"stim_w{word_bw}.txt", work / f"out_w{word_bw}.txt"
@@ -361,7 +370,9 @@ def run_csim(adapter: ModuleType, word_bw: int, calls, work: Path,
     tcl.write_text(TCL_TEMPLATE.format(
         project=f"_grader_w{word_bw}", top=adapter.TOPS[word_bw],
         design_files="\n".join(f'add_files {r} -cflags "{cflags}"' for r in rel),
-        tb=tb.name, cflags=cflags, stim=stim.as_posix(), out=out.as_posix()),
+        tb=tb.name, cflags=cflags,
+        tb_files="\n".join(f'add_files -tb {r} -cflags "{cflags}"' for r in tb_rel),
+        stim=stim.as_posix(), out=out.as_posix()),
         encoding="utf-8")
     cmd, _ = _build_vitis_hls_cmd(tcl)
     final, shell = _build_final_cmd(cmd)
@@ -426,7 +437,7 @@ def score(txs: list[Tx], got: list, out_bits: int, out_frac: int) -> dict:
 def grade(adapter_path: str | Path, work: str | Path | None = None, *, seed: int | None = None,
           word_bws: list[int] | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> dict:
     adapter = load_adapter(adapter_path)
-    work = Path(work) if work else Path(adapter_path).resolve().parent / "rotate_grade"
+    work = (Path(work) if work else Path(adapter_path).resolve().parent / "rotate_grade").resolve()
     work.mkdir(parents=True, exist_ok=True)
     seed = seed if seed is not None else random.SystemRandom().randrange(1 << 31)
     txs = make_transactions(seed)
