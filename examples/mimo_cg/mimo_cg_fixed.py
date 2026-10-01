@@ -363,3 +363,107 @@ def cg_fixed(
         if wanted is not None and n in wanted:
             out[n] = CgFixedResult(xr.copy(), xi.copy(), f.X)
     return out if wanted is not None else CgFixedResult(xr, xi, f.X)
+
+
+# --- the link simulator with the bit-exact detector (step 2.5) ----------------------------
+
+
+def simulate_point_fixed(
+    cfg,
+    rho_db: float,
+    formats: dict[str, CgFormats],
+    *,
+    explicit_residual: bool = False,
+    max_bits: int | None = None,
+    min_errors: int | None = None,
+) -> list[dict]:
+    """BER of float CG and of the bit-exact CG in each format, on identical samples.
+
+    Draws exactly the samples of :func:`examples.mimo_cg.mimo_cg.simulate_point` (same
+    generator, same call order, same chunks); a test proves its float-CG error counts equal
+    that function's.  For each CG iteration count ``n`` in ``cfg.nits`` it reports the float
+    detector ``cg{n}`` and, per format, ``fx:{name}:cg{n}``, with ``mismatch``: the bits whose
+    hard decision differs from float ``cg{n}``.  Estimates are unbiased by the same exact μ
+    as the float runs (a simulation-side genie, see :mod:`examples.mimo_cg.detectors`).
+
+    The stop rule is the float runs': every detector has ``min_errors`` bit errors, or
+    ``max_bits`` bits have been simulated, checked at chunk boundaries.
+    """
+    import math
+
+    from examples.mimo_cg import mimo_cg as base
+    from examples.mimo_cg.detectors import bias_from_system, cg_multi_rhs
+    from examples.mimo_cg.mimo_link import (
+        Qam,
+        noise_variance,
+        point_rng,
+        rayleigh,
+        snr_key,
+    )
+
+    max_bits = base.MAX_BITS if max_bits is None else max_bits
+    min_errors = base.MIN_ERRORS if min_errors is None else min_errors
+    qam = Qam(cfg.order)
+    b = qam.bits_per_symbol
+    M, K = cfg.M, cfg.K
+    sigma2 = noise_variance(rho_db)
+    sigma = math.sqrt(sigma2)
+    bits_per_block = base.NS * K * b
+    chunk = max(1, base.CHUNK_BITS // bits_per_block)
+    rng = point_rng(base._BER_STREAM, M, K, cfg.order, snr_key(rho_db))
+    nits = cfg.nits
+    names = [f"cg{n}" for n in nits] + [f"fx:{f}:cg{n}" for f in formats for n in nits]
+    errors = dict.fromkeys(names, 0)
+    mismatch = dict.fromkeys(names, 0)
+    bits = blocks = 0
+    eye = np.eye(K)
+    while True:
+        # The draw sequence of base.simulate_point, call for call.
+        H = rayleigh(rng, (chunk, M, K))
+        tx = rng.integers(0, 2, size=(chunk, base.NS, K * b), dtype=np.int8)
+        X = np.swapaxes(qam.modulate(tx), -1, -2)
+        Y = H @ X + sigma * rayleigh(rng, (chunk, M, base.NS))
+        Hh = np.conj(np.swapaxes(H, -1, -2))
+        A = Hh @ H + sigma2 * eye
+        B = Hh @ Y
+        mu = bias_from_system(A, sigma2)
+        decisions = {}
+        for n, Xn in cg_multi_rhs(A, B, max(nits), iterates=nits).items():
+            decisions[f"cg{n}"] = qam.demodulate(np.swapaxes(Xn / mu, -1, -2))
+        for fname, fmt in formats.items():
+            fixed = cg_fixed(
+                A,
+                B,
+                max(nits),
+                fmt,
+                scale=M,
+                explicit_residual=explicit_residual,
+                iterates=nits,
+            )
+            for n in nits:
+                decisions[f"fx:{fname}:cg{n}"] = qam.demodulate(
+                    np.swapaxes(fixed[n].real / mu, -1, -2)
+                )
+        for name, rx in decisions.items():
+            errors[name] += int(np.count_nonzero(rx != tx))
+            ref = decisions[name.rsplit(":", 1)[-1]] if name.startswith("fx:") else rx
+            mismatch[name] += int(np.count_nonzero(rx != ref))
+        bits += chunk * bits_per_block
+        blocks += chunk
+        if bits >= max_bits or min(errors.values()) >= min_errors:
+            break
+    return [
+        {
+            "M": M,
+            "K": K,
+            "modulation": cfg.modulation,
+            "rho_db": rho_db,
+            "detector": name,
+            "bit_errors": errors[name],
+            "mismatch": mismatch[name],
+            "bits": bits,
+            "blocks": blocks,
+            "ber": errors[name] / bits,
+        }
+        for name in names
+    ]

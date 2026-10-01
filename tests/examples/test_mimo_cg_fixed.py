@@ -11,7 +11,13 @@ import numpy as np
 import pytest
 
 from examples.mimo_cg.detectors import cg_multi_rhs, mmse_matrix
-from examples.mimo_cg.mimo_cg_fixed import INT_BITS, CgFormats, cg_fixed
+from examples.mimo_cg.mimo_cg import Config, simulate_point
+from examples.mimo_cg.mimo_cg_fixed import (
+    INT_BITS,
+    CgFormats,
+    cg_fixed,
+    simulate_point_fixed,
+)
 from examples.mimo_cg.mimo_link import Qam, noise_variance, point_rng, rayleigh, snr_key
 
 M, K, NS = 64, 8, 32
@@ -156,3 +162,47 @@ def test_result_exposes_stored_real_and_typed_views():
     assert da.element_type.inner_format() == CgFormats.wide().X
     assert np.array_equal(np.asarray(da.val)["re"], out.re.reshape(-1))
     np.testing.assert_allclose(out.real.real, out.re * 2.0**-out.fmt.frac_bits)
+
+
+# --- step 2.5: the bit-exact detector in the link simulator --------------------------------
+
+DEFAULT = Config(64, 8, "16qam")
+
+
+def test_paired_simulator_draws_exactly_the_float_samples():
+    """Same budget, no early stop: float-CG error counts equal simulate_point's, error for error."""
+    budget = 1_000_000
+    base = {
+        r["detector"]: r["bit_errors"]
+        for r in simulate_point(DEFAULT, 1.0, max_bits=budget, min_errors=10**9)
+    }
+    rows = simulate_point_fixed(DEFAULT, 1.0, {}, max_bits=budget, min_errors=10**9)
+    assert {r["detector"]: r["bit_errors"] for r in rows} == {
+        k: v for k, v in base.items() if k.startswith("cg")
+    }
+
+
+@pytest.mark.parametrize("explicit", [False, True], ids=["recurrence", "explicit"])
+@pytest.mark.parametrize("rho_db", [-2.0, 0.0, 2.0])
+def test_wide_bit_exact_detector_pairs_with_float_cg(rho_db, explicit):
+    """AC2.4, second half: on identical samples the wide-format detector decides like float CG
+    on >= 99.9% of bits, and its error count is within max(3, 1%) of float CG's."""
+    rows = simulate_point_fixed(
+        DEFAULT,
+        rho_db,
+        {"wide": CgFormats.wide()},
+        explicit_residual=explicit,
+        max_bits=1_000_000,
+        min_errors=10**9,
+    )
+    by = {r["detector"]: r for r in rows}
+    for n in DEFAULT.nits:
+        flt, fxd = by[f"cg{n}"], by[f"fx:wide:cg{n}"]
+        assert fxd["mismatch"] <= 1e-3 * fxd["bits"], (n, fxd["mismatch"])
+        assert abs(fxd["bit_errors"] - flt["bit_errors"]) <= max(
+            3, 0.01 * flt["bit_errors"]
+        ), (
+            n,
+            fxd["bit_errors"],
+            flt["bit_errors"],
+        )
