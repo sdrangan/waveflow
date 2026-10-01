@@ -131,6 +131,7 @@ review, run with `--no-approve`, read the agent's work, and continue by hand.
 | `--timeout <hours>` | limit on each run (default 4) |
 | `--silent` | do not print the agent's activity while it runs |
 | `--resume` | continue an unfinished run; see [Interrupted runs](#interrupted-runs) |
+| `--no-waveflow` | the baseline arm: see [Comparing against a run without Waveflow](#comparing-against-a-run-without-waveflow) |
 | `--force` | start a new run in a non-empty folder, replacing the earlier report. The old partial work stays in the folder, so the run is not blind; prefer deleting the folder |
 
 ### Usage
@@ -198,6 +199,28 @@ Everything is also saved in a folder **beside** the trial folder, named
 | `config.json`, `phases.json` | the run's settings, and each run's status (running, done, timed out, interrupted). Both are written as the test goes, which is what `--resume` reads |
 
 The trial folder itself holds what the agent built.
+
+## Comparing against a run without Waveflow
+
+A blind test on its own says what an agent does *with* Waveflow.  Whether that is better or
+worse than not using it needs a second run that differs **only** in Waveflow:
+
+```
+waveflow blind-test --prompt examples/mcp_test/rotate_vitis.md --no-waveflow
+```
+
+`--no-waveflow` keeps everything else the same -- the fresh folder, the allowlist, the
+non-interactive harness -- but starts no MCP server, takes the Waveflow entries off the
+allowlist, leaves `python` as the operator's shell resolves it, and tells the agent to use
+Vitis HLS directly, with Python and numpy for the models.  `rotate_vitis.md` is
+`rotate.md` with its first line, which names Waveflow, made neutral.  If the operator's
+Python can import Waveflow, `config.json` says so (`waveflow_importable`); the agent is
+never told it exists.
+
+Both arms then go through the same **independent grader**, which neither wrote: it
+generates hidden transactions, drives each arm's kernel with its own C++ testbench in
+Vitis C simulation, and checks every sample bit for bit.  See
+[`examples/mcp_test/grader/README.md`](https://github.com/sdrangan/waveflow/tree/main/examples/mcp_test/grader/README.md).
 
 ## Example
 

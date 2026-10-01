@@ -214,6 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
     blind.add_argument("--timeout", type=float, help="hours per run (default: 4)")
     blind.add_argument("--force", action="store_true", help="reuse a non-empty folder / old log")
     blind.add_argument("--silent", action="store_true", help="do not print the agent's log while it runs")
+    blind.add_argument("--no-waveflow", action="store_true",
+                       help="the baseline arm: no MCP server, no Waveflow tools, the operator's "
+                       "own Python, and a first message that says to use Vitis directly")
     blind.add_argument("--text", action="store_true")
 
     return parser
@@ -244,6 +247,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             force=args.force,
             silent=args.silent,
             resume=args.resume,
+            no_waveflow=args.no_waveflow,
         )
 
     if args.root:

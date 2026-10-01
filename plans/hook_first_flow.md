@@ -106,6 +106,31 @@ So that "not much worse" is a number, not a feeling.
 
 **Gate:** baseline numbers recorded in this plan.
 
+> **TOOLING DONE (2026-10-01); the runs are not.**
+> - **`waveflow blind-test --no-waveflow`**: no MCP server, the Waveflow entries
+>   off the allowlist, the operator's own `python`, and a first message saying
+>   to use Vitis HLS directly. `examples/mcp_test/rotate_vitis.md` is `rotate.md`
+>   with its Waveflow first line made neutral. **Caveat measured here:** the
+>   operator's `C:/Python314` can import Waveflow; `config.json` records it
+>   (`waveflow_importable`). The agent is never told it exists.
+> - **The grader**, `examples/mcp_test/grader/` (not a TOC example, so not in
+>   the search corpus -- checked). Hidden transactions from a seed picked at
+>   grading time (angles, lengths, full-scale corners, coefficients outside the
+>   unit circle, exact rounding ties); its own C++ testbench, generic over
+>   `ap_axiu` / `hls::axis` / `ap_uint` streams; Vitis csim per width; every
+>   sample scored under 20 rounding / overflow / quantization-order
+>   conventions, PASS = one convention exact everywhere. A per-run **adapter**,
+>   written from the arm's report, gives the layout.
+> - **Gate on Vitis:** the grader's reference kernel matches only
+>   `half_up/saturate/sum`; a truncating mutant only `floor/saturate/sum`; a
+>   sign error nothing -- at 32 and 64 bits.
+> - **Vitis again:** a design *or testbench* file outside the directory Vitis
+>   runs in is left out of csim (no rule to make target). The grader runs Vitis
+>   in the arm's folder for that reason.
+> - **Not done:** the 2-3 baseline runs. Each takes hours of the operator's
+>   Claude login, so they are the operator's to start:
+>   `waveflow blind-test --prompt examples/mcp_test/rotate_vitis.md --no-waveflow`.
+
 ### Stage 1: the code-generation change
 
 - **Pass the register map into a hook.** When a hook parameter is the
