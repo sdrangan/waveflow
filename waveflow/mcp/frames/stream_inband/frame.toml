@@ -78,36 +78,30 @@ skip_suffixes = [".ipynb", ".bin", ".vcd", ".json", ".csv", ".log"]
 
 [[template.stub]]
 file = "poly.py"
-description = "the Horner evaluation in PolyAccel.evaluate"
-start = "y = np.zeros_like(samp_in, dtype=np.float32)"
-end = "power *= samp_in"
+description = "the Horner evaluation in poly_eval"
+start = "y = np.full(xs.shape, c[3], dtype=np.float32)"
+end = "y = (y + c[k]).astype(np.float32)"
 replacement = """
 # TODO: your function goes here.  Identity for now, so that a fresh
 # {name} project runs end to end before you have written anything.
 #
-# Whatever replaces this has to be the same function the C++ hook in
-# {name}_evaluate_impl.tpp computes, bit for bit -- and both have to
-# match spec/oracle.py, which is written independently of both.
-y = samp_in.astype(np.float32)
+# Whatever replaces this must be the same function the C++ body in
+# {name}_body_impl.tpp computes, bit for bit: the same float32 operations
+# in the same order.  scenarios.py computes the expected outputs with it,
+# so pin it down with worked examples (values computed by hand) as well.
+y = xs.copy()
 """
 
 [[template.stub]]
-file = "poly_evaluate_impl.tpp"
-description = "the Horner helper"
-start = "static inline float eval_poly_horner(const float coeff[4], float x) {"
-end = "}"
+file = "poly_body_impl.tpp"
+description = "the Horner arithmetic in eval_poly_horner"
+start = "float y = coeff[3];"
+end = "y = y + coeff[0];"
 replacement = """
-// TODO: your function goes here.  The hook below is an identity
-// pass-through, so a fresh {name} project builds, runs and co-simulates
-// unmodified -- and so the first thing you debug is your own arithmetic
-// rather than the framing around it.
-"""
-
-[[template.stub]]
-file = "poly_evaluate_impl.tpp"
-description = "the call to the Horner helper"
-start = "y_lane[k] = eval_poly_horner(coeffs, x_lane[k]);"
-end = "y_lane[k] = eval_poly_horner(coeffs, x_lane[k]);"
-replacement = """
-y_lane[k] = x_lane[k];  // TODO: identity stub -- your function here
+// TODO: your function goes here.  Identity for now, so a fresh {name}
+// project builds, simulates and co-simulates unmodified -- and the first
+// thing you debug is your own arithmetic, not the framing around it.
+// Keep each multiply and add a separate statement: an expression the
+// compiler can fuse into a multiply-add no longer matches the Python model.
+float y = x;
 """

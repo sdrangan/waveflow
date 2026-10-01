@@ -102,6 +102,16 @@ def _is_env_ref(node: ast.expr) -> bool:
     return False
 
 
+#: Appended to every construct a ``SeqTB`` body rejects: what it CAN say, and where to go.
+_SEQTB_LIMITS = (
+    "A SeqTB's shape is fixed when it is written: straight-line push/pop/run calls, "
+    "file reads and writes, and 'if local.field == value' on a schema it read or popped. "
+    "To loop over transactions or scenarios, or to send a burst without TLAST, write the "
+    "testbench as ordinary C++ with wf::play_stream / wf::record_stream "
+    "(include/bundle_tb.h) -- see docs/guide/custom_hooks/body_only.md."
+)
+
+
 class HwStmtExtractor:
     """Parse ``run_proc`` of an ``HwModule`` into an ``HwStmt`` tree.
 
@@ -316,6 +326,12 @@ class HwStmtExtractor:
 
     def _visit_stmt(self, stmt: ast.stmt) -> HwStmt | None:
         if self._is_testbench:
+            if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                kind = "a 'while' loop" if isinstance(stmt, ast.While) else "a 'for' loop"
+                raise SynthesisError(
+                    f"A SeqTB body cannot contain {kind} (line {stmt.lineno}). "
+                    + _SEQTB_LIMITS
+                )
             tb_result = self._visit_stmt_tb(stmt)
             if tb_result is not None:
                 return tb_result
@@ -333,7 +349,12 @@ class HwStmtExtractor:
         if isinstance(stmt, ast.Expr):
             return self._visit_expr_stmt(stmt)
         if isinstance(stmt, ast.If):
-            return self._visit_if(stmt)
+            if not self._is_testbench:
+                return self._visit_if(stmt)
+            try:
+                return self._visit_if(stmt)
+            except SynthesisError as exc:
+                raise SynthesisError(f"{exc}. {_SEQTB_LIMITS}") from exc
         if isinstance(stmt, ast.Return):
             return self._visit_return(stmt)
         raise SynthesisError(
@@ -1566,11 +1587,17 @@ class HwStmtExtractor:
                 f"Non-synthesizable 'if' condition at line {node.lineno}; "
                 f"only 'if var.field <op> value:' or 'if var <op> value:' is allowed"
             )
-        if var_name not in self._scope:
+        if var_name in self._scope:
+            hw_var = self._scope[var_name]
+        elif self._is_testbench and var_name in self._tb_locals:
+            # A testbench local (``resp = PolyRespHdr()`` ... ``pop(resp)``) is a C++
+            # local of the same name; it lives in ``_tb_locals``, not the kernel's scope.
+            binding = self._tb_locals[var_name]
+            hw_var = HwVar(name=var_name, typ=binding if isinstance(binding, type) else None)
+        else:
             raise SynthesisError(
                 f"Undefined variable '{var_name}' in 'if' at line {node.lineno}"
             )
-        hw_var = self._scope[var_name]
         cmp_val = self._resolve_compare_rhs(test.comparators[0])
         op = '==' if isinstance(test.ops[0], ast.Eq) else '!='
         body_stmts = self._visit_stmts(node.body)
@@ -1912,6 +1939,11 @@ def extract_kernel(comp) -> HwStmt:
             f"its codegen is the sub-component graph (composite_top_spec)."
         )
     _validate_leaf_is_flat(comp)
+    # A body-only kernel (``cpp_body``) has nothing to extract: its top is the pragmas plus
+    # one call to the hand-written hook with every kernel argument.
+    from waveflow.build.hwgen import body_hook_name, body_only_tree
+    if body_hook_name(comp):
+        return body_only_tree(comp)
     from waveflow.build.hwresolve import resolve_kernel  # local: avoid an import cycle
     tree = HwStmtExtractor(comp, method_name=path.method).extract()
     return resolve_kernel(tree, comp)

@@ -2,130 +2,121 @@
 title: Vitis Pattern
 parent: Build System
 nav_order: 4
-summary: "The four-step Vitis pipeline — C-sim, validate against the Python simulation's binaries, C-synth, and inspect the synthesis report — documented as a pattern to copy rather than as shipped steps. The framework primitives underneath are real and reusable: the toolchain invocation and the csynth.xml parser."
+summary: "The Vitis half of a build -- generate the headers and the kernel boundary, C-simulate every scenario with a hand-written testbench, check it against the expected responses, synthesize and co-simulate, inspect the synthesis report, and compare pysim's cycle estimate with cosim -- taken from the streaming polynomial example. The csim and csynth steps are a pattern to copy; the toolchain call, the csynth.xml parser and the cosim timing steps are framework pieces."
 ---
 
 # Vitis Pattern
 
-> **Status: pattern only.** Waveflow does not yet ship framework-level steps for Vitis C-sim, C-synth, or report inspection. The steps below live in [examples/stream_inband/poly_build.py](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py) and serve as the canonical recipe to copy. Once a second design uses them, the genuinely-common pieces (toolchain invocation, report parsing) will be extracted into `waveflow/build/`.
+This is the Vitis half of the [Streaming polynomial](../../examples/stream_inband/index.md)
+example's [`poly_build.py`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py);
+the Python half is the [Python Simulation Pattern](./python.md).  Some of it is framework and
+some is a pattern to copy:
 
-A typical Vitis pipeline has four steps:
+| Piece | Where | Status |
+| --- | --- | --- |
+| `toolchain.run_vitis_hls(tcl, work_dir, env, capture_output)` | `waveflow.toolchain.toolchain` | framework |
+| `HlsCodegenStep`, `StreamUtilsStep`, `DataSchemaStep`, `ArrayUtilsStep` | `waveflow.build`, `waveflow.hw` | framework -- see [Code Generation Steps](./codegen.md) |
+| `CsynthParser(sol_path)` | `waveflow.utils.csynthparse` | framework |
+| `ExtractCosimTimingStep`, `ValidateTimingStep` | `waveflow.build.cosim_steps` | framework |
+| `CSimStep`, `CSynthStep`, `InspectSynthStep`, `SummaryStep` | the example | **pattern** |
 
-1. **`CSimStep`** — invoke `vitis_hls run.tcl` with `cosim=0`, let the C++ testbench drive the kernel and write outputs to a data directory.
-2. **`ValidateCSimStep`** — compare Vitis's output binaries against the Python simulation's binaries (from [`PySimStep`](./python.md)) and fail the build on mismatch.
-3. **`CSynthStep`** — invoke `vitis_hls run.tcl` again with `cosim=1`, producing the synthesis solution directory.
-4. **`InspectSynthStep`** — parse `solution1/syn/report/csynth.xml` and emit a CSV of loop pipeline information; fail the build if any reported loop has `PipelineII > 1`.
+The pattern steps stay in the example because what they check is the design's business: which
+scenarios run, which loops must reach II = 1, what a passing build has to show.
 
-The framework primitives all four steps lean on:
+---
 
-| Primitive | Location | What it does |
-|---|---|---|
-| `toolchain.run_vitis_hls(tcl, work_dir, env, capture_output)` | `waveflow.toolchain.toolchain` | Invokes Vitis HLS with the given TCL script and environment; returns a `subprocess.CompletedProcess`. |
-| `CsynthParser(sol_path)` | `waveflow.utils.csynthparse` | Parses `csynth.xml` from a Vitis solution directory; exposes `loop_df` and `res_df` as pandas DataFrames. |
+## Code generation: the boundary around a hand-written body
 
-These are the things you can reuse today. The build-step *shape* is what varies per example, which is why we're documenting it as a pattern rather than a class.
+```python
+dag.add(HlsGenIncludeStep(name="gen_include"))       # include/: schema headers, serializers,
+                                                     #   streamutils, bundle_tb.h
+dag.add(SourcesStep(name="sources"))                 # the hand-written C++ in place
+dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel,
+                       source_artifact="kernel_sources", output_dir="gen", impl_dir="."))
+```
+
+`PolyAccel` is a [body-only kernel](../custom_hooks/body_only.md): `gen_kernel` writes the
+boundary -- `gen/poly.cpp` with the interface pragmas and one call into the body, and
+`gen/poly.hpp` declaring it -- and the body itself is the hand-written `poly_body_impl.tpp`.
+
+**`SourcesStep` must come before `gen_kernel`.**  The generator writes the body file only when
+it is missing, as a stub marked `TODO: implement body`.  A build in another directory (the
+tests build in a temporary one) has to copy the real body in first, or the generator writes
+its stub there and the copy then rightly refuses to overwrite it.  `CSimStep` also refuses to
+simulate a stub: an empty body is not an error to Vitis, so the symptom would be every
+scenario failing at once for no visible reason.
 
 ---
 
 ## CSimStep
 
 ```python
+def _run_vitis(config: BuildConfig, stage: str, live_output: bool, clk_freq: float) -> None:
+    _ensure_sources(config.root_dir)
+    # The stage goes in the environment: vitis-run 2025.1 has no --tclargs.
+    env = {"WAVEFLOW_POLY_STAGE": stage, "WAVEFLOW_POLY_CLK_PERIOD_NS": f"{1e9 / clk_freq:g}"}
+    try:
+        result = toolchain.run_vitis_hls(config.root_dir / "run.tcl", work_dir=config.root_dir,
+                                         capture_output=not live_output, env=env)
+    except Exception as exc:  # CalledProcessError carries the Vitis log
+        out = getattr(exc, "stdout", "") or ""
+        raise RuntimeError(f"Vitis {stage} failed: {exc}\n{out[-3000:]}") from exc
+
+
 @dataclass(kw_only=True)
 class CSimStep(BuildStep):
-    description = "Invoke Vitis HLS C-simulation."
-    consumes    = ["poly_cpp", "poly_hpp", "poly_tb", "include_dir", "data_dir"]
-    produces    = {"csim_data_dir": "data_dir"}
-    params      = {"live_output": False, "clk_freq": 100e6}
+    description = "Vitis C simulation of every scenario, with the hand-written poly_tb.cpp."
+    consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "scenario_list"]
+    produces = {"csim_done": Path("results/csim_done.txt")}
+    params = {"live_output": False, "clk_freq": 100e6}
 
-    def run(self, config: BuildConfig, include_dir, data_dir, live_output, clk_freq, **_) -> dict:
-        vitis_env = {"WAVEFLOW_POLY_COSIM": "0",
-                     "WAVEFLOW_POLY_TRACE_LEVEL": "none",
-                     "WAVEFLOW_POLY_CLK_PERIOD_NS": f"{1e9 / clk_freq:g}"}
-        try:
-            result = toolchain.run_vitis_hls(
-                config.root_dir / "run.tcl",
-                work_dir=config.root_dir,
-                capture_output=not live_output,
-                env=vitis_env,
-            )
-            if result.stdout: print(result.stdout)
-            if result.stderr: print(result.stderr)
-        except Exception as exc:
-            raise RuntimeError(str(exc))
-        return {"csim_data_dir": data_dir}
+    def run(self, config: BuildConfig, scenario_list, live_output, clk_freq, **_) -> dict:
+        _require_real_body(config.root_dir)
+        names = Path(scenario_list).read_text(encoding="utf-8").split()
+        for name in names:
+            (config.root_dir / "data" / name / "csim").mkdir(parents=True, exist_ok=True)
+        _run_vitis(config, "csim", live_output, clk_freq)
+        ...   # write results/csim_done.txt
+        return {"csim_done": done}
 ```
 
 Things to notice:
 
-- **`consumes` lists every source file Vitis will touch.** `poly_cpp` / `poly_hpp` / `poly_tb` are codegen artifacts from `HlsCodegenStep` instances. Touching any of them invalidates the C-sim results — exactly what you want. `include_dir` is the generated headers directory from `HlsGenIncludeStep`. `data_dir` is the input binaries directory from `BuildInputsStep`.
-- **`produces = {"csim_data_dir": "data_dir"}`** uses string aliasing. Vitis writes its output binaries back into the same `data_dir` that `BuildInputsStep` created (the testbench writes alongside the inputs), so this step doesn't produce a *new* path — it re-publishes the same path under a new name so downstream steps can express "I depend on Vitis having run here." String aliasing is the right tool for this; declaring `Path("data")` again would conflict with the existing producer.
-- **The `WAVEFLOW_POLY_*` env vars are a contract** between the build step and the C++ testbench. The testbench reads `WAVEFLOW_POLY_COSIM` to decide whether to skip the cosim flow; reads `WAVEFLOW_POLY_CLK_PERIOD_NS` to set timing. This is per-example — every design defines its own env-var schema. There is no framework-level convention (yet).
-- **`run.tcl` is hard-coded** as living at `config.root_dir / "run.tcl"`. Most Vitis flows have one canonical TCL script per project; this convention matches that. If you need multiple solutions, parameterize via the env dict or write a second step.
-- **`live_output: False`** captures stdout/stderr by default. Pass `--live-output` on the CLI to stream Vitis output in real time when debugging.
-- **`try/except` around the toolchain call** converts subprocess failures into `RuntimeError` so the DAG records a clean `BuildResult.success=False` rather than crashing.
+- **`consumes` lists every source Vitis compiles.**  `poly_cpp` and `poly_hpp` come from
+  `gen_kernel`, `poly_body_impl` is the hand-written body it published, and `include_dir` is
+  the generated headers.  Editing any of them makes C-simulation stale.
+- **The testbench is ordinary C++.**  `poly_tb.cpp` loops over `data/scenarios.txt`, plays each
+  scenario's stimulus into the kernel with `wf::play_stream`, calls `poly(...)`, and records the
+  response with `wf::record_stream` into `data/<scenario>/csim/` -- the same format the model
+  and pysim wrote.  So the check is the same `CheckStep`, with `stage="csim"`.
+- **The step creates the output directories.**  The testbench's `write_bundle` writes into a
+  directory that must exist.
+- **Arguments reach `run.tcl` through the environment.**  `vitis-run` 2025.1 has no
+  `--tclargs`, so `run_vitis_hls(args=...)` raises; the script reads
+  `$::env(WAVEFLOW_POLY_STAGE)`.  The variable names are the example's own convention.
+- **`live_output`** streams Vitis's output instead of capturing it (`--live-output` on the
+  command line), for debugging.
 
----
+`run.tcl` is short; the part that matters is one project, one solution, and the stage switch:
 
-## ValidateCSimStep
-
-```python
-@dataclass(kw_only=True)
-class ValidateCSimStep(BuildStep):
-    description = "Compare Vitis C-sim outputs against the Python model."
-    consumes    = ["sim_dir", "csim_data_dir", "data_cmd_hdr"]
-    produces    = {"vitis_dir": Path("results/vitis")}
-    params      = {}
-
-    def run(self, config: BuildConfig, sim_dir, csim_data_dir, data_cmd_hdr) -> dict:
-        try:
-            data_hdr = PolyCmdHdr().read_uint32_file(data_cmd_hdr)
-            nsamp = int(data_hdr.nsamp)
-            sim_resp_hdr = PolyRespHdr().read_uint32_file(sim_dir / "resp_hdr.bin")
-            sim_status = json.loads(
-                (sim_dir / "regmap_status.json").read_text(encoding="utf-8"))
-            sim_samp_out = np.array(
-                read_uint32_file(sim_dir / "samp_out.bin", elem_type=Float32, shape=nsamp),
-                dtype=np.float32,
-            )
-            got_resp_hdr = PolyRespHdr().read_uint32_file(csim_data_dir / "resp_hdr_data.bin")
-            got_status = json.loads(
-                (csim_data_dir / "regmap_status.json").read_text(encoding="utf-8"))
-            got_samp_out = np.array(
-                read_uint32_file(csim_data_dir / "samp_out_data.bin", elem_type=Float32,
-                                 shape=nsamp),
-                dtype=np.float32,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"Failed to read sim or Vitis outputs: {exc}")
-        if not got_resp_hdr.is_close(sim_resp_hdr):
-            raise RuntimeError("Response header mismatch after Vitis C-simulation.")
-        for label, status in (("python", sim_status), ("vitis", got_status)):
-            if int(status["halted"]) != 0 or int(status["error"]) != int(PolyError.NO_ERROR):
-                raise RuntimeError(
-                    f"{label} regmap reports halted={status['halted']}, "
-                    f"error={status['error']}, tx_id={status['tx_id']}.")
-        if not np.allclose(got_samp_out, sim_samp_out[:got_samp_out.size],
-                           rtol=1e-6, atol=1e-6):
-            raise RuntimeError("Sample output mismatch after Vitis C-simulation.")
-        vitis_dir = config.root_dir / "results" / "vitis"
-        vitis_dir.mkdir(parents=True, exist_ok=True)
-        got_resp_hdr.write_uint32_file(vitis_dir / "resp_hdr.bin")
-        write_uint32_file(got_samp_out, elem_type=Float32,
-                          file_path=vitis_dir / "samp_out.bin", nwrite=len(got_samp_out))
-        (vitis_dir / "regmap_status.json").write_text(
-            json.dumps(got_status, indent=2), encoding="utf-8")
-        return {"vitis_dir": vitis_dir}
+```tcl
+open_project -reset waveflow_poly_proj
+set_top poly
+add_files gen/poly.cpp -cflags "-I."
+add_files -tb poly_tb.cpp -cflags "-I."
+...
+if {$stage eq "csim"} {
+    csim_design -argv "$data_dir csim"
+} else {
+    csynth_design
+    cosim_design -argv "$data_dir cosim timing" -trace_level $trace_level
+}
 ```
 
-This step is **deeply example-specific** — it knows about `PolyRespHdr`, the `regmap_status.json` schema, file naming conventions, and tolerance thresholds. There is no generic version here. Per-design template:
-
-- Consume the Python sim output directory and the Vitis output directory.
-- Read each schema instance / array from both.
-- Assert equality (or `is_close` / `np.allclose` for floats).
-- Copy the validated Vitis outputs into a `results/vitis/` directory so they're easy to find when reviewing the build.
-- Raise `RuntimeError` with a useful message on any mismatch.
-
-The "copy to `results/vitis/`" step is a small piece of UX — the consumed directory (`csim_data_dir`) is buried in the Vitis project tree, while `results/vitis/` is colocated with `results/sim/` for easy diff. Worth keeping in your own steps.
+**Keep the project one directory deep.**  Vitis HLS 2025.1 records a design file relative to
+a one-level project, so `open_project builds/w32` drops the kernel from C-simulation and the
+link fails with `undefined symbol: poly(...)`.  To group projects, `cd builds` first and then
+`open_project w32`.
 
 ---
 
@@ -134,34 +125,28 @@ The "copy to `results/vitis/`" step is a small piece of UX — the consumed dire
 ```python
 @dataclass(kw_only=True)
 class CSynthStep(BuildStep):
-    description = "Run Vitis HLS C-synthesis and RTL co-simulation."
-    consumes    = ["poly_cpp", "poly_hpp", "include_dir", "csim_data_dir"]
-    produces    = {"report_dir": Path("waveflow_poly_proj/solution1")}
-    params      = {"live_output": False, "clk_freq": 100e6}
+    description = "Vitis C synthesis, then RTL co-simulation of the timing scenario."
+    consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "check_csim"]
+    produces = {"report_dir": Path("waveflow_poly_proj/solution1"),
+                "cosim_done": Path("results/cosim_done.txt")}
+    params = {"live_output": False, "clk_freq": 100e6}
 
-    def run(self, config: BuildConfig, include_dir, csim_data_dir, live_output, clk_freq, **_) -> dict:
-        vitis_env = {"WAVEFLOW_POLY_COSIM": "1",
-                     "WAVEFLOW_POLY_TRACE_LEVEL": "none",
-                     "WAVEFLOW_POLY_CLK_PERIOD_NS": f"{1e9 / clk_freq:g}"}
-        try:
-            result = toolchain.run_vitis_hls(
-                config.root_dir / "run.tcl",
-                work_dir=config.root_dir,
-                capture_output=not live_output,
-                env=vitis_env,
-            )
-            if result.stdout: print(result.stdout)
-            if result.stderr: print(result.stderr)
-        except Exception as exc:
-            raise RuntimeError(str(exc))
-        report_dir = config.root_dir / "waveflow_poly_proj" / "solution1"
-        return {"report_dir": report_dir}
+    def run(self, config: BuildConfig, live_output, clk_freq, **_) -> dict:
+        (config.root_dir / "data" / "timing" / "cosim").mkdir(parents=True, exist_ok=True)
+        _run_vitis(config, "synth", live_output, clk_freq)
+        ...
+        return {"report_dir": config.root_dir / "waveflow_poly_proj" / "solution1",
+                "cosim_done": done}
 ```
 
-Mostly identical to `CSimStep` — same TCL, same toolchain wrapper, different env (`COSIM=1` triggers the synthesis branch in `run.tcl`). Differences worth noting:
-
-- **`consumes` includes `csim_data_dir`** — C-synth depends on C-sim having validated first. This is policy: you could write a `CSynthStep` that consumes only the source files, but in practice you don't want to spend 5 minutes on synth when C-sim would have caught a 5-second bug.
-- **`produces = {"report_dir": Path("waveflow_poly_proj/solution1")}`** is hard-coded to the project / solution names defined in `run.tcl`. If your TCL uses different names, edit the path. If you have multiple solutions, you need either multiple `CSynthStep` instances with different `produces`, or to parameterize via `expected_paths(config)` as the [`PySimStep` log_file pattern](./python.md#params-and-expected_paths-together-handle-a-config-driven-log-path) does.
+- **It consumes `check_csim`**, so synthesis runs only after C-simulation has *passed*, not
+  merely run.  That is policy -- nothing forces it -- but there is no point spending minutes
+  on synthesis that a seconds-long C-simulation would have rejected.
+- **Co-simulation runs one scenario**, `timing`.  The same testbench writes its response to
+  `data/timing/cosim/`, checked by `CheckStep(stage="cosim", only=("timing",))`.  RTL
+  simulation is slow; the other scenarios are covered by C-simulation.
+- **`report_dir` is hard-coded** to the project and solution names in `run.tcl`.  Change both
+  together.
 
 ---
 
@@ -170,93 +155,108 @@ Mostly identical to `CSimStep` — same TCL, same toolchain wrapper, different e
 ```python
 @dataclass(kw_only=True)
 class InspectSynthStep(BuildStep):
-    description = "Parse the Vitis HLS C-synthesis report and write results/loop_df.csv."
-    consumes    = ["report_dir"]
-    produces    = {"loop_df": Path("results/loop_df.csv")}
-    params      = {}
+    description = "Parse the C-synthesis report: loop II, latency and resources."
+    consumes = ["report_dir"]
+    produces = {"loop_df": Path("results/loop_df.csv"), "res_df": Path("results/res_df.csv")}
+    params = {}
 
-    def run(self, config: BuildConfig, report_dir) -> dict:
+    def run(self, config: BuildConfig, report_dir, **_) -> dict:
         from waveflow.utils.csynthparse import CsynthParser
-
-        if not report_dir.exists():
-            raise RuntimeError(f"Solution directory not found: {report_dir}")
 
         parser = CsynthParser(sol_path=str(report_dir))
         parser.get_loop_pipeline_info()
         parser.get_resources()
-
-        if not parser.loop_df.empty:
-            non_unit_ii = parser.loop_df[
-                parser.loop_df["PipelineII"].apply(
-                    lambda v: isinstance(v, (int, np.integer)) and v > 1
-                )
-            ]
-            if not non_unit_ii.empty:
-                raise RuntimeError("Vitis synthesis produced loops with PipelineII > 1.")
-
-        loop_df_path = config.root_dir / "results" / "loop_df.csv"
-        loop_df_path.parent.mkdir(parents=True, exist_ok=True)
-        parser.loop_df.to_csv(loop_df_path, index=False)
-        return {"loop_df": loop_df_path}
+        bad = parser.loop_df[parser.loop_df["PipelineII"].apply(
+            lambda v: isinstance(v, (int, np.integer)) and v > 1)] if not parser.loop_df.empty else []
+        if len(bad):
+            raise RuntimeError(f"loops with PipelineII > 1:\n{bad.to_string()}")
+        ...   # write loop_df.csv and res_df.csv
 ```
 
-This is the closest thing to a reusable step in the Vitis path — it consumes a solution directory, runs `CsynthParser` on it, writes a CSV. The example-specific bit is the **assertion** (PipelineII > 1 fails the build). Per-design assertions vary: one design might fail on II > 1, another might check resource budgets, another might just emit the CSV without asserting. Don't try to make the assertion generic; copy this step and write the assertion you need.
+The parsing is framework; the **assertion** is the design's.  This one fails the build on any
+loop above II = 1.  Another design might check a resource budget, or only record the tables.
 
-If we extract anything to the framework first, it'll probably be this step in two pieces:
-- `CsynthParseStep(report_artifact, output_path)` — pure parse + CSV emission, no policy.
-- Per-design assertion as a separate step that consumes the resulting DataFrame as an in-memory artifact.
+---
+
+## Timing: pysim against cosim
+
+```python
+dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly",
+                               report_dir_artifact="report_dir"))
+dag.add(ValidateTimingStep(name="validate_timing", py_timing_artifact="py_timing",
+                           cosim_timing_artifact="cosim_timing", tolerance_cycles=20))
+```
+
+`ExtractCosimTimingStep` reads `<top>_cosim.rpt` from the solution directory and writes the
+transaction's cycle count in the same JSON shape as the Python side's
+[`ExtractPyTimingStep`](./python.md#extracting-the-cycle-estimate).  `ValidateTimingStep` fails
+the build when the two differ by more than `tolerance_cycles`, and writes its verdict either
+way.  On the polynomial example cosim measures 143 cycles against pysim's 140.
+
+---
+
+## SummaryStep: the target that runs every check
+
+```python
+@dataclass(kw_only=True)
+class SummaryStep(BuildStep):
+    consumes = ["check_model", "check_pysim", "check_csim", "check_cosim", "loop_df", "res_df",
+                "timing_verdict"]
+    produces = {"summary": Path("results/summary.json")}
+```
+
+`--through` runs only the target's ancestors, so a pipeline whose last step is
+`validate_timing` would skip the cosim response check and the synthesis report -- neither is
+upstream of it.  A final step that consumes every check closes that gap.  Build through it:
+
+```
+python poly_build.py --through summary
+```
 
 ---
 
 ## Wiring the whole pipeline
 
-The poly DAG composes all of the above with the codegen and Python-sim steps:
-
 ```python
 def build_poly_dag() -> BuildDag:
     dag = BuildDag()
+    dag.add(SourceStep(artifact="poly_source", path=_SOURCE_DIR / "poly.py"))
+    dag.add(SourceStep(artifact="scenarios_source", path=_SOURCE_DIR / "scenarios.py"))
 
-    # Source files
-    dag.add(SourceStep(artifact="poly_source", path="poly.py"))
+    # Python: the model and pysim, checked against the expected responses.
+    dag.add(ScenariosStep(name="scenarios"))
+    dag.add(ModelStep(name="py_model"))
+    dag.add(CheckStep(name="check_model", stage="model", done_artifact="model_done"))
+    dag.add(PySimStep(name="py_sim"))
+    dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifact="pysim_done",
+                      only=S.WELL_FORMED))
+    dag.add(ExtractPyTimingStep(name="extract_py_timing"))
 
-    # Build steps (groups expressed as docstring comments in poly_build.py)
-    dag.add(BuildInputsStep(name="build_inputs"))                  # writes data/*.bin
-    dag.add(PySimStep(name="py_sim"))                              # SimPy → results/sim/*
-    dag.add(ExtractPyTimingStep(name="extract_py_timing"))         # py_timing.json
-    dag.add(HlsGenIncludeStep(name="gen_include"))                 # codegen sub-DAG → include/*.h
-    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))
-    dag.add(HlsCodegenStep(name="gen_tb",     comp_class=PolyTBHls, is_testbench=True, ...))
-    dag.add(CSimStep(name="csim"))                                 # Vitis C-sim
-    dag.add(FunctionalVerifyStep(name="validate_csim", ...))       # generic comparator
-    dag.add(CSynthStep(name="csynth"))                             # Vitis C-synth + cosim
-    dag.add(InspectSynthStep(name="inspect_synth"))                # parse csynth.xml
-    dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly"))
-    dag.add(ValidateTimingStep(name="validate_timing"))            # py vs cosim cycles
+    # Code generation: headers, and the kernel boundary around the hand-written body.
+    dag.add(HlsGenIncludeStep(name="gen_include"))
+    dag.add(SourcesStep(name="sources"))
+    dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel,
+                           source_artifact="kernel_sources", output_dir="gen", impl_dir="."))
+
+    # Vitis: csim on every scenario, then synthesis and cosim of the timing scenario.
+    dag.add(CSimStep(name="csim"))
+    dag.add(CheckStep(name="check_csim", stage="csim", done_artifact="csim_done"))
+    dag.add(CSynthStep(name="csynth"))
+    dag.add(InspectSynthStep(name="inspect_synth"))
+    dag.add(CheckStep(name="check_cosim", stage="cosim", done_artifact="cosim_done",
+                      only=("timing",)))
+    dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly",
+                                   report_dir_artifact="report_dir"))
+    dag.add(ValidateTimingStep(name="validate_timing", py_timing_artifact="py_timing",
+                               cosim_timing_artifact="cosim_timing", tolerance_cycles=20))
+    dag.add(SummaryStep(name="summary"))
     return dag
 ```
 
-Then per-run:
+The command line around it is `run_dag_cli` -- see
+[Python Simulation Pattern → CLI integration](./python.md#cli-integration):
 
-```python
-config = BuildConfig(root_dir=".", params={"clk_freq": 100e6, "nsamp": 100, ...})
-
-# Just Python sim + extracted timing (no Vitis)
-dag.run(config, through="extract_py_timing")
-
-# Full build with cosim timing comparison
-dag.run(config, through="validate_timing")
 ```
-
-The CLI scaffolding around this is documented under [Python Simulation Pattern → CLI integration](./python.md#cli-integration); the same `main()` covers both Python-sim-only and full-Vitis runs because of `--through`.
-
----
-
-## What's likely to be extracted first
-
-When the second design lands and we have something to triangulate against, my best guess at the framework extraction order:
-
-1. **A small `VitisRunStep` base class** — takes a TCL path, env dict, and named output directory, calls `toolchain.run_vitis_hls`, returns `{output_name: dir}`. `CSimStep` and `CSynthStep` reduce to a `VitisRunStep` subclass plus per-design env construction.
-2. **`CsynthParseStep`** — the policy-free version of `InspectSynthStep`. Emits the loop and resource DataFrames as in-memory artifacts (or CSV).
-3. **Env-var-prefix convention** — almost certainly something like `WAVEFLOW_<DESIGN>_*` formalized as a helper that builds the env dict from `config.params`.
-
-`ValidateCSimStep` will probably never be extracted — too design-specific. The recipe stays as a copy-and-modify template.
+python poly_build.py --through check_pysim    # Python only, no Vitis
+python poly_build.py --through summary        # everything
+```

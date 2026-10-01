@@ -73,6 +73,10 @@ class ComplexField(DataField):
         kind = _inner_kind(inner)
 
         overrides = cls.validate_specialize_kwargs(kwargs)
+        # The complex element's headers (array utils) go where its inner's go: an inner
+        # specialized with include_dir="include" would otherwise drop them in ".".
+        if "include_dir" not in overrides and getattr(inner, "include_dir", ".") not in (None, "."):
+            overrides["include_dir"] = inner.include_dir
         override_items = tuple(sorted(overrides.items()))
         key = (cls, inner, override_items)
         cached = cls._specializations.get(key)

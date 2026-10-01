@@ -15,12 +15,14 @@ example changes, and the plan's own first principle is *derived, not
 hand-labeled*.  The cost is that scaffolding needs a checkout, the same
 condition the knowledge index already has.
 
-**What is stubbed, and what is not.**  Only the compute is removed: the
-``@synthesizable`` method body in Python and its C++ hook both become an
-identity pass-through with a ``TODO``.  Framing, error handling, the response
-header and footer, the register map and the DAG are left exactly as the
-example has them, because those are what the frame specifies and what the
-agent is meant to read rather than reinvent.
+**What is stubbed, and what is not.**  Only the arithmetic is removed: the
+Python function (``poly_eval`` -> ``<name>_eval``) and its C++ twin in the
+kernel body both become an identity with a ``TODO``.  Framing, error handling,
+the response header, the register map, the scenarios and their checker, the
+C++ testbench and the DAG are left exactly as the example has them, because
+those are what the frame specifies and what the agent is meant to read rather
+than reinvent.  The expected responses in ``scenarios.py`` call the same
+function, so the stubbed project checks green end to end.
 """
 from __future__ import annotations
 
@@ -57,7 +59,7 @@ class ScaffoldResult:
             "files": list(self.files),
             "next": (
                 f"cd {self.directory.name} && python {self.name}_build.py "
-                f"--through py_sim"
+                f"--through check_pysim"
             ),
         }
 
@@ -157,126 +159,8 @@ def apply_stubs(
 
 
 # ---------------------------------------------------------------------------
-# The spec/ stubs
+# The layout.md stub
 # ---------------------------------------------------------------------------
-
-_ORACLE = '''"""The independent reference model.  Stage 1 writes this; Stage 2 is judged by it.
-
-**Do not import the accelerator from here.**  Not the module, not `HwModule`,
-not SimPy -- plain numpy only.  The point of this file is that it was written
-without seeing the design, so that "the kernel agrees with the model" is
-evidence of something.  A model derived from the same source as the kernel
-agrees with it by construction and proves nothing at all.
-
-Implement, from the function spec and `frame.md` (F3/F4):
-
-* the function itself, exactly -- including the rounding and saturation rules;
-* the framing: what is emitted for a DATA transaction, and in what order;
-* the errors: which condition maps to which code, and what is still emitted
-  before halting;
-* the register-map status a run should end with.
-"""
-from __future__ import annotations
-
-import numpy as np
-
-
-def compute(x: np.ndarray, **params) -> np.ndarray:
-    """The function, over one transaction's samples.  TODO."""
-    raise NotImplementedError("Stage 1: implement the function spec here")
-
-
-def run_transaction(cmd_hdr: dict, x: np.ndarray, **params) -> dict:
-    """One DATA transaction: the response header, the burst, the footer.  TODO."""
-    raise NotImplementedError("Stage 1: implement F3 framing here")
-
-
-def run_scenario(scenario: dict) -> dict:
-    """A whole scenario: every transaction, plus the final register status.  TODO."""
-    raise NotImplementedError("Stage 1: implement the scenario walk here")
-'''
-
-_SCENARIOS = '''"""Build every test scenario into `spec/vectors/<scenario>/`, from fixed seeds.
-
-Fixed seeds, because a scenario that changes between runs cannot be the thing
-a design is frozen against.
-
-Each scenario writes:
-
-* the register-map parameters;
-* the **whole** input stream -- every command header and sample burst,
-  including the deliberately malformed framing;
-* the oracle's expected output stream and expected register status.
-
-Cover, at least: a normal multi-transaction run ending in END, each error code
-the frame defines (early TLAST, missing TLAST, wrong nsamp, bad parameter),
-a zero-sample transaction, and one scenario long enough to measure timing on.
-
-Scenarios are **pre-loaded**: the testbench pushes everything before the
-kernel runs, then drains.  No scenario may make an input depend on an earlier
-output.
-"""
-from __future__ import annotations
-
-from pathlib import Path
-
-VECTORS = Path(__file__).resolve().parent / "vectors"
-
-#: Seeds are part of the spec: name them, do not draw them.
-SEEDS = {"nominal": 0, "early_tlast": 1, "no_tlast": 2, "wrong_nsamp": 3,
-         "bad_param": 4, "timing": 5}
-
-
-def build_all(out_dir: Path = VECTORS) -> list[str]:
-    """Write every scenario; return their names.  TODO."""
-    raise NotImplementedError("Stage 1: build the scenarios here")
-
-
-if __name__ == "__main__":
-    for scenario in build_all():
-        print(scenario)
-'''
-
-_CHECK = '''"""`check.py <results_dir>`: compare a run against the oracle, one line per criterion.
-
-Used three times on the same design -- against the pysim results, the csim
-results and the cosim results -- which is what makes the frame's three
-comparisons separable.  When something fails, the layer that failed is the one
-whose results directory this was pointed at.
-
-Prints one `PASS`/`FAIL` line per criterion and exits nonzero if any failed.
-**Nothing else writes a PASS column.**
-
-Before Stage 1 is done, show this rejecting at least two wrong outputs you
-construct on purpose.  A checker that has never failed is not known to work.
-"""
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-
-def check(results_dir: Path) -> list[tuple[str, bool, str]]:
-    """Return `(criterion, passed, detail)` for every criterion.  TODO."""
-    raise NotImplementedError("Stage 1: implement the comparison here")
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1:
-        print("usage: check.py <results_dir>", file=sys.stderr)
-        return 2
-
-    failed = 0
-    for criterion, passed, detail in check(Path(args[0])):
-        print(f"{'PASS' if passed else 'FAIL'}  {criterion}  {detail}")
-        failed += not passed
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-'''
 
 _LAYOUT = """# Wire layout
 
@@ -346,7 +230,7 @@ def new_accel(
 ) -> ScaffoldResult:
     """Write a new accelerator project named *name*, in *frame*.
 
-    The project runs as generated: ``python <name>_build.py --through py_sim``
+    The project runs as generated: ``python <name>_build.py --through check_pysim``
     passes before a line of it has been edited.
     """
     if not _NAME.match(name):
@@ -437,17 +321,12 @@ def new_accel(
         (out_dir / filename).write_text(content, encoding="utf-8")
         written.append(filename)
 
-    # --- spec/ ----------------------------------------------------------
-    spec = out_dir / "spec"
-    spec.mkdir(exist_ok=True)
-    for filename, content in (
-        ("oracle.py", _ORACLE),
-        ("scenarios.py", _SCENARIOS),
-        ("check.py", _CHECK),
-        ("layout.md", _LAYOUT),
-    ):
-        (spec / filename).write_text(content, encoding="utf-8")
-        written.append(f"spec/{filename}")
+    # --- layout.md -------------------------------------------------------
+    # The one Stage 1 artifact the reference design does not already carry: the
+    # scenarios, their expected responses and the checker come along in
+    # scenarios.py, the function and the schemas in <name>.py.
+    (out_dir / "layout.md").write_text(_LAYOUT, encoding="utf-8")
+    written.append("layout.md")
 
     # A stub that did not land means the example moved and the project still
     # contains the reference function.  That is exactly the failure worth

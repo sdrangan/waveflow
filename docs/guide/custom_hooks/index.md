@@ -17,6 +17,12 @@ hand-tuned HLS pragmas and exact `ap_fixed` intermediates. For those you write t
 yourself — a **custom hook** — and Waveflow drops it into the generated kernel in place of extracted
 code.
 
+**For a host-launched kernel, start with a [body-only kernel](./body_only.md).**  The
+module names one method as the whole kernel body (`cpp_body`); Waveflow generates only the
+boundary -- prototype, interface pragmas, register map -- and you write the body, a pure
+Python model, and an ordinary C++ testbench.  The patterns below are for when the
+kernel's control flow is extracted from Python and only a datapath is hand-written.
+
 ## Auto-generated vs. hand-written
 
 This is the **hand-written** side of hardware generation; the **auto-generated** side is

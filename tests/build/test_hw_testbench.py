@@ -192,7 +192,7 @@ def test_tb_files_to_str_returns_single_file():
 # Phase 3 — DUT binding + dut.run() lowering
 # ---------------------------------------------------------------------------
 
-from examples.stream_inband.poly import PolyAccel
+from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
 
 
 @dataclass
@@ -603,7 +603,7 @@ def test_write_status_json_filter_emits_debug_log():
 # ---------------------------------------------------------------------------
 
 from examples.regmap.simp_fun import SimpFun, SimpFunTBHls  # noqa: E402
-from examples.stream_inband.poly import (  # noqa: E402
+from tests.fixtures.poly_extracted.poly_extracted import (  # noqa: E402
     PolyAccel as _PolyAccel,
     PolyCmdHdr as _PolyCmdHdr,
     PolyRespHdr as _PolyRespHdr,
@@ -826,3 +826,66 @@ def test_file_read_schema_must_match_the_field():
 
     with pytest.raises(SynthesisError, match="is declared as Int32"):
         extract_testbench(_WrongSchemaTB(name='tb'))
+
+
+# ---------------------------------------------------------------------------
+# What a SeqTB can say, and what it says when it cannot (plans/hook_first_flow.md
+# Stage 4; the rotate blind test hit both).
+# ---------------------------------------------------------------------------
+
+from tests.fixtures.poly_extracted.poly_extracted import PolyCmdHdr as _Cmd, PolyRespHdr as _Resp
+from waveflow.build.hwcodegen import SynthesisError
+
+
+class _IfOnPoppedTB(SeqTB):
+    cpp_kernel_name: ClassVar[str | None] = "poly"
+
+    def main(self) -> None:
+        dut = PolyAccel()
+        hdr = _Cmd()
+        hdr.read_uint32_file(self.data_dir + "/h.bin")
+        dut.s_in.push(hdr)
+        dut.run()
+        resp = _Resp()
+        dut.m_out.pop(resp)
+        if resp.tx_id == 3:
+            resp.write_uint32_file(self.data_dir + "/r.bin")
+        else:
+            hdr.write_uint32_file(self.data_dir + "/h_out.bin")
+
+
+def test_seqtb_if_on_a_popped_local_lowers() -> None:
+    """It used to look the local up in the KERNEL's variable table and fail."""
+    from waveflow.build.hwgen import tb_files_to_str
+    cpp = tb_files_to_str(_IfOnPoppedTB, output_dir="gen")["poly_tb.cpp"]
+    assert "if (resp.tx_id == 3) {" in cpp
+    assert "} else {" in cpp
+    assert cpp.index("if (resp.tx_id") < cpp.index('"/r.bin"') < cpp.index('"/h_out.bin"')
+
+
+class _ForTB(SeqTB):
+    cpp_kernel_name: ClassVar[str | None] = "poly"
+
+    def main(self) -> None:
+        dut = PolyAccel()
+        for _ in range(3):
+            dut.run()
+
+
+class _IfOnLiteralTB(SeqTB):
+    cpp_kernel_name: ClassVar[str | None] = "poly"
+
+    def main(self) -> None:
+        dut = PolyAccel()
+        if 1 < 2:
+            dut.run()
+
+
+@pytest.mark.parametrize("tb, what", [(_ForTB, "a 'for' loop"), (_IfOnLiteralTB, "'if'")])
+def test_seqtb_rejections_point_at_the_hand_written_testbench(tb, what) -> None:
+    from waveflow.build.hwgen import tb_files_to_str
+    with pytest.raises(SynthesisError) as info:
+        tb_files_to_str(tb, output_dir="gen")
+    msg = str(info.value)
+    assert what in msg
+    assert "wf::play_stream" in msg and "body_only.md" in msg

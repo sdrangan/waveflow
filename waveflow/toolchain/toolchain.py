@@ -411,6 +411,15 @@ def _build_vitis_hls_cmd(
     tcl_script: Union[str, Path],
     args: Optional[Sequence[str]] = None,
 ) -> tuple[List[str], Path]:
+    if args:
+        # vitis-run (2025.1) has no --tclargs: it would fail inside Vitis with an
+        # unrelated-looking option error.  Say so here, with the way that works.
+        raise ValueError(
+            "vitis-run has no --tclargs, so a Tcl script cannot receive arguments. "
+            "Pass values through the environment instead -- run_vitis_hls(..., "
+            "env={'MY_STAGE': 'csim'}) and read $::env(MY_STAGE) in the script "
+            "(see examples/stream_inband/run.tcl)."
+        )
     vitis_path = find_vitis_path()
     if not vitis_path:
         raise RuntimeError(
@@ -420,9 +429,6 @@ def _build_vitis_hls_cmd(
 
     tcl_path = Path(tcl_script)
     cmd_list = [str(vitis_path), "--mode", "hls", "--tcl", str(tcl_path)]
-    if args:
-        cmd_list.append("--tclargs")
-        cmd_list.extend(str(arg) for arg in args)
 
     return cmd_list, tcl_path.parent
 
@@ -440,9 +446,9 @@ def run_vitis_hls(
     The function first resolves the Vitis executable via :func:`find_vitis_path`.
     It then builds and executes a command of the form:
 
-    - Windows: ``vitis-run.bat --mode hls <tcl_script> [--tclargs ...]``
+    - Windows: ``vitis-run.bat --mode hls --tcl <tcl_script>``
       executed via ``cmd.exe /c call ...``
-    - Linux: ``vitis-run --mode hls <tcl_script> [--tclargs ...]``
+    - Linux: ``vitis-run --mode hls --tcl <tcl_script>``
 
     Parameters
     ----------
@@ -454,9 +460,8 @@ def run_vitis_hls(
         Working directory for the subprocess. If ``None``, defaults to
         ``Path(tcl_script).parent``.
     args : Optional[List[str]], optional
-        Optional values passed to the TCL script through ``--tclargs``.
-        If provided, they are appended after ``--tclargs`` in the exact order
-        given.
+        Not supported: ``vitis-run`` has no ``--tclargs``, so any value raises
+        :class:`ValueError`.  Pass values to the script through ``env``.
     capture_output : bool, optional
         If ``True`` (default), captures stdout/stderr and stores them in the
         returned :class:`subprocess.CompletedProcess`. If ``False``, output is
@@ -475,6 +480,8 @@ def run_vitis_hls(
     ------
     RuntimeError
         If no Vitis executable could be discovered.
+    ValueError
+        If ``args`` is given (see above).
     subprocess.CalledProcessError
         If Vitis returns a non-zero exit status (``check=True`` behavior).
     """
@@ -640,9 +647,8 @@ def run_vitis_hls_result(
         Working directory for the subprocess. If ``None``, defaults to
         ``Path(tcl_script).parent``.
     args : Optional[List[str]], optional
-        Optional values passed to the TCL script through ``--tclargs``.
-        If provided, they are appended after ``--tclargs`` in the exact order
-        given.
+        Not supported: ``vitis-run`` has no ``--tclargs``, so any value raises
+        :class:`ValueError`.  Pass values to the script through ``env``.
     capture_output : bool, optional
         If ``True`` (default), captures stdout/stderr in the returned result
         dictionary. If ``False``, output is inherited by the current process

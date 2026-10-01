@@ -16,6 +16,7 @@ the RTL — the strongest claim Waveflow can make about its sim.
 
 | Step | Produces | What it does |
 |------|----------|--------------|
+| `check_cosim` | `check_cosim` | The co-simulated response of the timing scenario, checked bit-exactly against its expected response, like every other stage |
 | `extract_cosim_timing` | `cosim_timing` | Runs `waveflow.utils.cosimparse.CosimReportParser` on the solution dir; serializes the kernel's measured transaction-cycle count to `results/cosim_timing.json` |
 | `validate_timing` | `timing_verdict` | Compares `py_timing.transaction_cycles` (Group 1) against `cosim_timing.transaction_cycles`; raises if the absolute delta exceeds `tolerance_cycles` (default 20) |
 
@@ -43,7 +44,7 @@ future model-training workflow (per
 
 ```json
 {
-    "transaction_cycles": 144,
+    "transaction_cycles": 143,
     "report_path": ".../sim/report/poly_cosim.rpt",
     "vitis_version": "2025.1+",
     "source": "cosim",
@@ -63,8 +64,8 @@ regardless of pass/fail:
 {
     "pass": true,
     "py_cycles": 140,
-    "cosim_cycles": 144,
-    "delta": 4,
+    "cosim_cycles": 143,
+    "delta": 3,
     "tolerance": 20,
     "py_timing_path": "...",
     "cosim_timing_path": "..."
@@ -93,7 +94,9 @@ calibration:
 - `cosim_cycles = 144`
 - `delta = 4`
 
-This is the manual v1 of the model-training workflow described next.
+The kernel has since been rewritten hook-first, with the whole body hand-written.  The
+same calibration still holds: cosim now measures 143 cycles, a delta of 3.  This is the
+manual v1 of the model-training workflow described next.
 
 ## What's next
 
@@ -107,11 +110,13 @@ build-DAG step in its own right.
 ## Run the whole pipeline
 
 ```bash
-python -m examples.stream_inband.poly_build --through validate_timing --force --live-output
+python examples/stream_inband/poly_build.py --through summary
 ```
 
-Requires Vitis HLS on `PATH`.  Produces `results/timing_verdict.json`
-with a green `pass=true` when the model and the RTL agree.
+Requires Vitis HLS.  `results/timing_verdict.json` has `pass=true` when the model and
+the RTL agree, and `results/summary.json` collects every check, the synthesis tables
+and the verdict.  (`--through validate_timing` alone would skip the cosim response
+check and the synthesis report: a target runs only its ancestors.)
 
 ---
 

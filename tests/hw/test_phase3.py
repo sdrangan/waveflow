@@ -7,23 +7,17 @@
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
 import numpy as np
 import numpy.testing as npt
-import pytest
 
-POLY_DIR = Path(__file__).resolve().parents[2] / "examples" / "stream_inband"
-if str(POLY_DIR) not in sys.path:
-    sys.path.insert(0, str(POLY_DIR))
-
-from poly import (
-    Float32, PolyAccel, PolyCmdHdr, PolyCmdType, PolyError, PolyTB, connect,
+# The extracted poly kernel: these tests exercise its SimPy on_start/evaluate path.
+from tests.fixtures.poly_extracted.poly_extracted import (
+    PolyAccel, PolyCmdHdr, PolyCmdType, PolyError, PolyTB, connect,
 )
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_module import HwModule, HwParam, SynthContext
+from waveflow.hw.hw_module import SynthContext
 from waveflow.hw.interface import StreamDrainStmt
 from waveflow.simulation.simulation import Simulation
 

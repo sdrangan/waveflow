@@ -155,4 +155,4 @@ def test_get_example_over_stdio_returns_the_whole_file(session) -> None:
     _, _, results = session
     bodies = [text for tool, text in results if tool == "waveflow_get_example"]
     whole = max(bodies, key=len)
-    assert "class PolyAccel" in whole and "def evaluate" in whole
+    assert "class PolyAccel" in whole and "def body" in whole

@@ -2,202 +2,246 @@
 title: Python Simulation Pattern
 parent: Build System
 nav_order: 3
-summary: "A recipe rather than a step: how to write your own BuildStep that runs a SimPy simulation, derived from the polynomial accelerator's PySimStep. Waveflow ships no generic version because every design has its own components, testbench and result format. When a second example follows the pattern, the common scaffolding will be extracted."
+summary: "A recipe rather than a step: how to write the Python half of a build -- writing each scenario's stimulus and expected response, running a pure model and pysim on them, checking each stage against the expected responses, and extracting pysim's cycle estimate -- taken from the streaming polynomial example's poly_build.py. Waveflow ships no generic version because every design has its own scenarios, model and result format; the CLI is shared (run_dag_cli)."
 ---
 
 # Python Simulation Pattern
 
-Waveflow doesn't ship a generic "run a SimPy simulation" build step — every design has its own components, testbench, and result format, and a generic step would either need a long parameter list or constrain you to one shape. Instead this page is the **pattern**: a worked recipe for writing your own `BuildStep` that runs a Python simulation, derived from the poly accelerator's [`PySimStep`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py).
-
-When Waveflow has more than one example that follows this pattern, the common scaffolding will be extracted into a framework-level base class. Until then, copy this recipe.
+Waveflow does not ship a generic "run a simulation" build step: every design has its own
+scenarios, model and result format, and a generic step would either need a long parameter
+list or force one shape on all of them.  This page is the **pattern** instead -- the Python
+half of the [Streaming polynomial](../../examples/stream_inband/index.md) example's
+[`poly_build.py`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py),
+step by step, so it can be copied.  The Vitis half is the [Vitis Pattern](./vitis.md).
 
 ---
 
-## Anatomy of a simulation step
+## The shape: one stimulus, an expected response, every stage checked against it
 
-A Python simulation step typically:
+The Python half has five kinds of step:
 
-1. **Reads input data** from upstream artifacts (file paths produced by an input-building step, or in-memory objects from a generator step).
-2. **Constructs the simulation** — instantiates components, testbench, clocks, loggers, and wires interfaces.
-3. **Runs `sim.run_sim()`**.
-4. **Writes results** — either to disk (so the C-sim validation step can compare against them) and/or as an in-memory object (so a timing-validation step can analyse the log without re-parsing).
-5. **Declares all produced artifacts** in the returned dict.
+| Step | What it does | Writes |
+| --- | --- | --- |
+| `ScenariosStep` | each scenario's stimulus and **expected** response, from its intent | `data/<scenario>/in/`, `expected/` |
+| `ModelStep` | the pure bit-exact model on every scenario | `data/<scenario>/model/` |
+| `PySimStep` | pysim -- the module's Python body with its timing model | `data/<scenario>/pysim/`, the event log |
+| `CheckStep` | one stage's recorded responses vs the expected ones | `results/check_<stage>.json` |
+| `ExtractPyTimingStep` | pysim's cycle count for the timing scenario | `results/py_timing.json` |
 
-The poly version handles inputs as files (so the same data feeds both Python sim and Vitis C-sim) and emits both file artifacts (response binaries) and a file log (for downstream timing analysis):
+Every stage -- the model, pysim, and later csim and cosim -- writes its response **in the same
+format, beside the same stimulus**, and the same checker compares each with the expected
+response.  The expected response is computed from what the scenario *means* (its intent), not
+by running any implementation: two implementations written by the same person, or the same
+AI, can agree on the same mistake.
+
+---
+
+## Writing the scenarios
 
 ```python
 @dataclass(kw_only=True)
-class PySimStep(BuildStep):
-    description = "Run the Python SimPy simulation and write results to results/sim/."
-    consumes    = ["poly_source", "coeffs", "data_cmd_hdr", "samp_in"]
-    produces    = {"sim_dir": Path("results/sim"),
-                   "log":     Path("results/sim_log.csv")}
-    params      = {"clk_freq": 100e6, "in_bw": 32, "out_bw": 32,
-                   "unroll_factor": 1, "log_file": "results/sim_log.csv"}
+class ScenariosStep(BuildStep):
+    description = "Write every scenario's stimulus and expected response (scenarios.py)."
+    consumes = ["poly_source", "scenarios_source"]
+    produces = {"data_dir": Path("data"), "scenario_list": Path("data/scenarios.txt")}
+    params = {}
 
-    def expected_paths(self, config: BuildConfig) -> dict[str, Path]:
-        log_file = config.params.get("log_file", self.params["log_file"])
-        return {"log": config.root_dir / log_file}
-
-    def run(self, config: BuildConfig,
-            coeffs, data_cmd_hdr, samp_in,
-            clk_freq, in_bw, out_bw, unroll_factor, log_file,
-            **_) -> dict:
-        cmd_hdr_obj = PolyCmdHdr().read_uint32_file(data_cmd_hdr)
-        samp_in_arr = np.array(
-            read_uint32_file(samp_in, elem_type=Float32, shape=int(cmd_hdr_obj.nsamp)),
-            dtype=np.float32,
-        )
-        coeffs_obj = CoeffArray().read_uint32_file(coeffs)
-        sim = Simulation()
-        clk = Clock(freq=clk_freq)
-        log_path = config.root_dir / log_file
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        logger = Logger(name="poly_log", sim=sim, file_path=log_path,
-                        fields=["event", "job"])
-        accel = PolyAccel(
-            name="poly_accel", sim=sim,
-            in_bw=in_bw, out_bw=out_bw, unroll_factor=unroll_factor,
-            clk=clk, logger=logger,
-        )
-        tb = PolyTB(name="poly_tb", sim=sim,
-                    cmd_hdr=cmd_hdr_obj, samp_in=samp_in_arr,
-                    coeffs=np.asarray(coeffs_obj.val, dtype=np.float32),
-                    word_bw=in_bw)
-        connect(sim, tb, accel, clk)
-        sim.run_sim()
-
-        sim_dir = config.root_dir / "results" / "sim"
-        sim_dir.mkdir(parents=True, exist_ok=True)
-        tb.resp_hdr.write_uint32_file(sim_dir / "resp_hdr.bin")
-        write_uint32_file(tb.samp_out, elem_type=Float32,
-                          file_path=sim_dir / "samp_out.bin", nwrite=len(tb.samp_out))
-        (sim_dir / "regmap_status.json").write_text(
-            json.dumps({"halted": int(tb.halted), "error": int(tb.error),
-                        "tx_id": int(tb.tx_id_status)}, indent=2),
-            encoding="utf-8",
-        )
-        return {"sim_dir": sim_dir, "log": log_path}
+    def run(self, config: BuildConfig, **_) -> dict:
+        data = config.root_dir / "data"
+        S.write_scenarios(data)
+        return {"data_dir": data, "scenario_list": data / "scenarios.txt"}
 ```
+
+- **`consumes` names the two source files**, though `run()` never reads them -- they are
+  imported at module load.  Declaring them is what makes **editing `poly.py` or
+  `scenarios.py` invalidate everything downstream**: freshness is by modification time.
+- The step is thin on purpose.  What a scenario contains, and how its expected response is
+  computed, lives in `scenarios.py`, a plain module that tests and notebooks import too.
+- Stimulus is written as burst bundles (`write_bursts`), which the C++ testbench reads with
+  `wf::play_stream` -- see [Body-only kernels](../custom_hooks/body_only.md#testing-one-stimulus-every-implementation).
 
 ---
 
-## Walking through the design choices
+## Running the model and pysim
 
-### `consumes` lists three artifacts
+```python
+@dataclass(kw_only=True)
+class ModelStep(BuildStep):
+    description = "Run the pure bit-exact model (poly_stream_model) on every scenario."
+    consumes = ["scenario_list"]
+    produces = {"model_done": Path("results/model_done.txt")}
+    params = {}
 
-- `poly_source` is a `SourceStep` artifact pointing at `poly.py` itself. It's not used inside `run()` — the import happens at module load. But declaring it as a consumed artifact means **touching `poly.py` invalidates the simulation results**, which is what you want: the mtime of the source file gates the freshness of every downstream simulation output.
-- `coeffs`, `data_cmd_hdr`, and `samp_in` are the binary input files produced by `BuildInputsStep`. They arrive as `Path` objects.
+    def run(self, config: BuildConfig, scenario_list, **_) -> dict:
+        data = config.root_dir / "data"
+        names = Path(scenario_list).read_text(encoding="utf-8").split()
+        for name in names:
+            d = data / name
+            coeffs = CoeffArray().read_uint32_file(d / "coeffs.bin").val
+            res = poly_stream_model(read_bursts(d / "in"), coeffs)
+            write_bursts(res.out, d / "model")
+            _write_status(d / "model" / "status.json", res.status())
+        done = config.root_dir / "results" / "model_done.txt"
+        done.parent.mkdir(parents=True, exist_ok=True)
+        done.write_text("\n".join(names) + "\n", encoding="utf-8")
+        return {"model_done": done}
+```
 
-### `produces` mixes a directory and a file
+`PySimStep` has the same shape, but builds a `Simulation` per scenario -- the module, its
+testbench, a clock, and on the timing scenario a `Logger` -- and runs it:
 
-- `sim_dir = Path("results/sim")` declares a directory artifact. The DAG's freshness check (`_path_mtime`) understands directories: it walks them recursively and takes the max mtime of any file inside. So `sim_dir` is "fresh" when every file under it is newer than every consumed file.
-- `log = Path("results/sim_log.csv")` declares the CSV log explicitly so `ValidateTimingStep` can consume it as a file artifact.
+```python
+        for name in S.WELL_FORMED:
+            d = data / name
+            sim = Simulation()
+            clk = Clock(freq=clk_freq)
+            logger = (Logger(name="poly_log", sim=sim, file_path=log_path, fields=["event", "job"])
+                      if name == "timing" else None)
+            accel = PolyAccel(name="poly_accel", sim=sim, clk=clk, unroll_factor=unroll_factor,
+                              **({"logger": logger} if logger else {}))
+            tb = PolyTB(name="poly_tb", sim=sim, stimulus=d / "in",
+                        coeffs=CoeffArray().read_uint32_file(d / "coeffs.bin").val,
+                        n_out=len(read_bursts(d / "expected")))
+            connect(sim, tb, accel, clk)
+            sim.run_sim()
+            write_bursts(tb.out, d / "pysim")
+            _write_status(d / "pysim" / "status.json", tb.status)
+```
 
-### `params` and `expected_paths` together handle a config-driven log path
+Things to copy:
 
-The log filename is configurable per build (`config.params["log_file"]`), but it must still be declared as a file artifact so freshness works. The pattern:
+- **A "done" marker file is the produced artifact.**  The real outputs are spread over
+  `data/<scenario>/<stage>/`, one directory per scenario.  A single small file written last
+  gives the DAG one thing to check for freshness, and lists what ran.
+- **pysim runs only the well-formed scenarios.**  The model is the reference for the
+  malformed ones -- an early TLAST, a missing TLAST.  pysim exists for the timing model,
+  and timing is only meaningful on transactions the kernel accepts.
+- **Parameters arrive as keyword arguments.**  Every name in `params` is injected into
+  `run()`, from `BuildConfig.params` or the default.  `**_` swallows the ones a step does
+  not use; keep it, so adding a parameter never breaks a signature.
 
-1. Declare the static fallback in `params`.
-2. Declare a placeholder in `produces` so the DAG knows the artifact name.
-3. Override `expected_paths(config)` to return the actual path resolved against `config.params`.
+---
 
-The DAG calls `expected_paths()` after the static `produces` declaration, and the override takes precedence. This is the only mechanism for artifacts whose path can't be expressed as a plain `Path` literal.
+## Checking a stage
 
-### `run()` reads input by Path, writes output by Path
+One step class checks every stage; the DAG gets one instance per stage:
 
-Even though the simulation runs entirely in memory, the contract for downstream steps is files on disk — the C-sim validation step in particular needs to read the same binaries Vitis produces and compare. So the in-memory results are serialized at the end via `write_uint32_file`.
+```python
+@dataclass(kw_only=True)
+class CheckStep(BuildStep):
+    stage: str
+    done_artifact: str
+    only: tuple[str, ...] | None = None
+    params = {}
 
-### The `**_` swallows unconsumed params
+    @property
+    def consumes(self) -> list:
+        return [self.done_artifact, "scenario_list"]
 
-The DAG injects every declared param as a kwarg. `**_` catches any future param additions without forcing a `run()` signature change. Use it.
+    @property
+    def produces(self) -> dict:
+        return {f"check_{self.stage}": Path(f"results/check_{self.stage}.json")}
+
+    def run(self, config: BuildConfig, **_) -> dict:
+        report = S.check(config.root_dir / "data", self.stage,
+                         list(self.only) if self.only else None)
+        ...   # write the report, print PASS/FAIL per scenario
+        if failed:
+            raise RuntimeError(f"{self.stage}: {len(failed)} scenario(s) differ from the "
+                               f"expected response: {sorted(failed)}")
+        return {f"check_{self.stage}": out}
+
+dag.add(CheckStep(name="check_model", stage="model", done_artifact="model_done"))
+dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifact="pysim_done",
+                  only=S.WELL_FORMED))
+```
+
+- **`consumes` and `produces` are properties** here, because they depend on the instance.
+  That is how one class serves several stages without the artifact names colliding.
+- **The check is its own step**, not the tail of the simulation step.  A mismatch then fails
+  a step whose name says what failed (`check_pysim`), and the simulation's outputs stay on
+  disk to inspect.
+- **Raising `RuntimeError` fails the build** and puts the message in `BuildResult.message`.
+
+---
+
+## Extracting the cycle estimate
+
+```python
+@dataclass(kw_only=True)
+class ExtractPyTimingStep(BuildStep):
+    description = "Extract the timing scenario's cycle count from the pysim event log."
+    consumes = ["log"]
+    produces = {"py_timing": Path("results/py_timing.json")}
+    params = {"clk_freq": 100e6}
+
+    def run(self, config: BuildConfig, log, clk_freq, **_) -> dict:
+        events: dict[str, float] = {}
+        with open(log, newline="") as f:
+            for row in csv.DictReader(f):
+                events.setdefault(row["event"], float(row["time"]))
+        t0, t1 = events.get("samp_read_begin"), events.get("samp_out_write_end")
+        if t0 is None or t1 is None:
+            raise RuntimeError(f"missing timing events in {log}: {sorted(events)}")
+        ...   # write {"transaction_cycles": round((t1 - t0) * clk_freq), ...}
+        return {"py_timing": out}
+```
+
+The event names are the ones the module's Python body logs.  The result's format is the one
+the framework's `ValidateTimingStep` compares with the co-simulated count -- see
+[Vitis Pattern](./vitis.md#timing-pysim-against-cosim).
 
 ---
 
 ## When to use in-memory artifacts instead
 
-If a downstream step is purely Python (no Vitis-comparable output) and the simulation result is large or expensive to serialize, return an `ObjectArtifact`-style value instead of writing to disk:
+A `produces` entry of `None` declares an **in-memory** artifact: `run()` returns the Python
+object itself, and the consuming step receives it with no file in between.
 
 ```python
 @dataclass(kw_only=True)
-class PySimStep(BuildStep):
-    consumes = ["cmd_hdr", "samp_in"]
-    produces = {"sim_result": None,            # None = in-memory artifact
-                "log":        Path("results/sim_log.csv")}
-    params   = {"clk_freq": 100e6}
+class SweepModelStep(BuildStep):
+    consumes = ["scenario_list"]
+    produces = {"model_result": None}             # None = in-memory
 
-    def run(self, config, cmd_hdr, samp_in, clk_freq, **_):
-        # ... run sim ...
-        result = PySimResult(resp_hdr=tb.resp_hdr,
-                             samp_out=tb.samp_out,
-                             halted=tb.halted, error=tb.error,
-                             tx_id=tb.tx_id_status)
-        return {"sim_result": result, "log": log_path}
-
-
-@dataclass(kw_only=True)
-class AnalyseSimStep(BuildStep):
-    consumes = ["sim_result"]
-    produces = {"summary": Path("results/sim_summary.json")}
-
-    def run(self, config, sim_result, **_):
-        # sim_result is the actual Python object, no I/O
-        ...
+    def run(self, config, scenario_list, **_):
+        return {"model_result": run_everything(scenario_list)}
 ```
 
-The freshness model treats in-memory artifacts as always-rerun. Downstream consumers also re-run by cascade if they need the value. This is the right trade-off when serialisation cost would dominate sim time.
-
-The poly example uses **files** for the simulation outputs because the C-sim step needs to read them anyway — once you're paying for serialization, you get to skip re-running on subsequent builds. The choice is per-step: files for cross-tool exchange, in-memory for Python-only consumers.
-
----
-
-## Validating timing in a downstream step
-
-A common companion to a simulation step is one that reads the simulation log and asserts on event durations. The poly `ValidateTimingStep` is small and shows the pattern:
-
-```python
-@dataclass(kw_only=True)
-class ValidateTimingStep(BuildStep):
-    description = "Verify timing events in the simulation log."
-    consumes    = ["log"]
-    produces    = {"durations": Path("results/durations.json")}
-    params      = {}
-
-    def run(self, config: BuildConfig, log) -> dict:
-        events: dict[str, float] = {}
-        with open(log, newline="") as f:
-            for row in csv.DictReader(f):
-                ev = row["event"]
-                if ev not in events:
-                    events[ev] = float(row["time"])
-        t_start = events.get("samp_read_begin")
-        t_end = events.get("samp_out_write_end")
-        if t_start is None or t_end is None:
-            raise RuntimeError(f"Missing timing events in log: {list(events)}")
-        durations = {"samp_read_to_write_end": t_end - t_start}
-        durations_path = config.root_dir / "results" / "durations.json"
-        durations_path.parent.mkdir(parents=True, exist_ok=True)
-        durations_path.write_text(json.dumps(durations, indent=2), encoding="utf-8")
-        return {"durations": durations_path}
-```
-
-Notes:
-- `RuntimeError` on a missing event halts the build and surfaces the message in `BuildResult.message`.
-- The step writes a small JSON for downstream consumption (a report, a CI check, a notebook). Even if nothing consumes it today, having the artifact gives you something to point at in `results_status()`.
-- `consumes = ["log"]` is everything — no source files, no params. The step is fully determined by the log it reads.
+The freshness model treats an in-memory artifact as always stale, and the steps that consume
+it re-run by cascade.  That is the right trade when nothing outside Python reads the result.
+The polynomial example writes files because Vitis has to read the same stimulus and the
+checker has to read every stage's output.
 
 ---
 
 ## CLI integration
 
-If you want a `poly_build.py` style CLI on top of your DAG, the [poly version](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py) is the reference:
+`run_dag_cli` (in `waveflow.build.cli`) gives a build script the whole command line without a
+hand-written `main()`:
 
-- `--through STEP` → `dag.run(config, through=STEP)`
-- `--force` / `--force-step STEP` → `dag.run(config, force=...)`
-- `--list-steps`, `--list-steps-verbose` → `dag.step_names()` / `dag.info()`
-- `--list-artifacts` → `dag.artifact_paths(config)` + `dag.artifact_owners()`
-- `--status` → `dag.results_status(config)`
-- Per-param flags (`--nsamp`, `--clk-freq`, etc.) → packed into `BuildConfig(params={...})`
-- `on_step_begin` / `on_step_end` callbacks → progress printing
+```python
+def main() -> None:
+    run_dag_cli(
+        build_poly_dag,
+        description="Build the streaming polynomial accelerator.",
+        default_through="check_pysim",
+        root_dir=_SOURCE_DIR,
+        extra_args=[
+            (("--clk-freq",), {"type": float, "default": 100e6, "metavar": "HZ"}),
+            (("--unroll-factor",), {"type": int, "default": 1}),
+            (("--live-output",), {"action": "store_true"}),
+        ],
+        params_from_args=lambda a: {"clk_freq": a.clk_freq, "unroll_factor": a.unroll_factor,
+                                    "live_output": a.live_output},
+    )
+```
 
-That CLI scaffolding doesn't change per-example, so when we have a second simulation example, the CLI plumbing (and probably the timing-validation pattern) will be the first thing extracted into a framework helper. Until then, copy `main()` from poly.
+It provides `--through STEP`, `--force`, `--force-step STEP`, `--list-steps`,
+`--list-steps-verbose`, `--list-artifacts` and `--status`, plus whatever `extra_args` adds,
+packed into `BuildConfig.params` by `params_from_args`.
+
+**`--through` runs only the target's ancestors.**  A step that is not upstream of the target
+does not run, even if it is stale -- `--through gen_kernel` does not regenerate `include/`,
+because nothing in `gen_kernel`'s ancestry consumes it.  Give the pipeline one final step that
+depends on every check (the example's `summary`) and build through that.

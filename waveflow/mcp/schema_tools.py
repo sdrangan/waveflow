@@ -71,7 +71,9 @@ def validate_schema(schema: str, workspace_root: str | None = None) -> dict:
 	}
 
 	namespace = _build_validation_namespace()
-	initial_names = set(namespace)
+	# A schema the text imports (`from waveflow.hw.rfdc import RfdcSampWord`) is not one
+	# it defines: validating it would report someone else's class as this file's.
+	initial_names = set(namespace) | _imported_names(tree)
 
 	try:
 		exec(compile(tree, "<schema>", "exec"), namespace)
@@ -171,6 +173,16 @@ def _build_validation_namespace() -> dict[str, Any]:
 		"DataArray": DataArray,
 		"IntEnum": IntEnum,
 	}
+
+
+def _imported_names(tree: ast.Module) -> set[str]:
+	"""Names bound by the text's own top-level ``import`` / ``from ... import`` statements."""
+	names: set[str] = set()
+	for node in tree.body:
+		if isinstance(node, (ast.Import, ast.ImportFrom)):
+			for alias in node.names:
+				names.add(alias.asname or alias.name.split(".")[0])
+	return names
 
 
 def _discover_schema_classes(

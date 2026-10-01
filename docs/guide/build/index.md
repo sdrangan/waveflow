@@ -57,21 +57,27 @@ from waveflow.build.build import BuildConfig, BuildDag, SourceStep
 
 dag = BuildDag()
 dag.add(SourceStep(artifact="poly_source", path="poly.py"))
+dag.add(SourceStep(artifact="scenarios_source", path="scenarios.py"))
 
-dag.add(BuildInputsStep(name="build_inputs"))                    # writes data/*.bin
-dag.add(PySimStep(name="py_sim"))                                # writes results/sim/*
-dag.add(ExtractPyTimingStep(name="extract_py_timing"))           # writes results/py_timing.json
-dag.add(HlsGenIncludeStep(name="gen_include"))                   # writes include/*.h
-dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))
-dag.add(HlsCodegenStep(name="gen_tb",     comp_class=PolyTBHls, is_testbench=True, ...))
-dag.add(CSimStep(name="csim"))                                   # invokes Vitis C-sim
-dag.add(FunctionalVerifyStep(name="validate_csim", ...))         # py vs Vitis outputs
-dag.add(CSynthStep(name="csynth"))                               # invokes Vitis C-synth + cosim
+dag.add(ScenariosStep(name="scenarios"))                         # data/<scenario>/{in,expected}
+dag.add(ModelStep(name="py_model"))                              # the pure model, every scenario
+dag.add(CheckStep(name="check_model", stage="model", ...))       # vs the expected responses
+dag.add(PySimStep(name="py_sim"))                                # pysim: the timing model
+dag.add(CheckStep(name="check_pysim", stage="pysim", ...))
+dag.add(ExtractPyTimingStep(name="extract_py_timing"))           # results/py_timing.json
+dag.add(HlsGenIncludeStep(name="gen_include"))                   # include/*.h
+dag.add(SourcesStep(name="sources"))                             # hand-written C++ in place
+dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))  # the kernel boundary
+dag.add(CSimStep(name="csim"))                                   # Vitis C-sim, hand-written TB
+dag.add(CheckStep(name="check_csim", stage="csim", ...))
+dag.add(CSynthStep(name="csynth"))                               # Vitis C-synth + cosim
 dag.add(InspectSynthStep(name="inspect_synth"))                  # parses csynth.xml
+dag.add(CheckStep(name="check_cosim", stage="cosim", ...))
 dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly"))
 dag.add(ValidateTimingStep(name="validate_timing", tolerance_cycles=20))
+dag.add(SummaryStep(name="summary"))                             # every check, one file
 
-config = BuildConfig(root_dir=".", params={"nsamp": 100, "clk_freq": 100e6})
+config = BuildConfig(root_dir=".", params={"clk_freq": 100e6})
 dag.run(config, through="extract_py_timing")          # stop before Vitis
 # or:
 dag.run(config)                                       # full build through validate_timing

@@ -607,6 +607,9 @@ def _cpp_type_for(typ) -> str:
 
 def _emit_call_arg(arg, ctx: CodegenCtx) -> str:
     """Emit one argument: HwVar -> name, endpoint -> attr name, state -> attr name, literal."""
+    from waveflow.hw.hwstmt import KernelArgRef
+    if isinstance(arg, KernelArgRef):
+        return arg.name
     if isinstance(arg, HwVar):
         return arg.name
     if isinstance(arg, FieldRef):
@@ -773,6 +776,92 @@ def _discover_regmap(comp):
     return None
 
 
+def _kernel_arg_decls(comp, stream_width=None) -> list[tuple[str, str]]:
+    """``[(name, C++ declaration)]`` for every top-level kernel argument, in signature order.
+
+    The order is canonical -- streams, then register fields, then m_axi pointers -- and this
+    is the one place it is decided: :func:`kernel_signature` emits these, and a body-only
+    kernel's hook (:func:`body_hook_args`) takes exactly these, so the two cannot drift.
+
+    ``stream_width(ep)`` gives the width text of a stream's ``axi4s_word<...>``; it defaults to
+    the concrete bitwidth (a top-level kernel is concrete).  The hook passes a function that
+    names the ``HwParam`` instead, so one templated body serves every width.
+    """
+    out: list[tuple[str, str]] = []
+    for attr, ep in _discover_stream_endpoints(comp):
+        w = stream_width(ep) if stream_width is not None else _stream_template_arg(ep)
+        out.append((attr, f"hls::stream<streamutils::axi4s_word<{w}>>& {attr}"))
+    regmap_slave = _discover_regmap(comp)
+    if regmap_slave is not None:
+        for fname, fld in regmap_slave.regmap._fields.items():
+            if fld.is_vitis_auto:
+                continue
+            schema = fld.schema
+            if (isinstance(schema, type) and issubclass(schema, DataArray)
+                    and getattr(schema, 'cpp_storage', 'struct') == 'raw'):
+                elem_cpp = cpp_type(schema.element_type)
+                count = schema._declared_count()
+                out.append((fname, f"{elem_cpp} {fname}[{count}]"))
+            else:
+                out.append((fname, f"{cpp_type(schema)}& {fname}"))
+    for attr, ep in _discover_mm_masters(comp):
+        out.append((attr, f"ap_uint<{int(ep.bitwidth)}>* {attr}"))
+    return out
+
+
+def body_hook_name(comp_or_class) -> str | None:
+    """The name of a body-only kernel's hook (its ``cpp_body``), or ``None``.
+
+    A body-only kernel has no extracted body: its generated top is the pragmas plus one call
+    to this hook, passing every kernel argument.  See :func:`body_only_tree`.
+    """
+    cls = comp_or_class if isinstance(comp_or_class, type) else type(comp_or_class)
+    return getattr(cls, 'cpp_body', None)
+
+
+def body_only_tree(comp) -> HwStmt:
+    """The kernel tree of a body-only kernel: one call to its hook with every kernel argument.
+
+    Streams are passed as their endpoints (so the hook is templated on any ``HwParam`` widths,
+    by the usual rule); register fields and m_axi pointers by name.  The order is
+    :func:`_kernel_arg_decls`'s, which is also the hook's parameter order.
+    """
+    from waveflow.hw.hwstmt import KernelArgRef
+
+    name = body_hook_name(comp)
+    method = getattr(comp, name, None)
+    if method is None or not callable(method):
+        from waveflow.build.hwcodegen import SynthesisError
+        raise SynthesisError(
+            f"{type(comp).__name__}.cpp_body = {name!r}, but it has no method {name!r}. "
+            f"Define it: its Python body is the model the simulation runs, and its C++ body "
+            f"is the hand-written .tpp/.cpp the generated top calls."
+        )
+    streams = dict(_discover_stream_endpoints(comp))
+    inputs = [
+        streams[n] if n in streams else KernelArgRef(n)
+        for n, _ in _kernel_arg_decls(comp)
+    ]
+    return SeqStmt(stmts=[FunctionStmt(method=method, inputs=inputs, outputs=[])])
+
+
+def body_hook_args(comp) -> list[tuple[str, str]]:
+    """The C++ parameters of a body-only kernel's hook: the kernel's own, streams templated.
+
+    Identical to the top-level arguments (:func:`_kernel_arg_decls`), except that a stream whose
+    width is a ``HwParam`` names the parameter rather than its value, so the hook is a template
+    the C++ compiler instantiates per kernel variant.  Register fields are references, so the
+    hook writes status (``halted = 1;``) directly, as a hand-written Vitis kernel would.
+    """
+    from waveflow.hw.hw_module import HwParamValue
+
+    def width(ep) -> str:
+        bw = ep.bitwidth
+        return bw.param_name if isinstance(bw, HwParamValue) else str(int(bw))
+
+    return _kernel_arg_decls(comp, stream_width=width)
+
+
 def kernel_signature(comp, variant_suffix: str = "") -> str:
     """Build the concrete kernel function signature + ``#pragma HLS INTERFACE`` lines.
 
@@ -793,27 +882,15 @@ def kernel_signature(comp, variant_suffix: str = "") -> str:
     base_name = cpp_kernel_name(type(comp))
     name = f"{base_name}_{variant_suffix}" if variant_suffix else base_name
 
-    arg_lines: list[str] = []
+    arg_lines = [f"    {decl}" for _, decl in _kernel_arg_decls(comp)]
     pragma_lines: list[str] = []
     for attr, ep in _discover_stream_endpoints(comp):
-        tmpl_arg = _stream_template_arg(ep)
-        arg_lines.append(
-            f"    hls::stream<streamutils::axi4s_word<{tmpl_arg}>>& {attr}"
-        )
         pragma_lines.append(f"#pragma HLS INTERFACE axis port={attr}")
     regmap_slave = _discover_regmap(comp)
     if regmap_slave is not None:
         for fname, fld in regmap_slave.regmap._fields.items():
             if fld.is_vitis_auto:
                 continue
-            schema = fld.schema
-            if (isinstance(schema, type) and issubclass(schema, DataArray)
-                    and getattr(schema, 'cpp_storage', 'struct') == 'raw'):
-                elem_cpp = cpp_type(schema.element_type)
-                count = schema._declared_count()
-                arg_lines.append(f"    {elem_cpp} {fname}[{count}]")
-            else:
-                arg_lines.append(f"    {cpp_type(schema)}& {fname}")
             pragma_lines.append(
                 f"#pragma HLS INTERFACE s_axilite port={fname:<12} bundle=control"
             )
@@ -822,8 +899,6 @@ def kernel_signature(comp, variant_suffix: str = "") -> str:
     # pointer + an m_axi pragma (mirrors the generated histogram kernel).
     mm_masters = _discover_mm_masters(comp)
     for attr, ep in mm_masters:
-        bw = int(ep.bitwidth)
-        arg_lines.append(f"    ap_uint<{bw}>* {attr}")
         # depth is the total region the master sees — a named header constant
         # summing this port's buffer bounds (see header_to_cpp).
         # max_*_burst_length=256 (the AXI4 max) lets bulk transfers coalesce into
@@ -963,6 +1038,12 @@ def hook_signature(
 
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
     from waveflow.hw.memif import MMIFMaster
+
+    # A body-only kernel's hook takes the kernel's own arguments, whatever its Python
+    # signature is (its Python body reaches the ports through ``self``).
+    _bound = getattr(method, '__self__', None)
+    if _bound is not None and body_hook_name(_bound) == method.__name__:
+        return "void", body_hook_args(_bound)
 
     hints = typing.get_type_hints(method)
     sig = inspect.signature(method)
@@ -1677,6 +1758,44 @@ def _stub_default_return(ret_cpp: str) -> str:
     return f"return {ret_cpp}{{}};"
 
 
+def _body_stub_lines(comp, hook_method) -> list[str]:
+    """The first-time body of a body-only kernel's hook: what it is, and what it must keep.
+
+    ``#pragma HLS INLINE`` is not optional: the interface pragmas are on the generated top, and
+    an un-inlined body is a separate function whose ports Vitis may not bind to them (an m_axi
+    pointer unbound, or a datapath with "no outputs" optimized away).
+    """
+    from waveflow.hw.dataschema import DataSchema
+
+    mod = __import__(type(comp).__module__, fromlist=["_"])
+    schemas = sorted(
+        {
+            v for v in vars(mod).values()
+            if isinstance(v, type) and issubclass(v, DataSchema)
+            and v.__module__ == mod.__name__ and hasattr(v, "cpp_class_name")
+        },
+        key=lambda c: c.__name__,
+    )
+    lines = [
+        "#pragma HLS INLINE",
+        f"    // TODO: implement {hook_method.__name__} -- the WHOLE kernel body.",
+        "    // The generated top calls this with every kernel argument and holds all the",
+        "    // interface pragmas; keep the INLINE above, or Vitis may not bind the ports.",
+        "    // Register fields are references: write status directly (e.g. `halted = 1;`).",
+        "    // Pack and unpack words only with the generated serializers, never by hand.",
+    ]
+    if schemas:
+        lines.append("    // Schema headers this module defines (include the ones the body uses at")
+        lines.append("    // the top of this file, outside the namespace):")
+        for s in schemas:
+            try:
+                header = f"include/{_snake_case(s.cpp_class_name())}.h"
+            except Exception:
+                continue
+            lines.append(f'    //   #include "{header}"')
+    return ["    " + lines[0]] + lines[1:]
+
+
 def impl_stub_to_cpp(comp, hook_method, header_name: str | None = None) -> str:
     """Build the first-time stub content for one hook impl file.
 
@@ -1691,7 +1810,10 @@ def impl_stub_to_cpp(comp, hook_method, header_name: str | None = None) -> str:
     ret_cpp, args = hook_signature(hook_method)
     arg_str = ", ".join(arg_decl for _, arg_decl in args)
     default = _stub_default_return(ret_cpp)
-    body_lines = [f"    // TODO: implement {hook_method.__name__}"]
+    if body_hook_name(comp) == hook_method.__name__:
+        body_lines = _body_stub_lines(comp, hook_method)
+    else:
+        body_lines = [f"    // TODO: implement {hook_method.__name__}"]
     if default:
         body_lines.append(f"    {default}")
     body = "\n".join(body_lines)
@@ -1720,7 +1842,10 @@ def impl_stub_to_tpp(comp, hook_method, template_params: list[str]) -> str:
     ret_cpp, args = hook_signature(hook_method, template_params=template_params)
     arg_str = ", ".join(arg_decl for _, arg_decl in args)
     default = _stub_default_return(ret_cpp)
-    body_lines = [f"    // TODO: implement {hook_method.__name__}"]
+    if body_hook_name(comp) == hook_method.__name__:
+        body_lines = _body_stub_lines(comp, hook_method)
+    else:
+        body_lines = [f"    // TODO: implement {hook_method.__name__}"]
     if default:
         body_lines.append(f"    {default}")
     body = "\n".join(body_lines)
@@ -1794,6 +1919,18 @@ class TbCodegenCtx:
         )
 
 
+def _emit_tb_case(stmt: CaseStmt, ctx: TbCodegenCtx) -> str:
+    """``if local.field == value:`` on a testbench local; branches are TB statements."""
+    lhs = stmt.var.name if stmt.field is None else f"{stmt.var.name}.{stmt.field}"
+    lines = [f"{ctx.pad()}if ({lhs} {stmt.op} {_emit_expr(stmt.value, ctx)}) {{",
+             tb_to_cpp(stmt.if_true, ctx.child()),
+             f"{ctx.pad()}}}"]
+    if stmt.if_false is not None:
+        lines[-1] = f"{ctx.pad()}}} else {{"
+        lines += [tb_to_cpp(stmt.if_false, ctx.child()), f"{ctx.pad()}}}"]
+    return "\n".join(lines)
+
+
 def tb_to_cpp(stmt: HwStmt, ctx: TbCodegenCtx) -> str:
     """Emit C++ source for a testbench-mode statement."""
     if isinstance(stmt, SeqStmt):
@@ -1818,6 +1955,8 @@ def tb_to_cpp(stmt: HwStmt, ctx: TbCodegenCtx) -> str:
         return _emit_tb_regmap_file_read(stmt, ctx)
     if isinstance(stmt, TbStatusJsonStmt):
         return _emit_tb_status_json(stmt, ctx)
+    if isinstance(stmt, CaseStmt):
+        return _emit_tb_case(stmt, ctx)
     raise NotImplementedError(
         f"Testbench codegen for {type(stmt).__name__} not implemented yet"
     )

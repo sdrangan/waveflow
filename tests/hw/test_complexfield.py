@@ -210,3 +210,17 @@ def test_mixed_kind_raises():
         cadd(fx, it)
     with pytest.raises(TypeError):
         cmult(fx, it)
+
+
+def test_complex_inherits_the_inner_include_dir() -> None:
+    """Its array-utils headers land where the inner's do (rotate follow-up #5)."""
+    from waveflow.hw.arrayutils import _array_utils_include_path
+
+    inner = IntField.specialize(bitwidth=18, signed=True, include_dir="include")
+    cplx = ComplexField.specialize(inner)
+    assert cplx.include_dir == "include"
+    assert _array_utils_include_path(cplx).startswith("include/")
+    # An explicit override still wins, and a default inner leaves the default.
+    assert ComplexField.specialize(inner, include_dir="hdr").include_dir == "hdr"
+    plain = ComplexField.specialize(IntField.specialize(bitwidth=19, signed=True))
+    assert plain.include_dir == "."

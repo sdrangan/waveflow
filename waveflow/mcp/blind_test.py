@@ -107,6 +107,25 @@ DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "PowerShell(Move-Item:*)",
 )
 
+#: The no-Waveflow arm (``--no-waveflow``): the same harness and allowlist, less every
+#: Waveflow entry, so the two arms differ only in Waveflow.  The plan's Stage 0 baseline.
+#: The arm is chosen here, in the first message, not in the spec: both arms read the SAME
+#: spec file (``examples/mcp_test/rotate_func.md``), which names no tooling.
+def baseline_allowed(allowed) -> list[str]:
+    return [a for a in allowed if "waveflow" not in a.lower()]
+
+
+WAVEFLOW_FIRST = (
+    "Build the accelerator specified in {spec}, in this folder, with Waveflow: its MCP "
+    "server is available, and its stream_inband example is the reference design to follow."
+)
+
+NO_WAVEFLOW_FIRST = (
+    "Build the accelerator specified in {spec}, in this folder. Use Vitis HLS directly: "
+    "write the kernel and its testbench in C++, and use Python with numpy for models, test "
+    "vectors and analysis."
+)
+
 _MD_LINK = re.compile(r"\]\(([^)#\s]+\.md)\)")
 
 #: Tools that only make sense with a person or a scheduler behind the session.
@@ -200,6 +219,21 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
+def _waveflow_importable(no_waveflow: bool) -> bool | None:
+    """Can the agent's ``python`` import Waveflow?  (Only asked for the baseline arm.)"""
+    if not no_waveflow:
+        return None
+    exe = shutil.which("python", path=_agent_env(True).get("PATH"))
+    if exe is None:
+        return None
+    try:
+        r = subprocess.run([exe, "-c", "import waveflow"], capture_output=True,
+                           stdin=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.returncode == 0
+
+
 def _claude_exe() -> str:
     exe = shutil.which("claude")
     if exe is None:
@@ -207,17 +241,22 @@ def _claude_exe() -> str:
     return exe
 
 
-def _agent_env() -> dict[str, str]:
+def _agent_env(no_waveflow: bool = False) -> dict[str, str]:
     """The operator's environment, with this venv first on PATH.
+
+    For the no-Waveflow arm, the operator's environment as it is: whatever ``python`` the
+    shell resolves (``waveflow_importable`` in ``config.json`` records whether that one can
+    import Waveflow, which would make the baseline less blind).
 
     A student runs the agent with their venv active, so when it types
     ``python build.py`` it gets the Python that has Waveflow.  Reproduce that
     rather than trusting whatever ``python`` the operator's shell resolves.
     """
     env = dict(os.environ)
-    bindir = str(Path(sys.executable).parent)
-    env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
-    env["VIRTUAL_ENV"] = sys.prefix
+    if not no_waveflow:
+        bindir = str(Path(sys.executable).parent)
+        env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+        env["VIRTUAL_ENV"] = sys.prefix
     # A blind test launched from inside a Claude Code session must not look
     # like a nested one.
     for var in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
@@ -243,6 +282,7 @@ def _run_claude(
     resume: str | None,
     timeout: float,
     silent: bool,
+    no_waveflow: bool = False,
 ) -> dict[str, Any]:
     cmd = [
         _claude_exe(),
@@ -279,7 +319,7 @@ def _run_claude(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=err,
-            env=_agent_env(),
+            env=_agent_env(no_waveflow),
             encoding="utf-8",
             errors="replace",
             # Its own process group, so the whole tree can be stopped (POSIX).
@@ -558,6 +598,7 @@ def run_blind_test(
     force: bool = False,
     silent: bool = False,
     resume: bool = False,
+    no_waveflow: bool = False,
 ) -> dict[str, Any]:
     """Run the blind test and write ``<folder>.blindtest/summary.md``.
 
@@ -566,6 +607,9 @@ def run_blind_test(
     one: same session, same settings (``--allow`` adds to them; ``model``,
     ``permission_mode`` and ``timeout`` override them when given), and the
     summary covers every phase.
+
+    *no_waveflow* runs the baseline arm: no MCP server, no Waveflow tools on the allowlist,
+    the operator's own Python, and a first message that says to use Vitis directly.
     """
     if folder is None:
         if prompt is None:
@@ -613,29 +657,26 @@ def run_blind_test(
         copied.append(f.name)
 
     mcp_config = logdir / "mcp.json"
-    mcp_config.write_text(
-        json.dumps(
-            {
-                "mcpServers": {
-                    "waveflow": {
-                        "type": "stdio",
-                        "command": Path(sys.executable).as_posix(),
-                        "args": ["-m", "waveflow.mcp.server"],
-                    }
-                }
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    servers = {} if no_waveflow else {
+        "waveflow": {
+            "type": "stdio",
+            "command": Path(sys.executable).as_posix(),
+            "args": ["-m", "waveflow.mcp.server"],
+        }
+    }
+    mcp_config.write_text(json.dumps({"mcpServers": servers}, indent=2), encoding="utf-8")
 
-    first = message or f"Build the accelerator specified in {prompt.name}, in this folder."
+    first = message or (NO_WAVEFLOW_FIRST if no_waveflow else WAVEFLOW_FIRST).format(
+        spec=prompt.name)
+    allowed = [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])]
     config = {
         "prompt": str(prompt),
         "first_message": first,
         "folder": str(folder),
         "copied": copied,
-        "allowed": [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])],
+        "allowed": baseline_allowed(allowed) if no_waveflow else allowed,
+        "no_waveflow": no_waveflow,
+        "waveflow_importable": _waveflow_importable(no_waveflow),
         "permission_mode": permission_mode or _DEFAULTS["permission_mode"],
         "model": model,
         "timeout": timeout or _DEFAULTS["timeout"],
@@ -681,7 +722,10 @@ def _resume(
     }
     # Saved list, plus defaults added since the run began (Monitor was one),
     # plus this call's --allow.
-    for a in [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])]:
+    defaults = [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])]
+    if config.get("no_waveflow"):
+        defaults = baseline_allowed(defaults)
+    for a in defaults:
         if a not in config["allowed"]:
             config["allowed"].append(a)
     for key, val in (("model", model), ("permission_mode", permission_mode), ("timeout", timeout)):
@@ -702,7 +746,7 @@ def _resume(
         # and the agent did nothing.  Start the phase over.
         spec = next((c for c in config.get("copied", []) if c.endswith(".md")), "the spec")
         first = message or config.get("first_message") or (
-            f"Build the accelerator specified in {spec}, in this folder.")
+            NO_WAVEFLOW_FIRST if config.get("no_waveflow") else WAVEFLOW_FIRST).format(spec=spec)
         if not silent:
             _echo("No session was started before the interruption; starting over.")
     else:
@@ -732,6 +776,7 @@ def _drive(
         model=config.get("model"),
         timeout=float(config["timeout"]),
         silent=silent,
+        no_waveflow=bool(config.get("no_waveflow")),
     )
     queue = [first] + [config["approve"]] * approvals_left
     interrupted = False

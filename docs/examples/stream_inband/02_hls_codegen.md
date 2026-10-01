@@ -2,109 +2,93 @@
 title: HLS Code Generation
 parent: Streaming polynomial
 nav_order: 2
-summary: "Deriving the C++ sources — the kernel, the testbench and the per-schema utility headers — from the same Python definitions the golden uses. The surprising part is that the kernel and the testbench come out of the same step type, differing only by a flag: both are a Python method lowered to C++."
+summary: "What Waveflow generates and what you write. The schema headers and the kernel's boundary -- prototype, every interface pragma, a register map matching what Vitis builds, and one call into the body -- are generated; the whole kernel body and the C++ testbench are ordinary hand-written C++."
 ---
 
-# HLS code generation
+# Code generation
 
-The second group derives the C++ Vitis HLS sources — the kernel,
-the testbench, and the per-schema utility headers — from the same
-Python definitions the golden model uses.
+The second group produces the C++ that Vitis compiles.  The split is deliberate:
+**Waveflow generates what is mechanical, and you write what is design.**
 
 | Step | Produces | What it does |
-|------|----------|--------------|
-| `gen_include` | `include_dir` | Generates `include/*.h` — one header per `DataSchema` class plus the `streamutils` and `<elem>_array_utils` helpers |
-| `gen_kernel`  | `poly_hpp`, `poly_cpp`, `poly_evaluate_impl` | `HlsCodegenStep(comp_class=PolyAccel)`: emits `gen/poly.hpp` + `gen/poly.cpp` from `PolyAccel.on_start`; touches the sticky `poly_evaluate_impl.tpp` impl only if absent |
-| `gen_tb`      | `poly_tb` | `HlsCodegenStep(comp_class=PolyTBHls, is_testbench=True)`: emits `gen/poly_tb.cpp` from `PolyTBHls.main` |
+| --- | --- | --- |
+| `gen_include` | `include/*.h` | One header per schema, the float32 array serializers, the stream utilities, and the testbench helper `bundle_tb.h` |
+| `sources` | | Puts the hand-written C++ in place when the build runs outside the example's directory |
+| `gen_kernel` | `gen/poly.hpp`, `gen/poly.cpp` | The kernel's boundary, from `PolyAccel`'s ports and register map |
 
-## Symmetry: kernel and testbench are the same step
+## The generated boundary
 
-The most surprising thing about this group is that the kernel and
-testbench are produced by *the same step type* — `HlsCodegenStep` —
-just with `is_testbench=True` on the testbench instance:
-
-```python
-dag.add(HlsCodegenStep(
-    name="gen_kernel",
-    comp_class=PolyAccel,
-    source_artifact="poly_source",
-    output_dir="gen",
-    impl_dir=".",
-))
-
-dag.add(HlsCodegenStep(
-    name="gen_tb",
-    comp_class=PolyTBHls,
-    source_artifact="poly_source",
-    output_dir="gen",
-    is_testbench=True,
-))
-```
-
-The kernel-side codegen reads `PolyAccel.on_start` (a SimPy
-coroutine) and emits a Vitis HLS C++ free function with the matching
-signature and AXI-Lite + AXI-Stream interface pragmas.  Hooks marked
-`@synthesizable` (like `evaluate`) get a forward declaration in the
-header and a *sticky* impl-file stub at `impl_dir/`.  The impl stub is
-written only if absent — your hand-written body survives subsequent
-runs.
-
-The testbench-side codegen reads `PolyTBHls.main()` (a straight-line
-Python program) and emits `int main(int argc, char** argv)` with all
-the same stream / regmap / file-IO patterns lowered to
-`streamutils::*` / `<elem>_array_utils::*` calls.
-
-## What gets emitted
-
-```
-gen/
-├── poly.hpp            # generated, always rewritten
-├── poly.cpp            # generated, always rewritten
-└── poly_tb.cpp         # generated, always rewritten
-
-poly_evaluate_impl.tpp  # sticky hand-written hook (Horner evaluation)
-
-include/
-├── poly_cmd_hdr.h       poly_cmd_hdr_tb.h
-├── poly_resp_hdr.h      poly_resp_hdr_tb.h
-├── coeff_array.h        coeff_array_tb.h
-├── float32_array_utils.h  float32_array_utils_tb.h
-└── streamutils_hls.h    streamutils_tb.h
-```
-
-## The hand-written hook
-
-`PolyAccel.evaluate` is marked `@synthesizable` — the
-codegen emits a forward declaration in `poly.hpp` and a stub at
-`poly_evaluate_impl.tpp`.  This is where the actual Horner-method
-polynomial body lives:
+`PolyAccel` sets `cpp_body = "body"`, which makes it a **body-only kernel**.  Waveflow
+generates its top-level function from the ports and the register map alone:
 
 ```cpp
-// poly_evaluate_impl.tpp
-namespace poly_impl {
-PolyError evaluate(PolyCmdHdr cmd_hdr,
-                   hls::stream<...> & s_in,
-                   hls::stream<...> & m_out,
-                   float coeffs[4]) {
-    // hand-written Horner loop ...
-}
+void poly(hls::stream<streamutils::axi4s_word<32>>& s_in,
+          hls::stream<streamutils::axi4s_word<32>>& m_out,
+          ap_uint<1>& halted, ap_uint<8>& error, ap_uint<16>& tx_id,
+          float coeffs[4]) {
+#pragma HLS INTERFACE axis port=s_in
+#pragma HLS INTERFACE axis port=m_out
+#pragma HLS INTERFACE s_axilite port=halted       bundle=control
+#pragma HLS INTERFACE s_axilite port=error        bundle=control
+#pragma HLS INTERFACE s_axilite port=tx_id        bundle=control
+#pragma HLS INTERFACE s_axilite port=coeffs       bundle=control
+#pragma HLS INTERFACE s_axilite port=return       bundle=control
+    poly_impl::body(s_in, m_out, halted, error, tx_id, coeffs);
 }
 ```
 
-The file is `.gitignored`-aware: re-runs of `gen_kernel` will not
-overwrite it once it exists, so future codegen-driven refactors of
-`PolyAccel.on_start` do not stomp the hand-tuned compute
-body.
+This is the part worth generating.  It is fully determined by what the module declares,
+it is easy to get subtly wrong by hand (a misspelled pragma often still compiles, into a
+different interface), and the register map has to match the offsets Vitis actually
+assigns.  `gen/poly.hpp` declares the body with **the same arguments**, the register
+fields by reference, so the body writes `halted = 1;` directly, as a hand-written Vitis
+kernel would.
+
+## The hand-written body
+
+[`poly_body_impl.tpp`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_body_impl.tpp)
+is the whole kernel: the persistent command loop, the response header, the sample
+loop, the TLAST rules and the status.  It starts with `#pragma HLS INLINE`, which keeps
+the interface pragmas on the generated top binding to its ports, and it uses the
+generated serializers (`read_axi4_stream`, `read_axi4_stream_lane`, ...) for every word.
+
+The generator writes this file only when it is missing, as a stub marked
+`TODO: implement body`, so your body is never overwritten.  The build refuses to
+simulate the stub: a kernel with an empty body is not an error to Vitis, it just does
+nothing.
+
+## The hand-written testbench
+
+[`poly_tb.cpp`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly_tb.cpp)
+is ordinary C++, about 40 lines.  For each scenario it reads the coefficients, plays the
+stimulus into the kernel with `wf::play_stream`, runs the kernel, records the response
+with `wf::record_stream`, and writes the final register status:
+
+```cpp
+wf::play_stream<32>(dir + "/in", s_in);
+poly(s_in, m_out, halted, error, tx_id, coeffs);
+wf::record_stream<32>(m_out, dir + "/" + stage);
+```
+
+Because it loops over the scenario list, one C simulation covers every scenario,
+including the malformed ones -- a missing TLAST is just a flag in the stimulus file.
+
+## What gets emitted, and what you write
+
+```
+gen/poly.hpp, gen/poly.cpp     generated, rewritten every build
+include/*.h                    generated: schemas, serializers, stream and testbench helpers
+
+poly_body_impl.tpp             yours: the kernel body
+poly_tb.cpp                    yours: the testbench
+```
 
 ## Run just this group
 
 ```bash
-python -m examples.stream_inband.poly_build --through gen_tb
+python examples/stream_inband/poly_build.py --through gen_kernel
 ```
-
-Produces every `gen/*.cpp/.hpp` and `include/*.h` the Vitis steps in
-Group 3 consume.
 
 ---
 
-Next: [C-sim functional verification →](./03_csim_verification.md)
+Next: [C simulation →](./03_csim_verification.md)
