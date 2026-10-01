@@ -3,6 +3,7 @@ determinism, and that it never touches Vitis."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -64,14 +65,24 @@ def test_results_do_not_depend_on_the_worker_count():
 
 
 def test_sweep_never_touches_vitis(tmp_path, monkeypatch):
-    """A small sweep through SweepRunner and the DAG, with every toolchain entry point raising."""
+    """A small sweep through SweepRunner and the DAG, with every toolchain and subprocess entry
+    point recording its calls.  Recording (not just raising) matters: ``subprocess_result``
+    swallows exceptions, so a raise alone could pass silently.  ``workers=1`` keeps the run in
+    this process, where the patches apply."""
+    calls = []
 
-    def boom(*_a, **_k):
-        raise AssertionError("the accuracy sweep must not run Vitis or a subprocess")
+    def record(name):
+        def fn(*a, **k):
+            calls.append(name)
+            raise AssertionError(f"the accuracy sweep must not call {name}")
 
-    monkeypatch.setattr(toolchain, "run_vitis_hls", boom)
-    monkeypatch.setattr(subprocess, "run", boom)
-    monkeypatch.setattr(subprocess, "Popen", boom)
+        return fn
+
+    for name in ("run_vitis_hls", "run_vitis_hls_result", "subprocess_result"):
+        monkeypatch.setattr(toolchain, name, record(f"toolchain.{name}"))
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, record(f"subprocess.{name}"))
+    monkeypatch.setattr(os, "system", record("os.system"))
     runner = SweepRunner(
         dag_factory=sweep.build_accuracy_dag,
         root_dir=tmp_path,
@@ -87,6 +98,7 @@ def test_sweep_never_touches_vitis(tmp_path, monkeypatch):
         grid, [Stage(through="accuracy_point", use_platform=False)], verbose=False
     )
     assert result.ok, result.failures
+    assert calls == []
     out = sweep.merge_points(tmp_path, grid)
     rows = read_table(out)
     assert len(rows) == 2 * sweep.expected_rows(SMALL)
@@ -133,3 +145,86 @@ def test_float_rows_count_errors_on_the_chunk_samples(config):
     )
     assert rows[f"cg{c.K}"]["bit_errors"] == direct
     assert rows[f"cg{c.K}"]["residual"] == ("explicit" if c.explicit else "recurrence")
+
+
+def test_refinement_points_bracket_the_loss_region():
+    """2-3 consecutive offsets per case, covering 0-0.7 dB above Phase 1's float MMSE crossing."""
+    import math
+
+    for name, c in sweep.CONFIGS.items():
+        offsets = sweep.refine_offsets(name)
+        assert 2 <= len(offsets) <= 4, (name, offsets)
+        assert list(offsets) == list(range(offsets[0], offsets[-1] + 1))
+        x = sweep.float_mmse_crossing(c.M, c.K, c.modulation)
+        snrs = [sweep.point_snr(name, o) for o in offsets]
+        assert snrs[0] <= math.floor(x) and math.ceil(x + 0.7) <= snrs[-1], name
+    assert len(sweep.refine_points()) == sum(
+        len(sweep.refine_offsets(n)) for n in sweep.CONFIGS
+    )
+
+
+def test_merge_refuses_an_unrefined_refinement_point(tmp_path):
+    offset = sweep.refine_offsets(SMALL)[0]
+    point = {"case": SMALL, "snr_offset": offset}
+    rows = sweep.simulate_sweep_point(SMALL, offset, max_bits=sweep.SWEEP_CHUNK_BITS)
+    path = sweep._point_csv(tmp_path, SMALL, offset)
+    path.parent.mkdir(parents=True)
+    for min_errors, ok in ((sweep.MIN_ERRORS, False), (sweep.REFINE_MIN_ERRORS, True)):
+        comment = sweep.provenance("accuracy_point", min_errors=min_errors)
+        sweep.write_table(path, rows, comment)
+        if ok:
+            sweep.merge_points(tmp_path, [point])
+        else:
+            with pytest.raises(RuntimeError, match="refinement point"):
+                sweep.merge_points(tmp_path, [point])
+
+
+committed_grid = pytest.mark.skipif(
+    "refined_points"
+    not in (sweep.HERE / "paper_data" / "accuracy_grid.csv")
+    .read_text(encoding="utf-8")
+    .split("\n", 1)[0],
+    reason="the committed grid predates the refinement",
+)
+
+
+@committed_grid
+def test_committed_refinement_points_ran_to_the_refined_budget():
+    rows = read_table(sweep.HERE / "paper_data" / "accuracy_grid.csv")
+    refined = {
+        (sweep.CONFIGS[p["case"]], sweep.point_snr(p["case"], p["snr_offset"]))
+        for p in sweep.refine_points()
+    }
+    seen = set()
+    for r in rows:
+        c = sweep.CONFIGS[
+            f"{r['modulation']}_{r['M']}x{r['K']}"
+            + ("_explicit" if r["residual"] == "explicit" else "")
+        ]
+        if (c, float(r["rho_db"])) in refined:
+            seen.add((c, float(r["rho_db"])))
+            assert (
+                int(r["bit_errors"]) >= sweep.REFINE_MIN_ERRORS
+                or int(r["bits"]) >= sweep.MAX_BITS
+            ), r
+    assert seen == refined
+
+
+def test_refinement_redoes_an_under_budget_point_and_skips_a_refined_one(
+    tmp_path, monkeypatch
+):
+    """The point CSV's recorded budget, not a summary, decides what the refinement redoes."""
+    monkeypatch.setattr(sweep, "CONFIGS", {SMALL: sweep.CONFIGS[SMALL]})
+    monkeypatch.setattr(sweep, "refine_offsets", lambda case: (-1,))
+    monkeypatch.setattr(sweep, "MAX_BITS", sweep.SWEEP_CHUNK_BITS)
+    path = sweep._point_csv(tmp_path, SMALL, -1)
+    path.parent.mkdir(parents=True)
+    rows = sweep.simulate_sweep_point(SMALL, -1, max_bits=sweep.SWEEP_CHUNK_BITS)
+    comment = sweep.provenance("accuracy_point", min_errors=sweep.MIN_ERRORS)
+    sweep.write_table(path, rows, comment)  # as a fresh full run leaves it
+    log = tmp_path / "results" / "accuracy_refine" / f"{SMALL}.json"
+    assert sweep.run_refinement(1, root=tmp_path, verbose=False) == 0
+    assert sweep._recorded_min_errors(path) == sweep.REFINE_MIN_ERRORS and log.exists()
+    log.unlink()
+    assert sweep.run_refinement(1, root=tmp_path, verbose=False) == 0
+    assert not log.exists()  # already refined: nothing ran

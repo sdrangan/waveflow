@@ -26,11 +26,22 @@ or ``MAX_BITS`` bits) applied after each chunk.  Results are therefore identical
 count.  The work is memory-bandwidth bound: on the 4-core host, 2 workers and these small,
 cache-friendly chunks gave about twice the throughput of 1-Mbit chunks split by format (plan §15).
 
+Refinement
+----------
+The stop rule stops a point once every detector has ``MIN_ERRORS`` errors, which leaves the
+BER-1e-3 crossing of a design near the 0.5 dB budget uncertain by about 0.06 dB (M3 review).
+So the 2–3 SNR points per case that bracket its 0–0.7 dB loss region (from Phase 1's float
+exact-MMSE crossing, an input, not a result) are re-run to ``REFINE_MIN_ERRORS`` errors.  A
+refined point extends the same chunk-keyed sample stream, and ``merge`` refuses a refinement
+point that was not refined.  The refinement pass works out what is left from each point
+CSV's recorded budget, so it can be interrupted and re-run.
+
 Run from the repo root::
 
     python -m examples.mimo_cg.mimo_cg_accuracy_sweep --dry-run --out results/dry_run.json
-    python -m examples.mimo_cg.mimo_cg_accuracy_sweep --workers 8 [--resume]
-    python -m examples.mimo_cg.mimo_cg_accuracy_sweep merge   # rebuild accuracy_grid.csv only
+    python -m examples.mimo_cg.mimo_cg_accuracy_sweep [--workers 2] [--resume]  # + refine, merge
+    python -m examples.mimo_cg.mimo_cg_accuracy_sweep refine   # the refinement points, then merge
+    python -m examples.mimo_cg.mimo_cg_accuracy_sweep merge    # rebuild accuracy_grid.csv only
 """
 
 from __future__ import annotations
@@ -40,6 +51,7 @@ import dataclasses
 import math
 import multiprocessing as mp
 import os
+import re
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -57,6 +69,7 @@ from examples.mimo_cg.mimo_cg import (
     MIN_ERRORS,
     NS,
     Config,
+    mmse_crossing_db,
     provenance,
     read_table,
     write_table,
@@ -161,6 +174,48 @@ def point_snr(config: str, snr_offset: int) -> float:
 
 def expected_rows(config: str) -> int:
     return len(CONFIGS[config].detectors)
+
+
+# --- refinement (amended at the M3 review, plan §14) ----------------------------------------
+
+#: The stop rule's error target at the refinement points.  At ``MIN_ERRORS`` the crossing of a
+#: design near the 0.5 dB budget moves by about 0.06 dB between seed streams (M3 review), so the
+#: points that decide the frontier are run to ten times as many errors (still capped at
+#: ``MAX_BITS``).
+REFINE_MIN_ERRORS = 1000
+#: The loss region the refinement covers, in dB above float exact MMSE, plus a margin for the
+#: noise of the crossing itself.
+REFINE_LOSS_DB = (0.0, 0.7)
+_REFINE_MARGIN_DB = 0.1
+
+
+@cache
+def float_mmse_crossing(M: int, K: int, modulation: str) -> float:
+    """Float exact MMSE's BER-1e-3 SNR from Phase 1's committed ``paper_data/float_ber.csv``.
+
+    It is an input of the sweep, not a result of it, so the refinement points are fixed before
+    any point runs.
+    """
+    rows = [
+        {"rho_db": float(r["rho_db"]), "ber": float(r["ber"])}
+        for r in read_table(HERE / "paper_data" / "float_ber.csv")
+        if (int(r["M"]), int(r["K"]), r["modulation"], r["detector"])
+        == (M, K, modulation, "mmse")
+    ]
+    crossing = mmse_crossing_db(sorted(rows, key=lambda r: r["rho_db"]))
+    if crossing is None:
+        raise RuntimeError(f"float MMSE never reaches 1e-3 for {M}x{K} {modulation}")
+    return crossing
+
+
+def refine_offsets(config: str) -> tuple[int, ...]:
+    """The SNR offsets of ``config`` that bracket its 0–0.7 dB loss region (2–3 points)."""
+    c = CONFIGS[config]
+    x = float_mmse_crossing(c.M, c.K, c.modulation)
+    centre = round(zf_crossing(c.M, c.K, c.modulation))
+    lo = math.floor(x + REFINE_LOSS_DB[0] - _REFINE_MARGIN_DB) - centre
+    hi = math.ceil(x + REFINE_LOSS_DB[1] + _REFINE_MARGIN_DB) - centre
+    return tuple(o for o in SNR_OFFSETS if lo <= o <= hi)
 
 
 # --- one chunk of one point ----------------------------------------------------------------
@@ -349,7 +404,13 @@ class AccuracyPointStep(BuildStep):
         )
         path = _point_csv(root, kw["case"], kw["snr_offset"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        write_table(path, rows, provenance("accuracy_point", max_bits=kw["max_bits"]))
+        write_table(
+            path,
+            rows,
+            provenance(
+                "accuracy_point", max_bits=kw["max_bits"], min_errors=kw["min_errors"]
+            ),
+        )
         marker = root / "results" / "accuracy_points" / "last_point.txt"
         marker.write_text(f"{path.name}\n", encoding="utf-8")
         return {"accuracy_point": marker}
@@ -389,44 +450,116 @@ def build_accuracy_dag() -> BuildDag:
 DEFAULT_WORKERS = min(2, os.cpu_count() or 1)
 
 
+def _recorded_min_errors(path: Path) -> int:
+    """The stop rule's error target a point CSV was run with (its provenance line)."""
+    first = path.read_text(encoding="utf-8").split("\n", 1)[0]
+    m = re.search(r"min_errors=(\d+)", first)
+    return int(m.group(1)) if m else MIN_ERRORS  # written before the refinement existed
+
+
+def refine_points() -> list[dict]:
+    """Every refinement point of the grid, in grid order."""
+    return [p for p in GRID if p["snr_offset"] in refine_offsets(p["case"])]
+
+
 def merge_points(root: Path = HERE, points=None) -> Path:
     """Merge the point CSVs (default: the whole grid) into ``paper_data/accuracy_grid.csv``,
-    in grid order."""
+    in grid order.  Refuses a refinement point run below ``REFINE_MIN_ERRORS``."""
     points = list(GRID if points is None else points)
     rows = []
-    missing = []
+    missing, unrefined = [], []
+    refined = 0
     for point in points:
         path = _point_csv(root, point["case"], point["snr_offset"])
         if not path.exists():
             missing.append(path.name)
             continue
+        if point["snr_offset"] in refine_offsets(point["case"]):
+            if _recorded_min_errors(path) < REFINE_MIN_ERRORS:
+                unrefined.append(path.name)
+            refined += 1
         rows += read_table(path)
     if missing:
         raise RuntimeError(
             f"{len(missing)} point(s) missing, e.g. {missing[:3]}; run the sweep"
         )
+    if unrefined:
+        raise RuntimeError(
+            f"{len(unrefined)} refinement point(s) run below {REFINE_MIN_ERRORS} errors, e.g. "
+            f"{unrefined[:3]}; run `python -m examples.mimo_cg.mimo_cg_accuracy_sweep refine`"
+        )
     out = Path(root) / "paper_data" / "accuracy_grid.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
-    write_table(
-        out, rows, provenance("accuracy_grid", max_bits=MAX_BITS, points=len(points))
+    comment = provenance(
+        "accuracy_grid",
+        max_bits=MAX_BITS,
+        min_errors=MIN_ERRORS,
+        points=len(points),
+        refined_points=refined,
+        refine_min_errors=REFINE_MIN_ERRORS,
     )
+    write_table(out, rows, comment)
     return out
+
+
+def run_refinement(
+    workers: int = DEFAULT_WORKERS, *, root: Path = HERE, verbose: bool = True
+) -> int:
+    """Run every refinement point not yet run to ``REFINE_MIN_ERRORS``; return the failure count.
+
+    What is left is decided by each point CSV's recorded budget, not by a summary.  So the pass
+    resumes after an interruption, and it redoes a point that a later full run overwrote at the
+    base budget.  A refined point overwrites its CSV: the same chunk-keyed samples, run for
+    longer.  Each case's run is logged to ``results/accuracy_refine/<case>.json``, apart from
+    the main sweep's summary.
+    """
+    stage = Stage(through="accuracy_point", use_platform=False)
+    failures = 0
+    for case in CONFIGS:
+        todo = tuple(
+            o
+            for o in refine_offsets(case)
+            if not (path := _point_csv(root, case, o)).exists()
+            or _recorded_min_errors(path) < REFINE_MIN_ERRORS
+        )
+        if not todo:
+            continue
+        runner = SweepRunner(
+            dag_factory=build_accuracy_dag,
+            root_dir=root,
+            summary=Path(root) / "results" / "accuracy_refine" / f"{case}.json",
+            extra_params={
+                "workers": workers,
+                "max_bits": MAX_BITS,
+                "min_errors": REFINE_MIN_ERRORS,
+            },
+        )
+        # subset() keeps GRID's labels; a fresh one-case ParamGrid would drop `case` from them.
+        grid = GRID.subset(case=(case,), snr_offset=todo)
+        failures += len(runner.run(grid, stage, verbose=verbose).failures)
+    return failures
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["merge"]:
-        print(f"merged -> {merge_points()}")
-        return 0
-    total_rows = sum(expected_rows(p["case"]) for p in GRID)
-    print(
-        f"accuracy sweep: {len(GRID)} points, {len(FORMATS)} formats, {total_rows} expected rows"
-    )
     workers = DEFAULT_WORKERS
     if "--workers" in argv:
         i = argv.index("--workers")
         workers = int(argv[i + 1])
         argv = argv[:i] + argv[i + 2 :]
+    if argv[:1] == ["merge"]:
+        print(f"merged -> {merge_points()}")
+        return 0
+    if argv[:1] == ["refine"]:
+        rc = int(run_refinement(workers) > 0)
+        if rc == 0:
+            print(f"merged -> {merge_points()}")
+        return rc
+    total_rows = sum(expected_rows(p["case"]) for p in GRID)
+    print(
+        f"accuracy sweep: {len(GRID)} points, {len(FORMATS)} formats, {total_rows} expected "
+        f"rows; {len(refine_points())} refinement points"
+    )
     runner = SweepRunner(
         dag_factory=build_accuracy_dag,
         root_dir=HERE,
@@ -446,7 +579,10 @@ def main(argv: list[str] | None = None) -> int:
         argv=argv,
     )
     if rc == 0 and "--dry-run" not in argv and len(argv) == argv.count("--resume"):
-        print(f"merged -> {merge_points()}")
+        # A full run: refine the points that decide the frontier, then merge.
+        rc = int(run_refinement(workers) > 0)
+        if rc == 0:
+            print(f"merged -> {merge_points()}")
     return rc
 
 

@@ -8,11 +8,15 @@ Step 3.4 of ``plans/mimo_cg/mimo_cg_paper_sims.md`` (AC3.2).  Reads the merged s
   falls to 1e-3, interpolated in log-BER between the 1-dB grid points; its loss against float
   exact MMSE; and, for a fixed-point design, its **quantization-only** loss against float CG at
   the same ``nit``.  A design that never reaches 1e-3 in its ±6 dB window is ``floor``, with no
-  SNR and no loss; it is never dropped.
+  SNR and no loss; it is never dropped.  ``snr_sigma_db`` and ``loss_sigma_db`` are the Monte
+  Carlo standard deviations (:func:`crossing_sigma_db`), and ``non_monotone = 1`` marks a curve
+  that climbs back to 1e-3 after its first crossing.
 * ``paper_data/accuracy_frontier.csv`` — for every case, the fixed-point designs (W, g_s, nit)
   within 0.5 dB of float exact MMSE that no other such design beats or ties on all three of
   W, g_s and nit.  The ``headline`` is the smallest W, then the smallest g_s, then the
-  smallest nit; a case with no design in the budget gets one ``none`` row.
+  smallest nit; a case with no design in the budget gets one ``none`` row.  ``fragile = 1``
+  marks a design within 2σ of the budget, and ``contender`` rows are designs just outside it
+  that would replace the headline (see :func:`frontier_rows`).
 * the figures, rendered by :mod:`examples.mimo_cg.mimo_cg_accuracy_figures` into
   ``docs/examples/mimo_cg/images/``.
 
@@ -30,6 +34,8 @@ Run from the repo root (one command for every table and figure)::
 from __future__ import annotations
 
 import hashlib
+import itertools
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -49,6 +55,9 @@ HERE = Path(__file__).resolve().parent
 #: The accuracy budget of AC3.2: SNR loss at BER 1e-3 against float exact MMSE.
 LOSS_BUDGET_DB = 0.5
 FLOOR = "floor"
+#: How many standard deviations of the loss count as "too close to call" against the budget.
+FRAGILE_SIGMAS = 2.0
+_LOG10_E = math.log10(math.e)
 _CASE_COLUMNS = ("modulation", "M", "K", "residual")
 
 
@@ -57,10 +66,10 @@ def _opt_int(s: str) -> int | None:
 
 
 def design_curves(rows: list[dict]) -> dict[tuple, dict[str, dict]]:
-    """``{case: {detector: {"W", "g_s", "nit", "points"}}}`` from accuracy-grid rows.
+    """``{case: {detector: {"W", "g_s", "nit", "points", "errors"}}}`` from accuracy-grid rows.
 
-    ``case`` is ``(modulation, M, K, residual)``; cases and detectors keep the table's order, and
-    ``points`` are ``(rho_db, ber)`` in SNR order.
+    ``case`` is ``(modulation, M, K, residual)``; cases and detectors keep the table's order.
+    ``points`` are ``(rho_db, ber)`` in SNR order and ``errors`` the matching bit-error counts.
     """
     out: dict[tuple, dict[str, dict]] = {}
     for r in rows:
@@ -72,12 +81,16 @@ def design_curves(rows: list[dict]) -> dict[tuple, dict[str, dict]]:
                 "g_s": _opt_int(r["g_s"]),
                 "nit": _opt_int(r["nit"]),
                 "points": [],
+                "errors": [],
             },
         )
         d["points"].append((float(r["rho_db"]), float(r["ber"])))
+        d["errors"].append(int(r["bit_errors"]))
     for dets in out.values():
         for d in dets.values():
-            d["points"].sort()
+            order = sorted(range(len(d["points"])), key=lambda i, d=d: d["points"][i])
+            d["points"] = [d["points"][i] for i in order]
+            d["errors"] = [d["errors"][i] for i in order]
     return out
 
 
@@ -98,15 +111,53 @@ def crossing_db(
     return mmse_crossing_db([{"rho_db": s, "ber": b} for s, b in points], target)
 
 
+def _first_crossing(points: list[tuple[float, float]], target: float) -> int | None:
+    """Index ``i`` of the interval :func:`crossing_db` interpolates in (``b_i ≥ target > b_i+1``)."""
+    for i, ((_, b0), (_, b1)) in enumerate(itertools.pairwise(points)):
+        if b0 >= target > b1:
+            return i
+    return None
+
+
+def crossing_sigma_db(
+    points: list[tuple[float, float]], errors: list[int], target: float = TARGET_BER
+) -> float | None:
+    """Standard deviation of :func:`crossing_db`, from the error counts at its two bracketing SNRs.
+
+    The delta method on the log-BER interpolation, with Poisson counts (the standard deviation of
+    log10 BER is log10(e)/sqrt(errors)).  ``None`` for a floor, or when a bracketing SNR has no
+    errors.
+    """
+    i = _first_crossing(points, target)
+    if i is None or errors[i] == 0 or errors[i + 1] == 0:
+        return None
+    (s0, b0), (s1, b1) = points[i], points[i + 1]
+    l0, l1, lt = math.log10(b0), math.log10(b1), math.log10(target)
+    var = ((lt - l1) ** 2 / errors[i] + (l0 - lt) ** 2 / errors[i + 1]) * _LOG10_E**2
+    return (s1 - s0) * math.sqrt(var) / (l0 - l1) ** 2
+
+
+def rises_again(points: list[tuple[float, float]], target: float = TARGET_BER) -> bool:
+    """True if the BER climbs back to ``target`` or above after its first crossing."""
+    i = _first_crossing(points, target)
+    return i is not None and any(b >= target for _, b in points[i + 2 :])
+
+
 def loss_rows(rows: list[dict]) -> list[dict]:
-    """One row per (case, detector): the BER-1e-3 SNR and the two losses (see module doc)."""
+    """One row per (case, detector): the BER-1e-3 SNR, the two losses and their uncertainty.
+
+    ``loss_sigma_db`` combines the design's and MMSE's crossing σ as if independent, so it
+    overstates the noise of a paired difference (the samples are shared).
+    """
     out = []
     for case, dets in design_curves(rows).items():
-        ref = crossing_db(dets["mmse"]["points"])
+        mmse = dets["mmse"]
+        ref = crossing_db(mmse["points"])
         if ref is None:
             raise RuntimeError(
                 f"float exact MMSE never reaches BER {TARGET_BER} in the window of {case}"
             )
+        ref_sigma = crossing_sigma_db(mmse["points"], mmse["errors"])
         cg = {
             d["nit"]: crossing_db(d["points"])
             for name, d in dets.items()
@@ -114,6 +165,13 @@ def loss_rows(rows: list[dict]) -> list[dict]:
         }
         for name, d in dets.items():
             snr = crossing_db(d["points"])
+            sigma = crossing_sigma_db(d["points"], d["errors"])
+            if name == "mmse":
+                loss_sigma: float | str = 0.0
+            elif sigma is None or ref_sigma is None:
+                loss_sigma = ""
+            else:
+                loss_sigma = math.hypot(sigma, ref_sigma)
             ref_cg = cg.get(d["nit"]) if name.startswith("fx:") else None
             out.append(
                 {
@@ -124,10 +182,13 @@ def loss_rows(rows: list[dict]) -> list[dict]:
                     "nit": "" if d["nit"] is None else d["nit"],
                     "status": "ok" if snr is not None else FLOOR,
                     "snr_db": "" if snr is None else snr,
+                    "snr_sigma_db": "" if sigma is None else sigma,
                     "loss_mmse_db": "" if snr is None else snr - ref,
+                    "loss_sigma_db": loss_sigma,
                     "loss_cg_db": (
                         "" if snr is None or ref_cg is None else snr - ref_cg
                     ),
+                    "non_monotone": int(rises_again(d["points"])),
                 }
             )
     return out
@@ -137,12 +198,36 @@ def _dominates(a: tuple, b: tuple) -> bool:
     return a != b and all(x <= y for x, y in zip(a, b, strict=True))
 
 
+def _frontier_row(
+    base: dict, cost: tuple, d: dict, sigma: float | None, role: str, budget_db: float
+) -> dict:
+    loss = float(d["loss_mmse_db"])
+    fragile = sigma is None or abs(loss - budget_db) <= FRAGILE_SIGMAS * sigma
+    return {
+        **base,
+        "W": cost[0],
+        "g_s": cost[1],
+        "nit": cost[2],
+        "loss_mmse_db": loss,
+        "loss_sigma_db": "" if sigma is None else sigma,
+        "loss_cg_db": float(d["loss_cg_db"]) if d["loss_cg_db"] != "" else "",
+        "role": role,
+        "fragile": int(fragile),
+    }
+
+
 def frontier_rows(losses: list[dict], budget_db: float = LOSS_BUDGET_DB) -> list[dict]:
     """Per case, the non-dominated fixed-point (W, g_s, nit) within ``budget_db`` of MMSE.
 
     ``losses`` are :func:`loss_rows` (or the table read back).  ``role`` is ``headline`` for the
     smallest W, then g_s, then nit (never dominated, so always on the frontier), ``frontier``
     for the other non-dominated designs, and ``none`` for a case with no design in the budget.
+
+    Two uncertainty markers, both at ``FRAGILE_SIGMAS`` standard deviations of the loss:
+    ``fragile = 1`` on a frontier design whose loss is that close to the budget, and role
+    ``contender`` for a design just outside the budget that would replace the headline (it is
+    lexicographically smaller, so no frontier design dominates it).  A design without a σ is
+    marked fragile and is never a contender.
     """
     cases: dict[tuple, list[dict]] = {}
     for r in losses:
@@ -152,42 +237,40 @@ def frontier_rows(losses: list[dict], budget_db: float = LOSS_BUDGET_DB) -> list
             designs.append(r)
     out = []
     for case, designs in cases.items():
-        feasible = {
-            (int(d["W"]), int(d["g_s"]), int(d["nit"])): d
-            for d in designs
-            if float(d["loss_mmse_db"]) <= budget_db
+        by_cost = {(int(d["W"]), int(d["g_s"]), int(d["nit"])): d for d in designs}
+        loss = {c: float(d["loss_mmse_db"]) for c, d in by_cost.items()}
+        sigma = {
+            c: float(d["loss_sigma_db"]) if d["loss_sigma_db"] != "" else None
+            for c, d in by_cost.items()
         }
+        feasible = [c for c in by_cost if loss[c] <= budget_db]
         front = sorted(
             c for c in feasible if not any(_dominates(e, c) for e in feasible)
         )
+        near = [
+            c
+            for c in by_cost
+            if sigma[c] is not None
+            and budget_db < loss[c] <= budget_db + FRAGILE_SIGMAS * sigma[c]
+            and (not front or c < front[0])
+        ]
+        contenders = sorted(c for c in near if not any(_dominates(e, c) for e in near))
         base = dict(zip(_CASE_COLUMNS, case, strict=True))
         if not front:
             out.append(
                 {
                     **base,
-                    "W": "",
-                    "g_s": "",
-                    "nit": "",
-                    "loss_mmse_db": "",
-                    "loss_cg_db": "",
+                    **dict.fromkeys(("W", "g_s", "nit", "loss_mmse_db"), ""),
+                    **dict.fromkeys(("loss_sigma_db", "loss_cg_db"), ""),
                     "role": "none",
+                    "fragile": "",
                 }
             )
-            continue
-        for i, cost in enumerate(front):
-            d = feasible[cost]
+
+        roles = [("headline" if i == 0 else "frontier", c) for i, c in enumerate(front)]
+        for role, cost in roles + [("contender", c) for c in contenders]:
             out.append(
-                {
-                    **base,
-                    "W": cost[0],
-                    "g_s": cost[1],
-                    "nit": cost[2],
-                    "loss_mmse_db": float(d["loss_mmse_db"]),
-                    "loss_cg_db": (
-                        float(d["loss_cg_db"]) if d["loss_cg_db"] != "" else ""
-                    ),
-                    "role": "headline" if i == 0 else "frontier",
-                }
+                _frontier_row(base, cost, by_cost[cost], sigma[cost], role, budget_db)
             )
     return out
 

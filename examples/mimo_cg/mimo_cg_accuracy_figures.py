@@ -32,6 +32,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import BoundaryNorm, ListedColormap
@@ -61,6 +62,11 @@ HEAT_DARK_FROM = 4
 NEUTRAL = "#f0efec"
 #: The chart surface, which blanks the cells where nit > K (no such design exists).
 SURFACE = "#fcfcfb"
+#: Reference curves drawn over the BER families: thin, with a 2-pt surface halo.
+REFERENCE = {
+    "linewidth": 1.0,
+    "path_effects": [pe.Stroke(linewidth=3.0, foreground=SURFACE), pe.Normal()],
+}
 WHITE = "#ffffff"
 #: Loss bins (dB): the three lightest steps are within the 0.5 dB budget.
 LOSS_BOUNDS = (0.1, 0.25, LOSS_BUDGET_DB, 1.0, 2.0, 4.0)
@@ -83,8 +89,10 @@ def _ber_family(curves: dict, case: tuple, guards: list[int], path: Path) -> Pat
     dets = curves[case]
     fig, axes = plt.subplots(1, len(guards), figsize=(7.0, 2.9), sharey=True)
     for ax, g in zip(axes, guards, strict=True):
+        # The references sit on top, thin, with a surface halo, so they stay visible where a wide
+        # format coincides with them (the families are plotted under them).
         x, y = _nonzero(dets["mmse"]["points"])
-        ax.semilogy(x, y, color=INK, label="float exact MMSE", zorder=2)
+        ax.semilogy(x, y, color=INK, label="float exact MMSE", **REFERENCE, zorder=5)
         for slot, W in enumerate(FAMILY_W):
             x, y = _nonzero(dets[f"fx:W{W}g{g}:cg{K}"]["points"])
             ax.semilogy(
@@ -103,7 +111,8 @@ def _ber_family(curves: dict, case: tuple, guards: list[int], path: Path) -> Pat
             color=INK_SECONDARY,
             linestyle=(0, (3, 2)),
             label=f"float CG, {K} it.",
-            zorder=4,
+            **REFERENCE,
+            zorder=6,
         )
         ax.axhline(
             TARGET_BER, color=INK_SECONDARY, linestyle=":", linewidth=0.8, zorder=1

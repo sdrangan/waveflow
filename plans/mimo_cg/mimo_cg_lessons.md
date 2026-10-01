@@ -172,3 +172,15 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Background tasks have a time limit (30 min by default, 2 h at most).** A long
   sweep launched with the default was killed at 30 min. Make long runs resumable
   and split them into subsets (here `--case` halves) that each fit the limit.
+- **Resolve the decision boundary, not just the curve.** A stop rule of 100 errors
+  resolves a BER curve well, but a 0.5 dB budget decided from two curves' crossings
+  moved by about 0.06 dB between seed streams, enough to flip near-boundary
+  headlines. Spend extra samples only at the SNR points that bracket the decision,
+  and report σ and a fragile flag with every threshold result.
+- **Narrow a ParamGrid with `GRID.subset`, never a fresh one-value grid.** A
+  single-value axis is dropped from point labels, so per-case refinement runs
+  collided in the summary and `--resume` skipped them. A merge-time check of each
+  point's recorded budget caught it.
+- **Patch-and-raise doesn't prove a call never happened.** `subprocess_result`
+  swallows exceptions, so a "never calls Vitis" test must record calls and assert
+  the record is empty.
