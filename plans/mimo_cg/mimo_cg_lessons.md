@@ -184,3 +184,17 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Patch-and-raise doesn't prove a call never happened.** `subprocess_result`
   swallows exceptions, so a "never calls Vitis" test must record calls and assert
   the record is empty.
+
+## Phase 4 (2026-10-01)
+
+- **Don't trust a threaded C-sim of a stream-of-blocks composite.** In Vitis 2024.1's
+  C-sim model, `write_acquire` already hands the block to the reader, and `full()` is
+  always false. The matmul store read blocks the systolic array had not filled. Fire the
+  task bodies in dependency order instead; the RTL (XSI) has the real ping-pong semantics.
+- **A `HwParam` must be an integer** (or a bool). Index a registry by integer id
+  rather than passing a name.
+- **A stream-of-blocks depth is part of its C++ type.** Every task body that touches
+  one needs the depth as a template argument, or the depth knob will not compile.
+- **Widen registers to an aligned memory format.** A 12-bit complex register would put
+  2.5 elements in a 64-bit word, and the serializer splits `re` from `im` across words.
+  A 16-bit format with the same integer bits is exact and stays on proven ground.

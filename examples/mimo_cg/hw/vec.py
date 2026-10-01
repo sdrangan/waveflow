@@ -126,6 +126,8 @@ class CgVec(FreeRunMod):
     N: HwParam[int] = DEFAULT_N
     L: HwParam[int] = DEFAULT_L
     fmt: HwParam[int] = DEFAULT_FMT
+    #: Blocks per stream-of-blocks edge (part of the C++ type, so a template argument).
+    sob_depth: HwParam[int] = 2
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -164,7 +166,13 @@ class CgVec(FreeRunMod):
             "cg_vec_task",
             "cg_vec_task.h",
             ("cmd_in", "b_blk", "s_blk", "p_blk", "x_blk"),
-            template_args=(int(self.mem_dwidth), int(self.K), int(self.N), int(self.L)),
+            template_args=(
+                int(self.mem_dwidth),
+                int(self.K),
+                int(self.N),
+                int(self.L),
+                int(self.sob_depth),
+            ),
         )
 
     def _wait(self, op: IterOp):
@@ -277,6 +285,8 @@ class CgVecLoad(FreeRunMod):
     N: HwParam[int] = DEFAULT_N
     L: HwParam[int] = DEFAULT_L
     fmt: HwParam[int] = DEFAULT_FMT
+    #: Blocks per stream-of-blocks edge (part of the C++ type, so a template argument).
+    sob_depth: HwParam[int] = 2
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -310,7 +320,13 @@ class CgVecLoad(FreeRunMod):
             "cg_vec_load_task",
             "cg_vec_load_task.h",
             ("s_in", "desc_out", "cmd_out", "b_blk", "s_blk"),
-            template_args=(int(self.mem_dwidth), int(self.K), int(self.N), int(self.L)),
+            template_args=(
+                int(self.mem_dwidth),
+                int(self.K),
+                int(self.N),
+                int(self.L),
+                int(self.sob_depth),
+            ),
         )
 
     def _read_matrix(self, fmt):
@@ -350,6 +366,8 @@ class CgVecStore(FreeRunMod):
     N: HwParam[int] = DEFAULT_N
     L: HwParam[int] = DEFAULT_L
     fmt: HwParam[int] = DEFAULT_FMT
+    #: Blocks per stream-of-blocks edge (part of the C++ type, so a template argument).
+    sob_depth: HwParam[int] = 2
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -380,7 +398,13 @@ class CgVecStore(FreeRunMod):
             "cg_vec_store_task",
             "cg_vec_store_task.h",
             ("desc_in", "p_blk", "x_blk", "cmd_out"),
-            template_args=(int(self.mem_dwidth), int(self.K), int(self.N), int(self.L)),
+            template_args=(
+                int(self.mem_dwidth),
+                int(self.K),
+                int(self.N),
+                int(self.L),
+                int(self.sob_depth),
+            ),
         )
 
     def _write(self, addr: int, re, im, fmt, echo=None):
@@ -427,7 +451,12 @@ class CgVecUnit(FreeRunMod):
         super().__post_init__()
         w = int(self.mem_dwidth)
         kw = {"mem_dwidth": w, "K": int(self.K), "N": int(self.N), "clk": self.clk}
-        kwf = {**kw, "L": int(self.L), "fmt": int(self.fmt)}
+        kwf = {
+            **kw,
+            "L": int(self.L),
+            "fmt": int(self.fmt),
+            "sob_depth": int(self.sob_depth),
+        }
         self.rx = CgVecRx(name=f"{self.name}_rx", sim=self.sim, **kw)
         self.rstream = MemRStream(
             name=f"{self.name}_memr",
@@ -609,9 +638,11 @@ class CgVecUnitSim:
         self.tb = CgVecUnitTB(name="tb", sim=Simulation(), jobs=tuple(jobs), **tb_kw)
         self.expected: list[tuple[int, np.ndarray]] = []
 
-    def write_scenario(self, root) -> None:
+    def scenario(self) -> dict:
+        """The scenario as arrays — the command words, the memory image the unit starts from, and
+        the golden image — shared by the Python simulation, C-sim and the XSI run."""
         tb = self.tb
-        root, w = Path(root), int(tb.mem_dwidth)
+        w = int(tb.mem_dwidth)
         f = hw_format(int(tb.fmt))
         mem_in = np.zeros(int(tb.mem.nwords_tot), np.uint64)
         golden = np.zeros_like(mem_in)
@@ -629,9 +660,21 @@ class CgVecUnitSim:
             )
             golden[out_off : out_off + len(exp)] = exp
             self.expected.append((out_off, exp))
-        write_burst_bundle(tb.cmd_words, root / "vectors" / "s_cmd")
-        write_burst_bundle([mem_in], root / "vectors" / "mem_in")
-        write_burst_bundle([golden], root / "vectors" / "golden")
+        return {
+            "cmd_words": tb.cmd_words,
+            "mem_in": mem_in,
+            "golden": golden,
+            "done_words": len(tb.layout) * CgDesc.nwords_per_inst(w),
+            "expected": list(self.expected),
+        }
+
+    def write_scenario(self, root) -> None:
+        tb = self.tb
+        root = Path(root)
+        sc = self.scenario()
+        write_burst_bundle(sc["cmd_words"], root / "vectors" / "s_cmd")
+        write_burst_bundle([sc["mem_in"]], root / "vectors" / "mem_in")
+        write_burst_bundle([sc["golden"]], root / "vectors" / "golden")
         tb.driver.root = root
         tb.mem.root = root
 
