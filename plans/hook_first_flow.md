@@ -109,8 +109,12 @@ So that "not much worse" is a number, not a feeling.
 > **TOOLING DONE (2026-10-01); the runs are not.**
 > - **`waveflow blind-test --no-waveflow`**: no MCP server, the Waveflow entries
 >   off the allowlist, the operator's own `python`, and a first message saying
->   to use Vitis HLS directly. `examples/mcp_test/rotate_vitis.md` is `rotate.md`
->   with its Waveflow first line made neutral. **Caveat measured here:** the
+>   to use Vitis HLS directly. **One spec for both arms:**
+>   `examples/mcp_test/rotate_func.md` names no tooling; the Waveflow arm's
+>   first message says "with Waveflow ... stream_inband is the reference
+>   design". It is the rotation *functionally only* (bit-exact Python model,
+>   csim bit-exact at 32 and 64, csynth completes; no cosim or timing), and its
+>   report must state the layout and top functions an adapter needs. **Caveat measured here:** the
 >   operator's `C:/Python314` can import Waveflow; `config.json` records it
 >   (`waveflow_importable`). The agent is never told it exists.
 > - **The grader**, `examples/mcp_test/grader/` (not a TOC example, so not in
@@ -129,7 +133,7 @@ So that "not much worse" is a number, not a feeling.
 >   in the arm's folder for that reason.
 > - **Not done:** the 2-3 baseline runs. Each takes hours of the operator's
 >   Claude login, so they are the operator's to start:
->   `waveflow blind-test --prompt examples/mcp_test/rotate_vitis.md --no-waveflow`.
+>   `waveflow blind-test --prompt examples/mcp_test/rotate_func.md [--no-waveflow]`.
 
 ### Stage 1: the code-generation change
 

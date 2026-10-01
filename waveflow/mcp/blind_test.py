@@ -109,9 +109,16 @@ DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
 
 #: The no-Waveflow arm (``--no-waveflow``): the same harness and allowlist, less every
 #: Waveflow entry, so the two arms differ only in Waveflow.  The plan's Stage 0 baseline.
+#: The arm is chosen here, in the first message, not in the spec: both arms read the SAME
+#: spec file (``examples/mcp_test/rotate_func.md``), which names no tooling.
 def baseline_allowed(allowed) -> list[str]:
     return [a for a in allowed if "waveflow" not in a.lower()]
 
+
+WAVEFLOW_FIRST = (
+    "Build the accelerator specified in {spec}, in this folder, with Waveflow: its MCP "
+    "server is available, and its stream_inband example is the reference design to follow."
+)
 
 NO_WAVEFLOW_FIRST = (
     "Build the accelerator specified in {spec}, in this folder. Use Vitis HLS directly: "
@@ -659,8 +666,8 @@ def run_blind_test(
     }
     mcp_config.write_text(json.dumps({"mcpServers": servers}, indent=2), encoding="utf-8")
 
-    first = message or (NO_WAVEFLOW_FIRST.format(spec=prompt.name) if no_waveflow
-                        else f"Build the accelerator specified in {prompt.name}, in this folder.")
+    first = message or (NO_WAVEFLOW_FIRST if no_waveflow else WAVEFLOW_FIRST).format(
+        spec=prompt.name)
     allowed = [*DEFAULT_ALLOWED_TOOLS, *(extra_allowed or [])]
     config = {
         "prompt": str(prompt),
@@ -739,7 +746,7 @@ def _resume(
         # and the agent did nothing.  Start the phase over.
         spec = next((c for c in config.get("copied", []) if c.endswith(".md")), "the spec")
         first = message or config.get("first_message") or (
-            f"Build the accelerator specified in {spec}, in this folder.")
+            NO_WAVEFLOW_FIRST if config.get("no_waveflow") else WAVEFLOW_FIRST).format(spec=spec)
         if not silent:
             _echo("No session was started before the interruption; starting over.")
     else:

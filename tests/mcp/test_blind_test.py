@@ -188,7 +188,7 @@ def test_live_log_shows_paths_relative_to_the_folder(tmp_path, capsys):
 
 def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
     """Stage 0's baseline: no server, no Waveflow tools, the operator's Python."""
-    spec = tmp_path / "src" / "rotate_vitis.md"
+    spec = tmp_path / "src" / "rotate_func.md"
     spec.parent.mkdir()
     spec.write_text("Write and test a Vitis kernel.", encoding="utf-8")
     seen = {}
@@ -204,10 +204,13 @@ def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
     assert seen["config"]["no_waveflow"] is True
     assert not [a for a in seen["config"]["allowed"] if "waveflow" in a.lower()]
     assert "Monitor" in seen["config"]["allowed"] and "Bash(python:*)" in seen["config"]["allowed"]
-    assert "Vitis HLS directly" in seen["first"] and "rotate_vitis.md" in seen["first"]
+    assert "Vitis HLS directly" in seen["first"] and "rotate_func.md" in seen["first"]
+    assert "Waveflow" not in seen["first"]
 
     bt.run_blind_test(spec, tmp_path / "wf", silent=True)
     assert "waveflow" in seen["mcp"]["mcpServers"] and "mcp__waveflow" in seen["config"]["allowed"]
+    # The same spec file; the arm is in the first message only.
+    assert "with Waveflow" in seen["first"] and "stream_inband" in seen["first"]
 
 
 def test_the_no_waveflow_arm_keeps_the_operators_path(monkeypatch):

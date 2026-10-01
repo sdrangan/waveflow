@@ -1,7 +1,7 @@
 # The rotate grader
 
-An independent check of a blind-test run of [`rotate.md`](../rotate.md) (Waveflow arm) or
-[`rotate_vitis.md`](../rotate_vitis.md) (no-Waveflow arm).  Each arm writes its own tests
+An independent check of a blind-test run of [`rotate_func.md`](../rotate_func.md) -- the
+spec both arms read -- or of the fuller [`rotate.md`](../rotate.md).  Each arm writes its own tests
 and passes them; this is the test neither arm wrote.  `plans/hook_first_flow.md`, Stage 0.
 
 ## What it does
@@ -24,7 +24,8 @@ Error handling is not graded: the spec says only "halts on error and sets a stat
 ## Grading a run
 
 Write an **adapter** for the run -- copy [`reference/rotate_ref_adapter.py`](reference/rotate_ref_adapter.py)
--- from the arm's **report and layout notes**, never from its code (an arm's packing bug
+-- from the arm's **report** (`rotate_func.md` makes the report state the word layout, the
+top functions and how a transaction is driven, for exactly this purpose), never from its code (an arm's packing bug
 must not be graded against itself).  It gives:
 
 | Name | What |

@@ -125,7 +125,7 @@ review, run with `--no-approve`, read the agent's work, and continue by hand.
 
 | Option | Effect |
 | --- | --- |
-| `--message "…"` | the first message (default: *Build the accelerator specified in `<spec>`, in this folder.*) |
+| `--message "…"` | the first message (default: *Build the accelerator specified in `<spec>`, in this folder, with Waveflow: its MCP server is available, and its stream_inband example is the reference design to follow.*) |
 | `--model <name>` | the Claude model (default: Claude Code's default) |
 | `--allow "<tool>"` | add a tool to the allowlist, e.g. `--allow "Bash(make:*)"`; repeatable |
 | `--timeout <hours>` | limit on each run (default 4) |
@@ -206,14 +206,18 @@ A blind test on its own says what an agent does *with* Waveflow.  Whether that i
 worse than not using it needs a second run that differs **only** in Waveflow:
 
 ```
-waveflow blind-test --prompt examples/mcp_test/rotate_vitis.md --no-waveflow
+waveflow blind-test --prompt examples/mcp_test/rotate_func.md                  # with Waveflow
+waveflow blind-test --prompt examples/mcp_test/rotate_func.md --no-waveflow    # without
 ```
 
 `--no-waveflow` keeps everything else the same -- the fresh folder, the allowlist, the
 non-interactive harness -- but starts no MCP server, takes the Waveflow entries off the
 allowlist, leaves `python` as the operator's shell resolves it, and tells the agent to use
-Vitis HLS directly, with Python and numpy for the models.  `rotate_vitis.md` is
-`rotate.md` with its first line, which names Waveflow, made neutral.  If the operator's
+Vitis HLS directly, with Python and numpy for the models.  **Both arms read the same
+spec**, which names no tooling; the arm is chosen only by the first message.
+[`rotate_func.md`](https://github.com/sdrangan/waveflow/tree/main/examples/mcp_test/rotate_func.md)
+is written for this: the rotation, functionally only -- a bit-exact Python model and a
+kernel that matches it in C simulation, with no co-simulation or timing.  If the operator's
 Python can import Waveflow, `config.json` says so (`waveflow_importable`); the agent is
 never told it exists.
 
