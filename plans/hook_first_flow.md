@@ -291,6 +291,36 @@ From PR #209's list:
 
 **#4 (no burst without TLAST) is resolved by Stage 2.**
 
+> **DONE (2026-10-01, branch `hook-first-flow`).**
+> - **#6 needed no code.** `param_supports = {"bw64": {"in_bw": 64, "out_bw": 64}}`
+>   on a body-only module emits `poly` and `poly_bw64`, both calling the one
+>   templated body. Measured on Vitis: `poly_bw64` csim bit-exact against
+>   `poly_eval` with an odd sample count (half-full last word), csynth II = 1.
+>   Documented in `custom_hooks/body_only.md` and `process.md`; a fast test pins
+>   the two tops and the single body.
+> - **#1:** the validator skips every name the text imports, so a borrowed
+>   schema (or the abstract `ComplexField`) is no longer reported as defined.
+> - **#2:** `write_uint32_file` takes a `DataArray` and its element type, like
+>   `write_array`, with the same mismatch check.
+> - **#5:** `ComplexField.specialize` inherits the inner's non-default
+>   `include_dir`, so a complex element's array utils land in `include/`.
+> - **`SeqTB`:** `if local.field == value` on a schema the TB read or popped now
+>   lowers -- it was failing in the extractor (kernel scope) **and** had no TB
+>   emitter at all. A `for` / `while`, or an `if` the extractor cannot lower,
+>   now says what a `SeqTB` can express and points to `wf::play_stream` and
+>   `body_only.md`.
+> - **#8 is a Vitis 2025.1 defect, reproduced.** `open_project vitis/w32_t1`
+>   records the *design* file relative to a one-level project (`../gen/poly.cpp`,
+>   even from an absolute `add_files` path); csim's makefile drops it and the
+>   link fails with `undefined symbol: poly(...)`. `cd vitis; open_project w32_t1`
+>   works (all five scenarios bit-exact). The rule is in `process.md`.
+> - **#7 did not reproduce** in the new structure: the example's steps all go
+>   stale and fresh correctly. One trap seen while testing #8 and worth knowing:
+>   `--through gen_kernel` does not run `gen_include` (not an ancestor), so a
+>   stale `include/` survives it.
+> - **`run_vitis_hls(args=...)`** now raises at once: `vitis-run` has no
+>   `--tclargs`. The message names the `env=` route.
+
 ### Stage 5: frame, process and scaffold
 
 - **The frame.** Either a new frame for this flow or `stream_inband`

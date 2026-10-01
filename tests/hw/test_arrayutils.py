@@ -5,7 +5,7 @@ import pytest
 
 from waveflow.build.build import BuildConfig
 from waveflow.hw.arrayutils import gen_array_utils, get_nwords, read_uint32_file, write_array, write_uint32_file
-from waveflow.hw.dataschema import FloatField, IntField
+from waveflow.hw.dataschema import DataArray, FloatField, IntField
 
 
 F32 = FloatField.specialize(bitwidth=32)
@@ -22,6 +22,24 @@ def test_write_uint32_file_roundtrip_int16(tmp_path: Path):
 
     assert np.array_equal(words, expected)
     assert np.array_equal(got, data)
+
+
+def test_write_uint32_file_takes_a_dataarray_like_write_array(tmp_path: Path):
+    """A DataArray carries its element type, so write_uint32_file needs no elem_type."""
+    data = np.array([-5, 0, 7, 32767, -32768], dtype=np.int16)
+    arr = DataArray.specialize(element_type=S16, max_shape=(data.size,), static=True)()
+    arr.val = data
+
+    out_path = write_uint32_file(arr, None, tmp_path / "da.bin")
+    expected = np.asarray(write_array(data, elem_type=S16, word_bw=32), dtype="<u4")
+    assert np.array_equal(np.fromfile(out_path, dtype="<u4"), expected)
+
+    write_uint32_file(arr, S16, tmp_path / "same.bin", nwrite=2)          # same type: fine
+    assert np.fromfile(tmp_path / "same.bin", dtype="<u4").size == 1
+    with pytest.raises(TypeError, match="elem_type mismatch"):
+        write_uint32_file(arr, F32, tmp_path / "bad.bin")
+    with pytest.raises(TypeError, match="elem_type must be provided"):
+        write_uint32_file(data, None, tmp_path / "bad.bin")
 
 
 def test_write_uint32_file_nwrite_selects_prefix(tmp_path: Path):

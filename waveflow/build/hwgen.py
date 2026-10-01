@@ -1919,6 +1919,18 @@ class TbCodegenCtx:
         )
 
 
+def _emit_tb_case(stmt: CaseStmt, ctx: TbCodegenCtx) -> str:
+    """``if local.field == value:`` on a testbench local; branches are TB statements."""
+    lhs = stmt.var.name if stmt.field is None else f"{stmt.var.name}.{stmt.field}"
+    lines = [f"{ctx.pad()}if ({lhs} {stmt.op} {_emit_expr(stmt.value, ctx)}) {{",
+             tb_to_cpp(stmt.if_true, ctx.child()),
+             f"{ctx.pad()}}}"]
+    if stmt.if_false is not None:
+        lines[-1] = f"{ctx.pad()}}} else {{"
+        lines += [tb_to_cpp(stmt.if_false, ctx.child()), f"{ctx.pad()}}}"]
+    return "\n".join(lines)
+
+
 def tb_to_cpp(stmt: HwStmt, ctx: TbCodegenCtx) -> str:
     """Emit C++ source for a testbench-mode statement."""
     if isinstance(stmt, SeqStmt):
@@ -1943,6 +1955,8 @@ def tb_to_cpp(stmt: HwStmt, ctx: TbCodegenCtx) -> str:
         return _emit_tb_regmap_file_read(stmt, ctx)
     if isinstance(stmt, TbStatusJsonStmt):
         return _emit_tb_status_json(stmt, ctx)
+    if isinstance(stmt, CaseStmt):
+        return _emit_tb_case(stmt, ctx)
     raise NotImplementedError(
         f"Testbench codegen for {type(stmt).__name__} not implemented yet"
     )

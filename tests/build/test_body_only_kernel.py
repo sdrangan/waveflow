@@ -141,3 +141,27 @@ def test_cpp_body_must_name_a_method() -> None:
 
     with pytest.raises(SynthesisError, match="has no method 'nope'"):
         kernel_files_to_str(Missing, output_dir="gen", impl_dir=".")
+
+
+@dataclass
+class BodyKernelWidths(BodyKernel):
+    """One module, two word widths: param_supports emits a top per variant."""
+
+    cpp_kernel_name: ClassVar[str | None] = "bodyw"
+    cpp_namespace: ClassVar[str | None] = "bodyw_impl"
+    param_supports: ClassVar[dict] = {"w64": {"in_bw": 64, "out_bw": 64}}
+
+
+def test_every_width_variant_calls_the_same_templated_body() -> None:
+    """Several widths need no second module: each variant's top calls the one body.
+
+    Measured on Vitis HLS 2025.1 with stream_inband's body (2026-10-01): the 64-bit
+    variant is bit-exact against poly_eval in csim, an odd sample count included, and
+    pipelines at II = 1 -- two samples per clock.
+    """
+    files = kernel_files_to_str(BodyKernelWidths, output_dir="gen", impl_dir=".")
+    top = files["bodyw.cpp"]
+    assert "void bodyw(" in top and "void bodyw_w64(" in top
+    assert "axi4s_word<64>>& s_in" in top
+    assert top.count(f"bodyw_impl::run({', '.join(ARGS)});") == 2
+    assert files["bodyw.hpp"].count("void run(") == 1          # one body, templated

@@ -113,6 +113,10 @@ reached and what limits it.
    its ports and `VitisRegMap`. Its Python `body()` is a thin port wrapper
    around `<name>_eval`, with the timing model (`proc_latency`, `proc_ii`).
    - `waveflow_search("body-only kernel cpp_body")`, `waveflow_find_usage("cpp_body")`
+   - **More than one word width?** Do not write a second module: add
+     `param_supports = {"bw64": {"in_bw": 64, "out_bw": 64}}` and every width
+     gets its own generated top (`<name>_bw64`) calling the same templated
+     body. `waveflow_search("param_supports width variant")`
 3. **`<name>_body_impl.tpp`**: the whole kernel body in C++ -- the command
    loop, framing, compute and status (`halted = 1;` etc., through the
    reference arguments). Keep its `#pragma HLS INLINE`. Write each
@@ -146,6 +150,12 @@ reached and what limits it.
   plays a scenario's whole stimulus, then drains the outputs. No scenario may
   make an input depend on an earlier output. A design that needs that wants a
   `FreeRunMod` with the concurrent BFM testbench, which is a different frame.
+- **Keep each Vitis project one directory deep.** Vitis HLS 2025.1 records a
+  design file's path relative to a one-level project, so
+  `open_project vitis/w32` silently drops the kernel from csim and the link
+  fails with `undefined symbol: <kernel>(...)` -- a Vitis defect, not your
+  code. To group projects, `cd` into the folder first, then
+  `open_project w32`, and give `add_files` absolute paths.
 - A design is accepted only when **every comparison** of §F7 passes. When one
   fails, say **which layer** failed -- the function, the protocol model, the
   module, the C++ body -- before changing anything.

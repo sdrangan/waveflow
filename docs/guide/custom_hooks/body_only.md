@@ -67,8 +67,18 @@ void poly(hls::stream<streamutils::axi4s_word<32>>& s_in,
 
 The header declares the body with **the same parameters**.  The register fields are
 references, so the body writes status directly -- `halted = 1;` -- exactly as a
-hand-written Vitis kernel would.  The body is a template on the streams' width
-parameters, so one body serves every width variant.
+hand-written Vitis kernel would.
+
+**Several word widths need no second module.**  The body is a template on the streams'
+width parameters, and `param_supports` asks for one generated top per variant:
+
+```python
+param_supports: ClassVar[dict] = {"bw64": {"in_bw": 64, "out_bw": 64}}
+```
+
+gives `poly` (32-bit) and `poly_bw64` (64-bit) in the same `gen/poly.cpp`, both calling the
+same body.  Synthesize or simulate a variant by naming it as the Vitis top
+(`set_top poly_bw64`).
 
 Generating the boundary is worth it because it is easy to get subtly wrong by hand: a
 misspelled pragma often still compiles, into a different interface, and the register map

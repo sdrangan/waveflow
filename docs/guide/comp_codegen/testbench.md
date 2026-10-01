@@ -102,9 +102,9 @@ kernel bodies, so it has the same fixed vocabulary:
 | Expressible | Not expressible |
 | --- | --- |
 | creating schemas, reading and writing them from files | a `for` loop |
-| `push` / `push_array` / `pop` / `pop_array`, with counts read from data | an `if` on the testbench's own data |
-| `dut.run()`, register-map reads and writes, status JSON | a loop that ends (`while True` has no `break`) |
-| | a burst without TLAST (`push_array` always ends with TLAST) |
+| `push` / `push_array` / `pop` / `pop_array`, with counts read from data | an `if` on anything but `==` / `!=` against a constant |
+| `dut.run()`, register-map reads and writes, status JSON | a `while` loop |
+| `if local.field == value:` on a schema it read or popped | a burst without TLAST (`push_array` always ends with TLAST) |
 
 So the **shape** of a `SeqTB` -- how many transactions it sends and receives -- is fixed when it is
 written.  A test with several scenarios of different shapes, or with malformed transactions, does not

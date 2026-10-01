@@ -111,13 +111,13 @@ def test_scope_restricts_results() -> None:
 
 def test_generated_code_is_excluded_by_default() -> None:
     """Generated C++ is readable on request, never a default search result."""
-    default = waveflow_search("poly evaluate kernel", k=20)["hits"]
+    default = waveflow_search("poly kernel interface pragma", k=20)["hits"]
     assert not any(h.get("note") for h in default), (
         "a default search returned a file tagged as generated or build output"
     )
 
     with_gen = waveflow_search(
-        "poly evaluate kernel", k=20, include_generated=True
+        "poly kernel interface pragma", k=20, include_generated=True
     )["hits"]
     tagged = [h for h in with_gen if h.get("note")]
     assert tagged, "include_generated=True returned no generated files at all"
