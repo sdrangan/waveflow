@@ -173,6 +173,23 @@ by-reference form and Vitis.
 **Gate:** a toy kernel's csim replays a 3-transaction stream that includes a
 burst with no TLAST. Python reads back the identical words and TLAST flags.
 
+> **DONE (2026-10-01, branch `hook-first-flow`).**
+> - **Python:** `burst_io` gained an optional `tlast.bin` (one `uint8` per
+>   burst; absent means all TLAST, so existing bundles are unchanged byte for
+>   byte), plus `StreamBurst`, `write_bursts` and `read_bursts`.
+> - **C++:** `waveflow/build/bundle_tb.h` provides `wf::play_stream<W>` and
+>   `wf::record_stream<W>` (up to 64-bit words), shipped by `StreamUtilsStep`
+>   next to `streamutils_*.h`.
+> - **No transaction splitter:** splitting a recorded stream into a design's
+>   transactions is design-specific, so the checker does it, not a framework
+>   function.
+> - **Gate** (`tests/build/test_bundle_tb.py`, `-m vitis`, csim, about 8 s):
+>   round-trips at 32 and 64 bits, including values above 2^32. A missing
+>   TLAST on the *last* burst survives exactly. A missing TLAST *mid-stream*
+>   is recorded merged with the next burst, because TLAST is the only
+>   boundary on the wire, so that is what any kernel would see. The helper
+>   documents this rather than inventing a boundary.
+
 ### Stage 3: the reference example
 
 Convert `examples/stream_inband` to the convention. It is the example the lab

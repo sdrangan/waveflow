@@ -8,6 +8,11 @@ call-signature change.  A bundle currently holds:
 - **``bounds.bin``** — the *end* word-index of each burst (cumulative), ``uint64``, so burst ``k`` is
   ``words[bounds[k-1]:bounds[k]]`` and ``bounds[-1] == len(words)``.  End-indices (not lengths) let
   the reader slice directly, and the final entry doubles as a total-length check.
+- **``tlast.bin``**  — optional: one ``uint8`` per burst, ``1`` if its last word carries TLAST.
+  Absent means every burst ends with TLAST (all bundles written before the flag existed).  A ``0``
+  is how a stimulus sends a malformed transaction; the C++ side is ``waveflow/build/bundle_tb.h``
+  (``wf::play_stream`` / ``wf::record_stream``), and :func:`write_bursts` / :func:`read_bursts`
+  are the Python side.
 - **``meta.json``**  — a small manifest: ``word_bytes``, ``n_bursts``, ``n_words``.  It makes the
   word width *data* rather than an implicit convention, so a mismatch is caught rather than silently
   truncating (a 32-bit store would truncate a 64-bit stream's ``src|dst<<32`` to ``src``).  A caller
@@ -34,6 +39,7 @@ This is framework infra, not example code: nothing here knows any schema.  The t
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +54,59 @@ BOUNDS_NAME = "bounds.bin"
 META_NAME = "meta.json"
 
 
-def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | None = None) -> Path:
+TLAST_NAME = "tlast.bin"
+
+
+@dataclass(frozen=True)
+class StreamBurst:
+    """One burst of a stream as files hold it: its words, and whether its last word has TLAST.
+
+    ``tlast=False`` is how a stimulus describes a malformed transaction (a missing TLAST).  On
+    the wire TLAST is the only boundary, so a *recorded* stream splits at TLAST and nowhere
+    else: see ``bundle_tb.h``, the C++ side of the same format.
+    """
+
+    words: np.ndarray
+    tlast: bool = True
+
+
+def write_bursts(bursts: list[StreamBurst], bundle_dir: str | Path,
+                 extra: dict | None = None) -> Path:
+    """Write :class:`StreamBurst` s as a bundle, including their TLAST flags.
+
+    The stimulus side of the shared-stimulus flow: Python writes each scenario's input stream
+    once, and both the Python model and the C++ testbench (``wf::play_stream``) read it.
+    """
+    return write_burst_bundle([b.words for b in bursts], bundle_dir, extra=extra,
+                              tlast=[b.tlast for b in bursts])
+
+
+def read_bursts(bundle_dir: str | Path) -> list[StreamBurst]:
+    """Read a bundle as :class:`StreamBurst` s: the words and TLAST flag of each burst.
+
+    The capture side: what ``wf::record_stream`` wrote from a C++ testbench, or what
+    :func:`write_bursts` wrote from Python.  A bundle without ``tlast.bin`` reads as all
+    TLAST, which is what every bundle written before the flag existed meant.
+    """
+    words = read_burst_bundle(bundle_dir)
+    return [StreamBurst(w, t) for w, t in zip(words, read_burst_tlast(bundle_dir))]
+
+
+def read_burst_tlast(bundle_dir: str | Path) -> list[bool]:
+    """The TLAST flag of every burst: ``tlast.bin`` if present, else all ``True``."""
+    d = Path(bundle_dir)
+    n = int(np.fromfile(d / BOUNDS_NAME, dtype=_WORD_DTYPE).size)
+    p = d / TLAST_NAME
+    if not p.exists():
+        return [True] * n
+    flags = np.fromfile(p, dtype=np.uint8)
+    if flags.size != n:
+        raise ValueError(f"bundle {d}: {TLAST_NAME} has {flags.size} entries for {n} bursts")
+    return [bool(f) for f in flags]
+
+
+def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | None = None,
+                       tlast: list[bool] | None = None) -> Path:
     """Write a list of word bursts to a bundle directory.
 
     Parameters
@@ -58,6 +116,9 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | 
     bundle_dir : path
         The bundle directory.  Created (with parents) as needed; its ``words.bin`` / ``bounds.bin`` /
         ``meta.json`` members are written.
+    tlast : list of bool, optional
+        One TLAST flag per burst, written to ``tlast.bin``; ``False`` marks a burst whose last
+        word has no TLAST.  Omitted: no file, which reads as every burst ending with TLAST.
     extra : dict, optional
         Additional manifest entries, merged into ``meta.json`` beside the four this module owns.
         **Pass-through, not interpretation**: nothing here knows what they mean, which is what keeps
@@ -88,6 +149,14 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | 
 
     words.tofile(d / WORDS_NAME)
     bounds.tofile(d / BOUNDS_NAME)
+    # Per-burst TLAST flags, only when given: a bundle without them means "every burst ends
+    # with TLAST", so existing bundles are unchanged byte for byte.
+    if tlast is not None:
+        if len(tlast) != len(arrs):
+            raise ValueError(f"bundle {d}: {len(tlast)} TLAST flags for {len(arrs)} bursts")
+        np.asarray([1 if t else 0 for t in tlast], dtype=np.uint8).tofile(d / TLAST_NAME)
+    elif (d / TLAST_NAME).exists():
+        (d / TLAST_NAME).unlink()   # a stale flag file would describe the previous bursts
     meta = {
         "format": _FORMAT,
         "word_bytes": _WORD_BYTES,
