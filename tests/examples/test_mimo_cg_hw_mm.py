@@ -115,11 +115,12 @@ def _synth(K: int, cmul: int) -> dict:
 
 
 @pytest.mark.vitis
-@pytest.mark.parametrize("K", [4, 8, 16])
-def test_mm_unit_csynth_meets_4_ns(K):
-    """csynth of CgMmUnit (W12g8, R = K, C = 4, cmul = 4) into its build directory."""
+@pytest.mark.parametrize(("K", "cmul"), [(4, 4), (8, 4), (16, 4), (4, 3)])
+def test_mm_unit_csynth_meets_4_ns(K, cmul):
+    """csynth of CgMmUnit (W12g8, R = K, C = 4) into its build directory; K = 4 is built with
+    both products for the step 4.7 RTL gate."""
     _require_vitis()
-    assert _synth(K, 4)["DSP"] > 0
+    assert _synth(K, cmul)["DSP"] > 0
 
 
 @pytest.mark.vitis
