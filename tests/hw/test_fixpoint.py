@@ -243,3 +243,14 @@ def test_div_then_quantize_saturates_or_wraps():
     wrap = quantize(wide, FixedField.specialize(12, 5, o_mode=WRAP))
     assert to_real(sat)[0] == pytest.approx(16 - 2.0 ** -7)
     assert to_real(wrap)[0] != to_real(sat)[0]
+
+
+def test_truncate_sign_extends_at_63_bits():
+    """``truncate`` once overflowed int64 at wid == 63 (``y - (1 << 63)``); a 63-bit wrap is
+    reachable from legal <= 64-bit formats, e.g. a widened ``div`` (plans/mimo_cg step 2.3)."""
+    rng = np.random.default_rng(3)
+    for wid in (8, 32, 62, 63):
+        x = rng.integers(np.iinfo(np.int64).min, np.iinfo(np.int64).max, size=500, dtype=np.int64)
+        x[:4] = [0, -1, (1 << (wid - 1)) - 1, -(1 << (wid - 1))]
+        ref = [((int(v) + (1 << (wid - 1))) % (1 << wid)) - (1 << (wid - 1)) for v in x]
+        assert fixputils.truncate(x, wid, True).tolist() == ref, wid

@@ -93,8 +93,10 @@ def truncate(
     mask = (1 << wid) - 1
     y = (arr.astype(np.int64) & mask)
     if signed:
+        # Sign-extend as (y ^ s) - s: every intermediate stays inside int64, even at
+        # wid == 63, where the textbook ``y - (1 << wid)`` overflows.
         signbit = 1 << (wid - 1)
-        y = np.where(y >= signbit, y - (1 << wid), y)
+        y = (y ^ signbit) - signbit
     return y
 
 
