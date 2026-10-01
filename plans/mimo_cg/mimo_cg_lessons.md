@@ -169,3 +169,6 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   2 workers gave about 3× the throughput of 1-Mbit chunks with 8.
 - **Spawned workers re-import `__main__`.** A benchmark piped through stdin
   breaks the pool; use a script file with an `if __name__ == "__main__"` guard.
+- **Background tasks have a time limit (30 min by default, 2 h at most).** A long
+  sweep launched with the default was killed at 30 min. Make long runs resumable
+  and split them into subsets (here `--case` halves) that each fit the limit.
