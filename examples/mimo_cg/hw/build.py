@@ -366,3 +366,43 @@ def generate_mm_unit(
     }
     schemas = [CgMmUnitCmd, CgDesc, CgIterCmd, CgCmd, MemRCmd, MemWCmd]
     return generate_top(CgMmUnit, params, MM_TOP, Path(out_dir), schemas, mem_dw)
+
+
+# --- the integrated detector -----------------------------------------------------------------
+
+DET_TOP = "cg_detector"
+
+
+def generate_detector(
+    out_dir: Path | None = None,
+    *,
+    K: int = 4,
+    N: int = DEFAULT_N,
+    L: int = 4,
+    R: int = 0,
+    C: int = 4,
+    cmul: int = 4,
+    fmt: int = 0,
+    mem_dw: int = DEFAULT_MEM_DW,
+    cmd_depth: int = 2,
+    sob_depth: int = 2,
+) -> Path:
+    """Generate the ``CgDetector`` DUT for one configuration (``R = 0`` means ``R = K``)."""
+    from examples.mimo_cg.hw.detector import CgDetector
+
+    if out_dir is None:
+        out_dir = build_dir(DET_TOP, K, fmt)
+    params = {
+        "mem_dwidth": mem_dw,
+        "K": K,
+        "N": N,
+        "L": L,
+        "R": R,
+        "C": C,
+        "cmul": cmul,
+        "fmt": fmt,
+        "cmd_depth": cmd_depth,
+        "sob_depth": sob_depth,
+    }
+    schemas = [CgCmd, CgDesc, CgIterCmd, MemRCmd, MemWCmd]
+    return generate_top(CgDetector, params, DET_TOP, Path(out_dir), schemas, mem_dw)
