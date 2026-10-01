@@ -33,6 +33,10 @@ then α = 0 (zero dividend), β = 0 (guard), and R, P stay zero.  A zero ``ps`` 
 "Bit-exact" covers the CG from the quantized A/M and B/M onward; the Gram matrix and the
 matched filter are floating point (gate 2.1 decision 6).
 
+The Phase 4 hardware splits the loop the same way (plan §14, gate 4.0): :func:`mm_step` is step 1,
+the matrix-multiply block; :func:`vec_step` is steps 2–9, the vector unit; :func:`cg_init` is the
+start, and :func:`cg_fixed` composes them.
+
 Representation
 --------------
 Internally a complex register is a pair of int64 stored arrays ``(re, im)`` with one
@@ -274,6 +278,82 @@ class CgFixedResult:
         )(flat)
 
 
+@dataclass
+class CgState:
+    """The vector unit's CG state between iterations, as stored integers.
+
+    ``X``, ``R`` and ``P`` are ``(re, im)`` pairs of shape ``(..., K, N)`` in the register
+    formats ``X``, ``R`` and ``P``; ``rz`` has shape ``(..., 1, N)`` in format ``rz``.
+    """
+
+    xr: np.ndarray
+    xi: np.ndarray
+    rr: np.ndarray
+    ri: np.ndarray
+    pr: np.ndarray
+    pi: np.ndarray
+    rz: np.ndarray
+
+
+def cg_init(br: np.ndarray, bi: np.ndarray, formats: CgFormats) -> CgState:
+    """The state before iteration 1, from the stored ``B``: ``X = 0``, ``R = q_R(B)``,
+    ``P = q_P(R)``, ``rz = q_rz(Σ|R|²)``."""
+    f = formats
+    rr, ri = _q(br, f.B, f.R), _q(bi, f.B, f.R)
+    pr, pi = _q(rr, f.R, f.P), _q(ri, f.R, f.P)
+    rz_full, rz_fmt = _column_dot(rr, ri, f.R, rr, ri, f.R)
+    zeros = np.zeros(np.shape(br), np.int64)
+    return CgState(zeros, zeros.copy(), rr, ri, pr, pi, _q(rz_full, rz_fmt, f.rz))
+
+
+def mm_step(
+    ar: np.ndarray, ai: np.ndarray, pr: np.ndarray, pi: np.ndarray, formats: CgFormats
+) -> tuple[np.ndarray, np.ndarray]:
+    """Register step 1, the matrix-multiply block: ``S = q_S(A @ P)``, exact before ``q_S``."""
+    f = formats
+    sr, si, s_fmt = _matmul(ar, ai, f.A, pr, pi, f.P)
+    return _q(sr, s_fmt, f.S), _q(si, s_fmt, f.S)
+
+
+def vec_step(
+    state: CgState,
+    sr: np.ndarray,
+    si: np.ndarray,
+    formats: CgFormats,
+    *,
+    residual: Callable[[np.ndarray, np.ndarray], tuple] | None = None,
+) -> tuple[CgState, dict[str, np.ndarray]]:
+    """Register steps 2–9, the vector unit: from the state and ``S``, the next state.
+
+    ``residual(xr, xi)`` gives the exact pre-quantize residual ``(re, im, Format)`` of the
+    explicit form, ``B − A X``; ``None`` (the hardware) uses the recurrence ``R − S α``.
+    Returns the new state, whose ``rz`` is ``rz'``, and ``{"ps", "alpha", "beta"}``.
+    """
+    f = formats
+    rz_w_fmt = _widened(f.rz, f.g_div)
+    ps_full, ps_fmt = _column_dot(state.pr, state.pi, f.P, sr, si, f.S)  # 2
+    ps = _q(ps_full, ps_fmt, f.ps)
+    q, q_fmt = fx.div(_q(state.rz, f.rz, rz_w_fmt), rz_w_fmt, ps, f.ps)  # 3
+    alpha = _q(q, q_fmt, f.alpha)
+    tr, ti, t_fmt = _scale(state.pr, state.pi, f.P, alpha, f.alpha)  # 4
+    xr, xi, x_fmt = _addsub(fx.add, state.xr, state.xi, f.X, tr, ti, t_fmt)
+    xr, xi = _q(xr, x_fmt, f.X), _q(xi, x_fmt, f.X)
+    if residual is not None:  # 5
+        rr, ri, r_fmt = residual(xr, xi)
+    else:
+        tr, ti, t_fmt = _scale(sr, si, f.S, alpha, f.alpha)
+        rr, ri, r_fmt = _addsub(fx.sub, state.rr, state.ri, f.R, tr, ti, t_fmt)
+    rr, ri = _q(rr, r_fmt, f.R), _q(ri, r_fmt, f.R)
+    rz_full, rz_fmt = _column_dot(rr, ri, f.R, rr, ri, f.R)  # 6
+    rz = _q(rz_full, rz_fmt, f.rz)
+    q, q_fmt = fx.div(_q(rz, f.rz, rz_w_fmt), rz_w_fmt, state.rz, f.rz)  # 7
+    beta = _q(q, q_fmt, f.beta)
+    tr, ti, t_fmt = _scale(state.pr, state.pi, f.P, beta, f.beta)  # 9 (8 is rz = rz')
+    pr, pi, p_fmt = _addsub(fx.add, rr, ri, f.R, tr, ti, t_fmt)
+    pr, pi = _q(pr, p_fmt, f.P), _q(pi, p_fmt, f.P)
+    return CgState(xr, xi, rr, ri, pr, pi, rz), {"ps": ps, "alpha": alpha, "beta": beta}
+
+
 def cg_fixed(
     A: np.ndarray,
     B: np.ndarray,
@@ -286,6 +366,9 @@ def cg_fixed(
     on_iteration: Callable[[int, dict[str, tuple]], None] | None = None,
 ) -> CgFixedResult | dict[int, CgFixedResult]:
     """Bit-exact fixed-point multi-RHS CG on ``(A/scale) X = B/scale``, from ``X = 0``.
+
+    The loop is :func:`cg_init`, then per iteration :func:`mm_step` (step 1) and
+    :func:`vec_step` (steps 2–9): the split of the Phase 4 hardware blocks.
 
     Parameters
     ----------
@@ -321,58 +404,36 @@ def cg_fixed(
     shape = np.broadcast_shapes(ar.shape[:-2], br.shape[:-2]) + br.shape[-2:]
     br, bi = np.broadcast_to(br, shape), np.broadcast_to(bi, shape)
 
-    xr = np.zeros(shape, np.int64)
-    xi = np.zeros(shape, np.int64)
-    rr, ri = _q(br, f.B, f.R), _q(bi, f.B, f.R)
-    pr, pi = _q(rr, f.R, f.P), _q(ri, f.R, f.P)
-    rz_full, rz_fmt = _column_dot(rr, ri, f.R, rr, ri, f.R)
-    rz = _q(rz_full, rz_fmt, f.rz)
-    rz_w_fmt = _widened(f.rz, f.g_div)
+    residual = None
+    if explicit_residual:
 
+        def residual(xr, xi):
+            axr, axi, ax_fmt = _matmul(ar, ai, f.A, xr, xi, f.X)
+            return _addsub(fx.sub, br, bi, f.B, axr, axi, ax_fmt)
+
+    state = cg_init(br, bi, f)
     out: dict[int, CgFixedResult] = {}
     if wanted is not None and 0 in wanted:
-        out[0] = CgFixedResult(xr.copy(), xi.copy(), f.X)
+        out[0] = CgFixedResult(state.xr.copy(), state.xi.copy(), f.X)
     for n in range(1, nit + 1):
-        sr, si, s_fmt = _matmul(ar, ai, f.A, pr, pi, f.P)  # 1
-        sr, si = _q(sr, s_fmt, f.S), _q(si, s_fmt, f.S)
-        ps_full, ps_fmt = _column_dot(pr, pi, f.P, sr, si, f.S)  # 2
-        ps = _q(ps_full, ps_fmt, f.ps)
-        q, q_fmt = fx.div(_q(rz, f.rz, rz_w_fmt), rz_w_fmt, ps, f.ps)  # 3
-        alpha = _q(q, q_fmt, f.alpha)
-        tr, ti, t_fmt = _scale(pr, pi, f.P, alpha, f.alpha)  # 4
-        xr, xi, x_fmt = _addsub(fx.add, xr, xi, f.X, tr, ti, t_fmt)
-        xr, xi = _q(xr, x_fmt, f.X), _q(xi, x_fmt, f.X)
-        if explicit_residual:  # 5
-            axr, axi, ax_fmt = _matmul(ar, ai, f.A, xr, xi, f.X)
-            rr, ri, r_fmt = _addsub(fx.sub, br, bi, f.B, axr, axi, ax_fmt)
-        else:
-            tr, ti, t_fmt = _scale(sr, si, f.S, alpha, f.alpha)
-            rr, ri, r_fmt = _addsub(fx.sub, rr, ri, f.R, tr, ti, t_fmt)
-        rr, ri = _q(rr, r_fmt, f.R), _q(ri, r_fmt, f.R)
-        rz_full, rz_fmt = _column_dot(rr, ri, f.R, rr, ri, f.R)  # 6
-        rz_new = _q(rz_full, rz_fmt, f.rz)
-        q, q_fmt = fx.div(_q(rz_new, f.rz, rz_w_fmt), rz_w_fmt, rz, f.rz)  # 7
-        beta = _q(q, q_fmt, f.beta)
-        rz = rz_new  # 8
-        tr, ti, t_fmt = _scale(pr, pi, f.P, beta, f.beta)  # 9
-        pr, pi, p_fmt = _addsub(fx.add, rr, ri, f.R, tr, ti, t_fmt)
-        pr, pi = _q(pr, p_fmt, f.P), _q(pi, p_fmt, f.P)
+        sr, si = mm_step(ar, ai, state.pr, state.pi, f)
+        state, scalars = vec_step(state, sr, si, f, residual=residual)
         if on_iteration is not None:
             on_iteration(
                 n,
                 {
-                    "ps": (ps, f.ps),
-                    "alpha": (alpha, f.alpha),
-                    "rz": (rz, f.rz),
-                    "beta": (beta, f.beta),
-                    "X": (xr, xi, f.X),
-                    "R": (rr, ri, f.R),
-                    "P": (pr, pi, f.P),
+                    "ps": (scalars["ps"], f.ps),
+                    "alpha": (scalars["alpha"], f.alpha),
+                    "rz": (state.rz, f.rz),
+                    "beta": (scalars["beta"], f.beta),
+                    "X": (state.xr, state.xi, f.X),
+                    "R": (state.rr, state.ri, f.R),
+                    "P": (state.pr, state.pi, f.P),
                 },
             )
         if wanted is not None and n in wanted:
-            out[n] = CgFixedResult(xr.copy(), xi.copy(), f.X)
-    return out if wanted is not None else CgFixedResult(xr, xi, f.X)
+            out[n] = CgFixedResult(state.xr.copy(), state.xi.copy(), f.X)
+    return out if wanted is not None else CgFixedResult(state.xr, state.xi, f.X)
 
 
 # --- the link simulator with the bit-exact detector (step 2.5) ----------------------------
