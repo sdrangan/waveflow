@@ -1,7 +1,9 @@
-// cg_store_task.h -- the detector's storer: writes X and forwards the job's CgDesc, so the writer
-// echoes exactly one completion per job on s_done.
-//   [MemWCmd{x_off, NW, fwd=1} | CgDesc | X]
-// Python twin: CgStore.run_iter (examples/mimo_cg/hw/detector.py).
+// cg_store_task.h -- the detector's storer: writes X, then a zero-length write that forwards the
+// job's CgDesc, so the writer echoes exactly one completion per job on s_done.
+//   [MemWCmd{x_off, NW, fwd=0} | X]  [MemWCmd{x_off, 0, fwd=1} | CgDesc]
+// Two writes per job match the two reads (A, B): HLS couples the reader's and writer's firing counts
+// through the m_axi pointer FIFOs, so a job with fewer writes than reads deadlocks after a few jobs
+// (plan §15, step 4.7).  Python twin: CgStore.run_iter (examples/mimo_cg/hw/detector.py).
 #ifndef MIMO_CG_STORE_TASK_H
 #define MIMO_CG_STORE_TASK_H
 #include "hls_stream.h"
@@ -28,10 +30,15 @@ static void cg_store_task(
     MemWCmd w;
     w.addr = d.x_off;
     w.len = (K * N + LW - 1) / LW;
-    w.fwd_bursts = 1;
+    w.fwd_bursts = 0;
     w.write_framed_stream<MEM_DW>(cmd_out);
-    d.write_framed_stream<MEM_DW>(cmd_out);  // echoed on s_done after the store
     cg_store_matrix<MEM_DW, K, N, L, cg::x_t, cg::x_mem>(x, cmd_out);
+    MemWCmd e;  // the zero-length write that carries the echo (see the header)
+    e.addr = d.x_off;
+    e.len = 0;
+    e.fwd_bursts = 1;
+    e.write_framed_stream<MEM_DW>(cmd_out);
+    d.write_framed_stream<MEM_DW>(cmd_out);  // echoed on s_done after X is stored
 }
 
 #endif  // MIMO_CG_STORE_TASK_H

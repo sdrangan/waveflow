@@ -273,8 +273,12 @@ def run_xsi(out_dir: Path, top: str):
     )
 
 
-def check_xsi_outputs(out_dir: Path, scenario: dict) -> None:
-    """Every expected output region of the XSI memory dump is exact, and every done arrived."""
+def check_xsi_outputs(out_dir: Path, scenario: dict) -> list[int]:
+    """Every expected output region of the XSI memory dump is exact, and every done arrived.
+
+    Returns the cycle each done word arrived on ``s_done`` (the sink's ``cycles.bin``); the last
+    is the run's time to last completion.
+    """
     import numpy as np
 
     from waveflow.utils.burst_io import read_burst_bundle
@@ -292,6 +296,8 @@ def check_xsi_outputs(out_dir: Path, scenario: dict) -> None:
     assert len(done) == int(
         scenario["done_words"]
     ), f"s_done has {len(done)} words, expected {scenario['done_words']} (one per job)"
+    cycles = np.fromfile(vdir / "s_done" / "cycles.bin", dtype="<u8")
+    return [int(c) for c in cycles[: len(done)]]
 
 
 # --- the vector unit -------------------------------------------------------------------------

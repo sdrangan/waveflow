@@ -18,7 +18,9 @@ Step 4.8 of ``plans/mimo_cg/mimo_cg_paper_sims.md`` (gate 4.0 decision record, �
   each — in a feedback loop: ``P₀`` from ``INIT``, then each ``Sₙ`` makes the next ``P``, and
   ``LAST`` makes ``X`` instead.  Every firing of every task is one job, paced by its own command
   or descriptor, so the loop carries a token per job.
-* ``cg_store`` writes ``X`` and has the writer echo the descriptor on ``s_done``.
+* ``cg_store`` writes ``X`` and then a zero-length write whose echo is the job's done on
+  ``s_done``: a job must write as often as it reads (two each), because HLS couples the reader's
+  and writer's firing counts through the ``m_axi`` pointer FIFOs (plan §15, step 4.7).
 
 ``nit`` is a runtime field (1 … K).  The Python bodies call the golden; timing is a placeholder.
 """
@@ -238,7 +240,8 @@ class CgCtrl(FreeRunMod):
 
 @dataclass
 class CgStore(FreeRunMod):
-    """Writes ``X`` and has the writer echo the job's descriptor on ``s_done``."""
+    """Writes ``X``, then a zero-length write that echoes the job's descriptor on ``s_done``, so
+    each job has as many writes as reads (see ``cg_store_task.h``)."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_store"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -287,10 +290,14 @@ class CgStore(FreeRunMod):
         xb = yield from self.x_blk.acquire_read()
         words = to_words(*xb.payload, f.X, w)
         yield from self.x_blk.release_read()
-        cmd = MemWCmd(addr=int(desc.x_off), len=len(words), fwd_bursts=1)
+        cmd = MemWCmd(addr=int(desc.x_off), len=len(words), fwd_bursts=0)
         yield from self.cmd_out.write(np.asarray(cmd.serialize(word_bw=w), np.uint64))
-        yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), np.uint64))
         yield from self.cmd_out.write(words)
+        # The echo rides on a zero-length write, so a job writes as often as it reads (A, B): the
+        # RTL's pointer FIFOs couple the reader's and writer's firing counts (cg_store_task.h).
+        echo = MemWCmd(addr=int(desc.x_off), len=0, fwd_bursts=1)
+        yield from self.cmd_out.write(np.asarray(echo.serialize(word_bw=w), np.uint64))
+        yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), np.uint64))
 
 
 @dataclass
