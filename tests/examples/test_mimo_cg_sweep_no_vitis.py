@@ -52,10 +52,14 @@ def test_snr_window_is_integer_and_centred_on_the_zf_crossing():
 
 
 def test_results_do_not_depend_on_the_worker_count():
-    kw = {"max_bits": sweep.CHUNK_BITS, "min_errors": 10**9}  # exactly one chunk
+    # Three chunks: with 2 workers that is one full wave and a partial one, so the in-order fold
+    # and the stop rule across a wave boundary are both exercised.
+    kw = {"max_bits": 3 * sweep.SWEEP_CHUNK_BITS - 1, "min_errors": 10**9}
     one = sweep.simulate_sweep_point(SMALL, 0, workers=1, **kw)
     two = sweep.simulate_sweep_point(SMALL, 0, workers=2, **kw)
-    assert one == two
+    three = sweep.simulate_sweep_point(SMALL, 0, workers=3, **kw)
+    assert one == two == three
+    assert one[0]["bits"] == 3 * sweep.SWEEP_CHUNK_BITS
     assert [r["detector"] for r in one] == sweep.CONFIGS[SMALL].detectors
 
 
@@ -72,7 +76,11 @@ def test_sweep_never_touches_vitis(tmp_path, monkeypatch):
         dag_factory=sweep.build_accuracy_dag,
         root_dir=tmp_path,
         summary=tmp_path / "results" / "sweep.json",
-        extra_params={"workers": 1, "max_bits": sweep.CHUNK_BITS, "min_errors": 10**9},
+        extra_params={
+            "workers": 1,
+            "max_bits": sweep.SWEEP_CHUNK_BITS,
+            "min_errors": 10**9,
+        },
     )
     grid = ParamGrid(case=(SMALL,), snr_offset=(-1, 1))
     result = runner.run(
@@ -115,7 +123,7 @@ def test_float_rows_count_errors_on_the_chunk_samples(config):
     rows = {
         r["detector"]: r
         for r in sweep.simulate_sweep_point(
-            config, 0, max_bits=sweep.CHUNK_BITS, min_errors=10**9
+            config, 0, max_bits=sweep.SWEEP_CHUNK_BITS, min_errors=10**9
         )
     }
     qam, tx, _, A, B, mu, _ = sweep._chunk(c, sweep.point_snr(config, 0), 0)

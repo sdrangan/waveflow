@@ -17,11 +17,14 @@ samples**.  Unbiasing uses the exact μ, a simulation-side genie (see
 Parallelism and determinism
 ---------------------------
 :class:`~waveflow.build.sweep.SweepRunner` is serial, so a point is parallelized inside its
-stage.  Samples come in fixed chunks of about ``CHUNK_BITS`` bits, and chunk ``c`` of a point has
-its own generator, ``point_rng(_ACC_STREAM, M, K, order, snr_key(ρ), c)``.  Any worker can
-therefore regenerate any chunk, and only error counts cross process boundaries.  The formats are
-split across workers; the stop rule (every detector has ``MIN_ERRORS`` errors, or ``MAX_BITS``
-bits) is applied after each chunk.  Results are identical for any worker count.
+stage, **across chunks**.  Samples come in chunks of about ``SWEEP_CHUNK_BITS`` bits, and chunk
+``c`` has its own generator, ``point_rng(_ACC_STREAM, M, K, order, snr_key(ρ), c)``.  So a
+worker computes a whole chunk (samples, the float detectors and all 21 formats) independently,
+and only error counts cross processes.  Chunks run in waves of ``workers``, but their results
+are folded **in chunk order**, with the stop rule (every detector has ``MIN_ERRORS`` errors,
+or ``MAX_BITS`` bits) applied after each chunk.  Results are therefore identical for any worker
+count.  The work is memory-bandwidth bound: on the 4-core host, 2 workers and these small,
+cache-friendly chunks gave about twice the throughput of 1-Mbit chunks split by format (plan §15).
 
 Run from the repo root::
 
@@ -48,7 +51,6 @@ import numpy as np
 
 from examples.mimo_cg.detectors import bias_from_system, cg_multi_rhs
 from examples.mimo_cg.mimo_cg import (
-    CHUNK_BITS,
     K_VALUES,
     M_VALUES,
     MAX_BITS,
@@ -80,6 +82,9 @@ G_DIV = 6
 NITS = (1, 2, 3, 4, 6, 8, 12, 16)
 SNR_OFFSETS = tuple(range(-6, 7))
 SPOT_CHECK = (64, 8, "16qam")
+#: Bits per chunk: small enough to stay cache-friendly (512 blocks at 32×4 QPSK, 42 at 128×16
+#: 64-QAM) and to let low-SNR points stop early.
+SWEEP_CHUNK_BITS = 1 << 17
 _ACC_STREAM = 70  # seed namespace: never shared with Phase 1 (20, 30) or the tests
 
 
@@ -165,7 +170,7 @@ def _chunk(c: SweepConfig, rho_db: float, index: int):
     """Chunk ``index`` of a point: channels, bits, A, B and μ.  A pure function of its args."""
     qam = Qam(MODULATIONS[c.modulation])
     b = qam.bits_per_symbol
-    blocks = max(1, CHUNK_BITS // (NS * c.K * b))
+    blocks = max(1, SWEEP_CHUNK_BITS // (NS * c.K * b))
     rng = point_rng(_ACC_STREAM, c.M, c.K, qam.order, snr_key(rho_db), index)
     sigma2 = noise_variance(rho_db)
     H = rayleigh(rng, (blocks, c.M, c.K))
@@ -179,8 +184,9 @@ def _chunk(c: SweepConfig, rho_db: float, index: int):
 
 
 def _chunk_task(task: tuple) -> dict:
-    """Errors and mismatches of the given formats (and, if asked, the float detectors) on one chunk."""
-    config, rho_db, index, names, with_float = task
+    """Errors and mismatches of every detector (float and all formats) on one chunk."""
+    config, rho_db, index = task
+    names, with_float = list(FORMATS), True
     c = CONFIGS[config]
     qam, tx, G, A, B, mu, blocks = _chunk(c, rho_db, index)
 
@@ -227,19 +233,11 @@ _SINGLE_THREAD_ENV = {
 def _pool(workers: int) -> ProcessPoolExecutor:
     """A persistent spawned pool with single-threaded BLAS, reused across points."""
     if workers not in _POOL:
-        saved = {k: os.environ.get(k) for k in _SINGLE_THREAD_ENV}
+        # Pinned for the rest of this process: the executor spawns workers lazily, and every one
+        # must start with single-threaded BLAS (the parent's own BLAS is already initialized).
         os.environ.update(_SINGLE_THREAD_ENV)
-        try:
-            ctx = mp.get_context("spawn")
-            _POOL[workers] = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
-            # Spawn the workers now, while the environment pins BLAS to one thread.
-            list(_POOL[workers].map(int, range(workers)))
-        finally:
-            for k, v in saved.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+        ctx = mp.get_context("spawn")
+        _POOL[workers] = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
         atexit.register(_POOL[workers].shutdown)
     return _POOL[workers]
 
@@ -255,26 +253,28 @@ def simulate_sweep_point(
     """Every detector of one point, paired on identical chunks; one row per detector."""
     c = CONFIGS[config]
     rho_db = point_snr(config, snr_offset)
-    names = list(FORMATS)
-    groups = [names[i::workers] for i in range(workers)] if workers > 1 else [names]
     errors = dict.fromkeys(c.detectors, 0)
     mismatch = dict.fromkeys(c.detectors, 0)
     bits = blocks = index = 0
-    while True:
-        tasks = [(config, rho_db, index, g, i == 0) for i, g in enumerate(groups)]
+    done = False
+    while not done:
+        tasks = [(config, rho_db, index + k) for k in range(max(1, workers))]
         if workers > 1:
             results = list(_pool(workers).map(_chunk_task, tasks))
         else:
             results = [_chunk_task(t) for t in tasks]
-        for res in results:
+        for (
+            res
+        ) in results:  # in chunk order: the stop rule cannot depend on the worker count
             for det, (e, m) in res["counts"].items():
                 errors[det] += e
                 mismatch[det] += m
-        bits += results[0]["bits"]
-        blocks += results[0]["blocks"]
-        index += 1
-        if bits >= max_bits or min(errors.values()) >= min_errors:
-            break
+            bits += res["bits"]
+            blocks += res["blocks"]
+            index += 1
+            if bits >= max_bits or min(errors.values()) >= min_errors:
+                done = True
+                break
     rows = []
     for det in c.detectors:
         W = g = nit = ""
@@ -385,7 +385,8 @@ def build_accuracy_dag() -> BuildDag:
     return dag
 
 
-DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
+#: Measured on the 4-core host: memory-bound, so 2 workers beat 8 (plan §15).
+DEFAULT_WORKERS = min(2, os.cpu_count() or 1)
 
 
 def merge_points(root: Path = HERE, points=None) -> Path:

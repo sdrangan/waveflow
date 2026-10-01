@@ -160,3 +160,12 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Edit scripts must survive black.** Matching exact text that black has since
   reformatted failed twice. Match on stable tokens or patterns, and stop with
   nothing written when a match fails.
+- **Estimate parallel runtime under the real concurrency, not one process alone.**
+  The fixed-point CG is memory-bandwidth bound; on 4 physical cores, 8 workers
+  were no faster than 1. Benchmark N = 1, 2, 4, 8 concurrent processes before
+  quoting a time. (The same trap as Phase 1's float sweep; this time it cost a
+  stopped run.)
+- **Small chunks beat big ones on a memory-bound workload.** 131k-bit chunks with
+  2 workers gave about 3× the throughput of 1-Mbit chunks with 8.
+- **Spawned workers re-import `__main__`.** A benchmark piped through stdin
+  breaks the pool; use a script file with an `if __name__ == "__main__"` guard.
