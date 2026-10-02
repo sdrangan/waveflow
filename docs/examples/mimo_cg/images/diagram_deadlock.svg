@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="380" viewBox="0 0 1180 380">
+<defs><marker id="ah52514e" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52514e"/></marker></defs>
+<rect width="1180" height="380" fill="#fcfcfb"/>
+<text x="24" y="34" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="20" font-weight="bold" text-anchor="start" fill="#0b0b0b">Found at RTL: reads and writes per job must balance</text>
+<text x="24" y="56" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">HLS feeds both m_axi pointer arguments through FIFOs that one process (entry_proc) fills in lockstep</text>
+<rect x="24" y="140" width="150" height="100" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="99.0" y="164" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">entry_proc</text>
+<text x="99.0" y="184" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="middle" fill="#52514e">(HLS-generated)</text>
+<text x="99.0" y="201" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="middle" fill="#52514e">pushes m_in, m_out</text>
+<text x="214" y="118" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#52514e">m_in_c (depth 3)</text>
+<rect x="214" y="128" width="28" height="28" rx="3" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<rect x="248" y="128" width="28" height="28" rx="3" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<rect x="282" y="128" width="28" height="28" rx="3" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="214" y="174" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#898781">empty: the reader has no token</text>
+<text x="214" y="236" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#52514e">m_out_c (depth 7)</text>
+<rect x="214" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<rect x="248" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<rect x="282" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<rect x="316" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<rect x="350" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<rect x="384" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<rect x="418" y="246" width="28" height="28" rx="3" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<text x="452" y="236" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="end" fill="#eb6834">full</text>
+<path d="M 174 170 L 210 142" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<path d="M 174 210 L 210 260" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="520" y="116" width="170" height="52" rx="8" fill="#fde9e0" stroke="#eb6834" stroke-width="1.5"/>
+<text x="605.0" y="147.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">MemRStream</text>
+<rect x="520" y="234" width="170" height="52" rx="8" fill="#fde9e0" stroke="#eb6834" stroke-width="1.5"/>
+<text x="605.0" y="265.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">MemWStream</text>
+<path d="M 316 142 L 518 142" fill="none" stroke="#52514e" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<path d="M 458 260 L 518 260" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="605" y="190" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#eb6834">reader starves:</text>
+<text x="605" y="208" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="middle" fill="#52514e">waits for an m_in token</text>
+<rect x="24" y="300" width="666" height="56" rx="8" fill="#f0efec" stroke="#f0efec" stroke-width="1.5"/>
+<text x="40" y="324" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Every task then waits on the reader, so the RTL deadlocks: exactly 6 jobs completed, whatever the data.</text>
+<text x="40" y="344" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Found with a VCD trace of the top's channels (run.sh … trace).</text>
+<rect x="720" y="86" width="436" height="270" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="736" y="112" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="15" font-weight="bold" text-anchor="start" fill="#0b0b0b">Cause</text>
+<text x="736" y="136" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Each mem-stream firing takes one pointer token.</text>
+<text x="736" y="155" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">The matmul unit read nit + 1 times per job (A, P)</text>
+<text x="736" y="174" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">but wrote nit times (S): one m_out token was left</text>
+<text x="736" y="193" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">over per job, until m_out_c filled.</text>
+<text x="736" y="232" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="15" font-weight="bold" text-anchor="start" fill="#0ca30c">Fix (no framework change)</text>
+<text x="736" y="256" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">A final zero-length write carries the done echo,</text>
+<text x="736" y="275" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">so writes = reads per job, in every composite.</text>
+<text x="736" y="294" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Bit-exact at RTL for any number of jobs.</text>
+<text x="736" y="313" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Framework note: unbalanced composites are exposed.</text>
+</svg>

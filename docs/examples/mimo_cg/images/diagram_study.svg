@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="400" viewBox="0 0 1180 400">
+<defs><marker id="ah52514e" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52514e"/></marker></defs>
+<rect width="1180" height="400" fill="#fcfcfb"/>
+<text x="24" y="34" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="20" font-weight="bold" text-anchor="start" fill="#0b0b0b">The study: one Python model, from link-level accuracy to hardware cost</text>
+<text x="24" y="56" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">plans/mimo_cg/mimo_cg_paper_sims.md — phases 0–4 complete (milestones M0–M4 approved)</text>
+<rect x="24" y="92" width="148" height="196" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="38" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 0</text>
+<text x="38" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Toolchain</text>
+<text x="38" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Vitis / Vivado 2024.1</text>
+<text x="38" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">XSI RTL flow</text>
+<text x="38" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">xczu48dr probe</text>
+<rect x="38" y="254" width="52.2" height="20" rx="10" fill="#0ca30c" stroke="#0ca30c" stroke-width="1.5"/>
+<text x="64.1" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">✓ done</text>
+<path d="M 174 190.0 L 188 190.0" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="190" y="92" width="148" height="196" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="204" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 1</text>
+<text x="204" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Float link + CG</text>
+<text x="204" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">M×K Rayleigh uplink</text>
+<text x="204" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">ZF, MMSE, CG BER</text>
+<text x="204" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">27 configurations</text>
+<rect x="204" y="254" width="52.2" height="20" rx="10" fill="#0ca30c" stroke="#0ca30c" stroke-width="1.5"/>
+<text x="230.1" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">✓ done</text>
+<path d="M 340 190.0 L 354 190.0" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="356" y="92" width="148" height="196" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="370" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 2</text>
+<text x="370" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Bit-exact CG</text>
+<text x="370" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">ap_fixed golden</text>
+<text x="370" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">≡ Vitis C-sim</text>
+<text x="370" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">division + zero guard</text>
+<rect x="370" y="254" width="52.2" height="20" rx="10" fill="#0ca30c" stroke="#0ca30c" stroke-width="1.5"/>
+<text x="396.1" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">✓ done</text>
+<path d="M 506 190.0 L 520 190.0" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="522" y="92" width="148" height="196" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="536" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 3</text>
+<text x="536" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Accuracy DSE</text>
+<text x="536" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">364 points × 21</text>
+<text x="536" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">formats, no Vitis</text>
+<text x="536" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">≤ 0.5 dB frontier</text>
+<rect x="536" y="254" width="52.2" height="20" rx="10" fill="#0ca30c" stroke="#0ca30c" stroke-width="1.5"/>
+<text x="562.1" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">✓ done</text>
+<path d="M 672 190.0 L 686 190.0" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="688" y="92" width="148" height="196" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="702" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 4</text>
+<text x="702" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Hardware</text>
+<text x="702" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">vector unit, systolic</text>
+<text x="702" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">matmul, detector</text>
+<text x="702" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">4 ns, RTL bit-exact</text>
+<rect x="702" y="254" width="52.2" height="20" rx="10" fill="#0ca30c" stroke="#0ca30c" stroke-width="1.5"/>
+<text x="728.1" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">✓ done</text>
+<path d="M 838 190.0 L 852 190.0" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="854" y="92" width="148" height="196" rx="8" fill="#f0efec" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="868" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 5</text>
+<text x="868" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Performance</text>
+<text x="868" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">per-block cycle and</text>
+<text x="868" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">resource models,</text>
+<text x="868" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">held-out validation</text>
+<rect x="868" y="254" width="37.8" height="20" rx="10" fill="#eb6834" stroke="#eb6834" stroke-width="1.5"/>
+<text x="886.9" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">next</text>
+<path d="M 1004 190.0 L 1018 190.0" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="1020" y="92" width="148" height="196" rx="8" fill="#f0efec" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="1034" y="122" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Phase 6</text>
+<text x="1034" y="146" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="16" font-weight="bold" text-anchor="start" fill="#0b0b0b">Full DSE</text>
+<text x="1034" y="176.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">Pareto: accuracy vs</text>
+<text x="1034" y="192.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">DSP / LUT / latency</text>
+<text x="1034" y="209.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">+ brute-force check</text>
+<rect x="1034" y="254" width="59.4" height="20" rx="10" fill="#898781" stroke="#898781" stroke-width="1.5"/>
+<text x="1063.7" y="268" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#ffffff">planned</text>
+<rect x="24" y="318" width="1132" height="58" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="40" y="342" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="bold" text-anchor="start" fill="#0b0b0b">One source of truth:</text>
+<text x="178" y="342" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">the bit-exact Python model (mimo_cg_fixed.py) defines the detector; every accuracy number comes from it, and every hardware block</text>
+<text x="40" y="362" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">is proven equal to it — in C-sim, after synthesis, and cycle by cycle at RTL. Accuracy needs no Vitis; Vitis is spent only where the cost model needs it.</text>
+</svg>

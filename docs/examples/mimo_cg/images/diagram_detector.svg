@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="610" viewBox="0 0 1200 610">
+<defs><marker id="ah1baf7a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1baf7a"/></marker><marker id="ah52514e" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52514e"/></marker><marker id="aheb6834" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#eb6834"/></marker></defs>
+<rect width="1200" height="610" fill="#fcfcfb"/>
+<text x="24" y="34" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="20" font-weight="bold" text-anchor="start" fill="#0b0b0b">CgDetector: a free-running composite of hls::tasks on xczu48dr</text>
+<text x="24" y="56" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">one job = one CgCmd {A, B, X offsets, nit}; jobs pipeline through the tasks; verified at RTL by an XSI testbench generated from the same graph</text>
+<rect x="24" y="96" width="110" height="52" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="79.0" y="127.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">host</text>
+<rect x="168" y="96" width="140" height="52" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="238.0" y="127.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">cg_cmd_rx</text>
+<rect x="340" y="96" width="160" height="52" rx="8" fill="#fde9e0" stroke="#eb6834" stroke-width="1.5"/>
+<text x="420.0" y="127.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">MemRStream</text>
+<rect x="530" y="96" width="140" height="52" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="600.0" y="127.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">cg_load</text>
+<rect x="750" y="96" width="140" height="52" rx="8" fill="#ddf4ea" stroke="#1baf7a" stroke-width="1.5"/>
+<text x="820.0" y="127.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">cg_ctrl</text>
+<rect x="730" y="208" width="190" height="82" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="2"/>
+<text x="825.0" y="232" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#1c5cab">cg_mm</text>
+<text x="825.0" y="252" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="middle" fill="#52514e">systolic R × C array</text>
+<text x="825.0" y="269" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="middle" fill="#52514e">S = q_S(A·P)</text>
+<rect x="730" y="360" width="190" height="82" rx="8" fill="#e9e6f7" stroke="#4a3aa7" stroke-width="2"/>
+<text x="825.0" y="384" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#4a3aa7">cg_vec</text>
+<text x="825.0" y="404" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="middle" fill="#52514e">L lanes, steps 2–9</text>
+<text x="825.0" y="421" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="middle" fill="#52514e">holds X, R, P, rz</text>
+<rect x="990" y="380" width="150" height="52" rx="8" fill="#ffffff" stroke="#52514e" stroke-width="1.5"/>
+<text x="1065.0" y="411.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">cg_store</text>
+<rect x="990" y="470" width="150" height="52" rx="8" fill="#fde9e0" stroke="#eb6834" stroke-width="1.5"/>
+<text x="1065.0" y="501.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">MemWStream</text>
+<rect x="24" y="548" width="1152" height="44" rx="8" fill="#fde9e0" stroke="#eb6834" stroke-width="1.5"/>
+<text x="600" y="576" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="#0b0b0b">DDR over AXI-MM (m_axi):  A, B in per job  ·  X out per job</text>
+<path d="M 420 150 L 420 546" fill="none" stroke="#eb6834" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="428" y="520" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#eb6834">m_in (gmem0)</text>
+<path d="M 1065 524 L 1065 546" fill="none" stroke="#eb6834" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="1072" y="540" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#eb6834">m_out (gmem1)</text>
+<path d="M 134 122 L 166 122" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="150" y="88" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">s_cmd</text>
+<path d="M 308 122 L 338 122" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<path d="M 500 122 L 528 122" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<path d="M 670 122 L 748 122" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="709" y="114" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="middle" fill="#52514e">desc</text>
+<path d="M 570 148 L 570 236 L 728 236" fill="none" stroke="#eb6834" stroke-width="4.5" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="578" y="228" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#eb6834">a_blk</text>
+<path d="M 632 148 L 632 410 L 728 410" fill="none" stroke="#eb6834" stroke-width="4.5" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="640" y="402" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#eb6834">b_blk</text>
+<path d="M 790 358 L 790 292" fill="none" stroke="#eb6834" stroke-width="4.5" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="782" y="330" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="end" fill="#eb6834">p_blk</text>
+<path d="M 860 292 L 860 358" fill="none" stroke="#eb6834" stroke-width="4.5" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="868" y="330" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="start" fill="#eb6834">s_blk</text>
+<path d="M 920 412 L 988 412" fill="none" stroke="#eb6834" stroke-width="4.5" marker-end="url(#aheb6834)" stroke-linejoin="round"/>
+<text x="954" y="404" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#eb6834">x_blk</text>
+<path d="M 820 148 L 820 206" fill="none" stroke="#1baf7a" stroke-width="2.2" marker-end="url(#ah1baf7a)" stroke-linejoin="round"/>
+<text x="828" y="182" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="bold" text-anchor="start" fill="#1baf7a">mm_q</text>
+<path d="M 890 132 L 955 132 L 955 376 L 922 376" fill="none" stroke="#1baf7a" stroke-width="2.2" marker-end="url(#ah1baf7a)" stroke-linejoin="round"/>
+<text x="962" y="260" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="bold" text-anchor="start" fill="#1baf7a">vec_q</text>
+<path d="M 890 112 L 1065 112 L 1065 378" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="1072" y="250" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="start" fill="#52514e">desc</text>
+<path d="M 1065 432 L 1065 468" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<path d="M 1140 496 L 1176 496 L 1176 98" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="1170" y="90" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="11.5" font-weight="normal" text-anchor="end" fill="#52514e">s_done → host</text>
+<rect x="24" y="178" width="376" height="182" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="40" y="204" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="start" fill="#0b0b0b">Synthesized and verified</text>
+<text x="40" y="230" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">csynth for xczu48dr at 4 ns: est. 3.35 ns, K = 4, 8, 16</text>
+<text x="40" y="251" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">DSP = 48 (vector unit) + 4·R·C (matmul)</text>
+<text x="40" y="272" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">     = 112 / 176 / 304 at K = 4 / 8 / 16</text>
+<text x="40" y="293" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">LUT 33k / 42k / 61k,  BRAM_18K 20 / 26 / 63</text>
+<text x="40" y="314" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">RTL (XSI): X ≡ cg_fixed at K = 4 (M = 32), 8, 16</text>
+<text x="40" y="335" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">K = 4: 20 jobs, 50 iterations in 61,395 cycles</text>
+<rect x="24" y="376" width="376" height="162" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="40" y="398" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="start" fill="#0b0b0b">Legend</text>
+<path d="M 40 418 L 96 418" fill="none" stroke="#eb6834" stroke-width="4.5" stroke-linejoin="round"/>
+<text x="108" y="423" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">stream-of-blocks: the shared memory (ping-pong)</text>
+<path d="M 40 442 L 96 442" fill="none" stroke="#1baf7a" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="108" y="447" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">command queue (FIFO, cmd_depth)</text>
+<path d="M 40 466 L 96 466" fill="none" stroke="#52514e" stroke-width="1.6" stroke-linejoin="round"/>
+<text x="108" y="471" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">framed stream (FIFO)</text>
+<path d="M 40 490 L 96 490" fill="none" stroke="#eb6834" stroke-width="1.8" stroke-dasharray="6 4" stroke-linejoin="round"/>
+<text x="108" y="495" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">AXI-MM master (m_axi)</text>
+<rect x="52" y="508" width="32" height="18" rx="4" fill="#fde9e0" stroke="#eb6834" stroke-width="1.5"/>
+<text x="108" y="522" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">framework mem-stream task</text>
+</svg>
