@@ -71,15 +71,29 @@ stream message — that is what keeps the order of events in a design of concurr
 whenever it touches AXI-MM, an **adaptor** sits between it and the bus, converting stream messages to
 bus transactions or back:
 
+```mermaid
+flowchart LR
+  subgraph vk["Vitis kernel"]
+    direction TB
+    K["kernel<br/>(stream-only)"]
+    MA["master adaptor<br/>MemRStream / MemWStream<br/><i>a kernel module</i>"]
+  end
+  SA["slave adaptor<br/>queues · register bank · BRAM window<br/><i>an RTL module</i>"]
+  X(("AXI<br/>crossbar"))
+  MEM["memory,<br/>other slaves"]
+  HOST["host,<br/>other masters"]
+
+  K <-- "stream" --> MA
+  K <-- "stream" --> SA
+  MA <-- "m_axi (master)" --> X
+  SA <-- "AXI4 (slave)" --> X
+  X <--> MEM
+  X <--> HOST
 ```
-  kernel ──stream (commands, data)──▶ master adaptor ──m_axi──▶ ┐
-  (stream-only)                       MemRStream / MemWStream   │
-                                      a KERNEL MODULE           ├── crossbar ── memory, other slaves
-                                                                │
-  kernel ◀──stream (messages)──────── slave adaptor  ◀──AXI──── ┘ ◀── host, other masters
-                                      queues · register bank · BRAM window
-                                      an RTL MODULE
-```
+
+Every link carries data both ways. Who *initiates* differs by side: on the master side the master
+adaptor starts each transaction (reading from or writing to memory); on the slave side a host or
+another master starts it, and the slave adaptor answers.
 
 The two adaptors sit in different places for one reason — what HLS can generate:
 
