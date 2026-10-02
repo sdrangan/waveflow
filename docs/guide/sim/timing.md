@@ -42,7 +42,7 @@ transfer_time = (latency_init + nwords) / clk.freq   [seconds]
 `master.write(words)` blocks the caller for `transfer_time` of simulated time. The per-interface
 parameters (`latency_init`, the FULL/LITE read/write formulas, `latency_per_word`) are documented
 with each interface — see [Overview](../interface/overview.md), [streams](../interface/primitive/stream.md),
-and [memory-mapped](../interface/primitive/aximm.md). This page only notes *that* interfaces are where transfer
+and [memory-mapped](../interface/axi_mm/modeling.md). This page only notes *that* interfaces are where transfer
 time is charged.
 
 ## Components charge compute latency

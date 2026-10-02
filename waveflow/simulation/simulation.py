@@ -68,7 +68,7 @@ class Simulation:
         """
         self._sim_objs.append(obj)
 
-    def run_sim(self) -> None:
+    def run_sim(self, until=None) -> None:
         """Execute the full simulation lifecycle.
 
         Steps
@@ -76,8 +76,16 @@ class Simulation:
         1. Call ``pre_sim()`` on all registered objects in registration order.
         2. Schedule each object's ``run_proc()`` generator as a SimPy process
            (objects whose ``run_proc()`` returns ``None`` are skipped).
-        3. Advance the simulation via ``env.run()``.
+        3. Advance the simulation via ``env.run(until)``.
         4. Call ``post_sim()`` on all registered objects in registration order.
+
+        Parameters
+        ----------
+        until : simpy.Event | float | None
+            ``None`` (the default) runs until no event is left -- right whenever every process
+            eventually blocks for good.  A kernel that **polls** (an HLS free-running loop over
+            ``read_nb`` on two streams, modelled as a check every cycle) never runs out of events, so
+            its testbench passes the event that means "done" (or an end time) instead.
         """
         for obj in self._sim_objs:
             obj.pre_sim()
@@ -88,7 +96,7 @@ class Simulation:
                 self.env.process(proc)
 
         try:
-            self.env.run()
+            self.env.run(until=until)
         except Exception:
             for obj in self._sim_objs:
                 obj.error_cleanup()

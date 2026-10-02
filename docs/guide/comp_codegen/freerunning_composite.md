@@ -90,6 +90,18 @@ interface's type, not from a tag beside it:
 | `StreamIF` | `hls::stream<ap_uint<W> >` — a plain word FIFO |
 | `StreamOfBlocksIF` | `hls::stream_of_blocks<T[N], depth>` — a ping-pong block channel |
 
+**A framed internal channel and a framed boundary port are different C++ types.** This is the part
+that surprises people, and it is a Vitis constraint rather than a design preference:
+
+| | internal channel | boundary port |
+|---|---|---|
+| carries a packet boundary as | `streamutils::framed_word<W>` (a plain struct) | a real `TLAST` wire |
+| C++ type | `hls::stream<framed_word<W>>` | `hls::stream<ap_axis<W,0,0,0>>` |
+| why | HLS 214-208: `ap_axis` is reserved for interface ports and rejected on an internal FIFO | it *is* an interface port |
+
+`framed_word`'s members are deliberately named to match `ap_axis` (`.data` / `.last`) so one
+templated helper — `read_boundary_word<WordT, W>` — serves both.
+
 A FIFO's `depth` is a physical property of the `StreamIF`, single-sourced so the pysim queue and the
 emitted pragma cannot disagree. A `StreamIF` with `depth=None` is *explicit unbounded* — fine for
 pysim exploration, refused at the synthesis boundary, because an unbounded FIFO is not hardware.
@@ -221,5 +233,5 @@ downstream keeps working. This framework has needed it twice: an un-paced pipeli
 - [Free-running kernel in HLS](./freerunning.md) — the 1-task case, and the task body itself.
 - [Writing it in Python](../flows/concurrent_python.md) — declaring the graph.
 - [XSI testbench](./xsi_tb.md) — how a composite top is verified at RTL.
-- [Streaming Memory Kernels](../memory/memstream.md) — the `MemRStream` / `MemWStream` children used
+- [Streaming Memory Kernels](../interface/axi_mm/master.md) — the `MemRStream` / `MemWStream` children used
   here.

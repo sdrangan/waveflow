@@ -148,7 +148,7 @@ width-templated `hls::task` copied in by the build (a body that owns a memory po
 `MemRCmd` in-band and relays the opaque prefix; the writer takes its `MemWCmd` in-band on its single data
 stream. The writer is additionally `emit_done=True`, so it buffers the echoed `IlDesc` across the store and
 emits it on `s_done` after the write commits — the commit-timed completion. Their full story is
-[Streaming Memory Kernels](../../guide/memory/memstream.md).
+[Streaming Memory Kernels](../../guide/interface/axi_mm/master.md).
 
 ## Writing the composite: `InterleaverInband`
 

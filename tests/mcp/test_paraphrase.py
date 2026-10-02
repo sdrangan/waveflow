@@ -58,7 +58,7 @@ PARAPHRASES: list[tuple[str, str, str]] = [
     ),
     (
         "how does the CPU set the configuration values",
-        "docs/guide/interface/primitive/regmap.md",
+        "docs/guide/interface/axi_mm/regmap.md",
         BROWSE,
     ),
     (

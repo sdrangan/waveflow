@@ -177,7 +177,7 @@ So no module declares which side it is on, and the framework does not either:
 
 This is why "is this a DUT or a testbench participant?" is not a property you will find on any class.
 Asking it of a *(module, cut)* pair is what `check(mod, target)` is for. See
-[Concurrent flow — the DUT/TB boundary](./concurrent.md#dut-tb-boundary) for what re-cutting
+[XSI simulation components — moving the cut](./concurrent_layers.md#moving-the-cut) for what re-cutting
 costs in practice, which as of today is more than it should.
 
 ## Next

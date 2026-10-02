@@ -789,3 +789,23 @@ def test_example_pages_do_not_document_symbols_that_do_not_exist(source_identifi
                     missing.setdefault(p.relative_to(DOCS).as_posix(), set()).add(name)
     assert not missing, "example pages call names that exist nowhere in the source:\n  " + "\n  ".join(
         f"{f}: {', '.join(sorted(s))}" for f, s in sorted(missing.items()))
+
+
+def test_mm_fir_pages_quote_the_recorded_cycle_gates():
+    """The mm_fir pages quote the RTL cycle counts of both adaptor topologies; they must be the ones
+    the gate pins (``EXPECTED_CYCLES`` in tests/examples/test_mm_fir_xsi.py).  Read with ``ast`` rather
+    than imported, so this check needs no toolchain and cannot be skipped by one."""
+    import ast
+
+    gate = (REPO / "tests" / "examples" / "test_mm_fir_xsi.py").read_text(encoding="utf-8")
+    expected = None
+    for node in ast.parse(gate).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "EXPECTED_CYCLES"
+                                                for t in node.targets):
+            expected = ast.literal_eval(node.value)
+    assert expected and set(expected) == {"per_view", "one_front"}, expected
+    for page in ("index.md", "pysim.md", "rtlsim.md"):
+        text = (DOCS / "examples" / "mm_fir" / page).read_text(encoding="utf-8")
+        for topology, cycles in expected.items():
+            assert re.search(rf"\b{cycles}\b", text), (
+                f"docs/examples/mm_fir/{page} does not quote the {topology} gate ({cycles} cycles)")

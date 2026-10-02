@@ -18,7 +18,7 @@ needs both in one list:
 
 | | test | pages |
 |---|---|---|
-| **Boundary** | becomes a port on the generated kernel, and has a `kind_of_endpoint` kind | [Stream](./stream.md) · [MM](./aximm.md) · [BRAM](./bram.md) · [Register map](./regmap.md) |
+| **Boundary** | becomes a port on the generated kernel, and has a `kind_of_endpoint` kind | [Stream](./stream.md) · [MM](../axi_mm/modeling.md) · [BRAM](./bram.md) · [Register map](../axi_mm/regmap.md) |
 | **Internal** | lowers to an HLS construct that exists only *inside* the kernel | [Stream-of-blocks](./sob.md) · [Crossbar](./crossbar.md) |
 
 The distinction matters when reading about lowering and nowhere else: a `StreamIFSlave` at a
@@ -29,10 +29,10 @@ See [Interfaces](../) for the tier table this table refines, and
 ## Pages
 
 - [Stream Interfaces](./stream.md) — unidirectional streams (`StreamIF`) and pipelined transfer.
-- [MM Interfaces](./aximm.md) — memory-mapped read/write (`AXIMMCrossBarIF`, `DirectMMIF`).
+- [Modeling memory-mapped traffic](../axi_mm/modeling.md) — memory-mapped read/write (`AXIMMCrossBarIF`, `DirectMMIF`); in the [AXI-MM](../axi_mm/) section.
 - [BRAM — memory between modules](./bram.md) — `BramIF`: an on-chip memory shared by two tasks,
   which cannot live *inside* a Vitis kernel and so lives beside it as hand-written Verilog.
-- [Register Maps](./regmap.md) — AXI-Lite control/status fields (`RegMap`, `RegField`, `RegAccess`).
+- [Register Maps](../axi_mm/regmap.md) — AXI-Lite control/status fields (`RegMap`, `RegField`, `RegAccess`); in the [AXI-MM](../axi_mm/) section.
 - [Stream-of-Blocks Interface](./sob.md) — block handoff (`DataArray[T, N]`) over
   `write_lock` / `read_lock`. **Internal.**
 - [Crossbar Interfaces](./crossbar.md) — the port-indexed n × m stream fabric (`CrossBarIF`).
@@ -65,8 +65,7 @@ or in place.
 > one place the vocabulary was inconsistent for no reason, and it cost more than tidiness: the
 > codegen extractor matches methods structurally, by name, so `get(T)` and `get(T, count=N)` were
 > indistinguishable to it and the array form silently lowered to a single-element read. The three
-> names above are what fixed it. The same split has **not** reached `AXIMMQueue.get`, which still
-> dispatches on its arguments; that is unfinished work rather than a considered difference.
+> names above are what fixed it.
 
 > **The pipelined forms take no payload suffix, and that is the one exception to the rule above.**
 > `get_pipelined(T, count=N)` — and `read_pipelined` / `write_pipelined` on the other endpoints —
@@ -83,7 +82,7 @@ three are essential; collapsing any of them models a cost the hardware does not 
 | | Non-overlapping transfer | Overlapping (pipelined) transfer | In place |
 |---|---|---|---|
 | [`StreamIF`](stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
-| [`MMIF`](aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
+| [`MMIF`](../axi_mm/modeling.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
 | [`BramIF`](bram.md) | *not built* | `read_pipelined` / `write_pipelined` | **`array_ref`** |
 | `HwState` | — already local | — | *not built* |
 

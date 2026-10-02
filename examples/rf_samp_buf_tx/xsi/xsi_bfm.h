@@ -369,7 +369,7 @@ public:
         valid_ = d_.get1(P_valid);
         data_  = d_.getW(P_data);
         last_  = (P_last >= 0) ? d_.get1(P_last) : 0u;
-        beat_  = (valid_ && h_ready_);
+        beat_  = (valid_ && d_ready_);
     }
 
     /// Records the cycle each word arrived, not just the word.
@@ -388,7 +388,15 @@ public:
         }
     }
 
-    void drive() override { d_.put1(P_ready, h_ready_); }
+    void drive() override {
+        d_ready_ = (h_ready_ && cycle_ >= ready_from) ? 1u : 0u;
+        d_.put1(P_ready, d_ready_);
+    }
+
+    //: Optional: hold TREADY low until this cycle (1-based, the sink's own count).  Default 0 = ready
+    //: from the start, exactly the always-ready sink every existing gate uses.  Exists so a gate can
+    //: fill an upstream FIFO on purpose and measure the back-pressure (plans/mm_slave_adaptor.md).
+    long ready_from = 0;
 
     //: Optional: if set, post_sim dumps the collected words + their arrival cycles (a capture bundle),
     //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
@@ -411,6 +419,8 @@ public:
 
     const std::vector<uint64_t>& words() const { return words_; }
     size_t count() const { return words_.size(); }
+    /// Cumulative word counts at each TLAST (empty for a port without the pin).
+    const std::vector<uint64_t>& bounds() const { return bounds_; }
 
     /// The cycle each accepted word arrived on (parallel to `words()`).
     const std::vector<long>& beat_cycles() const { return beat_cycles_; }
@@ -428,9 +438,195 @@ private:
     std::vector<uint64_t> bounds_;
     std::vector<long> beat_cycles_;
     long cycle_ = 0;
-    uint32_t h_ready_ = 1, valid_ = 0, last_ = 0;
+    uint32_t h_ready_ = 1, d_ready_ = 1, valid_ = 0, last_ = 0;
     uint64_t data_ = 0;
     bool beat_ = false;
+};
+
+// ---------------------------------------------------------------------------
+// AxiMmMaster — the TB acting as an AXI4 *master*: a host, or any bus master that is not the DUT.
+// We drive AW* / W* / BREADY / AR* / RREADY; the DUT (a crossbar, a slave) drives the rest.
+// ---------------------------------------------------------------------------
+
+/// Issues a queue of INCR bursts, one transaction outstanding at a time, in queue order.
+///
+/// Every BFM above is the SLAVE side of an AXI port — the memory behind a kernel's m_axi.  This is
+/// the other side, and it exists for plans/mm_slave_adaptor.md: a host writing a kernel's register
+/// bank or queue window through a crossbar.  It is deliberately simple — no outstanding-transaction
+/// pipelining — because what the gates measure is the slave path, and a master that overlapped its
+/// own transactions would fold its own policy into every number.
+///
+/// A write presents AW and its first W beat in the SAME cycle (AXI allows W before or with AW; a
+/// master that waited for AWREADY first would add a cycle that belongs to the TB, not the DUT).
+/// BREADY and RREADY are held high: the master never back-pressures a response.
+///
+/// Timing: `update()` runs once per cycle, so its counter is the cycle number (the AxisSlave
+/// convention).  An op's `t_start` is the cycle its address phase is first presented, `t_end` the
+/// cycle of its B beat (write) or RLAST beat (read).  `not_before` holds an op back until that cycle,
+/// which is how a TB makes two masters collide on purpose.
+class AxiMmMaster : public XsiSimObj {
+public:
+    struct Op {
+        bool write = false;
+        uint64_t addr = 0;
+        std::vector<uint64_t> wdata;      ///< write payload (one word per beat)
+        uint32_t nwords = 0;              ///< read length
+        long not_before = 0;              ///< earliest cycle the address phase may be presented
+        uint64_t wstrb = ~(uint64_t)0;    ///< WSTRB on every beat (masked to the bus); a fault knob
+        int size = -1;                    ///< AxSIZE override; -1 = the bus width.  A fault knob.
+        long t_start = -1, t_end = -1;    ///< cycles (see class comment)
+        uint32_t resp = 0;                ///< BRESP, or the worst RRESP over the burst
+        std::vector<uint64_t> rdata;      ///< read result
+        bool done() const { return t_end >= 0; }
+    };
+
+    /// *prefix* names the port group, e.g. "s0_axi" for ports "s0_axi_AWADDR" ...; *id* is driven on
+    /// AWID/ARID when the port has them (a crossbar SI routes the response back by it).
+    AxiMmMaster(Dut& d, const std::string& prefix, int bytes_per_word, uint32_t id = 0)
+        : d_(d), bpw_(bytes_per_word), id_(id) {
+        size_ = 0; while ((1 << size_) < bpw_) ++size_;
+        auto P = [&](const char* s) { return d.port((prefix + s).c_str()); };
+        auto O = [&](const char* s) { return d.port_opt((prefix + s).c_str()); };
+        P_awaddr = P("_AWADDR"); P_awlen = P("_AWLEN"); P_awvalid = P("_AWVALID"); P_awready = P("_AWREADY");
+        P_wdata = P("_WDATA"); P_wlast = P("_WLAST"); P_wvalid = P("_WVALID"); P_wready = P("_WREADY");
+        P_bvalid = P("_BVALID"); P_bready = P("_BREADY");
+        P_araddr = P("_ARADDR"); P_arlen = P("_ARLEN"); P_arvalid = P("_ARVALID"); P_arready = P("_ARREADY");
+        P_rdata = P("_RDATA"); P_rlast = P("_RLAST"); P_rvalid = P("_RVALID"); P_rready = P("_RREADY");
+        P_wstrb = O("_WSTRB"); P_bresp = O("_BRESP"); P_rresp = O("_RRESP");
+        P_awid = O("_AWID"); P_arid = O("_ARID");
+        P_awsize = O("_AWSIZE"); P_arsize = O("_ARSIZE"); P_awburst = O("_AWBURST"); P_arburst = O("_ARBURST");
+        P_awcache = O("_AWCACHE"); P_arcache = O("_ARCACHE");
+        // Held-zero sidebands: present on a full AXI4 port, meaningless to these tests, and X if
+        // left undriven -- which a crossbar would happily route into a decision.
+        const char* zero[] = {"_AWLOCK", "_AWPROT", "_AWQOS", "_AWREGION", "_ARLOCK", "_ARPROT",
+                              "_ARQOS", "_ARREGION", "_AWUSER", "_ARUSER", "_WUSER"};
+        for (const char* z : zero) { int p = O(z); if (p >= 0) zero_.push_back(p); }
+    }
+
+    /// Queue a write burst of `words` at byte address `addr`.  Returns the op's index.
+    size_t write(uint64_t addr, std::vector<uint64_t> words, long not_before = 0) {
+        check_len(words.size());
+        Op o; o.write = true; o.addr = addr; o.wdata = std::move(words); o.not_before = not_before;
+        ops_.push_back(std::move(o)); return ops_.size() - 1;
+    }
+    /// Queue a read burst of `nwords` at byte address `addr`.  Returns the op's index.
+    size_t read(uint64_t addr, uint32_t nwords, long not_before = 0) {
+        check_len(nwords);
+        Op o; o.write = false; o.addr = addr; o.nwords = nwords; o.not_before = not_before;
+        ops_.push_back(std::move(o)); return ops_.size() - 1;
+    }
+
+    bool idle() const { return cur_ >= ops_.size(); }
+    const Op& op(size_t i) const { return ops_[i]; }
+    /// Mutable access, for the fault knobs (`wstrb`, `size`) on an op already queued.
+    Op& op_mut(size_t i) { return ops_[i]; }
+    size_t nops() const { return ops_.size(); }
+    long cycle() const { return cycle_; }
+
+    void sample() override {
+        awready_ = d_.get1(P_awready); wready_ = d_.get1(P_wready);
+        bvalid_ = d_.get1(P_bvalid);   bresp_ = (P_bresp >= 0) ? (uint32_t)(d_.getW(P_bresp) & 3) : 0;
+        arready_ = d_.get1(P_arready); rvalid_ = d_.get1(P_rvalid);
+        rdata_ = d_.getW(P_rdata);     rlast_ = d_.get1(P_rlast);
+        rresp_ = (P_rresp >= 0) ? (uint32_t)(d_.getW(P_rresp) & 3) : 0;
+        aw_beat_ = h_awvalid_ && awready_;
+        w_beat_  = h_wvalid_ && wready_;
+        b_beat_  = bvalid_ && h_bready_;
+        ar_beat_ = h_arvalid_ && arready_;
+        r_beat_  = rvalid_ && h_rready_;
+    }
+
+    void update() override {
+        ++cycle_;
+        if (active_) {
+            Op& o = ops_[cur_];
+            if (o.write) {
+                if (aw_beat_) h_awvalid_ = 0;
+                if (w_beat_) {
+                    ++wbeat_;
+                    if (wbeat_ >= o.wdata.size()) h_wvalid_ = 0;
+                }
+                if (b_beat_) {
+                    if (h_awvalid_ || h_wvalid_) bad("B before the burst was fully sent");
+                    o.resp = bresp_; finish(o);
+                }
+            } else {
+                if (ar_beat_) h_arvalid_ = 0;
+                if (r_beat_) {
+                    if (h_arvalid_) bad("R before AR was accepted");
+                    o.rdata.push_back(rdata_);
+                    if (rresp_ > o.resp) o.resp = rresp_;
+                    if (rlast_) {
+                        if (o.rdata.size() != o.nwords) bad("RLAST on the wrong beat");
+                        finish(o);
+                    }
+                }
+            }
+        }
+        if (!active_ && cur_ < ops_.size() && cycle_ >= ops_[cur_].not_before) start(ops_[cur_]);
+    }
+
+    void drive() override {
+        const Op* o = active_ ? &ops_[cur_] : nullptr;
+        const bool wr = o && o->write;
+        const uint64_t len = o ? (wr ? o->wdata.size() : o->nwords) - 1 : 0;
+        d_.putW(P_awaddr, wr ? o->addr : 0);
+        d_.putW(P_awlen, wr ? len : 0);
+        d_.put1(P_awvalid, h_awvalid_);
+        d_.putW(P_wdata, (wr && wbeat_ < o->wdata.size()) ? o->wdata[wbeat_] : 0);
+        d_.put1(P_wlast, (wr && wbeat_ + 1 == o->wdata.size()) ? 1u : 0u);
+        d_.put1(P_wvalid, h_wvalid_);
+        const uint64_t strb_all = (bpw_ >= 64) ? ~(uint64_t)0 : ((1ull << bpw_) - 1);
+        if (P_wstrb >= 0) d_.putW(P_wstrb, (o ? o->wstrb : ~(uint64_t)0) & strb_all);
+        d_.put1(P_bready, h_bready_);
+        d_.putW(P_araddr, (o && !wr) ? o->addr : 0);
+        d_.putW(P_arlen, (o && !wr) ? len : 0);
+        d_.put1(P_arvalid, h_arvalid_);
+        d_.put1(P_rready, h_rready_);
+        if (P_awid >= 0) d_.putW(P_awid, id_);
+        if (P_arid >= 0) d_.putW(P_arid, id_);
+        const uint64_t sz = (o && o->size >= 0) ? (uint64_t)o->size : (uint64_t)size_;
+        if (P_awsize >= 0) d_.putW(P_awsize, sz);
+        if (P_arsize >= 0) d_.putW(P_arsize, sz);
+        if (P_awburst >= 0) d_.putW(P_awburst, 1);   // INCR
+        if (P_arburst >= 0) d_.putW(P_arburst, 1);
+        if (P_awcache >= 0) d_.putW(P_awcache, 3);   // normal non-cacheable bufferable (AXI default)
+        if (P_arcache >= 0) d_.putW(P_arcache, 3);
+        for (int p : zero_) d_.putW(p, 0);
+    }
+
+private:
+    void check_len(size_t n) {
+        if (n < 1 || n > 256) { std::fprintf(stderr, "FATAL: AXI4 burst of %zu beats\n", n); std::exit(3); }
+    }
+    void bad(const char* why) {
+        std::fprintf(stderr, "FATAL: AxiMmMaster op %zu: %s (cycle %ld)\n", cur_, why, cycle_);
+        std::exit(4);
+    }
+    void start(Op& o) {
+        active_ = true; wbeat_ = 0; o.t_start = cycle_ + 1;   // presented by the drive() after this
+        if (o.write) { h_awvalid_ = 1; h_wvalid_ = 1; }
+        else         { h_arvalid_ = 1; }
+    }
+    void finish(Op& o) { o.t_end = cycle_; active_ = false; ++cur_; }
+
+    Dut& d_;
+    int bpw_, size_;
+    uint32_t id_;
+    std::vector<Op> ops_;
+    size_t cur_ = 0, wbeat_ = 0;
+    bool active_ = false;
+    long cycle_ = 0;
+    int P_awaddr, P_awlen, P_awvalid, P_awready, P_wdata, P_wlast, P_wvalid, P_wready, P_bvalid,
+        P_bready, P_araddr, P_arlen, P_arvalid, P_arready, P_rdata, P_rlast, P_rvalid, P_rready,
+        P_wstrb, P_bresp, P_rresp, P_awid, P_arid, P_awsize, P_arsize, P_awburst, P_arburst,
+        P_awcache, P_arcache;
+    std::vector<int> zero_;
+    uint32_t h_awvalid_ = 0, h_wvalid_ = 0, h_bready_ = 1, h_arvalid_ = 0, h_rready_ = 1;
+    uint32_t awready_ = 0, wready_ = 0, bvalid_ = 0, bresp_ = 0, arready_ = 0, rvalid_ = 0,
+             rlast_ = 0, rresp_ = 0;
+    uint64_t rdata_ = 0;
+    bool aw_beat_ = false, w_beat_ = false, b_beat_ = false, ar_beat_ = false, r_beat_ = false;
 };
 
 // ---------------------------------------------------------------------------

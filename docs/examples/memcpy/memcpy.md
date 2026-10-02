@@ -70,7 +70,7 @@ stages are `ap_ctrl_none` tasks rather than host-launched — it is what makes t
 
 `MemRStream` and `MemWStream` are **framework** components (`waveflow/hw/mem_stream.py`), not part of
 this example — any accelerator can compose them as its load / store stage. They are documented in
-[Streaming Memory Kernels](../../guide/memory/memstream.md), which also walks the generated composite top
+[Streaming Memory Kernels](../../guide/interface/axi_mm/master.md), which also walks the generated composite top
 and the generated XSI testbench in detail. Only the `Sequencer` and the composite wiring are specific to
 `mem_copy`; the following pages build the example up from there.
 

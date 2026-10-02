@@ -132,7 +132,7 @@ hand-written, width-templated `hls::task` copied in by the build (a body that ow
 never lowered from `run_iter` — the dividing line is `m_axi`). Here both are constructed `inband=True`:
 the reader reads a `MemRCmd` and relays the opaque prefix, and the writer takes its `MemWCmd` in-band on
 its single data stream and forwards the buffered response. Neither parses what it relays. Their full
-story is [Streaming Memory Kernels](../../guide/memory/memstream.md).
+story is [Streaming Memory Kernels](../../guide/interface/axi_mm/master.md).
 
 ## Writing the composite: `MemCopy`
 

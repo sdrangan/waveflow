@@ -2,64 +2,106 @@
 title: Flow steps
 parent: Concurrent (free-running)
 grand_parent: Hardware modules and Flows
-nav_order: 1
+nav_order: 2
 audience: python
-summary: "The concurrent flow end to end as a step diagram: a FreeRunMod graph and a composite FreeRunMod testbench graph, each walked to generated C++ (an ap_ctrl_none top with one hls::task per child, and an XSI harness), then csynth and cycle-exact XSI verification. The full worked instance is the mem_copy example."
+summary: "The concurrent flow end to end. One Python object, the XSI simulation top, holds three kinds of module — kernel modules, RTL modules and BFM modules — and runs in pysim as well. Kernel modules become the Vitis kernel (HLS C++, then csynth), RTL modules contribute hand-written Verilog, and the two together make the RTL top; BFM modules become C++ BFMs in the harness. XSI runs the RTL top under the harness, and the gate is bit-exact output plus an exact cycle count. The worked instance is the mem_copy example."
 ---
 
 # Flow steps
 
-The concurrent flow starts from a Python **component graph** and ends at an exact cycle count measured
-by driving the real RTL. Two graphs go in — the DUT and its testbench — and the *same* graph walk
-generates both the kernel and its harness. Every step below is walked with its real code in the
+The terms on this page — XSI simulation top, kernel / RTL / BFM module, RTL top, Vitis kernel,
+harness — are defined
+in [XSI simulation components](./concurrent_layers.md). Every step is walked with its real code in the
 [mem_copy example](../../examples/memcpy/).
+
+## One Python object, three kinds of module
+
+The flow starts from **one** Python object: the **XSI simulation top**, a composite `FreeRunMod` whose
+children are wired by interfaces exactly as in pysim — and the same object runs the pysim golden.
+Each child plays one of the three [roles](./concurrent_layers.md#three-kinds-of-module) — kernel
+module, RTL module, or BFM module — and each role has its own path to the XSI simulation:
 
 ```mermaid
 flowchart LR
-  subgraph py["Python (source of truth)"]
+  subgraph py["XSI simulation top (Python; also runs in pysim)"]
     direction TB
-    DUT["FreeRunMod graph<br/>(MemCopy: Sequencer→R→W)"]
-    TB["composite testbench<br/>(MemCopyTB: DUT + BFM models)"]
+    KM["kernel modules"]
+    RM["RTL modules"]
+    BM["BFM modules"]
   end
 
-  DUT -->|"composite_top_spec<br/>+ render_top"| TOP["ap_ctrl_none top<br/>(one hls::task per child)"]
-  TB  -->|"tb_top_spec<br/>+ render_tb_harness"| HARN["XSI harness<br/>(models, phases, run loop)"]
+  KM -->|"composite_top_spec<br/>+ render_top"| HLS["Vitis kernel<br/>(HLS C++)"]
+  HLS -->|"csynth"| KV["Vitis kernel<br/>(Verilog)"]
+  RM -->|"rtl_module()<br/>(the .v, as is)"| HV["hand-written<br/>Verilog"]
+  KV --> RT["RTL top<br/>(Verilog)"]
+  HV --> RT
+  BM -->|"tb_top_spec<br/>+ render_tb_harness"| HARN["harness<br/>(C++ BFMs + cycle loop)"]
 
-  TOP -->|"csynth"| RTL["Kernel RTL<br/>(ap_ctrl_none)"]
-  RTL --> XSI["XSI sim<br/>(cycle-by-cycle in xsim)"]
+  RT --> XSI["XSI simulation<br/>(xsim, cycle by cycle)"]
   HARN --> XSI
-  XSI --> CHK["bit-exact + exact cycle count"]
+  XSI --> CHK["bit-exact output<br/>+ exact cycle count"]
 ```
+
+In the [mem_copy example](../../examples/memcpy/) the XSI simulation top is `MemCopyTB`, and its
+modules fall into the three roles like this:
+
+| role | in `mem_copy` | becomes |
+|---|---|---|
+| kernel modules | `MemCopy` — a composite of `Sequencer` → `MemRStream` → `MemWStream` | the Vitis kernel |
+| RTL modules | none | — so the RTL top *is* the Vitis kernel |
+| BFM modules | a `StreamDriver`, a `StreamSink`, and one `MemoryMod` behind both `m_axi` bundles | `AxisMaster`, `AxisSlave`, and a `FlatMemory` serving `AxiMmReadSlave` / `AxiMmWriteSlave` |
+
+The harness arrow starts from the BFM modules, but `tb_top_spec` reads the **whole** XSI simulation top:
+to know which BFM goes on which pin, it has to see the kernel's ports *and* who is wired to each.
 
 ## The steps
 
-**1 · The component graph.** Describe the design as a [`FreeRunMod`](./modules.md) graph: standalone
-components that implement `run_iter`, and a composite that `add_comp`s them, wires internal channels,
-and names its boundary. For `mem_copy` that is a `Sequencer` feeding a `MemRStream` → `MemWStream` over
-internal FIFOs. The **testbench** is *also* a graph — a composite `FreeRunMod` wiring the DUT to BFM
-participants (a driver, a sink, a shared memory) — and the same graph runs the pysim golden.
+**Describe the XSI simulation top.** A kernel module is a [`FreeRunMod`](./modules.md) — a leaf that
+implements `run_iter`, or a composite that `add_comp`s children and wires internal channels with
+`add_if`. The XSI simulation top is a composite `FreeRunMod` too, holding the kernel modules, any RTL
+modules, and the BFM modules. In `mem_copy` the kernel side and the whole are separate classes,
+`MemCopy` and `MemCopyTB`, and `MemCopyTB` declares `potential_targets = {sequential_xsi_tb}` so it is
+never mistaken for a kernel.
 
-**2 · Generate the kernel (`composite_kernel`).** `composite_top_spec` walks the graph and `render_top`
-emits the `ap_ctrl_none` top: one `hls::task` per child, one internal FIFO per edge, boundary ports
-from the declared boundary. The task **bodies** come two ways — `TaskBodyStep` generates a leaf's body
-from its `run_iter`; `MemStreamStep` copies the hand-written bodies that own an `m_axi` port (the
-dividing line is `m_axi`, not tops-vs-bodies).
+**Generate the Vitis kernel** (target `composite_kernel`). `composite_top_spec` walks the kernel
+modules and `render_top` emits the Vitis kernel's top-level function in HLS C++: `ap_ctrl_none`, one `hls::task` per child, one
+internal FIFO per `add_if` edge, and a port for every child endpoint left unwired — the boundary. Task
+**bodies** come two ways: generated from a leaf's `run_iter` (`TaskBodyStep`), or hand-written and
+declared with [`kernel_task()`](../comp_codegen/freerunning_override.md). `mem_copy`'s three are
+hand-written framework bodies, copied in by `MemStreamStep`.
 
-**3 · C-synthesis.** The generated top is synthesized to RTL.
+**C-synthesis.** Vitis turns the top-level function into the Vitis kernel's Verilog.
 
-**4 · Generate the testbench (`sequential_xsi_tb`).** `tb_top_spec` walks the *testbench* graph and
-`render_tb_harness` emits the harness — which BFM models exist, which RTL port each drives, and the
-fixed-N cycle loop. The BFM model classes themselves are hand-written framework
-([`xsi_bfm.h`](../../../waveflow/build/xsi/xsi_bfm.h)); the harness only wires them.
+**Assemble the RTL top.** For `mem_copy` there is nothing to assemble: it has no RTL modules, so the
+RTL top *is* the Vitis kernel. A design with RTL modules gets a generated wrapper instead —
+`wrapper_gen` joins the kernel's `bram` ports to the memories its graph declares (worked in [A memory reached three ways](../../examples/bram_access/)) — and a design reached
+over a bus adds a [memory-mapped adaptor](../interface/axi_mm/slave.md) and AMD's crossbar, as in
+[mm_fir](../../examples/mm_fir/).
 
-**5 · XSI simulation.** Because the kernel is `ap_ctrl_none`, Vitis co-sim refuses it — so the harness
-drives the elaborated RTL directly in `xsim` through **XSI**, cycle by cycle. The gate is **exact**: a
-bit-exact result *and* an exact cycle count (e.g. `mem_copy` = 2908 cycles for 16 jobs), so a count
-that moves is a real behaviour change.
+**Generate the harness** (target `sequential_xsi_tb`). `tb_top_spec` walks the XSI simulation top,
+checks that every BFM module has a C++ BFM and every port of the RTL top is covered, and
+`render_tb_harness` emits the harness: which models exist, which pins each drives, and the fixed-N
+cycle loop. The models themselves are pre-written ([`xsi_bfm.h`](../../../waveflow/build/xsi/xsi_bfm.h));
+the harness only wires them. (The code calls the XSI simulation top the testbench — `tb_top_spec`,
+`TbSpec` — so read `tb` there as "XSI simulation top".) The full walk is the
+[XSI testbench](../comp_codegen/xsi_tb.md) page.
 
-> The kernel and its testbench are generated from the **same** graphs that run the Python golden — one
-> statement, two backends. That is what keeps the pysim model and the RTL from testing different things.
+One kind of BFM module is not generated today: a host *program* — one that reads a status register
+and decides what to write next. It is written by hand as a C++ state machine over the `AxiMmMaster`
+BFM; [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
+
+**XSI simulation.** The harness drives the RTL top in `xsim`, cycle by cycle. The gate is **exact**: a
+bit-exact result *and* an exact cycle count (`mem_copy` = 2908 cycles for 16 jobs), so a count that
+moves is a real behaviour change. The example gates run through their own build; an RTL top
+assembled without a Vitis project — hand-written Verilog and vendor IP, as in the adaptor gates —
+runs through [`XsiWorkspace`](../../../waveflow/build/xsi_workspace.py), which writes the `xvlog`
+file list and the harness and invokes the same `run.bat` / `run.sh`.
+
+> The Vitis kernel and the harness are generated from the **same** object that runs the Python golden —
+> one statement, two backends. That is what keeps the pysim model and the RTL from testing different
+> things.
 
 **Source of truth:** `waveflow/build/composite_gen.py` (`composite_top_spec`, `render_top`,
-`tb_top_spec`, `render_tb_harness`), `waveflow/build/hwcodegen_steps.py` (`TaskBodyStep`),
-`waveflow/build/streamutils.py` (`MemStreamStep`), `tests/examples/test_xsi_bfm.py` (the cycle gates).
+`tb_top_spec`, `render_tb_harness`), `waveflow/build/wrapper_gen.py` (the RTL top, when there is one),
+`waveflow/build/hwcodegen_steps.py` (`TaskBodyStep`), `waveflow/build/streamutils.py`
+(`MemStreamStep`), `tests/examples/test_xsi_bfm.py` (the cycle gates).
