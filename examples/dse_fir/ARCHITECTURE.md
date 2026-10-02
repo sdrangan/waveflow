@@ -50,4 +50,4 @@ Checkpoints travel as canonical `checkpoint_json` text to preserve numeric value
 
 Quality is evaluated in fixed-point Python. Synthesis evidence is replayed from the committed HLS corpus; RTL evidence is unavailable. Predictions remain distinct from replayed estimates. Model-dependent gains from recovery require separate controlled trials.
 
-[Usage](README.md) · [Design decisions](DESIGN.md) · [Verification](VERIFICATION.md)
+[Benchmark and connector direction](BENCHMARK.md) · [Usage](README.md) · [Design decisions](DESIGN.md) · [Verification](VERIFICATION.md)

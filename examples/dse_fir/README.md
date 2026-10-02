@@ -4,6 +4,7 @@ A bounded FIR DSE service with six typed tools, durable evidence, a JSON/CSV CLI
 stdio MCP, and an optional Pi extension. Ordinary Python owns the semantics;
 agent hosts are replaceable. See [design](DESIGN.md) and [verification](VERIFICATION.md).
 Module diagrams: [Architecture](ARCHITECTURE.md).
+Benchmark setup and connector direction: [BENCHMARK.md](BENCHMARK.md).
 
 **Available now:** real fixed-point Python evaluation, canonical resource prediction,
 and replay of the committed 24-point HLS corpus. `synth` returns explicitly labeled
