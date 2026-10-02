@@ -140,12 +140,12 @@ but not built — see `plans/design_cut.md` §S5.
 
 ## See also
 
-- [Memory-mapped slave adaptor](../interface/derived/mm_slave.md) — the adaptor's views, their
+- [Memory-mapped slave adaptor](../interface/axi_mm/slave.md) — the adaptor's views, their
   semantics, and the ordering guarantee.
-- [MM Interfaces](../interface/primitive/aximm.md#how-it-lowers) — `AXIMMCrossBarIF` in pysim, and
+- [MM Interfaces](../interface/axi_mm/modeling.md#how-it-lowers) — `AXIMMCrossBarIF` in pysim, and
   `axi_crossbar` at RTL.
 - [Flow steps](./concurrent_flowsteps.md) — how the XSI simulation top becomes a running simulation.
 - [mm_fir](../../examples/mm_fir/) — every piece in one design: a Vitis kernel, an adaptor and a
   crossbar in the RTL top, a host program in the testbench.
-- [Memory-mapped slave adaptor](../interface/derived/mm_slave.md#the-structure) — why a kernel can
+- [Memory-mapped slave adaptor](../interface/axi_mm/slave.md#the-structure) — why a kernel can
   drive the bus from inside the Vitis kernel but is reached through an adaptor in the RTL top.

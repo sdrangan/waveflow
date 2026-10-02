@@ -1,6 +1,6 @@
 ---
 title: Register Maps
-parent: Primitive interfaces
+parent: AXI-MM
 grand_parent: Interfaces
 nav_order: 4
 audience: python
@@ -12,7 +12,7 @@ summary: "The AXI-Lite register map as an interface — RegField / RegAccess (R,
 
 A **register map** is the conventional way to expose a small block of named, individually-addressable control and status fields to a host over AXI-Lite. Each named field gets its own bus offset, so the host can read or write one field at a time without paying for the others.
 
-Waveflow provides the register-map abstraction as a thin layer on top of the existing [MM interfaces](./aximm.md). The slave endpoint is an `MMIFSlave` that is wired by the framework — the component author declares a `RegMap`, and the slave's read/write callbacks dispatch to fields automatically.
+Waveflow provides the register-map abstraction as a thin layer on top of the existing [MM interfaces](modeling.md). The slave endpoint is an `MMIFSlave` that is wired by the framework — the component author declares a `RegMap`, and the slave's read/write callbacks dispatch to fields automatically.
 
 | Class | Role |
 |---|---|
@@ -192,7 +192,7 @@ class RegMapMMIFSlave(MMIFSlave):
     regmap: RegMap = ...
 ```
 
-A subclass of [`MMIFSlave`](./aximm.md#mmifslave) that wires its own `rx_read_proc` and `rx_write_proc`:
+A subclass of [`MMIFSlave`](modeling.md#mmifslave) that wires its own `rx_read_proc` and `rx_write_proc`:
 
 - Decodes `local_addr` to `(field_name, sub_word_index)` against the `RegMap`'s offset table.
 - For LITE crossbar binds, each callback receives one word at a time. Reads return the appropriate slice of the field's backing word buffer; writes update the buffer (applying access-mode rules) and fire the hook.

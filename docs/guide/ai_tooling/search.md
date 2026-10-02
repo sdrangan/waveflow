@@ -96,7 +96,7 @@ That last row is deliberate. An example offered to an assistant is one it may
 copy, and some directories under `examples/` are older work that should not
 be. The table of contents is the curation that already exists, so each
 `docs/examples/<name>/index.md` names its source directory in an
-`example_dir:` front-matter key, and those fifteen are the whole list. A
+`example_dir:` front-matter key, and those fourteen are the whole list. A
 directory with no page is not searchable, not listed, and not fetchable.
 
 Generated code and other build output — `examples/*/gen/`, copied support

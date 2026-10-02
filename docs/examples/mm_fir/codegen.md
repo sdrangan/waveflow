@@ -13,8 +13,8 @@ python -m examples.mm_fir.mm_fir_build             # headers + top + tcl, then c
 python -m examples.mm_fir.mm_fir_build --no-synth  # generate only
 ```
 
-[`mm_fir_build.py`](../../../examples/mm_fir/mm_fir_build.py) produces the **Vitis top** — one of the
-[layers](../../guide/flows/concurrent_layers.md) of this design, and the only one Vitis builds. The
+[`mm_fir_build.py`](../../../examples/mm_fir/mm_fir_build.py) produces the **Vitis kernel** — one of the
+[components of the XSI simulation](../../guide/flows/concurrent_layers.md), and the only one Vitis builds. The
 register bank and the queues are **not** in it: Vitis cannot generate an AXI slave, so they are RTL
 beside the kernel, joined in the [RTL top](rtlsim.md). What the kernel sees of them is four streams.
 

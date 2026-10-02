@@ -1,14 +1,14 @@
 ---
-title: MM Interfaces
-parent: Primitive interfaces
+title: Modeling memory-mapped traffic
+parent: AXI-MM
 grand_parent: Interfaces
-nav_order: 2
+nav_order: 1
 audience: python
 api: [MMIFMaster, MMIFSlave, AXIMMCrossBarIF, DirectMMIF, AXIMMProtocol, assign_address_ranges, SimObj, Simulation]
 summary: "Memory-mapped interfaces in the SimPy model — MMIFMaster/MMIFSlave endpoints, the AXIMMCrossBarIF (FULL/LITE, address routing) and DirectMMIF, and read/write/read_schema/read_array, with a runnable two-SimObj DirectMMIF toy."
 ---
 
-# Memory-Mapped (MM) Interfaces
+# Modeling memory-mapped traffic
 
 Waveflow provides two memory-mapped interface types that share a common pair of generic endpoints:
 
@@ -439,7 +439,7 @@ boundary port in this flow, because the kernel is always the master.
   a row so a design that needs one gets that sentence rather than a `KeyError`.
 
 **A slave a kernel can be reached through** is not a Vitis port at all: HLS generates no AXI4-full
-slave. It is the [memory-mapped slave adaptor](../derived/mm_slave.md) — hand-written Verilog in the
+slave. It is the [memory-mapped slave adaptor](slave.md) — hand-written Verilog in the
 [RTL top](../../flows/concurrent_layers.md) that turns transactions into the stream messages the kernel
 reads. Its pysim twins are `MMIFSlave`s like any other, with one opt-in flag:
 `serialize_transactions=True` makes the crossbar hold a slave's channel for the whole transaction,

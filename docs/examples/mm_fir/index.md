@@ -17,9 +17,9 @@ processor talks to a peripheral.
 
 Vitis HLS cannot generate that slave side. So the kernel stays exactly what the earlier examples'
 kernels are — a stream-only `FreeRunMod` — and a [memory-mapped slave
-adaptor](../../guide/interface/derived/mm_slave.md) in the RTL top does the translation: bus
+adaptor](../../guide/interface/axi_mm/slave.md) in the RTL top does the translation: bus
 transactions in, stream messages out. This example is the worked design for that adaptor, and for the
-[layers](../../guide/flows/concurrent_layers.md) a design with one has at RTL.
+[components of the XSI simulation](../../guide/flows/concurrent_layers.md) a design with one has.
 
 ## The design
 

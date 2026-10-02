@@ -20,16 +20,16 @@ or from Python, `run_xsi("one_front", work_dir)` returns the run's output.
 
 ## What is simulated
 
-This page is where all the [layers](../../guide/flows/concurrent_layers.md) of the design are present
+This page is where all the [components](../../guide/flows/concurrent_layers.md) of the XSI simulation are present
 at once:
 
-| layer | here | produced by |
+| component | here | produced by |
 |---|---|---|
-| Vitis top | `mm_fir` — csynth's Verilog for the [generated top](codegen.md) | `mm_fir_build.py` |
+| Vitis kernel | `mm_fir` — csynth's Verilog for the [generated top-level function](codegen.md) | `mm_fir_build.py` |
 | vendor IP | `axi_crossbar`, 1 SI, 2 or 3 MI | `generate_axi_xbar(XBARS[topology], ...)` |
 | hand-written RTL | `axi_slave_front`, `mm_regbank`, `mm_queue_in`, `mm_queue_out` | `waveflow/build/rtl/` |
 | RTL top | `mm_fir_top`: the three above, wired | `render_top(top, topology)` |
-| XSI harness | an `AxiMmMaster` and a `HostProgram` state machine | `render_tb(dll, x)` |
+| testbench (the harness) | an `AxiMmMaster` and a `HostProgram` state machine | `render_tb(dll, x)` |
 
 The RTL top is assembled by this example's `render_top` from framework pieces — it is not yet emitted
 by `wrapper_gen` from the module graph, the way a design's memories are.

@@ -2,7 +2,7 @@
 
 ``test_every_toc_page_names_a_real_example_dir`` is the one the plan calls for
 by name.  It exists because ``example_dir:`` is the *only* thing connecting a
-docs page to the source it documents, three of the fifteen have a directory
+docs page to the source it documents, two of the fourteen have a directory
 name that differs from the page name, and a rename that misses the front
 matter would silently drop an example out of the corpus with no other symptom.
 """
@@ -22,7 +22,7 @@ from waveflow.mcp.knowledge import (
 from waveflow.mcp.knowledge.corpus import TOC_DIR, parse_front_matter
 from waveflow.mcp.knowledge.roots import repo_root
 
-#: The docs TOC as of 2026-10-02 (mm_fir added).  Pinned so that *adding* an example is a
+#: The docs TOC as of 2026-10-02 (mm_fir added; mmqueue -- the retiring VMAC example -- removed).  Pinned so that *adding* an example is a
 #: deliberate two-line change rather than something that happens by accident,
 #: and so the count in the plan stays honest.
 TOC_EXAMPLES = {
@@ -32,7 +32,6 @@ TOC_EXAMPLES = {
     "interleaver",
     "memcpy",
     "mm_fir",
-    "mmqueue",
     "regmap",
     "rf_loopback",
     "rf_shot_loopback",
@@ -43,11 +42,10 @@ TOC_EXAMPLES = {
     "vecmult",
 }
 
-#: The three whose directory is not their page name -- the reason the key exists.
+#: The two whose directory is not their page name -- the reason the key exists.
 RENAMED = {
     "memcpy": "examples/mem_copy",
     "firblock": "examples/fir_block",
-    "mmqueue": "examples/vmac",
 }
 
 
@@ -107,7 +105,8 @@ def test_non_toc_example_directories_are_out_of_the_corpus(index) -> None:
         assert "error" in result
 
     indexed = {c.path.split("/")[1] for c in index.chunks if c.path.startswith("examples/")}
-    for stray in ("toy", "bram_toy", "state_toy", "vecunit", "dse_fir", "_archive"):
+    # vmac: AXIMMQueue's example, retired from the docs (2026-10-02) so it is not offered as a pattern.
+    for stray in ("toy", "bram_toy", "state_toy", "vecunit", "dse_fir", "_archive", "vmac"):
         assert stray not in indexed, f"examples/{stray} leaked into the index"
 
 
@@ -115,12 +114,9 @@ def test_files_linked_from_a_toc_page_come_along(index) -> None:
     """Files a TOC page points at outside its own directory are in the corpus.
 
     Derived from the pages, not hand-listed, so this asserts the derivation
-    still finds the two that exist today.
+    still finds the one that exists today.
     """
     paths = {c.path for c in index.chunks}
-    assert "examples/interface/aximm_queue_demo.py" in paths, (
-        "mmqueue links to it from pysim.md"
-    )
     assert any(p.startswith("examples/schemas/fixedpoint/") for p in paths), (
         "basic_vec names examples/schemas/fixedpoint as its counterpart"
     )

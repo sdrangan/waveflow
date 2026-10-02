@@ -253,7 +253,7 @@ explains why it is a token on an ordinary stream rather than a testbench's order
 `BramIF` access is **untimed in pysim, on purpose**: a BRAM answer is deterministic, unarbitrated and
 one cycle, so a discrete-event model of it would add a SimPy timestep and no fidelity — `read`
 and `write` are plain methods rather than generators, and **the absence of the `yield` is the
-interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/primitive/aximm.md), where the
+interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/axi_mm/modeling.md), where the
 bus, the arbitration and the burst *are* the point of having a model.)
 
 What that leaves out is not throughput. At II=1 a pipelined reader still answers one word per cycle

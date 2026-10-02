@@ -131,7 +131,9 @@ The name is shared with the C++ side on purpose: the generated testbench uses `M
 - [`MemMgr`](./memmgr.md) — allocation and addressing, including the byte-vs-word convention.
 - [`MemoryMod`](./memorymod.md) — category 4: the transactional, timed memory, its latency model, and
   the `Memory` store underneath it.
-- [Streaming Memory Kernels](./memstream.md) — `MemRStream` / `MemWStream` / `MemCopy`.
+- [Streaming memory kernels](../interface/axi_mm/master.md) — `MemRStream` / `MemWStream` / `MemCopy`:
+  how a free-running kernel reaches DDR. It lives in the [AXI-MM](../interface/axi_mm/) section, beside
+  the adaptor that lets a kernel be *reached* over the same bus.
 
 Category 3's own page is not written yet; until it is, [BRAM — memory between
 modules](../interface/primitive/bram.md) is the reference, with

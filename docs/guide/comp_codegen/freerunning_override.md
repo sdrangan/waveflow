@@ -104,5 +104,5 @@ One field carries a second job worth knowing about: `task_fn` is also the compon
 
 - [Free-running kernel in HLS](./freerunning.md) — the generated case this departs from.
 - [Free-running composite in HLS](./freerunning_composite.md) — how the resolved call ends up in a top.
-- [Streaming Memory Kernels](../memory/memstream.md) — `MemRStream` / `MemWStream`, the components
+- [Streaming Memory Kernels](../interface/axi_mm/master.md) — `MemRStream` / `MemWStream`, the components
   whose bodies are hand-written this way.

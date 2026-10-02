@@ -75,7 +75,7 @@ hand-written framework bodies, copied in by `MemStreamStep`.
 **Assemble the RTL top.** For `mem_copy` there is nothing to assemble: it has no RTL modules, so the
 RTL top *is* the Vitis kernel. A design with RTL modules gets a generated wrapper instead —
 `wrapper_gen` joins the kernel's `bram` ports to the memories its graph declares (worked in [A memory reached three ways](../../examples/bram_access/)) — and a design reached
-over a bus adds a [memory-mapped adaptor](../interface/derived/mm_slave.md) and AMD's crossbar, as in
+over a bus adds a [memory-mapped adaptor](../interface/axi_mm/slave.md) and AMD's crossbar, as in
 [mm_fir](../../examples/mm_fir/).
 
 **Generate the harness** (target `sequential_xsi_tb`). `tb_top_spec` walks the XSI simulation top,

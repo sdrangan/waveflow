@@ -177,4 +177,4 @@ Interfaces participate in the standard SimPy three-phase lifecycle managed by `S
 ## Next steps
 
 - [Stream Interfaces](./primitive/stream.md) — unidirectional streaming with `StreamIF` and `CrossBarIF`
-- [MM Interfaces](./primitive/aximm.md) — memory-mapped read/write with `AXIMMCrossBarIF` and `DirectMMIF`
+- [MM Interfaces](axi_mm/modeling.md) — memory-mapped read/write with `AXIMMCrossBarIF` and `DirectMMIF`

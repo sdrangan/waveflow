@@ -16,13 +16,13 @@ does, so that the [generated kernel](./hostactivated.md) and the simulation agre
 begins and ends.
 
 It sits on top of the register map, and only on top of it: the fields, the offsets and the AXI-Lite
-dispatch underneath are [Register Maps](../interface/primitive/regmap.md). A register map is useful
+dispatch underneath are [Register Maps](../interface/axi_mm/regmap.md). A register map is useful
 without a launch; a launch is not possible without a register map.
 
 ## A minimal simulation
 
 Two raw [`SimObj`](../sim/simobj.md)s exercising the launch-then-poll lifecycle over a
-[`DirectMMIF`](../interface/primitive/aximm.md#directmmif): a `Kernel` holding a `VitisRegMapMMIFSlave` runs its `on_start`
+[`DirectMMIF`](../interface/axi_mm/modeling.md#directmmif): a `Kernel` holding a `VitisRegMapMMIFSlave` runs its `on_start`
 when launched, and a `Host` holding an `MMIFMaster` writes the inputs, asserts `ap_start`, polls
 `ap_done`, and reads the result back. No `HwModule`. (`on_start` is the regmap-launched entry — see
 the [SimObj lifecycle](../sim/simobj.md#its-lifecycle); the `yield from` mechanics are in
@@ -177,7 +177,7 @@ Each user field goes, in declaration order, to the **lowest free address at or a
 
 So `int x, a, b` then `int& y` land at `0x10`, `0x18`, `0x20`, `0x28` — the familiar 8-byte stride — but only because nothing follows the output. A field after an output skips the output's gap, a 64-bit scalar steps by 12 bytes rather than 16, and because placement is first fit, a small scalar can fill the hole an aligned array leaves *ahead* of fields declared before it. The rule is measured, not documented by AMD: `tests/hw/test_regmap_vitis_layout.py` pins it against 15 probe kernels and, under `-m vitis`, re-synthesizes them and diffs the model against the generated `ADDR_*` localparams.
 
-An `RW` field the kernel *writes* is the one case the model gets wrong by construction: Vitis turns it into an in/out port with separate `<name>_i` and `<name>_o` registers, while `VitisRegMap` treats every `RW` field as an input. See [Bit-packed fields](../interface/primitive/regmap.md#bit-packed-fields) for the mechanism, and [Fidelity](#fidelity-what-is-and-is-not-modelled) for what the model does not reproduce.
+An `RW` field the kernel *writes* is the one case the model gets wrong by construction: Vitis turns it into an in/out port with separate `<name>_i` and `<name>_o` registers, while `VitisRegMap` treats every `RW` field as an input. See [Bit-packed fields](../interface/axi_mm/regmap.md#bit-packed-fields) for the mechanism, and [Fidelity](#fidelity-what-is-and-is-not-modelled) for what the model does not reproduce.
 
 ```python
 class VitisRegMap(RegMap):
@@ -470,11 +470,11 @@ from waveflow.hw.regmap import VitisRegMap, VitisRegMapMMIFSlave
 | Host launch a Vitis kernel  | `yield from regmap.start(master, base_addr=BASE)` |
 
 The generic `RegMap` rows of this table are on
-[Register Maps](../interface/primitive/regmap.md#quick-reference).
+[Register Maps](../interface/axi_mm/regmap.md#quick-reference).
 
 ## See also
 
-- [Register Maps](../interface/primitive/regmap.md) — the interface underneath: `RegField`,
+- [Register Maps](../interface/axi_mm/regmap.md) — the interface underneath: `RegField`,
   `RegAccess`, the offset table, and the AXI-Lite slave dispatch.
 - [Host-activated kernel in HLS](./hostactivated.md) — what this lifecycle lowers to: one
   `ap_ctrl_hs` top-level function whose `s_axilite` block carries the same fields.

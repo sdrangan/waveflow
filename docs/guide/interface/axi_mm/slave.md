@@ -1,35 +1,28 @@
 ---
-title: Memory-mapped slave adaptor
-parent: Derived interfaces
+title: Slave side — memory-mapped adaptor
+parent: AXI-MM
 grand_parent: Interfaces
-nav_order: 6
+nav_order: 3
 audience: python
 api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveAdaptor, QueueView, RegBankView, BramView, render_view_slot, render_adaptor_slot, AxiXbarConfig, generate_axi_xbar]
 summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. Four views (queue in, queue out, register bank, BRAM window), each with stated semantics; one or several behind one front; the ordering guarantee and its measured scope; and where the pysim twins agree with RTL and where they do not."
 ---
 
-# Memory-mapped slave adaptor
+# Slave side — memory-mapped adaptor
 
-A kernel can drive the bus as a **master** from inside the Vitis top — that is what
-[`MemRStream` / `MemWStream`](../../memory/memstream.md) are for. It cannot be **reached** as a
-slave from there: Vitis HLS generates `m_axi` and `s_axilite`, and no AXI4-full slave. `s_axilite`
-does not help a free-running kernel either — it is a register file, and the kernel cannot see a write
-happen, so writing the same value twice is invisible.
-
-So the memory-mapped side lives in the [RTL top](../../flows/concurrent_layers.md), as an **adaptor**:
-hand-written Verilog that takes AXI transactions on one side and produces stream messages on the
-other. The two sides meet at the AXI crossbar, which is in the RTL top too: it joins masters inside
-the kernel, slaves in the adaptor, and models in the testbench. The rule that makes it composable:
+A free-running kernel is **reached** over the bus — a host writing its registers, another kernel
+filling its queue — through a **slave adaptor**: hand-written Verilog, an RTL module in the
+[RTL top](../../flows/concurrent_layers.md), that takes AXI transactions on one side and produces the
+stream messages the kernel reads on the other. It is RTL because Vitis HLS cannot generate an AXI4-full
+slave, and `s_axilite` is no help to a kernel that cannot see a write happen — see
+[AXI-MM](./index.md#what-decides-the-realization-what-vitis-hls-can-generate). The other direction, a
+kernel *driving* the bus, is the [master side](./master.md). The rule that makes it composable:
 
 > **Kernels stay stream-only. Every synchronization a kernel sees is a stream message.**
 
 A kernel facing raw registers, a raw FIFO and a raw memory at once has no defined order between them.
 A stream message has one — it arrives, in order, once — so each view below states what one bus access
 becomes *as a message*.
-
-This is not the [AXI-MM Command Queue](./mmqueue.md). That is a ring in DRAM that both sides reach as
-masters, with the consumer polling memory. Here the queue is a hardware FIFO behind a slave port: the
-producer is stalled by back-pressure and the consumer is a stream reader that never polls.
 
 ## The structure
 
@@ -44,7 +37,7 @@ producer is stalled by back-pressure and the consumer is a stream reader that ne
    mm_queue_in  mm_queue_out  mm_regbank   mm_bram_port ─▶ bram_t2p port A
          │          ▲          │    ▲                         port B ◀─▶ kernel
          ▼ axis     │ axis     ▼    │ axis
-                       kernel (FreeRunMod in the Vitis top)
+                 kernel (a kernel module, in the Vitis kernel)
 ```
 
 - **`axi_slave_front.v`** is the only module that speaks AXI. It turns each beat into one request on
@@ -97,7 +90,7 @@ only INCR bursts, so the address moves every beat, and an AXI burst may not cros
   move a packet boundary. `len = 0` is an empty packet.
 - **A full FIFO holds WREADY low**: the writer's burst stalls until the kernel drains. That is modelled,
   not avoided — a producer whose bus port carries other traffic reads the vacancy first, or holds
-  credits ([Credit Stream](./credit_stream.md)).
+  credits ([Credit Stream](../derived/credit_stream.md)).
 - **Accepted is not consumed.** The B response means the adaptor took the words.
 - A kernel that already writes memory through `MemWStream` reaches another kernel's queue by pointing
   its base address at the window and prepending the length — gated at RTL with the real synthesized
@@ -227,7 +220,7 @@ transaction, as the front does. It is opt-in; every other slave behaves as befor
 The slave ports above are reached through AMD's `axi_crossbar` IP, the same core a board design uses,
 so the cycle counts measured through it transfer. `AxiXbarConfig` describes it and
 `generate_axi_xbar` produces it with `create_ip` (about 30 s, cached). See
-[MM Interfaces — how it lowers](../primitive/aximm.md#how-it-lowers).
+[MM Interfaces — how it lowers](modeling.md#how-it-lowers).
 
 ## pysim and RTL
 

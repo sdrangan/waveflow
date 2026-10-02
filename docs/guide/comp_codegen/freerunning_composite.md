@@ -233,5 +233,5 @@ downstream keeps working. This framework has needed it twice: an un-paced pipeli
 - [Free-running kernel in HLS](./freerunning.md) — the 1-task case, and the task body itself.
 - [Writing it in Python](../flows/concurrent_python.md) — declaring the graph.
 - [XSI testbench](./xsi_tb.md) — how a composite top is verified at RTL.
-- [Streaming Memory Kernels](../memory/memstream.md) — the `MemRStream` / `MemWStream` children used
+- [Streaming Memory Kernels](../interface/axi_mm/master.md) — the `MemRStream` / `MemWStream` children used
   here.

@@ -60,8 +60,8 @@ lite_link.bind ("master", tb.m_lite);  lite_link.bind ("slave", accel.s_lite)
 ```
 
 The endpoint classes and their `write` / `read` / `get` calls are documented under
-[Interfaces](../interface/) — [streams](../interface/primitive/stream.md), [memory-mapped](../interface/primitive/aximm.md),
-[register maps](../interface/primitive/regmap.md). This page is only about *assembling and running* the system.
+[Interfaces](../interface/) — [streams](../interface/primitive/stream.md), [memory-mapped](../interface/axi_mm/modeling.md),
+[register maps](../interface/axi_mm/regmap.md). This page is only about *assembling and running* the system.
 
 ## A minimal complete example
 

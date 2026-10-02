@@ -60,7 +60,7 @@ stages should run concurrently — anything that benefits from pipelining rather
   (`Sequencer → MemRStream → MemWStream`), the generated `ap_ctrl_none` top, the generated XSI
   testbench, and the RTL/XSI verification.
 - The framework memory streamers it is built from are the
-  [Streaming Memory Kernels](../memory/memstream.md) page.
+  [Streaming Memory Kernels](../interface/axi_mm/master.md) page.
 - **[How it is realized in HLS](../comp_codegen/freerunning.md)** — the generated `ap_ctrl_none` top,
   the task bodies, and [the XSI testbench](../comp_codegen/xsi_tb.md).
 

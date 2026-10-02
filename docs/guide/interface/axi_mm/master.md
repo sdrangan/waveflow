@@ -1,12 +1,13 @@
 ---
-title: Streaming Memory Kernels
-parent: Memory Modeling
-nav_order: 4
+title: Master side — streaming memory kernels
+parent: AXI-MM
+grand_parent: Interfaces
+nav_order: 2
 has_children: false
 summary: "MemRStream and MemWStream give memory a command-based transactional interface: a kernel sends a read or write command on a stream and the component runs the burst. A lone kernel could own its m_axi port directly — the command stream earns its keep once memory is shared, because commands in, completions out and correlation by an opaque tag is most of what a crossbar needs."
 ---
 
-# Streaming Memory Kernels
+# Master side — streaming memory kernels
 
 `MemRStream` and `MemWStream` (`waveflow/hw/mem_stream.py`) give memory a **command-based,
 transactional interface**. Rather than a kernel reaching into an `m_axi` port directly, it sends a read
@@ -53,7 +54,7 @@ class MRCmd(ParamSchema):
 relative to a buffer base set once with `bind_base()` (mirroring the `offset=slave` AXI register). Every
 command afterward is base-relative and unit-agnostic, and because `m_mem` is already a word pointer in
 the generated C++, no byte↔word conversion happens in the kernel — unlike a byte-addressed `m_axi` port
-(see [Endpoint interfaces](../comp_codegen/interface.md)).
+(see [Endpoint interfaces](../../comp_codegen/interface.md)).
 
 **Example.**
 
@@ -117,11 +118,11 @@ tractable without the memory stage holding any per-job state.
 
 > **The other side of the bus.** `MemRStream` / `MemWStream` let a kernel *drive* the bus. To be
 > *reached* over it — a queue a host writes, registers it sets, a memory it fills — a kernel gets a
-> [memory-mapped slave adaptor](../interface/derived/mm_slave.md) in the RTL top. The two meet: a
+> [memory-mapped slave adaptor](slave.md) in the RTL top. The two meet: a
 > kernel with a `MemWStream` writes into another kernel's queue window just by pointing its base
 > address there.
 
 > **Composing these into a kernel** (a memcpy: `MemRStream` → `MemWStream`) is a separate topic — see
-> the [MemCopy example](../../examples/memcpy/), which drives the two with a sequencer and uses a
+> the [MemCopy example](../../../examples/memcpy/), which drives the two with a sequencer and uses a
 > richer *in-band framed* command protocol so a store command can never separate from the data it
 > describes.

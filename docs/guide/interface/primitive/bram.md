@@ -199,7 +199,7 @@ no walk that emits `hls::task`s should ever meet it.
 
 The access is untimed in pysim on purpose: a BRAM answer is deterministic, unarbitrated and
 one cycle, so a discrete-event model of it would add a timestep and no fidelity. Contrast
-[AXI-MM](./aximm.md), where the bus, the arbitration and the burst *are* the point of having a model.
+[AXI-MM](../axi_mm/modeling.md), where the bus, the arbitration and the burst *are* the point of having a model.
 
 **The correctness argument is yours.** `bram_t2p.v` `$error`s when port B reads the address port A is
 writing that cycle — for a circular buffer, *rd trails wr*. Nothing else would check it: if it fails,

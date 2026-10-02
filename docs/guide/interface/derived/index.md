@@ -5,7 +5,7 @@ nav_order: 3
 has_children: true
 audience: python
 snippets: run
-summary: "The interfaces that are transaction patterns over a primitive rather than a construct of their own — the two reverse channels (credit and ack), a schema transfer, an array transfer, and the AXI-MM command queue. Each is built from primitives; what differs is how it hands you the primitive underneath — declared and wired automatically, or owned and bound by you."
+summary: "The interfaces that are transaction patterns over a primitive rather than a construct of their own — the two reverse channels (credit and ack), a schema transfer and an array transfer. Each is built from primitives; what differs is how it hands you the primitive underneath — declared and wired automatically, or owned and bound by you."
 ---
 
 # Derived interfaces
@@ -26,8 +26,6 @@ underneath** — and that difference is worth knowing before you wire one up.
 |---|---|
 | [Credit Stream](./credit_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
 | [Acked Stream](./acked_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
-| [AXI-MM Command Queue](./mmqueue.md) | a protocol *over* an `MMIFMaster` — the ring lives in the transactions, not in a new channel |
-| [Memory-mapped slave adaptor](./mm_slave.md) | an `MMIFSlave` on the bus side, ordinary streams on the kernel side — the adaptor between them is hand-written RTL |
 
 The two reverse channels declare their composition, so a walk over the design finds the underlying
 streams without help:
@@ -42,9 +40,6 @@ for cls in (CreditStreamIF, AckedStreamIF):
 CreditStreamIF   Two ordinary streams.  Nothing here lowers to a new kind of edge.
 AckedStreamIF    Two ordinary streams.  In hardware there is no acked stream — there are two FIFOs.
 ```
-
-The queue is the odd one: it is a protocol *over* an `MMIFMaster` rather than a new channel, so the
-ring lives in the transactions and there is nothing extra to bind.
 
 ## The two reverse channels
 
@@ -65,11 +60,6 @@ copies.
 
 ## Pages
 
-- [AXI-MM Command Queue](./mmqueue.md) — the in-memory command ring (`AXIMMQueue`): control moved
-  off the stream and into shared memory, over an `MMIFMaster`.
-- [Memory-mapped slave adaptor](./mm_slave.md) — how a kernel is *reached* over the bus: queues,
-  a register bank and a BRAM window behind one AXI slave port, each turning transactions into stream
-  messages; the ordering guarantee and its scope.
 - [Credit Stream](./credit_stream.md) — the receiver's reverse channel: cumulative words consumed,
   so a producer that cannot be stalled can ask about room *before* it commits.
 - [Acked Stream](./acked_stream.md) — the transmitter's reverse channel: one outcome per marked
