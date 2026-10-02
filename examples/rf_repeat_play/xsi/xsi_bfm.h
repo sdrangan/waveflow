@@ -369,7 +369,7 @@ public:
         valid_ = d_.get1(P_valid);
         data_  = d_.getW(P_data);
         last_  = (P_last >= 0) ? d_.get1(P_last) : 0u;
-        beat_  = (valid_ && h_ready_);
+        beat_  = (valid_ && d_ready_);
     }
 
     /// Records the cycle each word arrived, not just the word.
@@ -388,7 +388,15 @@ public:
         }
     }
 
-    void drive() override { d_.put1(P_ready, h_ready_); }
+    void drive() override {
+        d_ready_ = (h_ready_ && cycle_ >= ready_from) ? 1u : 0u;
+        d_.put1(P_ready, d_ready_);
+    }
+
+    //: Optional: hold TREADY low until this cycle (1-based, the sink's own count).  Default 0 = ready
+    //: from the start, exactly the always-ready sink every existing gate uses.  Exists so a gate can
+    //: fill an upstream FIFO on purpose and measure the back-pressure (plans/mm_slave_adaptor.md).
+    long ready_from = 0;
 
     //: Optional: if set, post_sim dumps the collected words + their arrival cycles (a capture bundle),
     //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
@@ -411,6 +419,8 @@ public:
 
     const std::vector<uint64_t>& words() const { return words_; }
     size_t count() const { return words_.size(); }
+    /// Cumulative word counts at each TLAST (empty for a port without the pin).
+    const std::vector<uint64_t>& bounds() const { return bounds_; }
 
     /// The cycle each accepted word arrived on (parallel to `words()`).
     const std::vector<long>& beat_cycles() const { return beat_cycles_; }
@@ -428,7 +438,7 @@ private:
     std::vector<uint64_t> bounds_;
     std::vector<long> beat_cycles_;
     long cycle_ = 0;
-    uint32_t h_ready_ = 1, valid_ = 0, last_ = 0;
+    uint32_t h_ready_ = 1, d_ready_ = 1, valid_ = 0, last_ = 0;
     uint64_t data_ = 0;
     bool beat_ = false;
 };
@@ -462,6 +472,8 @@ public:
         std::vector<uint64_t> wdata;      ///< write payload (one word per beat)
         uint32_t nwords = 0;              ///< read length
         long not_before = 0;              ///< earliest cycle the address phase may be presented
+        uint64_t wstrb = ~(uint64_t)0;    ///< WSTRB on every beat (masked to the bus); a fault knob
+        int size = -1;                    ///< AxSIZE override; -1 = the bus width.  A fault knob.
         long t_start = -1, t_end = -1;    ///< cycles (see class comment)
         uint32_t resp = 0;                ///< BRESP, or the worst RRESP over the burst
         std::vector<uint64_t> rdata;      ///< read result
@@ -506,6 +518,8 @@ public:
 
     bool idle() const { return cur_ >= ops_.size(); }
     const Op& op(size_t i) const { return ops_[i]; }
+    /// Mutable access, for the fault knobs (`wstrb`, `size`) on an op already queued.
+    Op& op_mut(size_t i) { return ops_[i]; }
     size_t nops() const { return ops_.size(); }
     long cycle() const { return cycle_; }
 
@@ -562,7 +576,8 @@ public:
         d_.putW(P_wdata, (wr && wbeat_ < o->wdata.size()) ? o->wdata[wbeat_] : 0);
         d_.put1(P_wlast, (wr && wbeat_ + 1 == o->wdata.size()) ? 1u : 0u);
         d_.put1(P_wvalid, h_wvalid_);
-        if (P_wstrb >= 0) d_.putW(P_wstrb, (bpw_ >= 8) ? ~(uint64_t)0 : ((1ull << bpw_) - 1));
+        const uint64_t strb_all = (bpw_ >= 64) ? ~(uint64_t)0 : ((1ull << bpw_) - 1);
+        if (P_wstrb >= 0) d_.putW(P_wstrb, (o ? o->wstrb : ~(uint64_t)0) & strb_all);
         d_.put1(P_bready, h_bready_);
         d_.putW(P_araddr, (o && !wr) ? o->addr : 0);
         d_.putW(P_arlen, (o && !wr) ? len : 0);
@@ -570,8 +585,9 @@ public:
         d_.put1(P_rready, h_rready_);
         if (P_awid >= 0) d_.putW(P_awid, id_);
         if (P_arid >= 0) d_.putW(P_arid, id_);
-        if (P_awsize >= 0) d_.putW(P_awsize, (uint64_t)size_);
-        if (P_arsize >= 0) d_.putW(P_arsize, (uint64_t)size_);
+        const uint64_t sz = (o && o->size >= 0) ? (uint64_t)o->size : (uint64_t)size_;
+        if (P_awsize >= 0) d_.putW(P_awsize, sz);
+        if (P_arsize >= 0) d_.putW(P_arsize, sz);
         if (P_awburst >= 0) d_.putW(P_awburst, 1);   // INCR
         if (P_arburst >= 0) d_.putW(P_arburst, 1);
         if (P_awcache >= 0) d_.putW(P_awcache, 3);   // normal non-cacheable bufferable (AXI default)
