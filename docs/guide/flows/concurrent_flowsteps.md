@@ -2,7 +2,7 @@
 title: Flow steps
 parent: Concurrent (free-running)
 grand_parent: Hardware modules and Flows
-nav_order: 1
+nav_order: 2
 audience: python
 summary: "The concurrent flow end to end as a step diagram: a FreeRunMod graph and a composite FreeRunMod testbench graph, each walked to generated C++ (an ap_ctrl_none top with one hls::task per child, and an XSI harness), then csynth and cycle-exact XSI verification. The full worked instance is the mem_copy example."
 ---

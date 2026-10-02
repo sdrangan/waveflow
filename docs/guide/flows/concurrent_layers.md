@@ -2,7 +2,7 @@
 title: The layers of a design
 parent: Concurrent (free-running)
 grand_parent: Hardware modules and Flows
-nav_order: 2
+nav_order: 1
 audience: python
 summary: "At RTL a concurrent design is nested layers, each produced a different way: the Vitis top (the generated kernel), the RTL top that joins it to hand-written Verilog and vendor IP (memories, the memory-mapped adaptor, the AXI crossbar), and the XSI harness of C++ models around that. In pysim the same objects form one graph. This page maps each pysim object to the layer it lands in, says which side of the bus a kernel can be on and why, and is explicit about which joins are generated from the graph today and which are still assembled by example code."
 ---
