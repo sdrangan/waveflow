@@ -42,6 +42,7 @@ from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.mm_adaptor import MemSlaveAdaptor
 from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
 from waveflow.hw.mm_regbank import MemSlaveRegBank
 from waveflow.simulation.simobj import SimObj
@@ -279,6 +280,8 @@ class MmFirSystem:
     plan: list
     pkt: int = 16
     lag: int = 0
+    #: Stage 4: all three views behind one adaptor port instead of one crossbar slot each.
+    one_front: bool = False
     xbar_latency: float = 4.0
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -301,13 +304,21 @@ class MmFirSystem:
             si = StreamIF(name=name, sim=sim, clk=clk, bitwidth=DW, depth=depth)
             si.bind(ep_name="master", endpoint=m)
             si.bind(ep_name="slave", endpoint=s)
-        self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=3,
-                                    bitwidth=DW, latency_init=self.xbar_latency)
+        if self.one_front:
+            # Stage 4: the three views behind ONE bus port, at the same addresses (view k at k*4 KB).
+            self.adaptor = MemSlaveAdaptor(name="fir_mm", sim=sim, mem_dwidth=DW,
+                                           views=[self.regs, self.qin, self.qout])
+            slaves, ranges = [self.adaptor.s_mem], [(REGS, self.adaptor.span())]
+        else:
+            slaves = [self.regs.s_mem, self.qin.s_mem, self.qout.s_mem]
+            ranges = [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000)]
+        self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1,
+                                    nports_slave=len(slaves), bitwidth=DW,
+                                    latency_init=self.xbar_latency)
         self.xbar.bind("master_0", self.host.m)
-        for k, ep in enumerate((self.regs.s_mem, self.qin.s_mem, self.qout.s_mem)):
+        for k, ep in enumerate(slaves):
             self.xbar.bind(f"slave_{k}", ep)
-        assign_address_ranges([self.regs.s_mem, self.qin.s_mem, self.qout.s_mem],
-                              [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000)])
+        assign_address_ranges(slaves, ranges)
 
     def run(self) -> np.ndarray:
         self.sim.run_sim(until=self.host.done)

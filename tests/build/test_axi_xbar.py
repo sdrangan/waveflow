@@ -66,3 +66,9 @@ def test_port_direction_follows_facing():
     assert any(d.startswith("output") and d.endswith("p_AWADDR") for d in master)
     assert any(d.startswith("output") and d.endswith("p_BVALID") for d in slave)
     assert not any("REGION" in d for d in slave)
+
+
+def test_one_by_one_crossbar_refused():
+    """create_ip turns NUM_SI=1/NUM_MI=1 into an inconsistent 2-MI IP (measured); refuse it up front."""
+    with pytest.raises(ValueError, match="degenerate"):
+        AxiXbarConfig(name="x", n_si=1, mi=[AxiXbarRange(0, 12)])

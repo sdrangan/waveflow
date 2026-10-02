@@ -39,3 +39,26 @@ def test_regbank_view_layout_and_render():
     assert ".m_cfg_TLAST(k_cfg_TLAST)" in txt and ".s_status_TREADY(k_stat_TREADY)" in txt
     with pytest.raises(ValueError, match="at least one"):
         RegBankView("r", ncfg=0, nstat=1, cfg_axis="a", status_axis="b")
+
+
+def test_adaptor_decoder_routes_by_window():
+    from waveflow.build.mm_adaptor_gen import RegBankView, adaptor_law, render_adaptor_slot
+    views = [RegBankView("regs", ncfg=5, nstat=2, cfg_axis="k_cfg", status_axis="k_stat"),
+             QueueView("qin", "in", axis="k_in", depth=64), QueueView("qout", "out", axis="k_out")]
+    assert [adaptor_law(n) for n in (1, 2, 3, 4, 5)] == [12, 13, 14, 14, 15]
+    v = render_adaptor_slot("ad", views, "mi0_axi", 64, 32, 1)
+    assert "axi_slave_front #(.DW(64), .AW(32), .IDW(1), .LAW(14)) u_ad_front" in v
+    assert "wire [1:0] ad_sel = ad_req_addr[13:12];" in v
+    assert "assign qin_req_valid = ad_req_valid && (ad_sel == 1);" in v
+    assert "assign qout_req_addr  = ad_req_addr[11:0];" in v
+    assert "wire ad_hole = (ad_sel >= 3);" in v          # the 4th window answers SLVERR
+    assert v.count("axi_slave_front") == 1                # ONE front
+
+
+def test_adaptor_refuses_duplicate_names_and_odd_windows():
+    from waveflow.build.mm_adaptor_gen import render_adaptor_slot
+    with pytest.raises(ValueError, match="unique"):
+        render_adaptor_slot("ad", [QueueView("q", "in", axis="a"), QueueView("q", "out", axis="b")],
+                            "mi0_axi", 64, 32, 1)
+    with pytest.raises(ValueError, match="4 KB"):
+        render_adaptor_slot("ad", [QueueView("q", "in", axis="a", law=13)], "mi0_axi", 64, 32, 1)

@@ -72,6 +72,13 @@ class AxiXbarConfig:
         object.__setattr__(self, "mi", tuple(self.mi))
         if not 1 <= self.n_si <= 16 or not 1 <= len(self.mi) <= 16:
             raise ValueError("axi_crossbar supports 1..16 SI and 1..16 MI slots")
+        if self.n_si == 1 and len(self.mi) == 1:
+            # Measured 2026-10-02 (Vivado 2025.1): create_ip accepts NUM_SI=1/NUM_MI=1 and silently
+            # generates C_NUM_MASTER_SLOTS=2 with address parameters for ONE slot -- 2-bit MI ports, an
+            # inconsistent IP, and an XSI run that crashes.  A 1x1 crossbar routes nothing; connect the
+            # master and slave directly, or give the crossbar a second slot.
+            raise ValueError("a 1x1 axi_crossbar is degenerate (create_ip generates an inconsistent "
+                             "2-MI IP for it); connect directly or add a second SI/MI slot")
         if (1 << self.id_width) < self.n_si:
             # The response route back to an SI is its ID; fewer ID values than SIs cannot name them.
             raise ValueError(f"id_width={self.id_width} cannot distinguish {self.n_si} SIs")

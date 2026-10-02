@@ -88,7 +88,10 @@ import pytest
 #: ``tests/examples/test_mm_fir_xsi.py`` -- the csynth'd mm_fir kernel behind the adaptor, bit-exact
 #: against the numpy golden through a mid-stream tap switch, plus its cycle count.  Needs
 #: ``python -m examples.mm_fir.mm_fir_build``, so it CAN skip.
-WANT_XSI_GATES = 136
+#:
+#: 136 -> 138 on 2026-10-02 (Stage 4): the same file, now parametrized over two topologies -- one
+#: view per crossbar slot, and all three views behind ONE front with the generated decoder.
+WANT_XSI_GATES = 138
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

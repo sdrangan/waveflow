@@ -1,12 +1,15 @@
 """mm_adaptor_gen.py — Verilog wiring for the memory-mapped slave adaptor (``plans/mm_slave_adaptor.md``).
 
 The adaptor is hand-written leaves (``waveflow/build/rtl/``) joined by generated wiring.  This module
-is the wiring: it emits the nets and instances that put one :file:`axi_slave_front.v` and one leaf
+is the wiring: it emits the nets and instances that put :file:`axi_slave_front.v` and the leaves
 behind an AXI4 port group, and lists the leaf sources xvlog needs.  It writes no datapath — the
 leaves are fixed files whose widths and depths ride on Verilog parameters.
 
-Stage 1 is one view per front (each view gets its own crossbar MI slot); the multi-view decoder that
-puts several views behind one front is Stage 4.
+Two shapes:
+
+* :func:`render_view_slot` — one view per front, each view its own crossbar MI slot (Stages 1-2);
+* :func:`render_adaptor_slot` — several views behind ONE front, with a generated address decoder
+  (Stage 4).  The decoder is the only generated logic, and it is a table.
 """
 from __future__ import annotations
 
@@ -86,79 +89,182 @@ def leaf_sources() -> list[Path]:
                                   "mm_queue_out.v", "mm_regbank.v")]
 
 
+# ---------------------------------------------------------------------------
+# Pieces: the request-bus nets, the front, a leaf
+# ---------------------------------------------------------------------------
+
+_AXIS = ("TDATA", "TVALID", "TREADY", "TLAST")
+_ZERO1 = "1'b0"
+
+
 def _axis_conns(side: str, prefix: str) -> str:
-    return ",\n".join(f"    .{side}_{s}({prefix}_{s})" for s in ("TDATA", "TVALID", "TREADY", "TLAST"))
+    return ",\n".join(f"    .{side}_{s}({prefix}_{s})" for s in _AXIS)
 
 
-def render_view_slot(view, axi: str, data_width: int, addr_width: int, id_width: int) -> str:
-    """One front + one leaf (any view type) behind the AXI4 nets ``<axi>_<SIG>``."""
-    if isinstance(view, QueueView):
-        return render_queue_slot(view, axi, data_width, addr_width, id_width)
-    if isinstance(view, RegBankView):
-        head = _render_front(view.name, view.law, axi, data_width, addr_width, id_width,
-                             f"regbank view '{view.name}' (ncfg {view.ncfg}, nstat {view.nstat})")
-        n = view.name
-        leaf = [
-            f"  mm_regbank #(.DW({data_width}), .LAW({view.law}), .NCFG({view.ncfg}), "
-            f".NSTAT({view.nstat})) u_{n} (",
-            "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),",
-            f"    .req_valid({n}_req_valid), .req_ready({n}_req_ready), .req_we({n}_req_we),",
-            f"    .req_addr({n}_req_addr), .req_wdata({n}_req_wdata),",
-            f"    .rsp_valid({n}_rsp_valid), .rsp_ready({n}_rsp_ready), .rsp_rdata({n}_rsp_rdata),",
-            f"    .rsp_err({n}_rsp_err),",
-            _axis_conns("m_cfg", view.cfg_axis) + ",",
-            _axis_conns("s_status", view.status_axis),
-            "  );",
-        ]
-        return head + "\n".join(leaf) + "\n"
-    raise TypeError(f"no adaptor leaf for view type {type(view).__name__}")
-
-
-def _render_front(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: int,
-                  title: str) -> str:
-    lines = [
-        f"  // --- {title} ---",
-        f"  wire {n}_req_valid, {n}_req_ready, {n}_req_we, {n}_rsp_valid, {n}_rsp_ready, {n}_rsp_err;",
-        f"  wire [{law - 1}:0] {n}_req_addr;",
-        f"  wire [{dw - 1}:0] {n}_req_wdata, {n}_rsp_rdata;",
-        f"  axi_slave_front #(.DW({dw}), .AW({addr_width}), .IDW({id_width}), .LAW({law})) "
-        f"u_{n}_front (",
-        "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),",
-    ]
-    lines += [f"    .s_axi_{s}({axi}_{s})," for s in _FRONT_SIGS]
-    lines += [
+def _req_conns(n: str) -> list[str]:
+    return [
         f"    .req_valid({n}_req_valid), .req_ready({n}_req_ready), .req_we({n}_req_we),",
         f"    .req_addr({n}_req_addr), .req_wdata({n}_req_wdata),",
         f"    .rsp_valid({n}_rsp_valid), .rsp_ready({n}_rsp_ready), .rsp_rdata({n}_rsp_rdata),",
         f"    .rsp_err({n}_rsp_err)",
-        "  );",
     ]
+
+
+def _req_wires(n: str, law: int, dw: int) -> list[str]:
+    """The request-bus nets ``<n>_req_*`` / ``<n>_rsp_*`` (the contract in axi_slave_front.v)."""
+    return [
+        f"  wire {n}_req_valid, {n}_req_ready, {n}_req_we, {n}_rsp_valid, {n}_rsp_ready, {n}_rsp_err;",
+        f"  wire [{law - 1}:0] {n}_req_addr;",
+        f"  wire [{dw - 1}:0] {n}_req_wdata, {n}_rsp_rdata;",
+    ]
+
+
+def _front_inst(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: int) -> list[str]:
+    """``axi_slave_front`` behind the AXI4 nets ``<axi>_<SIG>``, driving the request bus ``<n>_req_*``."""
+    lines = [f"  axi_slave_front #(.DW({dw}), .AW({addr_width}), .IDW({id_width}), .LAW({law})) "
+             f"u_{n}_front (", "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),"]
+    lines += [f"    .s_axi_{s}({axi}_{s})," for s in _FRONT_SIGS]
+    lines += _req_conns(n)
+    lines.append("  );")
+    return lines
+
+
+def _leaf_inst(view, dw: int) -> list[str]:
+    """The view's hand-written leaf on the request bus ``<view.name>_req_*``."""
+    n = view.name
+    if isinstance(view, QueueView):
+        side = "m_axis" if view.kind == "in" else "s_axis"
+        head = f"  {view.module} #(.DW({dw}), .LAW({view.law}), .DEPTH({view.depth})) u_{n} ("
+        streams = [_axis_conns(side, view.axis)]
+    elif isinstance(view, RegBankView):
+        head = (f"  mm_regbank #(.DW({dw}), .LAW({view.law}), .NCFG({view.ncfg}), "
+                f".NSTAT({view.nstat})) u_{n} (")
+        streams = [_axis_conns("m_cfg", view.cfg_axis) + ",", _axis_conns("s_status", view.status_axis)]
+    else:
+        raise TypeError(f"no adaptor leaf for view type {type(view).__name__}")
+    req = _req_conns(n)
+    req[-1] += ","
+    return [head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req, *streams, "  );"]
+
+
+def _title(view) -> str:
+    if isinstance(view, QueueView):
+        return f"queue view '{view.name}' ({view.module}, depth {view.depth})"
+    return f"regbank view '{view.name}' (ncfg {view.ncfg}, nstat {view.nstat})"
+
+
+# ---------------------------------------------------------------------------
+# Shape 1: one view per front
+# ---------------------------------------------------------------------------
+
+def render_view_slot(view, axi: str, data_width: int, addr_width: int, id_width: int) -> str:
+    """One front + one leaf (any view type) behind the AXI4 nets ``<axi>_<SIG>`` (which must already
+    exist).  The leaf's stream side lands on nets the enclosing module provides as ports or wires."""
+    lines = [f"  // --- {_title(view)} ---"]
+    lines += _req_wires(view.name, view.law, data_width)
+    lines += _front_inst(view.name, view.law, axi, data_width, addr_width, id_width)
+    lines += _leaf_inst(view, data_width)
     return "\n".join(lines) + "\n"
 
 
 def render_queue_slot(view: QueueView, axi: str, data_width: int, addr_width: int,
                       id_width: int) -> str:
-    """One front + one queue leaf behind the AXI4 nets ``<axi>_<SIG>`` (which must already exist).
+    """:func:`render_view_slot` for a queue view (the Stage 1 name, kept for its callers)."""
+    return render_view_slot(view, axi, data_width, addr_width, id_width)
 
-    The request bus between them is local nets ``<name>_req_*`` / ``<name>_rsp_*``; the leaf's
-    stream side lands on ``<axis>_T*`` nets, which the enclosing module provides as ports or wires.
+
+# ---------------------------------------------------------------------------
+# Shape 2: several views behind one front (Stage 4)
+# ---------------------------------------------------------------------------
+
+#: Every view window is 4 KB in a multi-view adaptor: the view index is the address above bit 12.
+VIEW_LAW = 12
+
+
+def adaptor_law(nviews: int) -> int:
+    """Local address bits of an adaptor holding *nviews* 4 KB windows (a power-of-two span)."""
+    k = 0
+    while (1 << k) < nviews:
+        k += 1
+    return VIEW_LAW + k
+
+
+def _mux(views, sig: str, sel: str, default: str) -> str:
+    expr = default
+    for k in reversed(range(len(views))):
+        expr = f"({sel} == {k}) ? {views[k].name}_{sig} : {expr}"
+    return expr
+
+
+def render_adaptor_slot(name: str, views, axi: str, data_width: int, addr_width: int,
+                        id_width: int) -> str:
+    """Several views behind ONE front: the Stage 4 adaptor (``plans/mm_slave_adaptor.md``).
+
+    View *k* occupies the 4 KB window at local offset ``k * 0x1000``.  The generated decoder:
+
+    * routes a request to the view its address selects (``req_addr[LAW-1:12]``), passing the low 12
+      bits as the view-local address;
+    * takes the read response from the view that accepted the read, selected by a register latched at
+      the request handshake -- correct because the front has at most one read outstanding;
+    * accepts an address in the span's unused tail (when the view count is not a power of two) and
+      answers a read there SLVERR with data 0, so a stray read cannot hang the bus.
+
+    ORDERING -- the plan's guarantee 1 -- is the front's: it serves one AXI transaction at a time, so a
+    write to one view has reached it before a later transaction is even decoded.
     """
-    n, dw = view.name, data_width
-    head = _render_front(n, view.law, axi, dw, addr_width, id_width,
-                         f"queue view '{n}' ({view.module}, depth {view.depth})")
-    lines = [
-        f"  {view.module} #(.DW({dw}), .LAW({view.law}), .DEPTH({view.depth})) u_{n} (",
-        "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),",
-        f"    .req_valid({n}_req_valid), .req_ready({n}_req_ready), .req_we({n}_req_we),",
-        f"    .req_addr({n}_req_addr), .req_wdata({n}_req_wdata),",
-        f"    .rsp_valid({n}_rsp_valid), .rsp_ready({n}_rsp_ready), .rsp_rdata({n}_rsp_rdata),",
-        f"    .rsp_err({n}_rsp_err),",
+    views = list(views)
+    if not views:
+        raise ValueError("an adaptor needs at least one view")
+    names = [v.name for v in views]
+    if len(set(names)) != len(names):
+        raise ValueError(f"view names must be unique, got {names}")
+    for v in views:
+        if v.law != VIEW_LAW:
+            raise ValueError(f"view '{v.name}': a multi-view adaptor uses 4 KB windows (law 12)")
+    dw, n = data_width, name
+    law = adaptor_law(len(views))
+    sb = law - VIEW_LAW
+    sel, rsel, hole, hole_rsp = f"{n}_sel", f"{n}_rsel", f"{n}_hole", f"{n}_hole_rsp"
+    zero_dw = "{" + str(dw) + "{1'b0}}"
+
+    lines = [f"  // --- adaptor '{n}': {len(views)} views behind one front (LAW {law}) ---"]
+    lines += _req_wires(n, law, dw)
+    lines += _front_inst(n, law, axi, dw, addr_width, id_width)
+    rng = f"[{sb - 1}:0] " if sb else ""
+    lines.append(f"  wire {rng}{sel} = " + (f"{n}_req_addr[{law - 1}:{VIEW_LAW}];" if sb else "1'b0;"))
+    lines.append(f"  reg  {rng}{rsel};")
+    lines.append(f"  wire {hole} = " + (f"({sel} >= {len(views)});" if (1 << sb) > len(views) else "1'b0;"))
+    lines.append(f"  reg  {hole_rsp};")
+    for k, v in enumerate(views):
+        vn = v.name
+        lines.append(f"  // view {k}: {_title(v)} at local 0x{k << VIEW_LAW:x}")
+        lines += _req_wires(vn, VIEW_LAW, dw)
+        lines += [
+            f"  assign {vn}_req_valid = {n}_req_valid && ({sel} == {k});",
+            f"  assign {vn}_req_we    = {n}_req_we;",
+            f"  assign {vn}_req_addr  = {n}_req_addr[{VIEW_LAW - 1}:0];",
+            f"  assign {vn}_req_wdata = {n}_req_wdata;",
+            f"  assign {vn}_rsp_ready = {n}_rsp_ready && !{hole_rsp} && ({rsel} == {k});",
+        ]
+        lines += _leaf_inst(v, dw)
+    lines += [
+        f"  assign {n}_req_ready = {hole} ? 1'b1 : ({_mux(views, 'req_ready', sel, _ZERO1)});",
+        f"  assign {n}_rsp_valid = {hole_rsp} ? 1'b1 : ({_mux(views, 'rsp_valid', rsel, _ZERO1)});",
+        f"  assign {n}_rsp_rdata = {hole_rsp} ? {zero_dw} : ({_mux(views, 'rsp_rdata', rsel, zero_dw)});",
+        f"  assign {n}_rsp_err   = {hole_rsp} ? 1'b1 : ({_mux(views, 'rsp_err', rsel, _ZERO1)});",
+        "  always @(posedge ap_clk) begin",
+        f"    if (!ap_rst_n) begin {rsel} <= 0; {hole_rsp} <= 1'b0; end",
+        "    else begin",
+        f"      if ({n}_req_valid && {n}_req_ready && !{n}_req_we) begin",
+        f"        {rsel} <= {sel};",
+        f"        {hole_rsp} <= {hole};",
+        f"      end else if ({hole_rsp} && {n}_rsp_ready) begin",
+        f"        {hole_rsp} <= 1'b0;",
+        "      end",
+        "    end",
+        "  end",
     ]
-    side = "m_axis" if view.kind == "in" else "s_axis"
-    lines.append(",\n".join(f"    .{side}_{s}({view.axis}_{s})"
-                            for s in ("TDATA", "TVALID", "TREADY", "TLAST")))
-    lines.append("  );")
-    return head + "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n"
 
 
 def axis_port_decls(prefix: str, data_width: int, kernel_reads: bool) -> list[str]:
@@ -170,5 +276,5 @@ def axis_port_decls(prefix: str, data_width: int, kernel_reads: bool) -> list[st
 
 
 def mi_wire_signals(data_width: int, addr_width: int, id_width: int):
-    """The AXI4 signal set of a crossbar MI slot (what :func:`render_queue_slot` connects to)."""
+    """The AXI4 signal set of a crossbar MI slot (what the slot renderers connect to)."""
     return axi_signals(data_width, addr_width, id_width, region=True)

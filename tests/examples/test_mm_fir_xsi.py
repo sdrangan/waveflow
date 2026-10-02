@@ -43,6 +43,8 @@ from waveflow.build.mm_adaptor_gen import (
     RegBankView,
     leaf_sources,
     mi_wire_signals,
+    adaptor_law,
+    render_adaptor_slot,
     render_view_slot,
 )
 from waveflow.build.trace_steps import rtl_staleness
@@ -54,11 +56,22 @@ ROOT = REPO / "examples" / "mm_fir"
 RTL = ROOT / "mm_fir_proj" / "solution1" / "syn" / "verilog"
 WORK = REPO / "tests" / "build" / "_xsi_work"
 
-XBAR = AxiXbarConfig(
-    name="xbar_mm3_1x3", n_si=1,
-    mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12)],
-    data_width=DW, addr_width=32, id_width=1,
-)
+#: Two topologies, one address map (view k at REGS + k * 4 KB either way):
+#:   per_view  -- a 1x3 crossbar, each view its own MI slot and its own front (Stages 1-2);
+#:   one_front -- all three views behind ONE front and a generated decoder (Stage 4), on MI0 of a 1x2
+#:                crossbar.  MI1 is a stub nothing addresses: a 1x1 crossbar is degenerate (create_ip
+#:                generates an inconsistent 2-MI IP for it -- see AxiXbarConfig), and a real system has
+#:                more than one slave anyway.
+XBARS = {
+    "per_view": AxiXbarConfig(
+        name="xbar_mm3_1x3", n_si=1,
+        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12)],
+        data_width=DW, addr_width=32, id_width=1),
+    "one_front": AxiXbarConfig(
+        name="xbar_mm1_1x2", n_si=1,
+        mi=[AxiXbarRange(REGS, adaptor_law(3)), AxiXbarRange(0x0001_0000, 12)],
+        data_width=DW, addr_width=32, id_width=1),
+}
 NCFG = FirCfg.nwords_per_inst(DW)
 NSTAT = FirStatus.nwords_per_inst(DW)
 VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_axis="k_stat"),
@@ -75,11 +88,12 @@ def scenario_x() -> np.ndarray:
     return np.random.default_rng(7).integers(-2000, 2000, size=NSAMP)
 
 
-def render_top(top: str) -> str:
-    dw, aw, idw = XBAR.data_width, XBAR.addr_width, XBAR.id_width
+def render_top(top: str, topology: str) -> str:
+    xbar = XBARS[topology]
+    dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
     ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
-    mi = [f"mi{k}_axi" for k in range(len(VIEWS))]
+    mi = [f"mi{k}_axi" for k in range(len(xbar.mi))]
     body = []
     for p in mi:
         body += ["  " + d for d in axi_wire_decls(p, mi_wire_signals(dw, aw, idw))]
@@ -89,9 +103,15 @@ def render_top(top: str) -> str:
     # so the TLASTs the leaves drive go nowhere, and the ones they read are tied low: the status bank
     # completes a message on its NSTAT-th word, and queue out ignores TLAST.
     body += ["  assign k_stat_TLAST = 1'b0;", "  assign k_out_TLAST = 1'b0;"]
-    body.append(render_xbar_instance(XBAR, "u_xbar", ["s0_axi"], mi))
-    for view, p in zip(VIEWS, mi):
-        body.append(render_view_slot(view, p, dw, aw, idw))
+    body.append(render_xbar_instance(xbar, "u_xbar", ["s0_axi"], mi))
+    if topology == "one_front":
+        body.append(render_adaptor_slot("fir_mm", VIEWS, mi[0], dw, aw, idw))
+        # The stub on MI1: every slave-driven signal held low.  Never addressed in this test.
+        body += [f"  assign {mi[1]}_{name} = 0;" for name, _w, m2s in mi_wire_signals(dw, aw, idw)
+                 if not m2s]
+    else:
+        for view, p in zip(VIEWS, mi):
+            body.append(render_view_slot(view, p, dw, aw, idw))
     body.append("""  mm_fir u_fir (
     .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
     .s_cfg_TDATA(k_cfg_TDATA), .s_cfg_TVALID(k_cfg_TVALID), .s_cfg_TREADY(k_cfg_TREADY),
@@ -262,8 +282,9 @@ def _parse_kv(out: str, tag: str) -> dict[str, int]:
     return {k: int(v) for k, v in (kv.split("=") for kv in line.split()[1:])}
 
 
-@pytest.fixture(scope="module")
-def fir_run() -> str:
+@pytest.fixture(scope="module", params=["per_view", "one_front"])
+def fir_run(request) -> tuple[str, str]:
+    topology = request.param
     if not find_vivado_path():
         pytest.skip("XSI gate prerequisite missing: Vivado (create_ip + xsim)")
     if not RTL.is_dir():
@@ -272,17 +293,18 @@ def fir_run() -> str:
     stale = rtl_staleness(ROOT, "mm_fir")
     if stale is not None:
         pytest.skip(f"XSI gate prerequisite missing: {stale}")
-    ip = generate_axi_xbar(XBAR, WORK / "ip")
-    ws = XsiWorkspace(WORK / "mm_fir", top="mm_fir_top")
+    ip = generate_axi_xbar(XBARS[topology], WORK / "ip")
+    ws = XsiWorkspace(WORK / f"mm_fir_{topology}", top="mm_fir_top")
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + sorted(RTL.glob("*.v")) + ["mm_fir_top.v"],
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb",
                tb_cpp=render_tb(ws.design_dll, scenario_x()),
-               extra_files={"mm_fir_top.v": render_top("mm_fir_top")})
-    return ws.run(timeout=3600)
+               extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology)})
+    return topology, ws.run(timeout=3600)
 
 
 @pytest.mark.xsi
-def test_mm_fir_rtl_bit_exact(fir_run: str):
+def test_mm_fir_rtl_bit_exact(fir_run):
+    _topology, fir_run = fir_run
     done = _parse_kv(fir_run, "DONE")
     assert done["done"] == 1, fir_run[-3000:]
     st = _parse_kv(fir_run, "STATUS")
@@ -294,13 +316,15 @@ def test_mm_fir_rtl_bit_exact(fir_run: str):
 
 
 @pytest.mark.xsi
-def test_mm_fir_rtl_cycles(fir_run: str):
+def test_mm_fir_rtl_cycles(fir_run):
+    topology, fir_run = fir_run
     done = _parse_kv(fir_run, "DONE")
-    sysm = MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT)
+    sysm = MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT, one_front=topology == "one_front")
     sysm.run()
     pysim_cycles = sysm.sim.env.now / sysm.clk.period
-    print({"rtl": done, "pysim_cycles": pysim_cycles})
-    assert done["cycles"] == EXPECTED_CYCLES, f"cycle count moved: {done} (pysim {pysim_cycles})"
+    print({"topology": topology, "rtl": done, "pysim_cycles": pysim_cycles})
+    assert done["cycles"] == EXPECTED_CYCLES[topology], (
+        f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
 
 
 #: Recorded 2026-10-02: host program start to the final status read, 200 samples, one tap switch.
@@ -314,4 +338,8 @@ def test_mm_fir_rtl_cycles(fir_run: str):
 #: and pysim ~51, and the difference is the C++ host's own pacing: AxiMmMaster starts each op two
 #: cycles after the previous one ends, and the protocol issues four ops per packet.  That is the
 #: testbench, not the system; the adaptor alone tracks RTL within 2 cycles (tests/hw/test_mm_queue.py).
-EXPECTED_CYCLES = 857
+#:
+#: one_front (Stage 4, recorded the same day): 823 -- 34 fewer over the same 68 ops.  Where the half
+#: cycle per op comes from (a 1x2 instead of a 1x3 crossbar, or one front instead of three) has NOT
+#: been isolated; both runs are bit-exact and pysim predicts 709 for each.
+EXPECTED_CYCLES = {"per_view": 857, "one_front": 823}
