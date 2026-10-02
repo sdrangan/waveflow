@@ -11,8 +11,8 @@ D5).  An example is offered to an agent as a model to copy, and some
 directories under ``examples/`` are older experiments that should not be
 copied.  The TOC -- ``docs/examples/<doc>/index.md`` -- is the curation that
 already exists, so each TOC page names its source directory in an
-``example_dir:`` front-matter key and that is the whole list.  Three doc names
-differ from their directories (``memcpy``, ``firblock``, ``mmqueue``), which is
+``example_dir:`` front-matter key and that is the whole list.  Two doc names
+differ from their directories (``memcpy``, ``firblock``), which is
 exactly why the key is needed rather than inferring the path from the name.
 
 What is *hand-written* in an example and what is *build output* is decided by
@@ -469,9 +469,8 @@ def _linked_example_paths(root: Path, doc_paths: list[Path], own_dir: str) -> li
 
     D5 keeps everything else under ``examples/`` out of the corpus, but a page
     that tells the reader to go and look at a file has, by that act, curated it.
-    Today that is ``examples/schemas/fixedpoint/`` (from ``basic_vec``) and
-    ``examples/interface/aximm_queue_demo.py`` (from ``mmqueue``); deriving the
-    list from the pages means the next one costs nothing.
+    Today that is ``examples/schemas/fixedpoint/`` (from ``basic_vec``); deriving
+    the list from the pages means the next one costs nothing.
     """
     found: set[str] = set()
     for doc in doc_paths:

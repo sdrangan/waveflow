@@ -53,8 +53,8 @@ QUERIES: list[tuple[str, tuple[str, ...]]] = [
         ("examples/stream_inband/poly.py", "docs/examples/stream_inband/"),
     ),
     # --- the register map ----------------------------------------------
-    ("register map parameter array", ("docs/guide/interface/primitive/regmap.md",)),
-    ("VitisRegMap RegField offsets", ("docs/guide/interface/primitive/regmap.md",)),
+    ("register map parameter array", ("docs/guide/interface/axi_mm/regmap.md",)),
+    ("VitisRegMap RegField offsets", ("docs/guide/interface/axi_mm/regmap.md",)),
     ("ap_start ap_done launch protocol", ("docs/guide/comp_codegen/",)),
     # --- schemas ---------------------------------------------------------
     ("DataList schema definition", ("docs/guide/schema/python/datalists.md",)),
