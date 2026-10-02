@@ -234,6 +234,36 @@ Block 0 is 0 + 1 + … + 15 = 120, and each later block adds 16 × 16 = 256. In 
 kernel and the reader are two tasks in one Vitis kernel, and the reader's `m_mem` is the kernel's
 `m_axi` port; the [MemCopy example](../../../examples/memcpy/) is that, worked end to end.
 
+## Splitting the endpoints
+
+The three endpoints do not have to belong to one module. The reader neither knows nor cares who sends
+its commands, who takes its data, or who reads its completions — so the stage that **issues** a read
+and the stage that **consumes** its data can be different modules. This is the usual shape of a
+pipeline: one stage decides what to fetch, and the data flows on to whichever stage processes it,
+without passing back through the one that asked.
+
+The [MemCopy example](../../../examples/memcpy/) is the simplest case. A `Sequencer` issues the read
+commands, and the reader's data goes straight to the `MemWStream` that stores it:
+
+<!-- snippet: skip -->
+```python
+# From examples/mem_copy/mem_copy.py -- inside MemCopy.__post_init__
+self._cmd_if.bind("master", self.seq.cmd_out)       # the Sequencer issues the reads ...
+self._cmd_if.bind("slave", self.rstream.s_cmd)
+self._data_if.bind("master", self.rstream.m_out)    # ... and the data goes to the writer
+self._data_if.bind("slave", self.wstream.s_in)
+```
+
+The [interleaver example](../../../examples/interleaver/) is the same pattern one stage longer: a
+command receiver issues the reads, and the loader that follows the reader takes the data and hands it
+on to the compute stage.
+
+In both, the reader runs in its **in-band** mode (`inband=True`): whatever the downstream stage needs
+to know about a burst — what it is, where its result goes — travels on the data stream itself, ahead
+of the data, rather than on a separate stream that would have to be kept in step with it. Splitting
+the endpoints is what makes that worth doing: the stage receiving the data is not the one that wrote
+the command, so it cannot simply remember what it asked for.
+
 > **The other side of the bus.** `MemRStream` / `MemWStream` let a kernel *drive* the bus. To be
 > *reached* over it — a queue a host writes, registers it sets, a memory it fills — a kernel gets a
 > [memory-mapped slave adaptor](slave.md) in the RTL top. The two meet: a
