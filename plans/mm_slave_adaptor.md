@@ -1,8 +1,12 @@
 # Plan: the memory-mapped slave adaptor — registers, queues and BRAM behind one AXI slave
 
-> **Status (2026-10-01): proposed, nothing built.** Decisions D1 to D6 are the recommendations from
-> the design discussion. Stage 0 (the crossbar witness) gates everything else. The `mm_fir` example
-> can proceed in parallel from Stage 1 on, in pysim.
+> **Status (2026-10-02): Stages 0-4 BUILT and XSI-gated** (branch `mm-slave-adaptor`, unpushed), and
+> `mm_fir` rungs 1-3 done (rung 3 bit-exact at RTL, in both topologies).  Stage 3 was done AFTER
+> Stage 4: its ordering gate needs several views behind one front, which is Stage 4.  What is left is
+> listed under **Remaining**, at the end.  `WANT_XSI_GATES` 127 -> 140.
+>
+> Plan text below is the design as proposed; where the build departed from it, a **Built:** note says
+> how and why.  Section headings are unchanged (code cites them).
 
 ## Motivation
 
@@ -130,6 +134,14 @@ Two guarantees, stated separately because they are different.
    behind `axi_slave_front` gives this. It is what makes *write a BRAM window, then ring a doorbell*
    correct: the BRAM write has reached the memory before the doorbell message exists. **Gated** in
    Stage 3.
+
+   **Built — and its SCOPE measured** (`tests/build/test_mm_bram_order_xsi.py`): host 0 writes a
+   256-word burst into a BRAM window, host 1 rings a doorbell two cycles later, a reader reads the
+   memory highest address first.  Behind ONE front the doorbell completes at cycle 267, after the
+   burst's 263, and nothing read is stale.  With each view behind its OWN front -- the negative
+   control -- the doorbell completes at 12 and 63 of 256 words are stale.  **The guarantee holds behind
+   one front and not across fronts: a design that needs "data, then doorbell" puts both views in one
+   adaptor.**
 2. **Order across two kernel-side streams is NOT preserved.** Once a commit message and data words
    travel on separate streams, the kernel can read them in either order. Every protocol that needs
    cross-view order must state it in the messages. The `mm_fir` example states it as
@@ -149,6 +161,11 @@ whose address map varies per kernel looks like a generator. The split keeps the 
 - **Generated wiring**: the address decoder (a table) plus the leaf instances. These are emitted by the
   path that already joins kernel ports to `bram_t2p` (`add_rtl_if` → `waveflow/build/wrapper_gen.py`).
   The decoder is the only generated logic. It contains no datapath.
+
+**Built:** the wiring lives in `waveflow/build/mm_adaptor_gen.py` (`render_view_slot`,
+`render_adaptor_slot`), called from each gate's top renderer; it is not yet emitted by `wrapper_gen`
+from a module graph, and the leaves are not yet `rtl_module()` declarations.  Both are under
+**Remaining**.  Views sit at fixed 4 KB windows (view *k* at `k * 0x1000`), not `RegMap` first-fit.
 
 **One address map, from Python.** The adaptor's views are laid out by `RegMap`'s first-fit rules. The
 same declaration produces:
@@ -177,9 +194,15 @@ Considered and not chosen:
   step is too heavy. In that case the board's numbers must be measured separately, and the plan says
   so where it reports them.
 
-**Unverified:** xsim ships precompiled XPM and AMD IP simulation models, so XSI should load the
-crossbar once its simulation sources are generated. That has not been run here. Stage 0 exists to
-run it.
+**Answered by Stage 0: yes, and it is cheap.**  The crossbar is plain, unencrypted Verilog
+(`data/ip/xilinx/axi_crossbar_v2_1/hdl`) plus four shared libraries and a behavioural FIFO model.
+`create_ip` in an in-memory project generates it in ~30 s (`waveflow/build/axi_xbar.py`, cached by a
+config hash) and xsim elaborates it with no project.  D1 stands; the verilog-axi fallback was not
+needed.
+
+**Found: a 1x1 crossbar is degenerate.**  `create_ip` accepts `NUM_SI=1, NUM_MI=1` and silently
+generates `C_NUM_MASTER_SLOTS=2` with address parameters for one slot -- 2-bit MI ports and an XSI run
+that crashes.  `AxiXbarConfig` refuses it; connect directly or add a slot.
 
 ## Decisions
 
@@ -211,6 +234,13 @@ break.
 - **Done when:** the transaction completes in XSI and the crossbar's latency is measured, or the IP
   route is shown impractical and D1 falls back.
 
+**Done (2026-10-02)** — `tests/build/test_axi_xbar_xsi.py`; `wfbfm::AxiMmMaster` in `xsi_bfm.h`.  Two
+masters through a 2x2 crossbar into the memory BFMs (the witness top echoes BID/RID -- the memory BFMs
+do not).  A burst costs ~5 cycles + 1 per beat (write16 = 21, read16 = 20, write1 = 7).  Two address
+phases in the same cycle to DIFFERENT MIs cost the loser ~4 cycles (write8 = 17 vs ~13 by slope) --
+read as the SAMD crossbar's shared address arbiter, not yet confirmed in a waveform.  Two bursts to the
+SAME MI serialize whole (37 vs 71).
+
 ### Stage 1 — queue in and queue out
 
 - RTL: `axi_slave_front`, `mm_queue_in`, `mm_queue_out`.
@@ -224,12 +254,45 @@ break.
 - **Done when:** bit-exact data and the XSI cycle count matches pysim's prediction, including one run
   with a full FIFO.
 
+**Done (2026-10-02).**  RTL `axi_slave_front.v`, `mm_queue_in.v`, `mm_queue_out.v`, `mm_sync_fifo.v`;
+pysim `waveflow/hw/mm_queue.py`.  Gates: `tests/build/test_mm_queue_xsi.py` (both queues through the
+crossbar, a held-off sink filling the FIFO, partial-WSTRB and wrong-AxSIZE faults) and
+`tests/build/test_mm_queue_memw_xsi.py` (the real csynth'd `mem_w_stream` writing packets into the
+queue).  Both directions sustain one beat per cycle after 4-5 cycles; a write into a full FIFO
+stalls and completes with nothing lost; an empty pop answers SLVERR in 5 cycles.
+
+- **Built:** `MemSlaveWStream` / `MemSlaveRStream` are plain `HwModule`s, not `FreeRunMod`s -- they have
+  no firing loop (a `FreeRunMod` must have a body or children) and are never an HLS task.
+- **Stall check:** `StreamIF.write` does block on a full stream on `main` (burst-granular: until the
+  burst fits, or the queue is empty for a burst larger than it).
+- **pysim vs RTL:** with the crossbar's `latency_init = 4` every op lands within 2 cycles of XSI
+  (`tests/hw/test_mm_queue.py::test_pysim_timing_tracks_the_rtl_gate`), except the back-pressured
+  write, ~95 cycles early: a pysim stream hands the kernel the whole backlog in one event where RTL
+  drains it a word per cycle.  Asserted as a bound.  Two pysim fixes came out of the comparison: the
+  stream push is early-anchored (it was charging the packet length twice), and the same for commits.
+- **The MemWStream witness** runs increasingly early in pysim (packets at 28 / 67 / 80 vs RTL 39 / 117
+  / 149): `MemWStream`'s per-command cost is uncalibrated in pysim.  Not the adaptor's gap.
+- **Found on the way:** `examples/interleaver`'s `mem_w_stream` RTL predated the source stamp and the
+  staleness guard refused it (mtime fallback); re-synthesized and stamped.  Its own gate still 176.
+
 ### Stage 2 — register bank
 
 - RTL: `mm_regbank` (shadow, commit, status). pysim builds on `RegMapMMIFSlave`.
 - The commit message type is the bank's `DataSchema`, so the kernel reads it with `get_schema`.
 - Witness: `mm_fir` rung 2 (tap switch at `apply_at_sample`).
 - **Done when:** output is bit-exact across a mid-stream tap switch in pysim and XSI.
+
+**Done (2026-10-02).**  RTL `mm_regbank.v` (shadow at `[0, W/2)`, COMMIT at `W/2`, status at `3W/4`);
+pysim `waveflow/hw/mm_regbank.py` (`MemSlaveRegBank`, typed by `cfg_type` / `status_type`).  Gate:
+`tests/build/test_mm_regbank_xsi.py` -- the bank beside both queues on a 1x3 crossbar.  Snapshot
+isolation holds (a shadow write after a commit does not reach that commit's packet); a second commit
+while the first packet is untaken stalls the bus (87 cycles) and goes out with its own contents.
+
+- **Built:** the pysim bank does not build on `RegMapMMIFSlave` -- a whole-schema shadow + commit
+  needed none of it.  A host writes `cfg_words(cfg)` at the bank base, then COMMIT.
+- The channel bound to `m_cfg` must hold exactly one packet (the RTL's snapshot register); checked at
+  start.  pysim tracks RTL within 2 cycles except the stalled commit (one packet early, same limit as
+  the queue).
 
 ### Stage 3 — BRAM window
 
@@ -238,12 +301,37 @@ break.
   this from the VCD (XSI discards `$display`), paired with a deliberately broken run that must fail.
 - Witness: `mm_fir` with a long tap table in BRAM plus a doorbell.
 
+**Done (2026-10-02), after Stage 4.**  RTL `mm_bram_port.v` on port A of `bram_t2p` (its `LAT`
+parameter is read from `bram_t2p.v`'s `READ_LATENCY` -- one source); pysim `waveflow/hw/mm_bram.py`.
+The ordering gate is `tests/build/test_mm_bram_order_xsi.py` and its result is under **Ordering**.  It
+is checked from the reader's output rather than the VCD: a doorbell that overtakes the data makes the
+reader return words that were never written, and the per-view topology is the run that must fail.
+
+- **Not built:** the lock stream (`LockedT2pMemIF` ownership) and the `mm_fir` BRAM-tap-table rung.
+  The BRAM window's kernel side is untimed `port_b_read` / `port_b_write`, not yet a `BramIF`.
+- **pysim found its own gap.**  `AXIMMCrossBarIF` charged a FULL burst's transfer time BEFORE taking
+  the slave's channel, so in pysim a short doorbell overtook a long burst even behind one adaptor.
+  New opt-in `MMIFSlave.serialize_transactions` holds the channel for the whole transaction;
+  `MemSlaveAdaptor` sets it, every other slave is unchanged
+  (`tests/hw/test_mm_bram.py::test_serialize_transactions_is_what_orders_them`).
+
 ### Stage 4 — generated multi-view address map
 
 - `wrapper_gen` emits the decoder and instances for any set of views.
 - The host header and the crossbar config come from the same layout.
 - Witness: `mm_fir` with all of its views behind one slave port.
 - **Done when:** the Stage 1–3 gates still pass with every view behind a single adaptor.
+
+**Done (2026-10-02).**  `render_adaptor_slot`: one front, view *k* at local `k * 4 KB`, requests
+routed by `req_addr[LAW-1:12]`, the read response taken from the view latched at the request (the
+front has one read outstanding), the span's unused tail answered SLVERR.  pysim twin
+`waveflow/hw/mm_adaptor.py` (`MemSlaveAdaptor`: one half-duplex, `serialize_transactions` slave).
+`tests/examples/test_mm_fir_xsi.py` is parametrized over both topologies: one front is bit-exact at
+823 cycles, one view per slot at 857.  The 34-cycle difference is NOT attributed (a 1x2 instead of a
+1x3 crossbar, or one front instead of three).
+
+- **Not built:** the host header and the crossbar config are not yet generated from one layout
+  declaration; each gate states its address map.
 
 ## Witness example: `examples/mm_fir`
 
@@ -266,6 +354,24 @@ it exists before the RTL does, and its pysim numbers are the predictions XSI mus
   4. BRAM tap table plus doorbell (Stage 3);
   5. stretch: results go through `MemWStream` into a second kernel's `queue_in` (the Producer →
      Consumer case as the same example's second rung).
+
+**Built (2026-10-02): rungs 1-3**, `examples/mm_fir/` (`mm_fir.py`, `mm_fir_build.py`,
+`include/mm_fir_task.h`), tests `tests/examples/test_mm_fir.py` and `test_mm_fir_xsi.py`.
+
+- **Departures:** one int16 sample per 64-bit word (no lane packing); outputs are the exact integer sum
+  as int64 (no rounding), so the golden is an exact convolution rather than `lfilter`; the config field
+  is `apply_at`.
+- **The cross-view protocol (D5), concretely:** the host commits a config, then polls the status until
+  it shows the config RECEIVED (`ncfg`) before sending the sample at `apply_at`.  The kernel polls both
+  streams, config first -- the pysim model of a `read_nb` loop -- so it takes a commit while no samples
+  arrive (which is why `Simulation.run_sim` gained `until=`).  A config that arrives after its sample
+  is applied at once and counted `late`; the negative control (`lag=32`) shows the output then matches
+  "switched where it arrived", not the plan.
+- **The kernel at RTL:** the first body read a 5-word config and wrote a 2-word status inside one
+  firing, could not pipeline, and ran at ~1 sample / 10 cycles (2096 cycles, 55 status polls).  Moving
+  at most one word per stream per firing pipelines it at II=1: 857 cycles, 2 polls, 16 DSP.  pysim
+  predicts 709; the rest is the C++ host BFM's two-cycle turnaround between its ops.
+- **Not built:** rung 4 (BRAM tap table + doorbell) and rung 5 (results into a second kernel).
 
 ## `AXIMMQueue`: keep until VMAC is migrated
 
@@ -296,9 +402,30 @@ mainly for it. 32 tracked files reference it today.
 
 ## Open questions
 
-- Does the generated `axi_crossbar` simulate under XSI without a Vivado project? (Stage 0 answers
-  this.)
-- Window size for queues: a fixed 4 KB, or a per-view parameter?
-- Should status pushes be rate-limited by the kernel, or should the leaf simply overwrite? (Overwrite
-  is the current assumption.)
+- ~~Does the generated `axi_crossbar` simulate under XSI without a Vivado project?~~ Yes (Stage 0).
+- Window size for queues: a fixed 4 KB, or a per-view parameter?  (Built: fixed 4 KB in a multi-view
+  adaptor; a single-view slot takes any `law >= 12`.)
+- Should status pushes be rate-limited by the kernel, or should the leaf simply overwrite?  (Built:
+  overwrite; `mm_fir` publishes after a config and on the first idle cycle after samples.)
 - `MemSlaveWStream` / `MemSlaveRStream` as names, or `MmQueueIn` / `MmQueueOut` to match the leaves?
+  (Built with the first; `MemSlaveRegBank`, `MemSlaveBramWindow`, `MemSlaveAdaptor` follow it.)
+- Queue out drops TLAST: the host reads raw words.  Does any consumer need packet boundaries there?
+- The request bus carries no write error back from a leaf (a write to queue out is silently dropped).
+
+## Remaining
+
+In rough priority order:
+
+1. **Integration with the module graph.**  The leaves as `rtl_module()` declarations and the wiring
+   emitted by `wrapper_gen` from a composite's `add_rtl_if` edges -- today each gate renders its own
+   top with `mm_adaptor_gen`.  This is what lets a design declare "this kernel has a register bank and
+   a queue" and get the adaptor without writing a top.
+2. **One layout, many outputs:** the host header and the crossbar `CONFIG` from the same address map.
+3. **BRAM window, rest of Stage 3:** the kernel's port B as a `BramIF`, the lock stream, and `mm_fir`
+   rung 4 (a long tap table in BRAM + doorbell).
+4. **`MemWStream` pysim calibration**, so the Producer -> queue chain predicts RTL (today ~40 cycles per
+   command optimistic).
+5. `mm_fir` rung 5 (results into a second kernel's queue through `MemWStream`).
+6. Attribute the 34-cycle one-front / per-view difference; confirm the shared-address-arbiter reading
+   of Stage 0's write8 in a waveform.
+7. Board: put the same `axi_crossbar` IP in `plans/board_packaging.md`'s block design.
