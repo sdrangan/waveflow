@@ -51,26 +51,77 @@ class QueueView:
         return "mm_queue_in" if self.kind == "in" else "mm_queue_out"
 
 
+@dataclass(frozen=True)
+class RegBankView:
+    """A register-bank window (``mm_regbank.v``): ``ncfg`` config words behind shadow-and-commit,
+    sent to the kernel on the AXIS group ``cfg_axis``; ``nstat`` status words, taken from the
+    kernel's AXIS group ``status_axis``.  Layout: shadow at ``[0, W/2)``, COMMIT at ``W/2``, status
+    at ``3W/4`` (``W = 2**law`` bytes)."""
+
+    name: str
+    ncfg: int
+    nstat: int
+    cfg_axis: str
+    status_axis: str
+    law: int = 12
+
+    def __post_init__(self) -> None:
+        if self.law < 12:
+            raise ValueError("a register-bank window is at least 4 KB (law >= 12)")
+        if not 1 <= self.ncfg or not 1 <= self.nstat:
+            raise ValueError("a register bank needs at least one config and one status word")
+
+    module = "mm_regbank"
+
+    def commit_offset(self) -> int:
+        return 1 << (self.law - 1)
+
+    def status_offset(self) -> int:
+        return 3 << (self.law - 2)
+
+
 def leaf_sources() -> list[Path]:
     """Every hand-written adaptor source, for an xvlog file list (order-independent)."""
     return [RTL_DIR / f for f in ("mm_sync_fifo.v", "axi_slave_front.v", "mm_queue_in.v",
-                                  "mm_queue_out.v")]
+                                  "mm_queue_out.v", "mm_regbank.v")]
 
 
-def render_queue_slot(view: QueueView, axi: str, data_width: int, addr_width: int,
-                      id_width: int) -> str:
-    """One front + one queue leaf behind the AXI4 nets ``<axi>_<SIG>`` (which must already exist).
+def _axis_conns(side: str, prefix: str) -> str:
+    return ",\n".join(f"    .{side}_{s}({prefix}_{s})" for s in ("TDATA", "TVALID", "TREADY", "TLAST"))
 
-    The request bus between them is local nets ``<name>_req_*`` / ``<name>_rsp_*``; the leaf's
-    stream side lands on ``<axis>_T*`` nets, which the enclosing module provides as ports or wires.
-    """
-    n, dw = view.name, data_width
+
+def render_view_slot(view, axi: str, data_width: int, addr_width: int, id_width: int) -> str:
+    """One front + one leaf (any view type) behind the AXI4 nets ``<axi>_<SIG>``."""
+    if isinstance(view, QueueView):
+        return render_queue_slot(view, axi, data_width, addr_width, id_width)
+    if isinstance(view, RegBankView):
+        head = _render_front(view.name, view.law, axi, data_width, addr_width, id_width,
+                             f"regbank view '{view.name}' (ncfg {view.ncfg}, nstat {view.nstat})")
+        n = view.name
+        leaf = [
+            f"  mm_regbank #(.DW({data_width}), .LAW({view.law}), .NCFG({view.ncfg}), "
+            f".NSTAT({view.nstat})) u_{n} (",
+            "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),",
+            f"    .req_valid({n}_req_valid), .req_ready({n}_req_ready), .req_we({n}_req_we),",
+            f"    .req_addr({n}_req_addr), .req_wdata({n}_req_wdata),",
+            f"    .rsp_valid({n}_rsp_valid), .rsp_ready({n}_rsp_ready), .rsp_rdata({n}_rsp_rdata),",
+            f"    .rsp_err({n}_rsp_err),",
+            _axis_conns("m_cfg", view.cfg_axis) + ",",
+            _axis_conns("s_status", view.status_axis),
+            "  );",
+        ]
+        return head + "\n".join(leaf) + "\n"
+    raise TypeError(f"no adaptor leaf for view type {type(view).__name__}")
+
+
+def _render_front(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: int,
+                  title: str) -> str:
     lines = [
-        f"  // --- queue view '{n}' ({view.module}, depth {view.depth}) ---",
+        f"  // --- {title} ---",
         f"  wire {n}_req_valid, {n}_req_ready, {n}_req_we, {n}_rsp_valid, {n}_rsp_ready, {n}_rsp_err;",
-        f"  wire [{view.law - 1}:0] {n}_req_addr;",
+        f"  wire [{law - 1}:0] {n}_req_addr;",
         f"  wire [{dw - 1}:0] {n}_req_wdata, {n}_rsp_rdata;",
-        f"  axi_slave_front #(.DW({dw}), .AW({addr_width}), .IDW({id_width}), .LAW({view.law})) "
+        f"  axi_slave_front #(.DW({dw}), .AW({addr_width}), .IDW({id_width}), .LAW({law})) "
         f"u_{n}_front (",
         "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),",
     ]
@@ -81,6 +132,21 @@ def render_queue_slot(view: QueueView, axi: str, data_width: int, addr_width: in
         f"    .rsp_valid({n}_rsp_valid), .rsp_ready({n}_rsp_ready), .rsp_rdata({n}_rsp_rdata),",
         f"    .rsp_err({n}_rsp_err)",
         "  );",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_queue_slot(view: QueueView, axi: str, data_width: int, addr_width: int,
+                      id_width: int) -> str:
+    """One front + one queue leaf behind the AXI4 nets ``<axi>_<SIG>`` (which must already exist).
+
+    The request bus between them is local nets ``<name>_req_*`` / ``<name>_rsp_*``; the leaf's
+    stream side lands on ``<axis>_T*`` nets, which the enclosing module provides as ports or wires.
+    """
+    n, dw = view.name, data_width
+    head = _render_front(n, view.law, axi, dw, addr_width, id_width,
+                         f"queue view '{n}' ({view.module}, depth {view.depth})")
+    lines = [
         f"  {view.module} #(.DW({dw}), .LAW({view.law}), .DEPTH({view.depth})) u_{n} (",
         "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),",
         f"    .req_valid({n}_req_valid), .req_ready({n}_req_ready), .req_we({n}_req_we),",
@@ -92,7 +158,7 @@ def render_queue_slot(view: QueueView, axi: str, data_width: int, addr_width: in
     lines.append(",\n".join(f"    .{side}_{s}({view.axis}_{s})"
                             for s in ("TDATA", "TVALID", "TREADY", "TLAST")))
     lines.append("  );")
-    return "\n".join(lines) + "\n"
+    return head + "\n".join(lines) + "\n"
 
 
 def axis_port_decls(prefix: str, data_width: int, kernel_reads: bool) -> list[str]:

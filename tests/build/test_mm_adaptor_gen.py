@@ -28,3 +28,14 @@ def test_slot_wires_front_to_leaf_and_stream():
     assert ".m_axis_TDATA(k_in_TDATA)" in v
     out = render_queue_slot(QueueView("qo", "out", axis="k_out"), "mi1_axi", 64, 32, 1)
     assert "mm_queue_out" in out and ".s_axis_TREADY(k_out_TREADY)" in out
+
+
+def test_regbank_view_layout_and_render():
+    from waveflow.build.mm_adaptor_gen import RegBankView, render_view_slot
+    v = RegBankView("regs", ncfg=4, nstat=2, cfg_axis="k_cfg", status_axis="k_stat")
+    assert (v.commit_offset(), v.status_offset()) == (0x800, 0xC00)
+    txt = render_view_slot(v, "mi0_axi", 64, 32, 1)
+    assert "mm_regbank #(.DW(64), .LAW(12), .NCFG(4), .NSTAT(2)) u_regs" in txt
+    assert ".m_cfg_TLAST(k_cfg_TLAST)" in txt and ".s_status_TREADY(k_stat_TREADY)" in txt
+    with pytest.raises(ValueError, match="at least one"):
+        RegBankView("r", ncfg=0, nstat=1, cfg_axis="a", status_axis="b")
