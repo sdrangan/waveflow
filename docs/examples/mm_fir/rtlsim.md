@@ -32,7 +32,7 @@ at once:
 | XSI harness | an `AxiMmMaster` and a `HostProgram` state machine | `render_tb(dll, x)` |
 
 The RTL top is assembled by this example's `render_top` from framework pieces — it is not yet emitted
-from the module graph (see [what is generated today](../../guide/flows/concurrent_layers.md#what-is-generated-today-and-what-is-not)).
+by `wrapper_gen` from the module graph, the way a design's memories are.
 
 ## Two topologies, one address map
 

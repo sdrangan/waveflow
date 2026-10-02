@@ -4,7 +4,7 @@ parent: Concurrent (free-running)
 grand_parent: Hardware modules and Flows
 nav_order: 1
 audience: python
-summary: "The concurrent flow uses two simulations: a Python discrete-event simulation for system-level modeling, and an XSI simulation that runs the real RTL cycle by cycle. This page is about the second: what an XSI simulation is made of (the RTL top and the testbench of C++ bus-functional models around it), the three ways an object can be realized in it, the layers inside the RTL top (the Vitis kernel, hand-written Verilog, vendor IP), which side of the bus a kernel can be on, and which parts are generated from the Python graph today."
+summary: "The concurrent flow uses two simulations: a Python discrete-event simulation for system-level modeling, and an XSI simulation that runs the real RTL cycle by cycle. This page is the big picture of the second: an XSI simulation top made of the RTL top (what will be synthesized) and a testbench of C++ bus-functional models, the three ways an object can be realized in it, and where each kind of pysim object usually lands."
 ---
 
 # XSI simulation components
@@ -39,42 +39,33 @@ they fit together.
 
 ## What an XSI simulation is made of
 
-An XSI simulation has two parts:
+An XSI simulation has a single composite `FreeRunMod` that defines the **XSI simulation top**. In
+the [mem_copy example](../../examples/memcpy/), for instance, the XSI simulation top is `MemCopyTB`.
+Its components fall into two groups:
 
-- **The RTL top** — one Verilog module, the design under test. It is what `xsim` elaborates.
-- **The testbench** — every BFM around it, each driving or answering some of the RTL top's pins.
-
-In Python the whole thing is the **XSI simulation top**: a composite `FreeRunMod` (in the
-[mem_copy example](../../examples/memcpy/), `MemCopyTB`) whose children are the design under test and
-the testbench participants around it, wired by interfaces exactly as in pysim. It needs no special
-attribute; what makes it an XSI simulation top is what two framework functions in
-[`composite_gen.py`](../../../waveflow/build/composite_gen.py) can do with it. (The code calls this
-composite the testbench — `tb_top_spec`, `TbSpec` — so read `tb` there as "XSI simulation top".)
-
-- **`tb_top_spec(top, dut=None)` checks it and describes it.** It picks the design under test — the
-  child named by `dut=`, or else the one child with a `boundary` — and walks that child's boundary
-  ports. For each port it finds the participant wired to it and resolves the participant's BFM,
-  refusing the design if a participant declares none, names a model class that does not exist, or
-  leaves a port uncovered. The result, a `TbSpec`, is plain data: which model sits on which pins.
-- **`render_tb_harness(spec)` renders that description** as the **harness**: the C++ that constructs
-  the testbench's models, binds each to its pins, and runs the cycle loop. It checks nothing and
-  generates no model code — the BFMs are pre-written, and the harness only instantiates and wires
-  them. The design under test is generated separately, from its own graph, by `composite_top_spec`
-  and `render_top`.
+- **The RTL top** — one Verilog module, the design under test, and what `xsim` elaborates. These
+  modules are what will actually be synthesized: the same hardware can be packaged as one or more IP
+  kernels and included in, say, a Vivado project.
+- **The testbench** — every BFM around the RTL top, each driving or answering some of its pins. These
+  modules are generally not intended for synthesis.
 
 Which children are inside the RTL top is decided per build — that is the
-[cut](./modules.md#the-cut).
+[cut](./modules.md#the-cut). How the composite becomes a running simulation is
+[Generating the XSI simulation](./concurrent_codegen.md).
 
 ### Three ways to be realized
 
-Every object in the graph must have exactly one cycle-level realization, and there are three. Each is
-a declared hook and a target name that `check(obj, target)` answers:
+Every object in the XSI simulation must have exactly one cycle-level realization, and there are three
+kinds:
 
 | realization | where | target | the object declares |
 |---|---|---|---|
 | a task in the Vitis kernel | inside the RTL top | `composite_kernel` | a `run_iter` body, or a hand-written body via [`kernel_task()`](../comp_codegen/freerunning_override.md) |
 | hand-written Verilog | inside the RTL top | `rtl_module` | [`rtl_module()`](../comp_codegen/rtl_module.md), naming a `.v` |
 | a BFM | the testbench | `xsi_bfm_model` | [`bfm_model()`](../custom_hooks/bfm_model.md), naming a C++ model class |
+
+
+`check(obj, target)` reports whether a module can be realized as a given target.
 
 So an object can be in the **testbench** exactly when it has a BFM — and in principle that is any
 object someone is willing to write a cycle model for. The models are `XsiSimObj`s in
@@ -89,32 +80,6 @@ protocol:
 
 Splitting `sample` from `update` is what lets every model see the same cycle: a handshake is decided
 from values sampled *before* the edge and applied *after* it, whatever order the models run in.
-
-## Inside the RTL top
-
-The RTL top is itself built from layers, each produced a different way:
-
-```
- testbench .............. C++ BFMs (XsiSimObj), constructed and run by the harness
- │   host (AxiMmMaster) · stream drivers/sinks (AxisMaster/AxisSlave) · memory behind m_axi (FlatMemory)
- │
- └─ RTL top ............. one Verilog module: the design under test, what xsim elaborates
-     ├─ Vitis kernel .... csynth's Verilog for the generated ap_ctrl_none top-level function
-     ├─ hand-written RTL  memories (bram_t2p) · the memory-mapped adaptor (axi_slave_front + leaves)
-     └─ vendor IP ....... AMD's axi_crossbar, generated by create_ip
-
- (later) block design ... the same RTL top on a board: the PS where the host model was
-```
-
-| layer | what is in it | produced by | from |
-|---|---|---|---|
-| **Vitis kernel** | one `hls::task` per active child, streams, `m_axi` and `bram` ports | `render_top` emits the top-level function, csynth makes it Verilog | the module graph ([`composite_top_spec`](../comp_codegen/freerunning.md)) plus any hand-written task bodies |
-| **hand-written RTL** | `waveflow/build/rtl/*.v`: `bram_t2p`, `axi_slave_front`, `mm_queue_in`, `mm_queue_out`, `mm_regbank`, `mm_bram_port` | written once, verified, never generated | `rtl_module()` declares which `.v` a module is |
-| **vendor IP** | `axi_crossbar` | `create_ip` in a batch Vivado run, cached by configuration | `AxiXbarConfig` ([`axi_xbar.py`](../../../waveflow/build/axi_xbar.py)) |
-| **RTL top** | the three above and the nets joining them | `wrapper_gen` (memories) / `mm_adaptor_gen` (the adaptor) | memories: the graph's `add_rtl_if` edges; the adaptor: example code, for now (see below) |
-
-A design with nothing beside its kernel — [mem_copy](../../examples/memcpy/) is one — has an RTL top
-that *is* the Vitis kernel, with no wrapper at all.
 
 ## Where each pysim object lands
 
@@ -133,49 +98,6 @@ The same Python class can land in different places in different builds — that 
 | a host process holding an `MMIFMaster` | testbench | `AxiMmMaster` |
 | `StreamDriver` / `StreamSink` | testbench | `AxisMaster` / `AxisSlave` |
 
-## Which side of the bus a kernel can be on
-
-A kernel can be a bus **master** from inside the Vitis kernel, and can be reached as a bus **slave**
-only through the RTL top. The asymmetry is Vitis HLS's, not Waveflow's:
-
-- **Master.** HLS generates `m_axi` ports. `MemRStream` / `MemWStream` own one each and turn a
-  command stream into AXI bursts, so a kernel that wants memory sends commands to them. Everything
-  stays inside the Vitis kernel. See [Streaming Memory Kernels](../memory/memstream.md).
-- **Slave.** HLS generates `s_axilite` — a register file a free-running kernel cannot use, because it
-  cannot see a write happen — and **no AXI4-full slave at all**. So a kernel that should be
-  *reachable* (a queue a host writes, registers a host sets, a memory a host fills) gets an adaptor
-  in the RTL top that turns bus transactions into stream messages. The kernel still sees only
-  streams. See [Memory-mapped slave adaptor](../interface/derived/mm_slave.md).
-
-Both sides meet at the crossbar, which is why the crossbar is in the RTL top too: it joins masters in
-the Vitis kernel, slaves in the RTL top, and models in the testbench.
-
-## What is generated today, and what is not
-
-Every piece above runs at RTL and is gated. What differs is how much of each **join** comes from the
-graph:
-
-- **Module graph → Vitis kernel:** generated. A hand-written task body is declared, not extracted.
-- **Vitis kernel + memories → RTL top:** generated. `add_rtl_if` records which kernel port joins
-  which memory port, and `wrapper_gen` emits the module. Worked design:
-  [A memory reached three ways](../../examples/bram_access/).
-- **Adaptor + crossbar → RTL top: assembled by example code.** The pieces are framework —
-  `generate_axi_xbar`, `render_view_slot`, `render_adaptor_slot` — but which views exist, at which
-  addresses, joined to which kernel ports, is written out in the example
-  ([`examples/mm_fir/mm_fir_xsi.py`](../../../examples/mm_fir/mm_fir_xsi.py)), not read off the module
-  graph. Teaching `wrapper_gen` to emit it is the first item under *Remaining* in
-  `plans/mm_slave_adaptor.md`.
-- **XSI simulation top → harness:** generated, for stream and memory models. A host *program* — a
-  sequence of bus transactions with decisions in it — is written as a C++ state machine over
-  `AxiMmMaster` (again in `mm_fir_xsi.py`).
-
-## Running an XSI simulation
-
-[`XsiWorkspace`](../../../waveflow/build/xsi_workspace.py) runs any RTL top through the same
-`run.bat` / `run.sh` the example gates use: it copies the BFM headers, writes the `xvlog` file list
-(generated IP sources, hand-written Verilog, csynth's Verilog, the RTL top) and the harness, and runs.
-It needs no Vitis project for the parts that have none, which is what the adaptor and crossbar gates
-use.
 
 ## Moving the cut: what it costs today {#moving-the-cut}
 
@@ -217,7 +139,9 @@ but not built — see `plans/design_cut.md` §S5.
   semantics, and the ordering guarantee.
 - [MM Interfaces](../interface/primitive/aximm.md#how-it-lowers) — `AXIMMCrossBarIF` in pysim, and
   `axi_crossbar` at RTL.
-- [XSI testbench in HLS](../comp_codegen/xsi_tb.md) — how the harness is generated from the XSI
-  simulation top.
+- [Generating the XSI simulation](./concurrent_codegen.md) — how the XSI simulation top becomes a
+  harness, and how a simulation is run.
 - [mm_fir](../../examples/mm_fir/) — every piece in one design: a Vitis kernel, an adaptor and a
   crossbar in the RTL top, a host program in the testbench.
+- [Memory-mapped slave adaptor](../interface/derived/mm_slave.md#the-structure) — why a kernel can
+  drive the bus from inside the Vitis kernel but is reached through an adaptor in the RTL top.

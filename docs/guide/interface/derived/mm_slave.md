@@ -18,7 +18,8 @@ happen, so writing the same value twice is invisible.
 
 So the memory-mapped side lives in the [RTL top](../../flows/concurrent_layers.md), as an **adaptor**:
 hand-written Verilog that takes AXI transactions on one side and produces stream messages on the
-other. The rule that makes it composable:
+other. The two sides meet at the AXI crossbar, which is in the RTL top too: it joins masters inside
+the kernel, slaves in the adaptor, and models in the testbench. The rule that makes it composable:
 
 > **Kernels stay stream-only. Every synchronization a kernel sees is a stream message.**
 
@@ -249,7 +250,7 @@ change to the stream model that moves it shows up.
 ## What is not built yet
 
 - The adaptor is assembled by example code (which views, which addresses, which kernel ports), not
-  emitted by `wrapper_gen` from the module graph — see [XSI simulation components](../../flows/concurrent_layers.md#what-is-generated-today-and-what-is-not).
+  emitted by `wrapper_gen` from the module graph, the way a design's memories are.
 - No host header is generated from the address map yet.
 - The BRAM window's kernel side is plain `port_b_read` / `port_b_write` in pysim, not yet a `BramIF`,
   and has no ownership (lock) stream.
