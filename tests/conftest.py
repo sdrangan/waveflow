@@ -91,7 +91,10 @@ import pytest
 #:
 #: 136 -> 138 on 2026-10-02 (Stage 4): the same file, now parametrized over two topologies -- one
 #: view per crossbar slot, and all three views behind ONE front with the generated decoder.
-WANT_XSI_GATES = 138
+#:
+#: 138 -> 140 on 2026-10-02 (Stage 3): ``test_mm_bram_order_xsi.py``, the BRAM window and the ordering
+#: guarantee -- one front (nothing stale) and its negative control, per-view fronts (63 stale words).
+WANT_XSI_GATES = 140
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

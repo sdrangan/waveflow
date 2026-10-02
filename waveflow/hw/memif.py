@@ -240,6 +240,19 @@ class MMIFSlave(InterfaceEndpoint):
     (``False``, full-duplex) gives independent AR/R and AW/W channels, matching real
     AXI where a read and a write on one bundle never contend."""
 
+    serialize_transactions: bool = False
+    """When ``True`` the slave serves ONE transaction at a time, from its address phase to its
+    response, and :class:`AXIMMCrossBarIF` holds this slave's channel for the whole transfer -- its
+    wire latency and per-word time included -- not only while :attr:`rx_write_proc` /
+    :attr:`rx_read_proc` run.
+
+    Without it (the default, unchanged) a FULL burst's transfer time is charged *before* the channel
+    is taken, so a short write issued after a long one can reach the slave first.  That is harmless
+    for a memory, and wrong for a slave whose whole point is order: the memory-mapped adaptor's front
+    end (``axi_slave_front.v``) accepts one AW/AR and is busy until its B/RLAST, which is what makes
+    "data, then doorbell" safe (``plans/mm_slave_adaptor.md``, guarantee 1).  Measured: without this
+    flag the pysim adaptor let a doorbell overtake a 256-word burst that the RTL held it behind."""
+
     bus_timing: "BusTiming | None" = None
     """Calibrated per-direction bus-occupancy span model for this slave's memory port
     (the contended physical resource).  ``None`` ⇒ the pipelined :class:`Region` slices
@@ -1194,7 +1207,21 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
 
-        if protocol == AXIMMProtocol.FULL:
+        if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
+            # One transaction at a time from the address phase on: take the channel FIRST, then
+            # charge the transfer, so a later transaction cannot slip in ahead (see the field).
+            with slave_ep.write_channel.request() as req:
+                yield req
+                cycles = self.latency_init + words.shape[0] * self._poll_stretch(ep_name)
+                dly = cycles / self.clk.freq
+                if tstart is not None:
+                    dly = max(0.0, dly + (tstart - self.env.now))
+                if dly > 0:
+                    yield self.timeout(dly)
+                if slave_ep.rx_write_proc is not None:
+                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+
+        elif protocol == AXIMMProtocol.FULL:
             # Derate only the per-word (nwords) occupancy term by 1/(1-ov); the
             # fixed init/address latency is untouched (see the model).
             cycles = self.latency_init + words.shape[0] * self._poll_stretch(ep_name)
@@ -1240,6 +1267,26 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
         dtype = self._dtype()
+
+        if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
+            # The whole read -- address latency, the slave, the return -- inside the channel.
+            with slave_ep.read_channel.request() as req:
+                yield req
+                req_dly = self.latency_init / self.clk.freq
+                if req_dly > 0:
+                    yield self.timeout(req_dly)
+                if slave_ep.rx_read_proc is not None:
+                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
+                    yield proc
+                    words = proc.value
+                else:
+                    words = np.zeros(nwords, dtype=dtype)
+                ret_dly = (
+                    self.latency_read_return + nwords * self._poll_stretch(ep_name)
+                ) / self.clk.freq
+                if ret_dly > 0:
+                    yield self.timeout(ret_dly)
+            return words
 
         if protocol == AXIMMProtocol.FULL:
             req_dly = self.latency_init / self.clk.freq

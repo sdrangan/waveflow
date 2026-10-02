@@ -13,9 +13,11 @@ semantics; this module replaces their individual bus ports with one:
 View *k* answers the 4 KB window at local offset ``k * 0x1000``, exactly as the RTL decoder lays it
 out.  An AXI burst cannot cross a 4 KB boundary, so every burst lands in exactly one view.
 
-**Ordering.**  The RTL front serves one AXI transaction at a time, reads and writes alike -- that is
-the plan's guarantee 1.  The bus port here is therefore declared ``half_duplex``: the crossbar holds
-one channel for reads and writes together, so a read can no more overtake a write here than there.
+**Ordering.**  The RTL front serves one AXI transaction at a time, reads and writes alike, from its
+address phase to its response -- that is the plan's guarantee 1.  The bus port here says both halves:
+``half_duplex`` (reads and writes share one channel) and ``serialize_transactions`` (the crossbar holds
+that channel for the whole transfer, not just the callback).  Without the second, a short doorbell
+issued after a long data burst reached the views first -- measured, ``tests/hw/test_mm_bram.py``.
 The views' own ``s_mem`` endpoints stay unbound.
 """
 from __future__ import annotations
@@ -55,7 +57,8 @@ class MemSlaveAdaptor(HwModule):
         self._dt = np.dtype(np.uint32) if dw <= 32 else np.dtype(np.uint64)
         self.s_mem = MMIFSlave(name=f"{self.name}_s_mem", sim=self.sim, bitwidth=dw,
                                rx_write_proc=self._on_write, rx_read_proc=self._on_read,
-                               peek_read=self._peek, half_duplex=True)
+                               peek_read=self._peek, half_duplex=True,
+                               serialize_transactions=True)
         self.add_endpoint(self.s_mem)
         #: ``(time, kind, local_addr)`` for accesses that hit no view (SLVERR in RTL).
         self.errors: list[tuple[float, str, int]] = []

@@ -62,3 +62,13 @@ def test_adaptor_refuses_duplicate_names_and_odd_windows():
                             "mi0_axi", 64, 32, 1)
     with pytest.raises(ValueError, match="4 KB"):
         render_adaptor_slot("ad", [QueueView("q", "in", axis="a", law=13)], "mi0_axi", 64, 32, 1)
+
+
+def test_bram_view_renders_memory_and_reads_latency_from_the_verilog():
+    from waveflow.build.mm_adaptor_gen import BramView, bram_read_latency, render_view_slot
+    assert bram_read_latency() == 1                         # bram_t2p.v publishes READ_LATENCY = 1
+    v = render_view_slot(BramView("win", kport="kb", baw=6), "mi0_axi", 64, 32, 1)
+    assert "bram_t2p #(.DW(64), .AW(6)) u_win_mem" in v
+    assert ".LAT(1)" in v and ".b_dout(kb_dout)" in v
+    with pytest.raises(ValueError, match="4 KB"):
+        BramView("w", kport="k", law=11)

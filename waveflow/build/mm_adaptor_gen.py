@@ -83,10 +83,42 @@ class RegBankView:
         return 3 << (self.law - 2)
 
 
+@dataclass(frozen=True)
+class BramView:
+    """A BRAM window (``mm_bram_port.v`` on port A of a ``bram_t2p`` holding ``2**baw`` words).
+
+    The memory is instantiated with the view; its port B -- the kernel's -- lands on the nets
+    ``<kport>_addr`` / ``_en`` / ``_we`` / ``_din`` / ``_dout``.  The leaf's read latency is read from
+    ``bram_t2p.v``'s published ``READ_LATENCY`` (:func:`bram_read_latency`), never declared here."""
+
+    name: str
+    kport: str
+    baw: int = 9
+    law: int = 12
+
+    def __post_init__(self) -> None:
+        if self.law < 12:
+            raise ValueError("a BRAM window is at least 4 KB (law >= 12)")
+        if self.baw < 1:
+            raise ValueError("a BRAM needs at least one address bit")
+
+    module = "mm_bram_port"
+
+
+def bram_read_latency() -> int:
+    """``bram_t2p.v``'s published read latency -- the single source the leaf's ``LAT`` comes from."""
+    from waveflow.build.rtl_gen import RtlModule, rtl_read_latency
+    lat = rtl_read_latency(RtlModule(module="bram_t2p", files=("bram_t2p.v",), ports={}, params=(),
+                                     clock="clk"))
+    if lat is None:                                     # pragma: no cover - guarded by the file
+        raise ValueError("bram_t2p.v publishes no READ_LATENCY")
+    return lat
+
+
 def leaf_sources() -> list[Path]:
     """Every hand-written adaptor source, for an xvlog file list (order-independent)."""
     return [RTL_DIR / f for f in ("mm_sync_fifo.v", "axi_slave_front.v", "mm_queue_in.v",
-                                  "mm_queue_out.v", "mm_regbank.v")]
+                                  "mm_queue_out.v", "mm_regbank.v", "mm_bram_port.v", "bram_t2p.v")]
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +172,25 @@ def _leaf_inst(view, dw: int) -> list[str]:
         head = (f"  mm_regbank #(.DW({dw}), .LAW({view.law}), .NCFG({view.ncfg}), "
                 f".NSTAT({view.nstat})) u_{n} (")
         streams = [_axis_conns("m_cfg", view.cfg_axis) + ",", _axis_conns("s_status", view.status_axis)]
+    elif isinstance(view, BramView):
+        k = view.kport
+        mem = [
+            f"  wire [31:0] {n}_a_addr; wire {n}_a_en; wire [1:0] {n}_a_we;",
+            f"  wire [{dw - 1}:0] {n}_a_din, {n}_a_dout;",
+            f"  bram_t2p #(.DW({dw}), .AW({view.baw})) u_{n}_mem (",
+            "    .clk(ap_clk),",
+            f"    .a_addr({n}_a_addr), .a_en({n}_a_en), .a_din({n}_a_din), .a_we({n}_a_we), "
+            f".a_dout({n}_a_dout),",
+            f"    .b_addr({k}_addr), .b_en({k}_en), .b_din({k}_din), .b_we({k}_we), .b_dout({k}_dout)",
+            "  );",
+        ]
+        head = (f"  mm_bram_port #(.DW({dw}), .LAW({view.law}), .BAW({view.baw}), "
+                f".LAT({bram_read_latency()})) u_{n} (")
+        streams = [f"    .bram_addr({n}_a_addr), .bram_en({n}_a_en), .bram_we({n}_a_we),",
+                   f"    .bram_din({n}_a_din), .bram_dout({n}_a_dout)"]
+        req = _req_conns(n)
+        req[-1] += ","
+        return [*mem, head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req, *streams, "  );"]
     else:
         raise TypeError(f"no adaptor leaf for view type {type(view).__name__}")
     req = _req_conns(n)
@@ -150,6 +201,8 @@ def _leaf_inst(view, dw: int) -> list[str]:
 def _title(view) -> str:
     if isinstance(view, QueueView):
         return f"queue view '{view.name}' ({view.module}, depth {view.depth})"
+    if isinstance(view, BramView):
+        return f"BRAM view '{view.name}' ({1 << view.baw} words, kernel on port B '{view.kport}')"
     return f"regbank view '{view.name}' (ncfg {view.ncfg}, nstat {view.nstat})"
 
 
